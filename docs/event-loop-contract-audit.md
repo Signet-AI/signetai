@@ -198,7 +198,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/synthesis-worker.ts:117` (withReadDb)
 - `prompt-entity-context.ts:661` (withReadDb)
 - `prompt-entity-context.ts:685` (withReadDb)
-- `repair-actions.ts:203` (withWriteTxAsync)
+- `repair-actions.ts:206` (withWriteTxAsync)
 - `db:repair.fts-consistency.read` (withReadDbAsync)
 - `db:repair.embedding-gap.read` (withReadDbAsync)
 - `db:repair.embedding-migration.read` (withReadDbAsync)

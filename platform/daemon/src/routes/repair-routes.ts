@@ -23,6 +23,7 @@ import {
 	pruneChunkGroupEntities,
 	pruneGenericEntities,
 	pruneSingletonExtractedEntities,
+	type GenericEntityCursor,
 	rebuildDerivedIndexes,
 	reembedMissingMemories,
 	reembedModelMigration,
@@ -402,11 +403,17 @@ export function registerRepairRoutes(
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const ctx = resolveRepairContext(c);
 		let batchSize = 100;
+		let candidateLimit: number | undefined;
+		let inspectionLimit: number | undefined;
+		let cursor: GenericEntityCursor | undefined;
 		let dryRun = true;
 		let body: Record<string, unknown> = {};
 		try {
 			body = asRecord(await c.req.json());
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
+			if (typeof body?.candidateLimit === "number") candidateLimit = body.candidateLimit;
+			if (typeof body?.inspectionLimit === "number") inspectionLimit = body.inspectionLimit;
+			if (body.cursor !== undefined) cursor = body.cursor as GenericEntityCursor;
 			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
 		} catch {}
 		const scoped = resolveScopedAgent(
@@ -420,10 +427,15 @@ export function registerRepairRoutes(
 			resolveDaemonAgentId(),
 		);
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
-		const result = await pruneGenericEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
+		const accessor = deps.getDbAccessor?.() ?? getDbAccessor();
+		const result = await pruneGenericEntities(accessor, cfg.pipelineV2, ctx, repairLimiter, {
 			batchSize,
+			candidateLimit,
+			inspectionLimit,
 			dryRun,
 			agentId: scoped.agentId,
+			cursor,
+			signal: c.req.raw.signal,
 		});
 		return c.json(result, repairHttpStatus(result));
 	});

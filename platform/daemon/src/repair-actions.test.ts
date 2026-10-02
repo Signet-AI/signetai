@@ -3,12 +3,13 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { readMemoriesFtsSql } from "../../core/src/fts-schema";
 import { runMigrations } from "../../core/src/migrations";
 import { normalizeAndHashContent } from "./content-normalization";
-import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import type { DbAccessor, ReadDb, ReadAdmissionOptions, WriteDb } from "./db-accessor";
 import { toFtsSchemaQueryDb } from "./db-accessor";
 import { ensureEmbeddingIndexState } from "./embedding-index-state";
 import { embeddingProfileFingerprint } from "./embedding-profile";
 import { DEFAULT_PIPELINE_V2 } from "./memory-config";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
+import { reportEventLoopLag, resetPressureState } from "./system-pressure";
 import {
 	cancelObsoleteJobs,
 	checkFtsConsistency,
@@ -29,7 +30,7 @@ import {
 	triggerRetentionSweep,
 } from "./repair-actions";
 
-function asAccessor(db: Database, onAsyncWrite?: () => void): DbAccessor {
+function asAccessor(db: Database, onAsyncWrite?: () => void, onAsyncRead?: () => void): DbAccessor {
 	return {
 		withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
 			db.exec("BEGIN IMMEDIATE");
@@ -65,8 +66,9 @@ function asAccessor(db: Database, onAsyncWrite?: () => void): DbAccessor {
 		withReadDb<T>(fn: (rdb: ReadDb) => T): T {
 			return fn(db as unknown as ReadDb);
 		},
-		withReadDbAsync<T>(fn: (rdb: ReadDb) => Promise<T>): Promise<T> {
-			return fn(db as unknown as ReadDb);
+		withReadDbAsync<T>(fn: (rdb: ReadDb) => T | Promise<T>, _options?: ReadAdmissionOptions): Promise<T> {
+			onAsyncRead?.();
+			return Promise.resolve(fn(db as unknown as ReadDb));
 		},
 		close() {
 			db.close();
@@ -432,6 +434,279 @@ describe("pruneGenericEntities", () => {
 			expect(dryRun.success).toBe(true);
 			expect(dryRun.affected).toBe(1);
 			expect(dryRun.message).toContain("Sender");
+		} finally {
+			db.close();
+		}
+	});
+
+	it("bounds inspection work and reports a resumable partial scan", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		let readCalls = 0;
+		let timerFired = false;
+		const accessor = asAccessor(db, undefined, () => {
+			readCalls += 1;
+		});
+		const limiter = createRateLimiter();
+		const now = "2026-05-11T18:00:00.000Z";
+		setTimeout(() => {
+			timerFired = true;
+		}, 0);
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, 0, ?, ?)`,
+			);
+			for (let i = 0; i < 250; i += 1) {
+				insert.run(`ent-valid-${String(i).padStart(3, "0")}`, `Project ${i}`, `project ${i}`, now, now);
+			}
+
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: true,
+				batchSize: 100,
+				inspectionLimit: 205,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(0);
+			expect(result.details).toMatchObject({
+				status: "partial",
+				complete: false,
+				candidateLimit: 100,
+				inspectionLimit: 205,
+				inspected: 205,
+				matched: 0,
+				remaining: "unknown",
+			});
+			expect((result.details as { cursor?: unknown }).cursor).toEqual({
+				updatedAt: now,
+				id: "ent-valid-045",
+			});
+			expect(readCalls).toBe(3);
+			await new Promise<void>((resolve) => setTimeout(resolve, 0));
+			expect(timerFired).toBe(true);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("resumes a keyset cursor across equal timestamps without skipping matches", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const limiter = createRateLimiter();
+		const now = "2026-05-11T18:00:00.000Z";
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, 'person', 'default', 1, 0, ?, ?)`,
+			);
+			for (let i = 0; i < 250; i += 1) {
+				const name = i % 40 === 0 ? `Sender ${i}` : `Project ${i}`;
+				insert.run(`ent-${String(i).padStart(3, "0")}`, name, name.toLowerCase(), now, now);
+			}
+
+			let cursor: { updatedAt: string; id: string } | undefined;
+			let totalMatched = 0;
+			let complete = false;
+			const seenCursors = new Set<string>();
+			for (let pass = 0; pass < 20 && !complete; pass += 1) {
+				const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+					dryRun: true,
+					candidateLimit: 1,
+					inspectionLimit: 50,
+					cursor,
+				});
+				expect(result.success).toBe(true);
+				const details = result.details as {
+					complete: boolean;
+					matched: number;
+					cursor: { updatedAt: string; id: string } | null;
+				};
+				totalMatched += details.matched;
+				complete = details.complete;
+				if (!complete) {
+					expect(details.cursor).not.toBeNull();
+					cursor = details.cursor ?? undefined;
+					const cursorKey = `${cursor?.updatedAt}:${cursor?.id}`;
+					expect(seenCursors.has(cursorKey)).toBe(false);
+					seenCursors.add(cursorKey);
+				}
+			}
+
+			expect(complete).toBe(true);
+			expect(totalMatched).toBe(7);
+			expect(seenCursors.size).toBeGreaterThan(1);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("stops at the server deadline without applying an unscanned plan", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const baseAccessor = asAccessor(db);
+		let readCalls = 0;
+		const accessor: DbAccessor = {
+			...baseAccessor,
+			async withReadDbAsync<T>(fn: (rdb: ReadDb) => T | Promise<T>, options?: ReadAdmissionOptions): Promise<T> {
+				readCalls += 1;
+				const result = await baseAccessor.withReadDbAsync(fn, options);
+				await new Promise<void>((resolve) => setTimeout(resolve, 100));
+				return result;
+			},
+		};
+		const limiter = createRateLimiter();
+		const now = "2026-05-11T18:00:00.000Z";
+
+		try {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('ent-sender', 'Sender', 'sender', 'person', 'default', 12, 0, ?, ?)`,
+			).run(now, now);
+
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: false,
+				candidateLimit: 1,
+				inspectionLimit: 10,
+				deadlineAt: performance.now() + 50,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(0);
+			expect(readCalls).toBe(1);
+			expect(result.details).toMatchObject({ status: "partial", complete: false, inspected: 0, reason: "deadline" });
+			expect(db.prepare("SELECT COUNT(*) AS count FROM entities WHERE id = 'ent-sender'").get()).toEqual({
+				count: 1,
+			});
+		} finally {
+			db.close();
+		}
+	});
+
+	it("stops between pages when system pressure rises without applying partial candidates", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		let readCalls = 0;
+		const accessor = asAccessor(db, undefined, () => {
+			readCalls += 1;
+			if (readCalls === 1) reportEventLoopLag(101);
+		});
+		const limiter = createRateLimiter();
+		const now = "2026-05-11T18:00:00.000Z";
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, 'person', 'default', 1, 0, ?, ?)`,
+			);
+			for (let i = 0; i < 250; i += 1) {
+				insert.run(`ent-sender-${String(i).padStart(3, "0")}`, `Sender ${i}`, `sender ${i}`, now, now);
+			}
+
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: false,
+				candidateLimit: 200,
+				inspectionLimit: 250,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(0);
+			expect(readCalls).toBe(1);
+			expect(result.details).toMatchObject({
+				status: "partial",
+				complete: false,
+				inspected: 100,
+				reason: "pressure",
+			});
+			expect((db.prepare("SELECT COUNT(*) AS count FROM entities").get() as { count: number }).count).toBe(250);
+		} finally {
+			resetPressureState();
+			db.close();
+		}
+	});
+
+	it("stops at request cancellation without persisting a partial candidate set", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const controller = new AbortController();
+		let readCalls = 0;
+		const accessor = asAccessor(db, undefined, () => {
+			readCalls += 1;
+			if (readCalls === 1) setImmediate(() => controller.abort());
+		});
+		const limiter = createRateLimiter();
+		const now = "2026-05-11T18:00:00.000Z";
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned,  created_at, updated_at)
+				 VALUES (?, ?, ?, 'person', 'default', 1, 0, ?, ?)`,
+			);
+			insert.run("ent-sender", "Sender", "sender", now, now);
+			for (let i = 0; i < 150; i += 1) {
+				insert.run(`ent-valid-${i}`, `Project ${i}`, `project ${i}`, now, now);
+			}
+
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: false,
+				batchSize: 1,
+				inspectionLimit: 500,
+				signal: controller.signal,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(0);
+			expect(readCalls).toBe(1);
+			expect(result.details).toMatchObject({ status: "partial", complete: false, reason: "cancelled" });
+			expect(db.prepare("SELECT COUNT(*) AS count FROM entities WHERE id = 'ent-sender'").get()).toEqual({ count: 1 });
+		} finally {
+			db.close();
+		}
+	});
+
+	it("revalidates agent ownership and entity state before deleting scanned candidates", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db, undefined, () => {
+			queueMicrotask(() => {
+				db.prepare(
+					`UPDATE entities
+					    SET name = 'Project Phoenix', canonical_name = 'project phoenix', agent_id = 'other', updated_at = ?
+					  WHERE id = 'ent-sender'`,
+				).run("2026-05-12T18:00:00.000Z");
+			});
+		});
+		const limiter = createRateLimiter();
+		const now = "2026-05-11T18:00:00.000Z";
+
+		try {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('ent-sender', 'Sender', 'sender', 'person', 'default', 12, 0, ?, ?)`,
+			).run(now, now);
+
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: false,
+				candidateLimit: 1,
+				inspectionLimit: 10,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(0);
+			expect(result.details).toMatchObject({ complete: true, matched: 1, skippedChanged: 1 });
+			expect(db.prepare("SELECT name, agent_id FROM entities WHERE id = 'ent-sender'").get()).toEqual({
+				name: "Project Phoenix",
+				agent_id: "other",
+			});
 		} finally {
 			db.close();
 		}

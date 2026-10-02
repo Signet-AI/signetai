@@ -55,8 +55,10 @@ import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import { recoverStaleLeases } from "./pipeline/stale-leases";
+import { isSystemPressureHigh } from "./system-pressure";
 import { insertHistoryEvent } from "./transactions";
 import { runVectorRepair, type VectorRepairOptions, type VectorRepairResult } from "./vector-repair";
+import { yieldEvery } from "./async-yield";
 
 export interface RepairContext {
 	readonly reason: string;
@@ -197,10 +199,11 @@ async function withRepairWriteTx<T>(
 	accessor: DbAccessor,
 	fn: (db: WriteDb) => T,
 	operationId: SyncDbCallSiteToken,
+	signal?: AbortSignal,
 ): Promise<T> {
 	if (accessor.withWriteTxAsync) {
 		// DYNAMIC_SITE_TOKEN: each repair action supplies its stable semantic operation ID.
-		return accessor.withWriteTxAsync(fn, { siteToken: operationId, operation: operationId });
+		return accessor.withWriteTxAsync(fn, { siteToken: operationId, operation: operationId, signal });
 	}
 	throw new Error("async write API is unavailable");
 }
@@ -2268,7 +2271,70 @@ interface GenericEntityCandidate {
 	readonly id: string;
 	readonly name: string;
 	readonly entity_type: string;
+	readonly updated_at: string;
 	reason?: string;
+}
+
+export interface GenericEntityCursor {
+	readonly updatedAt: string;
+	readonly id: string;
+}
+
+export interface PruneGenericEntitiesOptions {
+	readonly batchSize?: number;
+	readonly candidateLimit?: number;
+	readonly inspectionLimit?: number;
+	readonly dryRun?: boolean;
+	readonly agentId?: string;
+	readonly cursor?: GenericEntityCursor;
+	readonly deadlineAt?: number;
+	readonly signal?: AbortSignal;
+}
+
+export const GENERIC_ENTITY_DEFAULT_INSPECTION_LIMIT = 1_000;
+export const GENERIC_ENTITY_MAX_INSPECTION_LIMIT = 5_000;
+const GENERIC_ENTITY_MAX_SCAN_DURATION_MS = 5_000;
+const GENERIC_ENTITY_MAX_CANDIDATE_LIMIT = 500;
+const GENERIC_ENTITY_SCAN_PAGE_SIZE = 100;
+
+type GenericEntityStopReason = "candidate_limit" | "inspection_limit" | "deadline" | "cancelled" | "pressure";
+
+function normalizeGenericEntityCursor(value: unknown): GenericEntityCursor | null | undefined {
+	if (value === undefined) return undefined;
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const cursor = value as { updatedAt?: unknown; updated_at?: unknown; id?: unknown };
+	const updatedAt = typeof cursor.updatedAt === "string" ? cursor.updatedAt : cursor.updated_at;
+	if (
+		typeof updatedAt !== "string" ||
+		updatedAt.length === 0 ||
+		typeof cursor.id !== "string" ||
+		cursor.id.length === 0
+	) {
+		return null;
+	}
+	return { updatedAt, id: cursor.id };
+}
+
+function genericEntityScanDetails(
+	candidateLimit: number,
+	inspectionLimit: number,
+	inspected: number,
+	matched: number,
+	cursor: GenericEntityCursor | undefined,
+	complete: boolean,
+	stopReason: GenericEntityStopReason | undefined,
+): Readonly<Record<string, unknown>> {
+	return {
+		status: complete ? "complete" : "partial",
+		complete,
+		candidateLimit,
+		inspectionLimit,
+		inspected,
+		matched,
+		remaining: complete ? 0 : "unknown",
+		cursor: cursor ?? null,
+		...(complete || stopReason === undefined ? {} : { reason: stopReason }),
+	};
 }
 
 function deleteEntityGraphRows(db: WriteDb, ids: readonly string[]): void {
@@ -2302,7 +2368,7 @@ export async function pruneGenericEntities(
 	cfg: PipelineV2Config,
 	ctx: RepairContext,
 	limiter: RateLimiter,
-	options?: { batchSize?: number; dryRun?: boolean; agentId?: string },
+	options?: PruneGenericEntitiesOptions,
 ): Promise<RepairResult> {
 	const action = "pruneGenericEntities";
 	const gate = checkRepairGate(cfg, ctx, limiter, action, 60_000, 10);
@@ -2310,40 +2376,154 @@ export async function pruneGenericEntities(
 		return { action, success: false, affected: 0, message: gate.reason ?? "denied" };
 	}
 
-	const batchSize = Math.max(1, Math.min(Math.floor(options?.batchSize ?? 100), 500));
-	const agentId = options?.agentId ?? "default";
-	const candidates = await accessor.withReadDbAsync(
-		async (db) => {
-			const candidates: GenericEntityCandidate[] = [];
-			const pageSize = Math.max(batchSize * 10, 500);
-			let offset = 0;
-			const selectPage = db.prepare(
-				`SELECT e.id, e.name, e.entity_type
-			 FROM entities e
-			 WHERE e.agent_id = ?
-			   AND COALESCE(e.pinned, 0) = 0
-			   AND e.entity_type NOT IN ('skill')
-			   AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
-			 ORDER BY e.updated_at DESC
-			 LIMIT ? OFFSET ?`,
-			);
-
-			for (;;) {
-				const rows = selectPage.all(agentId, pageSize, offset) as GenericEntityCandidate[];
-				if (rows.length === 0) break;
-				for (const row of rows) {
-					const quality = classifyEntityQuality(row.name, row.entity_type);
-					if (!quality.ok) {
-						candidates.push({ ...row, reason: quality.reason });
-						if (candidates.length >= batchSize) return candidates;
-					}
-				}
-				offset += rows.length;
-			}
-			return candidates;
-		},
-		{ siteToken: "db:repair.generic-entity-candidates.read" },
+	const candidateLimitInput = options?.candidateLimit ?? options?.batchSize ?? 100;
+	const candidateLimit = Number.isFinite(candidateLimitInput)
+		? Math.max(1, Math.min(Math.floor(candidateLimitInput), GENERIC_ENTITY_MAX_CANDIDATE_LIMIT))
+		: 100;
+	const defaultInspectionLimit = Math.min(
+		GENERIC_ENTITY_MAX_INSPECTION_LIMIT,
+		Math.max(GENERIC_ENTITY_DEFAULT_INSPECTION_LIMIT, candidateLimit * 10),
 	);
+	const inspectionLimitInput = options?.inspectionLimit ?? defaultInspectionLimit;
+	const inspectionLimit = Number.isFinite(inspectionLimitInput)
+		? Math.max(1, Math.min(Math.floor(inspectionLimitInput), GENERIC_ENTITY_MAX_INSPECTION_LIMIT))
+		: defaultInspectionLimit;
+	const agentId = options?.agentId ?? "default";
+	const scanStartedAt = performance.now();
+	const defaultDeadlineAt = scanStartedAt + GENERIC_ENTITY_MAX_SCAN_DURATION_MS;
+	const deadlineAt =
+		typeof options?.deadlineAt === "number" && Number.isFinite(options.deadlineAt)
+			? Math.min(options.deadlineAt, defaultDeadlineAt)
+			: defaultDeadlineAt;
+	const normalizedCursor = normalizeGenericEntityCursor(options?.cursor);
+	if (normalizedCursor === null) {
+		return {
+			action,
+			success: false,
+			affected: 0,
+			message: "cursor must include non-empty updatedAt and id strings",
+			details: { invalidInput: true },
+		};
+	}
+
+	const candidates: GenericEntityCandidate[] = [];
+	let cursor = normalizedCursor;
+	let inspected = 0;
+	let matched = 0;
+	let complete = false;
+	let stopReason: GenericEntityStopReason | undefined;
+	const yieldBetweenPages = yieldEvery(1);
+
+	while (inspected < inspectionLimit && candidates.length < candidateLimit && !complete) {
+		if (options?.signal?.aborted) {
+			stopReason = "cancelled";
+			break;
+		}
+		if (isSystemPressureHigh()) {
+			stopReason = "pressure";
+			break;
+		}
+		if (performance.now() >= deadlineAt) {
+			stopReason = "deadline";
+			break;
+		}
+
+		const pageLimit = Math.min(GENERIC_ENTITY_SCAN_PAGE_SIZE, inspectionLimit - inspected);
+		let rows: GenericEntityCandidate[];
+		try {
+			rows = await accessor.withReadDbAsync(
+				async (db) => {
+					const query = cursor
+						? `SELECT e.id, e.name, e.entity_type, e.updated_at
+						   FROM entities e
+						  WHERE e.agent_id = ?
+						    AND COALESCE(e.pinned, 0) = 0
+						    AND e.entity_type NOT IN ('skill')
+						    AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
+						    AND (e.updated_at < ? OR (e.updated_at = ? AND e.id < ?))
+						  ORDER BY e.updated_at DESC, e.id DESC
+						  LIMIT ?`
+						: `SELECT e.id, e.name, e.entity_type, e.updated_at
+						   FROM entities e
+						  WHERE e.agent_id = ?
+						    AND COALESCE(e.pinned, 0) = 0
+						    AND e.entity_type NOT IN ('skill')
+						    AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
+						  ORDER BY e.updated_at DESC, e.id DESC
+						  LIMIT ?`;
+					const statement = db.prepare(query);
+					const values = cursor
+						? [agentId, cursor.updatedAt, cursor.updatedAt, cursor.id, pageLimit + 1]
+						: [agentId, pageLimit + 1];
+					return statement.all(...values) as GenericEntityCandidate[];
+				},
+				{
+					siteToken: "db:repair.generic-entity-candidates.read",
+					operation: "repair.pruneGenericEntities.scan",
+					signal: options?.signal,
+				},
+			);
+		} catch (error) {
+			if (options?.signal?.aborted) {
+				stopReason = "cancelled";
+				break;
+			}
+			throw error;
+		}
+
+		if (performance.now() >= deadlineAt) {
+			stopReason = "deadline";
+			break;
+		}
+		if (rows.length === 0) {
+			complete = true;
+			break;
+		}
+
+		const hasMore = rows.length > pageLimit;
+		const pageRows = rows.slice(0, pageLimit);
+		let processedRows = 0;
+		for (const row of pageRows) {
+			processedRows += 1;
+			inspected += 1;
+			cursor = { updatedAt: row.updated_at, id: row.id };
+			const quality = classifyEntityQuality(row.name, row.entity_type);
+			if (!quality.ok) {
+				matched += 1;
+				candidates.push({ ...row, reason: quality.reason });
+			}
+			if (candidates.length >= candidateLimit) {
+				stopReason = "candidate_limit";
+				break;
+			}
+			if (inspected >= inspectionLimit) {
+				stopReason = "inspection_limit";
+				break;
+			}
+			if (options?.signal?.aborted) {
+				stopReason = "cancelled";
+				break;
+			}
+			if (performance.now() >= deadlineAt) {
+				stopReason = "deadline";
+				break;
+			}
+		}
+
+		if (stopReason !== undefined) {
+			complete = !hasMore && processedRows === pageRows.length;
+			break;
+		}
+		if (!hasMore) {
+			complete = true;
+			break;
+		}
+		await yieldBetweenPages();
+	}
+
+	const scanDetails = (): Readonly<Record<string, unknown>> =>
+		genericEntityScanDetails(candidateLimit, inspectionLimit, inspected, matched, cursor, complete, stopReason);
+	const partialSuffix = !complete ? `; partial scan after ${inspected} inspected row(s), resume with cursor` : "";
 
 	if (options?.dryRun ?? true) {
 		const preview = candidates
@@ -2354,38 +2534,110 @@ export async function pruneGenericEntities(
 			action,
 			success: true,
 			affected: candidates.length,
-			message: `dry-run: would delete ${candidates.length} generic/non-concrete entities${preview ? `: ${preview}` : ""}`,
+			message: `dry-run: would delete ${candidates.length} generic/non-concrete entities${preview ? `: ${preview}` : ""}${partialSuffix}`,
+			details: scanDetails(),
+		};
+	}
+
+	if (options?.signal?.aborted || (!complete && isSystemPressureHigh())) {
+		stopReason = options?.signal?.aborted ? "cancelled" : "pressure";
+		complete = false;
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: `partial scan stopped before persistence (${stopReason}); no changes applied`,
+			details: scanDetails(),
 		};
 	}
 
 	if (candidates.length === 0) {
-		return { action, success: true, affected: 0, message: "no generic/non-concrete entities found" };
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: `no generic/non-concrete entities found${partialSuffix}`,
+			details: scanDetails(),
+		};
 	}
 
-	const affected = await withRepairWriteTx(
-		accessor,
-		(db) => {
-			const ids = candidates.map((row) => row.id);
-			deleteEntityGraphRows(db, ids);
-			writeRepairAudit(
-				db,
+	let affected: number;
+	let skippedChanged = 0;
+	try {
+		const outcome = await withRepairWriteTx(
+			accessor,
+			(db) => {
+				const candidatesById = new Map(candidates.map((row) => [row.id, row]));
+				const placeholders = candidates.map(() => "?").join(",");
+				const currentRows = db
+					.prepare(
+						`SELECT e.id, e.name, e.entity_type, e.updated_at
+						   FROM entities e
+						  WHERE e.agent_id = ?
+						    AND COALESCE(e.pinned, 0) = 0
+						    AND e.entity_type NOT IN ('skill')
+						    AND NOT EXISTS (SELECT 1 FROM skill_meta sm WHERE sm.entity_id = e.id)
+						    AND e.id IN (${placeholders})`,
+					)
+					.all(agentId, ...candidates.map((row) => row.id)) as GenericEntityCandidate[];
+				const ids = currentRows
+					.filter((row) => {
+						const scanned = candidatesById.get(row.id);
+						return (
+							scanned !== undefined &&
+							row.name === scanned.name &&
+							row.entity_type === scanned.entity_type &&
+							row.updated_at === scanned.updated_at &&
+							!classifyEntityQuality(row.name, row.entity_type).ok
+						);
+					})
+					.map((row) => row.id);
+				skippedChanged = candidates.length - ids.length;
+				if (ids.length === 0) return 0;
+
+				deleteEntityGraphRows(db, ids);
+				writeRepairAudit(
+					db,
+					action,
+					ctx,
+					ids.length,
+					`deleted ${ids.length} generic/non-concrete entities for agent ${agentId}`,
+				);
+				return ids.length;
+			},
+			"db:repair.prune-generic-entities.write",
+			options?.signal,
+		);
+		affected = outcome;
+	} catch (error) {
+		if (options?.signal?.aborted) {
+			stopReason = "cancelled";
+			complete = false;
+			return {
 				action,
-				ctx,
-				ids.length,
-				`deleted ${ids.length} generic/non-concrete entities for agent ${agentId}`,
-			);
-			return ids.length;
-		},
-		"db:repair.prune-generic-entities.write",
-	);
+				success: true,
+				affected: 0,
+				message: "partial scan stopped before persistence (cancelled); no changes applied",
+				details: scanDetails(),
+			};
+		}
+		throw error;
+	}
 
 	limiter.record(action);
 	logger.info("pipeline", "repair: pruned generic/non-concrete entities", {
 		affected,
+		skippedChanged,
 		agentId,
 		actor: ctx.actor,
 	});
-	return { action, success: true, affected, message: `deleted ${affected} generic/non-concrete entities` };
+	return {
+		action,
+		success: true,
+		affected,
+		message: `deleted ${affected} generic/non-concrete entities${skippedChanged > 0 ? `; skipped ${skippedChanged} changed before deletion` : ""}${partialSuffix}`,
+		details: { ...scanDetails(), skippedChanged },
+	};
 }
 
 export interface DeadMemory {

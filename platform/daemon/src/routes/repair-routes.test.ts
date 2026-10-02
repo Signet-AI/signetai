@@ -2,7 +2,8 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Hono } from "hono";
 import { parseAuthConfig } from "../auth";
-import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import type { DbAccessor, ReadAdmissionOptions, ReadDb, WriteDb } from "../db-accessor";
+import { resetPressureState } from "../system-pressure";
 import { registerRepairRoutes } from "./repair-routes";
 
 let db: Database;
@@ -12,6 +13,9 @@ function makeAccessor(database: Database): DbAccessor {
 	return {
 		withReadDb<T>(fn: (readDb: ReadDb) => T): T {
 			return fn(database as unknown as ReadDb);
+		},
+		withReadDbAsync<T>(fn: (readDb: ReadDb) => T | Promise<T>, _options?: ReadAdmissionOptions): Promise<T> {
+			return Promise.resolve(fn(database as unknown as ReadDb));
 		},
 		withWriteTx<T>(fn: (writeDb: WriteDb) => T): T {
 			database.exec("BEGIN IMMEDIATE");
@@ -67,6 +71,7 @@ function readMutationState(): { mentions: number; entityMentions: number } {
 }
 
 beforeEach(() => {
+	resetPressureState();
 	db = new Database(":memory:");
 	db.exec(`
 		CREATE TABLE memories (
@@ -86,9 +91,11 @@ beforeEach(() => {
 			entity_type TEXT,
 			agent_id TEXT NOT NULL,
 			mentions INTEGER DEFAULT 0,
+			pinned INTEGER DEFAULT 0,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		);
+		CREATE TABLE skill_meta (entity_id TEXT PRIMARY KEY);
 		CREATE TABLE memory_entity_mentions (
 			memory_id TEXT NOT NULL,
 			entity_id TEXT NOT NULL,
@@ -103,6 +110,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	resetPressureState();
 	db.close();
 });
 
@@ -145,6 +153,43 @@ describe("POST /api/repair/relink-entities", () => {
 			remaining: 0,
 		});
 		expect(readMutationState()).toEqual({ mentions: 1, entityMentions: 1 });
+	});
+});
+
+describe("POST /api/repair/prune-generic-entities", () => {
+	it("forwards limits and a keyset cursor to the bounded scan", async () => {
+		const now = new Date().toISOString();
+		accessor.withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities (
+					id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at
+				) VALUES (?, ?, ?, 'project', ?, 1, 0, ?, ?)`,
+			).run("entity-prune-cursor", "Project Phoenix", "project phoenix", "agent-relink", now, now);
+		});
+
+		const cursor = { updatedAt: "0000-01-01T00:00:00.000Z", id: "zzzz" };
+		const response = await makeApp().request("/api/repair/prune-generic-entities", {
+			method: "POST",
+			headers: requestHeaders(),
+			body: JSON.stringify({
+				agentId: "agent-relink",
+				candidateLimit: 7,
+				inspectionLimit: 3,
+				cursor,
+				dryRun: true,
+			}),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			action: "pruneGenericEntities",
+			details: {
+				candidateLimit: 7,
+				inspectionLimit: 3,
+				complete: true,
+				cursor,
+			},
+		});
 	});
 });
 
