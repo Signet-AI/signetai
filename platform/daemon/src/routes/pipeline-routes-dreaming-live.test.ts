@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { dreamingLiveEvents, publishDreamingAgentEvent } from "../pipeline/dreaming-live-events";
+import { getSseDiagnosticsSnapshot } from "../sse-stream.js";
 import {
 	invalidateDreamingEpisodicTokenBacklog,
 	recordDreamingEpisodicTokenBacklog,
@@ -204,6 +205,51 @@ describe("Dreaming live routes", () => {
 		expect(text.startsWith("event: snapshot\n")).toBe(true);
 		expect(text).toContain("event: snapshot");
 		expect(text).toContain('"passId":"live-pass-a"');
+	});
+
+	it("terminates a replay that exceeds the byte budget with a reconnectable overflow event", async () => {
+		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
+		process.env.SIGNET_DB_OWNER_WORKER = "1";
+		try {
+			const app = new Hono();
+			registerPipelineRoutes(app);
+			const before = getSseDiagnosticsSnapshot();
+			dreamingLiveEvents.startPass({ passId: "live-pass-a", agentId: "agent-a", mode: "incremental" });
+			for (let index = 0; index < 120; index += 1) {
+				dreamingLiveEvents.publish("live-pass-a", "assistant_delta", { delta: "x".repeat(15_000) });
+			}
+
+			const request = new AbortController();
+			const response = await app.request("/api/dream/passes/live-pass-a/events?after=0", {
+				signal: request.signal,
+			});
+			expect(response.status).toBe(200);
+			expect(getSseDiagnosticsSnapshot().overflowCount).toBeGreaterThan(before.overflowCount);
+			const reader = response.body?.getReader();
+			if (!reader) throw new Error("Dreaming event response did not expose a body");
+			let text = "";
+			try {
+				for (let index = 0; index < 90 && !text.includes("event: overflow"); index += 1) {
+					const next = await reader.read();
+					if (next.done) break;
+					text += new TextDecoder().decode(next.value);
+				}
+				expect(text).toContain("event: snapshot");
+				expect(text).toContain("event: assistant_delta");
+				expect(text).toContain("event: overflow");
+				expect(text).toContain('"reason":"queue_limit"');
+				expect(text).toContain('"reconnect":true');
+				expect(dreamingLiveEvents.getSubscriberCount("live-pass-a")).toBe(0);
+				expect((await reader.read()).done).toBe(true);
+			} finally {
+				await reader.cancel("test complete").catch(() => undefined);
+				request.abort();
+			}
+			expect(getSseDiagnosticsSnapshot().activeStreams).toBe(before.activeStreams);
+		} finally {
+			if (previousOwnerMode === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+			else process.env.SIGNET_DB_OWNER_WORKER = previousOwnerMode;
+		}
 	});
 
 	it("streams full model event payloads for the attach audit by default", async () => {
