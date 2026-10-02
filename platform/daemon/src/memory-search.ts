@@ -1007,6 +1007,35 @@ function nativeArtifactRecallTags(hit: NativeArtifactRecallHit): string {
 		.join(",");
 }
 
+function nativeArtifactRecallResult(
+	hit: NativeArtifactRecallHit,
+	recallTruncate: number,
+	score: number,
+	sourceId: string,
+): RecallResult {
+	const content = nativeArtifactRecallContent(hit);
+	const truncated = content.length > recallTruncate;
+	return {
+		id: `native-artifact:${hit.rowid}`,
+		content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+		content_length: content.length,
+		truncated,
+		score,
+		source: nativeArtifactRecallSource(hit),
+		source_id: sourceId,
+		session_id: sourceId,
+		type: hit.sourceKind,
+		tags: nativeArtifactRecallTags(hit),
+		pinned: false,
+		importance: 0.55,
+		who: hit.harness ?? "",
+		project: hit.project,
+		created_at: hit.updatedAt,
+		source_path: hit.sourcePath,
+		supplementary: true,
+	};
+}
+
 function sourcePathFromChunkText(chunkText: string): string {
 	const line = chunkText.split("\n").find((part) => part.toLowerCase().startsWith("source_path:"));
 	return line?.slice("source_path:".length).trim() ?? "";
@@ -1031,6 +1060,30 @@ function isVectorIndexUnavailable(error: unknown): boolean {
 function sourceChunkRecallTags(hit: SourceChunkVectorHit): string {
 	const provider = sourceChunkProvider(hit.sourceId);
 	return [provider, "source", hit.sourceType, "vector"].join(",");
+}
+
+function sourceChunkRecallResult(hit: SourceChunkVectorHit, recallTruncate: number): RecallResult {
+	const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
+	const truncated = content.length > recallTruncate;
+	return {
+		id: `source-chunk:${hit.embeddingId}`,
+		content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+		content_length: content.length,
+		truncated,
+		score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
+		source: sourceChunkRecallSource(hit.sourceId),
+		source_id: hit.sourceId,
+		session_id: hit.sourceId,
+		type: hit.sourceType,
+		tags: sourceChunkRecallTags(hit),
+		pinned: false,
+		importance: 0.6,
+		who: sourceChunkProvider(hit.sourceId),
+		project: hit.project,
+		created_at: hit.createdAt,
+		source_path: hit.sourcePath,
+		supplementary: true,
+	};
 }
 
 export async function buildSourceChunkVectorHits(
@@ -2841,29 +2894,7 @@ export async function hybridRecall(
 		}
 		if (sourceChunkOutcome && sourceChunkOutcome.hits.length > 0 && results.length < limit) {
 			const sourceResults = suppressPreviouslyRecalledForSelection(
-				sourceChunkOutcome.hits.slice(0, fallbackLimit).map((hit): RecallResult => {
-					const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
-					const truncated = content.length > recallTruncate;
-					return {
-						id: `source-chunk:${hit.embeddingId}`,
-						content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-						content_length: content.length,
-						truncated,
-						score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
-						source: sourceChunkRecallSource(hit.sourceId),
-						source_id: hit.sourceId,
-						session_id: hit.sourceId,
-						type: hit.sourceType,
-						tags: sourceChunkRecallTags(hit),
-						pinned: false,
-						importance: 0.6,
-						who: sourceChunkProvider(hit.sourceId),
-						project: hit.project,
-						created_at: hit.createdAt,
-						source_path: hit.sourcePath,
-						supplementary: true,
-					};
-				}),
+				sourceChunkOutcome.hits.slice(0, fallbackLimit).map((hit) => sourceChunkRecallResult(hit, recallTruncate)),
 			);
 			for (const row of sourceResults) {
 				if (results.length >= limit) break;
@@ -2880,8 +2911,6 @@ export async function hybridRecall(
 		if (nativeHits.length > 0 && results.length < limit) {
 			const nativeResults = suppressPreviouslyRecalledForSelection(
 				nativeHits.slice(0, fallbackLimit).map((hit): RecallResult => {
-					const content = nativeArtifactRecallContent(hit);
-					const truncated = content.length > recallTruncate;
 					const sourceId =
 						hit.sourceKind.startsWith("source_import_") && hit.sourceId ? hit.sourceId : nativeArtifactPublicId(hit);
 					if (hit.sourceId)
@@ -2889,25 +2918,12 @@ export async function hybridRecall(
 							source: nativeArtifactRecallSource(hit),
 							source_id: hit.sourceId,
 						});
-					return {
-						id: `native-artifact:${hit.rowid}`,
-						content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-						content_length: content.length,
-						truncated,
-						score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
-						source: nativeArtifactRecallSource(hit),
-						source_id: sourceId,
-						session_id: sourceId,
-						type: hit.sourceKind,
-						tags: nativeArtifactRecallTags(hit),
-						pinned: false,
-						importance: 0.55,
-						who: hit.harness ?? "",
-						project: hit.project,
-						created_at: hit.updatedAt,
-						source_path: hit.sourcePath,
-						supplementary: true,
-					};
+					return nativeArtifactRecallResult(
+						hit,
+						recallTruncate,
+						Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
+						sourceId,
+					);
 				}),
 			);
 			for (const row of nativeResults) {
@@ -3039,29 +3055,7 @@ export async function hybridRecall(
 			if (sourceChunkOutcome.completeness !== "complete") vectorCompleteness = sourceChunkOutcome.completeness;
 			searchedWindow = sourceChunkOutcome.searchedWindow ?? searchedWindow;
 		}
-		const candidates = (sourceChunkOutcome?.hits ?? []).map((hit): RecallResult => {
-			const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
-			const truncated = content.length > recallTruncate;
-			return {
-				id: `source-chunk:${hit.embeddingId}`,
-				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-				content_length: content.length,
-				truncated,
-				score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
-				source: sourceChunkRecallSource(hit.sourceId),
-				source_id: hit.sourceId,
-				session_id: hit.sourceId,
-				type: hit.sourceType,
-				tags: sourceChunkRecallTags(hit),
-				pinned: false,
-				importance: 0.6,
-				who: sourceChunkProvider(hit.sourceId),
-				project: hit.project,
-				created_at: hit.createdAt,
-				source_path: hit.sourcePath,
-				supplementary: true,
-			};
-		});
+		const candidates = (sourceChunkOutcome?.hits ?? []).map((hit) => sourceChunkRecallResult(hit, recallTruncate));
 		for (const row of suppressPreviouslyRecalledForSelection(candidates)) {
 			if (results.length >= limit) break;
 			results.push(row);
@@ -3077,33 +3071,18 @@ export async function hybridRecall(
 				)
 			: [];
 		const candidates = nativeHits.map((hit): RecallResult => {
-			const content = nativeArtifactRecallContent(hit);
-			const truncated = content.length > recallTruncate;
 			const sourceId = nativeArtifactPublicId(hit);
 			if (hit.sourceId)
 				lifecycleSourceResults.set(`native-artifact:${hit.rowid}`, {
 					source: nativeArtifactRecallSource(hit),
 					source_id: hit.sourceId,
 				});
-			return {
-				id: `native-artifact:${hit.rowid}`,
-				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-				content_length: content.length,
-				truncated,
-				score: Math.round(Math.max(0.01, Math.min(1, hit.rank * 0.85)) * 100) / 100,
-				source: nativeArtifactRecallSource(hit),
-				source_id: sourceId,
-				session_id: sourceId,
-				type: hit.sourceKind,
-				tags: nativeArtifactRecallTags(hit),
-				pinned: false,
-				importance: 0.55,
-				who: hit.harness ?? "",
-				project: hit.project,
-				created_at: hit.updatedAt,
-				source_path: hit.sourcePath,
-				supplementary: true,
-			};
+			return nativeArtifactRecallResult(
+				hit,
+				recallTruncate,
+				Math.round(Math.max(0.01, Math.min(1, hit.rank * 0.85)) * 100) / 100,
+				sourceId,
+			);
 		});
 		for (const row of suppressPreviouslyRecalledForSelection(candidates)) {
 			if (results.length >= limit) break;

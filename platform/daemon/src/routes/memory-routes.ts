@@ -749,6 +749,21 @@ export function createMemoryCaptureAdmissionMiddleware(
 	};
 }
 
+async function forwardRememberRequest(c: Context): Promise<Response> {
+	const body = await c.req.json().catch(() => ({}));
+	const headers: Record<string, string> = { "Content-Type": "application/json" };
+	headers["x-signet-operation-forwarded"] = "1";
+	const authHdr = c.req.header("authorization");
+	if (authHdr) headers.authorization = authHdr;
+	const sessionKey = c.req.header("x-signet-session-key");
+	if (sessionKey) headers["x-signet-session-key"] = sessionKey;
+	return fetchInternal(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
+		method: "POST",
+		headers,
+		body: JSON.stringify(body),
+	});
+}
+
 export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
 	const aggregateRecallFn = deps.aggregateRecall ?? aggregateRecall;
 	const hybridRecallFn = deps.hybridRecall ?? hybridRecall;
@@ -2081,34 +2096,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			contentSafety,
 		});
 	});
-	app.post("/api/memory/save", async (c) => {
-		const body = await c.req.json().catch(() => ({}));
-		const headers: Record<string, string> = { "Content-Type": "application/json" };
-		headers["x-signet-operation-forwarded"] = "1";
-		const authHdr = c.req.header("authorization");
-		if (authHdr) headers.authorization = authHdr;
-		const sessionKey = c.req.header("x-signet-session-key");
-		if (sessionKey) headers["x-signet-session-key"] = sessionKey;
-		return fetchInternal(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(body),
-		});
-	});
-	app.post("/api/hook/remember", async (c) => {
-		const body = await c.req.json().catch(() => ({}));
-		const headers: Record<string, string> = { "Content-Type": "application/json" };
-		headers["x-signet-operation-forwarded"] = "1";
-		const authHdr = c.req.header("authorization");
-		if (authHdr) headers.authorization = authHdr;
-		const sessionKey = c.req.header("x-signet-session-key");
-		if (sessionKey) headers["x-signet-session-key"] = sessionKey;
-		return fetchInternal(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
-			method: "POST",
-			headers,
-			body: JSON.stringify(body),
-		});
-	});
+	app.post("/api/memory/save", forwardRememberRequest);
+	app.post("/api/hook/remember", forwardRememberRequest);
 	app.get("/api/memory/:id", async (c) => {
 		const memoryId = c.req.param("id")?.trim();
 		if (!memoryId) {

@@ -912,6 +912,87 @@ function materializeAttributeMemoryInTx(
 	return input.attributeId;
 }
 
+interface ClaimAttributeInput {
+	readonly id: string;
+	readonly aspectId: string;
+	readonly entityId: string;
+	readonly agentId: string;
+	readonly kind: AttributeKind;
+	readonly content: string;
+	readonly normalizedContent: string;
+	readonly confidence: number;
+	readonly importance: number;
+	readonly groupKey: string;
+	readonly claimKey: string;
+	readonly version: number;
+	readonly versionRootId: string;
+	readonly previousAttributeId: string | null;
+	readonly reviewAfter: string | null;
+	readonly proposal: ProposalRow;
+}
+
+function createClaimAttributeInTx(db: WriteDb, input: ClaimAttributeInput): string {
+	db.prepare(
+		`INSERT INTO entity_attributes
+		 (id, aspect_id, agent_id, kind, content, normalized_content,
+		  confidence, importance, status, group_key, claim_key,
+		  version, version_root_id, previous_attribute_id,
+		  created_at, updated_at, source_id, source_kind, source_path, source_root,
+		  proposal_id, proposal_evidence)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?,
+		         datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)`,
+	).run(
+		input.id,
+		input.aspectId,
+		input.agentId,
+		input.kind,
+		input.content,
+		input.normalizedContent,
+		input.confidence,
+		input.importance,
+		input.groupKey,
+		input.claimKey,
+		input.version,
+		input.versionRootId,
+		input.previousAttributeId,
+		input.proposal.source_id,
+		input.proposal.source_kind,
+		input.proposal.source_path,
+		input.proposal.source_root,
+		input.proposal.id,
+		JSON.stringify(proposalAuditEvidence(input.proposal)),
+	);
+	return materializeAttributeMemoryInTx(db, {
+		attributeId: input.id,
+		entityId: input.entityId,
+		agentId: input.agentId,
+		content: input.content,
+		normalizedContent: input.normalizedContent,
+		importance: input.importance,
+		reviewAfter: input.reviewAfter,
+		proposal: input.proposal,
+	});
+}
+
+function enforceAttributeCap(db: WriteDb, aspectId: string, agentId: string, writeCaps?: GraphWriteCaps): void {
+	if (writeCaps === undefined) return;
+	const count = db
+		.prepare(
+			`SELECT COUNT(*) AS c FROM entity_attributes
+			 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'`,
+		)
+		.get(aspectId, agentId) as { c: number };
+	if (count.c >= writeCaps.maxAttributesPerAspect) {
+		const aspect = db.prepare("SELECT name FROM entity_aspects WHERE id = ?").get(aspectId) as
+			| { name: string }
+			| undefined;
+		throw new OntologyProposalError(
+			`aspect '${aspect?.name ?? aspectId}' is at attribute cap (${count.c}/${writeCaps.maxAttributesPerAspect}) — supersede or expire an existing claim, or consolidate duplicates, before adding`,
+			409,
+		);
+	}
+}
+
 function supersedeAttributeMemoryInTx(
 	db: WriteDb,
 	input: { readonly memoryId: string | null; readonly replacementMemoryId: string; readonly proposal: ProposalRow },
@@ -1032,65 +1113,27 @@ function applyAddClaimValue(
 		};
 	}
 
-	if (writeCaps !== undefined) {
-		const attrCount = db
-			.prepare(
-				`SELECT COUNT(*) AS c FROM entity_attributes
-				 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'`,
-			)
-			.get(aspectId, agentId) as { c: number };
-		if (attrCount.c >= writeCaps.maxAttributesPerAspect) {
-			const aspectName = db.prepare("SELECT name FROM entity_aspects WHERE id = ?").get(aspectId) as
-				| { name: string }
-				| undefined;
-			throw new OntologyProposalError(
-				`aspect '${aspectName?.name ?? aspectId}' is at attribute cap (${attrCount.c}/${writeCaps.maxAttributesPerAspect}) — supersede or expire an existing claim, or consolidate duplicates, before adding`,
-				409,
-			);
-		}
-	}
+	enforceAttributeCap(db, aspectId, agentId, writeCaps);
 
 	const id = crypto.randomUUID();
 	const confidence = clamp01(readNumber(payload, "confidence") ?? proposal.confidence);
 	const importance = clamp01(readNumber(payload, "importance") ?? confidence);
 	const reviewAfter = readReviewAfter(payload);
-	const proposalEvidence = proposalAuditEvidence(proposal);
-	db.prepare(
-		`INSERT INTO entity_attributes
-		 (id, aspect_id, agent_id, kind, content, normalized_content,
-		  confidence, importance, status, group_key, claim_key,
-		  version, version_root_id, previous_attribute_id,
-		  created_at, updated_at, source_id, source_kind, source_path, source_root,
-		  proposal_id, proposal_evidence)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?,
-		         1, ?, NULL,
-		         datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)`,
-	).run(
+	const memoryId = createClaimAttributeInTx(db, {
 		id,
 		aspectId,
+		entityId,
 		agentId,
 		kind,
-		value,
-		normalized,
+		content: value,
+		normalizedContent: normalized,
 		confidence,
 		importance,
 		groupKey,
 		claimKey,
-		id,
-		proposal.source_id,
-		proposal.source_kind,
-		proposal.source_path,
-		proposal.source_root,
-		proposal.id,
-		JSON.stringify(proposalEvidence),
-	);
-	const memoryId = materializeAttributeMemoryInTx(db, {
-		attributeId: id,
-		entityId,
-		agentId,
-		content: value,
-		normalizedContent: normalized,
-		importance,
+		version: 1,
+		versionRootId: id,
+		previousAttributeId: null,
 		reviewAfter,
 		proposal,
 	});
@@ -1164,66 +1207,28 @@ function applySetClaimValue(
 	}
 
 	const previous = active[0] ?? slot[0] ?? null;
-	if (previous === null && writeCaps !== undefined) {
-		const attrCount = db
-			.prepare(
-				`SELECT COUNT(*) AS c FROM entity_attributes
-				 WHERE aspect_id = ? AND agent_id = ? AND status = 'active'`,
-			)
-			.get(aspectId, agentId) as { c: number };
-		if (attrCount.c >= writeCaps.maxAttributesPerAspect) {
-			const aspectName = db.prepare("SELECT name FROM entity_aspects WHERE id = ?").get(aspectId) as
-				| { name: string }
-				| undefined;
-			throw new OntologyProposalError(
-				`aspect '${aspectName?.name ?? aspectId}' is at attribute cap (${attrCount.c}/${writeCaps.maxAttributesPerAspect}) — supersede or expire an existing claim, or consolidate duplicates, before adding`,
-				409,
-			);
-		}
-	}
+	if (previous === null) enforceAttributeCap(db, aspectId, agentId, writeCaps);
 	const version = previous === null ? 1 : Math.max(...slot.map((row) => row.version ?? 1)) + 1;
 	const rootId = previous?.version_root_id ?? previous?.id ?? crypto.randomUUID();
 	const id = version === 1 ? rootId : crypto.randomUUID();
 	const confidence = clamp01(readNumber(payload, "confidence") ?? proposal.confidence);
 	const importance = clamp01(readNumber(payload, "importance") ?? confidence);
 	const reviewAfter = readReviewAfter(payload);
-	db.prepare(
-		`INSERT INTO entity_attributes
-		 (id, aspect_id, agent_id, kind, content, normalized_content,
-		  confidence, importance, status, group_key, claim_key,
-		  version, version_root_id, previous_attribute_id,
-		  created_at, updated_at, source_id, source_kind, source_path, source_root,
-		  proposal_id, proposal_evidence)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?,
-		         datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)`,
-	).run(
+	const memoryId = createClaimAttributeInTx(db, {
 		id,
 		aspectId,
+		entityId,
 		agentId,
 		kind,
-		value,
-		normalized,
+		content: value,
+		normalizedContent: normalized,
 		confidence,
 		importance,
 		groupKey,
 		claimKey,
 		version,
-		rootId,
-		previous?.id ?? null,
-		proposal.source_id,
-		proposal.source_kind,
-		proposal.source_path,
-		proposal.source_root,
-		proposal.id,
-		JSON.stringify(proposalAuditEvidence(proposal)),
-	);
-	const memoryId = materializeAttributeMemoryInTx(db, {
-		attributeId: id,
-		entityId,
-		agentId,
-		content: value,
-		normalizedContent: normalized,
-		importance,
+		versionRootId: rootId,
+		previousAttributeId: previous?.id ?? null,
 		reviewAfter,
 		proposal,
 	});
@@ -2126,7 +2131,6 @@ function applyUnpinEntity(
 function applyCreateEntityAlias(
 	db: WriteDb,
 	agentId: string,
-	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
 	const entitySelector = readPayloadSelector(payload, "entity", "entity_id");
@@ -2150,7 +2154,6 @@ function applyCreateEntityAlias(
 function applyArchiveEntityAlias(
 	db: WriteDb,
 	agentId: string,
-	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
 	const entitySelector = readPayloadSelector(payload, "entity", "entity_id");
@@ -2213,10 +2216,8 @@ function applyOperation(
 			return applyAttachInterface(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "pin_entity") return applyPinEntity(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "unpin_entity") return applyUnpinEntity(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "create_entity_alias")
-			return applyCreateEntityAlias(db, proposal.agent_id, proposal, payload);
-		if (proposal.operation === "archive_entity_alias")
-			return applyArchiveEntityAlias(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "create_entity_alias") return applyCreateEntityAlias(db, proposal.agent_id, payload);
+		if (proposal.operation === "archive_entity_alias") return applyArchiveEntityAlias(db, proposal.agent_id, payload);
 		throw new OntologyProposalError(`Unsupported ontology proposal operation: ${proposal.operation}`, 400);
 	} finally {
 		reconcileOntologyContradictionsInTx(db, { agentId: proposal.agent_id });

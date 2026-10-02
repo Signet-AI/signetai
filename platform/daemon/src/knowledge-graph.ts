@@ -1272,6 +1272,27 @@ export async function listEntityAttributesByPath(
 	return { entity, aspect, items: rows.map(rowToAttribute) };
 }
 
+const KNOWLEDGE_ENTITY_COUNT_COLUMNS = `
+	(SELECT COUNT(*) FROM entity_aspects asp
+	 WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
+	   AND COALESCE(asp.status, 'active') = 'active') AS aspect_count,
+	(SELECT COUNT(*) FROM entity_attributes attr
+	 JOIN entity_aspects asp ON asp.id = attr.aspect_id
+	 WHERE asp.entity_id = e.id
+	   AND asp.agent_id = e.agent_id
+	   AND COALESCE(asp.status, 'active') = 'active'
+	   AND attr.agent_id = e.agent_id
+	   AND attr.kind = 'attribute'
+	   AND attr.status = 'active') AS attribute_count,
+	(SELECT COUNT(*) FROM entity_attributes attr
+	 JOIN entity_aspects asp ON asp.id = attr.aspect_id
+	 WHERE asp.entity_id = e.id
+	   AND asp.agent_id = e.agent_id
+	   AND COALESCE(asp.status, 'active') = 'active'
+	   AND attr.agent_id = e.agent_id
+	   AND attr.kind = 'constraint'
+	   AND attr.status = 'active') AS constraint_count`;
+
 export async function listKnowledgeEntities(
 	_accessor: DbAccessor,
 	params: {
@@ -1304,31 +1325,7 @@ export async function listKnowledgeEntities(
 				)
 				SELECT
 					e.*,
-					(
-						SELECT COUNT(*) FROM entity_aspects asp
-						WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
-						  AND COALESCE(asp.status, 'active') = 'active'
-					) AS aspect_count,
-					(
-						SELECT COUNT(*) FROM entity_attributes attr
-						JOIN entity_aspects asp ON asp.id = attr.aspect_id
-						WHERE asp.entity_id = e.id
-						  AND asp.agent_id = e.agent_id
-						  AND COALESCE(asp.status, 'active') = 'active'
-						  AND attr.agent_id = e.agent_id
-						  AND attr.kind = 'attribute'
-						  AND attr.status = 'active'
-					) AS attribute_count,
-					(
-						SELECT COUNT(*) FROM entity_attributes attr
-						JOIN entity_aspects asp ON asp.id = attr.aspect_id
-						WHERE asp.entity_id = e.id
-						  AND asp.agent_id = e.agent_id
-						  AND COALESCE(asp.status, 'active') = 'active'
-						  AND attr.agent_id = e.agent_id
-						  AND attr.kind = 'constraint'
-						  AND attr.status = 'active'
-					) AS constraint_count,
+					${KNOWLEDGE_ENTITY_COUNT_COLUMNS},
 					(
 						SELECT COUNT(*) FROM entity_dependencies dep
 						JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
@@ -1366,31 +1363,7 @@ export async function getKnowledgeEntityDetail(
 		{
 			sql: `SELECT
 					e.*,
-					(
-						SELECT COUNT(*) FROM entity_aspects asp
-						  WHERE asp.entity_id = e.id AND asp.agent_id = e.agent_id
-						    AND COALESCE(asp.status, 'active') = 'active'
-					) AS aspect_count,
-					(
-						SELECT COUNT(*) FROM entity_attributes attr
-						JOIN entity_aspects asp ON asp.id = attr.aspect_id
-						  WHERE asp.entity_id = e.id
-						  AND asp.agent_id = e.agent_id
-						  AND COALESCE(asp.status, 'active') = 'active'
-						  AND attr.agent_id = e.agent_id
-						  AND attr.kind = 'attribute'
-						  AND attr.status = 'active'
-					) AS attribute_count,
-					(
-						SELECT COUNT(*) FROM entity_attributes attr
-						JOIN entity_aspects asp ON asp.id = attr.aspect_id
-						  WHERE asp.entity_id = e.id
-						  AND asp.agent_id = e.agent_id
-						  AND COALESCE(asp.status, 'active') = 'active'
-						  AND attr.agent_id = e.agent_id
-						  AND attr.kind = 'constraint'
-						  AND attr.status = 'active'
-					) AS constraint_count,
+					${KNOWLEDGE_ENTITY_COUNT_COLUMNS},
 					(
 						SELECT COUNT(*) FROM entity_dependencies dep
 						JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
