@@ -23,6 +23,19 @@ import { ConcurrencyEditor } from "@/components/concurrency-editor"
 
 type Tab = "new" | "advanced"
 
+type RunForm = {
+  provider: string
+  benchmark: string
+  runId: string
+  judgeModel: string
+  answeringModel: string
+  selectionMode: SelectionMode
+  sampleType: SampleType
+  perCategory: string
+  limit: string
+  concurrency: ConcurrencyConfig
+}
+
 function providerConcurrency(provider?: Provider): ConcurrencyConfig {
   return {
     default: provider?.concurrency?.default ?? 1,
@@ -46,7 +59,7 @@ export default function NewRunPage() {
   const [models, setModels] = useState<any>({})
   const [completedRuns, setCompletedRuns] = useState<RunSummary[]>([])
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<RunForm>({
     provider: "",
     benchmark: "",
     runId: "",
@@ -56,14 +69,7 @@ export default function NewRunPage() {
     sampleType: "consecutive" as SampleType,
     perCategory: "2",
     limit: "",
-    concurrency: {
-      default: undefined as number | undefined,
-      ingest: undefined as number | undefined,
-      indexing: undefined as number | undefined,
-      search: undefined as number | undefined,
-      answer: undefined as number | undefined,
-      evaluate: undefined as number | undefined,
-    },
+    concurrency: {},
   })
 
   const [advancedForm, setAdvancedForm] = useState({
