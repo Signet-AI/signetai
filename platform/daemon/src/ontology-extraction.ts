@@ -3,16 +3,15 @@ import type { DbAccessor } from "./db-accessor";
 import { type EpisodicSourceRecord, readEpisodicSource } from "./episodic-sources";
 import { type CreateEpistemicAssertionInput, createEpistemicAssertionsInTx } from "./ontology-assertions";
 import { type CreateOntologyProposalInput, createOntologyProposalsInTx } from "./ontology-proposals";
+import {
+	isRecord,
+	proposalInput,
+	readArray,
+	readNumber,
+	readString,
+	type ProposalDraft,
+} from "./ontology-proposal-input";
 import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";
-
-type ProposalDraft = {
-	readonly operation: string;
-	readonly payload: Readonly<Record<string, unknown>>;
-	readonly confidence?: number;
-	readonly rationale?: string;
-	readonly evidence?: readonly unknown[];
-	readonly risk?: string | null;
-};
 
 type ParsedProposalJson = {
 	readonly proposals: readonly ProposalDraft[];
@@ -88,27 +87,6 @@ export class OntologyExtractionError extends Error {
 	}
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readString(record: Readonly<Record<string, unknown>>, key: string): string | null {
-	const value = record[key];
-	if (typeof value !== "string") return null;
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : null;
-}
-
-function readNumber(record: Readonly<Record<string, unknown>>, key: string): number | undefined {
-	const value = record[key];
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function readArray(record: Readonly<Record<string, unknown>>, key: string): readonly unknown[] {
-	const value = record[key];
-	return Array.isArray(value) ? value : [];
-}
-
 function readStringArray(record: Readonly<Record<string, unknown>>, key: string): readonly string[] {
 	return readArray(record, key)
 		.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
@@ -117,23 +95,6 @@ function readStringArray(record: Readonly<Record<string, unknown>>, key: string)
 
 function payloadRecord(entries: readonly (readonly [string, unknown])[]): Record<string, unknown> {
 	return Object.fromEntries(entries.filter((entry) => entry[1] !== undefined && entry[1] !== null));
-}
-
-function proposalInput(
-	operation: string | null,
-	payload: Record<string, unknown>,
-	src: Readonly<Record<string, unknown>>,
-	fallbackRationale: string,
-): ProposalDraft | null {
-	if (!operation || Object.keys(payload).length === 0) return null;
-	return {
-		operation,
-		payload,
-		confidence: readNumber(src, "confidence"),
-		rationale: readString(src, "rationale") ?? readString(src, "reason") ?? fallbackRationale,
-		evidence: readArray(src, "evidence"),
-		risk: readString(src, "risk"),
-	};
 }
 
 function normalizeExplicitProposal(value: unknown): ProposalDraft | null {
@@ -646,7 +607,7 @@ function readSource(accessor: DbAccessor, params: Pick<ExtractOntologyParams, "a
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const source = accessor.withReadDb(
 		(db: import("./db-accessor").ReadDb) => readEpisodicSource(db, { agentId: params.agentId, from }),
-		"ontology-extraction.ts:647",
+		"ontology-extraction.ts:608",
 	);
 	if (source) return source;
 	throw new OntologyExtractionError("Extraction source not found", 404);
@@ -752,7 +713,7 @@ export async function extractOntologyProposals(
 			: { items: [] as readonly OntologyProposal[], count: 0 };
 		const assertionItems = shouldWriteAssertions ? createEpistemicAssertionsInTx(accessor, db, assertionInputs) : [];
 		return { proposalResult, assertionItems };
-	}, "ontology-extraction.ts:749");
+	}, "ontology-extraction.ts:710");
 
 	return {
 		source: sourceInfo(source),

@@ -61,6 +61,20 @@ import {
 	findStructuredPathCandidatesViaOwner,
 	scoreStructuredPathEvidenceViaOwner,
 } from "./pipeline/structured-path-evidence";
+import {
+	HINT_ONLY_SCORE_CAP,
+	TEMPORAL_TOPIC_SCORE_CAP,
+	mergeRecallCandidates,
+	rankRecallCandidates,
+	selectTraversalRecallCandidates,
+	type ScoredRecallCandidate,
+} from "./memory-search-candidates";
+import {
+	appendRecallResultsWithinLimit,
+	projectAuthorizedRecallResults,
+	type MemoryRecallRow,
+	type RecallCurrentnessInfo,
+} from "./memory-search-results";
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
 import { escapeLike } from "./sql-utils";
@@ -212,8 +226,10 @@ export interface RecallTimings {
 	stages: RecallStageTiming[];
 }
 
+type RecallResultCounts = Pick<RecallResponse["meta"], "totalReturned" | "hasSupplementary" | "noHits">;
+type FinishedRecallMeta = Omit<RecallResponse["meta"], "timings"> & RecallResultCounts;
 type UntimedRecallResponse = Omit<RecallResponse, "meta"> & {
-	meta: Omit<RecallResponse["meta"], "timings">;
+	meta: Omit<RecallResponse["meta"], "timings" | keyof RecallResultCounts> & Partial<RecallResultCounts>;
 };
 
 const RECALL_TIMING_LOG_THRESHOLD_MS = 1000;
@@ -473,7 +489,7 @@ export function expandRecallKeywordQuery(raw: string): string {
 }
 
 async function applyRehearsalBoost(
-	scored: Array<{ id: string; score: number; source: string }>,
+	scored: ScoredRecallCandidate[],
 	search: MemorySearchConfig,
 	freshness: { readonly enabled: boolean; readonly nowMs: number },
 ): Promise<void> {
@@ -531,15 +547,6 @@ async function applyRehearsalBoost(
 	}
 }
 
-function mergeCandidate(
-	rows: Map<string, { id: string; score: number; source: string }>,
-	row: { id: string; score: number; source: string },
-): void {
-	const existing = rows.get(row.id);
-	if (!existing || row.score > existing.score) {
-		rows.set(row.id, row);
-	}
-}
 function lexicalFallbackTerms(keywordQuery: string): string[] {
 	return [
 		...new Set(
@@ -594,10 +601,10 @@ interface CandidateAuthorizationContext {
 }
 
 async function authorizeScoredCandidates(
-	scored: ReadonlyArray<{ id: string; score: number; source: string }>,
+	scored: ReadonlyArray<ScoredRecallCandidate>,
 	filter: FilterClause,
 	context?: CandidateAuthorizationContext,
-): Promise<Array<{ id: string; score: number; source: string }>> {
+): Promise<ScoredRecallCandidate[]> {
 	const ids = [...new Set(scored.map((row) => row.id))];
 	if (ids.length === 0) return [];
 	const owner = context?.owner ?? (await getDbOwner(getDbAccessorPath()));
@@ -756,20 +763,15 @@ async function loadObservedScores(ids: readonly string[], agentId: string): Prom
 	return new Map(rows.map((row) => [row.memory_id, row.score]));
 }
 
-interface CurrentnessInfo {
-	readonly active: readonly string[];
-	readonly superseded: ReadonlyArray<{
-		readonly content: string;
-		readonly replacement: string | null;
-	}>;
-}
-
 function shortenCurrentnessContent(content: string): string {
 	const oneLine = content.replace(/\s+/g, " ").trim();
 	return oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
 }
 
-async function loadCurrentnessInfo(ids: readonly string[], agentId: string): Promise<Map<string, CurrentnessInfo>> {
+async function loadCurrentnessInfo(
+	ids: readonly string[],
+	agentId: string,
+): Promise<Map<string, RecallCurrentnessInfo>> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
 	const queried = await ownerReadAll<{
@@ -827,8 +829,8 @@ async function loadCurrentnessInfo(ids: readonly string[], agentId: string): Pro
 }
 
 function applyCurrentnessBias(
-	scored: Array<{ id: string; score: number; source: string }>,
-	currentness: ReadonlyMap<string, CurrentnessInfo>,
+	scored: ScoredRecallCandidate[],
+	currentness: ReadonlyMap<string, RecallCurrentnessInfo>,
 ): void {
 	for (const row of scored) {
 		const info = currentness.get(row.id);
@@ -846,23 +848,6 @@ function applyCurrentnessBias(
 		}
 	}
 	scored.sort((a, b) => b.score - a.score);
-}
-
-function annotateCurrentness(content: string, info: CurrentnessInfo | undefined): string {
-	if (!info || info.superseded.length === 0) return content;
-	const lines = ["[Signet currentness]"];
-	if (info.active.length > 0) {
-		lines.push("Current structured facts:");
-		for (const item of info.active) lines.push(`- ${item}`);
-	}
-	if (info.superseded.length > 0) {
-		lines.push("Superseded structured facts, historical unless the question asks about the past:");
-		for (const item of info.superseded) {
-			lines.push(`- ${item.content}`);
-			if (item.replacement) lines.push(`  Current replacement: ${item.replacement}`);
-		}
-	}
-	return `${lines.join("\n")}\n\n${content}`;
 }
 
 interface NativeArtifactRecallHit {
@@ -1007,6 +992,35 @@ function nativeArtifactRecallTags(hit: NativeArtifactRecallHit): string {
 		.join(",");
 }
 
+function nativeArtifactRecallResult(
+	hit: NativeArtifactRecallHit,
+	recallTruncate: number,
+	score: number,
+	sourceId: string,
+): RecallResult {
+	const content = nativeArtifactRecallContent(hit);
+	const truncated = content.length > recallTruncate;
+	return {
+		id: `native-artifact:${hit.rowid}`,
+		content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+		content_length: content.length,
+		truncated,
+		score,
+		source: nativeArtifactRecallSource(hit),
+		source_id: sourceId,
+		session_id: sourceId,
+		type: hit.sourceKind,
+		tags: nativeArtifactRecallTags(hit),
+		pinned: false,
+		importance: 0.55,
+		who: hit.harness ?? "",
+		project: hit.project,
+		created_at: hit.updatedAt,
+		source_path: hit.sourcePath,
+		supplementary: true,
+	};
+}
+
 function sourcePathFromChunkText(chunkText: string): string {
 	const line = chunkText.split("\n").find((part) => part.toLowerCase().startsWith("source_path:"));
 	return line?.slice("source_path:".length).trim() ?? "";
@@ -1031,6 +1045,30 @@ function isVectorIndexUnavailable(error: unknown): boolean {
 function sourceChunkRecallTags(hit: SourceChunkVectorHit): string {
 	const provider = sourceChunkProvider(hit.sourceId);
 	return [provider, "source", hit.sourceType, "vector"].join(",");
+}
+
+function sourceChunkRecallResult(hit: SourceChunkVectorHit, recallTruncate: number): RecallResult {
+	const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
+	const truncated = content.length > recallTruncate;
+	return {
+		id: `source-chunk:${hit.embeddingId}`,
+		content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+		content_length: content.length,
+		truncated,
+		score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
+		source: sourceChunkRecallSource(hit.sourceId),
+		source_id: hit.sourceId,
+		session_id: hit.sourceId,
+		type: hit.sourceType,
+		tags: sourceChunkRecallTags(hit),
+		pinned: false,
+		importance: 0.6,
+		who: sourceChunkProvider(hit.sourceId),
+		project: hit.project,
+		created_at: hit.createdAt,
+		source_path: hit.sourcePath,
+		supplementary: true,
+	};
 }
 
 export async function buildSourceChunkVectorHits(
@@ -1392,11 +1430,6 @@ export async function buildSourceChunkVectorHits(
 	return outcome("recent-window", seenIds.size);
 }
 
-function sessionIdFromSourceId(sourceId: string): string {
-	const index = sourceId.lastIndexOf(":");
-	return index >= 0 ? sourceId.slice(index + 1) : sourceId;
-}
-
 function expandTranscriptTerms(terms: readonly string[]): string[] {
 	const expanded = new Set(terms);
 	const add = (from: string, variants: readonly string[]): void => {
@@ -1701,9 +1734,6 @@ function describeRecallGraphError(error: unknown): {
 function isRecallGraphDeadlineError(error: { readonly code: string | number | null }): boolean {
 	return error.code === "DB_OWNER_DEADLINE" || error.code === "DB_OWNER_CANCELLED";
 }
-const HINT_ONLY_SCORE_CAP = 0.75;
-const TEMPORAL_TOPIC_SCORE_CAP = 0.85;
-
 function temporalTopicTokens(raw: string): string[] {
 	return [...new Set(tokenizeGraphQuery(raw))];
 }
@@ -1815,7 +1845,7 @@ export async function hybridRecall(
 				}
 			: deduped.meta;
 		response.results = deduped.items;
-		response.meta = {
+		const meta: FinishedRecallMeta = {
 			...response.meta,
 			totalReturned: response.results.length,
 			hasSupplementary: response.results.some((row) => row.supplementary === true),
@@ -1830,6 +1860,7 @@ export async function hybridRecall(
 					: {}),
 			...(dedupeMeta.enabled || dedupeMeta.failedOpen ? { dedupe: dedupeMeta } : {}),
 		};
+		response.meta = meta;
 		try {
 			const trackedIds = response.results.map((row) => row.id).filter((id) => !id.includes(":"));
 			if (params.trackRecallAccess !== false && trackedIds.length > 0) {
@@ -1874,7 +1905,7 @@ export async function hybridRecall(
 			logger.warn("memory", "Recall stage timings", {
 				agentId: params.agentId ?? "default",
 				limit,
-				resultCount: response.meta.totalReturned,
+				resultCount: meta.totalReturned,
 				totalMs: recallTimings.totalMs,
 				stages: recallTimings.stages,
 			});
@@ -1882,7 +1913,7 @@ export async function hybridRecall(
 		return {
 			...response,
 			meta: {
-				...response.meta,
+				...meta,
 				timings: recallTimings,
 			},
 		};
@@ -2149,73 +2180,27 @@ export async function hybridRecall(
 			}
 		}
 	}
-	const allIds = new Set([
-		...bm25Map.keys(),
-		...hintMap.keys(),
-		...vectorMap.keys(),
-		...structuredCandidateMap.keys(),
-		...temporalCandidateMap.keys(),
-	]);
-	const flatScored: Array<{ id: string; score: number; source: string }> = [];
-
-	timings.time("flat_score_merge", () => {
-		for (const id of allIds) {
-			const bm25 = bm25Map.get(id) ?? 0;
-			const hint = hintMap.get(id) ?? 0;
-			const vec = vectorMap.get(id) ?? 0;
-			const structured = structuredCandidateMap.get(id) ?? 0;
-			const temporalCandidate = temporalCandidateMap.get(id) ?? 0;
-			const topicEvidence = bm25 > 0 || hint > 0 || vec > 0 || structured > 0;
-			const temporalScore = temporalCandidateSet.has(id) && topicEvidence ? 0.85 : 0;
-			let score: number;
-			let source: string;
-
-			if (bm25 > 0 && vec > 0) {
-				score = alpha * vec + (1 - alpha) * bm25;
-				source = "hybrid";
-			} else if (vec > 0) {
-				score = vec;
-				source = "vector";
-			} else if (bm25 > 0) {
-				score = bm25;
-				source = "keyword";
-			} else if (temporalScore > 0) {
-				score = temporalScore;
-				source = "temporal";
-			} else if (temporalCandidate > 0) {
-				score = temporalCandidate;
-				source = "temporal_candidate";
-			} else {
-				score = structured;
-				source = "structured";
-			}
-			if (hint > 0 && hint >= score) {
-				const hasDirectEvidence = bm25 > 0 || vec > 0 || structured > 0;
-				score = hasDirectEvidence ? hint : Math.min(hint, HINT_ONLY_SCORE_CAP);
-				source = bm25 > 0 || vec > 0 ? "hybrid" : structured > 0 ? "sec" : "hint";
-			}
-			if (structured > 0 && structured >= score) {
-				score = structured;
-				source = bm25 > 0 || vec > 0 || hint > 0 ? "sec" : "structured";
-			}
-			if (temporalScore > 0 && temporalScore >= score) {
-				score = temporalScore;
-				source = bm25 > 0 || vec > 0 || hint > 0 || structured > 0 ? "temporal_hybrid" : "temporal";
-			}
-
-			if (score >= minScore) flatScored.push({ id, score, source });
-		}
-
-		flatScored.sort((a, b) => b.score - a.score);
-	});
+	const flatScored = timings.time("flat_score_merge", () =>
+		rankRecallCandidates(
+			{
+				bm25: bm25Map,
+				hints: hintMap,
+				semantic: vectorMap,
+				structured: structuredCandidateMap,
+				temporal: temporalCandidateMap,
+				temporalCandidates: temporalCandidateSet,
+			},
+			{ alpha, minScore },
+		),
+	);
 	const traversalPrimary =
 		cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled && cfg.pipelineV2.traversal?.primary !== false;
 
-	let scored: Array<{ id: string; score: number; source: string }> = [];
+	let scored: ScoredRecallCandidate[] = [];
 
 	if (traversalPrimary) {
 		await timings.timeAsync("traversal_primary", async () => {
-			const traversalScored: Array<{ id: string; score: number; source: string }> = [];
+			const traversalScored: ScoredRecallCandidate[] = [];
 
 			if (cfg.pipelineV2.traversal) {
 				try {
@@ -2305,26 +2290,7 @@ export async function hybridRecall(
 					});
 				}
 			}
-			traversalScored.sort((a, b) => b.score - a.score);
-			const candidateBudget = Math.max(limit, Math.min(cfg.search.top_k, limit * 4));
-			const flatIds = new Set(flatScored.map((row) => row.id));
-			const minFlat = Math.ceil(candidateBudget * 0.4);
-			const byId = new Map<string, { id: string; score: number; source: string }>();
-			for (const row of flatScored) mergeCandidate(byId, row);
-			for (const row of traversalScored) mergeCandidate(byId, row);
-			const fused = [...byId.values()].sort((a, b) => b.score - a.score);
-			const selected: Array<{ id: string; score: number; source: string }> = [];
-			let flatCount = 0;
-			for (const row of fused) {
-				if (selected.length >= candidateBudget) break;
-				const isFlat = flatIds.has(row.id);
-				const remaining = candidateBudget - selected.length;
-				const neededFlat = Math.max(0, Math.min(minFlat, flatScored.length) - flatCount);
-				if (!isFlat && neededFlat >= remaining) continue;
-				selected.push(row);
-				if (isFlat) flatCount++;
-			}
-			scored = selected;
+			scored = selectTraversalRecallCandidates(flatScored, traversalScored, limit, cfg.search.top_k);
 		});
 	} else {
 		scored = flatScored;
@@ -2456,12 +2422,10 @@ export async function hybridRecall(
 	}
 
 	if (structuredCandidateMap.size > 0) {
-		const byId = new Map<string, { id: string; score: number; source: string }>();
-		for (const row of scored) mergeCandidate(byId, row);
-		for (const [id, score] of [...structuredCandidateMap.entries()].sort((a, b) => b[1] - a[1])) {
-			mergeCandidate(byId, { id, score, source: "structured" });
-		}
-		scored = [...byId.values()].sort((a, b) => b.score - a.score);
+		const structuredCandidates = [...structuredCandidateMap.entries()]
+			.sort((left, right) => right[1] - left[1])
+			.map(([id, score]) => ({ id, score, source: "structured" }));
+		scored = mergeRecallCandidates(scored, structuredCandidates).sort((left, right) => right.score - left.score);
 	}
 
 	if (scored.length > 0) {
@@ -2509,10 +2473,7 @@ export async function hybridRecall(
 	if (scored.length > 0) {
 		const structuredEvidenceStart = performance.now();
 		try {
-			const byId = new Map<string, { id: string; score: number; source: string }>();
-			for (const row of scored) mergeCandidate(byId, row);
-
-			const candidates = [...byId.values()];
+			const candidates = mergeRecallCandidates(scored, []);
 			try {
 				const agentId = params.agentId ?? "default";
 				const structured = await scoreStructuredPathEvidenceViaOwner(
@@ -2750,7 +2711,7 @@ export async function hybridRecall(
 		}
 	}
 
-	let currentness = new Map<string, CurrentnessInfo>();
+	let currentness = new Map<string, RecallCurrentnessInfo>();
 	if (scored.length > 0) {
 		const currentnessStart = performance.now();
 		try {
@@ -2841,34 +2802,9 @@ export async function hybridRecall(
 		}
 		if (sourceChunkOutcome && sourceChunkOutcome.hits.length > 0 && results.length < limit) {
 			const sourceResults = suppressPreviouslyRecalledForSelection(
-				sourceChunkOutcome.hits.slice(0, fallbackLimit).map((hit): RecallResult => {
-					const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
-					const truncated = content.length > recallTruncate;
-					return {
-						id: `source-chunk:${hit.embeddingId}`,
-						content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-						content_length: content.length,
-						truncated,
-						score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
-						source: sourceChunkRecallSource(hit.sourceId),
-						source_id: hit.sourceId,
-						session_id: hit.sourceId,
-						type: hit.sourceType,
-						tags: sourceChunkRecallTags(hit),
-						pinned: false,
-						importance: 0.6,
-						who: sourceChunkProvider(hit.sourceId),
-						project: hit.project,
-						created_at: hit.createdAt,
-						source_path: hit.sourcePath,
-						supplementary: true,
-					};
-				}),
+				sourceChunkOutcome.hits.slice(0, fallbackLimit).map((hit) => sourceChunkRecallResult(hit, recallTruncate)),
 			);
-			for (const row of sourceResults) {
-				if (results.length >= limit) break;
-				results.push(row);
-			}
+			appendRecallResultsWithinLimit(results, sourceResults, limit);
 		}
 		const nativeHits =
 			allowSourceFallbacks && results.length < limit
@@ -2880,8 +2816,6 @@ export async function hybridRecall(
 		if (nativeHits.length > 0 && results.length < limit) {
 			const nativeResults = suppressPreviouslyRecalledForSelection(
 				nativeHits.slice(0, fallbackLimit).map((hit): RecallResult => {
-					const content = nativeArtifactRecallContent(hit);
-					const truncated = content.length > recallTruncate;
 					const sourceId =
 						hit.sourceKind.startsWith("source_import_") && hit.sourceId ? hit.sourceId : nativeArtifactPublicId(hit);
 					if (hit.sourceId)
@@ -2889,40 +2823,21 @@ export async function hybridRecall(
 							source: nativeArtifactRecallSource(hit),
 							source_id: hit.sourceId,
 						});
-					return {
-						id: `native-artifact:${hit.rowid}`,
-						content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-						content_length: content.length,
-						truncated,
-						score: Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
-						source: nativeArtifactRecallSource(hit),
-						source_id: sourceId,
-						session_id: sourceId,
-						type: hit.sourceKind,
-						tags: nativeArtifactRecallTags(hit),
-						pinned: false,
-						importance: 0.55,
-						who: hit.harness ?? "",
-						project: hit.project,
-						created_at: hit.updatedAt,
-						source_path: hit.sourcePath,
-						supplementary: true,
-					};
+					return nativeArtifactRecallResult(
+						hit,
+						recallTruncate,
+						Math.round(Math.max(0.01, Math.min(1.1, hit.rank)) * 100) / 100,
+						sourceId,
+					);
 				}),
 			);
-			for (const row of nativeResults) {
-				if (results.length >= limit) break;
-				results.push(row);
-			}
+			appendRecallResultsWithinLimit(results, nativeResults, limit);
 		}
 		return await finish({
 			results,
 			query,
 			method: queryVecF32 ? "hybrid" : "keyword",
 			meta: {
-				totalReturned: results.length,
-				hasSupplementary: results.some((row) => row.supplementary === true),
-				noHits: results.length === 0,
 				...(vectorCompleteness === undefined ? {} : { vectorCompleteness }),
 				...(searchedWindow === undefined ? {} : { searchedWindow }),
 				...(sourceChunkOutcome === undefined ? {} : { sourceVectorSearch: sourceChunkOutcome.diagnostics }),
@@ -2942,21 +2857,7 @@ export async function hybridRecall(
         FROM memories m
         WHERE m.id IN (${placeholders})${currentMemorySql("m")}${filter.sql}`,
 						)
-						.all(...topIds, ...filter.args) as Array<{
-						id: string;
-						content: string;
-						source_id: string | null;
-						type: string;
-						tags: string | null;
-						pinned: number;
-						importance: number;
-						who: string;
-						project: string | null;
-						created_at: string;
-						visibility: string | null;
-						scope: string | null;
-						agent_id: string | null;
-					}>,
+						.all(...topIds, ...filter.args) as MemoryRecallRow[],
 				{ siteToken: "db:recall.final-candidates.hydrate" },
 			),
 	);
@@ -2973,38 +2874,9 @@ export async function hybridRecall(
 			),
 		{ siteToken: "db:recall.final-candidates.safety" },
 	);
-	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
 	let results: RecallResult[] = timings.time("assemble_results", () =>
 		suppressPreviouslyRecalledForSelection(
-			scored
-				.slice(0, preHydrate)
-				.filter((s) => rowMap.has(s.id))
-				.flatMap((s) => {
-					const r = rowMap.get(s.id);
-					if (!r) return [];
-					const content = annotateCurrentness(r.content, currentness.get(r.id));
-					const isTruncated = content.length > recallTruncate;
-					return [
-						{
-							id: r.id,
-							content: isTruncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-							content_length: content.length,
-							truncated: isTruncated,
-							score: Math.round(s.score * 100) / 100,
-							source: s.source,
-							...(r.source_id ? { source_id: r.source_id, session_id: sessionIdFromSourceId(r.source_id) } : {}),
-							type: r.type,
-							tags: r.tags,
-							pinned: !!r.pinned,
-							importance: r.importance,
-							who: r.who,
-							project: r.project,
-							created_at: r.created_at,
-							visibility: r.visibility,
-							scope: r.scope,
-						},
-					];
-				}),
+			projectAuthorizedRecallResults(scored, safeRows, currentness, preHydrate, recallTruncate),
 		),
 	);
 
@@ -3039,34 +2911,8 @@ export async function hybridRecall(
 			if (sourceChunkOutcome.completeness !== "complete") vectorCompleteness = sourceChunkOutcome.completeness;
 			searchedWindow = sourceChunkOutcome.searchedWindow ?? searchedWindow;
 		}
-		const candidates = (sourceChunkOutcome?.hits ?? []).map((hit): RecallResult => {
-			const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
-			const truncated = content.length > recallTruncate;
-			return {
-				id: `source-chunk:${hit.embeddingId}`,
-				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-				content_length: content.length,
-				truncated,
-				score: Math.round(Math.max(0.01, Math.min(1, hit.score)) * 100) / 100,
-				source: sourceChunkRecallSource(hit.sourceId),
-				source_id: hit.sourceId,
-				session_id: hit.sourceId,
-				type: hit.sourceType,
-				tags: sourceChunkRecallTags(hit),
-				pinned: false,
-				importance: 0.6,
-				who: sourceChunkProvider(hit.sourceId),
-				project: hit.project,
-				created_at: hit.createdAt,
-				source_path: hit.sourcePath,
-				supplementary: true,
-			};
-		});
-		for (const row of suppressPreviouslyRecalledForSelection(candidates)) {
-			if (results.length >= limit) break;
-			results.push(row);
-			if (row.source_id) existingSourceIds.add(row.source_id);
-		}
+		const candidates = (sourceChunkOutcome?.hits ?? []).map((hit) => sourceChunkRecallResult(hit, recallTruncate));
+		appendRecallResultsWithinLimit(results, suppressPreviouslyRecalledForSelection(candidates), limit);
 	}
 
 	if (results.length < limit) {
@@ -3077,38 +2923,20 @@ export async function hybridRecall(
 				)
 			: [];
 		const candidates = nativeHits.map((hit): RecallResult => {
-			const content = nativeArtifactRecallContent(hit);
-			const truncated = content.length > recallTruncate;
 			const sourceId = nativeArtifactPublicId(hit);
 			if (hit.sourceId)
 				lifecycleSourceResults.set(`native-artifact:${hit.rowid}`, {
 					source: nativeArtifactRecallSource(hit),
 					source_id: hit.sourceId,
 				});
-			return {
-				id: `native-artifact:${hit.rowid}`,
-				content: truncated ? `${content.slice(0, recallTruncate)} [truncated]` : content,
-				content_length: content.length,
-				truncated,
-				score: Math.round(Math.max(0.01, Math.min(1, hit.rank * 0.85)) * 100) / 100,
-				source: nativeArtifactRecallSource(hit),
-				source_id: sourceId,
-				session_id: sourceId,
-				type: hit.sourceKind,
-				tags: nativeArtifactRecallTags(hit),
-				pinned: false,
-				importance: 0.55,
-				who: hit.harness ?? "",
-				project: hit.project,
-				created_at: hit.updatedAt,
-				source_path: hit.sourcePath,
-				supplementary: true,
-			};
+			return nativeArtifactRecallResult(
+				hit,
+				recallTruncate,
+				Math.round(Math.max(0.01, Math.min(1, hit.rank * 0.85)) * 100) / 100,
+				sourceId,
+			);
 		});
-		for (const row of suppressPreviouslyRecalledForSelection(candidates)) {
-			if (results.length >= limit) break;
-			results.push(row);
-		}
+		appendRecallResultsWithinLimit(results, suppressPreviouslyRecalledForSelection(candidates), limit);
 	}
 	if (summarizeLeft > 0 && results.length > 0 && limit >= 2) {
 		const llmSummaryStart = performance.now();
@@ -3358,9 +3186,6 @@ export async function hybridRecall(
 		query,
 		method: vectorMap.size > 0 ? "hybrid" : "keyword",
 		meta: {
-			totalReturned: results.length,
-			hasSupplementary: results.some((row) => row.supplementary === true),
-			noHits: results.length === 0,
 			...(vectorCompleteness === undefined ? {} : { vectorCompleteness }),
 			...(searchedWindow === undefined ? {} : { searchedWindow }),
 			...(sourceChunkSearchDiagnostics === undefined ? {} : { sourceVectorSearch: sourceChunkSearchDiagnostics }),

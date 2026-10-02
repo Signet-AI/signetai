@@ -20,6 +20,9 @@ import {
 	shouldEnforceScope,
 } from "../request-scope";
 import { authConfig } from "./state";
+import { parseOptionalBoolean, parseOptionalString } from "./request-input.js";
+
+export { parseOptionalBoolean, parseOptionalString, readOptionalJsonObject, toRecord } from "./request-input.js";
 
 export interface EmbeddingStatus {
 	provider: "native" | "ollama" | "openai" | "llama-cpp" | "none";
@@ -144,12 +147,6 @@ export function parseIsoDateQuery(raw: string | undefined): string | undefined {
 	return date.toISOString();
 }
 
-export function parseOptionalString(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : undefined;
-}
-
 export function parseOptionalNumber(value: unknown): number | undefined {
 	if (typeof value === "number" && Number.isFinite(value)) return value;
 	if (typeof value === "string" && value.trim().length > 0) {
@@ -165,39 +162,6 @@ export function parseOptionalInt(value: unknown): number | undefined {
 	if (!Number.isInteger(parsed)) return undefined;
 	if (parsed <= 0) return undefined;
 	return parsed;
-}
-
-export function parseOptionalBoolean(value: unknown): boolean | undefined {
-	if (typeof value === "boolean") return value;
-	if (typeof value === "number") {
-		if (value === 1) return true;
-		if (value === 0) return false;
-		return undefined;
-	}
-	if (typeof value === "string") {
-		const lower = value.trim().toLowerCase();
-		if (lower === "1" || lower === "true") return true;
-		if (lower === "0" || lower === "false") return false;
-	}
-	return undefined;
-}
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-	return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
-export function toRecord(value: unknown): Record<string, unknown> | null {
-	return isRecord(value) ? value : null;
-}
-
-export async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {
-	const raw = await c.req.text();
-	if (!raw.trim()) return {};
-	try {
-		return toRecord(JSON.parse(raw));
-	} catch {
-		return null;
-	}
 }
 
 const TYPE_HINTS: Array<[string, string]> = [
@@ -503,7 +467,7 @@ export function loadForgetCandidates(
 			version: row.version,
 			score: 0,
 		}));
-	}, "routes/utils.ts:435");
+	}, "routes/utils.ts:399");
 }
 
 export function loadForgetCandidatesByIds(
@@ -543,7 +507,7 @@ export function loadForgetCandidatesByIds(
 				version: row.version,
 				score: 0,
 			}));
-	}, "routes/utils.ts:521");
+	}, "routes/utils.ts:485");
 }
 
 export function buildForgetConfirmToken(memoryIds: readonly string[]): string {
