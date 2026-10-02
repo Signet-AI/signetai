@@ -7,8 +7,7 @@ export interface WebSourceSettings {
 	readonly url: string;
 }
 
-export interface AddWebSourceInput {
-	readonly url: string;
+export interface AddWebSourceInput extends WebSourceSettings {
 	readonly name?: string;
 	readonly now?: string;
 }
@@ -38,26 +37,8 @@ export interface DiscordSourceSettings {
 	readonly syncMode: DiscordSourceSyncMode;
 }
 
-export interface AddDiscordSourceInput {
-	readonly guildIds?: readonly string[];
-	readonly tokenRef?: string;
-	readonly desktopCachePath?: string;
-	readonly desktopCacheFullScan?: boolean;
+export interface AddDiscordSourceInput extends Partial<DiscordSourceSettings> {
 	readonly name?: string;
-	readonly channelFilter?: readonly string[];
-	readonly maxMessagesPerChannel?: number;
-	readonly includeThreads?: boolean;
-	readonly includeArchivedThreads?: boolean;
-	readonly includePrivateArchivedThreads?: boolean;
-	readonly includeMembers?: boolean;
-	readonly includeAttachments?: boolean;
-	readonly includeAttachmentText?: boolean;
-	readonly maxAttachmentTextBytes?: number;
-	readonly includeEmbeds?: boolean;
-	readonly includePolls?: boolean;
-	readonly includeThreadMembers?: boolean;
-	readonly since?: string;
-	readonly syncMode?: DiscordSourceSyncMode;
 	readonly now?: string;
 }
 
@@ -72,16 +53,9 @@ export interface GitHubSourceSettings {
 	readonly maxItemsPerRepo: number;
 }
 
-export interface AddGitHubSourceInput {
+export interface AddGitHubSourceInput extends Partial<Omit<GitHubSourceSettings, "repos">> {
 	readonly repos: readonly string[];
-	readonly tokenRef?: string;
 	readonly name?: string;
-	readonly resourceTypes?: readonly GitHubSourceResourceType[];
-	readonly state?: GitHubSourceState;
-	readonly includeComments?: boolean;
-	readonly labels?: readonly string[];
-	readonly docPaths?: readonly string[];
-	readonly maxItemsPerRepo?: number;
 	readonly now?: string;
 }
 
