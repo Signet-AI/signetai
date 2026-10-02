@@ -277,8 +277,7 @@ describe("createRateLimiter", () => {
 		expect(result.reason).toMatch(/hourly budget exhausted/);
 	});
 
-	it("resets hourly count after the hour window expires", async () => {
-		const limiter = createRateLimiter();
+	it("blocks when the hourly budget is exhausted", async () => {
 		const lim = createRateLimiter();
 		for (let i = 0; i < 49; i++) {
 			lim.record("x");
@@ -288,6 +287,24 @@ describe("createRateLimiter", () => {
 		lim.record("x");
 		const denied = lim.check("x", 0, 50);
 		expect(denied.allowed).toBe(false);
+	});
+
+	it("resets hourly count after the hour window expires", async () => {
+		const realNow = Date.now;
+		let now = realNow();
+		Date.now = () => now;
+		try {
+			const limiter = createRateLimiter();
+			limiter.record("action");
+			expect(limiter.check("action", 0, 1).allowed).toBe(false);
+
+			now += 60 * 60 * 1000;
+			expect(limiter.check("action", 0, 1).allowed).toBe(true);
+			limiter.record("action");
+			expect(limiter.check("action", 0, 1).allowed).toBe(false);
+		} finally {
+			Date.now = realNow;
+		}
 	});
 });
 
@@ -511,7 +528,7 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 		db.close();
 	});
 
-	function seedBothQueues(count: number): void {
+	function seedMemoryAndSummaryQueues(count: number): void {
 		const now = new Date().toISOString();
 		for (let i = 0; i < count; i += 1) {
 			const memId = `mem-batch-${i}`;
@@ -531,127 +548,89 @@ describe("repair --max-batch aggregate cap (#1053)", () => {
 		return row.n;
 	}
 
-	describe("cancelObsoleteJobs", () => {
-		it("default both-queue apply affects at most 1000 total rows (not 2000)", async () => {
-			seedBothQueues(1001);
+	type BatchSelection = NonNullable<Parameters<typeof cancelObsoleteJobs>[4]>;
+	type TerminalStatus = "cancelled" | "dead";
+	const operations: ReadonlyArray<{
+		name: string;
+		status: TerminalStatus;
+		run: (options: BatchSelection) => Promise<RepairResult>;
+	}> = [
+		{
+			name: "cancelObsoleteJobs",
+			status: "cancelled",
+			run: (options) =>
+				cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), { olderThanMs: 0, ...options }),
+		},
+		{
+			name: "pruneTerminalJobs",
+			status: "dead",
+			run: (options) =>
+				pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), { retentionMs: 0, ...options }),
+		},
+	];
+	const scenarios: ReadonlyArray<{
+		name: string;
+		options: BatchSelection;
+		affectedLimit: number;
+		exactAffected?: boolean;
+		matching?: number;
+		memoryCounts: Readonly<Record<TerminalStatus, number>>;
+		summaryCounts: Readonly<Record<TerminalStatus, number>>;
+	}> = [
+		{
+			name: "default both-queue apply affects at most 1000 total rows (not 2000)",
+			options: {},
+			affectedLimit: 1000,
+			memoryCounts: { cancelled: 1000, dead: 1 },
+			summaryCounts: { cancelled: 0, dead: 1001 },
+		},
+		{
+			name: "--max-batch 50 affects at most 50 total rows across both queues",
+			options: { maxBatch: 50 },
+			affectedLimit: 50,
+			memoryCounts: { cancelled: 50, dead: 951 },
+			summaryCounts: { cancelled: 0, dead: 1001 },
+		},
+		{
+			name: "single-table selection still affects up to the requested cap from the memory table",
+			options: { maxBatch: 50, tables: ["memory"] },
+			affectedLimit: 50,
+			exactAffected: true,
+			memoryCounts: { cancelled: 50, dead: 951 },
+			summaryCounts: { cancelled: 0, dead: 1001 },
+		},
+		{
+			name: "dry-run preview is selected from the same globally bounded set as apply",
+			options: { maxBatch: 50, dryRun: true },
+			affectedLimit: 0,
+			exactAffected: true,
+			matching: 1001,
+			memoryCounts: { cancelled: 0, dead: 1001 },
+			summaryCounts: { cancelled: 0, dead: 1001 },
+		},
+	];
 
-			const result = await cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
-				olderThanMs: 0,
-			});
+	for (const operation of operations) {
+		describe(operation.name, () => {
+			for (const scenario of scenarios) {
+				it(scenario.name, async () => {
+					seedMemoryAndSummaryQueues(1001);
+					const result = await operation.run(scenario.options);
 
-			expect(result.success).toBe(true);
-			expect(result.affected).toBeLessThanOrEqual(1000);
-			expect(countMemoryByStatus("cancelled")).toBe(1000);
-			expect(countSummaryByStatus("cancelled")).toBe(0);
+					expect(result.success).toBe(true);
+					if (scenario.exactAffected) expect(result.affected).toBe(scenario.affectedLimit);
+					else expect(result.affected).toBeLessThanOrEqual(scenario.affectedLimit);
+					if (scenario.matching !== undefined) {
+						expect(result.totalMatching).toBe(scenario.matching);
+						expect(result.preview?.length ?? 0).toBeLessThanOrEqual(scenario.options.maxBatch ?? 0);
+						expect(result.preview?.every((id) => id.startsWith("memory_jobs:mem-job-"))).toBe(true);
+					}
+					expect(countMemoryByStatus(operation.status)).toBe(scenario.memoryCounts[operation.status]);
+					expect(countSummaryByStatus(operation.status)).toBe(scenario.summaryCounts[operation.status]);
+				});
+			}
 		});
-
-		it("--max-batch 50 affects at most 50 total rows across both queues", async () => {
-			seedBothQueues(1001);
-
-			const result = await cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
-				olderThanMs: 0,
-				maxBatch: 50,
-			});
-
-			expect(result.success).toBe(true);
-			expect(result.affected).toBeLessThanOrEqual(50);
-			expect(countMemoryByStatus("cancelled")).toBe(50);
-			expect(countSummaryByStatus("cancelled")).toBe(0);
-		});
-
-		it("single-table selection still affects up to the requested cap from the memory table", async () => {
-			seedBothQueues(1001);
-
-			const result = await cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
-				olderThanMs: 0,
-				maxBatch: 50,
-				tables: ["memory"],
-			});
-
-			expect(result.success).toBe(true);
-			expect(result.affected).toBe(50);
-			expect(countMemoryByStatus("cancelled")).toBe(50);
-		});
-
-		it("dry-run preview is selected from the same globally bounded set as apply", async () => {
-			seedBothQueues(1001);
-
-			const result = await cancelObsoleteJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
-				olderThanMs: 0,
-				maxBatch: 50,
-				dryRun: true,
-			});
-
-			expect(result.success).toBe(true);
-			expect(result.affected).toBe(0);
-			expect(result.totalMatching).toBe(1001);
-			expect(result.preview?.length ?? 0).toBeLessThanOrEqual(50);
-			expect(result.preview?.every((id) => id.startsWith("memory_jobs:mem-job-"))).toBe(true);
-			expect(countMemoryByStatus("cancelled")).toBe(0);
-			expect(countSummaryByStatus("cancelled")).toBe(0);
-		});
-	});
-
-	describe("pruneTerminalJobs", () => {
-		it("default both-queue apply affects at most 1000 total rows (not 2000)", async () => {
-			seedBothQueues(1001);
-
-			const result = await pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
-				retentionMs: 0,
-			});
-
-			expect(result.success).toBe(true);
-			expect(result.affected).toBeLessThanOrEqual(1000);
-			expect(countMemoryByStatus("dead")).toBe(1);
-			expect(countSummaryByStatus("dead")).toBe(1001);
-		});
-
-		it("--max-batch 50 affects at most 50 total rows across both queues", async () => {
-			seedBothQueues(1001);
-
-			const result = await pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
-				retentionMs: 0,
-				maxBatch: 50,
-			});
-
-			expect(result.success).toBe(true);
-			expect(result.affected).toBeLessThanOrEqual(50);
-			expect(countMemoryByStatus("dead")).toBe(951);
-			expect(countSummaryByStatus("dead")).toBe(1001);
-		});
-
-		it("single-table selection still affects up to the requested cap from the memory table", async () => {
-			seedBothQueues(1001);
-
-			const result = await pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
-				retentionMs: 0,
-				maxBatch: 50,
-				tables: ["memory"],
-			});
-
-			expect(result.success).toBe(true);
-			expect(result.affected).toBe(50);
-			expect(countMemoryByStatus("dead")).toBe(951);
-		});
-
-		it("dry-run preview is selected from the same globally bounded set as apply", async () => {
-			seedBothQueues(1001);
-
-			const result = await pruneTerminalJobs(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), {
-				retentionMs: 0,
-				maxBatch: 50,
-				dryRun: true,
-			});
-
-			expect(result.success).toBe(true);
-			expect(result.affected).toBe(0);
-			expect(result.totalMatching).toBe(1001);
-			expect(result.preview?.length ?? 0).toBeLessThanOrEqual(50);
-			expect(result.preview?.every((id) => id.startsWith("memory_jobs:mem-job-"))).toBe(true);
-			expect(countMemoryByStatus("dead")).toBe(1001);
-			expect(countSummaryByStatus("dead")).toBe(1001);
-		});
-	});
+	}
 });
 
 describe("releaseStaleLeases", () => {
