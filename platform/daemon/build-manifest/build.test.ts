@@ -61,6 +61,10 @@ describe("RuntimeManifest", () => {
 			const fixture = join(root, "fixture");
 			const pkg = join(root, "node_modules", "native-fixture");
 			mkdirSync(fixture, { recursive: true });
+			writeFileSync(
+				join(fixture, "package.json"),
+				JSON.stringify({ name: "runtime-fixture", private: true, dependencies: { "native-fixture": "1.0.0" } }),
+			);
 			mkdirSync(join(pkg, "prebuilds", "linux-x64"), { recursive: true });
 			writeFileSync(
 				join(fixture, "entry.js"),
