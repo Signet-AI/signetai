@@ -30,6 +30,7 @@ export function smokeEnvironment(home: string, workspace: string): Record<string
 		environment.SystemRoot = system;
 		environment.WINDIR = system;
 	}
+	if (process.platform === "darwin") environment.CFFIXED_USER_HOME = home;
 	const bus = process.env.SIGNET_SMOKE_DBUS_ADDRESS;
 	if (bus) environment.DBUS_SESSION_BUS_ADDRESS = bus;
 	return environment;
@@ -86,6 +87,7 @@ async function main(): Promise<void> {
 		const keychain = process.env.SIGNET_TEST_KEYCHAIN;
 		if (!keychain || !existsSync(keychain)) throw new Error("Missing provisioned disposable macOS keychain");
 		mkdirSync(join(home, "Library", "Keychains"), { recursive: true });
+		mkdirSync(join(home, "Library", "Preferences"), { recursive: true });
 		await bounded("/usr/bin/security", ["list-keychains", "-d", "user", "-s", keychain], root, env);
 		await bounded("/usr/bin/security", ["default-keychain", "-d", "user", "-s", keychain], root, env);
 		const configured = await bounded("/usr/bin/security", ["default-keychain", "-d", "user"], root, env);

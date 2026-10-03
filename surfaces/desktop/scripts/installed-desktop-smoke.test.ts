@@ -18,6 +18,8 @@ describe("installed desktop smoke", () => {
 		expect(env.XDG_RUNTIME_DIR).toBe(resolve(home, "run"));
 		for (const key of ["TEMP", "TMP", "TMPDIR"]) expect(env[key]).toBe(resolve(home, "tmp"));
 		expect(env.LANG).toBe("C");
+		if (process.platform === "darwin") expect(env.CFFIXED_USER_HOME).toBe(home);
+		if (process.platform !== "darwin") expect(env.CFFIXED_USER_HOME).toBeUndefined();
 		expect(env.DBUS_SESSION_BUS_ADDRESS).toEqual(process.env.SIGNET_SMOKE_DBUS_ADDRESS);
 		expect(env.PATH).not.toContain(process.env.PATH ?? "never");
 		expect(env.NODE_PATH).toBeUndefined();

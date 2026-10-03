@@ -165,8 +165,12 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/signet-smoke-logs" | Out-Null
           if (-not (Test-Path $env:SIGNET_SMOKE_ELECTRON)) { throw 'Installed Electron executable missing' }
           $env:ELECTRON_RUN_AS_NODE = '1'
-          & $env:SIGNET_SMOKE_ELECTRON -e 'if (!process.versions.electron) process.exit(1); console.log(process.versions.electron)' *> "$env:RUNNER_TEMP/signet-smoke-logs/electron.log"
-          if ($LASTEXITCODE -ne 0) { throw "Installed Electron verification failed with exit code $LASTEXITCODE" }
+          $log = "$env:RUNNER_TEMP/signet-smoke-logs/electron.log"
+          $errorLog = "$env:RUNNER_TEMP/signet-smoke-logs/electron-error.log"
+          $process = Start-Process -FilePath $env:SIGNET_SMOKE_ELECTRON -Wait -PassThru -ArgumentList @('-e', '"if (!process.versions.electron) process.exit(1); console.log(process.versions.electron)"') -RedirectStandardOutput $log -RedirectStandardError $errorLog
+          if ($process.ExitCode -ne 0) { throw "Installed Electron verification failed with exit code $($process.ExitCode)" }
+          $version = (Get-Content -Raw $log).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "Installed Electron did not report its runtime version" }
       - name: Verify installed Electron runtime on Linux
         if: runner.os == 'Linux'
         run: |
