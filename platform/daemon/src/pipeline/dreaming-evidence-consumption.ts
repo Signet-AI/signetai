@@ -132,6 +132,21 @@ export function passDeliveredRanges(
 	return ranges;
 }
 
+export function passFullyServedSourceRefs(db: ReadDb, passId: string, agentId: string): string[] {
+	const coverage = new Map<string, { ranges: Array<readonly [number, number]>; length: number }>();
+	for (const delivery of persistedEvidenceDeliveries(db, passId)) {
+		if (delivery.agentId !== agentId) continue;
+		const ref = `${delivery.kind}:${delivery.id}`;
+		const entry = coverage.get(ref) ?? { ranges: [], length: delivery.length };
+		entry.ranges.push([delivery.start, delivery.end]);
+		coverage.set(ref, entry);
+	}
+	return [...coverage].flatMap(([ref, { ranges, length }]) => {
+		const first = Math.min(...ranges.map(([start]) => start));
+		return extendDeliveredOffset(first, ranges) >= length ? [ref] : [];
+	});
+}
+
 export function extendDeliveredOffset(
 	baseline: number,
 	ranges: ReadonlyArray<readonly [number, number]> | undefined,

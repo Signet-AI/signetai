@@ -455,6 +455,7 @@ export interface DreamingConfig {
 	readonly timeout: number;
 	readonly maxInputTokens: number;
 	readonly maxOutputTokens: number | null;
+	readonly maxConcurrentPasses: number;
 	readonly backfillOnFirstRun: boolean;
 	readonly surprisal?: DreamingSurprisalConfig;
 }

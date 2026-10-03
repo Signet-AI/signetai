@@ -234,7 +234,7 @@ export function readDreamingRunbook(accessor: DbAccessor, agentId: string, limit
 				`SELECT id, mode, status, started_at AS startedAt, completed_at AS completedAt,
 				        summary, error, mutations_applied AS mutationsApplied, mutations_failed AS mutationsFailed,
 				        evidence_window_json AS evidenceWindowJson, runbook_json AS runbookJson
-				 FROM dreaming_passes WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?`,
+				 FROM dreaming_passes WHERE agent_id = ? AND status != 'running' ORDER BY created_at DESC LIMIT ?`,
 			)
 			.all(agentId, boundedLimit) as Array<Record<string, unknown>>;
 		const quarantines = db.prepare(

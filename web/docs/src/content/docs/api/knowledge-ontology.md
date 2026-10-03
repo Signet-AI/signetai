@@ -485,7 +485,14 @@ episodic evidence. Requires `admin` permission.
 ```json
 {
   "enabled": true,
-  "worker": { "running": true, "active": false, "activeAgentId": null },
+  "worker": {
+    "running": true,
+    "active": false,
+    "activeAgentId": null,
+    "activePasses": [
+      { "passId": "pass-uuid", "agentId": "default", "mode": "incremental", "scopes": ["default", "noam"] }
+    ]
+  },
   "episodicTokensPending": 42000,
   "state": {
     "tokensSinceLastPass": 42000,
@@ -498,6 +505,7 @@ episodic evidence. Requires `admin` permission.
     "backfillOnFirstRun": true,
     "maxInputTokens": 128000,
     "maxOutputTokens": null,
+    "maxConcurrentPasses": 2,
     "timeout": 300000
   },
   "passes": [
@@ -803,8 +811,20 @@ Returns `202 Accepted` immediately and runs the pass in the background
 (passes can take up to several minutes on large graphs).
 The daemon keeps the worker available for manual triggers when automatic
 Dreaming is disabled; scheduled sweeps remain idle. The pipeline must not be
-paused and mutations must not be frozen. Returns 409 if a pass is already
-running and 503 if the pipeline prevents worker startup.
+paused and mutations must not be frozen. Returns 409 when no pass can start
+and 503 if the pipeline prevents worker startup.
+
+An incremental trigger may start several passes. The daemon splits the agents
+that are not already in a running pass into up to `memory.dreaming.maxConcurrentPasses`
+groups (default 2), balanced by evidence backlog, and runs one pass per group.
+Each pass may read and write only its own group's agents, and an agent is in at
+most one running pass. The first pass starts immediately; the other groups start
+only after it completes a tool call, so an unavailable provider is not called once
+per group. The response's `passId` is the first pass. `worker.activePasses` in
+`GET /api/dream/status` lists every running pass; the trigger is complete when it
+is empty. Compact passes, directed passes, and scheduled content and hygiene
+passes run alone. `maxOutputTokens` is unset by default, so each reply may use
+the model's own output limit.
 
 Poll `GET /api/dream/status` and check `passes[0].status` for completion, or
 use `GET /api/dream/passes/:passId/events` for a live read-only view.

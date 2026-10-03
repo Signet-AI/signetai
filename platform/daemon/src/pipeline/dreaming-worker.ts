@@ -49,8 +49,51 @@ export interface DreamingWorkerHandle {
 	): Promise<string>;
 	readonly running: boolean;
 	readonly activeAgentId: string | null;
+	readonly activePasses: readonly DreamingActivePass[];
 	readonly activePass: Promise<unknown> | null;
 	readonly scheduler: DreamingSchedulerStatus;
+}
+export interface DreamingActivePass {
+	readonly passId: string | null;
+	readonly agentId: string;
+	readonly mode: DreamingMode;
+	readonly scopes: readonly string[];
+}
+interface RunningDreamingPass {
+	passId: string | null;
+	readonly agentId: string;
+	readonly mode: DreamingMode;
+	readonly scopes: readonly string[];
+	readonly exclusive: boolean;
+	readonly slots: number;
+	readonly settled: Promise<void>;
+}
+interface StartedDreamingPass {
+	readonly passId: Promise<string>;
+	readonly result: Promise<DreamingPassResult>;
+	readonly firstToolCall: Promise<boolean>;
+}
+type DreamingPassResult = { passId: string; applied: number; skipped: number; failed: number; summary: string };
+
+export function partitionDreamingScopes(
+	backlogs: ReadonlyArray<{ readonly scope: string; readonly tokens: number }>,
+	slots: number,
+): string[][] {
+	const withBacklog = backlogs
+		.filter((item) => item.tokens > 0)
+		.sort((a, b) => b.tokens - a.tokens || a.scope.localeCompare(b.scope));
+	const idle = backlogs.filter((item) => item.tokens <= 0).map((item) => item.scope);
+	const groups = Array.from({ length: Math.max(1, Math.min(slots, withBacklog.length)) }, () => ({
+		scopes: [] as string[],
+		tokens: 0,
+	}));
+	for (const item of withBacklog) {
+		const target = groups.reduce((smallest, group) => (group.tokens < smallest.tokens ? group : smallest));
+		target.scopes.push(item.scope);
+		target.tokens += item.tokens;
+	}
+	groups[0]?.scopes.push(...idle);
+	return groups.map((group) => [...group.scopes].sort()).filter((scopes) => scopes.length > 0);
 }
 export interface DreamingSchedulerStatus {
 	readonly status: "idle" | "deferred";
@@ -105,7 +148,7 @@ export async function shouldDeferDreamingSweep(
 ): Promise<boolean> {
 	if (ownerMaintenance) return !(await ownerMaintenance.queueIsHealthy());
 	return await accessor.withReadDbAsync((db) => getQueueHealth(db).status !== "healthy", {
-		siteToken: "pipeline/dreaming-worker.ts:107",
+		siteToken: "pipeline/dreaming-worker.ts:150",
 		operation: "dreaming.worker.queue-health",
 	});
 }
@@ -158,7 +201,7 @@ export async function getDreamingWorkerAgentIds(
 				(db) => {
 					return db.prepare(sql).all() as Array<{ id: string | null }>;
 				},
-				{ siteToken: "pipeline/dreaming-worker.ts:157", operation: "dreaming.worker.agent-scopes" },
+				{ siteToken: "pipeline/dreaming-worker.ts:200", operation: "dreaming.worker.agent-scopes" },
 			);
 	const ids = new Set<string>([defaultAgentId]);
 	for (const row of rows) {
@@ -213,7 +256,7 @@ export async function selectDreamingCheckMode(
 							[scope, "hygiene"],
 						).then((row) => row != null)
 					: accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"]), {
-							siteToken: "pipeline/dreaming-worker.ts:215",
+							siteToken: "pipeline/dreaming-worker.ts:258",
 							operation: "dreaming.worker.hygiene-attention",
 						}),
 			),
@@ -235,7 +278,7 @@ export async function selectDreamingCheckMode(
 					: accessor.withReadDbAsync(
 							(db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
 							{
-								siteToken: "pipeline/dreaming-worker.ts:235",
+								siteToken: "pipeline/dreaming-worker.ts:278",
 								operation: "dreaming.worker.content-attention",
 							},
 						),
@@ -258,10 +301,12 @@ export function startDreamingWorker(
 	caps?: GraphHygieneCaps,
 ): DreamingWorkerHandle {
 	let timer: ReturnType<typeof setTimeout> | null = null;
-	let active = false;
-	let activeAgent: string | null = null;
 	let stopped = false;
-	let activePassPromise: Promise<unknown> | null = null;
+	let admission: Promise<void> | null = null;
+	let activeWork: Promise<void> | null = null;
+	let knownScopes: readonly string[] = [];
+	const runningPasses = new Set<RunningDreamingPass>();
+	const maxConcurrentPasses = Math.max(1, Math.floor(cfg.maxConcurrentPasses ?? 1));
 	let scheduler: DreamingSchedulerStatus = { status: "idle", reason: null, checkedAt: null };
 	let nextScheduledFocus: DreamingPassFocus | null = null;
 	const getAgentScopes = createAgentScopeSnapshot(AGENT_SCOPE_SNAPSHOT_REFRESH_MS, () =>
@@ -333,47 +378,173 @@ export function startDreamingWorker(
 		});
 	}
 
-	async function runPass(
-		runAgentId: string,
-		mode: DreamingMode,
-		existingPassId?: string,
-		scopes?: readonly string[],
-	): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
-		if (active) throw new AlreadyRunningError();
-		active = true;
-		activeAgent = runAgentId;
+	const usedSlots = (): number => [...runningPasses].reduce((sum, pass) => sum + pass.slots, 0);
+	const leasedScopes = (): ReadonlySet<string> => new Set([...runningPasses].flatMap((pass) => pass.scopes));
+	const exclusiveRunning = (): boolean => [...runningPasses].some((pass) => pass.exclusive);
+	const listScopes = async (): Promise<readonly string[]> => {
+		knownScopes = await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance);
+		return knownScopes;
+	};
+	const knownScopesLeased = (): boolean => {
+		if (runningPasses.size === 0) return false;
+		if (exclusiveRunning() || usedSlots() >= maxConcurrentPasses) return true;
+		const leased = leasedScopes();
+		return knownScopes.length > 0 && knownScopes.every((scope) => leased.has(scope));
+	};
+
+	async function admit<T>(fn: () => Promise<T>): Promise<T> {
+		if (admission !== null) throw new AlreadyRunningError();
+		let release: () => void = () => undefined;
+		admission = new Promise<void>((resolve) => {
+			release = resolve;
+		});
 		try {
-			const passScopes =
-				scopes ?? (await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance));
-			const p = runDreamingAgentPass(
-				accessor,
-				executorForAgent(runAgentId),
-				cfg,
-				agentsDir,
-				runAgentId,
-				passScopes,
-				mode,
-				existingPassId,
-				caps,
-				undefined,
-				options.ownerMaintenance,
-			);
-			activePassPromise = p;
-			try {
-				return await p;
-			} catch (e) {
-				recordDreamingFailureOrLog(runAgentId);
-				throw e;
-			}
+			return await fn();
 		} finally {
-			active = false;
-			activeAgent = null;
-			activePassPromise = null;
+			admission = null;
+			release();
 		}
 	}
 
+	function reportToolCalls(executor: DreamingAgentExecutor, onToolCall: () => void): DreamingAgentExecutor {
+		return {
+			run: (input) =>
+				executor.run({
+					...input,
+					tools: input.tools.map((tool) => ({
+						...tool,
+						execute: (...args: Parameters<typeof tool.execute>) => {
+							onToolCall();
+							return tool.execute(...args);
+						},
+					})),
+				}),
+		};
+	}
+
+	function startPass(
+		runAgentId: string,
+		mode: DreamingMode,
+		scopes: readonly string[],
+		exclusive: boolean,
+		live?: DreamingPassLiveOptions,
+	): StartedDreamingPass {
+		let resolveToolCall: (ok: boolean) => void = () => undefined;
+		const firstToolCall = new Promise<boolean>((resolve) => {
+			resolveToolCall = resolve;
+		});
+		let release: () => void = () => undefined;
+		const entry: RunningDreamingPass = {
+			passId: null,
+			agentId: runAgentId,
+			mode,
+			scopes,
+			exclusive,
+			slots: 1,
+			settled: new Promise<void>((resolve) => {
+				release = resolve;
+			}),
+		};
+		runningPasses.add(entry);
+		const passId = (async () => {
+			const id = options.ownerMaintenance
+				? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode)
+				: await createDreamingPass(accessor, runAgentId, mode);
+			entry.passId = id;
+			return id;
+		})();
+		const result = passId.then((id) =>
+			runDreamingAgentPass(
+				accessor,
+				reportToolCalls(executorForAgent(runAgentId), () => resolveToolCall(true)),
+				cfg,
+				agentsDir,
+				runAgentId,
+				scopes,
+				mode,
+				id,
+				caps,
+				live,
+				options.ownerMaintenance,
+			).catch((error: unknown) => {
+				recordDreamingFailureOrLog(runAgentId);
+				logger.error("dreaming-worker", "Dreaming pass failed", undefined, {
+					agentId: runAgentId,
+					passId: id,
+					scopes,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				throw error;
+			}),
+		);
+		void result.then(
+			() => resolveToolCall(true),
+			() => resolveToolCall(false),
+		);
+		void result
+			.catch(() => undefined)
+			.finally(() => {
+				runningPasses.delete(entry);
+				release();
+			});
+		return { passId, result, firstToolCall };
+	}
+
+	async function measureScopeBacklogs(
+		scopes: readonly string[],
+	): Promise<Array<{ readonly scope: string; readonly tokens: number }>> {
+		return await Promise.all(
+			scopes.map(async (scope) => {
+				const probe = await probeDreamingEpisodicBacklog(accessor, scope, cfg.tokenThreshold, options.ownerMaintenance);
+				if (probe.hasBacklog === false) return { scope, tokens: 0 };
+				return { scope, tokens: Math.max(1, probe.kind === "exact" ? probe.tokens : probe.tokenLowerBound) };
+			}),
+		);
+	}
+
+	async function startIncrementalPasses(runAgentId: string, scopes: readonly string[]): Promise<StartedDreamingPass> {
+		const slots = maxConcurrentPasses - usedSlots();
+		if (scopes.length === 0 || slots <= 0) throw new AlreadyRunningError();
+		const groups =
+			slots === 1 || scopes.length === 1
+				? [[...scopes]]
+				: partitionDreamingScopes(await measureScopeBacklogs(scopes), slots);
+		const [firstGroup, ...rest] = groups;
+		const first = startPass(runAgentId, "incremental", firstGroup ?? [...scopes], false);
+		if (rest.length === 0) return first;
+		let releaseReservation: () => void = () => undefined;
+		const reservation: RunningDreamingPass = {
+			passId: null,
+			agentId: runAgentId,
+			mode: "incremental",
+			scopes: rest.flat(),
+			exclusive: false,
+			slots: rest.length,
+			settled: new Promise<void>((resolve) => {
+				releaseReservation = resolve;
+			}),
+		};
+		runningPasses.add(reservation);
+		void first.firstToolCall.then((ok) => {
+			runningPasses.delete(reservation);
+			releaseReservation();
+			if (!ok || stopped) {
+				logger.warn("dreaming-worker", "Skipped concurrent Dreaming passes after the first pass failed to start", {
+					agentId: runAgentId,
+					groups: rest.length,
+				});
+				return;
+			}
+			for (const group of rest) {
+				startPass(runAgentId, "incremental", group, false).result.catch(() => undefined);
+			}
+		});
+		return first;
+	}
+
 	async function check(): Promise<void> {
-		if (stopped || active || !cfg.enabled) return;
+		if (stopped || admission !== null || exclusiveRunning() || usedSlots() >= maxConcurrentPasses || !cfg.enabled)
+			return;
 		const checkedAt = new Date().toISOString();
 		if (isSystemPressureHigh()) {
 			scheduler = { status: "deferred", reason: "system_pressure", checkedAt };
@@ -385,7 +556,9 @@ export function startDreamingWorker(
 			return;
 		}
 		scheduler = { status: "idle", reason: null, checkedAt };
-		const scopes = await getAgentScopes();
+		const leased = leasedScopes();
+		const scopes = (await getAgentScopes()).filter((scope) => !leased.has(scope));
+		if (scopes.length === 0) return;
 		const autoRequeued = await autoRequeueRepairedDreamingEvidence(accessor, evidenceRetry);
 		if (autoRequeued > 0) {
 			logger.info("dreaming-worker", "Automatically requeued repaired Dreaming evidence", {
@@ -395,7 +568,7 @@ export function startDreamingWorker(
 		}
 		let triggered = false;
 		for (const scopeId of scopes) {
-			if (stopped || active) return;
+			if (stopped) return;
 			if (await isDreamingHaltActive(accessor, scopeId)) continue;
 			try {
 				await enqueueDreamingHygieneAttention(accessor, scopeId, undefined, caps, options.ownerMaintenance);
@@ -425,13 +598,20 @@ export function startDreamingWorker(
 		}
 		if (!triggered) return;
 		const mode = await selectDreamingCheckMode(accessor, scopes, nextScheduledFocus, options.ownerMaintenance);
+		if (mode !== "incremental" && runningPasses.size > 0) return;
 		nextScheduledFocus = dreamingFocusOfMode(mode) ?? nextScheduledFocus;
 		try {
-			await runPass(defaultAgentId, mode, undefined, scopes);
+			const started = await admit(async () =>
+				mode === "incremental"
+					? await startIncrementalPasses(defaultAgentId, scopes)
+					: startPass(defaultAgentId, mode, scopes, true),
+			);
+			await started.passId;
 		} catch (e) {
+			if (e instanceof AlreadyRunningError) return;
 			logger.error(
 				"dreaming-worker",
-				"Scheduled dreaming pass failed; check loop continues",
+				"Scheduled dreaming pass failed to start; check loop continues",
 				e instanceof Error ? e : undefined,
 				{ mode, error: e instanceof Error ? e.message : String(e) },
 			);
@@ -469,8 +649,12 @@ export function startDreamingWorker(
 			}
 		},
 
-		trigger(mode: DreamingMode, agentId?: string) {
-			return runPass(normalizeAgentId(agentId, defaultAgentId), mode);
+		async trigger(mode: DreamingMode, agentId?: string) {
+			const started = await admit(async () => {
+				if (runningPasses.size > 0) throw new AlreadyRunningError();
+				return startPass(normalizeAgentId(agentId, defaultAgentId), mode, await listScopes(), true);
+			});
+			return await started.result;
 		},
 
 		async triggerAsync(
@@ -478,75 +662,60 @@ export function startDreamingWorker(
 			agentId?: string,
 			userRequest?: DreamingPassLiveOptions["userRequest"],
 		): Promise<string> {
-			if (active) throw new AlreadyRunningError();
 			const runAgentId = normalizeAgentId(agentId, defaultAgentId);
-			active = true;
-			activeAgent = runAgentId;
-			let resolveActivePass: (() => void) | null = null;
-			let rejectActivePass: ((error: unknown) => void) | null = null;
-			const activeAttempt = new Promise<void>((resolve, reject) => {
-				resolveActivePass = resolve;
-				rejectActivePass = reject;
-			});
-			void activeAttempt.catch(() => undefined);
-			activePassPromise = activeAttempt;
-			const finish = (): void => {
-				active = false;
-				activeAgent = null;
-				activePassPromise = null;
-				const resolve = resolveActivePass;
-				resolveActivePass = null;
-				resolve?.();
-			};
-			try {
-				const passScopes = userRequest
-					? [runAgentId]
-					: await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance);
-				const executor = executorForAgent(runAgentId);
-				const passId = options.ownerMaintenance
-					? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode)
-					: await createDreamingPass(accessor, runAgentId, mode);
-				const p = runDreamingAgentPass(
-					accessor,
-					executor,
-					cfg,
-					agentsDir,
+			if (!userRequest && knownScopesLeased()) throw new AlreadyRunningError();
+			const started = await admit(async () => {
+				if (exclusiveRunning()) throw new AlreadyRunningError();
+				if (userRequest) {
+					if (leasedScopes().has(runAgentId) || usedSlots() >= maxConcurrentPasses) throw new AlreadyRunningError();
+					return startPass(runAgentId, mode, [runAgentId], mode !== "incremental", { userRequest });
+				}
+				const scopes = await listScopes();
+				if (mode !== "incremental") {
+					if (runningPasses.size > 0) throw new AlreadyRunningError();
+					return startPass(runAgentId, mode, scopes, true);
+				}
+				const leased = leasedScopes();
+				return await startIncrementalPasses(
 					runAgentId,
-					passScopes,
-					mode,
-					passId,
-					caps,
-					{ userRequest },
-					options.ownerMaintenance,
+					scopes.filter((scope) => !leased.has(scope)),
 				);
-				void p
-					.catch((error) => {
-						recordDreamingFailureOrLog(runAgentId);
-						logger.error("dreaming-worker", "Async trigger failed", undefined, {
-							agentId: runAgentId,
-							passId,
-							error: error instanceof Error ? error.message : String(error),
-						});
-						rejectActivePass?.(error);
-					})
-					.finally(finish);
-				return passId;
-			} catch (error) {
-				finish();
-				throw error;
-			}
+			});
+			return await started.passId;
 		},
 
 		get running() {
-			return active;
+			return runningPasses.size > 0 || admission !== null;
 		},
 
 		get activeAgentId() {
-			return activeAgent;
+			return [...runningPasses][0]?.agentId ?? null;
+		},
+
+		get activePasses() {
+			return [...runningPasses].map((pass) => ({
+				passId: pass.passId,
+				agentId: pass.agentId,
+				mode: pass.mode,
+				scopes: pass.scopes,
+			}));
 		},
 
 		get activePass() {
-			return activePassPromise;
+			if (runningPasses.size === 0 && admission === null) return null;
+			if (activeWork === null) {
+				const work = (async () => {
+					while (runningPasses.size > 0 || admission !== null) {
+						const pending = [...runningPasses].map((pass) => pass.settled);
+						if (admission !== null) pending.push(admission);
+						await Promise.all(pending);
+					}
+				})().finally(() => {
+					if (activeWork === work) activeWork = null;
+				});
+				activeWork = work;
+			}
+			return activeWork;
 		},
 		get scheduler() {
 			return scheduler;

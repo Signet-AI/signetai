@@ -85,7 +85,7 @@ interface DreamingStatusPass {
 }
 
 interface DreamingStatusResponse {
-  worker?: { running?: boolean }
+  worker?: { running?: boolean; activePasses?: unknown[] }
   passes?: DreamingStatusPass[]
   episodicTokensPending?: number
 }
@@ -552,61 +552,75 @@ export class SignetProvider implements Provider {
 
     const deadline = Date.now() + readPositiveInt("SIGNET_BENCH_DREAMING_WAIT_SECS", 720) * 1000
     const pollMs = Math.min(readPositiveInt("SIGNET_BENCH_DREAMING_POLL_SECS", 1), 5) * 1000
-    let idlePasses = 0
-    let failedPasses = 0
+    const settled = new Set(
+      ((await this.readDreamStatus(this.agentId)).passes ?? []).flatMap((pass) =>
+        pass.id && pass.status !== "running" ? [pass.id] : []
+      )
+    )
+    let idleRounds = 0
+    let failedRounds = 0
     while (Date.now() < deadline) {
-      let accepted: DreamingTriggerResponse
       try {
-        accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
+        const accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
           method: "POST",
           body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
         })
+        if (!accepted.passId) {
+          throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
+        }
       } catch (error) {
         if (!(error instanceof Error) || !error.message.includes("/api/dream/trigger failed (409)")) throw error
-        const status = await this.readDreamStatus(this.agentId)
-        const running = status.passes?.find((pass) => pass.status === "running" && pass.id)
-        if (!running?.id) throw error
-        accepted = { passId: running.id }
-      }
-      if (!accepted.passId) {
-        throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
       }
 
-      let completed = false
-      while (Date.now() < deadline) {
-        const primary = await this.readDreamStatus(this.agentId)
-        const pass = primary.passes?.find((candidate) => candidate.id === accepted.passId)
-        if (pass && pass.status !== "running") {
-          if (pass.status !== "completed") {
-            const failure = `Dreaming pass ${accepted.passId} ${pass.status || "failed"}: ${pass.error || "no detail"}`
-            failedPasses++
-            if (failedPasses >= MAX_FAILED_DREAMING_PASSES) {
-              throw new Error(`${failure} (${failedPasses} consecutive failed passes)`)
-            }
-            logger.warn(`${failure}; retrying (${failedPasses}/${MAX_FAILED_DREAMING_PASSES})`)
-            completed = true
-            break
-          }
-          failedPasses = 0
-          const statuses = await Promise.all(
-            scopes.map((agentId) =>
-              agentId === this.agentId ? Promise.resolve(primary) : this.readDreamStatus(agentId)
-            )
-          )
-          if (statuses.every((status) => status.episodicTokensPending === 0)) return
-          idlePasses = (pass.mutationsApplied ?? 0) > 0 ? 0 : idlePasses + 1
-          if (idlePasses >= MAX_IDLE_DREAMING_PASSES) {
-            const backlog = statuses.map((status) => status.episodicTokensPending ?? "unmeasured").join(", ")
-            throw new Error(
-              `Dreaming applied no mutations in ${idlePasses} consecutive passes while the backlog was not drained (${backlog})`
-            )
-          }
-          completed = true
-          break
+      let primary = await this.readDreamStatus(this.agentId)
+      while ((primary.worker?.activePasses?.length ?? 0) > 0 && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, pollMs))
+        primary = await this.readDreamStatus(this.agentId)
+      }
+      if ((primary.worker?.activePasses?.length ?? 0) > 0) break
+
+      const round = (primary.passes ?? []).filter(
+        (pass): pass is DreamingStatusPass & { id: string } =>
+          typeof pass.id === "string" && pass.status !== "running" && !settled.has(pass.id)
+      )
+      for (const pass of round) settled.add(pass.id)
+      if (round.length === 0) {
+        idleRounds++
+        if (idleRounds >= MAX_IDLE_DREAMING_PASSES) {
+          throw new Error(`Dreaming started no new passes in ${idleRounds} consecutive rounds`)
         }
         await new Promise((resolve) => setTimeout(resolve, pollMs))
+        continue
       }
-      if (!completed) break
+      const failures = round.filter((pass) => pass.status !== "completed")
+      if (failures.length > 0) {
+        failedRounds++
+        const failure = failures
+          .map((pass) => `Dreaming pass ${pass.id} ${pass.status || "failed"}: ${pass.error || "no detail"}`)
+          .join("; ")
+        if (failedRounds >= MAX_FAILED_DREAMING_PASSES) {
+          throw new Error(`${failure} (${failedRounds} consecutive rounds with failed passes)`)
+        }
+        logger.warn(`${failure}; retrying (${failedRounds}/${MAX_FAILED_DREAMING_PASSES})`)
+        if (failures.length === round.length) continue
+      } else {
+        failedRounds = 0
+      }
+
+      const statuses = await Promise.all(
+        scopes.map((agentId) =>
+          agentId === this.agentId ? Promise.resolve(primary) : this.readDreamStatus(agentId)
+        )
+      )
+      if (statuses.every((status) => status.episodicTokensPending === 0)) return
+      const applied = round.reduce((sum, pass) => sum + (pass.mutationsApplied ?? 0), 0)
+      idleRounds = applied > 0 ? 0 : idleRounds + 1
+      if (idleRounds >= MAX_IDLE_DREAMING_PASSES) {
+        const backlog = statuses.map((status) => status.episodicTokensPending ?? "unmeasured").join(", ")
+        throw new Error(
+          `Dreaming applied no mutations in ${idleRounds} consecutive rounds while the backlog was not drained (${backlog})`
+        )
+      }
     }
     throw new Error("Timed out draining the Dreaming episodic backlog")
   }

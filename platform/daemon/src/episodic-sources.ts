@@ -858,6 +858,7 @@ export function searchEpisodicSources(
 		readonly before?: string;
 		readonly kind?: "memory" | "artifact" | "transcript" | "summary";
 		readonly excludeDelivered?: boolean;
+		readonly excludeSourceRefs?: readonly string[];
 		readonly limit?: number | null;
 		readonly order?: "newest" | "none";
 		readonly candidateRefs?: readonly EpisodicSourceCandidateRef[];
@@ -937,6 +938,15 @@ export function searchEpisodicSources(
 	const artifactCandidate = candidateRefFilter(params.candidateRefs, "artifact", "ma.source_path");
 	const transcriptCandidate = candidateRefFilter(params.candidateRefs, "transcript", "session_key");
 	const summaryCandidate = candidateRefFilter(params.candidateRefs, "summary", "id");
+	const excluded = params.excludeSourceRefs ?? [];
+	const excludeRefs = (kind: EpisodicSourceKind, id: string): { readonly sql: string; readonly args: unknown[] } =>
+		excluded.length === 0
+			? { sql: "", args: [] }
+			: { sql: `AND ('${kind}:' || ${id}) NOT IN (SELECT value FROM json_each(?))`, args: [JSON.stringify(excluded)] };
+	const memoryExcluded = excludeRefs("memory", "id");
+	const artifactExcluded = excludeRefs("artifact", "ma.source_path");
+	const transcriptExcluded = excludeRefs("transcript", "session_key");
+	const summaryExcluded = excludeRefs("summary", "id");
 
 	const branches: Array<{ sql: string; args: unknown[] }> = [];
 	if (wants("memory")) {
@@ -950,8 +960,9 @@ export function searchEpisodicSources(
 			        ${params.before ? "AND julianday(created_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("memory", "id", "created_at", "''", "created_at")}
 			        ${reviewedPredicate("memory", "id", "created_at", "''", "created_at")}
-			        ${memoryCandidate.sql}`,
-			args: [...commonArgs, ...memoryCandidate.args],
+			        ${memoryCandidate.sql}
+			        ${memoryExcluded.sql}`,
+			args: [...commonArgs, ...memoryCandidate.args, ...memoryExcluded.args],
 		});
 	}
 	if (wants("artifact")) {
@@ -974,8 +985,9 @@ export function searchEpisodicSources(
 			               ORDER BY ma2.captured_at DESC, ma2.source_path ASC
 			               LIMIT 1
 			             ))
-			        ${artifactCandidate.sql}`,
-			args: [...commonArgs, ...artifactCandidate.args],
+			        ${artifactCandidate.sql}
+			        ${artifactExcluded.sql}`,
+			args: [...commonArgs, ...artifactCandidate.args, ...artifactExcluded.args],
 		});
 	}
 	if (wants("transcript")) {
@@ -988,8 +1000,9 @@ export function searchEpisodicSources(
 			        ${params.before ? `AND julianday(${transcriptSearchTime}) <= julianday(?)` : ""}
 			        ${deliveredPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}
 			        ${reviewedPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}
-			        ${transcriptCandidate.sql}`,
-			args: [...commonArgs, ...transcriptCandidate.args],
+			        ${transcriptCandidate.sql}
+			        ${transcriptExcluded.sql}`,
+			args: [...commonArgs, ...transcriptCandidate.args, ...transcriptExcluded.args],
 		});
 	}
 	if (wants("summary")) {
@@ -1002,8 +1015,9 @@ export function searchEpisodicSources(
 			        ${params.before ? "AND julianday(latest_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("summary", "id", "latest_at", "''", "latest_at")}
 			        ${reviewedPredicate("summary", "id", "latest_at", "''", "latest_at")}
-			        ${summaryCandidate.sql}`,
-			args: [...commonArgs, ...summaryCandidate.args],
+			        ${summaryCandidate.sql}
+			        ${summaryExcluded.sql}`,
+			args: [...commonArgs, ...summaryCandidate.args, ...summaryExcluded.args],
 		});
 	}
 

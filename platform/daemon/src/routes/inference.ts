@@ -965,7 +965,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								accessor: getDbAccessor(),
 								agentId: scope.agentId,
 								actor: "dashboard-chat",
-								restrictToAgent: true,
+								allowedAgentIds: [scope.agentId],
 								onToolCall(trace) {
 									const retrieval = retrievalEvent(trace.tool, trace.output);
 									if (retrieval) {

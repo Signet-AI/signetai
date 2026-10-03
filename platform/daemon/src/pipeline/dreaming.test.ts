@@ -2413,7 +2413,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
-			[AGENT],
+			[AGENT, "other-agent"],
 			"incremental",
 		);
 
