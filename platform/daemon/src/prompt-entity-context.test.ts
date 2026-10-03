@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, initDbAccessorAsync } from "./db-accessor";
@@ -122,9 +122,9 @@ describe("prompt entity context scaling (#1059)", () => {
 
 	beforeEach(() => {
 		closeDbAccessor();
-		rmSync(DB_PATH(), { force: true });
-		rmSync(`${DB_PATH()}-shm`, { force: true });
-		rmSync(`${DB_PATH()}-wal`, { force: true });
+		for (const file of readdirSync(join(dir, "memory"))) {
+			if (file.startsWith("memories.db")) rmSync(join(dir, "memory", file), { force: true });
+		}
 		initDbAccessor(DB_PATH(), { agentsDir: dir });
 		seedEntityContext();
 	});
