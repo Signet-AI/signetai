@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-03
-- Bug fixes: let connector rows pass wheel scroll; keep better-sqlite3 external in bun build; stage the real bun binary; verify native updates atomically; clarify retired Windows app; preserve retryable Windows migration; migrate legacy Windows install; preserve installed bundles and restore runtime connectivity; fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
+- Bug fixes: share in-flight connector inspections; let connector rows pass wheel scroll; keep better-sqlite3 external in bun build; stage the real bun binary; verify native updates atomically; clarify retired Windows app; preserve retryable Windows migration; migrate legacy Windows install; preserve installed bundles and restore runtime connectivity; fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
 - Docs: add dashboard screenshot; refresh overview, install, and trust sections; clarify legacy cleanup.
 
 ### 2026-10-02
@@ -37,6 +37,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: clarify checkpoint authority.
 
 ## Release Ledger
+
+## [0.230.8] - 2026-10-03
+
+Release summary: 1 bug fix.
+Tag range: `v0.230.7..v0.230.8`.
+
+### Bug Fixes
+
+- **daemon**: share in-flight connector inspections
 
 ## [0.230.7] - 2026-10-03
 
