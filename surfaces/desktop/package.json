@@ -39,6 +39,7 @@
 		"artifactName": "Signet-${version}-${os}-${arch}.${ext}",
 		"asar": true,
 		"npmRebuild": false,
+		"afterPack": "./scripts/after-pack.mjs",
 		"files": [
 			"dist/**/*",
 			"package.json"

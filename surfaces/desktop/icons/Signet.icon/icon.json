@@ -1,0 +1,40 @@
+{
+	"fill-specializations": [
+		{
+			"value": {
+				"linear-gradient": ["srgb:0.20000,0.20000,0.21961,1.00000", "srgb:0.04314,0.04314,0.04706,1.00000"]
+			}
+		},
+		{
+			"appearance": "dark",
+			"value": {
+				"linear-gradient": ["srgb:0.12157,0.12157,0.13333,1.00000", "srgb:0.01961,0.01961,0.02353,1.00000"]
+			}
+		}
+	],
+	"groups": [
+		{
+			"layers": [
+				{
+					"fill": "automatic",
+					"glass": true,
+					"image-name": "dots.svg",
+					"name": "dots",
+					"opacity": 0.55
+				}
+			],
+			"shadow": {
+				"kind": "neutral",
+				"opacity": 0.5
+			},
+			"specular": true,
+			"translucency": {
+				"enabled": true,
+				"value": 0.4
+			}
+		}
+	],
+	"supported-platforms": {
+		"squares": ["macOS"]
+	}
+}
