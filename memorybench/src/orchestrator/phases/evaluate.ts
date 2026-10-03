@@ -54,6 +54,37 @@ export async function runEvaluatePhase(
       })
 
       try {
+        if (benchmark.protocol) {
+          const evaluation = await benchmark.protocol.evaluateQuestion({
+            question,
+            hypothesis,
+            judge,
+          })
+          const durationMs = Date.now() - startTime
+          checkpointManager.updatePhase(checkpoint, question.questionId, "evaluate", {
+            status: "completed",
+            score: evaluation.score,
+            passed: evaluation.passed,
+            label: evaluation.passed ? "correct" : "incorrect",
+            explanation: evaluation.explanation,
+            metrics: evaluation.metrics,
+            details: evaluation.details,
+            usage: evaluation.usage,
+            completedAt: new Date().toISOString(),
+            durationMs,
+          })
+          logger.progress(
+            index + 1,
+            total,
+            `Evaluated ${question.questionId}: ${evaluation.score.toFixed(3)} (${durationMs}ms)`
+          )
+          return {
+            questionId: question.questionId,
+            durationMs,
+            label: evaluation.passed ? "correct" : "incorrect",
+          }
+        }
+
         const searchResults = checkpoint.questions[question.questionId].phases.search.results || []
 
         const [result, retrievalMetrics] = await Promise.all([
@@ -81,6 +112,7 @@ export async function runEvaluatePhase(
           label: result.label,
           explanation: result.explanation,
           retrievalMetrics,
+          usage: result.usage,
           completedAt: new Date().toISOString(),
           durationMs,
         })

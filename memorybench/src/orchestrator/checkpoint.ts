@@ -19,6 +19,7 @@ import type {
   SamplingConfig,
 } from "../types/checkpoint"
 import type { ConcurrencyConfig } from "../types/concurrency"
+import type { BenchmarkConfig } from "../types/benchmark"
 import { PHASE_ORDER } from "../types/checkpoint"
 import { logger } from "../utils/logger"
 
@@ -133,6 +134,7 @@ export class CheckpointManager {
       dataSourceRunId?: string
       status?: RunStatus
       concurrency?: ConcurrencyConfig
+      benchmarkConfig?: BenchmarkConfig
     }
   ): RunCheckpoint {
     const checkpoint: RunCheckpoint = {
@@ -149,6 +151,7 @@ export class CheckpointManager {
       sampling: options?.sampling,
       targetQuestionIds: options?.targetQuestionIds,
       concurrency: options?.concurrency,
+      benchmarkConfig: options?.benchmarkConfig,
       questions: {},
     }
 
@@ -359,6 +362,10 @@ export class CheckpointManager {
       sampling: source.sampling,
       targetQuestionIds: source.targetQuestionIds,
       concurrency: source.concurrency,
+      benchmarkConfig: source.benchmarkConfig,
+      protocol: source.protocol,
+      datasetIdentity: source.datasetIdentity,
+      ingestUsage: phasesToReset.includes("ingest") ? undefined : source.ingestUsage,
       questions: newQuestions,
     }
     const newRunPath = this.getRunPath(newRunId)

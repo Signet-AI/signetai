@@ -16,7 +16,6 @@ const session: UnifiedSession = {
 describe("Signet structured ingest integrity", () => {
   test("fails the ingest when structured extraction fails for a session", async () => {
     const provider = new FailingSignetProvider()
-    Object.assign(provider, { openai: {} })
 
     await expect(provider.ingest([session], { containerTag: "question-run" })).rejects.toThrow(
       "Structured extraction failed for session session-fails-extraction"

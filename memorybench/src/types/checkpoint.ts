@@ -1,6 +1,8 @@
 import type { SearchResult, RetrievalMetrics } from "./unified"
 import type { IngestResult } from "./provider"
 import type { ConcurrencyConfig } from "./concurrency"
+import type { BenchmarkConfig } from "./benchmark"
+import type { ModelUsage } from "../utils/llm"
 
 export type PhaseStatus = "pending" | "in_progress" | "completed" | "failed"
 
@@ -58,6 +60,8 @@ export interface AnswerPhaseCheckpoint {
   promptTokens?: number
   basePromptTokens?: number
   contextTokens?: number
+  evidenceCount?: number
+  usage?: ModelUsage
   startedAt?: string
   completedAt?: string
   durationMs?: number
@@ -70,6 +74,10 @@ export interface EvaluatePhaseCheckpoint {
   score?: number
   explanation?: string
   retrievalMetrics?: RetrievalMetrics
+  passed?: boolean
+  metrics?: Record<string, number>
+  details?: Record<string, unknown>
+  usage?: ModelUsage
   startedAt?: string
   completedAt?: string
   durationMs?: number
@@ -125,5 +133,20 @@ export interface RunCheckpoint {
   sampling?: SamplingConfig
   targetQuestionIds?: string[]
   concurrency?: ConcurrencyConfig
+  benchmarkConfig?: BenchmarkConfig
+  protocol?: Record<string, unknown>
+  datasetIdentity?: Record<string, unknown>
+  ingestUsage?: IngestUsage
   questions: Record<string, QuestionCheckpoint>
+}
+
+export interface IngestUsage {
+  harness: ModelUsage
+  dreamingPasses?: Record<string, DreamingPassUsage>
+}
+
+export interface DreamingPassUsage {
+  inputTokens: number | null
+  outputTokens: number | null
+  cacheReadTokens: number | null
 }

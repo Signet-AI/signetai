@@ -14,7 +14,9 @@ import { logger } from "../../utils/logger"
 import { HybridSearchEngine } from "./search"
 import type { Chunk } from "./search"
 import { RAG_PROMPTS } from "./prompts"
-import { extractMemories } from "../../prompts/extraction"
+import { EXTRACTION_MODEL, extractMemories } from "../../prompts/extraction"
+import { addUsage, assertModelCredentials, emptyUsage } from "../../utils/llm"
+import type { IngestUsage } from "../../types/checkpoint"
 const CHUNK_SIZE = 1600
 const CHUNK_OVERLAP = 320
 const EMBEDDING_BATCH_SIZE = 100
@@ -65,12 +67,18 @@ export class RAGProvider implements Provider {
   private searchEngine = new HybridSearchEngine()
   private openai: ReturnType<typeof createOpenAI> | null = null
   private apiKey: string = ""
+  private readonly extractionUsage = emptyUsage()
+
+  getIngestUsage(): IngestUsage {
+    return { harness: addUsage(emptyUsage(), this.extractionUsage) }
+  }
 
   async initialize(config: ProviderConfig): Promise<void> {
     this.apiKey = config.apiKey
     if (!this.apiKey) {
       throw new Error("RAG provider requires OPENAI_API_KEY for memory extraction and embeddings")
     }
+    assertModelCredentials(EXTRACTION_MODEL)
     this.openai = createConfiguredOpenAI(this.apiKey)
     logger.info("Initialized RAG memory provider (OpenClaw/QMD-style with LLM extraction + hybrid search)")
   }
@@ -86,7 +94,9 @@ export class RAGProvider implements Provider {
       metadata?: Record<string, unknown>
     }> = []
     for (const session of sessions) {
-      const extracted = await extractMemories(this.openai, session)
+      const result = await extractMemories(session)
+      addUsage(this.extractionUsage, result.usage)
+      const extracted = result.text
       const isoDate = (session.metadata?.date as string) || "unknown"
       const dateStr = isoDate !== "unknown" ? isoDate.split("T")[0] : "unknown"
       const dateHeader = `# Memories from ${dateStr}\n\n`

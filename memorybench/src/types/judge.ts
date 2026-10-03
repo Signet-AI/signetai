@@ -1,9 +1,7 @@
+import type { LanguageModel } from "ai"
 import type { ProviderPrompts } from "./prompts"
-
-export interface JudgeConfig {
-  apiKey: string
-  model?: string
-}
+import type { GenerateOptions, GenerateResult, ModelUsage } from "../utils/llm"
+import type { ModelConfig } from "../utils/models"
 
 export interface JudgeInput {
   question: string
@@ -18,14 +16,14 @@ export interface JudgeResult {
   score: number
   label: "correct" | "incorrect"
   explanation: string
+  usage?: ModelUsage
 }
 
 export interface Judge {
   name: string
-  initialize(config: JudgeConfig): Promise<void>
+  modelAlias: string
+  modelConfig: ModelConfig
   evaluate(input: JudgeInput): Promise<JudgeResult>
-  getPromptForQuestionType(questionType: string, providerPrompts?: ProviderPrompts): string
-  getModel(): import("ai").LanguageModel
+  generate(prompt: string, options?: GenerateOptions): Promise<GenerateResult>
+  getModel(): LanguageModel
 }
-
-export type JudgeName = "openai" | "anthropic" | "google"
