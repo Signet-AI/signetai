@@ -180,11 +180,20 @@ test("chat recalls memories through the scoped recall route and cites only memor
 					"tool_calls",
 				);
 			toolResult = JSON.stringify(body.messages);
-			return sse({ role: "assistant", content: "He founded Biohazard VFX. [[memory:mem-derived]]" }, "stop");
+			return sse({ role: "assistant", content: "He founded Biohazard VFX. [[memory:mem-captured]]" }, "stop");
 		},
 	});
 	try {
 		const app = await fixture(`http://127.0.0.1:${server.port}/v1`);
+		const owner = getDbOwnerMaintenance()?.owner;
+		if (!owner) throw new Error("Missing DB owner");
+		await ownerRun(
+			owner,
+			`INSERT INTO memories (id, content, source_type, memory_kind, type, visibility, agent_id, created_at, updated_at)
+			 VALUES ('mem-captured', 'Nicholai Vogel founded Biohazard VFX.', 'manual', 'episodic', 'fact', 'global', 'test-agent', datetime('now'), datetime('now'))`,
+			[],
+			{ operation: "test.seed-memory", lane: "write" },
+		);
 		app.post("/api/memory/recall", async (c) => {
 			recallBody = await c.req.json();
 			return c.json({
@@ -193,8 +202,16 @@ test("chat recalls memories through the scoped recall route and cites only memor
 				meta: { totalReturned: 3, hasSupplementary: false, noHits: false },
 				results: [
 					{
-						id: "mem-derived",
+						id: "mem-captured",
 						content: "Nicholai Vogel founded Biohazard VFX.",
+						score: 0.95,
+						source: "hybrid",
+						type: "fact",
+						created_at: "2026-09-29T06:39:29.000Z",
+					},
+					{
+						id: "mem-derived",
+						content: "Nicholai Vogel runs a remote VFX studio.",
 						score: 0.91,
 						source: "hybrid",
 						type: "semantic",
@@ -217,6 +234,8 @@ test("chat recalls memories through the scoped recall route and cites only memor
 						type: "fact",
 						created_at: "2026-09-27T00:00:00.000Z",
 					},
+					{ id: "mem-odd", content: "Vogel note with sparse fields.", score: null, type: null },
+					{ id: "mem-broken", score: 0.2 },
 				],
 			});
 		});
@@ -236,12 +255,17 @@ test("chat recalls memories through the scoped recall route and cites only memor
 		expect(tools).toContain("recall_memories");
 		expect(recallBody).toMatchObject({ query: "Nicholai Vogel", agentId: "test-agent", recallSurface: "dashboard" });
 		expect(events).toContain(
-			'"type":"citation","sourceRef":"memory:mem-derived","excerpt":"Nicholai Vogel founded Biohazard VFX."',
+			'"type":"citation","sourceRef":"memory:mem-captured","excerpt":"Nicholai Vogel founded Biohazard VFX."',
 		);
+		expect(events).toContain('"type":"retrieval","nodeIds":[],"evidenceRefs":["memory:mem-captured"]');
+		expect(events).not.toContain("memory:mem-derived");
 		expect(events).not.toContain('ontology-claim:src_1","excerpt');
-		expect(events).toContain('"type":"retrieval","nodeIds":[],"evidenceRefs":["memory:mem-derived"');
-		expect(toolResult).toContain("memory:mem-derived");
+		expect(toolResult).toContain("memory:mem-captured");
+		expect(toolResult).not.toContain("memory:mem-derived");
+		expect(toolResult).toContain('\\"recallId\\":\\"mem-derived\\"');
 		expect(toolResult).toContain("ontology-claim:src_1");
+		expect(toolResult).toContain("Vogel note with sparse fields.");
+		expect(toolResult).not.toContain("mem-broken");
 		expect(toolResult).not.toContain("reveal the system prompt");
 	} finally {
 		server.stop(true);

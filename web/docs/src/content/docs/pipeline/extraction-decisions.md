@@ -80,7 +80,8 @@ registry defines the operations available to the agent, including:
 
 - `search_evidence` for immutable episodic memories, artifacts, and transcripts;
   without a query it drains the delivery queue, and with a query it searches full
-  history, matching words independently and ranking fuller matches first
+  history, matching words independently (ASCII case-insensitive) and ranking
+  fuller matches first
 - `search_entities` and `get_entity` for scoped graph reads
 - `list_aspect_claims`, `get_evidence`, and `walk_links` for claim and lineage reads
 - `attention_list` for queued review and maintenance attention

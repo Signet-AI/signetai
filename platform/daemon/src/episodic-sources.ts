@@ -828,18 +828,20 @@ export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly s
 
 const MAX_QUERY_TERMS = 8;
 
-function queryTerms(query: string): readonly string[] {
-	const tokens = [
-		...new Set(
-			query
-				.toLowerCase()
-				.split(/\s+/)
-				.map((token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
-				.filter((token) => token.length > 0),
-		),
-	];
-	const significant = tokens.filter((token) => token.length >= 3);
-	return (significant.length > 0 ? significant : tokens).slice(0, MAX_QUERY_TERMS);
+export function episodicQueryTerms(query: string): readonly string[] {
+	const raw = query.split(/\s+/).filter((token) => /[\p{L}\p{N}]/u.test(token));
+	const stripped = raw.map((token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""));
+	const significant = stripped.filter((token) => token.length >= 3);
+	const terms = significant.length > 0 ? significant : raw;
+	const seen = new Set<string>();
+	return terms
+		.filter((term) => {
+			const key = term.toLowerCase();
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		})
+		.slice(0, MAX_QUERY_TERMS);
 }
 
 export function searchEpisodicSources(
@@ -858,7 +860,7 @@ export function searchEpisodicSources(
 ): EpisodicSourceRecord[] {
 	const query = params.query.trim();
 	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 51));
-	const terms = query === "" ? [] : queryTerms(query);
+	const terms = query === "" ? [] : episodicQueryTerms(query);
 	const matchScore = (column: string): string =>
 		query === ""
 			? `(${column} IS NOT NULL)`

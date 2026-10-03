@@ -397,10 +397,11 @@ Chat reads memory through scoped daemon capabilities: the ontology readers,
 transcripts, and `recall_memories`, which calls `POST /api/memory/recall` with the
 resolved agent and recall surface `dashboard`. Recall covers memories curated by
 Dreaming as well as captured ones. Its output passes the memory content-safety
-projection before reaching the model; withheld rows are dropped. Recalled memory
-rows carry a `memory:<id>` sourceRef and emit `citation` and `retrieval` events;
-ontology-claim and source rows carry only a `recallId` and must be backed by
-evidence tools before they are cited.
+projection before reaching the model; withheld or malformed rows are dropped.
+A recalled memory that resolves as episodic evidence through `search_evidence`
+carries a `memory:<id>` sourceRef and emits `citation` and `retrieval` events.
+Dreaming-curated memories, ontology claims, and source rows carry only a
+`recallId` and must be backed by evidence tools before they are cited.
 
 The system prompt requires evidence citations as `[[kind:exact-sourceRef-id]]`
 wikilinks copied verbatim from retrieval results. The dashboard renders only
