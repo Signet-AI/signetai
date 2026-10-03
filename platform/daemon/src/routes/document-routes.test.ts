@@ -178,6 +178,8 @@ beforeEach(() => {
 });
 
 afterAll(() => {
+	writeAuthConfig("local");
+	state.reloadAuthState(agentsDir);
 	closeDbAccessor();
 	if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	else process.env.SIGNET_PATH = previousSignetPath;
