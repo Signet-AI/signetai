@@ -66,6 +66,12 @@ jobs:
         with:
           bun-version-file: package.json
       - run: bun install --frozen-lockfile
+      - name: Select Xcode 26
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          xcode="$(ls -d /Applications/Xcode_26*.app | sort -V | tail -n 1)"
+          sudo xcode-select -s "$xcode/Contents/Developer"
+          actool --version
       - name: Build the platform package with its OS protocol registration
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

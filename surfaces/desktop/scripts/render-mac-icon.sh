@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Rebuilds icons/icon.icns from icons/Signet.icon so pre-Tahoe macOS (and the DMG) get a
-# full-resolution Liquid Glass render. actool's own fallback .icns stops at 128px@2x.
-# Requires Xcode 26+ (for Icon Composer's ictool).
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -14,7 +11,6 @@ trap 'rm -rf "$work"' EXIT
 iconset="$work/icon.iconset"
 mkdir "$iconset"
 
-# Apple's macOS grid: the 1024px canvas holds an 824px icon body.
 "$ictool" "$root/icons/Signet.icon" --export-image --output-file "$work/body.png" \
 	--platform macOS --rendition Default --width 824 --height 824 --scale 1 >/dev/null
 sips -p 1024 1024 "$work/body.png" --out "$work/full.png" >/dev/null

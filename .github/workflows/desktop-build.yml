@@ -48,7 +48,6 @@ jobs:
         with:
           bun-version-file: package.json
 
-      # The Liquid Glass app icon (icons/Signet.icon) is compiled by actool from Xcode 26+.
       - name: Select Xcode 26
         if: startsWith(matrix.runner, 'macos-')
         run: |
