@@ -13,7 +13,9 @@ async function main(): Promise<void> {
 	const keyring = getSecretKeyring(workspace);
 	const before = await keyring.get();
 	if (before.state !== "missing")
-		throw new Error(`Disposable keyring account is not empty and available: ${before.state}`);
+		throw new Error(
+			`Disposable keyring account is not empty and available: ${before.state}: ${before.message ?? "no detail"}`,
+		);
 	const entry = new AsyncEntry(
 		keyring.service,
 		keyring.account,

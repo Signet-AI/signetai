@@ -24,11 +24,26 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 function getPluginSourceDir(): string {
 	const explicit = process.env.SIGNET_CONNECTOR_ASSETS_DIR?.trim();
 	if (explicit) return resolveRuntimeAssetDirectory(join(explicit, "hermes-agent", "hermes-plugin"), import.meta.url);
-	const root = resolveRuntimePackageRoot(import.meta.url);
-	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-	const path =
-		pkg.name === "@signet/connector-hermes-agent" ? "hermes-plugin" : "connectors/hermes-agent/hermes-plugin";
-	return resolveRuntimeAssetDirectory(path, import.meta.url);
+	const candidates: string[] = [];
+	try {
+		const root = resolveRuntimePackageRoot(import.meta.url);
+		const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+		const packageOwned =
+			pkg.name === "@signet/connector-hermes-agent" || pkg.name === "@signetai/connector-hermes-agent";
+		candidates.push(join(root, packageOwned ? "hermes-plugin" : "connectors/hermes-agent/hermes-plugin"));
+	} catch (error) {
+		if (!(error instanceof Error) || !error.message.startsWith("Missing runtime package metadata")) throw error;
+	}
+	const signetDir = process.env.SIGNET_DIR?.trim();
+	if (signetDir) candidates.push(join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin"));
+	for (const candidate of candidates) {
+		try {
+			return resolveRuntimeAssetDirectory(candidate, import.meta.url);
+		} catch (error) {
+			if (!(error instanceof Error) || !error.message.startsWith("Missing runtime asset")) throw error;
+		}
+	}
+	throw new Error("Cannot find hermes-plugin directory in connector package");
 }
 
 const PLUGIN_FILES = ["__init__.py", "client.py", "plugin.yaml", "README.md"] as const;

@@ -76,11 +76,12 @@ jobs:
           install_manifest="$RUNNER_TEMP/signet-installed-files.txt"
           dpkg-query -L "$package_name" | tee "$install_manifest"
           bun_path=$(awk '/\/resources\/runtime\/bun$/ { print; exit }' "$install_manifest")
-          test -n "$bun_path" && test -x "$bun_path"
+          test -n "$bun_path"
+          test -x "$bun_path"
           resources_root=${bun_path%/runtime/bun}
           test -f "$resources_root/daemon/dist/daemon.js"
-          executable=$(awk '/\/bin\/signet$/ { print; exit }' "$install_manifest")
-          test -n "$executable" && test -x "$executable"
+          executable="${resources_root%/resources}/signet"
+          test -x "$executable"
           printf 'SIGNET_SMOKE_RESOURCES=%s\nSIGNET_SMOKE_ELECTRON=%s\n' "$resources_root" "$executable" >> "$GITHUB_ENV"
       - name: Install macOS DMG app bundle preserving symlinks
         if: runner.os == 'macOS'
@@ -94,8 +95,12 @@ jobs:
           hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_point"
           cleanup() { hdiutil detach "$mount_point" -quiet || true; }
           trap cleanup EXIT
-          app=$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print)
-          test -d "$app"
+          apps=("$mount_point"/*.app)
+          if [[ ${#apps[@]} -ne 1 || ! -d "${apps[0]}" ]]; then
+            printf 'Expected exactly one app bundle in the mounted installer\n' >&2
+            exit 1
+          fi
+          app=${apps[0]}
           ditto "$app" "$installed_root/Signet.app"
           test -d "$installed_root/Signet.app/Contents/Resources/runtime"
           executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$installed_root/Signet.app/Contents/Info.plist")
@@ -127,7 +132,7 @@ jobs:
           set -euo pipefail
           export SMOKE_LOG_DIR="$RUNNER_TEMP/signet-smoke-logs"
           exec > >(tee "$SMOKE_LOG_DIR/resource-smoke.log") 2>&1
-          bash surfaces/desktop/scripts/with-private-keyring.sh surfaces/desktop/scripts/installed-desktop-smoke.ts "$SIGNET_SMOKE_RESOURCES" "$BUN_INSTALL/bin/bun"
+          bash surfaces/desktop/scripts/with-private-keyring.sh surfaces/desktop/scripts/installed-desktop-smoke.ts "$SIGNET_SMOKE_RESOURCES" "$(command -v bun)"
       - name: Prepare macOS temporary unlocked keychain
         if: runner.os == 'macOS'
         shell: bash
@@ -187,6 +192,9 @@ jobs:
             security list-keychains -d user -s $(tr -d '\"' < "$RUNNER_TEMP/old-keychains.txt")
           fi
           if [[ -f "$RUNNER_TEMP/old-default-keychain.txt" ]]; then
-            security default-keychain -d user -s "$(tr -d '\"' < "$RUNNER_TEMP/old-default-keychain.txt")"
+            default=$(< "$RUNNER_TEMP/old-default-keychain.txt")
+            default=${default#*\"}
+            default=${default%%\"*}
+            security default-keychain -d user -s "$default"
           fi
           if [[ -n "$keychain" ]]; then security delete-keychain "$keychain" || true; fi
