@@ -1,6 +1,5 @@
 import { mkdir, readdir, readFile, writeFile, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { createOpenAI } from "@ai-sdk/openai"
 import type {
   Provider,
   ProviderConfig,
@@ -10,9 +9,10 @@ import type {
   IndexingProgressCallback,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
-import { createConfiguredOpenAI } from "../../utils/config"
+import type { IngestUsage } from "../../types/checkpoint"
 import { logger } from "../../utils/logger"
-import { extractMemories } from "../../prompts/extraction"
+import { EXTRACTION_MODEL, extractMemories } from "../../prompts/extraction"
+import { addUsage, assertModelCredentials, emptyUsage } from "../../utils/llm"
 import { FILESYSTEM_PROMPTS } from "./prompts"
 
 const BASE_DIR = join(process.cwd(), "data", "providers", "filesystem")
@@ -59,20 +59,19 @@ export class FilesystemProvider implements Provider {
     ingest: 10,
   }
 
-  private openai: ReturnType<typeof createOpenAI> | null = null
+  private readonly extractionUsage = emptyUsage()
 
-  async initialize(config: ProviderConfig): Promise<void> {
-    if (!config.apiKey || config.apiKey === "none") {
-      throw new Error("Filesystem provider requires OPENAI_API_KEY for memory extraction")
-    }
-    this.openai = createConfiguredOpenAI(config.apiKey)
+  async initialize(_config: ProviderConfig): Promise<void> {
+    assertModelCredentials(EXTRACTION_MODEL)
     await mkdir(BASE_DIR, { recursive: true })
     logger.info("Initialized Filesystem memory provider (MEMORY.md-style with LLM extraction)")
   }
 
-  async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
-    if (!this.openai) throw new Error("Provider not initialized")
+  getIngestUsage(): IngestUsage {
+    return { harness: addUsage(emptyUsage(), this.extractionUsage) }
+  }
 
+  async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
     const containerDir = join(BASE_DIR, sanitizePath(options.containerTag))
     const memoriesDir = join(containerDir, "memories")
     await mkdir(memoriesDir, { recursive: true })
@@ -80,7 +79,9 @@ export class FilesystemProvider implements Provider {
     const documentIds: string[] = []
 
     for (const session of sessions) {
-      const extractedMemories = await extractMemories(this.openai, session)
+      const extracted = await extractMemories(session)
+      addUsage(this.extractionUsage, extracted.usage)
+      const extractedMemories = extracted.text
       const date =
         (session.metadata?.formattedDate as string) ||
         (session.metadata?.date as string) ||

@@ -1,3 +1,5 @@
+import type { BenchmarkConfig, QualityReport } from "./benchmark"
+import type { ModelUsage } from "../utils/llm"
 export interface QuestionTypeInfo {
   id: string
   alias: string
@@ -101,6 +103,28 @@ export interface TokenMetrics {
   avgContextTokens: number
 }
 
+export interface UsageSummary {
+  model: string
+  usage: ModelUsage
+  estimatedCostUsd?: number
+}
+
+export interface DreamingUsageSummary {
+  passesObserved: number
+  passesWithoutUsage: number
+  inputTokens: number
+  outputTokens: number
+  cacheReadTokens: number
+}
+
+export interface RunUsage {
+  answer: UsageSummary
+  judge: UsageSummary
+  extraction?: UsageSummary
+  dreaming?: DreamingUsageSummary
+  answerTokensPerQuestion: number
+}
+
 export interface BenchmarkResult {
   provider: string
   benchmark: string
@@ -123,6 +147,12 @@ export interface BenchmarkResult {
     total: LatencyStats
   }
   tokens?: TokenMetrics
+  contextTokenizer?: string
+  quality?: QualityReport
+  protocol?: Record<string, unknown>
+  benchmarkConfig?: BenchmarkConfig
+  datasetIdentity?: Record<string, unknown>
+  usage?: RunUsage
   memscore?: string
   memscoreComponents?: { quality: number; latencyMs: number; contextTokens: number }
   retrieval?: RetrievalAggregates

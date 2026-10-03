@@ -129,6 +129,44 @@ benchmark:
 bun run bench -- --dry-run
 ```
 
+## GLM and BEAM runs
+
+MemoryBench resolves the answering model, judge, and harness-side extraction
+model through one client, so a run can use Z.ai's GLM-5.3-Flash for all three:
+
+```bash
+ZAI_API_KEY=... \
+SIGNET_BENCH_ANSWERING_MODEL=glm-5.3-flash \
+SIGNET_BENCH_JUDGE=glm-5.3-flash \
+MEMORYBENCH_EXTRACTION_MODEL=glm-5.3-flash \
+bun run bench -- --limit 20
+```
+
+`glm-5.3-flash` sends Chat Completions with thinking disabled;
+`glm-5.3-flash-thinking` enables it. Numbers produced with GLM are not
+like-for-like with results published using GPT-4o or GPT-4.1-mini. Compare
+Signet against the `filesystem` and `rag` baselines run with the same models.
+
+BEAM (`beam-1m`, `beam-10m`) needs a prepared, hash-verified snapshot:
+
+```bash
+cd memorybench
+bun run src/index.ts beam prepare --tiers 1M
+cd ..
+bun run bench -- -b beam-1m --evaluation-profile custom-judge \
+  --data-path ./data/benchmarks/beam --dataset-revision <fingerprint> --sample 1
+```
+
+The `paper` evaluation profile (default) requires `gpt-4.1-mini` as judge and
+reports `beamScore` only for a complete tier. `custom-judge` keeps the paper's
+rubric prompts and scoring with any judge and reports `beamRubricScore`.
+BEAM-1M is about 36M tokens across 37,315 sessions; the 20 questions of each
+conversation share one ingest.
+
+Reports record API-reported token usage for answering, judging, extraction,
+and observed Dreaming passes, plus a list-price cost estimate where model
+pricing is known. See `memorybench/README.md` for the field reference.
+
 ## Two-stage local model workflow
 
 For local tuning, keep extraction cheap and reserve the stronger model for the
@@ -629,6 +667,8 @@ MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS=<n> Structured JSON extraction cap,
 MEMORYBENCH_SESSION_CONCURRENCY=<n> Per-question session ingest concurrency, default 1, max 16.
 OPENROUTER_API_KEY                  Preferred injected env var for OpenRouter ingestion.
 OPENAI_BASE_URL                     OpenAI-compatible API base URL.
+ZAI_API_KEY                         Z.ai key for glm-* answering, judge, and extraction models.
+ZAI_BASE_URL                        Z.ai base URL, default https://open.bigmodel.cn/api/coding/paas/v4.
 ```
 
 ## Reports

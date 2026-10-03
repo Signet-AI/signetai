@@ -7,6 +7,7 @@ import { statusCommand } from "./commands/status"
 import { listQuestionsCommand } from "./commands/list-questions"
 import { showFailuresCommand } from "./commands/show-failures"
 import { serveCommand } from "./commands/serve"
+import { beamCommand } from "./commands/beam"
 import { listModelsByProvider, MODEL_ALIASES, DEFAULT_ANSWERING_MODEL } from "../utils/models"
 
 function printHelp(): void {
@@ -25,6 +26,7 @@ Commands:
   show-failures   Show failed questions from a run with full debugging data
   status          Check run status
   serve           Start the web UI server
+  beam prepare    Download, verify, and convert the pinned public BEAM dataset
   help            Show help (use 'help providers', 'help models', 'help benchmarks' for details)
 
 Examples:
@@ -44,6 +46,10 @@ Options:
   -q, --question-id      Question ID (repeatable for run/ingest, required for test)
   --question-ids-file    Read run/ingest question IDs from a newline-delimited file
   --force                Clear checkpoint and start fresh
+  --data-path            Prepared BEAM snapshot root (default: ./data/benchmarks/beam)
+  --dataset-revision     BEAM dataset fingerprint printed by 'beam prepare'
+  --retrieval-top-k      BEAM evidence count (paper profile: 5, 10, 15, or 20; default 5)
+  --evaluation-profile   BEAM scoring: paper (gpt-4.1-mini judge) or custom-judge
 
 Run 'bun run src/index.ts help <topic>' for more details:
   help providers   - List all memory providers
@@ -96,6 +102,7 @@ function printModelsHelp(): void {
   const openaiModels = listModelsByProvider("openai")
   const anthropicModels = listModelsByProvider("anthropic")
   const googleModels = listModelsByProvider("google")
+  const zaiModels = listModelsByProvider("zai")
 
   console.log(`
 Available Models
@@ -123,6 +130,14 @@ Anthropic Models:
 Google Models:
 `)
   for (const alias of googleModels) {
+    const info = MODEL_ALIASES[alias]
+    console.log(`  ${alias.padEnd(20)} ${info.displayName} (${info.id})`)
+  }
+
+  console.log(`
+Z.ai Models (requires ZAI_API_KEY; ZAI_BASE_URL defaults to the GLM Coding Plan endpoint):
+`)
+  for (const alias of zaiModels) {
     const info = MODEL_ALIASES[alias]
     console.log(`  ${alias.padEnd(20)} ${info.displayName} (${info.id})`)
   }
@@ -156,6 +171,11 @@ Available benchmark datasets for evaluation:
   convomem       ConvoMem - Conversational memory benchmark
                  Tests: user facts, assistant facts, preferences, implicit connections
                  Source: HuggingFace Salesforce/ConvoMem (downloaded on first use)
+
+  beam-1m        BEAM 1M - 35 conversations, 700 questions, ten memory abilities
+  beam-10m       BEAM 10M - 10 conversations, 200 questions
+                 Source: pinned Hugging Face revisions; run 'beam prepare' first.
+                 Scored with the paper rubric (nugget average, Kendall tau-b for ordering).
 
   dreaming-scenarios  Synthetic Dreaming contract corpus
                  Tests: source provenance, corrections, and agent isolation
@@ -200,6 +220,9 @@ export async function cli(args: string[]): Promise<void> {
       break
     case "serve":
       await serveCommand(commandArgs)
+      break
+    case "beam":
+      await beamCommand(commandArgs)
       break
     case "help":
     case "--help":

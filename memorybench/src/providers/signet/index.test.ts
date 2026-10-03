@@ -32,13 +32,22 @@ describe("Signet benchmark profiles", () => {
         if (this.statusCalls === 2) {
           return {
             worker: { running: true },
-            passes: [{ id: "pass-1", status: "completed" }],
+            passes: [
+              {
+                id: "pass-1",
+                status: "completed",
+                tokensInput: 1200,
+                tokensOutput: 300,
+                tokensCacheRead: 50,
+              },
+              { id: "periodic-pass", status: "running", tokensInput: 999 },
+            ],
             episodicTokensPending: 1,
           } as T
         }
         return {
           worker: { running: true },
-          passes: [{ id: "pass-2", status: "completed" }],
+          passes: [{ id: "pass-2", status: "completed", tokensInput: null }],
           episodicTokensPending: 0,
         } as T
       }
@@ -84,6 +93,10 @@ describe("Signet benchmark profiles", () => {
       "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
     ])
+    expect(provider.getIngestUsage().dreamingPasses).toEqual({
+      "pass-1": { inputTokens: 1200, outputTokens: 300, cacheReadTokens: 50 },
+      "pass-2": { inputTokens: null, outputTokens: null, cacheReadTokens: null },
+    })
   })
 
   it("preserves session and recall agent scopes for deterministic Dreaming scenarios", async () => {

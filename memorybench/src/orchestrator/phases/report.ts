@@ -9,9 +9,15 @@ import type {
   QuestionTypeStats,
   RetrievalMetrics,
   RetrievalAggregates,
+  RunUsage,
   TokenMetrics,
+  UsageSummary,
 } from "../../types/unified"
 import { logger } from "../../utils/logger"
+import { addUsage, emptyUsage, estimateCostUsd, type ModelUsage } from "../../utils/llm"
+import { getModelConfig } from "../../utils/models"
+import { tokenizerFor } from "../../utils/tokens"
+import { EXTRACTION_MODEL } from "../../prompts/extraction"
 
 const REPORTS_DIR = "./data/runs"
 
@@ -68,6 +74,49 @@ function calculateLatencyStats(durations: number[]): LatencyStats {
   }
 }
 
+function summarizeUsage(modelAlias: string, usage: ModelUsage): UsageSummary {
+  const estimatedCostUsd = estimateCostUsd(getModelConfig(modelAlias), usage)
+  return {
+    model: modelAlias,
+    usage,
+    ...(estimatedCostUsd === undefined ? {} : { estimatedCostUsd }),
+  }
+}
+
+function summarizeRunUsage(checkpoint: RunCheckpoint, questionIds: string[]): RunUsage {
+  const answer = emptyUsage()
+  const judge = emptyUsage()
+  for (const questionId of questionIds) {
+    const phases = checkpoint.questions[questionId]?.phases
+    addUsage(answer, phases?.answer.usage)
+    addUsage(judge, phases?.evaluate.usage)
+  }
+  const harness = checkpoint.ingestUsage?.harness
+  const passes = Object.values(checkpoint.ingestUsage?.dreamingPasses ?? {})
+  return {
+    answer: summarizeUsage(checkpoint.answeringModel, answer),
+    judge: summarizeUsage(checkpoint.judge, judge),
+    ...(harness && harness.requests > 0
+      ? { extraction: summarizeUsage(EXTRACTION_MODEL.id, harness) }
+      : {}),
+    ...(passes.length > 0
+      ? {
+          dreaming: {
+            passesObserved: passes.length,
+            passesWithoutUsage: passes.filter((pass) => pass.inputTokens === null).length,
+            inputTokens: passes.reduce((sum, pass) => sum + (pass.inputTokens ?? 0), 0),
+            outputTokens: passes.reduce((sum, pass) => sum + (pass.outputTokens ?? 0), 0),
+            cacheReadTokens: passes.reduce((sum, pass) => sum + (pass.cacheReadTokens ?? 0), 0),
+          },
+        }
+      : {}),
+    answerTokensPerQuestion:
+      questionIds.length > 0
+        ? Math.round((answer.inputTokens + answer.outputTokens) / questionIds.length)
+        : 0,
+  }
+}
+
 export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint): BenchmarkResult {
   const questions = benchmark.getQuestions()
   const evaluations: EvaluationResult[] = []
@@ -119,12 +168,13 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
 
     const retrievalMetrics = evalPhase.retrievalMetrics
 
+    const correct = evalPhase.passed ?? evalPhase.score === 1
     evaluations.push({
       questionId: question.questionId,
       questionType: question.questionType,
       question: question.question,
       score: evalPhase.score || 0,
-      label: evalPhase.label || "incorrect",
+      label: correct ? "correct" : "incorrect",
       explanation: evalPhase.explanation || "",
       hypothesis: answerPhase.hypothesis || "",
       groundTruth: question.groundTruth,
@@ -159,7 +209,7 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
     }
     const typeStats = byType[qType]!
     typeStats.total++
-    if (evalPhase.score === 1) {
+    if (correct) {
       typeStats.correct++
     }
     if (searchDurationMs) typeStats.searchDurations.push(searchDurationMs)
@@ -220,11 +270,21 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
   }
 
   const totalQuestions = evaluations.length
-  const correctCount = evaluations.filter((e) => e.score === 1).length
+  const correctCount = evaluations.filter((e) => e.label === "correct").length
   const accuracy = totalQuestions > 0 ? correctCount / totalQuestions : 0
 
+  const evaluatedIds = evaluations.map((evaluation) => evaluation.questionId)
+  const evaluatedIdSet = new Set(evaluatedIds)
+  const quality =
+    benchmark.protocol && totalQuestions > 0
+      ? benchmark.protocol.aggregate({
+          questions: questions.filter((question) => evaluatedIdSet.has(question.questionId)),
+          scores: new Map(evaluations.map((evaluation) => [evaluation.questionId, evaluation.score])),
+        })
+      : undefined
+
   const searchLatencyStats = calculateLatencyStats(searchDurations)
-  const qualityPct = Math.round(accuracy * 100)
+  const qualityPct = Math.round((quality?.primaryMetric.value ?? accuracy) * 100)
   const avgLatency = searchLatencyStats.mean
 
   let memscore: string | undefined
@@ -260,6 +320,12 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
       total: calculateLatencyStats(totalDurations),
     },
     tokens: tokenMetrics,
+    contextTokenizer: tokenizerFor(getModelConfig(checkpoint.answeringModel)),
+    quality,
+    protocol: checkpoint.protocol,
+    benchmarkConfig: checkpoint.benchmarkConfig,
+    datasetIdentity: checkpoint.datasetIdentity,
+    usage: summarizeRunUsage(checkpoint, evaluatedIds),
     memscore,
     memscoreComponents,
     retrieval: overallRetrieval,
@@ -305,8 +371,16 @@ export function printReport(result: BenchmarkResult): void {
   console.log(`  Correct: ${result.summary.correctCount}`)
   console.log(`  Accuracy: ${(result.summary.accuracy * 100).toFixed(2)}%`)
 
-  if (result.memscore && result.tokens) {
-    const qualityPct = Math.round(result.summary.accuracy * 100)
+  if (result.quality) {
+    const primary = result.quality.primaryMetric
+    console.log(`  ${primary.key}: ${(primary.value * 100).toFixed(2)}`)
+    console.log(
+      `  Pass accuracy (score >= 0.5): ${((result.quality.metrics.passAccuracy ?? 0) * 100).toFixed(2)}%`
+    )
+  }
+
+  if (result.memscore && result.tokens && result.memscoreComponents) {
+    const qualityPct = result.memscoreComponents.quality
     const avgLatency = result.latency.search.mean
     console.log("")
     console.log(`  Quality:  ${qualityPct}%`)
@@ -316,6 +390,32 @@ export function printReport(result: BenchmarkResult): void {
     )
     console.log("")
     console.log(`  MemScore: ${result.memscore}`)
+  }
+
+  if (result.usage) {
+    console.log("-".repeat(60))
+    console.log("\nUSAGE (API-reported):")
+    const line = (label: string, summary: UsageSummary) => {
+      const cost =
+        summary.estimatedCostUsd === undefined ? "" : `, ~$${summary.estimatedCostUsd.toFixed(4)} list`
+      const unreported =
+        summary.usage.unreportedRequests > 0
+          ? `, ${summary.usage.unreportedRequests} request(s) without usage`
+          : ""
+      console.log(
+        `  ${label.padEnd(11)} ${summary.model}: ${summary.usage.requests} req, ${summary.usage.inputTokens.toLocaleString()} in / ${summary.usage.outputTokens.toLocaleString()} out${cost}${unreported}`
+      )
+    }
+    line("Answer:", result.usage.answer)
+    line("Judge:", result.usage.judge)
+    if (result.usage.extraction) line("Extraction:", result.usage.extraction)
+    if (result.usage.dreaming) {
+      const dreaming = result.usage.dreaming
+      console.log(
+        `  Dreaming:   ${dreaming.passesObserved} pass(es), ${dreaming.inputTokens.toLocaleString()} in / ${dreaming.outputTokens.toLocaleString()} out${dreaming.passesWithoutUsage > 0 ? `, ${dreaming.passesWithoutUsage} without usage` : ""}`
+      )
+    }
+    console.log(`  Answer tokens/question: ${result.usage.answerTokensPerQuestion.toLocaleString()}`)
   }
 
   console.log("-".repeat(60))

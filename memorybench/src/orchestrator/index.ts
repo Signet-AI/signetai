@@ -1,14 +1,15 @@
 import type { ProviderName } from "../types/provider"
-import type { BenchmarkName } from "../types/benchmark"
-import type { JudgeName } from "../types/judge"
-import type { RunCheckpoint, SamplingConfig } from "../types/checkpoint"
+import type { Benchmark, BenchmarkConfig, BenchmarkName } from "../types/benchmark"
+import type { IngestUsage, RunCheckpoint, SamplingConfig } from "../types/checkpoint"
+import type { Provider } from "../types/provider"
 import type { ConcurrencyConfig } from "../types/concurrency"
 import { createProvider } from "../providers"
 import { createBenchmark } from "../benchmarks"
 import { createJudge } from "../judges"
 import { CheckpointManager } from "./checkpoint"
-import { getProviderConfig, getJudgeConfig } from "../utils/config"
+import { getProviderConfig } from "../utils/config"
 import { resolveModel } from "../utils/models"
+import { addUsage, emptyUsage } from "../utils/llm"
 import { logger } from "../utils/logger"
 import { runIngestPhase } from "./phases/ingest"
 import { runIndexingPhase } from "./phases/indexing"
@@ -27,6 +28,7 @@ export interface OrchestratorOptions {
   questionTypes?: string[]
   sampling?: SamplingConfig
   concurrency?: ConcurrencyConfig
+  benchmarkConfig?: BenchmarkConfig
   force?: boolean
   questionIds?: string[]
   phases?: ("ingest" | "indexing" | "search" | "answer" | "evaluate" | "report")[]
@@ -74,6 +76,79 @@ function selectQuestionsBySampling(
   return allQuestions.map((q) => q.questionId)
 }
 
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(",")}}`
+  }
+  return JSON.stringify(value)
+}
+
+export function resolveResumeBenchmarkConfig(
+  stored: BenchmarkConfig | undefined,
+  requested: BenchmarkConfig | undefined
+): BenchmarkConfig | undefined {
+  if (!requested) return stored
+  const conflicts = Object.entries(requested).filter(
+    ([key, value]) => value !== undefined && stored?.[key as keyof BenchmarkConfig] !== value
+  )
+  if (conflicts.length > 0) {
+    throw new Error(
+      `Benchmark configuration cannot change on resume (stored ${stableJson(stored ?? {})}, requested ${stableJson(requested)}). Start a new run instead.`
+    )
+  }
+  return stored
+}
+
+export function assertSameIdentity(
+  label: string,
+  stored: Record<string, unknown> | undefined,
+  current: Record<string, unknown> | undefined
+): void {
+  if (!stored || !current) return
+  if (stableJson(stored) !== stableJson(current)) {
+    throw new Error(
+      `${label} changed since this run started; results would mix two definitions. Start a new run.`
+    )
+  }
+}
+
+export function containerTagFor(
+  benchmark: Pick<Benchmark, "getIngestionGroupId">,
+  questionId: string,
+  dataSourceRunId: string
+): string {
+  return `${benchmark.getIngestionGroupId?.(questionId) ?? questionId}-${dataSourceRunId}`
+}
+
+export function mergeIngestUsage(
+  stored: IngestUsage | undefined,
+  observed: IngestUsage | undefined
+): IngestUsage | undefined {
+  if (!observed) return stored
+  const harness = addUsage(addUsage(emptyUsage(), stored?.harness), observed.harness)
+  const dreamingPasses =
+    stored?.dreamingPasses || observed.dreamingPasses
+      ? { ...(stored?.dreamingPasses ?? {}), ...(observed.dreamingPasses ?? {}) }
+      : undefined
+  return { harness, ...(dreamingPasses ? { dreamingPasses } : {}) }
+}
+
+function recordIngestUsage(
+  checkpoint: RunCheckpoint,
+  provider: Provider,
+  checkpointManager: CheckpointManager
+): void {
+  const merged = mergeIngestUsage(checkpoint.ingestUsage, provider.getIngestUsage?.())
+  if (!merged) return
+  checkpoint.ingestUsage = merged
+  checkpointManager.save(checkpoint)
+}
+
 function filterQuestionsByType<T extends { questionType: string }>(
   questions: T[],
   questionTypes?: string[]
@@ -105,13 +180,13 @@ export class Orchestrator {
       questionTypes,
       sampling,
       concurrency,
+      benchmarkConfig,
       force = false,
       questionIds,
       phases = ["ingest", "indexing", "search", "answer", "evaluate", "report"],
     } = options
 
     const judgeModelInfo = resolveModel(judgeModel)
-    const judgeName = judgeModelInfo.provider as JudgeName
 
     logger.info(`Starting MemoryBench run: ${providerName} + ${benchmarkName}`)
     logger.info(`Run ID: ${runId}`)
@@ -148,6 +223,7 @@ export class Orchestrator {
     let effectiveLimit: number | undefined
     let targetQuestionIds: string[] | undefined
     let isNewRun = false
+    let effectiveBenchmarkConfig = benchmarkConfig
 
     if (!this.checkpointManager.exists(runId)) {
       isNewRun = true
@@ -157,13 +233,18 @@ export class Orchestrator {
         benchmarkName,
         judgeModel,
         answeringModel,
-        { limit, sampling, concurrency, status: "initializing" }
+        { limit, sampling, concurrency, benchmarkConfig, status: "initializing" }
       )
       logger.info("Created checkpoint (initializing)")
+    } else {
+      effectiveBenchmarkConfig = resolveResumeBenchmarkConfig(
+        this.checkpointManager.load(runId)?.benchmarkConfig,
+        benchmarkConfig
+      )
     }
 
     const benchmark = createBenchmark(benchmarkName)
-    await benchmark.load()
+    await benchmark.load(effectiveBenchmarkConfig)
     const allQuestions = filterQuestionsByType(benchmark.getQuestions(), questionTypes)
     if (allQuestions.length === 0) {
       throw new Error(
@@ -184,6 +265,12 @@ export class Orchestrator {
 
     if (this.checkpointManager.exists(runId) && !isNewRun) {
       checkpoint = this.checkpointManager.load(runId)!
+      assertSameIdentity("Benchmark protocol", checkpoint.protocol, benchmark.protocol?.identity)
+      assertSameIdentity(
+        "Benchmark dataset",
+        checkpoint.datasetIdentity,
+        benchmark.getDatasetIdentity?.()
+      )
 
       effectiveLimit = checkpoint.limit
       targetQuestionIds = checkpoint.targetQuestionIds
@@ -314,8 +401,11 @@ export class Orchestrator {
         ? allQuestions.filter((q) => targetQuestionIds!.includes(q.questionId))
         : allQuestions
 
+      checkpoint.protocol = benchmark.protocol?.identity
+      checkpoint.datasetIdentity = benchmark.getDatasetIdentity?.()
+
       for (const q of questionsToInit) {
-        const containerTag = `${q.questionId}-${checkpoint.dataSourceRunId}`
+        const containerTag = containerTagFor(benchmark, q.questionId, checkpoint.dataSourceRunId)
         this.checkpointManager.initQuestion(checkpoint, q.questionId, containerTag, {
           question: q.question,
           groundTruth: q.groundTruth,
@@ -328,25 +418,35 @@ export class Orchestrator {
       this.checkpointManager.updateStatus(checkpoint, "running")
     }
 
+    const judge = phases.includes("evaluate") ? createJudge(judgeModel) : undefined
+    if (judge) benchmark.protocol?.assertJudge(judge)
+
     const provider = createProvider(providerName)
     await provider.initialize(getProviderConfig(providerName))
 
-    if (phases.includes("ingest")) {
-      await runIngestPhase(
-        provider,
-        benchmark,
-        checkpoint,
-        this.checkpointManager,
-        targetQuestionIds
-      )
-    }
+    try {
+      if (phases.includes("ingest")) {
+        await runIngestPhase(
+          provider,
+          benchmark,
+          checkpoint,
+          this.checkpointManager,
+          targetQuestionIds
+        )
+      }
 
-    if (phases.includes("indexing")) {
-      await runIndexingPhase(provider, checkpoint, this.checkpointManager, targetQuestionIds)
-      await provider.finalizeIngest?.({
-        runId: checkpoint.runId,
-        dataSourceRunId: checkpoint.dataSourceRunId,
-      })
+      if (phases.includes("indexing")) {
+        await runIndexingPhase(provider, checkpoint, this.checkpointManager, targetQuestionIds)
+        await provider.finalizeIngest?.({
+          runId: checkpoint.runId,
+          dataSourceRunId: checkpoint.dataSourceRunId,
+        })
+      }
+    } finally {
+      if (phases.includes("ingest") || phases.includes("indexing")) {
+        recordIngestUsage(checkpoint, provider, this.checkpointManager)
+        await this.checkpointManager.flush(checkpoint.runId)
+      }
     }
 
     if (phases.includes("search")) {
@@ -369,11 +469,7 @@ export class Orchestrator {
       )
     }
 
-    if (phases.includes("evaluate")) {
-      const judge = createJudge(judgeName)
-      const judgeConfig = getJudgeConfig(judgeName)
-      judgeConfig.model = judgeModel
-      await judge.initialize(judgeConfig)
+    if (judge) {
       await runEvaluatePhase(
         judge,
         benchmark,

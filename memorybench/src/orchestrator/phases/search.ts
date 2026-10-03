@@ -46,7 +46,7 @@ export async function runSearchPhase(
     checkpoint.runId,
     "search",
     async ({ item: question, index, total }) => {
-      const containerTag = `${question.questionId}-${checkpoint.dataSourceRunId}`
+      const containerTag = checkpoint.questions[question.questionId]!.containerTag
 
       const startTime = Date.now()
       checkpointManager.updatePhase(checkpoint, question.questionId, "search", {
@@ -57,7 +57,7 @@ export async function runSearchPhase(
       try {
         const results = await provider.search(question.question, {
           containerTag,
-          limit: 10,
+          limit: benchmark.protocol?.retrievalTopK ?? 10,
           threshold: 0.3,
           questionDate: checkpoint.questions[question.questionId]?.questionDate,
           agentId: typeof question.metadata?.agentId === "string" ? question.metadata.agentId : undefined,
