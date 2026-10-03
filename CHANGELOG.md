@@ -7,8 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-03
-- Bug fixes: clarify retired Windows app; preserve retryable Windows migration; migrate legacy Windows install; preserve installed bundles and restore runtime connectivity; fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
-- Docs: clarify legacy cleanup.
+- Bug fixes: let connector rows pass wheel scroll; keep better-sqlite3 external in bun build; stage the real bun binary; verify native updates atomically; clarify retired Windows app; preserve retryable Windows migration; migrate legacy Windows install; preserve installed bundles and restore runtime connectivity; fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
+- Docs: add dashboard screenshot; refresh overview, install, and trust sections; clarify legacy cleanup.
 
 ### 2026-10-02
 - Features: add 2D memory graph and persistent Pi chat.
@@ -37,6 +37,23 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: clarify checkpoint authority.
 
 ## Release Ledger
+
+## [0.230.7] - 2026-10-03
+
+Release summary: 4 bug fixes and 2 docs updates.
+Tag range: `v0.230.6..v0.230.7`.
+
+### Bug Fixes
+
+- **dashboard**: let connector rows pass wheel scroll
+- **daemon**: keep better-sqlite3 external in bun build
+- **desktop**: stage the real bun binary
+- **install**: verify native updates atomically
+
+### Docs
+
+- **readme**: add dashboard screenshot
+- **readme**: refresh overview, install, and trust sections
 
 ## [0.230.6] - 2026-10-03
 
