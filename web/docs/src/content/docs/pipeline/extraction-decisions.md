@@ -65,7 +65,9 @@ temporal summaries. The search path preserves source references and returns
 bounded excerpts rather than handing the model an unbounded database view.
 
 A completed transcript and its related lineage remain one source of evidence,
-not several independent facts to merge blindly. Read-time content-safety rules
+not several independent facts to merge blindly. When a captured session has
+both a transcript artifact and a transcript record, the transcript record is
+the one Dreaming input; the artifact is offered only when no record exists. Read-time content-safety rules
 can exclude tainted or blocked content from Dreaming context without deleting
 or rewriting the original source row.
 
@@ -79,8 +81,9 @@ Dreaming is an agentic pass, not a fixed per-fact classifier. Its capability
 registry defines the operations available to the agent, including:
 
 - `search_evidence` for immutable episodic memories, artifacts, and transcripts;
-  without a query it drains the delivery queue, and with a query it searches full
-  history, splitting it on whitespace into words that match independently
+  without a query it pages through the delivery queue, resuming each source
+  where the current pass last read it and reporting `hasMore` until the queue
+  is empty; with a query it searches full history, splitting it on whitespace into words that match independently
   (ASCII case-insensitive) and ranking fuller matches first; unspaced text such
   as CJK matches as one phrase
 - `search_entities` and `get_entity` for scoped graph reads
@@ -134,6 +137,9 @@ not hold a SQLite write lock.
 Dreaming records pass status, tool calls, applied/skipped/failed mutation
 counts, evidence progress, and summary information. The evidence watermark
 advances only when the pass actually consumes the relevant episodic backlog.
+A failed ontology operation withholds progress only for the sources it cites;
+a failure that cites no source withholds progress for its agent scope, so
+other sources and scopes in the same pass still record what was read.
 An `incremental-content` pass stages `memory_head_commit`; the DB owner applies
 the staged head in the same transaction as pass completion and watermark
 updates. If validation or any finalization write fails, the transaction rolls

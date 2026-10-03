@@ -26,7 +26,12 @@ import { type GraphWriteCaps, findDuplicateEntityMerges } from "../ontology-prop
 import { detectProspectiveContradictionRisk } from "./antonyms";
 import { getDreamingAttentionAcrossScopes, getDreamingAttentionScoped } from "./dreaming-attention";
 import { nextDreamingEvidenceFragment, renderDreamingEvidence } from "./dreaming-evidence";
-import { deliveredOffsetForSource, pendingDreamingEvidenceContinuations } from "./dreaming-evidence-consumption";
+import {
+	deliveredOffsetForSource,
+	extendDeliveredOffset,
+	passDeliveredRanges,
+	pendingDreamingEvidenceContinuations,
+} from "./dreaming-evidence-consumption";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import {
 	type ApplyDreamingOperationsResult,
@@ -347,33 +352,73 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 			: { ok: true, items: [fragment] };
 	}
 	const query = input.query?.trim() || undefined;
-	const scanFirst = query === undefined && input.since === undefined && input.before === undefined;
-	const continuations = scanFirst
-		? pendingDreamingEvidenceContinuations(db, scopeId, input.limit ?? 20, input.kind)
-		: [];
-	const sources =
-		continuations.length > 0
-			? continuations
-			: searchEpisodicSources(db, {
-					agentId: scopeId,
-					query: query ?? "",
-					since: input.since,
-					before: input.before,
-					kind: input.kind,
-					excludeDelivered: scanFirst,
-					limit: input.limit,
-				});
-	const items = scanFirst
-		? sources.flatMap((source) => {
-				const fragment = projectEvidenceFragment(
-					source,
-					deliveredOffsetForSource(db, scopeId, source),
-					MAX_EVIDENCE_EXCERPT_CHARS,
-				);
-				return fragment === null ? [] : [fragment];
-			})
-		: projectEvidence(sources, query ?? "");
-	return { ok: true, items };
+	if (query === undefined && input.since === undefined && input.before === undefined) {
+		return drainDreamingEvidenceQueueInDb(db, input);
+	}
+	const sources = searchEpisodicSources(db, {
+		agentId: scopeId,
+		query: query ?? "",
+		since: input.since,
+		before: input.before,
+		kind: input.kind,
+		limit: input.limit,
+	});
+	return { ok: true, items: projectEvidence(sources, query ?? "") };
+}
+
+const DELIVERY_QUEUE_SCAN_LIMIT = 51;
+
+function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
+	const scopeId = input.agentId;
+	const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 20), 50));
+	const servedInPass = input.passId ? passDeliveredRanges(db, input.passId, scopeId) : new Map();
+	const fresh = searchEpisodicSources(db, {
+		agentId: scopeId,
+		query: "",
+		kind: input.kind,
+		excludeDelivered: true,
+		limit: DELIVERY_QUEUE_SCAN_LIMIT,
+	});
+	const page = (sources: readonly EpisodicSourceRecord[], max: number, skip = new Set<string>()) => {
+		const items: Record<string, unknown>[] = [];
+		for (const source of sources) {
+			const ref = `${source.kind}:${source.id}`;
+			if (skip.has(ref)) continue;
+			skip.add(ref);
+			const offset = extendDeliveredOffset(deliveredOffsetForSource(db, scopeId, source), servedInPass.get(ref));
+			const fragment = projectEvidenceFragment(source, offset, MAX_EVIDENCE_EXCERPT_CHARS);
+			if (fragment !== null) items.push(fragment);
+			if (items.length >= max) break;
+		}
+		return items;
+	};
+	const continuationRefs = new Set<string>();
+	const continuations = page(
+		pendingDreamingEvidenceContinuations(db, scopeId, 50, input.kind),
+		limit + 1,
+		continuationRefs,
+	);
+	if (continuations.length > 0) {
+		const returned = continuations.slice(0, limit);
+		return {
+			ok: true,
+			items: returned,
+			hasMore:
+				continuations.length > limit ||
+				returned.some((item) => item.contentHasNext === true) ||
+				page(fresh, 1, continuationRefs).length > 0,
+		};
+	}
+	const items = page(fresh, limit + 1);
+	const returned = items.slice(0, limit);
+	return {
+		ok: true,
+		items: returned,
+		hasMore:
+			items.length > limit ||
+			returned.some((item) => item.contentHasNext === true) ||
+			(items.length > 0 && fresh.length >= DELIVERY_QUEUE_SCAN_LIMIT),
+	};
 }
 
 export function readDreamingEvidenceSourceInDb(
@@ -629,7 +674,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it lists every incomplete source revision and resumes at its delivered offset, regardless of time watermark. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit incomplete source revisions, each resuming at its delivered offset (including fragments already served earlier in this pass), regardless of time watermark. hasMore is true while more of the queue remains; call again without a query to continue until hasMore is false. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
@@ -653,6 +698,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					...(sourceRef === undefined ? {} : { sourceRef }),
 					...(offset === undefined ? {} : { offset }),
 					...(chunkSize === undefined ? {} : { chunkSize }),
+					...(params.passId === undefined ? {} : { passId: params.passId }),
 				};
 				return await runDbOwnerDomainOperation(accessor, {
 					runWithOwner: async (owner) => {

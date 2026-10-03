@@ -2544,6 +2544,119 @@ describe("Dreaming", () => {
 		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
 	});
 
+	it("pages the delivery queue within a pass and records the full read offsets", async () => {
+		seedTranscript(db, "queue-long", "a".repeat(5_000));
+		seedTranscript(db, "queue-short", "b".repeat(1_200));
+		const pages: Record<string, unknown>[] = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					for (let call = 0; call < 5; call += 1) {
+						pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+					}
+					return { summary: "Drained the delivery queue" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const served = pages.map((page) =>
+			(page.items as Array<Record<string, unknown>>).map((item) => `${String(item.id)}@${String(item.contentOffset)}`),
+		);
+		const flat = served.flat();
+		expect(new Set(flat).size).toBe(flat.length);
+		expect(flat.filter((entry) => entry.startsWith("queue-long@"))).toHaveLength(3);
+		expect(flat.filter((entry) => entry.startsWith("queue-short@"))).toHaveLength(1);
+		const lastNonEmpty = pages.findLastIndex((page) => (page.items as unknown[]).length > 0);
+		expect(pages.slice(0, lastNonEmpty).every((page) => page.hasMore === true)).toBe(true);
+		expect(pages[lastNonEmpty]?.hasMore).toBe(false);
+		expect(pages.slice(lastNonEmpty + 1).every((page) => (page.items as unknown[]).length === 0)).toBe(true);
+		const consumed = db
+			.prepare(
+				"SELECT source_id AS id, delivered_offset AS offset, source_length AS length FROM dreaming_evidence_consumption WHERE source_kind = 'transcript' ORDER BY source_id",
+			)
+			.all() as Array<{ id: string; offset: number; length: number }>;
+		expect(consumed.map((row) => row.id)).toEqual(["queue-long", "queue-short"]);
+		expect(consumed.every((row) => row.offset === row.length)).toBe(true);
+	});
+
+	it("withholds only the sources a failed operation cited", async () => {
+		seedTranscript(db, "cited-source", "Briar owns the release process.");
+		seedTranscript(db, "uncited-source", "Corin owns the staging cluster.");
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [
+							{
+								operation: "create_entity",
+								payload: { name: "Briar", entity_type: "person" },
+								evidence: [{ quote: "This quote is not in the transcript.", source_ref: "transcript:cited-source" }],
+							},
+						],
+					});
+					return { summary: "One rejected write" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = (
+			db
+				.prepare("SELECT source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'")
+				.all() as Array<{
+				id: string;
+			}>
+		).map((row) => row.id);
+		expect(consumed).toEqual(["uncited-source"]);
+	});
+
+	it("withholds an uncited failure's agent without discarding other agents' progress", async () => {
+		const other = "dreaming-other-scope";
+		accessor.withWriteTx((tx) => {
+			tx.prepare("INSERT OR IGNORE INTO agents (id, name, read_policy) VALUES (?, ?, 'isolated')").run(other, other);
+		});
+		seedTranscript(db, "scope-a-source", "Delta runs the billing service.");
+		seedTranscript(db, "scope-b-source", "Echo runs the search service.", undefined, other);
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					await invokeDreamingTool(input, "search_evidence", { agentId: other });
+					await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: other,
+						operations: [{ operation: "not_an_ontology_operation", payload: {} }],
+					});
+					return { summary: "One uncited rejected write in the second scope" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT, other],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = db
+			.prepare(
+				"SELECT agent_id AS agentId, source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'",
+			)
+			.all();
+		expect(consumed).toEqual([{ agentId: AGENT, id: "scope-a-source" }]);
+	});
+
 	it("reports a rejected unsupported operation as a failed mutation", async () => {
 		const evidence = "Briar owns the release process.";
 		seedSummary(db, "rejected-summary", evidence, 8);

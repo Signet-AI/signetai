@@ -344,6 +344,50 @@ describe("episodic source selection", () => {
 		).toMatchObject([{ kind: "artifact", id: "sessions/recovery-transcript.md", sourceKind: "transcript" }]);
 	});
 
+	it("queues a captured session once when both its artifact and transcript exist", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, session_id, session_key, session_token,
+				  captured_at, content, updated_at, is_deleted)
+				 VALUES ('ant', 'sessions/paired.md', 'sha-paired', 'transcript', 'session-paired', 'session-paired',
+				  'token-paired', '2026-08-01T12:00:00.000Z', 'paired session evidence', '2026-08-01T12:00:00.000Z', 0)`,
+			).run();
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at, completed_at)
+				 VALUES ('session-paired', 'paired session evidence', 'pi', '/repo', 'ant',
+				  '2026-08-01T12:00:00.000Z', '2026-08-01T12:00:00.000Z', '2026-08-01T12:00:00.000Z')`,
+			).run();
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, session_id, session_key, session_token,
+				  captured_at, content, updated_at, is_deleted)
+				 VALUES ('ant', 'sessions/orphan.md', 'sha-orphan', 'transcript', 'session-orphan', 'session-orphan',
+				  'token-orphan', '2026-08-01T13:00:00.000Z', 'orphan session evidence', '2026-08-01T13:00:00.000Z', 0)`,
+			).run();
+		});
+
+		const refs = (sources: ReadonlyArray<{ kind: string; id: string }>) =>
+			sources.map((source) => `${source.kind}:${source.id}`).sort();
+		const expected = ["artifact:sessions/orphan.md", "transcript:session-paired"];
+		expect(
+			refs(
+				getDbAccessor().withReadDb((db) =>
+					searchEpisodicSources(db, { agentId: "ant", query: "", excludeDelivered: true }),
+				),
+			),
+		).toEqual(expected);
+		expect(
+			refs(
+				getDbAccessor().withReadDb((db) => searchEpisodicSources(db, { agentId: "ant", query: "session evidence" })),
+			),
+		).toEqual(expected);
+		expect(
+			refs(getDbAccessor().withReadDb((db) => readRecentEpisodicSources(db, "ant", 10, undefined, null, "oldest"))),
+		).toEqual(expected);
+	});
+
 	it("searches only live episodic evidence across source stores", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(

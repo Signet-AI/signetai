@@ -60,7 +60,11 @@ import type { DreamingToolCallTrace } from "./dreaming-capabilities";
 import { readCuratedMemoryHead, type MemoryHeadCommitInput, type MemoryHeadCommitter } from "../memory-head";
 import { commitCuratedMemoryHeadInDb } from "../memory-head-owner";
 import { renderDreamingEvidence } from "./dreaming-evidence";
-import { deliveredOffsetForSource, recordDreamingEvidenceConsumptionInTx } from "./dreaming-evidence-consumption";
+import {
+	deliveredOffsetForSource,
+	failedOperationEvidence,
+	recordDreamingEvidenceConsumptionInTx,
+} from "./dreaming-evidence-consumption";
 import {
 	parseDreamingReviewedExcludedEvidence,
 	recordDreamingReviewedExcludedEvidenceInTx,
@@ -2126,7 +2130,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		manifest.memoryHead = memoryHeadResult;
 		db.prepare("UPDATE dreaming_passes SET runbook_json = ? WHERE id = ?").run(JSON.stringify(manifest), input.passId);
 	}
-	if (input.mode !== "incremental-hygiene" && input.failed === 0) {
+	if (input.mode !== "incremental-hygiene") {
 		const runbook = db
 			.prepare("SELECT runbook_json AS runbookJson FROM dreaming_passes WHERE id = ?")
 			.get(input.passId) as { runbookJson: string | null } | null;
@@ -2137,11 +2141,17 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		} catch {
 			parsedRunbook = null;
 		}
-		const deferredEvidence = parsedRunbook === null ? null : deferredEvidenceKeys(parsedRunbook, input.agentId);
+		const runbookDeferred = parsedRunbook === null ? null : deferredEvidenceKeys(parsedRunbook, input.agentId);
+		const failedEvidence = failedOperationEvidence(db, input.passId, input.agentId);
+		const deferredEvidence = runbookDeferred === null ? null : new Set([...runbookDeferred, ...failedEvidence.sources]);
 		const reviewedExcludedEvidence =
 			parsedRunbook === null ? null : parseDreamingReviewedExcludedEvidence(parsedRunbook);
 		if (deferredEvidence !== null && reviewedExcludedEvidence !== null) {
-			recordDreamingEvidenceConsumptionInTx(db, { passId: input.passId, deferredEvidence });
+			recordDreamingEvidenceConsumptionInTx(db, {
+				passId: input.passId,
+				deferredEvidence,
+				withheldScopes: failedEvidence.scopes,
+			});
 			recordDreamingReviewedExcludedEvidenceInTx(db, {
 				passId: input.passId,
 				scopeIds: new Set(input.scopes),
