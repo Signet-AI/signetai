@@ -10,7 +10,7 @@ import type {
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { classifyEntityQuality } from "../entity-quality";
 import type { EpisodicSourceRecord } from "../episodic-sources";
-import { readEpisodicSource, searchEpisodicSources } from "../episodic-sources";
+import { episodicQueryTerms, readEpisodicSource, searchEpisodicSources } from "../episodic-sources";
 import {
 	getAttributesForAspectFiltered,
 	getEntityAspectsWithCounts,
@@ -126,14 +126,9 @@ async function filterDreamingAttributes(
 }
 
 function evidenceExcerptStart(content: string, query: string, maxChars: number): number {
-	const terms = query
-		.toLowerCase()
-		.split(/\W+/)
-		.filter((term) => term.length >= 3)
-		.slice(0, 8);
 	const lower = content.toLowerCase();
-	for (const term of terms) {
-		const match = lower.indexOf(term);
+	for (const term of episodicQueryTerms(query)) {
+		const match = lower.indexOf(term.toLowerCase());
 		if (match >= 0) return Math.max(0, match - Math.floor(maxChars * 0.35));
 	}
 	return 0;
@@ -351,7 +346,8 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 			? { ok: false, error: "Evidence fragment offset is outside the source" }
 			: { ok: true, items: [fragment] };
 	}
-	const scanFirst = input.query === undefined && input.since === undefined && input.before === undefined;
+	const query = input.query?.trim() || undefined;
+	const scanFirst = query === undefined && input.since === undefined && input.before === undefined;
 	const continuations = scanFirst
 		? pendingDreamingEvidenceContinuations(db, scopeId, input.limit ?? 20, input.kind)
 		: [];
@@ -360,7 +356,7 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 			? continuations
 			: searchEpisodicSources(db, {
 					agentId: scopeId,
-					query: input.query ?? "",
+					query: query ?? "",
 					since: input.since,
 					before: input.before,
 					kind: input.kind,
@@ -376,7 +372,7 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 				);
 				return fragment === null ? [] : [fragment];
 			})
-		: projectEvidence(sources, input.query ?? "");
+		: projectEvidence(sources, query ?? "");
 	return { ok: true, items };
 }
 
@@ -633,7 +629,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split into words that match independently (case-insensitive substrings); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it lists every incomplete source revision and resumes at its delivered offset, regardless of time watermark. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split into words that match independently as substrings (ASCII case-insensitive); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it lists every incomplete source revision and resumes at its delivered offset, regardless of time watermark. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),

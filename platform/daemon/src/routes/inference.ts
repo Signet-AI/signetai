@@ -7,6 +7,7 @@ import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
 import { redactUnsafeMemoryProjection } from "../memory-content-safety";
 import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
+import { getDreamingCapability } from "../pipeline/dreaming-capabilities";
 import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
 
 import { MODEL_DEFAULTS } from "@signet/core";
@@ -853,18 +854,14 @@ const recallInputSchema = z.object({
 	query: z.string().trim().min(1).max(500),
 	limit: z.number().int().min(1).max(20).optional(),
 });
-const recallResponseSchema = z.object({
-	method: z.string().optional(),
-	results: z.array(
-		z.object({
-			id: z.string(),
-			content: z.string(),
-			score: z.number().optional(),
-			type: z.string().optional(),
-			created_at: z.string().optional(),
-			source_path: z.string().optional(),
-		}),
-	),
+const recallResponseSchema = z.object({ method: z.string().nullish(), results: z.array(z.unknown()) });
+const recallRowSchema = z.object({
+	id: z.string().min(1),
+	content: z.string(),
+	score: z.number().nullish(),
+	type: z.string().nullish(),
+	created_at: z.string().nullish(),
+	source_path: z.string().nullish(),
 });
 
 export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}): void {
@@ -1021,7 +1018,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 							name: "recall_memories",
 							label: "Recall memories",
 							description:
-								"Semantic and keyword recall over this agent's saved memories, including memories curated by Dreaming, ontology claims, and indexed sources. Use it first for questions about the user, their people, projects, or past; phrase the query naturally. Items with a sourceRef are memories you can cite directly. Items without one carry a recallId; fetch citable support with search_evidence or get_evidence before citing them.",
+								"Semantic and keyword recall over this agent's saved memories, including memories curated by Dreaming, ontology claims, and indexed sources. Use it first for questions about the user, their people, projects, or past; phrase the query naturally. Items with a sourceRef are captured memories that resolve as evidence; cite them directly. Items without one (Dreaming-curated memories, ontology claims, sources) carry only a recallId; fetch citable support with search_evidence or get_evidence before citing them.",
 							parameters: Type.Object({
 								query: Type.String({ minLength: 1, maxLength: 500 }),
 								limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
@@ -1036,17 +1033,40 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 										),
 									),
 								);
-								const items = recalled.results
-									.filter((row) => row.content !== MEMORY_CONTENT_WITHHELD_NOTICE)
-									.map((row) => ({
-										...(row.id.includes(":") ? {} : { sourceRef: `memory:${row.id}` }),
-										recallId: row.id,
-										content: row.content,
-										score: row.score,
-										type: row.type,
-										createdAt: row.created_at,
-										sourcePath: row.source_path,
-									}));
+								const rows = recalled.results.flatMap((value) => {
+									const row = recallRowSchema.safeParse(value);
+									return row.success && row.data.content !== MEMORY_CONTENT_WITHHELD_NOTICE ? [row.data] : [];
+								});
+								const evidence = getDreamingCapability(
+									{ accessor: getDbAccessor(), agentId: scope.agentId, actor: "dashboard-chat" },
+									"search_evidence",
+								);
+								const citable = new Set(
+									await Promise.all(
+										rows
+											.filter((row) => !row.id.includes(":"))
+											.map(async (row) =>
+												(
+													await evidence?.invoke({
+														agentId: scope.agentId,
+														sourceRef: `memory:${row.id}`,
+														chunkSize: 1,
+													})
+												)?.ok === true
+													? row.id
+													: undefined,
+											),
+									),
+								);
+								const items = rows.map((row) => ({
+									...(citable.has(row.id) ? { sourceRef: `memory:${row.id}` } : {}),
+									recallId: row.id,
+									content: row.content,
+									score: row.score,
+									type: row.type,
+									createdAt: row.created_at,
+									sourcePath: row.source_path,
+								}));
 								const evidenceRefs = items.flatMap((item) => (item.sourceRef ? [item.sourceRef] : []));
 								if (evidenceRefs.length > 0) send({ type: "retrieval", nodeIds: [], evidenceRefs });
 								for (const item of items)

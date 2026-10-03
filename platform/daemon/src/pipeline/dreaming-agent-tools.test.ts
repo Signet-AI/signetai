@@ -533,6 +533,8 @@ describe("dreaming-agent-tools", () => {
 				["mem-full", "Nicholai is a director. Vogel runs Biohazard VFX.", "2026-08-06T09:00:00.000Z"],
 				["mem-partial", "Vogel is mentioned here alone.", "2026-08-06T10:00:00.000Z"],
 				["mem-miss", "Unrelated note about 100% coverage_ratio.", "2026-08-06T11:00:00.000Z"],
+				["mem-cpp", "Rewrote the parser in C++ last week.", "2026-08-06T08:00:00.000Z"],
+				["mem-long", `${"filler words ".repeat(400)}Émile met Łukasz at the École.`, "2026-08-06T07:00:00.000Z"],
 			] as const) {
 				db.prepare(
 					`INSERT INTO memories
@@ -560,6 +562,44 @@ describe("dreaming-agent-tools", () => {
 		expect(await search("100% coverage_ratio")).toEqual(["memory:mem-miss"]);
 		expect(await search("rate%note")).toEqual([]);
 		expect(await search("?!")).toEqual([]);
+		expect(await search("C++")).toEqual(["memory:mem-cpp"]);
+		expect(await search("Émile ŁUKASZ")).toEqual(["memory:mem-long"]);
+		const excerpt = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner", query: "Émile" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		).items as Array<{ content: string }>;
+		expect(excerpt[0]?.content).toContain("Émile met");
+	});
+
+	it("search_evidence treats a blank query like an omitted one", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			for (const id of ["mem-open", "mem-done"])
+				db.prepare(
+					`INSERT INTO memories
+					 (id, content, source_type, memory_kind, visibility, agent_id, created_at, updated_at)
+					 VALUES (?, 'Queued evidence.', 'manual', 'episodic', 'normal', 'owner',
+					  '2026-08-06T09:00:00.000Z', '2026-08-06T09:00:00.000Z')`,
+				).run(id);
+			db.prepare(
+				`INSERT INTO dreaming_evidence_consumption
+				 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
+				  delivered_offset, source_length, pass_id, updated_at)
+				 VALUES ('owner', 'memory', 'mem-done', '2026-08-06T09:00:00.000Z', '', '2026-08-06T09:00:00.000Z',
+				  100, 100, 'pass-1', '2026-08-06T10:00:00.000Z')`,
+			).run();
+		});
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
+		for (const input of [{ agentId: "owner" }, { agentId: "owner", query: "" }, { agentId: "owner", query: "  " }]) {
+			const listed = readResult(
+				await findTool(tools, "search_evidence").execute("call", input, undefined, undefined, {} as never),
+			);
+			expect((listed.items as Array<{ sourceRef: string }>).map((item) => item.sourceRef)).toEqual(["memory:mem-open"]);
+		}
 	});
 
 	it("search_evidence exposes completed on transcripts and settled records", async () => {
