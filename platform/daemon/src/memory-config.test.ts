@@ -42,6 +42,14 @@ describe("loadDreamingConfig", () => {
 		);
 	});
 
+	it("leaves the Dreaming output cap to the model unless one is configured", () => {
+		expect(loadDreamingConfig({}).maxOutputTokens).toBeNull();
+		expect(loadDreamingConfig({ memory: { dreaming: { enabled: true } } }).maxOutputTokens).toBeNull();
+		expect(loadDreamingConfig({ memory: { dreaming: { maxOutputTokens: 64_000 } } }).maxOutputTokens).toBe(64_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxOutputTokens: 200_000 } } }).maxOutputTokens).toBe(200_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxOutputTokens: 10 } } }).maxOutputTokens).toBe(1_000);
+	});
+
 	it("keeps surprisal attention opt-in and clamps its resource bounds", () => {
 		expect(loadDreamingConfig({}).surprisal).toEqual({
 			enabled: false,

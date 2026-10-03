@@ -497,7 +497,7 @@ episodic evidence. Requires `admin` permission.
     "tokenThreshold": 100000,
     "backfillOnFirstRun": true,
     "maxInputTokens": 128000,
-    "maxOutputTokens": 16000,
+    "maxOutputTokens": null,
     "timeout": 300000
   },
   "passes": [

@@ -781,7 +781,7 @@ export interface DreamStatus {
 		tokenThreshold: number;
 		backfillOnFirstRun: boolean;
 		maxInputTokens: number;
-		maxOutputTokens: number;
+		maxOutputTokens: number | null;
 		timeout: number;
 	};
 	passes: DreamPass[];

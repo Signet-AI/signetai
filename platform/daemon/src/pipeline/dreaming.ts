@@ -347,7 +347,7 @@ export interface DreamingAgentExecutor {
 		readonly prompt: string;
 		readonly tools: ReturnType<typeof createDreamingAgentTools>;
 		readonly timeoutMs: number;
-		readonly maxTokens: number;
+		readonly maxTokens?: number;
 		readonly onEvent?: (event: unknown) => void;
 		readonly onSessionInfo?: (info: {
 			readonly sessionId?: string;
@@ -1805,7 +1805,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 			prompt,
 			tools,
 			timeoutMs: cfg.timeout,
-			maxTokens: cfg.maxOutputTokens,
+			maxTokens: cfg.maxOutputTokens ?? undefined,
 			onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
 			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
 		});
