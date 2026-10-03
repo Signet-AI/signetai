@@ -1,8 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DESKTOP_UPDATE_FEED, desktopUpdateSupport, desktopUpdateVersion } from "./desktop-update-policy";
+import {
+	DESKTOP_UPDATE_FEED,
+	codeSigningTeam,
+	desktopUpdateSupport,
+	desktopUpdateVersion,
+	macAppCodeSigningTeam,
+} from "./desktop-update-policy";
 
 const desktopRoot = join(import.meta.dir, "..");
 
@@ -38,17 +45,79 @@ describe("desktop update packaging", () => {
 	});
 
 	test("owns packaged macOS and Windows updates instead of treating them as Linux-only", () => {
-		expect(desktopUpdateSupport({ isPackaged: true, platform: "darwin", hasAppImage: false })).toEqual({
+		expect(
+			desktopUpdateSupport({ isPackaged: true, platform: "darwin", hasAppImage: false, codeSigningTeam: "TQK8H7V7RP" }),
+		).toEqual({
 			supported: true,
 		});
-		expect(desktopUpdateSupport({ isPackaged: true, platform: "win32", hasAppImage: false })).toEqual({
+		expect(
+			desktopUpdateSupport({ isPackaged: true, platform: "win32", hasAppImage: false, codeSigningTeam: null }),
+		).toEqual({
 			supported: true,
 		});
-		expect(desktopUpdateSupport({ isPackaged: true, platform: "linux", hasAppImage: false })).toEqual({
+		expect(
+			desktopUpdateSupport({ isPackaged: true, platform: "linux", hasAppImage: false, codeSigningTeam: null }),
+		).toEqual({
 			supported: false,
 			reason: "Desktop auto-updates on Linux require the AppImage build.",
 		});
 		expect(DESKTOP_UPDATE_FEED).toEqual({ provider: "github", owner: "Signet-AI", repo: "signetai" });
+	});
+
+	test("does not offer macOS updates that Squirrel cannot install into a build without a Developer ID", () => {
+		const support = desktopUpdateSupport({
+			isPackaged: true,
+			platform: "darwin",
+			hasAppImage: false,
+			codeSigningTeam: null,
+		});
+		expect(support.supported).toBe(false);
+		expect(support.supported === false && support.reason).toContain("signet desktop install");
+	});
+
+	test("reads the Developer ID team from codesign output", () => {
+		const release = [
+			"Executable=/Applications/Signet.app/Contents/MacOS/signet",
+			"Identifier=ai.signet.app",
+			"CodeDirectory v=20500 size=546 flags=0x10000(runtime) hashes=6+7 location=embedded",
+			"Authority=Developer ID Application: AVERY ALEXANDER FELTS (TQK8H7V7RP)",
+			"TeamIdentifier=TQK8H7V7RP",
+		].join("\n");
+		const sourceBuild = [
+			"Executable=/Users/me/Applications/Signet.app/Contents/MacOS/signet",
+			"Identifier=Electron",
+			"CodeDirectory v=20400 size=392 flags=0x20002(adhoc,linker-signed) hashes=9+0 location=embedded",
+			"Signature=adhoc",
+			"TeamIdentifier=not set",
+		].join("\n");
+		expect(codeSigningTeam(release)).toBe("TQK8H7V7RP");
+		expect(codeSigningTeam(sourceBuild)).toBeNull();
+		expect(codeSigningTeam("")).toBeNull();
+	});
+
+	test.skipIf(process.platform !== "darwin")("treats an ad-hoc signed app bundle as having no Developer ID", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-update-signing-"));
+		try {
+			const app = join(directory, "Signet.app");
+			const macos = join(app, "Contents", "MacOS");
+			mkdirSync(macos, { recursive: true });
+			writeFileSync(
+				join(app, "Contents", "Info.plist"),
+				`<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>ai.signet.app</string>
+<key>CFBundleExecutable</key><string>signet</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>`,
+			);
+			writeFileSync(join(directory, "main.c"), "int main(void) { return 0; }\n");
+			execFileSync("clang", [join(directory, "main.c"), "-o", join(macos, "signet")]);
+			execFileSync("/usr/bin/codesign", ["--force", "--sign", "-", app]);
+			expect(macAppCodeSigningTeam(app)).toBeNull();
+			expect(macAppCodeSigningTeam(join(directory, "Missing.app"))).toBeNull();
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 
 	test("does not treat an ineligible electron-updater result as available", () => {
