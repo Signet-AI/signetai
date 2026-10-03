@@ -535,6 +535,10 @@ describe("dreaming-agent-tools", () => {
 				["mem-miss", "Unrelated note about 100% coverage_ratio.", "2026-08-06T11:00:00.000Z"],
 				["mem-cpp", "Rewrote the parser in C++ last week.", "2026-08-06T08:00:00.000Z"],
 				["mem-long", `${"filler words ".repeat(400)}Émile met Łukasz at the École.`, "2026-08-06T07:00:00.000Z"],
+				["mem-boom", "deploy failed 💥 again", "2026-08-06T06:00:00.000Z"],
+				["mem-dotted", `${"İ".repeat(1500)} needle at end`, "2026-08-06T05:00:00.000Z"],
+				["mem-ecole-upper", "École Normale", "2026-08-06T04:00:00.000Z"],
+				["mem-ecole-lower", "école primaire", "2026-08-06T03:00:00.000Z"],
 			] as const) {
 				db.prepare(
 					`INSERT INTO memories
@@ -574,6 +578,22 @@ describe("dreaming-agent-tools", () => {
 			),
 		).items as Array<{ content: string }>;
 		expect(excerpt[0]?.content).toContain("Émile met");
+		expect(await search("💥")).toEqual(["memory:mem-boom"]);
+		expect((await search("École école")).sort()).toEqual([
+			"memory:mem-ecole-lower",
+			"memory:mem-ecole-upper",
+			"memory:mem-long",
+		]);
+		const dotted = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner", query: "needle" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		).items as Array<{ sourceRef: string; content: string }>;
+		expect(dotted.find((item) => item.sourceRef === "memory:mem-dotted")?.content).toContain("needle at end");
 	});
 
 	it("search_evidence treats a blank query like an omitted one", async () => {

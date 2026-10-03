@@ -10,7 +10,7 @@ import type {
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { classifyEntityQuality } from "../entity-quality";
 import type { EpisodicSourceRecord } from "../episodic-sources";
-import { episodicQueryTerms, readEpisodicSource, searchEpisodicSources } from "../episodic-sources";
+import { episodicQueryTerms, foldAsciiCase, readEpisodicSource, searchEpisodicSources } from "../episodic-sources";
 import {
 	getAttributesForAspectFiltered,
 	getEntityAspectsWithCounts,
@@ -126,9 +126,9 @@ async function filterDreamingAttributes(
 }
 
 function evidenceExcerptStart(content: string, query: string, maxChars: number): number {
-	const lower = content.toLowerCase();
+	const folded = foldAsciiCase(content);
 	for (const term of episodicQueryTerms(query)) {
-		const match = lower.indexOf(term.toLowerCase());
+		const match = folded.indexOf(foldAsciiCase(term));
 		if (match >= 0) return Math.max(0, match - Math.floor(maxChars * 0.35));
 	}
 	return 0;
@@ -629,7 +629,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split into words that match independently as substrings (ASCII case-insensitive); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it lists every incomplete source revision and resumes at its delivered offset, regardless of time watermark. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it lists every incomplete source revision and resumes at its delivered offset, regardless of time watermark. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
