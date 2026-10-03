@@ -18,8 +18,11 @@ describe("Signet benchmark profiles", () => {
     protected override async request<T>(path: string, init: RequestInit): Promise<T> {
       this.calls.push({ path, init })
       if (path === "/api/hooks/session-end") return { transcriptCaptureJobId: "capture-1" } as T
-      if (path === "/api/hooks/transcript-capture/capture-1?agentId=memorybench") {
+      if (path === "/api/hooks/transcript-capture/capture-1?agentId=memorybench-question-1-run") {
         return { status: "completed" } as T
+      }
+      if (path === "/api/dream/status?agentId=memorybench-question-1-run") {
+        return { worker: { running: true }, episodicTokensPending: this.statusCalls >= 3 ? 0 : 1 } as T
       }
       if (path === "/api/dream/trigger") {
         this.triggerCalls += 1
@@ -80,18 +83,22 @@ describe("Signet benchmark profiles", () => {
       harness: "memorybench",
       sessionId: "memorybench:question-1-run:session-1",
       sessionKey: "memorybench:question-1-run:session-1",
-      agentId: "memorybench",
+      agentId: "memorybench-question-1-run",
+      reason: "session_shutdown",
       capturedAt: "2023-05-20T10:20:00.000Z",
       transcript: "[2023-05-20T10:20:00.000Z]\nuser: I moved deployment to edge runtime.",
     })
     expect(provider.calls.map((call) => call.path)).toEqual([
       "/api/hooks/session-end",
-      "/api/hooks/transcript-capture/capture-1?agentId=memorybench",
-      "/api/dream/status?agentId=memorybench",
+      "/api/hooks/transcript-capture/capture-1?agentId=memorybench-question-1-run",
+      "/api/dream/status?agentId=memorybench-question-1-run",
       "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
+      "/api/dream/status?agentId=memorybench",
+      "/api/dream/status?agentId=memorybench-question-1-run",
       "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
+      "/api/dream/status?agentId=memorybench-question-1-run",
     ])
     expect(provider.getIngestUsage().dreamingPasses).toEqual({
       "pass-1": { inputTokens: 1200, outputTokens: 300, cacheReadTokens: 50 },
@@ -152,7 +159,10 @@ describe("Signet benchmark profiles", () => {
       "/api/hooks/transcript-capture/capture-dreaming-gate-beta?agentId=dreaming-gate-beta"
     )
     const recall = provider.calls.find((call) => call.path === "/api/memory/recall")
-    expect(JSON.parse(String(recall?.init.body))).toMatchObject({ agentId: "dreaming-gate-alpha" })
+    const recallBody = JSON.parse(String(recall?.init.body))
+    expect(recallBody).toMatchObject({ agentId: "dreaming-gate-alpha" })
+    expect(recallBody).not.toHaveProperty("project")
+    expect(recallBody).not.toHaveProperty("scope")
   })
 
   it("rejects resumed Dreaming captures whose fixture scopes were not checkpointed", async () => {
@@ -272,6 +282,60 @@ describe("Signet benchmark profiles", () => {
       if (previousPoll === undefined) delete process.env.SIGNET_BENCH_DREAMING_POLL_SECS
       else process.env.SIGNET_BENCH_DREAMING_POLL_SECS = previousPoll
     }
+  })
+
+  class ColdBacklogProvider extends SignetDreamingProvider {
+    calls: string[] = []
+    private reads = 0
+
+    constructor(private readonly measuredAfter: number) {
+      super()
+    }
+
+    protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+      this.calls.push(path)
+      if (path === "/api/dream/trigger") return { passId: "pass-1" } as T
+      if (path.startsWith("/api/dream/status")) {
+        this.reads += 1
+        return {
+          worker: { running: true },
+          passes: [{ id: "pass-1", status: "completed" }],
+          episodicTokensPending: this.reads > this.measuredAfter ? 0 : null,
+        } as T
+      }
+      throw new Error(`Unexpected path ${path}`)
+    }
+  }
+
+  async function finalizeWith(provider: SignetDreamingProvider, waitSecs: string): Promise<void> {
+    const previous = {
+      poll: process.env.SIGNET_BENCH_DREAMING_POLL_SECS,
+      wait: process.env.SIGNET_BENCH_DREAMING_WAIT_SECS,
+    }
+    process.env.SIGNET_BENCH_DREAMING_POLL_SECS = "1"
+    process.env.SIGNET_BENCH_DREAMING_WAIT_SECS = waitSecs
+    try {
+      await provider.finalizeIngest({ runId: "run", dataSourceRunId: "source" })
+    } finally {
+      for (const [key, value] of [
+        ["SIGNET_BENCH_DREAMING_POLL_SECS", previous.poll],
+        ["SIGNET_BENCH_DREAMING_WAIT_SECS", previous.wait],
+      ] as const) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
+  }
+
+  it("waits for an unmeasured backlog instead of failing after a completed pass", async () => {
+    const provider = new ColdBacklogProvider(2)
+    await finalizeWith(provider, "30")
+    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(1)
+  })
+
+  it("fails when the backlog is never measured before the deadline", async () => {
+    const provider = new ColdBacklogProvider(Number.POSITIVE_INFINITY)
+    await expect(finalizeWith(provider, "2")).rejects.toThrow("never reported a measured episodic backlog")
   })
 
   it("formats raw sessions like the Supermemory adapter for parity runs", () => {
