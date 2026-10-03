@@ -14,8 +14,8 @@ type ProposalRow = {
 	readonly status: string;
 };
 
-function proposalsFor(agentId: string, operation: string): readonly ProposalRow[] {
-	return listOntologyProposals(getDbAccessor(), { agentId, operation, limit: 200 }).items.map((item) => ({
+async function proposalsFor(agentId: string, operation: string): Promise<readonly ProposalRow[]> {
+	return (await listOntologyProposals(getDbAccessor(), { agentId, operation, limit: 200 })).items.map((item) => ({
 		id: item.id,
 		operation: item.operation,
 		status: item.status,
@@ -45,11 +45,11 @@ describe("interactive semantic mutation cutover", () => {
 	});
 
 	describe("pin/unpin via audited operation", () => {
-		it("pin_entity changes data and writes an applied proposal", () => {
-			const before = proposalsFor("ant", "pin_entity");
+		it("pin_entity changes data and writes an applied proposal", async () => {
+			const before = await proposalsFor("ant", "pin_entity");
 			expect(before).toHaveLength(0);
 
-			const { proposal, result } = applyOntologyOperation(getDbAccessor(), {
+			const { proposal, result } = await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "operator",
 				operation: "pin_entity",
@@ -72,7 +72,7 @@ describe("interactive semantic mutation cutover", () => {
 			expect(pinned?.proposal_id).toBe(proposal.id);
 		});
 
-		it("unpin_entity clears pinned state and writes an applied proposal", () => {
+		it("unpin_entity clears pinned state and writes an applied proposal", async () => {
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "operator",
@@ -80,7 +80,7 @@ describe("interactive semantic mutation cutover", () => {
 				payload: { id: "ent-audit" },
 			});
 
-			const { proposal, result } = applyOntologyOperation(getDbAccessor(), {
+			const { proposal, result } = await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "operator",
 				operation: "unpin_entity",
@@ -101,23 +101,23 @@ describe("interactive semantic mutation cutover", () => {
 			expect(after?.pinned_at).toBeNull();
 		});
 
-		it("pin_entity on a missing entity throws 404 and writes no applied proposal", () => {
-			expect(() =>
+		it("pin_entity on a missing entity throws 404 and writes no applied proposal", async () => {
+			await expect(
 				applyOntologyOperation(getDbAccessor(), {
 					agentId: "ant",
 					actor: "operator",
 					operation: "pin_entity",
 					payload: { id: "missing" },
 				}),
-			).toThrow(OntologyProposalError);
+			).rejects.toThrow(OntologyProposalError);
 
-			expect(proposalsFor("ant", "pin_entity").filter((p) => p.status === "applied")).toHaveLength(0);
+			expect((await proposalsFor("ant", "pin_entity")).filter((p) => p.status === "applied")).toHaveLength(0);
 		});
 	});
 
 	describe("entity aliases via audited operation", () => {
-		it("create_entity_alias writes the alias and an applied proposal", () => {
-			const { proposal, result } = applyOntologyOperation(getDbAccessor(), {
+		it("create_entity_alias writes the alias and an applied proposal", async () => {
+			const { proposal, result } = await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "operator",
 				operation: "create_entity_alias",
@@ -143,19 +143,19 @@ describe("interactive semantic mutation cutover", () => {
 			expect(alias?.source).toBe("test");
 		});
 
-		it("create_entity_alias on a missing entity throws 404", () => {
-			expect(() =>
+		it("create_entity_alias on a missing entity throws 404", async () => {
+			await expect(
 				applyOntologyOperation(getDbAccessor(), {
 					agentId: "ant",
 					actor: "operator",
 					operation: "create_entity_alias",
 					payload: { entity_id: "missing", alias: "Nope" },
 				}),
-			).toThrow(OntologyProposalError);
+			).rejects.toThrow(OntologyProposalError);
 		});
 
-		it("archive_entity_alias archives the alias and writes an applied proposal", () => {
-			const created = applyOntologyOperation(getDbAccessor(), {
+		it("archive_entity_alias archives the alias and writes an applied proposal", async () => {
+			const created = await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "operator",
 				operation: "create_entity_alias",
@@ -163,7 +163,7 @@ describe("interactive semantic mutation cutover", () => {
 			});
 			const aliasId = created.result?.aliasId as string;
 
-			const { proposal, result } = applyOntologyOperation(getDbAccessor(), {
+			const { proposal, result } = await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "operator",
 				operation: "archive_entity_alias",
@@ -181,7 +181,7 @@ describe("interactive semantic mutation cutover", () => {
 			expect(alias?.status).toBe("archived");
 		});
 
-		it("archive_entity_alias scoped to the owning entity throws 404 for a mismatched entity", () => {
+		it("archive_entity_alias scoped to the owning entity throws 404 for a mismatched entity", async () => {
 			getDbAccessor().withWriteTx((db) => {
 				const now = "2026-06-10T00:00:00.000Z";
 				db.prepare(
@@ -190,7 +190,7 @@ describe("interactive semantic mutation cutover", () => {
 					 VALUES ('ent-other', 'Other Entity', 'other entity', 'project', 'ant', 1, ?, ?)`,
 				).run(now, now);
 			});
-			const created = applyOntologyOperation(getDbAccessor(), {
+			const created = await applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
 				actor: "operator",
 				operation: "create_entity_alias",
@@ -198,14 +198,14 @@ describe("interactive semantic mutation cutover", () => {
 			});
 			const aliasId = created.result?.aliasId as string;
 
-			expect(() =>
+			await expect(
 				applyOntologyOperation(getDbAccessor(), {
 					agentId: "ant",
 					actor: "operator",
 					operation: "archive_entity_alias",
 					payload: { entity_id: "ent-other", alias_id: aliasId },
 				}),
-			).toThrow(OntologyProposalError);
+			).rejects.toThrow(OntologyProposalError);
 		});
 	});
 
@@ -220,7 +220,7 @@ describe("interactive semantic mutation cutover", () => {
 			expect(body.pinned).toBe(true);
 			expect(typeof body.pinnedAt).toBe("string");
 
-			expect(proposalsFor("ant", "pin_entity").filter((p) => p.status === "applied")).toHaveLength(1);
+			expect((await proposalsFor("ant", "pin_entity")).filter((p) => p.status === "applied")).toHaveLength(1);
 		});
 
 		it("POST /api/knowledge/entities/:id/pin on a missing entity returns 404", async () => {
@@ -240,7 +240,7 @@ describe("interactive semantic mutation cutover", () => {
 			const body = (await res.json()) as { readonly pinned: boolean };
 			expect(body.pinned).toBe(false);
 
-			expect(proposalsFor("ant", "unpin_entity").filter((p) => p.status === "applied")).toHaveLength(1);
+			expect((await proposalsFor("ant", "unpin_entity")).filter((p) => p.status === "applied")).toHaveLength(1);
 		});
 
 		it("POST /api/ontology/entities/:id/aliases creates an alias and returns the item", async () => {
@@ -259,7 +259,7 @@ describe("interactive semantic mutation cutover", () => {
 			expect(body.item.alias).toBe("Route Alias");
 			expect(body.item.status).toBe("active");
 
-			expect(proposalsFor("ant", "create_entity_alias").filter((p) => p.status === "applied")).toHaveLength(1);
+			expect((await proposalsFor("ant", "create_entity_alias")).filter((p) => p.status === "applied")).toHaveLength(1);
 		});
 
 		it("POST /api/ontology/entities/:id/aliases on a missing entity returns 404", async () => {
@@ -313,7 +313,7 @@ describe("interactive semantic mutation cutover", () => {
 			};
 			expect(body.item.status).toBe("archived");
 
-			expect(proposalsFor("ant", "archive_entity_alias").filter((p) => p.status === "applied")).toHaveLength(1);
+			expect((await proposalsFor("ant", "archive_entity_alias")).filter((p) => p.status === "applied")).toHaveLength(1);
 		});
 
 		it("DELETE /api/ontology/entities/:id/aliases/:aliasId on a missing alias returns 404", async () => {
