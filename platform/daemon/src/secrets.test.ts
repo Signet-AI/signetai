@@ -76,17 +76,7 @@ describe("local secrets provider", () => {
 		agentsDir = join(tmpdir(), `signet-secrets-provider-${process.pid}-${Date.now()}`);
 		process.env.SIGNET_PATH = agentsDir;
 		mkdirSync(agentsDir, { recursive: true });
-		setSecretKeyringAdapterForTests({
-			platform: "test",
-			service: "test",
-			account: "test",
-			async get() {
-				return { state: "unavailable", message: "test keyring unavailable" };
-			},
-			async set() {
-				return { state: "unavailable", message: "test keyring unavailable" };
-			},
-		});
+		setSecretKeyringAdapterForTests(makeKeyring({ state: "missing" }));
 	});
 
 	afterEach(() => {
