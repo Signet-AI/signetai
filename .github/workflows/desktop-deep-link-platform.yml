@@ -137,8 +137,9 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installer = Get-ChildItem surfaces/desktop/release -Filter 'Signet-*.exe' | Select-Object -First 1
-          if ($null -eq $installer) { throw 'Windows NSIS installer was not produced.' }
+          $installers = @(Get-ChildItem surfaces/desktop/release -Filter 'Signet-*.exe' -File)
+          if ($installers.Count -ne 1) { throw "Expected exactly one Windows NSIS installer, found $($installers.Count)." }
+          $installer = $installers[0]
           $installPath = Join-Path $env:RUNNER_TEMP 'signet-protocol-test'
           try {
             $install = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installPath") -Wait -PassThru

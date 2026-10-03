@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, rmdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { installWindowsDesktopApp } from "../src/features/desktop.js";
@@ -28,13 +29,12 @@ if (!existsSync(legacyExecutable) || !existsSync(legacyPackage) || !existsSync(l
 const roamingAppData = process.env.APPDATA;
 if (!roamingAppData) throw new Error("The Windows runner did not provide APPDATA.");
 const profileDirectory = join(roamingAppData, "Signet");
-if (existsSync(profileDirectory)) {
-	throw new Error("The Signet profile path must be clean before the migration smoke test.");
-}
-const profileMarker = join(profileDirectory, "migration-smoke-profile-preservation.txt");
-mkdirSync(profileDirectory, { recursive: true });
+const profileDirectoryExisted = existsSync(profileDirectory);
+const profileMarker = join(profileDirectory, `migration-smoke-${randomUUID()}.txt`);
+const profileMarkerContents = "preserve this desktop profile";
+if (!profileDirectoryExisted) mkdirSync(profileDirectory);
 try {
-	writeFileSync(profileMarker, "preserve this desktop profile");
+	writeFileSync(profileMarker, profileMarkerContents, { flag: "wx" });
 	const result = installWindowsDesktopApp(
 		process.cwd(),
 		homedir(),
@@ -54,11 +54,16 @@ try {
 	if (existsSync(legacyExecutable) || existsSync(legacyPackage) || existsSync(legacyUninstaller)) {
 		throw new Error(`Legacy Signet files remain after migration at ${legacyAppDir}.`);
 	}
-	if (!existsSync(profileMarker) || readFileSync(profileMarker, "utf8") !== "preserve this desktop profile") {
+	if (!existsSync(profileMarker) || readFileSync(profileMarker, "utf8") !== profileMarkerContents) {
 		throw new Error("Legacy uninstall removed or changed the existing Signet desktop profile.");
 	}
 
 	console.info("Real NSIS migration passed; managed app copied, legacy payload removed, profile preserved.");
 } finally {
-	rmSync(profileDirectory, { recursive: true, force: true });
+	if (existsSync(profileMarker) && readFileSync(profileMarker, "utf8") === profileMarkerContents) {
+		rmSync(profileMarker);
+	}
+	if (!profileDirectoryExisted && existsSync(profileDirectory) && readdirSync(profileDirectory).length === 0) {
+		rmdirSync(profileDirectory);
+	}
 }
