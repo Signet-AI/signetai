@@ -2,18 +2,20 @@ import { describe, expect, it } from "bun:test";
 import {
 	chmodSync,
 	existsSync,
+	lstatSync,
 	mkdtempSync,
 	mkdirSync,
 	readFileSync,
 	readdirSync,
 	renameSync,
 	rmSync,
+	symlinkSync,
 	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { assertBunRuntime, removeStaging, replaceResources, stageRuntime } from "./stage-runtime.mjs";
+import { assertBunRuntime, removeStaging, replaceResources, stageBunRuntime, stageRuntime } from "./stage-runtime.mjs";
 
 describe("stage-runtime Bun validation", () => {
 	it("rejects an architecture-mismatched staged runtime", () => {
@@ -26,6 +28,32 @@ describe("stage-runtime Bun validation", () => {
 			expect(() => assertBunRuntime(runtimePath, "arm64", "linux", () => ({ platform: "linux", arch: "x64" }))).toThrow(
 				"Bun runtime architecture mismatch: expected arm64, got x64",
 			);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
+	});
+
+	it("stages the binary behind a symlinked Bun install instead of the symlink", () => {
+		const directory = mkdtempSync(join(tmpdir(), "signet-stage-runtime-"));
+		const cellar = join(directory, "Cellar", "bun", "1.0.0", "bin");
+		const linkDirectory = join(directory, "bin");
+		const linkedRuntime = join(linkDirectory, "bun");
+		const staged = join(directory, "runtime", "bun");
+		try {
+			mkdirSync(cellar, { recursive: true });
+			mkdirSync(linkDirectory);
+			mkdirSync(join(directory, "runtime"));
+			writeFileSync(join(cellar, "bun"), "real bun runtime\n");
+			symlinkSync(join(cellar, "bun"), linkedRuntime);
+
+			stageBunRuntime(linkedRuntime, staged, "darwin");
+			rmSync(join(directory, "Cellar"), { recursive: true, force: true });
+
+			const stat = lstatSync(staged);
+			expect(stat.isSymbolicLink()).toBe(false);
+			expect(stat.isFile()).toBe(true);
+			expect(stat.mode & 0o777).toBe(0o755);
+			expect(readFileSync(staged, "utf8")).toBe("real bun runtime\n");
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
