@@ -108,6 +108,34 @@ function managedSourcePath(meta: string | null): string | null {
 	}
 }
 
+const ARTIFACT_IS_DREAMING_INPUT = `NOT (
+	ma.source_kind = 'manifest'
+	OR (
+		ma.source_kind = 'transcript' AND ma.session_key IS NOT NULL
+		AND EXISTS (
+			SELECT 1 FROM session_transcripts AS st
+			WHERE st.agent_id = ma.agent_id AND st.session_key = ma.session_key
+		)
+	)
+	OR (
+		ma.source_kind IN ('summary', 'compaction')
+		AND EXISTS (
+			SELECT 1 FROM session_summaries AS ss
+			WHERE ss.agent_id = ma.agent_id
+			  AND ss.depth = 0
+			  AND COALESCE(ss.source_type, 'summary') = ma.source_kind
+			  AND (
+				ss.session_key = ma.session_key
+				OR (
+					ss.session_key IS NULL AND ma.session_key IS NULL
+					AND ss.content = ma.content
+					AND julianday(ss.latest_at) = julianday(ma.captured_at)
+				)
+			  )
+		)
+	)
+)`;
+
 function tableHasColumn(db: ReadDb, table: string, column: string): boolean {
 	try {
 		const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
@@ -549,36 +577,7 @@ export function readRecentEpisodicSources(
 			        project, harness, content, captured_at, updated_at
 			 FROM memory_artifacts AS ma
 			 WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
-			   -- Canonical session artifacts preserve immutable lineage. When their
-			   -- matching temporal node is present, it is the single Dreaming input;
-			   -- otherwise keep the artifact as the durable recovery fallback.
-			   AND NOT (
-			     ma.source_kind = 'manifest'
-			     OR (
-			       ma.source_kind = 'transcript' AND ma.session_key IS NOT NULL
-			       AND EXISTS (
-			         SELECT 1 FROM session_transcripts AS st
-			         WHERE st.agent_id = ma.agent_id AND st.session_key = ma.session_key
-			       )
-			     )
-			     OR (
-			       ma.source_kind IN ('summary', 'compaction')
-			       AND EXISTS (
-			         SELECT 1 FROM session_summaries AS ss
-			         WHERE ss.agent_id = ma.agent_id
-			           AND ss.depth = 0
-			           AND COALESCE(ss.source_type, 'summary') = ma.source_kind
-			           AND (
-			             ss.session_key = ma.session_key
-			             OR (
-			               ss.session_key IS NULL AND ma.session_key IS NULL
-			               AND ss.content = ma.content
-			               AND julianday(ss.latest_at) = julianday(ma.captured_at)
-			             )
-			           )
-			       )
-			     )
-			   )
+			   AND ${ARTIFACT_IS_DREAMING_INPUT}
 			   AND (${artifactCursor.sql} OR ${artifactRequeue})
 			   ${artifactCandidate.sql}
 			   ${sourceOrder("captured_at", "source_path")}
@@ -961,6 +960,7 @@ export function searchEpisodicSources(
 			      FROM memory_artifacts ma
 			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
 			        AND length(ma.content) > 0
+			        AND ${ARTIFACT_IS_DREAMING_INPUT}
 			        ${params.since ? "AND (julianday(ma.captured_at) >= julianday(?) OR julianday(ma.captured_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(ma.captured_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("artifact", "ma.source_path", "ma.captured_at", "COALESCE(ma.source_id, '')", "CASE WHEN ma.source_sha256 IS NULL OR ma.source_sha256 = '' THEN ma.captured_at ELSE ma.source_sha256 END")}

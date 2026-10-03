@@ -118,6 +118,81 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 	});
 }
 
+export function passDeliveredRanges(
+	db: ReadDb,
+	passId: string,
+	agentId: string,
+): ReadonlyMap<string, ReadonlyArray<readonly [number, number]>> {
+	const ranges = new Map<string, Array<readonly [number, number]>>();
+	for (const delivery of persistedEvidenceDeliveries(db, passId)) {
+		if (delivery.agentId !== agentId) continue;
+		const ref = `${delivery.kind}:${delivery.id}`;
+		ranges.set(ref, [...(ranges.get(ref) ?? []), [delivery.start, delivery.end] as const]);
+	}
+	return ranges;
+}
+
+export function extendDeliveredOffset(
+	baseline: number,
+	ranges: ReadonlyArray<readonly [number, number]> | undefined,
+): number {
+	let offset = baseline;
+	for (const [start, end] of [...(ranges ?? [])].sort((a, b) => a[0] - b[0])) {
+		if (start > offset) break;
+		offset = Math.max(offset, end);
+	}
+	return offset;
+}
+
+export interface FailedOperationEvidence {
+	readonly sources: ReadonlySet<string>;
+	readonly scopes: ReadonlySet<string>;
+}
+
+export function failedOperationEvidence(db: ReadDb, passId: string, passAgentId: string): FailedOperationEvidence {
+	const keys = new Set<string>();
+	const scopes = new Set<string>();
+	if (!tableExists(db, "dreaming_tool_calls")) return { sources: keys, scopes };
+	const rows = db
+		.prepare(
+			`SELECT input_json AS inputJson, output_json AS outputJson
+			 FROM dreaming_tool_calls
+			 WHERE pass_id = ? AND tool_name = 'apply_ontology_ops' ORDER BY sequence ASC`,
+		)
+		.all(passId) as Array<{ inputJson: string; outputJson: string }>;
+	for (const { inputJson, outputJson } of rows) {
+		let input: Record<string, unknown> | null;
+		let output: Record<string, unknown> | null;
+		try {
+			input = record(JSON.parse(inputJson));
+			output = record(JSON.parse(outputJson));
+		} catch {
+			continue;
+		}
+		const agentId = text(input?.agentId) ?? passAgentId;
+		const operations = Array.isArray(input?.operations) ? input.operations : [];
+		const failedIndexes =
+			output?.ok === true && Array.isArray(output.items)
+				? output.items.flatMap((item) => {
+						const row = record(item);
+						return row?.ok === false && typeof row.index === "number" ? [row.index] : [];
+					})
+				: operations.map((_, index) => index);
+		for (const index of failedIndexes) {
+			const evidence = record(operations[index])?.evidence;
+			const citations = (Array.isArray(evidence) ? evidence : []).flatMap((citation) => {
+				const cited = record(citation);
+				const ref = text(cited?.source_ref) ?? text(cited?.sourceRef);
+				const parsed = ref ? sourceRef(ref) : null;
+				return parsed ? [`${agentId}\u0000${parsed.kind}:${parsed.id}`] : [];
+			});
+			if (citations.length === 0) scopes.add(agentId);
+			for (const key of citations) keys.add(key);
+		}
+	}
+	return { sources: keys, scopes };
+}
+
 export function verifiedDreamingEvidenceDelivery(
 	db: ReadDb,
 	delivery: DreamingEvidenceDelivery,
@@ -144,10 +219,15 @@ export function verifiedDreamingEvidenceDelivery(
 }
 export function recordDreamingEvidenceConsumptionInTx(
 	db: WriteDb,
-	params: { readonly passId: string; readonly deferredEvidence: ReadonlySet<string> },
+	params: {
+		readonly passId: string;
+		readonly deferredEvidence: ReadonlySet<string>;
+		readonly withheldScopes?: ReadonlySet<string>;
+	},
 ): void {
 	if (!tableExists(db, "dreaming_evidence_consumption")) return;
 	const deliveries = persistedEvidenceDeliveries(db, params.passId)
+		.filter((delivery) => !params.withheldScopes?.has(delivery.agentId))
 		.filter((delivery) => !params.deferredEvidence.has(`${delivery.agentId}\u0000${delivery.kind}:${delivery.id}`))
 		.sort(
 			(a, b) =>
@@ -264,7 +344,7 @@ export function pendingDreamingEvidenceContinuations(
 			`SELECT dec.source_kind AS kind, dec.source_id AS id, dec.source_captured_at AS capturedAt,
 			        dec.source_entry_id AS sourceEntryId, dec.source_revision AS sourceRevision
 			 FROM dreaming_evidence_consumption dec
-			 INNER JOIN dreaming_passes pass ON pass.id = dec.pass_id AND pass.agent_id = dec.agent_id
+			 INNER JOIN dreaming_passes pass ON pass.id = dec.pass_id
 			 WHERE dec.agent_id = ?
 			   AND dec.delivered_offset > 0 AND dec.delivered_offset < dec.source_length
 			   ${reviewedPredicate}
