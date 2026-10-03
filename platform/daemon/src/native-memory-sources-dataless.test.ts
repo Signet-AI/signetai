@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, mock } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,12 @@ afterEach(() => {
 	statError = () => null;
 	readdirError = () => null;
 });
+const realFsPromises = { ...(await import("node:fs/promises")) };
+afterAll(() => {
+	mock.module("node:fs/promises", () => realFsPromises);
+});
 mock.module("node:fs/promises", () => ({
+	...realFsPromises,
 	lstat: async () => ({ isSymbolicLink: () => false }),
 	stat: async (path: string) => {
 		const error = statError(path);
