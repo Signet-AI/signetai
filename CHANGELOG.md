@@ -7,7 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-03
-- Bug fixes: fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
+- Bug fixes: clarify retired Windows app; preserve retryable Windows migration; migrate legacy Windows install; preserve installed bundles and restore runtime connectivity; fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
+- Docs: clarify legacy cleanup.
 
 ### 2026-10-02
 - Features: add 2D memory graph and persistent Pi chat.
@@ -36,6 +37,22 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: clarify checkpoint authority.
 
 ## Release Ledger
+
+## [0.230.6] - 2026-10-03
+
+Release summary: 4 bug fixes and 1 docs update.
+Tag range: `v0.230.5..v0.230.6`.
+
+### Bug Fixes
+
+- **desktop**: clarify retired Windows app
+- **cli**: preserve retryable Windows migration
+- **desktop**: migrate legacy Windows install
+- **desktop**: preserve installed bundles and restore runtime connectivity
+
+### Docs
+
+- **desktop**: clarify legacy cleanup
 
 ## [0.230.5] - 2026-10-03
 
