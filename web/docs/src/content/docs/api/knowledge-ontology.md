@@ -755,8 +755,11 @@ governance path.
 its complete retained entry set with exact source/quote support and the revision
 and hash from `memory_head_read`, under the active content pass. The owner renders
 the body and records removals for omitted entries. `curate_memory_head` is retired
-and returns 404; historical freeform audit rows remain intact. Record deferrals
-and no-change explanations with `runbook_write`.
+and returns 404; historical freeform audit rows remain intact. Every content
+pass stages exactly one commit, even when nothing changes: resubmit the current
+entries, or an empty entry set while the head is still empty. An empty set never
+clears a published head. Record deferrals and no-change explanations with
+`runbook_write`.
 
 ### POST /api/dream/tools/:capability
 

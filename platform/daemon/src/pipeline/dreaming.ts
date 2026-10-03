@@ -1051,7 +1051,8 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - create_entity only for durable subjects clearly established by the source.
    - When the evidence supports a possible relationship, merge, or other ontology change but the relationship is ambiguous rather than settled, do not apply it immediately. Emit the normal ontology operation with risk: "review_required". Its reason must be a concise, human-readable explanation that names the entities and the proposed relationship; the exact evidence citation remains required. The daemon will place it in the user's review queue for confirmation, not treat the queue as a work-deferral mechanism.
    - Validate before writing (validate_proposal).
-5. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
+5. Update MEMORY.md: call memory_head_read, then call memory_head_commit exactly once with its revision and hash and the complete set of entries to retain, each with exact source/quote support. The pass cannot finish without this commit, even when nothing changed: resubmit the current entries unchanged, or submit an empty entry set if the head is empty and nothing durable qualifies yet.
+6. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
 
@@ -1809,7 +1810,9 @@ ${JSON.stringify(liveOptions.userRequest)}
 			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
 		});
 		if (mode === "incremental-content" && memoryHeadCommitInput === null) {
-			throw new Error("Content pass finalization requires a successful memory-head commit: staged input missing");
+			throw new Error(
+				"Content pass finalization requires a successful memory-head commit: the agent ended without calling memory_head_commit",
+			);
 		}
 		const summary = executorResult.summary?.trim() || "Agentic Dreaming pass completed";
 		const attribution = executorResult.attribution ?? null;
@@ -2075,7 +2078,9 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 	if (input.mode === "incremental-content") {
 		const commitInput = input.memoryHeadCommitInput;
 		if (commitInput === null)
-			throw new Error("Content pass finalization requires a successful memory-head commit: staged input missing");
+			throw new Error(
+				"Content pass finalization requires a successful memory-head commit: the agent ended without calling memory_head_commit",
+			);
 		if (commitInput.agentId !== input.agentId || commitInput.passId !== input.passId) {
 			throw new Error("Content pass memory-head commit does not match its finalizing pass");
 		}

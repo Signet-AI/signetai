@@ -113,6 +113,67 @@ describe("dreaming-agent-tools", () => {
 		expect(tools.some((tool) => tool.name === "curate_memory_head")).toBe(false);
 	});
 
+	it("completes a content pass whose empty head stays empty, but not one that empties a published head", async () => {
+		insertEpisodicMemory("head-evidence", "Meeting is Tuesday.");
+		const accessor = getDbAccessor();
+		const owner = await getDbOwnerForAccessor(accessor);
+		const options = { operation: "empty-head-fixture", lane: "read" as const, deadlineMs: 10000 };
+		const cfg = {
+			tokenThreshold: 100000,
+			maxInterval: 3600000,
+			maxInputTokens: 32000,
+			maxOutputTokens: 16000,
+			timeout: 30000,
+			backfillOnFirstRun: true,
+		};
+		let passId = "";
+		const runPass = (entries: readonly Record<string, unknown>[]) =>
+			runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						passId = input.passId;
+						const invoke = async (name: string, args: unknown) =>
+							readResult(await findTool(input.tools, name).execute(name, args, undefined, undefined, {} as never));
+						const base = await invoke("memory_head_read", { agentId: "owner" });
+						const head = base.head as { revision: number; hash: string };
+						expect(
+							await invoke("memory_head_commit", {
+								agentId: "owner",
+								passId: input.passId,
+								baseRevision: head.revision,
+								baseHash: head.hash,
+								entries,
+							}),
+						).toMatchObject({ ok: true, code: "STAGED_FOR_FINALIZATION" });
+						return { summary: "Nothing durable for MEMORY.md yet." };
+					},
+				},
+				cfg,
+				dir,
+				"owner",
+				["owner"],
+				"incremental-content",
+			);
+		const status = async () =>
+			await ownerReadOne(owner, "SELECT status FROM dreaming_passes WHERE id=?", [passId], options);
+
+		await runPass([]);
+		expect(await status()).toEqual({ status: "completed" });
+
+		await runPass([
+			{
+				entryId: "meeting",
+				text: "Meeting is Tuesday.",
+				support: [{ source_ref: "memory:head-evidence", quote: "Meeting is Tuesday." }],
+			},
+		]);
+		expect(await status()).toEqual({ status: "completed" });
+
+		await expect(runPass([])).rejects.toThrow("INVALID_HEAD");
+		expect(await status()).toEqual({ status: "failed" });
+	});
+
 	it("does not complete a content pass without a successful memory-head commit", async () => {
 		insertEpisodicMemory("head-evidence", "Meeting is Tuesday.");
 		const accessor = getDbAccessor();
