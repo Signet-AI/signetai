@@ -24,11 +24,7 @@ function writeRoutingFixture(root: string): void {
 	mkdirSync(join(root, "memory"), { recursive: true });
 	writeFileSync(
 		join(root, "agent.yaml"),
-		`memory:
-  pipelineV2:
-    extraction:
-      provider: none
-inference:
+		`inference:
   defaultPolicy: auto
   targets:
     remote:
@@ -77,11 +73,7 @@ function writeStreamingRoutingFixture(root: string, endpoint: string): void {
 	mkdirSync(join(root, "memory"), { recursive: true });
 	writeFileSync(
 		join(root, "agent.yaml"),
-		`memory:
-  pipelineV2:
-    extraction:
-      provider: none
-inference:
+		`inference:
   defaultPolicy: auto
   targets:
     fake:
@@ -108,11 +100,7 @@ function writeCommandInferenceFixture(root: string): void {
 	mkdirSync(join(root, "memory"), { recursive: true });
 	writeFileSync(
 		join(root, "agent.yaml"),
-		`memory:
-  pipelineV2:
-    extraction:
-      provider: none
-inference:
+		`inference:
   defaultPolicy: auto
   targets:
     localCli:
@@ -154,11 +142,7 @@ printf 'acpx:%s\n' "$(cat ${JSON.stringify(promptPath)})"
 	chmodSync(bin, 0o755);
 	writeFileSync(
 		join(root, "agent.yaml"),
-		`memory:
-  pipelineV2:
-    extraction:
-      provider: none
-inference:
+		`inference:
   defaultPolicy: background-acpx
   targets:
     background-acpx:
@@ -206,11 +190,7 @@ printf 'acpx:%s\n' "$(cat ${JSON.stringify(promptPath)})"
 	chmodSync(bin, 0o755);
 	writeFileSync(
 		join(root, "agent.yaml"),
-		`memory:
-  pipelineV2:
-    extraction:
-      provider: none
-inference:
+		`inference:
   defaultPolicy: background-acpx
   targets:
     background-acpx:
@@ -245,11 +225,7 @@ function writeAccountFallbackRoutingFixture(
 	mkdirSync(join(root, "memory"), { recursive: true });
 	writeFileSync(
 		join(root, "agent.yaml"),
-		`memory:
-  pipelineV2:
-    extraction:
-      provider: none
-inference:
+		`inference:
   defaultPolicy: auto
   accounts:
     shared:
@@ -335,14 +311,14 @@ function startFakeOpenAiServer(
 		port: 0,
 		fetch(req) {
 			const url = new URL(req.url);
-			if (url.pathname === "/models") {
+			if (url.pathname.endsWith("/models")) {
 				return Response.json({
 					object: "list",
 					data: [{ id: "fake-stream", object: "model" }],
 				});
 			}
 
-			if (url.pathname === "/chat/completions") {
+			if (url.pathname.endsWith("/chat/completions")) {
 				return req.json().then(async (body: unknown) => {
 					const payload = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
 					if (mode === "rate_limit") {
