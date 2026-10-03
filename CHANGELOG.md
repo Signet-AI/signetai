@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-03
-- Bug fixes: guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
+- Bug fixes: fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
 
 ### 2026-10-02
 - Features: add 2D memory graph and persistent Pi chat.
@@ -36,6 +36,17 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: clarify checkpoint authority.
 
 ## Release Ledger
+
+## [0.230.5] - 2026-10-03
+
+Release summary: 3 bug fixes.
+Tag range: `v0.230.4..v0.230.5`.
+
+### Bug Fixes
+
+- **daemon**: fold ASCII only in evidence search
+- **daemon**: tighten evidence search and recall cites
+- **dashboard**: let memory chat find saved memories
 
 ## [0.230.4] - 2026-10-03
 
