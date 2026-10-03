@@ -828,15 +828,21 @@ export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly s
 
 const MAX_QUERY_TERMS = 8;
 
+export function foldAsciiCase(value: string): string {
+	return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
 export function episodicQueryTerms(query: string): readonly string[] {
-	const raw = query.split(/\s+/).filter((token) => /[\p{L}\p{N}]/u.test(token));
-	const stripped = raw.map((token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""));
-	const significant = stripped.filter((token) => token.length >= 3);
-	const terms = significant.length > 0 ? significant : raw;
+	const raw = query.split(/\s+/).filter((token) => token.length > 0);
+	const worded = raw.filter((token) => /[\p{L}\p{N}]/u.test(token));
+	const significant = worded
+		.map((token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+		.filter((token) => token.length >= 3);
+	const terms = significant.length > 0 ? significant : worded.length > 0 ? worded : raw;
 	const seen = new Set<string>();
 	return terms
 		.filter((term) => {
-			const key = term.toLowerCase();
+			const key = foldAsciiCase(term);
 			if (seen.has(key)) return false;
 			seen.add(key);
 			return true;

@@ -1041,23 +1041,23 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									{ accessor: getDbAccessor(), agentId: scope.agentId, actor: "dashboard-chat" },
 									"search_evidence",
 								);
-								const citable = new Set(
-									await Promise.all(
-										rows
-											.filter((row) => !row.id.includes(":"))
-											.map(async (row) =>
-												(
-													await evidence?.invoke({
-														agentId: scope.agentId,
-														sourceRef: `memory:${row.id}`,
-														chunkSize: 1,
-													})
-												)?.ok === true
-													? row.id
-													: undefined,
-											),
-									),
-								);
+								const candidates = rows.filter((row) => !row.id.includes(":")).slice(0, 20);
+								const citable = new Set<string>();
+								for (let index = 0; index < candidates.length; index += 4) {
+									controller.signal.throwIfAborted();
+									const resolved = await Promise.all(
+										candidates.slice(index, index + 4).map(async (row) => {
+											const result = await evidence?.invoke({
+												agentId: scope.agentId,
+												sourceRef: `memory:${row.id}`,
+												chunkSize: 1,
+											});
+											return result?.ok === true ? row.id : undefined;
+										}),
+									);
+									for (const id of resolved) if (id) citable.add(id);
+								}
+								controller.signal.throwIfAborted();
 								const items = rows.map((row) => ({
 									...(citable.has(row.id) ? { sourceRef: `memory:${row.id}` } : {}),
 									recallId: row.id,
