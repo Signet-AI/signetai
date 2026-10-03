@@ -284,58 +284,57 @@ describe("Signet benchmark profiles", () => {
     }
   })
 
-  class ColdBacklogProvider extends SignetDreamingProvider {
+  class DrainingProvider extends SignetDreamingProvider {
     calls: string[] = []
-    private reads = 0
+    private triggers = 0
 
-    constructor(private readonly measuredAfter: number) {
+    constructor(
+      private readonly drainedAfterPass: number,
+      private readonly mutationsPerPass: number
+    ) {
       super()
     }
 
     protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
       this.calls.push(path)
-      if (path === "/api/dream/trigger") return { passId: "pass-1" } as T
+      if (path === "/api/dream/trigger") {
+        this.triggers += 1
+        return { passId: `pass-${this.triggers}` } as T
+      }
       if (path.startsWith("/api/dream/status")) {
-        this.reads += 1
         return {
           worker: { running: true },
-          passes: [{ id: "pass-1", status: "completed" }],
-          episodicTokensPending: this.reads > this.measuredAfter ? 0 : null,
+          passes: [
+            { id: `pass-${this.triggers}`, status: "completed", mutationsApplied: this.mutationsPerPass },
+          ],
+          episodicTokensPending: this.triggers >= this.drainedAfterPass ? 0 : null,
         } as T
       }
       throw new Error(`Unexpected path ${path}`)
     }
   }
 
-  async function finalizeWith(provider: SignetDreamingProvider, waitSecs: string): Promise<void> {
-    const previous = {
-      poll: process.env.SIGNET_BENCH_DREAMING_POLL_SECS,
-      wait: process.env.SIGNET_BENCH_DREAMING_WAIT_SECS,
-    }
+  async function finalizeWith(provider: SignetDreamingProvider): Promise<void> {
+    const previous = process.env.SIGNET_BENCH_DREAMING_POLL_SECS
     process.env.SIGNET_BENCH_DREAMING_POLL_SECS = "1"
-    process.env.SIGNET_BENCH_DREAMING_WAIT_SECS = waitSecs
     try {
       await provider.finalizeIngest({ runId: "run", dataSourceRunId: "source" })
     } finally {
-      for (const [key, value] of [
-        ["SIGNET_BENCH_DREAMING_POLL_SECS", previous.poll],
-        ["SIGNET_BENCH_DREAMING_WAIT_SECS", previous.wait],
-      ] as const) {
-        if (value === undefined) delete process.env[key]
-        else process.env[key] = value
-      }
+      if (previous === undefined) delete process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+      else process.env.SIGNET_BENCH_DREAMING_POLL_SECS = previous
     }
   }
 
-  it("waits for an unmeasured backlog instead of failing after a completed pass", async () => {
-    const provider = new ColdBacklogProvider(2)
-    await finalizeWith(provider, "30")
-    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(1)
+  it("keeps triggering passes while the backlog is unmeasured until it measures zero", async () => {
+    const provider = new DrainingProvider(3, 5)
+    await finalizeWith(provider)
+    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
   })
 
-  it("fails when the backlog is never measured before the deadline", async () => {
-    const provider = new ColdBacklogProvider(Number.POSITIVE_INFINITY)
-    await expect(finalizeWith(provider, "2")).rejects.toThrow("never reported a measured episodic backlog")
+  it("fails instead of looping when passes stop applying mutations", async () => {
+    const provider = new DrainingProvider(Number.POSITIVE_INFINITY, 0)
+    await expect(finalizeWith(provider)).rejects.toThrow("applied no mutations in 3 consecutive passes")
+    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
   })
 
   it("formats raw sessions like the Supermemory adapter for parity runs", () => {

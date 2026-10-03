@@ -61,11 +61,28 @@ export interface AnswerPhaseCheckpoint {
   basePromptTokens?: number
   contextTokens?: number
   evidenceCount?: number
+  rawEvidenceCount?: number
   usage?: ModelUsage
+  derivedOnly?: DerivedOnlyAnswer
   startedAt?: string
   completedAt?: string
   durationMs?: number
   error?: string
+}
+
+export interface DerivedOnlyAnswer {
+  reusedProductAnswer: boolean
+  hypothesis: string
+  promptTokens: number
+  contextTokens: number
+  evidenceCount: number
+  usage?: ModelUsage
+}
+
+export interface DerivedOnlyEvaluation {
+  score: number
+  passed: boolean
+  usage?: ModelUsage
 }
 
 export interface EvaluatePhaseCheckpoint {
@@ -78,6 +95,7 @@ export interface EvaluatePhaseCheckpoint {
   metrics?: Record<string, number>
   details?: Record<string, unknown>
   usage?: ModelUsage
+  derivedOnly?: DerivedOnlyEvaluation
   startedAt?: string
   completedAt?: string
   durationMs?: number

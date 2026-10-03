@@ -122,7 +122,25 @@ export interface RunUsage {
   judge: UsageSummary
   extraction?: UsageSummary
   dreaming?: DreamingUsageSummary
+  ablation?: { answer: UsageSummary; judge: UsageSummary }
   answerTokensPerQuestion: number
+}
+
+export interface TranscriptReliance {
+  questions: number
+  questionsWithRawEvidence: number
+  rawEvidenceItems: number
+  productScore: number
+  derivedOnlyScore: number
+  bothCorrect: number
+  onlyWithTranscripts: number
+  onlyWithoutTranscripts: number
+  bothWrong: number
+  avgContextTokensProduct: number
+  avgContextTokensDerivedOnly: number
+  answerInputTokensProduct: number
+  answerInputTokensDerivedOnly: number
+  extraInputTokensPerRescuedAnswer?: number
 }
 
 export interface BenchmarkResult {
@@ -153,6 +171,7 @@ export interface BenchmarkResult {
   benchmarkConfig?: BenchmarkConfig
   datasetIdentity?: Record<string, unknown>
   usage?: RunUsage
+  transcriptReliance?: TranscriptReliance
   memscore?: string
   memscoreComponents?: { quality: number; latencyMs: number; contextTokens: number }
   retrieval?: RetrievalAggregates
