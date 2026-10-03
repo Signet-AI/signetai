@@ -17,6 +17,7 @@ describe("Signet benchmark profiles", () => {
 
     protected override async request<T>(path: string, init: RequestInit): Promise<T> {
       this.calls.push({ path, init })
+      if (path.startsWith("/api/agents")) return {} as T
       if (path === "/api/hooks/session-end") return { transcriptCaptureJobId: "capture-1" } as T
       if (path === "/api/hooks/transcript-capture/capture-1?agentId=memorybench-question-1-run") {
         return { status: "completed" } as T
@@ -77,6 +78,9 @@ describe("Signet benchmark profiles", () => {
     }
 
     expect(provider.name).toBe("signet-dreaming")
+    const isolate = provider.calls.find((call) => call.path.startsWith("/api/agents"))
+    expect(isolate?.init.method).toBe("PATCH")
+    expect(JSON.parse(String(isolate?.init.body))).toEqual({ read_policy: "isolated" })
     expect(provider.calls.some((call) => call.path === "/api/memory/remember")).toBe(false)
     const capture = provider.calls.find((call) => call.path === "/api/hooks/session-end")
     expect(JSON.parse(String(capture?.init.body))).toMatchObject({
@@ -89,6 +93,7 @@ describe("Signet benchmark profiles", () => {
       transcript: "[2023-05-20T10:20:00.000Z]\nuser: I moved deployment to edge runtime.",
     })
     expect(provider.calls.map((call) => call.path)).toEqual([
+      "/api/agents/memorybench-question-1-run",
       "/api/hooks/session-end",
       "/api/hooks/transcript-capture/capture-1?agentId=memorybench-question-1-run",
       "/api/dream/status?agentId=memorybench-question-1-run",
@@ -112,7 +117,8 @@ describe("Signet benchmark profiles", () => {
 
       protected override async request<T>(path: string, init: RequestInit): Promise<T> {
         this.calls.push({ path, init })
-        if (path === "/api/hooks/session-end") {
+        if (path.startsWith("/api/agents")) return {} as T
+      if (path === "/api/hooks/session-end") {
           const body = JSON.parse(String(init.body)) as { agentId: string }
           return { transcriptCaptureJobId: `capture-${body.agentId}` } as T
         }
@@ -194,7 +200,8 @@ describe("Signet benchmark profiles", () => {
 
       protected override async request<T>(path: string, init: RequestInit): Promise<T> {
         this.calls.push({ path, init })
-        if (path === "/api/hooks/session-end") {
+        if (path.startsWith("/api/agents")) return {} as T
+      if (path === "/api/hooks/session-end") {
           const body = JSON.parse(String(init.body)) as { agentId: string }
           return { transcriptCaptureJobId: `capture-${body.agentId}` } as T
         }
@@ -335,6 +342,31 @@ describe("Signet benchmark profiles", () => {
     const provider = new DrainingProvider(Number.POSITIVE_INFINITY, 0)
     await expect(finalizeWith(provider)).rejects.toThrow("applied no mutations in 3 consecutive passes")
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
+  })
+
+  it("creates a missing haystack agent as isolated so recall cannot read other haystacks", async () => {
+    class NewAgentProvider extends SignetDreamingProvider {
+      calls: Array<{ path: string; init: RequestInit }> = []
+
+      protected override async request<T>(path: string, init: RequestInit): Promise<T> {
+        this.calls.push({ path, init })
+        if (init.method === "PATCH") throw new Error(`${path} failed (404): Agent not found`)
+        if (path === "/api/agents") return {} as T
+        if (path === "/api/memory/recall") return { results: [] } as T
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const provider = new NewAgentProvider()
+
+    await provider.search("question", { containerTag: "q1-run" })
+    await provider.search("question again", { containerTag: "q1-run" })
+
+    const create = provider.calls.find((call) => call.path === "/api/agents")
+    expect(JSON.parse(String(create?.init.body))).toEqual({
+      name: "memorybench-q1-run",
+      read_policy: "isolated",
+    })
+    expect(provider.calls.filter((call) => call.path.startsWith("/api/agents"))).toHaveLength(2)
   })
 
   it("formats raw sessions like the Supermemory adapter for parity runs", () => {
