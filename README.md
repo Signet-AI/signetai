@@ -110,6 +110,8 @@ Don't see your harness? [Open an issue](https://github.com/Signet-AI/signetai/is
 
 ## Dashboard and desktop
 
+<img src="public/dashboard-home.webp" alt="Signet dashboard home view showing the daily brief, recently saved memories, activity, and system status">
+
 The dashboard is where you look through your memory, connect sources and agents, change settings, and watch Signet work. It includes a memory graph of the people, projects, and claims Signet knows about, and a chat for asking questions of your memory with any connected model. Answers cite the memories they draw on.
 
 It runs in your browser via `signet dashboard`, or as a desktop app on macOS, Linux, and Windows x64:
