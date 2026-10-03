@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { lstatSync, mkdtempSync, rmSync, statfsSync } from "node:fs";
+import { lstatSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { type DescriptorEntry, type DescriptorRoot, openDescriptorRoot, UnsafeDescriptorPathError } from "@signet/core";
@@ -860,7 +860,7 @@ async function inventory(
 		fingerprints.push(fingerprint);
 		bytes += entry.type === "file" ? entry.size : 0;
 	}
-	ensureSpace(layout.destination, bytes);
+	await ensureSpace(layout.destination, bytes);
 	return {
 		readOnly: true,
 		bytes,
@@ -893,8 +893,12 @@ async function fingerprintEntry(root: DescriptorRoot, entry: DescriptorEntry): P
 }
 
 async function readFingerprint(root: DescriptorRoot, expected: Fingerprint): Promise<Fingerprint> {
-	const entry = (await root.inventory()).find((candidate) => candidate.path === expected.path);
-	if (!entry || entry.type === "directory") throw new Error(`missing migration entry: ${expected.path}`);
+	const entry = await root.inspectEntry(expected.path).catch((error: unknown) => {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT")
+			throw new Error(`missing migration entry: ${expected.path}`, { cause: error });
+		throw error;
+	});
+	if (entry.type === "directory") throw new Error(`missing migration entry: ${expected.path}`);
 	return fingerprintEntry(root, entry);
 }
 
@@ -1076,12 +1080,12 @@ function workspaceId(root: string): string {
 	return createHash("sha256").update(resolve(root)).digest("hex").slice(0, 32);
 }
 
-function ensureSpace(destination: string, bytes: number): void {
+async function ensureSpace(destination: string, bytes: number): Promise<void> {
+	const parent = await openDescriptorRoot(dirname(destination));
 	try {
-		const stat = statfsSync(dirname(destination));
-		const available = stat.bavail * stat.bsize;
+		const available = await parent.availableBytes();
 		if (available < bytes) throw new Error(`insufficient disk space: need ${bytes} bytes`);
-	} catch (error) {
-		if (error instanceof Error && error.message.startsWith("insufficient")) throw error;
+	} finally {
+		await parent.close();
 	}
 }

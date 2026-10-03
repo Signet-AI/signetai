@@ -11,6 +11,7 @@ export interface WorkspaceMigrationUiStatus {
 
 export interface WorkspaceMigrationResult {
 	readonly state: "completed" | "rolled-back" | "blocked" | "running" | "failed";
+	readonly reason?: string;
 }
 
 export interface DesktopBridge {

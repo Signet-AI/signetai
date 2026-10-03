@@ -1329,7 +1329,7 @@ export const api = {
 			refresh: boolean;
 		},
 		signal?: AbortSignal,
-	) => postJSON<InferenceProbeResult>("/api/inference/execute", body, signal ?? AbortSignal.timeout(30_000)),
+	) => postJSONResult<InferenceProbeResult>("/api/inference/execute", body, signal ?? AbortSignal.timeout(30_000)),
 	getConfigFiles: async (): Promise<ConfigFile[]> => {
 		const data = await getJSON<{ files?: ConfigFile[] }>("/api/config", { signal: AbortSignal.timeout(10_000) });
 		return data?.files ?? [];

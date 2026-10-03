@@ -120,6 +120,23 @@ test("rolls back an eligible interrupted copy without changing the configured wo
 	expect(restarts).toEqual([]);
 });
 
+test("returns the migration failure reason and waits for daemon recovery", async () => {
+	let recovered = false;
+	const { service, restarts } = makeService({
+		runWorker: async (action) => {
+			if (action === "status") return { phase: "not-started", blocked: [] };
+			throw new Error("daemon migration drain failed (503)");
+		},
+		configuredWorkspacePath: () => source,
+		ensureDaemon: async () => {
+			recovered = true;
+		},
+	});
+	expect(await service.run()).toEqual({ state: "failed", reason: "daemon migration drain failed (503)" });
+	expect(recovered).toBe(true);
+	expect(restarts).toEqual([]);
+});
+
 test("fails closed if the daemon serves a different workspace", async () => {
 	const { service, calls } = makeService({
 		daemonStatus: async () => ({ running: true, owned: true, workspacePath: "/home/example/other" }),

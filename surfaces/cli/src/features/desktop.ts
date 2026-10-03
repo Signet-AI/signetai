@@ -291,7 +291,13 @@ export function installMacDesktopApp(
 		source,
 		appBundle,
 		isSignetAppBundle,
-		(sourcePath, temporaryPath) => cpSync(sourcePath, temporaryPath, { recursive: true }),
+		(sourcePath, temporaryPath) => {
+			if (process.platform === "darwin") {
+				runChecked(defaultRunner, "/usr/bin/ditto", [sourcePath, temporaryPath], repo, process.env);
+			} else {
+				cpSync(sourcePath, temporaryPath, { recursive: true, verbatimSymlinks: true });
+			}
+		},
 		"app",
 	);
 

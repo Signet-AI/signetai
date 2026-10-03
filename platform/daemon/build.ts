@@ -1,6 +1,6 @@
 import { rmSync } from "node:fs";
 
-const EXTERNAL_BUN = ["@firecrawl/anydoc"];
+const EXTERNAL_BUN = ["@firecrawl/anydoc", "@napi-rs/keyring"];
 
 const EXTERNAL_NODE = [
 	"better-sqlite3",
@@ -26,6 +26,7 @@ const targets: Array<{
 	{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" },
 	{ entrypoint: "./src/mcp-stdio.ts", outfile: "./dist/mcp-stdio.js" },
 	{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" },
+	{ entrypoint: "../core/src/secrets-keyring-child.ts", outfile: "./dist/secrets-keyring-child.js" },
 	{ entrypoint: "./src/synthesis-render-worker.ts", outfile: "./dist/synthesis-render-worker.js" },
 	{ entrypoint: "./src/database-integrity-worker.ts", outfile: "./dist/database-integrity-worker.js" },
 	{ entrypoint: "./src/db-owner-worker.ts", outfile: "./dist/db-owner-worker.js" },
@@ -54,7 +55,7 @@ if (isBun) {
 			outdir: ".",
 			naming: {
 				entry: outfile,
-				asset: "[name].[ext]",
+				asset: "dist/[name].[ext]",
 			},
 			target: "bun",
 			format: "esm",

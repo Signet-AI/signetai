@@ -64,11 +64,14 @@ export function WorkspaceMigrationCard({
 			const result = await bridge.startWorkspaceMigration();
 			if (result.state === "completed")
 				setResultMessage("Signet checked the copy and is restarting with the new storage.");
-			else if (result.state === "failed")
+			else if (result.state === "failed") {
 				setResultMessage(
-					"The move did not finish. Your original files are still in place. Try again in Settings > Data & files.",
+					result.reason
+						? `The move did not finish: ${result.reason}`
+						: "The move did not finish. Review its status in Settings > Data & files before retrying.",
 				);
-			else if (result.state === "blocked") {
+				await query.refresh();
+			} else if (result.state === "blocked") {
 				setResultMessage("The move cannot continue. Review the status below and try again.");
 				await query.refresh();
 			}

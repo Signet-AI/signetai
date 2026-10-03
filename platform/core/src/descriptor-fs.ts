@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, fstatSync } from "node:fs";
+import { constants as fsConstants, fstatSync, statfsSync } from "node:fs";
 import type { Stats } from "node:fs";
 import { link, lstat, mkdir, open, opendir, readlink, rename, rmdir, symlink, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -92,6 +92,8 @@ type DarwinApi = {
 		readonly __error: () => DarwinPointer;
 		readonly close: (fd: number) => number;
 		readonly getdirentries: (fd: number, buffer: DarwinPointer, length: number, base: DarwinPointer) => number;
+		readonly lseek: (fd: number, offset: number, whence: number) => number;
+		readonly fstatvfs: (fd: number, buffer: DarwinPointer) => number;
 		readonly linkat: (
 			oldfd: number,
 			oldpath: DarwinPointer,
@@ -125,6 +127,8 @@ function loadDarwinApi(): DarwinApi | null {
 			__error: { args: [], returns: "ptr" },
 			close: { args: ["i32"], returns: "i32" },
 			getdirentries: { args: ["i32", "ptr", "i32", "ptr"], returns: "i32" },
+			lseek: { args: ["i32", "i64", "i32"], returns: "i64" },
+			fstatvfs: { args: ["i32", "ptr"], returns: "i32" },
 			linkat: { args: ["i32", "cstring", "i32", "cstring", "i32"], returns: "i32" },
 			mkdirat: { args: ["i32", "cstring", "i32"], returns: "i32" },
 			openat: { args: ["i32", "cstring", "i32", "i32"], returns: "i32" },
@@ -310,6 +314,7 @@ async function listDirectory(directory: FileHandle): Promise<string[]> {
 	if (process.platform === "darwin") {
 		const api = loadDarwinApi();
 		if (!api) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
+		if (api.symbols.lseek(directory.fd, 0, 0) < 0) throw darwinError("directory rewind", api);
 		return [...readDarwinDirectory(directory.fd, api)].sort();
 	}
 	const result: string[] = [];
@@ -492,6 +497,42 @@ export class DescriptorRoot {
 		this.requireOpen();
 		const stat = await this.root.stat();
 		return `${stat.dev}:${stat.ino}:${stat.mode}`;
+	}
+
+	async inspectEntry(path: string): Promise<DescriptorEntry> {
+		this.requireOpen();
+		const pathParts = parts(path);
+		const name = pathParts.pop();
+		if (!name) throw new UnsafeDescriptorPathError("descriptor path is empty");
+		const parent = await openDirectoryPath(this.root, pathParts, false);
+		try {
+			const entry = await inspectChild(parent, name);
+			try {
+				const { handle: _handle, ...metadata } = entry;
+				return { path, ...metadata };
+			} finally {
+				await entry.handle?.close();
+			}
+		} finally {
+			await parent.close();
+		}
+	}
+
+	async availableBytes(): Promise<number> {
+		this.requireOpen();
+		if (process.platform === "darwin") {
+			const api = loadDarwinApi();
+			const ffi = loadDarwinFfi();
+			if (!api || !ffi) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
+			const buffer = Buffer.alloc(64);
+			if (api.symbols.fstatvfs(this.root.fd, ffi.ptr(buffer)) !== 0) throw darwinError("filesystem capacity", api);
+			const blockSize = buffer.readBigUInt64LE(8);
+			if (blockSize === 0n) throw new Error("filesystem reports a zero allocation unit");
+			return Number(BigInt(buffer.readUInt32LE(24)) * blockSize);
+		}
+		const stat = statfsSync(descriptorPath(this.root.fd));
+		if (stat.bsize <= 0) throw new Error("filesystem reports a zero allocation unit");
+		return stat.bavail * stat.bsize;
 	}
 
 	async inventory(): Promise<DescriptorEntry[]> {

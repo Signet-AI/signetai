@@ -146,7 +146,7 @@ export class WorkspaceMigrationService {
 		}
 	}
 
-	async run(): Promise<{ readonly state: "completed" | "blocked" | "running" | "failed" }> {
+	async run(): Promise<{ readonly state: "completed" | "blocked" | "running" | "failed"; readonly reason?: string }> {
 		if (this.#running) return { state: "running" };
 		const current = await this.status();
 		if (!current.available) return { state: current.state === "running" ? "running" : "blocked" };
@@ -160,13 +160,13 @@ export class WorkspaceMigrationService {
 			if (!samePath(configuredPath, result.destination)) throw new Error("workspace cutover was not persisted");
 			deps.relaunch(configuredPath);
 			return { state: "completed" };
-		} catch {
+		} catch (error) {
 			try {
 				const configuredPath = deps.configuredWorkspacePath();
 				if (!samePath(configuredPath, deps.workspace.path)) deps.relaunch(configuredPath);
 				else await deps.ensureDaemon();
 			} catch {}
-			return { state: "failed" };
+			return { state: "failed", reason: error instanceof Error ? error.message : "Workspace migration failed" };
 		} finally {
 			this.#running = false;
 		}

@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { DescriptorRoot } from "@signet/core";
@@ -20,6 +20,34 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { MigrationEngine } from "./migration-engine.js";
+
+test("per-file verification does not rescan the workspace inventory", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-bounded-verification-"));
+	const destination = `${root}-new`;
+	const state = `${root}-state`;
+	for (let index = 0; index < 12; index++) writeFileSync(join(root, `file-${index}`), "payload");
+	const inventory = DescriptorRoot.prototype.inventory;
+	let scans = 0;
+	const probe = spyOn(DescriptorRoot.prototype, "inventory").mockImplementation(function (this: DescriptorRoot) {
+		scans++;
+		return inventory.call(this);
+	});
+	try {
+		const engine = new MigrationEngine({
+			resolver: { resolve: () => ({ version: 1, root, destination }) },
+			writers: { drain: async () => ({ owners: [] }) },
+			database: { prepare: async () => undefined },
+			journalStateDir: state,
+		});
+		expect((await engine.run()).status).toBe("completed");
+		expect(scans).toBeLessThanOrEqual(6);
+		for (let index = 0; index < 12; index++)
+			expect(readFileSync(join(destination, `file-${index}`), "utf8")).toBe("payload");
+	} finally {
+		probe.mockRestore();
+		for (const path of [root, destination, state]) rmSync(path, { recursive: true, force: true });
+	}
+});
 
 test("preflight is read-only and inventory reports required bytes", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));

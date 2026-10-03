@@ -174,6 +174,7 @@ async function proxyDaemonRoute(request: Request): Promise<Response> {
 			headers,
 			body,
 			redirect: "manual",
+			signal: request.signal,
 		});
 	} catch (err) {
 		return Response.json({ error: "Failed to reach Signet daemon", detail: errorMessage(err) }, { status: 502 });
@@ -444,16 +445,23 @@ async function runWorkspaceMigrationWorker(
 		},
 	});
 	let output = "";
+	let failureOutput = "";
 	child.stdout?.setEncoding("utf8");
 	child.stdout?.on("data", (chunk: string | Buffer) => {
 		output += String(chunk);
 	});
-	child.stderr?.resume();
+	child.stderr?.setEncoding("utf8");
+	child.stderr?.on("data", (chunk: string | Buffer) => {
+		failureOutput = (failureOutput + String(chunk)).slice(-4096);
+	});
 	return await new Promise((resolveResult, rejectResult) => {
 		child.once("error", () => rejectResult(new Error("Workspace migration helper could not start")));
 		child.once("close", (code: number | null) => {
 			if (code !== 0) {
-				rejectResult(new Error("Workspace migration helper failed"));
+				const reason = failureOutput.trim().split(/\r?\n/).at(-1)?.slice(0, 500);
+				rejectResult(
+					new Error(reason ? `Workspace migration helper failed: ${reason}` : "Workspace migration helper failed"),
+				);
 				return;
 			}
 			for (const line of output.split(/\r?\n/).reverse()) {

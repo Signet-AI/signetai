@@ -12,6 +12,7 @@ const originalCustomEvent = globalThis.CustomEvent;
 let config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
 let saveFails = false;
 let savedOAuth = false;
+let probeError: string | null = null;
 const calls: string[] = [];
 let identityFiles: Record<string, string> = {};
 let importFiles: Array<{ id: string; name: string }> = [];
@@ -103,8 +104,17 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			}
 			if (path.startsWith("/api/sources/imports/import-job/start")) return Response.json({ changed: true });
 			if (path.startsWith("/api/sources/import")) return Response.json({ imports: [] });
-			if (path === "/api/inference/execute")
+			if (path === "/api/inference/execute") {
+				if (probeError)
+					return Response.json(
+						{
+							error: "No eligible target",
+							details: { trace: { candidates: [{ targetRef: "background/default", blockedBy: [probeError] }] } },
+						},
+						{ status: 502 },
+					);
 				return Response.json({ text: "OK", decision: { targetRef: "background/default" }, attempts: [{ ok: true }] });
+			}
 			if (path === "/api/pipeline/resume") return Response.json({ success: true, mode: "controlled-write" });
 			if (path === "/api/agents") return Response.json({ agents: [{ id: "alice", name: "alice" }] });
 			if (path === "/api/memory/remember") {
@@ -373,6 +383,27 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			expect(document.body.textContent).toContain("What should your agents know about you");
 		} finally {
 			saveFails = false;
+			await view.close();
+		}
+	});
+
+	test("shows the daemon's connection failure and does not enable memory", async () => {
+		config = "name: Example\nharnesses: []\n";
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
+			await view.click("Continue");
+			await view.click("Local model");
+			await view.input("Model name", "fixture-model");
+			probeError = "Native keyring helper deadline exceeded";
+			await view.click("Test and enable memory");
+			expect(document.body.textContent).toContain(probeError);
+			expect(calls).not.toContain("POST /api/pipeline/resume");
+		} finally {
+			probeError = null;
 			await view.close();
 		}
 	});

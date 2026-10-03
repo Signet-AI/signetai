@@ -27,7 +27,7 @@ test("desktop runtime staging ships connector assets for harness install", () =>
 test("stages Bun runtime dependencies without the Node-only SQLite fallback", () => {
 	const daemonPkg = { dependencies: { "@firecrawl/anydoc": "^1.0.0", tiktoken: "^1.0.0" } };
 	const corePkg = {
-		dependencies: { "sqlite-vec": "^0.1.0" },
+		dependencies: { "sqlite-vec": "^0.1.0", "@napi-rs/keyring": "1.3.0" },
 		optionalDependencies: {
 			"better-sqlite3": "^11.0.0",
 			"sqlite-vec-linux-x64": "^0.1.0",
@@ -37,6 +37,7 @@ test("stages Bun runtime dependencies without the Node-only SQLite fallback", ()
 	expect(dependencies).toEqual({
 		"@firecrawl/anydoc": "^1.0.0",
 		tiktoken: "^1.0.0",
+		"@napi-rs/keyring": "1.3.0",
 		"sqlite-vec": "^0.1.0",
 		"sqlite-vec-linux-x64": "^0.1.0",
 	});
