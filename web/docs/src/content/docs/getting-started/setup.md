@@ -55,6 +55,15 @@ Headless setup retains identity presets, network options, Git protection, roster
 
 ## Source checkouts
 
+Desktop source builds require Bun 1.4.2 or newer. Before syncing source or
+installing dependencies, `signet desktop build` and `signet desktop install`
+check the installed Bun version. In an interactive terminal, an older version
+prompts you to run `bun upgrade --stable`; declining stops the command. The
+command checks the version again after upgrading. For package-manager installs
+of Bun, decline and upgrade through that package manager. In a non-interactive
+terminal, upgrade Bun manually before retrying. `--skip-build` installs an
+existing artifact without requiring Bun.
+
 Setup, `signet workspace set`, and the workspace layout upgrade do not clone
 the Signet repository. Saving and recalling memories use the installed
 application. `signet sync` and application updates maintain an existing
