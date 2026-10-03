@@ -173,6 +173,10 @@ const llmSemaphore = new LlmConcurrencySemaphore(
 		: DEFAULT_MAX_LLM_CONCURRENCY,
 );
 
+export function getLlmConcurrencyLimit(): number {
+	return llmSemaphore.limit;
+}
+
 export function configureLlmConcurrency(limit: number): void {
 	const normalized = Number.isSafeInteger(limit) ? Math.min(16, Math.max(1, limit)) : DEFAULT_MAX_LLM_CONCURRENCY;
 	llmSemaphore.setLimit(normalized);

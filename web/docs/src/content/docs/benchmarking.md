@@ -270,11 +270,13 @@ a fresh non-interactive install cannot reach a remote model otherwise:
   with no endpoint, matching how an installed Z.ai target is configured. The
   generic OpenAI-compatible executor appends `/v1` to the Z.ai `/v4` base URL.
 
-One Dreaming setting is deliberately raised: `memory.dreaming.maxConcurrentPasses`
-is 6 instead of the product default of 2, because a benchmark ingests its whole
-corpus at once and each question is its own agent. Set
-`SIGNET_BENCH_DREAMING_CONCURRENCY` to measure another value, including the
-default.
+Two concurrency settings are deliberately raised, because a benchmark ingests
+its whole corpus at once and each question is its own agent:
+`memory.dreaming.maxConcurrentPasses` is 6 instead of the product default of 2,
+and `memory.pipelineV2.worker.maxLlmConcurrency` is that value plus 2 so the
+shared LLM limit does not hold passes back. Dreaming never runs more passes than
+the shared LLM limit allows. Set `SIGNET_BENCH_DREAMING_CONCURRENCY` to measure
+another value, including the default.
 
 Set `SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=openai-compatible` with
 `SIGNET_BENCH_DREAMING_ENDPOINT` to keep a generic endpoint, for example a local
