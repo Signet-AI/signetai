@@ -409,7 +409,7 @@ function uninstallLegacyWindowsDesktopApp(
 		},
 		{ windowsVerbatimArguments: true },
 	);
-	if (legacyWindowsAppRemains(legacyAppDir)) {
+	if (legacySignetAppMarkersRemain(legacyAppDir)) {
 		throw new Error(
 			`The older Signet desktop install at ${legacyAppDir} is still present after uninstall. Close Signet from the system tray, then run desktop install again.`,
 		);
@@ -656,7 +656,7 @@ function isSignetWindowsAppPackage(path: string): boolean {
 	}
 }
 
-function legacyWindowsAppRemains(path: string): boolean {
+function legacySignetAppMarkersRemain(path: string): boolean {
 	return windowsAppExecutable(path) !== null || isSignetWindowsAppPackage(path);
 }
 
