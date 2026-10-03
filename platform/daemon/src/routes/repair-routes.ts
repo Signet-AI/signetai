@@ -880,6 +880,16 @@ export function registerRepairRoutes(
 				let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
 				let childFinished = false;
 				let outputPaused = false;
+				let flushingOutput = false;
+				let terminalEvent:
+					| { readonly type: "exit"; readonly code: number }
+					| { readonly type: "error"; readonly message: string }
+					| undefined;
+				// JSON can expand each UTF-16 code unit to six bytes, so keep encoded frames under the 256 KiB limit.
+				const outputFrameChars = 32 * 1024;
+				const outputPauseBytes = 128 * 1024;
+				const outputResumeBytes = 64 * 1024;
+				const pendingOutput: { readonly type: "stdout" | "stderr"; readonly data: string; offset: number }[] = [];
 
 				const clearTimers = (): void => {
 					if (killTimer) clearTimeout(killTimer);
@@ -913,18 +923,63 @@ export function registerRepairRoutes(
 					child.stdout?.pause();
 					child.stderr?.pause();
 				};
+				const finishOutput = (): void => {
+					if (
+						!childFinished ||
+						pendingOutput.length > 0 ||
+						outputPaused ||
+						terminalEvent === undefined ||
+						producer.isClosed
+					)
+						return;
+					producer.write(terminalEvent);
+					producer.close();
+				};
+				const resumeOutput = (): void => {
+					if (outputPaused || pendingOutput.length > 0 || producer.isClosed) return;
+					child.stdout?.resume();
+					child.stderr?.resume();
+				};
+				const flushOutput = (): void => {
+					if (flushingOutput || outputPaused || producer.isClosed) return;
+					flushingOutput = true;
+					try {
+						while (pendingOutput.length > 0 && !outputPaused && !producer.isClosed) {
+							const next = pendingOutput[0];
+							if (!next) break;
+							if (next.offset >= next.data.length) {
+								pendingOutput.shift();
+								continue;
+							}
+							let end = Math.min(next.offset + outputFrameChars, next.data.length);
+							if (end < next.data.length) {
+								const before = next.data.charCodeAt(end - 1);
+								const after = next.data.charCodeAt(end);
+								if (before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff) end -= 1;
+							}
+							const status = producer.write({ type: next.type, data: next.data.slice(next.offset, end) });
+							if (status === "closed" || status === "overflow") break;
+							next.offset = end;
+							if (next.offset >= next.data.length) pendingOutput.shift();
+							if (producer.queuedBytes >= outputPauseBytes) pauseOutput();
+						}
+					} finally {
+						flushingOutput = false;
+					}
+					finishOutput();
+					resumeOutput();
+				};
 				producer.addDrainListener((queuedBytes) => {
-					if (outputPaused && queuedBytes <= 64 * 1024 && !producer.isClosed) {
+					if (outputPaused && queuedBytes <= outputResumeBytes && !producer.isClosed) {
 						outputPaused = false;
-						child.stdout?.resume();
-						child.stderr?.resume();
+						flushOutput();
 					}
 				});
 
 				const writeOutput = (type: "stdout" | "stderr", chunk: Buffer): void => {
 					if (producer.isClosed) return;
-					producer.write({ type, data: chunk.toString("utf-8") });
-					if (producer.queuedBytes >= 128 * 1024) pauseOutput();
+					pendingOutput.push({ type, data: chunk.toString("utf-8"), offset: 0 });
+					flushOutput();
 				};
 
 				child.stdout?.on("data", (chunk: Buffer) => writeOutput("stdout", chunk));
@@ -936,23 +991,16 @@ export function registerRepairRoutes(
 				}, 60_000);
 				killTimer.unref?.();
 
-				child.on("close", (code) => {
+				const finishChild = (event: NonNullable<typeof terminalEvent>): void => {
+					if (childFinished) return;
 					childFinished = true;
+					terminalEvent = event;
 					clearTimers();
-					if (!producer.isClosed) {
-						producer.write({ type: "exit", code: code ?? 1 });
-						producer.close();
-					}
-				});
+					flushOutput();
+				};
 
-				child.on("error", (err) => {
-					childFinished = true;
-					clearTimers();
-					if (!producer.isClosed) {
-						producer.write({ type: "error", message: err.message });
-						producer.close();
-					}
-				});
+				child.on("close", (code) => finishChild({ type: "exit", code: code ?? 1 }));
+				child.on("error", (error) => finishChild({ type: "error", message: error.message }));
 			},
 		});
 

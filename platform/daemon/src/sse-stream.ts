@@ -84,7 +84,7 @@ function sseFrame(data: unknown, frame: SseFrameOptions = {}): Uint8Array {
 	const idLine = frame.id === undefined ? "" : `id: ${String(frame.id).replace(/[\r\n]/g, "")}\n`;
 	const value = typeof data === "string" ? data : (JSON.stringify(data) ?? "null");
 	const dataLines = value
-		.split(/\r?\n/)
+		.split(/\r\n|\r|\n/)
 		.map((line) => `data: ${line}\n`)
 		.join("");
 	return encoder.encode(`${eventLine}${idLine}${dataLines}\n`);

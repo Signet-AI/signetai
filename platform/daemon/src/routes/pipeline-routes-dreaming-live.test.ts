@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import type { TokenClaims } from "../auth/types";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { dreamingLiveEvents, publishDreamingAgentEvent } from "../pipeline/dreaming-live-events";
@@ -30,6 +31,25 @@ async function ownerStateMatchesWithin(predicate: () => boolean, timeoutMs: numb
 		await new Promise<void>((resolve) => setTimeout(resolve, 5));
 	}
 	return true;
+}
+
+function createPipelineApp(): Hono {
+	// These tests exercise handlers, so supply an admin principal without involving token verification.
+	const app = new Hono();
+	const now = Math.floor(Date.now() / 1000);
+	const claims: TokenClaims = {
+		sub: "dreaming-live-test-admin",
+		scope: { agent: "agent-a" },
+		role: "admin",
+		iat: now,
+		exp: now + 3600,
+	};
+	app.use("*", async (c, next) => {
+		c.set("auth", { authenticated: true, claims });
+		await next();
+	});
+	registerPipelineRoutes(app);
+	return app;
 }
 
 describe("Dreaming live routes", () => {
@@ -63,8 +83,7 @@ describe("Dreaming live routes", () => {
 	});
 
 	it("lists only the current agent's active passes and rejects another agent's stream", async () => {
-		const app = new Hono();
-		registerPipelineRoutes(app);
+		const app = createPipelineApp();
 
 		const activeResponse = await app.request("/api/dream/passes/active");
 		expect(activeResponse.status).toBe(200);
@@ -81,8 +100,7 @@ describe("Dreaming live routes", () => {
 		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
 		process.env.SIGNET_DB_OWNER_WORKER = "0";
 		try {
-			const app = new Hono();
-			registerPipelineRoutes(app);
+			const app = createPipelineApp();
 			expect((await app.request("/api/dream/passes/active")).status).toBe(200);
 			const owner = await getDbOwnerForAccessor(getDbAccessor());
 			expect(owner.health().pid).not.toBeNull();
@@ -113,8 +131,7 @@ describe("Dreaming live routes", () => {
 		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
 		process.env.SIGNET_DB_OWNER_WORKER = "0";
 		try {
-			const app = new Hono();
-			registerPipelineRoutes(app);
+			const app = createPipelineApp();
 			expect((await app.request("/api/dream/passes/active")).status).toBe(200);
 			const owner = await getDbOwnerForAccessor(getDbAccessor());
 			const blocker = owner.submit(
@@ -147,8 +164,7 @@ describe("Dreaming live routes", () => {
 
 	it("reads the cached backlog in the status response", async () => {
 		recordDreamingEpisodicTokenBacklog("agent-a", 12345);
-		const app = new Hono();
-		registerPipelineRoutes(app);
+		const app = createPipelineApp();
 
 		const response = await app.request("/api/dream/status");
 		expect(response.status).toBe(200);
@@ -160,8 +176,7 @@ describe("Dreaming live routes", () => {
 		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
 		process.env.SIGNET_DB_OWNER_WORKER = "1";
 		try {
-			const app = new Hono();
-			registerPipelineRoutes(app);
+			const app = createPipelineApp();
 
 			const workloadsResponse = await app.request("/api/diagnostics/workloads");
 			expect(workloadsResponse.status).toBe(200);
@@ -184,8 +199,7 @@ describe("Dreaming live routes", () => {
 
 	it("returns null when no fresh exact backlog measurement exists", async () => {
 		invalidateDreamingEpisodicTokenBacklog("agent-a");
-		const app = new Hono();
-		registerPipelineRoutes(app);
+		const app = createPipelineApp();
 
 		const response = await app.request("/api/dream/status");
 		expect(response.status).toBe(200);
@@ -193,8 +207,7 @@ describe("Dreaming live routes", () => {
 	});
 
 	it("emits an initial snapshot over the scoped SSE stream", async () => {
-		const app = new Hono();
-		registerPipelineRoutes(app);
+		const app = createPipelineApp();
 		const response = await app.request("/api/dream/passes/live-pass-a/events");
 		expect(response.headers.get("content-type")).toContain("text/event-stream");
 		const reader = response.body?.getReader();
@@ -211,8 +224,7 @@ describe("Dreaming live routes", () => {
 		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
 		process.env.SIGNET_DB_OWNER_WORKER = "1";
 		try {
-			const app = new Hono();
-			registerPipelineRoutes(app);
+			const app = createPipelineApp();
 			const before = getSseDiagnosticsSnapshot();
 			dreamingLiveEvents.startPass({ passId: "live-pass-a", agentId: "agent-a", mode: "incremental" });
 			for (let index = 0; index < 120; index += 1) {
@@ -253,8 +265,7 @@ describe("Dreaming live routes", () => {
 	});
 
 	it("streams full model event payloads for the attach audit by default", async () => {
-		const app = new Hono();
-		registerPipelineRoutes(app);
+		const app = createPipelineApp();
 		dreamingLiveEvents.startPass({ passId: "live-pass-a", agentId: "agent-a", mode: "incremental" });
 		publishDreamingAgentEvent(
 			"live-pass-a",

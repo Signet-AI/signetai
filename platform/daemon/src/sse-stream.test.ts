@@ -58,6 +58,20 @@ describe("bounded SSE lifecycle", () => {
 		expect(getSseDiagnosticsSnapshot().activeStreams).toBe(0);
 	});
 
+	test("frames lone carriage returns as SSE line boundaries", async () => {
+		const sse = openBoundedSse();
+		const reader = sse.stream.getReader();
+		readers.push(reader);
+
+		expect(sse.write("before\rafter")).toBe("accepted");
+		sse.close();
+
+		const frame = await reader.read();
+		expect(frame.done).toBe(false);
+		expect(new TextDecoder().decode(frame.value)).toBe("data: before\ndata: after\n\n");
+		expect((await reader.read()).done).toBe(true);
+	});
+
 	test("slow consumers stay within the byte budget and receive a terminal overflow frame", async () => {
 		const before = getSseDiagnosticsSnapshot();
 		const sse = openBoundedSse({
