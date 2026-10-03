@@ -256,6 +256,26 @@ export function attachBenchCredential(agentsDir: string, providerFamily: string)
 	writeFileSync(path, stringifyYaml(config));
 }
 
+export function benchDreamingConcurrency(env: NodeJS.ProcessEnv = process.env): number {
+	const raw = env.SIGNET_BENCH_DREAMING_CONCURRENCY;
+	if (raw === undefined || raw.trim() === "") return 6;
+	const parsed = Number(raw);
+	if (!Number.isInteger(parsed) || parsed < 1 || parsed > 16) {
+		throw new Error("SIGNET_BENCH_DREAMING_CONCURRENCY must be an integer from 1 to 16");
+	}
+	return parsed;
+}
+
+export function setBenchDreamingConcurrency(agentsDir: string, passes: number): void {
+	const path = join(agentsDir, "agent.yaml");
+	const config = parseYaml(readFileSync(path, "utf8")) as Record<string, unknown>;
+	const memory = (config.memory ?? {}) as Record<string, unknown>;
+	const dreaming = (memory.dreaming ?? {}) as Record<string, unknown>;
+	if (dreaming.maxConcurrentPasses === passes) return;
+	config.memory = { ...memory, dreaming: { ...dreaming, maxConcurrentPasses: passes } };
+	writeFileSync(path, stringifyYaml(config));
+}
+
 export function loadEnvFile(path: string, env: NodeJS.ProcessEnv = process.env): void {
 	if (!existsSync(path)) return;
 	for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
@@ -423,6 +443,7 @@ async function main(): Promise<void> {
 			attachBenchCredential(agentsDir, model.providerFamily);
 		}
 
+		setBenchDreamingConcurrency(agentsDir, benchDreamingConcurrency());
 		mkdirSync(join(agentsDir, ".daemon", "logs"), { recursive: true });
 		daemon = spawn("bun", ["platform/daemon/src/daemon.ts"], {
 			cwd: repoRoot,

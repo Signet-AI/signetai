@@ -12,13 +12,14 @@ export type { DreamingAgentEvidence } from "./dreaming-evidence";
 export type { DreamingCapabilityResult as DreamingAgentToolResult } from "./dreaming-capabilities";
 export interface CreateDreamingAgentToolsParams extends CreateDreamingCapabilitiesParams {
 	readonly capabilityIds?: readonly DreamingCapabilityId[];
-	readonly restrictToAgent?: boolean;
+	readonly allowedAgentIds: readonly string[];
 }
 
-function scopedInput(value: unknown, agentId: string): void {
+function scopedInput(value: unknown, allowed: ReadonlySet<string>): void {
 	if (typeof value !== "object" || value === null) return;
-	if ("agentId" in value && value.agentId !== agentId) throw new Error("Tool agent scope must match the active agent");
-	for (const item of Object.values(value)) scopedInput(item, agentId);
+	if ("agentId" in value && (typeof value.agentId !== "string" || !allowed.has(value.agentId)))
+		throw new Error("Tool agent scope must be one of this pass's agents");
+	for (const item of Object.values(value)) scopedInput(item, allowed);
 }
 
 function textResult(payload: DreamingCapabilityResult): { readonly type: "text"; readonly text: string } {
@@ -29,27 +30,37 @@ export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams)
 		.filter((capability) => !params.capabilityIds || params.capabilityIds.includes(capability.id))
 		.map((capability) => {
 			const schema = z.toJSONSchema(capability.inputSchema);
-			const parameters = params.restrictToAgent
-				? {
-						...schema,
-						properties: { ...schema.properties, agentId: { type: "string", const: params.agentId } },
-						required: [...new Set([...(schema.required ?? []), "agentId"])],
-					}
-				: schema;
+			const allowed = new Set(params.allowedAgentIds);
+			const agentIdSchema =
+				params.allowedAgentIds.length === 1
+					? { type: "string", const: params.allowedAgentIds[0] }
+					: { type: "string", enum: [...params.allowedAgentIds] };
+			const defaultsToSessionAgent = allowed.has(params.agentId);
+			const parameters = {
+				...schema,
+				properties: { ...schema.properties, agentId: agentIdSchema },
+				required:
+					defaultsToSessionAgent && params.allowedAgentIds.length > 1
+						? (schema.required ?? [])
+						: [...new Set([...(schema.required ?? []), "agentId"])],
+			};
 			return {
 				name: capability.id,
 				label: capability.title,
-				description: params.restrictToAgent
-					? `${capability.description} This session is restricted to agent ${params.agentId}.`
-					: capability.description,
+				description:
+					params.allowedAgentIds.length === 1
+						? `${capability.description} This session is restricted to agent ${params.allowedAgentIds[0]}.`
+						: capability.description,
 				parameters: Type.Unsafe(parameters),
 				async execute(toolCallId, rawParams) {
 					const startedAt = Date.now();
-					if (params.restrictToAgent) {
-						if (typeof rawParams !== "object" || rawParams === null || !("agentId" in rawParams))
-							throw new Error("Tool agent scope must match the active agent");
-						scopedInput(rawParams, params.agentId);
-					}
+					if (
+						typeof rawParams !== "object" ||
+						rawParams === null ||
+						(!("agentId" in rawParams) && !defaultsToSessionAgent)
+					)
+						throw new Error("Tool agent scope must be one of this pass's agents");
+					scopedInput(rawParams, allowed);
 					const result = await capability.invoke(rawParams);
 					await params.onToolCall?.({
 						toolCallId,

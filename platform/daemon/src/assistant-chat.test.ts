@@ -432,7 +432,7 @@ test("scoped tools advertise their bound identity and reject nested cross-agent 
 		accessor: getDbAccessor(),
 		agentId: "test-agent",
 		actor: "test",
-		restrictToAgent: true,
+		allowedAgentIds: ["test-agent"],
 		capabilityIds: ["runbook_read", "runbook_write"],
 	});
 	const read = tools.find((tool) => tool.name === "runbook_read");
@@ -450,7 +450,7 @@ test("scoped tools advertise their bound identity and reject nested cross-agent 
 			() => "accepted",
 			(error: unknown) => (error instanceof Error ? error.message : "failed"),
 		);
-	expect(outcome).toContain("Tool agent scope must match");
+	expect(outcome).toContain("Tool agent scope must be one of this pass's agents");
 }, 20000);
 
 test("chat selects a Pi registry model through a connected account without changing the assignment", async () => {

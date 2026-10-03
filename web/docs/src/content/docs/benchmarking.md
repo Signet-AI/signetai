@@ -270,6 +270,12 @@ a fresh non-interactive install cannot reach a remote model otherwise:
   with no endpoint, matching how an installed Z.ai target is configured. The
   generic OpenAI-compatible executor appends `/v1` to the Z.ai `/v4` base URL.
 
+One Dreaming setting is deliberately raised: `memory.dreaming.maxConcurrentPasses`
+is 6 instead of the product default of 2, because a benchmark ingests its whole
+corpus at once and each question is its own agent. Set
+`SIGNET_BENCH_DREAMING_CONCURRENCY` to measure another value, including the
+default.
+
 Set `SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=openai-compatible` with
 `SIGNET_BENCH_DREAMING_ENDPOINT` to keep a generic endpoint, for example a local
 model server.
@@ -634,7 +640,8 @@ SIGNET_BENCH_DREAMING_MODEL=<id>    Benchmark model for setup and Dreaming, defa
 SIGNET_BENCH_DREAMING_ENDPOINT=<u>  Model endpoint, default https://open.bigmodel.cn/api/coding/paas/v4.
 SIGNET_BENCH_DREAMING_API_KEY=<key> Daemon credential; defaults to ZAI_API_KEY from memorybench/.env.
 SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=<name> Pi catalog provider family, default zai-coding-cn; openai-compatible keeps the endpoint.
-SIGNET_BENCH_DREAMING_WAIT_SECS=<n> Max time to await its bounded Dreaming pass, default 720.
+SIGNET_BENCH_DREAMING_WAIT_SECS=<n> Max time to drain the Dreaming backlog, default 720.
+SIGNET_BENCH_DREAMING_CONCURRENCY=<n> Concurrent Dreaming passes for bulk ingest, default 6, max 16.
 MEMORYBENCH_EXTRACTION_MODEL=<m>    Structured extraction model, default gpt-4o.
 MEMORYBENCH_EXTRACTION_MAX_TOKENS=<n> Markdown extraction cap, default 1200.
 MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS=<n> Structured JSON extraction cap, default 1800.

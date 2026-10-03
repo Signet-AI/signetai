@@ -97,8 +97,8 @@ describe("Signet benchmark profiles", () => {
       "/api/hooks/session-end",
       "/api/hooks/transcript-capture/capture-1?agentId=memorybench-question-1-run",
       "/api/dream/status?agentId=memorybench-question-1-run",
-      "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
+      "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
       "/api/dream/status?agentId=memorybench-question-1-run",
       "/api/dream/trigger",
@@ -197,6 +197,7 @@ describe("Signet benchmark profiles", () => {
   it("drains every ingested fixture scope through one canonical Dreaming pass", async () => {
     class MultiScopeDreamingProvider extends SignetDreamingProvider {
       calls: Array<{ path: string; init: RequestInit }> = []
+      private triggered = false
 
       protected override async request<T>(path: string, init: RequestInit): Promise<T> {
         this.calls.push({ path, init })
@@ -208,11 +209,14 @@ describe("Signet benchmark profiles", () => {
         if (path.startsWith("/api/dream/status?agentId=dreaming-gate-")) {
           return { worker: { running: true }, episodicTokensPending: 0 } as T
         }
-        if (path === "/api/dream/trigger") return { passId: "universe-pass" } as T
+        if (path === "/api/dream/trigger") {
+          this.triggered = true
+          return { passId: "universe-pass" } as T
+        }
         if (path === "/api/dream/status?agentId=memorybench") {
           return {
             worker: { running: true },
-            passes: [{ id: "universe-pass", status: "completed" }],
+            passes: this.triggered ? [{ id: "universe-pass", status: "completed" }] : [],
             episodicTokensPending: 0,
           } as T
         }
@@ -341,6 +345,40 @@ describe("Signet benchmark profiles", () => {
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
   })
 
+  it("waits for every concurrent pass in a round before judging it", async () => {
+    class ConcurrentRoundProvider extends SignetDreamingProvider {
+      calls: string[] = []
+      private polls = 0
+      private triggered = false
+
+      protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+        this.calls.push(path)
+        if (path === "/api/dream/trigger") {
+          this.triggered = true
+          return { passId: "group-1" } as T
+        }
+        if (path.startsWith("/api/dream/status")) {
+          if (!this.triggered) return { worker: { running: true, activePasses: [] }, passes: [] } as T
+          this.polls += 1
+          const settled = this.polls > 2
+          return {
+            worker: { running: true, activePasses: settled ? [] : [{ passId: "group-2" }] },
+            passes: [
+              { id: "group-1", status: "completed", mutationsApplied: 2 },
+              { id: "group-2", status: settled ? "completed" : "running", mutationsApplied: 3 },
+            ],
+            episodicTokensPending: settled ? 0 : 1,
+          } as T
+        }
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const provider = new ConcurrentRoundProvider()
+    await finalizeWith(provider)
+    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(1)
+    expect(Object.keys(provider.getIngestUsage().dreamingPasses ?? {}).sort()).toEqual(["group-1", "group-2"])
+  })
+
   it("retries a failed pass and keeps draining", async () => {
     const provider = new DrainingProvider(3, 5, new Set([1, 2]))
     await finalizeWith(provider)
@@ -349,13 +387,13 @@ describe("Signet benchmark profiles", () => {
 
   it("fails after three consecutive failed passes", async () => {
     const provider = new DrainingProvider(Number.POSITIVE_INFINITY, 5, new Set([1, 2, 3]))
-    await expect(finalizeWith(provider)).rejects.toThrow("Pi agent length (3 consecutive failed passes)")
+    await expect(finalizeWith(provider)).rejects.toThrow("Pi agent length (3 consecutive rounds with failed passes)")
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
   })
 
   it("fails instead of looping when passes stop applying mutations", async () => {
     const provider = new DrainingProvider(Number.POSITIVE_INFINITY, 0)
-    await expect(finalizeWith(provider)).rejects.toThrow("applied no mutations in 3 consecutive passes")
+    await expect(finalizeWith(provider)).rejects.toThrow("applied no mutations in 3 consecutive rounds")
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
   })
 

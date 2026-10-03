@@ -30,6 +30,7 @@ import {
 	deliveredOffsetForSource,
 	extendDeliveredOffset,
 	passDeliveredRanges,
+	passFullyServedSourceRefs,
 	pendingDreamingEvidenceContinuations,
 } from "./dreaming-evidence-consumption";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
@@ -377,6 +378,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		query: "",
 		kind: input.kind,
 		excludeDelivered: true,
+		excludeSourceRefs: input.passId ? passFullyServedSourceRefs(db, input.passId, scopeId) : [],
 		limit: DELIVERY_QUEUE_SCAN_LIMIT,
 	});
 	const page = (sources: readonly EpisodicSourceRecord[], max: number, skip = new Set<string>()) => {

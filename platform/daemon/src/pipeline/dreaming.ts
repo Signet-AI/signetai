@@ -1720,7 +1720,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const surfacedWatermarkByScope = new Map<string, string>();
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
 		const tools = createDreamingAgentTools({
-			restrictToAgent: liveOptions?.userRequest !== undefined,
+			allowedAgentIds: liveOptions?.userRequest !== undefined ? [agentId] : scopes,
 			accessor,
 			agentId,
 			memoryHeadCommitter,
@@ -1836,20 +1836,14 @@ ${JSON.stringify(liveOptions.userRequest)}
 				surfaced === undefined ? previous : nextEvidenceWatermark(surfaced, previous, cutoff),
 			);
 		}
-		const transcriptManifestEntries = (
-			await Promise.all(
-				[...surfacedTranscriptRefsByScope.entries()].map(([scope, refs]) =>
-					Promise.all(
-						[...refs].map(async (sourceRef) => {
-							const source = await readDreamingEvidenceSource(accessor, scope, sourceRef);
-							return source === null || !source.completed
-								? []
-								: [{ scope, source, content: renderDreamingEvidence(source) }];
-						}),
-					).then((entries) => entries.flat()),
-				),
-			)
-		).flat();
+		const transcriptManifestEntries: Array<{ scope: string; source: EpisodicSourceRecord; content: string }> = [];
+		for (const [scope, refs] of surfacedTranscriptRefsByScope) {
+			for (const sourceRef of refs) {
+				const source = await readDreamingEvidenceSource(accessor, scope, sourceRef);
+				if (source !== null && source.completed)
+					transcriptManifestEntries.push({ scope, source, content: renderDreamingEvidence(source) });
+			}
+		}
 		const finalizeInput: DbOwnerDreamingPassFinalize = {
 			passId,
 			mode,

@@ -14,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
-import { closeDbAccessor, getDbAccessor, initDbAccessor, type DbAccessor } from "../db-accessor";
+import { closeDbAccessor, getDbAccessor, initDbAccessor, type DbAccessor, type WriteDb } from "../db-accessor";
 import {
 	createDbOwnerClient,
 	DbOwnerDeadlineError,
@@ -42,8 +42,10 @@ import {
 } from "./dreaming";
 import {
 	AlreadyRunningError,
+	type DreamingWorkerOptions,
 	createAgentScopeSnapshot,
 	getDreamingWorkerAgentIds,
+	partitionDreamingScopes,
 	selectDreamingCheckMode,
 	shouldDeferDreamingSweep,
 	startDreamingWorker,
@@ -271,7 +273,12 @@ interface RealOwnerTriggerFixture {
 }
 
 async function createRealOwnerTriggerFixture(
-	options: { readonly commitPauseMs?: number; readonly commitResultPauseMs?: number } = {},
+	options: {
+		readonly commitPauseMs?: number;
+		readonly commitResultPauseMs?: number;
+		readonly seed?: (db: WriteDb) => void;
+		readonly executorFactory?: DreamingWorkerOptions["executorFactory"];
+	} = {},
 ): Promise<RealOwnerTriggerFixture> {
 	const agentsDir = mkdtempSync(join(tmpdir(), "dreaming-owner-trigger-"));
 	const dbPath = join(agentsDir, "memory", "memories.db");
@@ -299,6 +306,7 @@ async function createRealOwnerTriggerFixture(
 				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
 				 VALUES ('owner-recall-fixture', 'isolated recall control row', 'fact', 'default', ?, ?, 'fixture')`,
 			).run(now, now);
+			options.seed?.(db);
 		});
 		accessor.close();
 
@@ -322,6 +330,7 @@ async function createRealOwnerTriggerFixture(
 		worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", {
 			checkIntervalMs: 60_000,
 			ownerMaintenance: maintenance,
+			...(options.executorFactory ? { executorFactory: options.executorFactory } : {}),
 		});
 		return {
 			agentsDir,
@@ -916,6 +925,128 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
+	it("balances agent groups by backlog and keeps idle agents together", () => {
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "alpha", tokens: 3_000 },
+					{ scope: "beta", tokens: 2_000 },
+					{ scope: "gamma", tokens: 1_500 },
+					{ scope: "default", tokens: 0 },
+				],
+				2,
+			),
+		).toEqual([
+			["alpha", "default"],
+			["beta", "gamma"],
+		]);
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "alpha", tokens: 10 },
+					{ scope: "default", tokens: 0 },
+				],
+				4,
+			),
+		).toEqual([["alpha", "default"]]);
+		expect(partitionDreamingScopes([{ scope: "default", tokens: 0 }], 3)).toEqual([["default"]]);
+	});
+
+	it("runs disjoint agent groups concurrently after the first pass reaches a tool", async () => {
+		const seed = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES (?, ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+		);
+		seed.run("alpha-session", "alpha", "Alpha evidence. ".repeat(400));
+		seed.run("beta-session", "beta", "Beta evidence. ".repeat(250));
+		seed.run("gamma-session", "gamma", "Gamma evidence. ".repeat(200));
+		const allowedOf = (tools: ReadonlyArray<{ parameters: unknown }>): string[] => {
+			const agentId = (tools[0]?.parameters as { properties?: { agentId?: { const?: string; enum?: string[] } } })
+				.properties?.agentId;
+			return agentId?.enum ?? (agentId?.const ? [agentId.const] : []);
+		};
+		const groups: string[][] = [];
+		const crossGroupErrors: string[] = [];
+		let running = 0;
+		let peak = 0;
+		let releaseBarrier: () => void = () => undefined;
+		const barrier = new Promise<void>((resolve) => {
+			releaseBarrier = resolve;
+		});
+		const worker = startDreamingWorker(accessor, defaultCfg({ maxConcurrentPasses: 2 }), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run(input) {
+					running++;
+					peak = Math.max(peak, running);
+					const allowed = allowedOf(input.tools);
+					groups.push(allowed);
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					await search.execute("own", { agentId: allowed[0] }, undefined, undefined, {} as never);
+					const outsider = ["alpha", "beta", "gamma"].find((agent) => !allowed.includes(agent));
+					if (outsider !== undefined) {
+						await search
+							.execute("cross", { agentId: outsider }, undefined, undefined, {} as never)
+							.catch((error: unknown) => crossGroupErrors.push(error instanceof Error ? error.message : String(error)));
+					}
+					await Promise.race([barrier, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+					running--;
+					return { summary: `Processed ${allowed.join(", ")}` };
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => groups.length === 2 && running === 2, 2_000);
+			await expect(worker.triggerAsync("incremental")).rejects.toBeInstanceOf(AlreadyRunningError);
+			releaseBarrier();
+			await waitFor(() => !worker.running, 5_000);
+			expect(peak).toBe(2);
+			const covered = groups.flat();
+			expect(new Set(covered).size).toBe(covered.length);
+			expect([...covered].sort()).toEqual(expect.arrayContaining(["alpha", "beta", "gamma"]));
+			expect(crossGroupErrors).toHaveLength(2);
+			expect(crossGroupErrors.every((message) => message.includes("one of this pass's agents"))).toBe(true);
+			expect(db.prepare("SELECT status, COUNT(*) AS n FROM dreaming_passes GROUP BY status").all()).toEqual([
+				{ status: "completed", n: 2 },
+			]);
+		} finally {
+			worker.stop();
+		}
+	});
+
+	it("does not fan out when the first pass fails before reaching a tool", async () => {
+		const seed = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES (?, ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+		);
+		seed.run("alpha-session", "alpha", "Alpha evidence. ".repeat(400));
+		seed.run("beta-session", "beta", "Beta evidence. ".repeat(250));
+		let runs = 0;
+		const worker = startDreamingWorker(accessor, defaultCfg({ maxConcurrentPasses: 2 }), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run() {
+					runs++;
+					throw new Error("provider unavailable");
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => !worker.running, 2_000);
+			expect(runs).toBe(1);
+			expect(db.prepare("SELECT status, COUNT(*) AS n FROM dreaming_passes GROUP BY status").all()).toEqual([
+				{ status: "failed", n: 1 },
+			]);
+		} finally {
+			worker.stop();
+		}
+	});
+
 	it("keeps an unrecordable pass failure from becoming an unhandled rejection (#2023)", async () => {
 		db.prepare(
 			`INSERT INTO session_transcripts
@@ -1236,6 +1367,57 @@ describe("dreaming worker async trigger with a real DB owner", () => {
 		expect(runningRows).toEqual([]);
 		expect(recoveryOutcome.kind).toBe("resolved");
 		expect(recoveryRows).toEqual([{ status: "completed" }]);
+	}, 30_000);
+
+	it("finalizes a pass that surfaced more transcripts than the owner admits at once", async () => {
+		const initial = fixture;
+		if (initial === null) throw new Error("real owner trigger fixture was not initialized");
+		await closeRealOwnerTriggerFixture(initial);
+		const surfaced: string[] = [];
+		fixture = await createRealOwnerTriggerFixture({
+			seed: (db) => {
+				const insert = db.prepare(
+					`INSERT INTO session_transcripts
+					 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+					 VALUES (?, 'default', ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+				);
+				for (let index = 0; index < 80; index++)
+					insert.run(`bulk-session-${index}`, `Bulk session ${index} settled its deployment owner.`);
+			},
+			executorFactory: () => ({
+				async run(input) {
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					for (let page = 0; page < 10; page++) {
+						const result = await search.execute(
+							"page",
+							{ agentId: "default", limit: 50 },
+							undefined,
+							undefined,
+							{} as never,
+						);
+						const payload = JSON.parse((result.content[0] as { text: string }).text) as {
+							items: Array<{ id: string }>;
+							hasMore: boolean;
+						};
+						surfaced.push(...payload.items.map((item) => item.id));
+						if (!payload.hasMore) break;
+					}
+					return { summary: "Reviewed the bulk sessions" };
+				},
+			}),
+		});
+		const { maintenance, worker } = fixture;
+		const passId = await worker.triggerAsync("incremental");
+		await worker.activePass;
+		expect(new Set(surfaced).size).toBe(80);
+		expect(
+			await recallThroughDbOwner<{ readonly status: string; readonly error: string | null }>(
+				maintenance.owner,
+				"SELECT status, error FROM dreaming_passes WHERE id = ?",
+				[passId],
+			),
+		).toEqual([{ status: "completed", error: null }]);
 	}, 30_000);
 
 	it("holds the trigger fence through a timed-out pass-create commit", async () => {
