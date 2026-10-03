@@ -82,6 +82,16 @@ async function main(): Promise<void> {
 	const env = smokeEnvironment(home, workspace);
 	mkdirSync(env.XDG_RUNTIME_DIR, { recursive: true, mode: 0o700 });
 	mkdirSync(env.TMPDIR, { recursive: true });
+	if (process.platform === "darwin") {
+		const keychain = process.env.SIGNET_TEST_KEYCHAIN;
+		if (!keychain || !existsSync(keychain)) throw new Error("Missing provisioned disposable macOS keychain");
+		mkdirSync(join(home, "Library", "Keychains"), { recursive: true });
+		await bounded("/usr/bin/security", ["list-keychains", "-d", "user", "-s", keychain], root, env);
+		await bounded("/usr/bin/security", ["default-keychain", "-d", "user", "-s", keychain], root, env);
+		const configured = await bounded("/usr/bin/security", ["default-keychain", "-d", "user"], root, env);
+		if (configured.trim() !== JSON.stringify(keychain))
+			throw new Error("Disposable home did not select the provisioned keychain");
+	}
 	const nonce = `installed-smoke-${crypto.randomUUID()}`;
 	let calls = 0;
 	const stub = createServer(async (request, response) => {
