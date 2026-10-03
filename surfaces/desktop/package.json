@@ -56,7 +56,7 @@
 		],
 		"mac": {
 			"category": "public.app-category.productivity",
-			"icon": "icons/Signet.icon",
+			"icon": "icons/icon.icns",
 			"protocols": [
 				{
 					"name": "Signet",
@@ -75,9 +75,6 @@
 			"entitlements": "build/entitlements.mac.plist",
 			"entitlementsInherit": "build/entitlements.mac.inherit.plist",
 			"notarize": true
-		},
-		"dmg": {
-			"icon": "icons/icon.icns"
 		},
 		"nsis": {
 			"include": "build/installer.nsh"
