@@ -882,20 +882,19 @@ export class InferenceRouter {
 				unavailableReason: `account ${target.account} not found`,
 			};
 		}
-		if (needsCredential) {
-			const credential = await this.resolveCredential(account);
-			if (!credential) {
-				return {
-					available: false,
-					health: "blocked",
-					circuitOpen: false,
-					accountState: target.kind === "subscription_session" ? "expired" : "missing",
-					unavailableReason: `missing credential${target.account ? ` for ${target.account}` : ""}`,
-				};
-			}
-		}
-
 		try {
+			if (needsCredential) {
+				const credential = await this.resolveCredential(account);
+				if (!credential) {
+					return {
+						available: false,
+						health: "blocked",
+						circuitOpen: false,
+						accountState: target.kind === "subscription_session" ? "expired" : "missing",
+						unavailableReason: `missing credential${target.account ? ` for ${target.account}` : ""}`,
+					};
+				}
+			}
 			const provider = await this.createProvider(loaded, parsed.value.targetId, parsed.value.modelId);
 			const available = await provider.available();
 			return {
@@ -910,7 +909,7 @@ export class InferenceRouter {
 				available: false,
 				health: "blocked",
 				circuitOpen: false,
-				accountState: target.kind === "subscription_session" ? "expired" : needsCredential ? "missing" : "unknown",
+				accountState: "unknown",
 				unavailableReason: formatExecutionError(error),
 			};
 		}

@@ -7,6 +7,39 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 describe("protection API", () => {
+	it.skipIf(process.platform === "win32")(
+		"does not read corpus contents when there is no restore receipt to verify",
+		() => {
+			const root = mkdtempSync(join(tmpdir(), "protection-api-no-receipt-"));
+			try {
+				mkdirSync(join(root, "data"));
+				writeFileSync(join(root, "workspace-layout.json"), JSON.stringify({ version: 2 }));
+				expect(spawnSync("mkfifo", [join(root, "data", "signet.db")]).status).toBe(0);
+				const script = join(root, "probe.ts");
+				writeFileSync(
+					script,
+					`
+import { Hono } from ${JSON.stringify(require.resolve("hono"))};
+import { mountProtectionRoutes } from ${JSON.stringify(join(import.meta.dir, "protection.ts"))};
+const app = new Hono();
+mountProtectionRoutes(app, { workspacePath: ${JSON.stringify(root)} });
+const response = await app.request("/api/protection");
+console.log(JSON.stringify({ status: response.status, report: await response.json() }));
+`,
+				);
+				const child = spawnSync(process.execPath, [script], { encoding: "utf8", timeout: 3000, killSignal: "SIGKILL" });
+				expect(child.error).toBeUndefined();
+				expect(child.status, child.stderr).toBe(0);
+				const result = JSON.parse(child.stdout);
+				expect(result.status).toBe(200);
+				expect(result.report.protected).toBe(false);
+				expect(result.report.restoreReceipt).toBeNull();
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		},
+	);
+
 	it("projects the shared protection status without exposing paths or secrets", async () => {
 		const app = new Hono();
 		mountProtectionRoutes(app, {

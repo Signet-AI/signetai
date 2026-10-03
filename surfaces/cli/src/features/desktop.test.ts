@@ -7,6 +7,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readlinkSync,
 	readdirSync,
 	renameSync,
 	rmSync,
@@ -546,6 +547,47 @@ function makeWindowsAppContents(app: string, arch: "x64" | "arm64", packageName 
 }
 
 describe("mac desktop install", () => {
+	test("preserves relative framework links after the source bundle is removed", async () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release", "mac");
+			mkdirSync(release, { recursive: true });
+			const source = makeMacAppBundle(release, process.arch === "arm64" ? "arm64" : "x64");
+			const frameworkPath = "Contents/Frameworks/Electron Framework.framework";
+			const framework = join(source, frameworkPath);
+			mkdirSync(join(framework, "Versions", "A"), { recursive: true });
+			writeFileSync(join(framework, "Versions", "A", "Electron Framework"), "framework");
+			symlinkSync("A", join(framework, "Versions", "Current"));
+			symlinkSync("Versions/Current/Electron Framework", join(framework, "Electron Framework"));
+			const installer = join(root, "installer.mjs");
+			const build = await Bun.build({
+				entrypoints: [join(import.meta.dir, "desktop.ts")],
+				target: "node",
+				external: ["better-sqlite3", "@napi-rs/keyring"],
+			});
+			expect(build.success).toBe(true);
+			writeFileSync(installer, await build.outputs[0].text());
+			execFileSync("node", [
+				"--input-type=module",
+				"-e",
+				`import { installMacDesktopApp } from ${JSON.stringify(installer)}; installMacDesktopApp(...process.argv.slice(1));`,
+				root,
+				home,
+				join(home, "workspace"),
+			]);
+			const result = { appBundle: join(home, "Applications", "Signet.app") };
+			rmSync(source, { recursive: true, force: true });
+			const installed = join(result.appBundle, frameworkPath);
+			expect(readlinkSync(join(installed, "Versions", "Current"))).toBe("A");
+			expect(readlinkSync(join(installed, "Electron Framework"))).toBe("Versions/Current/Electron Framework");
+			expect(readFileSync(join(installed, "Electron Framework"), "utf8")).toBe("framework");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test("installs the newest matching .app bundle into ~/Applications", () => {
 		const root = makeCheckout();
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));

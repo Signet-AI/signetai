@@ -118,6 +118,7 @@ describe("launchd environment", () => {
 		expect(plist).toContain("/usr/bin");
 		expect(plist).toContain("<key>SIGNET_PATH</key>");
 		expect(plist).toContain("<string>/Users/user/.agents</string>");
+		expect(plist).toContain("<key>ProcessType</key>\n\t<string>Interactive</string>");
 	});
 
 	it("escapes plist values so PATH and workspace paths remain valid XML", () => {

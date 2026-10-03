@@ -133,7 +133,7 @@ export function buildLaunchdPlist(input: LaunchdPlistInput): string {
 \t<key>StandardErrorPath</key>
 \t<string>${xmlEscape(input.standardErrorPath)}</string>
 \t<key>ProcessType</key>
-\t<string>Background</string>
+\t<string>Interactive</string>
 </dict>
 </plist>
 `;

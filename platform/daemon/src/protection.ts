@@ -136,7 +136,8 @@ export function mountProtectionRoutes(app: Hono, options: ProtectionRouteOptions
 					})));
 		const receipt =
 			options.restoreReceipt ?? (options.workspacePath ? readRestoreReceipt(options.workspacePath) : null);
-		const componentDigests = options.workspacePath ? computeProtectionDigests(options.workspacePath) : undefined;
+		const componentDigests =
+			receipt && options.workspacePath ? computeProtectionDigests(options.workspacePath) : undefined;
 		const status = aggregateProtection(components, {
 			restoreReceipt: receipt,
 			workspacePath: options.workspacePath,

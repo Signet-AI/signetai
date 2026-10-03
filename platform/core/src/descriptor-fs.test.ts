@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
 	chmodSync,
 	existsSync,
@@ -30,6 +31,57 @@ afterEach(() => {
 });
 
 describe("descriptor-rooted filesystem", () => {
+	test.skipIf(process.platform !== "darwin")("capacity agrees with the Node filesystem API on macOS", async () => {
+		const rootPath = temporaryRoot("descriptor-capacity");
+		const expected = Number(
+			execFileSync(
+				"node",
+				["-e", "const s=require('node:fs').statfsSync(process.argv[1]);console.log(s.bavail*s.bsize)", rootPath],
+				{ encoding: "utf8" },
+			),
+		);
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			expect(Math.abs((await root.availableBytes()) - expected)).toBeLessThan(64 * 1024 * 1024);
+		} finally {
+			await root.close();
+		}
+	});
+
+	test("repeated inventories return the same entries and capacity has valid units", async () => {
+		const rootPath = temporaryRoot("descriptor-repeat-inventory");
+		writeFileSync(join(rootPath, "value"), "payload");
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			const first = await root.inventory();
+			expect(first.map((entry) => entry.path)).toEqual(["value"]);
+			expect(await root.inventory()).toEqual(first);
+			expect(await root.availableBytes()).toBeGreaterThan(7);
+		} finally {
+			await root.close();
+		}
+	});
+
+	test("inspects one entry without traversing siblings or following parent symlinks", async () => {
+		const rootPath = temporaryRoot("descriptor-inspect");
+		mkdirSync(join(rootPath, "nested"));
+		writeFileSync(join(rootPath, "nested", "value"), "value", { mode: 0o640 });
+		symlinkSync("value", join(rootPath, "nested", "link"));
+		symlinkSync(tmpdir(), join(rootPath, "outside"));
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			const file = await root.inspectEntry("nested/value");
+			expect(file.type).toBe("file");
+			expect(file.size).toBe(5);
+			expect((await root.inspectEntry("nested/link")).target).toBe("value");
+			await expect(root.inspectEntry("outside/value")).rejects.toBeTruthy();
+			await expect(root.inspectEntry("../value")).rejects.toBeTruthy();
+		} finally {
+			await root.close();
+		}
+		await expect(root.inspectEntry("nested/value")).rejects.toThrow("closed");
+	});
+
 	test("refuses a file or directory mode the destination filesystem cannot preserve", async () => {
 		const rootPath = temporaryRoot("descriptor-mode");
 		const probe = join(rootPath, "permission-probe");

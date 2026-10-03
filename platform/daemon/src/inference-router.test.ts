@@ -767,6 +767,53 @@ printf 'never reached\\n'
 		}
 	});
 
+	it("keeps credential access failures visible without rejecting the whole routing snapshot", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-credential-failure-"));
+		try {
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				`inference:
+  defaultPolicy: strict
+  accounts:
+    subscription:
+      kind: subscription_session
+      providerFamily: openai-codex
+  targets:
+    subscription:
+      kind: subscription_session
+      executor: openai-codex
+      account: subscription
+      models:
+        default:
+          model: gpt-6-luna
+  policies:
+    strict:
+      mode: strict
+      defaultTargets:
+        - subscription/default
+`,
+			);
+			const router = getOrCreateInferenceRouter(dir);
+			Object.defineProperty(router, "resolveCredential", {
+				value: async () => {
+					throw new Error("Native keyring helper deadline exceeded");
+				},
+			});
+			const status = await router.status(true);
+			expect(status.ok).toBe(true);
+			if (!status.ok) return;
+			expect(status.value.runtimeSnapshot.targets["subscription/default"]).toMatchObject({
+				available: false,
+				accountState: "unknown",
+				unavailableReason: "Native keyring helper deadline exceeded",
+			});
+			const probe = await router.execute({ operation: "interactive" }, "Respond with exactly OK.", { refresh: true });
+			expect(probe.ok).toBe(false);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("isolates a rejected OAuth refresh from healthy fallback targets", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-oauth-refresh-"));
 		try {

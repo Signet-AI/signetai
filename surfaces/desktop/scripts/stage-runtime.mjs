@@ -138,7 +138,7 @@ export function runtimeDependencies(daemonPkg, corePkg, platform, arch) {
 		const version = pkgVersion(daemonPkg, name);
 		if (version) dependencies[name] = version;
 	}
-	for (const name of ["sqlite-vec", vecPackage]) {
+	for (const name of ["@napi-rs/keyring", "sqlite-vec", vecPackage]) {
 		const version = pkgVersion(corePkg, name);
 		if (version) dependencies[name] = version;
 	}

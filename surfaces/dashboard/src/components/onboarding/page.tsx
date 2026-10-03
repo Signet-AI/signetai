@@ -1,3 +1,4 @@
+import { routeBlockedBy } from "@/lib/inference-errors";
 import { EmbeddingStep, embeddingDraft, type EmbeddingDraft } from "./embedding-step";
 import { writeEmbeddingEndpoint } from "@/lib/embedding-config";
 import { IdentityStep, identityDraft, identityContent, type IdentityDraft } from "./identity-step";
@@ -465,7 +466,11 @@ export function OnboardingPage({
 					signal,
 				);
 				signal.throwIfAborted();
-				if (!probe?.text.trim() || !probe.attempts.some((a) => a.ok))
+				if (probe.error) {
+					const reasons = routeBlockedBy(probe.details);
+					throw new Error(reasons.length ? `${probe.error}: ${reasons.join("; ")}` : probe.error);
+				}
+				if (!probe.data?.text.trim() || !probe.data.attempts.some((a) => a.ok))
 					throw new Error("The model did not answer. Check the connection and try again.");
 				store.aSetBool(["memory", "pipelineV2", "enabled"], true);
 				store.aSetBool(["memory", "pipelineV2", "paused"], true);
