@@ -1,4 +1,4 @@
-import { launchSmokeProcess as launch } from "./smoke-process";
+import { launchSmokeProcess as launch, closeSmokeServer } from "./smoke-process";
 import { createServer } from "node:http";
 import { existsSync, realpathSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -191,8 +191,7 @@ async function main(): Promise<void> {
 			await running.stop();
 			rmSync(root, { recursive: true, force: true });
 		} finally {
-			stub.closeAllConnections();
-			await new Promise<void>((accept, reject) => stub.close((error) => (error ? reject(error) : accept())));
+			await closeSmokeServer(stub);
 		}
 	}
 	console.log(report);

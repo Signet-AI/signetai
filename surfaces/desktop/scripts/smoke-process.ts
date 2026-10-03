@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import type { Server } from "node:http";
 
 interface SmokeProcess {
 	readonly child: ChildProcess;
@@ -81,4 +82,17 @@ export function launchSmokeProcess(
 		}
 	}
 	return { child, done, output: () => log, stop };
+}
+
+export async function closeSmokeServer(server: Server): Promise<void> {
+	await new Promise<void>((accept, reject) => {
+		server.close((error) => {
+			if (error && Reflect.get(error, "code") !== "ERR_SERVER_NOT_RUNNING") {
+				reject(error);
+				return;
+			}
+			accept();
+		});
+		server.closeAllConnections();
+	});
 }

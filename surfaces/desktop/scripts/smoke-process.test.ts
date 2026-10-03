@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { launchSmokeProcess } from "./smoke-process";
+import { launchSmokeProcess, closeSmokeServer } from "./smoke-process";
+import { createServer } from "node:http";
 
 test.skipIf(process.platform === "win32")(
 	"cleanup kills a stubborn descendant after its parent exits",
@@ -34,3 +35,14 @@ test.skipIf(process.platform === "win32")(
 	},
 	15000,
 );
+
+for (const closed of [false, true]) {
+	test(`provider cleanup accepts an ${closed ? "already closed" : "active"} server`, async () => {
+		const server = createServer((_request, response) => response.end("ok"));
+		await new Promise<void>((accept) => server.listen(0, "127.0.0.1", accept));
+		if (closed) await new Promise<void>((accept) => server.close(() => accept()));
+		await closeSmokeServer(server);
+		expect(server.listening).toBe(false);
+		await closeSmokeServer(server);
+	});
+}

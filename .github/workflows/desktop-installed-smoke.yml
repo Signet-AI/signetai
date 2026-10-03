@@ -71,7 +71,7 @@ jobs:
           set -euo pipefail
           package=$(find surfaces/desktop/release -maxdepth 1 -name '*.deb' -print -quit)
           test -n "$package"
-          sudo dpkg -i "$package"
+          sudo apt-get install -y "./$package"
           package_name=$(dpkg-deb -f "$package" Package)
           install_manifest="$RUNNER_TEMP/signet-installed-files.txt"
           dpkg-query -L "$package_name" | tee "$install_manifest"
@@ -94,13 +94,15 @@ jobs:
           hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_point"
           cleanup() { hdiutil detach "$mount_point" -quiet || true; }
           trap cleanup EXIT
-          app=$(find "$mount_point" -maxdepth 2 -name 'Signet.app' -print -quit)
-          test -n "$app"
+          app=$(find "$mount_point" -maxdepth 1 -type d -name '*.app' -print)
+          test -d "$app"
           ditto "$app" "$installed_root/Signet.app"
           test -d "$installed_root/Signet.app/Contents/Resources/runtime"
-          test -x "$installed_root/Signet.app/Contents/MacOS/signet"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$installed_root/Signet.app/Contents/Info.plist")
+          test -n "$executable"
+          test -x "$installed_root/Signet.app/Contents/MacOS/$executable"
           printf 'SIGNET_SMOKE_RESOURCES=%s\n' "$installed_root/Signet.app/Contents/Resources" >> "$GITHUB_ENV"
-          printf 'SIGNET_SMOKE_ELECTRON=%s\n' "$installed_root/Signet.app/Contents/MacOS/signet" >> "$GITHUB_ENV"
+          printf 'SIGNET_SMOKE_ELECTRON=%s\n' "$installed_root/Signet.app/Contents/MacOS/$executable" >> "$GITHUB_ENV"
           hdiutil detach "$mount_point" -quiet
           trap - EXIT
       - name: Install Windows NSIS package
