@@ -7,6 +7,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	utimesSync,
 	writeFileSync,
@@ -1683,11 +1684,13 @@ process.stdin.on("data", (chunk) => {
 		directory = database.directory;
 		client = createDbOwnerClient({ dbPath: database.path });
 		await client.start();
+		const extension = findSqliteVecExtension();
+		if (!extension) throw new Error("Missing sqlite-vec fixture");
 
 		expect(await client.initialize(database.directory)).toEqual({
 			initialized: true,
 			pendingVecBackfill: true,
-			extensionPath: findSqliteVecExtension(),
+			extensionPath: realpathSync(extension),
 		});
 	});
 
