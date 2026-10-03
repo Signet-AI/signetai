@@ -1,7 +1,13 @@
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
 import { app, dialog } from "electron";
 import type { AppUpdater } from "electron-updater";
-import { DESKTOP_UPDATE_FEED, desktopUpdateSupport, desktopUpdateVersion } from "./desktop-update-policy.js";
+import {
+	DESKTOP_UPDATE_FEED,
+	desktopUpdateSupport,
+	desktopUpdateVersion,
+	macAppCodeSigningTeam,
+} from "./desktop-update-policy.js";
 
 const require = createRequire(import.meta.url);
 const { autoUpdater } = require("electron-updater") as { readonly autoUpdater: AppUpdater };
@@ -29,6 +35,13 @@ interface CheckDesktopUpdateOptions {
 
 let configured = false;
 let checkPromise: Promise<DesktopUpdateResult> | null = null;
+let runningAppTeam: string | null | undefined;
+
+function runningAppCodeSigningTeam(): string | null {
+	if (process.platform !== "darwin") return null;
+	runningAppTeam ??= macAppCodeSigningTeam(resolve(process.execPath, "..", "..", ".."));
+	return runningAppTeam;
+}
 
 export function configureDesktopUpdates(): void {
 	if (configured) return;
@@ -45,6 +58,7 @@ export function desktopUpdatesSupported():
 		isPackaged: app.isPackaged || process.env.SIGNET_DESKTOP_ENABLE_UPDATES_IN_DEV === "1",
 		platform: process.platform,
 		hasAppImage: Boolean(process.env.APPIMAGE),
+		codeSigningTeam: runningAppCodeSigningTeam(),
 	});
 }
 
