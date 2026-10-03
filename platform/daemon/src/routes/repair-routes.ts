@@ -885,7 +885,6 @@ export function registerRepairRoutes(
 					| { readonly type: "exit"; readonly code: number }
 					| { readonly type: "error"; readonly message: string }
 					| undefined;
-				// JSON can expand each UTF-16 code unit to six bytes, so keep encoded frames under the 256 KiB limit.
 				const outputFrameChars = 32 * 1024;
 				const outputPauseBytes = 128 * 1024;
 				const outputResumeBytes = 64 * 1024;

@@ -34,7 +34,6 @@ async function ownerStateMatchesWithin(predicate: () => boolean, timeoutMs: numb
 }
 
 function createPipelineApp(): Hono {
-	// These tests exercise handlers, so supply an admin principal without involving token verification.
 	const app = new Hono();
 	const now = Math.floor(Date.now() / 1000);
 	const claims: TokenClaims = {
