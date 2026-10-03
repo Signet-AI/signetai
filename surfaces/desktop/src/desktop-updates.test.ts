@@ -15,19 +15,24 @@ describe("desktop update packaging", () => {
 
 	test("shows the desktop window before daemon startup finishes", () => {
 		const mainSource = readFileSync(join(import.meta.dir, "main.ts"), "utf8");
-		const showDashboardReady = mainSource.slice(
-			mainSource.indexOf("async function showDashboardReady"),
-			mainSource.indexOf("async function prepareDaemonForDashboard"),
-		);
+		const section = (start: string, end: string) =>
+			mainSource.slice(mainSource.indexOf(start), mainSource.indexOf(end));
+		const showDashboard = section("function showDashboard(", "async function showDashboardReady");
+		const showDashboardReady = section("async function showDashboardReady", "async function prepareDaemonForDashboard");
+		const position = (source: string, marker: string) => {
+			const index = source.indexOf(marker);
+			expect(index).toBeGreaterThanOrEqual(0);
+			return index;
+		};
 
-		expect(showDashboardReady.indexOf("win.show()")).toBeLessThan(
-			showDashboardReady.indexOf("await prepareDaemonForDashboard()"),
-		);
 		expect(mainSource).toContain("show: true");
-		expect(showDashboardReady.indexOf("loadStartupWindow(win)")).toBeLessThan(
-			showDashboardReady.indexOf("await prepareDaemonForDashboard()"),
+		expect(position(showDashboard, "loadStartupWindow(win)")).toBeLessThan(
+			position(showDashboard, "showDashboardReady(win)"),
 		);
-		expect(showDashboardReady).toContain("loadMainWindow(win)");
+		expect(position(showDashboard, "win.show()")).toBeLessThan(position(showDashboard, "showDashboardReady(win)"));
+		expect(position(showDashboardReady, "await prepareDaemonForDashboard()")).toBeLessThan(
+			position(showDashboardReady, "loadMainWindow(win, destination)"),
+		);
 	});
 
 	test("loads electron-updater through CommonJS interop for packaged ESM", () => {
