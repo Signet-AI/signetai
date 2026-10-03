@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-10-03
+- Bug fixes: guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
+
 ### 2026-10-02
 - Features: add 2D memory graph and persistent Pi chat.
 - Bug fixes: update native Dreaming smoke payload; authorize macOS keychain access for API-key saves; remove false graph attribution; commit memory head with pass finalization; scope model catalog and gate dreaming completion; compare live credentials without password hashing; retry GitHub asset upload timeouts; classify absent default macOS keychain as unavailable; recover macOS OAuth keychain authorization; stop macOS keychain prompt loops; preserve macOS verification copy; use keychain search list; parse signing keychain lists; harden signing probe recovery; add codesign key access; use matched signing identity; support Bash 3.2 signing; harden macOS signing lookup; sign by certificate fingerprint; guard fallback signing identity; report macOS keychain lookup details; match signing team suffix; skip identity policy filter; bypass trust-only identity scan; preflight macOS signing.
@@ -33,6 +36,17 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: clarify checkpoint authority.
 
 ## Release Ledger
+
+## [0.230.4] - 2026-10-03
+
+Release summary: 3 bug fixes.
+Tag range: `v0.230.3..v0.230.4`.
+
+### Bug Fixes
+
+- **daemon**: guard prune resume generation
+- **daemon**: fence bounded prune scans
+- **daemon**: bound generic entity pruning scans
 
 ## [0.230.3] - 2026-10-03
 
