@@ -136,7 +136,7 @@ describe("prompt entity context scaling (#1059)", () => {
 	afterAll(() => {
 		closeDbAccessor();
 		if (prev === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 		} else {
 			process.env.SIGNET_PATH = prev;
 		}

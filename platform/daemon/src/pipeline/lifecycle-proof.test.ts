@@ -275,7 +275,7 @@ describe("daemon lifecycle proof integration", () => {
 			worker.stop();
 			await worker.drain();
 			if (previousSignetPath === undefined) {
-				process.env.SIGNET_PATH = undefined;
+				delete process.env.SIGNET_PATH;
 			} else {
 				process.env.SIGNET_PATH = previousSignetPath;
 			}

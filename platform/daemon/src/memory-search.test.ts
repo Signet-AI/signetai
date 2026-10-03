@@ -40,7 +40,7 @@ describe("hybridRecall", () => {
 		setActiveTelemetry(undefined);
 		closeDbAccessor();
 		if (prevSignetPath === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 		} else {
 			process.env.SIGNET_PATH = prevSignetPath;
 		}

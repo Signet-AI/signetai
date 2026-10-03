@@ -422,8 +422,8 @@ describe("local secrets provider", () => {
 		process.env.MARKER_PATH = marker;
 		process.env.CHILD_SCRIPT = child;
 		const result = await execWithSecrets(`bun ${parent}`, { OPENAI_API_KEY: "OPENAI_API_KEY" }, { timeoutMs: 200 });
-		process.env.MARKER_PATH = undefined;
-		process.env.CHILD_SCRIPT = undefined;
+		delete process.env.MARKER_PATH;
+		delete process.env.CHILD_SCRIPT;
 		await new Promise((resolve) => setTimeout(resolve, 1400));
 
 		expect(result.code).toBe(124);
