@@ -126,4 +126,26 @@ describe("bounded SSE lifecycle", () => {
 		expect(text).toContain("event: dropped");
 		expect(text).toContain('"count":');
 	});
+
+	test("flushes pending drop summary before ending a closed stream", async () => {
+		const sse = openBoundedSse({
+			highWaterMarkBytes: 1024,
+			maxFrameBytes: 256,
+			overflowPolicy: "drop",
+			onStart(producer) {
+				for (let index = 0; index < 30; index += 1) producer.write({ index, value: "x".repeat(48) });
+				producer.close();
+			},
+		});
+		const reader = sse.stream.getReader();
+		readers.push(reader);
+		let text = "";
+		while (true) {
+			const chunk = await reader.read();
+			if (chunk.done) break;
+			text += new TextDecoder().decode(chunk.value);
+		}
+
+		expect(text).toMatch(/event: dropped\ndata: \{"count":[1-9]\d*,"bytes":[1-9]\d*\}\n\n/);
+	});
 });
