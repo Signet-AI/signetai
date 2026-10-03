@@ -293,6 +293,7 @@ export class SignetProvider implements Provider {
   private baseUrl = ""
   private readonly extractionUsage = emptyUsage()
   private readonly dreamingPasses: Record<string, DreamingPassUsage> = {}
+  private readonly isolatedAgents = new Set<string>()
   private agentId = process.env.SIGNET_BENCH_AGENT_ID || DEFAULT_AGENT_ID
   private project = process.env.SIGNET_BENCH_PROJECT || DEFAULT_PROJECT
   private timeoutMs = readPositiveInt("SIGNET_BENCH_REQUEST_TIMEOUT_MS", DEFAULT_TIMEOUT_MS)
@@ -354,6 +355,23 @@ export class SignetProvider implements Provider {
     }
   }
 
+  private async ensureIsolatedAgent(agentId: string): Promise<void> {
+    if (this.isolatedAgents.has(agentId)) return
+    try {
+      await this.request(`/api/agents/${encodeURIComponent(agentId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ read_policy: "isolated" }),
+      })
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("failed (404)")) throw error
+      await this.request("/api/agents", {
+        method: "POST",
+        body: JSON.stringify({ name: agentId, read_policy: "isolated" }),
+      })
+    }
+    this.isolatedAgents.add(agentId)
+  }
+
   private async readDreamStatus(agentId: string): Promise<DreamingStatusResponse> {
     const status = await this.request<DreamingStatusResponse>(
       `/api/dream/status?agentId=${encodeURIComponent(agentId)}`,
@@ -372,6 +390,7 @@ export class SignetProvider implements Provider {
     for (const session of sessions) {
       if (this.profile === "dreaming") {
         const agentId = this.agentIdForSession(session, options.containerTag)
+        await this.ensureIsolatedAgent(agentId)
         const capture = await this.captureDreamingSession(session, options, agentId)
         if (!capture.transcriptCaptureJobId) {
           throw new Error(
@@ -486,6 +505,7 @@ export class SignetProvider implements Provider {
     const agentId =
       options.agentId ??
       (this.profile === "dreaming" ? haystackAgentId(options.containerTag) : this.agentId)
+    if (this.profile === "dreaming") await this.ensureIsolatedAgent(agentId)
     const response = await this.request<SignetRecallResponse>("/api/memory/recall", {
       method: "POST",
       body: JSON.stringify({
