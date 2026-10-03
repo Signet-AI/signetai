@@ -434,9 +434,8 @@ describe("check-publish-manifests", () => {
 		expect(nativePlatforms).toContain('"darwin-arm64"');
 		expect(nativePlatforms).toContain('"win32-x64"');
 		expect(nativePlatforms).toContain("packageName");
-		expect(installer).toContain("linkSync");
 		expect(installer).toContain("require.resolve");
-		expect(installer).toContain("Linked Signet native binary");
+		expect(installer).toContain("Installed verified Signet native binary");
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("installConnectorAssets");
 		expect(installer).not.toContain("better-sqlite3");

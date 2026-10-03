@@ -61,6 +61,11 @@ echo "fake native signet $*"
 `);
 }
 
+function nativeAsset(): { readonly platform: string; readonly size: number; readonly sha256: string } {
+	const binary = fakeNativeBinary();
+	return { platform: platformKey(), size: binary.length, sha256: createHash("sha256").update(binary).digest("hex") };
+}
+
 interface CommandResult {
 	readonly status: number | null;
 	readonly stdout: string;
@@ -288,7 +293,7 @@ function stageWrapperInstall(
 		JSON.stringify({
 			schemaVersion: 1,
 			version: "0.0.0",
-			assets: [],
+			assets: [nativeAsset()],
 			components: {
 				connectors: {
 					url: "signet-connectors-0.0.0.tar.gz",
@@ -397,7 +402,7 @@ describe("native install smoke", () => {
 			JSON.stringify({
 				schemaVersion: 1,
 				version,
-				assets: [],
+				assets: [nativeAsset()],
 				components: {
 					connectors: {
 						url: `signet-connectors-${version}.tar.gz`,
@@ -411,7 +416,7 @@ describe("native install smoke", () => {
 			join(nativePackageDir, "package.json"),
 			JSON.stringify({ name: nativePackageName, version, type: "module" }),
 		);
-		writeFileSync(nativePackageBin, "");
+		writeFileSync(nativePackageBin, fakeNativeBinary());
 		chmodSync(nativePackageBin, 0o755);
 		const connectorDir = join(packageDir, "runtime", "connectors");
 		mkdirSync(connectorDir, { recursive: true });
@@ -456,7 +461,7 @@ describe("native install smoke", () => {
 		const manifest = JSON.stringify({
 			schemaVersion: 1,
 			version,
-			assets: [],
+			assets: [nativeAsset()],
 			components: {
 				connectors: {
 					url: `signet-connectors-${version}.tar.gz`,
@@ -470,7 +475,7 @@ describe("native install smoke", () => {
 			join(nativePackageDir, "package.json"),
 			JSON.stringify({ name: nativePackageName, version, type: "module" }),
 		);
-		writeFileSync(nativePackageBin, "");
+		writeFileSync(nativePackageBin, fakeNativeBinary());
 		chmodSync(nativePackageBin, 0o755);
 
 		const result = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
@@ -553,7 +558,7 @@ describe("native install smoke", () => {
 		const manifest = JSON.stringify({
 			schemaVersion: 1,
 			version,
-			assets: [],
+			assets: [nativeAsset()],
 			components: {
 				connectors: {
 					url: `signet-connectors-${version}.tar.gz`,
@@ -567,7 +572,7 @@ describe("native install smoke", () => {
 			join(nativePackageDir, "package.json"),
 			JSON.stringify({ name: nativePackageName, version, type: "module" }),
 		);
-		writeFileSync(nativePackageBin, "");
+		writeFileSync(nativePackageBin, fakeNativeBinary());
 		chmodSync(nativePackageBin, 0o755);
 
 		const result = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
@@ -711,13 +716,17 @@ describe("native install smoke", () => {
 		expect(directWrapper.stdout).toContain(`signet wrapper ${packageDir}`);
 		expect(directWrapper.stdout).toContain("fake native signet --version");
 
+		writeFileSync(
+			join(packageDir, "native-manifest.json"),
+			JSON.stringify({ schemaVersion: 1, version: "0.0.0", assets: [nativeAsset()] }),
+		);
 		const install = await runCommand("node", [join(packageDir, "scripts", "install-native.js")], {
 			...process.env,
 			SIGNET_TELEMETRY_OPTOUT: "1",
 		});
 
 		expect(install.status).toBe(0);
-		expect(install.stdout).toContain(`Linked Signet native binary for ${platform}`);
+		expect(install.stdout).toContain(`Installed verified Signet native binary for ${platform}`);
 		const installedBinary = join(packageDir, "native", "signet");
 		expect(existsSync(installedBinary)).toBe(true);
 		chmodSync(installedBinary, 0o755);

@@ -3,12 +3,14 @@
 import { createHash } from "node:crypto";
 import {
 	copyFileSync,
+	createReadStream,
 	existsSync,
-	linkSync,
 	mkdirSync,
+	mkdtempSync,
 	readFileSync,
+	renameSync,
 	rmSync,
-	unlinkSync,
+	statSync,
 	writeFileSync,
 } from "node:fs";
 import { chmod } from "node:fs/promises";
@@ -104,26 +106,39 @@ function isWorkspacePackage() {
 	}
 }
 
-function placeBinary(source, destination) {
+async function placeBinary(source, destination, platform) {
+	const manifest = loadManifest();
+	const assets = Array.isArray(manifest?.assets) ? manifest.assets.filter((asset) => asset?.platform === platform) : [];
+	const asset = assets[0];
+	if (
+		assets.length !== 1 ||
+		!Number.isSafeInteger(asset?.size) ||
+		asset.size <= 0 ||
+		typeof asset.sha256 !== "string" ||
+		!/^[a-f0-9]{64}$/i.test(asset.sha256)
+	) {
+		throw new Error(`Missing or invalid native binary integrity metadata for ${platform}. Reinstall Signet.`);
+	}
+	if (statSync(source).size !== asset.size) {
+		throw new Error(`Native binary size mismatch for ${platform}. Reinstall Signet with a fresh package cache.`);
+	}
+
+	const staging = mkdtempSync(join(dirname(destination), ".signet-install-"));
+	const temporary = join(staging, basename(destination));
 	try {
-		linkSync(source, destination);
-	} catch (err) {
-		if (err?.code === "EEXIST") {
-			unlinkSync(destination);
-			try {
-				linkSync(source, destination);
-			} catch {
-				copyFileSync(source, destination);
-			}
-			return;
+		copyFileSync(source, temporary);
+		if (statSync(temporary).size !== asset.size) {
+			throw new Error(`Native binary size mismatch for ${platform}. Reinstall Signet with a fresh package cache.`);
 		}
-
-		if (err?.code === "EXDEV" || err?.code === "EPERM") {
-			copyFileSync(source, destination);
-			return;
+		const hash = createHash("sha256");
+		for await (const chunk of createReadStream(temporary)) hash.update(chunk);
+		if (hash.digest("hex") !== asset.sha256.toLowerCase()) {
+			throw new Error(`Native binary SHA-256 mismatch for ${platform}. Reinstall Signet with a fresh package cache.`);
 		}
-
-		throw err;
+		if (process.platform !== "win32") await chmod(temporary, 0o755);
+		renameSync(temporary, destination);
+	} finally {
+		rmSync(staging, { recursive: true, force: true });
 	}
 }
 
@@ -159,18 +174,10 @@ async function main() {
 	const installDir = join(packageDir, "native");
 	mkdirSync(installDir, { recursive: true });
 	const destination = join(installDir, process.platform === "win32" ? "signet.exe" : "signet");
-	try {
-		placeBinary(source, destination);
-		if (process.platform !== "win32") {
-			await chmod(destination, 0o755);
-		}
-		console.log(`Linked Signet native binary for ${platform}`);
-		if (process.platform === "darwin") {
-			console.log("macOS Gatekeeper tip: browser-downloaded unsigned binaries may require right-click Open or Open Anyway. Only bypass Gatekeeper for a trusted official Signet binary. See https://docs.signetai.sh/getting-started/install/");
-		}
-	} catch (err) {
-		rmSync(destination, { force: true });
-		throw err;
+	await placeBinary(source, destination, platform);
+	console.log(`Installed verified Signet native binary for ${platform}`);
+	if (process.platform === "darwin") {
+		console.log("macOS Gatekeeper tip: browser-downloaded unsigned binaries may require right-click Open or Open Anyway. Only bypass Gatekeeper for a trusted official Signet binary. See https://docs.signetai.sh/getting-started/install/");
 	}
 
 	// Companion runtime assets. Connector plugin payloads and the Bun JavaScript
