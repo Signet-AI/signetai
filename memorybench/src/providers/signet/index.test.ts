@@ -297,7 +297,8 @@ describe("Signet benchmark profiles", () => {
 
     constructor(
       private readonly drainedAfterPass: number,
-      private readonly mutationsPerPass: number
+      private readonly mutationsPerPass: number,
+      private readonly failedPasses: ReadonlySet<number> = new Set()
     ) {
       super()
     }
@@ -312,7 +313,9 @@ describe("Signet benchmark profiles", () => {
         return {
           worker: { running: true },
           passes: [
-            { id: `pass-${this.triggers}`, status: "completed", mutationsApplied: this.mutationsPerPass },
+            this.failedPasses.has(this.triggers)
+              ? { id: `pass-${this.triggers}`, status: "failed", error: "Pi agent length" }
+              : { id: `pass-${this.triggers}`, status: "completed", mutationsApplied: this.mutationsPerPass },
           ],
           episodicTokensPending: this.triggers >= this.drainedAfterPass ? 0 : null,
         } as T
@@ -335,6 +338,18 @@ describe("Signet benchmark profiles", () => {
   it("keeps triggering passes while the backlog is unmeasured until it measures zero", async () => {
     const provider = new DrainingProvider(3, 5)
     await finalizeWith(provider)
+    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
+  })
+
+  it("retries a failed pass and keeps draining", async () => {
+    const provider = new DrainingProvider(3, 5, new Set([1, 2]))
+    await finalizeWith(provider)
+    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
+  })
+
+  it("fails after three consecutive failed passes", async () => {
+    const provider = new DrainingProvider(Number.POSITIVE_INFINITY, 5, new Set([1, 2, 3]))
+    await expect(finalizeWith(provider)).rejects.toThrow("Pi agent length (3 consecutive failed passes)")
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
   })
 

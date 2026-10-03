@@ -109,6 +109,7 @@ export function observeDreamingPasses(
 }
 
 const MAX_IDLE_DREAMING_PASSES = 3
+const MAX_FAILED_DREAMING_PASSES = 3
 
 const RAW_EVIDENCE_ID_PREFIXES = ["source-chunk:", "native-artifact:"] as const
 
@@ -552,6 +553,7 @@ export class SignetProvider implements Provider {
     const deadline = Date.now() + readPositiveInt("SIGNET_BENCH_DREAMING_WAIT_SECS", 720) * 1000
     const pollMs = Math.min(readPositiveInt("SIGNET_BENCH_DREAMING_POLL_SECS", 1), 5) * 1000
     let idlePasses = 0
+    let failedPasses = 0
     while (Date.now() < deadline) {
       let accepted: DreamingTriggerResponse
       try {
@@ -576,8 +578,16 @@ export class SignetProvider implements Provider {
         const pass = primary.passes?.find((candidate) => candidate.id === accepted.passId)
         if (pass && pass.status !== "running") {
           if (pass.status !== "completed") {
-            throw new Error(`Dreaming pass ${accepted.passId} ${pass.status || "failed"}: ${pass.error || "no detail"}`)
+            const failure = `Dreaming pass ${accepted.passId} ${pass.status || "failed"}: ${pass.error || "no detail"}`
+            failedPasses++
+            if (failedPasses >= MAX_FAILED_DREAMING_PASSES) {
+              throw new Error(`${failure} (${failedPasses} consecutive failed passes)`)
+            }
+            logger.warn(`${failure}; retrying (${failedPasses}/${MAX_FAILED_DREAMING_PASSES})`)
+            completed = true
+            break
           }
+          failedPasses = 0
           const statuses = await Promise.all(
             scopes.map((agentId) =>
               agentId === this.agentId ? Promise.resolve(primary) : this.readDreamStatus(agentId)
