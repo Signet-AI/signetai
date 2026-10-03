@@ -786,6 +786,11 @@ function registerActiveInferenceRequest(requestId: string, cancel: (reason?: str
 	};
 }
 
+function sseFrame(payload: string, event?: string): Uint8Array {
+	const prefix = event ? `event: ${event}\n` : "";
+	return new TextEncoder().encode(`${prefix}data: ${payload}\n\n`);
+}
+
 function buildUsagePayload(
 	usage:
 		| {
