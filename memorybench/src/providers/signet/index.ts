@@ -106,6 +106,14 @@ export function observeDreamingPasses(
   }
 }
 
+export function haystackAgentId(containerTag: string): string {
+  const agentId = `memorybench-${containerTag}`
+  if (!/^[A-Za-z0-9._:-]+$/.test(agentId)) {
+    throw new Error(`Container tag ${containerTag} cannot form a Signet agent id`)
+  }
+  return agentId
+}
+
 function parseSessionDate(session: UnifiedSession): string | undefined {
   const raw = session.metadata?.date
   if (typeof raw !== "string" || raw.trim().length === 0) return undefined
@@ -345,7 +353,7 @@ export class SignetProvider implements Provider {
 
     for (const session of sessions) {
       if (this.profile === "dreaming") {
-        const agentId = this.agentIdForSession(session)
+        const agentId = this.agentIdForSession(session, options.containerTag)
         const capture = await this.captureDreamingSession(session, options, agentId)
         if (!capture.transcriptCaptureJobId) {
           throw new Error(
@@ -457,16 +465,19 @@ export class SignetProvider implements Provider {
 
   async search(query: string, options: SearchOptions): Promise<unknown[]> {
     const recallQuery = buildSignetRecallQuery(query, options.questionDate)
-    const agentId = options.agentId ?? this.agentId
+    const agentId =
+      options.agentId ??
+      (this.profile === "dreaming" ? haystackAgentId(options.containerTag) : this.agentId)
     const response = await this.request<SignetRecallResponse>("/api/memory/recall", {
       method: "POST",
       body: JSON.stringify({
         query: recallQuery,
         limit: resolveSignetSearchLimit(this.profile, options.limit),
         threshold: options.threshold || 0.3,
-        scope: options.containerTag,
         agentId,
-        project: this.project,
+        ...(this.profile === "dreaming"
+          ? {}
+          : { scope: options.containerTag, project: this.project }),
         expand: true,
       }),
     })
@@ -528,16 +539,7 @@ export class SignetProvider implements Provider {
           if (pass.status !== "completed") {
             throw new Error(`Dreaming pass ${accepted.passId} ${pass.status || "failed"}: ${pass.error || "no detail"}`)
           }
-          const statuses = await Promise.all(
-            scopes.map((agentId) =>
-              agentId === this.agentId
-                ? Promise.resolve(primary)
-                : this.readDreamStatus(agentId)
-            )
-          )
-          if (statuses.some((status) => typeof status.episodicTokensPending !== "number")) {
-            throw new Error("Dreaming status did not report the episodic backlog for every scenario scope")
-          }
+          const statuses = await this.awaitMeasuredBacklog(scopes, primary, deadline, pollMs)
           if (statuses.every((status) => status.episodicTokensPending === 0)) return
           completed = true
           break
@@ -549,9 +551,32 @@ export class SignetProvider implements Provider {
     throw new Error("Timed out draining the Dreaming episodic backlog")
   }
 
-  private agentIdForSession(session: UnifiedSession): string {
+  private async awaitMeasuredBacklog(
+    scopes: readonly string[],
+    primary: DreamingStatusResponse,
+    deadline: number,
+    pollMs: number
+  ): Promise<DreamingStatusResponse[]> {
+    let statuses = await Promise.all(
+      scopes.map((agentId) =>
+        agentId === this.agentId ? Promise.resolve(primary) : this.readDreamStatus(agentId)
+      )
+    )
+    while (statuses.some((status) => typeof status.episodicTokensPending !== "number")) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          "Dreaming status never reported a measured episodic backlog for every scope before the deadline"
+        )
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
+      statuses = await Promise.all(scopes.map((agentId) => this.readDreamStatus(agentId)))
+    }
+    return statuses
+  }
+
+  private agentIdForSession(session: UnifiedSession, containerTag: string): string {
     const declared = session.metadata?.agentId
-    if (declared === undefined) return this.agentId
+    if (declared === undefined) return haystackAgentId(containerTag)
     if (typeof declared !== "string" || !/^[A-Za-z0-9._:-]+$/.test(declared)) {
       throw new Error(`Dreaming benchmark session ${session.sessionId} has an invalid agentId`)
     }
@@ -582,6 +607,7 @@ export class SignetProvider implements Provider {
         sessionKey: sessionId,
         agentId,
         cwd: this.project,
+        reason: "session_shutdown",
         transcript,
         capturedAt: parseSessionDate(session),
       }),
