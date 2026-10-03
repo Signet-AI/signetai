@@ -56,15 +56,15 @@ jobs:
       - name: Build Debian installer
         if: runner.os == 'Linux'
         working-directory: surfaces/desktop
-        run: bunx electron-builder --publish never --deb --${{ matrix.arch }}
+        run: bunx electron-builder --publish never --linux deb --${{ matrix.arch }}
       - name: Build macOS DMG installer
         if: runner.os == 'macOS'
         working-directory: surfaces/desktop
-        run: bunx electron-builder --publish never --dmg --${{ matrix.arch }}
+        run: bunx electron-builder --publish never --mac dmg --${{ matrix.arch }}
       - name: Build Windows NSIS installer
         if: runner.os == 'Windows'
         working-directory: surfaces/desktop
-        run: bunx electron-builder --publish never --nsis --${{ matrix.arch }}
+        run: bunx electron-builder --publish never --win nsis --${{ matrix.arch }}
       - name: Install Debian package
         if: runner.os == 'Linux'
         run: |
