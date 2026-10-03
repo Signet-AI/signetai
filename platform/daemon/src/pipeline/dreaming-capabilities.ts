@@ -461,7 +461,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"memory_head_commit",
 			"Commit curated memory head",
-			"Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Use the revision/hash from memory_head_read and exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. Record deferrals and no-change reasons with runbook_write.",
+			"Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Use the revision/hash from memory_head_read and exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. Every content pass must stage exactly one commit, even when nothing changed: resubmit the current entries, or an empty entry set when the head is empty. Record deferrals and no-change reasons with runbook_write.",
 			false,
 			z.object({
 				agentId: z.string().min(1),

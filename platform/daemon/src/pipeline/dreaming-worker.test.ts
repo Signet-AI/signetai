@@ -916,6 +916,49 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
+	it("keeps an unrecordable pass failure from becoming an unhandled rejection (#2023)", async () => {
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES ('unrecordable-failure', 'default', 'Evidence for a pass that will be interrupted.', 'pi',
+			         datetime('now'), datetime('now'), datetime('now'))`,
+		).run();
+		db.exec(
+			`CREATE TRIGGER reject_failure_insert BEFORE INSERT ON dreaming_state
+			 WHEN NEW.consecutive_failures > 0
+			 BEGIN SELECT RAISE(ABORT, 'owner draining'); END;
+			 CREATE TRIGGER reject_failure_update BEFORE UPDATE OF consecutive_failures ON dreaming_state
+			 WHEN NEW.consecutive_failures > OLD.consecutive_failures
+			 BEGIN SELECT RAISE(ABORT, 'owner draining'); END;`,
+		);
+		const unhandled: unknown[] = [];
+		const onUnhandledRejection = (reason: unknown) => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandledRejection);
+		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: false }), agentsDir, "default", {
+			executorFactory: () => ({
+				async run() {
+					throw new Error("pass interrupted");
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			const active = worker.activePass;
+			if (active !== null) await active.catch(() => undefined);
+			await waitFor(() => !worker.running, 2_000);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(unhandled).toEqual([]);
+			expect(db.prepare("SELECT COUNT(*) AS n FROM dreaming_state WHERE consecutive_failures > 0").get()).toEqual({
+				n: 0,
+			});
+		} finally {
+			worker.stop();
+			process.off("unhandledRejection", onUnhandledRejection);
+		}
+	});
+
 	it("alternates hygiene and content runbooks across sweep checks (#1098)", async () => {
 		const now = new Date().toISOString();
 		db.prepare(

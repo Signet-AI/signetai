@@ -140,9 +140,11 @@ advances only when the pass actually consumes the relevant episodic backlog.
 A failed ontology operation withholds progress only for the sources it cites;
 a failure that cites no source withholds progress for its agent scope, so
 other sources and scopes in the same pass still record what was read.
-An `incremental-content` pass stages `memory_head_commit`; the DB owner applies
-the staged head in the same transaction as pass completion and watermark
-updates. If validation or any finalization write fails, the transaction rolls
+An `incremental-content` pass must stage exactly one `memory_head_commit`, and
+fails if the agent ends without one. A pass with nothing to publish resubmits
+the current entries, or an empty entry set while the head is still empty. The
+DB owner applies the staged head in the same transaction as pass completion and
+watermark updates. If validation or any finalization write fails, the transaction rolls
 back the head, pass completion, and watermark together. The generated
 `MEMORY.md` file is a projection: a publication failure leaves a durable
 pending publication for a later read to recover and does not turn the

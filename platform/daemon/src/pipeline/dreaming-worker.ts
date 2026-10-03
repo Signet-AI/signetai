@@ -325,6 +325,15 @@ export function startDreamingWorker(
 		};
 	};
 
+	function recordDreamingFailureOrLog(runAgentId: string): void {
+		recordDreamingFailure(accessor, runAgentId).catch((error) => {
+			logger.warn("dreaming-worker", "Dreaming failure was not recorded", {
+				agentId: runAgentId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		});
+	}
+
 	async function runPass(
 		runAgentId: string,
 		mode: DreamingMode,
@@ -354,7 +363,7 @@ export function startDreamingWorker(
 			try {
 				return await p;
 			} catch (e) {
-				recordDreamingFailure(accessor, runAgentId);
+				recordDreamingFailureOrLog(runAgentId);
 				throw e;
 			}
 		} finally {
@@ -513,7 +522,7 @@ export function startDreamingWorker(
 				);
 				void p
 					.catch((error) => {
-						recordDreamingFailure(accessor, runAgentId);
+						recordDreamingFailureOrLog(runAgentId);
 						logger.error("dreaming-worker", "Async trigger failed", undefined, {
 							agentId: runAgentId,
 							passId,

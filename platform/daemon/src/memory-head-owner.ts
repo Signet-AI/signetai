@@ -117,6 +117,8 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 	)
 		return { ok: false, code: "INVALID_HEAD", error: "head input exceeds its bounded budget" };
 	const body = input.entries.map((entry) => `- ${entry.text.trim()}`).join("\n");
+	if (input.entries.length === 0 && (head?.content ?? "") === "")
+		return { ok: true, code: "NOOP", revision, hash: currentHash, changed: false, changedIds: [] };
 	const safety = scanMemoryContent(body);
 	if (!body || !safety.contextEligible || countTokens(body) > 1000)
 		return { ok: false, code: "INVALID_HEAD", error: "head must be nonempty, safe, and at most 1000 tokens" };
