@@ -76,7 +76,7 @@ async function main(): Promise<void> {
 	const diagnostics = join(resources, "daemon", "dist", "runtime-diagnostics.js");
 	for (const path of [bun, daemon, diagnostics])
 		if (!existsSync(path)) throw new Error(`Missing installed runtime asset: ${path}`);
-	const root = mkdtempSync(join(tmpdir(), "signet-installed-smoke-"));
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "signet-installed-smoke-")));
 	const home = join(root, "home");
 	const workspace = join(home, ".agents");
 	mkdirSync(workspace, { recursive: true });
