@@ -2,110 +2,79 @@
 
 <a href="https://signetai.sh/"><img src="public/banner-typography.png" alt="Signet AI"></a>
 
-Signet gives your AI agents a shared memory. Store, sync, and share memories, system prompts, transcripts, institutional knowledge, and secrets across the harnesses and models you use.
+Signet gives your AI agents a shared memory. You can use it to store, sync, and share memories, system prompts, transcripts, institutional knowledge, and secrets across all the AI tools and models you use.
 
 <a href="https://github.com/Signet-AI/signetai/releases"><img src="https://img.shields.io/github/v/release/Signet-AI/signetai?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
 <a href="https://www.npmjs.com/package/signetai"><img src="https://img.shields.io/npm/v/signetai?style=for-the-badge" alt="npm"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="Apache-2.0 License"></a>
 <a href="https://docs.signetai.sh/benchmarking/#current-longmemeval-score"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97.6% answer accuracy"></a>
 
-**97.6% average LongMemEval answer accuracy**
-
-[Quick start](https://docs.signetai.sh/quickstart/) · [Why Signet](#why-signet) · [Benchmarks](https://docs.signetai.sh/benchmarking/) · [Docs](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7)
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Harnesses](#harnesses) · [Docs](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7)
 
 </div>
 
 ---
 
-> Warning: The `nightly` channel is currently unstable. Upgrading to it for production deployments is not advised. Use the stable channel for production.
+Signet creates memories automatically from your transcripts, imported files, and other sources. In the background, a process called "dreaming" builds and maintains a structured map of the people, projects, facts, and relationships in your history. Every connection links back to its source, so you can see where it came from.
 
-Signet creates memories automatically from your transcripts, imported files, and other sources. In the background, a process called dreaming builds and maintains a structured map of the people, projects, facts, and relationships in your history. Each connection has an audit trail back to its source.
+If you switch models or agent tools, Signet brings your context with you. Your agent gets what's relevant before the next prompt begins, and it can trace the memory back to the raw source when it needs more details. You can run Signet on your own machine or as a server for your team.
 
-Your agent gets relevant context before the next prompt begins. When it needs more detail, it can trace that context back to the raw source.
+## Quick start
 
-## Why Signet
-
-- Companies: Connect your knowledge sources so agents spend less time learning your business and more time working with what they already know.
-- Developers: Keep project context together when you switch models or harnesses. Your agents can work from the same knowledge base instead of starting over in each tool.
-- Individuals: Run the same agent across research, journaling, and daily work without re-explaining yourself every session. History compounds instead of resetting.
-- Autonomous agents: Scheduled agents, such as a morning brief or a monitoring agent, keep continuity between runs without a human re-priming them each time.
-- Agent builders: Add memory to an agent product without building the infrastructure from scratch. The audit trail helps you debug what an agent recalled and where it came from.
-
-Read more: [Why Signet](https://docs.signetai.sh/quickstart/#why-signet) · [Architecture](https://docs.signetai.sh/architecture/) · [Knowledge Graph](https://docs.signetai.sh/knowledge-graph/) · [Pipeline](https://docs.signetai.sh/pipeline/)
-
-## Quick start (about 5 minutes)
-
-### Install Signet
+Pick one installation method. They all install the same compiled Signet binary; the npm and Bun packages just fetch it through a matching native package.
 
 ```bash
-curl -fsSL https://signetai.sh/install.sh | bash                 # recommended stable install
-curl -fsSL https://signetai.sh/install.sh | bash -s -- --nightly # install the latest nightly
+# macOS and Linux
+curl -fsSL https://signetai.sh/install.sh | bash
+
+# npm or Bun (Windows, macOS, Linux)
+npm install -g signetai
+bun add -g signetai
 ```
 
-On Windows x64, run the PowerShell installer:
+On Windows x64, run this in PowerShell, then open a new window to get the updated `PATH`:
 
 ```powershell
 iwr -useb https://signetai.sh/install.ps1 | iex
 ```
 
-Or: `npm install -g signetai` / `bun add -g signetai`
+Then set up a workspace:
 
-The npm and Bun wrappers install the same compiled Signet binary through a matching native package.
+```bash
+signet setup       # prepare a workspace and open guided onboarding
+signet status      # confirm the daemon and Dreaming are healthy
+signet dashboard   # browse memory, sources, and settings
+```
 
-Don't want to handle setup yourself? Paste this to your AI agent:
+The guided onboarding walks you through choosing a provider and connecting your sources and agents. If you're on a headless machine, or if you'd rather have an agent set it up, you can also run setup non-interactively by pasting this to your agent:
 
 ```
 Install and fully configure Signet AI by following this guide exactly: https://signetai.sh/skill.md
 ```
 
-Covers Linux x64/arm64, macOS x64/arm64, Windows x64, and Docker.
+Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64, and Docker. See the [installation guide](https://docs.signetai.sh/getting-started/install/) for details and the [upgrade guide](https://docs.signetai.sh/upgrading/) for existing installs.
 
-Durable transcript imports and imported-source deletion support Windows, Linux, and macOS. Uploads resume from durable database checkpoints.
+> The `stable` channel is what we recommend for everyday use. `nightly` builds (`install.sh | bash -s -- --nightly`) have unreleased work and can break.
 
-### Setup
-
-```bash
-signet setup               # prepare a workspace and open guided dashboard onboarding
-signet status                        # confirm daemon + pipeline health
-signet dashboard                     # open memory + retrieval inspector
-```
-
-## Harness support
-
-Signet runs underneath the tools you already use. Run `signet setup` to prepare a workspace and open guided dashboard onboarding. For scripted configuration, use the noninteractive CLI options. Supported harnesses:
-
-|Harness|Integration path|
-|---|---|
-|[Claude Code](https://docs.anthropic.com/en/docs/claude-code)|Hooks + MCP|
-|[OpenCode](https://github.com/sst/opencode)|Plugin|
-|[OpenClaw](https://github.com/openclaw/openclaw)|Plugin|
-|[Codex](https://github.com/openai/codex)|Native plugin + hooks/MCP fallback|
-|[Kimi Code](https://github.com/MoonshotAI/kimi-cli)|Hooks + MCP / ACPX|
-|[Hermes Agent](https://github.com/NousResearch/hermes-agent)|Memory provider plugin|
-|[Pi](https://github.com/mariozechner/pi-coding-agent)|Extension|
-|Oh My Pi|Extension|
-|[Gemini CLI](https://github.com/google-gemini/gemini-cli)|MCP + GEMINI.md sync|
-|[ForgeCode](https://forgecode.dev/)|Hooks + MCP|
-
-> Don't see your favorite harness? File an [issue](https://github.com/Signet-AI/signetai/issues) and request that it be added!
+## How it works
 
 <a href="https://signetai.sh/"><img src="public/sources.png" alt="Sources"></a>
 
-Connect knowledge sources or import files into your agent's memory graph. Dreaming uses them to build connections that can surface during recall.
+Your **sources** bring the context you already have into Signet. Connected sources stay in sync as they change, and you can also import files and webpages as one-time imports (see [supported sources and formats](#supported-sources-and-formats)). Agent conversations are imported with who said what, when, and where it came from; interrupted imports resume, re-imports don't duplicate evidence, and you can export conversations back out as structured JSONL.
+
+**Dreaming** maintains what Signet knows as your work evolves. It reads new evidence alongside your existing context, connects the people, projects, facts, and relationships it describes, revisits contradictions, and proposes updates to claims. Changes are validated and recorded with citations, and the original evidence is never rewritten. Time-sensitive claims, like a deadline or someone's current role, can have a review date so they get revisited before they go stale. You can watch Dreaming work in the dashboard through live traces and an operation ledger.
+
+Read more: [Sources](https://docs.signetai.sh/sources/) · [Data portability](https://docs.signetai.sh/cli/data-portability/) · [Dreaming](https://docs.signetai.sh/pipeline/extraction-decisions/) · [Knowledge graph](https://docs.signetai.sh/knowledge-graph/) · [Architecture](https://docs.signetai.sh/architecture/)
+
+### Supported sources and formats
 
 |Source|Notes|
 |---|---|
-|Obsidian|Real-time file watcher, can be connected to multiple Obsidian vaults, supports the LLM-Wiki format. Useful for connecting your agent's memory directly to shared knowledge bases in a read-only format.|
-|Discord|Real-time Discord crawler, contributes to memory and connects to the existing knowledge graph.|
-|Github|Real-time ingest of issues, pull requests, and discussions, contributes to memory and connects to the existing knowledge graph.|
-|Slack|_coming soon_|
-|Email|_coming soon_|
-|Telegram|_coming soon_|
-|Whatsapp|_coming soon_|
-|Webpage imports|_coming soon_|
-|Notion|_coming soon_|
-
-Supported formats for one-time import:
+|Obsidian|Real-time file watcher. Connect multiple vaults read-only; supports the LLM-Wiki format.|
+|GitHub|Real-time ingest of issues, pull requests, and discussions.|
+|Discord|Real-time crawler that contributes to memory and links into the existing knowledge graph.|
+|Webpages|One-time import of a public URL, extracted to readable Markdown with page metadata.|
+|Slack, email, Telegram, WhatsApp|_Coming soon_|
 
 |Format|Extensions|
 |---|---|
@@ -118,33 +87,59 @@ Supported formats for one-time import:
 |CSV|`.csv`|
 |PDF|`.pdf`|
 
-## Documentation
+## Harnesses
 
-- [Quickstart](https://docs.signetai.sh/quickstart/)
-- [CLI Reference](https://docs.signetai.sh/cli/)
-- [Configuration](https://docs.signetai.sh/configuration/)
-- Telemetry
-- [Hooks](https://docs.signetai.sh/hooks/)
-- [Harnesses](https://docs.signetai.sh/harnesses/)
-- [Secrets](https://docs.signetai.sh/secrets/)
-- [Skills](https://docs.signetai.sh/skills/)
-- [Auth](https://docs.signetai.sh/auth/)
-- [Dashboard](https://docs.signetai.sh/dashboard/)
-- [SDK](https://docs.signetai.sh/sdk/)
-- [API Reference](https://docs.signetai.sh/api/)
-- [Knowledge Architecture](https://docs.signetai.sh/knowledge-architecture/)
-- [Knowledge Graph](https://docs.signetai.sh/knowledge-graph/)
-- [Benchmarks](https://docs.signetai.sh/benchmarking/)
-- Roadmap
-- Repository Map
+A "harness" is the app or environment your agent runs in. Signet connects through each harness's own hooks, plugins, or extensions to supply memory in the background and capture new context as you work, so if you switch agents you don't have to start over.
+
+|Harness|Integration|
+|---|---|
+|[Claude Code](https://docs.anthropic.com/en/docs/claude-code)|Hooks + MCP|
+|[Codex](https://github.com/openai/codex) and ChatGPT desktop|Native plugin, hooks/MCP fallback|
+|[OpenCode](https://github.com/sst/opencode)|Plugin|
+|[OpenClaw](https://github.com/openclaw/openclaw)|Plugin|
+|[Hermes Agent](https://github.com/NousResearch/hermes-agent)|Memory provider plugin|
+|[Kimi Code](https://github.com/MoonshotAI/kimi-cli)|Hooks + MCP, ACPX inference|
+|[Pi](https://github.com/mariozechner/pi-coding-agent)|Extension|
+|Oh My Pi|Extension|
+|[Gemini CLI](https://github.com/google-gemini/gemini-cli)|MCP + GEMINI.md sync|
+|[ForgeCode](https://forgecode.dev/)|Hooks + MCP|
+
+Agents can also message each other through Signet. Messages survive restarts and arrive at the start of the recipient's next session or prompt.
+
+Don't see your harness? [Open an issue](https://github.com/Signet-AI/signetai/issues). See the [harness guides](https://docs.signetai.sh/harnesses/) for setup.
+
+## Dashboard and desktop
+
+The dashboard is where you look through your memory, connect sources and agents, change settings, and watch Signet work. It includes a memory graph of the people, projects, and claims Signet knows about, and a chat for asking questions of your memory with any connected model. Answers cite the memories they draw on.
+
+It runs in your browser via `signet dashboard`, or as a desktop app on macOS, Linux, and Windows x64:
+
+```bash
+signet desktop install
+```
+
+## Inspecting and trusting memory
+
+- **Provenance:** when you recall a memory, Signet shows where it came from, how it's changed, and whether it's been reviewed.
+- **Claim traces:** you can ask why Signet believes something and get its history, competing claims, and the exact source passages, from the CLI, API, or MCP.
+- **Agent isolation:** each agent only sees the memory it's allowed to read.
+- **Secrets:** secrets are stored encrypted, with the master key in your OS keyring. Systems without a keyring fall back to encrypted file storage and show a health warning. Make sure to keep your keychain in your recovery plan; see [Secrets](https://docs.signetai.sh/secrets/).
+- **Recovery:** protection status shows whether a backup has been verified as restorable and flags backups that are missing or stale.
+- **Hostile content:** content that matches known hostile patterns is kept out of what your agents see.
+
+## Telemetry
+
+Signet sends anonymous usage data: install and version counts, feature usage, token and cost totals per provider, and sanitized crash reports. It never sends memory content, prompts, search queries, or anything that identifies you. Every event is also written to a local log in your workspace so you can read exactly what was sent.
+
+To turn it off, set `telemetryEnabled: false` in your config or `SIGNET_TELEMETRY_OPTOUT=1` in your environment. See [telemetry controls](https://docs.signetai.sh/analytics/).
 
 ## Benchmarks
 
-Signet's latest tracked MemoryBench run averages **97.6% LongMemEval answer accuracy**.
+Signet's latest tracked MemoryBench run averages **97.6% LongMemEval answer accuracy**. Keeping your memory local shouldn't mean you have to settle for weak recall. See [Benchmarks](https://docs.signetai.sh/benchmarking/#current-longmemeval-score) for the methodology, scoring note, and run workflow.
 
-Keeping memory local should not mean settling for weak recall. Signet is designed to retrieve relevant facts across long, multi-session conversations while keeping that memory inspectable and repairable.
+## Documentation
 
-See [Benchmarks](https://docs.signetai.sh/benchmarking/#current-longmemeval-score) for the methodology, scoring note, and run workflow.
+[Quickstart](https://docs.signetai.sh/quickstart/) · [CLI](https://docs.signetai.sh/cli/) · [Configuration](https://docs.signetai.sh/configuration/) · [Dashboard](https://docs.signetai.sh/dashboard/) · [Harnesses](https://docs.signetai.sh/harnesses/) · [Hooks](https://docs.signetai.sh/hooks/) · [Skills](https://docs.signetai.sh/skills/) · [Secrets](https://docs.signetai.sh/secrets/) · [Auth](https://docs.signetai.sh/auth/) · [SDK](https://docs.signetai.sh/sdk/) · [API](https://docs.signetai.sh/api/) · [Telemetry](https://docs.signetai.sh/analytics/) · [Workspace v2](https://docs.signetai.sh/workspace-v2/) · [Roadmap](ROADMAP.md) · [Repository map](repo.map.yaml)
 
 ## Development
 
@@ -163,17 +158,17 @@ cd platform/daemon && bun run dev     # Daemon dev (watch mode)
 cd surfaces/dashboard && bun run dev  # Dashboard dev
 ```
 
-Requirements:
+To develop this repository, you'll need:
 
 - Bun for normal repo development
 - Node.js 18+ for Node-targeted package surfaces
 - Bun on the process `PATH` for local secrets access from macOS Node runtimes; compiled Signet and the desktop app include their helper runtime
 - macOS or Linux
-- Optional for harness integrations: Claude Code, Codex, Kimi Code, OpenCode, OpenClaw, Gemini CLI, Pi, Oh My Pi, or Hermes Agent
+- Optional for harness integrations: any of the harnesses listed above
 
 ## Contributing
 
-New to open source? Start with [Your First PR](https://docs.signetai.sh/first-pr/). For code conventions and project structure, see [CONTRIBUTING.md](https://docs.signetai.sh/contributing/). Open an issue before contributing significant features. Read the AI Policy before submitting AI-assisted work.
+If you're new to open source, start with [Your First PR](https://docs.signetai.sh/first-pr/). For code conventions and project structure, see [CONTRIBUTING.md](CONTRIBUTING.md). Open an issue before contributing significant features, and read the [AI Policy](AI_POLICY.md) before submitting AI-assisted work.
 
 ## Star History
 
