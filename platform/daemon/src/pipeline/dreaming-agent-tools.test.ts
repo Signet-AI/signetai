@@ -489,6 +489,79 @@ describe("dreaming-agent-tools", () => {
 		);
 	});
 
+	it("search_evidence queries search history older than the time watermark", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
+				"owner",
+				"2026-08-06T12:00:00.000Z",
+			);
+			db.prepare(
+				`INSERT INTO memories
+				 (id, content, source_type, memory_kind, visibility, agent_id, created_at, updated_at)
+				 VALUES ('mem-old', 'Nicholai Vogel founded Biohazard VFX.', 'manual', 'episodic', 'normal', 'owner',
+				  '2026-08-06T11:00:00.000Z', '2026-08-06T11:00:00.000Z')`,
+			).run();
+		});
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
+
+		const found = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner", query: "Nicholai Vogel" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect((found.items as Array<{ sourceRef: string }>).map((item) => item.sourceRef)).toEqual(["memory:mem-old"]);
+
+		const bounded = readResult(
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner", query: "Nicholai Vogel", since: "2026-08-06T11:30:00.000Z" },
+				undefined,
+				undefined,
+				{} as never,
+			),
+		);
+		expect(bounded.items).toEqual([]);
+	});
+
+	it("search_evidence matches query terms independently and ranks fuller matches first", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			for (const [id, content, createdAt] of [
+				["mem-full", "Nicholai is a director. Vogel runs Biohazard VFX.", "2026-08-06T09:00:00.000Z"],
+				["mem-partial", "Vogel is mentioned here alone.", "2026-08-06T10:00:00.000Z"],
+				["mem-miss", "Unrelated note about 100% coverage_ratio.", "2026-08-06T11:00:00.000Z"],
+			] as const) {
+				db.prepare(
+					`INSERT INTO memories
+					 (id, content, source_type, memory_kind, visibility, agent_id, created_at, updated_at)
+					 VALUES (?, ?, 'manual', 'episodic', 'normal', 'owner', ?, ?)`,
+				).run(id, content, createdAt, createdAt);
+			}
+		});
+		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
+		const search = async (query: string): Promise<string[]> =>
+			(
+				readResult(
+					await findTool(tools, "search_evidence").execute(
+						"call",
+						{ agentId: "owner", query },
+						undefined,
+						undefined,
+						{} as never,
+					),
+				).items as Array<{ sourceRef: string }>
+			).map((item) => item.sourceRef);
+
+		expect(await search("who is Nicholai Vogel?")).toEqual(["memory:mem-full", "memory:mem-partial"]);
+		expect(await search("NICHOLAI")).toEqual(["memory:mem-full"]);
+		expect(await search("100% coverage_ratio")).toEqual(["memory:mem-miss"]);
+		expect(await search("rate%note")).toEqual([]);
+		expect(await search("?!")).toEqual([]);
+	});
+
 	it("search_evidence exposes completed on transcripts and settled records", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(

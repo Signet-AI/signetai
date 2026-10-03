@@ -1,10 +1,11 @@
 import { retrievalEvent } from "../assistant-retrieval";
 import * as Type from "typebox";
 import { z } from "zod";
-import type { AssistantChatEvent } from "@signet/core";
+import { type AssistantChatEvent, MEMORY_CONTENT_WITHHELD_NOTICE, buildRecallRequestBody } from "@signet/core";
 import { resolveScopedAgent } from "../request-scope";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
+import { redactUnsafeMemoryProjection } from "../memory-content-safety";
 import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
 import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
 
@@ -848,6 +849,23 @@ const assistantRequestSchema = z
 			body.messages.reduce((total, message) => total + message.content.length, 0) <= 64000,
 	);
 const messageIndexSchema = z.object({ messageIndex: z.number().int().min(0).max(31) });
+const recallInputSchema = z.object({
+	query: z.string().trim().min(1).max(500),
+	limit: z.number().int().min(1).max(20).optional(),
+});
+const recallResponseSchema = z.object({
+	method: z.string().optional(),
+	results: z.array(
+		z.object({
+			id: z.string(),
+			content: z.string(),
+			score: z.number().optional(),
+			type: z.string().optional(),
+			created_at: z.string().optional(),
+			source_path: z.string().optional(),
+		}),
+	),
+});
 
 export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}): void {
 	app.get("/api/assistant/models", async (c) => {
@@ -997,6 +1015,47 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 							async execute(_id, input) {
 								const { messageIndex } = messageIndexSchema.parse(input);
 								return { content: [{ type: "text", text: JSON.stringify(await capture(messageIndex)) }], details: {} };
+							},
+						});
+						tools.push({
+							name: "recall_memories",
+							label: "Recall memories",
+							description:
+								"Semantic and keyword recall over this agent's saved memories, including memories curated by Dreaming, ontology claims, and indexed sources. Use it first for questions about the user, their people, projects, or past; phrase the query naturally. Items with a sourceRef are memories you can cite directly. Items without one carry a recallId; fetch citable support with search_evidence or get_evidence before citing them.",
+							parameters: Type.Object({
+								query: Type.String({ minLength: 1, maxLength: 500 }),
+								limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 20 })),
+							}),
+							async execute(_id, input) {
+								const { query, limit } = recallInputSchema.parse(input);
+								const recalled = recallResponseSchema.parse(
+									redactUnsafeMemoryProjection(
+										await internal(
+											"/api/memory/recall",
+											buildRecallRequestBody(query, { limit, agentId: scope.agentId, recallSurface: "dashboard" }),
+										),
+									),
+								);
+								const items = recalled.results
+									.filter((row) => row.content !== MEMORY_CONTENT_WITHHELD_NOTICE)
+									.map((row) => ({
+										...(row.id.includes(":") ? {} : { sourceRef: `memory:${row.id}` }),
+										recallId: row.id,
+										content: row.content,
+										score: row.score,
+										type: row.type,
+										createdAt: row.created_at,
+										sourcePath: row.source_path,
+									}));
+								const evidenceRefs = items.flatMap((item) => (item.sourceRef ? [item.sourceRef] : []));
+								if (evidenceRefs.length > 0) send({ type: "retrieval", nodeIds: [], evidenceRefs });
+								for (const item of items)
+									if (item.sourceRef)
+										send({ type: "citation", sourceRef: item.sourceRef, excerpt: item.content.slice(0, 1200) });
+								return {
+									content: [{ type: "text", text: JSON.stringify({ ok: true, method: recalled.method, items }) }],
+									details: {},
+								};
 							},
 						});
 						tools.push({

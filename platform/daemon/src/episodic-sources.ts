@@ -825,6 +825,23 @@ export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly s
 
 	return [...new Set(rows.map((row) => row.agent_id).filter((agentId): agentId is string => Boolean(agentId)))].sort();
 }
+
+const MAX_QUERY_TERMS = 8;
+
+function queryTerms(query: string): readonly string[] {
+	const tokens = [
+		...new Set(
+			query
+				.toLowerCase()
+				.split(/\s+/)
+				.map((token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+				.filter((token) => token.length > 0),
+		),
+	];
+	const significant = tokens.filter((token) => token.length >= 3);
+	return (significant.length > 0 ? significant : tokens).slice(0, MAX_QUERY_TERMS);
+}
+
 export function searchEpisodicSources(
 	db: ReadDb,
 	params: {
@@ -841,8 +858,14 @@ export function searchEpisodicSources(
 ): EpisodicSourceRecord[] {
 	const query = params.query.trim();
 	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 51));
-	const contentPredicate = (column: string): string => `((? = '' AND ${column} IS NOT NULL) OR ${column} LIKE ?)`;
-	const contentArgs: unknown[] = [query, `%${query}%`];
+	const terms = query === "" ? [] : queryTerms(query);
+	const matchScore = (column: string): string =>
+		query === ""
+			? `(${column} IS NOT NULL)`
+			: terms.length === 0
+				? "0"
+				: `(${terms.map(() => `(${column} LIKE ? ESCAPE '\\')`).join(" + ")})`;
+	const contentArgs: unknown[] = terms.map((term) => `%${term.replace(/[\\%_]/g, "\\$&")}%`);
 	const sinceArgs: unknown[] = params.since !== undefined ? [params.since, EPISODIC_CAPTURED_AT_FLOOR] : [];
 	const beforeArgs: unknown[] = params.before !== undefined ? [params.before] : [];
 	const deliveredFilterEnabled =
@@ -895,7 +918,7 @@ export function searchEpisodicSources(
 			? "COALESCE(session_transcripts.updated_at, session_transcripts.created_at)"
 			: "session_transcripts.created_at";
 	const transcriptCompleted = transcriptHasCompletedAt ? "session_transcripts.completed_at IS NOT NULL" : "0";
-	const commonArgs = [params.agentId, ...contentArgs, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs];
+	const commonArgs = [...contentArgs, params.agentId, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs];
 	const candidateKinds =
 		params.candidateRefs === undefined
 			? null
@@ -911,11 +934,11 @@ export function searchEpisodicSources(
 	const branches: Array<{ sql: string; args: unknown[] }> = [];
 	if (wants("memory")) {
 		branches.push({
-			sql: `SELECT 'memory' AS kind, id, created_at AS captured_at
+			sql: `SELECT 'memory' AS kind, id, created_at AS captured_at, ${matchScore("content")} AS match_score
 			      FROM memories
 			      WHERE agent_id = ? AND memory_kind = 'episodic'
 			        AND COALESCE(is_deleted, 0) = 0 AND visibility != 'archived' AND scope IS NULL
-			        AND COALESCE(type, '') != 'session_summary' AND ${contentPredicate("content")}
+			        AND COALESCE(type, '') != 'session_summary'
 			        ${params.since ? "AND (julianday(created_at) >= julianday(?) OR julianday(created_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(created_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("memory", "id", "created_at", "''", "created_at")}
@@ -926,10 +949,10 @@ export function searchEpisodicSources(
 	}
 	if (wants("artifact")) {
 		branches.push({
-			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at
+			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at, ${matchScore("ma.content")} AS match_score
 			      FROM memory_artifacts ma
 			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
-			        AND length(ma.content) > 0 AND ${contentPredicate("ma.content")}
+			        AND length(ma.content) > 0
 			        ${params.since ? "AND (julianday(ma.captured_at) >= julianday(?) OR julianday(ma.captured_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(ma.captured_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("artifact", "ma.source_path", "ma.captured_at", "COALESCE(ma.source_id, '')", "CASE WHEN ma.source_sha256 IS NULL OR ma.source_sha256 = '' THEN ma.captured_at ELSE ma.source_sha256 END")}
@@ -949,9 +972,10 @@ export function searchEpisodicSources(
 	}
 	if (wants("transcript")) {
 		branches.push({
-			sql: `SELECT 'transcript' AS kind, session_key AS id, ${transcriptSearchTime} AS captured_at
+			sql: `SELECT 'transcript' AS kind, session_key AS id, ${transcriptSearchTime} AS captured_at,
+			             ${matchScore("session_transcripts.content")} AS match_score
 			      FROM session_transcripts
-			      WHERE agent_id = ? AND ${transcriptCompleted} AND ${contentPredicate("session_transcripts.content")}
+			      WHERE agent_id = ? AND ${transcriptCompleted}
 			        ${params.since ? `AND (julianday(${transcriptSearchTime}) >= julianday(?) OR julianday(${transcriptSearchTime}) < julianday(?))` : ""}
 			        ${params.before ? `AND julianday(${transcriptSearchTime}) <= julianday(?)` : ""}
 			        ${deliveredPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}
@@ -962,11 +986,10 @@ export function searchEpisodicSources(
 	}
 	if (wants("summary")) {
 		branches.push({
-			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at
+			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at, ${matchScore("content")} AS match_score
 			      FROM session_summaries
 			      WHERE agent_id = ? AND depth = 0
 			        AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
-			        AND ${contentPredicate("content")}
 			        ${params.since ? "AND (julianday(latest_at) >= julianday(?) OR julianday(latest_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(latest_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("summary", "id", "latest_at", "''", "latest_at")}
@@ -978,13 +1001,15 @@ export function searchEpisodicSources(
 
 	if (branches.length === 0) return [];
 	const union = branches.map((branch) => branch.sql).join("\nUNION ALL\n");
-	const orderBy = params.order === "none" ? "" : "ORDER BY julianday(captured_at) DESC, kind ASC, id ASC";
+	const orderBy =
+		params.order === "none" ? "" : "ORDER BY match_score DESC, julianday(captured_at) DESC, kind ASC, id ASC";
 	const rows = db
 		.prepare(
 			`SELECT kind, id
 			 FROM (
 			 ${union}
 			 )
+			 WHERE match_score > 0
 			 ${orderBy}
 			 LIMIT ${limit === null ? -1 : "?"}`,
 		)
