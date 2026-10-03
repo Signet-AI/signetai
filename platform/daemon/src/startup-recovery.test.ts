@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
@@ -9,11 +9,12 @@ import { createDbOwnerClient } from "./db-owner-client";
 import { startDreamingWorker } from "./pipeline/dreaming-worker";
 import { getStartupRecoveryCompletion, runStartupRecovery, runStartupRecoveryAsync } from "./startup-recovery";
 
-const dbFiles = ["memories.db", "memories.db-shm", "memories.db-wal"];
 let agentsDir = "";
 
 function resetDbFiles(): void {
-	for (const file of dbFiles) rmSync(join(agentsDir, "memory", file), { force: true });
+	for (const file of readdirSync(join(agentsDir, "memory"))) {
+		if (file.startsWith("memories.db")) rmSync(join(agentsDir, "memory", file), { force: true });
+	}
 }
 
 function seedTables(db: WriteDb): void {

@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runMigrations } from "../../core/src/migrations";
@@ -18,7 +18,9 @@ function ensureDir(path: string): void {
 function setupDb(): Database {
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
 	ensureDir(join(TEST_DIR, "memory"));
-	if (existsSync(dbPath)) rmSync(dbPath);
+	for (const file of readdirSync(join(TEST_DIR, "memory"))) {
+		if (file.startsWith("memories.db")) rmSync(join(join(TEST_DIR, "memory"), file), { force: true });
+	}
 
 	const db = new Database(dbPath);
 	db.exec("PRAGMA busy_timeout = 5000");

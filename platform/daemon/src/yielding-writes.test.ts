@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ReadDb, WriteDb } from "./db-accessor";
@@ -17,7 +17,6 @@ import {
 } from "./system-pressure";
 import { drainWriteBatches } from "./yielding-writes";
 
-const dbFiles = ["memories.db", "memories.db-shm", "memories.db-wal"];
 let agentsDir = "";
 
 afterEach(() => {
@@ -26,7 +25,9 @@ afterEach(() => {
 });
 
 function resetDbFiles(): void {
-	for (const file of dbFiles) rmSync(join(agentsDir, "memory", file), { force: true });
+	for (const file of readdirSync(join(agentsDir, "memory"))) {
+		if (file.startsWith("memories.db")) rmSync(join(agentsDir, "memory", file), { force: true });
+	}
 }
 
 function setupTables(): void {

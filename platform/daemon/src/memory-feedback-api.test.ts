@@ -1,18 +1,17 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { Hono } from "hono";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 
 let app: Hono;
 let agentsDir = "";
-const dbFiles = ["memories.db", "memories.db-shm", "memories.db-wal"];
 let originalSignetPath: string | undefined;
 
 function resetDbFiles(): void {
-	for (const file of dbFiles) {
-		rmSync(join(agentsDir, "memory", file), { force: true });
+	for (const file of readdirSync(join(agentsDir, "memory"))) {
+		if (file.startsWith("memories.db")) rmSync(join(agentsDir, "memory", file), { force: true });
 	}
 }
 
@@ -60,7 +59,7 @@ describe("memory feedback API", () => {
 	afterAll(() => {
 		closeDbAccessor();
 		if (originalSignetPath === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 		} else {
 			process.env.SIGNET_PATH = originalSignetPath;
 		}

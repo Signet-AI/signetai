@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { Hono } from "hono";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearAllPresence, upsertAgentPresence } from "./cross-agent";
@@ -35,9 +35,9 @@ describe("session API", () => {
 
 	beforeEach(() => {
 		closeDbAccessor();
-		rmSync(join(dir, "memory", "memories.db"), { force: true });
-		rmSync(join(dir, "memory", "memories.db-shm"), { force: true });
-		rmSync(join(dir, "memory", "memories.db-wal"), { force: true });
+		for (const file of readdirSync(join(dir, "memory"))) {
+			if (file.startsWith("memories.db")) rmSync(join(dir, "memory", file), { force: true });
+		}
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		clearAllPresence();
 		unbypassSession("sess-live");
@@ -53,7 +53,7 @@ describe("session API", () => {
 		closeDbAccessor();
 		clearAllPresence();
 		if (prev === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 		} else {
 			process.env.SIGNET_PATH = prev;
 		}
@@ -152,7 +152,7 @@ describe("session API", () => {
 			expect(json.hits?.map((hit) => hit.sessionKey)).not.toContain("default-agent-row");
 		} finally {
 			if (previous === undefined) {
-				process.env.SIGNET_AGENT_ID = undefined;
+				delete process.env.SIGNET_AGENT_ID;
 			} else {
 				process.env.SIGNET_AGENT_ID = previous;
 			}

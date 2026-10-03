@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -29,7 +29,9 @@ process.env.SIGNET_PATH = agentsDir;
 function resetDb(): void {
 	closeDbAccessor();
 	mkdirSync(memoryDir, { recursive: true });
-	if (existsSync(memoryDbPath)) rmSync(memoryDbPath);
+	for (const file of readdirSync(memoryDir)) {
+		if (file.startsWith("memories.db")) rmSync(join(memoryDir, file), { force: true });
+	}
 	initDbAccessor(memoryDbPath, { agentsDir });
 }
 

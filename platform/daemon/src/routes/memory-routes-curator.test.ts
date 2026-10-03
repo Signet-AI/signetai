@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -35,9 +35,9 @@ function ensureMemorySupersessionColumns(): void {
 
 beforeEach(() => {
 	closeDbAccessor();
-	rmSync(dbPath, { force: true });
-	rmSync(`${dbPath}-wal`, { force: true });
-	rmSync(`${dbPath}-shm`, { force: true });
+	for (const file of readdirSync(join(agentsDir, "memory"))) {
+		if (file.startsWith("memories.db")) rmSync(join(join(agentsDir, "memory"), file), { force: true });
+	}
 	initDbAccessor(dbPath, { agentsDir });
 	ensureMemorySupersessionColumns();
 });

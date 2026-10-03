@@ -117,7 +117,9 @@ function createMemoryDb(
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
 	ensureDir(join(TEST_DIR, "memory"));
 
-	if (existsSync(dbPath)) rmSync(dbPath);
+	for (const file of readdirSync(join(TEST_DIR, "memory"))) {
+		if (file.startsWith("memories.db")) rmSync(join(join(TEST_DIR, "memory"), file), { force: true });
+	}
 
 	const db = new Database(dbPath);
 
@@ -4162,7 +4164,7 @@ describe("applyTokenBudget", () => {
 
 afterAll(() => {
 	if (PREV_SIGNET_AGENT_ID_FOR_HOOKS === undefined) {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 	} else {
 		process.env.SIGNET_AGENT_ID = PREV_SIGNET_AGENT_ID_FOR_HOOKS;
 	}
