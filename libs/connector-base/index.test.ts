@@ -426,7 +426,8 @@ describe("shared connector helpers (#957)", () => {
 			process.env[name] = "   ";
 			expect(readTrimmedEnv(name)).toBeUndefined();
 		} finally {
-			process.env[name] = previous;
+			if (previous === undefined) delete process.env[name];
+			else process.env[name] = previous;
 		}
 	});
 

@@ -279,7 +279,8 @@ describe("listInstalledSkills", () => {
 	});
 
 	afterEach(() => {
-		process.env.SIGNET_PATH = origSignetPath;
+		if (origSignetPath === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = origSignetPath;
 		if (existsSync(tmpAgentsDir)) {
 			rmSync(tmpAgentsDir, { recursive: true, force: true });
 		}
@@ -374,7 +375,8 @@ This is a test skill.`,
 	});
 
 	afterEach(() => {
-		process.env.SIGNET_PATH = origSignetPath;
+		if (origSignetPath === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = origSignetPath;
 		if (existsSync(tmpAgentsDir)) {
 			rmSync(tmpAgentsDir, { recursive: true, force: true });
 		}

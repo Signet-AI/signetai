@@ -3395,7 +3395,8 @@ describe("handleSessionStart multi-agent identity", () => {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			return;
 		}
-		process.env.SIGNET_PATH = previousSignetPath;
+		if (previousSignetPath === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = previousSignetPath;
 	});
 
 	it("loads agent-scoped identity files for session-start", async () => {
@@ -3484,7 +3485,8 @@ describe("writeMemoryMd", () => {
 				Reflect.deleteProperty(process.env, "SIGNET_PATH");
 				return;
 			}
-			process.env.SIGNET_PATH = previousSignetPath;
+			if (previousSignetPath === undefined) delete process.env.SIGNET_PATH;
+			else process.env.SIGNET_PATH = previousSignetPath;
 		});
 
 		it("reports the retired legacy writer for every agent scope", () => {
