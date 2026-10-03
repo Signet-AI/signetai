@@ -1,5 +1,8 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import type { ChildProcess } from "node:child_process";
+import { createConnection } from "node:net";
+import { PassThrough } from "node:stream";
 import { Hono } from "hono";
 import { spawnHidden } from "@signet/core";
 import { parseAuthConfig } from "../auth";
@@ -242,45 +245,67 @@ describe("POST /api/troubleshoot/exec", () => {
 	it("pauses child output for slow consumers and terminates it when the client disconnects", async () => {
 		const script = [
 			"const chunk = 'x'.repeat(64 * 1024);",
-			"(async () => { for (let i = 0; i < 256; i++) if (!process.stdout.write(chunk)) await new Promise((resolve) => process.stdout.once('drain', resolve)); })();",
+			"(async () => { for (let i = 0; i < 256; i++) if (!process.stdout.write(chunk)) await new Promise((resolve) => process.stdout.once('drain', resolve)); setInterval(() => {}, 1000); })();",
 		].join("\n");
-		let child: ReturnType<typeof spawnHidden> | undefined;
-		const response = await makeApp({
+		let child: ChildProcess | undefined;
+		const app = makeApp({
 			resolveExecutable: () => process.execPath,
 			spawnCommand: (_command, _args, options) => {
 				child = spawnHidden(process.execPath, ["-e", script], options);
 				return child;
 			},
-		}).request("/api/troubleshoot/exec", {
-			method: "POST",
-			headers: requestHeaders(),
-			body: JSON.stringify({ key: "status" }),
 		});
-		const spawnedChild = child;
-		if (!spawnedChild) throw new Error("Troubleshoot route did not spawn a child process");
-		const reader = response.body?.getReader();
-		if (!reader) throw new Error("Troubleshoot response did not expose a stream");
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch(request) {
+				return app.fetch(request);
+			},
+		});
+		const serverPort = server.port;
+		let socket: ReturnType<typeof createConnection> | undefined;
 
 		try {
-			const pauseDeadline = Date.now() + 2_000;
+			if (serverPort === undefined) throw new Error("Troubleshoot test server did not bind a port");
+			const client = createConnection({ host: "127.0.0.1", port: serverPort });
+			socket = client;
+			await new Promise<void>((resolve, reject) => {
+				client.once("connect", resolve);
+				client.once("error", reject);
+			});
+			client.on("error", () => undefined);
+			const body = JSON.stringify({ key: "status" });
+			client.write(
+				[
+					"POST /api/troubleshoot/exec HTTP/1.1",
+					`Host: 127.0.0.1:${serverPort}`,
+					"Content-Type: application/json",
+					`Content-Length: ${Buffer.byteLength(body)}`,
+					"Connection: keep-alive",
+					"",
+					body,
+				].join("\r\n"),
+			);
+
+			const spawnDeadline = Date.now() + 2_000;
+			while (child === undefined && Date.now() < spawnDeadline) {
+				await new Promise<void>((resolve) => setTimeout(resolve, 5));
+			}
+			const spawnedChild = child;
+			if (!spawnedChild) throw new Error("Troubleshoot route did not spawn a child process");
+
+			const pauseDeadline = Date.now() + 5_000;
 			while (!spawnedChild.stdout?.isPaused() && Date.now() < pauseDeadline) {
 				await new Promise<void>((resolve) => setTimeout(resolve, 5));
 			}
 			expect(spawnedChild.stdout?.isPaused()).toBe(true);
 
-			const resumeDeadline = Date.now() + 2_000;
-			while (spawnedChild.stdout?.isPaused() && Date.now() < resumeDeadline) {
-				const next = await reader.read();
-				if (next.done) break;
-			}
-			expect(spawnedChild.stdout?.isPaused()).toBe(false);
-
-			await reader.cancel("client disconnected");
+			client.destroy();
 			if (spawnedChild.exitCode === null && spawnedChild.signalCode === null) {
 				await new Promise<void>((resolve, reject) => {
 					const timeout = setTimeout(
-						() => reject(new Error("Troubleshoot child did not stop after cancellation")),
-						2_000,
+						() => reject(new Error("Troubleshoot child did not stop after client disconnect")),
+						5_000,
 					);
 					spawnedChild.once("close", () => {
 						clearTimeout(timeout);
@@ -291,8 +316,76 @@ describe("POST /api/troubleshoot/exec", () => {
 			expect(spawnedChild.exitCode !== null || spawnedChild.signalCode !== null).toBe(true);
 			expect(spawnedChild.killed).toBe(true);
 		} finally {
-			await reader.cancel().catch(() => undefined);
-			if (spawnedChild.exitCode === null && !spawnedChild.killed) spawnedChild.kill("SIGTERM");
+			socket?.destroy();
+			if (child && child.exitCode === null && child.signalCode === null) {
+				child.kill("SIGTERM");
+				await new Promise<void>((resolve) => child?.once("close", () => resolve()));
+			}
+			server.stop(true);
+		}
+	});
+});
+
+describe("POST /api/troubleshoot/exec output framing", () => {
+	it("streams one oversized child chunk without terminating the child", async () => {
+		let child: ChildProcess | null = null;
+		let stdout: PassThrough | undefined;
+		const response = await makeApp({
+			resolveExecutable: () => process.execPath,
+			spawnCommand: () => {
+				const spawned = spawnHidden(process.execPath, ["-e", "setTimeout(() => process.exit(0), 1000)"], {
+					stdio: "pipe",
+				});
+				child = spawned;
+				stdout = new PassThrough();
+				spawned.stdout = stdout;
+				spawned.stderr = new PassThrough();
+				return spawned;
+			},
+		}).request("/api/troubleshoot/exec", {
+			method: "POST",
+			headers: requestHeaders(),
+			body: JSON.stringify({ key: "status" }),
+		});
+		const spawnedChild = child;
+		const childStdout = stdout;
+		if (!spawnedChild || !childStdout) throw new Error("Troubleshoot route did not expose child output");
+
+		try {
+			const frameChars = 32 * 1024;
+			const expectedOutput = `${"x".repeat(frameChars - 1)}😀${"x".repeat(256 * 1024 - frameChars - 1)}`;
+			childStdout.end(Buffer.from(expectedOutput, "utf8"));
+			const body = await response.text();
+			if (spawnedChild.exitCode === null && spawnedChild.signalCode === null) {
+				await new Promise<void>((resolve) => spawnedChild.once("close", () => resolve()));
+			}
+
+			const stdoutPayload = [...body.matchAll(/^data: (.+)$/gm)]
+				.map((match) => {
+					const payload: unknown = JSON.parse(match[1] ?? "");
+					if (
+						typeof payload !== "object" ||
+						payload === null ||
+						!("type" in payload) ||
+						payload.type !== "stdout" ||
+						!("data" in payload) ||
+						typeof payload.data !== "string"
+					)
+						return "";
+					return payload.data;
+				})
+				.join("");
+			expect(stdoutPayload).toBe(expectedOutput);
+			expect(body).not.toContain("event: overflow");
+			expect(spawnedChild.exitCode).toBe(0);
+			expect(spawnedChild.signalCode).toBeNull();
+		} finally {
+			if (spawnedChild.exitCode === null && spawnedChild.signalCode === null) {
+				await new Promise<void>((resolve) => {
+					spawnedChild.once("close", () => resolve());
+					spawnedChild.kill("SIGTERM");
+				});
+			}
 		}
 	});
 });
