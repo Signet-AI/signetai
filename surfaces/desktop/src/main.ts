@@ -589,7 +589,8 @@ app.on("open-url", (event, value) => {
 app.whenReady().then(async () => {
 	if (!hasSingleInstanceLock) return;
 	configureApplicationMenu();
-	if (process.platform === "darwin" && app.dock) {
+	// Packaged builds take the Liquid Glass icon from Assets.car; overriding it here would flatten it.
+	if (process.platform === "darwin" && app.dock && !app.isPackaged) {
 		app.dock.setIcon(iconPath("icon.png"));
 	}
 	configureDesktopUpdates();

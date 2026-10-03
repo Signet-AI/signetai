@@ -39,6 +39,7 @@
 		"artifactName": "Signet-${version}-${os}-${arch}.${ext}",
 		"asar": true,
 		"npmRebuild": false,
+		"afterPack": "./scripts/after-pack.mjs",
 		"files": [
 			"dist/**/*",
 			"package.json"
@@ -55,7 +56,7 @@
 		],
 		"mac": {
 			"category": "public.app-category.productivity",
-			"icon": "icons/icon.icns",
+			"icon": "icons/Signet.icon",
 			"protocols": [
 				{
 					"name": "Signet",
@@ -74,6 +75,9 @@
 			"entitlements": "build/entitlements.mac.plist",
 			"entitlementsInherit": "build/entitlements.mac.inherit.plist",
 			"notarize": true
+		},
+		"dmg": {
+			"icon": "icons/icon.icns"
 		},
 		"nsis": {
 			"include": "build/installer.nsh"
