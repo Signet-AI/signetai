@@ -10,6 +10,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	renameSync,
 	statSync,
@@ -120,6 +121,11 @@ export function assertBunRuntime(
 	if (runtime.arch !== arch) {
 		throw new Error(`Bun runtime architecture mismatch: expected ${arch}, got ${runtime.arch} (${runtimePath})`);
 	}
+}
+
+export function stageBunRuntime(source, destination, platform) {
+	cpSync(realpathSync(source), destination);
+	if (platform !== "win32") chmodSync(destination, 0o755);
 }
 
 export function platformVecPackage(platform, arch) {
@@ -308,8 +314,7 @@ export function stageRuntime() {
 		mkdirSync(runtimeOut, { recursive: true });
 
 		const bunDest = resolve(runtimeOut, target === "win32" ? "bun.exe" : "bun");
-		cpSync(bunSrc, bunDest);
-		if (target !== "win32") chmodSync(bunDest, 0o755);
+		stageBunRuntime(bunSrc, bunDest, target);
 		mkdirSync(resolve(daemonOut, "dist"), { recursive: true });
 		const daemonDist = resolve(repoRoot, "platform/daemon/dist");
 		for (const entry of readdirSync(daemonDist)) {
