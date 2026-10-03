@@ -54,5 +54,6 @@ exec dbus-run-session -- bash -euo pipefail -c '
   fi
   busctl --user call org.freedesktop.secrets /org/freedesktop/secrets org.freedesktop.Secret.Service SetAlias so default /org/freedesktop/secrets/collection/session
 
+  export SIGNET_SMOKE_DBUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS"
   "$bun_path" "$smoke_runner" --resources-root "$resources_root"
 ' private-keyring-smoke "$smoke_runner" "$resources_root" "$bun_path"

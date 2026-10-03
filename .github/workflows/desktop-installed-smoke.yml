@@ -71,7 +71,6 @@ jobs:
           set -euo pipefail
           package=$(find surfaces/desktop/release -maxdepth 1 -name '*.deb' -print -quit)
           test -n "$package"
-          # Install the real package on this disposable runner.
           sudo dpkg -i "$package"
           package_name=$(dpkg-deb -f "$package" Package)
           install_manifest="$RUNNER_TEMP/signet-installed-files.txt"

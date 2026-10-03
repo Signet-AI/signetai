@@ -1,15 +1,31 @@
-import { statSync, existsSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { statSync, existsSync, readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 function modulePath(origin: string | URL): string {
 	return origin instanceof URL || origin.startsWith("file:") ? fileURLToPath(origin) : resolve(origin);
 }
 
+function runtimePackage(directory: string, origin: string | URL): string {
+	const file = join(directory, "package.json");
+	if (!existsSync(file)) throw new Error(`Missing runtime package metadata for ${String(origin)}`);
+	const metadata: unknown = JSON.parse(readFileSync(file, "utf8"));
+	const name = metadata !== null && typeof metadata === "object" ? Reflect.get(metadata, "name") : undefined;
+	if (
+		typeof name !== "string" ||
+		(name !== "signetai" && !name.startsWith("@signet/") && !name.startsWith("@signetai/"))
+	) {
+		throw new Error(`Invalid runtime package metadata for ${String(origin)}`);
+	}
+	return directory;
+}
+
 export function resolveRuntimePackageRoot(origin: string | URL): string {
 	let directory = dirname(modulePath(origin));
 	for (let depth = 0; depth < 12; depth++) {
-		if (existsSync(join(directory, "package.json"))) return directory;
+		if (basename(directory) === "src" || basename(directory) === "dist")
+			return runtimePackage(dirname(directory), origin);
+		if (existsSync(join(directory, "package.json"))) return runtimePackage(directory, origin);
 		const parent = dirname(directory);
 		if (parent === directory) break;
 		directory = parent;

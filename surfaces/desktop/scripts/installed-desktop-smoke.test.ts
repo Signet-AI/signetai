@@ -15,6 +15,10 @@ describe("installed desktop smoke", () => {
 		expect(env.HOME).toBe(home);
 		expect(env.SIGNET_PATH).toBe(workspace);
 		expect(env.SIGNET_DAEMON_RUNTIME).toBe("bun-js");
+		expect(env.XDG_RUNTIME_DIR).toBe(resolve(home, "run"));
+		for (const key of ["TEMP", "TMP", "TMPDIR"]) expect(env[key]).toBe(resolve(home, "tmp"));
+		expect(env.LANG).toBe("C");
+		expect(env.DBUS_SESSION_BUS_ADDRESS).toEqual(process.env.SIGNET_SMOKE_DBUS_ADDRESS);
 		expect(env.PATH).not.toContain(process.env.PATH ?? "never");
 		expect(env.NODE_PATH).toBeUndefined();
 		expect(env.SIGNET_BUN_PATH).toBeUndefined();

@@ -15,7 +15,7 @@ function fixture(): string {
 	fixtures.push(root);
 	mkdirSync(join(root, "src", "nested"), { recursive: true });
 	mkdirSync(join(root, "dist"));
-	writeFileSync(join(root, "package.json"), "{}");
+	writeFileSync(join(root, "package.json"), JSON.stringify({ name: "@signet/daemon" }));
 	writeFileSync(join(root, "src", "worker.ts"), "throw new Error('source must never execute')");
 	return root;
 }
@@ -32,6 +32,24 @@ test("source and installed callers execute the same built worker", () => {
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout.toString().trim()).toBe("built-worker");
 	}
+});
+
+test("a missing child package cannot borrow an ancestor package and its built worker", () => {
+	const root = fixture();
+	writeFileSync(join(root, "dist", "worker.js"), "console.log('unrelated-worker')");
+	mkdirSync(join(root, "child", "dist"), { recursive: true });
+	expect(() => resolveRuntimeAsset("worker.js", join(root, "child", "dist", "daemon.js"))).toThrow(
+		"Missing runtime package metadata",
+	);
+});
+
+test("unrelated package metadata cannot authorize runtime asset lookup", () => {
+	const root = fixture();
+	writeFileSync(join(root, "package.json"), JSON.stringify({ name: "unrelated-parent" }));
+	writeFileSync(join(root, "dist", "worker.js"), "console.log('unrelated-worker')");
+	expect(() => resolveRuntimeAsset("worker.js", join(root, "dist", "daemon.js"))).toThrow(
+		"Invalid runtime package metadata",
+	);
 });
 
 test("missing built asset fails even while the corresponding source exists", () => {

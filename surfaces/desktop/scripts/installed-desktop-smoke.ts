@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { launchSmokeProcess as launch } from "./smoke-process";
 import { createServer } from "node:http";
 import { existsSync, realpathSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,50 +13,26 @@ export function smokeEnvironment(home: string, workspace: string): Record<string
 		XDG_CONFIG_HOME: join(home, ".config"),
 		XDG_CACHE_HOME: join(home, ".cache"),
 		XDG_DATA_HOME: join(home, ".local", "share"),
+		XDG_RUNTIME_DIR: join(home, "run"),
+		TMPDIR: join(home, "tmp"),
+		TEMP: join(home, "tmp"),
+		TMP: join(home, "tmp"),
+		LANG: "C",
 		PATH: process.platform === "win32" ? `${process.env.SystemRoot}\\System32` : "/usr/bin:/bin:/usr/sbin:/sbin",
 		SIGNET_PATH: workspace,
 		SIGNET_HOST: "127.0.0.1",
 		SIGNET_DAEMON_RUNTIME: "bun-js",
 		SIGNET_TELEMETRY_DISABLED: "1",
 	};
-	for (const key of [
-		"SystemRoot",
-		"WINDIR",
-		"TEMP",
-		"TMP",
-		"TMPDIR",
-		"DBUS_SESSION_BUS_ADDRESS",
-		"XDG_RUNTIME_DIR",
-		"LANG",
-	]) {
-		const value = process.env[key];
-		if (value !== undefined) environment[key] = value;
+	if (process.platform === "win32") {
+		const system = process.env.SystemRoot;
+		if (!system || !existsSync(system)) throw new Error("Missing Windows system directory");
+		environment.SystemRoot = system;
+		environment.WINDIR = system;
 	}
+	const bus = process.env.SIGNET_SMOKE_DBUS_ADDRESS;
+	if (bus) environment.DBUS_SESSION_BUS_ADDRESS = bus;
 	return environment;
-}
-
-function launch(
-	command: string,
-	args: readonly string[],
-	cwd: string,
-	env: Record<string, string>,
-): {
-	readonly child: ReturnType<typeof spawn>;
-	readonly done: Promise<number>;
-	readonly output: () => string;
-} {
-	const child = spawn(command, [...args], { cwd, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-	let log = "";
-	for (const stream of [child.stdout, child.stderr])
-		stream?.on("data", (data) => {
-			log = (log + String(data)).slice(-1_000_000);
-		});
-	const done = new Promise<number>((accept, reject) => {
-		child.once("error", reject);
-		child.once("close", (code) => accept(code ?? 1));
-	});
-	void done.catch(() => {});
-	return { child, done, output: () => log };
 }
 
 async function bounded(
@@ -66,13 +42,17 @@ async function bounded(
 	env: Record<string, string>,
 ): Promise<string> {
 	const process = launch(command, args, cwd, env);
-	const timer = setTimeout(() => process.child.kill("SIGKILL"), 60_000);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error("Installed runtime command timed out")), 60_000);
+	});
 	try {
-		const code = await process.done;
+		const code = await Promise.race([process.done, timeout]);
 		if (code !== 0) throw new Error(`Installed runtime command failed (${code}): ${process.output()}`);
 		return process.output();
 	} finally {
 		clearTimeout(timer);
+		await process.stop();
 	}
 }
 
@@ -100,6 +80,8 @@ async function main(): Promise<void> {
 	const workspace = join(home, ".agents");
 	mkdirSync(workspace, { recursive: true });
 	const env = smokeEnvironment(home, workspace);
+	mkdirSync(env.XDG_RUNTIME_DIR, { recursive: true, mode: 0o700 });
+	mkdirSync(env.TMPDIR, { recursive: true });
 	const nonce = `installed-smoke-${crypto.randomUUID()}`;
 	let calls = 0;
 	const stub = createServer(async (request, response) => {
@@ -169,6 +151,7 @@ async function main(): Promise<void> {
 		env,
 	);
 	const running = launch(bun, [daemon], root, env);
+	let report = "";
 	try {
 		const deadline = Date.now() + 90_000;
 		let ready = false;
@@ -197,22 +180,22 @@ async function main(): Promise<void> {
 		const body = await result.text();
 		if (!result.ok || !body.includes(nonce) || calls !== 1)
 			throw new Error(`Installed inference did not reach the provider stub: ${result.status} ${body}, calls=${calls}`);
-		console.log(
-			JSON.stringify({
-				installedResources: resources,
-				diagnostics: runtime.trim(),
-				inference: "real-daemon-provider-round-trip",
-				providerRequests: calls,
-			}),
-		);
+		report = JSON.stringify({
+			installedResources: resources,
+			diagnostics: runtime.trim(),
+			inference: "real-daemon-provider-round-trip",
+			providerRequests: calls,
+		});
 	} finally {
-		running.child.kill("SIGTERM");
-		const kill = setTimeout(() => running.child.kill("SIGKILL"), 10_000);
-		await running.done;
-		clearTimeout(kill);
-		await new Promise<void>((accept, reject) => stub.close((error) => (error ? reject(error) : accept())));
-		rmSync(root, { recursive: true, force: true });
+		try {
+			await running.stop();
+			rmSync(root, { recursive: true, force: true });
+		} finally {
+			stub.closeAllConnections();
+			await new Promise<void>((accept, reject) => stub.close((error) => (error ? reject(error) : accept())));
+		}
 	}
+	console.log(report);
 }
 
 if (import.meta.main) await main();

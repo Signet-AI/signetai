@@ -50,6 +50,56 @@ describe("runtime manifest staging boundary", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+	it("rejects noncanonical paths and staging-owned metadata destinations", () => {
+		const root = mkdtempSync(join(tmpdir(), "runtime-manifest-paths-"));
+		try {
+			const bytes = Buffer.from("fixture");
+			writeFileSync(join(root, "asset.data"), bytes);
+			const manifest = join(root, "manifest.json");
+			for (const path of [
+				"",
+				".",
+				"./asset.data",
+				"dist//asset.data",
+				"C:/asset.data",
+				"\\server\\asset.data",
+				"package.json",
+				"runtime-manifest.json",
+			]) {
+				writeFileSync(
+					manifest,
+					JSON.stringify({
+						version: 1,
+						platform: process.platform,
+						arch: process.arch,
+						files: [
+							{
+								source: "asset.data",
+								path,
+								size: bytes.length,
+								sha256: createHash("sha256").update(bytes).digest("hex"),
+								mode: 0o644,
+							},
+						],
+					}),
+				);
+				expect(() => copyManifest(root, join(root, "stage"), manifest)).toThrow("Invalid runtime manifest path");
+			}
+			writeFileSync(
+				manifest,
+				JSON.stringify({
+					version: 1,
+					platform: process.platform,
+					arch: process.arch,
+					files: [{ source: "", path: "dist/asset.data", size: 0, sha256: "", mode: 0o644 }],
+				}),
+			);
+			expect(() => copyManifest(root, join(root, "stage"), manifest)).toThrow("Invalid runtime manifest path");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects a missing required manifest member", () => {
 		const root = mkdtempSync(join(tmpdir(), "runtime-manifest-missing-"));
 		try {
