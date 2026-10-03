@@ -7,6 +7,16 @@ import { logger } from "../../utils/logger"
 import { ConcurrentExecutor } from "../concurrent"
 import { resolveConcurrency } from "../../types/concurrency"
 import { calculateRetrievalMetrics } from "./retrieval-eval"
+import type { ModelUsage } from "../../utils/llm"
+
+interface HypothesisScore {
+  score: number
+  passed: boolean
+  explanation: string
+  metrics?: Record<string, number>
+  details?: Record<string, unknown>
+  usage?: ModelUsage
+}
 
 export async function runEvaluatePhase(
   judge: Judge,
@@ -54,65 +64,76 @@ export async function runEvaluatePhase(
       })
 
       try {
-        if (benchmark.protocol) {
-          const evaluation = await benchmark.protocol.evaluateQuestion({
-            question,
-            hypothesis,
-            judge,
+        const answerPhase = checkpoint.questions[question.questionId].phases.answer
+        const scoreHypothesis = async (candidate: string): Promise<HypothesisScore> => {
+          if (benchmark.protocol) {
+            const evaluation = await benchmark.protocol.evaluateQuestion({
+              question,
+              hypothesis: candidate,
+              judge,
+            })
+            return {
+              score: evaluation.score,
+              passed: evaluation.passed,
+              explanation: evaluation.explanation,
+              metrics: evaluation.metrics,
+              details: evaluation.details,
+              usage: evaluation.usage,
+            }
+          }
+          const result = await judge.evaluate({
+            question: question.question,
+            questionType: question.questionType,
+            groundTruth: question.groundTruth,
+            hypothesis: candidate,
+            providerPrompts: provider?.prompts,
           })
-          const durationMs = Date.now() - startTime
-          checkpointManager.updatePhase(checkpoint, question.questionId, "evaluate", {
-            status: "completed",
-            score: evaluation.score,
-            passed: evaluation.passed,
-            label: evaluation.passed ? "correct" : "incorrect",
-            explanation: evaluation.explanation,
-            metrics: evaluation.metrics,
-            details: evaluation.details,
-            usage: evaluation.usage,
-            completedAt: new Date().toISOString(),
-            durationMs,
-          })
-          logger.progress(
-            index + 1,
-            total,
-            `Evaluated ${question.questionId}: ${evaluation.score.toFixed(3)} (${durationMs}ms)`
-          )
           return {
-            questionId: question.questionId,
-            durationMs,
-            label: evaluation.passed ? "correct" : "incorrect",
+            score: result.score,
+            passed: result.label === "correct",
+            explanation: result.explanation,
+            usage: result.usage,
           }
         }
 
         const searchResults = checkpoint.questions[question.questionId].phases.search.results || []
-
-        const [result, retrievalMetrics] = await Promise.all([
-          judge.evaluate({
-            question: question.question,
-            questionType: question.questionType,
-            groundTruth: question.groundTruth,
-            hypothesis,
-            providerPrompts: provider?.prompts,
-          }),
-          calculateRetrievalMetrics(
-            judge.getModel(),
-            question.question,
-            question.groundTruth,
-            searchResults,
-            undefined,
-            question.relevantSessionIds
-          ),
+        const [product, retrievalMetrics] = await Promise.all([
+          scoreHypothesis(hypothesis),
+          benchmark.protocol
+            ? Promise.resolve(undefined)
+            : calculateRetrievalMetrics(
+                judge.getModel(),
+                question.question,
+                question.groundTruth,
+                searchResults,
+                undefined,
+                question.relevantSessionIds
+              ),
         ])
+        const derivedAnswer = answerPhase.derivedOnly
+        const derived = !derivedAnswer
+          ? undefined
+          : derivedAnswer.reusedProductAnswer
+            ? { score: product.score, passed: product.passed }
+            : await scoreHypothesis(derivedAnswer.hypothesis).then((result) => ({
+                score: result.score,
+                passed: result.passed,
+                usage: result.usage,
+              }))
 
         const durationMs = Date.now() - startTime
+        const label = product.passed ? "correct" : "incorrect"
         checkpointManager.updatePhase(checkpoint, question.questionId, "evaluate", {
           status: "completed",
-          score: result.score,
-          label: result.label,
-          explanation: result.explanation,
-          retrievalMetrics,
-          usage: result.usage,
+          score: product.score,
+          passed: product.passed,
+          label,
+          explanation: product.explanation,
+          ...(product.metrics ? { metrics: product.metrics } : {}),
+          ...(product.details ? { details: product.details } : {}),
+          ...(retrievalMetrics ? { retrievalMetrics } : {}),
+          usage: product.usage,
+          ...(derived ? { derivedOnly: derived } : {}),
           completedAt: new Date().toISOString(),
           durationMs,
         })
@@ -120,13 +141,16 @@ export async function runEvaluatePhase(
         const retrievalInfo = retrievalMetrics
           ? ` | Hit@${retrievalMetrics.k}=${retrievalMetrics.hitAtK}, MRR=${retrievalMetrics.mrr.toFixed(2)}`
           : ""
+        const derivedInfo = derived
+          ? ` | derived-only: ${derived.passed ? "correct" : "incorrect"}`
+          : ""
         logger.progress(
           index + 1,
           total,
-          `Evaluated ${question.questionId}: ${result.label}${retrievalInfo} (${durationMs}ms)`
+          `Evaluated ${question.questionId}: ${label}${retrievalInfo}${derivedInfo} (${durationMs}ms)`
         )
 
-        return { questionId: question.questionId, durationMs, label: result.label }
+        return { questionId: question.questionId, durationMs, label }
       } catch (e) {
         const error = e instanceof Error ? e.message : String(e)
         checkpointManager.updatePhase(checkpoint, question.questionId, "evaluate", {

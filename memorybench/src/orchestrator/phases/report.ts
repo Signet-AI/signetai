@@ -11,6 +11,7 @@ import type {
   RetrievalAggregates,
   RunUsage,
   TokenMetrics,
+  TranscriptReliance,
   UsageSummary,
 } from "../../types/unified"
 import { logger } from "../../utils/logger"
@@ -86,10 +87,14 @@ function summarizeUsage(modelAlias: string, usage: ModelUsage): UsageSummary {
 function summarizeRunUsage(checkpoint: RunCheckpoint, questionIds: string[]): RunUsage {
   const answer = emptyUsage()
   const judge = emptyUsage()
+  const ablationAnswer = emptyUsage()
+  const ablationJudge = emptyUsage()
   for (const questionId of questionIds) {
     const phases = checkpoint.questions[questionId]?.phases
     addUsage(answer, phases?.answer.usage)
     addUsage(judge, phases?.evaluate.usage)
+    addUsage(ablationAnswer, phases?.answer.derivedOnly?.usage)
+    addUsage(ablationJudge, phases?.evaluate.derivedOnly?.usage)
   }
   const harness = checkpoint.ingestUsage?.harness
   const passes = Object.values(checkpoint.ingestUsage?.dreamingPasses ?? {})
@@ -110,10 +115,68 @@ function summarizeRunUsage(checkpoint: RunCheckpoint, questionIds: string[]): Ru
           },
         }
       : {}),
+    ...(ablationAnswer.requests + ablationJudge.requests > 0
+      ? {
+          ablation: {
+            answer: summarizeUsage(checkpoint.answeringModel, ablationAnswer),
+            judge: summarizeUsage(checkpoint.judge, ablationJudge),
+          },
+        }
+      : {}),
     answerTokensPerQuestion:
       questionIds.length > 0
         ? Math.round((answer.inputTokens + answer.outputTokens) / questionIds.length)
         : 0,
+  }
+}
+
+export function summarizeTranscriptReliance(
+  checkpoint: RunCheckpoint,
+  questionIds: string[]
+): TranscriptReliance | undefined {
+  const entries = questionIds.flatMap((questionId) => {
+    const phases = checkpoint.questions[questionId]?.phases
+    const answer = phases?.answer
+    const evaluation = phases?.evaluate
+    if (!answer?.derivedOnly || !evaluation?.derivedOnly || evaluation.score === undefined) return []
+    return [{ answer, evaluation, derivedAnswer: answer.derivedOnly, derivedEval: evaluation.derivedOnly }]
+  })
+  if (entries.length === 0) return undefined
+  const count = (predicate: (entry: (typeof entries)[number]) => boolean): number =>
+    entries.filter(predicate).length
+  const productPassed = (entry: (typeof entries)[number]): boolean =>
+    entry.evaluation.passed ?? entry.evaluation.score === 1
+  const sum = (values: number[]): number => values.reduce((total, value) => total + value, 0)
+  const productInput = sum(entries.map((entry) => entry.answer.usage?.inputTokens ?? 0))
+  const derivedInput = sum(
+    entries.map((entry) =>
+      entry.derivedAnswer.reusedProductAnswer
+        ? (entry.answer.usage?.inputTokens ?? 0)
+        : (entry.derivedAnswer.usage?.inputTokens ?? 0)
+    )
+  )
+  const onlyWithTranscripts = count((entry) => productPassed(entry) && !entry.derivedEval.passed)
+  return {
+    questions: entries.length,
+    questionsWithRawEvidence: count((entry) => (entry.answer.rawEvidenceCount ?? 0) > 0),
+    rawEvidenceItems: sum(entries.map((entry) => entry.answer.rawEvidenceCount ?? 0)),
+    productScore: sum(entries.map((entry) => entry.evaluation.score ?? 0)) / entries.length,
+    derivedOnlyScore: sum(entries.map((entry) => entry.derivedEval.score)) / entries.length,
+    bothCorrect: count((entry) => productPassed(entry) && entry.derivedEval.passed),
+    onlyWithTranscripts,
+    onlyWithoutTranscripts: count((entry) => !productPassed(entry) && entry.derivedEval.passed),
+    bothWrong: count((entry) => !productPassed(entry) && !entry.derivedEval.passed),
+    avgContextTokensProduct: Math.round(
+      sum(entries.map((entry) => entry.answer.contextTokens ?? 0)) / entries.length
+    ),
+    avgContextTokensDerivedOnly: Math.round(
+      sum(entries.map((entry) => entry.derivedAnswer.contextTokens)) / entries.length
+    ),
+    answerInputTokensProduct: productInput,
+    answerInputTokensDerivedOnly: derivedInput,
+    ...(onlyWithTranscripts > 0
+      ? { extraInputTokensPerRescuedAnswer: Math.round((productInput - derivedInput) / onlyWithTranscripts) }
+      : {}),
   }
 }
 
@@ -326,6 +389,7 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
     benchmarkConfig: checkpoint.benchmarkConfig,
     datasetIdentity: checkpoint.datasetIdentity,
     usage: summarizeRunUsage(checkpoint, evaluatedIds),
+    transcriptReliance: summarizeTranscriptReliance(checkpoint, evaluatedIds),
     memscore,
     memscoreComponents,
     retrieval: overallRetrieval,
@@ -415,7 +479,37 @@ export function printReport(result: BenchmarkResult): void {
         `  Dreaming:   ${dreaming.passesObserved} pass(es), ${dreaming.inputTokens.toLocaleString()} in / ${dreaming.outputTokens.toLocaleString()} out${dreaming.passesWithoutUsage > 0 ? `, ${dreaming.passesWithoutUsage} without usage` : ""}`
       )
     }
+    if (result.usage.ablation) {
+      line("Ablation:", result.usage.ablation.answer)
+      line("  judge:", result.usage.ablation.judge)
+    }
     console.log(`  Answer tokens/question: ${result.usage.answerTokensPerQuestion.toLocaleString()}`)
+  }
+
+  if (result.transcriptReliance) {
+    const reliance = result.transcriptReliance
+    console.log("-".repeat(60))
+    console.log("\nTRANSCRIPT RELIANCE (product recall vs derived-only):")
+    console.log(
+      `  Score:            ${(reliance.productScore * 100).toFixed(2)} product / ${(reliance.derivedOnlyScore * 100).toFixed(2)} derived-only`
+    )
+    console.log(
+      `  Raw evidence:     ${reliance.rawEvidenceItems} item(s) in ${reliance.questionsWithRawEvidence}/${reliance.questions} question(s)`
+    )
+    console.log(
+      `  Outcomes:         ${reliance.bothCorrect} both correct, ${reliance.onlyWithTranscripts} only with transcripts, ${reliance.onlyWithoutTranscripts} only without, ${reliance.bothWrong} both wrong`
+    )
+    console.log(
+      `  Context tokens:   ${reliance.avgContextTokensProduct} product / ${reliance.avgContextTokensDerivedOnly} derived-only (avg)`
+    )
+    console.log(
+      `  Answer input:     ${reliance.answerInputTokensProduct.toLocaleString()} product / ${reliance.answerInputTokensDerivedOnly.toLocaleString()} derived-only (API)`
+    )
+    if (reliance.extraInputTokensPerRescuedAnswer !== undefined) {
+      console.log(
+        `  Cost per rescue:  ${reliance.extraInputTokensPerRescuedAnswer.toLocaleString()} extra input tokens per answer only transcripts got right`
+      )
+    }
   }
 
   console.log("-".repeat(60))

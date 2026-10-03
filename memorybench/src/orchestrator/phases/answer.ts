@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from "fs"
 import type { AnswerPlan, Benchmark } from "../../types/benchmark"
-import type { RunCheckpoint } from "../../types/checkpoint"
+import type { DerivedOnlyAnswer, RunCheckpoint } from "../../types/checkpoint"
 import type { Provider } from "../../types/provider"
 import type { UnifiedQuestion } from "../../types/unified"
 import { CheckpointManager } from "../checkpoint"
@@ -53,6 +53,16 @@ export function planAnswer(
     basePrompt: buildAnswerPrompt(question.question, [], questionDate, provider),
     evidenceCount: context.length,
   }
+}
+
+export function splitDerivedEvidence(
+  context: unknown[],
+  provider?: Provider
+): { derived: unknown[]; rawEvidenceCount: number } | undefined {
+  const classify = provider?.classifyResult?.bind(provider)
+  if (!classify) return undefined
+  const derived = context.filter((result) => classify(result) === "derived")
+  return { derived, rawEvidenceCount: context.length - derived.length }
 }
 
 export function normalizeGeneratedAnswer(text: string): string {
@@ -127,6 +137,33 @@ export async function runAnswerPhase(
           )
         }
 
+        const split = splitDerivedEvidence(context, provider)
+        let derivedOnly: DerivedOnlyAnswer | undefined
+        if (split && split.rawEvidenceCount === 0) {
+          derivedOnly = {
+            reusedProductAnswer: true,
+            hypothesis,
+            promptTokens,
+            contextTokens,
+            evidenceCount: plan.evidenceCount,
+          }
+        } else if (split) {
+          const derivedPlan = planAnswer(benchmark, question, split.derived, questionDate, provider)
+          const derivedPromptTokens = countTokens(derivedPlan.prompt, modelConfig)
+          const derivedAnswer = await generateWithModel(modelConfig, derivedPlan.prompt)
+          derivedOnly = {
+            reusedProductAnswer: false,
+            hypothesis: normalizeGeneratedAnswer(derivedAnswer.text),
+            promptTokens: derivedPromptTokens,
+            contextTokens: Math.max(
+              0,
+              derivedPromptTokens - countTokens(derivedPlan.basePrompt, modelConfig)
+            ),
+            evidenceCount: derivedPlan.evidenceCount,
+            usage: derivedAnswer.usage,
+          }
+        }
+
         const durationMs = Date.now() - startTime
         checkpointManager.updatePhase(checkpoint, question.questionId, "answer", {
           status: "completed",
@@ -136,6 +173,7 @@ export async function runAnswerPhase(
           contextTokens,
           evidenceCount: plan.evidenceCount,
           usage,
+          ...(split ? { rawEvidenceCount: split.rawEvidenceCount, derivedOnly } : {}),
           completedAt: new Date().toISOString(),
           durationMs,
         })

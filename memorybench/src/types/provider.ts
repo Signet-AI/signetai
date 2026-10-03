@@ -55,7 +55,10 @@ export interface Provider {
   search(query: string, options: SearchOptions): Promise<unknown[]>
   clear(containerTag: string): Promise<void>
   getIngestUsage?(): IngestUsage
+  classifyResult?(result: unknown): RecallEvidenceKind
 }
+
+export type RecallEvidenceKind = "derived" | "raw-evidence"
 
 export type ProviderName =
   | "supermemory"

@@ -6,6 +6,7 @@ import type {
   FinalizeIngestOptions,
   Provider,
   ProviderConfig,
+  RecallEvidenceKind,
   SearchOptions,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
@@ -80,6 +81,7 @@ interface DreamingStatusPass {
   tokensInput?: number | null
   tokensOutput?: number | null
   tokensCacheRead?: number | null
+  mutationsApplied?: number | null
 }
 
 interface DreamingStatusResponse {
@@ -104,6 +106,18 @@ export function observeDreamingPasses(
       cacheReadTokens: finiteOrNull(pass.tokensCacheRead),
     }
   }
+}
+
+const MAX_IDLE_DREAMING_PASSES = 3
+
+const RAW_EVIDENCE_ID_PREFIXES = ["source-chunk:", "native-artifact:"] as const
+
+export function classifySignetRecallResult(result: unknown): RecallEvidenceKind {
+  const id =
+    typeof result === "object" && result !== null && "id" in result ? result.id : undefined
+  return typeof id === "string" && RAW_EVIDENCE_ID_PREFIXES.some((prefix) => id.startsWith(prefix))
+    ? "raw-evidence"
+    : "derived"
 }
 
 export function haystackAgentId(containerTag: string): string {
@@ -327,6 +341,10 @@ export class SignetProvider implements Provider {
     return extracted
   }
 
+  classifyResult(result: unknown): RecallEvidenceKind {
+    return classifySignetRecallResult(result)
+  }
+
   getIngestUsage(): IngestUsage {
     return {
       harness: addUsage(emptyUsage(), this.extractionUsage),
@@ -513,6 +531,7 @@ export class SignetProvider implements Provider {
 
     const deadline = Date.now() + readPositiveInt("SIGNET_BENCH_DREAMING_WAIT_SECS", 720) * 1000
     const pollMs = Math.min(readPositiveInt("SIGNET_BENCH_DREAMING_POLL_SECS", 1), 5) * 1000
+    let idlePasses = 0
     while (Date.now() < deadline) {
       let accepted: DreamingTriggerResponse
       try {
@@ -539,8 +558,19 @@ export class SignetProvider implements Provider {
           if (pass.status !== "completed") {
             throw new Error(`Dreaming pass ${accepted.passId} ${pass.status || "failed"}: ${pass.error || "no detail"}`)
           }
-          const statuses = await this.awaitMeasuredBacklog(scopes, primary, deadline, pollMs)
+          const statuses = await Promise.all(
+            scopes.map((agentId) =>
+              agentId === this.agentId ? Promise.resolve(primary) : this.readDreamStatus(agentId)
+            )
+          )
           if (statuses.every((status) => status.episodicTokensPending === 0)) return
+          idlePasses = (pass.mutationsApplied ?? 0) > 0 ? 0 : idlePasses + 1
+          if (idlePasses >= MAX_IDLE_DREAMING_PASSES) {
+            const backlog = statuses.map((status) => status.episodicTokensPending ?? "unmeasured").join(", ")
+            throw new Error(
+              `Dreaming applied no mutations in ${idlePasses} consecutive passes while the backlog was not drained (${backlog})`
+            )
+          }
           completed = true
           break
         }
@@ -549,29 +579,6 @@ export class SignetProvider implements Provider {
       if (!completed) break
     }
     throw new Error("Timed out draining the Dreaming episodic backlog")
-  }
-
-  private async awaitMeasuredBacklog(
-    scopes: readonly string[],
-    primary: DreamingStatusResponse,
-    deadline: number,
-    pollMs: number
-  ): Promise<DreamingStatusResponse[]> {
-    let statuses = await Promise.all(
-      scopes.map((agentId) =>
-        agentId === this.agentId ? Promise.resolve(primary) : this.readDreamStatus(agentId)
-      )
-    )
-    while (statuses.some((status) => typeof status.episodicTokensPending !== "number")) {
-      if (Date.now() >= deadline) {
-        throw new Error(
-          "Dreaming status never reported a measured episodic backlog for every scope before the deadline"
-        )
-      }
-      await new Promise((resolve) => setTimeout(resolve, pollMs))
-      statuses = await Promise.all(scopes.map((agentId) => this.readDreamStatus(agentId)))
-    }
-    return statuses
   }
 
   private agentIdForSession(session: UnifiedSession, containerTag: string): string {
