@@ -111,6 +111,7 @@ describe("MemoryBench launcher", () => {
 		setBenchDreamingConcurrency(dir, benchDreamingConcurrency({}));
 		const config = parseYaml(await readFile(join(dir, "agent.yaml"), "utf8"));
 		expect(config.memory.dreaming).toEqual({ enabled: true, maxConcurrentPasses: 6 });
+		expect(config.memory.pipelineV2.worker.maxLlmConcurrency).toBe(8);
 		expect(config.inference.targets.background.executor).toBe("openai-compatible");
 		expect(benchDreamingConcurrency({ SIGNET_BENCH_DREAMING_CONCURRENCY: "2" })).toBe(2);
 		expect(() => benchDreamingConcurrency({ SIGNET_BENCH_DREAMING_CONCURRENCY: "0" })).toThrow("from 1 to 16");

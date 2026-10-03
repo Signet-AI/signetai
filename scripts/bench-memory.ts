@@ -271,8 +271,15 @@ export function setBenchDreamingConcurrency(agentsDir: string, passes: number): 
 	const config = parseYaml(readFileSync(path, "utf8")) as Record<string, unknown>;
 	const memory = (config.memory ?? {}) as Record<string, unknown>;
 	const dreaming = (memory.dreaming ?? {}) as Record<string, unknown>;
-	if (dreaming.maxConcurrentPasses === passes) return;
-	config.memory = { ...memory, dreaming: { ...dreaming, maxConcurrentPasses: passes } };
+	const pipeline = (memory.pipelineV2 ?? {}) as Record<string, unknown>;
+	const worker = (pipeline.worker ?? {}) as Record<string, unknown>;
+	const llmConcurrency = Math.min(16, passes + 2);
+	if (dreaming.maxConcurrentPasses === passes && worker.maxLlmConcurrency === llmConcurrency) return;
+	config.memory = {
+		...memory,
+		dreaming: { ...dreaming, maxConcurrentPasses: passes },
+		pipelineV2: { ...pipeline, worker: { ...worker, maxLlmConcurrency: llmConcurrency } },
+	};
 	writeFileSync(path, stringifyYaml(config));
 }
 

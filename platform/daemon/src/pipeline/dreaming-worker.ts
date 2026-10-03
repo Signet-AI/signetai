@@ -8,6 +8,7 @@ import { getOrCreateInferenceRouter } from "../inference-router";
 import type { GraphHygieneCaps } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
 import { isSystemPressureHigh } from "../system-pressure";
+import { getLlmConcurrencyLimit } from "./provider";
 import {
 	type DreamingAgentExecutor,
 	type DreamingMode,
@@ -149,7 +150,7 @@ export async function shouldDeferDreamingSweep(
 ): Promise<boolean> {
 	if (ownerMaintenance) return !(await ownerMaintenance.queueIsHealthy());
 	return await accessor.withReadDbAsync((db) => getQueueHealth(db).status !== "healthy", {
-		siteToken: "pipeline/dreaming-worker.ts:150",
+		siteToken: "pipeline/dreaming-worker.ts:151",
 		operation: "dreaming.worker.queue-health",
 	});
 }
@@ -202,7 +203,7 @@ export async function getDreamingWorkerAgentIds(
 				(db) => {
 					return db.prepare(sql).all() as Array<{ id: string | null }>;
 				},
-				{ siteToken: "pipeline/dreaming-worker.ts:200", operation: "dreaming.worker.agent-scopes" },
+				{ siteToken: "pipeline/dreaming-worker.ts:201", operation: "dreaming.worker.agent-scopes" },
 			);
 	const ids = new Set<string>([defaultAgentId]);
 	for (const row of rows) {
@@ -257,7 +258,7 @@ export async function selectDreamingCheckMode(
 							[scope, "hygiene"],
 						).then((row) => row != null)
 					: accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"]), {
-							siteToken: "pipeline/dreaming-worker.ts:258",
+							siteToken: "pipeline/dreaming-worker.ts:259",
 							operation: "dreaming.worker.hygiene-attention",
 						}),
 			),
@@ -279,7 +280,7 @@ export async function selectDreamingCheckMode(
 					: accessor.withReadDbAsync(
 							(db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
 							{
-								siteToken: "pipeline/dreaming-worker.ts:278",
+								siteToken: "pipeline/dreaming-worker.ts:279",
 								operation: "dreaming.worker.content-attention",
 							},
 						),
@@ -307,7 +308,8 @@ export function startDreamingWorker(
 	let activeWork: Promise<void> | null = null;
 	let knownScopes: readonly string[] = [];
 	const runningPasses = new Set<RunningDreamingPass>();
-	const maxConcurrentPasses = Math.max(1, Math.floor(cfg.maxConcurrentPasses ?? 1));
+	const configuredConcurrentPasses = Math.max(1, Math.floor(cfg.maxConcurrentPasses ?? 1));
+	const maxPasses = (): number => Math.max(1, Math.min(configuredConcurrentPasses, getLlmConcurrencyLimit()));
 	let scheduler: DreamingSchedulerStatus = { status: "idle", reason: null, checkedAt: null };
 	let nextScheduledFocus: DreamingPassFocus | null = null;
 	const getAgentScopes = createAgentScopeSnapshot(AGENT_SCOPE_SNAPSHOT_REFRESH_MS, () =>
@@ -388,7 +390,7 @@ export function startDreamingWorker(
 	};
 	const knownScopesLeased = (): boolean => {
 		if (runningPasses.size === 0) return false;
-		if (exclusiveRunning() || usedSlots() >= maxConcurrentPasses) return true;
+		if (exclusiveRunning() || usedSlots() >= maxPasses()) return true;
 		const leased = leasedScopes();
 		return knownScopes.length > 0 && knownScopes.every((scope) => leased.has(scope));
 	};
@@ -504,7 +506,7 @@ export function startDreamingWorker(
 	}
 
 	async function startIncrementalPasses(runAgentId: string, scopes: readonly string[]): Promise<StartedDreamingPass> {
-		const slots = maxConcurrentPasses - usedSlots();
+		const slots = maxPasses() - usedSlots();
 		if (scopes.length === 0 || slots <= 0) throw new AlreadyRunningError();
 		const groups =
 			slots === 1 || scopes.length === 1
@@ -544,8 +546,7 @@ export function startDreamingWorker(
 	}
 
 	async function check(): Promise<void> {
-		if (stopped || admission !== null || exclusiveRunning() || usedSlots() >= maxConcurrentPasses || !(options.enabled ? options.enabled() : cfg.enabled))
-			return;
+		if (stopped || admission !== null || exclusiveRunning() || usedSlots() >= maxPasses() || !(options.enabled ? options.enabled() : cfg.enabled)) return;
 		const checkedAt = new Date().toISOString();
 		if (isSystemPressureHigh()) {
 			scheduler = { status: "deferred", reason: "system_pressure", checkedAt };
@@ -668,7 +669,7 @@ export function startDreamingWorker(
 			const started = await admit(async () => {
 				if (exclusiveRunning()) throw new AlreadyRunningError();
 				if (userRequest) {
-					if (leasedScopes().has(runAgentId) || usedSlots() >= maxConcurrentPasses) throw new AlreadyRunningError();
+					if (leasedScopes().has(runAgentId) || usedSlots() >= maxPasses()) throw new AlreadyRunningError();
 					return startPass(runAgentId, mode, [runAgentId], mode !== "incremental", { userRequest });
 				}
 				const scopes = await listScopes();

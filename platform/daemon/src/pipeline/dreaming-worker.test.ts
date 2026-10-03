@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
+import { configureLlmConcurrency, getLlmConcurrencyLimit } from "./provider";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, type DbAccessor, type WriteDb } from "../db-accessor";
 import {
 	createDbOwnerClient,
@@ -1014,6 +1015,38 @@ describe("dreaming worker agent scope", () => {
 			]);
 		} finally {
 			worker.stop();
+		}
+	});
+
+	it("admits no more concurrent passes than the shared LLM limit", async () => {
+		const seed = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES (?, ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+		);
+		seed.run("alpha-session", "alpha", "Alpha evidence. ".repeat(400));
+		seed.run("beta-session", "beta", "Beta evidence. ".repeat(250));
+		const previousLimit = getLlmConcurrencyLimit();
+		configureLlmConcurrency(1);
+		let runs = 0;
+		const worker = startDreamingWorker(accessor, defaultCfg({ maxConcurrentPasses: 4 }), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run(input) {
+					runs++;
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					await search?.execute("own", {}, undefined, undefined, {} as never);
+					return { summary: "Processed every agent" };
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => !worker.running, 2_000);
+			expect(runs).toBe(1);
+		} finally {
+			worker.stop();
+			configureLlmConcurrency(previousLimit);
 		}
 	});
 
