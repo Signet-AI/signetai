@@ -169,7 +169,7 @@ export function openBoundedSse(options: OpenBoundedSseOptions = {}): BoundedSseP
 		dispose();
 		if (abortUpstream && !abortController.signal.aborted) abortController.abort(reason);
 		if (error !== undefined) closeBody(error);
-		else if (queuedBytes() === 0) closeBody();
+		else if (queuedBytes() === 0 && pendingDroppedEvents === 0) closeBody();
 		else bodyCloseWhenDrained = true;
 	};
 
@@ -213,10 +213,11 @@ export function openBoundedSse(options: OpenBoundedSseOptions = {}): BoundedSseP
 	};
 
 	const writeDropSummary = (): void => {
-		if (closed || pendingDroppedEvents === 0) return;
+		if (pendingDroppedEvents === 0 || bodyClosed) return;
 		const frame = sseFrame({ count: pendingDroppedEvents, bytes: pendingDroppedBytes }, { event: "dropped" });
 		const desiredSize = controller?.desiredSize;
-		if (desiredSize === null || desiredSize === undefined || frame.byteLength > desiredSize - reservedBytes) return;
+		const reserve = closed ? 0 : reservedBytes;
+		if (desiredSize === null || desiredSize === undefined || frame.byteLength > desiredSize - reserve) return;
 		try {
 			controller?.enqueue(frame);
 			pendingDroppedEvents = 0;
@@ -275,7 +276,8 @@ export function openBoundedSse(options: OpenBoundedSseOptions = {}): BoundedSseP
 						} catch {}
 					}
 				}
-				if (bodyCloseWhenDrained && queuedBytes() === 0) closeBody();
+				if (closed && overflowPolicy === "drop" && bodyCloseWhenDrained) writeDropSummary();
+				if (bodyCloseWhenDrained && queuedBytes() === 0 && pendingDroppedEvents === 0) closeBody();
 			},
 			cancel(reason) {
 				if (closed) {
