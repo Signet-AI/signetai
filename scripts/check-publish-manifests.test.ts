@@ -83,7 +83,7 @@ describe("check-publish-manifests", () => {
 		const root = join(import.meta.dir, "..");
 		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
 
-		expect(daemonBuild).toContain('asset: "[name].[ext]"');
+		expect(daemonBuild).toContain('asset: "dist/[name].[ext]"');
 		expect(daemonBuild).toContain('assetNames: "[name]"');
 		expect(daemonBuild).toContain('"@napi-rs/keyring"');
 	});
