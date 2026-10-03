@@ -388,7 +388,7 @@ async function main(): Promise<void> {
 	const setupArgs = buildSetupArgs(agentsDir, port, model);
 
 	console.log(`MemoryBench workspace: ${root}`);
-	console.log(`Isolated Signet daemon: ${baseUrl}`);
+	console.log(`Isolated Signet daemon: ${baseUrl} (dashboard at ${baseUrl}/)`);
 	console.log(`Inference: ${model.model} via ${model.endpoint} (${model.providerFamily})`);
 	if (usesDefaultSample) {
 		console.log("Using dev-sized LongMemEval sample. Pass --full or --limit/--sample for a different run size.");
@@ -413,6 +413,9 @@ async function main(): Promise<void> {
 		if (parsed.build) {
 			await run("bun", ["run", "build"]);
 		}
+		if (parsed.build || !existsSync(join(repoRoot, "surfaces", "dashboard", "build", "index.html"))) {
+			await run("bun", ["run", "build"], process.env, join(repoRoot, "surfaces", "dashboard"));
+		}
 		if (isSetUp(agentsDir)) {
 			console.log("Reusing the existing benchmark workspace and database.");
 		} else {
@@ -433,6 +436,7 @@ async function main(): Promise<void> {
 		});
 
 		await waitForHealth(baseUrl, 180_000);
+		console.log(`Benchmark dashboard: ${baseUrl}/`);
 		await run("bun", ["src/index.ts", ...memorybenchArgs], env, join(repoRoot, "memorybench"));
 	} finally {
 		if (daemon && daemon.exitCode === null) {
