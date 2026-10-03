@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, mock } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 let readAttempts = 0;
@@ -14,7 +15,12 @@ afterEach(() => {
 	statError = () => null;
 	readdirError = () => null;
 });
+const realFsPromises = { ...fsPromises };
+afterAll(() => {
+	mock.module("node:fs/promises", () => realFsPromises);
+});
 mock.module("node:fs/promises", () => ({
+	...realFsPromises,
 	lstat: async () => ({ isSymbolicLink: () => false }),
 	stat: async (path: string) => {
 		const error = statError(path);
