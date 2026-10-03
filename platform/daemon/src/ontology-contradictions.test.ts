@@ -238,7 +238,7 @@ describe("persisted ontology contradictions", () => {
 		await addClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
 		await addClaim("owner", "Runtime mode is disabled by default.", "source-disabled");
 
-		purgeSourceOwnedRows({ agentId: "owner", sourceId: "source-enabled" });
+		await purgeSourceOwnedRows({ agentId: "owner", sourceId: "source-enabled" });
 
 		const all = await listOntologyContradictions(getDbAccessor(), { agentId: "owner", status: "all" });
 		expect(all.items).toHaveLength(1);
