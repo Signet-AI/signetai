@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import ts from "typescript";
+import type { BunPlugin } from "bun";
 
 interface Asset {
 	readonly source: string;
@@ -78,7 +79,7 @@ function packageRoot(name: string, importer: string): string {
 		if (parent === root) break;
 		root = parent;
 	}
-	throw new Error(`Missing runtime dependency ${name} imported by ${importer}`);
+	throw new Error(`Invalid runtime dependency metadata ${name} imported by ${importer}`);
 }
 
 export function runtimeReferences(path: string): readonly string[] {
@@ -336,11 +337,43 @@ export class RuntimeManifest {
 			);
 	}
 
-	external(specifier: string, importer: string): string | null {
+	plugin(options: {
+		readonly output: string;
+		readonly directory: string;
+		readonly aliases: Readonly<Record<string, string>>;
+		readonly external: readonly string[];
+	}): BunPlugin {
+		return {
+			name: "runtime-dependency-closure",
+			setup: (build) => {
+				build.onResolve({ filter: /^[^./]/ }, (input) => {
+					if (!input.importer || Object.hasOwn(options.aliases, input.path)) return undefined;
+					const allowAbsent = options.external.some((name) => input.path === name || input.path.startsWith(`${name}/`));
+					const path = this.external(input.path, input.importer, allowAbsent);
+					return path
+						? {
+								path: `./${relative(dirname(options.output), resolve(options.directory, path)).split(sep).join("/")}`,
+								external: true,
+							}
+						: undefined;
+				});
+			},
+		};
+	}
+
+	external(specifier: string, importer: string, allowAbsent = false): string | null {
 		const name = packageName(specifier);
 		if (!name) return null;
-		const root = packageRoot(name, importer);
+		let root: string;
+		try {
+			root = packageRoot(name, importer);
+		} catch (error) {
+			if (allowAbsent && error instanceof Error && error.message.startsWith("Missing runtime dependency ")) return null;
+			throw error;
+		}
 		if (!root.includes(`${sep}node_modules${sep}`)) return null;
+		const origin = relative(this.#root, root);
+		if (allowAbsent && (origin.startsWith(`..${sep}`) || isAbsolute(origin))) return null;
 		const entry = Bun.resolveSync(specifier, dirname(importer));
 		const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 		const identity = createHash("sha256").update(relative(this.#root, root)).digest("hex").slice(0, 12);

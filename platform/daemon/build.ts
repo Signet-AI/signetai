@@ -1,5 +1,5 @@
 import { rmSync, readdirSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { EXTERNAL_BUN, EXTERNAL_NODE } from "./build-externals";
 import { RuntimeManifest, runtimeReferences } from "./build-manifest/build";
 
@@ -50,23 +50,12 @@ if (isBun) {
 			entrypoints: [entrypoint],
 			metafile: true,
 			plugins: [
-				{
-					name: "runtime-dependency-closure",
-					setup(build) {
-						build.onResolve({ filter: /^[^./]/ }, (input) => {
-							if (!input.importer || Object.hasOwn(ALIAS, input.path)) return undefined;
-							const path = manifest.external(input.path, input.importer);
-							return path
-								? {
-										path: `./${relative(dirname(resolve(outfile)), resolve(import.meta.dir, "dist", path))
-											.split(sep)
-											.join("/")}`,
-										external: true,
-									}
-								: undefined;
-						});
-					},
-				},
+				manifest.plugin({
+					output: resolve(outfile),
+					directory: join(import.meta.dir, "dist"),
+					aliases: ALIAS,
+					external: EXTERNAL_BUN,
+				}),
 			],
 			outdir: ".",
 			naming: {
@@ -106,8 +95,7 @@ if (isBun) {
 
 	for (const { entrypoint, outfile } of targets) {
 		try {
-			const result = await build({
-				metafile: true,
+			await build({
 				entryPoints: [entrypoint],
 				bundle: true,
 				outfile,
