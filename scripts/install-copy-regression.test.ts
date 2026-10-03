@@ -127,7 +127,6 @@ describe("install copy", () => {
 		expect(nativePlatforms).toContain('"darwin-x64"');
 		expect(nativePlatforms).toContain('"darwin-arm64"');
 		expect(nativePlatforms).toContain('"win32-x64"');
-		expect(installer).toContain("linkSync");
 		expect(installer).toContain("require.resolve");
 		expect(installer).toContain("Skipping Signet native binary linking in workspace install");
 		expect(installer).toContain("native-manifest.json");

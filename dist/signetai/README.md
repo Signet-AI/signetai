@@ -9,9 +9,13 @@ bun add -g signetai
 ```
 
 The package installs a platform native package tarball from the same GitHub
-release. `postinstall` only links or copies that binary into the package
-directory; if install scripts are disabled, the `signet` command resolves and
-executes the native package directly.
+release. `postinstall` copies that binary to a private staging file, verifies
+its size and SHA-256 against the release manifest, and atomically replaces the
+installed executable. Missing integrity metadata or a damaged binary fails the
+install without replacing an existing executable. The installed copy is not
+hard-linked to the package-manager cache, so later cache changes cannot corrupt
+it. If install scripts are disabled, the `signet` command resolves and executes
+the native package directly; that path does not perform postinstall verification.
 
 The package does not install Bun, does not build Signet from source, and does
 not install runtime dependencies such as `better-sqlite3`.
