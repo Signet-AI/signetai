@@ -325,11 +325,55 @@ jobs:
             surfaces/desktop/release/*.blockmap
             surfaces/desktop/release/latest*.yml
           )
-          if [ "${#release_files[@]}" -eq 0 ]; then
+          publish_files=()
+          for file in "${release_files[@]}"; do
+            if [ "$(basename "${file}")" = "latest-mac.yml" ]; then
+              continue
+            fi
+            publish_files+=("${file}")
+          done
+          if [ "${#publish_files[@]}" -eq 0 ]; then
             echo "::error::No desktop release assets found"
             exit 1
           fi
-          scripts/retry-github-release.sh gh release upload "${GITHUB_REF_NAME}" "${release_files[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
+          scripts/retry-github-release.sh gh release upload "${GITHUB_REF_NAME}" "${publish_files[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-mac-update-manifest:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
+      - name: Download macOS x64 desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-macos-x64
+          path: mac-update/x64
+
+      - name: Download macOS arm64 desktop artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-macos-arm64
+          path: mac-update/arm64
+
+      - name: Merge and publish latest-mac.yml
+        run: |
+          set -euo pipefail
+          bun surfaces/desktop/scripts/merge-mac-update-manifest.ts \
+            --x64 mac-update/x64/latest-mac.yml \
+            --arm64 mac-update/arm64/latest-mac.yml \
+            --out mac-update/latest-mac.yml
+          cat mac-update/latest-mac.yml
+          scripts/retry-github-release.sh gh release upload "${GITHUB_REF_NAME}" mac-update/latest-mac.yml --clobber --repo "${GITHUB_REPOSITORY}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
