@@ -46,13 +46,67 @@ function buildFixture(directory: string, external: string[]) {
 		external,
 	}).then((result) => {
 		if (!result.metafile) throw new Error("missing build metadata");
-		manifest.graph(result.metafile, directory);
+		manifest.graph(result.metafile, process.cwd());
 		manifest.write(join(directory, "manifest.json"));
 		return result;
 	});
 }
 
 describe("daemon Bun build externals", () => {
+	test("does not bundle an ancestor package for a guarded optional import", async () => {
+		const outer = mkdtempSync(join(tmpdir(), "signet-ambient-build-"));
+		directories.push(outer);
+		const directory = join(outer, "workspace");
+		const ambient = join(outer, "node_modules", "ambient-optional-fixture");
+		mkdirSync(directory);
+		mkdirSync(ambient, { recursive: true });
+		writeFileSync(
+			join(ambient, "package.json"),
+			JSON.stringify({ name: "ambient-optional-fixture", version: "1.0.0", main: "index.js" }),
+		);
+		writeFileSync(join(ambient, "index.js"), 'module.exports = "must not be bundled";');
+		writeFileSync(
+			join(directory, "package.json"),
+			JSON.stringify({ name: "guarded-fixture", optionalDependencies: { "ambient-optional-fixture": "1.0.0" } }),
+		);
+		writeFileSync(
+			join(directory, "entry.ts"),
+			'export async function load(){try{return await import("ambient-optional-fixture")}catch{return null}}',
+		);
+		const result = await buildFixture(directory, []);
+		expect(result.success).toBe(true);
+		expect(JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"))).toMatchObject({
+			optionalAbsent: ["ambient-optional-fixture"],
+			files: [],
+		});
+		rmSync(join(outer, "node_modules"), { recursive: true });
+		const built = await import(join(directory, "out", "entry.js"));
+		expect(await built.load()).toBeNull();
+	});
+	test("preserves guarded optional imports and requires without a native external declaration", async () => {
+		for (const loader of ["import", "require"]) {
+			const directory = fixtureWithDroppedOptionalDependency();
+			writeFileSync(
+				join(directory, "package.json"),
+				JSON.stringify({
+					name: "guarded-fixture",
+					optionalDependencies: { "absent-optional-native-fixture": "1.0.0" },
+				}),
+			);
+			writeFileSync(
+				join(directory, "entry.ts"),
+				`export async function load(){try{return await ${loader}("absent-optional-native-fixture")}catch{return null}}`,
+			);
+			const result = await buildFixture(directory, []);
+			expect(result.success).toBe(true);
+			expect(JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"))).toMatchObject({
+				optionalAbsent: ["absent-optional-native-fixture"],
+				files: [],
+			});
+			const built = await import(join(directory, "out", "entry.js"));
+			expect(await built.load()).toBeNull();
+		}
+	});
 	test("rejects invalid metadata instead of classifying an installed optional external as absent", async () => {
 		const directory = fixtureWithDroppedOptionalDependency();
 		const native = join(directory, "node_modules", "better-sqlite3");

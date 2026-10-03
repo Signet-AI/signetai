@@ -348,8 +348,13 @@ export class RuntimeManifest {
 			setup: (build) => {
 				build.onResolve({ filter: /^[^./]/ }, (input) => {
 					if (!input.importer || Object.hasOwn(options.aliases, input.path)) return undefined;
-					const allowAbsent = options.external.some((name) => input.path === name || input.path.startsWith(`${name}/`));
+					const name = packageName(input.path);
+					if (!name) return undefined;
+					const allowAbsent =
+						options.external.some((external) => input.path === external || input.path.startsWith(`${external}/`)) ||
+						guardedPackage(input.importer, name);
 					const path = this.external(input.path, input.importer, allowAbsent);
+					if (path === input.path) return { path, external: true };
 					return path
 						? {
 								path: `./${relative(dirname(options.output), resolve(options.directory, path)).split(sep).join("/")}`,
@@ -368,12 +373,13 @@ export class RuntimeManifest {
 		try {
 			root = packageRoot(name, importer);
 		} catch (error) {
-			if (allowAbsent && error instanceof Error && error.message.startsWith("Missing runtime dependency ")) return null;
+			if (allowAbsent && error instanceof Error && error.message.startsWith("Missing runtime dependency "))
+				return specifier;
 			throw error;
 		}
 		if (!root.includes(`${sep}node_modules${sep}`)) return null;
 		const origin = relative(this.#root, root);
-		if (allowAbsent && (origin.startsWith(`..${sep}`) || isAbsolute(origin))) return null;
+		if (allowAbsent && (origin.startsWith(`..${sep}`) || isAbsolute(origin))) return specifier;
 		const entry = Bun.resolveSync(specifier, dirname(importer));
 		const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
 		const identity = createHash("sha256").update(relative(this.#root, root)).digest("hex").slice(0, 12);
@@ -388,26 +394,29 @@ export class RuntimeManifest {
 		const workers = new Set<string>();
 		for (const [input, meta] of Object.entries(graph.inputs)) {
 			const path = resolve(cwd, input);
-			for (const item of meta.imports) {
-				const name = item.external ? packageName(item.path) : null;
-				if (name) {
-					let directory = dirname(path);
-					while (!existsSync(join(directory, "package.json")) && dirname(directory) !== directory)
-						directory = dirname(directory);
-					const pkg = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
-					this.dependency(
-						name,
-						path,
-						pkg.peerDependenciesMeta?.[name]?.optional === true ||
-							name in (pkg.optionalDependencies ?? {}) ||
-							(!(name in (pkg.dependencies ?? {})) && guardedPackage(path, name)),
-					);
-				}
+			const names = new Set(
+				meta.imports.flatMap((item) => {
+					const name = item.external ? packageName(item.path) : null;
+					return name ? [name] : [];
+				}),
+			);
+			if (statSync(path, { throwIfNoEntry: false })?.isFile() && /\.[cm]?[jt]sx?$/.test(path)) {
+				for (const worker of runtimeReferences(path)) workers.add(worker);
+				if (!path.includes(`${sep}node_modules${sep}`)) for (const name of runtimePackages(path, true)) names.add(name);
 			}
-			if (!statSync(path, { throwIfNoEntry: false })?.isFile() || !/\.[cm]?[jt]sx?$/.test(path)) continue;
-			for (const worker of runtimeReferences(path)) workers.add(worker);
-			if (!path.includes(`${sep}node_modules${sep}`))
-				for (const name of runtimePackages(path, true)) this.dependency(name, path);
+			for (const name of names) {
+				let directory = dirname(path);
+				while (!existsSync(join(directory, "package.json")) && dirname(directory) !== directory)
+					directory = dirname(directory);
+				const pkg = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+				this.dependency(
+					name,
+					path,
+					pkg.peerDependenciesMeta?.[name]?.optional === true ||
+						name in (pkg.optionalDependencies ?? {}) ||
+						(!(name in (pkg.dependencies ?? {})) && guardedPackage(path, name)),
+				);
+			}
 		}
 		return [...workers];
 	}

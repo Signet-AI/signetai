@@ -30,18 +30,7 @@ async function buildFixture(root: string, entry: string, manifest: RuntimeManife
 		naming: { entry: "entry.js" },
 		target: "bun",
 		format: "esm",
-		plugins: [
-			{
-				name: "runtime-manifest-externalization",
-				setup(build) {
-					build.onResolve({ filter: /^[^./]/ }, ({ path, importer }) => {
-						if (!importer) return undefined;
-						const resolved = manifest.external(path, importer);
-						return resolved ? { path: resolved, external: true } : undefined;
-					});
-				},
-			},
-		],
+		plugins: [manifest.plugin({ output: join(output, "entry.js"), directory: output, aliases: {}, external: [] })],
 	});
 	expect(result.success).toBe(true);
 	return join(output, "entry.js");
