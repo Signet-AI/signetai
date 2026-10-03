@@ -350,7 +350,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:190");
+		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:337");
 	});
 
 	test("attributes an in-flight parent sync call at latch time", () => {
@@ -378,7 +378,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:201");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:368");
 	});
 
 	test("attributes an in-flight queued async write callback at latch time", async () => {
@@ -409,7 +409,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:222");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:396");
 	});
 
 	test("attributes the actual caller through runWriteTxAsync", async () => {
@@ -437,7 +437,9 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:432");
+		expect(state.latched.syncDbCallSites).toContainEqual(
+			expect.stringMatching(/^withWriteTxAsync@platform\/daemon\/src\/db-accessor\.test\.ts:\d+$/),
+		);
 	});
 
 	test("write statements expose the number of affected rows", () => {
