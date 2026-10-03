@@ -392,6 +392,16 @@ existing daemon capabilities and the asynchronous database owner protocol.
 No shell, coding, ambient extension, or direct semantic mutation tools are
 provided to chat.
 
+Chat reads memory through scoped daemon capabilities: the ontology readers,
+`search_evidence` over the full history of episodic memories, artifacts, and
+transcripts, and `recall_memories`, which calls `POST /api/memory/recall` with the
+resolved agent and recall surface `dashboard`. Recall covers memories curated by
+Dreaming as well as captured ones. Its output passes the memory content-safety
+projection before reaching the model; withheld rows are dropped. Recalled memory
+rows carry a `memory:<id>` sourceRef and emit `citation` and `retrieval` events;
+ontology-claim and source rows carry only a `recallId` and must be backed by
+evidence tools before they are cited.
+
 The system prompt requires evidence citations as `[[kind:exact-sourceRef-id]]`
 wikilinks copied verbatim from retrieval results. The dashboard renders only
 references backed by retrieved citation events as clickable source pills; entity
