@@ -38,6 +38,12 @@ const DREAMING_CONFIG: DreamingConfig = {
 	backfillOnFirstRun: true,
 };
 
+function seedLegacyTranscriptMigrations(db: { prepare(sql: string): { run(): unknown } }): void {
+	db.prepare(
+		"INSERT OR IGNORE INTO source_import_migrations(agent_id) SELECT DISTINCT agent_id FROM source_import_files WHERE storage_state = 'legacy'",
+	).run();
+}
+
 describe("source artifact graph structure", () => {
 	let dir = "";
 	let previousSignetPath: string | undefined;
@@ -212,6 +218,7 @@ describe("source artifact graph structure", () => {
 				db.prepare(
 					"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status) VALUES ('unsafe-purge-record', 'unsafe-purge-job', 'unsafe-purge-file', ?, 'agent-a', 1, 1, 0, 4, 'staged-hash', 'pending')",
 				).run(sourceId);
+				seedLegacyTranscriptMigrations(db);
 			});
 
 			await expect(purgeSourceOwnedRows({ sourceId })).rejects.toThrow("symlink");
