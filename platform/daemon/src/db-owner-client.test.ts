@@ -1437,6 +1437,10 @@ process.stdin.on("data", (chunk) => {
 			const owner = client;
 			if (owner === null) throw new Error("owner client not created");
 			await owner.start();
+			await owner.submit(
+				{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
+				{ operation: "maintenance.non-idempotent-fixture-ready", lane: "read", deadlineMs: 5_000 },
+			).result;
 			const run = runOwnerMaintenanceWithRetry<{ readonly changes: number }>(
 				owner,
 				{
