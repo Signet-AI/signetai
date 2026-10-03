@@ -1,7 +1,8 @@
-import { createOpenAI } from "@ai-sdk/openai"
-import { generateText } from "ai"
 import type { UnifiedSession } from "../types/unified"
-const EXTRACTION_MODEL = process.env.MEMORYBENCH_EXTRACTION_MODEL || "gpt-4o"
+import { addUsage, emptyUsage, generateWithModel, type ModelUsage } from "../utils/llm"
+import { getModelConfig } from "../utils/models"
+
+export const EXTRACTION_MODEL = getModelConfig(process.env.MEMORYBENCH_EXTRACTION_MODEL || "gpt-4o")
 
 function readPositiveInt(name: string, fallback: number): number {
   const value = Number.parseInt(process.env[name] || "", 10)
@@ -18,20 +19,6 @@ const STRUCTURED_EXTRACTION_CONTENT_CHARS = readPositiveInt(
   18000
 )
 
-function extractionModelSupportsTemperature(): boolean {
-  const model = EXTRACTION_MODEL.toLowerCase()
-  return !(
-    model.startsWith("inception/mercury") ||
-    model.startsWith("gpt-5") ||
-    model.startsWith("o1") ||
-    model.startsWith("o3") ||
-    model.startsWith("o4")
-  )
-}
-
-function extractionTemperature(): Record<string, number> {
-  return extractionModelSupportsTemperature() ? { temperature: 0 } : {}
-}
 export function buildExtractionPrompt(session: UnifiedSession): string {
   const speakerA = (session.metadata?.speakerA as string) || "Speaker A"
   const speakerB = (session.metadata?.speakerB as string) || "Speaker B"
@@ -114,21 +101,16 @@ Temporal rules:
 - If unsure of the exact day, use the narrowest range possible (e.g. "June 2023" not "sometime in 2023")`
 }
 export async function extractMemories(
-  openai: ReturnType<typeof createOpenAI>,
   session: UnifiedSession
-): Promise<string> {
-  const prompt = buildExtractionPrompt(session)
-
-  const params: Record<string, unknown> = {
-    model: openai(EXTRACTION_MODEL),
-    prompt,
-    maxTokens: EXTRACTION_MAX_TOKENS,
-    ...extractionTemperature(),
-  }
-
-  const { text } = await generateText(params as Parameters<typeof generateText>[0])
-
-  return text.trim()
+): Promise<{ text: string; usage: ModelUsage }> {
+  const { text, usage } = await generateWithModel(
+    EXTRACTION_MODEL,
+    buildExtractionPrompt(session),
+    {
+      maxOutputTokens: EXTRACTION_MAX_TOKENS,
+    }
+  )
+  return { text: text.trim(), usage }
 }
 const ENTITY_TYPES =
   "person, organization, place, project, system, service, tool, product, work, event, unknown"
@@ -202,6 +184,7 @@ export function boundStructuredContent(content: string): string {
   return `${head}\n\n[Truncated ${omitted} middle characters to keep structured extraction inside the local model context window.]\n\n${tail}`
 }
 interface StructuredExtraction {
+  usage: ModelUsage
   content: string
   structured: {
     entities: Array<{
@@ -476,29 +459,17 @@ export function parseJson(raw: string): unknown {
   }
 }
 export async function extractStructuredMemories(
-  openai: ReturnType<typeof createOpenAI>,
   session: UnifiedSession
 ): Promise<StructuredExtraction> {
-  const prompt = buildExtractionPrompt(session)
-
-  const params: Record<string, unknown> = {
-    model: openai(EXTRACTION_MODEL),
-    prompt,
-    maxTokens: EXTRACTION_MAX_TOKENS,
-    ...extractionTemperature(),
-  }
-
-  const { text } = await generateText(params as Parameters<typeof generateText>[0])
-  const content = text.trim()
-
-  const structuredParams: Record<string, unknown> = {
-    model: openai(EXTRACTION_MODEL),
-    prompt: buildStructuredPrompt(content),
-    maxTokens: STRUCTURED_EXTRACTION_MAX_TOKENS,
-    ...extractionTemperature(),
-  }
-
-  const { text: raw } = await generateText(structuredParams as Parameters<typeof generateText>[0])
+  const extracted = await extractMemories(session)
+  const content = extracted.text
+  const structuredResult = await generateWithModel(
+    EXTRACTION_MODEL,
+    buildStructuredPrompt(content),
+    { maxOutputTokens: STRUCTURED_EXTRACTION_MAX_TOKENS }
+  )
+  const usage = addUsage(addUsage(emptyUsage(), extracted.usage), structuredResult.usage)
+  const raw = structuredResult.text
 
   const fallback = { entities: [], aspects: [], hints: [] }
   let structured: StructuredExtraction["structured"]
@@ -513,5 +484,5 @@ export async function extractStructuredMemories(
     structured = fallback
   }
 
-  return { content, structured }
+  return { usage, content, structured }
 }

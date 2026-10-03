@@ -1,5 +1,4 @@
-import { createOpenAI } from "@ai-sdk/openai"
-import { extractStructuredMemories } from "../../prompts/extraction"
+import { EXTRACTION_MODEL, extractStructuredMemories } from "../../prompts/extraction"
 import type {
   IndexingProgressCallback,
   IngestOptions,
@@ -7,10 +6,12 @@ import type {
   FinalizeIngestOptions,
   Provider,
   ProviderConfig,
+  RecallEvidenceKind,
   SearchOptions,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
-import { createConfiguredOpenAI } from "../../utils/config"
+import type { DreamingPassUsage, IngestUsage } from "../../types/checkpoint"
+import { addUsage, assertModelCredentials, emptyUsage } from "../../utils/llm"
 import { logger } from "../../utils/logger"
 import { SIGNET_PROMPTS, SIGNET_SUPERMEMORY_PARITY_PROMPTS } from "./prompts"
 
@@ -73,10 +74,58 @@ interface DreamingTriggerResponse {
   error?: string
 }
 
+interface DreamingStatusPass {
+  id?: string
+  status?: string
+  error?: string | null
+  tokensInput?: number | null
+  tokensOutput?: number | null
+  tokensCacheRead?: number | null
+  mutationsApplied?: number | null
+}
+
 interface DreamingStatusResponse {
   worker?: { running?: boolean }
-  passes?: Array<{ id?: string; status?: string; error?: string | null }>
+  passes?: DreamingStatusPass[]
   episodicTokensPending?: number
+}
+
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+export function observeDreamingPasses(
+  target: Record<string, DreamingPassUsage>,
+  passes: readonly DreamingStatusPass[] | undefined
+): void {
+  for (const pass of passes ?? []) {
+    if (!pass.id || pass.status === "running") continue
+    target[pass.id] = {
+      inputTokens: finiteOrNull(pass.tokensInput),
+      outputTokens: finiteOrNull(pass.tokensOutput),
+      cacheReadTokens: finiteOrNull(pass.tokensCacheRead),
+    }
+  }
+}
+
+const MAX_IDLE_DREAMING_PASSES = 3
+
+const RAW_EVIDENCE_ID_PREFIXES = ["source-chunk:", "native-artifact:"] as const
+
+export function classifySignetRecallResult(result: unknown): RecallEvidenceKind {
+  const id =
+    typeof result === "object" && result !== null && "id" in result ? result.id : undefined
+  return typeof id === "string" && RAW_EVIDENCE_ID_PREFIXES.some((prefix) => id.startsWith(prefix))
+    ? "raw-evidence"
+    : "derived"
+}
+
+export function haystackAgentId(containerTag: string): string {
+  const agentId = `memorybench-${containerTag}`
+  if (!/^[A-Za-z0-9._:-]+$/.test(agentId)) {
+    throw new Error(`Container tag ${containerTag} cannot form a Signet agent id`)
+  }
+  return agentId
 }
 
 function parseSessionDate(session: UnifiedSession): string | undefined {
@@ -242,7 +291,9 @@ export class SignetProvider implements Provider {
   concurrency = { default: 10, ingest: 5, search: 8 }
 
   private baseUrl = ""
-  private openai: ReturnType<typeof createOpenAI> | null = null
+  private readonly extractionUsage = emptyUsage()
+  private readonly dreamingPasses: Record<string, DreamingPassUsage> = {}
+  private readonly isolatedAgents = new Set<string>()
   private agentId = process.env.SIGNET_BENCH_AGENT_ID || DEFAULT_AGENT_ID
   private project = process.env.SIGNET_BENCH_PROJECT || DEFAULT_PROJECT
   private timeoutMs = readPositiveInt("SIGNET_BENCH_REQUEST_TIMEOUT_MS", DEFAULT_TIMEOUT_MS)
@@ -266,13 +317,9 @@ export class SignetProvider implements Provider {
         "Signet provider requires SIGNET_BENCH_DAEMON_URL or SIGNET_BASE_URL. Use `bun run bench` to start an isolated daemon automatically."
       )
     }
-    if (this.profile === "structured" && (!config.apiKey || config.apiKey === "none")) {
-      throw new Error("Signet provider requires OPENAI_API_KEY for structured extraction")
-    }
+    if (this.profile === "structured") assertModelCredentials(EXTRACTION_MODEL)
 
     this.baseUrl = trimTrailingSlash(baseUrl)
-    this.openai =
-      config.apiKey && config.apiKey !== "none" ? createConfiguredOpenAI(config.apiKey) : null
 
     const health = await this.request<{ status?: string; agentsDir?: string; version?: string }>(
       "/health",
@@ -290,12 +337,51 @@ export class SignetProvider implements Provider {
   protected async extractStructured(
     session: UnifiedSession
   ): Promise<Awaited<ReturnType<typeof extractStructuredMemories>>> {
-    if (!this.openai) throw new Error("Provider not initialized")
-    return extractStructuredMemories(this.openai, session)
+    const extracted = await extractStructuredMemories(session)
+    addUsage(this.extractionUsage, extracted.usage)
+    return extracted
+  }
+
+  classifyResult(result: unknown): RecallEvidenceKind {
+    return classifySignetRecallResult(result)
+  }
+
+  getIngestUsage(): IngestUsage {
+    return {
+      harness: addUsage(emptyUsage(), this.extractionUsage),
+      ...(Object.keys(this.dreamingPasses).length > 0
+        ? { dreamingPasses: { ...this.dreamingPasses } }
+        : {}),
+    }
+  }
+
+  private async ensureIsolatedAgent(agentId: string): Promise<void> {
+    if (this.isolatedAgents.has(agentId)) return
+    try {
+      await this.request(`/api/agents/${encodeURIComponent(agentId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ read_policy: "isolated" }),
+      })
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("failed (404)")) throw error
+      await this.request("/api/agents", {
+        method: "POST",
+        body: JSON.stringify({ name: agentId, read_policy: "isolated" }),
+      })
+    }
+    this.isolatedAgents.add(agentId)
+  }
+
+  private async readDreamStatus(agentId: string): Promise<DreamingStatusResponse> {
+    const status = await this.request<DreamingStatusResponse>(
+      `/api/dream/status?agentId=${encodeURIComponent(agentId)}`,
+      { method: "GET" }
+    )
+    observeDreamingPasses(this.dreamingPasses, status.passes)
+    return status
   }
 
   async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
-    if (this.profile === "structured" && !this.openai) throw new Error("Provider not initialized")
 
     const ids: string[] = []
     const pending: string[] = []
@@ -303,7 +389,8 @@ export class SignetProvider implements Provider {
 
     for (const session of sessions) {
       if (this.profile === "dreaming") {
-        const agentId = this.agentIdForSession(session)
+        const agentId = this.agentIdForSession(session, options.containerTag)
+        await this.ensureIsolatedAgent(agentId)
         const capture = await this.captureDreamingSession(session, options, agentId)
         if (!capture.transcriptCaptureJobId) {
           throw new Error(
@@ -415,16 +502,20 @@ export class SignetProvider implements Provider {
 
   async search(query: string, options: SearchOptions): Promise<unknown[]> {
     const recallQuery = buildSignetRecallQuery(query, options.questionDate)
-    const agentId = options.agentId ?? this.agentId
+    const agentId =
+      options.agentId ??
+      (this.profile === "dreaming" ? haystackAgentId(options.containerTag) : this.agentId)
+    if (this.profile === "dreaming") await this.ensureIsolatedAgent(agentId)
     const response = await this.request<SignetRecallResponse>("/api/memory/recall", {
       method: "POST",
       body: JSON.stringify({
         query: recallQuery,
         limit: resolveSignetSearchLimit(this.profile, options.limit),
         threshold: options.threshold || 0.3,
-        scope: options.containerTag,
         agentId,
-        project: this.project,
+        ...(this.profile === "dreaming"
+          ? {}
+          : { scope: options.containerTag, project: this.project }),
         expand: true,
       }),
     })
@@ -444,13 +535,11 @@ export class SignetProvider implements Provider {
   async finalizeIngest(_options: FinalizeIngestOptions): Promise<void> {
     if (this.profile !== "dreaming") return
     const scopes = this.dreamingAgentIds.size > 0 ? [...this.dreamingAgentIds] : [this.agentId]
-    const dreamStatusPath = (agentId: string): string =>
-      `/api/dream/status?agentId=${encodeURIComponent(agentId)}`
     const readyDeadline = Date.now() + 60_000
     let workerReady = false
     while (Date.now() < readyDeadline) {
       const statuses = await Promise.all(
-        scopes.map((agentId) => this.request<DreamingStatusResponse>(dreamStatusPath(agentId), { method: "GET" }))
+        scopes.map((agentId) => this.readDreamStatus(agentId))
       )
       if (statuses.every((status) => status.worker?.running)) {
         workerReady = true
@@ -462,6 +551,7 @@ export class SignetProvider implements Provider {
 
     const deadline = Date.now() + readPositiveInt("SIGNET_BENCH_DREAMING_WAIT_SECS", 720) * 1000
     const pollMs = Math.min(readPositiveInt("SIGNET_BENCH_DREAMING_POLL_SECS", 1), 5) * 1000
+    let idlePasses = 0
     while (Date.now() < deadline) {
       let accepted: DreamingTriggerResponse
       try {
@@ -471,7 +561,7 @@ export class SignetProvider implements Provider {
         })
       } catch (error) {
         if (!(error instanceof Error) || !error.message.includes("/api/dream/trigger failed (409)")) throw error
-        const status = await this.request<DreamingStatusResponse>(dreamStatusPath(this.agentId), { method: "GET" })
+        const status = await this.readDreamStatus(this.agentId)
         const running = status.passes?.find((pass) => pass.status === "running" && pass.id)
         if (!running?.id) throw error
         accepted = { passId: running.id }
@@ -482,7 +572,7 @@ export class SignetProvider implements Provider {
 
       let completed = false
       while (Date.now() < deadline) {
-        const primary = await this.request<DreamingStatusResponse>(dreamStatusPath(this.agentId), { method: "GET" })
+        const primary = await this.readDreamStatus(this.agentId)
         const pass = primary.passes?.find((candidate) => candidate.id === accepted.passId)
         if (pass && pass.status !== "running") {
           if (pass.status !== "completed") {
@@ -490,15 +580,17 @@ export class SignetProvider implements Provider {
           }
           const statuses = await Promise.all(
             scopes.map((agentId) =>
-              agentId === this.agentId
-                ? Promise.resolve(primary)
-                : this.request<DreamingStatusResponse>(dreamStatusPath(agentId), { method: "GET" })
+              agentId === this.agentId ? Promise.resolve(primary) : this.readDreamStatus(agentId)
             )
           )
-          if (statuses.some((status) => typeof status.episodicTokensPending !== "number")) {
-            throw new Error("Dreaming status did not report the episodic backlog for every scenario scope")
-          }
           if (statuses.every((status) => status.episodicTokensPending === 0)) return
+          idlePasses = (pass.mutationsApplied ?? 0) > 0 ? 0 : idlePasses + 1
+          if (idlePasses >= MAX_IDLE_DREAMING_PASSES) {
+            const backlog = statuses.map((status) => status.episodicTokensPending ?? "unmeasured").join(", ")
+            throw new Error(
+              `Dreaming applied no mutations in ${idlePasses} consecutive passes while the backlog was not drained (${backlog})`
+            )
+          }
           completed = true
           break
         }
@@ -509,9 +601,9 @@ export class SignetProvider implements Provider {
     throw new Error("Timed out draining the Dreaming episodic backlog")
   }
 
-  private agentIdForSession(session: UnifiedSession): string {
+  private agentIdForSession(session: UnifiedSession, containerTag: string): string {
     const declared = session.metadata?.agentId
-    if (declared === undefined) return this.agentId
+    if (declared === undefined) return haystackAgentId(containerTag)
     if (typeof declared !== "string" || !/^[A-Za-z0-9._:-]+$/.test(declared)) {
       throw new Error(`Dreaming benchmark session ${session.sessionId} has an invalid agentId`)
     }
@@ -542,6 +634,7 @@ export class SignetProvider implements Provider {
         sessionKey: sessionId,
         agentId,
         cwd: this.project,
+        reason: "session_shutdown",
         transcript,
         capturedAt: parseSessionDate(session),
       }),

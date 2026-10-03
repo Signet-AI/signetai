@@ -1,6 +1,7 @@
 import type { UnifiedSession } from "./unified"
 import type { ProviderPrompts } from "./prompts"
 import type { ConcurrencyConfig } from "./concurrency"
+import type { IngestUsage } from "./checkpoint"
 
 export interface ProviderConfig {
   apiKey: string
@@ -53,7 +54,11 @@ export interface Provider {
   ): Promise<void>
   search(query: string, options: SearchOptions): Promise<unknown[]>
   clear(containerTag: string): Promise<void>
+  getIngestUsage?(): IngestUsage
+  classifyResult?(result: unknown): RecallEvidenceKind
 }
+
+export type RecallEvidenceKind = "derived" | "raw-evidence"
 
 export type ProviderName =
   | "supermemory"

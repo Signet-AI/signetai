@@ -52,8 +52,8 @@
         "signet-connector-claude-code": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/core": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/core": "0.230.6",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -67,8 +67,8 @@
         "signet-connector-codex": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/core": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/core": "0.230.6",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -82,8 +82,8 @@
         "signet-codex-plugin": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/connector-codex": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/connector-codex": "0.230.6",
       },
     },
     "integrations/forge/connector": {
@@ -93,8 +93,8 @@
         "signet-connector-forge": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/core": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/core": "0.230.6",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -108,8 +108,8 @@
         "signet-connector-gemini": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/core": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/core": "0.230.6",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -123,8 +123,8 @@
         "signet-connector-hermes-agent": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/core": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/core": "0.230.6",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -138,8 +138,8 @@
         "signet-connector-kimi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/core": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/core": "0.230.6",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -153,8 +153,8 @@
         "signet-connector-oh-my-pi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/core": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/core": "0.230.6",
       },
       "devDependencies": {
         "@signet/oh-my-pi-extension": "workspace:*",
@@ -182,8 +182,8 @@
         "signet-connector-openclaw": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/core": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/core": "0.230.6",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -215,8 +215,8 @@
         "signet-connector-opencode": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
-        "@signet/core": "0.230.5",
+        "@signet/connector-base": "0.230.6",
+        "@signet/core": "0.230.6",
         "jsonc-parser": "3.3.1",
       },
       "devDependencies": {
@@ -248,7 +248,7 @@
         "signet-connector-pi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.5",
+        "@signet/connector-base": "0.230.6",
       },
       "devDependencies": {
         "@signet/pi-extension": "workspace:*",
@@ -288,7 +288,7 @@
       "name": "@signet/connector-base",
       "version": "0.230.6",
       "dependencies": {
-        "@signet/core": "0.230.5",
+        "@signet/core": "0.230.6",
         "json5": "^2.2.3",
         "jsonc-parser": "3.3.1",
       },
@@ -325,11 +325,15 @@
         "@ai-sdk/anthropic": "^2.0.56",
         "@ai-sdk/google": "^2.0.49",
         "@ai-sdk/openai": "^2.0.88",
+        "@ai-sdk/openai-compatible": "^1.0.58",
         "@anthropic-ai/tokenizer": "^0.0.4",
         "@getzep/zep-cloud": "^3.13.0",
         "ai": "^5.0.115",
         "drizzle-orm": "^0.45.1",
+        "hyparquet": "^1.27.1",
+        "hyparquet-compressors": "^1.1.1",
         "js-tiktoken": "^1.0.21",
+        "json5": "2.2.3",
         "mem0ai": "^3.1.4",
         "supermemory": "^4.0.0",
         "zod": "^3.24.4",
@@ -641,6 +645,8 @@
     "@ai-sdk/google": ["@ai-sdk/google@2.0.70", "", { "dependencies": { "@ai-sdk/provider": "2.0.1", "@ai-sdk/provider-utils": "3.0.23" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-NDMTvMo6vnPHDTA94FBOh3YMv0lxWDohYmFSGYhg0IimHMcOcC1ZV7E2KMLjzHOz5S7uasTITW7V3X5T+ozInQ=="],
 
     "@ai-sdk/openai": ["@ai-sdk/openai@2.0.103", "", { "dependencies": { "@ai-sdk/provider": "2.0.1", "@ai-sdk/provider-utils": "3.0.23" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-FDwY060LV/D5th+LeaxpSKcot5eXjzNzHguDf0NU1K+v7rxYZFWbldQPZarNo/IpD/WJE9RojgrFAcZ1e8KyvQ=="],
+
+    "@ai-sdk/openai-compatible": ["@ai-sdk/openai-compatible@1.0.58", "", { "dependencies": { "@ai-sdk/provider": "2.0.5", "@ai-sdk/provider-utils": "3.0.41" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-IqsKBBEBtfZD38GZaLnpAq8aSJu1774UPX3vm2hirKnf5SS0uvXQVYtGFRWKHcOOPvtxELTCd/wL4oEfhvn4Jw=="],
 
     "@ai-sdk/provider": ["@ai-sdk/provider@3.0.8", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-oGMAgGoQdBXbZqNG0Ze56CHjDZ1IDYOwGYxYjO5KLSlz5HiNQ9udIXsPZ61VWaHGZ5XW/jyjmr6t2xz2jGVwbQ=="],
 
@@ -2436,6 +2442,8 @@
 
     "fuse.js": ["fuse.js@7.3.0", "", {}, "sha512-plz8RVjfcDedTGfVngWH1jmJvBvAwi1v2jecfDerbEnMcmOYUEEwKFTHbNoCiYyzaK2Ws8lABkTCcRSqCY1q4w=="],
 
+    "fzstd": ["fzstd@0.1.1", "", {}, "sha512-dkuVSOKKwh3eas5VkJy1AW1vFpet8TA/fGmVA5krThl8YcOVE/8ZIoEA1+U1vEn5ckxxhLirSdY837azmbaNHA=="],
+
     "gaxios": ["gaxios@7.1.4", "", { "dependencies": { "extend": "^3.0.2", "https-proxy-agent": "^7.0.1", "node-fetch": "^3.3.2" } }, "sha512-bTIgTsM2bWn3XklZISBTQX7ZSddGW+IO3bMdGaemHZ3tbqExMENHLx6kKZ/KlejgrMtj8q7wBItt51yegqalrA=="],
 
     "gcp-metadata": ["gcp-metadata@8.1.2", "", { "dependencies": { "gaxios": "^7.0.0", "google-logging-utils": "^1.0.0", "json-bigint": "^1.0.0" } }, "sha512-zV/5HKTfCeKWnxG0Dmrw51hEWFGfcF2xiXqcA3+J90WDuP0SvoiSO5ORvcBsifmx/FoIjgQN3oNOGaQ5PhLFkg=="],
@@ -2577,6 +2585,12 @@
     "https-proxy-agent": ["https-proxy-agent@9.1.0", "", { "dependencies": { "agent-base": "9.0.0", "debug": "^4.3.4", "proxy-agent-negotiate": "1.1.0" } }, "sha512-ag87y7cJJ9/3+GxFr8Oy4O5faDsGRGnBGsJj/YjOSsSx/5eadKLYTMPlzuR6obgoCDDm0abAAZitXXQkMOPSpA=="],
 
     "humanize-ms": ["humanize-ms@1.2.1", "", { "dependencies": { "ms": "^2.0.0" } }, "sha512-Fl70vYtsAFb/C06PTS9dZBo7ihau+Tu/DNCk/OyHhea07S+aeMWpFFkUaXRa8fI+ScZbEI8dfSxwY7gxZ9SAVQ=="],
+
+    "hyparquet": ["hyparquet@1.31.2", "", {}, "sha512-dpVTCGkPPIdfDExa7YZGaJpuBTmLFDKGeZ6meHUj1mz/Q3qmaQHGLLqCyPBkQjfxrYNb08YTax682qeGO+zkVA=="],
+
+    "hyparquet-compressors": ["hyparquet-compressors@1.1.2", "", { "dependencies": { "fzstd": "0.1.1", "hysnappy": "1.1.1" } }, "sha512-0Hx6w0ZpVpNCefKy5xBYLTp6rKeZn/tsUzuliNzfKqSCdLcTQSfwATEoeedS703Y17k1qNS61HwRME5aOeNkPg=="],
+
+    "hysnappy": ["hysnappy@1.1.1", "", {}, "sha512-/V9XcN2NtRyWjR4LYMfvnvasVVF8jbT/ej0eofBQjZel91E3D813FQ3mQC6gDSMMTCq/FJh28XHeyqr3I/oBRw=="],
 
     "i18next": ["i18next@26.3.6", "", { "peerDependencies": { "typescript": "^5 || ^6 || ^7" }, "optionalPeers": ["typescript"] }, "sha512-Bu5Z2nAXgfVyM8xvW3jk9EKRIuX37PudsrBViThNFx7CR7aaYTpP01cxNB/E4c4UUzTDiAZRstEhsRfPOL/8xA=="],
 
@@ -3765,6 +3779,10 @@
     "@ai-sdk/google/@ai-sdk/provider": ["@ai-sdk/provider@2.0.1", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-KCUwswvsC5VsW2PWFqF8eJgSCu5Ysj7m1TxiHTVA6g7k360bk0RNQENT8KTMAYEs+8fWPD3Uu4dEmzGHc+jGng=="],
 
     "@ai-sdk/openai/@ai-sdk/provider": ["@ai-sdk/provider@2.0.1", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-KCUwswvsC5VsW2PWFqF8eJgSCu5Ysj7m1TxiHTVA6g7k360bk0RNQENT8KTMAYEs+8fWPD3Uu4dEmzGHc+jGng=="],
+
+    "@ai-sdk/openai-compatible/@ai-sdk/provider": ["@ai-sdk/provider@2.0.5", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-cmG40u10QFEUrYXWYom6Lo6DLR+pND3wWABTTT9Nf7zg9F7BD46KNj+STekndp9Kg5ZAIPA0WxmTI0IwRvKvvQ=="],
+
+    "@ai-sdk/openai-compatible/@ai-sdk/provider-utils": ["@ai-sdk/provider-utils@3.0.41", "", { "dependencies": { "@ai-sdk/provider": "2.0.5", "@standard-schema/spec": "^1.0.0", "eventsource-parser": "^3.0.6", "undici": "^5.29.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-xpURVGQud+AEOZ/uRZTBU0eVy2+dt/y/dUEp9ewjW3eTM6yu0vThzTvduhOSabpn6AExewg8WJW04P4D6USVXw=="],
 
     "@ai-sdk/provider-utils/@ai-sdk/provider": ["@ai-sdk/provider@2.0.1", "", { "dependencies": { "json-schema": "^0.4.0" } }, "sha512-KCUwswvsC5VsW2PWFqF8eJgSCu5Ysj7m1TxiHTVA6g7k360bk0RNQENT8KTMAYEs+8fWPD3Uu4dEmzGHc+jGng=="],
 

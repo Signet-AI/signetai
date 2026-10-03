@@ -17,9 +17,13 @@ describe("Signet benchmark profiles", () => {
 
     protected override async request<T>(path: string, init: RequestInit): Promise<T> {
       this.calls.push({ path, init })
+      if (path.startsWith("/api/agents")) return {} as T
       if (path === "/api/hooks/session-end") return { transcriptCaptureJobId: "capture-1" } as T
-      if (path === "/api/hooks/transcript-capture/capture-1?agentId=memorybench") {
+      if (path === "/api/hooks/transcript-capture/capture-1?agentId=memorybench-question-1-run") {
         return { status: "completed" } as T
+      }
+      if (path === "/api/dream/status?agentId=memorybench-question-1-run") {
+        return { worker: { running: true }, episodicTokensPending: this.statusCalls >= 3 ? 0 : 1 } as T
       }
       if (path === "/api/dream/trigger") {
         this.triggerCalls += 1
@@ -32,13 +36,22 @@ describe("Signet benchmark profiles", () => {
         if (this.statusCalls === 2) {
           return {
             worker: { running: true },
-            passes: [{ id: "pass-1", status: "completed" }],
+            passes: [
+              {
+                id: "pass-1",
+                status: "completed",
+                tokensInput: 1200,
+                tokensOutput: 300,
+                tokensCacheRead: 50,
+              },
+              { id: "periodic-pass", status: "running", tokensInput: 999 },
+            ],
             episodicTokensPending: 1,
           } as T
         }
         return {
           worker: { running: true },
-          passes: [{ id: "pass-2", status: "completed" }],
+          passes: [{ id: "pass-2", status: "completed", tokensInput: null }],
           episodicTokensPending: 0,
         } as T
       }
@@ -65,25 +78,37 @@ describe("Signet benchmark profiles", () => {
     }
 
     expect(provider.name).toBe("signet-dreaming")
+    const isolate = provider.calls.find((call) => call.path.startsWith("/api/agents"))
+    expect(isolate?.init.method).toBe("PATCH")
+    expect(JSON.parse(String(isolate?.init.body))).toEqual({ read_policy: "isolated" })
     expect(provider.calls.some((call) => call.path === "/api/memory/remember")).toBe(false)
     const capture = provider.calls.find((call) => call.path === "/api/hooks/session-end")
     expect(JSON.parse(String(capture?.init.body))).toMatchObject({
       harness: "memorybench",
       sessionId: "memorybench:question-1-run:session-1",
       sessionKey: "memorybench:question-1-run:session-1",
-      agentId: "memorybench",
+      agentId: "memorybench-question-1-run",
+      reason: "session_shutdown",
       capturedAt: "2023-05-20T10:20:00.000Z",
       transcript: "[2023-05-20T10:20:00.000Z]\nuser: I moved deployment to edge runtime.",
     })
     expect(provider.calls.map((call) => call.path)).toEqual([
+      "/api/agents/memorybench-question-1-run",
       "/api/hooks/session-end",
-      "/api/hooks/transcript-capture/capture-1?agentId=memorybench",
-      "/api/dream/status?agentId=memorybench",
+      "/api/hooks/transcript-capture/capture-1?agentId=memorybench-question-1-run",
+      "/api/dream/status?agentId=memorybench-question-1-run",
       "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
+      "/api/dream/status?agentId=memorybench",
+      "/api/dream/status?agentId=memorybench-question-1-run",
       "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
+      "/api/dream/status?agentId=memorybench-question-1-run",
     ])
+    expect(provider.getIngestUsage().dreamingPasses).toEqual({
+      "pass-1": { inputTokens: 1200, outputTokens: 300, cacheReadTokens: 50 },
+      "pass-2": { inputTokens: null, outputTokens: null, cacheReadTokens: null },
+    })
   })
 
   it("preserves session and recall agent scopes for deterministic Dreaming scenarios", async () => {
@@ -92,7 +117,8 @@ describe("Signet benchmark profiles", () => {
 
       protected override async request<T>(path: string, init: RequestInit): Promise<T> {
         this.calls.push({ path, init })
-        if (path === "/api/hooks/session-end") {
+        if (path.startsWith("/api/agents")) return {} as T
+      if (path === "/api/hooks/session-end") {
           const body = JSON.parse(String(init.body)) as { agentId: string }
           return { transcriptCaptureJobId: `capture-${body.agentId}` } as T
         }
@@ -139,7 +165,10 @@ describe("Signet benchmark profiles", () => {
       "/api/hooks/transcript-capture/capture-dreaming-gate-beta?agentId=dreaming-gate-beta"
     )
     const recall = provider.calls.find((call) => call.path === "/api/memory/recall")
-    expect(JSON.parse(String(recall?.init.body))).toMatchObject({ agentId: "dreaming-gate-alpha" })
+    const recallBody = JSON.parse(String(recall?.init.body))
+    expect(recallBody).toMatchObject({ agentId: "dreaming-gate-alpha" })
+    expect(recallBody).not.toHaveProperty("project")
+    expect(recallBody).not.toHaveProperty("scope")
   })
 
   it("rejects resumed Dreaming captures whose fixture scopes were not checkpointed", async () => {
@@ -171,7 +200,8 @@ describe("Signet benchmark profiles", () => {
 
       protected override async request<T>(path: string, init: RequestInit): Promise<T> {
         this.calls.push({ path, init })
-        if (path === "/api/hooks/session-end") {
+        if (path.startsWith("/api/agents")) return {} as T
+      if (path === "/api/hooks/session-end") {
           const body = JSON.parse(String(init.body)) as { agentId: string }
           return { transcriptCaptureJobId: `capture-${body.agentId}` } as T
         }
@@ -259,6 +289,84 @@ describe("Signet benchmark profiles", () => {
       if (previousPoll === undefined) delete process.env.SIGNET_BENCH_DREAMING_POLL_SECS
       else process.env.SIGNET_BENCH_DREAMING_POLL_SECS = previousPoll
     }
+  })
+
+  class DrainingProvider extends SignetDreamingProvider {
+    calls: string[] = []
+    private triggers = 0
+
+    constructor(
+      private readonly drainedAfterPass: number,
+      private readonly mutationsPerPass: number
+    ) {
+      super()
+    }
+
+    protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+      this.calls.push(path)
+      if (path === "/api/dream/trigger") {
+        this.triggers += 1
+        return { passId: `pass-${this.triggers}` } as T
+      }
+      if (path.startsWith("/api/dream/status")) {
+        return {
+          worker: { running: true },
+          passes: [
+            { id: `pass-${this.triggers}`, status: "completed", mutationsApplied: this.mutationsPerPass },
+          ],
+          episodicTokensPending: this.triggers >= this.drainedAfterPass ? 0 : null,
+        } as T
+      }
+      throw new Error(`Unexpected path ${path}`)
+    }
+  }
+
+  async function finalizeWith(provider: SignetDreamingProvider): Promise<void> {
+    const previous = process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+    process.env.SIGNET_BENCH_DREAMING_POLL_SECS = "1"
+    try {
+      await provider.finalizeIngest({ runId: "run", dataSourceRunId: "source" })
+    } finally {
+      if (previous === undefined) delete process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+      else process.env.SIGNET_BENCH_DREAMING_POLL_SECS = previous
+    }
+  }
+
+  it("keeps triggering passes while the backlog is unmeasured until it measures zero", async () => {
+    const provider = new DrainingProvider(3, 5)
+    await finalizeWith(provider)
+    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
+  })
+
+  it("fails instead of looping when passes stop applying mutations", async () => {
+    const provider = new DrainingProvider(Number.POSITIVE_INFINITY, 0)
+    await expect(finalizeWith(provider)).rejects.toThrow("applied no mutations in 3 consecutive passes")
+    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
+  })
+
+  it("creates a missing haystack agent as isolated so recall cannot read other haystacks", async () => {
+    class NewAgentProvider extends SignetDreamingProvider {
+      calls: Array<{ path: string; init: RequestInit }> = []
+
+      protected override async request<T>(path: string, init: RequestInit): Promise<T> {
+        this.calls.push({ path, init })
+        if (init.method === "PATCH") throw new Error(`${path} failed (404): Agent not found`)
+        if (path === "/api/agents") return {} as T
+        if (path === "/api/memory/recall") return { results: [] } as T
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const provider = new NewAgentProvider()
+
+    await provider.search("question", { containerTag: "q1-run" })
+    await provider.search("question again", { containerTag: "q1-run" })
+
+    const create = provider.calls.find((call) => call.path === "/api/agents")
+    expect(JSON.parse(String(create?.init.body))).toEqual({
+      name: "memorybench-q1-run",
+      read_policy: "isolated",
+    })
+    expect(provider.calls.filter((call) => call.path.startsWith("/api/agents"))).toHaveLength(2)
   })
 
   it("formats raw sessions like the Supermemory adapter for parity runs", () => {

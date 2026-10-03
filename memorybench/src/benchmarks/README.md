@@ -7,13 +7,27 @@ Benchmark dataset adapters. Each benchmark implements the `Benchmark` interface.
 ```typescript
 interface Benchmark {
     name: string
+    protocol?: BenchmarkProtocol
     load(config?: BenchmarkConfig): Promise<void>
     getQuestions(filter?: QuestionFilter): UnifiedQuestion[]
     getHaystackSessions(questionId: string): UnifiedSession[]
     getGroundTruth(questionId: string): string
     getQuestionTypes(): QuestionTypeRegistry
+    getIngestionGroupId?(questionId: string): string
+    getDatasetIdentity?(): Record<string, unknown> | undefined
 }
 ```
+
+Optional members:
+
+- `getIngestionGroupId()` - questions returning the same group share one
+  container and are ingested and indexed once (BEAM's 20 questions per chat).
+- `protocol` - a benchmark that defines its own scoring owns the retrieval
+  Top-K, answer prompt, per-question evaluation (score in [0, 1] plus usage),
+  and aggregation into a primary metric. Without it, the harness uses the
+  provider's answer prompt and the legacy correct/incorrect judge.
+- `getDatasetIdentity()` - provenance recorded in the checkpoint and report; a
+  resumed run fails if it changed.
 
 ## Adding a Benchmark
 
@@ -36,6 +50,7 @@ interface Benchmark {
 | `locomo` | GitHub snap-research/locomo | Long context memory benchmark |
 | `longmemeval` | HuggingFace xiaowu0162/longmemeval-cleaned | Long-term memory evaluation |
 | `convomem` | HuggingFace Salesforce/ConvoMem | Conversational memory benchmark |
+| `beam-1m` / `beam-10m` | Pinned Hugging Face BEAM revisions via `beam prepare` | Ten memory abilities over 1M / 10M token conversations |
 
 ## Question Types
 
@@ -67,3 +82,17 @@ interface Benchmark {
 | `changing_evidence` | change | Information updates |
 | `implicit_connection_evidence` | implicit | Implicit reasoning |
 | `abstention_evidence` | abstain | Unanswerable questions |
+
+### BEAM
+| Type | Alias | Description |
+|------|-------|-------------|
+| `abstention` | abstain | Withhold answers when evidence is missing |
+| `contradiction_resolution` | contradict | Detect and reconcile inconsistent statements |
+| `event_ordering` | order | Reconstruct event or information order |
+| `information_extraction` | extract | Recall entities and factual details |
+| `instruction_following` | instruction | Follow sustained user instructions |
+| `knowledge_update` | update | Retain updated facts over stale facts |
+| `multi_session_reasoning` | multi | Reason across non-adjacent dialogue segments |
+| `preference_following` | preference | Adapt to evolving user preferences |
+| `summarization` | summary | Summarize dialogue content |
+| `temporal_reasoning` | temporal | Reason about explicit and implicit time relations |

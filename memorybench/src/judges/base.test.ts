@@ -1,10 +1,11 @@
 import { describe, expect, it } from "bun:test"
 import type { JudgeResult } from "../types/judge"
 import { config } from "../utils/config"
-import { OpenAIJudge } from "./openai"
+import { createJudge } from "./index"
 
 async function run(content: string): Promise<JudgeResult> {
   const previousBaseUrl = config.openaiBaseUrl
+  const previousApiKey = config.openaiApiKey
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -27,10 +28,10 @@ async function run(content: string): Promise<JudgeResult> {
       }),
   })
   config.openaiBaseUrl = `http://127.0.0.1:${server.port}/v1`
+  config.openaiApiKey = "local-test"
 
   try {
-    const judge = new OpenAIJudge()
-    await judge.initialize({ apiKey: "local-test", model: "gpt-4o" })
+    const judge = createJudge("gpt-4o")
     return await judge.evaluate({
       question: "What is 2 + 2?",
       questionType: "default",
@@ -40,17 +41,26 @@ async function run(content: string): Promise<JudgeResult> {
   } finally {
     server.stop(true)
     config.openaiBaseUrl = previousBaseUrl
+    config.openaiApiKey = previousApiKey
   }
 }
 
-describe("OpenAIJudge response parsing", () => {
-  it("accepts a valid JSON verdict", async () => {
+describe("judge response parsing", () => {
+  it("accepts a valid JSON verdict and reports API usage", async () => {
     await expect(
       run('{"score":1,"label":"correct","explanation":"The answer is 4."}')
     ).resolves.toEqual({
       score: 1,
       label: "correct",
       explanation: "The answer is 4.",
+      usage: {
+        requests: 1,
+        unreportedRequests: 0,
+        inputTokens: 1,
+        outputTokens: 1,
+        reasoningTokens: 0,
+        cachedInputTokens: 0,
+      },
     })
   })
 
