@@ -117,6 +117,10 @@ export function normalizePipelineCause(error: unknown): PipelineCauseFamily {
 	return "internal_error";
 }
 
+export function pipelineErrorStatus(error: unknown): number | undefined {
+	return pipelineErrorDetails(error).status;
+}
+
 export function pipelineCauseFromHttpFailure(status: number, responseText = ""): PipelineCauseFamily {
 	return normalizePipelineCause({ status, message: responseText });
 }
