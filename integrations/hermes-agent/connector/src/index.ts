@@ -1,4 +1,4 @@
-import { spawnSyncHidden as spawnSync } from "@signet/core";
+import { resolveRuntimeAssetDirectory, resolveRuntimePackageRoot, spawnSyncHidden as spawnSync } from "@signet/core";
 import { createHash } from "node:crypto";
 import {
 	closeSync,
@@ -22,21 +22,13 @@ import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signe
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 function getPluginSourceDir(): string {
-	const fromDist = join(__dirname, "..", "hermes-plugin");
-	if (existsSync(fromDist)) return fromDist;
-	const fromSrc = join(__dirname, "..", "..", "hermes-plugin");
-	if (existsSync(fromSrc)) return fromSrc;
-	const connectorAssetsDir = process.env.SIGNET_CONNECTOR_ASSETS_DIR?.trim();
-	if (connectorAssetsDir) {
-		const fromEmbeddedAssets = join(connectorAssetsDir, "hermes-agent", "hermes-plugin");
-		if (existsSync(fromEmbeddedAssets)) return fromEmbeddedAssets;
-	}
-	const signetDir = process.env.SIGNET_DIR?.trim();
-	if (signetDir) {
-		const fromConnectors = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
-		if (existsSync(fromConnectors)) return fromConnectors;
-	}
-	throw new Error("Cannot find hermes-plugin directory in connector package");
+	const explicit = process.env.SIGNET_CONNECTOR_ASSETS_DIR?.trim();
+	if (explicit) return resolveRuntimeAssetDirectory(join(explicit, "hermes-agent", "hermes-plugin"), import.meta.url);
+	const root = resolveRuntimePackageRoot(import.meta.url);
+	const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+	const path =
+		pkg.name === "@signet/connector-hermes-agent" ? "hermes-plugin" : "connectors/hermes-agent/hermes-plugin";
+	return resolveRuntimeAssetDirectory(path, import.meta.url);
 }
 
 const PLUGIN_FILES = ["__init__.py", "client.py", "plugin.yaml", "README.md"] as const;

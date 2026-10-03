@@ -1,6 +1,4 @@
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveRuntimeAsset } from "@signet/core";
 import { Worker } from "node:worker_threads";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
 import { tokenizerWasmPath } from "./tokenizer";
@@ -28,11 +26,8 @@ interface CountResponse {
 }
 
 function resolveWorkerPath(): string {
-	const moduleDir = dirname(fileURLToPath(import.meta.url));
-	const bundled = join(moduleDir, "dreaming-token-worker.js");
-	return existsSync(bundled)
-		? bundled
-		: (resolveEmbeddedWorkerPath("dreaming-token-worker") ?? join(moduleDir, "dreaming-token-worker.ts"));
+	const embedded = resolveEmbeddedWorkerPath("dreaming-token-worker");
+	return embedded ?? resolveRuntimeAsset("dreaming-token-worker.js", import.meta.url);
 }
 
 export interface DreamingBacklogTokenBatchResult {

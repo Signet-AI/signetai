@@ -1,7 +1,7 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { resolveRuntimeAsset } from "@signet/core";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, extname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { hasNativeRuntimeAssets } from "../native-runtime-assets";
 
 export interface DreamingAcpxMcpConfig {
@@ -19,16 +19,7 @@ function resolveMcpProcess(): DreamingMcpProcess {
 	if (hasNativeRuntimeAssets()) {
 		return { command: process.execPath, args: [], internal: true };
 	}
-	const here = fileURLToPath(import.meta.url);
-	const suffix = extname(here) === ".ts" ? ".ts" : ".js";
-	const candidates =
-		suffix === ".ts"
-			? [join(dirname(dirname(here)), "mcp-stdio.ts")]
-			: [join(dirname(here), "mcp-stdio.js"), join(dirname(dirname(here)), "mcp-stdio.js")];
-	const entrypoint = candidates.find((candidate) => existsSync(candidate));
-	if (!entrypoint) {
-		throw new Error(`Signet Dreaming MCP entrypoint is unavailable: ${candidates.join(", ")}`);
-	}
+	const entrypoint = resolveRuntimeAsset("mcp-stdio.js", import.meta.url);
 	return { command: process.execPath, args: [entrypoint], internal: false };
 }
 export function createDreamingAcpxMcpConfig(params: {

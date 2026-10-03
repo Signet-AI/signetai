@@ -8,7 +8,6 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
-	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -18,19 +17,14 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { copyManifest } from "./stage-runtime-manifest.mjs";
 
 const hostWin = process.platform === "win32";
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "../..");
 const resources = resolve(desktopRoot, "resources");
-const daemonPkgPath = resolve(repoRoot, "platform/daemon/package.json");
-const corePkgPath = resolve(repoRoot, "platform/core/package.json");
 const resourceLockOwnerGracePeriodMs = 60_000;
-
-function readJson(path) {
-	return JSON.parse(readFileSync(path, "utf8"));
-}
 
 function pathLookup(cmd) {
 	try {
@@ -131,24 +125,6 @@ export function stageBunRuntime(source, destination, platform) {
 export function platformVecPackage(platform, arch) {
 	const os = platform === "win32" ? "windows" : platform;
 	return `sqlite-vec-${os}-${arch}`;
-}
-
-function pkgVersion(pkg, name) {
-	return pkg.dependencies?.[name] ?? pkg.optionalDependencies?.[name] ?? pkg.devDependencies?.[name] ?? null;
-}
-
-export function runtimeDependencies(daemonPkg, corePkg, platform, arch) {
-	const vecPackage = platformVecPackage(platform, arch);
-	const dependencies = {};
-	for (const name of ["@firecrawl/anydoc", "tiktoken"]) {
-		const version = pkgVersion(daemonPkg, name);
-		if (version) dependencies[name] = version;
-	}
-	for (const name of ["@napi-rs/keyring", "sqlite-vec", vecPackage]) {
-		const version = pkgVersion(corePkg, name);
-		if (version) dependencies[name] = version;
-	}
-	return dependencies;
 }
 
 function resourceLockPath(target) {
@@ -315,55 +291,14 @@ export function stageRuntime() {
 
 		const bunDest = resolve(runtimeOut, target === "win32" ? "bun.exe" : "bun");
 		stageBunRuntime(bunSrc, bunDest, target);
-		mkdirSync(resolve(daemonOut, "dist"), { recursive: true });
 		const daemonDist = resolve(repoRoot, "platform/daemon/dist");
-		for (const entry of readdirSync(daemonDist)) {
-			if (/\.(js|node|wasm)$/.test(entry)) {
-				cpSync(join(daemonDist, entry), resolve(daemonOut, "dist", entry));
-			}
-		}
-		execFileSync(
-			bunSrc,
-			[
-				"build",
-				resolve(repoRoot, "surfaces/desktop/scripts/workspace-migration-runner.ts"),
-				"--target=bun",
-				"--external",
-				"better-sqlite3",
-				"--outfile",
-				resolve(daemonOut, "dist", "workspace-migration-runner.js"),
-			],
-			{ cwd: repoRoot, stdio: "inherit" },
-		);
-		cpSync(resolve(repoRoot, "platform/daemon/dashboard"), resolve(daemonOut, "dashboard"), { recursive: true });
-		cpSync(resolve(repoRoot, "platform/daemon/skills"), resolve(daemonOut, "skills"), { recursive: true });
-		const connectorsOut = resolve(daemonOut, "connectors");
-		const hermesPluginSrc = resolve(repoRoot, "integrations/hermes-agent/connector/hermes-plugin");
-		if (existsSync(hermesPluginSrc)) {
-			cpSync(hermesPluginSrc, resolve(connectorsOut, "hermes-agent", "hermes-plugin"), { recursive: true });
-		} else {
-			throw new Error(`Hermes connector plugin source not found: ${hermesPluginSrc}`);
-		}
-
-		const daemonPkg = readJson(daemonPkgPath);
-		const corePkg = readJson(corePkgPath);
-		const vecPkg = platformVecPackage(target, bunArch);
-		if (pkgVersion(corePkg, vecPkg) === null) {
-			throw new Error(`No sqlite-vec binary package is available for ${target}/${bunArch}`);
-		}
-		const dependencies = runtimeDependencies(daemonPkg, corePkg, target, bunArch);
-
+		const manifestPath = resolve(daemonDist, "runtime-manifest.json");
+		if (!existsSync(manifestPath)) throw new Error(`Runtime manifest is missing: ${manifestPath}`);
+		copyManifest(repoRoot, daemonOut, manifestPath);
 		writeFileSync(
 			resolve(daemonOut, "package.json"),
-			`${JSON.stringify({ private: true, type: "module", dependencies }, null, "	")}\n`,
+			`${JSON.stringify({ name: "@signet/daemon", private: true, type: "module" }, null, "\t")}\n`,
 		);
-
-		execFileSync(bunSrc, ["install", "--production"], {
-			cwd: daemonOut,
-			stdio: "inherit",
-			env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
-		});
-
 		replaceResources(resources, stagedResources);
 		console.log(`Staged Electron desktop resources in ${resources}`);
 	} catch (error) {

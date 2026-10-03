@@ -1,8 +1,7 @@
+import { resolveRuntimeAsset } from "@signet/core";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
 import { lstat, opendir, readFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { Worker, isMainThread, parentPort, threadId } from "node:worker_threads";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 import { buildObsidianSourceChunks, type ObsidianSourceChunk } from "./obsidian-source-chunks";
@@ -326,9 +325,7 @@ export function runNativeSourceWorker(): void {
 function workerPath(): string {
 	const embedded = resolveEmbeddedWorkerPath("native-memory-source-worker");
 	if (embedded !== null) return embedded;
-	const directory = dirname(fileURLToPath(import.meta.url));
-	const bundled = join(directory, "native-memory-source-worker.js");
-	return existsSync(bundled) ? bundled : join(directory, "native-memory-source-worker.ts");
+	return resolveRuntimeAsset("native-memory-source-worker.js", import.meta.url);
 }
 
 export interface NativeSourceWorkerHandle {

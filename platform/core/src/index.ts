@@ -694,3 +694,5 @@ export { parseTranscriptMessages, buildExportTranscriptRecord } from "./transcri
 
 export { parseAssistantChatEvent } from "./assistant-chat";
 export type { AssistantChatEvent, AssistantChatMessage } from "./assistant-chat";
+
+export { resolveRuntimeAsset, resolveRuntimeAssetDirectory, resolveRuntimePackageRoot } from "./runtime-assets";
