@@ -5,6 +5,7 @@ beforeDashboardFixture(() => dashboardQueryCache.clear(false, false));
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { TelemetryHealthResponse } from "@/lib/api";
 import { Window } from "happy-dom";
+import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { TelemetryHealthPanel, formatTelemetryCount } from "@/components/settings/logs";
@@ -33,14 +34,10 @@ function health(overrides: Partial<Extract<TelemetryHealthResponse, { enabled: t
 const originalFetch = globalThis.fetch;
 let response: TelemetryHealthResponse | "failed" = health();
 
+let restoreDomGlobals = () => {};
+
 beforeAll(() => {
-	(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-	const window = new Window();
-	for (const key of Object.getOwnPropertyNames(window)) {
-		if (!(key in globalThis)) {
-			(globalThis as Record<string, unknown>)[key] = (window as unknown as Record<string, unknown>)[key];
-		}
-	}
+	restoreDomGlobals = installDashboardDomGlobals(new Window());
 	globalThis.fetch = (async (input: RequestInfo | URL) => {
 		if (!String(input).endsWith("/api/telemetry/health")) return new Response("not found", { status: 404 });
 		if (response === "failed") return new Response("service unavailable", { status: 503 });
@@ -49,6 +46,7 @@ beforeAll(() => {
 });
 
 afterAll(() => {
+	restoreDomGlobals();
 	globalThis.fetch = originalFetch;
 });
 
