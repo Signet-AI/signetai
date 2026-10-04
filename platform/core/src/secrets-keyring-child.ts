@@ -44,20 +44,36 @@ function loadModule(): typeof import("@napi-rs/keyring") {
 	return require("@napi-rs/keyring") as typeof import("@napi-rs/keyring");
 }
 
-function linuxAvailability(): { readonly state: string; readonly message: string } | null {
-	if (process.platform !== "linux") return null;
-	if (process.env.SIGNET_SECRETS_LINUX_KEYRING === "keyutils")
-		return { state: "unsupported", message: "Linux keyutils is not an implicit Signet secrets backend" };
-	if (!process.env.DBUS_SESSION_BUS_ADDRESS)
-		return { state: "unavailable", message: "Linux Secret Service requires a user D-Bus session" };
+function probeSecretService(): void {
+	execFileSyncHidden("busctl", ["--user", "status", "org.freedesktop.secrets"], {
+		stdio: "ignore",
+		timeout: 1_000,
+	});
+}
+
+export function linuxKeyringAvailability(
+	platform: NodeJS.Platform = process.platform,
+	env: NodeJS.ProcessEnv = process.env,
+	probe: () => void = probeSecretService,
+): { readonly state: string; readonly message: string; readonly backend: "absent" } | null {
+	if (platform !== "linux") return null;
+	if (env.SIGNET_SECRETS_LINUX_KEYRING === "keyutils")
+		return {
+			state: "unsupported",
+			message: "Linux keyutils is not an implicit Signet secrets backend",
+			backend: "absent",
+		};
+	if (!env.DBUS_SESSION_BUS_ADDRESS)
+		return { state: "unavailable", message: "Linux Secret Service requires a user D-Bus session", backend: "absent" };
 	try {
-		execFileSyncHidden("busctl", ["--user", "status", "org.freedesktop.secrets"], {
-			stdio: "ignore",
-			timeout: 1_000,
-		});
+		probe();
 		return null;
 	} catch {
-		return { state: "unavailable", message: "Linux Secret Service is not registered on the user D-Bus session" };
+		return {
+			state: "unavailable",
+			message: "Linux Secret Service is not registered on the user D-Bus session",
+			backend: "absent",
+		};
 	}
 }
 
@@ -87,7 +103,7 @@ async function readRequest(): Promise<SecretKeyringChildRequest> {
 }
 
 async function execute(request: SecretKeyringChildRequest): Promise<unknown> {
-	const unavailable = linuxAvailability();
+	const unavailable = linuxKeyringAvailability();
 	if (unavailable !== null) return unavailable;
 	let module: typeof import("@napi-rs/keyring");
 	try {

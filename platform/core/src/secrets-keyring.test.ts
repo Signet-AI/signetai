@@ -5,6 +5,7 @@ import { devNull, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSyncHidden } from "./child-process";
+import { linuxKeyringAvailability } from "./secrets-keyring-child";
 import {
 	getSecretKeyring,
 	resetSecretKeyringModuleForTests,
@@ -37,8 +38,8 @@ afterEach(async () => {
 	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-function fixedKeyring(state: SecretKeyringState): SecretKeyringAdapter {
-	const result: SecretKeyringResult = { state, message: `test keyring ${state}` };
+function fixedKeyring(state: SecretKeyringState, backend?: "absent"): SecretKeyringAdapter {
+	const result: SecretKeyringResult = { state, message: `test keyring ${state}`, ...(backend ? { backend } : {}) };
 	return {
 		platform: "test",
 		service: "test",
@@ -533,6 +534,47 @@ await new Promise(()=>{});}
 		setSecretKeyringAdapterForTests(fixedKeyring("unavailable"));
 
 		await expect(getLocalSecretValue("EXISTING_KEY")).rejects.toMatchObject({ state: "unavailable" });
+	});
+
+	test("falls back to the machine-id store only when the host has no keyring backend", async () => {
+		const headless = await mkdtemp(join(tmpdir(), "signet-keyring-headless-"));
+		directories.push(headless);
+		process.env.SIGNET_PATH = headless;
+		setSecretKeyringAdapterForTests(fixedKeyring("unavailable", "absent"));
+		await putLocalSecret("HEADLESS_KEY", "headless-value");
+		const store = JSON.parse(await readFile(join(headless, ".secrets", "secrets.enc"), "utf8")) as {
+			version: number;
+			provider: string;
+		};
+		expect(store).toMatchObject({ version: 1, provider: "legacy-obfuscated" });
+		expect(await getLocalSecretValue("HEADLESS_KEY")).toBe("headless-value");
+
+		const transient = await mkdtemp(join(tmpdir(), "signet-keyring-transient-"));
+		directories.push(transient);
+		process.env.SIGNET_PATH = transient;
+		setSecretKeyringAdapterForTests(fixedKeyring("unavailable"));
+		await expect(putLocalSecret("TRANSIENT_KEY", "value")).rejects.toMatchObject({ state: "unavailable" });
+		expect(existsSync(join(transient, ".secrets", "secrets.enc"))).toBe(false);
+	});
+
+	test("reports a missing keyring backend only for Linux hosts without Secret Service", () => {
+		const reachable = () => {};
+		const unregistered = () => {
+			throw new Error("org.freedesktop.secrets is not registered");
+		};
+		const session = { DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus" };
+		expect(linuxKeyringAvailability("darwin", {}, unregistered)).toBeNull();
+		expect(linuxKeyringAvailability("win32", {}, unregistered)).toBeNull();
+		expect(linuxKeyringAvailability("linux", session, reachable)).toBeNull();
+		expect(linuxKeyringAvailability("linux", {}, reachable)).toMatchObject({ state: "unavailable", backend: "absent" });
+		expect(linuxKeyringAvailability("linux", session, unregistered)).toMatchObject({
+			state: "unavailable",
+			backend: "absent",
+		});
+		expect(linuxKeyringAvailability("linux", { SIGNET_SECRETS_LINUX_KEYRING: "keyutils" }, reachable)).toMatchObject({
+			state: "unsupported",
+			backend: "absent",
+		});
 	});
 
 	test("does not fall back for locked or permission-denied keyrings", async () => {

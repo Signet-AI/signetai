@@ -395,10 +395,10 @@ async function resolveMasterKey(
 	if (result.state === "locked") throw new SecretKeyringError(result);
 	if (result.state !== "unavailable" && result.state !== "unsupported") throw new SecretKeyringError(result);
 	emitDegradedWarning(result);
-	if (options.allowLegacyFallback === false) {
+	if (options.allowLegacyFallback === false && result.state !== "unsupported" && result.backend !== "absent") {
 		throw new SecretKeyringError({
 			...result,
-			message: `Native keyring is ${result.state}; refusing to write secrets with legacy machine-id encryption${result.message ? `: ${result.message}` : ""}`,
+			message: `Native keyring is temporarily ${result.state}; refusing to write secrets with legacy machine-id encryption${result.message ? `: ${result.message}` : ""}`,
 		});
 	}
 	return { key: await getLegacyMasterKey(), provider: "legacy-obfuscated" };
