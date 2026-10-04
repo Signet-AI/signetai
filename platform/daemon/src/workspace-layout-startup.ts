@@ -56,7 +56,4 @@ export function runWorkspaceLayoutStartup(
 		return { status: "failed", reason: error instanceof Error ? error.message : String(error) };
 	}
 }
-
-// Evaluated as the first import of daemon.ts: every later module binds workspace
-// paths at load time, so the layout must be final before any of them load.
 export const workspaceLayoutStartup = runWorkspaceLayoutStartup();
