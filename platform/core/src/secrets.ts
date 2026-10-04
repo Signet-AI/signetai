@@ -10,6 +10,7 @@ import {
 	readdirSync,
 	renameSync,
 	rmdirSync,
+	rmSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
@@ -710,8 +711,9 @@ async function acquireSecretStoreLock(): Promise<SecretStoreLock> {
 				release: async () => {
 					try {
 						if (readSecretStoreLockOwner() !== owner) return;
-						unlinkSync(getSecretStoreLockOwnerFile());
-						rmdirSync(getSecretStoreLockFile());
+						const released = `${getSecretStoreLockFile()}.released-${owner}`;
+						renameSync(getSecretStoreLockFile(), released);
+						rmSync(released, { recursive: true, force: true });
 					} catch (error) {
 						if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
 					}
