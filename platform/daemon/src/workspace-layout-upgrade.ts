@@ -31,7 +31,13 @@ const ARTIFACT_FILE = /^[^/\\]+--(?:summary|transcript|compaction|manifest)\.md$
 const TRANSCRIPT_FILE = /^transcript\.jsonl(?:\.lock)?$/;
 const DATABASE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
-export type LayoutMove = { readonly from: string; readonly to: string };
+type MoveIdentity = {
+	readonly device: string;
+	readonly inode: string;
+	readonly kind: "directory" | "file" | "other" | "symlink";
+};
+
+export type LayoutMove = { readonly from: string; readonly to: string; readonly identity?: MoveIdentity };
 
 type InProgressRecord = {
 	readonly version: 1;
@@ -103,11 +109,25 @@ function isRecordPath(value: unknown): value is string {
 }
 
 function isMove(value: unknown): value is LayoutMove {
+	const identity = value && typeof value === "object" ? Reflect.get(value, "identity") : undefined;
 	return (
 		!!value &&
 		typeof value === "object" &&
 		isRecordPath(Reflect.get(value, "from")) &&
-		isRecordPath(Reflect.get(value, "to"))
+		isRecordPath(Reflect.get(value, "to")) &&
+		(identity === undefined || isMoveIdentity(identity))
+	);
+}
+
+function isMoveIdentity(value: unknown): value is MoveIdentity {
+	if (!value || typeof value !== "object") return false;
+	const device = Reflect.get(value, "device");
+	const inode = Reflect.get(value, "inode");
+	const kind = Reflect.get(value, "kind");
+	return (
+		typeof device === "string" &&
+		typeof inode === "string" &&
+		(kind === "directory" || kind === "file" || kind === "other" || kind === "symlink")
 	);
 }
 
@@ -163,6 +183,22 @@ function entry(path: string): ReturnType<typeof lstatSync> | null {
 	}
 }
 
+function moveIdentity(path: string): MoveIdentity {
+	const stat = lstatSync(path, { bigint: true });
+	const kind = stat.isDirectory() ? "directory" : stat.isFile() ? "file" : stat.isSymbolicLink() ? "symlink" : "other";
+	return { device: stat.dev.toString(), inode: stat.ino.toString(), kind };
+}
+
+function matchesMoveIdentity(path: string, expected: MoveIdentity): boolean {
+	const actual = moveIdentity(path);
+	return (
+		expected.inode !== "0" &&
+		actual.device === expected.device &&
+		actual.inode === expected.inode &&
+		actual.kind === expected.kind
+	);
+}
+
 function inside(root: string, path: string): boolean {
 	const rel = relative(root, path);
 	return rel !== "" && !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
@@ -195,11 +231,11 @@ function baseFor(bases: readonly string[], move: LayoutMove): string | undefined
 function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: string[] } {
 	const v1 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V1);
 	const v2 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V2);
-	const moves: { from: string; to: string }[] = [];
+	const moves: LayoutMove[] = [];
 	const emptied: string[] = [];
 	const add = (from: string, to: string): void => {
 		if (from === to || !entry(from)) return;
-		moves.push({ from, to });
+		moves.push({ from, to, identity: moveIdentity(from) });
 	};
 	const bases = upgradeBases(root);
 
@@ -290,7 +326,7 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 
 	const stored = (path: string): string => (inside(root, path) ? relative(root, path) : path);
 	return {
-		moves: moves.map((move) => ({ from: stored(move.from), to: stored(move.to) })),
+		moves: moves.map((move) => ({ ...move, from: stored(move.from), to: stored(move.to) })),
 		created: [...created].map(stored),
 		emptied: emptied.map(stored),
 	};
@@ -343,7 +379,10 @@ function apply(
 		const to = resolve(root, move.to);
 		const source = entry(from);
 		if (!source) {
-			if (resumed && entry(to)) continue;
+			const target = entry(to);
+			if (resumed && target && (!move.identity || matchesMoveIdentity(to, move.identity))) continue;
+			if (resumed && target && move.identity)
+				throw new UpgradeBlocked(`moved item at ${move.to} does not match its recorded identity`);
 			throw new UpgradeBlocked(`neither ${move.from} nor ${move.to} exists`);
 		}
 		const target = entry(to);

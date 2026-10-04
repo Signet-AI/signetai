@@ -217,6 +217,37 @@ describe("upgradeWorkspaceLayout", () => {
 		expect(readWorkspaceLayoutUpgradeRecord(root)?.state).toBe("in-progress");
 	});
 
+	it("does not accept a replacement destination as a completed interrupted move", () => {
+		const { root } = v1Workspace();
+		let renames = 0;
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					renames += 1;
+					if (renames > 1) throw new Error("process terminated");
+					renameSync(from, to);
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish");
+
+		const destination = join(root, "data/signet.db");
+		const replacementPath = join(root, "replacement.db");
+		const replacement = new Database(replacementPath);
+		replacement.exec("CREATE TABLE memories (content TEXT); INSERT INTO memories VALUES ('replacement')");
+		replacement.close();
+		rmSync(destination);
+		renameSync(replacementPath, destination);
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow(
+			"moved item at data/signet.db does not match its recorded identity",
+		);
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+		expect(readWorkspaceLayoutUpgradeRecord(root)?.state).toBe("in-progress");
+		const db = new Database(destination, { readonly: true });
+		expect(db.query("SELECT content FROM memories").get()).toEqual({ content: "replacement" });
+		db.close();
+	});
+
 	it("keeps custom paths and normalizes transcripts inside a custom transcript root", () => {
 		const { root } = v1Workspace();
 		const external = workspace();
