@@ -70,7 +70,7 @@ Use an integration only when its access boundary matches the deployment. Keep it
 
 Local secret state is kept under `$SIGNET_WORKSPACE/.secrets/`. Keep this directory private and out of source control. Secret values are intentionally not available through a `get` command; `signet secret get NAME` explains how to use an existing reference instead.
 
-New stores are keyring-first. Signet generates a random 256-bit master key and stores it as a generic credential named `ai.signet.secrets` in the current user account. The encrypted payload remains in `secrets.enc`, but the machine identifier is no longer used to protect new stores.
+New stores are keyring-first. Signet generates a random 256-bit master key and stores it as a generic credential named `ai.signet.secrets` in the current user account. The encrypted payload remains in `secrets.enc`. Headless Linux hosts without a user D-Bus session, or with a verified service inventory containing neither a registered nor an activatable Secret Service, may create a degraded machine-id-derived store. Selecting the unsupported Linux keyutils backend also uses this degraded mode. A failed, timed-out, or malformed service probe does not establish absence and refuses new secret writes; locked and permission-denied keyrings also fail closed.
 
 The native adapter uses the platform user credential store:
 

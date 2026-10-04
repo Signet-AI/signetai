@@ -56,7 +56,9 @@ function fixedKeyring(state: SecretKeyringState, backend?: "absent"): SecretKeyr
 async function useNativeModule(directory: string, modulePath: string): Promise<void> {
 	const busctl = join(directory, "busctl");
 	const helperPath = join(directory, "keyring-helper.ts");
-	await writeFile(busctl, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+	await writeFile(busctl, "#!/bin/sh\nprintf 'org.freedesktop.DBus -\\norg.freedesktop.secrets (activatable)\\n'\n", {
+		mode: 0o700,
+	});
 	const childModule = fileURLToPath(new URL("./secrets-keyring-child.ts", import.meta.url));
 	await writeFile(
 		helperPath,
@@ -558,10 +560,8 @@ await new Promise(()=>{});}
 	});
 
 	test("reports a missing keyring backend only for Linux hosts without Secret Service", () => {
-		const reachable = () => {};
-		const unregistered = () => {
-			throw new Error("org.freedesktop.secrets is not registered");
-		};
+		const reachable = () => true;
+		const unregistered = () => false;
 		const session = { DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1000/bus" };
 		expect(linuxKeyringAvailability("darwin", {}, unregistered)).toBeNull();
 		expect(linuxKeyringAvailability("win32", {}, unregistered)).toBeNull();
@@ -574,6 +574,53 @@ await new Promise(()=>{});}
 		expect(linuxKeyringAvailability("linux", { SIGNET_SECRETS_LINUX_KEYRING: "keyutils" }, reachable)).toMatchObject({
 			state: "unsupported",
 			backend: "absent",
+		});
+	});
+
+	test("failed Linux service probes never permit legacy secret writes", async () => {
+		const session = { DBUS_SESSION_BUS_ADDRESS: "unix:path=/fixture/bus" };
+		for (const message of ["D-Bus connection timed out", "busctl ENOENT", "access denied"]) {
+			const result = linuxKeyringAvailability("linux", session, () => {
+				throw new Error(message);
+			});
+			expect(result).toMatchObject({ state: "unavailable" });
+			expect(result?.backend).toBeUndefined();
+		}
+		if (process.platform !== "linux") return;
+		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-probe-failure-"));
+		directories.push(directory);
+		process.env.SIGNET_PATH = directory;
+		await useNativeModule(directory, join(directory, "must-not-load.cjs"));
+		for (const script of ["#!/bin/sh\nexit 1\n", "#!/bin/sh\nexit 0\n"]) {
+			await writeFile(join(directory, "busctl"), script, { mode: 0o700 });
+			const result = await getSecretKeyring(directory).get();
+			expect(result.state).toBe("unavailable");
+			expect(result.backend).toBeUndefined();
+			await expect(putLocalSecret("PROBE_KEY", "fixture")).rejects.toMatchObject({ state: "unavailable" });
+			expect(existsSync(join(directory, ".secrets", "secrets.enc"))).toBe(false);
+		}
+	});
+
+	test("Linux service inventory distinguishes absence from an activatable keyring", async () => {
+		if (process.platform !== "linux") return;
+		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-service-inventory-"));
+		directories.push(directory);
+		process.env.SIGNET_PATH = directory;
+		const modulePath = join(directory, "locked.cjs");
+		await writeFile(
+			modulePath,
+			'module.exports.AsyncEntry = class { async getPassword() { throw new Error("locked"); } };',
+		);
+		await useNativeModule(directory, modulePath);
+		expect(await getSecretKeyring(directory).get()).toMatchObject({ state: "locked" });
+		await expect(putLocalSecret("LOCKED_KEY", "fixture")).rejects.toMatchObject({ state: "locked" });
+		expect(existsSync(join(directory, ".secrets", "secrets.enc"))).toBe(false);
+		await writeFile(join(directory, "busctl"), "#!/bin/sh\nprintf 'org.freedesktop.DBus -\\n'\n", { mode: 0o700 });
+		expect(await getSecretKeyring(directory).get()).toMatchObject({ state: "unavailable", backend: "absent" });
+		await putLocalSecret("HEADLESS_KEY", "fixture");
+		expect(JSON.parse(await readFile(join(directory, ".secrets", "secrets.enc"), "utf8"))).toMatchObject({
+			version: 1,
+			provider: "legacy-obfuscated",
 		});
 	});
 
