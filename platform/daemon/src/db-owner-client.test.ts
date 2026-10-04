@@ -1436,6 +1436,9 @@ process.stdin.on("data", (chunk) => {
 			const owner = client;
 			if (owner === null) throw new Error("owner client not created");
 			await owner.start();
+			if (previousCommitMarker === undefined)
+				Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_STARTED");
+			else process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = previousCommitMarker;
 			const run = runOwnerMaintenanceWithRetry<{ readonly changes: number }>(
 				owner,
 				{
@@ -1447,10 +1450,11 @@ process.stdin.on("data", (chunk) => {
 					},
 				},
 				"maintenance.non-idempotent-deadline",
-				{ deadlineMs: 100 },
+				{ deadlineMs: 1_000 },
 			);
+			const outcome = rejected(run);
 			await waitFor(() => existsSync(commitStarted));
-			expect(await rejected(run)).toBeInstanceOf(DbOwnerDeadlineError);
+			expect(await outcome).toBeInstanceOf(DbOwnerDeadlineError);
 			blocker.exec("ROLLBACK");
 			blockerReleased = true;
 			blocker.close(true);
