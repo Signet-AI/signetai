@@ -55,7 +55,8 @@ describe("Signet benchmark profiles", () => {
           episodicTokensPending: 0,
         } as T
       }
-      throw new Error(`Unexpected path ${path}`)
+      if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
+        throw new Error(`Unexpected path ${path}`)
     }
   }
 
@@ -104,6 +105,7 @@ describe("Signet benchmark profiles", () => {
       "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
       "/api/dream/status?agentId=memorybench-question-1-run&measure=1",
+      "/api/embeddings/health",
     ])
     expect(provider.getIngestUsage().dreamingPasses).toEqual({
       "pass-1": { inputTokens: 1200, outputTokens: 300, cacheReadTokens: 50 },
@@ -126,6 +128,7 @@ describe("Signet benchmark profiles", () => {
           return { status: "completed" } as T
         }
         if (path === "/api/memory/recall") return { results: [] } as T
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
         throw new Error(`Unexpected path ${path}`)
       }
     }
@@ -220,6 +223,7 @@ describe("Signet benchmark profiles", () => {
             episodicTokensPending: 0,
           } as T
         }
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
         throw new Error(`Unexpected path ${path}`)
       }
     }
@@ -280,6 +284,7 @@ describe("Signet benchmark profiles", () => {
             episodicTokensPending: 0,
           } as T
         }
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
         throw new Error(`Unexpected path ${path}`)
       }
     }
@@ -324,7 +329,8 @@ describe("Signet benchmark profiles", () => {
           episodicTokensPending: this.triggers >= this.drainedAfterPass ? 0 : null,
         } as T
       }
-      throw new Error(`Unexpected path ${path}`)
+      if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
+        throw new Error(`Unexpected path ${path}`)
     }
   }
 
@@ -370,6 +376,7 @@ describe("Signet benchmark profiles", () => {
             episodicTokensPending: settled ? 0 : 1,
           } as T
         }
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
         throw new Error(`Unexpected path ${path}`)
       }
     }
@@ -407,6 +414,7 @@ describe("Signet benchmark profiles", () => {
             episodicTokensPending: this.triggers >= 2 ? 0 : 500,
           } as T
         }
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
         throw new Error(`Unexpected path ${path}`)
       }
     }
@@ -426,6 +434,35 @@ describe("Signet benchmark profiles", () => {
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(2)
     expect(provider.calls).toContain("/api/dream/status?agentId=memorybench-haystack")
   })
+
+  it("waits for Dreaming's derived memories to be embedded before retrieval", async () => {
+    class EmbeddingProvider extends SignetDreamingProvider {
+      health = 0
+      private triggered = false
+
+      protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+        if (path === "/api/dream/trigger") {
+          this.triggered = true
+          return { passId: "pass-1" } as T
+        }
+        if (path.startsWith("/api/dream/status")) {
+          return {
+            worker: { running: true, activePasses: [] },
+            passes: this.triggered ? [{ id: "pass-1", status: "completed", mutationsApplied: 4 }] : [],
+            episodicTokensPending: 0,
+          } as T
+        }
+        if (path === "/api/embeddings/health") {
+          this.health += 1
+          return { checks: [{ name: "coverage", detail: { unembedded: Math.max(0, 3 - this.health) } }] } as T
+        }
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const provider = new EmbeddingProvider()
+    await finalizeWith(provider)
+    expect(provider.health).toBe(3)
+  }, 30_000)
 
   it("retries a failed pass and keeps draining", async () => {
     const provider = new DrainingProvider(3, 5, new Set([1, 2]))
@@ -454,6 +491,7 @@ describe("Signet benchmark profiles", () => {
         if (init.method === "PATCH") throw new Error(`${path} failed (404): Agent not found`)
         if (path === "/api/agents") return {} as T
         if (path === "/api/memory/recall") return { results: [] } as T
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
         throw new Error(`Unexpected path ${path}`)
       }
     }

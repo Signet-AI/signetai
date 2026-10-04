@@ -644,6 +644,7 @@ SIGNET_BENCH_DREAMING_API_KEY=<key> Daemon credential; defaults to ZAI_API_KEY f
 SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=<name> Pi catalog provider family, default zai-coding-cn; openai-compatible keeps the endpoint.
 SIGNET_BENCH_DREAMING_WAIT_SECS=<n> Max time to drain the Dreaming backlog, default 720.
 SIGNET_BENCH_DREAMING_CONCURRENCY=<n> Concurrent Dreaming passes for bulk ingest, default 6, max 16.
+SIGNET_BENCH_EMBEDDING_WAIT_SECS=<n> Max time to wait for Dreaming's derived memories to be embedded before retrieval, default 1800.
 MEMORYBENCH_EXTRACTION_MODEL=<m>    Structured extraction model, default gpt-4o.
 MEMORYBENCH_EXTRACTION_MAX_TOKENS=<n> Markdown extraction cap, default 1200.
 MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS=<n> Structured JSON extraction cap, default 1800.

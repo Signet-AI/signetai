@@ -84,6 +84,10 @@ interface DreamingStatusPass {
   mutationsApplied?: number | null
 }
 
+interface EmbeddingHealthResponse {
+  checks?: Array<{ name?: string; detail?: { unembedded?: number } }>
+}
+
 interface DreamingStatusResponse {
   worker?: { running?: boolean; activePasses?: unknown[] }
   passes?: DreamingStatusPass[]
@@ -609,7 +613,10 @@ export class SignetProvider implements Provider {
       }
 
       const statuses = await Promise.all(scopes.map((agentId) => this.readDreamStatus(agentId, true)))
-      if (statuses.every((status) => status.episodicTokensPending === 0)) return
+      if (statuses.every((status) => status.episodicTokensPending === 0)) {
+        await this.awaitDerivedEmbeddings(pollMs)
+        return
+      }
       const applied = round.reduce((sum, pass) => sum + (pass.mutationsApplied ?? 0), 0)
       idleRounds = applied > 0 ? 0 : idleRounds + 1
       if (idleRounds >= MAX_IDLE_DREAMING_PASSES) {
@@ -620,6 +627,32 @@ export class SignetProvider implements Provider {
       }
     }
     throw new Error("Timed out draining the Dreaming episodic backlog")
+  }
+
+  private async awaitDerivedEmbeddings(pollMs: number): Promise<void> {
+    const deadline = Date.now() + readPositiveInt("SIGNET_BENCH_EMBEDDING_WAIT_SECS", 1800) * 1000
+    const stallMs = 180_000
+    let best = Number.POSITIVE_INFINITY
+    let progressAt = Date.now()
+    while (Date.now() < deadline) {
+      const health = await this.request<EmbeddingHealthResponse>("/api/embeddings/health", { method: "GET" })
+      const coverage = health.checks?.find((check) => check.name === "coverage")?.detail
+      const unembedded = typeof coverage?.unembedded === "number" ? coverage.unembedded : null
+      if (unembedded === null) {
+        logger.warn("Signet embedding health did not report coverage; searching without waiting")
+        return
+      }
+      if (unembedded === 0) return
+      if (unembedded < best) {
+        best = unembedded
+        progressAt = Date.now()
+      } else if (Date.now() - progressAt > stallMs) {
+        logger.warn(`${unembedded} Signet memories are still unembedded and embedding has stalled; searching anyway`)
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.max(pollMs, 5_000)))
+    }
+    logger.warn("Timed out waiting for Signet memory embeddings; searching anyway")
   }
 
   private agentIdForSession(session: UnifiedSession, containerTag: string): string {
