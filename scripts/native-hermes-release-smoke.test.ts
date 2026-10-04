@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -33,7 +33,12 @@ afterEach(() => {
 	}
 });
 
+const previousTelemetryOptout = process.env.SIGNET_TELEMETRY_OPTOUT;
 process.env.SIGNET_TELEMETRY_OPTOUT = "1";
+afterAll(() => {
+	if (previousTelemetryOptout === undefined) delete process.env.SIGNET_TELEMETRY_OPTOUT;
+	else process.env.SIGNET_TELEMETRY_OPTOUT = previousTelemetryOptout;
+});
 
 describe("native Hermes release smoke", () => {
 	const binary = process.env.SIGNET_NATIVE_SMOKE_BINARY?.trim();
