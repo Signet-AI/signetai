@@ -138,8 +138,10 @@ Dreaming records pass status, tool calls, applied/skipped/failed mutation
 counts, evidence progress, and summary information. The evidence watermark
 advances only when the pass actually consumes the relevant episodic backlog.
 A failed ontology operation withholds progress only for the sources it cites;
-a failure that cites no source withholds progress for its agent scope, so
-other sources and scopes in the same pass still record what was read.
+a failure that cites no source, including one whose operations could not be
+parsed, withholds progress for its agent scope, so other sources and scopes in
+the same pass still record what was read. A failed write whose trace cannot be
+read withholds every scope in the pass.
 An `incremental-content` pass must stage exactly one `memory_head_commit`, and
 fails if the agent ends without one. A pass with nothing to publish resubmits
 the current entries, or an empty entry set while the head is still empty. The
