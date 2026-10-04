@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-10-04
+- Bug fixes: flush final SSE drop summaries; retain SSE fallback framing; preserve bounded SSE delivery; bound SSE buffering and teardown.
+
 ### 2026-10-03
 - Bug fixes: share in-flight connector inspections; let connector rows pass wheel scroll; keep better-sqlite3 external in bun build; stage the real bun binary; verify native updates atomically; clarify retired Windows app; preserve retryable Windows migration; migrate legacy Windows install; preserve installed bundles and restore runtime connectivity; fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
 - Docs: add dashboard screenshot; refresh overview, install, and trust sections; clarify legacy cleanup.
@@ -32,11 +35,19 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-09-28
 - Bug fixes: verify arm64 on macOS 27; upgrade Bun to 1.4.2; retain status telemetry; reduce Windows console flashes.
 
-### 2026-09-27
-- Bug fixes: nest workspace layout migration; clarify recovered context; stat macOS symlinks by descriptor; expose attach reasoning; mirror daemon toggle resolution; repair Windows app and settings UX.
-- Docs: clarify checkpoint authority.
-
 ## Release Ledger
+
+## [0.230.9] - 2026-10-04
+
+Release summary: 4 bug fixes.
+Tag range: `v0.230.8..v0.230.9`.
+
+### Bug Fixes
+
+- **daemon**: flush final SSE drop summaries
+- **daemon**: retain SSE fallback framing
+- **daemon**: preserve bounded SSE delivery
+- **daemon**: bound SSE buffering and teardown
 
 ## [0.230.8] - 2026-10-03
 
