@@ -164,7 +164,12 @@ export interface FailedOperationEvidence {
 	readonly scopes: ReadonlySet<string>;
 }
 
-export function failedOperationEvidence(db: ReadDb, passId: string, passAgentId: string): FailedOperationEvidence {
+export function failedOperationEvidence(
+	db: ReadDb,
+	passId: string,
+	passAgentId: string,
+	passScopes: readonly string[],
+): FailedOperationEvidence {
 	const keys = new Set<string>();
 	const scopes = new Set<string>();
 	if (!tableExists(db, "dreaming_tool_calls")) return { sources: keys, scopes };
@@ -182,10 +187,15 @@ export function failedOperationEvidence(db: ReadDb, passId: string, passAgentId:
 			input = record(JSON.parse(inputJson));
 			output = record(JSON.parse(outputJson));
 		} catch {
+			for (const scope of passScopes) scopes.add(scope);
 			continue;
 		}
 		const agentId = text(input?.agentId) ?? passAgentId;
 		const operations = Array.isArray(input?.operations) ? input.operations : [];
+		if (output?.ok !== true && operations.length === 0) {
+			scopes.add(agentId);
+			continue;
+		}
 		const failedIndexes =
 			output?.ok === true && Array.isArray(output.items)
 				? output.items.flatMap((item) => {

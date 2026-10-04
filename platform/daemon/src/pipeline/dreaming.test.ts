@@ -2628,6 +2628,65 @@ describe("Dreaming", () => {
 		expect(consumed).toEqual(["uncited-source"]);
 	});
 
+	it("withholds delivered evidence when a failed write's operations cannot be parsed", async () => {
+		seedTranscript(db, "schema-rejected", "Fenna owns the release calendar.");
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					const apply = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: "invalid array",
+					});
+					expect(apply.ok).toBe(false);
+					return { summary: "Schema-rejected write" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result).toMatchObject({ applied: 0, failed: 1 });
+		expect(
+			db.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_consumption WHERE source_id = 'schema-rejected'").get(),
+		).toEqual({ n: 0 });
+	});
+
+	it("withholds every agent in the pass when a write trace cannot be read", async () => {
+		const other = "dreaming-unreadable-trace";
+		accessor.withWriteTx((tx) => {
+			tx.prepare("INSERT OR IGNORE INTO agents (id, name, read_policy) VALUES (?, ?, 'isolated')").run(other, other);
+		});
+		seedTranscript(db, "trace-a", "Gale runs the payments service.");
+		seedTranscript(db, "trace-b", "Hale runs the ledger service.", undefined, other);
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					await invokeDreamingTool(input, "search_evidence", { agentId: other });
+					accessor.withWriteTx((tx) => {
+						tx.prepare(
+							`INSERT INTO dreaming_tool_calls
+							 (id, agent_id, pass_id, sequence, tool_name, input_json, output_json, success, latency_ms)
+							 VALUES ('unreadable-call', ?, ?, 999, 'apply_ontology_ops', '{not json', '{"ok":false}', 0, 1)`,
+						).run(AGENT, input.passId);
+					});
+					return { summary: "A write whose trace cannot be read" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT, other],
+			"incremental",
+		);
+		expect(db.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_consumption").get()).toEqual({ n: 0 });
+	});
+
 	it("withholds an uncited failure's agent without discarding other agents' progress", async () => {
 		const other = "dreaming-other-scope";
 		accessor.withWriteTx((tx) => {

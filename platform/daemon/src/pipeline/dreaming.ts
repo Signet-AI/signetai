@@ -2141,7 +2141,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 			parsedRunbook = null;
 		}
 		const runbookDeferred = parsedRunbook === null ? null : deferredEvidenceKeys(parsedRunbook, input.agentId);
-		const failedEvidence = failedOperationEvidence(db, input.passId, input.agentId);
+		const failedEvidence = failedOperationEvidence(db, input.passId, input.agentId, input.scopes);
 		const deferredEvidence = runbookDeferred === null ? null : new Set([...runbookDeferred, ...failedEvidence.sources]);
 		const reviewedExcludedEvidence =
 			parsedRunbook === null ? null : parseDreamingReviewedExcludedEvidence(parsedRunbook);
