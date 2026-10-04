@@ -906,7 +906,10 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(false);
-		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(result.error).toContain("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(result.error).toContain(
+			'operation 0 quotes text not found verbatim in memory:mem-1: "This quote was never in the source."',
+		);
 	});
 
 	it("validates later evidence before minting an earlier flag (#1414)", async () => {
@@ -933,7 +936,8 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(false);
-		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(result.error).toContain("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(result.error).toContain("operation 1 quotes text not found verbatim in memory:mem-1414-invalid");
 		expect(
 			getDbAccessor().withReadDb(
 				(db) =>

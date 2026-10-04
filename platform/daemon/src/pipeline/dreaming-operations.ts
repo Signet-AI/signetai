@@ -405,7 +405,11 @@ function provenanceForEvidence(
 	accessor: DbAccessor,
 	agentId: string,
 	operation: DreamingOperationRequest,
-): { readonly provenance: DreamingOperationProvenance | null; readonly scopeMismatch: string | null } {
+): {
+	readonly provenance: DreamingOperationProvenance | null;
+	readonly scopeMismatch: string | null;
+	readonly unmatched?: string;
+} {
 	const citations = operation.evidence ?? [];
 	if (citations.length === 0) return { provenance: null, scopeMismatch: null };
 	const matched: DreamingAgentEvidence[] = [];
@@ -419,7 +423,10 @@ function provenanceForEvidence(
 					scopeMismatch: `Cited evidence belongs to scope${resolution.sourceAgentIds.length === 1 ? "" : "s"} ${scopes} but this operation targets '${agentId}'. Search evidence in the target scope before applying the operation.`,
 				};
 			}
-			return { provenance: null, scopeMismatch: null };
+			const cited = citationRecord(citation);
+			if (cited === null) return { provenance: null, scopeMismatch: null };
+			const quote = cited.quote.length > 120 ? `${cited.quote.slice(0, 120)}…` : cited.quote;
+			return { provenance: null, scopeMismatch: null, unmatched: `${cited.sourceRef}: "${quote}"` };
 		}
 		matched.push(resolution.evidence);
 	}
@@ -675,6 +682,13 @@ function toApplicatorPayload(
 			return { payload };
 	}
 }
+const EVIDENCE_ERROR = "Every operation must cite an exact quote from scoped episodic evidence";
+
+function evidenceError(index: number, unmatched: string | undefined): string {
+	if (unmatched === undefined) return EVIDENCE_ERROR;
+	return `${EVIDENCE_ERROR}: operation ${index} quotes text not found verbatim in ${unmatched}; copy the source exactly, typos included`;
+}
+
 function unresolvedTarget(index: number, operation: string, detail: string): string {
 	return `Could not resolve operation ${index} target (${operation}): ${detail}`;
 }
@@ -724,7 +738,7 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 
 		const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation);
 		if (evidenceResult.provenance === null) {
-			return evidenceResult.scopeMismatch ?? "Every operation must cite an exact quote from scoped episodic evidence";
+			return evidenceResult.scopeMismatch ?? evidenceError(index, evidenceResult.unmatched);
 		}
 	}
 	return null;
@@ -947,8 +961,7 @@ export async function applyDreamingOperations(
 				return {
 					ok: false,
 					items: [],
-					error:
-						evidenceResult.scopeMismatch ?? "Every operation must cite an exact quote from scoped episodic evidence",
+					error: evidenceResult.scopeMismatch ?? evidenceError(index, evidenceResult.unmatched),
 				};
 			}
 		}
