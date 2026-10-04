@@ -11,10 +11,7 @@ interface Limit {
 	readonly label: string;
 }
 
-const LIMITS: ReadonlyArray<Limit> = [
-	{ path: "VISION.md", capBytes: 5500, softBytes: 4125, label: "VISION.md" },
-	{ path: "AGENTS.md", capBytes: 20000, softBytes: 15000, label: "AGENTS.md" },
-];
+const LIMITS: ReadonlyArray<Limit> = [{ path: "AGENTS.md", capBytes: 20000, softBytes: 15000, label: "AGENTS.md" }];
 
 function byteSize(absolutePath: string): number {
 	return statSync(absolutePath).size;
