@@ -108,7 +108,10 @@ pass inspected completely and intentionally found to contain no durable fact.
 A concrete deliverable the assistant produced for the user's own project, plan,
 or situation, such as a budget, schedule, or draft, counts as durable: Dreaming
 files its specifics on that project, worded as proposed rather than confirmed.
-Generic information not tied to the user's circumstances does not. The
+Generic information not tied to the user's circumstances does not. Advice is
+not durable, but what the user discloses about themselves to get it (their
+situation, constraints, habits, and preferences) is, so a source holding such a
+disclosure is never excluded as empty. The
 `memory_head_read` and `memory_head_commit` tools are offered only to content
 passes, which are the only passes that can publish the head.
 Each entry includes the owning `agentId` and `sourceRef`, so multi-scope passes
