@@ -1627,22 +1627,18 @@ describe("daemon lifecycle exit findings (#1148)", () => {
 		}
 	});
 
-	it("points the unrecorded-death hint at the v2 runtime log directory", async () => {
+	it("points daemon log hints at the v2 runtime log directory", async () => {
 		const root = mkdtempSync(join(tmpdir(), "doctor-lifecycle-v2-"));
 		try {
 			writeFileSync(join(root, "workspace-layout.json"), `${JSON.stringify({ version: 2 })}\n`);
-			const exited = spawnSync(process.execPath, ["-e", ""]).pid;
+			const base = lifecycleDeps(root, null);
+			const status = await base.getDaemonStatus();
 			const jsonOut = await captureDoctorJson(
-				lifecycleDeps(root, {
-					state: "running",
-					pid: exited,
-					version: "0.165.0",
-					startedAt: "2026-08-07T00:00:00.000Z",
-				}).getDaemonStatus,
+				async () => ({ ...status, probe: { ...status.probe, status: "listener-unhealthy", listenerPresent: true } }),
 				root,
 			);
-			const finding = jsonOut.findings.find((f) => f.code === "daemon_exit_unrecorded");
-			expect(finding?.fix).toContain(join(root, "runtime", "logs", "signet-<date>.log"));
+			const finding = jsonOut.findings.find((f) => f.message.includes("/health is unreachable"));
+			expect(finding?.fix).toContain(join(root, "runtime", "logs", "daemon.err.log"));
 			expect(finding?.fix).not.toContain(".daemon");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
