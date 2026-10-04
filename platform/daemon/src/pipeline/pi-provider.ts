@@ -712,7 +712,13 @@ export function createPiModelProvider(
 					systemPrompt:
 						options.systemPrompt ??
 						"You are a bounded Signet maintenance agent. You may use only the supplied daemon tools.",
-					tools: tools.map(({ name, label, description, parameters }) => ({ name, label, description, parameters })),
+					tools: tools.map(({ name, label, description, parameters, exposure }) => ({
+						name,
+						label,
+						description,
+						parameters,
+						...(exposure ? { exposure } : {}),
+					})),
 					...(options.retry ? { retry: options.retry } : {}),
 				},
 				tools,

@@ -1,7 +1,8 @@
 import type { Model, Api, Usage } from "@earendil-works/pi-ai";
 import type { AgentSessionEvent, SessionStats, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-export interface PiAgentTool extends Pick<ToolDefinition, "name" | "label" | "description" | "parameters"> {
+export interface PiAgentTool
+	extends Pick<ToolDefinition, "name" | "label" | "description" | "parameters" | "exposure"> {
 	execute(
 		toolCallId: string,
 		params: unknown,
@@ -19,7 +20,7 @@ export interface PiAgentWorkerInput {
 	readonly model: Model<Api>;
 	readonly apiKey: string;
 	readonly systemPrompt: string;
-	readonly tools: ReadonlyArray<Pick<ToolDefinition, "name" | "label" | "description" | "parameters">>;
+	readonly tools: ReadonlyArray<Pick<ToolDefinition, "name" | "label" | "description" | "parameters" | "exposure">>;
 	readonly retry?: PiAgentRetryPolicy;
 }
 

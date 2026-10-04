@@ -766,6 +766,8 @@ export function registerPipelineRoutes(app: Hono): void {
 				backfillOnFirstRun: cfg.dreaming.backfillOnFirstRun,
 				maxInputTokens: cfg.dreaming.maxInputTokens,
 				maxOutputTokens: cfg.dreaming.maxOutputTokens,
+				maxConcurrentPasses: cfg.dreaming.maxConcurrentPasses,
+				codemode: cfg.dreaming.codemode,
 				timeout: cfg.dreaming.timeout,
 				surprisal: cfg.dreaming.surprisal,
 			},
@@ -931,7 +933,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:938",
+						"routes/pipeline-routes.ts:939",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,

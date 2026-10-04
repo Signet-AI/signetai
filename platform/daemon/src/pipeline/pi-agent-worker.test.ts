@@ -134,6 +134,99 @@ test("a session retry policy outlasts provider throttling that exhausts the defa
 	}
 }, 30000);
 
+test("codemode scripts reach codemode tools in the daemon but cannot call model-only tools", async () => {
+	let requests = 0;
+	let announced: string[] = [];
+	let scriptResult = "";
+	const lookups: unknown[] = [];
+	let writes = 0;
+	const script = [
+		"const a = await tools.lookup({ query: 'alpha' });",
+		"const b = await tools.lookup({ query: 'beta' });",
+		"let blocked = 'no';",
+		"try { await tools.write({ value: 'x' }); } catch { blocked = 'yes'; }",
+		"text(a + '|' + b + '|blocked=' + blocked);",
+	].join("\n");
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		async fetch(request) {
+			const body = (await request.json().catch(() => null)) as {
+				tools?: Array<{ function: { name: string } }>;
+				messages?: Array<{ role: string; content?: unknown }>;
+			} | null;
+			if (body === null) return new Response("", { status: 400 });
+			requests++;
+			if (requests === 1) {
+				announced = (body.tools ?? []).map((tool) => tool.function.name);
+			} else {
+				const toolMessage = (body.messages ?? []).find((message) => message.role === "tool");
+				scriptResult = JSON.stringify(toolMessage?.content ?? "");
+			}
+			const content =
+				requests === 1
+					? completion({
+							role: "assistant",
+							tool_calls: [
+								{
+									index: 0,
+									id: "call-1",
+									type: "function",
+									function: { name: "codemode", arguments: JSON.stringify({ code: script }) },
+								},
+							],
+						}) + completion({}, "tool_calls")
+					: completion({ role: "assistant", content: "Done." }) + completion({}, "stop");
+			return new Response(`${content}data: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+		},
+	});
+	const tools: PiAgentTool[] = [
+		{
+			name: "lookup",
+			label: "Lookup",
+			description: "Read-only lookup",
+			parameters: Type.Object({ query: Type.String() }),
+			exposure: "codemode",
+			async execute(_id, params) {
+				lookups.push(params);
+				return { content: [{ type: "text", text: `found:${(params as { query: string }).query}` }], details: {} };
+			},
+		},
+		{
+			name: "write",
+			label: "Write",
+			description: "Audited write",
+			parameters: Type.Object({ value: Type.String() }),
+			exposure: "model-only",
+			async execute() {
+				writes++;
+				return { content: [{ type: "text", text: "written" }], details: {} };
+			},
+		},
+	];
+	try {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "test-model",
+			baseUrl: `http://127.0.0.1:${server.port}/v1`,
+		});
+		const session = await provider.createAgentSession(tools, { systemPrompt: "You are a maintenance agent." });
+		try {
+			await session.prompt("Look things up.");
+			expect(announced).toContain("codemode");
+			expect(announced).toContain("write");
+			expect(announced).not.toContain("lookup");
+			expect(lookups).toEqual([{ query: "alpha" }, { query: "beta" }]);
+			expect(writes).toBe(0);
+			expect(scriptResult).toContain("found:alpha|found:beta|blocked=yes");
+		} finally {
+			await session.dispose();
+		}
+	} finally {
+		server.stop(true);
+	}
+}, 30000);
+
 test("aborting a stalled model releases the actual worker and settles the prompt", async () => {
 	const server = Bun.serve({
 		port: 0,

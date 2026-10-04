@@ -114,6 +114,26 @@ describe("dreaming-agent-tools", () => {
 		expect(tools.some((tool) => tool.name === "curate_memory_head")).toBe(false);
 	});
 
+	it("puts only read-only lookups behind codemode when the flag is on", () => {
+		const base = { accessor: getDbAccessor(), agentId: "owner", allowedAgentIds: ["owner"], actor: "owner" } as const;
+		expect(createDreamingAgentTools(base).every((tool) => tool.exposure === undefined)).toBe(true);
+		const exposure = Object.fromEntries(
+			createDreamingAgentTools({ ...base, codemode: true }).map((tool) => [tool.name, tool.exposure]),
+		);
+		for (const lookup of [
+			"search_entities",
+			"get_entity",
+			"list_aspect_claims",
+			"validate_proposal",
+			"attention_list",
+		]) {
+			expect(exposure[lookup]).toBe("codemode");
+		}
+		for (const direct of ["search_evidence", "get_evidence", "apply_ontology_ops", "runbook_write"]) {
+			expect(exposure[direct]).toBe("model-only");
+		}
+	});
+
 	it("completes a content pass whose empty head stays empty, but not one that empties a published head", async () => {
 		insertEpisodicMemory("head-evidence", "Meeting is Tuesday.");
 		const accessor = getDbAccessor();

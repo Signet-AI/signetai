@@ -13,7 +13,19 @@ export type { DreamingCapabilityResult as DreamingAgentToolResult } from "./drea
 export interface CreateDreamingAgentToolsParams extends CreateDreamingCapabilitiesParams {
 	readonly capabilityIds?: readonly DreamingCapabilityId[];
 	readonly allowedAgentIds: readonly string[];
+	readonly codemode?: boolean;
 }
+
+export const DREAMING_CODEMODE_TOOL_IDS: ReadonlySet<DreamingCapabilityId> = new Set<DreamingCapabilityId>([
+	"search_entities",
+	"get_entity",
+	"list_aspect_claims",
+	"walk_links",
+	"validate_proposal",
+	"list_contradictions",
+	"attention_list",
+	"runbook_read",
+]);
 
 function scopedInput(value: unknown, allowed: ReadonlySet<string>): void {
 	if (typeof value !== "object" || value === null) return;
@@ -52,6 +64,11 @@ export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams)
 						? `${capability.description} This session is restricted to agent ${params.allowedAgentIds[0]}.`
 						: capability.description,
 				parameters: Type.Unsafe(parameters),
+				...(params.codemode
+					? {
+							exposure: DREAMING_CODEMODE_TOOL_IDS.has(capability.id) ? ("codemode" as const) : ("model-only" as const),
+						}
+					: {}),
 				async execute(toolCallId, rawParams) {
 					const startedAt = Date.now();
 					if (

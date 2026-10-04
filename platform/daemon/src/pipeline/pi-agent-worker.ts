@@ -6,6 +6,7 @@ import {
 	SessionManager,
 	SettingsManager,
 	createAgentSession,
+	createCodemodeExtension,
 } from "@earendil-works/pi-coding-agent";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { PI_AGENT_MAX_MESSAGE_BYTES } from "./pi-agent-protocol";
@@ -28,6 +29,7 @@ runtime.registerProvider(input.model.provider, {
 	models: [{ ...input.model }],
 });
 const settingsManager = SettingsManager.inMemory(input.retry ? { retry: { enabled: true, ...input.retry } } : {});
+const codemode = input.tools.some((tool) => tool.exposure === "codemode");
 const resourceLoader = new DefaultResourceLoader({
 	cwd: process.cwd(),
 	agentDir: process.cwd(),
@@ -38,6 +40,7 @@ const resourceLoader = new DefaultResourceLoader({
 	noThemes: true,
 	noContextFiles: true,
 	systemPrompt: input.systemPrompt,
+	...(codemode ? { extensionFactories: [createCodemodeExtension({ mode: "on" })] } : {}),
 });
 await resourceLoader.reload();
 let nextId = 0;
@@ -66,9 +69,15 @@ const { session } = await createAgentSession({
 	sessionManager: SessionManager.inMemory(),
 	settingsManager,
 	resourceLoader,
-	tools: customTools.map((tool) => tool.name),
+	tools: [...customTools.map((tool) => tool.name), ...(codemode ? ["codemode"] : [])],
 	customTools,
 });
+if (codemode) {
+	session.setActiveToolsByName([
+		...customTools.filter((tool) => tool.exposure !== "codemode").map((tool) => tool.name),
+		"codemode",
+	]);
+}
 session.subscribe((event) => send({ type: "event", event }));
 let running = false;
 port.on("message", async (request: PiAgentWorkerRequest) => {

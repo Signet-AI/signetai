@@ -283,6 +283,25 @@ export function setBenchDreamingConcurrency(agentsDir: string, passes: number): 
 	writeFileSync(path, stringifyYaml(config));
 }
 
+export function benchDreamingCodemode(env: NodeJS.ProcessEnv = process.env): boolean | undefined {
+	const raw = env.SIGNET_BENCH_DREAMING_CODEMODE?.trim();
+	if (raw === undefined || raw === "") return undefined;
+	if (raw === "1" || raw === "true") return true;
+	if (raw === "0" || raw === "false") return false;
+	throw new Error("SIGNET_BENCH_DREAMING_CODEMODE must be 1, 0, true, or false");
+}
+
+export function setBenchDreamingCodemode(agentsDir: string, enabled: boolean | undefined): void {
+	if (enabled === undefined) return;
+	const path = join(agentsDir, "agent.yaml");
+	const config = parseYaml(readFileSync(path, "utf8")) as Record<string, unknown>;
+	const memory = (config.memory ?? {}) as Record<string, unknown>;
+	const dreaming = (memory.dreaming ?? {}) as Record<string, unknown>;
+	if (dreaming.codemode === enabled) return;
+	config.memory = { ...memory, dreaming: { ...dreaming, codemode: enabled } };
+	writeFileSync(path, stringifyYaml(config));
+}
+
 export function loadEnvFile(path: string, env: NodeJS.ProcessEnv = process.env): void {
 	if (!existsSync(path)) return;
 	for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
@@ -451,6 +470,7 @@ async function main(): Promise<void> {
 		}
 
 		setBenchDreamingConcurrency(agentsDir, benchDreamingConcurrency());
+		setBenchDreamingCodemode(agentsDir, benchDreamingCodemode());
 		mkdirSync(join(agentsDir, ".daemon", "logs"), { recursive: true });
 		daemon = spawn("bun", ["platform/daemon/src/daemon.ts"], {
 			cwd: repoRoot,

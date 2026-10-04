@@ -706,6 +706,9 @@ export async function getActiveDreamingPasses(
 	);
 }
 
+const DREAMING_CODEMODE_PROMPT =
+	"Lookups (search_entities, get_entity, list_aspect_claims, walk_links, validate_proposal, list_contradictions, attention_list, runbook_read) are available only inside the codemode tool. Batch the lookups a page needs into one script: call them through tools.<name>(args), parse each JSON result, and print only what you need, carrying ids from results instead of retyping them. Reading evidence (search_evidence, get_evidence) and every write (apply_ontology_ops, runbook_write, memory_head_commit) stay direct tool calls; a script cannot call them.";
+
 const MAX_DREAMING_TOOL_TRACE_JSON_CHARS = 128_000;
 
 function serializeToolTrace(value: unknown): string {
@@ -1583,14 +1586,15 @@ export async function runDreamingAgentPass(
 			scopes.length > 1
 				? `${dreamingPromptForMode(mode)}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`
 				: dreamingPromptForMode(mode);
+		const toolPrompt = cfg.codemode ? `${basePrompt}\n\n${DREAMING_CODEMODE_PROMPT}` : basePrompt;
 		const prompt = liveOptions?.userRequest
-			? `${basePrompt}
+			? `${toolPrompt}
 
 The authenticated user requested this scoped maintenance task. Their instruction was recorded as evidence before this pass. Address it using the same audited tools and citation requirements; report any unsupported change rather than bypassing validation.
 <user_request>
 ${JSON.stringify(liveOptions.userRequest)}
 </user_request>`
-			: basePrompt;
+			: toolPrompt;
 		const cutoffRow = await ownerQueryOne<{ now: string }>(
 			await getDbOwnerForAccessor(accessor),
 			"dreaming.pass.cutoff",
@@ -1740,6 +1744,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
 		const tools = createDreamingAgentTools({
 			allowedAgentIds: liveOptions?.userRequest !== undefined ? [agentId] : scopes,
+			codemode: cfg.codemode,
 			...(mode === "incremental-content"
 				? {}
 				: {

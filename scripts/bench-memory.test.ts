@@ -6,10 +6,12 @@ import { parse as parseYaml } from "yaml";
 import {
 	BENCH_CREDENTIAL_ENV,
 	attachBenchCredential,
+	benchDreamingCodemode,
 	benchDreamingConcurrency,
 	buildSetupArgs,
 	loadEnvFile,
 	resolveBenchModel,
+	setBenchDreamingCodemode,
 	setBenchDreamingConcurrency,
 } from "./bench-memory";
 
@@ -115,6 +117,19 @@ describe("MemoryBench launcher", () => {
 		expect(config.inference.targets.background.executor).toBe("openai-compatible");
 		expect(benchDreamingConcurrency({ SIGNET_BENCH_DREAMING_CONCURRENCY: "2" })).toBe(2);
 		expect(() => benchDreamingConcurrency({ SIGNET_BENCH_DREAMING_CONCURRENCY: "0" })).toThrow("from 1 to 16");
+	});
+
+	test("turns Dreaming codemode on only when the bench asks for it", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
+		setBenchDreamingCodemode(dir, benchDreamingCodemode({}));
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).memory.dreaming).toEqual({ enabled: true });
+		setBenchDreamingCodemode(dir, benchDreamingCodemode({ SIGNET_BENCH_DREAMING_CODEMODE: "1" }));
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).memory.dreaming).toEqual({
+			enabled: true,
+			codemode: true,
+		});
+		expect(() => benchDreamingCodemode({ SIGNET_BENCH_DREAMING_CODEMODE: "yes" })).toThrow("must be 1, 0");
 	});
 
 	test("loads the bench env file without overriding values already set", async () => {

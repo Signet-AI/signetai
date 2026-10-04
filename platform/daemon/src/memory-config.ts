@@ -88,6 +88,7 @@ export const DEFAULT_DREAMING: DreamingConfig = {
 	maxInputTokens: 128_000,
 	maxOutputTokens: null,
 	maxConcurrentPasses: 2,
+	codemode: false,
 	backfillOnFirstRun: true,
 	surprisal: DEFAULT_DREAMING_SURPRISAL,
 };
@@ -976,6 +977,7 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 		maxConcurrentPasses: Math.floor(
 			clampWarn("maxConcurrentPasses", raw.maxConcurrentPasses, 1, 16, dd.maxConcurrentPasses),
 		),
+		codemode: typeof raw.codemode === "boolean" ? raw.codemode : dd.codemode,
 		backfillOnFirstRun: typeof raw.backfillOnFirstRun === "boolean" ? raw.backfillOnFirstRun : dd.backfillOnFirstRun,
 		surprisal: {
 			enabled: typeof surprisal?.enabled === "boolean" ? surprisal.enabled : defaultSurprisal.enabled,

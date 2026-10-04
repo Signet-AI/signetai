@@ -521,6 +521,7 @@ that content safety keeps out of Dreaming is not counted.
     "maxInputTokens": 128000,
     "maxOutputTokens": null,
     "maxConcurrentPasses": 2,
+    "codemode": false,
     "timeout": 300000
   },
   "passes": [
@@ -849,6 +850,12 @@ default, at least 16,000), so most sessions arrive whole instead of in
 A Dreaming pass retries provider throttling and transient provider errors up to
 eight times with exponential backoff capped at 60 seconds (about four minutes in
 total) before the pass fails; interactive chat keeps the shorter default.
+`memory.dreaming.codemode` (default `false`) moves Dreaming's read-only lookups
+(`search_entities`, `get_entity`, `list_aspect_claims`, `walk_links`,
+`validate_proposal`, `list_contradictions`, `attention_list`, `runbook_read`)
+behind Pi's `codemode` tool, so a pass can batch them in one script. Evidence
+reads and writes stay direct calls, and scripts cannot call them. Nested calls
+run through the same audited tools and are traced like direct calls.
 
 Poll `GET /api/dream/status` and check `passes[0].status` for completion, or
 use `GET /api/dream/passes/:passId/events` for a live read-only view.
