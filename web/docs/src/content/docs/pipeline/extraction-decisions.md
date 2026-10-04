@@ -83,9 +83,12 @@ registry defines the operations available to the agent, including:
 - `search_evidence` for immutable episodic memories, artifacts, and transcripts;
   without a query it pages through the delivery queue, resuming each source
   where the current pass last read it and reporting `hasMore` until the queue
-  is empty. Once a pass has used half its timeout, the queue stops handing out
-  new sources (`deliveryClosed`) so the pass can file what it read and record
-  its progress; the rest goes to the next pass; with a query it searches full history, splitting it on whitespace into words that match independently
+  is empty. The agent files each page before asking for the next, so a pass
+  that runs out of time loses at most one page. Once a pass has used half its
+  timeout, the queue stops handing out new sources (`deliveryClosed`) so the
+  pass can file what it read and record its progress; the rest goes to the
+  next pass. With a query it searches full history, splitting it on whitespace
+  into words that match independently
   (ASCII case-insensitive) and ranking fuller matches first; unspaced text such
   as CJK matches as one phrase
 - `search_entities` and `get_entity` for scoped graph reads
@@ -101,6 +104,12 @@ and graph reads and writes remain bound to the requested agent scope.
 
 `runbook_write` accepts `reviewedExcludedEvidence` for source revisions that the
 pass inspected completely and intentionally found to contain no durable fact.
+A concrete deliverable the assistant produced for the user's own project, plan,
+or situation, such as a budget, schedule, or draft, counts as durable: Dreaming
+files its specifics on that project, worded as proposed rather than confirmed.
+Generic information not tied to the user's circumstances does not. The
+`memory_head_read` and `memory_head_commit` tools are offered only to content
+passes, which are the only passes that can publish the head.
 Each entry includes the owning `agentId` and `sourceRef`, so multi-scope passes
 cannot attribute a reviewed source to the primary scope. This terminal
 disposition is revision-scoped. A newer source revision becomes eligible again,

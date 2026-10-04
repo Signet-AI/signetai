@@ -2550,6 +2550,46 @@ describe("Dreaming", () => {
 		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
 	});
 
+	it("offers the memory-head tools only to content passes", async () => {
+		seedTranscript(db, "tool-list", "Juno owns the release notes.");
+		const toolsFor = async (mode: "incremental" | "incremental-content") => {
+			let names: string[] = [];
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						names = input.tools.map((tool) => tool.name);
+						if (mode === "incremental-content") {
+							const head = await invokeDreamingTool(input, "memory_head_read", { agentId: AGENT });
+							const current = head.head as { revision: number; hash: string };
+							await invokeDreamingTool(input, "memory_head_commit", {
+								agentId: AGENT,
+								passId: input.passId,
+								baseRevision: current.revision,
+								baseHash: current.hash,
+								entries: [],
+							});
+						}
+						return { summary: "Listed tools" };
+					},
+				},
+				defaultCfg(),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				mode,
+			);
+			return names;
+		};
+		const incremental = await toolsFor("incremental");
+		expect(incremental).not.toContain("memory_head_read");
+		expect(incremental).not.toContain("memory_head_commit");
+		expect(incremental).toContain("search_evidence");
+		expect(await toolsFor("incremental-content")).toEqual(
+			expect.arrayContaining(["memory_head_read", "memory_head_commit"]),
+		);
+	});
+
 	it("pages the delivery queue within a pass and records the full read offsets", async () => {
 		seedTranscript(db, "queue-long", "a".repeat(5_000));
 		seedTranscript(db, "queue-short", "b".repeat(1_200));
