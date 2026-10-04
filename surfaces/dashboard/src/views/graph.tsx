@@ -121,7 +121,9 @@ export function GraphView() {
 					...(agentRoster ?? []).map((agent) => agent.id),
 					...(graphQuery.data?.entities ?? []).map((entity) => entity.agentId),
 				]),
-			].sort(),
+			]
+				.filter((id): id is string => typeof id === "string" && id.length > 0)
+				.sort(),
 		[agentRoster, graphQuery.data],
 	);
 	const agentColors = useMemo(
@@ -132,7 +134,7 @@ export function GraphView() {
 	const entitiesByAgent = useMemo(() => {
 		const counts = new Map<string, number>();
 		for (const entity of graphQuery.data?.entities ?? [])
-			counts.set(entity.agentId, (counts.get(entity.agentId) ?? 0) + 1);
+			if (entity.agentId) counts.set(entity.agentId, (counts.get(entity.agentId) ?? 0) + 1);
 		return [...counts].sort(([a], [b]) => a.localeCompare(b));
 	}, [graphQuery.data]);
 	const sources = useAsync(() => api.getSources(), { key: "sources", intervalMs: 30_000 }).data?.sources;
@@ -392,7 +394,7 @@ export function GraphView() {
 		for (const id of agentIds) mix(id);
 		for (const e of entities) {
 			mix(e.id);
-			mix(e.agentId);
+			mix(e.agentId ?? "");
 			mix(e.name);
 			mix(e.entityType);
 			mix(String(e.mentions));
@@ -792,7 +794,7 @@ export function GraphView() {
 						<SelectTrigger className="graph-agent-picker" aria-label="Show the graph for an agent">
 							<SelectValue />
 						</SelectTrigger>
-						<SelectContent position="popper" align="start" sideOffset={4}>
+						<SelectContent className="graph-agent-options" position="popper" align="start" sideOffset={4}>
 							<SelectItem value={ALL_AGENTS}>All agents</SelectItem>
 							{agentIds.map((id) => (
 								<SelectItem key={id} value={id}>

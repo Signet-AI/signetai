@@ -674,11 +674,14 @@
 	background: color-mix(in oklch, var(--background) 60%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 	border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); box-shadow: none; transition: color .15s; }
 .graph-legend-btn:hover { color: var(--foreground); }
-.graph-agent-picker { flex-shrink: 0; width: 200px; height: 32px; font-size: var(--text-small);
+.graph-agent-picker { flex-shrink: 0; width: auto; max-width: 200px; height: 32px; font-size: var(--text-small);
 	color: var(--home-secondary, var(--muted-foreground)); border-radius: 999px;
 	background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 	border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); box-shadow: none; }
 .graph-agent-picker:hover { color: var(--home-title, var(--foreground)); }
+.graph-agent-options { max-width: 260px; font-size: var(--text-small); }
+.graph-agent-options .lg-dot { display: inline-block; flex-shrink: 0; margin-right: 6px; vertical-align: middle; }
+.graph-agent-options [role="option"] > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .graph-key-agents { display: flex; flex-direction: column; gap: 7px; padding-top: 8px; border-top: 1px solid var(--border); }
 .graph-legend-pop { position: absolute; top: 52px; left: 16px; z-index: 4; display: none; flex-direction: column; gap: 7px;
 	padding: 12px 14px; border-radius: 10px; background: color-mix(in oklch, var(--background) 80%, transparent);
