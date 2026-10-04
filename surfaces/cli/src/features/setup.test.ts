@@ -442,32 +442,30 @@ memory:
 		expect(readFileSync(join(basePath, "agent.yaml"), "utf-8")).toContain("database: data/signet.db");
 	});
 
-	it("keeps transcript-only v1 memory on the existing-workspace migration path", async () => {
-		root = mkdtempSync(join(tmpdir(), "setup-migrate-v1-transcripts-"));
+	it("keeps transcript-only v1 memory on the existing-workspace setup path", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-v1-transcripts-"));
+		process.env.HOME = root;
+		process.env.HERMES_HOME = join(root, ".hermes");
 		const basePath = join(root, "agents");
 		const templatesPath = join(root, "templates");
 		const transcripts = join(basePath, "memory", "codex", "transcripts");
+		const transcript = '{"role":"user","content":"keep this conversation"}\n';
 		mkdirSync(transcripts, { recursive: true });
 		writeIdentityTemplates(templatesPath);
-		writeFileSync(join(basePath, "IDENTITY.md"), "# Existing Agent\n");
-		writeFileSync(join(transcripts, "transcript.jsonl"), "{}\n");
+		writeFileSync(join(transcripts, "transcript.jsonl"), transcript);
+		const detection = { ...fakeDetection(basePath), memoryDb: false, hasMemoryDir: true };
 
 		const deps = stubDeps({
 			AGENTS_DIR: basePath,
+			detectExistingSetup: mock(() => detection),
 			getTemplatesDir: mock(() => templatesPath),
 			normalizeAgentPath: mock((p: string) => p),
 		});
 
-		await runExistingSetupWizard(
-			basePath,
-			{ ...fakeDetection(basePath), memoryDb: false, identityFiles: ["IDENTITY.md"], hasMemoryDir: true },
-			{},
-			deps,
-			{ nonInteractive: true, skipGit: true, allowUnprotectedWorkspace: true },
-		);
+		await setupWizard({ path: basePath, nonInteractive: true, skipGit: true, allowUnprotectedWorkspace: true }, deps);
 
 		expect(existsSync(join(basePath, "workspace-layout.json"))).toBe(false);
-		expect(existsSync(join(transcripts, "transcript.jsonl"))).toBe(true);
+		expect(readFileSync(join(transcripts, "transcript.jsonl"), "utf-8")).toBe(transcript);
 		expect(readFileSync(join(basePath, "agent.yaml"), "utf-8")).toContain("database: memory/memories.db");
 	});
 

@@ -1,4 +1,5 @@
 import { OpenClawConnector } from "@signet/connector-openclaw";
+import { hasExistingWorkspaceState } from "@signet/core";
 import type { SetupDetection } from "../lib/setup-detection.js";
 import chalk from "chalk";
 
@@ -118,7 +119,12 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 }
 
 export function hasExistingAgentState(detection: SetupDetection): boolean {
-	return detection.memoryDb || detection.agentYaml || detection.identityFiles.length > 0;
+	return (
+		detection.memoryDb ||
+		detection.agentYaml ||
+		detection.identityFiles.length > 0 ||
+		hasExistingWorkspaceState(detection.basePath)
+	);
 }
 
 export function detectPreferredOpenClawWorkspace(defaultPath: string, deps: PathDeps): string | null {

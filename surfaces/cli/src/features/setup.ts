@@ -57,7 +57,6 @@ import {
 	formatDetectionSummary,
 	getEmbeddingDimensions,
 	hasExistingAgentState,
-	hasExistingIdentityFiles,
 	normalizeHarnessList,
 	readErr,
 	readHarnesses,
@@ -615,16 +614,20 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 
 		printSetupProtectionSummary(protection);
 		return;
-	} else if (hasExistingIdentityFiles(existing)) {
-		console.log(chalk.cyan("  Detected existing agent identity"));
+	} else if (hasExistingAgentState(existing)) {
+		console.log(
+			chalk.cyan(
+				existing.identityFiles.length > 0 ? "  Detected existing agent identity" : "  Detected existing workspace data",
+			),
+		);
 		console.log(chalk.dim(`    ${basePath}`));
 		console.log();
 		console.log(formatDetectionSummary(existing));
 		console.log();
 
 		console.log(chalk.bold("  Signet will:"));
-		console.log(chalk.dim("    1. Create agent.yaml manifest pointing to your existing files"));
-		console.log(chalk.dim("    2. Import memory logs to SQLite for search"));
+		console.log(chalk.dim("    1. Create agent.yaml while preserving existing workspace data"));
+		console.log(chalk.dim("    2. Preserve existing memory and transcript data for migration"));
 		console.log(chalk.dim("    3. Sync built-in skills + unify external skill sources"));
 		console.log(chalk.dim("    4. Install connectors for detected harnesses"));
 		console.log(chalk.dim("    5. Keep all existing files unchanged"));
