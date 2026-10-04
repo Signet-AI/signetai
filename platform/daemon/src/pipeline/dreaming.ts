@@ -1721,6 +1721,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
 		const tools = createDreamingAgentTools({
 			allowedAgentIds: liveOptions?.userRequest !== undefined ? [agentId] : scopes,
+			evidenceDeliveryDeadline: Date.now() + Math.floor(cfg.timeout / 2),
 			accessor,
 			agentId,
 			memoryHeadCommitter,

@@ -2584,6 +2584,35 @@ describe("Dreaming", () => {
 		expect(consumed.every((row) => row.offset === row.length)).toBe(true);
 	});
 
+	it("closes new evidence delivery halfway through the pass timeout", async () => {
+		seedTranscript(db, "late-source", "Ines maintains the on-call rota.");
+		let page: Record<string, unknown> = {};
+		let reread: Record<string, unknown> = {};
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await new Promise((resolve) => setTimeout(resolve, 60));
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					reread = await invokeDreamingTool(input, "search_evidence", {
+						agentId: AGENT,
+						sourceRef: "transcript:late-source",
+						offset: 0,
+					});
+					return { summary: "Delivery closed before reading" };
+				},
+			},
+			defaultCfg({ timeout: 100 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBe(0);
+		expect(page).toMatchObject({ ok: true, items: [], hasMore: false, deliveryClosed: true });
+		expect((reread.items as unknown[]).length).toBe(1);
+	});
+
 	it("withholds only the sources a failed operation cited", async () => {
 		seedTranscript(db, "cited-source", "Briar owns the release process.");
 		seedTranscript(db, "uncited-source", "Corin owns the staging cluster.");
