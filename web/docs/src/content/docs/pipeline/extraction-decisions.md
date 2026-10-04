@@ -83,8 +83,9 @@ registry defines the operations available to the agent, including:
 - `search_evidence` for immutable episodic memories, artifacts, and transcripts;
   without a query it pages through the delivery queue, resuming each source
   where the current pass last read it and reporting `hasMore` until the queue
-  is empty. The agent files each page before asking for the next, so a pass
-  that runs out of time loses at most one page. Once a pass has used half its
+  is empty. A page holds one excerpt per source, and a partly read source
+  continues on a later page by itself. The agent files each page before asking
+  for the next, so a pass that runs out of time loses at most one page. Once a pass has used half its
   timeout, the queue stops handing out new sources (`deliveryClosed`) so the
   pass can file what it read and record its progress; the rest goes to the
   next pass. With a query it searches full history, splitting it on whitespace
