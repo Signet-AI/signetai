@@ -247,6 +247,17 @@ function attentionProvenance(
 		attentionId: attention.id,
 	};
 }
+const HYGIENE_PROVENANCE_ERROR =
+	"Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
+
+function hygieneProvenanceError(accessor: DbAccessor, agentId: string, operation: DreamingOperationRequest): string {
+	const reference = operation.provenance?.trim() ?? "";
+	if (!reference.startsWith("attention:") || /^attention:\$\d+$/.test(reference)) return HYGIENE_PROVENANCE_ERROR;
+	const id = reference.slice("attention:".length);
+	const attention = id ? getDreamingAttentionById(accessor, { agentId, id }) : null;
+	if (attention !== null && attention.kind === "hygiene") return HYGIENE_PROVENANCE_ERROR;
+	return `${HYGIENE_PROVENANCE_ERROR}: no hygiene attention ${id} in this agent; copy its id exactly from attention_list`;
+}
 function pinnedBySubjectRef(subjectRef: string, prefix: string): string | null {
 	if (!subjectRef.startsWith(prefix)) return null;
 	const id = subjectRef.slice(prefix.length);
@@ -675,14 +686,14 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			const sameBatch = reference?.match(/^attention:\$(\d+)$/);
 			if (sameBatch) {
 				if (sameBatchFlagIndex(params.accessor, params.agentId, params.operations, index, operation) === null) {
-					return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
+					return HYGIENE_PROVENANCE_ERROR;
 				}
 				continue;
 			}
 			if (
 				attentionProvenance(params.accessor, params.agentId, operation, new Map(), params.operations, index) === null
 			) {
-				return "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
+				return hygieneProvenanceError(params.accessor, params.agentId, operation);
 			}
 			continue;
 		}
@@ -903,11 +914,7 @@ export async function applyDreamingOperations(
 				attentionId = resolved.attentionId;
 			}
 			if (provenance === null) {
-				return {
-					ok: false,
-					items: [],
-					error: "Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)",
-				};
+				return { ok: false, items: [], error: hygieneProvenanceError(params.accessor, params.agentId, operation) };
 			}
 		} else {
 			const evidenceResult = provenanceForEvidence(params.accessor, params.agentId, operation);
