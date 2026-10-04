@@ -178,7 +178,9 @@ post-processing:
   keeps the existing ordering.
 - **Dampening** penalizes low-overlap semantic hits, hub-like entity
   dominance, and other noisy retrieval shapes. The low-overlap penalty never
-  drops a hit below the scores it leaves untouched.
+  drops a hit below the scores it leaves untouched, and an entity counts as a
+  hub only when it is linked to at least a quarter of the agent's memories, so
+  the topics a user talks about most are not penalized for being central.
 - **Currentness** annotates superseded memories and boosts current
   replacements.
 

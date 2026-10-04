@@ -2676,6 +2676,7 @@ export async function hybridRecall(
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
 			const entities = new Map<string, Set<string>>();
 			const degrees = new Map<string, number>();
+			let agentMemoryCount: number | undefined;
 
 			if (cfg.pipelineV2.graph.enabled) {
 				const links = await graphOwnerReadAll<{
@@ -2717,6 +2718,13 @@ export async function hybridRecall(
 					for (const row of degreeRows) {
 						degrees.set(row.entity_id, row.cnt);
 					}
+					const [memoryCount] = await graphOwnerReadAll<{ cnt: number }>(
+						"SELECT COUNT(*) AS cnt FROM memories WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0",
+						[params.agentId ?? "default"],
+						"memory-search.dampening.agent-memories",
+						1,
+					);
+					agentMemoryCount = memoryCount?.cnt;
 				}
 			}
 			const dampened = applyDampening(
@@ -2737,6 +2745,7 @@ export async function hybridRecall(
 				DEFAULT_DAMPENING,
 				entities,
 				degrees,
+				agentMemoryCount,
 			);
 			const dampenedMap = new Map(dampened.map((r) => [r.id, r.score]));
 			for (const s of scored) {
