@@ -8,7 +8,6 @@ import { getOrCreateInferenceRouter } from "../inference-router";
 import type { GraphHygieneCaps } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
 import { isSystemPressureHigh } from "../system-pressure";
-import { PI_AGENT_MAX_WORKERS } from "./pi-agent-protocol";
 import { getLlmConcurrencyLimit } from "./provider";
 import {
 	type DreamingAgentExecutor,
@@ -150,7 +149,7 @@ export async function shouldDeferDreamingSweep(
 ): Promise<boolean> {
 	if (ownerMaintenance) return !(await ownerMaintenance.queueIsHealthy());
 	return await accessor.withReadDbAsync((db) => getQueueHealth(db).status !== "healthy", {
-		siteToken: "pipeline/dreaming-worker.ts:152",
+		siteToken: "pipeline/dreaming-worker.ts:151",
 		operation: "dreaming.worker.queue-health",
 	});
 }
@@ -203,7 +202,7 @@ export async function getDreamingWorkerAgentIds(
 				(db) => {
 					return db.prepare(sql).all() as Array<{ id: string | null }>;
 				},
-				{ siteToken: "pipeline/dreaming-worker.ts:202", operation: "dreaming.worker.agent-scopes" },
+				{ siteToken: "pipeline/dreaming-worker.ts:201", operation: "dreaming.worker.agent-scopes" },
 			);
 	const ids = new Set<string>([defaultAgentId]);
 	for (const row of rows) {
@@ -258,7 +257,7 @@ export async function selectDreamingCheckMode(
 							[scope, "hygiene"],
 						).then((row) => row != null)
 					: accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"]), {
-							siteToken: "pipeline/dreaming-worker.ts:260",
+							siteToken: "pipeline/dreaming-worker.ts:259",
 							operation: "dreaming.worker.hygiene-attention",
 						}),
 			),
@@ -280,7 +279,7 @@ export async function selectDreamingCheckMode(
 					: accessor.withReadDbAsync(
 							(db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
 							{
-								siteToken: "pipeline/dreaming-worker.ts:280",
+								siteToken: "pipeline/dreaming-worker.ts:279",
 								operation: "dreaming.worker.content-attention",
 							},
 						),
@@ -309,8 +308,7 @@ export function startDreamingWorker(
 	let knownScopes: readonly string[] = [];
 	const runningPasses = new Set<RunningDreamingPass>();
 	const configuredConcurrentPasses = Math.max(1, Math.floor(cfg.maxConcurrentPasses ?? 1));
-	const maxPasses = (): number =>
-		Math.max(1, Math.min(configuredConcurrentPasses, getLlmConcurrencyLimit(), PI_AGENT_MAX_WORKERS));
+	const maxPasses = (): number => Math.max(1, Math.min(configuredConcurrentPasses, getLlmConcurrencyLimit()));
 	let scheduler: DreamingSchedulerStatus = { status: "idle", reason: null, checkedAt: null };
 	let nextScheduledFocus: DreamingPassFocus | null = null;
 	const getAgentScopes = createAgentScopeSnapshot(AGENT_SCOPE_SNAPSHOT_REFRESH_MS, () =>

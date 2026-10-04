@@ -55,7 +55,7 @@ The `repair` object bounds maintenance work with cooldowns and hourly budgets. I
 
 ## Concurrency and provider behavior
 
-`worker.maxLlmConcurrency` sets a shared cap for active LLM work. `SIGNET_MAX_LLM_CONCURRENCY` overrides it for the process when it is a positive integer. Do not set this from a guess: provider quota, local GPU memory, and latency are deployment-specific.
+`worker.maxLlmConcurrency` sets a shared cap for active LLM work. `SIGNET_MAX_LLM_CONCURRENCY` overrides it for the process when it is a positive integer. The daemon allows that many Pi agent worker threads plus three for retained dashboard chats, and Dreaming runs no more concurrent passes than this cap. Do not set this from a guess: provider quota, local GPU memory, and latency are deployment-specific.
 
 For canonical model selection, create or edit a routing target and bind the workload. See [Inference and routing](/configuration/inference-routing/). A legacy provider/model field in an old workspace is not a safe substitute for a workload binding.
 

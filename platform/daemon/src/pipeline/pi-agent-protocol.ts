@@ -48,5 +48,5 @@ export type PiAgentWorkerResponse =
 	| { readonly type: "aborted" }
 	| { readonly type: "configured" };
 
-export const PI_AGENT_MAX_WORKERS = 4;
+export const PI_CHAT_MAX_PERSISTENT_SESSIONS = 3;
 export const PI_AGENT_MAX_MESSAGE_BYTES = 2 * 1024 * 1024;

@@ -7,7 +7,8 @@ import type { AgentSessionEvent, SessionStats } from "@earendil-works/pi-coding-
 import type { Usage } from "@earendil-works/pi-ai";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
 import type { PiAgentSession } from "./pi-provider";
-import { PI_AGENT_MAX_MESSAGE_BYTES, PI_AGENT_MAX_WORKERS } from "./pi-agent-protocol";
+import { PI_AGENT_MAX_MESSAGE_BYTES, PI_CHAT_MAX_PERSISTENT_SESSIONS } from "./pi-agent-protocol";
+import { getLlmConcurrencyLimit } from "./provider";
 import type { PiAgentTool, PiAgentWorkerInput, PiAgentWorkerRequest, PiAgentWorkerResponse } from "./pi-agent-protocol";
 
 const workers = new Set<Worker>();
@@ -19,6 +20,10 @@ export async function stopPiAgentWorkers(closeAdmission = false): Promise<void> 
 	persistentSessions.clear();
 	await Promise.all([...disposers.values()].map((dispose) => dispose()));
 }
+export function piAgentWorkerLimit(): number {
+	return getLlmConcurrencyLimit() + PI_CHAT_MAX_PERSISTENT_SESSIONS;
+}
+
 export function activePiAgentWorkers(): number {
 	return workers.size;
 }
@@ -30,7 +35,7 @@ export async function createWorkerAgentSession(
 ): Promise<PiAgentSession> {
 	if (!accepting) throw new Error("Pi agent worker admission closed");
 	if (signal?.aborted) throw new Error("Pi agent initialization cancelled");
-	if (workers.size >= PI_AGENT_MAX_WORKERS) throw new Error("Pi agent worker capacity reached");
+	if (workers.size >= piAgentWorkerLimit()) throw new Error("Pi agent worker capacity reached");
 	if (Buffer.byteLength(JSON.stringify(input)) > PI_AGENT_MAX_MESSAGE_BYTES)
 		throw new Error("Pi agent input limit exceeded");
 	const directory = dirname(fileURLToPath(import.meta.url));
@@ -283,7 +288,7 @@ export async function leaseWorkerAgentSession(
 	}
 	const resumed = entry !== undefined;
 	if (!entry) {
-		if (persistentSessions.size >= 3)
+		if (persistentSessions.size >= PI_CHAT_MAX_PERSISTENT_SESSIONS)
 			throw new Error("Persistent chat capacity reached; idle sessions expire after 15 minutes");
 		entry = {
 			session: createWorkerAgentSession(input, tools, signal),
