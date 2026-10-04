@@ -276,7 +276,10 @@ its whole corpus at once and each question is its own agent:
 and `memory.pipelineV2.worker.maxLlmConcurrency` is that value plus 2 so the
 shared LLM limit does not hold passes back. Dreaming never runs more passes than
 the shared LLM limit allows. Set `SIGNET_BENCH_DREAMING_CONCURRENCY` to measure
-another value, including the default.
+another value, including the default. While draining, the harness triggers a new
+incremental pass whenever a slot frees up and the backlog is not yet zero, rather
+than waiting for every running pass to finish. It stops after three failed
+passes per slot in a row, or three passes per slot that apply no mutations.
 
 Set `SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=openai-compatible` with
 `SIGNET_BENCH_DREAMING_ENDPOINT` to keep a generic endpoint, for example a local

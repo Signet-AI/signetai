@@ -351,7 +351,7 @@ describe("Signet benchmark profiles", () => {
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
   })
 
-  it("waits for every concurrent pass in a round before judging it", async () => {
+  it("waits for running passes before finishing the drain", async () => {
     class ConcurrentRoundProvider extends SignetDreamingProvider {
       calls: string[] = []
       private polls = 0
@@ -385,6 +385,42 @@ describe("Signet benchmark profiles", () => {
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(1)
     expect(Object.keys(provider.getIngestUsage().dreamingPasses ?? {}).sort()).toEqual(["group-1", "group-2"])
   })
+
+  it("starts another pass as soon as a slot frees instead of waiting for the slowest pass", async () => {
+    class SlotProvider extends SignetDreamingProvider {
+      triggers: number[] = []
+      private polls = 0
+
+      protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+        if (path === "/api/dream/trigger") {
+          this.triggers.push(this.polls)
+          return { passId: `pass-${this.triggers.length}` } as T
+        }
+        if (path.startsWith("/api/dream/status")) {
+          if (this.triggers.length === 0) return { worker: { running: true, activePasses: [] }, passes: [] } as T
+          this.polls += 1
+          const slowDone = this.polls > 6
+          const passes = [
+            { id: "slow", status: slowDone ? "completed" : "running", mutationsApplied: 4 },
+            { id: "fast", status: "completed", mutationsApplied: 2 },
+            ...(this.triggers.length > 1 ? [{ id: "next", status: "completed", mutationsApplied: 1 }] : []),
+          ]
+          return {
+            worker: { running: true, activePasses: slowDone ? [] : [{ passId: "slow" }] },
+            config: { maxConcurrentPasses: 2 },
+            passes,
+            episodicTokensPending: slowDone ? 0 : 1,
+          } as T
+        }
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const provider = new SlotProvider()
+    await finalizeWith(provider)
+    expect(provider.triggers.length).toBeGreaterThanOrEqual(2)
+    expect(provider.triggers[1]).toBeLessThanOrEqual(6)
+  }, 20_000)
 
   it("drains the checkpointed haystack agents when a resumed run skipped ingest", async () => {
     class ResumedProvider extends SignetDreamingProvider {
@@ -472,13 +508,13 @@ describe("Signet benchmark profiles", () => {
 
   it("fails after three consecutive failed passes", async () => {
     const provider = new DrainingProvider(Number.POSITIVE_INFINITY, 5, new Set([1, 2, 3]))
-    await expect(finalizeWith(provider)).rejects.toThrow("Pi agent length (3 consecutive rounds with failed passes)")
+    await expect(finalizeWith(provider)).rejects.toThrow("Pi agent length (3 consecutive failed passes)")
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
   })
 
   it("fails instead of looping when passes stop applying mutations", async () => {
     const provider = new DrainingProvider(Number.POSITIVE_INFINITY, 0)
-    await expect(finalizeWith(provider)).rejects.toThrow("applied no mutations in 3 consecutive rounds")
+    await expect(finalizeWith(provider)).rejects.toThrow("applied no mutations in 3 consecutive passes")
     expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(3)
   })
 

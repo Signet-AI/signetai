@@ -90,6 +90,7 @@ interface EmbeddingHealthResponse {
 
 interface DreamingStatusResponse {
   worker?: { running?: boolean; activePasses?: unknown[] }
+  config?: { maxConcurrentPasses?: number }
   passes?: DreamingStatusPass[]
   episodicTokensPending?: number
 }
@@ -562,71 +563,79 @@ export class SignetProvider implements Provider {
         pass.id && pass.status !== "running" ? [pass.id] : []
       )
     )
-    let idleRounds = 0
-    let failedRounds = 0
+    let idlePasses = 0
+    let failedPasses = 0
+    let emptyTriggers = 0
+    let measured = false
+    await this.triggerDreaming()
     while (Date.now() < deadline) {
-      try {
-        const accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
-          method: "POST",
-          body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
-        })
-        if (!accepted.passId) {
-          throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
-        }
-      } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes("/api/dream/trigger failed (409)")) throw error
-      }
-
-      let primary = await this.readDreamStatus(this.agentId)
-      while ((primary.worker?.activePasses?.length ?? 0) > 0 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, pollMs))
-        primary = await this.readDreamStatus(this.agentId)
-      }
-      if ((primary.worker?.activePasses?.length ?? 0) > 0) break
-
-      const round = (primary.passes ?? []).filter(
+      const primary = await this.readDreamStatus(this.agentId)
+      const slots = Math.max(1, Math.floor(primary.config?.maxConcurrentPasses ?? 1))
+      const finished = (primary.passes ?? []).filter(
         (pass): pass is DreamingStatusPass & { id: string } =>
           typeof pass.id === "string" && pass.status !== "running" && !settled.has(pass.id)
       )
-      for (const pass of round) settled.add(pass.id)
-      if (round.length === 0) {
-        idleRounds++
-        if (idleRounds >= MAX_IDLE_DREAMING_PASSES) {
-          throw new Error(`Dreaming started no new passes in ${idleRounds} consecutive rounds`)
+      for (const pass of finished) {
+        settled.add(pass.id)
+        if (pass.status !== "completed") {
+          failedPasses++
+          const failure = `Dreaming pass ${pass.id} ${pass.status || "failed"}: ${pass.error || "no detail"}`
+          if (failedPasses >= MAX_FAILED_DREAMING_PASSES * slots) {
+            throw new Error(`${failure} (${failedPasses} consecutive failed passes)`)
+          }
+          logger.warn(`${failure}; retrying (${failedPasses}/${MAX_FAILED_DREAMING_PASSES * slots})`)
+          continue
         }
-        await new Promise((resolve) => setTimeout(resolve, pollMs))
-        continue
-      }
-      const failures = round.filter((pass) => pass.status !== "completed")
-      if (failures.length > 0) {
-        failedRounds++
-        const failure = failures
-          .map((pass) => `Dreaming pass ${pass.id} ${pass.status || "failed"}: ${pass.error || "no detail"}`)
-          .join("; ")
-        if (failedRounds >= MAX_FAILED_DREAMING_PASSES) {
-          throw new Error(`${failure} (${failedRounds} consecutive rounds with failed passes)`)
-        }
-        logger.warn(`${failure}; retrying (${failedRounds}/${MAX_FAILED_DREAMING_PASSES})`)
-        if (failures.length === round.length) continue
-      } else {
-        failedRounds = 0
+        failedPasses = 0
+        idlePasses = (pass.mutationsApplied ?? 0) > 0 ? 0 : idlePasses + 1
       }
 
-      const statuses = await Promise.all(scopes.map((agentId) => this.readDreamStatus(agentId, true)))
-      if (statuses.every((status) => status.episodicTokensPending === 0)) {
-        await this.awaitDerivedEmbeddings(pollMs)
-        return
+      const active = primary.worker?.activePasses?.length ?? 0
+      if (finished.length > 0 || active === 0 || !measured) {
+        measured = true
+        const statuses = await Promise.all(scopes.map((agentId) => this.readDreamStatus(agentId, true)))
+        if (statuses.every((status) => status.episodicTokensPending === 0)) {
+          if (active === 0) {
+            await this.awaitDerivedEmbeddings(pollMs)
+            return
+          }
+        } else {
+          if (idlePasses >= MAX_IDLE_DREAMING_PASSES * slots) {
+            const backlog = statuses.map((status) => status.episodicTokensPending ?? "unmeasured").join(", ")
+            throw new Error(
+              `Dreaming applied no mutations in ${idlePasses} consecutive passes while the backlog was not drained (${backlog})`
+            )
+          }
+          if (active < slots) {
+            const started = await this.triggerDreaming()
+            if (!started && active === 0 && finished.length === 0) {
+              emptyTriggers++
+              if (emptyTriggers >= MAX_IDLE_DREAMING_PASSES) {
+                throw new Error(`Dreaming started no new passes in ${emptyTriggers} consecutive triggers`)
+              }
+            } else {
+              emptyTriggers = 0
+            }
+          }
+        }
       }
-      const applied = round.reduce((sum, pass) => sum + (pass.mutationsApplied ?? 0), 0)
-      idleRounds = applied > 0 ? 0 : idleRounds + 1
-      if (idleRounds >= MAX_IDLE_DREAMING_PASSES) {
-        const backlog = statuses.map((status) => status.episodicTokensPending ?? "unmeasured").join(", ")
-        throw new Error(
-          `Dreaming applied no mutations in ${idleRounds} consecutive rounds while the backlog was not drained (${backlog})`
-        )
-      }
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
     }
     throw new Error("Timed out draining the Dreaming episodic backlog")
+  }
+
+  private async triggerDreaming(): Promise<boolean> {
+    try {
+      const accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
+        method: "POST",
+        body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
+      })
+      if (!accepted.passId) throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
+      return true
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("/api/dream/trigger failed (409)")) return false
+      throw error
+    }
   }
 
   private async awaitDerivedEmbeddings(pollMs: number): Promise<void> {
