@@ -399,6 +399,7 @@ export interface KnowledgeStats {
 export interface KnowledgeConstellation {
 	entities: Array<{
 		id: string;
+		agentId: string;
 		name: string;
 		entityType: string;
 		mentions: number;
@@ -1032,9 +1033,9 @@ export const api = {
 		}
 	},
 	getKnowledgeStats: () => getJSON<KnowledgeStats>("/api/knowledge/stats"),
-	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160) =>
+	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160, agentId = "all") =>
 		getJSON<KnowledgeConstellation>(
-			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=4&dependency_limit=${dependencyLimit}`,
+			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=4&dependency_limit=${dependencyLimit}&agent_id=${encodeURIComponent(agentId)}`,
 		),
 	getOntologyProposals: (status: "pending" | "applied" | "rejected" | "failed" = "pending", limit = 20) =>
 		getJSON<{ items: OntologyProposal[]; limit: number; offset: number }>(

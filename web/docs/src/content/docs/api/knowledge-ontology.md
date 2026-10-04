@@ -122,7 +122,15 @@ Query parameters: `agent_id`, `limit`, `max_aspects_per_entity`,
 omitted, the daemon uses the configured daemon agent ID (`SIGNET_AGENT_ID`, or
 `default`). The read includes the requested agent plus agents whose
 `read_policy` is `shared`, and clamps limits so dashboard navigation cannot
-load the entire knowledge graph into one read response.
+load the entire knowledge graph into one read response. `agentId` is accepted
+as an alias for `agent_id`.
+
+`agent_id=all` returns every agent's graph in one view and requires `admin`
+permission outside local mode. The entity limit then applies across all agents,
+and `metadata` still describes the configured daemon agent. Every entity carries
+its owning `agentId`. The dashboard graph opens on all agents, colors each
+agent's entities, rings their aspects, claims, and evidence in the same color
+when more than one agent is shown, and offers a picker to show one agent.
 
 The dashboard entity limit is capped at 300, matching the server limit. The
 3D view also renders no more than 5,000 nodes at once and labels the view when

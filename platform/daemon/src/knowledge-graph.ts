@@ -1843,6 +1843,7 @@ export interface ConstellationAspect {
 
 export interface ConstellationEntity {
 	readonly id: string;
+	readonly agentId: string;
 	readonly name: string;
 	readonly entityType: string;
 	readonly mentions: number;
@@ -1923,6 +1924,7 @@ export interface ConstellationGraphOptions {
 	readonly dependencyLimit?: number;
 	readonly assertionLimit?: number;
 	readonly backlogProbe?: DreamingEpisodicBacklogProbe;
+	readonly allAgents?: boolean;
 }
 
 function boundedInteger(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -1931,6 +1933,15 @@ function boundedInteger(value: number | undefined, fallback: number, min: number
 
 function placeholders(count: number): string {
 	return Array.from({ length: count }, () => "?").join(", ");
+}
+
+function getConstellationAllAgentIds(db: ReadDb, agentId: string): readonly string[] {
+	const rows = db.prepare("SELECT id FROM agents UNION SELECT DISTINCT agent_id AS id FROM entities").all() as Array<
+		Record<string, unknown>
+	>;
+	const ids = new Set<string>([agentId]);
+	for (const row of rows) if (typeof row.id === "string" && row.id.trim().length > 0) ids.add(row.id);
+	return [...ids];
 }
 
 function getConstellationVisibleAgentIds(db: ReadDb, agentId: string): readonly string[] {
@@ -2098,13 +2109,15 @@ export async function getKnowledgeGraphForConstellation(
 
 	return await accessor.withReadDbAsync(
 		async (db) => {
-			const visibleAgentIds = getConstellationVisibleAgentIds(db, agentId);
+			const visibleAgentIds = options.allAgents
+				? getConstellationAllAgentIds(db, agentId)
+				: getConstellationVisibleAgentIds(db, agentId);
 			const agentPlaceholders = placeholders(visibleAgentIds.length);
 			const topologyPlaceholders = placeholders(SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.length);
 			const sourceClaimEntityTypePlaceholders = placeholders(SOURCE_CLAIM_ENTITY_TYPES.length);
 			const entityRows = db
 				.prepare(
-					`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id
+					`SELECT e.id, e.agent_id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id
 				 FROM entities e
 				 WHERE e.agent_id IN (${agentPlaceholders})
 				   AND COALESCE(e.status, 'active') = 'active'
@@ -2315,6 +2328,7 @@ export async function getKnowledgeGraphForConstellation(
 				}));
 				return {
 					id: eid,
+					agentId: row.agent_id as string,
 					name,
 					entityType: row.entity_type as string,
 					mentions: typeof row.mentions === "number" ? row.mentions : 0,

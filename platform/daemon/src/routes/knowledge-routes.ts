@@ -341,7 +341,13 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.get("/api/knowledge/constellation", async (c) => {
-		const agentId = c.req.query("agent_id") ?? resolveDaemonAgentId();
+		const requested = c.req.query("agent_id") ?? c.req.query("agentId");
+		const allAgents = requested === "all";
+		if (allAgents) {
+			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+		}
+		const agentId = allAgents ? resolveDaemonAgentId() : (requested ?? resolveDaemonAgentId());
 		const accessor = getDbAccessor();
 		const backlogProbe = await probeDreamingEpisodicBacklog(
 			accessor,
@@ -356,6 +362,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				dependencyLimit: parseNavigationLimit(c.req.query("dependency_limit"), 500, 2000),
 				assertionLimit: parseNavigationLimit(c.req.query("assertion_limit"), 250, 1000),
 				backlogProbe,
+				allAgents,
 			}),
 		);
 	});
@@ -491,7 +498,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:487" },
+			{ siteToken: "routes/knowledge-routes.ts:494" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -589,7 +596,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: safeRows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:504" },
+			{ siteToken: "routes/knowledge-routes.ts:511" },
 		);
 	});
 
@@ -608,7 +615,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:609" },
+			{ siteToken: "routes/knowledge-routes.ts:616" },
 		);
 		return c.json(result);
 	});
