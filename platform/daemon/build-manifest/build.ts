@@ -268,7 +268,7 @@ export class RuntimeManifest {
 		try {
 			root = packageRoot(name, importer);
 		} catch (error) {
-			if (optional) {
+			if (optional && error instanceof Error && error.message.startsWith("Missing runtime dependency ")) {
 				this.#optionalAbsent.add(name);
 				return;
 			}

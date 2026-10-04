@@ -108,12 +108,31 @@ describe("daemon Bun build externals", () => {
 		}
 	});
 	test("rejects invalid metadata instead of classifying an installed optional external as absent", async () => {
-		const directory = fixtureWithDroppedOptionalDependency();
-		const native = join(directory, "node_modules", "better-sqlite3");
-		rmSync(native);
-		mkdirSync(native);
-		writeFileSync(join(native, "package.json"), JSON.stringify({ name: "wrong-package", version: "1.0.0" }));
-		await expect(buildFixture(directory, [...EXTERNAL_BUN])).rejects.toThrow();
+		for (const transitive of [false, true]) {
+			for (const metadata of ['{"name":', JSON.stringify({ name: "wrong-package", version: "1.0.0" })]) {
+				const directory = fixtureWithDroppedOptionalDependency();
+				const native = join(directory, "node_modules", "better-sqlite3");
+				rmSync(native);
+				mkdirSync(native);
+				let corrupt = native;
+				if (transitive) {
+					writeFileSync(
+						join(native, "package.json"),
+						JSON.stringify({
+							name: "better-sqlite3",
+							version: "1.0.0",
+							main: "index.js",
+							optionalDependencies: { "corrupt-optional-fixture": "1.0.0" },
+						}),
+					);
+					writeFileSync(join(native, "index.js"), "module.exports = 42;");
+					corrupt = join(native, "node_modules", "corrupt-optional-fixture");
+					mkdirSync(corrupt, { recursive: true });
+				}
+				writeFileSync(join(corrupt, "package.json"), metadata);
+				await expect(buildFixture(directory, [...EXTERNAL_BUN])).rejects.toThrow();
+			}
+		}
 	});
 	test("still rejects a missing required external dependency during inventory", async () => {
 		const directory = fixtureWithDroppedOptionalDependency();
