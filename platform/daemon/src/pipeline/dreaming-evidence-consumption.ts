@@ -162,6 +162,7 @@ export function extendDeliveredOffset(
 export interface FailedOperationEvidence {
 	readonly sources: ReadonlySet<string>;
 	readonly scopes: ReadonlySet<string>;
+	readonly filedSources: ReadonlySet<string>;
 }
 
 export function failedOperationEvidence(
@@ -172,7 +173,8 @@ export function failedOperationEvidence(
 ): FailedOperationEvidence {
 	const keys = new Set<string>();
 	const scopes = new Set<string>();
-	if (!tableExists(db, "dreaming_tool_calls")) return { sources: keys, scopes };
+	const filed = new Set<string>();
+	if (!tableExists(db, "dreaming_tool_calls")) return { sources: keys, scopes, filedSources: filed };
 	const rows = db
 		.prepare(
 			`SELECT input_json AS inputJson, output_json AS outputJson
@@ -196,6 +198,21 @@ export function failedOperationEvidence(
 			scopes.add(agentId);
 			continue;
 		}
+		const citedKeys = (index: number): string[] => {
+			const evidence = record(operations[index])?.evidence;
+			return (Array.isArray(evidence) ? evidence : []).flatMap((citation) => {
+				const cited = record(citation);
+				const ref = text(cited?.source_ref) ?? text(cited?.sourceRef);
+				const parsed = ref ? sourceRef(ref) : null;
+				return parsed ? [`${agentId}\u0000${parsed.kind}:${parsed.id}`] : [];
+			});
+		};
+		if (output?.ok === true && Array.isArray(output.items)) {
+			for (const item of output.items) {
+				const row = record(item);
+				if (row?.ok === true && typeof row.index === "number") for (const key of citedKeys(row.index)) filed.add(key);
+			}
+		}
 		const failedIndexes =
 			output?.ok === true && Array.isArray(output.items)
 				? output.items.flatMap((item) => {
@@ -204,18 +221,12 @@ export function failedOperationEvidence(
 					})
 				: operations.map((_, index) => index);
 		for (const index of failedIndexes) {
-			const evidence = record(operations[index])?.evidence;
-			const citations = (Array.isArray(evidence) ? evidence : []).flatMap((citation) => {
-				const cited = record(citation);
-				const ref = text(cited?.source_ref) ?? text(cited?.sourceRef);
-				const parsed = ref ? sourceRef(ref) : null;
-				return parsed ? [`${agentId}\u0000${parsed.kind}:${parsed.id}`] : [];
-			});
+			const citations = citedKeys(index);
 			if (citations.length === 0) scopes.add(agentId);
 			for (const key of citations) keys.add(key);
 		}
 	}
-	return { sources: keys, scopes };
+	return { sources: keys, scopes, filedSources: filed };
 }
 
 export function verifiedDreamingEvidenceDelivery(
@@ -248,11 +259,16 @@ export function recordDreamingEvidenceConsumptionInTx(
 		readonly passId: string;
 		readonly deferredEvidence: ReadonlySet<string>;
 		readonly withheldScopes?: ReadonlySet<string>;
+		readonly filedSources?: ReadonlySet<string>;
 	},
 ): void {
 	if (!tableExists(db, "dreaming_evidence_consumption")) return;
 	const deliveries = persistedEvidenceDeliveries(db, params.passId)
-		.filter((delivery) => !params.withheldScopes?.has(delivery.agentId))
+		.filter(
+			(delivery) =>
+				!params.withheldScopes?.has(delivery.agentId) ||
+				params.filedSources?.has(`${delivery.agentId}\u0000${delivery.kind}:${delivery.id}`) === true,
+		)
 		.filter((delivery) => !params.deferredEvidence.has(`${delivery.agentId}\u0000${delivery.kind}:${delivery.id}`))
 		.sort(
 			(a, b) =>

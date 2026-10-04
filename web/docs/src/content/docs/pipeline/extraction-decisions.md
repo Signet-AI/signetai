@@ -151,8 +151,9 @@ counts, evidence progress, and summary information. The evidence watermark
 advances only when the pass actually consumes the relevant episodic backlog.
 A failed ontology operation withholds progress only for the sources it cites;
 a failure that cites no source, including one whose operations could not be
-parsed, withholds progress for its agent scope, so other sources and scopes in
-the same pass still record what was read. A failed write whose trace cannot be
+parsed, withholds progress for the sources in its agent scope that no
+successful write in the pass cited, so filed sources and other scopes in the
+same pass still record what was read. A failed write whose trace cannot be
 read withholds every scope in the pass.
 An `incremental-content` pass must stage exactly one `memory_head_commit`, and
 fails if the agent ends without one. A pass with nothing to publish resubmits

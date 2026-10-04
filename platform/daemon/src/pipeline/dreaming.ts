@@ -2161,6 +2161,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 				passId: input.passId,
 				deferredEvidence,
 				withheldScopes: failedEvidence.scopes,
+				filedSources: failedEvidence.filedSources,
 			});
 			recordDreamingReviewedExcludedEvidenceInTx(db, {
 				passId: input.passId,

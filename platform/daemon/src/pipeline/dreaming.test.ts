@@ -2790,6 +2790,55 @@ describe("Dreaming", () => {
 		expect(db.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_consumption").get()).toEqual({ n: 0 });
 	});
 
+	it("keeps progress for sources a pass filed when an uncited write fails in the same agent", async () => {
+		seedTranscript(db, "filed-source", "Aster is the durable release project.");
+		seedTranscript(db, "unfiled-source", "Weather small talk about the weekend.");
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					const filed = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [
+							{
+								operation: "create_entity",
+								payload: { name: "Aster", type: "project" },
+								reason: "The evidence names a durable project.",
+								evidence: [
+									{
+										source_ref: "transcript:filed-source",
+										quote: "Aster is the durable release project.",
+									},
+								],
+							},
+						],
+					});
+					expect(filed.ok).toBe(true);
+					await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [{ operation: "not_an_ontology_operation", payload: {} }],
+					});
+					return { summary: "One filed write and one uncited rejection" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = (
+			db
+				.prepare("SELECT source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'")
+				.all() as Array<{
+				id: string;
+			}>
+		).map((row) => row.id);
+		expect(consumed).toEqual(["filed-source"]);
+	});
+
 	it("withholds an uncited failure's agent without discarding other agents' progress", async () => {
 		const other = "dreaming-other-scope";
 		accessor.withWriteTx((tx) => {
