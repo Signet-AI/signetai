@@ -47,10 +47,10 @@ describe("durable session lifecycle claims (#1228)", () => {
 		setSessionClaimStore(createSessionClaimStore(getDbAccessor()));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		setSessionClaimStore(null);
 		resetSessions();
-		closeDbAccessor();
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 	});
 

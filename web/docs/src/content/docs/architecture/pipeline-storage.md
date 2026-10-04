@@ -261,7 +261,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `160-import-admission-ledger.ts`.
+`schema_migrations_audit`. The latest migration is `162-generic-entity-prune-scan-generation.ts`.
 
 ### Evidence and semantic state
 

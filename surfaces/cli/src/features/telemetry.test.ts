@@ -54,7 +54,7 @@ beforeEach(() => {
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
-	process.env.SIGNET_TELEMETRY_OPTOUT = undefined;
+	delete process.env.SIGNET_TELEMETRY_OPTOUT;
 	rmSync(dir, { recursive: true, force: true });
 });
 

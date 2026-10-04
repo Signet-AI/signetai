@@ -30,8 +30,8 @@ describe("GET /api/diagnostics/memory-content-safety", () => {
 		});
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 	});
 

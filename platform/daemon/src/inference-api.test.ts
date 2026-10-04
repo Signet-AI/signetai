@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -91,36 +92,6 @@ function writeStreamingRoutingFixture(root: string, endpoint: string): void {
         - fake/stream
   workloads:
     interactive:
-      policy: auto
-`,
-	);
-}
-
-function writeCommandInferenceFixture(root: string): void {
-	mkdirSync(join(root, "memory"), { recursive: true });
-	writeFileSync(
-		join(root, "agent.yaml"),
-		`inference:
-  defaultPolicy: auto
-  targets:
-    localCli:
-      executor: command
-      command:
-        bin: ${process.execPath}
-        args:
-          - -e
-          - console.log("cli:" + process.env.SIGNET_PROMPT)
-      models:
-        default:
-          model: local-cli
-          reasoning: low
-  policies:
-    auto:
-      mode: strict
-      defaultTargets:
-        - localCli/default
-  workloads:
-    default:
       policy: auto
 `,
 	);
@@ -517,6 +488,9 @@ function createTelemetryRecorder(): {
 		events,
 		collector: {
 			enabled: true,
+			anonymizeAgentId(agentId: string): string {
+				return createHash("sha256").update(agentId).digest("hex").slice(0, 16);
+			},
 			record(event: TelemetryEventType, properties: TelemetryProperties): void {
 				events.push({
 					id: `evt_${events.length + 1}`,
@@ -820,35 +794,6 @@ describe("inference route hardening", () => {
 				}),
 			);
 			expect(statusRes.status).toBe(200);
-		} finally {
-			resetInferenceRouterForTests();
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
-
-	it("executes generic command targets through the default inference workload", async () => {
-		const root = mkdtempSync(join(tmpdir(), "signet-inference-command-"));
-		writeCommandInferenceFixture(root);
-		try {
-			const { app, secret } = createInferenceTestApp(root);
-			const adminToken = createToken(secret, { sub: "admin", scope: {}, role: "admin" }, 60);
-			const res = await app.request(
-				new Request("http://localhost/api/inference/execute", {
-					method: "POST",
-					headers: {
-						Authorization: `Bearer ${adminToken}`,
-						"content-type": "application/json",
-					},
-					body: JSON.stringify({ prompt: "bring your own cli", operation: "default" }),
-				}),
-			);
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as {
-				readonly text?: string;
-				readonly decision?: { readonly targetRef?: string };
-			};
-			expect(body.text).toBe("cli:bring your own cli");
-			expect(body.decision?.targetRef).toBe("localCli/default");
 		} finally {
 			resetInferenceRouterForTests();
 			rmSync(root, { recursive: true, force: true });

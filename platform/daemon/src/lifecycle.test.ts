@@ -2,13 +2,37 @@ import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyPreviousDaemonExit, lifecyclePath, readDaemonLifecycle, writeDaemonLifecycle } from "./lifecycle";
+import {
+	classifyPreviousDaemonExit,
+	lifecyclePath,
+	readDaemonLifecycle,
+	terminalLifecycleFields,
+	writeDaemonLifecycle,
+} from "./lifecycle";
 
 function tempRoot(): string {
 	return mkdtempSync(join(tmpdir(), "signet-lifecycle-"));
 }
 
 describe("daemon lifecycle record (#1148)", () => {
+	it("records a signal shutdown without a cleanup failure as clean", () => {
+		const exitedAt = "2026-08-07T01:00:00.000Z";
+		expect(terminalLifecycleFields("signal:SIGTERM", 0, null, exitedAt)).toEqual({
+			state: "clean",
+			exitedAt,
+			exitCode: 0,
+			reason: "signal:SIGTERM",
+		});
+		expect(terminalLifecycleFields("signal:SIGTERM", 0, undefined, exitedAt).state).toBe("clean");
+		expect(terminalLifecycleFields("error:startup", 1, new Error("boom"), exitedAt)).toEqual({
+			state: "error",
+			exitedAt,
+			exitCode: 1,
+			reason: "error:startup",
+			error: "boom",
+		});
+	});
+
 	it("persists a clean shutdown record with the exit path and code", () => {
 		const root = tempRoot();
 		try {

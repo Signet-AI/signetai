@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
@@ -171,9 +171,12 @@ describe("install copy", () => {
 	test("build-connector-assets stages runtime plugin assets into a tarball", () => {
 		const buildScript = read("scripts/build-connector-assets.ts");
 		expect(buildScript).toContain(`signet-connectors-\${version}.tar.gz`);
-		expect(buildScript).toContain("runtime/connectors");
+		expect(buildScript).toContain(`join(stagingRoot, "runtime", "connectors", entry.harness, entry.assetDir)`);
 		expect(buildScript).toContain("integrations");
-		expect(buildScript).toContain("hermes-plugin");
+		expect(buildScript).toContain('join(integrationsDir, name, "connector")');
+		expect(existsSync(join(import.meta.dir, "..", "integrations", "hermes-agent", "connector", "hermes-plugin"))).toBe(
+			true,
+		);
 		expect(buildScript).toContain('"dist"');
 		expect(buildScript).toContain('"node_modules"');
 		expect(buildScript).toContain('"src"');

@@ -35,8 +35,8 @@ const emb: EmbeddingConfig = {
 
 let path = "";
 
-afterEach(() => {
-	closeDbAccessor();
+afterEach(async () => {
+	await closeDbAccessor();
 	if (path) {
 		rmSync(path, { force: true });
 		rmSync(`${path}-wal`, { force: true });

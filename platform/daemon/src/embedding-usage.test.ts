@@ -18,17 +18,17 @@ const TELEMETRY_CONFIG = {
 	memorySearchQaEnabled: false,
 } as const;
 
-function resetWorkspace(): void {
-	closeDbAccessor();
+async function resetWorkspace(): Promise<void> {
+	await closeDbAccessor();
 	rmSync(join(dir, "memory"), { recursive: true, force: true });
 	mkdirSync(join(dir, "memory"), { recursive: true });
 	initDbAccessor(join(dir, "memory", "memories.db"));
 }
 
 describe("embedding telemetry (issue #1181)", () => {
-	beforeAll(() => {
+	beforeAll(async () => {
 		dir = createTestTempDir("signet-embed-telemetry-");
-		resetWorkspace();
+		await resetWorkspace();
 	});
 
 	afterAll(() => {

@@ -24,8 +24,8 @@ function prepareDashboard(dir: string): void {
 	prepared.add(dir);
 }
 
-function packFiles(dir: string): string[] {
-	prepareDashboard(dir);
+function packFiles(dir: string, prepare = true): string[] {
+	if (prepare) prepareDashboard(dir);
 
 	const res = spawnSync("npm", ["pack", "--dry-run", "--json"], {
 		cwd: dir,
@@ -72,8 +72,8 @@ describe("published package dashboard bundles", () => {
 		expect(files).toContain("dashboard/index.html");
 	}, 60_000);
 
-	test("dist/signetai pack output includes dashboard assets", () => {
-		const files = packFiles(resolve(root, "dist", "signetai"));
-		expect(files).toContain("dashboard/index.html");
+	test("dist/signetai pack output includes the staged daemon runtime dashboard", () => {
+		const files = packFiles(resolve(root, "dist", "signetai"), false);
+		expect(files).toContain("runtime/daemon-js/dashboard/index.html");
 	}, 60_000);
 });

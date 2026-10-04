@@ -15,7 +15,7 @@ import { normalizeAndHashContent } from "./content-normalization";
 import { getDbAccessor, getDbAccessorPath, runWriteTxAsync } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
 import { vectorSearchThroughDbOwner } from "./db-owner-recall";
-import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
+import { ownerBytesFromHex, ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { getDbOwner, getDbRecallOwner } from "./db-owner-runtime";
 import { DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
 import {
@@ -925,19 +925,9 @@ function checkRecallCancellation(options?: RecallExecutionOptions): void {
 	}
 }
 
-function ownerVectorFromBlob(value: unknown): Float32Array | null {
-	let bytes: Uint8Array;
-	if (value instanceof Uint8Array) bytes = value;
-	else if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
-	else if (
-		typeof value === "object" &&
-		value !== null &&
-		"data" in value &&
-		Array.isArray(value.data) &&
-		value.data.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
-	) {
-		bytes = Uint8Array.from(value.data);
-	} else return null;
+function ownerVectorFromHex(value: unknown): Float32Array | null {
+	if (typeof value !== "string" || !/^(?:[0-9A-Fa-f]{2})*$/.test(value)) return null;
+	const bytes = ownerBytesFromHex(value);
 	if (bytes.byteLength === 0 || bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) return null;
 	const vector = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / Float32Array.BYTES_PER_ELEMENT);
 	return vector.every(Number.isFinite) ? vector : null;
@@ -1321,11 +1311,11 @@ export async function buildSourceChunkVectorHits(
 				id: string;
 				source_type: string;
 				source_id: string;
-				vector: unknown;
+				vector_hex: string | null;
 				created_at: string;
 			}>(
 				owner,
-				`SELECT e.rowid, e.id, e.source_type, e.source_id, e.vector, e.created_at
+				`SELECT e.rowid, e.id, e.source_type, e.source_id, hex(e.vector) AS vector_hex, e.created_at
 				 FROM embeddings e ${safetyJoin}
 				 WHERE e.rowid > ? AND e.source_type IN (?, ?) AND e.agent_id = ?
 			   AND e.vector IS NOT NULL AND length(CAST(e.chunk_text AS BLOB)) <= ? ${safetyFilter}
@@ -1353,7 +1343,7 @@ export async function buildSourceChunkVectorHits(
 			}
 			cursor = lastRow.rowid;
 			for (const row of rows) {
-				const vector = ownerVectorFromBlob(row.vector);
+				const vector = ownerVectorFromHex(row.vector_hex);
 				if (!vector) continue;
 				const score = cosineSimilarity(queryVec, vector);
 				if (score > 0 && !existingSourceIds.has(row.source_id))

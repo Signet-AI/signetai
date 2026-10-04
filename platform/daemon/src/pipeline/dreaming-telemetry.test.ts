@@ -18,9 +18,9 @@ const TELEMETRY_CONFIG = {
 } as const;
 
 describe("dreaming telemetry", () => {
-	beforeAll(() => {
+	beforeAll(async () => {
 		dir = createTestTempDir("signet-dream-telemetry-");
-		closeDbAccessor();
+		await closeDbAccessor();
 		rmSync(join(dir, "memory"), { recursive: true, force: true });
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"));

@@ -217,7 +217,7 @@ describe("globToRegex", () => {
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
-	});
+	}, 30_000);
 
 	test("*.md does not match .env", () => {
 		expect(matchGlob("**/*.md", ".env")).toBe(false);

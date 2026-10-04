@@ -36,8 +36,8 @@ function seedEntity(id: string, name: string, agentId = "default"): void {
 describe("inline entity linker", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });

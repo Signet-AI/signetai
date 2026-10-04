@@ -24,8 +24,8 @@ describe("persisted ontology contradictions", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		rmSync(dir, { recursive: true, force: true });
@@ -238,7 +238,7 @@ describe("persisted ontology contradictions", () => {
 		await addClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
 		await addClaim("owner", "Runtime mode is disabled by default.", "source-disabled");
 
-		purgeSourceOwnedRows({ agentId: "owner", sourceId: "source-enabled" });
+		await purgeSourceOwnedRows({ agentId: "owner", sourceId: "source-enabled" });
 
 		const all = await listOntologyContradictions(getDbAccessor(), { agentId: "owner", status: "all" });
 		expect(all.items).toHaveLength(1);
