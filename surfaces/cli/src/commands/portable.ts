@@ -2,6 +2,8 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, resolve, sep } from "node:path";
 import {
 	collectExportData,
+	createFreshWorkspaceV2,
+	hasExistingWorkspaceState,
 	importEntities,
 	importMemories,
 	importRelations,
@@ -88,12 +90,15 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 		.option("--json", "Input is a JSON file instead of a directory")
 		.action(async (importPath: string, options) => {
 			const agentsDir = deps.AGENTS_DIR;
-			const dbPath = resolveWorkspaceLayout(agentsDir).database;
 
 			if (!existsSync(importPath)) {
 				console.error(chalk.red(`  Path not found: ${importPath}`));
 				process.exit(1);
 			}
+			const layout = hasExistingWorkspaceState(agentsDir)
+				? resolveWorkspaceLayout(agentsDir)
+				: createFreshWorkspaceV2(agentsDir);
+			const dbPath = layout.database;
 
 			const spinner = ora("Importing agent data...").start();
 			const fileMap = options.json || importPath.endsWith(".json") ? loadJsonMap(importPath) : loadDirMap(importPath);
@@ -113,7 +118,7 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 				writeFileSync(join(agentsDir, "agent.yaml"), agentYaml);
 			}
 
-			mkdirSync(join(agentsDir, "memory"), { recursive: true });
+			mkdirSync(dirname(dbPath), { recursive: true });
 			let db: ReturnType<typeof Database> | null = null;
 			const conflict = readConflict(options.conflict);
 			let memResult = { imported: 0, skipped: 0 };

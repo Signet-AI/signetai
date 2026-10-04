@@ -413,6 +413,60 @@ memory:
 		expect(state.activeProject).toBe(projectPath);
 	});
 
+	it("creates a v2 workspace when migrating an identity-only directory", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-identity-v2-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(basePath, { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(basePath, "IDENTITY.md"), "# Existing Agent\n");
+		writeFileSync(join(basePath, "AGENTS.md"), "# Existing instructions\n");
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+
+		await runExistingSetupWizard(basePath, { ...fakeDetection(basePath), memoryDb: false }, {}, deps, {
+			nonInteractive: true,
+			skipGit: true,
+			allowUnprotectedWorkspace: true,
+		});
+
+		expect(JSON.parse(readFileSync(join(basePath, "workspace-layout.json"), "utf-8")).version).toBe(2);
+		expect(existsSync(join(basePath, "data", "signet.db"))).toBe(true);
+		expect(existsSync(join(basePath, "runtime", "plugins", "registry-v1.json"))).toBe(true);
+		expect(existsSync(join(basePath, "memory"))).toBe(false);
+		expect(existsSync(join(basePath, ".daemon"))).toBe(false);
+		expect(readFileSync(join(basePath, "agent.yaml"), "utf-8")).toContain("database: data/signet.db");
+	});
+
+	it("keeps an existing v1 database layout when migrating", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-v1-db-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(basePath, "memory", "memories.db"), "");
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+
+		await runExistingSetupWizard(basePath, fakeDetection(basePath), {}, deps, {
+			nonInteractive: true,
+			skipGit: true,
+			allowUnprotectedWorkspace: true,
+		});
+
+		expect(existsSync(join(basePath, "workspace-layout.json"))).toBe(false);
+		expect(existsSync(join(basePath, "data"))).toBe(false);
+		expect(existsSync(join(basePath, "memory", "scripts"))).toBe(false);
+	});
+
 	it("enables Dreaming defaults and removes retired routing during existing setup", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-migrate-dreaming-defaults-"));
 		const basePath = join(root, "agents");
