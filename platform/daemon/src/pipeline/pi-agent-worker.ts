@@ -43,23 +43,32 @@ const resourceLoader = new DefaultResourceLoader({
 	...(codemode ? { extensionFactories: [createCodemodeExtension({ mode: "on" })] } : {}),
 });
 await resourceLoader.reload();
+const MAX_IN_FLIGHT_TOOL_CALLS = 8;
+type PendingToolCall = {
+	resolve: (result: Awaited<ReturnType<ToolDefinition["execute"]>>) => void;
+	reject: (error: Error) => void;
+};
 let nextId = 0;
-let toolCount = 0;
-const pending = new Map<
-	number,
-	{ resolve: (result: Awaited<ReturnType<ToolDefinition["execute"]>>) => void; reject: (error: Error) => void }
->();
+const pending = new Map<number, PendingToolCall>();
+const queued: Array<{ readonly call: PendingToolCall; readonly dispatch: (id: number) => void }> = [];
+const dispatchQueued = (): void => {
+	while (pending.size < MAX_IN_FLIGHT_TOOL_CALLS) {
+		const next = queued.shift();
+		if (!next) return;
+		const id = ++nextId;
+		pending.set(id, next.call);
+		next.dispatch(id);
+	}
+};
 const customTools: ToolDefinition[] = input.tools.map((tool) => ({
 	...tool,
 	execute(toolCallId, params) {
 		return new Promise((resolve, reject) => {
-			if (++toolCount > 64 || pending.size >= 8) {
-				reject(new Error("Pi agent tool budget exceeded"));
-				return;
-			}
-			const id = ++nextId;
-			pending.set(id, { resolve, reject });
-			send({ type: "tool", id, name: tool.name, toolCallId, params });
+			queued.push({
+				call: { resolve, reject },
+				dispatch: (id) => send({ type: "tool", id, name: tool.name, toolCallId, params }),
+			});
+			dispatchQueued();
 		});
 	},
 }));
@@ -103,18 +112,19 @@ port.on("message", async (request: PiAgentWorkerRequest) => {
 			if (request.error) call?.reject(new Error(request.error));
 			else if (request.result) call?.resolve(request.result);
 			else call?.reject(new Error("Missing tool result"));
+			dispatchQueued();
 			return;
 		}
 		if (request.type === "abort" || request.type === "cancel") {
 			for (const call of pending.values()) call.reject(new Error("Pi agent aborted"));
 			pending.clear();
+			for (const { call } of queued.splice(0)) call.reject(new Error("Pi agent aborted"));
 			await session.abort();
 			send({ type: "aborted" });
 			return;
 		}
 		if (running) throw new Error("Pi agent session already running");
 		running = true;
-		toolCount = 0;
 		const previousStats = session.getSessionStats();
 		const firstMessage = session.messages.length;
 		try {

@@ -227,6 +227,84 @@ test("codemode scripts reach codemode tools in the daemon but cannot call model-
 	}
 }, 30000);
 
+test("a codemode script may make many tool calls, with at most eight in flight", async () => {
+	let requests = 0;
+	let scriptResult = "";
+	let calls = 0;
+	let inFlight = 0;
+	let maxInFlight = 0;
+	const script = [
+		"for (let i = 0; i < 100; i++) await tools.lookup({ query: 'q' + i });",
+		"await Promise.all(Array.from({ length: 20 }, (_, i) => tools.lookup({ query: 'p' + i })));",
+		"text('done');",
+	].join("\n");
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		async fetch(request) {
+			const body = (await request.json().catch(() => null)) as {
+				messages?: Array<{ role: string; content?: unknown }>;
+			} | null;
+			if (body === null) return new Response("", { status: 400 });
+			requests++;
+			if (requests > 1) {
+				scriptResult = JSON.stringify(body.messages?.find((message) => message.role === "tool")?.content ?? "");
+			}
+			const content =
+				requests === 1
+					? completion({
+							role: "assistant",
+							tool_calls: [
+								{
+									index: 0,
+									id: "call-1",
+									type: "function",
+									function: { name: "codemode", arguments: JSON.stringify({ code: script }) },
+								},
+							],
+						}) + completion({}, "tool_calls")
+					: completion({ role: "assistant", content: "Done." }) + completion({}, "stop");
+			return new Response(`${content}data: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+		},
+	});
+	const tools: PiAgentTool[] = [
+		{
+			name: "lookup",
+			label: "Lookup",
+			description: "Read-only lookup",
+			parameters: Type.Object({ query: Type.String() }),
+			exposure: "codemode",
+			async execute() {
+				calls++;
+				inFlight++;
+				maxInFlight = Math.max(maxInFlight, inFlight);
+				await new Promise((resolve) => setTimeout(resolve, 2));
+				inFlight--;
+				return { content: [{ type: "text", text: "ok" }], details: {} };
+			},
+		},
+	];
+	try {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "test-model",
+			baseUrl: `http://127.0.0.1:${server.port}/v1`,
+		});
+		const session = await provider.createAgentSession(tools, { systemPrompt: "You are a maintenance agent." });
+		try {
+			await session.prompt("Look everything up.");
+			expect(scriptResult).toContain("done");
+			expect(calls).toBe(120);
+			expect(maxInFlight).toBeLessThanOrEqual(8);
+			expect(maxInFlight).toBeGreaterThan(1);
+		} finally {
+			await session.dispose();
+		}
+	} finally {
+		server.stop(true);
+	}
+}, 60000);
+
 test("aborting a stalled model releases the actual worker and settles the prompt", async () => {
 	const server = Bun.serve({
 		port: 0,
