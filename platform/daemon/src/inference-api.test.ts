@@ -282,15 +282,14 @@ function startFakeOpenAiServer(
 		port: 0,
 		fetch(req) {
 			const url = new URL(req.url);
-			url.pathname = url.pathname.replace(/^\/v1(?=\/)/, "");
-			if (url.pathname === "/models") {
+			if (url.pathname.endsWith("/models")) {
 				return Response.json({
 					object: "list",
 					data: [{ id: "fake-stream", object: "model" }],
 				});
 			}
 
-			if (url.pathname === "/chat/completions") {
+			if (url.pathname.endsWith("/chat/completions")) {
 				return req.json().then(async (body: unknown) => {
 					const payload = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
 					if (mode === "rate_limit") {

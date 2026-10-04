@@ -8,6 +8,7 @@ import { checkPermission } from "../auth/policy";
 import { dbOwnerBatch, dbOwnerQuery } from "../db-owner-runtime.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { loadPipelineConfig } from "../memory-config.js";
+import { openBoundedSse } from "../sse-stream.js";
 import {
 	MAX_UPDATE_INTERVAL_SECONDS,
 	MIN_UPDATE_INTERVAL_SECONDS,
@@ -71,49 +72,20 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.get("/api/logs/stream", (c) => {
-		const encoder = new TextEncoder();
-
-		const stream = new ReadableStream({
-			start(controller) {
-				let dead = false;
-				const cleanup = () => {
-					if (dead) return;
-					dead = true;
-					logger.off("log", onLog);
-					try {
-						controller.close();
-					} catch {}
+		const sse = openBoundedSse({
+			requestSignal: c.req.raw.signal,
+			overflowPolicy: "drop",
+			onStart(producer) {
+				const onLog = (entry: LogEntry): void => {
+					producer.write(entry);
 				};
-
-				const onLog = (entry: LogEntry) => {
-					if (dead) return;
-					try {
-						const data = `data: ${JSON.stringify(entry)}\n\n`;
-						controller.enqueue(encoder.encode(data));
-					} catch {
-						cleanup();
-					}
-				};
-
+				producer.addDisposer(() => logger.off("log", onLog));
+				if (producer.signal.aborted) return;
 				logger.on("log", onLog);
-
-				try {
-					controller.enqueue(encoder.encode(`data: {"type":"connected"}\n\n`));
-				} catch {
-					cleanup();
-				}
-
-				c.req.raw.signal.addEventListener("abort", cleanup);
+				producer.write({ type: "connected" });
 			},
 		});
-
-		return new Response(stream, {
-			headers: {
-				"Content-Type": "text/event-stream",
-				"Cache-Control": "no-cache",
-				Connection: "keep-alive",
-			},
-		});
+		return sse.response;
 	});
 
 	app.get("/api/config", async (c) => {

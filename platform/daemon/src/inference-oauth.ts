@@ -10,6 +10,7 @@ import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { logger } from "./logger";
 import { deleteSecretFromActiveProvider, getSecret, putSecret } from "./secrets";
 import { registerSignetOAuthFlows } from "./inference-oauth-runtime";
+import { openBoundedSse, type BoundedSseProducer } from "./sse-stream.js";
 
 registerSignetOAuthFlows();
 
@@ -254,6 +255,7 @@ function cleanupSession(session: OAuthLoginSession, reason?: string): void {
 export function startOAuthLogin(
 	providerId: string,
 	onCredentialsChanged?: () => void,
+	requestSignal?: AbortSignal,
 ): {
 	readonly sessionId: string;
 	readonly stream: ReadableStream<Uint8Array>;
@@ -264,9 +266,9 @@ export function startOAuthLogin(
 	if (activeSessions.size >= MAX_ACTIVE_OAUTH_SESSIONS) throw new Error("Too many active OAuth login sessions");
 
 	const sessionId = randomUUID();
-	const encoder = new TextEncoder();
-	let controllerRef: ReadableStreamDefaultController<Uint8Array> | null = null;
 	let closed = false;
+	let streamProducer: BoundedSseProducer | undefined;
+	let timeout: ReturnType<typeof setTimeout> | undefined;
 	const abortController = new AbortController();
 	const session: OAuthLoginSession = {
 		id: sessionId,
@@ -275,24 +277,32 @@ export function startOAuthLogin(
 		pending: new Map(),
 		expiresAt: Date.now() + OAUTH_SESSION_TTL_MS,
 		emit(event) {
-			if (closed || !controllerRef) return;
-			controllerRef.enqueue(encoder.encode(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`));
+			if (closed || !streamProducer) return;
+			streamProducer.write(event, { event: event.type });
 		},
 		close() {
 			if (closed) return;
 			closed = true;
-			try {
-				controllerRef?.close();
-			} catch {}
+			streamProducer?.close();
 		},
 	};
 
-	const stream = new ReadableStream<Uint8Array>({
-		start(controller) {
-			controllerRef = controller;
+	const sse = openBoundedSse({
+		requestSignal,
+		highWaterMarkBytes: 512 * 1024,
+		maxFrameBytes: 256 * 1024,
+		onStart(producer) {
+			streamProducer = producer;
 			activeSessions.set(sessionId, session);
+			producer.addDisposer(() => {
+				if (timeout) clearTimeout(timeout);
+			});
+			producer.addDisposer(() => {
+				if (activeSessions.has(sessionId)) abortOAuthLogin(sessionId, "Client disconnected");
+			});
+			if (producer.signal.aborted) return;
 			session.emit({ type: "session", sessionId, providerId: normalized });
-			const timeout = setTimeout(() => abortOAuthLogin(sessionId, "Login session expired"), OAUTH_SESSION_TTL_MS);
+			timeout = setTimeout(() => abortOAuthLogin(sessionId, "Login session expired"), OAUTH_SESSION_TTL_MS);
 			timeout.unref?.();
 
 			const callbacks: ProviderAuthInteraction = {
@@ -374,12 +384,9 @@ export function startOAuthLogin(
 					session.close();
 				});
 		},
-		cancel() {
-			abortOAuthLogin(sessionId, "Client disconnected");
-		},
 	});
 
-	return { sessionId, stream };
+	return { sessionId, stream: sse.stream };
 }
 
 export function completeOAuthInteraction(sessionId: string, responseId: string, value: string): void {
