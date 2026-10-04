@@ -60,7 +60,9 @@ function makeDeps(overrides: Partial<PromptDeps> = {}): PromptDeps {
 		hybridRecall: hybridRecallMock,
 		fetchEmbedding: fetchEmbeddingMock,
 		searchTemporalFallback: searchTemporalFallbackMock,
-		upsertSessionTranscript() {},
+		async upsertSessionTranscriptAsync() {
+			return true;
+		},
 		getExpiryWarning: () => null,
 		recordPrompt() {},
 		shouldCheckpoint() {
@@ -331,8 +333,9 @@ describe("handleUserPromptSubmit entity context", () => {
 	it("keeps prompt bookkeeping ahead of the low-signal gate", async () => {
 		seedEntityContext();
 		const recordPrompt = mock((_sessionKey: string | undefined, _queryTerms?: string, _snippet?: string) => {});
-		const upsertSessionTranscript = mock(
-			(_sessionKey: string, _transcript: string, _harness: string, _project: string | null, _agentId: string) => {},
+		const upsertSessionTranscriptAsync = mock(
+			async (_sessionKey: string, _transcript: string, _harness: string, _project: string | null, _agentId: string) =>
+				true,
 		);
 
 		const result = await handleUserPromptSubmit(
@@ -342,11 +345,11 @@ describe("handleUserPromptSubmit entity context", () => {
 				sessionKey: "session-bookkeeping",
 				transcript: "User: hi",
 			},
-			makeDeps({ recordPrompt, upsertSessionTranscript }),
+			makeDeps({ recordPrompt, upsertSessionTranscriptAsync }),
 		);
 
 		expect(recordPrompt).toHaveBeenCalledWith("session-bookkeeping", undefined, "hi");
-		expect(upsertSessionTranscript).toHaveBeenCalled();
+		expect(upsertSessionTranscriptAsync).toHaveBeenCalled();
 		expect(result.inject).toBe("");
 	});
 

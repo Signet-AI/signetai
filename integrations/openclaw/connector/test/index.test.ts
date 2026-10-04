@@ -186,7 +186,7 @@ describe("OpenClawConnector config patching", () => {
 			timeouts: { before_prompt_build: 12_000 },
 		});
 		expect(entry.config).toEqual({
-			daemonUrl: "http://localhost:3850",
+			daemonUrl: "http://127.0.0.1:3850",
 			customSetting: "preserved",
 		});
 	});

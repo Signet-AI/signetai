@@ -44,6 +44,21 @@ function seedLegacyTranscriptMigrations(db: { prepare(sql: string): { run(): unk
 	).run();
 }
 
+function legacyExportRecord(agentId: string): { readonly line: string; readonly bytes: number } {
+	const line = JSON.stringify({
+		id: `legacy-${agentId}`,
+		source: "signet",
+		harness: "hermes",
+		agent_id: agentId,
+		session_key: `legacy-session-${agentId}`,
+		project: null,
+		timestamp: "2026-01-01T00:00:00.000Z",
+		message_count: 1,
+		messages: [{ role: "user", content: `legacy transcript for ${agentId}` }],
+	});
+	return { line, bytes: Buffer.byteLength(line) };
+}
+
 describe("source artifact graph structure", () => {
 	let dir = "";
 	let previousSignetPath: string | undefined;
@@ -151,27 +166,39 @@ describe("source artifact graph structure", () => {
 		const sourceId = "shared-transcript-source";
 		const stagedDirectory = join(dir, "imports", "transcripts", sourceId);
 		mkdirSync(stagedDirectory, { recursive: true });
-		writeFileSync(join(stagedDirectory, "source.jsonl"), "staged");
+		const agents = ["agent-a", "agent-b"];
+		for (const agentId of agents)
+			writeFileSync(join(stagedDirectory, `${agentId}.jsonl`), `${legacyExportRecord(agentId).line}\n`);
 		try {
 			await getDbAccessor().withWriteTxAsync((db) => {
-				for (const agentId of ["agent-a", "agent-b"]) {
+				for (const agentId of agents) {
 					const suffix = agentId.slice(-1);
+					const record = legacyExportRecord(agentId);
 					db.prepare(
 						"INSERT INTO source_import_jobs (id, kind, agent_id, schema_id, adapter_version, state, generation, lease_token) VALUES (?, 'import', ?, 'signet-export.v1', 1, 'queued', 3, ?)",
 					).run(`shared-job-${suffix}`, agentId, `shared-lease-${suffix}`);
 					db.prepare(
-						"INSERT INTO source_import_files (id, job_id, source_id, agent_id, ordinal, name, managed_path, state) VALUES (?, ?, ?, ?, 0, 'source.jsonl', ?, 'ready')",
+						"INSERT INTO source_import_files (id, job_id, source_id, agent_id, ordinal, name, managed_path, size_bytes, state) VALUES (?, ?, ?, ?, 0, 'source.jsonl', ?, ?, 'ready')",
 					).run(
 						`shared-file-${suffix}`,
 						`shared-job-${suffix}`,
 						sourceId,
 						agentId,
-						`imports/transcripts/${sourceId}/source.jsonl`,
+						`imports/transcripts/${sourceId}/${agentId}.jsonl`,
+						record.bytes + 1,
 					);
 					db.prepare(
-						"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status) VALUES (?, ?, ?, ?, ?, 1, 1, 0, 6, 'staged-hash', 'pending')",
-					).run(`shared-record-${suffix}`, `shared-job-${suffix}`, `shared-file-${suffix}`, sourceId, agentId);
+						"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status) VALUES (?, ?, ?, ?, ?, 1, 1, 0, ?, 'staged-hash', 'pending')",
+					).run(
+						`shared-record-${suffix}`,
+						`shared-job-${suffix}`,
+						`shared-file-${suffix}`,
+						sourceId,
+						agentId,
+						record.bytes,
+					);
 				}
+				seedLegacyTranscriptMigrations(db);
 			});
 
 			await purgeSourceOwnedRows({ sourceId });
@@ -191,7 +218,7 @@ describe("source artifact graph structure", () => {
 				files: 0,
 				records: 0,
 			});
-			expect(existsSync(join(stagedDirectory, "source.jsonl"))).toBe(false);
+			for (const agentId of agents) expect(existsSync(join(stagedDirectory, `${agentId}.jsonl`))).toBe(false);
 		} finally {
 			if (oldOwner === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
 			else process.env.SIGNET_DB_OWNER_WORKER = oldOwner;
@@ -246,19 +273,21 @@ describe("source artifact graph structure", () => {
 		process.env.SIGNET_DB_OWNER_WORKER = "1";
 		const sourceId = "permission-denied-transcript-source";
 		const transcriptsDirectory = join(dir, "imports", "transcripts");
+		const record = legacyExportRecord("agent-a");
 		mkdirSync(join(transcriptsDirectory, sourceId), { recursive: true });
-		writeFileSync(join(transcriptsDirectory, sourceId, "source.jsonl"), "staged");
+		writeFileSync(join(transcriptsDirectory, sourceId, "source.jsonl"), `${record.line}\n`);
 		try {
 			await getDbAccessor().withWriteTxAsync((db) => {
 				db.prepare(
 					"INSERT INTO source_import_jobs (id, kind, agent_id, schema_id, adapter_version, state) VALUES ('permission-purge-job', 'import', 'agent-a', 'signet-export.v1', 1, 'queued')",
 				).run();
 				db.prepare(
-					"INSERT INTO source_import_files (id, job_id, source_id, agent_id, ordinal, name, managed_path, state) VALUES ('permission-purge-file', 'permission-purge-job', ?, 'agent-a', 0, 'source.jsonl', ?, 'ready')",
-				).run(sourceId, `imports/transcripts/${sourceId}/source.jsonl`);
+					"INSERT INTO source_import_files (id, job_id, source_id, agent_id, ordinal, name, managed_path, size_bytes, state) VALUES ('permission-purge-file', 'permission-purge-job', ?, 'agent-a', 0, 'source.jsonl', ?, ?, 'ready')",
+				).run(sourceId, `imports/transcripts/${sourceId}/source.jsonl`, record.bytes + 1);
 				db.prepare(
-					"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status) VALUES ('permission-purge-record', 'permission-purge-job', 'permission-purge-file', ?, 'agent-a', 1, 1, 0, 7, 'staged-hash', 'pending')",
-				).run(sourceId);
+					"INSERT INTO source_import_records (id, job_id, file_id, source_id, agent_id, ordinal, line_number, byte_offset, byte_length, raw_hash, status) VALUES ('permission-purge-record', 'permission-purge-job', 'permission-purge-file', ?, 'agent-a', 1, 1, 0, ?, 'staged-hash', 'pending')",
+				).run(sourceId, record.bytes);
+				seedLegacyTranscriptMigrations(db);
 			});
 			chmodSync(transcriptsDirectory, 0o000);
 			await expect(purgeSourceOwnedRows({ agentId: "agent-a", sourceId })).rejects.toMatchObject({ code: "EACCES" });
@@ -270,7 +299,7 @@ describe("source artifact graph structure", () => {
 				records: (db.prepare("SELECT COUNT(*) AS count FROM source_import_records").get() as { count: number }).count,
 			}));
 			expect(rows).toEqual({
-				job: { state: "cancelled", generation: 1, lease_token: null },
+				job: { state: "queued", generation: 0, lease_token: null },
 				files: 1,
 				records: 1,
 			});
