@@ -275,8 +275,7 @@ its whole corpus at once and each question is its own agent:
 `memory.dreaming.maxConcurrentPasses` is 6 instead of the product default of 2,
 and `memory.pipelineV2.worker.maxLlmConcurrency` is that value plus 2 so the
 shared LLM limit does not hold passes back. Dreaming never runs more passes than
-the shared LLM limit or the daemon's four Pi agent worker threads allow, so the
-effective bench concurrency is 4. Set `SIGNET_BENCH_DREAMING_CONCURRENCY` to measure
+the shared LLM limit allows. Set `SIGNET_BENCH_DREAMING_CONCURRENCY` to measure
 another value, including the default.
 
 Set `SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=openai-compatible` with

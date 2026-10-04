@@ -2,7 +2,8 @@ import { afterEach, expect, test } from "bun:test";
 import { isMainThread } from "node:worker_threads";
 import * as Type from "typebox";
 import { createPiModelProvider } from "./pi-provider";
-import { activePiAgentWorkers, stopPiAgentWorkers } from "./pi-agent-client";
+import { activePiAgentWorkers, piAgentWorkerLimit, stopPiAgentWorkers } from "./pi-agent-client";
+import { configureLlmConcurrency, getLlmConcurrencyLimit } from "./provider";
 import type { PiAgentTool } from "./pi-agent-protocol";
 
 function completion(delta: unknown, finishReason: string | null = null): string {
@@ -11,6 +12,18 @@ function completion(delta: unknown, finishReason: string | null = null): string 
 
 afterEach(async () => {
 	await stopPiAgentWorkers();
+});
+
+test("allows a Pi agent worker per shared LLM permit plus the retained chat sessions", () => {
+	const previous = getLlmConcurrencyLimit();
+	try {
+		configureLlmConcurrency(2);
+		expect(piAgentWorkerLimit()).toBe(5);
+		configureLlmConcurrency(8);
+		expect(piAgentWorkerLimit()).toBe(11);
+	} finally {
+		configureLlmConcurrency(previous);
+	}
 });
 
 test("the real Pi loop runs in a worker and invokes only supplied tools in the daemon", async () => {
@@ -116,7 +129,7 @@ test("worker admission is bounded and shutdown closes idle sessions", async () =
 		model: "test-model",
 		baseUrl: "http://127.0.0.1:1/v1",
 	});
-	for (let index = 0; index < 4; index++) await provider.createAgentSession([]);
+	for (let index = 0; index < piAgentWorkerLimit(); index++) await provider.createAgentSession([]);
 	await expect(provider.createAgentSession([])).rejects.toThrow("capacity");
 	await stopPiAgentWorkers();
 	expect(activePiAgentWorkers()).toBe(0);
