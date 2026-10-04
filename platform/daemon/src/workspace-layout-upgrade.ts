@@ -342,7 +342,10 @@ function apply(
 		const from = resolve(root, move.from);
 		const to = resolve(root, move.to);
 		const source = entry(from);
-		if (!source) continue;
+		if (!source) {
+			if (resumed && entry(to)) continue;
+			throw new UpgradeBlocked(`neither ${move.from} nor ${move.to} exists`);
+		}
 		const target = entry(to);
 		if (target) {
 			if (resumed && from === runtime && source.isDirectory() && target.isDirectory() && !target.isSymbolicLink()) {

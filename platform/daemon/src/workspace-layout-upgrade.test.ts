@@ -195,6 +195,28 @@ describe("upgradeWorkspaceLayout", () => {
 		expect(existsSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE))).toBe(false);
 	});
 
+	it("refuses to finish an interrupted upgrade when a moved item is missing from both paths", () => {
+		const { root } = v1Workspace();
+		let renames = 0;
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					renames += 1;
+					if (renames > 1) throw new Error("process terminated");
+					renameSync(from, to);
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish");
+
+		const record = readWorkspaceLayoutUpgradeRecord(root);
+		expect(record?.state).toBe("in-progress");
+		rmSync(join(root, "data/signet.db"));
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow("workspace layout upgrade could not finish an interrupted run");
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+		expect(readWorkspaceLayoutUpgradeRecord(root)?.state).toBe("in-progress");
+	});
+
 	it("keeps custom paths and normalizes transcripts inside a custom transcript root", () => {
 		const { root } = v1Workspace();
 		const external = workspace();
