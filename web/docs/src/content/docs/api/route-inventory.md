@@ -126,8 +126,6 @@ generated runtime route dump.
 
 | Method | Path | Source |
 |--------|------|--------|
-| GET | `/api/workspace/migration-control` | platform/daemon/src/daemon.ts |
-| POST | `/api/workspace/migration-control/drain` | platform/daemon/src/daemon.ts |
 | GET | `/api/harnesses/:id/health` | platform/daemon/src/routes/connectors-routes.ts |
 | GET | `/api/hooks/transcript-capture/:jobId` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/hooks/skill-invocation` | platform/daemon/src/routes/hooks-routes.ts |
@@ -138,9 +136,6 @@ generated runtime route dump.
 | POST | `/api/harnesses/:id/connect` | platform/daemon/src/routes/harness-install.ts |
 | POST | `/api/harnesses/:id/disconnect` | platform/daemon/src/routes/harness-install.ts |
 
-Migration-control endpoints are used by the CLI's workspace layout migration
-writer-drain lifecycle; prefer `signet workspace layout migrate` (or its
-compatibility alias, `signet migration`) over calling them directly.
 `POST /api/sources/web` adds a public web source and queues indexing.
 
 ## Transcript import upload routes

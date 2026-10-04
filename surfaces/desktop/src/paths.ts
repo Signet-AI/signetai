@@ -69,10 +69,6 @@ export function daemonEntry(): string {
 	return join(daemonRoot(), "dist", "daemon.js");
 }
 
-export function migrationRunnerEntry(): string {
-	return join(daemonRoot(), "dist", "workspace-migration-runner.js");
-}
-
 export function dashboardRoot(): string {
 	return join(daemonRoot(), "dashboard");
 }

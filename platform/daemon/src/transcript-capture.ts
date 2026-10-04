@@ -5,7 +5,6 @@ import {
 	inferTranscriptSourceFormat,
 	writeCanonicalTranscriptSnapshot,
 } from "./transcript-jsonl";
-import { withMigrationAdmission, type MigrationAdmission } from "./workspace-writer-barrier";
 
 export async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly basePath: string;
@@ -19,23 +18,20 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly capturedAt?: string;
 	readonly transcriptPath?: string;
 	readonly preserveExistingSession?: boolean;
-	readonly migration?: MigrationAdmission;
 }): Promise<boolean> {
-	return withMigrationAdmission(params.migration, "transcript-capture", async () => {
-		if (!params.transcriptPath) await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-		return writeCanonicalTranscriptSnapshot({
-			basePath: params.basePath,
-			agentId: params.agentId,
-			harness: params.harness,
-			sessionKey: params.sessionKey,
-			sessionId: params.sessionId,
-			project: params.project ?? null,
-			capturedAt: params.capturedAt,
-			sourceFormat: params.rawTranscript ? inferTranscriptSourceFormat(params.rawTranscript) : "normalized",
-			sourcePath: params.transcriptPath,
-			preserveExistingSession: params.preserveExistingSession,
-			transcript: stripInternalMemoryContext(params.transcript),
-		});
+	if (!params.transcriptPath) await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
+	return writeCanonicalTranscriptSnapshot({
+		basePath: params.basePath,
+		agentId: params.agentId,
+		harness: params.harness,
+		sessionKey: params.sessionKey,
+		sessionId: params.sessionId,
+		project: params.project ?? null,
+		capturedAt: params.capturedAt,
+		sourceFormat: params.rawTranscript ? inferTranscriptSourceFormat(params.rawTranscript) : "normalized",
+		sourcePath: params.transcriptPath,
+		preserveExistingSession: params.preserveExistingSession,
+		transcript: stripInternalMemoryContext(params.transcript),
 	});
 }
 
@@ -47,24 +43,21 @@ export async function appendCanonicalLiveTranscriptTurns(params: {
 	readonly project?: string | null;
 	readonly userMessage: string;
 	readonly lastAssistantMessage?: string;
-	readonly migration?: MigrationAdmission;
 }): Promise<void> {
-	await withMigrationAdmission(params.migration, "transcript-capture", async () => {
-		await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-		await appendCanonicalTranscriptTurns({
-			basePath: params.basePath,
-			agentId: params.agentId,
-			harness: params.harness,
-			sessionKey: params.sessionKey,
-			project: params.project ?? null,
-			sourceFormat: "live",
-			turns: [
-				...(params.lastAssistantMessage
-					? [{ role: "assistant" as const, content: stripInternalMemoryContext(params.lastAssistantMessage) }]
-					: []),
-				{ role: "user" as const, content: stripInternalMemoryContext(params.userMessage) },
-			],
-		});
+	await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
+	await appendCanonicalTranscriptTurns({
+		basePath: params.basePath,
+		agentId: params.agentId,
+		harness: params.harness,
+		sessionKey: params.sessionKey,
+		project: params.project ?? null,
+		sourceFormat: "live",
+		turns: [
+			...(params.lastAssistantMessage
+				? [{ role: "assistant" as const, content: stripInternalMemoryContext(params.lastAssistantMessage) }]
+				: []),
+			{ role: "user" as const, content: stripInternalMemoryContext(params.userMessage) },
+		],
 	});
 }
 

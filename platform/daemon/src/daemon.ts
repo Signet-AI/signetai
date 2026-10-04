@@ -265,7 +265,7 @@ import {
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
-import { MigrationControlBoundary, migrationDrainTargetMatches } from "./workspace-writer-barrier";
+import { MigrationControlBoundary } from "./workspace-writer-barrier";
 import { createOwnerTranscriptImportStore } from "./transcript-import-store";
 import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
 import { admitImport } from "./import-inbox";
@@ -498,21 +498,6 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 export const app = new Hono();
 export const daemonMigrationControl = new MigrationControlBoundary(`daemon:${process.pid}:${randomUUID()}`);
 
-app.get("/api/workspace/migration-control", (c) =>
-	c.json({
-		generation: daemonMigrationControl.generation,
-		state: daemonMigrationControl.state,
-		blockers: daemonMigrationControl.blockers(),
-	}),
-);
-app.post("/api/workspace/migration-control/drain", async (c) => {
-	const target: unknown = await c.req.json().catch(() => null);
-	if (!migrationDrainTargetMatches(target, process.pid, AGENTS_DIR))
-		return c.json({ error: "migration drain target identity mismatch" }, 409);
-	const started = daemonMigrationControl.beginDrain();
-	const result = await daemonMigrationControl.close();
-	return c.json({ ...started, ...result, blockers: daemonMigrationControl.blockers() });
-});
 app.use("*", async (c, next) => {
 	if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return await next();
 	if (!migrationIntegrityWritesBlocked) return await next();

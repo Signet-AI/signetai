@@ -322,19 +322,6 @@ export function stageRuntime() {
 				cpSync(join(daemonDist, entry), resolve(daemonOut, "dist", entry));
 			}
 		}
-		execFileSync(
-			bunSrc,
-			[
-				"build",
-				resolve(repoRoot, "surfaces/desktop/scripts/workspace-migration-runner.ts"),
-				"--target=bun",
-				"--external",
-				"better-sqlite3",
-				"--outfile",
-				resolve(daemonOut, "dist", "workspace-migration-runner.js"),
-			],
-			{ cwd: repoRoot, stdio: "inherit" },
-		);
 		cpSync(resolve(repoRoot, "platform/daemon/dashboard"), resolve(daemonOut, "dashboard"), { recursive: true });
 		cpSync(resolve(repoRoot, "platform/daemon/skills"), resolve(daemonOut, "skills"), { recursive: true });
 		const connectorsOut = resolve(daemonOut, "connectors");
