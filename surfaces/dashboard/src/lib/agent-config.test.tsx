@@ -1,6 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { useEffect, useRef } from "react";
 import { type Root, createRoot } from "react-dom/client";
@@ -89,10 +88,14 @@ async function mountHarness(): Promise<{
 	};
 }
 
-let restoreDomGlobals = () => {};
-
 beforeAll(() => {
-	restoreDomGlobals = installDashboardDomGlobals(new Window());
+	(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+	const window = new Window();
+	for (const key of Object.getOwnPropertyNames(window)) {
+		if (!(key in globalThis)) {
+			(globalThis as Record<string, unknown>)[key] = (window as unknown as Record<string, unknown>)[key];
+		}
+	}
 	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
 		const url = String(input);
 		if (url.endsWith("/api/config") && (init?.method ?? "GET") === "GET") {
@@ -110,7 +113,6 @@ beforeAll(() => {
 });
 
 afterAll(() => {
-	restoreDomGlobals();
 	globalThis.fetch = originalFetch;
 });
 
