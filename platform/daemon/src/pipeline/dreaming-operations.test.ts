@@ -966,6 +966,34 @@ describe("dreaming operations", () => {
 		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
 	});
 
+	it("names the operation and the id that did not resolve", async () => {
+		insertEntity("e-trip", "June Business Trip", "june-business-trip");
+		insertAspect("eb9f4323-95c4-43f1-9b98-b092d545dc45", "e-trip", "trip preparation");
+		insertEpisodicMemory("mem-trip", "I need help with packing for my upcoming business trip next month.");
+		const evidence = [
+			{
+				source_ref: "memory:mem-trip",
+				source_kind: "manual",
+				source_id: "mem-trip",
+				quote: "I need help with packing for my upcoming business trip next month.",
+			},
+		];
+		const claim = (aspectId: string) => ({
+			operation: "add_claim_value",
+			payload: { entityId: "e-trip", aspectId, claimKey: "packing", value: "The user is packing for a trip." },
+			evidence,
+		});
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [claim("eb9f4323-95c4-43f1-9b98-b092d545dc45"), claim("eb9f4323-95c4-4f51-9b98-b092d545dc45")],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain("operation 1 target (add_claim_value)");
+		expect(result.error).toContain("aspect eb9f4323-95c4-4f51-9b98-b092d545dc45 not found on entity e-trip");
+	});
+
 	it("stores review_after on a semantic memory for a future temporal claim", async () => {
 		insertEntity("e-acme", "Acme", "acme");
 		insertAspect("a-main", "e-acme", "general");

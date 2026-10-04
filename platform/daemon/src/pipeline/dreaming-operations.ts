@@ -483,132 +483,167 @@ function stringArrayField(payload: Readonly<Record<string, unknown>>, key: strin
 		.map((s) => s.trim());
 	return items.length > 0 ? items : null;
 }
+type ApplicatorPayload = { readonly payload: Readonly<Record<string, unknown>> } | { readonly error: string };
+
+function missingFields(
+	payload: Readonly<Record<string, unknown>>,
+	fields: readonly string[],
+): ApplicatorPayload | null {
+	const missing = fields.filter((field) => stringField(payload, field) === null);
+	return missing.length === 0 ? null : { error: `missing ${missing.map((field) => `payload.${field}`).join(", ")}` };
+}
+
+function notFound(kind: string, id: string, scope: string): ApplicatorPayload {
+	return { error: `${kind} ${id} not found ${scope}; read it back with get_entity before retrying` };
+}
+
 function toApplicatorPayload(
 	accessor: DbAccessor,
 	agentId: string,
 	operation: string,
 	payload: Readonly<Record<string, unknown>>,
-): Readonly<Record<string, unknown>> | null {
+): ApplicatorPayload {
 	const target = stringField(payload, "target");
 	const reason = stringField(payload, "reason") ?? undefined;
+	const inAgent = "in this agent";
 	switch (operation) {
 		case "archive_entity":
-			return target === null ? null : { entity_id: target, reason };
+			return target === null ? { error: "missing payload.target" } : { payload: { entity_id: target, reason } };
 		case "archive_aspect": {
-			if (target === null) return null;
+			if (target === null) return { error: "missing payload.target" };
 			const entityId = lookupAspectEntityId(accessor, agentId, target);
-			return entityId === null ? null : { entity_id: entityId, aspect_id: target, reason };
+			return entityId === null
+				? notFound("aspect", target, inAgent)
+				: { payload: { entity_id: entityId, aspect_id: target, reason } };
 		}
 		case "archive_claim_value":
-			return target === null ? null : { attribute_id: target, reason };
+			return target === null ? { error: "missing payload.target" } : { payload: { attribute_id: target, reason } };
 		case "archive_link":
-			return target === null ? null : { id: target, reason };
+			return target === null ? { error: "missing payload.target" } : { payload: { id: target, reason } };
 		case "merge_entities": {
 			const targets = stringArrayField(payload, "targets");
 			const survivor = stringField(payload, "survivor");
-			if (targets === null || survivor === null) return null;
+			if (targets === null || survivor === null) return { error: "missing payload.targets or payload.survivor" };
 			const sourceIds = targets.filter((id) => id !== survivor);
-			return { target_entity_id: survivor, source_entity_ids: sourceIds };
+			return { payload: { target_entity_id: survivor, source_entity_ids: sourceIds } };
 		}
 		case "merge_aspects": {
 			const entityId = stringField(payload, "entityId");
-			const target = stringField(payload, "target");
+			const mergeTarget = stringField(payload, "target");
 			const sources = stringArrayField(payload, "sources");
-			if (entityId === null || target === null || sources === null || sources.length === 0) return null;
+			if (entityId === null || mergeTarget === null || sources === null || sources.length === 0) {
+				return { error: "missing payload.entityId, payload.target, or payload.sources" };
+			}
 			const name = lookupEntityName(accessor, agentId, entityId);
 			return name === null
-				? null
-				: { entity: name, target, sources, new_name: stringField(payload, "newName") ?? undefined };
+				? notFound("entity", entityId, inAgent)
+				: {
+						payload: {
+							entity: name,
+							target: mergeTarget,
+							sources,
+							new_name: stringField(payload, "newName") ?? undefined,
+						},
+					};
 		}
 		case "create_entity": {
-			const name = stringField(payload, "name");
-			const type = stringField(payload, "type");
-			return name === null || type === null ? null : { name, entity_type: type };
+			const missing = missingFields(payload, ["name", "type"]);
+			if (missing !== null) return missing;
+			return { payload: { name: stringField(payload, "name"), entity_type: stringField(payload, "type") } };
 		}
 		case "add_claim_value":
-		case "set_claim_value": {
-			const entityId = stringField(payload, "entityId");
-			const aspectId = stringField(payload, "aspectId");
-			const claimKey = stringField(payload, "claimKey");
-			const value = stringField(payload, "value");
-			if (entityId === null || aspectId === null || claimKey === null || value === null) return null;
+		case "set_claim_value":
+		case "supersede_claim_value": {
+			const missing = missingFields(payload, ["entityId", "aspectId", "claimKey", "value"]);
+			if (missing !== null) return missing;
+			const entityId = stringField(payload, "entityId") ?? "";
+			const aspectId = stringField(payload, "aspectId") ?? "";
+			const claimKey = stringField(payload, "claimKey") ?? "";
+			const value = stringField(payload, "value") ?? "";
 			const name = lookupEntityName(accessor, agentId, entityId);
+			if (name === null) return notFound("entity", entityId, inAgent);
 			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId);
-			return name === null || aspect === null
-				? null
-				: {
+			if (aspect === null) return notFound("aspect", aspectId, `on entity ${entityId}`);
+			if (operation !== "supersede_claim_value") {
+				return {
+					payload: {
 						entity: name,
 						aspect,
 						claim_key: claimKey,
 						value,
 						...(stringField(payload, "reviewAfter") ? { review_after: stringField(payload, "reviewAfter") } : {}),
-					};
-		}
-		case "supersede_claim_value": {
-			const entityId = stringField(payload, "entityId");
-			const aspectId = stringField(payload, "aspectId");
-			const claimKey = stringField(payload, "claimKey");
-			const value = stringField(payload, "value");
-			if (entityId === null || aspectId === null || claimKey === null || value === null) return null;
-			const name = lookupEntityName(accessor, agentId, entityId);
-			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId);
+					},
+				};
+			}
 			const attributeId =
 				stringField(payload, "attributeId") ?? lookupActiveClaimAttributeId(accessor, agentId, aspectId, claimKey);
-			return name === null || aspect === null || attributeId === null
-				? null
-				: { entity: name, aspect, claim_key: claimKey, attribute_id: attributeId, new_value: value };
+			return attributeId === null
+				? { error: `no active claim ${claimKey} on aspect ${aspectId} to supersede` }
+				: { payload: { entity: name, aspect, claim_key: claimKey, attribute_id: attributeId, new_value: value } };
 		}
 		case "rename_entity": {
-			const entityId = stringField(payload, "entityId");
-			const newName = stringField(payload, "newName");
-			return entityId === null || newName === null ? null : { entity_id: entityId, new_name: newName };
+			const missing = missingFields(payload, ["entityId", "newName"]);
+			if (missing !== null) return missing;
+			return { payload: { entity_id: stringField(payload, "entityId"), new_name: stringField(payload, "newName") } };
 		}
 		case "create_aspect": {
-			const entityId = stringField(payload, "entityId");
-			const name = stringField(payload, "name");
-			return entityId === null || name === null ? null : { entity_id: entityId, name };
+			const missing = missingFields(payload, ["entityId", "name"]);
+			if (missing !== null) return missing;
+			return { payload: { entity_id: stringField(payload, "entityId"), name: stringField(payload, "name") } };
 		}
 		case "rename_aspect": {
-			const entityId = stringField(payload, "entityId");
-			const aspectId = stringField(payload, "aspectId");
-			const newName = stringField(payload, "newName");
-			return entityId === null || aspectId === null || newName === null
-				? null
-				: { entity_id: entityId, aspect_id: aspectId, new_name: newName };
+			const missing = missingFields(payload, ["entityId", "aspectId", "newName"]);
+			if (missing !== null) return missing;
+			return {
+				payload: {
+					entity_id: stringField(payload, "entityId"),
+					aspect_id: stringField(payload, "aspectId"),
+					new_name: stringField(payload, "newName"),
+				},
+			};
 		}
 		case "create_link": {
-			const fromEntityId = stringField(payload, "fromEntityId");
-			const toEntityId = stringField(payload, "toEntityId");
-			const linkType = stringField(payload, "linkType");
-			return fromEntityId === null || toEntityId === null || linkType === null
-				? null
-				: { source_entity_id: fromEntityId, target_entity_id: toEntityId, link_type: linkType };
+			const missing = missingFields(payload, ["fromEntityId", "toEntityId", "linkType"]);
+			if (missing !== null) return missing;
+			return {
+				payload: {
+					source_entity_id: stringField(payload, "fromEntityId"),
+					target_entity_id: stringField(payload, "toEntityId"),
+					link_type: stringField(payload, "linkType"),
+				},
+			};
 		}
 		case "update_link": {
 			const linkId = stringField(payload, "linkId");
 			const linkType = stringField(payload, "linkType") ?? undefined;
-			return linkId === null ? null : { id: linkId, link_type: linkType, reason };
+			return linkId === null
+				? { error: "missing payload.linkId" }
+				: { payload: { id: linkId, link_type: linkType, reason } };
 		}
 		case "create_policy": {
-			const entityId = stringField(payload, "entityId");
-			const name = stringField(payload, "name");
-			const definition = stringField(payload, "definition");
-			return entityId === null || name === null || definition === null
-				? null
-				: { entity_id: entityId, kind: name, content: definition };
+			const missing = missingFields(payload, ["entityId", "name", "definition"]);
+			if (missing !== null) return missing;
+			return {
+				payload: {
+					entity_id: stringField(payload, "entityId"),
+					kind: stringField(payload, "name"),
+					content: stringField(payload, "definition"),
+				},
+			};
 		}
-		case "create_action_type": {
-			const name = stringField(payload, "name");
-			return name === null ? null : { name };
-		}
+		case "create_action_type":
 		case "create_interface": {
 			const name = stringField(payload, "name");
-			return name === null ? null : { name };
+			return name === null ? { error: "missing payload.name" } : { payload: { name } };
 		}
 		default:
-			return payload;
+			return { payload };
 	}
 }
+function unresolvedTarget(index: number, operation: string, detail: string): string {
+	return `Could not resolve operation ${index} target (${operation}): ${detail}`;
+}
+
 function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): string | null {
 	for (const [index, operation] of params.operations.entries()) {
 		if (operation.operation === FLAG_OP) {
@@ -633,9 +668,8 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			continue;
 		}
 
-		if (toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload) === null) {
-			return `Could not resolve operation target: ${operation.operation}`;
-		}
+		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		if ("error" in applicator) return unresolvedTarget(index, operation.operation, applicator.error);
 		if (HYGIENE_ARCHIVE_OPS.has(operation.operation)) {
 			const reference = operation.provenance?.trim();
 			const sameBatch = reference?.match(/^attention:\$(\d+)$/);
@@ -887,10 +921,11 @@ export async function applyDreamingOperations(
 				};
 			}
 		}
-		const payload = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
-		if (payload === null) {
-			return { ok: false, items: [], error: `Could not resolve operation target: ${operation.operation}` };
+		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		if ("error" in applicator) {
+			return { ok: false, items: [], error: unresolvedTarget(index, operation.operation, applicator.error) };
 		}
+		const payload = applicator.payload;
 		validated.push({
 			index,
 			input: {
