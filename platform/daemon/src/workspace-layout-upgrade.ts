@@ -34,6 +34,7 @@ const DATABASE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 type MoveIdentity = {
 	readonly device: string;
 	readonly inode: string;
+	readonly birthtimeNs?: string;
 	readonly kind: "directory" | "file" | "other" | "symlink";
 };
 
@@ -123,10 +124,12 @@ function isMoveIdentity(value: unknown): value is MoveIdentity {
 	if (!value || typeof value !== "object") return false;
 	const device = Reflect.get(value, "device");
 	const inode = Reflect.get(value, "inode");
+	const birthtimeNs = Reflect.get(value, "birthtimeNs");
 	const kind = Reflect.get(value, "kind");
 	return (
 		typeof device === "string" &&
 		typeof inode === "string" &&
+		(birthtimeNs === undefined || typeof birthtimeNs === "string") &&
 		(kind === "directory" || kind === "file" || kind === "other" || kind === "symlink")
 	);
 }
@@ -186,15 +189,26 @@ function entry(path: string): ReturnType<typeof lstatSync> | null {
 function moveIdentity(path: string): MoveIdentity {
 	const stat = lstatSync(path, { bigint: true });
 	const kind = stat.isDirectory() ? "directory" : stat.isFile() ? "file" : stat.isSymbolicLink() ? "symlink" : "other";
-	return { device: stat.dev.toString(), inode: stat.ino.toString(), kind };
+	return { device: stat.dev.toString(), inode: stat.ino.toString(), birthtimeNs: stat.birthtimeNs.toString(), kind };
 }
 
-function matchesMoveIdentity(path: string, expected: MoveIdentity): boolean {
+function hasDurableMoveIdentity(
+	identity: MoveIdentity | undefined,
+): identity is MoveIdentity & { readonly birthtimeNs: string } {
+	return (
+		identity !== undefined &&
+		identity.inode !== "0" &&
+		identity.birthtimeNs !== undefined &&
+		identity.birthtimeNs !== "0"
+	);
+}
+
+function matchesMoveIdentity(path: string, expected: MoveIdentity & { readonly birthtimeNs: string }): boolean {
 	const actual = moveIdentity(path);
 	return (
-		expected.inode !== "0" &&
 		actual.device === expected.device &&
 		actual.inode === expected.inode &&
+		actual.birthtimeNs === expected.birthtimeNs &&
 		actual.kind === expected.kind
 	);
 }
@@ -380,14 +394,23 @@ function apply(
 		const source = entry(from);
 		if (!source) {
 			const target = entry(to);
-			if (resumed && target && (!move.identity || matchesMoveIdentity(to, move.identity))) continue;
-			if (resumed && target && move.identity)
+			if (resumed && target) {
+				const identity = move.identity;
+				if (!hasDurableMoveIdentity(identity))
+					throw new UpgradeBlocked(`cannot verify moved item at ${move.to}: upgrade record lacks a durable identity`);
+				if (matchesMoveIdentity(to, identity)) continue;
 				throw new UpgradeBlocked(`moved item at ${move.to} does not match its recorded identity`);
+			}
 			throw new UpgradeBlocked(`neither ${move.from} nor ${move.to} exists`);
 		}
 		const target = entry(to);
 		if (target) {
 			if (resumed && from === runtime && source.isDirectory() && target.isDirectory() && !target.isSymbolicLink()) {
+				const identity = move.identity;
+				if (!hasDurableMoveIdentity(identity))
+					throw new UpgradeBlocked(`cannot verify moved item at ${move.to}: upgrade record lacks a durable identity`);
+				if (!matchesMoveIdentity(to, identity))
+					throw new UpgradeBlocked(`moved item at ${move.to} does not match its recorded identity`);
 				mergeRecreatedRuntime(from, to, now);
 				continue;
 			}

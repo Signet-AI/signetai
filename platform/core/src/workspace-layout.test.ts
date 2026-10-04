@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
 	createFreshWorkspaceV2,
+	hasExistingWorkspaceState,
 	persistWorkspaceLayout,
 	resolveWorkspaceLayout,
 	serializeWorkspaceLayout,
@@ -26,6 +27,30 @@ describe("canonical workspace layout resolver", () => {
 			expect(layout.database).toBe(join(root, "memory", "memories.db"));
 			expect(layout.transcripts).toBe(join(root, "memory"));
 			expect(layout.runtime).toBe(join(root, ".daemon"));
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("treats transcript-only v1 memory as existing workspace state", () => {
+		const root = mkdtempSync(join(tmpdir(), "layout-v1-transcripts-"));
+		try {
+			persistWorkspaceLayout(root, { version: 1 });
+			mkdirSync(join(root, "memory", "codex", "transcripts"), { recursive: true });
+			writeFileSync(join(root, "memory", "codex", "transcripts", "transcript.jsonl"), "{}\n");
+			expect(hasExistingWorkspaceState(root)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("treats custom transcript roots as existing v1 workspace state", () => {
+		const root = mkdtempSync(join(tmpdir(), "layout-v1-custom-transcripts-"));
+		try {
+			persistWorkspaceLayout(root, { version: 1, overrides: { transcripts: "external-transcripts" } });
+			mkdirSync(join(root, "external-transcripts", "codex", "transcripts"), { recursive: true });
+			writeFileSync(join(root, "external-transcripts", "codex", "transcripts", "transcript.jsonl"), "{}\n");
+			expect(hasExistingWorkspaceState(root)).toBe(true);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

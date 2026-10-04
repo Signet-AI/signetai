@@ -152,7 +152,10 @@ export function findExistingWorkspaceDatabase(rootPath: string): string | null {
 export function hasExistingWorkspaceState(rootPath: string): boolean {
 	if (findExistingWorkspaceDatabase(rootPath) !== null) return true;
 	const layout = resolveWorkspaceLayout(rootPath);
-	return layout.version === WORKSPACE_LAYOUT_V1 && existsSync(layout.runtime);
+	return (
+		layout.version === WORKSPACE_LAYOUT_V1 &&
+		[layout.runtime, layout.data, layout.transcripts, layout.cache, layout.imports, layout.secrets].some(existsSync)
+	);
 }
 
 export function createFreshWorkspaceV2(

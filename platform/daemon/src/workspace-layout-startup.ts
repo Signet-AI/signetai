@@ -61,11 +61,17 @@ export function runWorkspaceLayoutStartup(
 		const root = resolve(resolveDefaultBasePath());
 		if (resolve(workspace.path) !== root)
 			return { status: "skipped", reason: "workspace selection is ambiguous at startup" };
-		const interrupted = existsSync(root) && readWorkspaceLayoutUpgradeRecord(root)?.state === "in-progress";
+		const upgradeRecord = existsSync(root) ? readWorkspaceLayoutUpgradeRecord(root) : null;
+		const interrupted = upgradeRecord?.state === "in-progress";
 		if (!interrupted && (workspace.status === "missing" || workspace.status === "incomplete"))
 			return { status: "skipped", reason: `workspace is ${workspace.status}` };
-		if (!interrupted && existsSync(root) && resolveWorkspaceLayout(root).version === WORKSPACE_LAYOUT_V2)
-			return upgradeWorkspaceLayout(root);
+		if (
+			!interrupted &&
+			upgradeRecord === null &&
+			existsSync(root) &&
+			resolveWorkspaceLayout(root).version === WORKSPACE_LAYOUT_V2
+		)
+			return { status: "current" };
 		mkdirSync(root, { recursive: true });
 		const deadline = Date.now() + lockWaitMs;
 		for (;;) {

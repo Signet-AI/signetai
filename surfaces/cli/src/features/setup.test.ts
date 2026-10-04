@@ -442,6 +442,35 @@ memory:
 		expect(readFileSync(join(basePath, "agent.yaml"), "utf-8")).toContain("database: data/signet.db");
 	});
 
+	it("keeps transcript-only v1 memory on the existing-workspace migration path", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-v1-transcripts-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		const transcripts = join(basePath, "memory", "codex", "transcripts");
+		mkdirSync(transcripts, { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(basePath, "IDENTITY.md"), "# Existing Agent\n");
+		writeFileSync(join(transcripts, "transcript.jsonl"), "{}\n");
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+
+		await runExistingSetupWizard(
+			basePath,
+			{ ...fakeDetection(basePath), memoryDb: false, identityFiles: ["IDENTITY.md"], hasMemoryDir: true },
+			{},
+			deps,
+			{ nonInteractive: true, skipGit: true, allowUnprotectedWorkspace: true },
+		);
+
+		expect(existsSync(join(basePath, "workspace-layout.json"))).toBe(false);
+		expect(existsSync(join(transcripts, "transcript.jsonl"))).toBe(true);
+		expect(readFileSync(join(basePath, "agent.yaml"), "utf-8")).toContain("database: memory/memories.db");
+	});
+
 	it("keeps an existing v1 database layout when migrating", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-migrate-v1-db-"));
 		const basePath = join(root, "agents");

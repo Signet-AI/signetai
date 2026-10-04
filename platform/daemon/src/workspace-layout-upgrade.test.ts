@@ -248,6 +248,87 @@ describe("upgradeWorkspaceLayout", () => {
 		db.close();
 	});
 
+	it("rejects a replaced runtime destination when the launcher recreated .daemon", () => {
+		const { root } = v1Workspace();
+		crashAfterRuntimeRename(root);
+		const runtime = join(root, "runtime");
+		const original = join(root, "runtime-original");
+		renameSync(runtime, original);
+		mkdirSync(runtime);
+		write(root, "runtime/replacement.txt");
+		write(root, ".daemon/logs/launcher.txt");
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow(/recorded identity/);
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+		expect(readWorkspaceLayoutUpgradeRecord(root)?.state).toBe("in-progress");
+		expect(readFileSync(join(original, "pid"), "utf8")).toBe("123");
+		expect(readFileSync(join(root, "runtime/replacement.txt"), "utf8")).toBe("runtime/replacement.txt");
+		expect(readFileSync(join(root, ".daemon/logs/launcher.txt"), "utf8")).toBe(".daemon/logs/launcher.txt");
+	});
+
+	it("rejects legacy interrupted records when a moved item has no identity", () => {
+		const { root } = v1Workspace();
+		let renames = 0;
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					renames += 1;
+					if (renames > 1) throw new Error("process terminated");
+					renameSync(from, to);
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish");
+		const record = readWorkspaceLayoutUpgradeRecord(root);
+		if (record?.state !== "in-progress") throw new Error("expected an in-progress upgrade record");
+		writeFileSync(
+			join(root, WORKSPACE_LAYOUT_UPGRADE_FILE),
+			`${JSON.stringify({ ...record, moves: record.moves.map(({ from, to }) => ({ from, to })) }, null, 2)}\n`,
+		);
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow(/identity/);
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+		expect(readWorkspaceLayoutUpgradeRecord(root)?.state).toBe("in-progress");
+	});
+
+	it("rejects interrupted move identities without a stable birthtime", () => {
+		const { root } = v1Workspace();
+		let renames = 0;
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					renames += 1;
+					if (renames > 1) throw new Error("process terminated");
+					renameSync(from, to);
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish");
+		const record = readWorkspaceLayoutUpgradeRecord(root);
+		if (record?.state !== "in-progress") throw new Error("expected an in-progress upgrade record");
+		writeFileSync(
+			join(root, WORKSPACE_LAYOUT_UPGRADE_FILE),
+			`${JSON.stringify(
+				{
+					...record,
+					moves: record.moves.map((move) => ({
+						from: move.from,
+						to: move.to,
+						identity: move.identity && {
+							device: move.identity.device,
+							inode: move.identity.inode,
+							kind: move.identity.kind,
+						},
+					})),
+				},
+				null,
+				2,
+			)}\n`,
+		);
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow(/durable identity/);
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+		expect(readWorkspaceLayoutUpgradeRecord(root)?.state).toBe("in-progress");
+	});
+
 	it("keeps custom paths and normalizes transcripts inside a custom transcript root", () => {
 		const { root } = v1Workspace();
 		const external = workspace();
@@ -526,6 +607,39 @@ describe("runWorkspaceLayoutStartup", () => {
 			const started = performance.now();
 			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"], 10_000)).toEqual({ status: "current" });
 			expect(performance.now() - started).toBeLessThan(1_000);
+		} finally {
+			if (lock) releaseSingleInstanceLock(lock);
+			if (previous === undefined) delete process.env.SIGNET_PATH;
+			else process.env.SIGNET_PATH = previous;
+		}
+	});
+
+	it("does not remove a blocked upgrade record without the v2 instance lock", () => {
+		const root = workspace();
+		persistWorkspaceLayout(root, { version: 2 });
+		const env = { ...process.env, SIGNET_PATH: root, SIGNET_DAEMON_ENTRYPOINT: "1" };
+		const previous = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = root;
+		write(root, "agent.yaml");
+		write(root, "data/signet.db", "");
+		write(
+			root,
+			WORKSPACE_LAYOUT_UPGRADE_FILE,
+			JSON.stringify({
+				version: 1,
+				state: "blocked",
+				reason: "operator recovery required",
+				at: new Date().toISOString(),
+			}),
+		);
+		const lock = acquireSingleInstanceLock(join(root, "runtime", "daemon.lock"));
+		try {
+			expect(lock).not.toBeNull();
+			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"], 0)).toEqual({
+				status: "skipped",
+				reason: "another daemon holds the workspace lock",
+			});
+			expect(readWorkspaceLayoutUpgradeRecord(root)?.state).toBe("blocked");
 		} finally {
 			if (lock) releaseSingleInstanceLock(lock);
 			if (previous === undefined) delete process.env.SIGNET_PATH;
