@@ -167,6 +167,7 @@ interface DaemonInstance {
 		readonly workerRunning: boolean;
 	} | null;
 	readonly workspaceStats: WorkspaceStatusSummaryFromStatus | null;
+	readonly workspaceLayoutUpgrade: string | null;
 	readonly transcripts: {
 		readonly pending: number;
 		readonly failed: number;
@@ -681,6 +682,14 @@ export function getReachableDaemonUrls(): Promise<string[]> {
 	return flight;
 }
 
+function workspaceLayoutUpgradeReason(
+	upgrade: { state?: unknown; reason?: unknown } | null | undefined,
+): string | null {
+	if (!upgrade) return null;
+	if (upgrade.state === "blocked" && typeof upgrade.reason === "string") return upgrade.reason;
+	return upgrade.state === "unreadable" ? "the upgrade record could not be read" : null;
+}
+
 async function getDaemonInstances(): Promise<DaemonInstance[]> {
 	const urls = await getReachableDaemonUrls();
 	return Promise.all(
@@ -700,6 +709,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						bindHost?: string;
 						networkMode?: string;
 						agentsDir?: string;
+						workspaceLayout?: { upgrade?: { state?: unknown; reason?: unknown } | null };
 						dreaming?: { enabled?: boolean; workerRunning?: boolean };
 						health?: {
 							score?: number;
@@ -779,6 +789,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 					return {
 						baseUrl,
 						workspacePath: typeof data.agentsDir === "string" ? data.agentsDir : null,
+						workspaceLayoutUpgrade: workspaceLayoutUpgradeReason(data.workspaceLayout?.upgrade),
 						pid: data.pid ?? null,
 						uptime: data.uptime ?? null,
 						version: data.version ?? null,
@@ -855,6 +866,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				scheduler: null,
 				dreaming: null,
 				workspaceStats: null,
+				workspaceLayoutUpgrade: null,
 				probe: reachableDaemonProbe(
 					baseUrl,
 					null,
@@ -1231,6 +1243,7 @@ async function readDaemonStatus(): Promise<{
 	extraction: DaemonInstance["extraction"];
 	dreaming: DaemonInstance["dreaming"];
 	workspaceStats: DaemonInstance["workspaceStats"];
+	workspaceLayoutUpgrade: DaemonInstance["workspaceLayoutUpgrade"];
 	transcripts: DaemonInstance["transcripts"];
 	health: DaemonInstance["health"];
 	queue: DaemonInstance["queue"];
@@ -1256,6 +1269,7 @@ async function readDaemonStatus(): Promise<{
 			extraction: preferred.extraction,
 			dreaming: preferred.dreaming,
 			workspaceStats: preferred.workspaceStats,
+			workspaceLayoutUpgrade: preferred.workspaceLayoutUpgrade,
 			transcripts: preferred.transcripts,
 			health: preferred.health,
 			queue: preferred.queue,
@@ -1283,6 +1297,7 @@ async function readDaemonStatus(): Promise<{
 		extraction: null,
 		dreaming: null,
 		workspaceStats: null,
+		workspaceLayoutUpgrade: null,
 		transcripts: null,
 		health: null,
 		queue: null,

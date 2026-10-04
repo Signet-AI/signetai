@@ -1320,6 +1320,10 @@ describe("getDaemonStatus", () => {
 					bindHost: "127.0.0.1",
 					networkMode: "local",
 					agentsDir: "/tmp/status-workspace",
+					workspaceLayout: {
+						version: 1,
+						upgrade: { state: "blocked", reason: "runtime already exists", at: "2026-10-04T00:00:00.000Z" },
+					},
 					dreaming: { enabled: true, workerRunning: true },
 					resources: {
 						rss: 169,
@@ -1372,6 +1376,7 @@ describe("getDaemonStatus", () => {
 		expect(status.probe.status).toBe("healthy");
 		expect(status.probe.readinessReasons).toBeUndefined();
 		expect(status.workspacePath).toBe("/tmp/status-workspace");
+		expect(status.workspaceLayoutUpgrade).toBe("runtime already exists");
 		expect(status.dreaming).toEqual({ enabled: true, workerRunning: true });
 		expect(status.workspaceStats).toEqual({
 			agentId: "default",

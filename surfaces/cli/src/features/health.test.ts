@@ -977,6 +977,29 @@ describe("showStatus readiness labeling", () => {
 		return lines.join("\n");
 	}
 
+	it("reports a blocked workspace layout upgrade from the daemon", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-status-"));
+		try {
+			const base = runningDaemonDeps(root, {
+				status: "healthy",
+				detail: "/health responded",
+				url: "http://127.0.0.1:3850",
+				listenerPresent: true,
+				processPid: 42,
+				stalePid: null,
+			});
+			const daemon = await base.getDaemonStatus();
+			const output = await captureStatus({
+				...base,
+				getDaemonStatus: async () => ({ ...daemon, workspaceLayoutUpgrade: "data already exists and is not empty" }),
+			});
+			expect(output).toContain("Workspace layout upgrade blocked; still on layout v1");
+			expect(output).toContain("data already exists and is not empty. Fix it and restart the daemon.");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("labels liveness and shows degraded readiness reasons", async () => {
 		const root = mkdtempSync(join(tmpdir(), "health-status-"));
 		try {

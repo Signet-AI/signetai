@@ -60,7 +60,9 @@ The daemon then writes `workspace-layout.json` with version 2 and preserves cust
 
 Before the first rename, the daemon records the planned renames in `.workspace-layout-upgrade.json` at the workspace root. If the daemon is interrupted, the next start finishes the remaining renames.
 
-If the upgrade cannot proceed safely, the daemon reverses any renames it made, leaves the workspace on v1, records the reason in `.workspace-layout-upgrade.json`, reports it in `signet status` and `GET /api/status` (field `workspaceLayout.upgrade`), and starts normally on v1. This happens when a v2 destination already exists, a new v2 directory is not empty, a path crosses a filesystem boundary or goes through a symlink, or a rename fails. The daemon retries on the next start, so fix the reported cause and restart.
+If the upgrade cannot proceed safely, the daemon reverses any renames it made, leaves the workspace on v1, records the reason in `.workspace-layout-upgrade.json`, reports it in `signet status` and `GET /api/status` (field `workspaceLayout.upgrade`), and starts normally on v1. This happens when a v2 destination already exists, a new v2 directory is not empty, a path is on a different filesystem than the workspace, a path sits inside a symlinked directory or is itself a relative symlink, or a rename fails. The daemon retries on the next start, so fix the reported cause and restart.
+
+If an interrupted upgrade can be neither finished nor reversed, the daemon refuses to start and names the paths it could not restore. It does not start on a partially moved workspace.
 
 A workspace whose daemon is still running under an older release is not upgraded until that daemon stops, because the new daemon cannot take the instance lock.
 

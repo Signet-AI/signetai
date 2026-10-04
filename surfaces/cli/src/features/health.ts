@@ -70,6 +70,7 @@ interface DaemonStatus {
 		readonly enabled: boolean;
 		readonly workerRunning: boolean;
 	} | null;
+	readonly workspaceLayoutUpgrade?: string | null;
 	readonly workspaceStats?: {
 		readonly agentId: string;
 		readonly memoryCount: number;
@@ -354,6 +355,10 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 			const colorize = extractionNotice.level === "error" ? chalk.red : chalk.yellow;
 			console.log(colorize(`    ${icon} ${extractionNotice.title}`));
 			console.log(chalk.dim(`      ${extractionNotice.detail}`));
+		}
+		if (report.daemon.workspaceLayoutUpgrade) {
+			console.log(chalk.yellow("    ⚠ Workspace layout upgrade blocked; still on layout v1"));
+			console.log(chalk.dim(`      ${report.daemon.workspaceLayoutUpgrade}. Fix it and restart the daemon.`));
 		}
 		const dreaming = report.daemon.dreaming;
 		if (dreaming) {
