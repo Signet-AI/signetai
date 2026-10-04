@@ -1454,16 +1454,25 @@ process.stdin.on("data", (chunk) => {
 			blocker.exec("ROLLBACK");
 			blockerReleased = true;
 			blocker.close(true);
-			const rows = await owner.submit<readonly { readonly count: number }[]>(
-				{
-					kind: "query",
-					statement: {
-						sql: "SELECT COUNT(*) AS count FROM non_idempotent_writes",
-						result: "all",
-					},
-				},
-				{ operation: "maintenance.non-idempotent-deadline-verify", lane: "read", deadlineMs: 1_000 },
-			).result;
+			const verifyUntil = Date.now() + 10_000;
+			let rows: readonly { readonly count: number }[] | undefined;
+			while (rows === undefined) {
+				try {
+					rows = await owner.submit<readonly { readonly count: number }[]>(
+						{
+							kind: "query",
+							statement: {
+								sql: "SELECT COUNT(*) AS count FROM non_idempotent_writes",
+								result: "all",
+							},
+						},
+						{ operation: "maintenance.non-idempotent-deadline-verify", lane: "read", deadlineMs: 1_000 },
+					).result;
+				} catch (error) {
+					if (!(error instanceof WorkspaceMigrationRetryableError) || Date.now() > verifyUntil) throw error;
+					await Bun.sleep(25);
+				}
+			}
 			expect(rows).toEqual([{ count: 1 }]);
 		} finally {
 			if (!blockerReleased) blocker.exec("ROLLBACK");

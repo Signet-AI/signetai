@@ -94,7 +94,8 @@ beforeAll(async () => {
 	}) as typeof fetch;
 });
 
-afterAll(() => {
+afterAll(async () => {
+	await new Promise((resolve) => setTimeout(resolve, 10));
 	globalThis.fetch = originalFetch;
 	restoreDomGlobals();
 });

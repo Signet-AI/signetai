@@ -344,7 +344,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:337" },
+				{ siteToken: "db-accessor.test.ts:339" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -352,7 +352,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:337");
+		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:339");
 	});
 
 	test("attributes an in-flight parent sync call at latch time", () => {
@@ -373,14 +373,14 @@ describe("DbAccessor", () => {
 				recordEventLoopHeartbeat(5_000, 2_000);
 				state.latched = getEventLoopLiveness(5_000);
 				db.prepare("SELECT 1").get();
-			}, "db-accessor.test.ts:368");
+			}, "db-accessor.test.ts:370");
 		} finally {
 			Date.now = realNow;
 		}
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:368");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:370");
 	});
 
 	test("attributes an in-flight queued async write callback at latch time", async () => {
@@ -403,7 +403,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:396" },
+				{ siteToken: "db-accessor.test.ts:398" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -411,7 +411,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:396");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:398");
 	});
 
 	test("attributes the actual caller through runWriteTxAsync", async () => {
