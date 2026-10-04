@@ -1,3 +1,4 @@
+import { LOOPBACK_HOST } from "@signet/core";
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import {
 	fetchEmbedding,
@@ -258,7 +259,7 @@ describe("fetchEmbedding", () => {
 
 		expect(result).toEqual([0.5, 0.6, 0.7]);
 		expect(capturedUrl).toContain("/api/embeddings");
-		expect(capturedUrl).toContain("localhost");
+		expect(capturedUrl).toContain(`${LOOPBACK_HOST}:11434`);
 	});
 
 	it("does not record provider-down telemetry when native embeddings are disabled without a fallback", async () => {
@@ -324,7 +325,7 @@ describe("fetchEmbedding", () => {
 		});
 
 		expect(result).toEqual([0.8, 0.9, 1.0]);
-		expect(capturedUrl).toContain("localhost:8080");
+		expect(capturedUrl).toContain(`${LOOPBACK_HOST}:8080`);
 		expect(capturedUrl).toContain("/v1/embeddings");
 		expect(capturedBody).toContain("nomic-embed-text");
 	});
@@ -378,7 +379,7 @@ describe("fetchEmbedding", () => {
 		let capturedInput = "";
 		globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
 			const urlStr = url.toString();
-			if (urlStr.includes("localhost:8080")) {
+			if (urlStr.includes(`${LOOPBACK_HOST}:8080`)) {
 				if (urlStr.includes("/v1/models")) {
 					return Promise.resolve(Response.json({ data: [{ id: "nomic-embed-text" }] }));
 				}
@@ -402,7 +403,7 @@ describe("fetchEmbedding", () => {
 		});
 
 		expect(result).toEqual([0.1, 0.2]);
-		expect(capturedUrl).toContain("localhost:8080");
+		expect(capturedUrl).toContain(`${LOOPBACK_HOST}:8080`);
 		expect(countTokens(capturedInput)).toBeLessThanOrEqual(300);
 	});
 
@@ -431,10 +432,10 @@ describe("fetchEmbedding", () => {
 		let capturedUrl: string | undefined;
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			const urlStr = url.toString();
-			if (urlStr.includes("localhost:8080")) {
+			if (urlStr.includes(`${LOOPBACK_HOST}:8080`)) {
 				return Promise.resolve(new Response("unreachable", { status: 503 }));
 			}
-			if (urlStr.includes("localhost:11434")) {
+			if (urlStr.includes(`${LOOPBACK_HOST}:11434`)) {
 				capturedUrl = urlStr;
 				return Promise.resolve(Response.json({ embedding: [0.5, 0.6] }));
 			}
@@ -453,7 +454,7 @@ describe("fetchEmbedding", () => {
 		});
 
 		expect(result).toEqual([0.5, 0.6]);
-		expect(capturedUrl).toContain("localhost:11434");
+		expect(capturedUrl).toContain(`${LOOPBACK_HOST}:11434`);
 	});
 
 	it("probes the configured llama.cpp base_url, not the compiled default (#1159)", async () => {
@@ -536,7 +537,7 @@ describe("fetchEmbedding", () => {
 	it("does not cross-contaminate: llama-cpp fallback does not route to ollama", async () => {
 		let ollamaCalled = false;
 		globalThis.fetch = mock((url: string | URL | Request) => {
-			if (url.toString().includes("localhost:11434")) {
+			if (url.toString().includes(`${LOOPBACK_HOST}:11434`)) {
 				ollamaCalled = true;
 				return Promise.resolve(Response.json({ embedding: [0.9, 0.9] }));
 			}

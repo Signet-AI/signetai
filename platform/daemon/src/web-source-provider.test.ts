@@ -30,11 +30,11 @@ describe("web-source-provider", () => {
 		]) as typeof import("node:dns/promises").lookup);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		setWebDnsLookupForTest(null);
 		setWebFetchTimeoutForTest(null);
 		setWebRequestForTest(null);
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		rmSync(dir, { recursive: true, force: true });

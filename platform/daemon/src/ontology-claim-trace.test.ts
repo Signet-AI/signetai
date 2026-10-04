@@ -155,8 +155,8 @@ describe("authorized ontology claim traces", () => {
 		});
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 	});
 

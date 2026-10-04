@@ -117,7 +117,9 @@ function createMemoryDb(
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
 	ensureDir(join(TEST_DIR, "memory"));
 
-	if (existsSync(dbPath)) rmSync(dbPath);
+	for (const file of readdirSync(join(TEST_DIR, "memory"))) {
+		if (file.startsWith("memories.db")) rmSync(join(join(TEST_DIR, "memory"), file), { force: true });
+	}
 
 	const db = new Database(dbPath);
 
@@ -3288,8 +3290,8 @@ describe("handleSessionStart multi-agent identity", () => {
 		agentsDir = mkdtempSync(join(tmpdir(), "signet-hooks-agent-identity-"));
 	});
 
-	beforeEach(() => {
-		closeDbAccessor();
+	beforeEach(async () => {
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 		mkdirSync(join(agentsDir, "agents", "dot"), { recursive: true });
 		process.env.SIGNET_PATH = agentsDir;
@@ -3393,7 +3395,8 @@ describe("handleSessionStart multi-agent identity", () => {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			return;
 		}
-		process.env.SIGNET_PATH = previousSignetPath;
+		if (previousSignetPath === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = previousSignetPath;
 	});
 
 	it("loads agent-scoped identity files for session-start", async () => {
@@ -3465,15 +3468,15 @@ describe("writeMemoryMd", () => {
 			process.env.SIGNET_PATH = agentsDir;
 		});
 
-		beforeEach(() => {
-			closeDbAccessor();
+		beforeEach(async () => {
+			await closeDbAccessor();
 			rmSync(agentsDir, { recursive: true, force: true });
 			mkdirSync(agentsDir, { recursive: true });
 			initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
 		});
 
-		afterEach(() => {
-			closeDbAccessor();
+		afterEach(async () => {
+			await closeDbAccessor();
 		});
 
 		afterAll(() => {
@@ -3482,7 +3485,8 @@ describe("writeMemoryMd", () => {
 				Reflect.deleteProperty(process.env, "SIGNET_PATH");
 				return;
 			}
-			process.env.SIGNET_PATH = previousSignetPath;
+			if (previousSignetPath === undefined) delete process.env.SIGNET_PATH;
+			else process.env.SIGNET_PATH = previousSignetPath;
 		});
 
 		it("reports the retired legacy writer for every agent scope", () => {
@@ -4162,7 +4166,7 @@ describe("applyTokenBudget", () => {
 
 afterAll(() => {
 	if (PREV_SIGNET_AGENT_ID_FOR_HOOKS === undefined) {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 	} else {
 		process.env.SIGNET_AGENT_ID = PREV_SIGNET_AGENT_ID_FOR_HOOKS;
 	}

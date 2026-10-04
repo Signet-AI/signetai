@@ -50,7 +50,7 @@ import {
 	SemaphoreTimeoutError,
 } from "./pipeline/provider";
 import { getSecret } from "./secrets";
-import { type PipelineCauseFamily, normalizePipelineCause } from "./pipeline-operation";
+import { type PipelineCauseFamily, normalizePipelineCause, pipelineErrorStatus } from "./pipeline-operation";
 
 const SNAPSHOT_TTL_MS = 15_000;
 const OBSERVED_RATE_LIMIT_TTL_MS = 60_000;
@@ -677,9 +677,12 @@ export class InferenceRouter {
 	private classifyObservedFailure(
 		message: string,
 		hasAccount: boolean,
+		status: number | undefined,
 	): { readonly state: RoutingRuntimeState; readonly ttlMs: number; readonly scope: "target" | "account" } | null {
 		const lower = message.toLowerCase();
 		if (
+			status === 429 ||
+			status === 402 ||
 			lower.includes("http 429") ||
 			lower.includes("rate limit") ||
 			lower.includes("rate-limit") ||
@@ -707,6 +710,8 @@ export class InferenceRouter {
 			};
 		}
 		if (
+			status === 401 ||
+			status === 403 ||
 			lower.includes("http 401") ||
 			lower.includes("http 403") ||
 			lower.includes("unauthorized") ||
@@ -745,12 +750,17 @@ export class InferenceRouter {
 		return null;
 	}
 
-	private observeExecutionFailure(loaded: LoadedRoutingConfig, targetRef: string, error: string): void {
+	private observeExecutionFailure(
+		loaded: LoadedRoutingConfig,
+		targetRef: string,
+		message: string,
+		error: unknown,
+	): void {
 		const parsed = parseRoutingTargetRef(targetRef);
 		if (!parsed.ok) return;
 		const target = loaded.config.targets[parsed.value.targetId];
 		if (!target) return;
-		const classified = this.classifyObservedFailure(error, Boolean(target.account));
+		const classified = this.classifyObservedFailure(message, Boolean(target.account), pipelineErrorStatus(error));
 		if (!classified) return;
 		const expiresAt = Date.now() + classified.ttlMs;
 		if (classified.scope === "account" && target.account) {
@@ -1327,7 +1337,7 @@ export class InferenceRouter {
 					};
 				} catch (error) {
 					const message = formatExecutionError(error);
-					this.observeExecutionFailure(loaded.value, targetRef, message);
+					this.observeExecutionFailure(loaded.value, targetRef, message, error);
 					attempts.push({ targetRef, ok: false, durationMs: Date.now() - startedAt, error: message });
 					if (error instanceof PiAgentSessionTimeoutError || error instanceof PiProviderDeadlineError) break;
 				} finally {
@@ -1423,7 +1433,7 @@ export class InferenceRouter {
 					targetRef,
 					error: message.slice(0, 200),
 				});
-				this.observeExecutionFailure(loaded.value, targetRef, message);
+				this.observeExecutionFailure(loaded.value, targetRef, message, error);
 				attempts.push({
 					targetRef,
 					ok: false,
@@ -1601,7 +1611,7 @@ export class InferenceRouter {
 									targetRef,
 									error: message.slice(0, 200),
 								});
-								router.observeExecutionFailure(loaded.value, targetRef, message);
+								router.observeExecutionFailure(loaded.value, targetRef, message, error);
 								failAttempt(message);
 								closeWith({
 									type: "error",
@@ -1638,7 +1648,7 @@ export class InferenceRouter {
 					targetRef,
 					error: message.slice(0, 200),
 				});
-				this.observeExecutionFailure(loaded.value, targetRef, message);
+				this.observeExecutionFailure(loaded.value, targetRef, message, error);
 				attempts.push({
 					targetRef,
 					ok: false,

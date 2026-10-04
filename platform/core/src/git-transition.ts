@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSyncHidden as spawnSync } from "./child-process";
 import { mergeSignetGitignoreEntries } from "./gitignore";
 
 export type RootGitMode = "absent" | "shell" | "unmanaged";

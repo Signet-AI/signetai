@@ -13,7 +13,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { join, relative, resolve, dirname } from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSyncHidden as spawnSync } from "./child-process";
 import { tmpdir } from "node:os";
 import { inspectRootGit, type RootGitInventory } from "./git-transition";
 

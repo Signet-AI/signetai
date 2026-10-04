@@ -36,11 +36,11 @@ describe("hybridRecall", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		setActiveTelemetry(undefined);
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (prevSignetPath === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 		} else {
 			process.env.SIGNET_PATH = prevSignetPath;
 		}

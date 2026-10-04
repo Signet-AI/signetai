@@ -22,6 +22,7 @@ const intentionalProcessOwners: Readonly<Record<string, IntentionalProcessOwner>
 	"daemon.ts": { count: 1, reason: "daemon replacement after an update" },
 	"database-integrity.ts": { count: 1, reason: "killable integrity worker runner" },
 	"db-owner-client.ts": { count: 1, reason: "exclusive synchronous SQLite owner" },
+	"harness-health.ts": { count: 1, reason: "killable connector health inspection child" },
 	"transcript-recovery-supervisor.ts": { count: 1, reason: "killable transcript recovery supervisor" },
 	"transcript-recovery-worker.ts": { count: 1, reason: "bounded transcript recovery child" },
 };

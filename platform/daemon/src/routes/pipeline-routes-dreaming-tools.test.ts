@@ -15,8 +15,8 @@ describe("POST /api/dream/tools/apply_ontology_ops", () => {
 		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 	});
 

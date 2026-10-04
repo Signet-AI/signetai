@@ -1,6 +1,7 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
@@ -353,7 +354,7 @@ describe("Dreaming", () => {
 	let memoryHeadRoot: string;
 
 	beforeEach(() => {
-		memoryHeadRoot = mkdtempSync(join("/mnt/work/hermes-scratch", "signet-dreaming-head-"));
+		memoryHeadRoot = mkdtempSync(join(tmpdir(), "signet-dreaming-head-"));
 		db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		accessor = wrapDb(db);

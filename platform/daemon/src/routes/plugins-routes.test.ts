@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -89,7 +89,9 @@ describe("plugin routes", () => {
 	test("GET /api/plugins/audit lists durable plugin audit events", async () => {
 		agentsDir = join(tmpdir(), `signet-plugin-audit-routes-${process.pid}-${Date.now()}`);
 		process.env.SIGNET_PATH = agentsDir;
-		mkdirSync(agentsDir, { recursive: true });
+		mkdirSync(join(agentsDir, "memory"), { recursive: true });
+		writeFileSync(join(agentsDir, "agent.yaml"), "name: Plugin Audit Test\n");
+		writeFileSync(join(agentsDir, "memory", "memories.db"), "");
 		recordPluginAuditEvent({
 			event: "plugin.enabled",
 			pluginId: SIGNET_SECRETS_PLUGIN_ID,

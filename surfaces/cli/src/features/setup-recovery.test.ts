@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,10 @@ import { persistWorkspaceLayout } from "@signet/core";
 import Database from "../sqlite.js";
 import type { SetupDeps } from "./setup-types.js";
 
+const realInquirerPrompts = { ...(await import("@inquirer/prompts")) };
+afterAll(() => {
+	mock.module("@inquirer/prompts", () => realInquirerPrompts);
+});
 mock.module("@inquirer/prompts", () => ({
 	confirm: async () => false,
 	input: async () => "",

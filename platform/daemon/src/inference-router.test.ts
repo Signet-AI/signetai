@@ -132,12 +132,12 @@ afterEach(() => {
 	if (originalSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	else process.env.SIGNET_PATH = originalSignetPath;
 	if (originalOpenRouterApiKey === undefined) {
-		process.env.OPENROUTER_API_KEY = undefined;
+		delete process.env.OPENROUTER_API_KEY;
 	} else {
 		process.env.OPENROUTER_API_KEY = originalOpenRouterApiKey;
 	}
 	if (originalOpenAiApiKey === undefined) {
-		process.env.OPENAI_API_KEY = undefined;
+		delete process.env.OPENAI_API_KEY;
 	} else {
 		process.env.OPENAI_API_KEY = originalOpenAiApiKey;
 	}

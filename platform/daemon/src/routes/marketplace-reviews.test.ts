@@ -22,7 +22,8 @@ describe("marketplace reviews routes", () => {
 
 	afterEach(() => {
 		globalThis.fetch = originalFetch;
-		process.env.SIGNET_PATH = origSignetPath;
+		if (origSignetPath === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = origSignetPath;
 		if (existsSync(tmpAgentsDir)) {
 			rmSync(tmpAgentsDir, { recursive: true, force: true });
 		}
