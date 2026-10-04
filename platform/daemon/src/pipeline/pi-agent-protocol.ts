@@ -9,11 +9,18 @@ export interface PiAgentTool extends Pick<ToolDefinition, "name" | "label" | "de
 	): Promise<Awaited<ReturnType<ToolDefinition["execute"]>>>;
 }
 
+export interface PiAgentRetryPolicy {
+	readonly maxRetries: number;
+	readonly baseDelayMs: number;
+	readonly maxAgentDelayMs: number;
+}
+
 export interface PiAgentWorkerInput {
 	readonly model: Model<Api>;
 	readonly apiKey: string;
 	readonly systemPrompt: string;
 	readonly tools: ReadonlyArray<Pick<ToolDefinition, "name" | "label" | "description" | "parameters">>;
+	readonly retry?: PiAgentRetryPolicy;
 }
 
 export type PiAgentWorkerRequest =

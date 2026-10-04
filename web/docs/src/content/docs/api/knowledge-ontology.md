@@ -846,6 +846,9 @@ the model's own output limit. `maxInputTokens` (default 128,000) sizes evidence
 reads: a delivery-queue page holds up to a sixteenth of it (32,000 characters by
 default, at least 16,000), so most sessions arrive whole instead of in
 2,000-character fragments. Lower it for a model with a small context window.
+A Dreaming pass retries provider throttling and transient provider errors up to
+eight times with exponential backoff capped at 60 seconds (about four minutes in
+total) before the pass fails; interactive chat keeps the shorter default.
 
 Poll `GET /api/dream/status` and check `passes[0].status` for completion, or
 use `GET /api/dream/passes/:passId/events` for a live read-only view.

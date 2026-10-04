@@ -95,6 +95,42 @@ test("the real Pi loop runs in a worker and invokes only supplied tools in the d
 	}
 }, 20000);
 
+test("a session retry policy outlasts provider throttling that exhausts the default retries", async () => {
+	let requests = 0;
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		async fetch() {
+			requests++;
+			if (requests <= 6) {
+				return new Response(JSON.stringify({ code: "1302", message: "rate limited" }), {
+					status: 429,
+					headers: { "Content-Type": "application/json", "retry-after-ms": "1" },
+				});
+			}
+			const content = completion({ role: "assistant", content: "Filed." }) + completion({}, "stop");
+			return new Response(`${content}data: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+		},
+	});
+	try {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "test-model",
+			baseUrl: `http://127.0.0.1:${server.port}/v1`,
+		});
+		const session = await provider.createAgentSession([], {
+			systemPrompt: "You are a maintenance agent.",
+			retry: { maxRetries: 6, baseDelayMs: 1, maxAgentDelayMs: 5 },
+		});
+		await session.prompt("Run the pass.");
+		expect(session.getFailureMessage()).toBeUndefined();
+		expect(requests).toBe(7);
+		await session.dispose();
+	} finally {
+		server.stop(true);
+	}
+}, 30000);
+
 test("aborting a stalled model releases the actual worker and settles the prompt", async () => {
 	const server = Bun.serve({
 		port: 0,

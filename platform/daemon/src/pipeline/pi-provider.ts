@@ -1,5 +1,5 @@
 import { createWorkerAgentSession, leaseWorkerAgentSession } from "./pi-agent-client";
-import type { PiAgentWorkerInput, PiAgentTool } from "./pi-agent-protocol";
+import type { PiAgentRetryPolicy, PiAgentTool, PiAgentWorkerInput } from "./pi-agent-protocol";
 import {
 	type Api,
 	type Context,
@@ -95,6 +95,7 @@ export interface PiAgentSessionProvider {
 			readonly systemPrompt?: string;
 			readonly persistentSessionKey?: string;
 			readonly continuationPrompt?: string;
+			readonly retry?: PiAgentRetryPolicy;
 		},
 	): Promise<PiAgentSession>;
 }
@@ -698,6 +699,7 @@ export function createPiModelProvider(
 				readonly systemPrompt?: string;
 				readonly persistentSessionKey?: string;
 				readonly continuationPrompt?: string;
+				readonly retry?: PiAgentRetryPolicy;
 			} = {},
 		) {
 			const create = options.persistentSessionKey
@@ -711,6 +713,7 @@ export function createPiModelProvider(
 						options.systemPrompt ??
 						"You are a bounded Signet maintenance agent. You may use only the supplied daemon tools.",
 					tools: tools.map(({ name, label, description, parameters }) => ({ name, label, description, parameters })),
+					...(options.retry ? { retry: options.retry } : {}),
 				},
 				tools,
 				options.signal,

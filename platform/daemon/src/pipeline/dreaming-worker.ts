@@ -30,6 +30,9 @@ import {
 } from "./dreaming";
 import { DREAMING_CONTENT_ATTENTION_KINDS, hasDreamingAttentionKindInDb } from "./dreaming-attention";
 import { type DreamingEvidenceRetryPolicy, autoRequeueRepairedDreamingEvidence } from "./dreaming-evidence-retry";
+import type { PiAgentRetryPolicy } from "./pi-agent-protocol";
+
+const DREAMING_PROVIDER_RETRY: PiAgentRetryPolicy = { maxRetries: 8, baseDelayMs: 2_000, maxAgentDelayMs: 60_000 };
 export class AlreadyRunningError extends Error {
 	constructor() {
 		super("A dreaming pass is already running");
@@ -337,6 +340,7 @@ export function startDreamingWorker(
 					{
 						timeoutMs: input.timeoutMs,
 						maxTokens: input.maxTokens,
+						retry: DREAMING_PROVIDER_RETRY,
 						onEvent: input.onEvent,
 						onSessionInfo: input.onSessionInfo,
 						...(options.acpxMcp

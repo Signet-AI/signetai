@@ -27,7 +27,7 @@ runtime.registerProvider(input.model.provider, {
 	apiKey: input.apiKey,
 	models: [{ ...input.model }],
 });
-const settingsManager = SettingsManager.inMemory();
+const settingsManager = SettingsManager.inMemory(input.retry ? { retry: { enabled: true, ...input.retry } } : {});
 const resourceLoader = new DefaultResourceLoader({
 	cwd: process.cwd(),
 	agentDir: process.cwd(),
