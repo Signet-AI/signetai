@@ -83,7 +83,9 @@ registry defines the operations available to the agent, including:
 - `search_evidence` for immutable episodic memories, artifacts, and transcripts;
   without a query it pages through the delivery queue, resuming each source
   where the current pass last read it and reporting `hasMore` until the queue
-  is empty; with a query it searches full history, splitting it on whitespace into words that match independently
+  is empty. Once a pass has used half its timeout, the queue stops handing out
+  new sources (`deliveryClosed`) so the pass can file what it read and record
+  its progress; the rest goes to the next pass; with a query it searches full history, splitting it on whitespace into words that match independently
   (ASCII case-insensitive) and ranking fuller matches first; unspaced text such
   as CJK matches as one phrase
 - `search_entities` and `get_entity` for scoped graph reads

@@ -280,6 +280,7 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly actor: string;
 	readonly memoryHeadCommitter?: MemoryHeadCommitter;
 	readonly passId?: string;
+	readonly evidenceDeliveryDeadline?: number;
 	readonly mode?: DreamingCapabilityMode;
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
@@ -676,7 +677,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit incomplete source revisions, each resuming at its delivered offset (including fragments already served earlier in this pass), regardless of time watermark. hasMore is true while more of the queue remains; call again without a query to continue until hasMore is false. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit incomplete source revisions, each resuming at its delivered offset (including fragments already served earlier in this pass), regardless of time watermark. hasMore is true while more of the queue remains; call again without a query to continue until hasMore is false. Partway through a pass the queue closes (deliveryClosed: true): stop reading new sources, file what you have read, and finish so your progress is recorded. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
@@ -690,6 +691,22 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				chunkSize: z.number().finite().optional(),
 			}),
 			async ({ agentId: scopeId, query, since, before, kind, limit, sourceRef, offset, chunkSize }) => {
+				if (
+					params.evidenceDeliveryDeadline !== undefined &&
+					Date.now() >= params.evidenceDeliveryDeadline &&
+					(query === undefined || query.trim() === "") &&
+					since === undefined &&
+					before === undefined &&
+					sourceRef === undefined
+				) {
+					return {
+						ok: true,
+						items: [],
+						hasMore: false,
+						deliveryClosed: true,
+						note: "This pass has used its time for new evidence. File what you have read, write the runbook, and finish; the rest of the queue is delivered to the next pass.",
+					};
+				}
 				const input: DbOwnerDreamingEvidenceSearch = {
 					agentId: scopeId,
 					...(query === undefined ? {} : { query }),
