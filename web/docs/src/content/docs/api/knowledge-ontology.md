@@ -842,7 +842,10 @@ per group. The response's `passId` is the first pass. `worker.activePasses` in
 `GET /api/dream/status` lists every running pass; the trigger is complete when it
 is empty. Compact passes, directed passes, and scheduled content and hygiene
 passes run alone. `maxOutputTokens` is unset by default, so each reply may use
-the model's own output limit.
+the model's own output limit. `maxInputTokens` (default 128,000) sizes evidence
+reads: a delivery-queue page holds up to a sixteenth of it (32,000 characters by
+default, at least 16,000), so most sessions arrive whole instead of in
+2,000-character fragments. Lower it for a model with a small context window.
 
 Poll `GET /api/dream/status` and check `passes[0].status` for completion, or
 use `GET /api/dream/passes/:passId/events` for a live read-only view.

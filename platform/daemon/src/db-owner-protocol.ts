@@ -377,6 +377,7 @@ export interface DbOwnerDreamingEvidenceSearch {
 	readonly offset?: number;
 	readonly chunkSize?: number;
 	readonly passId?: string;
+	readonly evidenceChars?: number;
 }
 
 export interface DbOwnerDreamingEvidenceSource {

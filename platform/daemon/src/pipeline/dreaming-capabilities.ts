@@ -49,6 +49,16 @@ const bounded = (value: number | undefined, fallback: number, max: number): numb
 
 const MAX_EVIDENCE_EXCERPT_CHARS = 2_000;
 const MAX_EVIDENCE_RESULT_CHARS = 16_000;
+const MAX_EVIDENCE_PAGE_CHARS = 250_000;
+
+export function dreamingEvidencePageChars(maxInputTokens: number): number {
+	return evidencePageChars(Math.floor(maxInputTokens / 4));
+}
+
+function evidencePageChars(requested: number | undefined): number {
+	const chars = Number.isFinite(requested) ? Math.floor(requested ?? 0) : 0;
+	return Math.min(MAX_EVIDENCE_PAGE_CHARS, Math.max(MAX_EVIDENCE_RESULT_CHARS, chars));
+}
 const MAX_HYDRATED_ITEMS = 50;
 const MAX_ENTITY_TEXT_CHARS = 2_000;
 
@@ -281,6 +291,7 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly memoryHeadCommitter?: MemoryHeadCommitter;
 	readonly passId?: string;
 	readonly evidenceDeliveryDeadline?: number;
+	readonly evidenceChars?: number;
 	readonly mode?: DreamingCapabilityMode;
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
@@ -347,7 +358,10 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 		const fragment = projectEvidenceFragment(
 			source,
 			Math.max(0, Math.floor(input.offset ?? 0)),
-			Math.min(Math.max(Math.floor(input.chunkSize ?? MAX_EVIDENCE_EXCERPT_CHARS), 1), MAX_EVIDENCE_EXCERPT_CHARS),
+			Math.min(
+				Math.max(Math.floor(input.chunkSize ?? MAX_EVIDENCE_EXCERPT_CHARS), 1),
+				evidencePageChars(input.evidenceChars),
+			),
 		);
 		return fragment === null
 			? { ok: false, error: "Evidence fragment offset is outside the source" }
@@ -374,6 +388,8 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 	const scopeId = input.agentId;
 	const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 20), 50));
 	const servedInPass = input.passId ? passDeliveredRanges(db, input.passId, scopeId) : new Map();
+	const pageChars = evidencePageChars(input.evidenceChars);
+	let budgetExhausted = false;
 	const fresh = searchEpisodicSources(db, {
 		agentId: scopeId,
 		query: "",
@@ -384,13 +400,21 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 	});
 	const page = (sources: readonly EpisodicSourceRecord[], max: number, skip = new Set<string>()) => {
 		const items: Record<string, unknown>[] = [];
+		let remaining = pageChars;
 		for (const source of sources) {
 			const ref = `${source.kind}:${source.id}`;
 			if (skip.has(ref)) continue;
+			if (items.length > 0 && remaining < MAX_EVIDENCE_EXCERPT_CHARS) {
+				budgetExhausted = true;
+				break;
+			}
 			skip.add(ref);
 			const offset = extendDeliveredOffset(deliveredOffsetForSource(db, scopeId, source), servedInPass.get(ref));
-			const fragment = projectEvidenceFragment(source, offset, MAX_EVIDENCE_EXCERPT_CHARS);
-			if (fragment !== null) items.push(fragment);
+			const fragment = projectEvidenceFragment(source, offset, Math.max(remaining, MAX_EVIDENCE_EXCERPT_CHARS));
+			if (fragment !== null) {
+				items.push(fragment);
+				remaining -= typeof fragment.content === "string" ? fragment.content.length : 0;
+			}
 			if (items.length >= max) break;
 		}
 		return items;
@@ -408,6 +432,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 			items: returned,
 			hasMore:
 				continuations.length > limit ||
+				budgetExhausted ||
 				returned.some((item) => item.contentHasNext === true) ||
 				page(fresh, 1, continuationRefs).length > 0,
 		};
@@ -419,6 +444,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		items: returned,
 		hasMore:
 			items.length > limit ||
+			budgetExhausted ||
 			returned.some((item) => item.contentHasNext === true) ||
 			(items.length > 0 && fresh.length >= DELIVERY_QUEUE_SCAN_LIMIT),
 	};
@@ -718,6 +744,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					...(offset === undefined ? {} : { offset }),
 					...(chunkSize === undefined ? {} : { chunkSize }),
 					...(params.passId === undefined ? {} : { passId: params.passId }),
+					...(params.evidenceChars === undefined ? {} : { evidenceChars: params.evidenceChars }),
 				};
 				return await runDbOwnerDomainOperation(accessor, {
 					runWithOwner: async (owner) => {

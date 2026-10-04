@@ -57,7 +57,7 @@ import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
-import { DREAMING_CAPABILITY_IDS } from "./dreaming-capabilities";
+import { DREAMING_CAPABILITY_IDS, dreamingEvidencePageChars } from "./dreaming-capabilities";
 import { readCuratedMemoryHead, type MemoryHeadCommitInput, type MemoryHeadCommitter } from "../memory-head";
 import { commitCuratedMemoryHeadInDb } from "../memory-head-owner";
 import { renderDreamingEvidence } from "./dreaming-evidence";
@@ -1732,6 +1732,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 						),
 					}),
 			evidenceDeliveryDeadline: Date.now() + Math.floor(cfg.timeout / 2),
+			evidenceChars: dreamingEvidencePageChars(cfg.maxInputTokens),
 			accessor,
 			agentId,
 			memoryHeadCommitter,

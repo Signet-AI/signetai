@@ -41,7 +41,7 @@ import {
 	selectDreamingPassMode,
 	shouldTriggerDreaming,
 } from "./dreaming";
-import { searchDreamingEvidenceInDb } from "./dreaming-capabilities";
+import { dreamingEvidencePageChars, searchDreamingEvidenceInDb } from "./dreaming-capabilities";
 import { selectDreamingCheckMode } from "./dreaming-worker";
 import {
 	enqueueDreamingAttentionInTx,
@@ -528,7 +528,7 @@ describe("Dreaming", () => {
 	});
 
 	it("drains oversized evidence within budget only after every delivered fragment completes (#1430, #1715)", async () => {
-		seedTranscript(db, "s1", "x".repeat(5_000));
+		seedTranscript(db, "s1", "x".repeat(40_000));
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		let prompt = "";
 		const run = async () =>
@@ -556,14 +556,14 @@ describe("Dreaming", () => {
 			(call) => call.toolName === "search_evidence",
 		);
 		expect(firstDelivery?.output).toMatchObject({
-			items: [expect.objectContaining({ sourceRef: "transcript:s1", contentOffset: 0, contentLength: 5_000 })],
+			items: [expect.objectContaining({ sourceRef: "transcript:s1", contentOffset: 0, contentLength: 40_000 })],
 		});
 		const partial = db
 			.prepare(
 				"SELECT delivered_offset AS offset, source_length AS length FROM dreaming_evidence_consumption WHERE source_id = ?",
 			)
 			.get("s1") as { offset: number; length: number } | null;
-		expect(partial).toEqual(expect.objectContaining({ length: 5_000 }));
+		expect(partial).toEqual(expect.objectContaining({ length: 40_000 }));
 		expect(partial?.offset).toBeGreaterThan(0);
 		expect(partial?.offset).toBeLessThan(partial?.length ?? 0);
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
@@ -573,7 +573,7 @@ describe("Dreaming", () => {
 			(call) => call.toolName === "search_evidence",
 		);
 		expect(secondDelivery?.output).toMatchObject({
-			items: [expect.objectContaining({ sourceRef: "transcript:s1", contentOffset: 2_000, contentLength: 5_000 })],
+			items: [expect.objectContaining({ sourceRef: "transcript:s1", contentOffset: 16_000, contentLength: 40_000 })],
 		});
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		await run();
@@ -677,7 +677,7 @@ describe("Dreaming", () => {
 	});
 
 	it("terminalizes reviewed evidence after cross-pass fragments (#1712)", async () => {
-		seedTranscript(db, "reviewed-large", "x".repeat(5_000));
+		seedTranscript(db, "reviewed-large", "x".repeat(40_000));
 		let passNumber = 0;
 		const run = async () =>
 			runDreamingAgentPass(
@@ -1145,7 +1145,7 @@ describe("Dreaming", () => {
 	it("pins a capped frontier ahead of newer evidence on its next pass (#1430)", async () => {
 		const now = Date.now();
 		const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
-		seedTranscript(db, "partial-frontier", "x".repeat(5_000), new Date(now).toISOString());
+		seedTranscript(db, "partial-frontier", "x".repeat(40_000), new Date(now).toISOString());
 		const run = async () =>
 			runDreamingAgentPass(
 				accessor,
@@ -1184,7 +1184,7 @@ describe("Dreaming", () => {
 			(call) => call.toolName === "search_evidence",
 		);
 		expect(delivery?.output).toMatchObject({
-			items: [expect.objectContaining({ sourceRef: "transcript:partial-frontier", contentOffset: 2_000 })],
+			items: [expect.objectContaining({ sourceRef: "transcript:partial-frontier", contentOffset: 16_000 })],
 		});
 		expect(
 			db
@@ -1192,7 +1192,7 @@ describe("Dreaming", () => {
 					"SELECT pass_id AS passId, delivered_offset AS offset FROM dreaming_evidence_consumption WHERE source_id = ?",
 				)
 				.get("partial-frontier"),
-		).toEqual({ passId: second.passId, offset: 4_000 });
+		).toEqual({ passId: second.passId, offset: 32_000 });
 		expect(second.passId).not.toBe(first.passId);
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now + 21_000)).toBe(true);
 	}, 15_000);
@@ -2624,8 +2624,34 @@ describe("Dreaming", () => {
 		);
 	});
 
+	it("sizes evidence pages from the Dreaming input budget", async () => {
+		expect(dreamingEvidencePageChars(128_000)).toBe(32_000);
+		expect(dreamingEvidencePageChars(8_000)).toBe(16_000);
+		expect(dreamingEvidencePageChars(1_000_000)).toBe(250_000);
+		for (const id of ["session-a", "session-b", "session-c"]) seedTranscript(db, id, id.repeat(1_200));
+		let page: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const items = page.items as Array<{ content: string; contentHasNext: boolean }>;
+		expect(items.slice(0, 2).every((item) => item.contentHasNext === false)).toBe(true);
+		expect(items.reduce((sum, item) => sum + item.content.length, 0)).toBeLessThanOrEqual(32_000);
+		expect(page.hasMore).toBe(true);
+	});
+
 	it("pages the delivery queue within a pass and records the full read offsets", async () => {
-		seedTranscript(db, "queue-long", "a".repeat(5_000));
+		seedTranscript(db, "queue-long", "a".repeat(40_000));
 		seedTranscript(db, "queue-short", "b".repeat(1_200));
 		const pages: Record<string, unknown>[] = [];
 		await runDreamingAgentPass(
