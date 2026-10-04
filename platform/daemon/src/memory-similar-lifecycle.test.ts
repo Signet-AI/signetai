@@ -2,9 +2,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Hono } from "hono";
+import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { syncVecInsert, vectorToBlob } from "./db-helpers";
+import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
 
 const DIMENSIONS = 768;
 function vec(signal: number[]): number[] {
@@ -14,6 +15,8 @@ function vec(signal: number[]): number[] {
 }
 
 let app: Hono;
+let recallOwner: DbOwnerClient | null = null;
+let registerMemoryRoutes: typeof import("./routes/memory-routes").registerMemoryRoutes;
 let agentsDir = "";
 let originalSignetPath: string | undefined;
 
@@ -88,19 +91,23 @@ memory:
 `,
 		);
 		process.env.SIGNET_PATH = agentsDir;
-
-		const daemon = await import("./daemon");
-		app = daemon.app;
+		registerMemoryRoutes = (await import("./routes/memory-routes")).registerMemoryRoutes;
 	});
 
 	beforeEach(async () => {
 		await closeDbAccessor();
 		resetDbFiles();
-		initDbAccessor(join(agentsDir, "memory", "memories.db"));
+		const dbPath = join(agentsDir, "memory", "memories.db");
+		initDbAccessor(dbPath);
+		recallOwner = createDbOwnerClient({ dbPath, workerRole: "recall" });
+		app = new Hono();
+		registerMemoryRoutes(app, { recallOwner });
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await recallOwner?.close();
+		recallOwner = null;
+		await closeDbAccessor();
 	});
 
 	afterAll(async () => {

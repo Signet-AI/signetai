@@ -127,11 +127,11 @@ describe("DbAccessor", () => {
 		});
 	});
 
-	test("keeps large deferred FTS backfills off the initialization path", () => {
+	test("keeps large deferred FTS backfills off the initialization path", async () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));
 		initDbAccessor(dbPath);
-		closeDbAccessor();
+		await closeDbAccessor();
 
 		const db = new Database(dbPath);
 		const insert = db.prepare(
@@ -139,9 +139,11 @@ describe("DbAccessor", () => {
 				id, content, type, agent_id, visibility, created_at, updated_at, updated_by
 			) VALUES (?, ?, 'fact', 'default', 'global', datetime('now'), datetime('now'), 'test')`,
 		);
-		for (let index = 0; index < 10_000; index += 1) {
-			insert.run(`large-fts-memory-${index}`, `large deferred FTS corpus memory ${index}`);
-		}
+		db.transaction(() => {
+			for (let index = 0; index < 10_000; index += 1) {
+				insert.run(`large-fts-memory-${index}`, `large deferred FTS corpus memory ${index}`);
+			}
+		})();
 		db.exec("DROP TRIGGER memories_ai");
 		db.exec("DROP TRIGGER memories_ad");
 		db.exec("DROP TRIGGER memories_au");
