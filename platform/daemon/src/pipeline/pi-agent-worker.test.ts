@@ -122,10 +122,13 @@ test("a session retry policy outlasts provider throttling that exhausts the defa
 			systemPrompt: "You are a maintenance agent.",
 			retry: { maxRetries: 6, baseDelayMs: 1, maxAgentDelayMs: 5 },
 		});
-		await session.prompt("Run the pass.");
-		expect(session.getFailureMessage()).toBeUndefined();
-		expect(requests).toBe(7);
-		await session.dispose();
+		try {
+			await session.prompt("Run the pass.");
+			expect(session.getFailureMessage()).toBeUndefined();
+			expect(requests).toBe(7);
+		} finally {
+			await session.dispose();
+		}
 	} finally {
 		server.stop(true);
 	}
