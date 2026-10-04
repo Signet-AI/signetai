@@ -16,7 +16,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDescriptorRoot, UnsupportedDescriptorFilesystemError } from "./descriptor-fs";
+import {
+	__createDescriptorChildForTests,
+	openDescriptorRoot,
+	UnsupportedDescriptorFilesystemError,
+} from "./descriptor-fs";
 
 const roots: string[] = [];
 
@@ -45,6 +49,40 @@ describe("descriptor-rooted filesystem", () => {
 			expect(Math.abs((await root.availableBytes()) - expected)).toBeLessThan(64 * 1024 * 1024);
 		} finally {
 			await root.close();
+		}
+	});
+
+	test.skipIf(process.platform !== "darwin")("creates macOS children with the requested mode", async () => {
+		const rootPath = temporaryRoot("descriptor-create-mode");
+		const umask = process.umask(0);
+		try {
+			for (const mode of [0o640, 0o604, 0o600, 0o700]) {
+				const name = `mode-${mode.toString(8)}`;
+				await __createDescriptorChildForTests(rootPath, name, mode);
+				expect(lstatSync(join(rootPath, name)).mode & 0o7777).toBe(mode);
+			}
+		} finally {
+			process.umask(umask);
+		}
+	});
+
+	test("writes and copies files whose final mode is read-only", async () => {
+		const sourcePath = temporaryRoot("descriptor-readonly-source");
+		const destinationPath = temporaryRoot("descriptor-readonly-destination");
+		writeFileSync(join(sourcePath, "object"), "object");
+		chmodSync(join(sourcePath, "object"), 0o444);
+		const source = await openDescriptorRoot(sourcePath);
+		const destination = await openDescriptorRoot(destinationPath);
+		try {
+			await destination.copyFileFrom(source, "object");
+			await destination.writeFileAtomic("written", new TextEncoder().encode("written"), { mode: 0o444 });
+			expect(lstatSync(join(destinationPath, "object")).mode & 0o777).toBe(0o444);
+			expect(readFileSync(join(destinationPath, "object"), "utf8")).toBe("object");
+			expect(lstatSync(join(destinationPath, "written")).mode & 0o777).toBe(0o444);
+			expect(readFileSync(join(destinationPath, "written"), "utf8")).toBe("written");
+		} finally {
+			await source.close();
+			await destination.close();
 		}
 	});
 
