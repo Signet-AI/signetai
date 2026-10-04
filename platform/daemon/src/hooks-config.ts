@@ -1,3 +1,4 @@
+import { WORKSPACE_PRIVATE_DIR_NAMES } from "@signet/core";
 import { readRuntimeConfig } from "./memory-config";
 import { logger } from "./logger";
 
@@ -153,10 +154,9 @@ function isSafeRelativeIdentityPath(path: string): boolean {
 	if (trimmed.startsWith("/") || trimmed.startsWith("~")) return false;
 	if (!trimmed.toLowerCase().endsWith(".md")) return false;
 	const parts = trimmed.split(/[\\/]/);
-	const deniedDirs = new Set([".daemon", ".secrets", "memory"]);
 	return parts.every((part) => {
 		const normalized = part.toLowerCase();
-		return normalized !== ".." && !normalized.startsWith(".") && !deniedDirs.has(normalized);
+		return normalized !== ".." && !normalized.startsWith(".") && !WORKSPACE_PRIVATE_DIR_NAMES.has(normalized);
 	});
 }
 

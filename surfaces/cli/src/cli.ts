@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSyncHidden as spawnSync } from "@signet/core";
+import { resolveWorkspaceLayout, spawnSyncHidden as spawnSync } from "@signet/core";
 import {
 	existsSync,
 	lstatSync,
@@ -420,7 +420,7 @@ function normalizeAgentPath(pathValue: string): string {
 }
 
 function getOpenClawPluginSyncPath(basePath: string): string {
-	return join(basePath, ".daemon", OPENCLAW_PLUGIN_SYNC_FILENAME);
+	return join(resolveWorkspaceLayout(basePath).runtime, OPENCLAW_PLUGIN_SYNC_FILENAME);
 }
 
 function readOpenClawPluginSyncVersion(basePath: string): string | null {
@@ -443,7 +443,7 @@ function writeOpenClawPluginSyncVersion(basePath: string, version: string): void
 }
 
 function openClawPluginRetryPath(basePath: string): string {
-	return join(basePath, ".daemon", OPENCLAW_PLUGIN_RETRY_FILENAME);
+	return join(resolveWorkspaceLayout(basePath).runtime, OPENCLAW_PLUGIN_RETRY_FILENAME);
 }
 
 function readOpenClawPluginRetryAt(basePath: string): number | null {

@@ -1,4 +1,9 @@
-import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type SpawnSyncReturns } from "@signet/core";
+import {
+	resolveWorkspaceLayout,
+	spawnHidden as spawn,
+	spawnSyncHidden as spawnSync,
+	type SpawnSyncReturns,
+} from "@signet/core";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	appendFileSync,
@@ -100,7 +105,7 @@ export interface DaemonLastExit {
 }
 export function readDaemonLifecycleRecord(agentsDir: string): DaemonLastExit | null {
 	try {
-		const raw = readFileSync(join(agentsDir, ".daemon", "lifecycle.json"), "utf-8");
+		const raw = readFileSync(join(resolveWorkspaceLayout(agentsDir).runtime, "lifecycle.json"), "utf-8");
 		const parsed = JSON.parse(raw) as Partial<DaemonLastExit>;
 		if (typeof parsed.state !== "string" || typeof parsed.pid !== "number") return null;
 		const { runtime: rawRuntime, ...record } = parsed;
@@ -250,7 +255,7 @@ function currentNativeExecutablePath(execPath: string = process.execPath): strin
 }
 
 function pidFile(agentsDir: string): string {
-	return join(agentsDir, ".daemon", "pid");
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "pid");
 }
 
 export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -1932,7 +1937,7 @@ export async function startDaemon(
 	const net = resolveDaemonNetwork(agentsDir, process.env);
 	const inspectorForwarding = await resolveDaemonInspectorForwarding();
 
-	const daemonDir = join(agentsDir, ".daemon");
+	const daemonDir = resolveWorkspaceLayout(agentsDir).runtime;
 	const logDir = join(daemonDir, "logs");
 	mkdirSync(daemonDir, { recursive: true });
 	mkdirSync(logDir, { recursive: true });

@@ -172,12 +172,15 @@ function createSigignoreMatcher(agentsDir: string): (normalizedPath: string) => 
 
 export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: string) => boolean {
 	const agentRoot = resolveForComparison(join(agentsDir, "agents"));
-	const memoriesDb = resolveForComparison(resolveWorkspaceLayout(agentsDir).database);
-	const memoriesDbWal = resolveForComparison(`${resolveWorkspaceLayout(agentsDir).database}-wal`);
-	const memoriesDbShm = resolveForComparison(`${resolveWorkspaceLayout(agentsDir).database}-shm`);
-	const memoriesDbJournal = resolveForComparison(`${resolveWorkspaceLayout(agentsDir).database}-journal`);
+	const layout = resolveWorkspaceLayout(agentsDir);
+	const memoriesDb = resolveForComparison(layout.database);
+	const memoriesDbWal = resolveForComparison(`${layout.database}-wal`);
+	const memoriesDbShm = resolveForComparison(`${layout.database}-shm`);
+	const memoriesDbJournal = resolveForComparison(`${layout.database}-journal`);
 	const sourceRepoRoot = resolveForComparison(resolveWorkspaceSourceRepoPath(agentsDir));
-	const memoryDir = resolveForComparison(join(agentsDir, "memory"));
+	const artifactDirs = [...new Set([layout.transcripts, layout.data, join(agentsDir, "memory")])].map(
+		resolveForComparison,
+	);
 	const isIgnoredByWorkspaceConfig = createSigignoreMatcher(agentsDir);
 	ensureDefaultSigignore(resolveForComparison(join(agentsDir, SIGNET_IGNORE_FILENAME)));
 	const ignoredPaths = new Set([memoriesDb, memoriesDbWal, memoriesDbShm, memoriesDbJournal]);
@@ -187,8 +190,11 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 		if (relativePathWithin(sourceRepoRoot, normalizedPath) !== null) {
 			return true;
 		}
-		const relMemory = relativePathWithin(memoryDir, normalizedPath);
-		if (relMemory !== null && relMemory !== "") {
+		const inArtifactDir = artifactDirs.some((dir) => {
+			const rel = relativePathWithin(dir, normalizedPath);
+			return rel !== null && rel !== "";
+		});
+		if (inArtifactDir) {
 			const fname = basename(normalizedPath);
 			if (ARTIFACT_FILENAME_RE.test(fname) || MEMORY_BACKUP_FILENAME_RE.test(fname)) {
 				return true;

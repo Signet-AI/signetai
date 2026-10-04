@@ -243,6 +243,8 @@ export {
 } from "./memory-context";
 export {
 	createFreshWorkspaceV2,
+	findExistingWorkspaceDatabase,
+	hasExistingWorkspaceState,
 	persistWorkspaceLayout,
 	readWorkspaceLayoutOverrides,
 	resolveWorkspaceLayout,
@@ -250,6 +252,7 @@ export {
 	serializeWorkspaceLayout,
 	WORKSPACE_LAYOUT_V1,
 	WORKSPACE_LAYOUT_V2,
+	WORKSPACE_PRIVATE_DIR_NAMES,
 	type WorkspaceLayout,
 	type WorkspaceLayoutOverrides,
 	type WorkspaceLayoutVersion,
@@ -355,13 +358,13 @@ export type { PromptContextEnvelope } from "./prompt-context";
 
 export {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
-	SIGNET_PLUGIN_REGISTRY_DIR,
+	getPluginRegistryDir,
+	getPluginRegistryPath,
 	SIGNET_PLUGIN_REGISTRY_FILE,
 	SIGNET_PLUGIN_REGISTRY_VERSION,
 	SIGNET_SECRETS_PLUGIN_ID,
 } from "./plugins";
 export {
-	SIGNET_GRAPHIQ_STATE_FILE,
 	disableGraphiqState,
 	emptyGraphiqState,
 	enableGraphiqState,

@@ -7,7 +7,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
-	SIGNET_PLUGIN_REGISTRY_DIR,
+	getPluginRegistryDir,
 	SIGNET_PLUGIN_REGISTRY_FILE,
 	SIGNET_PLUGIN_REGISTRY_VERSION,
 	SIGNET_SECRETS_PLUGIN_ID,
@@ -76,7 +76,7 @@ function graphiqPolicyHost(
 }
 
 function enableGraphiqPluginInRegistry(basePath: string): void {
-	const registryDir = join(basePath, SIGNET_PLUGIN_REGISTRY_DIR);
+	const registryDir = getPluginRegistryDir(basePath);
 	mkdirSync(registryDir, { recursive: true });
 	writeFileSync(
 		join(registryDir, SIGNET_PLUGIN_REGISTRY_FILE),

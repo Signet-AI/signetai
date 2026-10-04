@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative } from "node:path";
-import { getAgentIdentityFiles, parseSimpleYaml } from "@signet/core";
+import { WORKSPACE_PRIVATE_DIR_NAMES, getAgentIdentityFiles, parseSimpleYaml } from "@signet/core";
 import type { ContextIdentityConfig, ContextIdentityFileConfig } from "./hooks-config";
 import { countTokens, truncateToTokens } from "./pipeline/tokenizer";
 
@@ -117,10 +117,9 @@ function isSafeResolvedIdentityPath(agentsDir: string, filePath: string): boolea
 		if (!target.toLowerCase().endsWith(".md")) return false;
 		const rel = relative(base, target);
 		if (!rel || rel.startsWith("..") || isAbsolute(rel)) return false;
-		const deniedDirs = new Set([".daemon", ".secrets", "memory"]);
 		return rel.split(/[\\/]/).every((part) => {
 			const normalized = part.toLowerCase();
-			return !normalized.startsWith(".") && !deniedDirs.has(normalized);
+			return !normalized.startsWith(".") && !WORKSPACE_PRIVATE_DIR_NAMES.has(normalized);
 		});
 	} catch {
 		return false;

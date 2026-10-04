@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { appendFileSync, existsSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export type LogCategory =
@@ -92,7 +93,7 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 	error: 3,
 };
 const DEFAULT_CONFIG: LoggerConfig = {
-	logDir: join(homedir(), ".agents", ".daemon", "logs"),
+	logDir: join(resolveWorkspaceLayout(join(homedir(), ".agents")).runtime, "logs"),
 	logFilePath: undefined,
 	level: "info",
 	maxFileSize: 10 * 1024 * 1024,
@@ -115,7 +116,7 @@ export function resolveLoggerConfig(env: NodeJS.ProcessEnv = process.env, homeDi
 
 	const signetPath = env.SIGNET_PATH?.trim();
 	return {
-		logDir: join(signetPath || join(homeDir, ".agents"), ".daemon", "logs"),
+		logDir: join(resolveWorkspaceLayout(signetPath || join(homeDir, ".agents")).runtime, "logs"),
 	};
 }
 

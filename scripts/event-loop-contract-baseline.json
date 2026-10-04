@@ -1413,42 +1413,42 @@
     },
     {
       "path": "identity-context.ts",
-      "line": 180,
+      "line": 179,
       "api": "existsSync",
       "source": "if (identityMd && existsSync(identityMd)) {",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 182,
+      "line": 181,
       "api": "readFileSync",
       "source": "return parseIdentityMarkdown(readFileSync(identityMd, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 187,
+      "line": 186,
       "api": "existsSync",
       "source": "if (existsSync(agentYaml)) {",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 189,
+      "line": 188,
       "api": "readFileSync",
       "source": "const content = readFileSync(agentYaml, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 202,
+      "line": 201,
       "api": "existsSync",
       "source": "if (existsSync(rootIdentityMd)) {",
       "category": "hot-path"
     },
     {
       "path": "identity-context.ts",
-      "line": 204,
+      "line": 203,
       "api": "readFileSync",
       "source": "return parseIdentityMarkdown(readFileSync(rootIdentityMd, \"utf-8\"));",
       "category": "hot-path"
@@ -1555,63 +1555,63 @@
     },
     {
       "path": "logger.ts",
-      "line": 188,
+      "line": 189,
       "api": "existsSync",
       "source": "if (!existsSync(this.config.logFilePath)) return [];",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 196,
+      "line": 197,
       "api": "existsSync",
       "source": "if (!existsSync(this.config.logDir)) return [];",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 197,
+      "line": 198,
       "api": "readdirSync",
       "source": "return readdirSync(this.config.logDir)",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 285,
+      "line": 286,
       "api": "appendFileSync",
       "source": "appendFileSync(this.currentLogFile, lines);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 307,
+      "line": 308,
       "api": "existsSync",
       "source": "if (!existsSync(this.currentLogFile)) return;",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 309,
+      "line": 310,
       "api": "statSync",
       "source": "const stats = statSync(this.currentLogFile);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 321,
+      "line": 322,
       "api": "renameSync",
       "source": "renameSync(this.currentLogFile, rotatedName);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 331,
+      "line": 332,
       "api": "unlinkSync",
       "source": "unlinkSync(files[i].path);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 464,
+      "line": 465,
       "api": "readFileSync",
       "source": "const content = readFileSync(file.path, \"utf-8\");",
       "category": "hot-path"
@@ -2678,56 +2678,56 @@
     },
     {
       "path": "pipeline/provider.ts",
-      "line": 842,
+      "line": 843,
       "api": "mkdirSync",
       "source": "mkdirSync(isolatedCwd, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "pipeline/reflection-worker.ts",
-      "line": 40,
+      "line": 45,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return null;",
       "category": "hot-path"
     },
     {
       "path": "pipeline/reflection-worker.ts",
-      "line": 41,
+      "line": 46,
       "api": "readFileSync",
       "source": "const data = JSON.parse(readFileSync(path, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "pipeline/reflection-worker.ts",
-      "line": 51,
+      "line": 56,
       "api": "mkdirSync",
       "source": "mkdirSync(dir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "pipeline/reflection-worker.ts",
-      "line": 52,
+      "line": 57,
       "api": "writeFileSync",
       "source": "writeFileSync(getLastReflectionPath(agentId), JSON.stringify({ lastDate: date }));",
       "category": "hot-path"
     },
     {
       "path": "pipeline/reflection-worker.ts",
-      "line": 347,
+      "line": 352,
       "api": "withReadDb",
       "source": "const memories = dbAccessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/reflection-worker.ts",
-      "line": 380,
+      "line": 385,
       "api": "withReadDb",
       "source": "const existingReflections = dbAccessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/reflection-worker.ts",
-      "line": 442,
+      "line": 447,
       "api": "withWriteTx",
       "source": "deps.getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path"
@@ -2820,7 +2820,7 @@
       "path": "pipeline/synthesis-worker.ts",
       "line": 58,
       "api": "mkdirSync",
-      "source": "mkdirSync(join(getAgentsDir(), \".daemon\"), { recursive: true });",
+      "source": "mkdirSync(getRuntimeDir(), { recursive: true });",
       "category": "hot-path"
     },
     {
@@ -2874,28 +2874,28 @@
     },
     {
       "path": "plugins/host.ts",
-      "line": 331,
+      "line": 326,
       "api": "existsSync",
       "source": "if (!this.storagePath || !existsSync(this.storagePath)) {",
       "category": "hot-path"
     },
     {
       "path": "plugins/host.ts",
-      "line": 335,
+      "line": 330,
       "api": "readFileSync",
       "source": "const parsed: unknown = JSON.parse(readFileSync(this.storagePath, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "plugins/host.ts",
-      "line": 360,
+      "line": 355,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(this.storagePath), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "plugins/host.ts",
-      "line": 361,
+      "line": 356,
       "api": "writeFileSync",
       "source": "writeFileSync(this.storagePath, `${JSON.stringify(this.store, null, 2)}\\n`, { mode: 0o600 });",
       "category": "hot-path"
@@ -4125,35 +4125,35 @@
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1040,
+      "line": 1041,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1042,
+      "line": 1043,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1052,
+      "line": 1053,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1054,
+      "line": 1055,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\\n`, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1055,
+      "line": 1056,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"

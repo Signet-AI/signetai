@@ -23,6 +23,7 @@ import {
 	launchdDaemonLabel,
 	launchdDaemonPlistPath,
 	macOSLaunchAgentAttributionNotice,
+	readDaemonLifecycleRecord,
 	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
 	resolveDaemonProbeUrls,
@@ -840,6 +841,33 @@ describe("readManagedDaemonPid", () => {
 		expect(pid).toBe(4242);
 
 		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("reads the managed pid and lifecycle record from runtime/ on a v2 workspace", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-test-"));
+		try {
+			writeFileSync(join(root, "workspace-layout.json"), `${JSON.stringify({ version: 2 })}\n`);
+			const dir = join(root, "runtime");
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(join(dir, "pid"), "4343\n");
+			writeFileSync(
+				join(dir, "lifecycle.json"),
+				JSON.stringify({ state: "running", pid: 4343, version: "0.0.0", startedAt: "2026-01-01T00:00:00.000Z" }),
+			);
+
+			const pid = readManagedDaemonPid(root, {
+				daemonPaths: ["/opt/signet/dist/daemon.js"],
+				isAlive: () => true,
+				readCmd: () => "bun /opt/signet/dist/daemon.js",
+				readEnv: () => "SIGNET_DAEMON_ENTRYPOINT=1\u0000",
+			});
+
+			expect(pid).toBe(4343);
+			expect(readDaemonLifecycleRecord(root)?.pid).toBe(4343);
+			expect(existsSync(join(root, ".daemon"))).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("rejects a daemon-path CLI process without the daemon entrypoint marker", () => {

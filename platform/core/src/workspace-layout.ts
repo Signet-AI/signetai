@@ -4,6 +4,15 @@ import { join, resolve } from "node:path";
 export const WORKSPACE_LAYOUT_V1 = 1 as const;
 export const WORKSPACE_LAYOUT_V2 = 2 as const;
 export type WorkspaceLayoutVersion = typeof WORKSPACE_LAYOUT_V1 | typeof WORKSPACE_LAYOUT_V2;
+export const WORKSPACE_PRIVATE_DIR_NAMES: ReadonlySet<string> = new Set([
+	".daemon",
+	".secrets",
+	"memory",
+	"runtime",
+	"data",
+	"transcripts",
+	"cache",
+]);
 
 export interface WorkspaceLayoutOverrides {
 	database?: string;
@@ -114,6 +123,21 @@ function layoutFor(root: string, version: WorkspaceLayoutVersion, custom: Worksp
 		data,
 		layoutFile: layoutFile(root),
 	};
+}
+export function findExistingWorkspaceDatabase(rootPath: string): string | null {
+	const layout = resolveWorkspaceLayout(rootPath);
+	const candidates = [
+		layout.database,
+		join(layout.data, "signet.db"),
+		join(layout.root, "data", "signet.db"),
+		join(layout.root, "memory", "memories.db"),
+	];
+	return candidates.find((database) => existsSync(database)) ?? null;
+}
+export function hasExistingWorkspaceState(rootPath: string): boolean {
+	if (findExistingWorkspaceDatabase(rootPath) !== null) return true;
+	const layout = resolveWorkspaceLayout(rootPath);
+	return layout.version === WORKSPACE_LAYOUT_V1 && existsSync(layout.runtime);
 }
 
 export function createFreshWorkspaceV2(

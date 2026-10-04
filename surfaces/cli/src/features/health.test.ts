@@ -1604,6 +1604,27 @@ describe("daemon lifecycle exit findings (#1148)", () => {
 		}
 	});
 
+	it("points the unrecorded-death hint at the v2 runtime log directory", async () => {
+		const root = mkdtempSync(join(tmpdir(), "doctor-lifecycle-v2-"));
+		try {
+			writeFileSync(join(root, "workspace-layout.json"), `${JSON.stringify({ version: 2 })}\n`);
+			const jsonOut = await captureDoctorJson(
+				lifecycleDeps(root, {
+					state: "running",
+					pid: 4242,
+					version: "0.165.0",
+					startedAt: "2026-08-07T00:00:00.000Z",
+				}).getDaemonStatus,
+				root,
+			);
+			const finding = jsonOut.findings.find((f) => f.code === "daemon_exit_unrecorded");
+			expect(finding?.fix).toContain(join(root, "runtime", "logs", "signet-<date>.log"));
+			expect(finding?.fix).not.toContain(".daemon");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("does not report an unrecorded death while the recorded pid is alive (custom port / still booting)", async () => {
 		const root = mkdtempSync(join(tmpdir(), "doctor-lifecycle-"));
 		try {

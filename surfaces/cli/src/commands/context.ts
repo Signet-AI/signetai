@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, parse, relative } from "node:path";
+import { WORKSPACE_PRIVATE_DIR_NAMES } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonApiCall } from "../lib/daemon.js";
@@ -80,10 +81,9 @@ function isSafeContextRelativePath(path: string): boolean {
 	const trimmed = path.trim();
 	if (!trimmed || trimmed.startsWith("~") || isAbsolute(trimmed)) return false;
 	const parts = trimmed.split(/[\\/]/);
-	const denied = new Set([".daemon", ".secrets", "memory"]);
 	return parts.every((part) => {
 		const normalized = part.toLowerCase();
-		return normalized !== ".." && !normalized.startsWith(".") && !denied.has(normalized);
+		return normalized !== ".." && !normalized.startsWith(".") && !WORKSPACE_PRIVATE_DIR_NAMES.has(normalized);
 	});
 }
 
@@ -98,13 +98,12 @@ function nearestExistingAncestor(path: string): string {
 
 function isAllowedResolvedRelative(rel: string): boolean {
 	if (rel.startsWith("..") || isAbsolute(rel)) return false;
-	const denied = new Set([".daemon", ".secrets", "memory"]);
 	return rel
 		.split(/[\\/]/)
 		.filter((part) => part.length > 0)
 		.every((part) => {
 			const normalized = part.toLowerCase();
-			return !normalized.startsWith(".") && !denied.has(normalized);
+			return !normalized.startsWith(".") && !WORKSPACE_PRIVATE_DIR_NAMES.has(normalized);
 		});
 }
 
