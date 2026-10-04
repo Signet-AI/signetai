@@ -32,9 +32,13 @@ function lockDirectory(root: string): string {
 	return moved ? join(root, moved.to) : runtime;
 }
 
+const LOCK_WAIT_MS = 10_000;
+const LOCK_RETRY_MS = 100;
+
 export function runWorkspaceLayoutStartup(
 	env: NodeJS.ProcessEnv = process.env,
 	argv: readonly string[] = process.argv,
+	lockWaitMs = LOCK_WAIT_MS,
 ): WorkspaceLayoutStartup {
 	if (!isDaemonProcess(env, argv)) return { status: "not-daemon" };
 	try {
@@ -45,12 +49,20 @@ export function runWorkspaceLayoutStartup(
 		if (workspace.status === "missing" || workspace.status === "incomplete")
 			return { status: "skipped", reason: `workspace is ${workspace.status}` };
 		mkdirSync(root, { recursive: true });
-		const lock = acquireSingleInstanceLock(join(lockDirectory(root), "daemon.lock"));
-		if (lock === null) return { status: "skipped", reason: "another daemon holds the workspace lock" };
-		try {
-			return upgradeWorkspaceLayout(root);
-		} finally {
-			releaseSingleInstanceLock(lock);
+		const deadline = Date.now() + lockWaitMs;
+		for (;;) {
+			const directory = lockDirectory(root);
+			const lock = acquireSingleInstanceLock(join(directory, "daemon.lock"));
+			if (lock !== null && lockDirectory(root) === directory) {
+				try {
+					return upgradeWorkspaceLayout(root);
+				} finally {
+					releaseSingleInstanceLock(lock);
+				}
+			}
+			if (lock !== null) releaseSingleInstanceLock(lock);
+			if (Date.now() >= deadline) return { status: "skipped", reason: "another daemon holds the workspace lock" };
+			Bun.sleepSync(LOCK_RETRY_MS);
 		}
 	} catch (error) {
 		return { status: "failed", reason: error instanceof Error ? error.message : String(error) };

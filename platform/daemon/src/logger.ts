@@ -92,8 +92,7 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 	warn: 2,
 	error: 3,
 };
-const DEFAULT_CONFIG: LoggerConfig = {
-	logDir: join(resolveWorkspaceLayout(join(homedir(), ".agents")).runtime, "logs"),
+const DEFAULT_CONFIG: Omit<LoggerConfig, "logDir"> = {
 	logFilePath: undefined,
 	level: "info",
 	maxFileSize: 10 * 1024 * 1024,
@@ -103,7 +102,10 @@ const DEFAULT_CONFIG: LoggerConfig = {
 	flushRetryBackoffMs: 30_000,
 };
 
-export function resolveLoggerConfig(env: NodeJS.ProcessEnv = process.env, homeDir = homedir()): Partial<LoggerConfig> {
+export function resolveLoggerConfig(
+	env: NodeJS.ProcessEnv = process.env,
+	homeDir = homedir(),
+): Partial<LoggerConfig> & { logDir: string } {
 	const envLogFile = env.SIGNET_LOG_FILE?.trim();
 	if (envLogFile) {
 		return { logFilePath: envLogFile, logDir: dirname(envLogFile) };
@@ -132,7 +134,7 @@ export class Logger extends EventEmitter {
 
 	constructor(config: Partial<LoggerConfig> = {}) {
 		super();
-		this.config = { ...DEFAULT_CONFIG, ...config };
+		this.config = { ...DEFAULT_CONFIG, ...config, logDir: config.logDir ?? resolveLoggerConfig().logDir };
 		this.currentLogFile = this.getLogFileName();
 		this.startFlushTimer();
 	}

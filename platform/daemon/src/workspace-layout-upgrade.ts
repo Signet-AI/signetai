@@ -10,6 +10,7 @@ import {
 	readlinkSync,
 	renameSync,
 	rmdirSync,
+	statSync,
 	unlinkSync,
 	writeSync,
 } from "node:fs";
@@ -92,14 +93,11 @@ export function readWorkspaceLayoutUpgradeRecord(root: string): UpgradeRecord | 
 	return { version: 1, state, startedAt, moves, createdDirectories: created, emptiedDirectories: emptied };
 }
 
-function isRelativeWithin(value: unknown): value is string {
+function isRecordPath(value: unknown): value is string {
 	return (
 		typeof value === "string" &&
 		value.length > 0 &&
-		!isAbsolute(value) &&
-		value !== ".." &&
-		!value.startsWith(`..${sep}`) &&
-		!value.startsWith("../")
+		(isAbsolute(value) || (value !== ".." && !value.startsWith(`..${sep}`) && !value.startsWith("../")))
 	);
 }
 
@@ -107,13 +105,13 @@ function isMove(value: unknown): value is LayoutMove {
 	return (
 		!!value &&
 		typeof value === "object" &&
-		isRelativeWithin(Reflect.get(value, "from")) &&
-		isRelativeWithin(Reflect.get(value, "to"))
+		isRecordPath(Reflect.get(value, "from")) &&
+		isRecordPath(Reflect.get(value, "to"))
 	);
 }
 
 function isPathList(value: unknown): value is string[] {
-	return Array.isArray(value) && value.every(isRelativeWithin);
+	return Array.isArray(value) && value.every(isRecordPath);
 }
 
 function writeRecord(root: string, record: UpgradeRecord): void {
@@ -173,6 +171,11 @@ function containsOrEquals(parent: string, path: string): boolean {
 	return parent === path || inside(parent, path);
 }
 
+function isEmptyDirectory(path: string): boolean {
+	const existing = entry(path);
+	return !!existing && existing.isDirectory() && !existing.isSymbolicLink() && readdirSync(path).length === 0;
+}
+
 function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: string[] } {
 	const v1 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V1);
 	const v2 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V2);
@@ -182,12 +185,17 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 		if (from === to || !entry(from)) return;
 		moves.push({ from, to });
 	};
+	const bases = [
+		root,
+		...[v2.transcripts, v2.data].filter(
+			(path, index) => !inside(root, path) && path === [v1.transcripts, v1.data][index],
+		),
+	];
 
 	if (v1.database !== v2.database)
 		for (const suffix of DATABASE_SUFFIXES) add(v1.database + suffix, v2.database + suffix);
 	if (v1.cache !== v2.cache) add(v1.cache, v2.cache);
 	if (v1.imports !== v2.imports) add(v1.imports, v2.imports);
-	if (v1.runtime !== v2.runtime) add(v1.runtime, v2.runtime);
 
 	if (entry(v1.transcripts)?.isDirectory()) {
 		for (const harness of readdirSync(v1.transcripts)) {
@@ -205,7 +213,16 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 	if (v1.data !== v2.data && inside(root, v1.data) && entry(v1.data)?.isDirectory()) {
 		const legacy = join(v2.data, "legacy-memory");
 		const claimed = new Set(moves.map((move) => move.from));
-		const retained = [v2.database, v2.transcripts, v2.cache, v2.imports, v2.runtime, v2.files, v2.secrets, v2.skills];
+		const retained = [
+			...DATABASE_SUFFIXES.map((suffix) => v2.database + suffix),
+			v2.transcripts,
+			v2.cache,
+			v2.imports,
+			v2.runtime,
+			v2.files,
+			v2.secrets,
+			v2.skills,
+		];
 		for (const name of readdirSync(v1.data)) {
 			const from = join(v1.data, name);
 			if (claimed.has(from) || retained.some((path) => containsOrEquals(from, path))) continue;
@@ -217,32 +234,36 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 		emptied.push(legacy, v1.data);
 	}
 
-	for (const move of moves) {
-		if (!inside(root, move.from) || !inside(root, move.to))
-			throw new UpgradeBlocked(`refusing to move a path outside the workspace: ${move.from}`);
-	}
+	if (v1.runtime !== v2.runtime) add(v1.runtime, v2.runtime);
 
 	const created = new Set<string>();
-	const rootDevice = lstatSync(root).dev;
 	for (const move of moves) {
+		const base = bases.find((candidate) => inside(candidate, move.from) && inside(candidate, move.to));
+		if (!base) throw new UpgradeBlocked(`refusing to move ${move.from} outside its configured root`);
+		const label = (path: string): string => (base === root ? relative(root, path) : path);
 		const source = lstatSync(move.from);
-		if (source.dev !== rootDevice)
-			throw new UpgradeBlocked(`${relative(root, move.from)} is on a different filesystem than the workspace`);
+		if (source.dev !== statSync(base).dev)
+			throw new UpgradeBlocked(
+				`${label(move.from)} is on a different filesystem than ${label(base) || "the workspace"}`,
+			);
 		if (source.isSymbolicLink() && !isAbsolute(readlinkSync(move.from)))
-			throw new UpgradeBlocked(`${relative(root, move.from)} is a relative symlink that would break if moved`);
-		assertNoSymlinkAncestors(root, move.from);
-		if (entry(move.to)) throw new UpgradeBlocked(`${relative(root, move.to)} already exists`);
+			throw new UpgradeBlocked(`${label(move.from)} is a relative symlink that would break if moved`);
+		assertNoSymlinkAncestors(base, move.from);
+		if (entry(move.to) && !(source.isDirectory() && isEmptyDirectory(move.to)))
+			throw new UpgradeBlocked(`${label(move.to)} already exists`);
 		let parent = dirname(move.to);
-		while (parent !== root && inside(root, parent)) {
+		while (parent !== base && inside(base, parent)) {
 			const existing = entry(parent);
 			if (existing && (!existing.isDirectory() || existing.isSymbolicLink()))
-				throw new UpgradeBlocked(`${relative(root, parent)} exists and is not a directory`);
+				throw new UpgradeBlocked(`${label(parent)} exists and is not a directory`);
 			if (!existing) created.add(parent);
 			parent = dirname(parent);
 		}
 	}
+	const targets = new Set(moves.map((move) => move.to));
 	for (const path of new Set([v2.data, v2.transcripts, v2.cache, v2.runtime])) {
-		if (!inside(root, path) || [v1.data, v1.transcripts, v1.cache, v1.runtime].includes(path)) continue;
+		if (!inside(root, path) || [v1.data, v1.transcripts, v1.cache, v1.runtime].includes(path) || targets.has(path))
+			continue;
 		const existing = entry(path);
 		if (existing && (!existing.isDirectory() || readdirSync(path).length > 0))
 			throw new UpgradeBlocked(`${relative(root, path)} already exists and is not empty`);
@@ -250,23 +271,23 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 
 	const destinations = new Set<string>();
 	for (const move of moves) {
-		if (destinations.has(move.to)) throw new UpgradeBlocked(`two paths map to ${relative(root, move.to)}`);
+		if (destinations.has(move.to)) throw new UpgradeBlocked(`two paths map to ${move.to}`);
 		destinations.add(move.to);
 	}
 
-	const rel = (path: string): string => relative(root, path);
+	const stored = (path: string): string => (inside(root, path) ? relative(root, path) : path);
 	return {
-		moves: moves.map((move) => ({ from: rel(move.from), to: rel(move.to) })),
-		created: [...created].map(rel),
-		emptied: emptied.filter((path) => inside(root, path)).map(rel),
+		moves: moves.map((move) => ({ from: stored(move.from), to: stored(move.to) })),
+		created: [...created].map(stored),
+		emptied: emptied.map(stored),
 	};
 }
 
-function assertNoSymlinkAncestors(root: string, path: string): void {
+function assertNoSymlinkAncestors(base: string, path: string): void {
 	let parent = dirname(path);
-	while (parent !== root && inside(root, parent)) {
+	while (parent !== base && inside(base, parent)) {
 		if (lstatSync(parent).isSymbolicLink())
-			throw new UpgradeBlocked(`${relative(root, parent)} is a symlink; Signet will not move files through it`);
+			throw new UpgradeBlocked(`${parent} is a symlink; Signet will not move files through it`);
 		parent = dirname(parent);
 	}
 }
@@ -274,38 +295,53 @@ function assertNoSymlinkAncestors(root: string, path: string): void {
 function apply(root: string, record: InProgressRecord, rename: (from: string, to: string) => void): number {
 	let moved = 0;
 	for (const move of record.moves) {
-		const from = join(root, move.from);
-		const to = join(root, move.to);
+		const from = resolve(root, move.from);
+		const to = resolve(root, move.to);
 		const source = entry(from);
-		const target = entry(to);
-		if (!source && target) continue;
 		if (!source) continue;
-		if (target) throw new UpgradeBlocked(`${move.to} already exists`);
-		assertNoSymlinkAncestors(root, from);
+		if (entry(to)) {
+			if (!source.isDirectory() || !isEmptyDirectory(to)) throw new UpgradeBlocked(`${move.to} already exists`);
+			rmdirSync(to);
+		}
+		if (inside(root, from)) assertNoSymlinkAncestors(root, from);
 		mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
 		rename(from, to);
 		moved += 1;
 	}
-	for (const directory of record.emptiedDirectories) removeIfEmpty(join(root, directory));
+	for (const directory of record.emptiedDirectories) removeIfEmpty(resolve(root, directory));
 	return moved;
 }
 
 function rollback(root: string, record: InProgressRecord, rename: (from: string, to: string) => void): string[] {
 	const stranded: string[] = [];
 	for (const move of [...record.moves].reverse()) {
-		const from = join(root, move.from);
-		const to = join(root, move.to);
-		if (!entry(to) || entry(from)) continue;
+		const from = resolve(root, move.from);
+		const to = resolve(root, move.to);
+		if (!entry(to)) continue;
+		if (entry(from)) {
+			stranded.push(move.to);
+			continue;
+		}
+		const created = mkdirSync(dirname(from), { recursive: true, mode: 0o700 });
 		try {
-			mkdirSync(dirname(from), { recursive: true, mode: 0o700 });
 			rename(to, from);
 		} catch {
 			stranded.push(move.to);
+			if (created) removeEmptyChain(dirname(from), created);
 		}
 	}
 	const created = [...record.createdDirectories].sort((a, b) => b.length - a.length);
-	for (const directory of created) removeIfEmpty(join(root, directory));
+	for (const directory of created) removeIfEmpty(resolve(root, directory));
 	return stranded;
+}
+
+function removeEmptyChain(path: string, top: string): void {
+	let current = path;
+	while (containsOrEquals(top, current)) {
+		removeIfEmpty(current);
+		if (current === top) return;
+		current = dirname(current);
+	}
 }
 
 function removeIfEmpty(path: string): void {
@@ -361,6 +397,11 @@ export function upgradeWorkspaceLayout(
 		return { status: "upgraded", moved, resumed };
 	} catch (error) {
 		const cause = error instanceof Error ? error.message : String(error);
+		if (resumed)
+			throw new Error(
+				`workspace layout upgrade could not finish an interrupted run: ${cause}; ${WORKSPACE_LAYOUT_UPGRADE_FILE} lists the planned renames`,
+				{ cause: error },
+			);
 		const stranded = layout.version === WORKSPACE_LAYOUT_V2 ? [] : rollback(root, record, rename);
 		const reason =
 			stranded.length > 0

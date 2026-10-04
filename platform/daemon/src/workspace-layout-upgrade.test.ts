@@ -226,6 +226,84 @@ describe("upgradeWorkspaceLayout", () => {
 		expect(existsSync(join(elsewhere, "memory", "memories.db"))).toBe(true);
 	});
 
+	it("keeps WAL and journal files beside a custom database inside memory/", () => {
+		const { root } = v1Workspace();
+		const writer = new Database(join(root, "memory", "memories.db"));
+		writer.exec("PRAGMA wal_autocheckpoint = 0");
+		for (let i = 0; i < 20; i += 1) writer.exec(`INSERT INTO memories (content) VALUES ('wal-${i}')`);
+		const walCopy = readFileSync(join(root, "memory", "memories.db-wal"));
+		const dbCopy = readFileSync(join(root, "memory", "memories.db"));
+		writer.close();
+		writeFileSync(join(root, "memory", "memories.db"), dbCopy);
+		writeFileSync(join(root, "memory", "memories.db-wal"), walCopy);
+		persistWorkspaceLayout(root, { version: 1, overrides: { database: "memory/memories.db" } });
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded" });
+
+		expect(resolveWorkspaceLayout(root).database).toBe(join(root, "memory", "memories.db"));
+		expect(existsSync(join(root, "memory", "memories.db-wal"))).toBe(true);
+		expect(existsSync(join(root, "data/legacy-memory/memories.db-wal"))).toBe(false);
+		const db = new Database(join(root, "memory", "memories.db"), { readonly: true });
+		expect(db.query("SELECT COUNT(*) AS count FROM memories").get()).toEqual({ count: 21 });
+		db.close();
+	});
+
+	it("refuses to start rather than guess when an interrupted run finds both sides of a rename", () => {
+		const { root } = v1Workspace();
+		let terminated = false;
+		const killedAfterRuntimeRename = (from: string, to: string): void => {
+			if (terminated) throw new Error("process terminated");
+			renameSync(from, to);
+			if (to === join(root, "runtime")) {
+				terminated = true;
+				throw new Error("process terminated");
+			}
+		};
+		expect(() => upgradeWorkspaceLayout(root, { rename: killedAfterRuntimeRename })).toThrow(
+			"workspace layout upgrade could not finish",
+		);
+		write(root, ".daemon/logs/startup.log", "recreated by a launcher");
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow("could not finish an interrupted run");
+
+		expect(readFileSync(join(root, "runtime", "pid"), "utf8")).toBe("123");
+		expect(existsSync(join(root, "data/signet.db"))).toBe(true);
+		expect(readWorkspaceLayoutUpgradeRecord(root)).toMatchObject({ state: "in-progress" });
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+	});
+
+	it("normalizes transcripts inside an external transcript root", () => {
+		const { root } = v1Workspace();
+		const external = workspace();
+		write(external, "codex/transcripts/transcript.jsonl", "{}\n");
+		persistWorkspaceLayout(root, { version: 1, overrides: { transcripts: external } });
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded" });
+
+		expect(readFileSync(join(external, "codex/transcript.jsonl"), "utf8")).toBe("{}\n");
+		expect(existsSync(join(external, "codex/transcripts"))).toBe(false);
+	});
+
+	it("accepts an empty pre-existing v2 directory", () => {
+		const { root } = v1Workspace();
+		mkdirSync(join(root, "runtime"));
+		mkdirSync(join(root, "cache"));
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded" });
+		expect(existsSync(join(root, "runtime/pid"))).toBe(true);
+		expect(existsSync(join(root, "cache/embedding.bin"))).toBe(true);
+	});
+
+	it("upgrades through a symlinked workspace root", () => {
+		const { root } = v1Workspace();
+		const link = join(workspace(), "agents-link");
+		symlinkSync(root, link);
+
+		expect(upgradeWorkspaceLayout(link)).toMatchObject({ status: "upgraded" });
+		expect(resolveWorkspaceLayout(root).version).toBe(2);
+		expect(existsSync(join(root, "data/signet.db"))).toBe(true);
+	});
+
 	it("writes the v2 layout for a workspace with no v1 state", () => {
 		const root = workspace();
 		expect(upgradeWorkspaceLayout(root)).toEqual({ status: "upgraded", moved: 0, resumed: false });
@@ -248,13 +326,13 @@ describe("runWorkspaceLayoutStartup", () => {
 		const lock = acquireSingleInstanceLock(join(root, ".daemon", "daemon.lock"));
 		try {
 			expect(lock).not.toBeNull();
-			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"])).toEqual({
+			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"], 0)).toEqual({
 				status: "skipped",
 				reason: "another daemon holds the workspace lock",
 			});
 			expect(resolveWorkspaceLayout(root).version).toBe(1);
 			if (lock) releaseSingleInstanceLock(lock);
-			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"])).toMatchObject({ status: "upgraded" });
+			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"], 0)).toMatchObject({ status: "upgraded" });
 			expect(resolveWorkspaceLayout(root).version).toBe(2);
 		} finally {
 			if (lock) releaseSingleInstanceLock(lock);

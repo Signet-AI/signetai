@@ -1,18 +1,27 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const WORKSPACE_LAYOUT_V1 = 1 as const;
 export const WORKSPACE_LAYOUT_V2 = 2 as const;
 export type WorkspaceLayoutVersion = typeof WORKSPACE_LAYOUT_V1 | typeof WORKSPACE_LAYOUT_V2;
-export const WORKSPACE_PRIVATE_DIR_NAMES: ReadonlySet<string> = new Set([
-	".daemon",
-	".secrets",
-	"memory",
-	"runtime",
-	"data",
-	"transcripts",
-	"cache",
-]);
+const PRIVATE_SEGMENTS: ReadonlySet<string> = new Set([".daemon", ".secrets", "memory"]);
+const PRIVATE_ROOT_DIRS: ReadonlySet<string> = new Set(["runtime", "data", "transcripts", "cache"]);
+
+export function isWorkspacePrivatePath(relativePath: string): boolean {
+	const parts = relativePath
+		.split(/[\\/]/)
+		.filter((part) => part.length > 0)
+		.map((part) => part.toLowerCase());
+	return parts.some((part) => PRIVATE_SEGMENTS.has(part)) || PRIVATE_ROOT_DIRS.has(parts[0] ?? "");
+}
+
+const LEGACY_ARTIFACT_PATH = /^memory\/[^/]+--(?:summary|transcript|compaction|manifest)\.md$/;
+
+export function currentArtifactRelativePath(version: WorkspaceLayoutVersion, path: string): string {
+	return version === WORKSPACE_LAYOUT_V2 && LEGACY_ARTIFACT_PATH.test(path)
+		? `transcripts/${path.slice("memory/".length)}`
+		: path;
+}
 
 export interface WorkspaceLayoutOverrides {
 	database?: string;
@@ -86,7 +95,13 @@ export function persistWorkspaceLayout(
 	mkdirSync(root, { recursive: true });
 	const file = layoutFile(root);
 	const temp = `${file}.tmp-${process.pid}`;
-	writeFileSync(temp, serializeWorkspaceLayout(input), { mode: 0o600 });
+	const fd = openSync(temp, "w", 0o600);
+	try {
+		writeSync(fd, serializeWorkspaceLayout(input));
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
 	renameSync(temp, file);
 	return file;
 }

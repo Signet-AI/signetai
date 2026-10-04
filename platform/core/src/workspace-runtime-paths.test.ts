@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getGraphiqStatePath, readGraphiqState, updateGraphiqActiveProject } from "./graphiq";
 import { getPluginRegistryDir, getPluginRegistryPath } from "./plugins";
-import { findExistingWorkspaceDatabase, hasExistingWorkspaceState } from "./workspace-layout";
+import {
+	currentArtifactRelativePath,
+	findExistingWorkspaceDatabase,
+	hasExistingWorkspaceState,
+	isWorkspacePrivatePath,
+} from "./workspace-layout";
 
 const roots: string[] = [];
 
@@ -68,5 +73,28 @@ describe("existing workspace state detection", () => {
 		writeFileSync(join(root, "data", "signet.db"), "");
 		expect(findExistingWorkspaceDatabase(root)).toBe(join(root, "data", "signet.db"));
 		expect(hasExistingWorkspaceState(root)).toBe(true);
+	});
+});
+
+describe("workspace private paths", () => {
+	it("denies v1 private segments anywhere and v2 storage roots only at the top level", () => {
+		expect(isWorkspacePrivatePath("memory/notes.md")).toBe(true);
+		expect(isWorkspacePrivatePath("notes/memory/x.md")).toBe(true);
+		expect(isWorkspacePrivatePath("data/signet.md")).toBe(true);
+		expect(isWorkspacePrivatePath("Transcripts/codex/x.md")).toBe(true);
+		expect(isWorkspacePrivatePath("runtime\\logs\\x.md")).toBe(true);
+		expect(isWorkspacePrivatePath("notes/data/x.md")).toBe(false);
+		expect(isWorkspacePrivatePath("projects/cache/plan.md")).toBe(false);
+		expect(isWorkspacePrivatePath("USER.md")).toBe(false);
+	});
+});
+
+describe("stored artifact paths", () => {
+	it("maps historical memory/ artifact references to transcripts/ on layout v2 only", () => {
+		const path = "memory/2026-01-01T00-00-00Z--abc--manifest.md";
+		expect(currentArtifactRelativePath(2, path)).toBe("transcripts/2026-01-01T00-00-00Z--abc--manifest.md");
+		expect(currentArtifactRelativePath(1, path)).toBe(path);
+		expect(currentArtifactRelativePath(2, "memory/notes.md")).toBe("memory/notes.md");
+		expect(currentArtifactRelativePath(2, "memory/claude-code/x--summary.md")).toBe("memory/claude-code/x--summary.md");
 	});
 });

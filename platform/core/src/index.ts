@@ -243,6 +243,7 @@ export {
 } from "./memory-context";
 export {
 	createFreshWorkspaceV2,
+	currentArtifactRelativePath,
 	findExistingWorkspaceDatabase,
 	hasExistingWorkspaceState,
 	persistWorkspaceLayout,
@@ -252,7 +253,7 @@ export {
 	serializeWorkspaceLayout,
 	WORKSPACE_LAYOUT_V1,
 	WORKSPACE_LAYOUT_V2,
-	WORKSPACE_PRIVATE_DIR_NAMES,
+	isWorkspacePrivatePath,
 	type WorkspaceLayout,
 	type WorkspaceLayoutOverrides,
 	type WorkspaceLayoutVersion,

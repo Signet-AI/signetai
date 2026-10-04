@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { resolveWorkspaceLayout } from "@signet/core";
+import { currentArtifactRelativePath, resolveWorkspaceLayout } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { type TranscriptCaptureStatusSummary, getTranscriptCaptureStatus } from "./transcript-capture-worker";
 
@@ -72,7 +72,9 @@ function scanAuditLogs(basePath: string): TranscriptHealthReport["audit"] {
 
 function pathExists(basePath: string, path: unknown): boolean {
 	const rel = asStringOrNull(path);
-	return rel ? existsSync(join(basePath, rel)) : false;
+	return rel
+		? existsSync(join(basePath, currentArtifactRelativePath(resolveWorkspaceLayout(basePath).version, rel)))
+		: false;
 }
 
 function readManifestValue(path: string, key: string): string | null {
@@ -110,7 +112,7 @@ export async function getTranscriptHealthReport(
 				newestUpdatedAt: asStringOrNull(row?.newest_updated_at),
 			};
 		},
-		{ siteToken: "transcript-health.ts:97" },
+		{ siteToken: "transcript-health.ts:99" },
 	);
 	const artifacts = await dbAccessor.withReadDbAsync(
 		async (db) => {
@@ -132,7 +134,10 @@ export async function getTranscriptHealthReport(
 			for (const row of manifestRows) {
 				const sourcePath = asStringOrNull(row.source_path);
 				if (!sourcePath) continue;
-				const fullManifestPath = join(basePath, sourcePath);
+				const fullManifestPath = join(
+					basePath,
+					currentArtifactRelativePath(resolveWorkspaceLayout(basePath).version, sourcePath),
+				);
 				const summaryPath = readManifestValue(fullManifestPath, "summary_path");
 				const summaryStatus = readManifestValue(fullManifestPath, "summary_status");
 				const transcriptPath = readManifestValue(fullManifestPath, "transcript_path");
@@ -157,7 +162,7 @@ export async function getTranscriptHealthReport(
 				missingSummaryArtifacts,
 			};
 		},
-		{ siteToken: "transcript-health.ts:115" },
+		{ siteToken: "transcript-health.ts:117" },
 	);
 	const ok = capture.failed === 0 && capture.dead === 0 && artifacts.missingTranscriptArtifacts === 0;
 	return {

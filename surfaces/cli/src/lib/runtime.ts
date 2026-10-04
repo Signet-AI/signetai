@@ -1698,6 +1698,16 @@ export function launchdDaemonPlistPath(agentsDir: string, home: string = homedir
 	return join(home, "Library", "LaunchAgents", `${launchdDaemonLabel(agentsDir)}.plist`);
 }
 
+export function daemonStartupLogPath(
+	agentsDir: string,
+	platform: NodeJS.Platform = process.platform,
+	home: string = homedir(),
+): string {
+	if (platform === "darwin")
+		return join(home, "Library", "Logs", "Signet", `${launchdDaemonLabel(agentsDir)}.startup.log`);
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "logs", "startup.log");
+}
+
 interface LaunchdDaemonLoadDeps {
 	readonly platform?: NodeJS.Platform;
 	readonly spawnSync?: LaunchctlProbeSpawnSync;
@@ -1952,17 +1962,15 @@ export async function startDaemon(
 	const net = resolveDaemonNetwork(agentsDir, process.env);
 	const inspectorForwarding = await resolveDaemonInspectorForwarding();
 
-	const daemonDir = resolveWorkspaceLayout(agentsDir).runtime;
-	const logDir = join(daemonDir, "logs");
-	mkdirSync(daemonDir, { recursive: true });
-	mkdirSync(logDir, { recursive: true });
+	mkdirSync(resolveWorkspaceLayout(agentsDir).runtime, { recursive: true });
 
 	const attributionNotice = macOSLaunchAgentAttributionNotice(daemonPath);
 	if (attributionNotice) {
 		console.warn(chalk.yellow(`  Note: ${attributionNotice}`));
 	}
 
-	const startupLogPath = join(logDir, "startup.log");
+	const startupLogPath = daemonStartupLogPath(agentsDir);
+	mkdirSync(dirname(startupLogPath), { recursive: true });
 	const systemdUnitName = `signet-daemon-${process.pid}`;
 	const attemptStartedAt = Date.now();
 	const startAttemptId = randomUUID();

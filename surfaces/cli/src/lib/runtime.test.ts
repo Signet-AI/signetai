@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { persistWorkspaceLayout } from "@signet/core";
 import {
 	DAEMON_JS_WORKER_FILES,
 	buildLaunchdDaemonPlist,
@@ -12,6 +13,7 @@ import {
 	buildSystemdDaemonStartArgs,
 	didLaunchdDaemonStart,
 	didSystemdDaemonStart,
+	daemonStartupLogPath,
 	getDaemonStatus,
 	getLaunchdDaemonLoadState,
 	inspectDaemonJsBundle,
@@ -1010,6 +1012,26 @@ describe("stopManagedDaemonProcess", () => {
 			});
 		} finally {
 			if (child.exitCode === null) child.kill("SIGKILL");
+		}
+	});
+});
+
+describe("daemonStartupLogPath", () => {
+	it("keeps the macOS LaunchAgent log outside the workspace runtime directory", () => {
+		const darwin = daemonStartupLogPath("/Users/u/.agents", "darwin", "/Users/u");
+		expect(darwin.startsWith("/Users/u/Library/Logs/Signet/")).toBe(true);
+		expect(darwin.endsWith(".startup.log")).toBe(true);
+		expect(darwin).not.toContain("/.agents/");
+	});
+
+	it("uses the resolved runtime log directory elsewhere", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-startup-log-"));
+		try {
+			expect(daemonStartupLogPath(root, "linux")).toBe(join(root, ".daemon", "logs", "startup.log"));
+			persistWorkspaceLayout(root, { version: 2 });
+			expect(daemonStartupLogPath(root, "linux")).toBe(join(root, "runtime", "logs", "startup.log"));
+		} finally {
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 });
