@@ -37,6 +37,7 @@ import {
 	resolveSqliteJournalConfig,
 	runMigrations,
 	resolveWorkspacePath,
+	activeVectorProjectionTable,
 } from "@signet/core";
 import { convertToIncrementalVacuum, DbSpacePreflightError, ensureVacuumConversionState } from "./db-vacuum";
 import type { DbSpaceMetrics } from "./db-vacuum";
@@ -1811,18 +1812,19 @@ function ensureVecTable(db: SqliteDatabase, expectedDimensions: number): void {
 	ensureVecEmbeddingsQuarantineTable(db);
 }
 
-function vecRowidsTableAvailable(db: SqliteWriteSurface): boolean {
+function activeVecTables(db: SqliteWriteSurface): { readonly table: string; readonly idTable: string } {
+	const table = activeVectorProjectionTable(db);
 	try {
-		const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'vec_embeddings_rowids'").get();
-		return row !== undefined;
+		const rowids = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(`${table}_rowids`);
+		return { table, idTable: rowids === undefined ? table : `${table}_rowids` };
 	} catch {
-		return false;
+		return { table, idTable: table };
 	}
 }
 
 function hasMissingVecEmbeddings(db: SqliteWriteSurface, expectedDimensions: number): boolean {
 	try {
-		const targetTable = vecRowidsTableAvailable(db) ? "vec_embeddings_rowids" : "vec_embeddings";
+		const targetTable = activeVecTables(db).idTable;
 		return (
 			db
 				.prepare(
@@ -1849,7 +1851,7 @@ function missingVecEmbeddingsRows(
 	lastId: string,
 	limit: number,
 ): Array<{ id: string; vector: unknown }> {
-	const targetTable = vecRowidsTableAvailable(db) ? "vec_embeddings_rowids" : "vec_embeddings";
+	const targetTable = activeVecTables(db).idTable;
 	return db
 		.prepare(
 			`SELECT e.id, e.vector FROM embeddings e
@@ -1881,7 +1883,8 @@ export function backfillVecEmbeddings(
 		1,
 		Math.min(options.batchSize ?? VEC_EMBEDDING_BACKFILL_BATCH_SIZE, VEC_EMBEDDING_BACKFILL_BATCH_SIZE),
 	);
-	const insert = db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)");
+	const vecTable = activeVecTables(db).table;
+	const insert = db.prepare(`INSERT OR REPLACE INTO ${vecTable} (id, embedding) VALUES (?, ?)`);
 	const quarantine = db.prepare(
 		"INSERT OR IGNORE INTO vec_embeddings_quarantine (rowid, dimensions, reason, quarantinedAt) VALUES (?, ?, ?, ?)",
 	);
@@ -1963,7 +1966,7 @@ export function backfillVecEmbeddings(
 	}
 
 	if (migrated > 0) {
-		log(`[db-accessor] Backfilled ${migrated}/${totalRows} missing embeddings into vec_embeddings`);
+		log(`[db-accessor] Backfilled ${migrated}/${totalRows} missing embeddings into ${vecTable}`);
 	}
 	if (deferred) {
 		warn(
@@ -1981,15 +1984,15 @@ export function backfillVecEmbeddings(
 	try {
 		const orphanRow = db
 			.prepare(
-				`SELECT COUNT(*) AS n FROM vec_embeddings v
+				`SELECT COUNT(*) AS n FROM ${vecTable} v
 				 LEFT JOIN embeddings e ON e.id = v.id
 				 WHERE e.id IS NULL`,
 			)
 			.get() as { n: number } | undefined;
 		const orphanCount = orphanRow?.n ?? 0;
 		if (orphanCount > 0) {
-			db.prepare("DELETE FROM vec_embeddings WHERE id NOT IN (SELECT id FROM embeddings)").run();
-			log(`[db-accessor] Cleaned ${orphanCount} orphaned vec_embeddings rows`);
+			db.prepare(`DELETE FROM ${vecTable} WHERE id NOT IN (SELECT id FROM embeddings)`).run();
+			log(`[db-accessor] Cleaned ${orphanCount} orphaned ${vecTable} rows`);
 		}
 	} catch {}
 	pendingVecBackfillDimensions = null;

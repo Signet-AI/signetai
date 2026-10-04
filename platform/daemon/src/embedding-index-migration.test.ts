@@ -5,6 +5,7 @@ import { vectorSearch, vectorSearchWithMetadata } from "../../core/src/search";
 import { syncVecInsert } from "./db-helpers";
 import { up as embeddingIndexGenerations } from "../../core/src/migrations/091-embedding-index-generations";
 import type { DbAccessor, ReadDb, SqliteStatement, WriteDb } from "./db-accessor";
+import { backfillVecEmbeddings } from "./db-accessor";
 import {
 	promoteStagingIndex,
 	stageEmbeddingBatch,
@@ -820,6 +821,64 @@ describe("staging promotion", () => {
 			INSERT INTO embeddings VALUES ('fresh', 'fresh-content', X'00000000000000000000803F', 3, 'memory', 'memory-2', '2026-01-02');
 		`);
 		syncVecInsert(db, "fresh", [0, 0, 1]);
+
+		const found = vectorSearchWithMetadata(raw as never, new Float32Array([0, 0, 1]), { limit: 1 });
+		expect(found.results.map((row) => row.id)).toEqual(["memory-2"]);
+	});
+
+	it("heals a vector stranded in the inactive slot on the startup backfill", async () => {
+		if (!VEC_EXTENSION) return;
+		const raw = new Database(":memory:");
+		raw.loadExtension(VEC_EXTENSION);
+		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+		raw.exec(`
+			CREATE TABLE memories (id TEXT PRIMARY KEY, embedding_model TEXT, type TEXT, source_type TEXT);
+			CREATE TABLE embeddings (id TEXT, content_hash TEXT, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT);
+			CREATE TABLE embeddings_staging (id TEXT, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, created_at TEXT);
+			CREATE VIRTUAL TABLE vec_embeddings USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+			CREATE VIRTUAL TABLE vec_embeddings_staging USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[3] distance_metric=cosine);
+			CREATE TABLE umap_cache (id TEXT);
+		`);
+		const db = raw as unknown as WriteDb;
+		const config = {
+			provider: "ollama",
+			model: "nomic-embed-text",
+			dimensions: 3,
+			base_url: "http://127.0.0.1:11434",
+		} as const;
+		ensureEmbeddingIndexState(db, config);
+		beginEmbeddingIndexBuild(db, { ...config, model: "qwen3-embedding:0.6b" });
+		raw.exec(`
+			INSERT INTO memories (id, embedding_model) VALUES ('memory-1', 'nomic-embed-text');
+			INSERT INTO embeddings VALUES ('old', 'content', X'0000803F0000000000000000', 3, 'memory', 'memory-1', '2026-01-01');
+			INSERT INTO embeddings_staging VALUES ('new', 'content', X'000000000000803F00000000', 3, 'memory', 'memory-1', '2026-01-01');
+		`);
+		raw.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run("old", new Float32Array([1, 0, 0]));
+		raw
+			.prepare("INSERT INTO vec_embeddings_staging (id, embedding) VALUES (?, ?)")
+			.run("new", new Float32Array([0, 1, 0]));
+		const accessor: DbAccessor = {
+			withWriteTx: (fn) => testTransaction(raw, db, fn),
+			withWriteTxAsync: async (fn) => testTransaction(raw, db, fn),
+			withReadDb: (fn) => fn(raw as unknown as ReadDb),
+			withReadDbAsync: async (fn) => fn(raw as unknown as ReadDb),
+			close: () => undefined,
+			checkpointWal: () => undefined,
+			incrementalVacuum: () => 0,
+		};
+		expect(await promoteStagingIndex(accessor)).toBe(true);
+		expect(readEmbeddingIndexState(raw as unknown as ReadDb)?.active.projectionSlot).toBe("staging");
+
+		raw.exec(`
+			INSERT INTO memories (id, embedding_model) VALUES ('memory-2', 'qwen3-embedding:0.6b');
+			INSERT INTO embeddings VALUES ('fresh', 'fresh-content', X'00000000000000000000803F', 3, 'memory', 'memory-2', '2026-01-02');
+		`);
+		raw.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run("fresh", new Float32Array([0, 0, 1]));
+		expect(
+			vectorSearchWithMetadata(raw as never, new Float32Array([0, 0, 1]), { limit: 5 }).results.map((row) => row.id),
+		).not.toContain("memory-2");
+
+		backfillVecEmbeddings(raw as never, 3, undefined, { log: () => undefined });
 
 		const found = vectorSearchWithMetadata(raw as never, new Float32Array([0, 0, 1]), { limit: 1 });
 		expect(found.results.map((row) => row.id)).toEqual(["memory-2"]);
