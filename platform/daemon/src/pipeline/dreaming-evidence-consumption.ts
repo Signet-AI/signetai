@@ -175,6 +175,8 @@ export function failedOperationEvidence(
 	const keys = new Set<string>();
 	const scopes = new Set<string>();
 	const filed = new Set<string>();
+	const filedQuotes = new Set<string>();
+	const failedQuotes: Array<{ readonly key: string; readonly quote: string }> = [];
 	if (!tableExists(db, "dreaming_tool_calls")) return { sources: keys, scopes, filedSources: filed };
 	const rows = db
 		.prepare(
@@ -199,19 +201,25 @@ export function failedOperationEvidence(
 			scopes.add(agentId);
 			continue;
 		}
-		const citedKeys = (index: number): string[] => {
+		const citations = (index: number): Array<{ readonly key: string; readonly quote: string }> => {
 			const evidence = record(operations[index])?.evidence;
 			return (Array.isArray(evidence) ? evidence : []).flatMap((citation) => {
 				const cited = record(citation);
 				const ref = text(cited?.source_ref) ?? text(cited?.sourceRef);
 				const parsed = ref ? sourceRef(ref) : null;
-				return parsed ? [`${agentId}\u0000${parsed.kind}:${parsed.id}`] : [];
+				return parsed
+					? [{ key: `${agentId}\u0000${parsed.kind}:${parsed.id}`, quote: text(cited?.quote)?.trim() ?? "" }]
+					: [];
 			});
 		};
 		if (output?.ok === true && Array.isArray(output.items)) {
 			for (const item of output.items) {
 				const row = record(item);
-				if (row?.ok === true && typeof row.index === "number") for (const key of citedKeys(row.index)) filed.add(key);
+				if (row?.ok !== true || typeof row.index !== "number") continue;
+				for (const cited of citations(row.index)) {
+					filed.add(cited.key);
+					filedQuotes.add(`${cited.key}\u0000${cited.quote}`);
+				}
 			}
 		}
 		const failedIndexes =
@@ -223,10 +231,13 @@ export function failedOperationEvidence(
 				: operations.map((_, index) => index);
 		for (const index of failedIndexes) {
 			if (DREAMING_ATTENTION_OPERATIONS.has(text(record(operations[index])?.operation) ?? "")) continue;
-			const citations = citedKeys(index);
-			if (citations.length === 0) scopes.add(agentId);
-			for (const key of citations) keys.add(key);
+			const cited = citations(index);
+			if (cited.length === 0) scopes.add(agentId);
+			failedQuotes.push(...cited);
 		}
+	}
+	for (const { key, quote } of failedQuotes) {
+		if (!filedQuotes.has(`${key}\u0000${quote}`)) keys.add(key);
 	}
 	return { sources: keys, scopes, filedSources: filed };
 }

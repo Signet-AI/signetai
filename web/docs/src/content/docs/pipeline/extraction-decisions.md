@@ -149,7 +149,9 @@ not hold a SQLite write lock.
 Dreaming records pass status, tool calls, applied/skipped/failed mutation
 counts, evidence progress, and summary information. The evidence watermark
 advances only when the pass actually consumes the relevant episodic backlog.
-A failed ontology operation withholds progress only for the sources it cites;
+A failed ontology operation withholds progress only for the sources it cites,
+unless a successful write in the same pass cited the same source with the same
+quote;
 a failure that cites no source, including one whose operations could not be
 parsed, withholds progress for the sources in its agent scope that no
 successful write in the pass cited, so filed sources and other scopes in the

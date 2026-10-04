@@ -2865,6 +2865,58 @@ describe("Dreaming", () => {
 		expect(consumed).toEqual(["filed-source"]);
 	});
 
+	it("records a source whose failed citation a retry filed with the same quote", async () => {
+		seedTranscript(db, "retried-source", "Aster is the durable release project.");
+		seedTranscript(db, "typo-source", "The user wants more examples for each crteirion.");
+		const aster = {
+			operation: "create_entity",
+			payload: { name: "Aster", type: "project" },
+			reason: "The evidence names a durable project.",
+			evidence: [{ source_ref: "transcript:retried-source", quote: "Aster is the durable release project." }],
+		};
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					const rejected = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [
+							aster,
+							{
+								operation: "create_entity",
+								payload: { name: "Example rubric", type: "project" },
+								reason: "The user asked for rubric examples.",
+								evidence: [{ source_ref: "transcript:typo-source", quote: "more examples for each criterion" }],
+							},
+						],
+					});
+					expect(rejected.ok).toBe(false);
+					const retried = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [aster],
+					});
+					expect(retried.ok).toBe(true);
+					return { summary: "Retried the valid write" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = (
+			db
+				.prepare("SELECT source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'")
+				.all() as Array<{
+				id: string;
+			}>
+		).map((row) => row.id);
+		expect(consumed).toEqual(["retried-source"]);
+	});
+
 	it("does not withhold evidence when only a hygiene operation fails", async () => {
 		seedTranscript(db, "read-source", "Aster is the durable release project.");
 		const result = await runDreamingAgentPass(
