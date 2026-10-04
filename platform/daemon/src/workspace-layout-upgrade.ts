@@ -305,35 +305,27 @@ function assertNoSymlinkAncestors(base: string, path: string): void {
 	}
 }
 
-const LAUNCHER_ARTIFACTS = new Set(["daemon.lock", "logs"]);
-
-function launcherOnly(directory: string): boolean {
-	const names = readdirSync(directory);
-	if (!names.every((name) => LAUNCHER_ARTIFACTS.has(name))) return false;
-	const logs = join(directory, "logs");
-	if (!names.includes("logs")) return true;
-	const stat = entry(logs);
-	return (
-		!!stat &&
-		stat.isDirectory() &&
-		!stat.isSymbolicLink() &&
-		readdirSync(logs).every((name) => entry(join(logs, name))?.isFile() === true)
-	);
-}
-
-function absorbLauncherArtifacts(from: string, to: string, now: Date): void {
-	const logs = join(from, "logs");
-	if (entry(logs)) {
-		mkdirSync(join(to, "logs"), { recursive: true, mode: 0o700 });
-		for (const name of readdirSync(logs)) {
-			let target = join(to, "logs", name);
-			if (entry(target)) target = join(to, "logs", `${name}.${now.getTime()}`);
-			if (entry(target)) throw new UpgradeBlocked(`${target} already exists`);
-			renameSync(join(logs, name), target);
+function mergeRecreatedRuntime(from: string, to: string, now: Date): void {
+	for (const name of readdirSync(from)) {
+		const source = join(from, name);
+		const target = join(to, name);
+		const sourceEntry = lstatSync(source);
+		const targetEntry = entry(target);
+		if (name === "daemon.lock" && sourceEntry.isFile()) {
+			unlinkSync(source);
+			continue;
 		}
-		rmdirSync(logs);
+		if (targetEntry?.isDirectory() && !targetEntry.isSymbolicLink() && sourceEntry.isDirectory()) {
+			mergeRecreatedRuntime(source, target, now);
+			continue;
+		}
+		if (targetEntry) {
+			const aside = `${target}.before-${now.getTime()}`;
+			if (entry(aside)) throw new UpgradeBlocked(`${aside} already exists`);
+			renameSync(target, aside);
+		}
+		renameSync(source, target);
 	}
-	if (entry(join(from, "daemon.lock"))) unlinkSync(join(from, "daemon.lock"));
 	rmdirSync(from);
 }
 
@@ -351,9 +343,10 @@ function apply(
 		const to = resolve(root, move.to);
 		const source = entry(from);
 		if (!source) continue;
-		if (entry(to)) {
-			if (resumed && from === runtime && source.isDirectory() && launcherOnly(from)) {
-				absorbLauncherArtifacts(from, to, now);
+		const target = entry(to);
+		if (target) {
+			if (resumed && from === runtime && source.isDirectory() && target.isDirectory() && !target.isSymbolicLink()) {
+				mergeRecreatedRuntime(from, to, now);
 				continue;
 			}
 			if (!source.isDirectory() || !isEmptyDirectory(to)) throw new UpgradeBlocked(`${move.to} already exists`);
@@ -364,7 +357,6 @@ function apply(
 		rename(from, to);
 		performed.push(move);
 	}
-	for (const directory of record.emptiedDirectories) removeIfEmpty(resolve(root, directory));
 }
 
 function rollback(
@@ -409,6 +401,14 @@ function removeIfEmpty(path: string): void {
 	} catch {}
 }
 
+function committed(root: string): boolean {
+	try {
+		return resolveWorkspaceLayout(root).version === WORKSPACE_LAYOUT_V2;
+	} catch {
+		return false;
+	}
+}
+
 export function upgradeWorkspaceLayout(
 	rootPath: string,
 	deps: WorkspaceLayoutUpgradeDeps = {},
@@ -430,9 +430,12 @@ export function upgradeWorkspaceLayout(
 		const outside = existing.moves.find(
 			(move) => !baseFor(bases, { from: resolve(root, move.from), to: resolve(root, move.to) }),
 		);
-		if (outside)
+		const outsideDirectory = [...existing.createdDirectories, ...existing.emptiedDirectories].find(
+			(path) => !bases.some((base) => inside(base, resolve(root, path))),
+		);
+		if (outside || outsideDirectory)
 			throw new Error(
-				`workspace layout upgrade record names a path outside the workspace and its configured roots: ${outside.from}`,
+				`workspace layout upgrade record names a path outside the workspace and its configured roots: ${outside?.from ?? outsideDirectory}`,
 			);
 		record = existing;
 	} else {
@@ -455,15 +458,7 @@ export function upgradeWorkspaceLayout(
 	}
 
 	const performed: LayoutMove[] = [];
-	try {
-		apply(root, record, rename, performed, resumed, now());
-		if (layout.version !== WORKSPACE_LAYOUT_V2) {
-			persistWorkspaceLayout(root, { version: WORKSPACE_LAYOUT_V2, overrides: readWorkspaceLayoutOverrides(root) });
-			syncDirectory(root);
-		}
-		removeRecord(root);
-		return { status: "upgraded", moved: performed.length, resumed };
-	} catch (error) {
+	const fail = (error: unknown): WorkspaceLayoutUpgradeResult => {
 		const cause = error instanceof Error ? error.message : String(error);
 		if (resumed)
 			throw new Error(
@@ -477,7 +472,25 @@ export function upgradeWorkspaceLayout(
 			});
 		writeRecord(root, { version: 1, state: "blocked", reason: cause, at: now().toISOString() });
 		return { status: "blocked", reason: cause };
+	};
+	try {
+		apply(root, record, rename, performed, resumed, now());
+	} catch (error) {
+		return fail(error);
 	}
+	if (layout.version !== WORKSPACE_LAYOUT_V2) {
+		try {
+			persistWorkspaceLayout(root, { version: WORKSPACE_LAYOUT_V2, overrides: readWorkspaceLayoutOverrides(root) });
+		} catch (error) {
+			if (!committed(root)) return fail(error);
+		}
+	}
+	for (const directory of record.emptiedDirectories) removeIfEmpty(resolve(root, directory));
+	try {
+		syncDirectory(root);
+		removeRecord(root);
+	} catch {}
+	return { status: "upgraded", moved: performed.length, resumed };
 }
 
 export function readWorkspaceLayoutStatus(

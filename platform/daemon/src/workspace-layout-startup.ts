@@ -24,12 +24,27 @@ function isDaemonProcess(env: NodeJS.ProcessEnv, argv: readonly string[]): boole
 	}
 }
 
-function lockDirectory(root: string): string {
+function lockDirectories(root: string): string[] {
 	const runtime = resolveWorkspaceLayout(root).runtime;
 	const record = readWorkspaceLayoutUpgradeRecord(root);
-	if (record?.state !== "in-progress" || existsSync(runtime)) return runtime;
+	if (record?.state !== "in-progress") return [runtime];
 	const moved = record.moves.find((move) => resolve(root, move.from) === runtime);
-	return moved ? join(root, moved.to) : runtime;
+	const candidates = moved ? [runtime, resolve(root, moved.to)] : [runtime];
+	const existing = candidates.filter((directory) => existsSync(directory));
+	return (existing.length > 0 ? existing : [candidates[candidates.length - 1] ?? runtime]).sort();
+}
+
+function acquireAll(directories: readonly string[]): ReturnType<typeof acquireSingleInstanceLock>[] | null {
+	const held: NonNullable<ReturnType<typeof acquireSingleInstanceLock>>[] = [];
+	for (const directory of directories) {
+		const lock = acquireSingleInstanceLock(join(directory, "daemon.lock"));
+		if (lock === null) {
+			for (const release of held) releaseSingleInstanceLock(release);
+			return null;
+		}
+		held.push(lock);
+	}
+	return held;
 }
 
 const LOCK_WAIT_MS = 10_000;
@@ -46,27 +61,25 @@ export function runWorkspaceLayoutStartup(
 		const root = resolve(resolveDefaultBasePath());
 		if (resolve(workspace.path) !== root)
 			return { status: "skipped", reason: "workspace selection is ambiguous at startup" };
-		if (workspace.status === "missing" || workspace.status === "incomplete")
+		const interrupted = existsSync(root) && readWorkspaceLayoutUpgradeRecord(root)?.state === "in-progress";
+		if (!interrupted && (workspace.status === "missing" || workspace.status === "incomplete"))
 			return { status: "skipped", reason: `workspace is ${workspace.status}` };
-		if (
-			existsSync(root) &&
-			resolveWorkspaceLayout(root).version === WORKSPACE_LAYOUT_V2 &&
-			readWorkspaceLayoutUpgradeRecord(root)?.state !== "in-progress"
-		)
+		if (!interrupted && existsSync(root) && resolveWorkspaceLayout(root).version === WORKSPACE_LAYOUT_V2)
 			return upgradeWorkspaceLayout(root);
 		mkdirSync(root, { recursive: true });
 		const deadline = Date.now() + lockWaitMs;
 		for (;;) {
-			const directory = lockDirectory(root);
-			const lock = acquireSingleInstanceLock(join(directory, "daemon.lock"));
-			if (lock !== null && lockDirectory(root) === directory) {
+			const directories = lockDirectories(root);
+			const locks = acquireAll(directories);
+			const stable = locks !== null && lockDirectories(root).join("\0") === directories.join("\0");
+			if (locks !== null && stable) {
 				try {
 					return upgradeWorkspaceLayout(root);
 				} finally {
-					releaseSingleInstanceLock(lock);
+					for (const lock of locks) if (lock) releaseSingleInstanceLock(lock);
 				}
 			}
-			if (lock !== null) releaseSingleInstanceLock(lock);
+			if (locks !== null) for (const lock of locks) if (lock) releaseSingleInstanceLock(lock);
 			if (Date.now() >= deadline) return { status: "skipped", reason: "another daemon holds the workspace lock" };
 			Bun.sleepSync(LOCK_RETRY_MS);
 		}

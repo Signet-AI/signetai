@@ -264,35 +264,92 @@ describe("upgradeWorkspaceLayout", () => {
 		).toThrow("workspace layout upgrade could not finish");
 	}
 
-	it("finishes an interrupted run when a launcher recreated .daemon with only its logs", () => {
+	it("finishes an interrupted run when a launcher recreated .daemon, keeping current files canonical", () => {
 		const { root } = v1Workspace();
 		crashAfterRuntimeRename(root);
 		write(root, ".daemon/logs/startup.log", "this launch");
 		write(root, ".daemon/logs/signet.log", "this launch");
+		write(root, ".daemon/telemetry/events.jsonl", "{}\n");
+		write(root, ".daemon/pid", "999");
 		write(root, ".daemon/daemon.lock", "");
 
 		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded", resumed: true });
 
 		expect(resolveWorkspaceLayout(root).version).toBe(2);
 		expect(existsSync(join(root, ".daemon"))).toBe(false);
-		expect(readFileSync(join(root, "runtime", "pid"), "utf8")).toBe("123");
-		expect(readFileSync(join(root, "runtime/logs/signet.log"), "utf8")).toBe(".daemon/logs/signet.log");
-		const logs = readdirSync(join(root, "runtime/logs"));
-		expect(logs).toContain("startup.log");
-		expect(logs.filter((name) => name.startsWith("signet.log.")).length).toBe(1);
+		expect(readFileSync(join(root, "runtime/pid"), "utf8")).toBe("999");
+		expect(readFileSync(join(root, "runtime/logs/signet.log"), "utf8")).toBe("this launch");
+		expect(readFileSync(join(root, "runtime/logs/startup.log"), "utf8")).toBe("this launch");
+		expect(readFileSync(join(root, "runtime/telemetry/events.jsonl"), "utf8")).toBe("{}\n");
+		const pidAside = readdirSync(join(root, "runtime")).find((name) => name.startsWith("pid.before-"));
+		expect(pidAside && readFileSync(join(root, "runtime", pidAside), "utf8")).toBe("123");
+		const logAside = readdirSync(join(root, "runtime/logs")).find((name) => name.startsWith("signet.log.before-"));
+		expect(logAside && readFileSync(join(root, "runtime/logs", logAside), "utf8")).toBe(".daemon/logs/signet.log");
 	});
 
-	it("refuses to start rather than guess when a recreated .daemon holds more than launcher logs", () => {
+	it("resumes through the startup gate after the database already moved", () => {
+		const { root, databaseInode } = v1Workspace();
+		let renames = 0;
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					renames += 1;
+					if (renames > 1) throw new Error("process terminated");
+					renameSync(from, to);
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish");
+		expect(existsSync(join(root, "memory/memories.db"))).toBe(false);
+		const env = { ...process.env, SIGNET_PATH: root, SIGNET_DAEMON_ENTRYPOINT: "1" };
+		const previous = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = root;
+		try {
+			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"], 0)).toMatchObject({
+				status: "upgraded",
+				resumed: true,
+			});
+		} finally {
+			if (previous === undefined) delete process.env.SIGNET_PATH;
+			else process.env.SIGNET_PATH = previous;
+		}
+		expect(resolveWorkspaceLayout(root).version).toBe(2);
+		expect(statSync(join(root, "data/signet.db")).ino).toBe(databaseInode);
+	});
+
+	it("reverses every rename when writing the layout fails", () => {
 		const { root } = v1Workspace();
-		crashAfterRuntimeRename(root);
-		write(root, ".daemon/pid", "999");
+		write(root, "memory/codex/transcripts/transcript.jsonl", "{}\n");
+		const before = tree(root);
+		const result = upgradeWorkspaceLayout(root, {
+			rename: (from, to) => {
+				renameSync(from, to);
+				if (to === join(root, "runtime")) mkdirSync(join(root, "workspace-layout.json"));
+			},
+		});
+		rmSync(join(root, "workspace-layout.json"), { recursive: true, force: true });
 
-		expect(() => upgradeWorkspaceLayout(root)).toThrow("could not finish an interrupted run");
+		expect(result.status).toBe("blocked");
+		expect(tree(root)).toEqual(before);
+	});
 
-		expect(readFileSync(join(root, "runtime", "pid"), "utf8")).toBe("123");
-		expect(existsSync(join(root, "data/signet.db"))).toBe(true);
-		expect(readWorkspaceLayoutUpgradeRecord(root)).toMatchObject({ state: "in-progress" });
-		expect(resolveWorkspaceLayout(root).version).toBe(1);
+	it("refuses a resumed record that lists a directory outside the workspace", () => {
+		const { root } = v1Workspace();
+		const outside = workspace();
+		mkdirSync(join(outside, "empty"));
+		writeFileSync(
+			join(root, WORKSPACE_LAYOUT_UPGRADE_FILE),
+			JSON.stringify({
+				version: 1,
+				state: "in-progress",
+				startedAt: "2026-10-04T00:00:00.000Z",
+				moves: [],
+				createdDirectories: [],
+				emptiedDirectories: [join(outside, "empty")],
+			}),
+		);
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow("outside the workspace and its configured roots");
+		expect(existsSync(join(outside, "empty"))).toBe(true);
 	});
 
 	it("reports a blocked upgrade, not a refusal, when a rename fails beside an empty v2 directory", () => {
