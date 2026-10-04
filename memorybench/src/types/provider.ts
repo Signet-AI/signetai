@@ -36,6 +36,7 @@ export interface IndexingProgress {
 export interface FinalizeIngestOptions {
   runId: string
   dataSourceRunId: string
+  agentIds?: string[]
 }
 
 export type IndexingProgressCallback = (progress: IndexingProgress) => void
