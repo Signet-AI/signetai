@@ -49,9 +49,11 @@ jobs:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
-      - name: Build @signet/core
+      - name: Build daemon dependencies and runtime helpers
         shell: bash
-        run: bun run --filter '@signet/core' build
+        run: |
+          bun run --filter '@signet/cli' build:workspace-deps
+          bun run --filter '@signet/daemon' build
 
       - name: Run source-run boot-wedge gate
         shell: bash

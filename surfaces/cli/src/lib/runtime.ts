@@ -1778,7 +1778,6 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 	const runtime = input.runtime ?? resolveDaemonRuntime(undefined, sourceEnvironment);
 	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(input.daemonPath) : null;
 	const wasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(input.daemonPath) : null;
-	const connectorAssetsDir = runtime === "bun-js" ? findBundleDirectory(dirname(input.daemonPath), "connectors") : null;
 	const environment = buildLaunchdEnvironment({
 		environment: sourceEnvironment,
 		values: {
@@ -1791,7 +1790,6 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 			SIGNET_DAEMON_RUNTIME: runtime,
 			...(nodePath ? { NODE_PATH: appendNodePath(nodePath, sourceEnvironment.NODE_PATH) } : {}),
 			...(wasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: wasmPath } : {}),
-			...(connectorAssetsDir ? { SIGNET_CONNECTOR_ASSETS_DIR: connectorAssetsDir } : {}),
 			SIGNET_DAEMON_SERVICE: "launchd",
 			...resolveTelemetryEnvironment(sourceEnvironment),
 			BUN_INSPECT: input.bunInspect ?? "",

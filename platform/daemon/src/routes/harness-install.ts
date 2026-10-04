@@ -1,7 +1,5 @@
+import { resolveRuntimeAsset } from "@signet/core";
 import type { ConnectorRecoveryCapabilities, InstallResult } from "@signet/connector-base";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
@@ -28,9 +26,7 @@ function actionLabel(action: HarnessAction): string {
 function harnessInstallWorkerPath(): string {
 	const embedded = resolveEmbeddedWorkerPath("harness-install-worker");
 	if (embedded !== null) return embedded;
-	const directory = dirname(fileURLToPath(import.meta.url));
-	const built = join(directory, "harness-install-worker.js");
-	return existsSync(built) ? built : join(directory, "../harness-install-worker.ts");
+	return resolveRuntimeAsset("harness-install-worker.js", import.meta.url);
 }
 
 export async function stopHarnessInstall(): Promise<void> {

@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { resolveRuntimeAsset } from "@signet/core";
 import { fileURLToPath } from "node:url";
 import { get_encoding, init } from "tiktoken/init";
 import * as tokenizerWasmModule from "tiktoken/tiktoken_bg.wasm";
@@ -13,7 +14,10 @@ export function resolveTokenizerWasmPath(emitted: string): string {
 	if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(emitted)) return emitted;
 	return fileURLToPath(emitted.startsWith("file:") ? new URL(emitted) : new URL(emitted, import.meta.url));
 }
-const tokenizerWasmPath = tokenizerWasmOverride || resolveTokenizerWasmPath(tokenizerWasmFile);
+const tokenizerWasmPath = resolveRuntimeAsset(
+	tokenizerWasmOverride || resolveTokenizerWasmPath(tokenizerWasmFile),
+	import.meta.url,
+);
 await init(async (imports) => WebAssembly.instantiate(await readFile(tokenizerWasmPath), imports));
 const tok = get_encoding("cl100k_base");
 const decoder = new TextDecoder("utf-8", { fatal: true });

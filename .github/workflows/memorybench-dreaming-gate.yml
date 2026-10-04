@@ -45,8 +45,10 @@ jobs:
         env:
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
-      - name: Build @signet/core for daemon source imports
-        run: bun run --filter '@signet/core' build
+      - name: Build daemon dependencies and runtime helpers
+        run: |
+          bun run --filter '@signet/cli' build:workspace-deps
+          bun run --filter '@signet/daemon' build
       - name: Validate deterministic Dreaming scenarios
         run: >-
           bun test

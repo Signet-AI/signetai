@@ -17,7 +17,7 @@
 		"verify:macos": "node scripts/verify-macos-release.mjs release",
 		"build": "bun run build:main",
 		"build:desktop": "bun run build:core && bun run build:tray && bun run build:connectors && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder --publish never",
-		"dev": "bun run build:tray && bun run build:dashboard && bun run build:main && electron .",
+		"dev": "bun run build:core && bun run build:tray && bun run build:connectors && bun run build:daemon && bun run stage:runtime && bun run build:main && electron .",
 		"typecheck": "bun run build:tray && tsc -p tsconfig.json --noEmit",
 		"test": "bun test"
 	},
@@ -27,6 +27,7 @@
 		"electron-updater": "^6.8.9"
 	},
 	"devDependencies": {
+		"@napi-rs/keyring": "2.1.0",
 		"@types/node": "^24.5.2",
 		"electron": "^41.2.1",
 		"electron-builder": "^26.15.3",

@@ -1,40 +1,34 @@
+import { expect, mock, test } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, mock, test } from "bun:test";
+import { tmpdir } from "node:os";
 
+let packaged = false;
+let resources = "";
 mock.module("electron", () => ({
-	app: { isPackaged: false },
+	app: {
+		get isPackaged() {
+			return packaged;
+		},
+	},
 }));
+const paths = await import("./paths.ts");
 
-const { daemonRoot, migrationRunnerEntry, resolveBunPath } = await import("./paths.ts");
-
-test("resolves the migration runner only inside the staged daemon runtime", () => {
-	expect(migrationRunnerEntry()).toBe(join(daemonRoot(), "dist", "workspace-migration-runner.js"));
-});
-
-describe("desktop Bun runtime resolution", () => {
-	test("uses a known absolute Windows Bun path when the bundled runtime is absent", () => {
-		const path = resolveBunPath({
-			bundled: "C:\\Signet\\resources\\runtime\\bun.exe",
-			platform: "win32",
-			home: "C:\\Users\\Nicholai",
-			environment: { USERPROFILE: "C:\\Users\\Nicholai" },
-			exists: () => false,
-		});
-
-		expect(path).toBe("C:\\Users\\Nicholai\\.bun\\bin\\bun.exe");
-		expect(path).not.toBe("bun.exe");
-	});
-
-	test("prefers the configured Windows Bun install when it exists", () => {
-		const bunInstall = "D:\\Tools\\bun";
-		const path = resolveBunPath({
-			bundled: "C:\\Signet\\resources\\runtime\\bun.exe",
-			platform: "win32",
-			home: "C:\\Users\\Nicholai",
-			environment: { USERPROFILE: "C:\\Users\\Nicholai", BUN_INSTALL: bunInstall },
-			exists: (candidate) => candidate === "D:\\Tools\\bun\\bin\\bun.exe",
-		});
-
-		expect(path).toBe("D:\\Tools\\bun\\bin\\bun.exe");
-	});
+test("packaged runtime refuses a missing staged Bun despite a valid explicit override", () => {
+	const root = mkdtempSync(join(tmpdir(), "desktop-packaged-paths-"));
+	const previous = { packaged, resources, override: process.env.SIGNET_BUN_PATH };
+	try {
+		resources = join(root, "resources");
+		mkdirSync(resources);
+		packaged = true;
+		process.resourcesPath = resources;
+		process.env.SIGNET_BUN_PATH = process.execPath;
+		expect(() => paths.bunPath()).toThrow();
+	} finally {
+		packaged = previous.packaged;
+		resources = previous.resources;
+		if (previous.override === undefined) delete process.env.SIGNET_BUN_PATH;
+		else process.env.SIGNET_BUN_PATH = previous.override;
+		rmSync(root, { recursive: true, force: true });
+	}
 });

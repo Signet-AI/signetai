@@ -7,6 +7,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	utimesSync,
 	writeFileSync,
@@ -1436,6 +1437,10 @@ process.stdin.on("data", (chunk) => {
 			const owner = client;
 			if (owner === null) throw new Error("owner client not created");
 			await owner.start();
+			await owner.submit(
+				{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
+				{ operation: "maintenance.non-idempotent-fixture-ready", lane: "read", deadlineMs: 5_000 },
+			).result;
 			const run = runOwnerMaintenanceWithRetry<{ readonly changes: number }>(
 				owner,
 				{
@@ -1683,11 +1688,13 @@ process.stdin.on("data", (chunk) => {
 		directory = database.directory;
 		client = createDbOwnerClient({ dbPath: database.path });
 		await client.start();
+		const extension = findSqliteVecExtension();
+		if (!extension) throw new Error("Missing sqlite-vec fixture");
 
 		expect(await client.initialize(database.directory)).toEqual({
 			initialized: true,
 			pendingVecBackfill: true,
-			extensionPath: findSqliteVecExtension(),
+			extensionPath: realpathSync(extension),
 		});
 	});
 

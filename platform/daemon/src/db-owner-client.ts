@@ -1,8 +1,8 @@
+import { resolveRuntimeAsset } from "@signet/core";
 import { randomUUID } from "node:crypto";
 import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
-import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
 import type {
@@ -225,9 +225,7 @@ function workerArguments(workerPath: string | undefined): readonly string[] {
 	if (resolveEmbeddedWorkerPath("db-owner-worker") !== null) {
 		return [];
 	}
-	const directory = dirname(fileURLToPath(import.meta.url));
-	const bundled = join(directory, "db-owner-worker.js");
-	return [existsSync(bundled) ? bundled : join(directory, "db-owner-worker.ts")];
+	return [resolveRuntimeAsset("db-owner-worker.js", import.meta.url)];
 }
 
 function ownerIsDead(owner: ChildProcess): boolean {

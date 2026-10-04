@@ -1,7 +1,7 @@
+import { resolveRuntimeAsset } from "@signet/core";
 import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
-import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
@@ -559,10 +559,7 @@ try {
 `;
 
 function workerPathFromModule(): string {
-	const moduleDir = dirname(fileURLToPath(import.meta.url));
-	const bundled = join(moduleDir, "database-integrity-worker.js");
-	if (existsSync(bundled)) return bundled;
-	return join(moduleDir, "database-integrity-worker.ts");
+	return resolveRuntimeAsset("database-integrity-worker.js", import.meta.url);
 }
 
 async function runOwnerIntegrityCheck(

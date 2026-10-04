@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
-import { extname, join, normalize, relative, resolve, sep } from "node:path";
+import { extname, normalize, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveWorkspaceLayout, spawnHidden } from "@signet/core";
 import {
@@ -437,8 +437,6 @@ async function runWorkspaceMigrationWorker(
 			SIGNET_DAEMON_URL: daemon.baseUrl,
 			SIGNET_DAEMON_RUNTIME: "bun-js",
 			SIGNET_DAEMON_JS_PATH: daemonEntry(),
-			SIGNET_TIKTOKEN_WASM_PATH: join(root, "node_modules", "tiktoken", "tiktoken_bg.wasm"),
-			SIGNET_CONNECTOR_ASSETS_DIR: process.env.SIGNET_CONNECTOR_ASSETS_DIR ?? join(root, "connectors"),
 			SIGNET_DESKTOP: "1",
 			SIGNET_TELEMETRY_OPTOUT: "1",
 			SIGNET_ANALYTICS_DISABLED: "1",

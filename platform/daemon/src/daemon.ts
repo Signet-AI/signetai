@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { resolveRuntimeAsset } from "@signet/core";
 import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 import { requestMemoryHead } from "./memory-head";
 
@@ -2445,10 +2446,9 @@ async function main() {
 	if (!migrationIntegrityWritesBlocked) runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
 
 	const { extensionPath } = getVectorRuntimeStatus();
-	const bundled = join(__dirname, "synthesis-render-worker.js");
-	const workerPath = existsSync(bundled)
-		? bundled
-		: (resolveEmbeddedWorkerPath("synthesis-render-worker") ?? join(__dirname, "synthesis-render-worker.ts"));
+	const workerPath =
+		resolveEmbeddedWorkerPath("synthesis-render-worker") ??
+		resolveRuntimeAsset("synthesis-render-worker.js", import.meta.url);
 	let synthWorker: Worker | null = null;
 	if (!migrationIntegrityWritesBlocked) {
 		try {
