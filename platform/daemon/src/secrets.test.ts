@@ -46,6 +46,20 @@ function machineIdFile(): string {
 	return join(agentsDir, ".secrets", ".machine-id");
 }
 
+function headlessKeyring(): SecretKeyringAdapter {
+	return {
+		platform: "test",
+		service: "ai.signet.secrets",
+		account: "test",
+		async get(): Promise<SecretKeyringResult> {
+			return { state: "unavailable", message: "no Secret Service on this host", backend: "absent" };
+		},
+		async set(): Promise<SecretKeyringResult> {
+			return { state: "unavailable", message: "no Secret Service on this host", backend: "absent" };
+		},
+	};
+}
+
 function makeKeyring(initial: SecretKeyringResult): SecretKeyringAdapter & { setCalls: number } {
 	let stored = initial.state === "found" ? initial.value : undefined;
 	let next = initial;
@@ -149,6 +163,7 @@ describe("local secrets provider", () => {
 	});
 
 	test("legacy stores migrate once keyring access is restored", async () => {
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		await putSecret("OPENAI_API_KEY", "legacy-secret");
 		const legacyStore = JSON.parse(readFileSync(secretsFile(), "utf-8")) as { version: number };
 		expect(legacyStore.version).toBe(1);
@@ -252,6 +267,7 @@ describe("local secrets provider", () => {
 	});
 
 	test("storing a local secret writes the existing v1 encrypted store format", async () => {
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		await putSecret("OPENAI_API_KEY", "sk-test-local");
 
 		const store = JSON.parse(readFileSync(secretsFile(), "utf-8")) as {
@@ -267,12 +283,15 @@ describe("local secrets provider", () => {
 	});
 
 	test("a kill during store replacement leaves the previous store and load removes the orphan temp", async () => {
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		await putSecret("OPENAI_API_KEY", "before-kill");
 		const script = join(agentsDir, "kill-during-secrets-write.ts");
 		writeFileSync(
 			script,
 			[
-				`import { __setSecretStoreWriteHookForTests, putSecret } from ${JSON.stringify(join(import.meta.dir, "secrets.ts"))};`,
+				`import { __setSecretStoreWriteHookForTests, putSecret, setSecretKeyringAdapterForTests } from ${JSON.stringify(join(import.meta.dir, "secrets.ts"))};`,
+				'const absent = async () => ({ state: "unavailable", message: "no Secret Service on this host", backend: "absent" });',
+				'setSecretKeyringAdapterForTests({ platform: "test", service: "ai.signet.secrets", account: "test", get: absent, set: absent });',
 				'__setSecretStoreWriteHookForTests((stage) => { if (stage === "after-write") process.kill(process.pid, "SIGKILL"); });',
 				'await putSecret("OPENAI_API_KEY", "after-kill");',
 			].join("\n"),
@@ -308,6 +327,7 @@ describe("local secrets provider", () => {
 	});
 
 	test("transient machine-id failure keeps the secrets key stable across restarts", async () => {
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		process.env.USER = "signet-secrets-test-user";
 		setMachineIdResolverForTests(() => undefined);
 
@@ -324,6 +344,7 @@ describe("local secrets provider", () => {
 	});
 
 	test("existing v1 store stays recoverable when the machine-id resolver is unavailable during upgrade", async () => {
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		process.env.USER = "signet-secrets-test-user";
 		setMachineIdResolverForTests(() => "legacy-machine-id");
 		await putSecret("OPENAI_API_KEY", "«redacted:sk-…»");
