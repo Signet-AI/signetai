@@ -52,8 +52,8 @@
         "signet-connector-claude-code": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/core": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/core": "0.230.8",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -67,8 +67,8 @@
         "signet-connector-codex": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/core": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/core": "0.230.8",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -82,8 +82,8 @@
         "signet-codex-plugin": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/connector-codex": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/connector-codex": "0.230.8",
       },
     },
     "integrations/forge/connector": {
@@ -93,8 +93,8 @@
         "signet-connector-forge": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/core": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/core": "0.230.8",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -108,8 +108,8 @@
         "signet-connector-gemini": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/core": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/core": "0.230.8",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -123,8 +123,8 @@
         "signet-connector-hermes-agent": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/core": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/core": "0.230.8",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -138,8 +138,8 @@
         "signet-connector-kimi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/core": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/core": "0.230.8",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -153,8 +153,8 @@
         "signet-connector-oh-my-pi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/core": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/core": "0.230.8",
       },
       "devDependencies": {
         "@signet/oh-my-pi-extension": "workspace:*",
@@ -182,8 +182,8 @@
         "signet-connector-openclaw": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/core": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/core": "0.230.8",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -215,8 +215,8 @@
         "signet-connector-opencode": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
-        "@signet/core": "0.230.7",
+        "@signet/connector-base": "0.230.8",
+        "@signet/core": "0.230.8",
         "jsonc-parser": "3.3.1",
       },
       "devDependencies": {
@@ -248,7 +248,7 @@
         "signet-connector-pi": "bin/install.js",
       },
       "dependencies": {
-        "@signet/connector-base": "0.230.7",
+        "@signet/connector-base": "0.230.8",
       },
       "devDependencies": {
         "@signet/pi-extension": "workspace:*",
@@ -288,7 +288,7 @@
       "name": "@signet/connector-base",
       "version": "0.230.8",
       "dependencies": {
-        "@signet/core": "0.230.7",
+        "@signet/core": "0.230.8",
         "json5": "^2.2.3",
         "jsonc-parser": "3.3.1",
       },

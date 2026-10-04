@@ -71,6 +71,7 @@ function packageRoot(name: string, importer: string): string {
 			throw new Error(`Missing runtime dependency ${name} imported by ${importer}`);
 		}
 	}
+	if (!existsSync(entry)) throw new Error(`Missing runtime dependency ${name} imported by ${importer}`);
 	let root = dirname(entry);
 	for (let depth = 0; depth < 20; depth++) {
 		const manifest = join(root, "package.json");
