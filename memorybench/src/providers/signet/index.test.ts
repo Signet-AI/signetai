@@ -324,7 +324,12 @@ describe("Signet benchmark profiles", () => {
           passes: [
             this.failedPasses.has(this.triggers)
               ? { id: `pass-${this.triggers}`, status: "failed", error: "Pi agent length" }
-              : { id: `pass-${this.triggers}`, status: "completed", mutationsApplied: this.mutationsPerPass },
+              : {
+                  id: `pass-${this.triggers}`,
+                  status: "completed",
+                  mutationsApplied: this.mutationsPerPass,
+                  tokensInput: 1_000,
+                },
           ],
           episodicTokensPending: this.triggers >= this.drainedAfterPass ? 0 : null,
         } as T
@@ -421,6 +426,44 @@ describe("Signet benchmark profiles", () => {
     expect(provider.triggers.length).toBeGreaterThanOrEqual(2)
     expect(provider.triggers[1]).toBeLessThanOrEqual(6)
   }, 20_000)
+
+  it("holds triggers while extra slots only start passes with nothing to do", async () => {
+    class EmptySlotProvider extends SignetDreamingProvider {
+      triggers = 0
+      private polls = 0
+
+      protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+        if (path === "/api/dream/trigger") {
+          this.triggers += 1
+          return { passId: `pass-${this.triggers}` } as T
+        }
+        if (path.startsWith("/api/dream/status")) {
+          if (this.triggers === 0) return { worker: { running: true, activePasses: [] }, passes: [] } as T
+          this.polls += 1
+          const longDone = this.polls > 12
+          const empties = Array.from({ length: Math.max(0, this.triggers - 1) }, (_, index) => ({
+            id: `empty-${index + 1}`,
+            status: "completed",
+            mutationsApplied: 0,
+          }))
+          return {
+            worker: { running: true, activePasses: longDone ? [] : [{ passId: "long" }] },
+            config: { maxConcurrentPasses: 2 },
+            passes: [
+              { id: "long", status: longDone ? "completed" : "running", mutationsApplied: 9, tokensInput: 5_000 },
+              ...empties,
+            ],
+            episodicTokensPending: longDone ? 0 : 1,
+          } as T
+        }
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const provider = new EmptySlotProvider()
+    await finalizeWith(provider)
+    expect(provider.triggers).toBeLessThanOrEqual(3)
+  }, 30_000)
 
   it("drains the checkpointed haystack agents when a resumed run skipped ingest", async () => {
     class ResumedProvider extends SignetDreamingProvider {

@@ -113,6 +113,10 @@ export function observeDreamingPasses(
   }
 }
 
+function passHadNothingToDo(pass: DreamingStatusPass): boolean {
+  return pass.status === "completed" && (pass.mutationsApplied ?? 0) === 0 && !((pass.tokensInput ?? 0) > 0)
+}
+
 const MAX_IDLE_DREAMING_PASSES = 3
 const MAX_FAILED_DREAMING_PASSES = 3
 
@@ -567,6 +571,7 @@ export class SignetProvider implements Provider {
     let failedPasses = 0
     let emptyTriggers = 0
     let measured = false
+    let holdTriggers = false
     await this.triggerDreaming()
     while (Date.now() < deadline) {
       const primary = await this.readDreamStatus(this.agentId)
@@ -587,6 +592,11 @@ export class SignetProvider implements Provider {
           continue
         }
         failedPasses = 0
+        if (passHadNothingToDo(pass)) {
+          holdTriggers = true
+          continue
+        }
+        holdTriggers = false
         idlePasses = (pass.mutationsApplied ?? 0) > 0 ? 0 : idlePasses + 1
       }
 
@@ -606,9 +616,10 @@ export class SignetProvider implements Provider {
               `Dreaming applied no mutations in ${idlePasses} consecutive passes while the backlog was not drained (${backlog})`
             )
           }
-          if (active < slots) {
+          if (active < slots && (active === 0 || !holdTriggers)) {
             const started = await this.triggerDreaming()
-            if (!started && active === 0 && finished.length === 0) {
+            const onlyEmpty = finished.length > 0 && finished.every(passHadNothingToDo)
+            if (active === 0 && (onlyEmpty || (!started && finished.length === 0))) {
               emptyTriggers++
               if (emptyTriggers >= MAX_IDLE_DREAMING_PASSES) {
                 throw new Error(`Dreaming started no new passes in ${emptyTriggers} consecutive triggers`)
