@@ -1552,6 +1552,7 @@ describe("first-run setup migration onboarding handoff", () => {
 		}) as never);
 		const error = spyOn(console, "error").mockImplementation(() => {});
 		try {
+			console.error("Unrelated logger diagnostic before workspace refusal");
 			await expect(
 				runExistingSetupWizard(
 					basePath,
@@ -1571,7 +1572,7 @@ describe("first-run setup migration onboarding handoff", () => {
 					},
 				),
 			).rejects.toThrow("process.exit:1");
-			expect(String(error.mock.calls[0]?.[0] ?? "")).toContain("Another workspace");
+			expect(error.mock.calls.some((call) => String(call[0] ?? "").includes("Another workspace"))).toBe(true);
 			expect(open).not.toHaveBeenCalled();
 		} finally {
 			open.mockRestore();
