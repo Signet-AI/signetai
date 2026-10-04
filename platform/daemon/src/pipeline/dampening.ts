@@ -38,11 +38,12 @@ function tokenize(text: string): ReadonlySet<string> {
 	return tokens;
 }
 
+const GRAVITY_THRESHOLD = 0.3;
 const VECTOR_SOURCES = new Set(["vector", "hybrid", "traversal", "ka_traversal", "sec", "structured"]);
 function gravity(rows: readonly ScoredRow[], query: ReadonlySet<string>, penalty: number): void {
 	for (const row of rows) {
 		if (!VECTOR_SOURCES.has(row.source)) continue;
-		if (row.score <= 0.3) continue;
+		if (row.score <= GRAVITY_THRESHOLD) continue;
 
 		const content = tokenize(row.content);
 		let overlap = false;
@@ -53,7 +54,7 @@ function gravity(rows: readonly ScoredRow[], query: ReadonlySet<string>, penalty
 			}
 		}
 		if (!overlap) {
-			row.score *= penalty;
+			row.score = Math.max(GRAVITY_THRESHOLD, row.score * penalty);
 		}
 	}
 }

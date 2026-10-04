@@ -167,7 +167,8 @@ post-processing:
 
 - **Structured Evidence Convolution (SEC-lite)** compares lexical, semantic,
   hint, traversal, and structured signals so graph-only results do not blindly
-  dominate direct evidence.
+  dominate direct evidence. It reorders admitted candidates; only candidates
+  without lexical or semantic evidence can fall below `min_score` here.
 - **Facet coverage** can read candidate content and prefer rows that cover
   more of the query's facets.
 - **Rehearsal boost** applies a small access-frequency and recency signal
@@ -176,7 +177,8 @@ post-processing:
   authorized top-N candidates. If the reranker fails or times out, recall
   keeps the existing ordering.
 - **Dampening** penalizes low-overlap semantic hits, hub-like entity
-  dominance, and other noisy retrieval shapes.
+  dominance, and other noisy retrieval shapes. The low-overlap penalty never
+  drops a hit below the scores it leaves untouched.
 - **Currentness** annotates superseded memories and boosts current
   replacements.
 

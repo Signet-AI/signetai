@@ -12,6 +12,19 @@ describe("structured evidence shaping", () => {
 		expect(shaped.find((row) => row.id === "swordfish")?.score).toBeLessThanOrEqual(0.35);
 	});
 
+	it("keeps admitted semantic-only candidates while dropping weak graph-only candidates", () => {
+		const shaped = shapeStructuredEvidence(
+			[
+				{ id: "spotify", source: "vector", semantic: 0.62, structured: 0.16 },
+				{ id: "anchored", source: "hybrid", lexical: 0.6, semantic: 0.5, structured: 0.3 },
+				{ id: "graph-noise", source: "traversal", traversal: 0.4 },
+			],
+			{ minScore: 0.3 },
+		);
+
+		expect(shaped.map((row) => row.id)).toEqual(["anchored", "spotify"]);
+	});
+
 	it("lets hint evidence rescue a class-to-instance match", () => {
 		const shaped = shapeStructuredEvidence([
 			{ id: "netflix", source: "hybrid", lexical: 0.85, semantic: 0.6 },
