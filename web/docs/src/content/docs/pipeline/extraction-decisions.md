@@ -114,7 +114,9 @@ situation, constraints, habits, and preferences) is, so a source holding such a
 disclosure is never excluded as empty. Those claims attach to a person entity
 named after the user when the source states a name, and otherwise to one
 entity named `User`; a bare `User` without the person type is still rejected
-as transcript scaffolding. A pass defers a source only while its transcript is
+as transcript scaffolding. When a source shows several named speakers, such as
+a group chat, each speaker's statements go on that speaker's own entity.
+Separating unnamed users who share one agent scope is best effort (#2037). A pass defers a source only while its transcript is
 still mid-stream or a tool error persists after the call is corrected; a
 missing entity or aspect is created in the same pass. The
 `memory_head_read` and `memory_head_commit` tools are offered only to content
