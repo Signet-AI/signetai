@@ -252,7 +252,9 @@ export {
 export {
 	createFreshWorkspaceV2,
 	persistWorkspaceLayout,
+	readWorkspaceLayoutOverrides,
 	resolveWorkspaceLayout,
+	resolveWorkspaceLayoutAs,
 	serializeWorkspaceLayout,
 	WORKSPACE_LAYOUT_V1,
 	WORKSPACE_LAYOUT_V2,

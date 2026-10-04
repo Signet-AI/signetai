@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { workspaceLayoutStartup } from "./workspace-layout-startup";
 import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 import { requestMemoryHead } from "./memory-head";
 
@@ -2280,6 +2281,12 @@ process.on("unhandledRejection", (reason) => {
 });
 
 async function main() {
+	if (workspaceLayoutStartup.status === "failed") {
+		console.error(`Signet cannot start: workspace layout upgrade failed: ${workspaceLayoutStartup.reason}`);
+		logger.shutdown(false);
+		process.exitCode = 1;
+		return;
+	}
 	const workspace = preflightWorkspace();
 	if (workspace.status === "missing" || workspace.status === "incomplete") {
 		console.error(formatWorkspacePreflightError(workspace));
@@ -2313,6 +2320,10 @@ async function main() {
 	logger.info("daemon", "Signet Daemon starting", { runtime: DAEMON_RUNTIME });
 	logger.info("daemon", `File logging to ${logger.logFilePath}`);
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
+	if (workspaceLayoutStartup.status === "upgraded")
+		logger.info("daemon", "Workspace upgraded in place to layout v2", workspaceLayoutStartup);
+	if (workspaceLayoutStartup.status === "blocked" || workspaceLayoutStartup.status === "skipped")
+		logger.warn("daemon", "Workspace layout upgrade did not run", workspaceLayoutStartup);
 	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
 	const lock = acquireSingleInstanceLock(join(DAEMON_DIR, "daemon.lock"));
 	if (lock === null) {

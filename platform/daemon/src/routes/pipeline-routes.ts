@@ -15,6 +15,7 @@ import {
 import { getVacuumConversionStatusAsync } from "../db-vacuum.js";
 import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../diagnostics-queue.js";
 import { readEmbeddingUsageSummary } from "../embedding-usage";
+import { readWorkspaceLayoutStatus } from "../workspace-layout-upgrade";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { BackgroundWorkloadDiagnostics } from "../inference-router.js";
 import { getLlmProvider } from "../llm.js";
@@ -69,6 +70,7 @@ import {
 	HOST,
 	LOG_DIR,
 	MEMORY_DB,
+	WORKSPACE_LAYOUT,
 	NETWORK_MODE,
 	PORT,
 	analyticsCollector,
@@ -394,6 +396,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			agentId: resolveDaemonAgentId(),
 			agentsDir: AGENTS_DIR,
 			memoryDb: existsSync(MEMORY_DB),
+			workspaceLayout: readWorkspaceLayoutStatus(AGENTS_DIR, WORKSPACE_LAYOUT.version),
 			resources: getCachedResourceSnapshot(),
 			pipelineV2: config.pipelineV2,
 			pipeline: {

@@ -85,10 +85,21 @@ export function persistWorkspaceLayout(
 export function resolveWorkspaceLayout(rootPath: string, _options: { env?: NodeJS.ProcessEnv } = {}): WorkspaceLayout {
 	const root = resolve(rootPath);
 	const state = readPersisted(root);
-	const custom = state.overrides ?? {};
-	const v2 = state.version === WORKSPACE_LAYOUT_V2;
+	return layoutFor(root, state.version as WorkspaceLayoutVersion, state.overrides ?? {});
+}
+
+export function readWorkspaceLayoutOverrides(rootPath: string): WorkspaceLayoutOverrides {
+	return { ...readPersisted(resolve(rootPath)).overrides };
+}
+
+export function resolveWorkspaceLayoutAs(rootPath: string, version: WorkspaceLayoutVersion): WorkspaceLayout {
+	const root = resolve(rootPath);
+	return layoutFor(root, version, readPersisted(root).overrides ?? {});
+}
+
+function layoutFor(root: string, version: WorkspaceLayoutVersion, custom: WorkspaceLayoutOverrides): WorkspaceLayout {
+	const v2 = version === WORKSPACE_LAYOUT_V2;
 	const data = custom.data ? absolute(root, custom.data) : join(root, v2 ? "data" : "memory");
-	const version = state.version as WorkspaceLayoutVersion;
 	return {
 		root,
 		version,
