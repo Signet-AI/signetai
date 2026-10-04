@@ -533,9 +533,10 @@ export class SignetProvider implements Provider {
       `Signet provider clear skipped for ${containerTag}; isolated daemon workspace owns cleanup`
     )
   }
-  async finalizeIngest(_options: FinalizeIngestOptions): Promise<void> {
+  async finalizeIngest(options: FinalizeIngestOptions): Promise<void> {
     if (this.profile !== "dreaming") return
-    const scopes = this.dreamingAgentIds.size > 0 ? [...this.dreamingAgentIds] : [this.agentId]
+    const ingested = new Set([...this.dreamingAgentIds, ...(options.agentIds ?? [])])
+    const scopes = ingested.size > 0 ? [...ingested] : [this.agentId]
     const readyDeadline = Date.now() + 60_000
     let workerReady = false
     while (Date.now() < readyDeadline) {

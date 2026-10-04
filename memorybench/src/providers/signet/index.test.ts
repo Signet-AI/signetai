@@ -379,6 +379,54 @@ describe("Signet benchmark profiles", () => {
     expect(Object.keys(provider.getIngestUsage().dreamingPasses ?? {}).sort()).toEqual(["group-1", "group-2"])
   })
 
+  it("drains the checkpointed haystack agents when a resumed run skipped ingest", async () => {
+    class ResumedProvider extends SignetDreamingProvider {
+      calls: string[] = []
+      private triggers = 0
+
+      protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+        this.calls.push(path)
+        if (path === "/api/dream/trigger") {
+          this.triggers += 1
+          return { passId: `pass-${this.triggers}` } as T
+        }
+        if (path === "/api/dream/status?agentId=memorybench") {
+          return {
+            worker: { running: true, activePasses: [] },
+            passes: Array.from({ length: this.triggers }, (_, index) => ({
+              id: `pass-${index + 1}`,
+              status: "completed",
+              mutationsApplied: 3,
+            })),
+            episodicTokensPending: 0,
+          } as T
+        }
+        if (path === "/api/dream/status?agentId=memorybench-haystack") {
+          return {
+            worker: { running: true, activePasses: [] },
+            episodicTokensPending: this.triggers >= 2 ? 0 : 500,
+          } as T
+        }
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const provider = new ResumedProvider()
+    const previous = process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+    process.env.SIGNET_BENCH_DREAMING_POLL_SECS = "1"
+    try {
+      await provider.finalizeIngest({
+        runId: "run",
+        dataSourceRunId: "source",
+        agentIds: ["memorybench-haystack"],
+      })
+    } finally {
+      if (previous === undefined) delete process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+      else process.env.SIGNET_BENCH_DREAMING_POLL_SECS = previous
+    }
+    expect(provider.calls.filter((path) => path === "/api/dream/trigger")).toHaveLength(2)
+    expect(provider.calls).toContain("/api/dream/status?agentId=memorybench-haystack")
+  })
+
   it("retries a failed pass and keeps draining", async () => {
     const provider = new DrainingProvider(3, 5, new Set([1, 2]))
     await finalizeWith(provider)

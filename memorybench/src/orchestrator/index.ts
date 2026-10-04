@@ -440,6 +440,15 @@ export class Orchestrator {
         await provider.finalizeIngest?.({
           runId: checkpoint.runId,
           dataSourceRunId: checkpoint.dataSourceRunId,
+          agentIds: [
+            ...new Set(
+              (targetQuestionIds ?? Object.keys(checkpoint.questions)).flatMap((questionId) =>
+                Object.values(
+                  checkpoint.questions[questionId]?.phases.ingest.ingestResult?.taskAgentIds ?? {}
+                )
+              )
+            ),
+          ],
         })
       }
     } finally {
