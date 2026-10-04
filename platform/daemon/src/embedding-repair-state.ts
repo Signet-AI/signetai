@@ -372,6 +372,7 @@ export async function finishEmbeddingRepairLease(
 		readonly pollMs: number;
 		readonly eligibility: EmbeddingRepairEligibility;
 		readonly error?: string;
+		readonly budgeted?: boolean;
 	},
 	now = Date.now(),
 ): Promise<boolean> {
@@ -414,7 +415,8 @@ export async function finishEmbeddingRepairLease(
 				const windowStartedAt = validWindowStart(current.window_started_at, now);
 				const inWindow = windowStartedAt !== null && now - windowStartedAt < HOUR_MS;
 				const batchesStarted = inWindow ? current.batches_started : 0;
-				const charged = outcome.successful.length > 0 || (outcome.affected ?? 0) > 0;
+				const budgeted = outcome.budgeted !== false;
+				const charged = budgeted && (outcome.successful.length > 0 || (outcome.affected ?? 0) > 0);
 				const error = outcome.error ?? (outcome.failed.length > 0 ? "embedding provider returned no vector" : null);
 				db.prepare(
 					`UPDATE embedding_repair_budget
@@ -424,7 +426,7 @@ export async function finishEmbeddingRepairLease(
 				).run(
 					inWindow ? current.window_started_at : iso(now),
 					batchesStarted + (charged ? 1 : 0),
-					iso(now),
+					budgeted ? iso(now) : current.last_completed_at,
 					outcome.affected ?? outcome.successful.length,
 					error,
 					iso(now),

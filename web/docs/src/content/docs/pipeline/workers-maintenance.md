@@ -299,7 +299,11 @@ Each cycle:
    and writes any failure backoff. A superseded profile or pressure-aborted
    batch releases its lease without consuming the promoted profile's budget.
    The lease spans the accounting window, so a slow batch cannot run twice;
-   the existing repair cooldown and hourly budget control admission.
+   the existing repair cooldown and hourly budget control admission for
+   re-embedding. When a cycle finds memories that have never been embedded,
+   it embeds those first under the lease without the cooldown or budget, so
+   new memories, including Dreaming's derived memories, become searchable
+   promptly.
 
 4. **Sequential embedding fetch** — each stale row's content is embedded
    one at a time, outside any transaction. Failed fetches increment the

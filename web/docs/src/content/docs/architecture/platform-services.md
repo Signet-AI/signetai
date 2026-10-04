@@ -149,7 +149,11 @@ Each successful repair writes an audit event to `memory_history` with
 **Embedding refresh tracker** (`embedding-tracker.ts`): the existing
 incremental tracker owns stale and missing-memory vector writes. It does not
 create a second repair queue. Before a provider batch, it acquires a durable
-SQLite lease and consumes one `repair.reembedHourlyBudget` slot. Per-memory
+SQLite lease. A batch that re-embeds existing vectors consumes one
+`repair.reembedHourlyBudget` slot and respects the re-embed cooldown. A batch of
+memories that have never been embedded, such as Dreaming's derived memories,
+takes the lease but neither waits for the cooldown nor consumes the budget, so
+new memories become searchable within a few tracker cycles. Per-memory
 provider failures retain exponential retry deadlines across daemon restarts;
 the lease, completed batch count, and last error are returned with
 `GET /api/repair/embedding-gaps`.

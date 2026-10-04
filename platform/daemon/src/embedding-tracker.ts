@@ -188,6 +188,9 @@ export function startEmbeddingTracker(
 			lastQueueDepth = readyRows.length;
 			lastCycleAt = new Date(now).toISOString();
 			if (readyRows.length === 0) return;
+			const firstEmbeddings = readyRows.filter((row) => row.currentModel == null);
+			const budgeted = firstEmbeddings.length === 0;
+			const batch = budgeted ? readyRows : firstEmbeddings;
 			const gate = await awaitEmbeddingProviderAvailable(
 				`${embeddingCfg.provider}:${embeddingCfg.model}:${embeddingCfg.base_url ?? ""}`,
 				async () => (await checkProviderFn(embeddingCfg)).available,
@@ -200,8 +203,8 @@ export function startEmbeddingTracker(
 			}
 			const admission = await acquireEmbeddingRepairLease(
 				accessor,
-				repairCfg.reembedCooldownMs,
-				repairCfg.reembedHourlyBudget,
+				budgeted ? repairCfg.reembedCooldownMs : 0,
+				budgeted ? repairCfg.reembedHourlyBudget : Number.MAX_SAFE_INTEGER,
 				now,
 			);
 			if (!admission.allowed || admission.lease === undefined) {
@@ -211,7 +214,7 @@ export function startEmbeddingTracker(
 
 			try {
 				const cycle = await processEmbeddingCycle(
-					readyRows,
+					batch,
 					failures,
 					embeddingCfg,
 					trackerCfg.pollMs,
@@ -227,6 +230,7 @@ export function startEmbeddingTracker(
 						agentId,
 						model: embeddingCfg.model,
 						pollMs: trackerCfg.pollMs,
+						budgeted,
 						eligibility: (db) => isActiveEmbeddingConfig(db, embeddingCfg),
 						error: "system pressure became high before embedding persistence",
 					});
@@ -270,6 +274,7 @@ export function startEmbeddingTracker(
 					agentId,
 					model: embeddingCfg.model,
 					pollMs: trackerCfg.pollMs,
+					budgeted,
 					eligibility: applied || ((db) => isActiveEmbeddingConfig(db, embeddingCfg)),
 					...(applied || cycle.results.length === 0 ? {} : { error: "embedding profile changed before persistence" }),
 				});
@@ -281,6 +286,7 @@ export function startEmbeddingTracker(
 					agentId,
 					model: embeddingCfg.model,
 					pollMs: trackerCfg.pollMs,
+					budgeted,
 					eligibility: (db) => isActiveEmbeddingConfig(db, embeddingCfg),
 					error: error instanceof Error ? error.message : String(error),
 				});

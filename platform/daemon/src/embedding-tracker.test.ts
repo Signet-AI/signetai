@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { computeEmbeddingRetryBackoffMs, processEmbeddingCycle } from "./embedding-tracker";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { acquireEmbeddingRepairLease, finishEmbeddingRepairLease } from "./embedding-repair-state";
+import { computeEmbeddingRetryBackoffMs, processEmbeddingCycle, startEmbeddingTracker } from "./embedding-tracker";
 
 const cfg = {
 	provider: "ollama",
@@ -88,5 +93,78 @@ describe("processEmbeddingCycle", () => {
 		expect(retry.results).toHaveLength(1);
 		expect(after.results).toHaveLength(1);
 		expect(after.failed).toBe(0);
+	});
+});
+
+describe("startEmbeddingTracker admission", () => {
+	it("embeds never-embedded memories while the re-embed repair budget is spent", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-embedding-tracker-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		const accessor = getDbAccessor();
+		const trackerCfg = { enabled: true, pollMs: 20, batchSize: 8 };
+		const repairCfg = {
+			reembedCooldownMs: 3_600_000,
+			reembedHourlyBudget: 1,
+			requeueCooldownMs: 0,
+			requeueHourlyBudget: 1,
+			dedupCooldownMs: 0,
+			dedupHourlyBudget: 1,
+			dedupSemanticThreshold: 0.9,
+			dedupBatchSize: 1,
+		};
+		const now = new Date().toISOString();
+		accessor.withWriteTx((db) => {
+			const insert = db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, agent_id, created_at, updated_at, embedding_model)
+				 VALUES (?, ?, ?, 'fact', 'default', ?, ?, ?)`,
+			);
+			insert.run("fresh-a", "A fresh derived memory.", "hash-fresh-a", now, now, null);
+			insert.run("fresh-b", "Another fresh derived memory.", "hash-fresh-b", now, now, null);
+			insert.run("stale-model", "A memory embedded by an older model.", "hash-stale", now, now, "older-model");
+		});
+		const spent = await acquireEmbeddingRepairLease(accessor, 0, 1);
+		if (!spent.allowed || spent.lease === undefined) throw new Error("expected a repair lease");
+		await finishEmbeddingRepairLease(accessor, spent.lease, {
+			successful: [{ id: "earlier", contentHash: "earlier" }],
+			failed: [],
+			model: "nomic-embed-text",
+			pollMs: 20,
+			eligibility: true,
+		});
+		const embedded: string[] = [];
+		const activeCfg = {
+			provider: "ollama",
+			model: "nomic-embed-text",
+			dimensions: 768,
+			base_url: "http://127.0.0.1:11434",
+		} as const;
+		const tracker = startEmbeddingTracker(
+			accessor,
+			activeCfg,
+			trackerCfg,
+			repairCfg,
+			async (text) => {
+				embedded.push(text);
+				return Array.from({ length: activeCfg.dimensions }, () => 0.01);
+			},
+			async () => ({ available: true }),
+		);
+		try {
+			const deadline = Date.now() + 5_000;
+			while (embedded.length < 2 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+			await new Promise((resolve) => setTimeout(resolve, 200));
+			expect([...embedded].sort()).toEqual(["A fresh derived memory.", "Another fresh derived memory."]);
+			expect(
+				accessor.withReadDb(
+					(db) =>
+						db.prepare("SELECT batches_started AS n FROM embedding_repair_budget WHERE id = 1").get() as { n: number },
+				),
+			).toEqual({ n: 1 });
+		} finally {
+			await tracker.stop();
+			closeDbAccessor();
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 });
