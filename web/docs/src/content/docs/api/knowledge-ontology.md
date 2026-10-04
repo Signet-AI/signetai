@@ -487,6 +487,12 @@ episodic evidence. Requires `admin` permission.
 |------------|--------|----------|----------------------------------------------|
 | `agentId`  | string | no       | Agent ID (default: daemon configured agent)  |
 | `agent_id` | string | no       | Alias for `agentId`                          |
+| `measure`  | string | no       | `1` probes the episodic backlog now          |
+
+`episodicTokensPending` normally reports the last measurement, which is `null`
+when none is fresh. With `measure=1` the route runs the bounded backlog probe:
+an exact count when the backlog fits in the probe, `null` otherwise. Evidence
+that content safety keeps out of Dreaming is not counted.
 
 **Response**
 

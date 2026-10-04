@@ -45,6 +45,7 @@ import {
 	type DreamingLiveEvent,
 } from "../pipeline/dreaming-live-events";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
+import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreaming-token-cache";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
@@ -616,7 +617,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:619",
+				"routes/pipeline-routes.ts:625",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -735,7 +736,16 @@ export function registerPipelineRoutes(app: Hono): void {
 		const agentId = scopedAgent.agentId;
 
 		const state = await getDreamingState(accessor, agentId);
-		const episodicTokensPending = getDreamingEpisodicTokenBacklogCachedOrNull(agentId);
+		const backlogProbe =
+			c.req.query("measure") === "1"
+				? await probeDreamingEpisodicBacklog(accessor, agentId, cfg.dreaming.tokenThreshold)
+				: null;
+		const episodicTokensPending =
+			backlogProbe === null
+				? getDreamingEpisodicTokenBacklogCachedOrNull(agentId)
+				: backlogProbe.kind === "exact"
+					? backlogProbe.tokens
+					: null;
 		const passes = await getDreamingPasses(accessor, agentId, 10);
 		const exclusions = await getDreamingEvidenceExclusions(accessor, agentId);
 		const reviewedEvidence = await getDreamingReviewedEvidence(accessor, agentId);
@@ -921,7 +931,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:924",
+						"routes/pipeline-routes.ts:983",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,

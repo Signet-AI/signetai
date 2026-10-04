@@ -373,9 +373,9 @@ export class SignetProvider implements Provider {
     this.isolatedAgents.add(agentId)
   }
 
-  private async readDreamStatus(agentId: string): Promise<DreamingStatusResponse> {
+  private async readDreamStatus(agentId: string, measure = false): Promise<DreamingStatusResponse> {
     const status = await this.request<DreamingStatusResponse>(
-      `/api/dream/status?agentId=${encodeURIComponent(agentId)}`,
+      `/api/dream/status?agentId=${encodeURIComponent(agentId)}${measure ? "&measure=1" : ""}`,
       { method: "GET" }
     )
     observeDreamingPasses(this.dreamingPasses, status.passes)
@@ -608,11 +608,7 @@ export class SignetProvider implements Provider {
         failedRounds = 0
       }
 
-      const statuses = await Promise.all(
-        scopes.map((agentId) =>
-          agentId === this.agentId ? Promise.resolve(primary) : this.readDreamStatus(agentId)
-        )
-      )
+      const statuses = await Promise.all(scopes.map((agentId) => this.readDreamStatus(agentId, true)))
       if (statuses.every((status) => status.episodicTokensPending === 0)) return
       const applied = round.reduce((sum, pass) => sum + (pass.mutationsApplied ?? 0), 0)
       idleRounds = applied > 0 ? 0 : idleRounds + 1

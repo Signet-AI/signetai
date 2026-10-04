@@ -22,14 +22,14 @@ describe("Signet benchmark profiles", () => {
       if (path === "/api/hooks/transcript-capture/capture-1?agentId=memorybench-question-1-run") {
         return { status: "completed" } as T
       }
-      if (path === "/api/dream/status?agentId=memorybench-question-1-run") {
+      if (path.replace("&measure=1", "") === "/api/dream/status?agentId=memorybench-question-1-run") {
         return { worker: { running: true }, episodicTokensPending: this.statusCalls >= 3 ? 0 : 1 } as T
       }
       if (path === "/api/dream/trigger") {
         this.triggerCalls += 1
         return { passId: `pass-${this.triggerCalls}` } as T
       }
-      if (path === "/api/dream/status?agentId=memorybench") {
+      if (path.replace("&measure=1", "") === "/api/dream/status?agentId=memorybench") {
         this.statusCalls += 1
         if (this.statusCalls === 1)
           return { worker: { running: true }, episodicTokensPending: 2 } as T
@@ -100,10 +100,10 @@ describe("Signet benchmark profiles", () => {
       "/api/dream/status?agentId=memorybench",
       "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
-      "/api/dream/status?agentId=memorybench-question-1-run",
+      "/api/dream/status?agentId=memorybench-question-1-run&measure=1",
       "/api/dream/trigger",
       "/api/dream/status?agentId=memorybench",
-      "/api/dream/status?agentId=memorybench-question-1-run",
+      "/api/dream/status?agentId=memorybench-question-1-run&measure=1",
     ])
     expect(provider.getIngestUsage().dreamingPasses).toEqual({
       "pass-1": { inputTokens: 1200, outputTokens: 300, cacheReadTokens: 50 },
@@ -213,7 +213,7 @@ describe("Signet benchmark profiles", () => {
           this.triggered = true
           return { passId: "universe-pass" } as T
         }
-        if (path === "/api/dream/status?agentId=memorybench") {
+        if (path.replace("&measure=1", "") === "/api/dream/status?agentId=memorybench") {
           return {
             worker: { running: true },
             passes: this.triggered ? [{ id: "universe-pass", status: "completed" }] : [],
@@ -264,7 +264,7 @@ describe("Signet benchmark profiles", () => {
         if (path === "/api/dream/trigger") {
           throw new Error("/api/dream/trigger failed (409): A dreaming pass is already running")
         }
-        if (path === "/api/dream/status?agentId=memorybench") {
+        if (path.replace("&measure=1", "") === "/api/dream/status?agentId=memorybench") {
           this.statusCalls += 1
           if (this.statusCalls === 1) return { worker: { running: true }, episodicTokensPending: 2 } as T
           if (this.statusCalls === 2) {
@@ -390,7 +390,7 @@ describe("Signet benchmark profiles", () => {
           this.triggers += 1
           return { passId: `pass-${this.triggers}` } as T
         }
-        if (path === "/api/dream/status?agentId=memorybench") {
+        if (path.replace("&measure=1", "") === "/api/dream/status?agentId=memorybench") {
           return {
             worker: { running: true, activePasses: [] },
             passes: Array.from({ length: this.triggers }, (_, index) => ({
@@ -401,7 +401,7 @@ describe("Signet benchmark profiles", () => {
             episodicTokensPending: 0,
           } as T
         }
-        if (path === "/api/dream/status?agentId=memorybench-haystack") {
+        if (path.replace("&measure=1", "") === "/api/dream/status?agentId=memorybench-haystack") {
           return {
             worker: { running: true, activePasses: [] },
             episodicTokensPending: this.triggers >= 2 ? 0 : 500,
