@@ -47,8 +47,8 @@ describe("hybridRecall freshness-aware rehearsal", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (prevSignetPath === undefined) {
 			delete process.env.SIGNET_PATH;
 		} else {

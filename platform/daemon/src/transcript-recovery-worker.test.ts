@@ -75,8 +75,8 @@ describe("transcript recovery worker", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		if (previousRecoveryHoldFile === undefined)

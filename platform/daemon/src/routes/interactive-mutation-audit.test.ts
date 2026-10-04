@@ -39,8 +39,8 @@ describe("interactive semantic mutation cutover", () => {
 		});
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 	});
 

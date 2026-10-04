@@ -33,8 +33,8 @@ describe("session API", () => {
 		app = daemon.app;
 	});
 
-	beforeEach(() => {
-		closeDbAccessor();
+	beforeEach(async () => {
+		await closeDbAccessor();
 		for (const file of readdirSync(join(dir, "memory"))) {
 			if (file.startsWith("memories.db")) rmSync(join(dir, "memory", file), { force: true });
 		}
@@ -49,8 +49,8 @@ describe("session API", () => {
 		unbypassSession("sess-live");
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeDbAccessor();
 		clearAllPresence();
 		if (prev === undefined) {
 			delete process.env.SIGNET_PATH;

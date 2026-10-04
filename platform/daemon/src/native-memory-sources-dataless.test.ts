@@ -142,7 +142,7 @@ describe("dataless / EDEADLK native artifact reads (#1161)", () => {
 			Object.defineProperty(process, "platform", { value: originalPlatform });
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
-			closeDbAccessor();
+			await closeDbAccessor();
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

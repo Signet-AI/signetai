@@ -49,9 +49,9 @@ describe("temporal summary API auth", () => {
 		app = daemon.app;
 	});
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		reloadAuthState?.(dir);
-		closeDbAccessor();
+		await closeDbAccessor();
 		for (const file of readdirSync(join(dir, "memory"))) {
 			if (file.startsWith("memories.db")) rmSync(join(dir, "memory", file), { force: true });
 		}
@@ -64,8 +64,8 @@ describe("temporal summary API auth", () => {
 		closeDbAccessor();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeDbAccessor();
 		if (prev === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {

@@ -115,8 +115,8 @@ function rejectNestedReads(accessor: DbAccessor): DbAccessor {
 describe("knowledge graph navigation", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });

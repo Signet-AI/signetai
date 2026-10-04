@@ -26,8 +26,8 @@ const { loadMemoryConfig: realLoadMemoryConfig } = await import("./memory-config
 
 process.env.SIGNET_PATH = agentsDir;
 
-function resetDb(): void {
-	closeDbAccessor();
+async function resetDb(): Promise<void> {
+	await closeDbAccessor();
 	mkdirSync(memoryDir, { recursive: true });
 	for (const file of readdirSync(memoryDir)) {
 		if (file.startsWith("memories.db")) rmSync(join(memoryDir, file), { force: true });
@@ -239,7 +239,7 @@ describe("handleUserPromptSubmit entity context", () => {
 		expect(first.clockContext).not.toContain("<signet-memory-context>");
 	});
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		infoMock.mockClear();
 		warnMock.mockClear();
 		errorMock.mockClear();
@@ -248,11 +248,11 @@ describe("handleUserPromptSubmit entity context", () => {
 		searchTemporalFallbackMock.mockClear();
 		resetDefaultPluginHostForTests();
 		getDefaultPluginHost().setEnabled(SIGNET_SECRETS_PLUGIN_ID, true);
-		resetDb();
+		await resetDb();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");

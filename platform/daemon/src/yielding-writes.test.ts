@@ -46,8 +46,8 @@ describe("drainWriteBatches", () => {
 		setupTables();
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 	});
 
@@ -183,7 +183,7 @@ describe("event-loop wedge telemetry", () => {
 		const { createTelemetryCollector, setActiveTelemetry } = await import("./telemetry");
 		const dir = createTestTempDir("signet-wedge-");
 		try {
-			closeDbAccessor();
+			await closeDbAccessor();
 			rmSync(join(dir, "memory"), { recursive: true, force: true });
 			mkdirSync(join(dir, "memory"), { recursive: true });
 			initDbAccessor(join(dir, "memory", "memories.db"));

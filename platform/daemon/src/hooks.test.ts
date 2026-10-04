@@ -3290,8 +3290,8 @@ describe("handleSessionStart multi-agent identity", () => {
 		agentsDir = mkdtempSync(join(tmpdir(), "signet-hooks-agent-identity-"));
 	});
 
-	beforeEach(() => {
-		closeDbAccessor();
+	beforeEach(async () => {
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 		mkdirSync(join(agentsDir, "agents", "dot"), { recursive: true });
 		process.env.SIGNET_PATH = agentsDir;
@@ -3468,15 +3468,15 @@ describe("writeMemoryMd", () => {
 			process.env.SIGNET_PATH = agentsDir;
 		});
 
-		beforeEach(() => {
-			closeDbAccessor();
+		beforeEach(async () => {
+			await closeDbAccessor();
 			rmSync(agentsDir, { recursive: true, force: true });
 			mkdirSync(agentsDir, { recursive: true });
 			initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
 		});
 
-		afterEach(() => {
-			closeDbAccessor();
+		afterEach(async () => {
+			await closeDbAccessor();
 		});
 
 		afterAll(() => {

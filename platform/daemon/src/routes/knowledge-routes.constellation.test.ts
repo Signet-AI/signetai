@@ -70,9 +70,9 @@ describe("GET /api/knowledge/constellation backlog measurement", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		invalidateDreamingEpisodicTokenBacklog("default");
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (dir) rmSync(dir, { recursive: true, force: true });
 		dir = "";
 	});

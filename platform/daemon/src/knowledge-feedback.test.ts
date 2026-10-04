@@ -47,8 +47,8 @@ function insertMemory(id: string, content: string): void {
 describe("knowledge feedback", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) {

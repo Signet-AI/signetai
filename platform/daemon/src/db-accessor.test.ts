@@ -60,8 +60,8 @@ function tmpDbPath(): string {
 describe("DbAccessor", () => {
 	const cleanupDirs: string[] = [];
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		for (const dir of cleanupDirs) {
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 		}
@@ -85,7 +85,7 @@ describe("DbAccessor", () => {
 		cleanupDirs.push(join(dbPath, ".."));
 
 		initDbAccessor(dbPath);
-		closeDbAccessor();
+		await closeDbAccessor();
 		for (const name of readdirSync(join(dbPath, ".."))) {
 			if (name.startsWith("test.db.bak-v") && !name.endsWith(".cursor.json")) rmSync(join(dbPath, "..", name));
 		}

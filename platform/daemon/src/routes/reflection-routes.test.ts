@@ -103,9 +103,9 @@ beforeEach(() => {
 	initInferenceProviderResolver(() => makeProvider("unused test provider"));
 });
 
-afterEach(() => {
+afterEach(async () => {
 	closeInferenceProviderResolver();
-	closeDbAccessor();
+	await closeDbAccessor();
 	if (previousSignetPath === undefined) {
 		delete process.env.SIGNET_PATH;
 	} else {

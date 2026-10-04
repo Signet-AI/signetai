@@ -40,8 +40,8 @@ function seedMemory(id: string, content: string): void {
 describe("knowledge graph hygiene report", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });

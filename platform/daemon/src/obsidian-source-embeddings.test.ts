@@ -44,9 +44,9 @@ describe("Obsidian source embeddings", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		resetEmbeddingCircuitBreakers();
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (prevSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = prevSignetPath;
 		if (prevAgentId === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");

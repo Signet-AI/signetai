@@ -120,8 +120,8 @@ describe("prompt entity context scaling (#1059)", () => {
 		await initDbAccessorAsync(DB_PATH(), { agentsDir: dir });
 	});
 
-	beforeEach(() => {
-		closeDbAccessor();
+	beforeEach(async () => {
+		await closeDbAccessor();
 		for (const file of readdirSync(join(dir, "memory"))) {
 			if (file.startsWith("memories.db")) rmSync(join(dir, "memory", file), { force: true });
 		}
@@ -133,8 +133,8 @@ describe("prompt entity context scaling (#1059)", () => {
 		closeDbAccessor();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeDbAccessor();
 		if (prev === undefined) {
 			delete process.env.SIGNET_PATH;
 		} else {

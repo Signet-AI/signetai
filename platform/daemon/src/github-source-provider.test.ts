@@ -22,9 +22,9 @@ describe("github-source-provider", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		globalThis.fetch = originalFetch;
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		rmSync(dir, { recursive: true, force: true });

@@ -33,8 +33,8 @@ function ensureMemorySupersessionColumns(): void {
 	});
 }
 
-beforeEach(() => {
-	closeDbAccessor();
+beforeEach(async () => {
+	await closeDbAccessor();
 	for (const file of readdirSync(join(agentsDir, "memory"))) {
 		if (file.startsWith("memories.db")) rmSync(join(join(agentsDir, "memory"), file), { force: true });
 	}
@@ -42,8 +42,8 @@ beforeEach(() => {
 	ensureMemorySupersessionColumns();
 });
 
-afterAll(() => {
-	closeDbAccessor();
+afterAll(async () => {
+	await closeDbAccessor();
 	if (previousSignetPath === undefined) {
 		Reflect.deleteProperty(process.env, "SIGNET_PATH");
 	} else {

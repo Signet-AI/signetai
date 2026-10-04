@@ -57,11 +57,11 @@ describe("discord-source-provider", () => {
 		await putSecret("DISCORD_BOT_TOKEN", "bot-token");
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		globalThis.fetch = originalFetch;
 		setDiscordGatewaySocketFactoryForTest(null);
 		setSecretKeyringAdapterForTests(null);
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		rmSync(dir, { recursive: true, force: true });

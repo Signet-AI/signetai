@@ -103,9 +103,9 @@ beforeEach(() => {
 	seedGraph(db);
 });
 
-afterEach(() => {
+afterEach(async () => {
 	db.close();
-	closeDbAccessor();
+	await closeDbAccessor();
 	if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
 });
 

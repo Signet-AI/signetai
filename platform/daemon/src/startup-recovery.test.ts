@@ -95,8 +95,8 @@ describe("runStartupRecovery", () => {
 		getDbAccessor().withWriteTx(seedTables);
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 	});
 

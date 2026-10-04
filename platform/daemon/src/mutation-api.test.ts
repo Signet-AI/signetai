@@ -93,8 +93,8 @@ memory:
 		app = daemon.app;
 	});
 
-	beforeEach(() => {
-		closeDbAccessor();
+	beforeEach(async () => {
+		await closeDbAccessor();
 		resetDbFiles();
 		initDbAccessor(join(agentsDir, "memory", "memories.db"));
 	});
@@ -103,8 +103,8 @@ memory:
 		closeDbAccessor();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeDbAccessor();
 		if (originalSignetPath === undefined) {
 			delete process.env.SIGNET_PATH;
 		} else {
