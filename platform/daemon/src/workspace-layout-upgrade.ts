@@ -28,6 +28,7 @@ import {
 export const WORKSPACE_LAYOUT_UPGRADE_FILE = ".workspace-layout-upgrade.json";
 
 const ARTIFACT_FILE = /^[^/\\]+--(?:summary|transcript|compaction|manifest)\.md$/;
+const TRANSCRIPT_FILE = /^transcript\.jsonl(?:\.lock)?$/;
 const DATABASE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
 export type LayoutMove = { readonly from: string; readonly to: string };
@@ -176,6 +177,21 @@ function isEmptyDirectory(path: string): boolean {
 	return !!existing && existing.isDirectory() && !existing.isSymbolicLink() && readdirSync(path).length === 0;
 }
 
+function upgradeBases(root: string): string[] {
+	const v1 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V1);
+	const v2 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V2);
+	return [
+		root,
+		...[v2.transcripts, v2.data].filter(
+			(path, index) => !inside(root, path) && path === [v1.transcripts, v1.data][index],
+		),
+	];
+}
+
+function baseFor(bases: readonly string[], move: LayoutMove): string | undefined {
+	return bases.find((candidate) => inside(candidate, move.from) && inside(candidate, move.to));
+}
+
 function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: string[] } {
 	const v1 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V1);
 	const v2 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V2);
@@ -185,12 +201,7 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 		if (from === to || !entry(from)) return;
 		moves.push({ from, to });
 	};
-	const bases = [
-		root,
-		...[v2.transcripts, v2.data].filter(
-			(path, index) => !inside(root, path) && path === [v1.transcripts, v1.data][index],
-		),
-	];
+	const bases = upgradeBases(root);
 
 	if (v1.database !== v2.database)
 		for (const suffix of DATABASE_SUFFIXES) add(v1.database + suffix, v2.database + suffix);
@@ -201,7 +212,9 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 		for (const harness of readdirSync(v1.transcripts)) {
 			const nested = join(v1.transcripts, harness, "transcripts");
 			if (!entry(join(v1.transcripts, harness))?.isDirectory() || !entry(nested)?.isDirectory()) continue;
-			for (const name of readdirSync(nested)) add(join(nested, name), join(v2.transcripts, harness, name));
+			for (const name of readdirSync(nested))
+				if (inside(root, nested) || TRANSCRIPT_FILE.test(name))
+					add(join(nested, name), join(v2.transcripts, harness, name));
 			emptied.push(nested);
 		}
 		if (v1.transcripts !== v2.transcripts)
@@ -238,7 +251,7 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 
 	const created = new Set<string>();
 	for (const move of moves) {
-		const base = bases.find((candidate) => inside(candidate, move.from) && inside(candidate, move.to));
+		const base = baseFor(bases, move);
 		if (!base) throw new UpgradeBlocked(`refusing to move ${move.from} outside its configured root`);
 		const label = (path: string): string => (base === root ? relative(root, path) : path);
 		const source = lstatSync(move.from);
@@ -292,33 +305,79 @@ function assertNoSymlinkAncestors(base: string, path: string): void {
 	}
 }
 
-function apply(root: string, record: InProgressRecord, rename: (from: string, to: string) => void): number {
-	let moved = 0;
+const LAUNCHER_ARTIFACTS = new Set(["daemon.lock", "logs"]);
+
+function launcherOnly(directory: string): boolean {
+	const names = readdirSync(directory);
+	if (!names.every((name) => LAUNCHER_ARTIFACTS.has(name))) return false;
+	const logs = join(directory, "logs");
+	if (!names.includes("logs")) return true;
+	const stat = entry(logs);
+	return (
+		!!stat &&
+		stat.isDirectory() &&
+		!stat.isSymbolicLink() &&
+		readdirSync(logs).every((name) => entry(join(logs, name))?.isFile() === true)
+	);
+}
+
+function absorbLauncherArtifacts(from: string, to: string, now: Date): void {
+	const logs = join(from, "logs");
+	if (entry(logs)) {
+		mkdirSync(join(to, "logs"), { recursive: true, mode: 0o700 });
+		for (const name of readdirSync(logs)) {
+			let target = join(to, "logs", name);
+			if (entry(target)) target = join(to, "logs", `${name}.${now.getTime()}`);
+			if (entry(target)) throw new UpgradeBlocked(`${target} already exists`);
+			renameSync(join(logs, name), target);
+		}
+		rmdirSync(logs);
+	}
+	if (entry(join(from, "daemon.lock"))) unlinkSync(join(from, "daemon.lock"));
+	rmdirSync(from);
+}
+
+function apply(
+	root: string,
+	record: InProgressRecord,
+	rename: (from: string, to: string) => void,
+	performed: LayoutMove[],
+	resumed: boolean,
+	now: Date,
+): void {
+	const runtime = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V1).runtime;
 	for (const move of record.moves) {
 		const from = resolve(root, move.from);
 		const to = resolve(root, move.to);
 		const source = entry(from);
 		if (!source) continue;
 		if (entry(to)) {
+			if (resumed && from === runtime && source.isDirectory() && launcherOnly(from)) {
+				absorbLauncherArtifacts(from, to, now);
+				continue;
+			}
 			if (!source.isDirectory() || !isEmptyDirectory(to)) throw new UpgradeBlocked(`${move.to} already exists`);
 			rmdirSync(to);
 		}
 		if (inside(root, from)) assertNoSymlinkAncestors(root, from);
 		mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
 		rename(from, to);
-		moved += 1;
+		performed.push(move);
 	}
 	for (const directory of record.emptiedDirectories) removeIfEmpty(resolve(root, directory));
-	return moved;
 }
 
-function rollback(root: string, record: InProgressRecord, rename: (from: string, to: string) => void): string[] {
+function rollback(
+	root: string,
+	performed: readonly LayoutMove[],
+	record: InProgressRecord,
+	rename: (from: string, to: string) => void,
+): string[] {
 	const stranded: string[] = [];
-	for (const move of [...record.moves].reverse()) {
+	for (const move of [...performed].reverse()) {
 		const from = resolve(root, move.from);
 		const to = resolve(root, move.to);
-		if (!entry(to)) continue;
-		if (entry(from)) {
+		if (!entry(to) || entry(from)) {
 			stranded.push(move.to);
 			continue;
 		}
@@ -367,6 +426,14 @@ export function upgradeWorkspaceLayout(
 	let record: InProgressRecord;
 	const resumed = existing?.state === "in-progress";
 	if (existing?.state === "in-progress") {
+		const bases = upgradeBases(root);
+		const outside = existing.moves.find(
+			(move) => !baseFor(bases, { from: resolve(root, move.from), to: resolve(root, move.to) }),
+		);
+		if (outside)
+			throw new Error(
+				`workspace layout upgrade record names a path outside the workspace and its configured roots: ${outside.from}`,
+			);
 		record = existing;
 	} else {
 		try {
@@ -387,14 +454,15 @@ export function upgradeWorkspaceLayout(
 		writeRecord(root, record);
 	}
 
+	const performed: LayoutMove[] = [];
 	try {
-		const moved = apply(root, record, rename);
+		apply(root, record, rename, performed, resumed, now());
 		if (layout.version !== WORKSPACE_LAYOUT_V2) {
 			persistWorkspaceLayout(root, { version: WORKSPACE_LAYOUT_V2, overrides: readWorkspaceLayoutOverrides(root) });
 			syncDirectory(root);
 		}
 		removeRecord(root);
-		return { status: "upgraded", moved, resumed };
+		return { status: "upgraded", moved: performed.length, resumed };
 	} catch (error) {
 		const cause = error instanceof Error ? error.message : String(error);
 		if (resumed)
@@ -402,18 +470,13 @@ export function upgradeWorkspaceLayout(
 				`workspace layout upgrade could not finish an interrupted run: ${cause}; ${WORKSPACE_LAYOUT_UPGRADE_FILE} lists the planned renames`,
 				{ cause: error },
 			);
-		const stranded = layout.version === WORKSPACE_LAYOUT_V2 ? [] : rollback(root, record, rename);
-		const reason =
-			stranded.length > 0
-				? `${cause}; could not restore ${stranded.join(", ")}`
-				: layout.version === WORKSPACE_LAYOUT_V2
-					? `${cause}; the workspace is already on layout v2`
-					: cause;
-		if (stranded.length > 0 || layout.version === WORKSPACE_LAYOUT_V2) {
-			throw new Error(`workspace layout upgrade could not finish: ${reason}`, { cause: error });
-		}
-		writeRecord(root, { version: 1, state: "blocked", reason, at: now().toISOString() });
-		return { status: "blocked", reason };
+		const stranded = rollback(root, performed, record, rename);
+		if (stranded.length > 0)
+			throw new Error(`workspace layout upgrade could not finish: ${cause}; could not restore ${stranded.join(", ")}`, {
+				cause: error,
+			});
+		writeRecord(root, { version: 1, state: "blocked", reason: cause, at: now().toISOString() });
+		return { status: "blocked", reason: cause };
 	}
 }
 

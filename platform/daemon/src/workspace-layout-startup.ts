@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, realpathSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
-import { preflightWorkspace, resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
+import { WORKSPACE_LAYOUT_V2, preflightWorkspace, resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
 import { acquireSingleInstanceLock, releaseSingleInstanceLock } from "./single-instance-lock";
 import {
 	type WorkspaceLayoutUpgradeResult,
@@ -48,6 +48,12 @@ export function runWorkspaceLayoutStartup(
 			return { status: "skipped", reason: "workspace selection is ambiguous at startup" };
 		if (workspace.status === "missing" || workspace.status === "incomplete")
 			return { status: "skipped", reason: `workspace is ${workspace.status}` };
+		if (
+			existsSync(root) &&
+			resolveWorkspaceLayout(root).version === WORKSPACE_LAYOUT_V2 &&
+			readWorkspaceLayoutUpgradeRecord(root)?.state !== "in-progress"
+		)
+			return upgradeWorkspaceLayout(root);
 		mkdirSync(root, { recursive: true });
 		const deadline = Date.now() + lockWaitMs;
 		for (;;) {

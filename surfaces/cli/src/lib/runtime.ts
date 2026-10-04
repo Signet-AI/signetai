@@ -2171,7 +2171,7 @@ export async function startDaemon(
 				process.platform === "linux" ? systemdUnitName : undefined,
 			);
 		const diagnostics = readDaemonStartFailureDiagnostics({
-			startupLogPath,
+			startupLogPath: existsSync(startupLogPath) ? startupLogPath : daemonStartupLogPath(agentsDir),
 			systemdUnitName: process.platform === "linux" ? systemdUnitName : undefined,
 			failureKind: processExitedDuringStart ? "process-exited" : "deadline",
 			startupDeadlineMs,

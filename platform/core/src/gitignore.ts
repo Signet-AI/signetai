@@ -13,6 +13,7 @@ export const SIGNET_GIT_PROTECTED_PATHS = [
 	"files",
 	"runtime",
 	"workspace-layout.json",
+	".workspace-layout-upgrade.json",
 	"node_modules",
 	":(glob)**/node_modules/**",
 	`${SIGNET_SOURCE_CHECKOUT_DIRNAME}`,
@@ -81,6 +82,7 @@ export function isSignetGitProtectedPath(path: string): boolean {
 		lower === "runtime" ||
 		lower.startsWith("runtime/") ||
 		lower === "workspace-layout.json" ||
+		lower === ".workspace-layout-upgrade.json" ||
 		lower === "node_modules" ||
 		lower.startsWith("node_modules/") ||
 		lower.includes("/node_modules/") ||
@@ -115,6 +117,7 @@ const SIGNET_GITIGNORE_PROTECTED_PATTERNS = [
 	"files/",
 	"runtime/",
 	"workspace-layout.json",
+	".workspace-layout-upgrade.json",
 	"node_modules/",
 	`${SIGNET_SOURCE_CHECKOUT_DIRNAME}/`,
 	"memory/memories.db*",

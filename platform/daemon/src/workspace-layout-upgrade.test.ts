@@ -248,21 +248,44 @@ describe("upgradeWorkspaceLayout", () => {
 		db.close();
 	});
 
-	it("refuses to start rather than guess when an interrupted run finds both sides of a rename", () => {
-		const { root } = v1Workspace();
+	function crashAfterRuntimeRename(root: string): void {
 		let terminated = false;
-		const killedAfterRuntimeRename = (from: string, to: string): void => {
-			if (terminated) throw new Error("process terminated");
-			renameSync(from, to);
-			if (to === join(root, "runtime")) {
-				terminated = true;
-				throw new Error("process terminated");
-			}
-		};
-		expect(() => upgradeWorkspaceLayout(root, { rename: killedAfterRuntimeRename })).toThrow(
-			"workspace layout upgrade could not finish",
-		);
-		write(root, ".daemon/logs/startup.log", "recreated by a launcher");
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					if (terminated) throw new Error("process terminated");
+					renameSync(from, to);
+					if (to === join(root, "runtime")) {
+						terminated = true;
+						throw new Error("process terminated");
+					}
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish");
+	}
+
+	it("finishes an interrupted run when a launcher recreated .daemon with only its logs", () => {
+		const { root } = v1Workspace();
+		crashAfterRuntimeRename(root);
+		write(root, ".daemon/logs/startup.log", "this launch");
+		write(root, ".daemon/logs/signet.log", "this launch");
+		write(root, ".daemon/daemon.lock", "");
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded", resumed: true });
+
+		expect(resolveWorkspaceLayout(root).version).toBe(2);
+		expect(existsSync(join(root, ".daemon"))).toBe(false);
+		expect(readFileSync(join(root, "runtime", "pid"), "utf8")).toBe("123");
+		expect(readFileSync(join(root, "runtime/logs/signet.log"), "utf8")).toBe(".daemon/logs/signet.log");
+		const logs = readdirSync(join(root, "runtime/logs"));
+		expect(logs).toContain("startup.log");
+		expect(logs.filter((name) => name.startsWith("signet.log.")).length).toBe(1);
+	});
+
+	it("refuses to start rather than guess when a recreated .daemon holds more than launcher logs", () => {
+		const { root } = v1Workspace();
+		crashAfterRuntimeRename(root);
+		write(root, ".daemon/pid", "999");
 
 		expect(() => upgradeWorkspaceLayout(root)).toThrow("could not finish an interrupted run");
 
@@ -272,16 +295,55 @@ describe("upgradeWorkspaceLayout", () => {
 		expect(resolveWorkspaceLayout(root).version).toBe(1);
 	});
 
+	it("reports a blocked upgrade, not a refusal, when a rename fails beside an empty v2 directory", () => {
+		const { root } = v1Workspace();
+		mkdirSync(join(root, "runtime"));
+		mkdirSync(join(root, "cache"));
+		const before = tree(root).filter((line) => !line.startsWith("runtime:") && !line.startsWith("cache:"));
+		const result = upgradeWorkspaceLayout(root, {
+			rename: () => {
+				throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+			},
+		});
+
+		expect(result).toEqual({ status: "blocked", reason: "EACCES: permission denied" });
+		expect(tree(root).filter((line) => !line.startsWith("runtime:") && !line.startsWith("cache:"))).toEqual(before);
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+	});
+
+	it("refuses a resumed record that names a path outside the workspace", () => {
+		const { root } = v1Workspace();
+		const outside = workspace();
+		write(outside, "victim.txt");
+		writeFileSync(
+			join(root, WORKSPACE_LAYOUT_UPGRADE_FILE),
+			JSON.stringify({
+				version: 1,
+				state: "in-progress",
+				startedAt: "2026-10-04T00:00:00.000Z",
+				moves: [{ from: join(outside, "victim.txt"), to: join(outside, "moved.txt") }],
+				createdDirectories: [],
+				emptiedDirectories: [],
+			}),
+		);
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow("outside the workspace and its configured roots");
+		expect(existsSync(join(outside, "victim.txt"))).toBe(true);
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+	});
+
 	it("normalizes transcripts inside an external transcript root", () => {
 		const { root } = v1Workspace();
 		const external = workspace();
 		write(external, "codex/transcripts/transcript.jsonl", "{}\n");
+		write(external, "podcast/transcripts/episode-01.txt", "user file");
 		persistWorkspaceLayout(root, { version: 1, overrides: { transcripts: external } });
 
 		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded" });
 
 		expect(readFileSync(join(external, "codex/transcript.jsonl"), "utf8")).toBe("{}\n");
 		expect(existsSync(join(external, "codex/transcripts"))).toBe(false);
+		expect(readFileSync(join(external, "podcast/transcripts/episode-01.txt"), "utf8")).toBe("user file");
 	});
 
 	it("accepts an empty pre-existing v2 directory", () => {
@@ -334,6 +396,26 @@ describe("runWorkspaceLayoutStartup", () => {
 			if (lock) releaseSingleInstanceLock(lock);
 			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"], 0)).toMatchObject({ status: "upgraded" });
 			expect(resolveWorkspaceLayout(root).version).toBe(2);
+		} finally {
+			if (lock) releaseSingleInstanceLock(lock);
+			if (previous === undefined) delete process.env.SIGNET_PATH;
+			else process.env.SIGNET_PATH = previous;
+		}
+	});
+
+	it("does not wait for the instance lock when the workspace is already on layout v2", () => {
+		const root = workspace();
+		persistWorkspaceLayout(root, { version: 2 });
+		const env = { ...process.env, SIGNET_PATH: root, SIGNET_DAEMON_ENTRYPOINT: "1" };
+		const previous = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = root;
+		write(root, "agent.yaml");
+		write(root, "data/signet.db", "");
+		const lock = acquireSingleInstanceLock(join(root, "runtime", "daemon.lock"));
+		try {
+			const started = performance.now();
+			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"], 10_000)).toEqual({ status: "current" });
+			expect(performance.now() - started).toBeLessThan(1_000);
 		} finally {
 			if (lock) releaseSingleInstanceLock(lock);
 			if (previous === undefined) delete process.env.SIGNET_PATH;

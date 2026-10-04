@@ -19,6 +19,7 @@ describe("mergeSignetGitignoreEntries", () => {
 		expect(merged).toContain("files/");
 		expect(merged).toContain(".secrets/");
 		expect(merged).toContain("workspace-layout.json");
+		expect(merged).toContain(".workspace-layout-upgrade.json");
 		expect(merged).toContain("memory/backups/");
 		expect(merged).toContain("*.db");
 		expect(merged).toContain("signetai/");
@@ -57,5 +58,11 @@ describe("mergeSignetGitignoreEntries", () => {
 		expect(isSignetGitTrackedPath("memory/backups/old.db")).toBe(false);
 		expect(isSignetGitTrackedPath("node_modules/package.json")).toBe(false);
 		expect(isSignetGitTrackedPath("app/node_modules/package.json")).toBe(false);
+	});
+});
+
+describe("workspace layout upgrade record", () => {
+	it("is never tracked by workspace git sync", () => {
+		expect(isSignetGitTrackedPath(".workspace-layout-upgrade.json")).toBe(false);
 	});
 });
