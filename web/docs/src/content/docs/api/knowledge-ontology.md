@@ -139,7 +139,8 @@ the returned graph is complete.
 
 The route probes the Dreaming episodic backlog using the configured token
 threshold and tokenizes at most 50 entries (with one additional source row as
-a lookahead). In `metadata.dreaming`,
+a lookahead). The probe considers only sources still waiting for Dreaming, so
+already delivered or reviewed sources do not use up its 50 slots. In `metadata.dreaming`,
 `episodicTokensPending` is an exact number only when
 `episodicBacklogProbe.kind` is `exact`; it is `null` for a threshold result or
 an incomplete scan. The probe exposes its status, not a partial token count.

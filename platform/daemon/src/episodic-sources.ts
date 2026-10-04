@@ -153,25 +153,13 @@ export function scanEpisodicSourceCandidates(
 	if (!Number.isSafeInteger(maxCandidates) || maxCandidates < 1 || maxCandidates > 50) {
 		throw new RangeError("Episodic source candidate limit must be an integer between 1 and 50");
 	}
-	const rows = db
-		.prepare(
-			`SELECT kind, id
-			 FROM (
-				SELECT 'memory' AS kind, id
-				FROM memories
-				WHERE agent_id = ? AND memory_kind = 'episodic'
-				UNION ALL
-				SELECT 'artifact' AS kind, source_path AS id
-				FROM memory_artifacts
-				WHERE agent_id = ?
-				UNION ALL
-				SELECT 'transcript' AS kind, session_key AS id
-				FROM session_transcripts
-				WHERE agent_id = ?
-			 )
-			 LIMIT ?`,
-		)
-		.all(agentId, agentId, agentId, maxCandidates + 1);
+	const rows = selectEpisodicSourceRefs(db, {
+		agentId,
+		query: "",
+		excludeDelivered: true,
+		limit: maxCandidates + 1,
+		order: "none",
+	});
 	const refs = rows.map((candidate): EpisodicSourceCandidateRef => {
 		if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
 			throw new Error("Unexpected episodic source candidate row");
@@ -849,21 +837,29 @@ export function episodicQueryTerms(query: string): readonly string[] {
 		.slice(0, MAX_QUERY_TERMS);
 }
 
-export function searchEpisodicSources(
+interface EpisodicSourceSearchParams {
+	readonly agentId: string;
+	readonly query: string;
+	readonly since?: string;
+	readonly before?: string;
+	readonly kind?: "memory" | "artifact" | "transcript" | "summary";
+	readonly excludeDelivered?: boolean;
+	readonly excludeSourceRefs?: readonly string[];
+	readonly limit?: number | null;
+	readonly order?: "newest" | "none";
+	readonly candidateRefs?: readonly EpisodicSourceCandidateRef[];
+}
+
+export function searchEpisodicSources(db: ReadDb, params: EpisodicSourceSearchParams): EpisodicSourceRecord[] {
+	return selectEpisodicSourceRefs(db, params)
+		.map((row) => readEpisodicSource(db, { agentId: params.agentId, from: `${row.kind}:${row.id}` }))
+		.filter((source): source is EpisodicSourceRecord => source !== null);
+}
+
+function selectEpisodicSourceRefs(
 	db: ReadDb,
-	params: {
-		readonly agentId: string;
-		readonly query: string;
-		readonly since?: string;
-		readonly before?: string;
-		readonly kind?: "memory" | "artifact" | "transcript" | "summary";
-		readonly excludeDelivered?: boolean;
-		readonly excludeSourceRefs?: readonly string[];
-		readonly limit?: number | null;
-		readonly order?: "newest" | "none";
-		readonly candidateRefs?: readonly EpisodicSourceCandidateRef[];
-	},
-): EpisodicSourceRecord[] {
+	params: EpisodicSourceSearchParams,
+): Array<{ readonly kind: EpisodicSourceKind; readonly id: string }> {
 	const query = params.query.trim();
 	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 51));
 	const terms = query === "" ? [] : episodicQueryTerms(query);
@@ -1039,7 +1035,5 @@ export function searchEpisodicSources(
 		kind: EpisodicSourceKind;
 		id: string;
 	}>;
-	return rows
-		.map((row) => readEpisodicSource(db, { agentId: params.agentId, from: `${row.kind}:${row.id}` }))
-		.filter((source): source is EpisodicSourceRecord => source !== null);
+	return rows;
 }

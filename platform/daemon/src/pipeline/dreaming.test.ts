@@ -1403,6 +1403,41 @@ describe("Dreaming", () => {
 		).toEqual({ trigger: true, reason: "token-threshold" });
 	});
 
+	it("measures a drained agent with more than 50 sources as an exact empty backlog", async () => {
+		for (let index = 0; index < 60; index += 1) {
+			seedTranscript(db, `drained-${index}`, `Session ${index} settled who owns build ${index}.`);
+		}
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					for (let page = 0; page < 5; page += 1) {
+						const result = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT, limit: 50 });
+						if (result.hasMore !== true) break;
+					}
+					return { summary: "Read every session" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(
+			db
+				.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_consumption WHERE delivered_offset >= source_length")
+				.get(),
+		).toEqual({ n: 60 });
+		expect(await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, AGENT, 1_000_000, 50)).toEqual({
+			kind: "exact",
+			tokens: 0,
+			hasBacklog: false,
+			sourcesScanned: 0,
+		});
+		expect(await hasDreamingEpisodicBacklog(accessor, AGENT)).toBe(false);
+	});
+
 	it("treats exactly 50 sources as a complete bounded page", async () => {
 		const agentId = "exact-fifty";
 		for (let index = 0; index < 50; index += 1) {
@@ -1426,7 +1461,7 @@ describe("Dreaming", () => {
 		expect(Number.isFinite(exact)).toBe(true);
 	});
 
-	it("does not claim an exact backlog after the bounded probe exhausts reviewed candidates", async () => {
+	it("finds a pending source behind more than 50 reviewed candidates", async () => {
 		const agentId = "bounded-reviewed-candidates";
 		const capturedAt = "2026-08-01T00:00:00.000Z";
 		for (let index = 0; index < 51; index += 1) {
@@ -1450,11 +1485,9 @@ describe("Dreaming", () => {
 
 		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
 
-		expect(probe.kind).toBe("indeterminate");
-		if (probe.kind !== "indeterminate") throw new Error("expected an indeterminate backlog probe");
-		expect(probe.tokenLowerBound).toBe(0);
-		expect(probe.hasBacklog).toBeNull();
-		expect(probe.sourcesScanned).toBe(0);
+		expect(probe).toMatchObject({ kind: "exact", hasBacklog: true, sourcesScanned: 1 });
+		if (probe.kind !== "exact") throw new Error("expected an exact backlog probe");
+		expect(probe.tokens).toBeGreaterThan(0);
 	});
 
 	it("does not claim an exact legacy backlog after the bounded probe exhausts ineligible sources", async () => {
@@ -1490,7 +1523,7 @@ describe("Dreaming", () => {
 		expect(JSON.stringify(evidence)).toContain("transcript:z-pending");
 	});
 
-	it("schedules an indeterminate backlog and surfaces distinct evidence beyond a duplicate reviewed page", async () => {
+	it("schedules a backlog behind a duplicate reviewed page and surfaces the distinct evidence", async () => {
 		const agentId = "bounded-reviewed-pass";
 		const capturedAt = "2026-08-01T00:00:00.000Z";
 		for (let index = 0; index < 51; index += 1) {
@@ -1524,7 +1557,7 @@ describe("Dreaming", () => {
 		});
 
 		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
-		expect(probe).toMatchObject({ kind: "indeterminate", hasBacklog: null, sourcesScanned: 0 });
+		expect(probe).toMatchObject({ kind: "exact", hasBacklog: true, sourcesScanned: 1 });
 		expect(await evaluateDreamingTrigger(accessor, cfg, agentId, probe, now)).toEqual({
 			trigger: true,
 			reason: "attention",
@@ -1620,7 +1653,8 @@ describe("Dreaming", () => {
 
 		expect(query.parameters[query.parameters.length - 1]).toBe(51);
 		expect(plan.some((row) => row.detail.includes("idx_memories_agent_kind"))).toBe(true);
-		expect(plan.some((row) => row.detail.includes("SEARCH memory_artifacts"))).toBe(true);
+		expect(plan.some((row) => /SEARCH (memory_artifacts|ma) /.test(row.detail))).toBe(true);
+		expect(plan.some((row) => /SCAN (dec|der)\b/.test(row.detail))).toBe(false);
 		expect(plan.some((row) => row.detail.includes("SEARCH session_transcripts"))).toBe(true);
 		expect(plan.some((row) => row.detail.includes("USE TEMP B-TREE"))).toBe(false);
 		const filteredSearch = captured.queries.find(
