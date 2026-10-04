@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, sep } from "node:path";
+import { dirname, join } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
 import { extractAnchorTerms } from "./anchor-terms";
 import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor } from "./db-accessor";
@@ -204,7 +204,7 @@ async function backfillMarkdownTranscriptArtifacts(
 				project: parsed.frontmatter.project || null,
 				capturedAt: parsed.frontmatter.captured_at || new Date().toISOString(),
 				sourceFormat: "markdown" as const,
-				sourcePath: relative(basePath, path).split(sep).join("/"),
+				sourcePath: `memory/${name}`,
 				transcript: parsed.body,
 			};
 			const { classification } = await getSeen(harness);

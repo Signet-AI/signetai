@@ -61,7 +61,7 @@ defaults, and a rejected reload keeps the previously accepted authentication
 state.
 
 In `"local"` mode the token secret is generated automatically and stored
-at `$SIGNET_WORKSPACE/.daemon/auth-secret`. In `"team"` and `"hybrid"` modes,
+at `$SIGNET_WORKSPACE/runtime/auth-secret`. In `"team"` and `"hybrid"` modes,
 the daemon validates HMAC-signed bearer tokens with role and scope
 claims.
 
@@ -232,7 +232,7 @@ editing the config file is impractical.
 | `SIGNET_HOST` | `127.0.0.1` | Daemon host for local calls |
 | `SIGNET_BIND` | network mode bind | Explicit bind address override (`0.0.0.0`, etc.); defaults to `127.0.0.1` in localhost mode and `0.0.0.0` in tailscale mode |
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
-| `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
+| `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/runtime/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
 | `SIGNET_DB_OWNER_START_TIMEOUT_MS` | `15000` | DB-owner protocol startup deadline in ms. Readiness is published before database initialization; this remains a bounded fallback for worker launch failures |
 | `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start daemon wait budget in ms for Signet-managed clients. Generated Claude Code hook config writes this value directly. Generated Codex hook config rounds up to seconds and adds 5 seconds of harness grace |

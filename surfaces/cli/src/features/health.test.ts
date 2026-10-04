@@ -1631,10 +1631,11 @@ describe("daemon lifecycle exit findings (#1148)", () => {
 		const root = mkdtempSync(join(tmpdir(), "doctor-lifecycle-v2-"));
 		try {
 			writeFileSync(join(root, "workspace-layout.json"), `${JSON.stringify({ version: 2 })}\n`);
+			const exited = spawnSync(process.execPath, ["-e", ""]).pid;
 			const jsonOut = await captureDoctorJson(
 				lifecycleDeps(root, {
 					state: "running",
-					pid: 4242,
+					pid: exited,
 					version: "0.165.0",
 					startedAt: "2026-08-07T00:00:00.000Z",
 				}).getDaemonStatus,

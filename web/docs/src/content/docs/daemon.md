@@ -70,7 +70,7 @@ the compiled executable. The selected runtime is returned by `/health`,
 
 The daemon loads `agent.yaml` from the selected workspace. Some files and service settings can be observed after startup, but long-running pipeline workers begin from a configuration snapshot. Restart after changing pipeline, embedding, inference, auth, or network configuration.
 
-A configured workspace is not treated as first-run state after it disappears. The daemon exits before creating `.daemon/`, opening SQLite, or writing plugin and telemetry state when the selected workspace is `missing` or `incomplete`. Use `signet workspace status` to inspect the state, then restore the configured path or run an explicit setup or replacement action.
+A configured workspace is not treated as first-run state after it disappears. The daemon exits before creating its runtime directory, opening SQLite, or writing plugin and telemetry state when the selected workspace is `missing` or `incomplete`. Use `signet workspace status` to inspect the state, then restore the configured path or run an explicit setup or replacement action.
 
 ```bash
 signet daemon restart
@@ -94,7 +94,7 @@ The full request and response surface is in [HTTP API](/api/). Do not automate a
 
 ## Logs and local state
 
-Runtime state lives under `$SIGNET_WORKSPACE/.daemon/`. By default, daemon logs are written there; `SIGNET_LOG_FILE` can select an explicit log file and `SIGNET_LOG_DIR` can select a log directory. Use the CLI first:
+Runtime state lives under `$SIGNET_WORKSPACE/runtime/` (`.daemon/` on a legacy v1 workspace until the daemon upgrades it). By default, daemon logs are written there; `SIGNET_LOG_FILE` can select an explicit log file and `SIGNET_LOG_DIR` can select a log directory. Use the CLI first:
 
 ```bash
 signet daemon logs
