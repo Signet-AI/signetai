@@ -768,7 +768,7 @@ describe("dreaming operations", () => {
 		expect(result.error).toContain("Hygiene archives require attention provenance");
 	});
 
-	it("says when a hygiene archive cites an attention id that is not in this agent", async () => {
+	it("says when a hygiene merge cites an attention id that is not pending in this agent", async () => {
 		insertEntity("e-target", "Acme", "acme");
 		insertEntity("e-source", "Acme App", "acme");
 		const flagged = await applyDreamingOperations({
@@ -795,7 +795,37 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(false);
-		expect(result.error).toContain(`no hygiene attention ${miscopied} in this agent`);
+		expect(result.error).toContain(`${miscopied} is not a pending hygiene attention in this agent`);
+	});
+
+	it("names merge targets outside the flagged duplicate group", async () => {
+		insertEntity("e-target", "Acme", "acme");
+		insertEntity("e-source", "Acme App", "acme");
+		insertEntity("e-other", "Acme Holdings", "acme holdings");
+		const flagged = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				flag({ subjectRef: "duplicate:acme", details: { canonicalName: "acme", reason: "duplicate_canonical_name" } }),
+			],
+		});
+		const attentionId = (flagged.items[0] as { result?: { attentionId?: string } }).result?.attentionId ?? "";
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "merge_entities",
+					payload: { targets: ["e-other", "e-target"], survivor: "e-target" },
+					provenance: `attention:${attentionId}`,
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain('targets e-other are not in the "acme" duplicate group');
+		expect(result.error).toContain("decline_attention");
 	});
 
 	it("merges a flagged duplicate group via targets/survivor", async () => {

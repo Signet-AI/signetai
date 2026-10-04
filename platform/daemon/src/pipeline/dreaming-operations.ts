@@ -255,8 +255,11 @@ function hygieneProvenanceError(accessor: DbAccessor, agentId: string, operation
 	if (!reference.startsWith("attention:") || /^attention:\$\d+$/.test(reference)) return HYGIENE_PROVENANCE_ERROR;
 	const id = reference.slice("attention:".length);
 	const attention = id ? getDreamingAttentionById(accessor, { agentId, id }) : null;
-	if (attention !== null && attention.kind === "hygiene") return HYGIENE_PROVENANCE_ERROR;
-	return `${HYGIENE_PROVENANCE_ERROR}: no hygiene attention ${id} in this agent; copy its id exactly from attention_list`;
+	if (attention === null || attention.kind !== "hygiene") {
+		return `${HYGIENE_PROVENANCE_ERROR}: ${id} is not a pending hygiene attention in this agent (already resolved, or the id is mistyped); copy a pending id from attention_list`;
+	}
+	const mismatch = attentionTargetMismatch(accessor, agentId, operation, attention);
+	return mismatch === null ? HYGIENE_PROVENANCE_ERROR : `${HYGIENE_PROVENANCE_ERROR}: ${mismatch}`;
 }
 function pinnedBySubjectRef(subjectRef: string, prefix: string): string | null {
 	if (!subjectRef.startsWith(prefix)) return null;
@@ -269,18 +272,27 @@ function hasExpectedAttentionTarget(
 	operation: DreamingOperationRequest,
 	attention: DreamingAttention,
 ): boolean {
+	return attentionTargetMismatch(accessor, agentId, operation, attention) === null;
+}
+
+function attentionTargetMismatch(
+	accessor: DbAccessor,
+	agentId: string,
+	operation: DreamingOperationRequest,
+	attention: DreamingAttention,
+): string | null {
 	const payload = operation.payload;
 	if (operation.operation === "archive_entity") {
-		return pinnedTarget(payload, attention, "entity:", "entityId");
+		return pinnedTargetMismatch(payload, attention, "entity:", "entityId");
 	}
 	if (operation.operation === "archive_aspect") {
-		return pinnedTarget(payload, attention, "aspect:", "aspectId");
+		return pinnedTargetMismatch(payload, attention, "aspect:", "aspectId");
 	}
 	if (operation.operation === "archive_claim_value") {
-		return pinnedTarget(payload, attention, "attribute:", "attributeId");
+		return pinnedTargetMismatch(payload, attention, "attribute:", "attributeId");
 	}
 	if (operation.operation === "archive_link") {
-		return pinnedTarget(payload, attention, "link:", "linkId");
+		return pinnedTargetMismatch(payload, attention, "link:", "linkId");
 	}
 	if (operation.operation === "merge_entities") {
 		const targets = Array.isArray(payload.targets)
@@ -289,35 +301,42 @@ function hasExpectedAttentionTarget(
 		const survivor = typeof payload.survivor === "string" ? payload.survivor : "";
 		const canonicalName =
 			attention.details.canonicalName ?? pinnedBySubjectRef(attention.subjectRef, "duplicate:") ?? "";
+		if (canonicalName.length === 0 || attention.subjectRef !== `duplicate:${canonicalName}`) {
+			return `attention ${attention.id} flags ${attention.subjectRef}, not a duplicate group`;
+		}
 		const groupIds = semanticDuplicateIds(accessor, agentId, canonicalName);
-		return (
-			canonicalName.length > 0 &&
-			attention.subjectRef === `duplicate:${canonicalName}` &&
-			groupIds.size > 1 &&
-			groupIds.has(survivor) &&
-			targets.length >= 2 &&
-			targets.every((id) => groupIds.has(id)) &&
-			targets.includes(survivor) &&
-			targets.some((id) => id !== survivor)
-		);
+		if (groupIds.size <= 1) {
+			return `no duplicate group named "${canonicalName}" remains; decline_attention if the flag no longer applies`;
+		}
+		const outside = targets.filter((id) => !groupIds.has(id));
+		if (outside.length > 0) {
+			return `targets ${outside.join(", ")} are not in the "${canonicalName}" duplicate group (${[...groupIds].join(", ")}); merge only that group, or decline_attention if the flag is wrong`;
+		}
+		if (
+			!groupIds.has(survivor) ||
+			targets.length < 2 ||
+			!targets.includes(survivor) ||
+			!targets.some((id) => id !== survivor)
+		) {
+			return "targets must list the survivor and at least one other member of the duplicate group";
+		}
+		return null;
 	}
 	if (operation.operation === "merge_aspects") {
 		const sources = Array.isArray(payload.sources)
 			? payload.sources.filter((value): value is string => typeof value === "string")
 			: [];
 		const pinnedAspect = pinnedBySubjectRef(attention.subjectRef, "aspect:");
-		const detailAgrees =
-			pinnedAspect !== null &&
-			(attention.details.aspectId === undefined || attention.details.aspectId === pinnedAspect);
-		return (
-			detailAgrees &&
-			typeof payload.target === "string" &&
-			sources.length >= 1 &&
-			pinnedAspect !== null &&
-			sources.includes(pinnedAspect)
-		);
+		if (pinnedAspect === null) return `attention ${attention.id} flags ${attention.subjectRef}, not an aspect`;
+		if (attention.details.aspectId !== undefined && attention.details.aspectId !== pinnedAspect) {
+			return `attention ${attention.id} details disagree with its subjectRef`;
+		}
+		if (typeof payload.target !== "string" || !sources.includes(pinnedAspect)) {
+			return `payload.sources must include the flagged aspect ${pinnedAspect} and payload.target must name the surviving aspect`;
+		}
+		return null;
 	}
-	return false;
+	return `${operation.operation} cannot resolve a hygiene attention`;
 }
 function sameBatchFlagIndex(
 	accessor: DbAccessor,
@@ -364,17 +383,22 @@ function sameBatchFlagIndex(
 	}
 	return null;
 }
-function pinnedTarget(
+function pinnedTargetMismatch(
 	payload: Readonly<Record<string, unknown>>,
 	attention: DreamingAttention,
 	prefix: string,
 	detailKey: keyof DreamingAttention["details"],
-): boolean {
+): string | null {
+	const pinned = pinnedBySubjectRef(attention.subjectRef, prefix);
+	if (pinned === null) {
+		return `attention ${attention.id} flags ${attention.subjectRef}, not ${prefix.slice(0, -1)}; cite an attention for this target`;
+	}
 	const target = typeof payload.target === "string" ? payload.target : null;
-	const pinned = target !== null ? pinnedBySubjectRef(attention.subjectRef, prefix) : null;
-	if (pinned === null || target !== pinned) return false;
+	if (target !== pinned) return `payload.target must be ${pinned}, the ${prefix.slice(0, -1)} this attention flags`;
 	const detail = attention.details[detailKey];
-	return detail === undefined || detail === target;
+	return detail === undefined || detail === target
+		? null
+		: `attention ${attention.id} details disagree with its subjectRef`;
 }
 
 function provenanceForEvidence(
