@@ -6,6 +6,7 @@ import { parse as parseYaml } from "yaml";
 import {
 	BENCH_CREDENTIAL_ENV,
 	attachBenchCredential,
+	benchUsesSubscription,
 	benchDreamingCodemode,
 	benchDreamingConcurrency,
 	buildSetupArgs,
@@ -98,6 +99,19 @@ describe("MemoryBench launcher", () => {
 		const target = parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).inference.targets.background;
 		expect(target.executor).toBe("openai-compatible");
 		expect(target.endpoint).toBe("https://open.bigmodel.cn/api/coding/paas/v4");
+	});
+
+	test("attaches a ChatGPT subscription account without an API key reference", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
+		attachBenchCredential(dir, "openai-codex");
+		const config = parseYaml(await readFile(join(dir, "agent.yaml"), "utf8"));
+		const account = Object.values(config.inference.accounts as Record<string, Record<string, unknown>>).find(
+			(entry) => entry.providerFamily === "openai-codex",
+		);
+		expect(account).toEqual({ kind: "subscription_session", providerFamily: "openai-codex" });
+		expect(config.inference.targets.background.executor).toBe("openai-codex");
+		expect(benchUsesSubscription("zai-coding-cn")).toBe(false);
 	});
 
 	test("refuses a workspace without the setup-written background target", async () => {

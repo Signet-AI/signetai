@@ -234,6 +234,12 @@ export function buildSetupArgs(agentsDir: string, port: number, model: BenchMode
 	];
 }
 
+const SUBSCRIPTION_PROVIDER_FAMILIES: ReadonlySet<string> = new Set(["openai-codex"]);
+
+export function benchUsesSubscription(providerFamily: string): boolean {
+	return SUBSCRIPTION_PROVIDER_FAMILIES.has(providerFamily);
+}
+
 export function attachBenchCredential(agentsDir: string, providerFamily: string): void {
 	const path = join(agentsDir, "agent.yaml");
 	const config = parseYaml(readFileSync(path, "utf8")) as Record<string, unknown>;
@@ -245,7 +251,9 @@ export function attachBenchCredential(agentsDir: string, providerFamily: string)
 	}
 	inference.accounts = {
 		...(inference.accounts as Record<string, unknown> | undefined),
-		[BENCH_ACCOUNT]: { kind: "api", providerFamily, credentialRef: BENCH_CREDENTIAL_ENV },
+		[BENCH_ACCOUNT]: benchUsesSubscription(providerFamily)
+			? { kind: "subscription_session", providerFamily }
+			: { kind: "api", providerFamily, credentialRef: BENCH_CREDENTIAL_ENV },
 	};
 	target.account = BENCH_ACCOUNT;
 	target.privacy = "restricted_remote";
@@ -409,7 +417,7 @@ async function main(): Promise<void> {
 	mkdirSync(home, { recursive: true });
 	const model = resolveBenchModel();
 	const apiKey = process.env.SIGNET_BENCH_DREAMING_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || "";
-	if (!apiKey && !isLocalEndpoint(model.endpoint)) {
+	if (!apiKey && !isLocalEndpoint(model.endpoint) && !benchUsesSubscription(model.providerFamily)) {
 		throw new Error(
 			`The benchmark daemon needs an API key for ${model.endpoint}; set ZAI_API_KEY in memorybench/.env or SIGNET_BENCH_DREAMING_API_KEY`,
 		);
