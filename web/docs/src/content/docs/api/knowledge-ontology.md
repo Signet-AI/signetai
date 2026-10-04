@@ -818,7 +818,8 @@ An incremental trigger may start several passes. The daemon splits the agents
 that are not already in a running pass into up to `memory.dreaming.maxConcurrentPasses`
 groups (default 2), balanced by evidence backlog, and runs one pass per group.
 It never starts more passes than `worker.maxLlmConcurrency` allows, because a
-pass waiting for a shared LLM permit would spend its own timeout waiting.
+pass waiting for a shared LLM permit would spend its own timeout waiting, or more
+than the daemon's four Pi agent worker threads.
 Each pass may read and write only its own group's agents, and an agent is in at
 most one running pass. The first pass starts immediately; the other groups start
 only after it completes a tool call, so an unavailable provider is not called once
