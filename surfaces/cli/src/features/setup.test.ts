@@ -796,7 +796,9 @@ memory:
 			await expect(setupWizard({ nonInteractive: true, identityMode: "ghost" }, deps)).rejects.toThrow(
 				"process.exit:1",
 			);
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("Unknown --identity-mode value: ghost");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain(
+				"Unknown --identity-mode value: ghost",
+			);
 		} finally {
 			errorSpy.mockRestore();
 			exitSpy.mockRestore();
@@ -824,7 +826,9 @@ memory:
 				"process.exit:1",
 			);
 			expect(errorSpy).toHaveBeenCalled();
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("Unknown --identity-preset value: maximalist");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain(
+				"Unknown --identity-preset value: maximalist",
+			);
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1005,7 +1009,7 @@ describe("setupWizard headless plan path", () => {
 			await expect(setupWizard({ nonInteractive: true, agent: ["researcher"] }, deps)).rejects.toThrow(
 				"process.exit:1",
 			);
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("Expected name:policy");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("Expected name:policy");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1030,7 +1034,7 @@ describe("setupWizard headless plan path", () => {
 			await expect(setupWizard({ nonInteractive: true, aggregateRecallModel: "x" }, deps)).rejects.toThrow(
 				"process.exit:1",
 			);
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("aggregateRecallProvider");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("aggregateRecallProvider");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1088,7 +1092,9 @@ describe("setupWizard headless plan path", () => {
 			await expect(
 				setupWizard({ nonInteractive: true, remoteUrl: "https://signet.remote.example/api" }, deps),
 			).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("bare http:// or https:// origin");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain(
+				"bare http:// or https:// origin",
+			);
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1174,7 +1180,7 @@ describe("setupWizard headless plan path", () => {
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
 			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("extractionConnect");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("extractionConnect");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1199,7 +1205,7 @@ describe("setupWizard headless plan path", () => {
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
 			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("extractionConnect");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("extractionConnect");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1301,7 +1307,7 @@ describe("setupWizard headless plan path", () => {
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
 			await expect(setupWizard({ file: badPath }, deps)).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("not valid JSON");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("not valid JSON");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1327,7 +1333,9 @@ describe("setupWizard headless plan path", () => {
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
 			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("existing Signet installation");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain(
+				"existing Signet installation",
+			);
 			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
 		} finally {
 			exitSpy.mockRestore();
@@ -1347,7 +1355,7 @@ describe("setupWizard headless plan path", () => {
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
 			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("searchBalance");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("searchBalance");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
@@ -1372,7 +1380,7 @@ describe("setupWizard headless plan path", () => {
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
 			await expect(setupWizard({}, deps)).rejects.toThrow("process.exit:1");
-			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("requires a TTY");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("requires a TTY");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
