@@ -169,7 +169,9 @@ export function classifyEntityQuality(name: string, type?: string): EntityQualit
 	}
 	if (/^\d+$/.test(canonical)) return { ok: false, reason: "numeric_only" };
 	if (GENERIC_CANONICAL_NAMES.has(canonical)) return { ok: false, reason: "generic_or_scaffolding_name" };
-	if (METADATA_LABELS.has(canonical)) return { ok: false, reason: "metadata_role" };
+	if (METADATA_LABELS.has(canonical) && !(canonical === "user" && normalizedType === "person")) {
+		return { ok: false, reason: "metadata_role" };
+	}
 	if (DISCOURSE_WORDS.has(canonical)) return { ok: false, reason: "discourse_fragment" };
 	if (/^(user|assistant|system|sender|recipient|author)\b[:\s-]+/i.test(name.trim())) {
 		return { ok: false, reason: "role_prefixed_scaffolding" };

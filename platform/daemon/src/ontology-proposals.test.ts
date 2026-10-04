@@ -580,6 +580,31 @@ describe("ontology proposals", () => {
 		).toEqual({ count: 0 });
 	});
 
+	it("creates an unnamed user as a person but not as an untyped label", async () => {
+		await expect(
+			applyOntologyOperation(getDbAccessor(), {
+				agentId: "ant",
+				actor: "test",
+				operation: "create_entity",
+				payload: { name: "User" },
+			}),
+		).rejects.toThrow("Entity name rejected: metadata_role");
+		await applyOntologyOperation(getDbAccessor(), {
+			agentId: "ant",
+			actor: "test",
+			operation: "create_entity",
+			payload: { name: "User", entity_type: "person" },
+		});
+		expect(
+			getDbAccessor().withReadDb(
+				(db) =>
+					db.prepare("SELECT entity_type FROM entities WHERE agent_id = ? AND name = ?").get("ant", "User") as {
+						entity_type: string;
+					},
+			),
+		).toEqual({ entity_type: "person" });
+	});
+
 	it("does not archive an aspect that has an active constraint without force", async () => {
 		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",

@@ -690,7 +690,7 @@ function resolveEntity(db: WriteDb, agentId: string, name: string): string | nul
 function resolveOrCreateEntity(db: WriteDb, agentId: string, name: string, type: EntityType): string {
 	const existing = resolveEntity(db, agentId, name);
 	if (existing !== null) return existing;
-	const quality = classifyEntityQuality(name);
+	const quality = classifyEntityQuality(name, type === "person" ? type : undefined);
 	if (!quality.ok) throw new OntologyProposalError(`Entity name rejected: ${quality.reason}`, 400);
 	const id = crypto.randomUUID();
 	db.prepare(
