@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { ReadDb, WriteDb } from "../db-accessor";
 import { type EpisodicSourceKind, type EpisodicSourceRecord, readEpisodicSource } from "../episodic-sources";
 import { renderDreamingEvidence } from "./dreaming-evidence";
@@ -13,7 +14,11 @@ export interface DreamingEvidenceDelivery {
 	readonly start: number;
 	readonly end: number;
 	readonly length: number;
-	readonly content: string;
+	readonly contentSha256: string;
+}
+
+export function evidenceContentSha256(content: string): string {
+	return createHash("sha256").update(content).digest("hex");
 }
 
 function tableExists(db: ReadDb, table: string): boolean {
@@ -86,6 +91,15 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 			const start =
 				typeof row?.contentOffset === "number" && Number.isSafeInteger(row.contentOffset) ? row.contentOffset : null;
 			const content = text(row?.content);
+			const compactChars =
+				typeof row?.contentChars === "number" && Number.isSafeInteger(row.contentChars) ? row.contentChars : null;
+			const compactSha256 = text(row?.contentSha256);
+			const delivered =
+				content !== null
+					? { chars: content.length, sha256: evidenceContentSha256(content) }
+					: compactChars !== null && compactChars > 0 && compactSha256 !== null
+						? { chars: compactChars, sha256: compactSha256 }
+						: null;
 			const length =
 				typeof row?.contentLength === "number" && Number.isSafeInteger(row.contentLength) ? row.contentLength : null;
 			if (
@@ -93,13 +107,13 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 				!capturedAt ||
 				!sourceRevision ||
 				start === null ||
-				!content ||
+				delivered === null ||
 				length === null ||
 				start < 0 ||
 				length < start
 			)
 				return [];
-			const end = start + content.length;
+			const end = start + delivered.chars;
 			if (end > length) return [];
 			return [
 				{
@@ -112,7 +126,7 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 					start,
 					end,
 					length,
-					content,
+					contentSha256: delivered.sha256,
 				},
 			];
 		});
@@ -260,7 +274,7 @@ export function verifiedDreamingEvidenceDelivery(
 	if (
 		rendered.length !== delivery.length ||
 		delivery.end > rendered.length ||
-		rendered.slice(delivery.start, delivery.end) !== delivery.content
+		evidenceContentSha256(rendered.slice(delivery.start, delivery.end)) !== delivery.contentSha256
 	) {
 		return null;
 	}

@@ -2650,6 +2650,37 @@ describe("Dreaming", () => {
 		expect(page.hasMore).toBe(true);
 	});
 
+	it("keeps delivery ranges durable when a large evidence page exceeds the trace limit", async () => {
+		seedTranscript(db, "large-source", 'The user said "keep going" on line\n'.repeat(15_000));
+		const pages: Array<Record<string, unknown>> = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+					return { summary: "Read two large pages" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 800_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const offsets = pages.map((page) => (page.items as Array<{ contentOffset: number }>)[0]?.contentOffset);
+		expect(offsets[0]).toBe(0);
+		expect(offsets[1]).toBeGreaterThan(0);
+		const trace = db
+			.prepare("SELECT output_json AS output FROM dreaming_tool_calls WHERE tool_name = 'search_evidence' LIMIT 1")
+			.get() as { output: string };
+		expect(JSON.parse(trace.output)).toMatchObject({ truncated: true });
+		const consumed = db
+			.prepare("SELECT delivered_offset AS offset FROM dreaming_evidence_consumption WHERE source_id = ?")
+			.get("large-source") as { offset: number } | null;
+		expect(consumed?.offset ?? 0).toBeGreaterThan(offsets[1] ?? 0);
+	});
+
 	it("pages the delivery queue within a pass and records the full read offsets", async () => {
 		seedTranscript(db, "queue-long", "a".repeat(40_000));
 		seedTranscript(db, "queue-short", "b".repeat(1_200));

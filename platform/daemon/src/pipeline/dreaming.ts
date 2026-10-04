@@ -63,6 +63,7 @@ import { commitCuratedMemoryHeadInDb } from "../memory-head-owner";
 import { renderDreamingEvidence } from "./dreaming-evidence";
 import {
 	deliveredOffsetForSource,
+	evidenceContentSha256,
 	failedOperationEvidence,
 	recordDreamingEvidenceConsumptionInTx,
 } from "./dreaming-evidence-consumption";
@@ -716,10 +717,23 @@ function serializeToolTrace(value: unknown): string {
 	}
 	if (json === undefined) return "null";
 	if (json.length <= MAX_DREAMING_TOOL_TRACE_JSON_CHARS) return json;
+	const items = compactTraceItems(value);
+	const durable = items === null ? {} : { ok: true, items };
+	const previewChars = Math.max(0, MAX_DREAMING_TOOL_TRACE_JSON_CHARS - JSON.stringify(durable).length);
 	return JSON.stringify({
 		truncated: true,
 		originalChars: json.length,
-		preview: json.slice(0, MAX_DREAMING_TOOL_TRACE_JSON_CHARS),
+		...durable,
+		preview: json.slice(0, previewChars),
+	});
+}
+
+function compactTraceItems(value: unknown): unknown[] | null {
+	if (!isRecord(value) || value.ok !== true || !Array.isArray(value.items)) return null;
+	return value.items.map((item) => {
+		if (!isRecord(item) || typeof item.content !== "string") return item;
+		const { content, ...metadata } = item;
+		return { ...metadata, contentChars: content.length, contentSha256: evidenceContentSha256(content) };
 	});
 }
 
