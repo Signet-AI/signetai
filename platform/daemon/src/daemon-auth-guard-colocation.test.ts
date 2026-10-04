@@ -62,7 +62,10 @@ describe("auth guard co-location", () => {
 		closeAccessor = closeDbAccessor;
 		const state = await import("./routes/state.js");
 		state.reloadAuthState(tmpDir);
-		resetAuth = () => state.reloadAuthState(state.AGENTS_DIR);
+		resetAuth = () => {
+			writeFileSync(join(tmpDir, "agent.yaml"), "auth:\n  mode: local\n");
+			state.reloadAuthState(tmpDir);
+		};
 	});
 
 	async function makeApp(): Promise<InstanceType<typeof import("hono").Hono>> {
