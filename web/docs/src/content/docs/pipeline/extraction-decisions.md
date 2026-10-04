@@ -153,8 +153,10 @@ A failed ontology operation withholds progress only for the sources it cites;
 a failure that cites no source, including one whose operations could not be
 parsed, withholds progress for the sources in its agent scope that no
 successful write in the pass cited, so filed sources and other scopes in the
-same pass still record what was read. A failed write whose trace cannot be
-read withholds every scope in the pass.
+same pass still record what was read. Hygiene operations (flags, declines,
+and the archives and merges that cite attention records) carry no evidence, so
+their failures withhold nothing. A failed write whose trace cannot be read
+withholds every scope in the pass.
 An `incremental-content` pass must stage exactly one `memory_head_commit`, and
 fails if the agent ends without one. A pass with nothing to publish resubmits
 the current entries, or an empty entry set while the head is still empty. The

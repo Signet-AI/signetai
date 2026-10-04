@@ -10,7 +10,7 @@ import {
 import { runWriteBatches } from "../yielding-writes";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
-import { DREAMING_OPERATION_IDS } from "./dreaming-operation-contract";
+import { DREAMING_HYGIENE_ARCHIVE_OPERATIONS, DREAMING_OPERATION_IDS } from "./dreaming-operation-contract";
 
 export interface DreamingOperationRequest {
 	readonly operation: string;
@@ -53,14 +53,6 @@ const DREAMING_WRITE_MAX_TX_DURATION_MS = 50;
 
 const FLAG_OP = "flag";
 const DECLINE_ATTENTION_OP = "decline_attention";
-const HYGIENE_ARCHIVE_OPS = new Set([
-	"archive_entity",
-	"archive_aspect",
-	"archive_claim_value",
-	"archive_link",
-	"merge_entities",
-	"merge_aspects",
-]);
 
 function citationRecord(value: unknown): {
 	readonly sourceRef: string;
@@ -209,7 +201,7 @@ function attentionProvenance(
 ): { readonly provenance: DreamingOperationProvenance; readonly attentionId: string } | null {
 	const reference = operation.provenance?.trim();
 	if (!reference?.startsWith("attention:")) return null;
-	if (!HYGIENE_ARCHIVE_OPS.has(operation.operation)) return null;
+	if (!DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) return null;
 	const payload = operation.payload;
 
 	let attention: DreamingAttention | null = null;
@@ -719,7 +711,7 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 
 		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
 		if ("error" in applicator) return unresolvedTarget(index, operation.operation, applicator.error);
-		if (HYGIENE_ARCHIVE_OPS.has(operation.operation)) {
+		if (DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) {
 			const reference = operation.provenance?.trim();
 			const sameBatch = reference?.match(/^attention:\$(\d+)$/);
 			if (sameBatch) {
@@ -938,7 +930,7 @@ export async function applyDreamingOperations(
 		}
 		let provenance: DreamingOperationProvenance | null = null;
 		let attentionId: string | null = null;
-		if (HYGIENE_ARCHIVE_OPS.has(operation.operation)) {
+		if (DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) {
 			const resolved = attentionProvenance(
 				params.accessor,
 				params.agentId,
@@ -985,7 +977,7 @@ export async function applyDreamingOperations(
 				sourceRoot: provenance.sourceRoot,
 			},
 			attentionId,
-			reviewOnly: operation.risk === "review_required" && !HYGIENE_ARCHIVE_OPS.has(operation.operation),
+			reviewOnly: operation.risk === "review_required" && !DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation),
 		});
 	}
 

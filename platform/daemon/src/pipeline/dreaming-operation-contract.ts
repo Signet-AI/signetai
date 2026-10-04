@@ -84,6 +84,21 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 	create_interface: payload({ name: entityName }),
 } as const satisfies Record<string, z.ZodType>;
 
+export const DREAMING_HYGIENE_ARCHIVE_OPERATIONS: ReadonlySet<string> = new Set([
+	"archive_entity",
+	"archive_aspect",
+	"archive_claim_value",
+	"archive_link",
+	"merge_entities",
+	"merge_aspects",
+]);
+
+export const DREAMING_ATTENTION_OPERATIONS: ReadonlySet<string> = new Set([
+	"flag",
+	"decline_attention",
+	...DREAMING_HYGIENE_ARCHIVE_OPERATIONS,
+]);
+
 export const DREAMING_OPERATION_IDS = [
 	...ONTOLOGY_PROPOSAL_OPERATIONS.filter((op) => op !== "restore_claim_version" && op !== "attach_interface"),
 	"flag",

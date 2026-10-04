@@ -2839,6 +2839,44 @@ describe("Dreaming", () => {
 		expect(consumed).toEqual(["filed-source"]);
 	});
 
+	it("does not withhold evidence when only a hygiene operation fails", async () => {
+		seedTranscript(db, "read-source", "Aster is the durable release project.");
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					const merge = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [
+							{
+								operation: "merge_entities",
+								payload: { targets: ["entity-a", "entity-b"], survivor: "entity-a" },
+								provenance: "attention:00000000-0000-4000-8000-000000000000",
+							},
+						],
+					});
+					expect(merge.ok).toBe(false);
+					return { summary: "Read one page; a hygiene merge was rejected" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = (
+			db
+				.prepare("SELECT source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'")
+				.all() as Array<{
+				id: string;
+			}>
+		).map((row) => row.id);
+		expect(consumed).toEqual(["read-source"]);
+	});
+
 	it("withholds an uncited failure's agent without discarding other agents' progress", async () => {
 		const other = "dreaming-other-scope";
 		accessor.withWriteTx((tx) => {

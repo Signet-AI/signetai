@@ -1,6 +1,7 @@
 import type { ReadDb, WriteDb } from "../db-accessor";
 import { type EpisodicSourceKind, type EpisodicSourceRecord, readEpisodicSource } from "../episodic-sources";
 import { renderDreamingEvidence } from "./dreaming-evidence";
+import { DREAMING_ATTENTION_OPERATIONS } from "./dreaming-operation-contract";
 
 export interface DreamingEvidenceDelivery {
 	readonly agentId: string;
@@ -221,6 +222,7 @@ export function failedOperationEvidence(
 					})
 				: operations.map((_, index) => index);
 		for (const index of failedIndexes) {
+			if (DREAMING_ATTENTION_OPERATIONS.has(text(record(operations[index])?.operation) ?? "")) continue;
 			const citations = citedKeys(index);
 			if (citations.length === 0) scopes.add(agentId);
 			for (const key of citations) keys.add(key);
