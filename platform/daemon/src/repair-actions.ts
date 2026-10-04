@@ -3,6 +3,7 @@ import {
 	readMemoriesFtsIndexRowCount,
 	readMemoriesFtsSql,
 	recreateMemoriesFts,
+	activeVectorProjectionTable,
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { IntegrityCheckStatus } from "./database-integrity";
@@ -2091,7 +2092,8 @@ async function findSemanticDuplicates(
 
 		const neighbors = await accessor.withReadDbAsync(
 			async (db) => {
-				const vecRow = db.prepare("SELECT embedding FROM vec_embeddings WHERE id = ?").get(candidate.embedding_id) as
+				const vecTable = activeVectorProjectionTable(db);
+				const vecRow = db.prepare(`SELECT embedding FROM ${vecTable} WHERE id = ?`).get(candidate.embedding_id) as
 					| { embedding: ArrayBuffer }
 					| undefined;
 
@@ -2101,7 +2103,7 @@ async function findSemanticDuplicates(
 				const rows = db
 					.prepare(
 						`SELECT e.source_id, v.distance
-					 FROM vec_embeddings v
+					 FROM ${vecTable} v
 					 JOIN embeddings e ON v.id = e.id
 					 JOIN memories m ON e.source_id = m.id
 					 WHERE v.embedding MATCH ? AND k = 6

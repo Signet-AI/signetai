@@ -3,6 +3,7 @@ import {
 	type AccountingProvenance,
 	type AccountingSummaryProvenance,
 	type AgentRosterReadPolicy,
+	activeVectorProjectionTable,
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	type LlmUsage,
 	type RecallSurface,
@@ -1084,6 +1085,18 @@ export async function buildSourceChunkVectorHits(
 		},
 	);
 	const hasSafetyLedger = safetyTable != null;
+	const indexState = await ownerReadOne<{ readonly active_profile_json: unknown }>(
+		owner,
+		"SELECT active_profile_json FROM embedding_index_state WHERE id = 1",
+		[],
+		{
+			operation: "memory-search.source-chunk-projection",
+			workloadClass: "foreground",
+			estimatedWorkUnits: 1,
+			deadlineMs: 5_000,
+		},
+	).catch(() => undefined);
+	const vecTable = activeVectorProjectionTable({ prepare: () => ({ get: () => indexState }) });
 	const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
 	const safetyJoin = hasSafetyLedger
 		? "LEFT JOIN memory_content_safety mcs ON mcs.agent_id = ? AND mcs.source_kind = 'source_chunk' AND mcs.source_id = e.id"
@@ -1196,7 +1209,7 @@ export async function buildSourceChunkVectorHits(
 			}>(
 				owner,
 				`SELECT e.id, e.source_id, e.source_type, e.created_at, v.distance${safetySelect}
-				 FROM vec_embeddings v
+				 FROM ${vecTable} v
 				 JOIN embeddings e ON e.id = v.id
 				 ${safetyJoin}
 				 WHERE v.embedding MATCH ? AND k = ?

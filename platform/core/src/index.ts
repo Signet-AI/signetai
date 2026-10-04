@@ -283,6 +283,7 @@ export {
 	keywordSearch,
 	hybridSearch,
 	cosineSimilarity,
+	activeVectorProjectionTable,
 	buildFtsMatchQuery,
 	type SearchOptions,
 	type SearchResult,

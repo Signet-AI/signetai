@@ -133,17 +133,28 @@ function withReadTransaction(db: SQLiteDatabase, read: () => void): void {
 	}
 }
 
+export function activeVectorProjectionTable(db: {
+	prepare(sql: string): { get(...args: unknown[]): unknown };
+}): "vec_embeddings" | "vec_embeddings_staging" {
+	try {
+		const row = db.prepare("SELECT active_profile_json FROM embedding_index_state WHERE id = 1").get() as
+			| { active_profile_json?: unknown }
+			| undefined;
+		if (typeof row?.active_profile_json !== "string") return "vec_embeddings";
+		const active = JSON.parse(row.active_profile_json) as { projectionSlot?: unknown };
+		return active.projectionSlot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
+	} catch {
+		return "vec_embeddings";
+	}
+}
+
 function activeVectorSearchTables(db: SQLiteDatabase): VectorSearchTables {
 	try {
 		const row = db
 			.prepare("SELECT active_profile_json, state, staging_profile_json FROM embedding_index_state WHERE id = 1")
 			.get() as { active_profile_json?: unknown; state?: unknown; staging_profile_json?: unknown } | undefined;
 		if (!row) return { projection: "vec_embeddings", embeddings: "embeddings" };
-		const active =
-			typeof row.active_profile_json === "string"
-				? (JSON.parse(row.active_profile_json) as { projectionSlot?: unknown })
-				: {};
-		const activeProjection = active.projectionSlot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
+		const activeProjection = activeVectorProjectionTable(db);
 		if (row.state !== "building" || typeof row.staging_profile_json !== "string") {
 			return { projection: activeProjection, embeddings: "embeddings" };
 		}
