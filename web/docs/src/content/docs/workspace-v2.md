@@ -1,6 +1,6 @@
 ---
 title: "Workspace v2"
-description: "Workspace ownership, import ingress, protection status, and safe v1 migration."
+description: "Workspace ownership, import ingress, protection status, and the automatic v1 upgrade."
 ---
 
 Signet workspace v2 separates authored files, durable state, runtime files, rebuildable cache, imports, transcripts, skills, and secrets. It preserves the existing evidence, Dreaming, ontology, and Source lifecycle.
@@ -23,11 +23,11 @@ Signet workspace v2 separates authored files, durable state, runtime files, rebu
 
 The persisted `workspace-layout.json` selects v1 or v2. v1 uses `memory/memories.db`, `memory/<harness>/transcripts/`, `.daemon/`, and legacy cache paths. v2 uses the layout above. Custom database, transcript, runtime, cache, inbox, managed-import, secret, skills, data, and workspace paths override defaults. Signet refuses unknown or newer layout versions instead of falling back to legacy paths.
 
-Root Git history, remotes, branches, index, and working state are not rewritten by migration. Root `skills/` stays independently owned and discoverable by harnesses. Configured external Sources stay in place; Signet does not clone them into `files/` or managed import storage.
+Root Git history, remotes, branches, index, and working state are not rewritten by the layout upgrade. Root `skills/` stays independently owned and discoverable by harnesses. Configured external Sources stay in place; Signet does not clone them into `files/` or managed import storage.
 
 ## `files/` import inbox
 
-`files/` is ingress for manual drops and dashboard uploads. It is not a Source root and does not create a local-files provider. Both paths use one durable admission operation and the existing imported-source lifecycle. New imports retain exact original bytes in resolver-owned managed storage before acceptance, for reindexing, export, provenance verification, and recovery. Older imports without retained originals remain valid but are non-reindexable from original bytes. Setup and migration never auto-ingest files that were already in the inbox.
+`files/` is ingress for manual drops and dashboard uploads. It is not a Source root and does not create a local-files provider. Both paths use one durable admission operation and the existing imported-source lifecycle. New imports retain exact original bytes in resolver-owned managed storage before acceptance, for reindexing, export, provenance verification, and recovery. Older imports without retained originals remain valid but are non-reindexable from original bytes. Setup and the layout upgrade never auto-ingest files that were already in the inbox.
 
 ## Transcripts
 
@@ -35,46 +35,42 @@ JSONL is the canonical transcript file representation. Normal capture does not c
 
 On historical backfill, completed JSONL turns are the authority for the same session. Signet compares ordered roles and content from legacy Markdown and DB rows, retains divergent sources unchanged, logs the disagreement, and withholds the completion marker until reconciled. Identical turns do not duplicate the JSONL record. Live-only turns can still be replaced by a fuller completed snapshot; later disagreements do not silently complete the backfill. Malformed JSONL rows and non-increasing session sequence numbers encountered during comparison also prevent the marker from being written until repaired.
 
-## Migrate v1 to v2
+## Upgrade a v1 workspace
 
-Migration is stopped, drained, copy-and-verify, journaled, and resumable:
+New workspaces are created on the v2 layout. `workspace-layout.json` is written when the workspace is created.
 
-```bash
-signet workspace layout migrate preflight --source <v1-root> --destination <v2-root>
-signet workspace layout migrate run --source <v1-root> --destination <v2-root>
-signet workspace layout migrate resume --source <v1-root> --destination <v2-root>
-signet workspace layout migrate status --source <v1-root> --destination <v2-root>
-signet workspace layout migrate rollback --source <v1-root> --destination <v2-root>
-signet workspace layout migrate cleanup --accept --source <v1-root> --destination <v2-root>
-```
+An existing v1 workspace is upgraded in place the first time a v2-aware daemon starts on it. The workspace root does not change, and no configured workspace pointer changes. Before the daemon opens the database or binds any workspace path, it takes the daemon instance lock, then renames Signet-owned v1 paths to their v2 locations under the same root:
 
-The previous top-level `signet migration` command remains available as a compatibility alias.
+| v1 path | v2 path |
+|---------|---------|
+| `memory/memories.db` and its `-wal`, `-shm`, and `-journal` files | `data/signet.db` and matching files |
+| Signet's `transcript.jsonl` files in `memory/<harness>/transcripts/` | `transcripts/<harness>/` |
+| top-level `memory/*--summary.md`, `*--transcript.md`, `*--compaction.md`, and `*--manifest.md` | `transcripts/` |
+| `memory/cache/` | `cache/` |
+| `memory/imports/` | `data/imports/` |
+| Signet's own leftovers in `memory/`: schema backups (`memories.db.bak-v*` and their sidecars), transcript backfill markers, `backups/`, and the retired `scripts/`, `tests/`, and `requirements*.txt` templates | `data/legacy-memory/` |
+| `.daemon/` | `runtime/` |
 
-- `preflight` makes no changes. It resolves custom paths, inventories ownership and Git state, checks the configured source database read-only, reports required space, and returns a redacted plan. Writer draining occurs during `run`, not preflight.
-- `run` acquires an exclusive lease, drains supported writers, copies and verifies state, snapshots SQLite, and publishes the v2 resolver cutover.
-- `resume` continues from the durable journal without duplicate evidence, Sources, or Dreaming consumption.
-- `status` shows phase, copied count, blockers, destination writes, and rollback eligibility.
-- `rollback` is available only before destination durable writes. After that, reconcile forward; the old directory is not a safe rollback target.
-- `cleanup` requires explicit acceptance after destination startup and verification. It removes the migration journal, not necessarily legacy Markdown/manifests; retain or quarantine them while consumers exist.
+Files in `memory/` that Signet did not create stay there, including your own notes and harness daily logs such as OpenClaw's `memory/YYYY-MM-DD.md`. Harnesses still find them, and Signet's Git backup still includes them. The daemon removes `memory/` only when the upgrade leaves it empty.
 
-Before cutover, copied files are hash-checked and the SQLite snapshot is compared table by table against the stopped v1 database, including row counts and typed row values. This checks stored Source identities/scopes, transcript fields, and Dreaming/evidence links where those records exist. v1 harness transcript files and top-level transcript/manifest/summary/compaction artifacts move to `transcripts/` for the existing readers. Historical `memory/` artifact references in database rows and manifest frontmatter resolve to their migrated v2 files without duplicating them; reindex reconciles stored row paths. Unknown v1 `memory/` payloads are preserved under `data/legacy-memory/`; they are not silently imported or made searchable by the v2 daemon.
+Custom path overrides stay authoritative: an overridden component is not moved, and a custom database keeps its `-wal`, `-shm`, and `-journal` files beside it. Inside a custom transcript or data root outside the workspace, the daemon only renames Signet's own files within that root: `<root>/<harness>/transcripts/transcript.jsonl` becomes `<root>/<harness>/transcript.jsonl`, and a custom data root's `memories.db` becomes `signet.db`. Other files there are left alone. The daemon then writes `workspace-layout.json` with version 2 and preserves the overrides. Root identity files, `agent.yaml`, `skills/`, `files/`, `.secrets/`, root Git state, and everything else at the root stay where they are. External Sources stay external. Files are renamed, not copied, so the upgrade uses no extra space and the database file is moved intact.
 
-Migration refuses ambiguous ownership, insufficient space, inconsistent snapshots, unsafe symlinks or special files, filesystems that do not preserve requested permissions, active writers that cannot drain, and unsupported custom layouts. Before requesting a daemon drain, migration checks that the daemon serves the source workspace and that its PID matches the source's managed PID; unrelated daemons are not drained or stopped. It preserves Source IDs and generations rather than disconnecting and reconnecting Sources.
+Before the first rename, the daemon records planned moves and each source item's filesystem identity in `.workspace-layout-upgrade.json` at the workspace root. `.daemon/` moves last. After an interruption, the next start accepts an already-moved item only when its destination matches the recorded identity. The record may only move paths from Signet's v1 storage into its v2 storage, and the daemon writes layout v2 only after no v1 storage path remains. If the daemon stopped after writing layout v2 but before removing `.workspace-layout-upgrade.json`, the next start only finishes that cleanup. If an older journal lacks enough identity to verify a completed move, the daemon leaves the workspace on v1 and refuses to start rather than guessing; the journal lists the planned moves for manual recovery.
 
-The daemon exposes `GET /api/workspace/migration-control` for the current
-writer-drain generation, state, and blockers. The migration CLI invokes
-`POST /api/workspace/migration-control/drain` to close admission and drain
-supported writers before copying. These are lifecycle coordination endpoints;
-use the CLI commands above rather than calling the daemon endpoints directly.
+If the upgrade cannot proceed safely, the daemon reverses any renames it made, leaves the workspace on v1, records the reason in `.workspace-layout-upgrade.json`, reports it in `signet status` and `GET /api/status` (field `workspaceLayout.upgrade`), and starts normally on v1. This happens when a v2 destination already exists, a new v2 directory is not empty, a path is on a different filesystem than the workspace, a path sits inside a symlinked directory or is itself a relative symlink, a v1 directory cannot be read, or a rename fails. The daemon retries on the next start, so fix the reported cause and restart.
+
+If a launcher recreated `.daemon/` after an interruption (for example with startup logs, a pid file, or telemetry), the next start merges its new files into `runtime/` only when the runtime directory matches the identity recorded for the completed move. When a name already exists there, the older file is kept beside it with a `.before-<timestamp>` suffix. Nothing is overwritten. A mismatched runtime directory, or an interrupted record without enough identity to verify it, makes the daemon refuse to start and report the problem. It does not start on a partially moved workspace or guess which copy is current; `.workspace-layout-upgrade.json` lists the planned renames for manual recovery.
+
+A workspace whose daemon is still running under an older release is not upgraded until that daemon stops, because the new daemon cannot take the instance lock.
 
 ## Protection and restore status
 
 CLI, API, and dashboard protection surfaces use one component-aware contract. Components include root-authored files, skills, managed originals, SQLite, transcripts, external Sources, runtime, filesystem cache, and secrets. States include protected, missing, stale, degraded, unknown, external, unverified, and excluded-rebuildable. Overall `protected` requires current protection for required components and valid restore evidence. Git sync alone cannot produce that result.
 
-The restore comparison checks supplied claims for files, SQLite, daemon health, Source identities, transcript roles/provenance/order, recall scope, Dreaming frontier, ontology history/evidence, and harness identity/skills discovery. It does not itself establish independent recovery evidence or issue a valid receipt. The disposable real-daemon fixture currently checks workspace/database health, a persisted SQLite row and integrity, a restored memory through the daemon API, Source ID/generation, and skill discovery. Recall, Dreaming, ontology, and encrypted-secret continuity still require independent recovery probes; until those exist, restore status remains unverified and no valid receipt is published. Restore evidence is bounded and does not make post-write rollback safe.
+The restore comparison checks supplied claims for files, SQLite, daemon health, Source identities, transcript roles/provenance/order, recall scope, Dreaming frontier, ontology history/evidence, and harness identity/skills discovery. It does not itself establish independent recovery evidence or issue a valid receipt. The disposable real-daemon fixture currently checks workspace/database health, a persisted SQLite row and integrity, a restored memory through the daemon API, Source ID/generation, and skill discovery. Recall, Dreaming, ontology, and encrypted-secret continuity still require independent recovery probes; until those exist, restore status remains unverified and no valid receipt is published. Restore evidence is bounded; it does not make an older release safe to run against an upgraded workspace.
 
 ## Upgrades and downgrades
 
-Run preflight before upgrading, review the plan and protection status, run the migration, verify daemon readiness and restore evidence, then accept cleanup. An interrupted pre-cutover migration can resume or roll back. An interrupted post-cutover migration must resume or reconcile forward.
+Install the new release and start the daemon; the layout upgrade runs on its own. Check `signet status` afterward. If `workspaceLayout.upgrade` reports a blocked upgrade, fix the reported cause and restart the daemon.
 
-Downgrade only to a resolver-aware release before destination writes. After v2 writes, older binaries that do not understand the persisted layout version are unsupported and must not be pointed at the workspace.
+After the upgrade, do not run an older release that predates layout support against the workspace. Older binaries that do not understand the persisted layout version are unsupported.

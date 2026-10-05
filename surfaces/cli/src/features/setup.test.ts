@@ -413,6 +413,87 @@ memory:
 		expect(state.activeProject).toBe(projectPath);
 	});
 
+	it("creates a v2 workspace when migrating an identity-only directory", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-identity-v2-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(basePath, { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(basePath, "IDENTITY.md"), "# Existing Agent\n");
+		writeFileSync(join(basePath, "AGENTS.md"), "# Existing instructions\n");
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+
+		await runExistingSetupWizard(basePath, { ...fakeDetection(basePath), memoryDb: false }, {}, deps, {
+			nonInteractive: true,
+			skipGit: true,
+			allowUnprotectedWorkspace: true,
+		});
+
+		expect(JSON.parse(readFileSync(join(basePath, "workspace-layout.json"), "utf-8")).version).toBe(2);
+		expect(existsSync(join(basePath, "data", "signet.db"))).toBe(true);
+		expect(existsSync(join(basePath, "runtime", "plugins", "registry-v1.json"))).toBe(true);
+		expect(existsSync(join(basePath, "memory"))).toBe(false);
+		expect(existsSync(join(basePath, ".daemon"))).toBe(false);
+		expect(readFileSync(join(basePath, "agent.yaml"), "utf-8")).toContain("database: data/signet.db");
+	});
+
+	it("keeps transcript-only v1 memory on the existing-workspace setup path", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-v1-transcripts-"));
+		process.env.HOME = root;
+		process.env.HERMES_HOME = join(root, ".hermes");
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		const transcripts = join(basePath, "memory", "codex", "transcripts");
+		const transcript = '{"role":"user","content":"keep this conversation"}\n';
+		mkdirSync(transcripts, { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(transcripts, "transcript.jsonl"), transcript);
+		const detection = { ...fakeDetection(basePath), memoryDb: false, hasMemoryDir: true };
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			detectExistingSetup: mock(() => detection),
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+
+		await setupWizard({ path: basePath, nonInteractive: true, skipGit: true, allowUnprotectedWorkspace: true }, deps);
+
+		expect(existsSync(join(basePath, "workspace-layout.json"))).toBe(false);
+		expect(readFileSync(join(transcripts, "transcript.jsonl"), "utf-8")).toBe(transcript);
+		expect(readFileSync(join(basePath, "agent.yaml"), "utf-8")).toContain("database: memory/memories.db");
+	});
+
+	it("keeps an existing v1 database layout when migrating", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-v1-db-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(basePath, "memory", "memories.db"), "");
+
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+
+		await runExistingSetupWizard(basePath, fakeDetection(basePath), {}, deps, {
+			nonInteractive: true,
+			skipGit: true,
+			allowUnprotectedWorkspace: true,
+		});
+
+		expect(existsSync(join(basePath, "workspace-layout.json"))).toBe(false);
+		expect(existsSync(join(basePath, "data"))).toBe(false);
+		expect(existsSync(join(basePath, "memory", "scripts"))).toBe(false);
+	});
+
 	it("enables Dreaming defaults and removes retired routing during existing setup", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-migrate-dreaming-defaults-"));
 		const basePath = join(root, "agents");
@@ -1314,17 +1395,27 @@ describe("setupWizard headless plan path", () => {
 		}
 	});
 
-	it("refuses to overwrite an existing installation", async () => {
-		root = mkdtempSync(join(tmpdir(), "setup-headless-existing-"));
+	it("refuses file and JSON setup for a transcript-only v1 workspace", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-transcript-only-"));
 		const basePath = join(root, "agents");
-		const templatesPath = join(root, "templates");
-		writeIdentityTemplates(templatesPath);
+		const transcripts = join(basePath, "memory", "codex", "transcripts");
+		const transcript = '{"role":"user","content":"preserve this conversation"}\n';
+		mkdirSync(transcripts, { recursive: true });
+		writeFileSync(join(transcripts, "transcript.jsonl"), transcript);
 		const planPath = writePlanFile(root);
+		const json = readFileSync(planPath, "utf8");
 		const deps = stubDeps({
 			AGENTS_DIR: basePath,
-			getTemplatesDir: mock(() => templatesPath),
 			normalizeAgentPath: mock((p: string) => p),
-			detectExistingSetup: mock(() => fakeDetection(basePath)),
+			detectExistingSetup: mock(() => ({
+				...fakeDetection(basePath),
+				agentsDir: false,
+				memoryDb: false,
+				agentYaml: false,
+				configYaml: false,
+				identityFiles: [],
+				hasMemoryDir: true,
+			})),
 		});
 
 		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
@@ -1332,14 +1423,59 @@ describe("setupWizard headless plan path", () => {
 		}) as never);
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
-			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
+			for (const options of [{ file: planPath }, { json }]) {
+				await expect(setupWizard(options, deps)).rejects.toThrow("process.exit:1");
+			}
 			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain(
 				"existing Signet installation",
 			);
 			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
+			expect(existsSync(join(basePath, "workspace-layout.json"))).toBe(false);
+			expect(readFileSync(join(transcripts, "transcript.jsonl"), "utf8")).toBe(transcript);
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
+		}
+	});
+
+	it("refuses setup when a v2 layout has only the legacy database", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-v2-legacy-db-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		writeFileSync(join(basePath, "workspace-layout.json"), '{"version":2,"overrides":{}}\n');
+		const legacyDatabase = join(basePath, "memory/memories.db");
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeFileSync(legacyDatabase, "preserve legacy database");
+		const planPath = writePlanFile(root);
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({
+				...fakeDetection(basePath),
+				agentsDir: true,
+				memoryDb: true,
+				agentYaml: false,
+				configYaml: false,
+			})),
+		});
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		const originalTty = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
+			await expect(setupWizard({ nonInteractive: true }, deps)).rejects.toThrow("process.exit:1");
+			await expect(setupWizard({}, deps)).rejects.toThrow("process.exit:1");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("legacy database");
+			expect(readFileSync(legacyDatabase, "utf8")).toBe("preserve legacy database");
+			expect(existsSync(join(basePath, "data/signet.db"))).toBe(false);
+			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+			Object.defineProperty(process.stdin, "isTTY", { value: originalTty, configurable: true });
 		}
 	});
 
@@ -1405,6 +1541,41 @@ describe("interactive onboarding", () => {
 		else process.env.SIGNET_PORT = previousPort;
 		if (previousDaemonUrl === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
 		else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
+	});
+
+	it("routes transcript-only v1 workspaces through existing interactive setup", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-onboarding-transcript-only-"));
+		const transcriptDir = join(root, "memory", "codex", "transcripts");
+		mkdirSync(transcriptDir, { recursive: true });
+		const transcript = '{"role":"user","content":"keep this conversation"}\n';
+		writeFileSync(join(transcriptDir, "transcript.jsonl"), transcript);
+		const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ agentsDir: root }) });
+		process.env.SIGNET_PORT = String(server.port);
+		const confirm = spyOn(prompts, "confirm").mockImplementation(() =>
+			Object.assign(Promise.resolve(false), { cancel: () => {} }),
+		);
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const previousTty = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: root,
+				DEFAULT_PORT: server.port,
+				detectExistingSetup: () => ({ ...fakeDetection(root), memoryDb: false, hasMemoryDir: true }),
+			});
+			await setupWizard({}, deps);
+
+			expect(existsSync(join(root, "workspace-layout.json"))).toBe(false);
+			expect(readFileSync(join(root, "agent.yaml"), "utf8")).toContain("database: memory/memories.db");
+			expect(readFileSync(join(transcriptDir, "transcript.jsonl"), "utf8")).toBe(transcript);
+			expect(open).not.toHaveBeenCalled();
+		} finally {
+			confirm.mockRestore();
+			open.mockRestore();
+			server.stop(true);
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("resumes through the dashboard without rewriting the workspace", async () => {

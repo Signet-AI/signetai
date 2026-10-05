@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
+import { persistWorkspaceLayout } from "@signet/core";
 import {
 	DAEMON_JS_WORKER_FILES,
 	buildLaunchdDaemonPlist,
@@ -12,6 +13,7 @@ import {
 	buildSystemdDaemonStartArgs,
 	didLaunchdDaemonStart,
 	didSystemdDaemonStart,
+	daemonStartupLogPath,
 	getDaemonStatus,
 	getLaunchdDaemonLoadState,
 	inspectDaemonJsBundle,
@@ -23,6 +25,7 @@ import {
 	launchdDaemonLabel,
 	launchdDaemonPlistPath,
 	macOSLaunchAgentAttributionNotice,
+	readDaemonLifecycleRecord,
 	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
 	resolveDaemonProbeUrls,
@@ -842,6 +845,33 @@ describe("readManagedDaemonPid", () => {
 		rmSync(root, { recursive: true, force: true });
 	});
 
+	it("reads the managed pid and lifecycle record from runtime/ on a v2 workspace", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-test-"));
+		try {
+			writeFileSync(join(root, "workspace-layout.json"), `${JSON.stringify({ version: 2 })}\n`);
+			const dir = join(root, "runtime");
+			mkdirSync(dir, { recursive: true });
+			writeFileSync(join(dir, "pid"), "4343\n");
+			writeFileSync(
+				join(dir, "lifecycle.json"),
+				JSON.stringify({ state: "running", pid: 4343, version: "0.0.0", startedAt: "2026-01-01T00:00:00.000Z" }),
+			);
+
+			const pid = readManagedDaemonPid(root, {
+				daemonPaths: ["/opt/signet/dist/daemon.js"],
+				isAlive: () => true,
+				readCmd: () => "bun /opt/signet/dist/daemon.js",
+				readEnv: () => "SIGNET_DAEMON_ENTRYPOINT=1\u0000",
+			});
+
+			expect(pid).toBe(4343);
+			expect(readDaemonLifecycleRecord(root)?.pid).toBe(4343);
+			expect(existsSync(join(root, ".daemon"))).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects a daemon-path CLI process without the daemon entrypoint marker", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-runtime-test-"));
 		const dir = join(root, ".daemon");
@@ -982,6 +1012,26 @@ describe("stopManagedDaemonProcess", () => {
 			});
 		} finally {
 			if (child.exitCode === null) child.kill("SIGKILL");
+		}
+	});
+});
+
+describe("daemonStartupLogPath", () => {
+	it("keeps the macOS LaunchAgent log outside the workspace runtime directory", () => {
+		const darwin = daemonStartupLogPath("/Users/u/.agents", "darwin", "/Users/u");
+		expect(darwin.startsWith("/Users/u/Library/Logs/Signet/")).toBe(true);
+		expect(darwin.endsWith(".startup.log")).toBe(true);
+		expect(darwin).not.toContain("/.agents/");
+	});
+
+	it("uses the resolved runtime log directory elsewhere", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-startup-log-"));
+		try {
+			expect(daemonStartupLogPath(root, "linux")).toBe(join(root, ".daemon", "logs", "startup.log"));
+			persistWorkspaceLayout(root, { version: 2 });
+			expect(daemonStartupLogPath(root, "linux")).toBe(join(root, "runtime", "logs", "startup.log"));
+		} finally {
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 });
@@ -1292,6 +1342,10 @@ describe("getDaemonStatus", () => {
 					bindHost: "127.0.0.1",
 					networkMode: "local",
 					agentsDir: "/tmp/status-workspace",
+					workspaceLayout: {
+						version: 1,
+						upgrade: { state: "blocked", reason: "runtime already exists", at: "2026-10-04T00:00:00.000Z" },
+					},
 					dreaming: { enabled: true, workerRunning: true },
 					resources: {
 						rss: 169,
@@ -1344,6 +1398,7 @@ describe("getDaemonStatus", () => {
 		expect(status.probe.status).toBe("healthy");
 		expect(status.probe.readinessReasons).toBeUndefined();
 		expect(status.workspacePath).toBe("/tmp/status-workspace");
+		expect(status.workspaceLayoutUpgrade).toBe("runtime already exists");
 		expect(status.dreaming).toEqual({ enabled: true, workerRunning: true });
 		expect(status.workspaceStats).toEqual({
 			agentId: "default",

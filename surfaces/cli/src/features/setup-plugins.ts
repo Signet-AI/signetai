@@ -1,9 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname } from "node:path";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
-	SIGNET_PLUGIN_REGISTRY_DIR,
-	SIGNET_PLUGIN_REGISTRY_FILE,
+	getPluginRegistryPath,
 	SIGNET_PLUGIN_REGISTRY_VERSION,
 	SIGNET_SECRETS_PLUGIN_ID,
 } from "@signet/core";
@@ -34,7 +33,7 @@ class SetupPluginRegistryError extends Error {
 }
 
 export function getSetupPluginRegistryPath(basePath: string): string {
-	return join(basePath, SIGNET_PLUGIN_REGISTRY_DIR, SIGNET_PLUGIN_REGISTRY_FILE);
+	return getPluginRegistryPath(basePath);
 }
 
 export function readSetupCorePluginEnabled(basePath: string, pluginId = SIGNET_SECRETS_PLUGIN_ID): boolean | null {
@@ -75,7 +74,7 @@ export function writeSetupCorePluginRegistry(
 		plugins,
 	};
 
-	mkdirSync(join(basePath, SIGNET_PLUGIN_REGISTRY_DIR), { recursive: true });
+	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
 }
 

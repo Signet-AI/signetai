@@ -7,6 +7,7 @@ import {
 	type LlmProvider,
 	MEMORY_CONTENT_WITHHELD_NOTICE,
 	resolveDefaultBasePath,
+	currentArtifactRelativePath,
 	resolveWorkspaceLayout,
 	scanMemoryContent,
 } from "@signet/core";
@@ -282,12 +283,7 @@ function relativeArtifactPath(capturedAt: string, sessionToken: string, kind: Ar
 }
 
 function storedArtifactRelativePath(path: string): string {
-	if (
-		memoryRelativePrefix() === "transcripts/" &&
-		/^memory\/[^/]+--(?:summary|transcript|compaction|manifest)\.md$/.test(path)
-	)
-		return `transcripts/${path.slice("memory/".length)}`;
-	return path;
+	return currentArtifactRelativePath(resolveWorkspaceLayout(getAgentsDir()).version, path);
 }
 
 function wikilink(path: string, label?: string): string {

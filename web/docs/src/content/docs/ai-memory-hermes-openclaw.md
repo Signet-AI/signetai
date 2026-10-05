@@ -106,8 +106,8 @@ $SIGNET_WORKSPACE/
   AGENTS.md
   MEMORY.md
   agent.yaml
-  memory/
-    memories.db
+  data/
+    signet.db
 ```
 
 The database is local SQLite with FTS5 search, vector embeddings,

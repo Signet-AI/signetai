@@ -62,7 +62,7 @@ Configuration lives under `continuity` in the pipeline config:
 ## Lossless Session Transcripts
 
 As hooks run, Signet stores the canonical retained conversation transcript as
-JSONL at `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl` and
+JSONL at `$SIGNET_WORKSPACE/transcripts/{harness}/transcript.jsonl` and
 keeps the session row lossless for later projection. The `session_transcripts`
 table (migration 040) is the canonical transcript index. Dreaming sanitizes a
 read-time projection: tool calls become markers, tool outputs are omitted, and
@@ -91,7 +91,7 @@ behind a recalled memory without a separate API call.
 Rolling history now has an explicit authority split.
 
 Canonical historical content lives as immutable markdown artifacts in
-`$SIGNET_WORKSPACE/memory/`:
+`$SIGNET_WORKSPACE/transcripts/`:
 
 - `--transcript.md`
 - `--summary.md`

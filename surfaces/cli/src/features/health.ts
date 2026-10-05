@@ -11,6 +11,7 @@ import {
 	loadIdentityMode,
 	resolveWorkspaceLayout,
 } from "@signet/core";
+import { join } from "node:path";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
 import type { DaemonLastExit, DaemonResourceUsage } from "../lib/runtime.js";
@@ -69,6 +70,7 @@ interface DaemonStatus {
 		readonly enabled: boolean;
 		readonly workerRunning: boolean;
 	} | null;
+	readonly workspaceLayoutUpgrade?: string | null;
 	readonly workspaceStats?: {
 		readonly agentId: string;
 		readonly memoryCount: number;
@@ -214,7 +216,7 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 	const files = [
 		...(showIdentityFiles ? [{ name: "AGENTS.md", exists: existing.agentsMd }] : []),
 		{ name: "agent.yaml", exists: existing.agentYaml },
-		{ name: "memories.db", exists: existing.memoryDb },
+		{ name: "database", exists: existing.memoryDb },
 	];
 	const daemon = await deps.getDaemonStatus();
 	const git = getGitRemoteState(basePath);
@@ -353,6 +355,10 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 			const colorize = extractionNotice.level === "error" ? chalk.red : chalk.yellow;
 			console.log(colorize(`    ${icon} ${extractionNotice.title}`));
 			console.log(chalk.dim(`      ${extractionNotice.detail}`));
+		}
+		if (report.daemon.workspaceLayoutUpgrade) {
+			console.log(chalk.yellow("    ⚠ Workspace layout upgrade blocked; still on layout v1"));
+			console.log(chalk.dim(`      ${report.daemon.workspaceLayoutUpgrade}. Fix it and restart the daemon.`));
 		}
 		const dreaming = report.daemon.dreaming;
 		if (dreaming) {
@@ -734,15 +740,24 @@ async function showHermesDoctor(options: { json?: boolean }): Promise<void> {
 	console.log();
 }
 
+function daemonLogDirHint(basePath: string): string {
+	try {
+		return join(resolveWorkspaceLayout(basePath).runtime, "logs");
+	} catch {
+		return "the workspace runtime logs directory";
+	}
+}
+
 function addDaemonProbeFindings(report: StatusReport, findings: DoctorFinding[]): void {
 	const probe = report.daemon.probe;
 	if (!probe || probe.status === "healthy") return;
+	const logDir = daemonLogDirHint(report.basePath);
 
 	if (probe.status === "listener-unhealthy") {
 		findings.push({
 			level: "error",
 			message: "Daemon port is listening, but /health is unreachable.",
-			fix: "Run `signet daemon restart`; if it recurs, inspect ~/.agents/.daemon/logs/daemon.err.log.",
+			fix: `Run \`signet daemon restart\`; if it recurs, inspect ${join(logDir, "daemon.err.log")}.`,
 		});
 		return;
 	}
@@ -764,7 +779,7 @@ function addDaemonProbeFindings(report: StatusReport, findings: DoctorFinding[])
 		});
 	}
 
-	addDaemonLifecycleExitFindings(probe, findings);
+	addDaemonLifecycleExitFindings(probe, findings, logDir);
 }
 
 function addReadinessFindings(report: StatusReport, findings: DoctorFinding[]): void {
@@ -793,7 +808,11 @@ function addReadinessFindings(report: StatusReport, findings: DoctorFinding[]): 
 		fix: "Inspect the queue in `signet status`; repair only identified jobs with `signet repair queue requeue --apply` or retire obsolete jobs with `signet repair queue cancel --apply`.",
 	});
 }
-function addDaemonLifecycleExitFindings(probe: NonNullable<DaemonStatus["probe"]>, findings: DoctorFinding[]): void {
+function addDaemonLifecycleExitFindings(
+	probe: NonNullable<DaemonStatus["probe"]>,
+	findings: DoctorFinding[],
+	logDir: string,
+): void {
 	const lastExit = probe.lastExit;
 	if (!lastExit) return;
 
@@ -822,8 +841,8 @@ function addDaemonLifecycleExitFindings(probe: NonNullable<DaemonStatus["probe"]
 		code: "daemon_exit_unrecorded",
 		message: `Previous daemon exit was not recorded as clean: the process was killed or crashed (pid ${lastExit.pid}, last marked ${lastExit.state} at ${lastExit.startedAt}). No shutdown marker was written.`,
 		fix: lastExit.systemdUnit
-			? `Check the daemon log tail (~/.agents/.daemon/logs/signet-<date>.log) and the unit exit status: journalctl --user -u ${lastExit.systemdUnit}`
-			: "Check the daemon log tail (~/.agents/.daemon/logs/signet-<date>.log) for where it stopped, and dmesg/journalctl for OOM kills or signals.",
+			? `Check the daemon log tail (${join(logDir, "signet-<date>.log")}) and the unit exit status: journalctl --user -u ${lastExit.systemdUnit}`
+			: `Check the daemon log tail (${join(logDir, "signet-<date>.log")}) for where it stopped, and dmesg/journalctl for OOM kills or signals.`,
 	});
 }
 

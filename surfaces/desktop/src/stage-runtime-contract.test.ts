@@ -13,8 +13,6 @@ test("desktop runtime staging ships the full daemon dist and tiktoken", () => {
 	const daemonPkg = JSON.parse(daemonManifest) as { dependencies?: Record<string, string> };
 	expect(source).toContain('"tiktoken"');
 	expect(typeof daemonPkg.dependencies?.tiktoken).toBe("string");
-	expect(source).toContain("workspace-migration-runner.ts");
-	expect(source).toContain('"workspace-migration-runner.js"');
 });
 test("desktop runtime staging ships connector assets for harness install", () => {
 	const source = readFileSync(join(import.meta.dir, "..", "scripts", "stage-runtime.mjs"), "utf8");

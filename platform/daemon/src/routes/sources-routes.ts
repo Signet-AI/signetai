@@ -2,7 +2,7 @@ import { execFileHidden as execFile } from "@signet/core";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
@@ -20,6 +20,7 @@ import {
 	parseGitHubSettings,
 	removeSourceIfGeneration,
 	resolveDefaultBasePath,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
@@ -1056,7 +1057,7 @@ function saveSourceDeletionTombstones(tombstones: readonly SourceDeletionTombsto
 }
 
 function sourceDeletionTombstonesPath(agentsDir: string): string {
-	return `${agentsDir.replace(/\/$/, "")}/.daemon/source-deletion-tombstones.json`;
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "source-deletion-tombstones.json");
 }
 
 function isSourceDeletionTombstone(value: unknown): value is SourceDeletionTombstone {

@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { SIGNET_GRAPHIQ_PLUGIN_ID } from "./plugins";
+import { resolveWorkspaceLayout } from "./workspace-layout";
 
-export const SIGNET_GRAPHIQ_STATE_FILE = ".daemon/graphiq/state.json";
 export const GRAPHIQ_SYNCED_VERSION = "4.3.3";
 export const GRAPHIQ_DEFAULT_INSTALL_DIR = join(homedir(), ".local", "bin");
 
@@ -36,7 +36,7 @@ export interface UpdateGraphiqActiveProjectInput {
 }
 
 export function getGraphiqStatePath(basePath: string): string {
-	return join(basePath, SIGNET_GRAPHIQ_STATE_FILE);
+	return join(resolveWorkspaceLayout(basePath).runtime, "graphiq", "state.json");
 }
 
 export function getGraphiqProjectDbPath(projectPath: string): string {

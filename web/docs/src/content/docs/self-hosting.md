@@ -87,7 +87,7 @@ Use a service supervisor you already operate rather than copying an outdated uni
 - Bind to loopback by default. Use `network.mode: tailscale` or an explicit `SIGNET_BIND` only for a trusted network design.
 - Use `auth.mode: team` for shared, proxied, or public access.
 - Use one named API key per connector or automation client, then revoke it when the client is retired.
-- Keep the workspace volume, `.daemon/`, and `.secrets/` private and backed up.
+- Keep the workspace volume, `runtime/`, `data/`, and `.secrets/` private and backed up.
 - Do not put raw tokens, passwords, or provider keys in source control, issue trackers, or screenshots.
 
 Related: [Daemon](/daemon/), [Authentication](/auth/), [Remote Harness Connectors](/remote-connectors/), [Diagnostics](/diagnostics/).

@@ -217,11 +217,12 @@ function readLinuxFileDescriptors(): FileDescriptorUsage {
 		for (const fd of entries) {
 			try {
 				const target = readlinkSync(join(fdDir, fd));
-				if (target.includes("/memory/") && target.endsWith(".md")) usage.memoryMd++;
+				if ((target.includes("/memory/") || target.includes("/transcripts/")) && target.endsWith(".md"))
+					usage.memoryMd++;
 				else if (target.startsWith("socket:")) usage.sockets++;
 				else if (target.includes("inotify")) usage.inotify++;
 				else if (target.startsWith("pipe:")) usage.pipes++;
-				else if (target.includes("memories.db")) usage.db++;
+				else if (target.includes("memories.db") || target.includes("signet.db")) usage.db++;
 				else usage.other++;
 			} catch {
 				usage.other++;

@@ -1,11 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import {
-	SIGNET_PLUGIN_REGISTRY_DIR,
-	SIGNET_PLUGIN_REGISTRY_FILE,
-	preflightWorkspace,
-	resolveDefaultBasePath,
-} from "@signet/core";
+import { dirname } from "node:path";
+import { getPluginRegistryPath, preflightWorkspace, resolveDefaultBasePath } from "@signet/core";
 import { logger } from "../logger.js";
 import { truncateToTokens } from "../pipeline/tokenizer.js";
 import { recordPluginAuditEvent } from "./audit.js";
@@ -363,7 +358,7 @@ export class PluginHostV1 {
 }
 
 export function getDefaultPluginRegistryPath(): string {
-	return join(resolveDefaultBasePath(), SIGNET_PLUGIN_REGISTRY_DIR, SIGNET_PLUGIN_REGISTRY_FILE);
+	return getPluginRegistryPath(resolveDefaultBasePath());
 }
 
 function resolveState(

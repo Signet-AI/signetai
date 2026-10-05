@@ -7,14 +7,6 @@ export {
 	restoreVerifiedRootGitArchive,
 } from "./git-archive-retirement";
 export type { RootGitArchive, RootGitArchivePlan, RootGitArchiveVerification } from "./git-archive-retirement";
-
-export {
-	DescriptorRoot,
-	openDescriptorRoot,
-	UnsafeDescriptorPathError,
-	UnsupportedDescriptorFilesystemError,
-} from "./descriptor-fs";
-export type { DescriptorEntry, DescriptorWriteOptions } from "./descriptor-fs";
 export type { ManagedGitignoreUpdate, RootGitInventory, RootGitMode } from "./git-transition";
 export { aggregateProtection, PROTECTION_COMPONENT_IDS, validateRestoreReceipt } from "./protection";
 export type {
@@ -251,11 +243,18 @@ export {
 } from "./memory-context";
 export {
 	createFreshWorkspaceV2,
+	currentArtifactRelativePath,
+	findExistingWorkspaceDatabase,
+	hasExistingLegacyWorkspaceState,
+	hasExistingWorkspaceState,
 	persistWorkspaceLayout,
+	readWorkspaceLayoutOverrides,
 	resolveWorkspaceLayout,
+	resolveWorkspaceLayoutAs,
 	serializeWorkspaceLayout,
 	WORKSPACE_LAYOUT_V1,
 	WORKSPACE_LAYOUT_V2,
+	isWorkspacePrivatePath,
 	type WorkspaceLayout,
 	type WorkspaceLayoutOverrides,
 	type WorkspaceLayoutVersion,
@@ -361,13 +360,13 @@ export type { PromptContextEnvelope } from "./prompt-context";
 
 export {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
-	SIGNET_PLUGIN_REGISTRY_DIR,
+	getPluginRegistryDir,
+	getPluginRegistryPath,
 	SIGNET_PLUGIN_REGISTRY_FILE,
 	SIGNET_PLUGIN_REGISTRY_VERSION,
 	SIGNET_SECRETS_PLUGIN_ID,
 } from "./plugins";
 export {
-	SIGNET_GRAPHIQ_STATE_FILE,
 	disableGraphiqState,
 	emptyGraphiqState,
 	enableGraphiqState,

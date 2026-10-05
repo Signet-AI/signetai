@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildHermeticEnvironment } from "../../../scripts/run-hermetic-tests";
 import { runMigrations } from "../../core/src/migrations";
+import { resolveWorkspaceLayout } from "../../core/src/workspace-layout";
 
 const daemonScript = join(import.meta.dir, "daemon.ts");
 const tempDirs: string[] = [];
@@ -258,8 +259,10 @@ describe("daemon workspace startup preflight", () => {
 		expect(output).not.toContain("Post-ready conversion worker failed");
 		expect(output).not.toContain("Post-ready conversion worker crashed");
 		expect(output.toLowerCase()).not.toContain("database is locked");
-		await until(() => openDatabaseDescriptors(dbPath).length === 0);
-		const db = new Database(dbPath, { readonly: true });
+		const upgradedDbPath = resolveWorkspaceLayout(workspace).database;
+		expect(upgradedDbPath).toBe(join(workspace, "data", "signet.db"));
+		await until(() => openDatabaseDescriptors(upgradedDbPath).length === 0);
+		const db = new Database(upgradedDbPath, { readonly: true });
 		try {
 			expect(db.query("SELECT state, attempts FROM _signet_vacuum_conversion WHERE id = 1").get()).toEqual({
 				state: "running",

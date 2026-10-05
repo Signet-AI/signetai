@@ -1,4 +1,9 @@
-import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type SpawnSyncReturns } from "@signet/core";
+import {
+	resolveWorkspaceLayout,
+	spawnHidden as spawn,
+	spawnSyncHidden as spawnSync,
+	type SpawnSyncReturns,
+} from "@signet/core";
 import { createHash, randomUUID } from "node:crypto";
 import {
 	appendFileSync,
@@ -100,7 +105,7 @@ export interface DaemonLastExit {
 }
 export function readDaemonLifecycleRecord(agentsDir: string): DaemonLastExit | null {
 	try {
-		const raw = readFileSync(join(agentsDir, ".daemon", "lifecycle.json"), "utf-8");
+		const raw = readFileSync(join(resolveWorkspaceLayout(agentsDir).runtime, "lifecycle.json"), "utf-8");
 		const parsed = JSON.parse(raw) as Partial<DaemonLastExit>;
 		if (typeof parsed.state !== "string" || typeof parsed.pid !== "number") return null;
 		const { runtime: rawRuntime, ...record } = parsed;
@@ -162,6 +167,7 @@ interface DaemonInstance {
 		readonly workerRunning: boolean;
 	} | null;
 	readonly workspaceStats: WorkspaceStatusSummaryFromStatus | null;
+	readonly workspaceLayoutUpgrade: string | null;
 	readonly transcripts: {
 		readonly pending: number;
 		readonly failed: number;
@@ -250,7 +256,7 @@ function currentNativeExecutablePath(execPath: string = process.execPath): strin
 }
 
 function pidFile(agentsDir: string): string {
-	return join(agentsDir, ".daemon", "pid");
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "pid");
 }
 
 export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
@@ -676,6 +682,14 @@ export function getReachableDaemonUrls(): Promise<string[]> {
 	return flight;
 }
 
+function workspaceLayoutUpgradeReason(
+	upgrade: { state?: unknown; reason?: unknown } | null | undefined,
+): string | null {
+	if (!upgrade) return null;
+	if (upgrade.state === "blocked" && typeof upgrade.reason === "string") return upgrade.reason;
+	return upgrade.state === "unreadable" ? "the upgrade record could not be read" : null;
+}
+
 async function getDaemonInstances(): Promise<DaemonInstance[]> {
 	const urls = await getReachableDaemonUrls();
 	return Promise.all(
@@ -695,6 +709,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						bindHost?: string;
 						networkMode?: string;
 						agentsDir?: string;
+						workspaceLayout?: { upgrade?: { state?: unknown; reason?: unknown } | null };
 						dreaming?: { enabled?: boolean; workerRunning?: boolean };
 						health?: {
 							score?: number;
@@ -774,6 +789,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 					return {
 						baseUrl,
 						workspacePath: typeof data.agentsDir === "string" ? data.agentsDir : null,
+						workspaceLayoutUpgrade: workspaceLayoutUpgradeReason(data.workspaceLayout?.upgrade),
 						pid: data.pid ?? null,
 						uptime: data.uptime ?? null,
 						version: data.version ?? null,
@@ -850,6 +866,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				scheduler: null,
 				dreaming: null,
 				workspaceStats: null,
+				workspaceLayoutUpgrade: null,
 				probe: reachableDaemonProbe(
 					baseUrl,
 					null,
@@ -1226,6 +1243,7 @@ async function readDaemonStatus(): Promise<{
 	extraction: DaemonInstance["extraction"];
 	dreaming: DaemonInstance["dreaming"];
 	workspaceStats: DaemonInstance["workspaceStats"];
+	workspaceLayoutUpgrade: DaemonInstance["workspaceLayoutUpgrade"];
 	transcripts: DaemonInstance["transcripts"];
 	health: DaemonInstance["health"];
 	queue: DaemonInstance["queue"];
@@ -1251,6 +1269,7 @@ async function readDaemonStatus(): Promise<{
 			extraction: preferred.extraction,
 			dreaming: preferred.dreaming,
 			workspaceStats: preferred.workspaceStats,
+			workspaceLayoutUpgrade: preferred.workspaceLayoutUpgrade,
 			transcripts: preferred.transcripts,
 			health: preferred.health,
 			queue: preferred.queue,
@@ -1278,6 +1297,7 @@ async function readDaemonStatus(): Promise<{
 		extraction: null,
 		dreaming: null,
 		workspaceStats: null,
+		workspaceLayoutUpgrade: null,
 		transcripts: null,
 		health: null,
 		queue: null,
@@ -1678,6 +1698,16 @@ export function launchdDaemonPlistPath(agentsDir: string, home: string = homedir
 	return join(home, "Library", "LaunchAgents", `${launchdDaemonLabel(agentsDir)}.plist`);
 }
 
+export function daemonStartupLogPath(
+	agentsDir: string,
+	platform: NodeJS.Platform = process.platform,
+	home: string = homedir(),
+): string {
+	if (platform === "darwin")
+		return join(home, "Library", "Logs", "Signet", `${launchdDaemonLabel(agentsDir)}.startup.log`);
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "logs", "startup.log");
+}
+
 interface LaunchdDaemonLoadDeps {
 	readonly platform?: NodeJS.Platform;
 	readonly spawnSync?: LaunchctlProbeSpawnSync;
@@ -1932,17 +1962,15 @@ export async function startDaemon(
 	const net = resolveDaemonNetwork(agentsDir, process.env);
 	const inspectorForwarding = await resolveDaemonInspectorForwarding();
 
-	const daemonDir = join(agentsDir, ".daemon");
-	const logDir = join(daemonDir, "logs");
-	mkdirSync(daemonDir, { recursive: true });
-	mkdirSync(logDir, { recursive: true });
+	mkdirSync(resolveWorkspaceLayout(agentsDir).runtime, { recursive: true });
 
 	const attributionNotice = macOSLaunchAgentAttributionNotice(daemonPath);
 	if (attributionNotice) {
 		console.warn(chalk.yellow(`  Note: ${attributionNotice}`));
 	}
 
-	const startupLogPath = join(logDir, "startup.log");
+	const startupLogPath = daemonStartupLogPath(agentsDir);
+	mkdirSync(dirname(startupLogPath), { recursive: true });
 	const systemdUnitName = `signet-daemon-${process.pid}`;
 	const attemptStartedAt = Date.now();
 	const startAttemptId = randomUUID();
@@ -2143,7 +2171,7 @@ export async function startDaemon(
 				process.platform === "linux" ? systemdUnitName : undefined,
 			);
 		const diagnostics = readDaemonStartFailureDiagnostics({
-			startupLogPath,
+			startupLogPath: existsSync(startupLogPath) ? startupLogPath : daemonStartupLogPath(agentsDir),
 			systemdUnitName: process.platform === "linux" ? systemdUnitName : undefined,
 			failureKind: processExitedDuringStart ? "process-exited" : "deadline",
 			startupDeadlineMs,

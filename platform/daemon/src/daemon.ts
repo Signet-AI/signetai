@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { workspaceLayoutStartup } from "./workspace-layout-startup";
 import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 import { requestMemoryHead } from "./memory-head";
 
@@ -264,7 +265,7 @@ import {
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
-import { MigrationControlBoundary, migrationDrainTargetMatches } from "./workspace-writer-barrier";
+import { MigrationControlBoundary } from "./workspace-writer-barrier";
 import { createOwnerTranscriptImportStore } from "./transcript-import-store";
 import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
 import { admitImport } from "./import-inbox";
@@ -497,21 +498,6 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 export const app = new Hono();
 export const daemonMigrationControl = new MigrationControlBoundary(`daemon:${process.pid}:${randomUUID()}`);
 
-app.get("/api/workspace/migration-control", (c) =>
-	c.json({
-		generation: daemonMigrationControl.generation,
-		state: daemonMigrationControl.state,
-		blockers: daemonMigrationControl.blockers(),
-	}),
-);
-app.post("/api/workspace/migration-control/drain", async (c) => {
-	const target: unknown = await c.req.json().catch(() => null);
-	if (!migrationDrainTargetMatches(target, process.pid, AGENTS_DIR))
-		return c.json({ error: "migration drain target identity mismatch" }, 409);
-	const started = daemonMigrationControl.beginDrain();
-	const result = await daemonMigrationControl.close();
-	return c.json({ ...started, ...result, blockers: daemonMigrationControl.blockers() });
-});
 app.use("*", async (c, next) => {
 	if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return await next();
 	if (!migrationIntegrityWritesBlocked) return await next();
@@ -2280,6 +2266,12 @@ process.on("unhandledRejection", (reason) => {
 });
 
 async function main() {
+	if (workspaceLayoutStartup.status === "failed") {
+		console.error(`Signet cannot start: workspace layout upgrade failed: ${workspaceLayoutStartup.reason}`);
+		logger.shutdown(false);
+		process.exitCode = 1;
+		return;
+	}
 	const workspace = preflightWorkspace();
 	if (workspace.status === "missing" || workspace.status === "incomplete") {
 		console.error(formatWorkspacePreflightError(workspace));
@@ -2313,6 +2305,16 @@ async function main() {
 	logger.info("daemon", "Signet Daemon starting", { runtime: DAEMON_RUNTIME });
 	logger.info("daemon", `File logging to ${logger.logFilePath}`);
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
+	if (workspaceLayoutStartup.status === "upgraded" && workspaceLayoutStartup.cleanup)
+		logger.warn(
+			"daemon",
+			"Workspace upgraded to layout v2, but upgrade cleanup did not finish",
+			workspaceLayoutStartup,
+		);
+	else if (workspaceLayoutStartup.status === "upgraded")
+		logger.info("daemon", "Workspace upgraded in place to layout v2", workspaceLayoutStartup);
+	if (workspaceLayoutStartup.status === "blocked" || workspaceLayoutStartup.status === "skipped")
+		logger.warn("daemon", "Workspace layout upgrade did not run", workspaceLayoutStartup);
 	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
 	const lock = acquireSingleInstanceLock(join(DAEMON_DIR, "daemon.lock"));
 	if (lock === null) {

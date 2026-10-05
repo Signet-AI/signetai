@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, setSystemTime } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -235,6 +235,23 @@ describe("setup protection soft gate", () => {
 				}),
 			).rejects.toThrow("OpenClaw workspace is linked");
 		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps two snapshots taken in the same millisecond", () => {
+		const root = mkdtempSync(join(tmpdir(), "setup-protection-"));
+		const workspace = join(root, "agents");
+		try {
+			mkdirSync(workspace, { recursive: true });
+			writeFileSync(join(workspace, "AGENTS.md"), "agents");
+			setSystemTime(new Date("2026-10-05T00:00:00.000Z"));
+			const first = createWorkspaceSnapshot(workspace, join(root, "backups"));
+			const second = createWorkspaceSnapshot(workspace, join(root, "backups"));
+			expect(second.path).not.toBe(first.path);
+			expect(readFileSync(join(second.path, "AGENTS.md"), "utf8")).toBe("agents");
+		} finally {
+			setSystemTime();
 			rmSync(root, { recursive: true, force: true });
 		}
 	});

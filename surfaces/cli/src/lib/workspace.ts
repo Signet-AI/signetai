@@ -4,7 +4,6 @@ import {
 	clearConfiguredWorkspacePath as clearCore,
 	getWorkspaceConfigPath as getCore,
 	normalizeWorkspacePath as normalizeCore,
-	readConfiguredWorkspacePath as readCore,
 	resolveWorkspacePath,
 	writeConfiguredWorkspacePath as writeCore,
 } from "@signet/core";
@@ -17,10 +16,6 @@ export function normalizeWorkspacePath(pathValue: string): string {
 
 export function getWorkspaceConfigPath(env: NodeJS.ProcessEnv = process.env): string {
 	return getCore(env);
-}
-
-export function readConfiguredWorkspacePath(env: NodeJS.ProcessEnv = process.env): string | null {
-	return readCore(env);
 }
 
 export function resolveAgentsDir(env: NodeJS.ProcessEnv = process.env): WorkspaceResolution {

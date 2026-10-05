@@ -51,7 +51,7 @@ SIGNET_TELEMETRY_OPTOUT=1 signet daemon start
 The daemon writes recorded telemetry events to:
 
 ```text
-$SIGNET_WORKSPACE/.daemon/telemetry/events.jsonl
+$SIGNET_WORKSPACE/runtime/telemetry/events.jsonl
 ```
 
 PostHog delivery is best-effort and depends on telemetry configuration. The local JSONL audit is the inspection surface; it lets an operator see what was recorded without treating a remote dashboard as the source of truth.

@@ -55,9 +55,10 @@ Headless setup retains identity presets, network options, Git protection, roster
 
 ## Source checkouts
 
-Setup and workspace migration do not clone the Signet repository. Saving and
-recalling memories use the installed application. `signet sync` and application
-updates maintain an existing workspace checkout but do not create one.
+Setup, `signet workspace set`, and the workspace layout upgrade do not clone
+the Signet repository. Saving and recalling memories use the installed
+application. `signet sync` and application updates maintain an existing
+workspace checkout but do not create one.
 
 `signet desktop build` or `signet desktop install` explicitly creates the managed
 checkout when needed for a source build. Contributors can also clone the repository

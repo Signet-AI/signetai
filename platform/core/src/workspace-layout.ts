@@ -1,9 +1,27 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const WORKSPACE_LAYOUT_V1 = 1 as const;
 export const WORKSPACE_LAYOUT_V2 = 2 as const;
 export type WorkspaceLayoutVersion = typeof WORKSPACE_LAYOUT_V1 | typeof WORKSPACE_LAYOUT_V2;
+const PRIVATE_SEGMENTS: ReadonlySet<string> = new Set([".daemon", ".secrets", "memory"]);
+const PRIVATE_ROOT_DIRS: ReadonlySet<string> = new Set(["runtime", "data", "transcripts", "cache"]);
+
+export function isWorkspacePrivatePath(relativePath: string): boolean {
+	const parts = relativePath
+		.split(/[\\/]/)
+		.filter((part) => part.length > 0)
+		.map((part) => part.toLowerCase());
+	return parts.some((part) => PRIVATE_SEGMENTS.has(part)) || PRIVATE_ROOT_DIRS.has(parts[0] ?? "");
+}
+
+const LEGACY_ARTIFACT_PATH = /^memory\/[^/]+--(?:summary|transcript|compaction|manifest)\.md$/;
+
+export function currentArtifactRelativePath(version: WorkspaceLayoutVersion, path: string): string {
+	return version === WORKSPACE_LAYOUT_V2 && LEGACY_ARTIFACT_PATH.test(path)
+		? `transcripts/${path.slice("memory/".length)}`
+		: path;
+}
 
 export interface WorkspaceLayoutOverrides {
 	database?: string;
@@ -77,7 +95,13 @@ export function persistWorkspaceLayout(
 	mkdirSync(root, { recursive: true });
 	const file = layoutFile(root);
 	const temp = `${file}.tmp-${process.pid}`;
-	writeFileSync(temp, serializeWorkspaceLayout(input), { mode: 0o600 });
+	const fd = openSync(temp, "w", 0o600);
+	try {
+		writeSync(fd, serializeWorkspaceLayout(input));
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
 	renameSync(temp, file);
 	return file;
 }
@@ -85,10 +109,21 @@ export function persistWorkspaceLayout(
 export function resolveWorkspaceLayout(rootPath: string, _options: { env?: NodeJS.ProcessEnv } = {}): WorkspaceLayout {
 	const root = resolve(rootPath);
 	const state = readPersisted(root);
-	const custom = state.overrides ?? {};
-	const v2 = state.version === WORKSPACE_LAYOUT_V2;
+	return layoutFor(root, state.version as WorkspaceLayoutVersion, state.overrides ?? {});
+}
+
+export function readWorkspaceLayoutOverrides(rootPath: string): WorkspaceLayoutOverrides {
+	return { ...readPersisted(resolve(rootPath)).overrides };
+}
+
+export function resolveWorkspaceLayoutAs(rootPath: string, version: WorkspaceLayoutVersion): WorkspaceLayout {
+	const root = resolve(rootPath);
+	return layoutFor(root, version, readPersisted(root).overrides ?? {});
+}
+
+function layoutFor(root: string, version: WorkspaceLayoutVersion, custom: WorkspaceLayoutOverrides): WorkspaceLayout {
+	const v2 = version === WORKSPACE_LAYOUT_V2;
 	const data = custom.data ? absolute(root, custom.data) : join(root, v2 ? "data" : "memory");
-	const version = state.version as WorkspaceLayoutVersion;
 	return {
 		root,
 		version,
@@ -103,6 +138,35 @@ export function resolveWorkspaceLayout(rootPath: string, _options: { env?: NodeJ
 		data,
 		layoutFile: layoutFile(root),
 	};
+}
+export function findExistingWorkspaceDatabase(rootPath: string): string | null {
+	const layout = resolveWorkspaceLayout(rootPath);
+	const candidates = [
+		layout.database,
+		join(layout.data, "signet.db"),
+		join(layout.root, "data", "signet.db"),
+		join(layout.root, "memory", "memories.db"),
+	];
+	return candidates.find((database) => existsSync(database)) ?? null;
+}
+export function hasExistingLegacyWorkspaceState(rootPath: string): boolean {
+	const layout = resolveWorkspaceLayout(rootPath);
+	return (
+		layout.version === WORKSPACE_LAYOUT_V1 &&
+		[
+			layout.database,
+			layout.runtime,
+			layout.data,
+			layout.transcripts,
+			layout.cache,
+			layout.imports,
+			layout.secrets,
+		].some(existsSync)
+	);
+}
+
+export function hasExistingWorkspaceState(rootPath: string): boolean {
+	return findExistingWorkspaceDatabase(rootPath) !== null || hasExistingLegacyWorkspaceState(rootPath);
 }
 
 export function createFreshWorkspaceV2(

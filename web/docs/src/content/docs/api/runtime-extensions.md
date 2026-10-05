@@ -462,7 +462,7 @@ prompt capability grant.
 ### GET /api/plugins/audit
 
 List durable plugin audit events from
-`$SIGNET_WORKSPACE/.daemon/plugins/audit-v1.ndjson`. Events are newest
+`$SIGNET_WORKSPACE/runtime/plugins/audit-v1.ndjson`. Events are newest
 first, capped to 500 rows, and sensitive fields are redacted before they
 are written and again when read.
 

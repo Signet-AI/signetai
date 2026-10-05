@@ -4,7 +4,6 @@ import { SignetMark } from "@/components/icons";
 import { getDesktopBridge } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 import { useView } from "@/lib/view-context";
-import { WorkspaceMigrationCard } from "@/components/workspace/workspace-migration";
 
 export function Topbar() {
 	const desktop = getDesktopBridge();
@@ -28,8 +27,6 @@ export function Topbar() {
 					<span className="truncate text-[16px] font-medium tracking-tight">{label(view)}</span>
 				</div>
 			</div>
-
-			<WorkspaceMigrationCard placement="toast" />
 		</header>
 	);
 }

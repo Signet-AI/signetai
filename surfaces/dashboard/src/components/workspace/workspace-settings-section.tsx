@@ -1,6 +1,5 @@
 import { ProtectionRecoveryData } from "@/components/sources/protection-recovery";
 import { DurableImportStatus } from "@/components/workspace/import-inbox";
-import { WorkspaceMigrationCard } from "@/components/workspace/workspace-migration";
 import { SettingsGroup } from "@/components/settings/controls";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
@@ -24,7 +23,6 @@ export function WorkspaceSettingsSection() {
 				)}
 				<p className="settings-row-description mt-2">This page does not change your storage location automatically.</p>
 			</SettingsGroup>
-			<WorkspaceMigrationCard onlyWhenRelevant />
 			<ProtectionRecoveryData />
 			<DurableImportStatus />
 		</section>

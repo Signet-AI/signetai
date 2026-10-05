@@ -393,8 +393,8 @@ silent fallback or hard-blocked extraction after boot.
     }
   },
   "logging": {
-    "logDir": "/home/user/.agents/.daemon/logs",
-    "logFile": "/home/user/.agents/.daemon/logs/signet-2026-04-29.log"
+    "logDir": "/home/user/.agents/runtime/logs",
+    "logFile": "/home/user/.agents/runtime/logs/signet-2026-04-29.log"
   },
   "activeSessions": 1,
   "bypassedSessions": 1,

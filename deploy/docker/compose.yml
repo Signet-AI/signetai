@@ -11,7 +11,6 @@ services:
       SIGNET_BIND: 0.0.0.0
       SIGNET_PORT: 3850
       SIGNET_PATH: /data/agents
-      SIGNET_LOG_FILE: /data/agents/.daemon/logs/daemon.log
       SIGNET_TELEMETRY_OPTOUT: ${SIGNET_TELEMETRY_OPTOUT:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}

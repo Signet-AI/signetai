@@ -163,7 +163,8 @@ export function createWorkspaceSnapshot(basePath: string, backupRoot?: string): 
 
 	const stamp = new Date().toISOString().replace(/[-:.]/g, "");
 	const dir = sanitize(basename(source));
-	const target = join(root, `${dir}-${stamp}`);
+	let target = join(root, `${dir}-${stamp}`);
+	for (let attempt = 1; existsSync(target); attempt += 1) target = join(root, `${dir}-${stamp}-${attempt}`);
 
 	cpSync(source, target, {
 		recursive: true,

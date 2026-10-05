@@ -13,8 +13,8 @@ Keep the workspace readable and separate authored context from daemon-owned stat
 | `SOUL.md`, `IDENTITY.md`, `USER.md` | Identity, tone, and user context where the active identity preset uses them. |
 | `MEMORY.md`                         | Generated working-memory summary. Do not hand-edit.                          |
 | `agent.yaml`                        | Operator configuration.                                                      |
-| `memory/memories.db`                | SQLite database owned by the daemon.                                         |
-| `.daemon/`                          | PID, logs, auth material, telemetry audit data, and other runtime state.     |
+| `data/signet.db`                    | SQLite database owned by the daemon.                                         |
+| `runtime/`                          | PID, logs, auth material, telemetry audit data, and other runtime state.     |
 | `.secrets/`                         | Encrypted secrets. Never commit this directory.                              |
 
 Use [Workspace and identity](/configuration/workspace-identity/) for workspace resolution and [Secrets](/secrets/) for credential storage.
@@ -39,7 +39,10 @@ A daemon restart or fresh harness session may be necessary after a connector or 
 Treat the workspace as a mix of durable authored files and private runtime state. A conservative `.gitignore` includes:
 
 ```text
-.daemon/
+runtime/
+data/
+cache/
+transcripts/
 .secrets/
 *.log
 ```

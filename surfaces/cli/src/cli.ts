@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSyncHidden as spawnSync } from "@signet/core";
+import { resolveWorkspaceLayout, spawnSyncHidden as spawnSync } from "@signet/core";
 import {
 	existsSync,
 	lstatSync,
@@ -54,7 +54,6 @@ import { registerGraphiqCommands } from "./commands/graphiq.js";
 import { registerHookCommands } from "./commands/hook.js";
 import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMemoryCommands } from "./commands/memory.js";
-import { registerMigrationCommands } from "./commands/migration.js";
 import { registerOntologyCommands } from "./commands/ontology.js";
 import { registerPortableCommands } from "./commands/portable.js";
 import { registerRepairQueueCommands } from "./commands/repair-queue.js";
@@ -421,7 +420,7 @@ function normalizeAgentPath(pathValue: string): string {
 }
 
 function getOpenClawPluginSyncPath(basePath: string): string {
-	return join(basePath, ".daemon", OPENCLAW_PLUGIN_SYNC_FILENAME);
+	return join(resolveWorkspaceLayout(basePath).runtime, OPENCLAW_PLUGIN_SYNC_FILENAME);
 }
 
 function readOpenClawPluginSyncVersion(basePath: string): string | null {
@@ -444,7 +443,7 @@ function writeOpenClawPluginSyncVersion(basePath: string, version: string): void
 }
 
 function openClawPluginRetryPath(basePath: string): string {
-	return join(basePath, ".daemon", OPENCLAW_PLUGIN_RETRY_FILENAME);
+	return join(resolveWorkspaceLayout(basePath).runtime, OPENCLAW_PLUGIN_RETRY_FILENAME);
 }
 
 function readOpenClawPluginRetryAt(basePath: string): number | null {
@@ -1056,12 +1055,10 @@ registerPortableCommands(program, {
 	fetchDaemonStream,
 });
 
-const workspaceLayoutCommand = registerWorkspaceCommands(program, {
+registerWorkspaceCommands(program, {
 	signetLogo,
 });
 
-registerMigrationCommands(program);
-registerMigrationCommands(workspaceLayoutCommand, {}, "migrate");
 registerHookCommands(program, {
 	AGENTS_DIR,
 	fetchDaemonResult,
