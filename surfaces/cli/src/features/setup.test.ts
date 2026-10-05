@@ -1395,17 +1395,27 @@ describe("setupWizard headless plan path", () => {
 		}
 	});
 
-	it("refuses to overwrite an existing installation", async () => {
-		root = mkdtempSync(join(tmpdir(), "setup-headless-existing-"));
+	it("refuses file and JSON setup for a transcript-only v1 workspace", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-transcript-only-"));
 		const basePath = join(root, "agents");
-		const templatesPath = join(root, "templates");
-		writeIdentityTemplates(templatesPath);
+		const transcripts = join(basePath, "memory", "codex", "transcripts");
+		const transcript = '{"role":"user","content":"preserve this conversation"}\n';
+		mkdirSync(transcripts, { recursive: true });
+		writeFileSync(join(transcripts, "transcript.jsonl"), transcript);
 		const planPath = writePlanFile(root);
+		const json = readFileSync(planPath, "utf8");
 		const deps = stubDeps({
 			AGENTS_DIR: basePath,
-			getTemplatesDir: mock(() => templatesPath),
 			normalizeAgentPath: mock((p: string) => p),
-			detectExistingSetup: mock(() => fakeDetection(basePath)),
+			detectExistingSetup: mock(() => ({
+				...fakeDetection(basePath),
+				agentsDir: false,
+				memoryDb: false,
+				agentYaml: false,
+				configYaml: false,
+				identityFiles: [],
+				hasMemoryDir: true,
+			})),
 		});
 
 		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
@@ -1413,11 +1423,15 @@ describe("setupWizard headless plan path", () => {
 		}) as never);
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
-			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
+			for (const options of [{ file: planPath }, { json }]) {
+				await expect(setupWizard(options, deps)).rejects.toThrow("process.exit:1");
+			}
 			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain(
 				"existing Signet installation",
 			);
 			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
+			expect(existsSync(join(basePath, "workspace-layout.json"))).toBe(false);
+			expect(readFileSync(join(transcripts, "transcript.jsonl"), "utf8")).toBe(transcript);
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();
