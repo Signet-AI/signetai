@@ -18,6 +18,7 @@ import { SIGNET_PROMPTS, SIGNET_SUPERMEMORY_PARITY_PROMPTS } from "./prompts"
 const DEFAULT_AGENT_ID = "memorybench"
 const DEFAULT_PROJECT = "memorybench"
 const DEFAULT_TIMEOUT_MS = 60_000
+const DREAM_STATUS_CONCURRENCY = 4
 const STRICT_SEARCH_LIMIT = 10
 const SUPERMEMORY_PARITY_SEARCH_LIMIT = 30
 const MONTH_NAMES = [
@@ -382,6 +383,19 @@ export class SignetProvider implements Provider {
     this.isolatedAgents.add(agentId)
   }
 
+  private async readDreamStatuses(scopes: readonly string[], measure = false): Promise<DreamingStatusResponse[]> {
+    const statuses: DreamingStatusResponse[] = new Array(scopes.length)
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (next < scopes.length) {
+        const index = next++
+        statuses[index] = await this.readDreamStatus(scopes[index]!, measure)
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(DREAM_STATUS_CONCURRENCY, scopes.length) }, worker))
+    return statuses
+  }
+
   private async readDreamStatus(agentId: string, measure = false): Promise<DreamingStatusResponse> {
     const status = await this.request<DreamingStatusResponse>(
       `/api/dream/status?agentId=${encodeURIComponent(agentId)}${measure ? "&measure=1" : ""}`,
@@ -549,9 +563,7 @@ export class SignetProvider implements Provider {
     const readyDeadline = Date.now() + 60_000
     let workerReady = false
     while (Date.now() < readyDeadline) {
-      const statuses = await Promise.all(
-        scopes.map((agentId) => this.readDreamStatus(agentId))
-      )
+      const statuses = await this.readDreamStatuses(scopes)
       if (statuses.every((status) => status.worker?.running)) {
         workerReady = true
         break
@@ -603,7 +615,7 @@ export class SignetProvider implements Provider {
       const active = primary.worker?.activePasses?.length ?? 0
       if (finished.length > 0 || active === 0 || !measured) {
         measured = true
-        const statuses = await Promise.all(scopes.map((agentId) => this.readDreamStatus(agentId, true)))
+        const statuses = await this.readDreamStatuses(scopes, true)
         if (statuses.every((status) => status.episodicTokensPending === 0)) {
           if (active === 0) {
             await this.awaitDerivedEmbeddings(pollMs)

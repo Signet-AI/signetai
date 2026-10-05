@@ -113,6 +113,43 @@ describe("Signet benchmark profiles", () => {
     })
   })
 
+  it("polls Dreaming status for many scopes with bounded concurrency", async () => {
+    class CountingStatusProvider extends SignetDreamingProvider {
+      inFlight = 0
+      maxInFlight = 0
+      statusCalls = 0
+      protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+        if (path.startsWith("/api/dream/status")) {
+          this.statusCalls += 1
+          this.inFlight += 1
+          this.maxInFlight = Math.max(this.maxInFlight, this.inFlight)
+          await new Promise((resolve) => setTimeout(resolve, 5))
+          this.inFlight -= 1
+          return {
+            worker: { running: true, activePasses: [] },
+            passes: [{ id: "pass-1", status: "completed", mutationsApplied: 1 }],
+            episodicTokensPending: 0,
+          } as T
+        }
+        if (path === "/api/dream/trigger") return { passId: "pass-1" } as T
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const previousPoll = process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+    process.env.SIGNET_BENCH_DREAMING_POLL_SECS = "0"
+    try {
+      const provider = new CountingStatusProvider()
+      const agentIds = Array.from({ length: 10 }, (_, index) => `memorybench-q${index}-run`)
+      await provider.finalizeIngest({ runId: "run", dataSourceRunId: "source", agentIds })
+      expect(provider.statusCalls).toBeGreaterThanOrEqual(20)
+      expect(provider.maxInFlight).toBeLessThanOrEqual(4)
+    } finally {
+      if (previousPoll === undefined) delete process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+      else process.env.SIGNET_BENCH_DREAMING_POLL_SECS = previousPoll
+    }
+  })
+
   it("waits for queued transcript captures beyond the HTTP request timeout", async () => {
     class QueuedCaptureProvider extends SignetDreamingProvider {
       polls = 0
