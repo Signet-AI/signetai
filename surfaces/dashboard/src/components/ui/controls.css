@@ -1,5 +1,5 @@
 @layer components {
-	.settings-page { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; padding: 10px 40px 36px; }
+	.settings-page { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; padding: 30px 40px 36px; }
  .settings-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 32px; }
  .settings-section-nav { min-height: 0; display: flex; flex-direction: column; gap: 8px; padding-right: 24px; border-right: 1px solid var(--border); }
  .settings-section-nav > .settings-nav-search { flex: none; height: 36px; padding-inline: 12px; border: 0; background: color-mix(in oklch, var(--foreground) 8%, transparent); }

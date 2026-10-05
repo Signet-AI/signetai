@@ -160,7 +160,7 @@ export function SidebarToggle({ open, onToggle }: { open: boolean; onToggle: () 
 					</svg>
 				</button>
 			</TooltipTrigger>
-			<TooltipContent side="right">
+			<TooltipContent side="bottom">
 				{label} · {shortcut}
 			</TooltipContent>
 		</Tooltip>

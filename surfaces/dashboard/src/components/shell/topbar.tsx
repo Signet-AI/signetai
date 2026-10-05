@@ -4,8 +4,9 @@ import { SignetMark } from "@/components/icons";
 import { getDesktopBridge } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 import { useView } from "@/lib/view-context";
+import { SidebarToggle } from "@/components/shell/navigation";
 
-export function Topbar() {
+export function Topbar({ sidebarOpen, onToggleSidebar }: { sidebarOpen: boolean; onToggleSidebar: () => void }) {
 	const desktop = getDesktopBridge();
 	const unavailable = useSyncExternalStore(
 		dashboardQueryCache.subscribeStatus,
@@ -22,6 +23,7 @@ export function Topbar() {
 						Updates unavailable
 					</span>
 				)}
+				<SidebarToggle open={sidebarOpen} onToggle={onToggleSidebar} />
 				<SignetMark className="sig-topbar-brand" aria-label="Signet" aria-hidden={false} role="img" />
 				<span className="sig-topbar-wordmark" aria-hidden="true">
 					Signet
