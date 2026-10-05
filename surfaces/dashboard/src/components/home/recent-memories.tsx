@@ -145,7 +145,6 @@ function RecentMemoryRow({ memory }: { memory: Memory }) {
 							<span className={cn("shrink-0", TYPE_TINTS[memory.type] ?? "text-muted-foreground")}>
 								{memory.type || sourceLabel(kind)}
 							</span>
-							{/* Dreaming is the default writer, so only other provenance earns space in the list; the reader shows all of it. */}
 							{memory.who && memory.who !== "dreaming" && (
 								<>
 									<span aria-hidden="true">·</span>

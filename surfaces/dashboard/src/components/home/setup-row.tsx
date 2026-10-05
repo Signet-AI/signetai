@@ -1,8 +1,5 @@
 import { ChevronRight } from "@/components/mingcute-icons";
 import type { ReactNode } from "react";
-
-// One line per setup area: label, a short summary of what is there, and a count. Toggle rows expand in place;
-// open rows hand off to Settings.
 export function SetupRow({
 	id,
 	label,

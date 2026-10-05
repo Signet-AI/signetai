@@ -480,9 +480,12 @@ export interface SourceStats {
 }
 
 export interface SourceHealth {
-	status: "healthy" | "degraded" | "unhealthy" | "empty";
+	status: "healthy" | "degraded" | "unhealthy" | "empty" | "unknown";
+	error?: string;
 	latestArtifactAt?: string | null;
 	failures?: { total: number; recoverable: number };
+	checkpoints?: { total: number; partial: number; stale: number };
+	purge?: { deletedArtifacts: number; orphanChunks: number };
 	semantic?: {
 		entities: number;
 		aspects: number;

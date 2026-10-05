@@ -109,8 +109,6 @@ export function HomeConnectorsPanel({
 		</section>
 	);
 }
-
-/** A connector problem worth surfacing on Home, or null when it is installed and working. */
 export function connectorIssue(connector: HarnessConnector): { tone: StatusTone; label: string } | null {
 	if (!connector.installed || !connector.available || connector.inspectionStatus === "unavailable") return null;
 	if (connector.health.status === "needs-auth") return { tone: "error", label: "Sign in needed" };

@@ -41,7 +41,6 @@ test("Manage opens and focuses an editable agent, not every disclosure", async (
 		await act(async () => {
 			root.render(<HomeAgentsPanel />);
 		});
-		// Agents is a collapsed setup row on Home; Manage lives inside it.
 		await act(async () => {
 			(container.querySelector('button[aria-labelledby="home-agents-title"]') as HTMLButtonElement | null)?.click();
 		});
@@ -75,7 +74,6 @@ test("daemon-managed-only roster does not advertise an unavailable Manage action
 		await act(async () => {
 			root.render(<HomeAgentsPanel />);
 		});
-		// Agents is a collapsed setup row on Home; Manage lives inside it.
 		await act(async () => {
 			(container.querySelector('button[aria-labelledby="home-agents-title"]') as HTMLButtonElement | null)?.click();
 		});

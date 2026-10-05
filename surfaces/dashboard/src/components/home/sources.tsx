@@ -25,7 +25,90 @@ const HEALTH_STATUS: Record<string, { tone: StatusTone; label: string } | undefi
 	degraded: { tone: "warn", label: "Degraded" },
 	unhealthy: { tone: "error", label: "Unhealthy" },
 	empty: { tone: "neutral", label: "Empty" },
+	unknown: { tone: "neutral", label: "Couldn't check" },
 };
+
+const REINDEXABLE_KINDS = new Set(["obsidian", "web", "github", "notion", "discord"]);
+
+export interface SourceIssue {
+	readonly tone: StatusTone;
+	readonly title: string;
+	readonly detail?: string;
+	readonly fix: "reindex" | "details";
+	readonly actionable: boolean;
+}
+
+function plural(count: number, word: string): string {
+	return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+export function sourceIssue(source: SignetSource): SourceIssue | null {
+	const health = source.health;
+	if (!health) return null;
+	const reindex = REINDEXABLE_KINDS.has(source.kind) ? "reindex" : "details";
+	if (health.status === "unknown")
+		return {
+			tone: "neutral",
+			title: "Signet couldn't check this source",
+			detail: health.error,
+			fix: "details",
+			actionable: false,
+		};
+	if (health.permission?.status === "denied")
+		return {
+			tone: "error",
+			title: "Signet can't read this folder",
+			detail: health.permission.issues[0]?.guidance,
+			fix: "details",
+			actionable: true,
+		};
+	const failures = health.failures?.total ?? 0;
+	if (failures > 0) {
+		const recoverable = health.failures?.recoverable ?? 0;
+		return {
+			tone: "warn",
+			title: `${plural(failures, "item")} failed to sync`,
+			detail:
+				recoverable > 0
+					? `${recoverable} can be retried by re-indexing.`
+					: "None can be retried automatically; check the source itself.",
+			fix: recoverable > 0 ? reindex : "details",
+			actionable: true,
+		};
+	}
+	const stale = health.checkpoints?.stale ?? 0;
+	const partial = health.checkpoints?.partial ?? 0;
+	if (stale + partial > 0)
+		return {
+			tone: "warn",
+			title: "Sync didn't finish",
+			detail:
+				[stale ? `${stale} stale` : "", partial ? `${partial} partial` : ""].filter(Boolean).join(" and ") +
+				" checkpoints.",
+			fix: reindex,
+			actionable: true,
+		};
+	const orphans = health.purge?.orphanChunks ?? 0;
+	const deleted = health.purge?.deletedArtifacts ?? 0;
+	if (orphans + deleted > 0)
+		return {
+			tone: "warn",
+			title: "Index still holds data from deleted items",
+			detail: [orphans ? plural(orphans, "orphaned chunk") : "", deleted ? plural(deleted, "deleted item") : ""]
+				.filter(Boolean)
+				.join(" and ")
+				.concat("."),
+			fix: "details",
+			actionable: true,
+		};
+	if (health.status === "unhealthy" || health.status === "degraded")
+		return {
+			tone: health.status === "unhealthy" ? "error" : "warn",
+			title: `Source is ${health.status}`,
+			fix: "details",
+			actionable: true,
+		};
+	return null;
+}
 function RootIcon({ kind }: { kind: string }) {
 	const cls = "size-[13px] shrink-0 text-muted-foreground";
 	if (kind === "github") return <GitBranch className={cls} aria-hidden="true" />;
@@ -61,7 +144,6 @@ export function HomeSourcesPanel({
 		setExpanded(true);
 		setPendingFocus(focus.id);
 	}, [focus]);
-	// Runs after the expanded list has committed, so the requested source row exists to open.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: sources re-runs the lookup when rows arrive late.
 	useEffect(() => {
 		if (!expanded || !pendingFocus) return;
@@ -142,6 +224,7 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 		setConfirming,
 	} = useSourceActions(source, onMutate);
 	const format = typeof source.providerSettings?.format === "string" ? source.providerSettings.format : source.kind;
+	const issue = sourceIssue(source);
 
 	return (
 		<details className="group/source" data-health={health} data-source-id={source.id}>
@@ -161,6 +244,12 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 				<ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/source:rotate-90" />
 			</summary>
 			<div className="pb-2.5 pl-6.5">
+				{issue && (
+					<p className="home-source-reason" data-tone={issue.tone}>
+						<span>{issue.title}.</span>
+						{issue.detail && source.health?.permission?.status !== "denied" && <> {issue.detail}</>}
+					</p>
+				)}
 				<div className="flex min-w-0 items-center gap-1.5">
 					<div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--control-radius)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] pl-2 pr-1">
 						<RootIcon kind={source.kind} />

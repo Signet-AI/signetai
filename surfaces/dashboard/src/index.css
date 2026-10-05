@@ -285,7 +285,6 @@
 	.dreams-summary-copy { color: var(--home-body, var(--foreground)); overflow-wrap: anywhere; }
 	.dreams-pass-row:focus-visible, .dreams-page button:focus-visible { outline: 2px solid var(--home-focus, var(--ring)); outline-offset: 2px; }
 	@media (max-width: 1023px) { .dreams-page { padding-inline: 24px; } }
-	/* The home page scrolls as one document; breakpoints follow the content width, not the window. */
 	.home-dashboard { container: home / inline-size; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 	.home-workspace, .home-status-bar { --home-max: 1560px; --home-gutter: clamp(16px, 3cqi, 40px); }
 	.home-workspace { flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 34%, 440px); padding-inline: max(0px, (100% - var(--home-max)) / 2); background: var(--background); }
@@ -293,7 +292,6 @@
 	.home-today > *, .home-system > * { flex-shrink: 0; }
 	.home-system { border-inline-start: 1px solid var(--border); }
 	.home-daily-brief .insight-text { max-width: 34em; min-height: 0; font-size: clamp(18px, 14px + 0.8cqi, 22px); font-weight: 400; line-height: 1.4; letter-spacing: -0.015em; text-wrap: pretty; }
-	/* The brief is the one raised surface on the page; everything else sits flat on the sheet. */
 	.home-daily-brief { margin-block-end: 32px; padding: 18px 22px 14px; border-radius: 16px; background: var(--card); border: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 4%, transparent), 0 1px 2px oklch(0 0 0 / 0.05); }
 	.home-brief-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-height: 28px; margin-block-start: 6px; }
 	.home-brief-icon { display: grid; place-items: center; width: 28px; height: 28px; margin: -4px; border-radius: 999px; color: var(--home-secondary, var(--muted-foreground)); transition: background-color 160ms ease, color 160ms ease; }
@@ -304,7 +302,6 @@
 	.home-brief-reply:disabled { opacity: 0.5; }
 	.home-brief-pager { display: flex; align-items: center; gap: 4px; }
 	.home-brief-pager > span { min-width: 6ch; text-align: center; }
-	/* Recent memories scroll inside a fixed window so the page height stays put; the fade hints at more below. */
 	.home-recent-list { max-block-size: 316px; overflow-y: auto; overflow-x: hidden; padding-inline: 10px; margin-inline: -10px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--foreground) 18%, transparent) transparent; }
 	.home-recent-list[data-at-end="false"] { -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 36px), transparent); }
 	.home-recent > div:nth-child(2) { gap: 16px; margin-top: 14px; }
@@ -322,7 +319,6 @@
 	.home-activity [role="img"] > div[title$=": 0"] { background: var(--home-cell, var(--muted)); }
 	.home-system > section { padding: 0; }
 	.home-system > section > div:first-child { min-height: 28px; }
-	/* Setup inventory: one line per area. Rows bleed 10px so hover fills edge to edge while text stays on the column grid. */
 	.home-setup-list { display: flex; flex-direction: column; margin-block-start: 20px; border-block-start: 1px solid var(--border); }
 	.home-setup-group { border-block-end: 1px solid var(--border); }
 	.home-setup-row { display: grid; grid-template-columns: 88px minmax(0, 1fr) auto 28px; align-items: center; column-gap: 12px; width: calc(100% + 20px); min-height: 52px; margin-inline: -10px; padding-inline: 10px 0; border-radius: 10px; text-align: start; transition: background-color 160ms ease; }
@@ -346,7 +342,12 @@
 	.home-setup-summary .home-connector-tile img:is([src$="kimi.png"], [src$="opencode.svg"], [src$="hermes-agent.svg"]) { width: 13px; height: 13px; }
 	.home-system > .home-attention { margin-block-start: 20px; padding: 14px 16px 8px; border-radius: 14px; background: var(--card); border: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent); }
 	.home-attention-list { display: flex; flex-direction: column; margin: 2px 0 0; padding: 0; list-style: none; }
-	.home-attention-item { display: flex; align-items: center; gap: 10px; min-height: 40px; }
+	.home-source-reason { margin: 0 0 8px; font-size: var(--text-small); line-height: 1.5; color: var(--home-secondary, var(--muted-foreground)); overflow-wrap: anywhere; }
+	.home-source-reason > span:first-child { color: var(--home-title, var(--foreground)); }
+	.home-attention-item { display: flex; align-items: flex-start; gap: 10px; padding-block: 8px; }
+	.home-attention-item > .dashboard-status { margin-block-start: 6px; }
+	.home-attention-item > .dashboard-section-action { margin-block-start: -4px; }
+	.home-attention-detail { margin: 2px 0 0; font-size: var(--text-small); line-height: 1.45; color: var(--home-secondary, var(--muted-foreground)); overflow-wrap: anywhere; }
 	.home-attention-suggestions { display: flex; flex-direction: column; gap: 4px; margin-block-start: 8px; padding-block-start: 10px; border-block-start: 1px solid var(--border); }
 	.home-system summary { min-height: 48px; gap: 12px; padding-block: 8px; }
 	.home-system summary > span:first-child { width: 24px; height: 20px; }
@@ -373,13 +374,11 @@
 	html:not(.dark) :is(.home-connector-icon, .home-connector-tile) img[src$="openai.svg"],
 	html:not(.dark) :is(.home-connector-icon, .home-connector-tile) img[src$="forge.svg"],
 	html:not(.dark) :is(.home-connector-icon, .home-connector-tile) img[src$="pi.svg"] { filter: invert(1); }
-	/* Connectors read as one overlapping stack; logos stay monochrome until hovered so no brand color dominates. */
 	.home-connectors-rows { padding: 4px 4px 4px 2px; margin: -4px -4px -4px -2px; }
 	.home-connectors-rows > li + li { margin-inline-start: -6px; }
 	.home-connector-tile { position: relative; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; background: var(--home-interactive); box-shadow: 0 0 0 2px var(--background), inset 0 0 0 1px color-mix(in srgb, var(--foreground) 9%, transparent); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), background-color 160ms ease; }
 	.home-connector-tile img { filter: grayscale(1) contrast(1.1); opacity: 0.78; transition: filter 180ms ease, opacity 180ms ease; }
 	.dark .home-connector-tile img { filter: grayscale(1) brightness(1.5); }
-	/* App-icon marks ship as full-bleed squares; shrink and round them so they match the weight of plain glyphs. */
 	.home-connector-tile img:is([src$="kimi.png"], [src$="opencode.svg"], [src$="hermes-agent.svg"]) { width: 15px; height: 15px; border-radius: 4px; filter: grayscale(1); }
 	.home-connector-tile:hover, .home-connector-tile:focus-visible { z-index: 1; transform: translateY(-2px); background: var(--home-selection); }
 	.home-connector-tile:hover img, .home-connector-tile:focus-visible img { filter: none; opacity: 1; }
@@ -414,7 +413,6 @@
 	.home-recent > div:first-child { gap: 6px; }
 	.home-system [class~="group/source"] summary > span:first-child { color: var(--home-body, var(--foreground)); }
 	.home-system summary > svg { color: var(--home-disabled, var(--muted-foreground)); }
-	/* Same surface as the search pill beside it, so the two read as one control group. */
 	.home-source-filter { flex-shrink: 0; width: 156px; height: 36px; padding-inline: 14px 12px; border: 1px solid var(--input); border-radius: var(--search-radius); background: color-mix(in oklch, var(--foreground) 5%, transparent); box-shadow: none; font-size: var(--text-small); font-weight: 400; color: var(--muted-foreground); transition: border-color 160ms ease, background-color 160ms ease; }
 	.home-source-filter:hover { border-color: color-mix(in srgb, var(--foreground) 18%, transparent); }
 	.home-source-filter svg { width: 13px; height: 13px; }
@@ -452,7 +450,6 @@
 	@media (prefers-reduced-motion: reduce) {
 		.home-dashboard :is(button, summary, svg, p) { transition: none; }
 	}
-	/* Phones scroll the status line with the page instead of pinning it above the nav bar. */
 	@media (max-width: 640px) {
 		.home-dashboard { overflow-y: auto; overscroll-behavior: contain; }
 		.home-workspace { flex: none; overflow: visible; }

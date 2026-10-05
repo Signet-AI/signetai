@@ -9,8 +9,8 @@ import { type HarnessConnector, type SignetSource, api } from "@/lib/api";
 import { useView } from "@/lib/view-context";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { HomeSourcesPanel } from "@/components/home/sources";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { HomeSourcesPanel, sourceIssue } from "@/components/home/sources";
+import { useEffect, useMemo, useState } from "react";
 
 export function HomeView() {
 	const status = useAsync(() => api.getStatus(), { key: "status", intervalMs: 30000 });
@@ -77,6 +77,7 @@ export function HomeView() {
 						sources={sources}
 						connectors={harnessesQuery.data?.error ? undefined : harnessesQuery.data?.data?.connectors}
 						onShowSource={(id) => setSourceFocus({ id, at: Date.now() })}
+						onSourcesChanged={sourcesQuery.refresh}
 					/>
 					<div className="home-setup-list">
 						<HomeSourcesPanel
@@ -96,17 +97,16 @@ export function HomeView() {
 		</div>
 	);
 }
-
-// Only things that need the user: unhealthy sources, connectors that need sign-in, and pending suggestions.
-// Renders nothing when all is well, so the setup list leads.
 function NeedsAttention({
 	sources,
 	connectors,
 	onShowSource,
+	onSourcesChanged,
 }: {
 	sources?: readonly SignetSource[];
 	connectors?: readonly HarnessConnector[];
 	onShowSource: (id: string) => void;
+	onSourcesChanged: () => void;
 }) {
 	const { openSettings } = useView();
 	const proposals = useAsync(() => api.getOntologyProposals("pending", 20), {
@@ -114,9 +114,10 @@ function NeedsAttention({
 		intervalMs: 15000,
 	});
 	const suggestions = proposals.data?.items ?? [];
-	const sourceIssues = (sources ?? []).filter(
-		(source) => source.health?.status === "unhealthy" || source.health?.status === "degraded",
-	);
+	const sourceIssues = (sources ?? []).flatMap((source) => {
+		const issue = sourceIssue(source);
+		return issue?.actionable ? [{ source, issue }] : [];
+	});
 	const connectorIssues = (connectors ?? []).flatMap((connector) => {
 		const issue = connectorIssue(connector);
 		return issue ? [{ connector, issue }] : [];
@@ -133,25 +134,55 @@ function NeedsAttention({
 				meta={<span className="text-meta tabular-nums text-muted-foreground">{count}</span>}
 			/>
 			<ul className="home-attention-list">
-				{sourceIssues.map((source) => (
-					<AttentionItem
-						key={source.id}
-						tone={source.health?.status === "unhealthy" ? "error" : "warn"}
-						action="Details"
-						onAction={() => onShowSource(source.id)}
-					>
-						{source.name} is {source.health?.status}
-					</AttentionItem>
-				))}
+				{sourceIssues.map(({ source, issue }) =>
+					issue.fix === "reindex" ? (
+						<AttentionItem
+							key={source.id}
+							tone={issue.tone}
+							title={`${source.name}: ${issue.title}`}
+							detail={issue.detail}
+							action="Re-index"
+							pendingLabel="Re-indexing…"
+							doneLabel="Re-index requested. Health updates when the sync finishes."
+							onRun={async () => {
+								const result = await api.reindexSource(source);
+								if (result.ok) onSourcesChanged();
+								return result;
+							}}
+						/>
+					) : (
+						<AttentionItem
+							key={source.id}
+							tone={issue.tone}
+							title={`${source.name}: ${issue.title}`}
+							detail={issue.detail}
+							action="Details"
+							onAction={() => onShowSource(source.id)}
+						/>
+					),
+				)}
 				{connectorIssues.map(({ connector, issue }) => (
-					<AttentionItem key={connector.id} tone={issue.tone} action="Fix" onAction={() => openSettings("connectors")}>
-						{connector.displayName}: {issue.label.toLowerCase()}
-					</AttentionItem>
+					<AttentionItem
+						key={connector.id}
+						tone={issue.tone}
+						title={`${connector.displayName}: ${issue.label.toLowerCase()}`}
+						detail={
+							issue.label === "Sign in needed"
+								? "Its credentials expired or were never set. Sign in again from Connectors."
+								: "Its last health check reported a problem. Open Connectors to see the check and repair it."
+						}
+						action={issue.label === "Sign in needed" ? "Sign in" : "Open"}
+						onAction={() => openSettings("connectors")}
+					/>
 				))}
 				{proposalsFailed && (
-					<AttentionItem tone="neutral" action="Retry" onAction={() => void proposals.refresh()}>
-						Review suggestions could not be loaded
-					</AttentionItem>
+					<AttentionItem
+						tone="neutral"
+						title="Review suggestions couldn't be loaded"
+						detail="The daemon didn't answer the request. Retrying usually works once it's reachable."
+						action="Retry"
+						onAction={() => void proposals.refresh()}
+					/>
 				)}
 			</ul>
 			{suggestions.length > 0 && (
@@ -177,22 +208,58 @@ function NeedsAttention({
 
 function AttentionItem({
 	tone,
+	title,
+	detail,
 	action,
+	pendingLabel,
+	doneLabel,
 	onAction,
-	children,
+	onRun,
 }: {
 	tone: StatusTone;
+	title: string;
+	detail?: string;
 	action: string;
-	onAction: () => void;
-	children: ReactNode;
+	pendingLabel?: string;
+	doneLabel?: string;
+	onAction?: () => void;
+	onRun?: () => Promise<{ ok: boolean; error?: string }>;
 }) {
+	const [state, setState] = useState<"idle" | "pending" | "done">("idle");
+	const [error, setError] = useState<string | null>(null);
+	const run = async () => {
+		if (!onRun) return onAction?.();
+		setState("pending");
+		setError(null);
+		const result = await onRun();
+		setState(result.ok ? "done" : "idle");
+		if (!result.ok) setError(result.error ?? "That didn't work. Try again.");
+	};
 	return (
 		<li className="home-attention-item">
 			<span className="dashboard-status" data-tone={tone}>
 				<span className="dashboard-status-dot" aria-hidden="true" />
 			</span>
-			<span className="min-w-0 flex-1 text-body">{children}</span>
-			<SectionAction onClick={onAction}>{action}</SectionAction>
+			<div className="min-w-0 flex-1">
+				<p className="m-0 text-body text-foreground">{title}</p>
+				{state === "done" && doneLabel ? (
+					<p role="status" className="home-attention-detail">
+						{doneLabel}
+					</p>
+				) : (
+					detail && <p className="home-attention-detail">{detail}</p>
+				)}
+				{error && (
+					<p role="alert" className="home-attention-detail text-destructive">
+						{error}
+					</p>
+				)}
+			</div>
+			{state !== "done" && (
+				<SectionAction disabled={state === "pending"} onClick={() => void run()}>
+					{state === "pending" ? (pendingLabel ?? action) : action}
+				</SectionAction>
+			)}
 		</li>
 	);
 }
