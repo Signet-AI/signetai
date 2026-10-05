@@ -317,6 +317,33 @@ async function nextLeafPass(owner: DbOwnerClient, agentId: string, scopeKey: str
 	return row === undefined || row.status === "running" ? null : row.id;
 }
 
+export async function narrowDreamingPassScopeKey(
+	accessor: DbAccessor,
+	passId: string,
+	scopes: readonly string[],
+): Promise<string> {
+	const owner = await getDbOwnerForAccessor(accessor);
+	const allowed = new Set(scopes);
+	const used = (
+		await ownerQueryAll<{ scope: string | null }>(
+			owner,
+			"dreaming.history.pass-scopes",
+			`SELECT DISTINCT json_extract(input_json, '$.agentId') AS scope
+			 FROM dreaming_tool_calls WHERE pass_id = ? AND json_valid(input_json)`,
+			[passId],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		)
+	).flatMap((row) => (typeof row.scope === "string" && allowed.has(row.scope) ? [row.scope] : []));
+	const scopeKey = dreamingScopeKey(used.length > 0 ? used : scopes);
+	await ownerTransaction(
+		owner,
+		"dreaming.history.pass-scope-key",
+		[ownerRunStatement("UPDATE dreaming_passes SET scope_key = ? WHERE id = ?", [scopeKey, passId])],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+	);
+	return scopeKey;
+}
+
 const compactionsByAgent = new Map<string, Promise<number>>();
 
 export async function compactDreamingHistory(

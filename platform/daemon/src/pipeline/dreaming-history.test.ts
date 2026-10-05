@@ -9,6 +9,7 @@ import {
 	type DreamingHistoryCompleter,
 	compactDreamingHistory,
 	foldDreamingHistory,
+	narrowDreamingPassScopeKey,
 	nextDreamingHistoryMerge,
 	renderDreamingHistory,
 	renderDreamingHistoryForPass,
@@ -237,5 +238,20 @@ describe("dreaming history compaction", () => {
 		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE, "scope-b"])).toBe(
 			"scopes=scope-a\n0+1|about scope a\n1+1|about scope a",
 		);
+	});
+	it("files a pass under the scopes it actually worked in", async () => {
+		insertPass("mixed", 1, { scope: "default,scope-a", toolCall: false });
+		getDbAccessor().withWriteTx((db) => {
+			const call = db.prepare(
+				`INSERT INTO dreaming_tool_calls (id, agent_id, pass_id, sequence, tool_name, input_json, output_json, success, latency_ms)
+				 VALUES (?, ?, 'mixed', ?, 'search_evidence', ?, '{}', 1, 1)`,
+			);
+			call.run("mixed-1", AGENT, 1, JSON.stringify({ agentId: SCOPE }));
+			call.run("mixed-2", AGENT, 2, JSON.stringify({ agentId: "scope-outside-the-pass" }));
+		});
+		expect(await narrowDreamingPassScopeKey(getDbAccessor(), "mixed", ["default", SCOPE])).toBe(SCOPE);
+		const completer = recordingCompleter(() => "worked only in scope a");
+		expect(await compactDreamingHistory(getDbAccessor(), completer, AGENT, SCOPE)).toBe(1);
+		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE])).toBe("0+1|worked only in scope a");
 	});
 });

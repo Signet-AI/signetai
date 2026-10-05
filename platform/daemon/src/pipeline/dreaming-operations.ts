@@ -740,10 +740,6 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			continue;
 		}
 
-		const relativeTime = CLAIM_VALUE_OPERATIONS.has(operation.operation)
-			? findUnresolvedRelativeTime(stringField(operation.payload, "value") ?? "")
-			: null;
-		if (relativeTime !== null) return relativeTimeError(index, operation.operation, relativeTime);
 		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
 		if ("error" in applicator) return unresolvedTarget(index, operation.operation, applicator.error);
 		if (DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) {
@@ -821,6 +817,23 @@ function applyValidatedOperationBody(
 			return { index: entry.index, ok: true, result: { attentionId: entry.attentionId } };
 		}
 		return { index: entry.index, ok: true, result: { attentionId: entry.attentionId } };
+	}
+
+	if (CLAIM_VALUE_OPERATIONS.has(entry.input.operation)) {
+		const claimValue =
+			typeof entry.input.payload.value === "string"
+				? entry.input.payload.value
+				: typeof entry.input.payload.new_value === "string"
+					? entry.input.payload.new_value
+					: "";
+		const relativeTime = findUnresolvedRelativeTime(claimValue);
+		if (relativeTime !== null) {
+			return {
+				index: entry.index,
+				ok: false,
+				error: relativeTimeError(entry.index, entry.input.operation, relativeTime),
+			};
+		}
 	}
 
 	if (entry.reviewOnly) {

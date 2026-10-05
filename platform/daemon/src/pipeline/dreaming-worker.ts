@@ -31,7 +31,7 @@ import {
 import { DREAMING_CONTENT_ATTENTION_KINDS, hasDreamingAttentionKindInDb } from "./dreaming-attention";
 import { type DreamingEvidenceRetryPolicy, autoRequeueRepairedDreamingEvidence } from "./dreaming-evidence-retry";
 import type { PiAgentRetryPolicy } from "./pi-agent-protocol";
-import { compactDreamingHistory, type DreamingHistoryCompleter, dreamingScopeKey } from "./dreaming-history";
+import { compactDreamingHistory, type DreamingHistoryCompleter, narrowDreamingPassScopeKey } from "./dreaming-history";
 
 const DREAMING_PROVIDER_RETRY: PiAgentRetryPolicy = { maxRetries: 8, baseDelayMs: 2_000, maxAgentDelayMs: 60_000 };
 export class AlreadyRunningError extends Error {
@@ -395,13 +395,18 @@ export function startDreamingWorker(
 
 	async function compactHistoryAfterPass(
 		runAgentId: string,
+		passId: string,
 		scopes: readonly string[],
 		live?: DreamingPassLiveOptions,
 	): Promise<void> {
 		try {
 			const completer = historyCompleterForAgent(runAgentId);
 			if (completer === null || stopped) return;
-			const scopeKey = dreamingScopeKey(live?.userRequest !== undefined ? [runAgentId] : scopes);
+			const scopeKey = await narrowDreamingPassScopeKey(
+				accessor,
+				passId,
+				live?.userRequest !== undefined ? [runAgentId] : scopes,
+			);
 			await compactDreamingHistory(accessor, completer, runAgentId, scopeKey, { isActive: () => !stopped });
 		} catch (error) {
 			logger.warn("dreaming-worker", "Dreaming history compaction was not started", {
@@ -525,7 +530,8 @@ export function startDreamingWorker(
 		);
 		void result
 			.catch(() => undefined)
-			.then(() => compactHistoryAfterPass(runAgentId, scopes, live))
+			.then(async () => compactHistoryAfterPass(runAgentId, await passId, scopes, live))
+			.catch(() => undefined)
 			.finally(() => {
 				runningPasses.delete(entry);
 				release();

@@ -1135,10 +1135,10 @@ describe("dreaming operations", () => {
 		expect(row).toEqual({ occurred_start: "2023-03-19T00:00:00.000Z", time_precision: "day" });
 	});
 
-	it("rejects claim text that still holds a relative time, before writing", async () => {
+	it("rejects only the claim that still holds a relative time and applies the rest of the batch", async () => {
 		insertEntity("e-user", "User", "user");
 		insertAspect("a-events", "e-user", "events");
-		insertEpisodicMemory("mem-walk", "I just finished the Walk for Hunger this morning!");
+		insertEpisodicMemory("mem-walk", "I just finished the Walk for Hunger this morning! I also adopted a cat.");
 		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
 			agentId: "agent-a",
@@ -1154,15 +1154,27 @@ describe("dreaming operations", () => {
 					},
 					evidence: [{ source_ref: "memory:mem-walk", quote: "I just finished the Walk for Hunger" }],
 				},
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "e-user",
+						aspectId: "a-events",
+						claimKey: "pet",
+						value: "The user adopted a cat.",
+					},
+					evidence: [{ source_ref: "memory:mem-walk", quote: "I also adopted a cat." }],
+				},
 			],
 		});
-		expect(result.ok).toBe(false);
-		expect(result.error).toContain('relative time "last weekend"');
-		expect(result.error).toContain("capturedAt");
-		const count = getDbAccessor().withReadDb(
-			(db) => db.prepare("SELECT COUNT(*) AS c FROM entity_attributes").get() as { c: number },
+		const rejected = result.items[0] as { ok: boolean; error?: string } | undefined;
+		expect(rejected?.ok).toBe(false);
+		expect(String(rejected?.error)).toContain('relative time "last weekend"');
+		expect(String(rejected?.error)).toContain("capturedAt");
+		expect(result.items[1]).toMatchObject({ ok: true });
+		const claims = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT claim_key FROM entity_attributes").all() as Array<{ claim_key: string }>,
 		);
-		expect(count.c).toBe(0);
+		expect(claims.map((claim) => claim.claim_key)).toEqual(["pet"]);
 	});
 
 	it("supersedes the current active claim for a key without an explicit attribute id", async () => {
