@@ -1,13 +1,12 @@
-import { DashboardRegion } from "@/components/dashboard/region";
 import { MarkdownSummary, markdownSummaryPreview } from "@/components/dreams/summary";
-import { PageHeading, SectionHeading } from "@/components/dashboard/heading";
-import { PageControls, useBoundedPagination } from "@/components/dashboard/pagination";
+import { PageHeading, SectionAction, SectionHeading, StatusLabel } from "@/components/dashboard/heading";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { type DreamPass, type DreamToolCall, api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
+import { useScrollEnd } from "@/lib/use-scroll-end";
 import { cn } from "@/lib/utils";
-import { Activity, AlertCircle, Check, ChevronRight, Loader2, Play, X } from "@/components/mingcute-icons";
+import { Activity, AlertCircle, Check, Loader2, Play, X } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useState } from "react";
 
 function parseDate(s: string): Date | null {
@@ -93,6 +92,7 @@ export function DreamsView() {
 	}, [activePass]);
 
 	const lastPass = status.data?.passes[0] ?? null;
+	const shownPass = activePass ?? lastPass;
 	const pendingAttention = status.data?.attention ?? [];
 	const running = Boolean(activePass);
 	const scheduler = status.data?.scheduler ?? null;
@@ -101,58 +101,49 @@ export function DreamsView() {
 
 	return (
 		<div className="dreams-page">
-			<PageHeading
-				title="Dreams"
-				description="How Signet reflects on your memories."
-				className="flex h-auto! flex-wrap items-start justify-between gap-4"
-			>
-				<TriggerControl running={running} refresh={status.refresh} />
-			</PageHeading>
-			<div className="dreams-stats flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border pb-4">
-				<Stat label="state" value={running ? "running" : "idle"} live={running} />
-				<Stat
-					label={running ? "pass" : "last attempt"}
-					value={
-						running
-							? `${modeLabel(activePass?.mode)} · ${fmtDuration(elapsedMs)}`
-							: lastPass
-								? `${modeLabel(lastPass.mode)} · ${fmtTimeShort(lastPass.completedAt ?? lastPass.startedAt)}`
-								: "—"
-					}
-				/>
-				<Stat
-					label="tokens"
-					value={`${fmtTokens((activePass ?? lastPass)?.tokensInput)} ↑ ${fmtTokens((activePass ?? lastPass)?.tokensOutput)} ↓`}
-				/>
-				<Stat label="cost" value={fmtCost((activePass ?? lastPass)?.tokensCost)} />
-				<Stat label="attention" value={String(pendingAttention.length)} />
-				<Stat label="backlog" value={fmtTokens(status.data?.episodicTokensPending ?? null)} />
-				<span className="ml-auto flex shrink-0 items-center gap-3">
-					<span
-						className={cn(
-							"flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground",
-							queueDeferred && "text-[oklch(0.8_0.14_80)]",
-						)}
+			<div className="dreams-content">
+				<PageHeading title="Dreams" description="How Signet reflects on your memories." className="dreams-heading">
+					<TriggerControl running={running} refresh={status.refresh} />
+				</PageHeading>
+				<div className="dreams-stats">
+					<Stat label="State" value={running ? "Running" : "Idle"} live={running} />
+					<Stat
+						label={running ? "Current pass" : "Last attempt"}
+						value={
+							running
+								? `${modeLabel(activePass?.mode)} · ${fmtDuration(elapsedMs)}`
+								: lastPass
+									? `${modeLabel(lastPass.mode)} · ${fmtTimeShort(lastPass.completedAt ?? lastPass.startedAt)}`
+									: "—"
+						}
+					/>
+					<Stat
+						label="Tokens in / out"
+						value={`${fmtTokens(shownPass?.tokensInput)} / ${fmtTokens(shownPass?.tokensOutput)}`}
+					/>
+					<Stat label="Cost" value={fmtCost(shownPass?.tokensCost)} />
+					<Stat label="Attention" value={String(pendingAttention.length)} />
+					<Stat label="Backlog" value={fmtTokens(status.data?.episodicTokensPending ?? null)} />
+					<StatusLabel
+						className="dreams-daemon"
+						tone={status.error ? "neutral" : queueDeferred ? "warn" : status.loading ? "neutral" : "ok"}
 					>
-						<span
-							className={cn("size-1.5 rounded-full bg-success", queueDeferred && "bg-[oklch(0.8_0.14_80)] shadow-none")}
-						/>
 						{status.error
-							? "updates unavailable · showing saved data"
+							? "Updates unavailable, showing saved data"
 							: status.loading
-								? "connecting to daemon…"
+								? "Connecting to daemon…"
 								: queueDeferred
-									? "automatic Dreaming deferred: queue pressure"
-									: "daemon reachable"}
-					</span>
-				</span>
-			</div>
+									? "Automatic Dreaming deferred: queue pressure"
+									: "Daemon reachable"}
+					</StatusLabel>
+				</div>
 
-			<div className="dreams-workspace">
-				<DreamingSummarySection pass={lastSuccessful} summary={summaryText} loading={runbook.loading} />
-				<div className="dreams-right">
-					<PassLedger passes={status.data?.passes ?? []} onSelect={setDetailPass} />
-					<PassActivity pass={trackedPass} onDetails={setDetailPass} />
+				<div className="dreams-workspace">
+					<DreamingSummarySection pass={lastSuccessful} summary={summaryText} loading={runbook.loading} />
+					<div className="dreams-right">
+						<PassLedger passes={status.data?.passes ?? []} onSelect={setDetailPass} />
+						<PassActivity pass={trackedPass} onDetails={setDetailPass} />
+					</div>
 				</div>
 			</div>
 
@@ -163,13 +154,17 @@ export function DreamsView() {
 
 function Stat({ label, value, live }: { label: string; value: string; live?: boolean }) {
 	return (
-		<span className="flex min-w-0 items-baseline gap-2">
-			<span className="text-xs text-muted-foreground">{label}</span>
-			<span className="flex min-w-0 items-center gap-1.5">
-				{live && <span className="size-1.5 shrink-0 rounded-full bg-success" />}
-				<span className="font-mono text-xs leading-relaxed text-foreground">{value}</span>
+		<div className="dreams-stat">
+			<span className="text-meta text-muted-foreground">{label}</span>
+			<span className="flex min-w-0 items-center gap-1.5 text-body tabular-nums text-foreground">
+				{live && (
+					<span className="dashboard-status" data-tone="ok">
+						<span className="dashboard-status-dot" aria-hidden="true" />
+					</span>
+				)}
+				<span className="truncate">{value}</span>
 			</span>
-		</span>
+		</div>
 	);
 }
 
@@ -187,23 +182,10 @@ function TriggerControl({ running, refresh }: { running: boolean; refresh: () =>
 		}
 		refresh();
 	};
-	if (running) {
-		return (
-			<span className="flex min-h-8 shrink-0 items-center gap-2 text-sm text-muted-foreground">
-				<span className="size-1.5 rounded-full bg-success" />
-				running
-			</span>
-		);
-	}
+	if (running) return <StatusLabel tone="ok">Pass running</StatusLabel>;
 	return (
-		<div className="flex items-center gap-2">
-			<Button
-				variant="outline"
-				size="compact"
-				onClick={trigger}
-				disabled={busy}
-				className="min-h-9! gap-2! px-3! disabled:cursor-not-allowed disabled:opacity-50"
-			>
+		<div className="flex flex-col items-end gap-1.5">
+			<button type="button" onClick={trigger} disabled={busy} className="dreams-run">
 				{busy ? (
 					<>
 						<Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" /> Starting…
@@ -213,8 +195,8 @@ function TriggerControl({ running, refresh }: { running: boolean; refresh: () =>
 						<Play className="size-3.5" /> Run a pass
 					</>
 				)}
-			</Button>
-			{error && <span className="font-mono text-[10px] text-destructive">{error}</span>}
+			</button>
+			{error && <span className="text-meta text-destructive">{error}</span>}
 		</div>
 	);
 }
@@ -229,24 +211,19 @@ function DreamingSummarySection({
 	loading: boolean;
 }) {
 	return (
-		<section className="dreams-summary dashboard-region">
+		<section className="dreams-summary" aria-labelledby="dreams-summary-title">
 			<SectionHeading
+				id="dreams-summary-title"
 				title="Latest reflection"
-				titleClassName="font-medium tracking-normal"
 				meta={
-					<span className="text-xs text-muted-foreground">
+					<span className="text-meta tabular-nums text-muted-foreground">
 						{pass
 							? `${modeLabel(pass.mode)} · ${fmtTimeShort(pass.completedAt ?? pass.startedAt)}`
-							: "no completed pass"}
+							: "No completed pass"}
 					</span>
 				}
 			/>
-			<div
-				role="region"
-				className="dashboard-region-body dreams-reflection-body"
-				tabIndex={0}
-				aria-label="Reflection summary"
-			>
+			<div className="dreams-reflection-body">
 				<MarkdownSummary text={summary ?? (loading ? "Loading reflection…" : "No reflection recorded yet.")} />
 			</div>
 		</section>
@@ -260,100 +237,95 @@ function PassActivity({ pass, onDetails }: { pass: DreamPass | null; onDetails: 
 		intervalMs: pass?.status === "running" ? 2500 : undefined,
 	});
 	const items = tools.data?.passId === pass?.id ? (tools.data?.items ?? []) : [];
-	const { ref, page, pages, setPage, visible } = useBoundedPagination(items, 36, 28);
+	const scroll = useScrollEnd<HTMLOListElement>(items);
 	return (
-		<DashboardRegion
-			className="dreams-activity"
-			title={pass?.status === "running" ? "Current activity" : "Pass activity"}
-			headerClassName="gap-2"
-			bodyRef={ref}
-			actions={
-				pass && (
-					<button type="button" className="dreams-text-action" onClick={() => onDetails(pass)}>
-						Details <ChevronRight className="size-3" />
-					</button>
-				)
-			}
-			footer={<PageControls page={page} pages={pages} onPage={setPage} label="activity page" />}
-		>
-			{pass && (
-				<p className="m-0 mb-2 text-xs text-muted-foreground">
-					{modeLabel(pass.mode)} · {pass.status} · {fmtTimeShort(pass.startedAt)}
-				</p>
-			)}
-			{items.length ? (
-				visible.map((t) => (
-					<div key={t.id} className="flex h-9 items-center justify-between gap-2 border-b border-border text-xs">
-						<span className="truncate font-mono">
-							{t.sequence} · {t.toolName}
+		<section className="dreams-activity" aria-labelledby="dreams-activity-title">
+			<SectionHeading
+				id="dreams-activity-title"
+				title={pass?.status === "running" ? "Current activity" : "Pass activity"}
+				meta={
+					pass && (
+						<span className="text-meta tabular-nums text-muted-foreground">
+							{modeLabel(pass.mode)} · {fmtTimeShort(pass.startedAt)}
 						</span>
-						<span>{t.success ? "done" : "failed"}</span>
-					</div>
-				))
+					)
+				}
+				actions={pass && <SectionAction onClick={() => onDetails(pass)}>Details</SectionAction>}
+			/>
+			{items.length ? (
+				<ol
+					ref={scroll.ref}
+					onScroll={scroll.onScroll}
+					data-at-end={scroll.atEnd}
+					className="dreams-list dreams-activity-list"
+				>
+					{items.map((t) => (
+						<li key={t.id} className="dreams-tool-row">
+							<span className="w-6 shrink-0 text-meta tabular-nums text-muted-foreground">{t.sequence}</span>
+							<span className="min-w-0 flex-1 truncate font-mono text-small text-foreground">{t.toolName}</span>
+							{t.success ? (
+								<span className="shrink-0 text-meta tabular-nums text-muted-foreground">{t.latencyMs}ms</span>
+							) : (
+								<StatusLabel tone="error">Failed</StatusLabel>
+							)}
+						</li>
+					))}
+				</ol>
 			) : (
-				<p className="m-0 line-clamp-3 text-sm text-muted-foreground">
+				<p className="m-0 mt-3 text-small text-muted-foreground">
 					{tools.loading
 						? "Loading activity…"
 						: (pass?.error ?? (pass ? "No tool calls recorded." : "No passes recorded."))}
 				</p>
 			)}
-		</DashboardRegion>
+		</section>
 	);
 }
 
 function PassLedger({ passes, onSelect }: { passes: DreamPass[]; onSelect: (p: DreamPass) => void }) {
-	const { ref, page, pages, setPage, visible } = useBoundedPagination(passes, 60);
 	return (
-		<DashboardRegion
-			className="dreams-ledger"
-			title="Recent passes"
-			headerClassName="mb-3"
-			bodyRef={ref}
-			meta={<span className="font-mono text-xs text-muted-foreground">{passes.length} latest</span>}
-			footer={<PageControls page={page} pages={pages} onPage={setPage} label="history page" />}
-		>
+		<section className="dreams-ledger" aria-labelledby="dreams-ledger-title">
+			<SectionHeading
+				id="dreams-ledger-title"
+				title="Recent passes"
+				meta={<span className="text-meta tabular-nums text-muted-foreground">{passes.length}</span>}
+			/>
 			{passes.length ? (
-				<ul className="m-0 list-none divide-y divide-border p-0">
-					{visible.map((pass) => {
-						const duration = Math.max(
-							0,
-							(parseDate(pass.completedAt ?? "")?.getTime() ?? 0) - (parseDate(pass.startedAt ?? "")?.getTime() ?? 0),
-						);
-						return (
-							<li key={pass.id}>
-								<button
-									type="button"
-									onClick={() => onSelect(pass)}
-									className="dreams-pass-row h-15 w-full overflow-hidden rounded-md py-2 text-left hover:bg-muted/30"
-								>
-									<div className="flex items-start gap-3">
-										<span className="min-w-0 flex-1 truncate text-sm leading-relaxed text-foreground">
-											{pass.error ?? (pass.summary ? markdownSummaryPreview(pass.summary) : "No summary recorded.")}
-										</span>
-										<span className="shrink-0 font-mono text-xs text-muted-foreground">
-											{fmtTimeShort(pass.startedAt)}
-										</span>
-										<ChevronRight className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
-									</div>
-									<div className="mt-1.5 flex items-center gap-3 overflow-hidden whitespace-nowrap text-xs text-muted-foreground">
-										<ModeBadge mode={pass.mode} running={pass.status === "running"} failed={pass.status === "failed"} />
-										<span>{pass.status}</span>
-										<span>{duration > 0 ? fmtDuration(duration) : "—"}</span>
-										<span>{fmtTokens(pass.tokensConsumed)} tokens</span>
-										<span>{fmtCost(pass.tokensCost)}</span>
-										<span>
-											{(pass.mutationsApplied ?? 0) > 0 ? `${pass.mutationsApplied} applied` : "no mutations"}
-										</span>
-									</div>
-								</button>
-							</li>
-						);
-					})}
+				<ul className="dreams-list dreams-ledger-list">
+					{passes.map((pass) => (
+						<li key={pass.id}>
+							<button type="button" onClick={() => onSelect(pass)} className="dreams-pass-row">
+								<span className="block truncate text-body text-foreground">
+									{pass.error ?? (pass.summary ? markdownSummaryPreview(pass.summary) : "No summary recorded.")}
+								</span>
+								<span className="mt-0.5 flex min-w-0 items-center gap-1.5 whitespace-nowrap text-meta tabular-nums text-muted-foreground">
+									{pass.status === "failed" && <StatusLabel tone="error">Failed</StatusLabel>}
+									{pass.status === "running" && <StatusLabel tone="ok">Running</StatusLabel>}
+									{pass.status !== "completed" && <span aria-hidden="true">·</span>}
+									<span>{modeLabel(pass.mode)}</span>
+									<span aria-hidden="true">·</span>
+									<span>{fmtTimeShort(pass.startedAt)}</span>
+									{(pass.tokensConsumed ?? 0) > 0 && (
+										<>
+											<span aria-hidden="true">·</span>
+											<span>{fmtTokens(pass.tokensConsumed)} tokens</span>
+										</>
+									)}
+									{(pass.mutationsApplied ?? 0) > 0 && (
+										<>
+											<span aria-hidden="true">·</span>
+											<span>{pass.mutationsApplied} applied</span>
+										</>
+									)}
+								</span>
+							</button>
+						</li>
+					))}
 				</ul>
 			) : (
-				<p className="py-4 text-sm text-muted-foreground">No passes recorded.</p>
+				<p className="m-0 mt-3 text-small text-muted-foreground">No passes recorded.</p>
 			)}
-		</DashboardRegion>
+		</section>
 	);
 }
 

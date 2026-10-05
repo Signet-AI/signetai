@@ -288,17 +288,39 @@
 		.sig-app-frame > header > .sig-topbar-row { padding-inline-start: 12px; }
 	}
 	.sig-theme-control { transition-property: background-color, border-color, color, transform; transition-duration: 150ms; transition-timing-function: ease-out; }
-	.dreams-page { flex: 1; min-height: 0; overflow: hidden; min-width: 0; padding: 30px 40px 36px; display: flex; flex-direction: column; gap: 28px; }
-	.dreams-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,55fr) minmax(0,45fr); gap: 32px; }
-	.dreams-right { min-height: 0; display: grid; grid-template-rows: minmax(0,1fr) minmax(0,1fr); gap: 24px; border-left: 1px solid var(--border); padding-left: 32px; }
-	.dreams-reflection-body { overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding-right: 12px; }
-	.dreams-reflection-body:focus-visible { outline: 2px solid var(--home-focus, var(--ring)); outline-offset: 2px; }
-	.dreams-activity { border-top: 1px solid var(--border); padding-top: 16px; }
-	.dreams-text-action { display: inline-flex; align-items: center; gap: 4px; color: var(--muted-foreground); font-size: 12px; }
-	@media (max-width: 700px) { .dreams-page { padding: 16px 20px; gap: 16px; } .dreams-workspace { grid-template-columns: 1fr; grid-template-rows: minmax(0,1fr) minmax(0,1fr); gap: 16px; } .dreams-right { padding-left: 0; border-left: 0; grid-template-columns: minmax(0,1fr) minmax(0,1fr); grid-template-rows: minmax(0,1fr); gap: 16px; } .dreams-activity { padding-top: 0; border-top: 0; } }
+	.dreams-page { container: dreams / inline-size; flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+	.dreams-content { --dreams-gutter: clamp(16px, 3cqi, 40px); display: flex; flex-direction: column; gap: 24px; width: 100%; max-width: 1560px; margin-inline: auto; padding: 30px var(--dreams-gutter) 40px; }
+	.dreams-heading { display: flex; height: auto; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 16px; }
+	.dreams-run { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding-inline: 14px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent); font-size: var(--text-small); color: var(--home-title, var(--foreground)); transition: background-color 160ms ease, border-color 160ms ease; }
+	.dreams-run:hover:not(:disabled) { background: var(--home-interactive); border-color: color-mix(in srgb, var(--foreground) 22%, transparent); }
+	.dreams-run:disabled { opacity: 0.5; cursor: not-allowed; }
+	.dreams-stats { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 32px; padding: 16px 20px; border-radius: 14px; background: var(--card); border: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent); }
+	.dreams-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+	.dreams-daemon { margin-inline-start: auto; align-self: center; }
+	.dreams-workspace { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 36%, 460px); }
+	.dreams-summary { min-width: 0; padding-inline-end: 32px; }
+	.dreams-reflection-body { margin-block-start: 14px; max-width: 72ch; }
+	.dreams-right { display: flex; flex-direction: column; gap: 28px; min-width: 0; padding-inline-start: 32px; border-inline-start: 1px solid var(--border); }
+	.dreams-list { display: flex; flex-direction: column; margin: 10px -10px 0; padding: 0 10px; list-style: none; overflow-y: auto; scrollbar-width: thin; }
+	.dreams-ledger-list { max-block-size: 300px; }
+	.dreams-activity-list { max-block-size: 340px; }
+	.dreams-list[data-at-end="false"] { -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 36px), transparent); }
+	.dreams-pass-row { display: block; width: calc(100% + 20px); margin-inline: -10px; padding: 9px 10px; border-radius: 8px; text-align: start; transition: background-color 160ms ease; }
+	.dreams-pass-row:hover { background: var(--home-interactive); }
+	.dreams-ledger-list > li:not(:last-child), .dreams-tool-row:not(:last-child) { border-block-end: 1px solid var(--border); }
+	.dreams-tool-row { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+	.dreams-page button:focus-visible { outline: 1px solid var(--home-focus, var(--ring)); outline-offset: -1px; }
+	@container dreams (max-width: 960px) {
+		.dreams-workspace { grid-template-columns: minmax(0, 1fr); row-gap: 32px; }
+		.dreams-summary { padding-inline-end: 0; }
+		.dreams-right { padding-inline-start: 0; padding-block-start: 28px; border-inline-start: 0; border-block-start: 1px solid var(--border); }
+	}
+	@container dreams (max-width: 600px) {
+		.dreams-content { padding-block: 20px 28px; gap: 20px; }
+		.dreams-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 14px 16px; }
+		.dreams-daemon { grid-column: 1 / -1; margin-inline-start: 0; }
+	}
 	.dreams-summary-copy { color: var(--home-body, var(--foreground)); overflow-wrap: anywhere; }
-	.dreams-pass-row:focus-visible, .dreams-page button:focus-visible { outline: 2px solid var(--home-focus, var(--ring)); outline-offset: 2px; }
-	@media (max-width: 1023px) { .dreams-page { padding-inline: 24px; } }
 	.home-dashboard { container: home / inline-size; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 	.home-workspace, .home-status-bar { --home-max: 1560px; --home-gutter: clamp(16px, 3cqi, 40px); }
 	.home-workspace { flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 34%, 440px); padding-inline: max(0px, (100% - var(--home-max)) / 2); background: var(--background); }

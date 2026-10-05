@@ -114,7 +114,7 @@ describe("dreaming summary layout", () => {
 			const summary = container.querySelector(".dreams-summary");
 			expect(summary).not.toBeNull();
 			expect(summary?.textContent).toContain("A long dreaming summary must remain readable.");
-			expect(container.textContent).toContain("automatic Dreaming deferred: queue pressure");
+			expect(container.textContent).toContain("Automatic Dreaming deferred: queue pressure");
 			expect(container.querySelector(".dream-section")).toBeNull();
 			expect(container.querySelector(".dreams-activity")?.textContent).toContain("attention_list");
 			const details = container.querySelector<HTMLButtonElement>(".dreams-pass-row");

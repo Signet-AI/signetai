@@ -6,7 +6,8 @@ import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } 
 import { api, type Memory } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
+import { useScrollEnd } from "@/lib/use-scroll-end";
 
 const TYPE_TINTS: Record<string, string> = {
 	decision: "home-type-decision",
@@ -17,12 +18,6 @@ const TYPE_TINTS: Record<string, string> = {
 export function HomeRecentMemories() {
 	const [query, setQuery] = useState("");
 	const [sourceFilter, setSourceFilter] = useState("all");
-	const listRef = useRef<HTMLDivElement>(null);
-	const [atEnd, setAtEnd] = useState(true);
-	const measureEnd = useCallback(() => {
-		const list = listRef.current;
-		if (list) setAtEnd(list.scrollTop + list.clientHeight >= list.scrollHeight - 2);
-	}, []);
 	const trimmedQuery = query.trim();
 	const memoriesQuery = useAsync(
 		async () => {
@@ -48,8 +43,7 @@ export function HomeRecentMemories() {
 	);
 	const visibleMemories =
 		sourceFilter === "all" ? memories : memories.filter((memory) => (memory.source_type ?? "agent") === sourceFilter);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: re-measure whenever the rendered rows change.
-	useLayoutEffect(measureEnd, [measureEnd, visibleMemories]);
+	const scroll = useScrollEnd<HTMLDivElement>(visibleMemories);
 	const searching = memoriesQuery.loading || memoriesQuery.data?.query !== trimmedQuery;
 	const failed = !searching && memoriesQuery.data?.memories === null;
 	const meta = searching
@@ -118,7 +112,12 @@ export function HomeRecentMemories() {
 										: "No saved memories yet."}
 						</div>
 					) : (
-						<div ref={listRef} onScroll={measureEnd} data-at-end={atEnd} className="home-recent-list flex flex-col">
+						<div
+							ref={scroll.ref}
+							onScroll={scroll.onScroll}
+							data-at-end={scroll.atEnd}
+							className="home-recent-list flex flex-col"
+						>
 							{visibleMemories.map((memory) => (
 								<RecentMemoryRow key={memory.id} memory={memory} />
 							))}
