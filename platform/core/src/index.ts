@@ -245,6 +245,7 @@ export {
 	createFreshWorkspaceV2,
 	currentArtifactRelativePath,
 	findExistingWorkspaceDatabase,
+	hasExistingLegacyWorkspaceState,
 	hasExistingWorkspaceState,
 	persistWorkspaceLayout,
 	readWorkspaceLayoutOverrides,

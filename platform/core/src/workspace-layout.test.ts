@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
 	createFreshWorkspaceV2,
+	hasExistingLegacyWorkspaceState,
 	hasExistingWorkspaceState,
 	persistWorkspaceLayout,
 	resolveWorkspaceLayout,
@@ -38,6 +39,19 @@ describe("canonical workspace layout resolver", () => {
 			persistWorkspaceLayout(root, { version: 1 });
 			mkdirSync(join(root, "memory", "codex", "transcripts"), { recursive: true });
 			writeFileSync(join(root, "memory", "codex", "transcripts", "transcript.jsonl"), "{}\n");
+			expect(hasExistingWorkspaceState(root)).toBe(true);
+			expect(hasExistingLegacyWorkspaceState(root)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not classify an orphaned v2 database as legacy workspace state", () => {
+		const root = mkdtempSync(join(tmpdir(), "layout-orphan-v2-database-"));
+		try {
+			mkdirSync(join(root, "data"), { recursive: true });
+			writeFileSync(join(root, "data", "signet.db"), "db");
+			expect(hasExistingLegacyWorkspaceState(root)).toBe(false);
 			expect(hasExistingWorkspaceState(root)).toBe(true);
 		} finally {
 			rmSync(root, { recursive: true, force: true });

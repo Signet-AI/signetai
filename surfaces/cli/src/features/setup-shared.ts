@@ -1,5 +1,10 @@
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { hasExistingWorkspaceState } from "@signet/core";
+import {
+	hasExistingLegacyWorkspaceState,
+	hasExistingWorkspaceState,
+	resolveWorkspaceLayout,
+	WORKSPACE_LAYOUT_V2,
+} from "@signet/core";
 import type { SetupDetection } from "../lib/setup-detection.js";
 import chalk from "chalk";
 
@@ -124,6 +129,21 @@ export function hasExistingAgentState(detection: SetupDetection): boolean {
 		detection.agentYaml ||
 		detection.identityFiles.length > 0 ||
 		hasExistingWorkspaceState(detection.basePath)
+	);
+}
+
+export function hasExistingInteractiveSetupState(detection: SetupDetection): boolean {
+	const layout = resolveWorkspaceLayout(detection.basePath);
+	const hasWorkspaceState =
+		layout.version === WORKSPACE_LAYOUT_V2
+			? hasExistingWorkspaceState(detection.basePath)
+			: hasExistingLegacyWorkspaceState(detection.basePath);
+	return (
+		detection.memoryDb ||
+		detection.agentYaml ||
+		detection.configYaml ||
+		detection.identityFiles.length > 0 ||
+		hasWorkspaceState
 	);
 }
 

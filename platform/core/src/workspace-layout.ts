@@ -149,13 +149,24 @@ export function findExistingWorkspaceDatabase(rootPath: string): string | null {
 	];
 	return candidates.find((database) => existsSync(database)) ?? null;
 }
-export function hasExistingWorkspaceState(rootPath: string): boolean {
-	if (findExistingWorkspaceDatabase(rootPath) !== null) return true;
+export function hasExistingLegacyWorkspaceState(rootPath: string): boolean {
 	const layout = resolveWorkspaceLayout(rootPath);
 	return (
 		layout.version === WORKSPACE_LAYOUT_V1 &&
-		[layout.runtime, layout.data, layout.transcripts, layout.cache, layout.imports, layout.secrets].some(existsSync)
+		[
+			layout.database,
+			layout.runtime,
+			layout.data,
+			layout.transcripts,
+			layout.cache,
+			layout.imports,
+			layout.secrets,
+		].some(existsSync)
 	);
+}
+
+export function hasExistingWorkspaceState(rootPath: string): boolean {
+	return findExistingWorkspaceDatabase(rootPath) !== null || hasExistingLegacyWorkspaceState(rootPath);
 }
 
 export function createFreshWorkspaceV2(

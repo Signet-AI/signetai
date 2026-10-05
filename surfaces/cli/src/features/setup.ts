@@ -57,6 +57,7 @@ import {
 	formatDetectionSummary,
 	getEmbeddingDimensions,
 	hasExistingAgentState,
+	hasExistingInteractiveSetupState,
 	normalizeHarnessList,
 	readErr,
 	readHarnesses,
@@ -292,7 +293,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	const basePath = deps.normalizeAgentPath(deps.normalizeStringValue(options.path) ?? deps.AGENTS_DIR);
 	const existing = deps.detectExistingSetup(basePath);
-	const hasExistingState = hasExistingAgentState(existing);
+	const hasExistingState = hasExistingInteractiveSetupState(existing);
 	if (hasExistingState) {
 		const changes = Object.entries(options).filter(
 			([key, value]) =>
