@@ -1,5 +1,5 @@
 import { LoadingRows } from "@/components/ui/skeleton";
-import { SectionHeading } from "@/components/dashboard/heading";
+import { SectionAction, SectionHeading, type StatusTone, StatusLabel } from "@/components/dashboard/heading";
 import { sourceLogo } from "@/components/icons";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
 import { type SignetSource, type SourceHealth, type SourceIndexJob, api } from "@/lib/api";
@@ -14,18 +14,16 @@ import {
 	FolderOpen,
 	GitBranch,
 	Globe,
-	Plus,
 	RotateCw,
 	Trash2,
 	X,
 } from "@/components/mingcute-icons";
 import { useEffect, useRef, useState } from "react";
 
-const HEALTH_STYLES: Record<string, string> = {
-	healthy: "home-health-healthy",
-	degraded: "home-health-degraded",
-	unhealthy: "home-health-unhealthy",
-	empty: "home-health-empty",
+const HEALTH_STATUS: Record<string, { tone: StatusTone; label: string } | undefined> = {
+	degraded: { tone: "warn", label: "Degraded" },
+	unhealthy: { tone: "error", label: "Unhealthy" },
+	empty: { tone: "neutral", label: "Empty" },
 };
 function RootIcon({ kind }: { kind: string }) {
 	const cls = "size-[13px] shrink-0 text-muted-foreground";
@@ -54,20 +52,15 @@ export function HomeSourcesPanel({
 
 	return (
 		<>
-			<section className="group pb-3">
+			<section className="group">
 				<SectionHeading
 					title="Sources"
-					className="items-center gap-3"
-					actions={
-						<button
-							type="button"
-							onClick={() => setConnectOpen(true)}
-							className="home-text-action h-7 rounded-[var(--control-radius)] px-1 hover:text-foreground"
-						>
-							<Plus className="size-3" />
-							Connect a source
-						</button>
+					meta={
+						sources && sources.length > 0 ? (
+							<span className="text-meta tabular-nums text-muted-foreground">{sources.length}</span>
+						) : undefined
 					}
+					actions={<SectionAction onClick={() => setConnectOpen(true)}>Connect a source</SectionAction>}
 				/>
 				{loading ? (
 					<LoadingRows label="Loading sources…" rows={2} />
@@ -127,11 +120,12 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 				<span className="flex min-w-0 flex-1 flex-col leading-tight">
 					<span className="truncate text-body">{source.name}</span>
 				</span>
-				<span className={cn("flex shrink-0 items-center gap-1 text-meta tabular-nums", HEALTH_STYLES[health])}>
-					<span className="size-1.5 rounded-full bg-current" />
-					{health}
-					{failures > 0 && ` · ${failures} ${failures === 1 ? "failure" : "failures"}`}
-				</span>
+				{(HEALTH_STATUS[health] || failures > 0) && (
+					<StatusLabel tone={HEALTH_STATUS[health]?.tone ?? "warn"}>
+						{HEALTH_STATUS[health]?.label ?? "Healthy"}
+						{failures > 0 && ` · ${failures} ${failures === 1 ? "failure" : "failures"}`}
+					</StatusLabel>
+				)}
 				<ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/source:rotate-90" />
 			</summary>
 			<div className="pb-2.5 pl-6.5">

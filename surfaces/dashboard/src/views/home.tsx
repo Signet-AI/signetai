@@ -9,7 +9,6 @@ import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { HomeSourcesPanel } from "@/components/home/sources";
-import { ChevronRight, FileText } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useState } from "react";
 
 export function HomeView() {
@@ -32,7 +31,6 @@ export function HomeView() {
 
 	const kpis: KpiData[] = useMemo(() => {
 		const totalMemories = timeline?.totalMemories;
-		const agentCount = status.data?.agentId ? 1 : 0;
 		return [
 			{
 				label: "Memories",
@@ -40,18 +38,8 @@ export function HomeView() {
 				sub: "stored",
 			},
 			{ label: "Ontology nodes", value: stats?.entityCount?.toLocaleString() ?? "—", sub: "indexed" },
-			{
-				label: "Agents",
-				value: String(agentCount),
-				sub: `of ${agentCount} active`,
-			},
-			{
-				label: "Sources",
-				value: sources ? String(sources.filter((s) => s.enabled).length) : "—",
-				sub: sources ? `of ${sources.length} syncing` : "unavailable",
-			},
 		];
-	}, [status.data?.agentId, timeline, stats?.entityCount, sources]);
+	}, [timeline, stats?.entityCount]);
 	const days: DayBucket[] = useMemo(() => {
 		if (timeline?.dailyBuckets?.length) {
 			return timeline.dailyBuckets.map((bucket) => ({ date: bucket.date, count: bucket.memoriesAdded }));
@@ -118,7 +106,7 @@ function ReviewSuggestions() {
 	const meta = proposals.loading && proposals.data === null ? "loading…" : `${items.length} pending`;
 
 	return (
-		<section className="py-5" aria-labelledby="review-suggestions-title">
+		<section aria-labelledby="review-suggestions-title">
 			<SectionHeading
 				id="review-suggestions-title"
 				title="Review suggestions"
@@ -136,14 +124,9 @@ function ReviewSuggestions() {
 					</button>
 				</div>
 			) : items.length === 0 ? (
-				<div className="mt-4 flex items-center gap-3 text-muted-foreground">
-					<FileText className="size-5 shrink-0" />
-					<div>
-						<div className="text-body text-foreground">No reviews pending</div>
-						<div className="mt-0.5 text-small">New suggestions will appear here when they are ready for review.</div>
-					</div>
-					<ChevronRight className="ml-auto size-3.5" />
-				</div>
+				<p className="mt-2 text-small text-muted-foreground">
+					Nothing to review. Suggestions from dreaming will show up here.
+				</p>
 			) : (
 				<div className="flex flex-col">
 					{items.map((proposal, index) => (
@@ -238,7 +221,7 @@ function ReviewActionButton({
 			onClick={onClick}
 			disabled={disabled}
 			className={cn(
-				"min-w-[74px] whitespace-nowrap rounded-[var(--radius)] border px-2 py-[5px] text-small font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+				"h-7 min-w-[68px] whitespace-nowrap rounded-full border px-3 text-small font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
 				primary ? "border-primary bg-primary text-primary-foreground" : "home-review-secondary-action",
 			)}
 		>

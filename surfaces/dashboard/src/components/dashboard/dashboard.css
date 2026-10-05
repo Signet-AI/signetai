@@ -9,5 +9,14 @@
 	.dashboard-page-heading p { margin-top: 6px; font-size: var(--text-small); font-weight: 400; }
 	.dashboard-page-heading :is(h1, h2) { color: var(--home-title, var(--foreground)); }
 	.dashboard-page-heading p { text-wrap: pretty; }
-	@media (min-width: 851px) and (max-height: 950px) { .dashboard-page-heading { height: 78px; } }
+	.dashboard-section-action { display: inline-flex; flex-shrink: 0; align-items: center; gap: 4px; height: 28px; padding-inline: 10px 8px; margin-inline-end: -8px; border-radius: 999px; font-size: var(--text-small); color: var(--home-action, var(--muted-foreground)); transition: background-color 160ms ease, color 160ms ease; }
+	.dashboard-section-action:hover { background: var(--home-interactive, var(--muted)); color: var(--home-title, var(--foreground)); }
+	.dashboard-section-action svg { transition: transform 160ms ease; }
+	.dashboard-section-action:hover svg { transform: translateX(1px); }
+	.dashboard-status { display: inline-flex; flex-shrink: 0; align-items: center; gap: 6px; font-size: var(--text-meta); line-height: 1.45; color: var(--dashboard-status-color); }
+	.dashboard-status-dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+	.dashboard-status[data-tone="ok"] { --dashboard-status-color: var(--home-health-healthy, var(--success)); }
+	.dashboard-status[data-tone="warn"] { --dashboard-status-color: var(--home-health-degraded, var(--warning)); }
+	.dashboard-status[data-tone="error"] { --dashboard-status-color: var(--home-health-unhealthy, var(--destructive)); }
+	.dashboard-status[data-tone="neutral"] { --dashboard-status-color: var(--home-secondary, var(--muted-foreground)); }
 }

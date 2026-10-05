@@ -1,4 +1,5 @@
-import type { ReactNode } from "react";
+import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { ChevronRight } from "@/components/mingcute-icons";
 import { cn } from "@/lib/utils";
 
 export function PageHeading({
@@ -58,5 +59,33 @@ export function SectionHeading({
 			</div>
 			{actions}
 		</div>
+	);
+}
+
+export function SectionAction({ children, className, ...props }: ButtonHTMLAttributes<HTMLButtonElement>) {
+	return (
+		<button type="button" className={cn("dashboard-section-action", className)} {...props}>
+			{children}
+			<ChevronRight className="size-3" aria-hidden="true" />
+		</button>
+	);
+}
+
+export type StatusTone = "ok" | "warn" | "error" | "neutral";
+
+export function StatusLabel({
+	tone,
+	children,
+	className,
+}: {
+	tone: StatusTone;
+	children: ReactNode;
+	className?: string;
+}) {
+	return (
+		<span className={cn("dashboard-status", className)} data-tone={tone}>
+			<span className="dashboard-status-dot" aria-hidden="true" />
+			{children}
+		</span>
 	);
 }

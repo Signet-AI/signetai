@@ -1,4 +1,4 @@
-import { ChevronRight, KeyRound } from "@/components/mingcute-icons";
+import { SectionAction, SectionHeading } from "@/components/dashboard/heading";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { useView } from "@/lib/view-context";
@@ -6,40 +6,21 @@ import { useView } from "@/lib/view-context";
 export function HomeSecretsPanel() {
 	const secrets = useAsync(() => api.getSecrets(), { key: "secrets", intervalMs: 30_000 });
 	const { openSettings } = useView();
-	const count = secrets.data?.secrets?.length;
-
-	const openSecrets = () => {
-		openSettings("secrets");
-	};
+	const provider = secrets.data?.provider ?? "local";
+	const meta =
+		secrets.data === null ? (secrets.loading ? "loading…" : "unavailable") : String(secrets.data.secrets?.length ?? 0);
 
 	return (
-		<section aria-labelledby="home-secrets-title" className="py-5">
-			<button type="button" onClick={openSecrets} className="group/secret flex w-full items-start gap-3 text-left">
-				<span className="min-w-0 flex-1">
-					<span className="flex items-center justify-between gap-3">
-						<span id="home-secrets-title" className="text-title font-medium tracking-tight text-foreground">
-							Secrets
-						</span>
-						<span className="flex items-center gap-2 text-meta tabular-nums text-muted-foreground">
-							{secrets.data === null
-								? secrets.loading
-									? "loading…"
-									: "unavailable"
-								: `${count ?? 0} ${secrets.data.provider ?? "local"}`}
-							<ChevronRight className="size-3.5 transition-transform group-hover/secret:translate-x-0.5" />
-						</span>
-					</span>
-					<span className="home-secret-description">
-						<KeyRound className="size-6 shrink-0 text-muted-foreground" />
-						<span>
-							<span className="block text-body leading-[1.45] text-muted-foreground">
-								API keys, passwords, and tokens
-							</span>
-							<span className="mt-1 block text-small text-muted-foreground/75">Stored locally on this device.</span>
-						</span>
-					</span>
-				</span>
-			</button>
+		<section aria-labelledby="home-secrets-title">
+			<SectionHeading
+				id="home-secrets-title"
+				title="Secrets"
+				meta={<span className="text-meta tabular-nums text-muted-foreground">{meta}</span>}
+				actions={<SectionAction onClick={() => openSettings("secrets")}>Manage</SectionAction>}
+			/>
+			<p className="mt-2 text-small text-muted-foreground">
+				API keys, passwords, and tokens, {provider === "local" ? "stored on this device" : `stored in ${provider}`}.
+			</p>
 		</section>
 	);
 }

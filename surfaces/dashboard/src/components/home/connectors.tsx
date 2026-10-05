@@ -1,6 +1,7 @@
 import { LoadingRows } from "@/components/ui/skeleton";
 import { ConnectorLogo } from "@/components/connector-logo";
-import { ChevronRight } from "@/components/mingcute-icons";
+import { SectionAction, SectionHeading, type StatusTone, StatusLabel } from "@/components/dashboard/heading";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ApiReadResult, HarnessConnector, HarnessesResponse } from "@/lib/api";
 import { useView } from "@/lib/view-context";
 import { useEffect, useState } from "react";
@@ -37,65 +38,82 @@ export function HomeConnectorsPanel({
 		Boolean(result?.error) ||
 		(Boolean(result) && !available) ||
 		Boolean(available?.some((item) => !item.available || item.inspectionStatus === "unavailable"));
+	const statusOf = (connector: HarnessConnector): { tone: StatusTone; label: string } | null => {
+		if (unavailable || !connector.available || connector.inspectionStatus === "unavailable") return null;
+		if (connector.health.status === "needs-auth") return { tone: "error", label: "Sign in needed" };
+		if (connector.health.status === "degraded" || connector.health.status === "unhealthy")
+			return { tone: "warn", label: "Needs attention" };
+		return null;
+	};
+	const exceptions = connectors.flatMap((connector) => {
+		const status = statusOf(connector);
+		return status ? [{ connector, status }] : [];
+	});
 	return (
-		<section className="home-connectors pb-3" aria-labelledby="home-connectors-title">
-			<button
-				type="button"
-				onClick={() => openSettings("connectors")}
-				className="group flex w-full items-center justify-between gap-3 py-2 text-left"
-			>
-				<span id="home-connectors-title" className="text-title font-medium tracking-tight">
-					Connectors{" "}
-					<span data-testid="connector-count" className="ml-2 text-meta tabular-nums font-normal text-muted-foreground">
+		<section className="home-connectors" aria-labelledby="home-connectors-title">
+			<SectionHeading
+				id="home-connectors-title"
+				title="Connectors"
+				meta={
+					<span data-testid="connector-count" className="text-meta tabular-nums text-muted-foreground">
 						{available || previous.length ? connectors.length : "—"}
 					</span>
-				</span>
-				<span className="flex items-center gap-2 text-small text-muted-foreground">
-					Connect & manage <ChevronRight className="size-3.5" />
-				</span>
-			</button>
-			<p className="mb-3 text-small text-muted-foreground">Signet integrations installed on this machine.</p>
+				}
+				actions={<SectionAction onClick={() => openSettings("connectors")}>Manage</SectionAction>}
+			/>
 			{unavailable && (
-				<p role="status" className="mb-3 text-small text-muted-foreground">
+				<p role="status" className="mt-2 text-small text-muted-foreground">
 					Checks unavailable. Showing the last known installations.
 				</p>
 			)}
-			<ul
-				data-testid="connector-rows"
-				aria-label="Installed connectors"
-				className="overflow-y-auto home-connectors-rows list-none divide-y divide-border"
-			>
-				{connectors.map((connector) => (
-					<li key={connector.id}>
-						<button
-							type="button"
-							onClick={() => openSettings("connectors")}
-							className="home-connector-link flex w-full items-center gap-3 rounded-[var(--control-radius)] py-3 text-left"
-						>
-							<ConnectorLogo icon={connector.icon} className="size-5 shrink-0 object-contain" />
-							<span className="flex-1 text-body">{connector.displayName}</span>
-							<span className="text-small text-muted-foreground">
-								{!unavailable &&
-								connector.available &&
-								connector.inspectionStatus !== "unavailable" &&
-								connector.health.status === "needs-auth"
-									? "Sign in needed"
-									: !unavailable &&
-											connector.available &&
-											connector.inspectionStatus !== "unavailable" &&
-											["degraded", "unhealthy"].includes(connector.health.status)
-										? "Needs attention"
-										: "Installed"}
-							</span>
-						</button>
-					</li>
-				))}
-			</ul>
+			<TooltipProvider delayDuration={150}>
+				<ul
+					data-testid="connector-rows"
+					aria-label="Installed connectors"
+					className="home-connectors-rows mt-3 flex list-none flex-wrap gap-2 overflow-y-auto empty:hidden"
+				>
+					{connectors.map((connector) => {
+						const label = statusOf(connector)?.label ?? "Installed";
+						return (
+							<li key={connector.id}>
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<button
+											type="button"
+											onClick={() => openSettings("connectors")}
+											className="home-connector-tile"
+											data-tone={statusOf(connector)?.tone}
+										>
+											<ConnectorLogo icon={connector.icon} className="size-5 shrink-0 object-contain" />
+											<span className="sr-only">
+												{connector.displayName}, {label}
+											</span>
+										</button>
+									</TooltipTrigger>
+									<TooltipContent side="bottom">
+										{connector.displayName} · {label}
+									</TooltipContent>
+								</Tooltip>
+							</li>
+						);
+					})}
+				</ul>
+			</TooltipProvider>
+			{exceptions.length > 0 && (
+				<ul className="mt-3 flex list-none flex-col gap-1.5" aria-label="Connectors needing attention">
+					{exceptions.map(({ connector, status }) => (
+						<li key={connector.id} className="flex items-center justify-between gap-3 text-body">
+							<span className="truncate">{connector.displayName}</span>
+							<StatusLabel tone={status.tone}>{status.label}</StatusLabel>
+						</li>
+					))}
+				</ul>
+			)}
 			{loading && !connectors.length ? (
 				<LoadingRows label="Loading connectors…" rows={2} />
 			) : (
 				!connectors.length && (
-					<p className="py-3 text-body text-muted-foreground">
+					<p className="mt-2 text-small text-muted-foreground">
 						{loading
 							? "Loading connectors…"
 							: unavailable

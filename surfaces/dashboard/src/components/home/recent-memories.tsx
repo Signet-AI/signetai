@@ -1,6 +1,5 @@
 import { LoadingRows } from "@/components/ui/skeleton";
 import { SectionHeading } from "@/components/dashboard/heading";
-import { ChevronRight, FileText, MessageCircle } from "@/components/mingcute-icons";
 import { SearchField } from "@/components/ui/field";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -147,9 +146,6 @@ function RecentMemoryRow({ memory }: { memory: Memory }) {
 		<Dialog>
 			<DialogTrigger asChild>
 				<button type="button" className="home-memory-row home-memory-summary group/memory w-full text-left">
-					<span className="home-memory-icon">
-						{kind === "manual" ? <MessageCircle aria-hidden="true" /> : <FileText aria-hidden="true" />}
-					</span>
 					<div className="min-w-0 flex-1">
 						<p className="m-0 line-clamp-1 text-body font-medium leading-[1.35] text-foreground">{title}</p>
 						<div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-meta tabular-nums text-muted-foreground">
@@ -158,10 +154,10 @@ function RecentMemoryRow({ memory }: { memory: Memory }) {
 							<span className={cn("shrink-0", TYPE_TINTS[memory.type] ?? "text-muted-foreground")}>
 								{memory.type || sourceLabel(kind)}
 							</span>
+							<span aria-hidden="true">·</span>
+							<span className="shrink-0">{timeAgo(memory.created_at)}</span>
 						</div>
 					</div>
-					<span className="shrink-0 text-meta tabular-nums text-muted-foreground">{timeAgo(memory.created_at)}</span>
-					<ChevronRight className="size-3.5 shrink-0 text-muted-foreground/75 transition-transform group-hover/memory:translate-x-0.5" />
 				</button>
 			</DialogTrigger>
 			<DialogContent className="home-memory-reader">

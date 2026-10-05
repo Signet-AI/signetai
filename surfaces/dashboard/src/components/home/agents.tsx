@@ -1,6 +1,7 @@
 import { LoadingRows } from "@/components/ui/skeleton";
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, ChevronRight, UserRound } from "@/components/mingcute-icons";
+import { ChevronRight, UserRound } from "@/components/mingcute-icons";
+import { SectionAction, SectionHeading, StatusLabel } from "@/components/dashboard/heading";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { api, type Agent } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
@@ -67,29 +68,33 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 
 	return (
 		<>
-			<section ref={rosterRef} className="py-2.5" aria-labelledby="home-agents-title">
-				<div className="flex items-center justify-between gap-2.5">
-					<span id="home-agents-title" className="text-title font-medium tracking-tight text-foreground">
-						Agents
-					</span>
-					{agents?.some((agent) => agent.name !== "default") && (
-						<button
-							type="button"
-							className="home-text-action"
-							onClick={() => {
-								const agent = agents.find((candidate) => candidate.name !== "default");
-								if (!agent) return;
-								const row = Array.from(rosterRef.current?.querySelectorAll("details") ?? []).find(
-									(candidate) => candidate.dataset.agentId === agent.id,
-								);
-								if (row) row.open = true;
-								beginEdit(agent);
-							}}
-						>
-							Manage <ArrowRight className="size-3.5" />
-						</button>
-					)}
-				</div>
+			<section ref={rosterRef} aria-labelledby="home-agents-title">
+				<SectionHeading
+					id="home-agents-title"
+					title="Agents"
+					meta={
+						agents && agents.length > 0 ? (
+							<span className="text-meta tabular-nums text-muted-foreground">{agents.length}</span>
+						) : undefined
+					}
+					actions={
+						agents?.some((agent) => agent.name !== "default") && (
+							<SectionAction
+								onClick={() => {
+									const agent = agents.find((candidate) => candidate.name !== "default");
+									if (!agent) return;
+									const row = Array.from(rosterRef.current?.querySelectorAll("details") ?? []).find(
+										(candidate) => candidate.dataset.agentId === agent.id,
+									);
+									if (row) row.open = true;
+									beginEdit(agent);
+								}}
+							>
+								Manage
+							</SectionAction>
+						)
+					}
+				/>
 
 				{error && (
 					<div
@@ -119,7 +124,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 						<span className="text-meta tabular-nums text-muted-foreground">No agents registered yet.</span>
 					</div>
 				) : (
-					<div className="mt-1.5 divide-y divide-border">
+					<div className="mt-2 divide-y divide-border">
 						{agents.map((agent) => (
 							<AgentDisclosure
 								key={agent.id}
@@ -232,14 +237,11 @@ function AgentDisclosure({
 					<UserRound className="size-3" aria-hidden="true" />
 				</span>
 				<span className="min-w-0 flex-1 truncate text-body">{displayName}</span>
-				{active && (
-					<span className="flex shrink-0 items-center gap-1 text-meta tabular-nums text-success">
-						<span className="size-1.5 rounded-full bg-success" />
-						Active
-					</span>
-				)}
-				<ScopeBadge>{POLICY_LABELS[agent.read_policy]}</ScopeBadge>
-				{agent.policy_group && <ScopeBadge>{agent.policy_group}</ScopeBadge>}
+				{active && <StatusLabel tone="ok">Active</StatusLabel>}
+				<span className="shrink-0 text-meta text-muted-foreground">
+					{POLICY_LABELS[agent.read_policy]}
+					{agent.policy_group && ` · ${agent.policy_group}`}
+				</span>
 				<ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/agent:rotate-90" />
 			</summary>
 			<div className="home-agent-detail">
