@@ -760,10 +760,12 @@ superseded by the active one and the result names it in
 `supersededByNewerEvidence`. Without times on both claims, the newest write
 replaces the current value as before.
 
-Claim text that still contains a relative time such as "yesterday", "last
-weekend", or "three weeks ago" is rejected before any write, with an error
-asking for the absolute date and the matching time field. Vague times with no
-anchor, such as "recently", are allowed.
+Claim text that contains a relative time such as "yesterday", "last
+weekend", or "three weeks ago" and no absolute date is rejected before any
+write, with an error asking for the absolute date and the matching time field.
+A relative phrase kept next to its resolved date ("the next week (week of
+2023-06-05)") is allowed, as are durations ("in one day") and vague times with
+no anchor ("recently").
 
 ### GET /api/dream/passes/:passId/tools
 
