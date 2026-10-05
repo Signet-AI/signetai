@@ -397,9 +397,12 @@ function shouldPurgeImportedSourcePath(
 }
 
 function indexesSnapshotArtifactGraph(artifact: SourceSnapshotArtifact): boolean {
-	return !["source_discord_checkpoint", "source_discord_failure", "source_github_failure"].includes(
-		artifact.sourceKind,
-	);
+	return ![
+		"source_discord_checkpoint",
+		"source_discord_failure",
+		"source_github_failure",
+		"source_notion_failure",
+	].includes(artifact.sourceKind);
 }
 
 function sourceArtifactDisplayName(artifact: SourceSnapshotArtifact): string | undefined {

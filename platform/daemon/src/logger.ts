@@ -12,6 +12,7 @@ export type LogCategory =
 	| "sync"
 	| "git"
 	| "github-source"
+	| "notion-source"
 	| "watcher"
 	| "embedding"
 	| "harness"

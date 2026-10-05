@@ -30,7 +30,7 @@ const HEALTH_STYLES: Record<string, string> = {
 function RootIcon({ kind }: { kind: string }) {
 	const cls = "size-[13px] shrink-0 text-muted-foreground";
 	if (kind === "github") return <GitBranch className={cls} aria-hidden="true" />;
-	if (kind === "web") return <Globe className={cls} aria-hidden="true" />;
+	if (kind === "web" || kind === "notion") return <Globe className={cls} aria-hidden="true" />;
 	if (kind === "discord" || kind === "slack") return <Globe className={cls} aria-hidden="true" />;
 	return <Folder className={cls} aria-hidden="true" />;
 }

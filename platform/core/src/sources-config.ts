@@ -125,6 +125,18 @@ export interface AddGitHubSourceInput {
 	readonly now?: string;
 }
 
+export interface NotionSourceSettings {
+	readonly tokenRef: string;
+	readonly maxPages: number;
+}
+
+export interface AddNotionSourceInput {
+	readonly tokenRef: string;
+	readonly name?: string;
+	readonly maxPages?: number;
+	readonly now?: string;
+}
+
 export type ImportedSourceDuplicateMode = "skip" | "replace" | "reimport";
 
 export interface AddImportedSourceInput {
@@ -167,6 +179,8 @@ export const DEFAULT_GITHUB_DOC_PATHS = ["README.md", "CHANGELOG.md"] as const;
 export const DEFAULT_GITHUB_MAX_ITEMS_PER_REPO = 500;
 export const MAX_GITHUB_MAX_ITEMS_PER_REPO = 10_000;
 const VALID_GITHUB_RESOURCE_TYPES = new Set<string>(DEFAULT_GITHUB_RESOURCE_TYPES);
+export const DEFAULT_NOTION_MAX_PAGES = 500;
+export const MAX_NOTION_MAX_PAGES = 10_000;
 
 export function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -231,6 +245,14 @@ export function addDiscordSource(input: AddDiscordSourceInput, agentsDir = getAg
 
 export function addGitHubSource(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	return withSourcesConfigLock(agentsDir, () => addGitHubSourceUnlocked(input, agentsDir));
+}
+
+export function addNotionSource(input: AddNotionSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addNotionSourceUnlocked(input, agentsDir));
+}
+
+export function notionSourceId(tokenRef: string): string {
+	return `notion:${createHash("sha256").update(tokenRef.trim()).digest("hex").slice(0, 16)}`;
 }
 
 function addWebSourceUnlocked(input: AddWebSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
@@ -466,6 +488,69 @@ function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgen
 	return { ok: true, source, created: true };
 }
 
+function addNotionSourceUnlocked(input: AddNotionSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	try {
+		return addNotionSourceChecked(input, agentsDir);
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
+function addNotionSourceChecked(input: AddNotionSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	const now = input.now ?? new Date().toISOString();
+	const cfg = loadSourcesConfigForWrite(agentsDir);
+	const tokenRef = typeof input.tokenRef === "string" ? input.tokenRef.trim() : "";
+	const sourceId = notionSourceId(tokenRef);
+	const existing = cfg.sources.find((source) => source.id === sourceId);
+	const settings = buildNotionSettings(input, existing ? parseNotionSettings(existing.providerSettings) : undefined);
+	if ("error" in settings) return { ok: false, error: settings.error };
+	const root = `notion://integrations/${settings.tokenRef}`;
+	if (existing) {
+		const updated: SignetSourceEntry = {
+			...existing,
+			name: cleanName(input.name) ?? existing.name,
+			root,
+			enabled: true,
+			providerSettings: notionSettingsProviderSettings(settings),
+			generation: newSourceGeneration(),
+			updatedAt: now,
+		};
+		saveSourcesConfig(
+			{
+				version: SOURCES_CONFIG_VERSION,
+				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
+			},
+			agentsDir,
+		);
+		return { ok: true, source: updated, created: false };
+	}
+
+	const source: SignetSourceEntry = {
+		id: sourceId,
+		generation: newSourceGeneration(),
+		kind: "notion",
+		name: cleanName(input.name) ?? "Notion",
+		root,
+		enabled: true,
+		mode: "read-only",
+		createdAt: now,
+		updatedAt: now,
+		providerSettings: notionSettingsProviderSettings(settings),
+	};
+	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
+	return { ok: true, source, created: true };
+}
+
+export function parseNotionSettings(raw?: SignetSourceProviderSettings): NotionSourceSettings {
+	const tokenRef = typeof raw?.tokenRef === "string" ? raw.tokenRef.trim() : "";
+	if (!tokenRef) throw new Error("Notion source has no tokenRef");
+	return {
+		tokenRef,
+		maxPages: cleanPositiveInteger(raw?.maxPages, MAX_NOTION_MAX_PAGES) ?? DEFAULT_NOTION_MAX_PAGES,
+	};
+}
+
 export function parseDiscordSettings(raw?: SignetSourceProviderSettings): DiscordSourceSettings {
 	const guildIds = Array.isArray(raw?.guildIds) ? cleanDiscordIds(raw.guildIds) : [];
 	const tokenRef = typeof raw?.tokenRef === "string" ? raw.tokenRef.trim() : "";
@@ -664,6 +749,24 @@ function buildGitHubSettings(
 		docPaths,
 		maxItemsPerRepo: input.maxItemsPerRepo ?? existing?.maxItemsPerRepo ?? DEFAULT_GITHUB_MAX_ITEMS_PER_REPO,
 	};
+}
+
+function buildNotionSettings(
+	input: AddNotionSourceInput,
+	existing?: NotionSourceSettings,
+): NotionSourceSettings | { readonly error: string } {
+	const tokenRef = typeof input.tokenRef === "string" ? input.tokenRef.trim() : "";
+	if (!tokenRef) return { error: "Notion tokenRef is required" };
+	if (looksLikeRawNotionToken(tokenRef))
+		return { error: "Notion tokenRef must be a secret reference, not a raw token" };
+	if (input.maxPages !== undefined && cleanPositiveInteger(input.maxPages, MAX_NOTION_MAX_PAGES) !== input.maxPages) {
+		return { error: `Notion maxPages must be an integer between 1 and ${MAX_NOTION_MAX_PAGES}` };
+	}
+	return { tokenRef, maxPages: input.maxPages ?? existing?.maxPages ?? DEFAULT_NOTION_MAX_PAGES };
+}
+
+function notionSettingsProviderSettings(settings: NotionSourceSettings): SignetSourceProviderSettings {
+	return { tokenRef: settings.tokenRef, maxPages: settings.maxPages };
 }
 
 function discordSettingsProviderSettings(settings: DiscordSourceSettings): SignetSourceProviderSettings {
@@ -1116,6 +1219,14 @@ function looksLikeRawGitHubToken(value: string): boolean {
 	return (
 		/^github_pat_[A-Za-z0-9_]{20,}$/.test(withoutAuthScheme) || /^gh[opsru]_[A-Za-z0-9_]{20,}$/.test(withoutAuthScheme)
 	);
+}
+
+function looksLikeRawNotionToken(value: string): boolean {
+	const trimmed = value.trim();
+	const withoutHeaderPrefix = trimmed.replace(/^authorization:\s*/i, "").trim();
+	const withoutAuthScheme = withoutHeaderPrefix.replace(/^bearer\s+/i, "").trim();
+	if (withoutAuthScheme !== trimmed) return true;
+	return /^(ntn|secret)_[A-Za-z0-9]{20,}$/.test(withoutAuthScheme);
 }
 
 function cleanPositiveInteger(value: unknown, max: number): number | undefined {

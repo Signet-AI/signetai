@@ -5,7 +5,7 @@ description: "Connect read-only knowledge bases like Obsidian vaults directly in
 
 Sources are external knowledge bases that Signet can read, index, and recall from without turning them into ordinary saved memories.
 
-Sources currently support **Web pages**, **Obsidian** vaults, **Discord** guilds, and **GitHub** repositories. Add a public Web page URL and Signet fetches it through the dedicated web provider, uses Defuddle to extract readable Markdown and page metadata, then stores the result as source-backed evidence. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall. Add Discord with a bot-token secret reference and Signet indexes guild topology, channels, threads, members, message windows, and Discord metadata through the same source-owned artifact lifecycle. Add GitHub repositories to index issues, pull requests, discussions, selected Markdown docs, comments, and source failure artifacts through the shared source provider pipeline.
+Sources currently support **Web pages**, **Obsidian** vaults, **Discord** guilds, **GitHub** repositories, and **Notion** workspaces. Add a public Web page URL and Signet fetches it through the dedicated web provider, uses Defuddle to extract readable Markdown and page metadata, then stores the result as source-backed evidence. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall. Add Discord with a bot-token secret reference and Signet indexes guild topology, channels, threads, members, message windows, and Discord metadata through the same source-owned artifact lifecycle. Add GitHub repositories to index issues, pull requests, discussions, selected Markdown docs, comments, and source failure artifacts through the shared source provider pipeline. Add Notion with an internal-integration token secret reference and Signet indexes every page shared with that integration, including database entries, as Markdown source artifacts.
 
 The important rule is simple: **the source stays canonical**. Signet reads from the vault. It does not edit notes, rewrite frontmatter, create files, or move anything inside the source directory.
 
@@ -25,7 +25,7 @@ A source hit is marked as source-backed recall, not as a native saved memory. Ob
 
 ## Use the Dashboard
 
-Open the [Dashboard](/dashboard/) and select **Sources**. The current Sources surface starts with a two-step **Add a source** dialog. Choose **Import → Files** or **Import → Web page**, or choose **Connect → Obsidian**, **GitHub**, or **Discord**. Connected-source cards show artifact, chunk, and indexed counts plus source health; they also support re-indexing, snapshot download, and removal.
+Open the [Dashboard](/dashboard/) and select **Sources**. The current Sources surface starts with a two-step **Add a source** dialog. Choose **Import → Files** or **Import → Web page**, or choose **Connect → Obsidian**, **GitHub**, **Notion**, or **Discord**. Connected-source cards show artifact, chunk, and indexed counts plus source health; they also support re-indexing, snapshot download, and removal.
 
 The Dashboard dialog deliberately collects the basic fields only:
 
@@ -34,6 +34,7 @@ The Dashboard dialog deliberately collects the basic fields only:
 | Web page | Public `http(s)` URL | None |
 | Obsidian | Absolute vault path | Display name |
 | GitHub | `owner/repo` or `owner/*` | Display name and token secret reference |
+| Notion | Integration-token secret reference | Display name |
 | Discord | Guild ID and bot-token secret reference | Display name |
 
 For an Obsidian vault, **Browse** asks the local daemon to open a folder picker. The desktop shell can use its native picker; browser/dev mode may need a pasted absolute path when no native picker is available.
@@ -196,6 +197,57 @@ does not become arbitrary source-code indexing by accident.
 Partial GitHub failures are written as source-owned failure artifacts and cause
 the shared source job to report failure instead of silently marking incomplete
 data as fully indexed.
+
+## Notion v1
+
+Notion Sources v1 indexes the pages shared with a Notion internal integration
+through the shared Sources job pipeline:
+
+```bash
+signet secret put NOTION_TOKEN
+signet sources add notion --token-ref NOTION_TOKEN --name "Team Notion"
+signet sources add notion --token-ref NOTION_TOKEN --max-pages 2000
+signet sources list
+signet sources remove notion:...
+```
+
+Create an internal integration in Notion, store its token in Signet Secrets
+(or pass an external secret reference), then share the pages you want indexed
+with the integration from each page's **Connections** menu. Sharing a page
+shares its descendants. The integration's access is the source's scope: Signet
+does not index pages the integration cannot read. Raw `ntn_` or `secret_`
+tokens are rejected in source config.
+
+Each sync enumerates shared pages through the Notion search API, most recently
+edited first, bounded by `maxPages` (default 500, maximum 10,000). Page content
+is read through Notion's page-Markdown endpoint; database-entry properties
+are rendered above the page body. Notion reports `last_edited_time` at minute
+granularity, so a page is skipped only when its edit time is unchanged and the
+previous fetch happened after that minute ended; a page is marked synced only
+after both its artifact and its source-graph structure are written. Each page
+artifact records the page ID, URL, parent, and edit time, and is grouped under
+a reference node for its parent page or data source in the source graph.
+
+Pages that are no longer returned are removed from the index after a complete
+enumeration. Pages outside a smaller `maxPages` window are removed directly;
+any other missing page is first confirmed gone (`404` or trashed) with a page
+lookup, up to 200 lookups per sync, so a page edited while the listing was in
+progress is not dropped. Unconfirmed removals are kept and reported. A failed
+page fetch keeps the last indexed version, an incomplete Notion search skips
+removal, and partial page results keep their existing artifacts. Rate-limited
+requests honor Notion's `Retry-After` header with bounded retries, and
+cancelling or removing the source interrupts in-flight requests.
+
+Notion's Markdown endpoint marks a page as truncated whenever it contains a
+block the API cannot render. Signet resolves each such block individually (up
+to 25 per page): blocks Notion can serve are inlined, and blocks it cannot
+serve or the integration cannot access, such as buttons, embeds, and
+templates, become `[Unsupported Notion block: <type>]` placeholders without
+failing the sync. Fetch failures, unconfirmed removals, and pages with blocks
+that could not be retrieved are written as source-owned failure artifacts and
+cause the shared source job to report failure; incomplete pages are refetched
+and reported on every sync.
+Comments, file attachments, and data-source schemas are not indexed in v1.
 
 ## Operations diagnostics
 
@@ -376,6 +428,7 @@ The daemon exposes the Sources lifecycle under `/api/sources`:
 | `POST` | `/api/sources/obsidian` | Add/update an Obsidian vault source and index it. |
 | `POST` | `/api/sources/discord` | Add/update a Discord source and queue a shared source index job. |
 | `POST` | `/api/sources/github` | Add/update a GitHub source and queue a shared source index job. |
+| `POST` | `/api/sources/notion` | Add/update a Notion source and queue a shared source index job. |
 | `POST` | `/api/sources/web` | Add/update a public Web page source and queue a shared source index job. |
 | `GET` | `/api/sources/:sourceId/health` | Inspect source health diagnostics used by the dashboard. |
 | `GET` | `/api/sources/:sourceId/snapshot` | Export source-owned artifacts as a Signet source snapshot. |
@@ -390,7 +443,7 @@ The desktop shell uses native folder selection through IPC. The daemon picker ro
 - Discord gateway tailing depends on a bot token with the required gateway
   intents and keeps a source job open while it is connected.
 - Sources are local/operator-managed. Permissions and RBAC are intentionally out of scope for v1.
-- Signet does not write back to Obsidian or Discord.
+- Signet does not write back to Obsidian, Discord, GitHub, or Notion.
 - Rename handling is delete + add.
 - Non-Markdown Obsidian attachments are not indexed by the Obsidian v1 source path.
 - Discord attachment binary/media extraction is disabled by default; opt-in text attachment extraction only fetches bounded text-like uploads.
