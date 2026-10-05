@@ -42,6 +42,8 @@ const DARWIN_DIRECTORY_BUFFER_BYTES = 64 * 1024;
 const DARWIN_DIRENT_HEADER_BYTES = 8;
 const DARWIN_AT_REMOVEDIR = 0x80;
 const DARWIN_O_SYMLINK = 0x00200000;
+const DARWIN_ARM64_REGISTER_PADDING = [0, 0, 0, 0, 0] as const;
+const TEMPORARY_FILE_MODE = 0o600;
 
 export class UnsupportedDescriptorFilesystemError extends Error {
 	readonly code = "unsupported_descriptor_filesystem";
@@ -102,7 +104,7 @@ type DarwinApi = {
 			flags: number,
 		) => number;
 		readonly mkdirat: (fd: number, path: DarwinPointer, mode: number) => number;
-		readonly openat: (fd: number, path: DarwinPointer, flags: number, mode: number) => number;
+		readonly openat: (fd: number, path: DarwinPointer, flags: number, ...variadic: number[]) => number;
 		readonly readlinkat: (fd: number, path: DarwinPointer, buffer: DarwinPointer, length: number) => number;
 		readonly renameat: (oldfd: number, oldpath: DarwinPointer, newfd: number, newpath: DarwinPointer) => number;
 		readonly symlinkat: (target: DarwinPointer, fd: number, path: DarwinPointer) => number;
@@ -131,7 +133,13 @@ function loadDarwinApi(): DarwinApi | null {
 			fstatvfs: { args: ["i32", "ptr"], returns: "i32" },
 			linkat: { args: ["i32", "cstring", "i32", "cstring", "i32"], returns: "i32" },
 			mkdirat: { args: ["i32", "cstring", "i32"], returns: "i32" },
-			openat: { args: ["i32", "cstring", "i32", "i32"], returns: "i32" },
+			openat: {
+				args:
+					process.arch === "arm64"
+						? ["i32", "cstring", "i32", ...DARWIN_ARM64_REGISTER_PADDING.map(() => "i32"), "i32"]
+						: ["i32", "cstring", "i32", "i32"],
+				returns: "i32",
+			},
 			readlinkat: { args: ["i32", "cstring", "ptr", "usize"], returns: "i64" },
 			renameat: { args: ["i32", "cstring", "i32", "cstring"], returns: "i32" },
 			symlinkat: { args: ["cstring", "i32", "cstring"], returns: "i32" },
@@ -141,6 +149,12 @@ function loadDarwinApi(): DarwinApi | null {
 		darwinApi = null;
 	}
 	return darwinApi;
+}
+
+function darwinOpenat(api: DarwinApi, fd: number, path: DarwinPointer, flags: number, mode: number): number {
+	return process.arch === "arm64"
+		? api.symbols.openat(fd, path, flags, ...DARWIN_ARM64_REGISTER_PADDING, mode)
+		: api.symbols.openat(fd, path, flags, mode);
 }
 
 function darwinError(operation: string, api: DarwinApi): NodeJS.ErrnoException {
@@ -203,7 +217,7 @@ async function openChild(parent: FileHandle, name: string, flags: number, mode =
 		if (process.platform === "linux") return await open(descriptorPath(parent.fd, name), flags, mode);
 		const api = loadDarwinApi();
 		if (!api) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
-		const fd = api.symbols.openat(parent.fd, cstring(name), flags, mode);
+		const fd = darwinOpenat(api, parent.fd, cstring(name), flags, mode);
 		if (fd < 0) throw darwinError("openat", api);
 		return await duplicateDarwinDescriptor(fd, flags);
 	} catch (error) {
@@ -268,7 +282,7 @@ async function readlinkChild(parent: FileHandle, name: string): Promise<string> 
 function statSymlinkChild(parent: FileHandle, name: string): Stats {
 	const api = loadDarwinApi();
 	if (!api) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
-	const fd = api.symbols.openat(parent.fd, cstring(name), DARWIN_O_SYMLINK, 0);
+	const fd = darwinOpenat(api, parent.fd, cstring(name), DARWIN_O_SYMLINK, 0);
 	if (fd < 0) throw darwinError("openat", api);
 	try {
 		return fstatSync(fd, { bigint: false });
@@ -691,7 +705,7 @@ export class DescriptorRoot {
 				parent,
 				temporary,
 				fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | NOFOLLOW,
-				options.mode ?? 0o600,
+				TEMPORARY_FILE_MODE,
 			);
 			try {
 				await file.writeFile(bytes);
@@ -789,7 +803,7 @@ export class DescriptorRoot {
 					destinationParent,
 					temporary,
 					fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | NOFOLLOW,
-					options.mode ?? stat.mode & 0o7777,
+					TEMPORARY_FILE_MODE,
 				);
 				temporaryCreated = true;
 				try {
@@ -866,6 +880,21 @@ export class DescriptorRoot {
 		if (this.closed) return;
 		this.closed = true;
 		await this.root.close();
+	}
+}
+
+export async function __createDescriptorChildForTests(directory: string, name: string, mode: number): Promise<void> {
+	const parent = await open(resolve(directory), DIRECTORY_FLAGS);
+	try {
+		const file = await openChild(
+			parent,
+			name,
+			fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | NOFOLLOW,
+			mode,
+		);
+		await file.close();
+	} finally {
+		await parent.close();
 	}
 }
 
