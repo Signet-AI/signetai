@@ -115,7 +115,10 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 					);
 				return Response.json({ text: "OK", decision: { targetRef: "background/default" }, attempts: [{ ok: true }] });
 			}
-			if (path === "/api/pipeline/resume") return Response.json({ success: true, mode: "controlled-write" });
+			if (path === "/api/pipeline/resume") {
+				config = config.replace("paused: true", "paused: false");
+				return Response.json({ success: true, mode: "controlled-write" });
+			}
 			if (path === "/api/agents") return Response.json({ agents: [{ id: "alice", name: "alice" }] });
 			if (path === "/api/memory/remember") {
 				const body = JSON.parse(String(init?.body));
@@ -383,6 +386,33 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			expect(document.body.textContent).toContain("What should your agents know about you");
 		} finally {
 			saveFails = false;
+			await view.close();
+		}
+	});
+
+	test("later setup saves keep the pipeline resumed and recall ignores surrounding whitespace", async () => {
+		config = "name: Example\nharnesses: []\n";
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
+			await view.click("Continue");
+			await view.click("Local model");
+			await view.input("Model name", "fixture-model");
+			await view.click("Test and enable memory");
+			expect(config).toContain("paused: false");
+			await view.click("Continue");
+			await view.click("Continue");
+			await view.click("Save search settings");
+			expect(config).toContain("paused: false");
+			await view.input("Your first memory", "I prefer short answers. ");
+			await view.click("Remember this");
+			await view.click("Recall it");
+			const query = new URLSearchParams({ q: "I prefer short answers.", agentId: "alice", limit: "20" });
+			expect(calls).toContain(`GET /memory/search?${query}`);
+		} finally {
 			await view.close();
 		}
 	});

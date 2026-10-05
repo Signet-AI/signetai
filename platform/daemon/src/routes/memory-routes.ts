@@ -1274,7 +1274,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 	});
 	app.get("/memory/search", async (c) => {
-		const query = c.req.query("q") ?? "";
+		const query = (c.req.query("q") ?? "").trim();
 		const distinct = c.req.query("distinct");
 		const limitParam = c.req.query("limit");
 		if (distinct === "who") {
@@ -1300,8 +1300,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		};
 
 		const hasFilters = Object.values(filterParams).some((v) => v !== "" && v !== false && v !== null);
-		if (!query.trim() && !hasFilters) return c.json({ results: [] });
-		const limit = effectiveRecallLimit(limitParam ? Number.parseInt(limitParam, 10) : query.trim() ? 20 : 50);
+		if (!query && !hasFilters) return c.json({ results: [] });
+		const limit = effectiveRecallLimit(limitParam ? Number.parseInt(limitParam, 10) : query ? 20 : 50);
 		const recallSurface = normalizeRecallSurface(c.req.header("x-signet-recall-surface"), "dashboard");
 		recordRecallAttempt(recallSurface);
 
@@ -1310,7 +1310,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				async (db) => {
 					let rows: unknown[] = [];
 
-					if (query.trim()) {
+					if (query) {
 						const { clause, args } = buildWhere(filterParams);
 						try {
 							rows = prepareTypedStatement<Record<string, unknown>>(

@@ -486,6 +486,7 @@ export function OnboardingPage({
 						result.error ??
 							"Memory is still paused, frozen, or in shadow mode. Review its controls in Settings before retrying.",
 					);
+				store.aSetBool(["memory", "pipelineV2", "paused"], false);
 				setVerified(true);
 			});
 			return;
@@ -532,7 +533,7 @@ export function OnboardingPage({
 					if (!result.data?.id) throw new Error(result.error ?? "Your memory could not be saved. Retry safely.");
 					setMemoryId(result.data.id);
 				} else {
-					const query = new URLSearchParams({ q: memory, agentId, limit: "20" });
+					const query = new URLSearchParams({ q: memory.trim(), agentId, limit: "20" });
 					const result = await getJSONResult<{ results: Memory[] }>(`/memory/search?${query}`, { signal });
 					const match = result.data?.results.find((row) => row.id === memoryId);
 					if (!match)
