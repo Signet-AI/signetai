@@ -139,3 +139,30 @@ function SidebarButton({
 		</Tooltip>
 	);
 }
+
+export function SidebarToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+	const label = open ? "Collapse sidebar" : "Expand sidebar";
+	const shortcut = document.documentElement.dataset.platform === "mac" ? "⌘B" : "Ctrl+B";
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					onClick={onToggle}
+					aria-label={label}
+					aria-expanded={open}
+					aria-controls="dashboard-sidebar"
+					className="sig-sidebar-toggle sig-no-drag"
+				>
+					<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6">
+						<rect x="3.5" y="4.5" width="17" height="15" rx="4" />
+						<rect x="6.75" y="7.75" width="3.5" height="8.5" rx="1.75" />
+					</svg>
+				</button>
+			</TooltipTrigger>
+			<TooltipContent side="right">
+				{label} · {shortcut}
+			</TooltipContent>
+		</Tooltip>
+	);
+}

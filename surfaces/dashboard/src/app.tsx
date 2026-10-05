@@ -1,7 +1,7 @@
 import { Activity, useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SidebarNav, useSidebarOpen } from "@/components/shell/navigation";
+import { SidebarNav, SidebarToggle, useSidebarOpen } from "@/components/shell/navigation";
 import { Topbar } from "@/components/shell/topbar";
 import { type ViewId, useView } from "@/lib/view-context";
 import { SettingsView, useSettingsHotkey } from "@/views/settings";
@@ -36,13 +36,14 @@ function Shell() {
 				data-sidebar={sidebarOpen ? "open" : "closed"}
 				className="sig-app-frame flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
 			>
-				<Topbar sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
+				<Topbar />
 				<div className="sig-work-area flex min-h-0 min-w-0 flex-1">
 					<SidebarNav open={sidebarOpen} />
 					<div
 						ref={contentRef}
 						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "settings" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}
 					>
+						<SidebarToggle open={sidebarOpen} onToggle={toggleSidebar} />
 						{view === "setup" ? (
 							<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />
 						) : (
