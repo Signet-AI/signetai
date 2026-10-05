@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AssistantChatMessage } from "@signet/core";
 import { type AssistantModelOption, streamAssistantChat } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -171,6 +171,27 @@ export function MemoryChat({
 			abortRef.current = null;
 		}
 	};
+	const promptRef = useRef<HTMLFormElement>(null);
+	const dockRect = useRef<DOMRect | null>(null);
+	useLayoutEffect(() => {
+		const prompt = promptRef.current;
+		if (!prompt) return;
+		if (presentation === "compact") {
+			dockRect.current = prompt.getBoundingClientRect();
+			return;
+		}
+		const from = dockRect.current;
+		dockRect.current = null;
+		if (!from || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+		const to = prompt.getBoundingClientRect();
+		prompt.animate(
+			[
+				{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)`, width: `${from.width}px` },
+				{ transform: "translate(0, 0)", width: `${to.width}px` },
+			],
+			{ duration: 360, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+		);
+	}, [presentation]);
 	return (
 		<section
 			className={cn("memory-chat", presentation === "sidebar" && "memory-chat-sidebar", className)}
@@ -304,6 +325,7 @@ export function MemoryChat({
 				</p>
 			)}
 			<PromptInput
+				ref={promptRef}
 				onSubmit={(event) => {
 					event.preventDefault();
 					void submit();

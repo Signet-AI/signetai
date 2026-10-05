@@ -581,22 +581,25 @@
 		}
 	}
 }
-.graph-view-root { --graph-sidebar-width: clamp(340px, 30%, 560px); position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 0px; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; transition: grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1), grid-template-rows 380ms cubic-bezier(.22, 1, .36, 1); }
+.graph-view-root { --graph-sidebar-width: clamp(340px, 30%, 560px); position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 0px; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
 .graph-view-root.has-sidebar { grid-template-columns: minmax(0, 1fr) var(--graph-sidebar-width); }
 .sig-content { container: sheet / inline-size; }
 .graph-viewport { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 .graph-view-root.has-sidebar .graph-tooltip { bottom: 20px; }
-.graph-view-root > .graph-chat-sidebar { grid-column: 2; width: 100%; min-height: 0; border: 0; border-left: 1px solid var(--border); border-radius: 0; display: flex; flex-direction: column; background: var(--background); transition: opacity 220ms ease, transform 380ms cubic-bezier(.22, 1, .36, 1); }
-.graph-view-root.has-sidebar > .graph-chat-sidebar { animation: graph-chat-enter 380ms cubic-bezier(.22, 1, .36, 1); }
-.graph-chat-sidebar.is-closing { opacity: 0; transform: translateX(24px); pointer-events: none; }
-@keyframes graph-chat-enter { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
+.graph-view-root > .graph-chat-sidebar { grid-column: 2; width: 100%; min-height: 0; border: 0; border-left: 1px solid var(--border); border-radius: 0; display: flex; flex-direction: column; background: var(--background); }
+.graph-view-root > .graph-chat-sidebar { animation: graph-chat-fade 220ms ease-out both; }
+.graph-chat-sidebar > :not(.chat-prompt) { animation: graph-chat-enter 320ms 60ms cubic-bezier(.22, 1, .36, 1) both; }
+.graph-chat-sidebar.is-closing { opacity: 0; pointer-events: none; transition: opacity 180ms ease-in; }
+@keyframes graph-chat-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes graph-chat-fade { from { border-left-color: transparent; } }
+@keyframes graph-dock-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.graph-dock { animation: graph-dock-in 240ms cubic-bezier(.22, 1, .36, 1) both; }
 @container sheet (max-width: 760px) {
  .graph-view-root, .graph-view-root.has-sidebar { grid-template-columns: minmax(0, 1fr); }
  .graph-view-root > .graph-chat-sidebar { position: absolute; inset: 0; z-index: 10; grid-column: 1; border-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
- .graph-view-root, .graph-view-root > .graph-chat-sidebar { transition: none; }
- .graph-view-root.has-sidebar > .graph-chat-sidebar { animation: none; }
+ .graph-chat-sidebar, .graph-chat-sidebar > *, .graph-dock { animation: none; transition: none; }
 }
 .graph-stage { position: absolute; inset: 0; background-image: radial-gradient(oklch(1 0 0 / 0.03) 1px, transparent 1px); background-size: 28px 28px; }
 :root:not(.dark) .graph-stage { background-image: radial-gradient(oklch(0 0 0 / 0.03) 1px, transparent 1px); }

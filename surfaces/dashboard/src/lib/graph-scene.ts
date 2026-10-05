@@ -542,6 +542,8 @@ export function createGraphScene(
 			fit(nodes.filter((node) => retrieved.has(node.id) || retrievedNeighbors.has(node.id)));
 		else if (selected) focusNode(selected.id);
 		else fit();
+		if (frame) cancelAnimationFrame(frame);
+		draw(performance.now());
 	});
 	resize.observe(container);
 	const theme = new MutationObserver(invalidate);

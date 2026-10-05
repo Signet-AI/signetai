@@ -470,7 +470,7 @@ export function GraphView() {
 			setSidebarMounted(true);
 			return;
 		}
-		const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 420;
+		const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200;
 		const timer = setTimeout(() => setSidebarMounted(false), delay);
 		return () => clearTimeout(timer);
 	}, [sidebarOpen]);
@@ -541,7 +541,7 @@ export function GraphView() {
 	);
 
 	return (
-		<div className={cn("graph-view-root", sidebarOpen && "has-sidebar")}>
+		<div className={cn("graph-view-root", sidebarPresented && "has-sidebar")}>
 			<div className="graph-viewport">
 				{!sidebarOpen && (
 					<Button
