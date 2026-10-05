@@ -147,15 +147,20 @@ function RecentMemoryRow({ memory }: { memory: Memory }) {
 			<DialogTrigger asChild>
 				<button type="button" className="home-memory-row home-memory-summary group/memory w-full text-left">
 					<div className="min-w-0 flex-1">
-						<p className="m-0 line-clamp-1 text-body font-medium leading-[1.35] text-foreground">{title}</p>
+						<p className="m-0 line-clamp-1 text-body leading-[1.35] text-foreground">{title}</p>
 						<div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-meta tabular-nums text-muted-foreground">
-							<span className="truncate">via {memory.who || sourceLabel(kind)}</span>
+							<span className="shrink-0">{timeAgo(memory.created_at)}</span>
 							<span aria-hidden="true">·</span>
 							<span className={cn("shrink-0", TYPE_TINTS[memory.type] ?? "text-muted-foreground")}>
 								{memory.type || sourceLabel(kind)}
 							</span>
-							<span aria-hidden="true">·</span>
-							<span className="shrink-0">{timeAgo(memory.created_at)}</span>
+							{/* Dreaming is the default writer, so only other provenance earns space in the list; the reader shows all of it. */}
+							{memory.who && memory.who !== "dreaming" && (
+								<>
+									<span aria-hidden="true">·</span>
+									<span className="truncate">via {memory.who}</span>
+								</>
+							)}
 						</div>
 					</div>
 				</button>

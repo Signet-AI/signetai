@@ -66,39 +66,56 @@ export function HomeConnectorsPanel({
 					Checks unavailable. Showing the last known installations.
 				</p>
 			)}
-			<TooltipProvider delayDuration={150}>
-				<ul
-					data-testid="connector-rows"
-					aria-label="Installed connectors"
-					className="home-connectors-rows mt-3 flex list-none flex-wrap gap-2 overflow-y-auto empty:hidden"
-				>
-					{connectors.map((connector) => {
-						const label = statusOf(connector)?.label ?? "Installed";
-						return (
-							<li key={connector.id}>
-								<Tooltip>
-									<TooltipTrigger asChild>
-										<button
-											type="button"
-											onClick={() => openSettings("connectors")}
-											className="home-connector-tile"
-											data-tone={statusOf(connector)?.tone}
-										>
-											<ConnectorLogo icon={connector.icon} className="size-5 shrink-0 object-contain" />
-											<span className="sr-only">
-												{connector.displayName}, {label}
-											</span>
-										</button>
-									</TooltipTrigger>
-									<TooltipContent side="bottom">
-										{connector.displayName} · {label}
-									</TooltipContent>
-								</Tooltip>
-							</li>
-						);
-					})}
-				</ul>
-			</TooltipProvider>
+			<div className="mt-3 flex min-w-0 items-center justify-between gap-3 empty:hidden">
+				<TooltipProvider delayDuration={150}>
+					<ul
+						data-testid="connector-rows"
+						aria-label="Installed connectors"
+						className="home-connectors-rows flex min-w-0 list-none flex-wrap overflow-y-auto empty:hidden"
+					>
+						{connectors.map((connector) => {
+							const label = statusOf(connector)?.label ?? "Installed";
+							return (
+								<li key={connector.id}>
+									<Tooltip>
+										<TooltipTrigger asChild>
+											<button
+												type="button"
+												onClick={() => openSettings("connectors")}
+												className="home-connector-tile"
+												data-tone={statusOf(connector)?.tone}
+											>
+												<ConnectorLogo icon={connector.icon} className="size-[18px] shrink-0 object-contain" />
+												<span className="sr-only">
+													{connector.displayName}, {label}
+												</span>
+											</button>
+										</TooltipTrigger>
+										<TooltipContent side="bottom">
+											{connector.displayName} · {label}
+										</TooltipContent>
+									</Tooltip>
+								</li>
+							);
+						})}
+					</ul>
+				</TooltipProvider>
+				{connectors.length > 0 && !unavailable && (
+					<StatusLabel
+						tone={
+							exceptions.length
+								? exceptions.some((item) => item.status.tone === "error")
+									? "error"
+									: "warn"
+								: "neutral"
+						}
+					>
+						{exceptions.length
+							? `${exceptions.length} need${exceptions.length === 1 ? "s" : ""} attention`
+							: "All connected"}
+					</StatusLabel>
+				)}
+			</div>
 			{exceptions.length > 0 && (
 				<ul className="mt-3 flex list-none flex-col gap-1.5" aria-label="Connectors needing attention">
 					{exceptions.map(({ connector, status }) => (

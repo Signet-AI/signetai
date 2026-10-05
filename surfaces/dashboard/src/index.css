@@ -293,10 +293,17 @@
 	.home-today > *, .home-system > * { flex-shrink: 0; }
 	.home-system { border-inline-start: 1px solid var(--border); }
 	.home-daily-brief .insight-text { max-width: 34em; min-height: 0; font-size: clamp(18px, 14px + 0.8cqi, 22px); font-weight: 400; line-height: 1.4; letter-spacing: -0.015em; text-wrap: pretty; }
-	.home-daily-brief button[aria-label] svg { width: 11px; height: 11px; }
-	.home-daily-brief button[aria-label] { width: 22px; height: 22px; border-radius: 50%; background: var(--home-interactive, transparent); border-top-color: var(--home-edge, var(--border)); color: var(--muted-foreground); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 4%, transparent), 0 1px 0 color-mix(in srgb, var(--background) 22%, transparent); transition-property: background-color, border-color, color, transform; transition-duration: 150ms; transition-timing-function: ease-out; }
-	.home-daily-brief button[aria-label]:active:not(:disabled) { transform: scale(0.96); }
-	.home-brief-divider { height: 1px; background: var(--border); margin-block: 20px; margin-inline: 0; }
+	/* The brief is the one raised surface on the page; everything else sits flat on the sheet. */
+	.home-daily-brief { margin-block-end: 32px; padding: 18px 22px 14px; border-radius: 16px; background: var(--card); border: 1px solid color-mix(in srgb, var(--foreground) 7%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 4%, transparent), 0 1px 2px oklch(0 0 0 / 0.05); }
+	.home-brief-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; min-height: 28px; margin-block-start: 6px; }
+	.home-brief-icon { display: grid; place-items: center; width: 28px; height: 28px; margin: -4px; border-radius: 999px; color: var(--home-secondary, var(--muted-foreground)); transition: background-color 160ms ease, color 160ms ease; }
+	.home-brief-icon:hover:not(:disabled) { background: var(--home-interactive); color: var(--home-title, var(--foreground)); }
+	.home-brief-icon:disabled { opacity: 0.4; }
+	.home-brief-reply { height: 28px; padding-inline: 12px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent); font-size: var(--text-small); color: var(--home-title, var(--foreground)); transition: background-color 160ms ease, border-color 160ms ease; }
+	.home-brief-reply:hover:not(:disabled) { background: var(--home-interactive); border-color: color-mix(in srgb, var(--foreground) 22%, transparent); }
+	.home-brief-reply:disabled { opacity: 0.5; }
+	.home-brief-pager { display: flex; align-items: center; gap: 4px; }
+	.home-brief-pager > span { min-width: 6ch; text-align: center; }
 	.home-recent-more { align-self: flex-start; margin-block-start: 8px; padding-block: 4px; }
 	.home-recent > div:nth-child(2) { gap: 16px; margin-top: 14px; }
 	.home-recent input { font-size: var(--text-small); }
@@ -339,10 +346,18 @@
 	html:not(.dark) :is(.home-connector-icon, .home-connector-tile) img[src$="openai.svg"],
 	html:not(.dark) :is(.home-connector-icon, .home-connector-tile) img[src$="forge.svg"],
 	html:not(.dark) :is(.home-connector-icon, .home-connector-tile) img[src$="pi.svg"] { filter: invert(1); }
-	.home-connector-tile { position: relative; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 999px; background: var(--home-interactive); border: 1px solid color-mix(in srgb, var(--foreground) 8%, transparent); transition: background-color 160ms ease, border-color 160ms ease, transform 150ms ease-out; }
-	.home-connector-tile:hover { background: var(--home-selection); border-color: color-mix(in srgb, var(--foreground) 16%, transparent); }
-	.home-connector-tile:active { transform: scale(0.96); }
-	.home-connector-tile[data-tone]::after { content: ""; position: absolute; inset-block-start: 1px; inset-inline-end: 1px; width: 9px; height: 9px; border-radius: 999px; border: 2px solid var(--background); }
+	/* Connectors read as one overlapping stack; logos stay monochrome until hovered so no brand color dominates. */
+	.home-connectors-rows { padding: 4px 4px 4px 2px; margin: -4px -4px -4px -2px; }
+	.home-connectors-rows > li + li { margin-inline-start: -6px; }
+	.home-connector-tile { position: relative; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; background: var(--home-interactive); box-shadow: 0 0 0 2px var(--background), inset 0 0 0 1px color-mix(in srgb, var(--foreground) 9%, transparent); transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), background-color 160ms ease; }
+	.home-connector-tile img { filter: grayscale(1) contrast(1.1); opacity: 0.78; transition: filter 180ms ease, opacity 180ms ease; }
+	.dark .home-connector-tile img { filter: grayscale(1) brightness(1.5); }
+	/* App-icon marks ship as full-bleed squares; shrink and round them so they match the weight of plain glyphs. */
+	.home-connector-tile img:is([src$="kimi.png"], [src$="opencode.svg"], [src$="hermes-agent.svg"]) { width: 15px; height: 15px; border-radius: 4px; filter: grayscale(1); }
+	.home-connector-tile:hover, .home-connector-tile:focus-visible { z-index: 1; transform: translateY(-2px); background: var(--home-selection); }
+	.home-connector-tile:hover img, .home-connector-tile:focus-visible img { filter: none; opacity: 1; }
+	.home-connector-tile[data-tone]::after { content: ""; position: absolute; inset-block-start: -1px; inset-inline-end: -1px; width: 9px; height: 9px; border-radius: 999px; border: 2px solid var(--background); }
+	@media (prefers-reduced-motion: reduce) { .home-connector-tile, .home-connector-tile img { transition: none; } .home-connector-tile:hover { transform: none; } }
 	.home-connector-tile[data-tone="error"]::after { background: var(--home-health-unhealthy); }
 	.home-connector-tile[data-tone="warn"]::after { background: var(--home-health-degraded); }
 	.home-connector-row[data-health="healthy"] .home-connector-icon { color: color-mix(in srgb, var(--home-health-healthy) 58%, var(--home-body)); }
@@ -372,10 +387,10 @@
 	.home-recent > div:first-child { gap: 6px; }
 	.home-system [class~="group/source"] summary > span:first-child { color: var(--home-body, var(--foreground)); }
 	.home-system summary > svg { color: var(--home-disabled, var(--muted-foreground)); }
-	.home-source-filter { flex-shrink: 0; width: 156px; height: 36px; font-size: var(--text-small); font-weight: 400; color: var(--muted-foreground); background: var(--home-interactive, var(--background)); border-color: color-mix(in srgb, var(--foreground) 9%, transparent); border-top-color: color-mix(in srgb, var(--foreground) 13%, transparent); border-radius: var(--control-radius); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 4%, transparent), 0 1px 0 color-mix(in srgb, var(--background) 22%, transparent); transition: border-color 160ms ease, background-color 160ms ease, transform 150ms ease-out; }
-	.home-source-filter:active { transform: scale(0.96); }
+	/* Same surface as the search pill beside it, so the two read as one control group. */
+	.home-source-filter { flex-shrink: 0; width: 156px; height: 36px; padding-inline: 14px 12px; border: 1px solid var(--input); border-radius: var(--search-radius); background: color-mix(in oklch, var(--foreground) 5%, transparent); box-shadow: none; font-size: var(--text-small); font-weight: 400; color: var(--muted-foreground); transition: border-color 160ms ease, background-color 160ms ease; }
+	.home-source-filter:hover { border-color: color-mix(in srgb, var(--foreground) 18%, transparent); }
 	.home-source-filter svg { width: 13px; height: 13px; }
-	:root:not(.dark) .home-source-filter { background: var(--muted); }
 	.home-source-filter:focus-visible { outline: 1px solid var(--home-focus); box-shadow: none; }
 	.home-source-options { background: var(--popover); border-color: var(--border); border-radius: var(--control-radius); box-shadow: none; animation-duration: 160ms; --tw-enter-scale: 1; --tw-exit-scale: 1; }
 	.home-source-options [role="option"] { min-height: 32px; font-size: var(--text-small); font-weight: 400; }
@@ -393,7 +408,6 @@
 		.home-source-options, .home-memory-reader, .home-brief-copy { animation: none; }
 	}
 	.home-system details p { text-wrap: pretty; }
-	.home-daily-brief > div:first-child .tabular-nums { min-width: 7ch; margin-inline-end: 4px; text-align: end; white-space: nowrap; }
 	.home-dashboard :is(input, select) { caret-color: var(--foreground); }
 	.home-dashboard ::selection { background: color-mix(in srgb, var(--success) 23%, transparent); color: var(--foreground); }
 	.home-system summary,
@@ -423,6 +437,7 @@
 	}
 	@container home (max-width: 600px) {
 		.home-today, .home-system { padding-block: 20px 28px; }
+		.home-daily-brief { padding: 16px 16px 12px; margin-block-end: 24px; border-radius: 14px; }
 		.home-memory-summary { gap: 10px; align-items: flex-start; padding-block: 10px; }
 		.home-memory-summary p { -webkit-line-clamp: 2; }
 		.home-source-filter { width: 112px; }

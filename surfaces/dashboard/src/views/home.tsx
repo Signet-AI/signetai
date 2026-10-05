@@ -58,7 +58,6 @@ export function HomeView() {
 						</a>
 					)}
 					<DailyBrief agentId={status.data?.agentId} agentSettled={!status.loading} />
-					<div className="home-brief-divider" />
 					<HomeRecentMemories />
 					<div className="home-activity">
 						<ActivityHeatmap days={days} heading={<SectionHeading title="Activity" />} />
