@@ -23,9 +23,9 @@ beforeEach(() => {
 	registerHooksRoutes(app);
 });
 
-afterEach(() => {
+afterEach(async () => {
 	resetCrossAgentStateForTest();
-	closeDbAccessor();
+	await closeDbAccessor();
 	rmSync(dir, { recursive: true, force: true });
 });
 

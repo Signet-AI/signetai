@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, describe, expect, it } from "bun:test";
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import type { Readable } from "node:stream";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -190,7 +190,12 @@ async function waitForHealth(
 	throw new Error("daemon did not become healthy in time");
 }
 
+const previousTelemetryOptout = process.env.SIGNET_TELEMETRY_OPTOUT;
 process.env.SIGNET_TELEMETRY_OPTOUT = "1";
+afterAll(() => {
+	if (previousTelemetryOptout === undefined) delete process.env.SIGNET_TELEMETRY_OPTOUT;
+	else process.env.SIGNET_TELEMETRY_OPTOUT = previousTelemetryOptout;
+});
 
 describe("native embedding event-loop isolation (e2e)", () => {
 	it("preserves child output and daemon diagnostics when startup exits before health", async () => {

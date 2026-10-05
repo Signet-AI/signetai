@@ -688,13 +688,13 @@ describe("auth routes - password dashboard login", () => {
 		const tmpDir = mkdtempSync(join(tmpdir(), "signet-auth-login-test-"));
 		const prevUsername = process.env.SIGNET_ADMIN_USERNAME;
 		const prevPassword = process.env.SIGNET_ADMIN_PASSWORD;
+		const state = await import("../routes/state.js");
 		try {
 			mkdirSync(join(tmpDir, ".daemon"), { recursive: true });
 			writeFileSync(join(tmpDir, "agent.yaml"), "auth:\n  mode: team\n  sessionTokenTtlSeconds: 60\n");
 			process.env.SIGNET_ADMIN_USERNAME = "owner";
 			process.env.SIGNET_ADMIN_PASSWORD = "secret-password";
 
-			const state = await import("../routes/state.js");
 			state.reloadAuthState(tmpDir);
 			if (!state.authSecret) throw new Error("expected auth secret");
 
@@ -724,6 +724,7 @@ describe("auth routes - password dashboard login", () => {
 			else process.env.SIGNET_ADMIN_USERNAME = prevUsername;
 			if (prevPassword === undefined) Reflect.deleteProperty(process.env, "SIGNET_ADMIN_PASSWORD");
 			else process.env.SIGNET_ADMIN_PASSWORD = prevPassword;
+			state.reloadAuthState(state.AGENTS_DIR);
 			rmSync(tmpDir, { recursive: true, force: true });
 		}
 	});

@@ -2,7 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations";
 
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,7 +21,9 @@ function ensureDir(path: string): void {
 async function setupDb(): Promise<Database> {
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
 	ensureDir(join(TEST_DIR, "memory"));
-	if (existsSync(dbPath)) rmSync(dbPath);
+	for (const file of readdirSync(join(TEST_DIR, "memory"))) {
+		if (file.startsWith("memories.db")) rmSync(join(join(TEST_DIR, "memory"), file), { force: true });
+	}
 
 	const db = new Database(dbPath);
 	db.exec("PRAGMA busy_timeout = 5000");

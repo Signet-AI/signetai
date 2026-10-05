@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { EXTERNAL_NODE } from "../platform/daemon/build-externals";
 
 import {
 	collectManifestIssues,
@@ -76,7 +77,8 @@ describe("check-publish-manifests", () => {
 
 		expect(daemonBuild).toContain('const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";');
 		expect(daemonBuild).toContain('const isBun = typeof Bun !== "undefined" && !forceNodeBuild;');
-		expect(daemonBuild).toContain('"bun:ffi"');
+		expect(daemonBuild).toContain("external: EXTERNAL_NODE,");
+		expect(EXTERNAL_NODE).toContain("bun:ffi");
 	});
 
 	test("keeps daemon tokenizer assets stable and native keyring external in Node builds", () => {
@@ -85,7 +87,8 @@ describe("check-publish-manifests", () => {
 
 		expect(daemonBuild).toContain('asset: "dist/[name].[ext]"');
 		expect(daemonBuild).toContain('assetNames: "[name]"');
-		expect(daemonBuild).toContain('"@napi-rs/keyring"');
+		expect(daemonBuild).toContain("external: EXTERNAL_NODE,");
+		expect(EXTERNAL_NODE).toContain("@napi-rs/keyring");
 	});
 
 	test("keeps runtime split SQLite loader ESM-safe", () => {
@@ -358,7 +361,7 @@ describe("check-publish-manifests", () => {
 			});
 		} finally {
 			if (oldExpect === undefined) {
-				process.env.SIGNET_EXPECT_NATIVE_OPTIONAL_DEPS = undefined;
+				delete process.env.SIGNET_EXPECT_NATIVE_OPTIONAL_DEPS;
 			} else {
 				process.env.SIGNET_EXPECT_NATIVE_OPTIONAL_DEPS = oldExpect;
 			}

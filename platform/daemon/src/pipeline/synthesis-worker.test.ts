@@ -83,7 +83,7 @@ describe("synthesis-worker", () => {
 	afterAll(() => {
 		rmSync(agentsDir, { recursive: true, force: true });
 		if (previousSignetPath === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 		} else {
 			process.env.SIGNET_PATH = previousSignetPath;
 		}

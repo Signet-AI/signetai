@@ -92,7 +92,7 @@ describe("knowledge expand API", () => {
 	afterAll(async () => {
 		await closeDbAccessor();
 		if (prev === undefined) {
-			process.env.SIGNET_PATH = undefined;
+			delete process.env.SIGNET_PATH;
 		} else {
 			process.env.SIGNET_PATH = prev;
 		}

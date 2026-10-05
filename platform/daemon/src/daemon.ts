@@ -138,6 +138,7 @@ import {
 	classifyPreviousDaemonExit,
 	previousExitTelemetryProperties,
 	readDaemonLifecycle,
+	terminalLifecycleFields,
 	writeDaemonLifecycle,
 } from "./lifecycle";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
@@ -2187,12 +2188,8 @@ async function flushAndExit(exitCode: number): Promise<void> {
 }
 
 function buildTerminalLifecycleRecord(reason: string, exitCode: number, error?: unknown): DaemonLifecycle {
-	return buildLifecycleRecord(error === undefined ? "clean" : "error", {
-		exitedAt: new Date().toISOString(),
-		exitCode,
-		reason,
-		...(error !== undefined ? { error: error instanceof Error ? error.message : String(error) } : {}),
-	});
+	const { state, ...extra } = terminalLifecycleFields(reason, exitCode, error, new Date().toISOString());
+	return buildLifecycleRecord(state, extra);
 }
 function buildShutdownTerminalRecord(reason: string, exitCode: number, error?: unknown): DaemonLifecycle {
 	const fatalRequest = shutdownRequestGate.fatalRequest;

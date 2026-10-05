@@ -1,19 +1,5 @@
 import { rmSync } from "node:fs";
-
-const EXTERNAL_BUN = ["@firecrawl/anydoc", "@napi-rs/keyring"];
-
-const EXTERNAL_NODE = [
-	"better-sqlite3",
-	"bun",
-	"bun:sqlite",
-	"bun:ffi",
-	"@1password/sdk",
-	"@firecrawl/anydoc",
-	"libsodium-wrappers",
-	"onnxruntime-node",
-	"@huggingface/transformers",
-	"@napi-rs/keyring",
-];
+import { EXTERNAL_BUN, EXTERNAL_NODE } from "./build-externals";
 
 const ALIAS: Record<string, string> = {
 	sharp: "./src/shims/sharp.ts",

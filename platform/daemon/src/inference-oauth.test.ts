@@ -166,6 +166,25 @@ describe("inference OAuth", () => {
 		expect(await loadOAuthCredentials(PROVIDER_ID)).toBeNull();
 	});
 
+	test("aborts an interactive login and removes its pending prompt when the request disconnects", async () => {
+		const request = new AbortController();
+		const login = startOAuthLogin(PROVIDER_ID, undefined, request.signal);
+		const reader = login.stream.getReader();
+		const initial = await readUntil(reader, (text) => text.includes('"type":"prompt"'));
+		const promptData = initial
+			.split("\n")
+			.find((line) => line.startsWith("data: ") && line.includes('"type":"prompt"'));
+		if (!promptData) throw new Error("prompt event missing");
+		const prompt = JSON.parse(promptData.slice(6)) as { responseId: string };
+
+		const nextRead = reader.read();
+		request.abort();
+		await expect(nextRead).rejects.toMatchObject({ name: "AbortError" });
+		expect(() => completeOAuthInteraction(login.sessionId, prompt.responseId, "avery")).toThrow(
+			"OAuth login session not found or expired",
+		);
+	});
+
 	test("refreshes an expired token once and persists the replacement", async () => {
 		const refreshToken = mock(async () => ({
 			refresh: "refresh-old",

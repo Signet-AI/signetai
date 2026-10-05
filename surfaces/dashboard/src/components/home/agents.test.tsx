@@ -4,6 +4,7 @@ beforeDashboardFixture(() => dashboardQueryCache.clear(false, false));
 
 import { afterAll, beforeAll, test, expect } from "bun:test";
 import { Window } from "happy-dom";
+import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { api, type Agent } from "@/lib/api";
@@ -11,16 +12,14 @@ import { HomeAgentsPanel } from "./agents";
 
 const getAgents = api.getAgents;
 const getIdentity = api.getIdentity;
+let restoreDomGlobals = () => {};
+
 beforeAll(() => {
-	(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-	const window = new Window();
-	for (const key of Object.getOwnPropertyNames(window)) {
-		if (!(key in globalThis))
-			(globalThis as Record<string, unknown>)[key] = (window as unknown as Record<string, unknown>)[key];
-	}
+	restoreDomGlobals = installDashboardDomGlobals(new Window());
 	api.getIdentity = async () => null;
 });
 afterAll(() => {
+	restoreDomGlobals();
 	api.getAgents = getAgents;
 	api.getIdentity = getIdentity;
 });

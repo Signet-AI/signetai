@@ -45,7 +45,7 @@ describe("sync DB attribution", () => {
 		const token = beginSyncDbCall("withReadDb", 1_000, "sync-db-attribution.test.ts:45");
 
 		expect(getSyncDbCallSitesForWindow(1_000, 2_000)).toEqual([
-			"withReadDb@platform/daemon/src/sync-db-attribution.test.ts:28",
+			"withReadDb@platform/daemon/src/sync-db-attribution.test.ts:45",
 		]);
 		void token;
 	});

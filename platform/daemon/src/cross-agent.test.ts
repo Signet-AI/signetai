@@ -31,9 +31,9 @@ beforeEach(() => {
 	initDbAccessor(dbPath, { agentsDir: tempDir });
 });
 
-afterEach(() => {
+afterEach(async () => {
 	resetCrossAgentStateForTest();
-	closeDbAccessor();
+	await closeDbAccessor();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 
@@ -482,7 +482,7 @@ describe("ACP relay", () => {
 		} finally {
 			globalThis.fetch = originalFetch;
 			if (originalAllowlist === undefined) {
-				process.env.SIGNET_ACP_ALLOWED_ORIGINS = undefined;
+				delete process.env.SIGNET_ACP_ALLOWED_ORIGINS;
 			} else {
 				process.env.SIGNET_ACP_ALLOWED_ORIGINS = originalAllowlist;
 			}

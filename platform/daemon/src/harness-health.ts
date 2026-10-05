@@ -11,7 +11,14 @@ export interface HarnessHealthRequest {
 	readonly lastSeen: string | null;
 }
 
-const active = new Map<string, { cancel: () => void; closed: Promise<HarnessConnectorStatus> }>();
+interface ActiveInspection {
+	readonly cancel: () => void;
+	readonly closed: Promise<HarnessConnectorStatus>;
+	finished: boolean;
+	waiters: number;
+}
+
+const active = new Map<string, ActiveInspection>();
 let stopping = false;
 
 function workerPath(): string {
@@ -43,8 +50,19 @@ export async function runHarnessInspection(
 	request: HarnessHealthRequest,
 	options: { signal?: AbortSignal; timeoutMs?: number; entrypoint?: string } = {},
 ): Promise<HarnessConnectorStatus> {
+	let running = active.get(request.id);
+	while (running?.finished) {
+		await running.closed;
+		running = active.get(request.id);
+	}
 	if (stopping || options.signal?.aborted) return failed(request, "Health inspection cancelled.");
-	if (active.has(request.id)) return failed(request, "Health inspection already running; retry shortly.");
+	return waitForInspection(request, running ?? startInspection(request, options), options.signal);
+}
+
+function startInspection(
+	request: HarnessHealthRequest,
+	options: { timeoutMs?: number; entrypoint?: string },
+): ActiveInspection {
 	let cancel = () => {};
 	const closed = new Promise<HarnessConnectorStatus>((resolve) => {
 		const child = spawn(
@@ -59,13 +77,12 @@ export async function runHarnessInspection(
 		const finish = (status: HarnessConnectorStatus) => {
 			if (result) return;
 			result = status;
+			inspection.finished = true;
 			clearTimeout(timer);
-			options.signal?.removeEventListener("abort", cancel);
 			child.kill("SIGKILL");
 		};
 		cancel = () => finish(failed(request, "Health inspection cancelled."));
 		const timer = setTimeout(() => finish(failed(request, "Health inspection timed out.")), options.timeoutMs ?? 5000);
-		options.signal?.addEventListener("abort", cancel, { once: true });
 		let output = "";
 		child.stdout?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk: string) => {
@@ -84,16 +101,37 @@ export async function runHarnessInspection(
 		child.once("error", (error: Error) => finish(failed(request, `Health inspection failed: ${error.message}`)));
 		child.once("close", (code) => {
 			clearTimeout(timer);
-			options.signal?.removeEventListener("abort", cancel);
+			if (active.get(request.id) === inspection) active.delete(request.id);
 			resolve(result ?? failed(request, `Health process exited before reporting a result (${code}).`));
 		});
 	});
-	active.set(request.id, { cancel, closed });
-	try {
-		return await closed;
-	} finally {
-		active.delete(request.id);
-	}
+	const inspection: ActiveInspection = { cancel, closed, finished: false, waiters: 0 };
+	active.set(request.id, inspection);
+	return inspection;
+}
+
+function waitForInspection(
+	request: HarnessHealthRequest,
+	inspection: ActiveInspection,
+	signal: AbortSignal | undefined,
+): Promise<HarnessConnectorStatus> {
+	inspection.waiters += 1;
+	return new Promise((resolve) => {
+		let settled = false;
+		const settle = (status: HarnessConnectorStatus) => {
+			if (settled) return;
+			settled = true;
+			inspection.waiters -= 1;
+			signal?.removeEventListener("abort", abort);
+			resolve(status);
+		};
+		const abort = () => {
+			settle(failed(request, "Health inspection cancelled."));
+			if (inspection.waiters === 0) inspection.cancel();
+		};
+		signal?.addEventListener("abort", abort, { once: true });
+		void inspection.closed.then(settle);
+	});
 }
 
 export async function stopHarnessHealth(): Promise<void> {

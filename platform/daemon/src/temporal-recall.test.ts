@@ -53,8 +53,8 @@ describe("temporal recall", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 	});
 

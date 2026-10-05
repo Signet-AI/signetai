@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -26,10 +26,12 @@ const { loadMemoryConfig: realLoadMemoryConfig } = await import("./memory-config
 
 process.env.SIGNET_PATH = agentsDir;
 
-function resetDb(): void {
-	closeDbAccessor();
+async function resetDb(): Promise<void> {
+	await closeDbAccessor();
 	mkdirSync(memoryDir, { recursive: true });
-	if (existsSync(memoryDbPath)) rmSync(memoryDbPath);
+	for (const file of readdirSync(memoryDir)) {
+		if (file.startsWith("memories.db")) rmSync(join(memoryDir, file), { force: true });
+	}
 	initDbAccessor(memoryDbPath, { agentsDir });
 }
 
@@ -58,7 +60,9 @@ function makeDeps(overrides: Partial<PromptDeps> = {}): PromptDeps {
 		hybridRecall: hybridRecallMock,
 		fetchEmbedding: fetchEmbeddingMock,
 		searchTemporalFallback: searchTemporalFallbackMock,
-		upsertSessionTranscript() {},
+		async upsertSessionTranscriptAsync() {
+			return true;
+		},
 		getExpiryWarning: () => null,
 		recordPrompt() {},
 		shouldCheckpoint() {
@@ -237,7 +241,7 @@ describe("handleUserPromptSubmit entity context", () => {
 		expect(first.clockContext).not.toContain("<signet-memory-context>");
 	});
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		infoMock.mockClear();
 		warnMock.mockClear();
 		errorMock.mockClear();
@@ -246,11 +250,11 @@ describe("handleUserPromptSubmit entity context", () => {
 		searchTemporalFallbackMock.mockClear();
 		resetDefaultPluginHostForTests();
 		getDefaultPluginHost().setEnabled(SIGNET_SECRETS_PLUGIN_ID, true);
-		resetDb();
+		await resetDb();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -329,8 +333,9 @@ describe("handleUserPromptSubmit entity context", () => {
 	it("keeps prompt bookkeeping ahead of the low-signal gate", async () => {
 		seedEntityContext();
 		const recordPrompt = mock((_sessionKey: string | undefined, _queryTerms?: string, _snippet?: string) => {});
-		const upsertSessionTranscript = mock(
-			(_sessionKey: string, _transcript: string, _harness: string, _project: string | null, _agentId: string) => {},
+		const upsertSessionTranscriptAsync = mock(
+			async (_sessionKey: string, _transcript: string, _harness: string, _project: string | null, _agentId: string) =>
+				true,
 		);
 
 		const result = await handleUserPromptSubmit(
@@ -340,11 +345,11 @@ describe("handleUserPromptSubmit entity context", () => {
 				sessionKey: "session-bookkeeping",
 				transcript: "User: hi",
 			},
-			makeDeps({ recordPrompt, upsertSessionTranscript }),
+			makeDeps({ recordPrompt, upsertSessionTranscriptAsync }),
 		);
 
 		expect(recordPrompt).toHaveBeenCalledWith("session-bookkeeping", undefined, "hi");
-		expect(upsertSessionTranscript).toHaveBeenCalled();
+		expect(upsertSessionTranscriptAsync).toHaveBeenCalled();
 		expect(result.inject).toBe("");
 	});
 

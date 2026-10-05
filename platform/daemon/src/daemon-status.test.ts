@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
@@ -302,18 +303,28 @@ describe("daemon status contract", () => {
 
 	it("keeps the real HTTP listener responsive during an active DB-owner VACUUM window", async () => {
 		const { createDbOwnerClient } = await import("./db-owner-client");
-		const owner = createDbOwnerClient({ dbPath: join(dir, "memory", "memories.db") });
+		const dbPath = join(dir, "memory", "memories.db");
+		const legacy = new Database(dbPath);
+		legacy.exec("PRAGMA auto_vacuum = NONE");
+		legacy.exec("VACUUM");
+		legacy.exec("DROP TABLE IF EXISTS _signet_vacuum_converted");
+		legacy.close();
+		const owner = createDbOwnerClient({ dbPath });
+		const activeFile = join(dir, "vacuum-active");
 		const previousPause = process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS;
+		const previousActiveFile = process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE;
 		process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = "1000";
+		process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE = activeFile;
 		const server = Bun.serve({ port: 0, fetch: app.fetch });
 		try {
 			await owner.start();
 			const job = owner.submit(
 				{ kind: "vacuum_conversion" },
-				{ operation: "db.vacuum_conversion", lane: "maintenance", deadlineMs: 5000, estimatedWorkUnits: 1 },
+				{ operation: "db.vacuum_conversion", lane: "maintenance", deadlineMs: 10_000, estimatedWorkUnits: 1 },
 			);
-			const deadline = Date.now() + 2000;
-			while (owner.health().activeJobId === null && Date.now() < deadline) await Bun.sleep(5);
+			const deadline = Date.now() + 10_000;
+			while (!existsSync(activeFile) && Date.now() < deadline) await Bun.sleep(5);
+			expect(existsSync(activeFile)).toBe(true);
 			expect(owner.health().activeJobId).not.toBeNull();
 			const started = performance.now();
 			const [live, status] = await Promise.all([
@@ -323,14 +334,17 @@ describe("daemon status contract", () => {
 			expect(performance.now() - started).toBeLessThan(250);
 			expect(live.status).toBe(200);
 			expect(status.status).toBe(200);
-			await owner.awaitResult(job, 5000).catch(() => undefined);
+			expect(await owner.awaitResult(job, 10_000)).toEqual({ converted: true });
 		} finally {
 			server.stop(true);
 			await owner.close().catch(() => undefined);
 			if (previousPause === undefined) Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS");
 			else process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = previousPause;
+			if (previousActiveFile === undefined)
+				Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE");
+			else process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE = previousActiveFile;
 		}
-	});
+	}, 30_000);
 
 	it("reports unknown queue completeness when the status read fails", async () => {
 		const { getDbAccessor } = await import("./db-accessor");

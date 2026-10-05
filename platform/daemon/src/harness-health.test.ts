@@ -1,10 +1,59 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { runHarnessInspection, stopHarnessHealth } from "./harness-health";
 
 const request = (id: string) => ({ id, configured: true, lastSeen: null });
+
+test("overlapping inspections share one child and its result", async () => {
+	const dir = mkdtempSync("/tmp/signet-health-shared-");
+	const entrypoint = join(dir, "worker.ts");
+	const spawns = join(dir, "spawns");
+	writeFileSync(
+		entrypoint,
+		`
+import { appendFileSync } from "node:fs";
+const workerData = JSON.parse(process.env.SIGNET_HEALTH_INSPECTION);
+appendFileSync(${JSON.stringify(spawns)}, workerData.id + "\\n");
+import { inspectRegisteredConnector } from ${JSON.stringify(join(import.meta.dir, "harness-registry.ts"))};
+class Connector {
+ name = "fixture";
+ getConfigPath() { return ""; }
+ isDetected() { return true; }
+ isInstalled() { return true; }
+ async inspectHealth() { await new Promise((resolve) => setTimeout(resolve, 300)); return {status:"healthy",message:"Probe passed"}; }
+}
+console.log("SIGNET_HEALTH_RESULT " + JSON.stringify(await inspectRegisteredConnector(workerData.id, async () => Connector, true, null, new Date().toISOString())));
+`,
+	);
+	const spawnCount = () => (existsSync(spawns) ? readFileSync(spawns, "utf8").trim().split("\n").length : 0);
+	try {
+		const first = runHarnessInspection(request("shared"), { entrypoint, timeoutMs: 5000 });
+		const second = runHarnessInspection(request("shared"), { entrypoint, timeoutMs: 5000 });
+		const leaving = new AbortController();
+		const third = runHarnessInspection(request("shared"), { entrypoint, signal: leaving.signal });
+		leaving.abort();
+		expect((await third).health.message).toContain("cancelled");
+		const results = await Promise.all([first, second]);
+		for (const result of results) {
+			expect(result.available).toBe(true);
+			expect(result.health.status).toBe("healthy");
+		}
+		expect(spawnCount()).toBe(1);
+
+		const controllers = [new AbortController(), new AbortController()];
+		const abandoned = controllers.map((controller) =>
+			runHarnessInspection(request("abandoned"), { entrypoint, signal: controller.signal, timeoutMs: 5000 }),
+		);
+		for (const controller of controllers) controller.abort();
+		for (const result of await Promise.all(abandoned)) expect(result.health.message).toContain("cancelled");
+		const fresh = await runHarnessInspection(request("abandoned"), { entrypoint, timeoutMs: 5000 });
+		expect(fresh.health.status).toBe("healthy");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
 
 test("a blocked connector cannot block the parent event loop or suppress another result; timeout joins its child", async () => {
 	const dir = mkdtempSync("/tmp/signet-health-proof-");
@@ -34,7 +83,7 @@ console.log("SIGNET_HEALTH_RESULT " + JSON.stringify(await inspectRegisteredConn
 		const timer = setInterval(() => ticks++, 10);
 		const blocked = runHarnessInspection(request("blocked"), { entrypoint, timeoutMs: 300 });
 		const duplicate = await runHarnessInspection(request("blocked"), { entrypoint });
-		expect(duplicate.health.message).toContain("already running");
+		expect(duplicate.health.message).toContain("timed out");
 		const healthy = await runHarnessInspection(request("healthy"), { entrypoint, timeoutMs: 2000 });
 		expect(healthy.health.status).toBe("healthy");
 		const timeout = await blocked;

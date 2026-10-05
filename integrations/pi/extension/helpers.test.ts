@@ -7,8 +7,10 @@ const originalEnv = {
 };
 
 afterEach(() => {
-	process.env.SIGNET_AGENT_ID = originalEnv.SIGNET_AGENT_ID;
-	process.env.SIGNET_DAEMON_URL = originalEnv.SIGNET_DAEMON_URL;
+	for (const [key, value] of Object.entries(originalEnv)) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
 });
 
 describe("runtime env helpers", () => {

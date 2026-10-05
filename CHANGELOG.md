@@ -6,9 +6,13 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-10-04
+- Bug fixes: close search before client navigation; fail closed on keyring probe errors; persist and deliver first-use events in recorded order; release the store lock without exposing an empty lock directory; decode source-chunk fallback vectors from the DB owner; record a clean shutdown when no cleanup error occurred; yield every reindex batch instead of every 2,500 files; stop sharing default pipeline config by reference; allow machine-id encryption only when the host has no keyring; launch git and protection subprocesses through the shared adapter; mark routed targets unavailable on any HTTP auth failure; flush final SSE drop summaries; retain SSE fallback framing; preserve bounded SSE delivery; bound SSE buffering and teardown.
+- Docs: sync the route reference with the daemon.
+
 ### 2026-10-03
-- Bug fixes: clarify retired Windows app; preserve retryable Windows migration; migrate legacy Windows install; preserve installed bundles and restore runtime connectivity; fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
-- Docs: clarify legacy cleanup.
+- Bug fixes: share in-flight connector inspections; let connector rows pass wheel scroll; keep better-sqlite3 external in bun build; stage the real bun binary; verify native updates atomically; clarify retired Windows app; preserve retryable Windows migration; migrate legacy Windows install; preserve installed bundles and restore runtime connectivity; fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
+- Docs: add dashboard screenshot; refresh overview, install, and trust sections; clarify legacy cleanup.
 
 ### 2026-10-02
 - Features: add 2D memory graph and persistent Pi chat.
@@ -32,11 +36,68 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-09-28
 - Bug fixes: verify arm64 on macOS 27; upgrade Bun to 1.4.2; retain status telemetry; reduce Windows console flashes.
 
-### 2026-09-27
-- Bug fixes: nest workspace layout migration; clarify recovered context; stat macOS symlinks by descriptor; expose attach reasoning; mirror daemon toggle resolution; repair Windows app and settings UX.
-- Docs: clarify checkpoint authority.
-
 ## Release Ledger
+
+## [0.230.10] - 2026-10-04
+
+Release summary: 11 bug fixes and 1 docs update.
+Tag range: `v0.230.9..v0.230.10`.
+
+### Bug Fixes
+
+- **docs**: close search before client navigation
+- **core**: fail closed on keyring probe errors
+- **telemetry**: persist and deliver first-use events in recorded order
+- **secrets**: release the store lock without exposing an empty lock directory
+- **daemon**: decode source-chunk fallback vectors from the DB owner
+- **daemon**: record a clean shutdown when no cleanup error occurred
+- **daemon**: yield every reindex batch instead of every 2,500 files
+- **daemon**: stop sharing default pipeline config by reference
+- **secrets**: allow machine-id encryption only when the host has no keyring
+- launch git and protection subprocesses through the shared adapter
+- **daemon**: mark routed targets unavailable on any HTTP auth failure
+
+### Docs
+
+- **api**: sync the route reference with the daemon
+
+## [0.230.9] - 2026-10-04
+
+Release summary: 4 bug fixes.
+Tag range: `v0.230.8..v0.230.9`.
+
+### Bug Fixes
+
+- **daemon**: flush final SSE drop summaries
+- **daemon**: retain SSE fallback framing
+- **daemon**: preserve bounded SSE delivery
+- **daemon**: bound SSE buffering and teardown
+
+## [0.230.8] - 2026-10-03
+
+Release summary: 1 bug fix.
+Tag range: `v0.230.7..v0.230.8`.
+
+### Bug Fixes
+
+- **daemon**: share in-flight connector inspections
+
+## [0.230.7] - 2026-10-03
+
+Release summary: 4 bug fixes and 2 docs updates.
+Tag range: `v0.230.6..v0.230.7`.
+
+### Bug Fixes
+
+- **dashboard**: let connector rows pass wheel scroll
+- **daemon**: keep better-sqlite3 external in bun build
+- **desktop**: stage the real bun binary
+- **install**: verify native updates atomically
+
+### Docs
+
+- **readme**: add dashboard screenshot
+- **readme**: refresh overview, install, and trust sections
 
 ## [0.230.6] - 2026-10-03
 

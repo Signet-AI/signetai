@@ -10,6 +10,7 @@ import {
 	readdirSync,
 	renameSync,
 	rmdirSync,
+	rmSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
@@ -395,10 +396,10 @@ async function resolveMasterKey(
 	if (result.state === "locked") throw new SecretKeyringError(result);
 	if (result.state !== "unavailable" && result.state !== "unsupported") throw new SecretKeyringError(result);
 	emitDegradedWarning(result);
-	if (options.allowLegacyFallback === false) {
+	if (options.allowLegacyFallback === false && result.state !== "unsupported" && result.backend !== "absent") {
 		throw new SecretKeyringError({
 			...result,
-			message: `Native keyring is ${result.state}; refusing to write secrets with legacy machine-id encryption${result.message ? `: ${result.message}` : ""}`,
+			message: `Native keyring is temporarily ${result.state}; refusing to write secrets with legacy machine-id encryption${result.message ? `: ${result.message}` : ""}`,
 		});
 	}
 	return { key: await getLegacyMasterKey(), provider: "legacy-obfuscated" };
@@ -710,8 +711,9 @@ async function acquireSecretStoreLock(): Promise<SecretStoreLock> {
 				release: async () => {
 					try {
 						if (readSecretStoreLockOwner() !== owner) return;
-						unlinkSync(getSecretStoreLockOwnerFile());
-						rmdirSync(getSecretStoreLockFile());
+						const released = `${getSecretStoreLockFile()}.released-${owner}`;
+						renameSync(getSecretStoreLockFile(), released);
+						rmSync(released, { recursive: true, force: true });
 					} catch (error) {
 						if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
 					}

@@ -13,11 +13,12 @@ describe("restore receipt seam", () => {
 	it("stores and reads only a valid receipt", () => {
 		workspace = mkdtempSync(join(tmpdir(), "protection-receipt-"));
 		writeFileSync(join(workspace, "workspace-layout.json"), JSON.stringify({ version: 2 }));
+		const now = Date.now();
 		const receipt = {
 			schema: "signet.restore.v1" as const,
 			id: "receipt-1",
-			at: "2026-09-23T00:00:00.000Z",
-			expiresAt: "2026-09-24T00:00:00.000Z",
+			at: new Date(now - 60_000).toISOString(),
+			expiresAt: new Date(now + 24 * 60 * 60 * 1000).toISOString(),
 			valid: true as const,
 			workspace,
 			components: ["sqlite"] as const,

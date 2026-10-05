@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { type Server, createServer } from "node:net";
@@ -197,7 +197,12 @@ async function startOAuthLoginSse(origin: string, providerId: string): Promise<s
 	return text;
 }
 
+const previousTelemetryOptout = process.env.SIGNET_TELEMETRY_OPTOUT;
 process.env.SIGNET_TELEMETRY_OPTOUT = "1";
+afterAll(() => {
+	if (previousTelemetryOptout === undefined) delete process.env.SIGNET_TELEMETRY_OPTOUT;
+	else process.env.SIGNET_TELEMETRY_OPTOUT = previousTelemetryOptout;
+});
 
 describe("native smoke binary path", () => {
 	test("resolves a relative SIGNET_NATIVE_SMOKE_BINARY override to an absolute path", () => {

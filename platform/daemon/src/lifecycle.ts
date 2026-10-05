@@ -122,6 +122,16 @@ export function previousExitTelemetryProperties(
 	return properties;
 }
 
+export function terminalLifecycleFields(
+	reason: string,
+	exitCode: number,
+	error: unknown,
+	exitedAt: string,
+): Pick<DaemonLifecycle, "state" | "exitedAt" | "exitCode" | "reason" | "error"> {
+	if (error === undefined || error === null) return { state: "clean", exitedAt, exitCode, reason };
+	return { state: "error", exitedAt, exitCode, reason, error: error instanceof Error ? error.message : String(error) };
+}
+
 export function lifecyclePath(agentsDir: string): string {
 	return join(resolveWorkspaceLayout(agentsDir).runtime, "lifecycle.json");
 }
