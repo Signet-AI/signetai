@@ -424,13 +424,13 @@ test("scoped tools advertise their bound identity and reject nested cross-agent 
 		agentId: "test-agent",
 		actor: "test",
 		allowedAgentIds: ["test-agent"],
-		capabilityIds: ["runbook_read", "runbook_write"],
+		capabilityIds: ["zoom_history", "runbook_write"],
 	});
-	const read = tools.find((tool) => tool.name === "runbook_read");
+	const read = tools.find((tool) => tool.name === "zoom_history");
 	const write = tools.find((tool) => tool.name === "runbook_write");
 	if (!read || !write) throw new Error("Missing scoped tools");
 	expect(JSON.stringify(read.parameters)).toContain('"const":"test-agent"');
-	expect(JSON.stringify(read.parameters)).toContain('"required":["agentId"]');
+	expect(JSON.stringify(read.parameters)).toContain('"agentId"]');
 	const outcome = await write
 		.execute("scope", {
 			agentId: "test-agent",

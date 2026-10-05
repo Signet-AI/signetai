@@ -415,7 +415,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(164);
+			expect(applied.version).toBe(165);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -476,7 +476,7 @@ describe("migration framework", () => {
 		expect(columns).toEqual(
 			expect.arrayContaining(["occurred_start", "occurred_end", "valid_from", "valid_until", "time_precision"]),
 		);
-		db.prepare("DELETE FROM schema_migrations WHERE version = 164").run();
+		db.prepare("DELETE FROM schema_migrations WHERE version >= 164").run();
 		runMigrations(db);
 		expect(hasPendingMigrations(db)).toBe(false);
 	});

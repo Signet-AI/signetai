@@ -24,7 +24,7 @@ export const DREAMING_CODEMODE_TOOL_IDS: ReadonlySet<DreamingCapabilityId> = new
 	"validate_proposal",
 	"list_contradictions",
 	"attention_list",
-	"runbook_read",
+	"zoom_history",
 ]);
 
 function scopedInput(value: unknown, allowed: ReadonlySet<string>): void {

@@ -39,7 +39,8 @@ import {
 	type DreamingOperationRequest,
 	applyDreamingOperations,
 } from "./dreaming-operations";
-import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
+import { zoomDreamingHistory } from "./dreaming-history";
+import { writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
 import { readCuratedMemoryHead, type MemoryHeadCommitter } from "../memory-head";
 
@@ -164,7 +165,7 @@ export const DREAMING_CAPABILITY_IDS = [
 	"search_evidence",
 	"validate_proposal",
 	"list_contradictions",
-	"runbook_read",
+	"zoom_history",
 	"runbook_write",
 	"attention_list",
 	"apply_ontology_ops",
@@ -749,12 +750,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 		),
 		capability(
-			"runbook_read",
-			"Read Dreaming runbook",
-			"Read recent scoped pass outcomes, evidence windows, quarantines, and structured runbook notes.",
+			"zoom_history",
+			"Zoom pass history",
+			"Open line id+n of the pass history into the two lines of n/2 passes it was made from; n = 1 returns that pass's full record (runbook note, operation counts and failures, evidence window, quarantines).",
 			true,
-			z.object({ limit: z.number().finite().optional() }),
-			async ({ limit }) => ({ ok: true, items: readDreamingRunbook(accessor, agentId, bounded(limit, 5, 20)) }),
+			z.object({
+				id: z.number().int().min(0).describe("The first pass of the line, as shown before the +."),
+				n: z.number().int().min(1).describe("How many passes the line covers, as shown after the +."),
+			}),
+			async ({ id, n }) => await zoomDreamingHistory(accessor, agentId, id, n),
 		),
 		capability(
 			"runbook_write",

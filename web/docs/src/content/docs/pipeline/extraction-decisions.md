@@ -95,7 +95,8 @@ registry defines the operations available to the agent, including:
 - `list_aspect_claims`, `get_evidence`, and `walk_links` for claim and lineage reads
 - `attention_list` for queued review and maintenance attention
 - `list_contradictions` and `validate_proposal` for deterministic checks
-- `runbook_read` and `runbook_write` for Dreaming's bounded operational notes
+- `runbook_write` for Dreaming's per-pass operational note, and `zoom_history` to open a
+  line of the pass history back into the passes and records it was made from
 - `apply_ontology_ops` for daemon-owned semantic mutations
 
 The same scope-bound registry is used across the in-process agent path and the

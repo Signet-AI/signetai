@@ -31,6 +31,7 @@ import {
 import { DREAMING_CONTENT_ATTENTION_KINDS, hasDreamingAttentionKindInDb } from "./dreaming-attention";
 import { type DreamingEvidenceRetryPolicy, autoRequeueRepairedDreamingEvidence } from "./dreaming-evidence-retry";
 import type { PiAgentRetryPolicy } from "./pi-agent-protocol";
+import { compactDreamingHistory, type DreamingHistoryCompleter } from "./dreaming-history";
 
 const DREAMING_PROVIDER_RETRY: PiAgentRetryPolicy = { maxRetries: 8, baseDelayMs: 2_000, maxAgentDelayMs: 60_000 };
 export class AlreadyRunningError extends Error {
@@ -135,6 +136,7 @@ export function _testDreamingTriggerLogData(
 
 export interface DreamingWorkerOptions {
 	readonly executorFactory?: (agentId: string) => DreamingAgentExecutor;
+	readonly historyCompleterFactory?: (agentId: string) => DreamingHistoryCompleter;
 	readonly checkIntervalMs?: number;
 	readonly enabled?: () => boolean;
 	readonly acpxMcp?: {
@@ -376,6 +378,34 @@ export function startDreamingWorker(
 		};
 	};
 
+	const historyCompleterForAgent = (agentId: string): DreamingHistoryCompleter | null => {
+		if (options.historyCompleterFactory) return options.historyCompleterFactory(agentId);
+		if (options.executorFactory) return null;
+		const router = getOrCreateInferenceRouter(agentsDir);
+		return {
+			async complete(input) {
+				const result = await router.execute({ agentId, operation: "memory_extraction" }, input.prompt, {
+					timeoutMs: input.timeoutMs,
+				});
+				if (!result.ok) throw new Error(result.error.message);
+				return { text: result.value.text, usage: result.value.usage };
+			},
+		};
+	};
+
+	async function compactHistoryAfterPass(runAgentId: string): Promise<void> {
+		try {
+			const completer = historyCompleterForAgent(runAgentId);
+			if (completer === null || stopped) return;
+			await compactDreamingHistory(accessor, completer, runAgentId, { isActive: () => !stopped });
+		} catch (error) {
+			logger.warn("dreaming-worker", "Dreaming history compaction was not started", {
+				agentId: runAgentId,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
 	function recordDreamingFailureOrLog(runAgentId: string): void {
 		recordDreamingFailure(accessor, runAgentId).catch((error) => {
 			logger.warn("dreaming-worker", "Dreaming failure was not recorded", {
@@ -490,6 +520,7 @@ export function startDreamingWorker(
 		);
 		void result
 			.catch(() => undefined)
+			.then(() => compactHistoryAfterPass(runAgentId))
 			.finally(() => {
 				runningPasses.delete(entry);
 				release();

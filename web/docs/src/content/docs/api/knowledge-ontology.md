@@ -838,11 +838,26 @@ reasoner can consult them before proposing a write; cited operation validation
 and semantic writes remain daemon-owned. The request body cannot supply a
 second agent scope inside `input`. A writer failure after a committed prefix
 returns `503` with `retryable: true`, `retryFrom`, and the committed `items`;
-retry only `operations.slice(retryFrom)`, never the returned prefix. `runbook_read` returns recent scoped pass
-outcomes, applied/rejected operations, evidence windows, unresolved
-quarantines, and notes; `runbook_write` stores one short structured note on a
-currently running pass. CLI callers supply that pass with `--pass-id`; the Pi
+retry only `operations.slice(retryFrom)`, never the returned prefix.
+`runbook_write` stores one short structured note on a currently running pass.
+`zoom_history` opens a line of the scope's pass history (see **Pass history**
+below): `zoom_history(id, n)` returns the two lines it was merged from, and
+`n = 1` returns that pass's record (note, operation counts and failures,
+evidence window, unresolved quarantines). CLI callers supply that pass with `--pass-id`; the Pi
 and restricted ACPX bindings receive it from the daemon-owned pass context.
+
+**Pass history.** Each Dreaming pass starts with the scope's pass history in
+its prompt instead of reading recent pass logs: one line per earlier pass,
+oldest first, with older passes folded pairwise into coarser lines so the
+history stays within a fixed budget (about 24 KB) however many passes have
+run. Lines read `id+n|text`, covering passes `id` through `id+n-1`. After a
+pass finishes, while it still holds its slot, the daemon asks the same
+Dreaming model, in a fresh request with no tools and no pass context, to
+compress that pass's stored record into one line of at most 512 bytes, and to
+merge the oldest pair of lines when the history outgrows its budget. Lines are
+stored in `dreaming_history_nodes` and derived from the pass records, which
+stay the verbatim source; a pass whose line could not be built is shown as not
+yet summarized and is retried after the next pass.
 
 ### POST /api/dream/trigger
 
@@ -876,7 +891,7 @@ eight times with exponential backoff capped at 60 seconds (about four minutes in
 total) before the pass fails; interactive chat keeps the shorter default.
 `memory.dreaming.codemode` (default `false`) moves Dreaming's read-only lookups
 (`search_entities`, `get_entity`, `list_aspect_claims`, `walk_links`,
-`validate_proposal`, `list_contradictions`, `attention_list`, `runbook_read`)
+`validate_proposal`, `list_contradictions`, `attention_list`, `zoom_history`)
 behind Pi's `codemode` tool, so a pass can batch them in one script. Evidence
 reads and writes stay direct calls, and scripts cannot call them. Nested calls
 run through the same audited tools and are traced like direct calls.

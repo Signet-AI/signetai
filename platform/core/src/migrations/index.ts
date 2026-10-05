@@ -165,6 +165,7 @@ import { up as entityPruneKeysetIndex } from "./161-entity-prune-keyset-index";
 import { up as genericEntityPruneScanGeneration } from "./162-generic-entity-prune-scan-generation";
 import { up as retireMemoryContentSafety } from "./163-retire-memory-content-safety";
 import { up as claimEventTime } from "./164-claim-event-time";
+import { up as dreamingHistory } from "./165-dreaming-history";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1496,6 +1497,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				column,
 			})),
 		},
+	},
+	{
+		version: 165,
+		name: "dreaming-history",
+		up: dreamingHistory,
+		artifacts: { tables: ["dreaming_history_nodes"], indexes: ["idx_dreaming_history_nodes_pass"] },
 	},
 ];
 function checksum(m: Migration): string {

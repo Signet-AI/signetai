@@ -62,6 +62,9 @@ interface Summary {
 	readonly dreamingOutputTokens: number | null;
 	readonly dreamingCacheReadTokens: number | null;
 	readonly dreamingPassesWithoutUsage: number | null;
+	readonly historyCalls: number | null;
+	readonly historyInputTokens: number | null;
+	readonly historyOutputTokens: number | null;
 	readonly entities: number | null;
 	readonly claims: number | null;
 	readonly wallMinutes: number;
@@ -88,6 +91,7 @@ function summarize(spec: string, note: string | undefined, commitOverride: strin
 		: { executor: null, model: null, codemode: null, maxConcurrentPasses: null };
 	let entities: number | null = null;
 	let claims: number | null = null;
+	let history: { calls: number; input: number; output: number } | null = null;
 	if (workspace) {
 		const scopes = scopeAgentIds(checkpoint);
 		const db = openReadOnly(workspace);
@@ -106,6 +110,18 @@ function summarize(spec: string, note: string | undefined, commitOverride: strin
 					)
 					.get(...scopes) as { c: number }
 			).c;
+			const historyTable = db
+				.query("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_history_nodes'")
+				.get();
+			if (historyTable !== null) {
+				const row = db
+					.query(
+						`SELECT COUNT(*) AS calls, COALESCE(SUM(tokens_input), 0) AS input, COALESCE(SUM(tokens_output), 0) AS output
+						 FROM dreaming_history_nodes WHERE agent_id IN (${placeholders(scopes.length)})`,
+					)
+					.get(...scopes) as { calls: number; input: number; output: number };
+				history = row;
+			}
 		} finally {
 			db.close();
 		}
@@ -140,6 +156,9 @@ function summarize(spec: string, note: string | undefined, commitOverride: strin
 		dreamingOutputTokens: report.usage?.dreaming?.outputTokens ?? null,
 		dreamingCacheReadTokens: report.usage?.dreaming?.cacheReadTokens ?? null,
 		dreamingPassesWithoutUsage: report.usage?.dreaming?.passesWithoutUsage ?? null,
+		historyCalls: history?.calls ?? null,
+		historyInputTokens: history?.input ?? null,
+		historyOutputTokens: history?.output ?? null,
 		entities,
 		claims,
 		wallMinutes: Math.round((Date.parse(checkpoint.updatedAt) - Date.parse(checkpoint.createdAt)) / 60_000),
@@ -171,12 +190,12 @@ function main(): void {
 	if (append && !note) throw new Error("--append requires --note describing what the run tested");
 	const summaries = specs.map((spec) => summarize(spec, note, commitOverride));
 	console.log(
-		"| run | dreaming model | codemode | score | Hit@K | MRR | entities | claims | passes | dreaming in/out/cached | wall |",
+		"| run | dreaming model | codemode | score | Hit@K | MRR | entities | claims | passes | dreaming in/out/cached | history lines in/out | wall |",
 	);
-	console.log("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+	console.log("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
 	for (const s of summaries) {
 		console.log(
-			`| ${s.runId} | ${s.dreamingModel ?? "n/a"} | ${s.codemode ?? "n/a"} | ${s.correct}/${s.questions} | ${fmt(s.hitAtK, 2)} | ${fmt(s.mrr, 3)} | ${fmt(s.entities)} | ${fmt(s.claims)} | ${fmt(s.dreamingPasses)} | ${millions(s.dreamingInputTokens)} / ${millions(s.dreamingOutputTokens)} / ${millions(s.dreamingCacheReadTokens)} | ${s.wallMinutes} min |`,
+			`| ${s.runId} | ${s.dreamingModel ?? "n/a"} | ${s.codemode ?? "n/a"} | ${s.correct}/${s.questions} | ${fmt(s.hitAtK, 2)} | ${fmt(s.mrr, 3)} | ${fmt(s.entities)} | ${fmt(s.claims)} | ${fmt(s.dreamingPasses)} | ${millions(s.dreamingInputTokens)} / ${millions(s.dreamingOutputTokens)} / ${millions(s.dreamingCacheReadTokens)} | ${s.historyCalls === null ? "n/a" : `${s.historyCalls}: ${millions(s.historyInputTokens)} / ${millions(s.historyOutputTokens)}`} | ${s.wallMinutes} min |`,
 		);
 	}
 	if (append) {

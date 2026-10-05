@@ -97,6 +97,7 @@ import {
 	type DreamingLiveEventHub,
 } from "./dreaming-live-events";
 import { countTokens } from "./tokenizer";
+import { renderDreamingHistoryForPass } from "./dreaming-history";
 
 export type DreamingMode = "incremental" | "compact" | "incremental-hygiene" | "incremental-content";
 
@@ -706,7 +707,7 @@ export async function getActiveDreamingPasses(
 }
 
 const DREAMING_CODEMODE_PROMPT =
-	"Lookups (search_entities, get_entity, list_aspect_claims, walk_links, validate_proposal, list_contradictions, attention_list, runbook_read) are available only inside the codemode tool. Batch the lookups a page needs into one script: call them through tools.<name>(args), parse each JSON result, and print only what you need, carrying ids from results instead of retyping them. Reading evidence (search_evidence, get_evidence) and every write (apply_ontology_ops, runbook_write, memory_head_commit) stay direct tool calls; a script cannot call them.";
+	"Lookups (search_entities, get_entity, list_aspect_claims, walk_links, validate_proposal, list_contradictions, attention_list, zoom_history) are available only inside the codemode tool. Batch the lookups a page needs into one script: call them through tools.<name>(args), parse each JSON result, and print only what you need, carrying ids from results instead of retyping them. Reading evidence (search_evidence, get_evidence) and every write (apply_ontology_ops, runbook_write, memory_head_commit) stay direct tool calls; a script cannot call them.";
 
 const MAX_DREAMING_TOOL_TRACE_JSON_CHARS = 128_000;
 
@@ -928,7 +929,7 @@ export const DREAMING_AGENT_PROMPT = `You are a bounded Signet maintenance agent
 
 ## Process
 
-Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. The graph is a derived structure; every write carries provenance (an attention id for hygiene, an exact quote from episodic evidence for content). Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
+Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. The graph is a derived structure; every write carries provenance (an attention id for hygiene, an exact quote from episodic evidence for content). Use the pass history (shown below, zoom_history for detail) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
 
 An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's attention queue, with each record carrying its owning agentId.
 
@@ -938,11 +939,11 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 - Exploration hints: bounded embedding-surprisal records (kind=surprisal); these are not evidence
 - Graph: entities, aspects, claims, links (active/archived/pinned)
 - Evidence: episodic store (memories, artifacts, completed transcripts)
-- Pass log: dreaming_passes + runbook notes (what changed, what was viewed)
+- Pass history: one line per earlier pass, coarser for older passes, each openable with zoom_history down to the pass's runbook note
 
 ### Per-pass process
 
-1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
+1. Read the pass history below. Establish cutoff: sources viewed, changes applied, deferred items. Zoom (zoom_history) into any line that mentions work you are about to repeat, resume, or re-defer before acting on it.
 2. Query the attention queue (attention_list, kind=hygiene, status=pending). Process ALL pending hygiene records first, before any content work:
    - Inspect the flagged target (get_entity — check aspects, claims, pinned).
    - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
@@ -1005,7 +1006,7 @@ export const DREAMING_HYGIENE_AGENT_PROMPT = `You are a bounded Signet maintenan
 
 ## Process
 
-Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a HYGIENE pass: process the attention queue — inspect flagged targets and archive or merge them with attention provenance, minting flags for junk the queue missed. Content maintenance (claims, entities) belongs to content passes, which cite exact quotes from episodic evidence. Use the pass log (runbook_read) as the dedup source: the previous pass's changes are the cutoff.
+Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a HYGIENE pass: process the attention queue — inspect flagged targets and archive or merge them with attention provenance, minting flags for junk the queue missed. Content maintenance (claims, entities) belongs to content passes, which cite exact quotes from episodic evidence. Use the pass history (shown below, zoom_history for detail) as the dedup source: the previous pass's changes are the cutoff.
 
 An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's attention queue, with each record carrying its owning agentId.
 
@@ -1013,11 +1014,11 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 
 - Hygiene queue: dreaming_attention pending records (kind=hygiene)
 - Graph: entities, aspects, claims, links (active/archived/pinned)
-- Pass log: dreaming_passes + runbook notes (what changed, what was viewed)
+- Pass history: one line per earlier pass, coarser for older passes, each openable with zoom_history down to the pass's runbook note
 
 ### Per-pass process
 
-1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
+1. Read the pass history below. Establish cutoff: sources viewed, changes applied, deferred items. Zoom (zoom_history) into any line that mentions work you are about to repeat, resume, or re-defer before acting on it.
 2. Query the attention queue (attention_list, kind=hygiene, status=pending). Process ALL pending hygiene records:
    - Inspect the flagged target (get_entity — check aspects, claims, pinned).
    - Archive or merge it, citing its attention id (provenance: "attention:<uuid>", or attention:$<index> for a flag you minted in the same batch).
@@ -1053,7 +1054,7 @@ export const DREAMING_CONTENT_AGENT_PROMPT = `You are a bounded Signet maintenan
 
 ## Process
 
-Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a CONTENT pass: process review work, inspect bounded surprisal hints, and find new evidence since the cutoff; extract/update claims with exact-quote citations and create entities only for durable subjects. Hygiene archives/merges belong to hygiene passes, which process structural attention. Use the pass log (runbook_read) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
+Purpose: maintain durable, evidence-cited semantic understanding in the knowledge graph. This is a CONTENT pass: process review work, inspect bounded surprisal hints, and find new evidence since the cutoff; extract/update claims with exact-quote citations and create entities only for durable subjects. Hygiene archives/merges belong to hygiene passes, which process structural attention. Use the pass history (shown below, zoom_history for detail) as the dedup source: the previous pass's viewed sources and changes are the cutoff.
 
 An install may have several agent scopes (listed in <agent_scopes> when there is more than one): the scoped tools take an agentId, so address any scope you need — each write is attributed to the agent you name. attention_list without an agentId lists the whole install's attention queue, with each record carrying its owning agentId.
 
@@ -1062,11 +1063,11 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 - Exploration hints: bounded embedding-surprisal records (kind=surprisal); these are not evidence
 - Graph: entities, aspects, claims, links (active/archived/pinned)
 - Evidence: episodic store (memories, artifacts, completed transcripts)
-- Pass log: dreaming_passes + runbook notes (what changed, what was viewed)
+- Pass history: one line per earlier pass, coarser for older passes, each openable with zoom_history down to the pass's runbook note
 
 ### Per-pass process
 
-1. Read the pass log (runbook_read). Establish cutoff: sources viewed, changes applied, deferred items.
+1. Read the pass history below. Establish cutoff: sources viewed, changes applied, deferred items. Zoom (zoom_history) into any line that mentions work you are about to repeat, resume, or re-defer before acting on it.
 2. Query attention_list with kind=review_due. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp.
 3. Query attention_list with kind=surprisal. These are bounded exploration hints, not evidence and not hygiene provenance. Inspect each hint's memory:<id> subjectRef with search_evidence in the owning scope. If the source establishes a useful settled fact, use a normal content operation with an exact quote; otherwise decline_attention after inspection. Never create a claim or entity from the score alone, and never cite attention:<id> for a content operation.
 4. Find new evidence since the cutoff. Read unprocessed evidence one page at a time with search_evidence — omit the query, since, and before to take the next page of the durable delivery queue. A page holds one excerpt per source; a source with contentHasNext continues by itself on a later page, so do not page through queued sources with sourceRef and offset. File what each page establishes (or mark a source you have read in full as reviewed or deferred) before asking for the next page, so the work is kept if the pass runs out of time; stop when hasMore is false or the queue reports deliveryClosed. Use a query or sourceRef only to look up specific history or verify a citation. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
@@ -1118,6 +1119,15 @@ The pass is done when:
 - The pass log is written with sources viewed + changes applied (this is the next pass's dedup).
 - No writes attempted against pinned or source-root entities.
 `;
+export function dreamingPassPrompt(prompt: string, history: string): string {
+	return `${prompt}
+
+<pass_history>
+Earlier Dreaming passes in this scope, oldest first. Recent passes have one line each; older lines cover more passes. Each line reads id+n|text, covering passes id through id+n-1. zoom_history(id, n) opens a line into the two lines under it, and zoom_history(id, 1) returns that pass's full record.
+${history}
+</pass_history>`;
+}
+
 export function dreamingPromptForMode(mode: DreamingMode): string {
 	if (mode === "incremental-hygiene") return DREAMING_HYGIENE_AGENT_PROMPT;
 	if (mode === "incremental-content") return DREAMING_CONTENT_AGENT_PROMPT;
@@ -1846,13 +1856,14 @@ ${JSON.stringify(liveOptions.userRequest)}
 				}
 			},
 		});
+		const passPrompt = dreamingPassPrompt(prompt, await renderDreamingHistoryForPass(accessor, agentId));
 		logger.info("dreaming", "Starting agentic dreaming pass", {
 			mode,
-			promptChars: prompt.length,
+			promptChars: passPrompt.length,
 		});
 		const executorResult = await executor.run({
 			passId,
-			prompt,
+			prompt: passPrompt,
 			tools,
 			timeoutMs: cfg.timeout,
 			maxTokens: cfg.maxOutputTokens ?? undefined,
@@ -1867,7 +1878,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const summary = executorResult.summary?.trim() || "Agentic Dreaming pass completed";
 		const attribution = executorResult.attribution ?? null;
 		const usage = executorResult.usage ?? null;
-		const tokensConsumed = usage?.totalTokens ?? countTokens(prompt);
+		const tokensConsumed = usage?.totalTokens ?? countTokens(passPrompt);
 		const nextWatermarkByScope = new Map<string, string | null>();
 		for (const scope of scopes) {
 			const previous =
