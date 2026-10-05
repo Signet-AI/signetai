@@ -37,14 +37,30 @@ sha512: LOdKHF73q34IbYIXaLwCN1cqxd9ruErOTMqYbpPMRnllqFveCSqzPKSXklOriXZsHvg9jnAD
 releaseDate: '2026-10-03T21:49:07.572Z'
 `;
 
-const electronUpdaterYaml = createRequire(require.resolve("electron-updater"))("js-yaml") as {
+const updaterRequire = createRequire(require.resolve("electron-updater"));
+const electronUpdaterYaml = updaterRequire("js-yaml") as {
 	load: (text: string) => unknown;
 };
+const electronMacUpdater = updaterRequire("./MacUpdater.js") as {
+	MacUpdater: {
+		filterFilesForArch(
+			files: Array<{ url: URL; info: { url: string } }>,
+			isArm64Mac: boolean,
+		): Array<{ url: URL; info: { url: string } }>;
+	};
+};
 
-function zipFor(files: readonly { url: string }[], arm64Mac: boolean): string | undefined {
-	const isArm64 = (file: { url: string }) => file.url.includes("arm64");
-	const candidates = arm64Mac && files.some(isArm64) ? files.filter(isArm64) : files.filter((file) => !isArm64(file));
-	return candidates.find((file) => file.url.endsWith(".zip"))?.url;
+function zipFor(
+	files: readonly { url: string; sha512: string; size: number }[],
+	arm64Mac: boolean,
+): string | undefined {
+	const resolved = files.map((file) => ({
+		url: new URL(file.url, "https://updates.example.invalid"),
+		info: { url: file.url },
+	}));
+	return electronMacUpdater.MacUpdater.filterFilesForArch(resolved, arm64Mac).find((file) =>
+		file.url.pathname.endsWith(".zip"),
+	)?.info.url;
 }
 
 describe("macOS update manifest merge", () => {
