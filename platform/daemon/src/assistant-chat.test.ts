@@ -430,7 +430,7 @@ test("scoped tools advertise their bound identity and reject nested cross-agent 
 	const write = tools.find((tool) => tool.name === "runbook_write");
 	if (!read || !write) throw new Error("Missing scoped tools");
 	expect(JSON.stringify(read.parameters)).toContain('"const":"test-agent"');
-	expect(JSON.stringify(read.parameters)).toContain('"agentId"]');
+	expect((read.parameters as { required?: readonly string[] }).required).toContain("agentId");
 	const outcome = await write
 		.execute("scope", {
 			agentId: "test-agent",

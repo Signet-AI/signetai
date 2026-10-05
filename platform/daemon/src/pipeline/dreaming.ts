@@ -97,7 +97,7 @@ import {
 	type DreamingLiveEventHub,
 } from "./dreaming-live-events";
 import { countTokens } from "./tokenizer";
-import { renderDreamingHistoryForPass } from "./dreaming-history";
+import { dreamingScopeKey, renderDreamingHistoryForPass } from "./dreaming-history";
 
 export type DreamingMode = "incremental" | "compact" | "incremental-hygiene" | "incremental-content";
 
@@ -1856,7 +1856,19 @@ ${JSON.stringify(liveOptions.userRequest)}
 				}
 			},
 		});
-		const passPrompt = dreamingPassPrompt(prompt, await renderDreamingHistoryForPass(accessor, agentId));
+		const historyScopes = liveOptions?.userRequest !== undefined ? [agentId] : scopes;
+		await ownerTransaction(
+			await getDbOwnerForAccessor(accessor),
+			"dreaming.pass.scope-key",
+			[
+				ownerRunStatement("UPDATE dreaming_passes SET scope_key = ? WHERE id = ?", [
+					dreamingScopeKey(historyScopes),
+					passId,
+				]),
+			],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		);
+		const passPrompt = dreamingPassPrompt(prompt, await renderDreamingHistoryForPass(accessor, agentId, historyScopes));
 		logger.info("dreaming", "Starting agentic dreaming pass", {
 			mode,
 			promptChars: passPrompt.length,

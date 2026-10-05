@@ -39,7 +39,7 @@ import {
 	type DreamingOperationRequest,
 	applyDreamingOperations,
 } from "./dreaming-operations";
-import { zoomDreamingHistory } from "./dreaming-history";
+import { dreamingScopeKey, zoomDreamingHistory } from "./dreaming-history";
 import { writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
 import { readCuratedMemoryHead, type MemoryHeadCommitter } from "../memory-head";
@@ -212,6 +212,7 @@ export interface DreamingCapability {
 export interface CreateDreamingCapabilitiesParams {
 	readonly accessor: DbAccessor;
 	readonly agentId: string;
+	readonly allowedScopes?: readonly string[];
 	readonly actor: string;
 	readonly memoryHeadCommitter?: MemoryHeadCommitter;
 	readonly passId?: string;
@@ -755,10 +756,25 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			"Open line id+n of the pass history into the two lines of n/2 passes it was made from; n = 1 returns that pass's full record (runbook note, operation counts and failures, evidence window, quarantines).",
 			true,
 			z.object({
+				agentId: z.string().min(1),
 				id: z.number().int().min(0).describe("The first pass of the line, as shown before the +."),
 				n: z.number().int().min(1).describe("How many passes the line covers, as shown after the +."),
+				scopes: z
+					.string()
+					.min(1)
+					.describe("The scopes= value of the history section the line is in. Omit for this pass's own history.")
+					.optional(),
 			}),
-			async ({ id, n }) => await zoomDreamingHistory(accessor, agentId, id, n),
+			async ({ agentId: scopeId, id, n, scopes }) => {
+				const allowedScopes = params.allowedScopes ?? [scopeId];
+				return await zoomDreamingHistory(accessor, {
+					agentId,
+					scopeKey: scopes ?? dreamingScopeKey(allowedScopes),
+					allowedScopes,
+					id,
+					n,
+				});
+			},
 		),
 		capability(
 			"runbook_write",

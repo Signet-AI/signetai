@@ -1502,7 +1502,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 165,
 		name: "dreaming-history",
 		up: dreamingHistory,
-		artifacts: { tables: ["dreaming_history_nodes"], indexes: ["idx_dreaming_history_nodes_pass"] },
+		artifacts: {
+			tables: ["dreaming_history_nodes"],
+			indexes: ["idx_dreaming_history_nodes_pass"],
+			columns: [{ table: "dreaming_passes", column: "scope_key" }],
+		},
 	},
 ];
 function checksum(m: Migration): string {

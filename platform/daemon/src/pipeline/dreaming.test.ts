@@ -2578,6 +2578,7 @@ describe("Dreaming", () => {
 				},
 			},
 			AGENT,
+			AGENT,
 		);
 		expect(built).toBe(1);
 		expect(compactionPrompts[0]).toContain("Who owns the review?");

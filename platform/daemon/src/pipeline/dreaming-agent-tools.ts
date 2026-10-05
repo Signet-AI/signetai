@@ -38,7 +38,7 @@ function textResult(payload: DreamingCapabilityResult): { readonly type: "text";
 	return { type: "text", text: JSON.stringify(payload) };
 }
 export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams): readonly PiAgentTool[] {
-	return createDreamingCapabilities(params)
+	return createDreamingCapabilities({ ...params, allowedScopes: params.allowedAgentIds })
 		.filter((capability) => !params.capabilityIds || params.capabilityIds.includes(capability.id))
 		.map((capability) => {
 			const schema = z.toJSONSchema(capability.inputSchema);

@@ -121,15 +121,30 @@ export function renderDreamingHistory(view: readonly DreamingHistoryPart[]): str
 	return view.map((part) => `${lineLabel(part.level, part.idx)}|${flatten(part.text ?? PENDING_LINE)}`).join("\n");
 }
 
+export function dreamingScopeKey(scopes: readonly string[]): string {
+	return [...new Set(scopes)].sort().join(",");
+}
+
+function scopesOf(scopeKey: string): readonly string[] {
+	return scopeKey.split(",").filter((scope) => scope.length > 0);
+}
+
+function streamAllowed(scopeKey: string, allowedScopes: readonly string[]): boolean {
+	const allowed = new Set(allowedScopes);
+	const scopes = scopesOf(scopeKey);
+	return scopes.length > 0 && scopes.every((scope) => allowed.has(scope));
+}
+
 async function loadNodes(
 	owner: DbOwnerClient,
 	agentId: string,
+	scopeKey: string,
 ): Promise<{ readonly leafCount: number; readonly nodes: Map<string, string> }> {
 	const rows = await ownerQueryAll<{ level: number; idx: number; text: string }>(
 		owner,
 		"dreaming.history.nodes",
-		"SELECT level, idx, text FROM dreaming_history_nodes WHERE agent_id = ?",
-		[agentId],
+		"SELECT level, idx, text FROM dreaming_history_nodes WHERE agent_id = ? AND scope_key = ?",
+		[agentId, scopeKey],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 	);
 	const nodes = new Map<string, string>();
@@ -141,30 +156,64 @@ async function loadNodes(
 	return { leafCount, nodes };
 }
 
-export async function renderDreamingHistoryForPass(accessor: DbAccessor, agentId: string): Promise<string> {
-	const { leafCount, nodes } = await loadNodes(await getDbOwnerForAccessor(accessor), agentId);
-	return renderDreamingHistory(foldDreamingHistory(leafCount, nodes));
+export async function renderDreamingHistoryForPass(
+	accessor: DbAccessor,
+	agentId: string,
+	scopes: readonly string[],
+): Promise<string> {
+	const owner = await getDbOwnerForAccessor(accessor);
+	const ownKey = dreamingScopeKey(scopes);
+	const streams = (
+		await ownerQueryAll<{ scopeKey: string }>(
+			owner,
+			"dreaming.history.streams",
+			"SELECT DISTINCT scope_key AS scopeKey FROM dreaming_history_nodes WHERE agent_id = ? ORDER BY scope_key",
+			[agentId],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		)
+	)
+		.map((row) => row.scopeKey)
+		.filter((scopeKey) => streamAllowed(scopeKey, scopes));
+	if (streams.length === 0) return "(no earlier passes)";
+	if (streams.length === 1 && streams[0] === ownKey) {
+		const { leafCount, nodes } = await loadNodes(owner, agentId, ownKey);
+		return renderDreamingHistory(foldDreamingHistory(leafCount, nodes));
+	}
+	const sections: string[] = [];
+	for (const scopeKey of streams) {
+		const { leafCount, nodes } = await loadNodes(owner, agentId, scopeKey);
+		sections.push(`scopes=${scopeKey}\n${renderDreamingHistory(foldDreamingHistory(leafCount, nodes))}`);
+	}
+	return sections.join("\n\n");
 }
 
 export async function zoomDreamingHistory(
 	accessor: DbAccessor,
-	agentId: string,
-	id: number,
-	n: number,
+	params: {
+		readonly agentId: string;
+		readonly scopeKey: string;
+		readonly allowedScopes: readonly string[];
+		readonly id: number;
+		readonly n: number;
+	},
 ): Promise<
 	| { readonly ok: true; readonly lines?: readonly string[]; readonly record?: unknown }
 	| { readonly ok: false; readonly error: string }
 > {
+	const { agentId, scopeKey, id, n } = params;
+	if (!streamAllowed(scopeKey, params.allowedScopes)) {
+		return { ok: false, error: `Pass history for scopes ${scopeKey} is outside this pass's scopes.` };
+	}
 	if (!Number.isSafeInteger(id) || !Number.isSafeInteger(n) || id < 0 || n < 1 || (n & (n - 1)) !== 0 || id % n !== 0) {
 		return { ok: false, error: `No line ${id}+${n}: n must be a power of two and id a multiple of n.` };
 	}
 	const owner = await getDbOwnerForAccessor(accessor);
 	if (n === 1) {
-		const leaf = await ownerQueryOne<{ passId: string | null; text: string }>(
+		const leaf = await ownerQueryOne<{ passId: string | null }>(
 			owner,
 			"dreaming.history.leaf",
-			"SELECT pass_id AS passId, text FROM dreaming_history_nodes WHERE agent_id = ? AND level = 0 AND idx = ?",
-			[agentId, id],
+			"SELECT pass_id AS passId FROM dreaming_history_nodes WHERE agent_id = ? AND scope_key = ? AND level = 0 AND idx = ?",
+			[agentId, scopeKey, id],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		);
 		if (leaf === undefined || leaf.passId === null) return { ok: false, error: `No line ${id}+1.` };
@@ -175,7 +224,7 @@ export async function zoomDreamingHistory(
 	}
 	const level = Math.log2(n);
 	const childIdx = (id / n) * 2;
-	const { nodes } = await loadNodes(owner, agentId);
+	const { nodes } = await loadNodes(owner, agentId, scopeKey);
 	const lines = [childIdx, childIdx + 1].flatMap((idx) => {
 		const text = nodes.get(nodeKey(level - 1, idx));
 		return text === undefined ? [] : [`${lineLabel(level - 1, idx)}|${flatten(text)}`];
@@ -251,18 +300,18 @@ Reply with the shorter line only.`;
 	return { text: shortest, inputTokens, outputTokens, cacheReadTokens };
 }
 
-async function nextLeafPass(owner: DbOwnerClient, agentId: string): Promise<string | null> {
+async function nextLeafPass(owner: DbOwnerClient, agentId: string, scopeKey: string): Promise<string | null> {
 	const row = await ownerQueryOne<{ id: string; status: string }>(
 		owner,
 		"dreaming.history.next-leaf",
 		`SELECT p.id, p.status FROM dreaming_passes p
-		 WHERE p.agent_id = ?
+		 WHERE p.agent_id = ? AND p.scope_key = ?
 		   AND NOT EXISTS (SELECT 1 FROM dreaming_history_nodes n WHERE n.pass_id = p.id)
 		   AND (p.status = 'running'
 		        OR EXISTS (SELECT 1 FROM dreaming_tool_calls c WHERE c.agent_id = p.agent_id AND c.pass_id = p.id))
 		 ORDER BY p.created_at ASC, p.rowid ASC
 		 LIMIT 1`,
-		[agentId],
+		[agentId, scopeKey],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 	);
 	return row === undefined || row.status === "running" ? null : row.id;
@@ -274,17 +323,19 @@ export async function compactDreamingHistory(
 	accessor: DbAccessor,
 	completer: DreamingHistoryCompleter,
 	agentId: string,
+	scopeKey: string,
 	options: { readonly maxCalls?: number; readonly isActive?: () => boolean } = {},
 ): Promise<number> {
 	const maxCalls = options.maxCalls ?? MAX_CALLS_PER_COMPACTION;
 	const isActive = options.isActive ?? (() => true);
-	const running = compactionsByAgent.get(agentId);
+	const lockKey = `${agentId}\u0000${scopeKey}`;
+	const running = compactionsByAgent.get(lockKey);
 	if (running !== undefined) return await running;
 	const work = (async () => {
 		const owner = await getDbOwnerForAccessor(accessor);
 		let built = 0;
 		while (built < maxCalls && isActive()) {
-			const passId = await nextLeafPass(owner, agentId);
+			const passId = await nextLeafPass(owner, agentId, scopeKey);
 			if (passId !== null) {
 				const record = await readDreamingPassRecord(owner, agentId, passId);
 				if (record === null) break;
@@ -295,11 +346,21 @@ export async function compactDreamingHistory(
 					[
 						ownerRunStatement(
 							`INSERT INTO dreaming_history_nodes
-							   (agent_id, level, idx, pass_id, text, tokens_input, tokens_output, tokens_cache_read)
-							 SELECT ?, 0, COALESCE(MAX(idx) + 1, 0), ?, ?, ?, ?, ?
-							 FROM dreaming_history_nodes WHERE agent_id = ? AND level = 0
+							   (agent_id, scope_key, level, idx, pass_id, text, tokens_input, tokens_output, tokens_cache_read)
+							 SELECT ?, ?, 0, COALESCE(MAX(idx) + 1, 0), ?, ?, ?, ?, ?
+							 FROM dreaming_history_nodes WHERE agent_id = ? AND scope_key = ? AND level = 0
 							 ON CONFLICT DO NOTHING`,
-							[agentId, passId, line.text, line.inputTokens, line.outputTokens, line.cacheReadTokens, agentId],
+							[
+								agentId,
+								scopeKey,
+								passId,
+								line.text,
+								line.inputTokens,
+								line.outputTokens,
+								line.cacheReadTokens,
+								agentId,
+								scopeKey,
+							],
 						),
 					],
 					{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
@@ -307,7 +368,7 @@ export async function compactDreamingHistory(
 				built++;
 				continue;
 			}
-			const { leafCount, nodes } = await loadNodes(owner, agentId);
+			const { leafCount, nodes } = await loadNodes(owner, agentId, scopeKey);
 			const merge = nextDreamingHistoryMerge(leafCount, nodes);
 			if (merge === null) break;
 			const line = await buildLine(completer, mergePrompt(merge.older, merge.newer));
@@ -317,10 +378,19 @@ export async function compactDreamingHistory(
 				[
 					ownerRunStatement(
 						`INSERT INTO dreaming_history_nodes
-						   (agent_id, level, idx, pass_id, text, tokens_input, tokens_output, tokens_cache_read)
-						 VALUES (?, ?, ?, NULL, ?, ?, ?, ?)
+						   (agent_id, scope_key, level, idx, pass_id, text, tokens_input, tokens_output, tokens_cache_read)
+						 VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)
 						 ON CONFLICT DO NOTHING`,
-						[agentId, merge.level, merge.idx, line.text, line.inputTokens, line.outputTokens, line.cacheReadTokens],
+						[
+							agentId,
+							scopeKey,
+							merge.level,
+							merge.idx,
+							line.text,
+							line.inputTokens,
+							line.outputTokens,
+							line.cacheReadTokens,
+						],
 					),
 				],
 				{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
@@ -333,11 +403,12 @@ export async function compactDreamingHistory(
 		.catch((error: unknown) => {
 			logger.warn("dreaming", "Dreaming history compaction failed", {
 				agentId,
+				scopeKey,
 				error: error instanceof Error ? error.message : String(error),
 			});
 			return 0;
 		})
-		.finally(() => compactionsByAgent.delete(agentId));
-	compactionsByAgent.set(agentId, guarded);
+		.finally(() => compactionsByAgent.delete(lockKey));
+	compactionsByAgent.set(lockKey, guarded);
 	return await guarded;
 }
