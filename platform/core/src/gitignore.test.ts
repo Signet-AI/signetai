@@ -1,4 +1,8 @@
 import { describe, expect, it } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { isSignetGitTrackedPath, mergeSignetGitignoreEntries } from "./gitignore";
 
 describe("mergeSignetGitignoreEntries", () => {
@@ -24,6 +28,22 @@ describe("mergeSignetGitignoreEntries", () => {
 		expect(merged).toContain("*.db");
 		expect(merged).toContain("signetai/");
 		expect(merged).toContain("# END Signet lightweight workspace");
+	});
+
+	it("ignores v2 storage roots without ignoring same-named folders inside notes", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-gitignore-"));
+		try {
+			writeFileSync(join(root, ".gitignore"), mergeSignetGitignoreEntries(""));
+			const ignored = (path: string): boolean =>
+				spawnSync("git", ["-C", root, "check-ignore", "-q", "--no-index", path]).status === 0;
+			expect(spawnSync("git", ["-C", root, "init", "-q"]).status).toBe(0);
+			for (const path of ["data/legacy-memory/notes.md", "runtime/telemetry/events.json", "cache/index.json"])
+				expect(ignored(path)).toBe(true);
+			for (const path of ["memory/research/data/notes.md", "skills/web/data/schema.json", "tools/t/runtime/r.md"])
+				expect(ignored(path)).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("preserves existing content and appends the managed block last", () => {
