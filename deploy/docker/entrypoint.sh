@@ -13,7 +13,7 @@ YAML
 	printf '%s\n' "[docker] wrote default auth.mode=team to $cfg"
 fi
 layout="$root/workspace-layout.json"
-if [ ! -f "$layout" ] && [ ! -f "$root/memory/memories.db" ]; then
+if [ ! -f "$layout" ] && [ ! -e "$root/memory" ] && [ ! -e "$root/.daemon" ]; then
 	printf '{\n  "version": 2\n}\n' > "$layout"
 	printf '%s\n' "[docker] created workspace layout v2 at $layout"
 fi
