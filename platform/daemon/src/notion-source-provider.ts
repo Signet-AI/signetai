@@ -29,7 +29,19 @@ const PAGE_KIND = "source_notion_page";
 export const NOTION_EDIT_GRANULARITY_MS = 60_000;
 export const NOTION_MAX_PURGE_CONFIRMATIONS = 200;
 export const NOTION_MAX_UNKNOWN_BLOCK_RESOLUTIONS = 25;
-const MAX_STORED_UNSUPPORTED_BLOCK_IDS = 500;
+export const NOTION_MAX_UNKNOWN_BLOCK_BUDGET = 400;
+export const NOTION_MAX_CONSECUTIVE_REQUEST_FAILURES = 5;
+export const NOTION_MAX_PAGE_CHARS = 750_000;
+export const NOTION_SYNC_DEADLINE_MS = 3 * 60 * 60 * 1000;
+const MAX_STORED_UNSUPPORTED_BLOCK_IDS = 1_000;
+
+let syncDeadlineMs = NOTION_SYNC_DEADLINE_MS;
+
+export function setNotionSyncDeadlineForTest(ms: number | null): void {
+	syncDeadlineMs = ms ?? NOTION_SYNC_DEADLINE_MS;
+}
+
+type PageOutcome = "indexed" | "failed" | "transient" | "unauthorized";
 const VERSION_BATCH = 100;
 const STALE_SCAN_BATCH = 500;
 const PURGE_BATCH = 100;
@@ -44,6 +56,13 @@ interface CompletedMarkdown {
 	readonly markdown: string;
 	readonly unsupportedBlockIds: readonly string[];
 	readonly missingBlocks: number;
+	readonly resolutionBudget: number;
+	readonly clipped: boolean;
+}
+
+interface ResolutionState {
+	readonly known: ReadonlySet<string>;
+	readonly budget: number;
 }
 
 interface StaleCandidate {
@@ -102,10 +121,13 @@ async function syncNotionSource(context: SourceProviderSyncContext): Promise<Sou
 			});
 		}
 		const yielder = yieldEvery(5);
+		const deadline = Date.now() + syncDeadlineMs;
 		let stateReadable = true;
+		let consecutiveRequestFailures = 0;
+		let stopReason: string | null = null;
 		for (
 			let start = 0;
-			start < search.pages.length && stateReadable && context.shouldContinue();
+			start < search.pages.length && stateReadable && stopReason === null && context.shouldContinue();
 			start += VERSION_BATCH
 		) {
 			const batch = search.pages.slice(start, start + VERSION_BATCH);
@@ -123,17 +145,35 @@ async function syncNotionSource(context: SourceProviderSyncContext): Promise<Sou
 			}
 			for (const page of batch) {
 				if (!context.shouldContinue()) break;
+				if (Date.now() > deadline) {
+					stopReason = `Notion sync reached its ${Math.round(syncDeadlineMs / 60_000)}-minute deadline`;
+					break;
+				}
 				const path = pagePath(source, page.id);
 				seenPaths.add(path);
 				context.onProgress?.({ scanned, total, indexed, currentPath: path });
 				if (isCurrent(versions.get(path), page)) {
 					indexed++;
-				} else if (await syncPage(source, agentId, token, page, failures, context.shouldContinue)) {
-					indexed++;
+				} else {
+					const outcome = await syncPage(source, agentId, token, page, failures, context.shouldContinue);
+					if (outcome === "indexed") indexed++;
+					consecutiveRequestFailures = outcome === "transient" ? consecutiveRequestFailures + 1 : 0;
+					if (outcome === "unauthorized") stopReason = "Notion rejected the integration token";
+					else if (consecutiveRequestFailures >= NOTION_MAX_CONSECUTIVE_REQUEST_FAILURES)
+						stopReason = `Stopped after ${consecutiveRequestFailures} consecutive Notion request failures`;
 				}
 				scanned++;
 				await yielder();
+				if (stopReason) break;
 			}
+		}
+		if (stopReason && context.shouldContinue()) {
+			failures.push(
+				failureState(source, `${stopReason}; ${total - scanned} page(s) were not attempted`, {
+					phase: "sync",
+					notAttempted: total - scanned,
+				}),
+			);
 		}
 		context.onProgress?.({ scanned, total, indexed, currentPath: source.root });
 		if (context.shouldContinue() && scanned === total && !search.incomplete) {
@@ -147,6 +187,7 @@ async function syncNotionSource(context: SourceProviderSyncContext): Promise<Sou
 					syncStartedAt,
 					failures,
 					context.shouldContinue,
+					deadline,
 				);
 			} catch (err) {
 				failures.push(failureState(source, `Notion stale page purge failed: ${errorMessage(err)}`, { phase: "purge" }));
@@ -175,7 +216,7 @@ async function syncPage(
 	page: NotionPage,
 	failures: SourceFailureState[],
 	shouldContinue: () => boolean,
-): Promise<boolean> {
+): Promise<PageOutcome> {
 	const path = pagePath(source, page.id);
 	let fetched: NotionPageMarkdown;
 	try {
@@ -187,28 +228,19 @@ async function syncPage(
 				pageId: page.id,
 			}),
 		);
-		return false;
+		return requestOutcome(err);
 	}
-	let known: ReadonlySet<string>;
+	let state: ResolutionState;
 	try {
-		known = fetched.truncated ? await readKnownUnsupportedBlocks(source.id, agentId, path) : new Set<string>();
+		state = fetched.truncated
+			? await readResolutionState(source.id, agentId, path)
+			: { known: new Set<string>(), budget: NOTION_MAX_UNKNOWN_BLOCK_RESOLUTIONS };
 	} catch (err) {
 		failures.push(failureState(source, `Notion index state read failed: ${errorMessage(err)}`, { phase: "state" }));
-		return false;
+		return "failed";
 	}
-	let markdown: CompletedMarkdown;
-	try {
-		markdown = await completeMarkdown(token, fetched, known, shouldContinue);
-	} catch (err) {
-		failures.push(
-			failureState(source, `Notion page fetch failed for "${page.title}": ${errorMessage(err)}`, {
-				phase: "markdown",
-				pageId: page.id,
-			}),
-		);
-		return false;
-	}
-	if (!shouldContinue()) return false;
+	const markdown = await completeMarkdown(token, fetched, state, shouldContinue);
+	if (!shouldContinue()) return "failed";
 	try {
 		await writePageArtifact(source, agentId, page, markdown, fetched.servedAtMs);
 	} catch (err) {
@@ -218,7 +250,7 @@ async function syncPage(
 				pageId: page.id,
 			}),
 		);
-		return false;
+		return "failed";
 	}
 	if (markdown.missingBlocks > 0) {
 		failures.push(
@@ -229,13 +261,27 @@ async function syncPage(
 			),
 		);
 	}
-	return true;
+	if (markdown.clipped) {
+		logger.warn("notion-source", "Notion page content exceeded the stored character cap", {
+			sourceId: source.id,
+			pageId: page.id,
+			maxChars: NOTION_MAX_PAGE_CHARS,
+		});
+	}
+	return "indexed";
+}
+
+function requestOutcome(err: unknown): PageOutcome {
+	if (!(err instanceof NotionRequestError)) return "failed";
+	if (err.status === 401) return "unauthorized";
+	if (err.code !== "cancelled" && (err.retryable || err.status === 0)) return "transient";
+	return "failed";
 }
 
 async function completeMarkdown(
 	token: string,
 	fetched: NotionPageMarkdown,
-	known: ReadonlySet<string>,
+	state: ResolutionState,
 	shouldContinue: () => boolean,
 ): Promise<CompletedMarkdown> {
 	let markdown = fetched.markdown;
@@ -247,11 +293,11 @@ async function completeMarkdown(
 	let requests = 0;
 	for (let index = 0; index < queue.length; index++) {
 		const blockId = queue[index] ?? "";
-		if (known.has(blockId)) {
+		if (state.known.has(blockId)) {
 			unsupported.add(blockId);
 			continue;
 		}
-		if (requests >= NOTION_MAX_UNKNOWN_BLOCK_RESOLUTIONS || !shouldContinue()) {
+		if (requests >= state.budget || !shouldContinue()) {
 			missing.add(blockId);
 			continue;
 		}
@@ -278,16 +324,35 @@ async function completeMarkdown(
 		}
 	}
 	missingBlocks += missing.size;
-	const rendered = markdown.replace(UNKNOWN_TAG, (tag) => {
+	const rendered = replaceOutsideCode(markdown, UNKNOWN_TAG, (tag) => {
 		const label = unknownTagLabel(tag);
 		if (tagMatchesAny(tag, unsupported)) return `[Unsupported Notion block: ${label}]`;
 		if (!tagMatchesAny(tag, missing)) missingBlocks++;
 		return `[Missing Notion block: ${label}]`;
 	});
-	return { markdown: rendered, unsupportedBlockIds: [...unsupported], missingBlocks };
+	const clipped = rendered.length > NOTION_MAX_PAGE_CHARS;
+	return {
+		markdown: clipped ? rendered.slice(0, NOTION_MAX_PAGE_CHARS) : rendered,
+		unsupportedBlockIds: [...unsupported],
+		missingBlocks,
+		resolutionBudget: state.budget,
+		clipped,
+	};
 }
 
 const UNKNOWN_TAG = /<unknown(?:\s+(?:url|alt)="[^"]*")+\s*\/>/g;
+const CODE_SPAN = /```[\s\S]*?```|~~~[\s\S]*?~~~|`[^`\n]+`/g;
+
+function replaceOutsideCode(markdown: string, pattern: RegExp, replacer: (match: string) => string): string {
+	let output = "";
+	let last = 0;
+	for (const code of markdown.matchAll(CODE_SPAN)) {
+		const index = code.index ?? 0;
+		output += markdown.slice(last, index).replace(pattern, replacer) + code[0];
+		last = index + code[0].length;
+	}
+	return output + markdown.slice(last).replace(pattern, replacer);
+}
 
 function tagMatchesAny(tag: string, blockIds: ReadonlySet<string>): boolean {
 	for (const blockId of blockIds) {
@@ -299,7 +364,7 @@ function tagMatchesAny(tag: string, blockIds: ReadonlySet<string>): boolean {
 function substituteUnknownBlock(markdown: string, blockId: string, replacement: string): string {
 	let replaced = false;
 	const ids = new Set([blockId]);
-	const next = markdown.replace(UNKNOWN_TAG, (tag) => {
+	const next = replaceOutsideCode(markdown, UNKNOWN_TAG, (tag) => {
 		if (replaced || !tagMatchesAny(tag, ids)) return tag;
 		replaced = true;
 		return replacement;
@@ -311,25 +376,30 @@ function unknownTagLabel(tag: string): string {
 	return tag.match(/alt="([^"]*)"/)?.[1] || "block";
 }
 
-async function readKnownUnsupportedBlocks(
-	sourceId: string,
-	agentId: string,
-	sourcePath: string,
-): Promise<ReadonlySet<string>> {
-	const row = await dbOwnerQuery<{ readonly incomplete: number | null; readonly ids: string | null } | null>(
+async function readResolutionState(sourceId: string, agentId: string, sourcePath: string): Promise<ResolutionState> {
+	const row = await dbOwnerQuery<{
+		readonly incomplete: number | null;
+		readonly ids: string | null;
+		readonly budget: number | null;
+	} | null>(
 		{
 			sql: `SELECT json_extract(source_meta_json, '$.incomplete') AS incomplete,
-			        json_extract(source_meta_json, '$.unsupportedBlockIds') AS ids
+			        json_extract(source_meta_json, '$.unsupportedBlockIds') AS ids,
+			        json_extract(source_meta_json, '$.resolutionBudget') AS budget
 			 FROM memory_artifacts
 			 WHERE agent_id = ? AND source_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0`,
 			params: [agentId, sourceId, sourcePath],
 			result: "get",
 		},
-		{ operation: "sources.notion.read_unsupported", lane: "read", deadlineMs: 5_000 },
+		{ operation: "sources.notion.read_resolution", lane: "read", deadlineMs: 5_000 },
 	);
-	if (row?.incomplete !== 1 || typeof row.ids !== "string") return new Set();
-	const parsed: unknown = JSON.parse(row.ids);
-	return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []);
+	if (row?.incomplete !== 1) return { known: new Set(), budget: NOTION_MAX_UNKNOWN_BLOCK_RESOLUTIONS };
+	const parsed: unknown = typeof row.ids === "string" ? JSON.parse(row.ids) : [];
+	const previous = typeof row.budget === "number" ? row.budget : NOTION_MAX_UNKNOWN_BLOCK_RESOLUTIONS;
+	return {
+		known: new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []),
+		budget: Math.min(NOTION_MAX_UNKNOWN_BLOCK_BUDGET, Math.max(NOTION_MAX_UNKNOWN_BLOCK_RESOLUTIONS, previous * 2)),
+	};
 }
 
 async function writePageArtifact(
@@ -367,6 +437,8 @@ async function writePageArtifact(
 			missingBlocks: markdown.missingBlocks,
 			unsupportedBlocks: markdown.unsupportedBlockIds.length,
 			unsupportedBlockIds: markdown.unsupportedBlockIds.slice(0, MAX_STORED_UNSUPPORTED_BLOCK_IDS),
+			resolutionBudget: markdown.resolutionBudget,
+			clipped: markdown.clipped,
 		},
 	});
 	await indexSourceArtifactStructureAsync({
@@ -402,6 +474,11 @@ function pageContent(page: NotionPage, markdown: CompletedMarkdown): string {
 	lines.push("", markdown.markdown.trim());
 	if (markdown.missingBlocks > 0)
 		lines.push("", `> ${markdown.missingBlocks} Notion block(s) on this page could not be retrieved.`);
+	if (markdown.clipped)
+		lines.push(
+			"",
+			`> Signet stored the first ${NOTION_MAX_PAGE_CHARS.toLocaleString("en-US")} characters of this page.`,
+		);
 	return lines.join("\n");
 }
 
@@ -464,6 +541,7 @@ async function purgeStalePages(
 	syncStartedAt: string,
 	failures: SourceFailureState[],
 	shouldContinue: () => boolean,
+	deadline: number,
 ): Promise<void> {
 	const candidates = await readStaleCandidates(source.id, agentId, seenPaths);
 	if (candidates.length === 0) return;
@@ -474,6 +552,8 @@ async function purgeStalePages(
 	const confirmedLive: StaleCandidate[] = [];
 	let confirmations = 0;
 	let unconfirmed = 0;
+	let consecutiveFailures = 0;
+	let lookupsHalted = false;
 	candidates.sort((left, right) => (left.confirmedLiveAtMs ?? 0) - (right.confirmedLiveAtMs ?? 0));
 	for (const candidate of candidates) {
 		if (!shouldContinue()) return;
@@ -481,7 +561,12 @@ async function purgeStalePages(
 			stale.push(candidate);
 			continue;
 		}
-		if (!candidate.pageId || confirmations >= NOTION_MAX_PURGE_CONFIRMATIONS) {
+		if (
+			!candidate.pageId ||
+			lookupsHalted ||
+			confirmations >= NOTION_MAX_PURGE_CONFIRMATIONS ||
+			Date.now() > deadline
+		) {
 			unconfirmed++;
 			continue;
 		}
@@ -490,8 +575,13 @@ async function purgeStalePages(
 			const lookup = await fetchNotionPage(token, candidate.pageId, shouldContinue);
 			if (lookup.status === "gone" || Date.parse(lookup.page.lastEditedTime) <= windowFloorMs) stale.push(candidate);
 			else confirmedLive.push(candidate);
-		} catch {
+			consecutiveFailures = 0;
+		} catch (err) {
 			unconfirmed++;
+			const outcome = requestOutcome(err);
+			consecutiveFailures = outcome === "transient" ? consecutiveFailures + 1 : 0;
+			if (outcome === "unauthorized" || consecutiveFailures >= NOTION_MAX_CONSECUTIVE_REQUEST_FAILURES)
+				lookupsHalted = true;
 		}
 	}
 	if (unconfirmed > 0) {

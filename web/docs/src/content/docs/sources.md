@@ -241,16 +241,28 @@ cancelling or removing the source interrupts in-flight requests.
 
 Notion's Markdown endpoint marks a page as truncated whenever it contains a
 block the API cannot render. Signet resolves each such block individually,
-including nested ones, with up to 25 lookups per page per sync: blocks Notion
+including nested ones, starting with 25 lookups per page per sync: blocks Notion
 can serve are inlined, and blocks it cannot serve or the integration cannot
 access, such as buttons, embeds, and templates, become
 `[Unsupported Notion block: <type>]` placeholders without failing the sync.
 Blocks that could not be retrieved, including those beyond the per-sync
 budget, become `[Missing Notion block: <type>]` and mark the page incomplete;
-the next sync continues from the blocks already classified. Fetch failures,
+the next sync reuses the blocks already classified and doubles the lookup
+budget, up to 400. Unknown-tag text inside fenced or inline code is left as
+written. Fetch failures,
 unconfirmed removals, and incomplete pages are written as source-owned failure
 artifacts and cause the shared source job to report failure until resolved.
+A sync stops early, reporting the pages it did not attempt, when Notion rejects
+the integration token, after five consecutive transient request failures, or
+after three hours; the next sync resumes from the pages not yet marked synced.
+Stored page text is capped at 750,000 characters, with a note in the page and a
+`clipped` flag in its metadata.
+
 Comments, file attachments, and data-source schemas are not indexed in v1.
+Formula, rollup, and person-name property values that change without editing
+the page are refreshed only when the page is next edited. Pages removed from
+the index are soft-deleted and their content is retained until the source
+itself is removed.
 
 ## Operations diagnostics
 

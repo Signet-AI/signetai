@@ -6,7 +6,7 @@ import { type SignetSourceEntry, addNotionSource } from "@signet/core";
 import type { SecretKeyringAdapter } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { NOTION_API_VERSION, NOTION_MAX_RESPONSE_BYTES, setNotionSleepForTest } from "./notion-source-fetch";
-import { notionSourceProvider } from "./notion-source-provider";
+import { NOTION_MAX_PAGE_CHARS, notionSourceProvider, setNotionSyncDeadlineForTest } from "./notion-source-provider";
 import { putSecret, setSecretKeyringAdapterForTests } from "./secrets";
 
 const originalFetch = globalThis.fetch;
@@ -112,6 +112,7 @@ describe("notion-source-provider", () => {
 	afterEach(async () => {
 		globalThis.fetch = originalFetch;
 		setNotionSleepForTest(null);
+		setNotionSyncDeadlineForTest(null);
 		setSecretKeyringAdapterForTests(null);
 		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -623,7 +624,7 @@ describe("notion-source-provider", () => {
 		expect(JSON.parse(artifact?.source_meta_json ?? "{}")).toMatchObject({ incomplete: false, unsupportedBlocks: 0 });
 	});
 
-	it("reports pages with unretrievable blocks as incomplete on every sync", async () => {
+	it("reports unretrievable blocks and widens the block budget on the next sync", async () => {
 		const source = addSource();
 		const ids = Array.from({ length: 27 }, (_, index) => `block-${index}`);
 		const requests = stubNotion((request) => {
@@ -641,13 +642,20 @@ describe("notion-source-provider", () => {
 		requests.length = 0;
 		const second = await sync(source);
 
-		const expected = ['Notion page "Big page" is incomplete: 3 block(s) could not be retrieved'];
-		expect(first.failures.map((failure) => failure.message)).toEqual(expected);
-		expect(second.failures.map((failure) => failure.message)).toEqual(expected);
+		expect(first.failures.map((failure) => failure.message)).toEqual([
+			'Notion page "Big page" is incomplete: 3 block(s) could not be retrieved',
+		]);
+		expect(second.failures.map((failure) => failure.message)).toEqual([
+			'Notion page "Big page" is incomplete: 1 block(s) could not be retrieved',
+		]);
 		expect(requests.some((request) => request.path === "/pages/big/markdown")).toBe(true);
 		const artifact = sourceRows(source.id).find((entry) => entry.source_kind === "source_notion_page");
-		expect(artifact?.content).toContain("3 Notion block(s) on this page could not be retrieved.");
-		expect(JSON.parse(artifact?.source_meta_json ?? "{}")).toMatchObject({ incomplete: true, missingBlocks: 3 });
+		expect(artifact?.content).toContain("1 Notion block(s) on this page could not be retrieved.");
+		expect(JSON.parse(artifact?.source_meta_json ?? "{}")).toMatchObject({
+			incomplete: true,
+			missingBlocks: 1,
+			resolutionBudget: 50,
+		});
 	});
 
 	it("resolves nested unknown blocks and treats unresolved nested content as missing", async () => {
@@ -829,6 +837,135 @@ describe("notion-source-provider", () => {
 		await sync(source);
 
 		expect(requests.map((request) => request.path)).toEqual(["/search", "/pages/a/markdown"]);
+	});
+
+	it("stops a sync after repeated transient request failures", async () => {
+		const source = addSource();
+		const ids = Array.from({ length: 20 }, (_, index) => `p${index}`);
+		const requests = stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse(ids.map((id) => page(id, id, "2026-02-01T00:00:00.000Z")))
+				: Response.json({ code: "rate_limited", message: "slow" }, { status: 429, headers: { "Retry-After": "60" } }),
+		);
+
+		const result = await sync(source);
+
+		expect(requests.filter((request) => request.path.endsWith("/markdown"))).toHaveLength(5 * 4);
+		expect(result.scanned).toBe(5);
+		expect(result.failures.at(-1)?.message).toBe(
+			"Stopped after 5 consecutive Notion request failures; 15 page(s) were not attempted",
+		);
+	});
+
+	it("stops a sync immediately when Notion rejects the token", async () => {
+		const source = addSource();
+		const requests = stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse(["a", "b", "c"].map((id) => page(id, id, "2026-02-01T00:00:00.000Z")))
+				: Response.json({ code: "unauthorized", message: "API token is invalid." }, { status: 401 }),
+		);
+
+		const result = await sync(source);
+
+		expect(requests.filter((request) => request.path.endsWith("/markdown"))).toHaveLength(1);
+		expect(result.failures.at(-1)?.message).toBe("Notion rejected the integration token; 2 page(s) were not attempted");
+	});
+
+	it("stops at the sync deadline and leaves the rest for the next sync", async () => {
+		const source = addSource();
+		setNotionSyncDeadlineForTest(-1);
+		const requests = stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse(["a", "b"].map((id) => page(id, id, "2026-02-01T00:00:00.000Z")))
+				: markdownResponse("body"),
+		);
+
+		const result = await sync(source);
+
+		expect(requests.map((request) => request.path)).toEqual(["/search"]);
+		expect(result.failures.at(-1)?.message).toContain("deadline; 2 page(s) were not attempted");
+	});
+
+	it("halts removal lookups after repeated transient failures", async () => {
+		const source = addSource();
+		seedPageRows(
+			source.id,
+			Array.from({ length: 20 }, (_, index) => `gone-${index}`),
+			Date.parse("2026-02-01T00:00:00.000Z"),
+			Date.now(),
+		);
+		const requests = stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse([])
+				: Response.json({ code: "service_unavailable", message: "down" }, { status: 503 }),
+		);
+
+		const result = await sync(source);
+
+		expect(requests.filter((request) => request.path.startsWith("/pages/"))).toHaveLength(5 * 4);
+		expect(result.failures.map((failure) => failure.message)).toEqual([
+			"Could not confirm removal of 20 Notion page(s); kept them for the next sync",
+		]);
+	});
+
+	it("never rewrites unknown-tag text inside code", async () => {
+		const source = addSource();
+		const body =
+			'Docs:\n```html\n<unknown url="https://example.com/x" alt="demo"/>\n```\nInline `<unknown url="u" alt="a"/>` too.';
+		stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse([page("p", "Format", "2026-02-01T00:00:00.000Z")])
+				: Response.json({ markdown: body, truncated: false, unknown_block_ids: [] }),
+		);
+
+		const result = await sync(source);
+
+		expect(result.failures).toEqual([]);
+		expect(sourceRows(source.id).find((entry) => entry.source_external_id === "p")?.content).toContain(body);
+	});
+
+	it("widens the budget so pages with many resolvable blocks converge", async () => {
+		const source = addSource();
+		const ids = Array.from({ length: 30 }, (_, index) => `blk-${index}`);
+		const markdown = ids.map((id) => `<unknown url="https://www.notion.so/p#${id}" alt="toggle"/>`).join("\n");
+		stubNotion((request) => {
+			if (request.path === "/search") return searchResponse([page("p", "Long", "2026-02-01T00:00:00.000Z")]);
+			if (request.path === "/pages/p/markdown")
+				return Response.json({ markdown, truncated: true, unknown_block_ids: ids });
+			return Response.json({
+				markdown: `content ${request.path.split("/")[2]}`,
+				truncated: false,
+				unknown_block_ids: [],
+			});
+		});
+
+		const first = await sync(source);
+		const second = await sync(source);
+
+		expect(first.failures.map((failure) => failure.message)).toEqual([
+			'Notion page "Long" is incomplete: 5 block(s) could not be retrieved',
+		]);
+		expect(second.failures).toEqual([]);
+		const artifact = sourceRows(source.id).find((entry) => entry.source_kind === "source_notion_page");
+		expect(artifact?.content).toContain("content blk-29");
+		expect(artifact?.content).not.toContain("[Missing Notion block");
+	});
+
+	it("caps stored page content and marks it clipped", async () => {
+		const source = addSource();
+		stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse([page("p", "Huge", "2026-02-01T00:00:00.000Z")])
+				: markdownResponse("x".repeat(NOTION_MAX_PAGE_CHARS + 50_000)),
+		);
+
+		const result = await sync(source);
+
+		expect(result.failures).toEqual([]);
+		const artifact = sourceRows(source.id).find((entry) => entry.source_external_id === "p");
+		expect(artifact?.content.length).toBeLessThan(NOTION_MAX_PAGE_CHARS + 1_000);
+		expect(artifact?.content).toContain("Signet stored the first 750,000 characters of this page.");
+		expect(JSON.parse(artifact?.source_meta_json ?? "{}")).toMatchObject({ clipped: true });
 	});
 
 	it("retries a rate limit whose body is not JSON", async () => {
