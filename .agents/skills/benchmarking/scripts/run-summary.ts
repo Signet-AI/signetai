@@ -24,7 +24,15 @@ after a run finishes and before changing code. --commit overrides that for backf
 interface Report {
 	readonly summary: { totalQuestions: number; correctCount: number };
 	readonly retrieval?: { hitAtK?: number; mrr?: number; k?: number };
-	readonly usage?: { dreaming?: { passesObserved?: number; inputTokens?: number; outputTokens?: number } };
+	readonly usage?: {
+		dreaming?: {
+			passesObserved?: number;
+			passesWithoutUsage?: number;
+			inputTokens?: number;
+			outputTokens?: number;
+			cacheReadTokens?: number;
+		};
+	};
 	readonly judge: string;
 	readonly answeringModel: string;
 	readonly benchmark: string;
@@ -52,6 +60,8 @@ interface Summary {
 	readonly dreamingPasses: number | null;
 	readonly dreamingInputTokens: number | null;
 	readonly dreamingOutputTokens: number | null;
+	readonly dreamingCacheReadTokens: number | null;
+	readonly dreamingPassesWithoutUsage: number | null;
 	readonly entities: number | null;
 	readonly claims: number | null;
 	readonly wallMinutes: number;
@@ -128,6 +138,8 @@ function summarize(spec: string, note: string | undefined, commitOverride: strin
 		dreamingPasses: report.usage?.dreaming?.passesObserved ?? null,
 		dreamingInputTokens: report.usage?.dreaming?.inputTokens ?? null,
 		dreamingOutputTokens: report.usage?.dreaming?.outputTokens ?? null,
+		dreamingCacheReadTokens: report.usage?.dreaming?.cacheReadTokens ?? null,
+		dreamingPassesWithoutUsage: report.usage?.dreaming?.passesWithoutUsage ?? null,
 		entities,
 		claims,
 		wallMinutes: Math.round((Date.parse(checkpoint.updatedAt) - Date.parse(checkpoint.createdAt)) / 60_000),
@@ -159,12 +171,12 @@ function main(): void {
 	if (append && !note) throw new Error("--append requires --note describing what the run tested");
 	const summaries = specs.map((spec) => summarize(spec, note, commitOverride));
 	console.log(
-		"| run | dreaming model | codemode | score | Hit@K | MRR | entities | claims | passes | dreaming in/out | wall |",
+		"| run | dreaming model | codemode | score | Hit@K | MRR | entities | claims | passes | dreaming in/out/cached | wall |",
 	);
 	console.log("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
 	for (const s of summaries) {
 		console.log(
-			`| ${s.runId} | ${s.dreamingModel ?? "n/a"} | ${s.codemode ?? "n/a"} | ${s.correct}/${s.questions} | ${fmt(s.hitAtK, 2)} | ${fmt(s.mrr, 3)} | ${fmt(s.entities)} | ${fmt(s.claims)} | ${fmt(s.dreamingPasses)} | ${millions(s.dreamingInputTokens)} / ${millions(s.dreamingOutputTokens)} | ${s.wallMinutes} min |`,
+			`| ${s.runId} | ${s.dreamingModel ?? "n/a"} | ${s.codemode ?? "n/a"} | ${s.correct}/${s.questions} | ${fmt(s.hitAtK, 2)} | ${fmt(s.mrr, 3)} | ${fmt(s.entities)} | ${fmt(s.claims)} | ${fmt(s.dreamingPasses)} | ${millions(s.dreamingInputTokens)} / ${millions(s.dreamingOutputTokens)} / ${millions(s.dreamingCacheReadTokens)} | ${s.wallMinutes} min |`,
 		);
 	}
 	if (append) {
