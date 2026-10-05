@@ -261,39 +261,37 @@
 	.sig-sidebar-toggle:focus-visible { outline: 1px solid var(--home-focus, var(--ring)); outline-offset: -1px; }
 	html[data-surface="desktop"][data-platform="mac"] .sig-topbar-brand { display: none; }
 	html[data-surface="desktop"][data-platform="mac"] .sig-topbar-title-mark { display: block; }
-	.sig-sidebar { background: var(--home-chrome); display: flex; flex-direction: column; width: 56px; flex: none; padding: 16px 8px; overflow: hidden; transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1); }
-	.sig-app-frame[data-sidebar="open"] .sig-sidebar { width: 196px; }
-	.sig-sidebar-label { display: flex; align-items: baseline; gap: 8px; min-width: 0; white-space: nowrap; font-size: var(--text-body); color: inherit; opacity: 0; transition: opacity 120ms ease; }
+	.sig-sidebar { background: var(--home-chrome); display: flex; flex-direction: column; width: 56px; flex: none; padding: 14px 10px; overflow: hidden; transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1); }
+	.sig-app-frame[data-sidebar="open"] .sig-sidebar { width: 200px; }
+	.sig-sidebar-label { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; white-space: nowrap; font-size: var(--text-body); letter-spacing: -0.005em; color: inherit; opacity: 0; transition: opacity 120ms ease; }
 	.sig-app-frame[data-sidebar="open"] .sig-sidebar-label { opacity: 1; transition-delay: 60ms; }
-	.sig-sidebar-soon { font-size: var(--text-meta); color: var(--home-meta, var(--muted-foreground)); text-transform: capitalize; }
+	.sig-sidebar-soon { padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 10px; line-height: 1.4; color: var(--home-meta, var(--muted-foreground)); }
+	.sig-sidebar-value { font-size: var(--text-small); color: var(--home-meta, var(--muted-foreground)); text-transform: capitalize; }
 	.sig-topbar-wordmark { position: absolute; inset-inline-start: 46px; top: 50%; transform: translateY(-50%); font-size: var(--text-body); font-weight: 500; letter-spacing: -0.01em; color: var(--home-title, var(--foreground)); opacity: 0; pointer-events: none; transition: opacity 150ms ease; }
 	.sig-app-frame[data-sidebar="open"] .sig-topbar-wordmark { opacity: 1; transition-delay: 60ms; }
 	html[data-surface="desktop"][data-platform="mac"] .sig-topbar-wordmark { display: none; }
 	@media (prefers-reduced-motion: reduce) { .sig-sidebar, .sig-sidebar-label, .sig-topbar-wordmark { transition: none; } }
-	.sig-sidebar-link { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; min-height: 40px; padding-inline: 9px; overflow: hidden; border-radius: 8px; font-size: 11px; color: var(--muted-foreground); transition: color 150ms, background-color 150ms; }
-	.sig-sidebar-link svg { width: 22px; height: 22px; }
-	.sig-sidebar-link:hover:not(:disabled) { color: var(--foreground); background: var(--muted); }
-	.sig-sidebar-link.is-active { color: var(--foreground); background: color-mix(in oklch, var(--foreground) 7%, transparent); }
-	.sig-sidebar-link:disabled { opacity: .4; cursor: not-allowed; }
-	.sig-sidebar-link:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+	.sig-sidebar-link { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; min-height: 34px; padding-inline: 9px; overflow: hidden; border-radius: 8px; color: var(--home-secondary, var(--muted-foreground)); transition: color 150ms ease, background-color 150ms ease; }
+	.sig-sidebar-link svg { width: 18px; height: 18px; flex-shrink: 0; }
+	.sig-sidebar-link:hover:not(:disabled, .is-active) { color: var(--home-title, var(--foreground)); background: color-mix(in srgb, var(--foreground) 3.5%, transparent); }
+	.sig-sidebar-link.is-active { color: var(--home-title, var(--foreground)); background: color-mix(in srgb, var(--foreground) 9%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 5%, transparent); }
+	.sig-sidebar-link.is-active .sig-sidebar-label { font-weight: 500; }
+	.sig-sidebar-link:disabled { color: var(--home-disabled, var(--muted-foreground)); cursor: default; }
+	.sig-sidebar-link:focus-visible { outline: 1px solid var(--home-focus, var(--ring)); outline-offset: -1px; }
 	@media (max-width: 640px) {
 		.sig-work-area { flex-direction: column-reverse; }
 		.sig-content { border-left: 0; border-top-left-radius: 0; }
 		.sig-sidebar { width: 100%; flex-direction: row; align-items: center; gap: 4px; padding: 6px 12px calc(6px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--border); }
 		.sig-sidebar > ul { flex-direction: row; gap: 4px; }
 		.sig-sidebar > div { flex-direction: row; margin-top: 0; margin-left: auto; gap: 4px; }
-		.sig-sidebar-link { width: 44px; min-height: 44px; padding-inline: 11px; }
+		.sig-sidebar-link { width: 44px; min-height: 44px; padding-inline: 12px; }
+		.sig-sidebar-link svg { width: 20px; height: 20px; }
 		.sig-app-frame[data-sidebar] .sig-sidebar { width: 100%; }
 		.sig-sidebar-label, .sig-sidebar-toggle, .sig-topbar-wordmark { display: none; }
 		.sig-content { padding-top: 0; }
 		.sig-app-frame > header > .sig-topbar-row { padding-inline-start: 12px; }
 	}
 	.sig-theme-control { transition-property: background-color, border-color, color, transform; transition-duration: 150ms; transition-timing-function: ease-out; }
-	.sig-theme-control:not(:disabled):active { transform: scale(0.96); }
-	.sig-theme-icon-stack { position: relative; display: grid; width: 22px; height: 22px; place-items: center; }
-	.sig-theme-icon-stack .sig-theme-icon { position: absolute; width: 22px; height: 22px; opacity: 0; transform: scale(0.25); filter: blur(4px); }
-	.sig-theme-icon-stack[data-ready="true"] .sig-theme-icon { transition-property: opacity, transform, filter; transition-duration: 200ms; transition-timing-function: cubic-bezier(0.2, 0, 0, 1); }
-	.sig-theme-icon-stack .sig-theme-icon.is-active { opacity: 1; transform: scale(1); filter: blur(0); }
 	.dreams-page { flex: 1; min-height: 0; overflow: hidden; min-width: 0; padding: 10px 40px 36px; display: flex; flex-direction: column; gap: 28px; }
 	.dreams-workspace { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,55fr) minmax(0,45fr); gap: 32px; }
 	.dreams-right { min-height: 0; display: grid; grid-template-rows: minmax(0,1fr) minmax(0,1fr); gap: 24px; border-left: 1px solid var(--border); padding-left: 32px; }

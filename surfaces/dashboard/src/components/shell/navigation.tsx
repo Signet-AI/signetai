@@ -67,7 +67,7 @@ export function SidebarNav({ open }: { open: boolean }) {
 	const activeView = view === "graph" || view === "memory" ? "memory" : view;
 	return (
 		<nav id="dashboard-sidebar" aria-label="Dashboard navigation" className="sig-sidebar">
-			<ul className="m-0 flex list-none flex-col gap-2 p-0">
+			<ul className="m-0 flex list-none flex-col gap-0.5 p-0">
 				{TOP_LEVEL_NAV_ITEMS.map((item) => {
 					const Icon = item.icon;
 					const active = item.view === activeView;
@@ -83,13 +83,13 @@ export function SidebarNav({ open }: { open: boolean }) {
 								onClick={() => setView(item.view)}
 								className={active ? "is-active" : undefined}
 							>
-								<Icon className="size-[22px] shrink-0" />
+								<Icon className="size-[18px] shrink-0" />
 							</SidebarButton>
 						</li>
 					);
 				})}
 			</ul>
-			<div className="sig-no-drag mt-auto flex flex-col gap-2">
+			<div className="sig-no-drag mt-auto flex flex-col gap-0.5">
 				<ModeToggle />
 				<SidebarButton
 					label="Settings"
@@ -99,7 +99,7 @@ export function SidebarNav({ open }: { open: boolean }) {
 					aria-current={view === "settings" ? "page" : undefined}
 					data-dashboard-nav="settings"
 				>
-					<Settings className="size-[22px] shrink-0" aria-hidden="true" />
+					<Settings className="size-[18px] shrink-0" aria-hidden="true" />
 				</SidebarButton>
 			</div>
 		</nav>
