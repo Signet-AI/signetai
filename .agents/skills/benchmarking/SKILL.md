@@ -31,6 +31,7 @@ All scripts run from the repository root with `bun` and only read their inputs:
 
 - `scripts/run-summary.ts <runId>[=<workspace>] ...` prints score, Hit@K, MRR, entities, claims, Dreaming passes and tokens, and wall time side by side. `--append --note "..."` records the runs in the ledger.
 - `scripts/pass-inspect.ts <workspace>` summarizes Dreaming passes: outcomes, tool-call failures, grouped filing errors, exclusion reasons, graph size per scope, and the latest pass logs.
+- `scripts/sample-questions.ts --total <n> --seed <n> --out <file>` writes a LongMemEval question list whose type mix matches the full set, for MemoryBench's `--question-ids-file`. Committed lists live in `results/samples/`; reuse one to compare runs on the same questions.
 - `scripts/recall-eval.ts --run <runId> --workspace <workspace>` replays a finished run's questions through recall on a copy of its workspace and reports gold-session and answer ranks. Use it to separate a filing miss from a ranking miss without rerunning Dreaming.
 
 A `<workspace>` is the bench workspace root printed as `MemoryBench workspace:` (it contains `agents/` and `home/`); keep it with `--keep-workspace`.
