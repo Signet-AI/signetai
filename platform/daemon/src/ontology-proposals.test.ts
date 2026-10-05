@@ -3021,7 +3021,7 @@ describe("ontology proposals", () => {
 				payload: { entity: "CappedEnt", entity_type: "project", name: "overflow_aspect" },
 				writeCaps: cap,
 			}),
-		).rejects.toThrow(/aspect cap \(2\/2\).*consolidate or archive/);
+		).rejects.toThrow(/aspect cap \(2\/2\).*merge_aspects.*rename_aspect.*Existing aspects: aspect_0 \(.+\); aspect_1/);
 	});
 
 	it("allows adding to an existing aspect that already exists past the cap (idempotent resolve)", async () => {

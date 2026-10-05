@@ -1177,6 +1177,57 @@ describe("dreaming operations", () => {
 		expect(claims.map((claim) => claim.claim_key)).toEqual(["pet"]);
 	});
 
+	it("lets a content pass merge and rename aspects with a reason instead of a hygiene flag", async () => {
+		insertEntity("e-user", "User", "user");
+		insertAspect("a-running", "e-user", "running and fitness");
+		insertAspect("a-fitness", "e-user", "fitness and exercise");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, group_key, claim_key, version, version_root_id, created_at, updated_at)
+				 VALUES ('attr-run', 'a-running', 'agent-a', 'attribute', 'The user runs 5k on Saturdays.', 'the user runs 5k on saturdays.', 0.8, 0.5, 'active', 'general', 'weekend_run', 1, 'attr-run', datetime('now'), datetime('now'))`,
+			).run();
+		});
+		const withoutReason = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{ operation: "rename_aspect", payload: { entityId: "e-user", aspectId: "a-fitness", newName: "fitness" } },
+			],
+		});
+		expect(withoutReason.ok).toBe(false);
+		expect(String(withoutReason.error)).toContain("requires a reason");
+
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "merge_aspects",
+					payload: { entityId: "e-user", target: "a-fitness", sources: ["a-running"] },
+					reason: "Running is part of the user's fitness routine.",
+				},
+				{
+					operation: "rename_aspect",
+					payload: { entityId: "e-user", aspectId: "a-fitness", newName: "fitness and running" },
+					reason: "The merged aspect now covers running too.",
+				},
+			],
+		});
+		expect(result.items.map((item) => item.ok)).toEqual([true, true]);
+		const state = getDbAccessor().withReadDb((db) => ({
+			aspects: db
+				.prepare("SELECT id, name, COALESCE(status, 'active') AS status FROM entity_aspects ORDER BY id")
+				.all() as Array<{ id: string; name: string; status: string }>,
+			claim: db.prepare("SELECT aspect_id FROM entity_attributes WHERE id = 'attr-run'").get() as { aspect_id: string },
+		}));
+		expect(state.claim.aspect_id).toBe("a-fitness");
+		expect(state.aspects.find((aspect) => aspect.id === "a-fitness")?.name).toBe("fitness and running");
+		expect(state.aspects.find((aspect) => aspect.id === "a-running")?.status).not.toBe("active");
+	});
+
 	it("supersedes the current active claim for a key without an explicit attribute id", async () => {
 		insertEntity("e-acme", "Acme", "acme");
 		insertAspect("a-main", "e-acme", "general");
@@ -1283,7 +1334,7 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 3 });
 	});
 
-	it("requires attention provenance for merge_aspects like other hygiene ops", async () => {
+	it("requires a reason for merge_aspects without attention provenance", async () => {
 		insertEntity("e-merge2", "MergeTwo", "mergetwo");
 		insertAspect("a-t2", "e-merge2", "target");
 		insertAspect("a-s2", "e-merge2", "source");
@@ -1299,6 +1350,19 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(false);
-		expect(result.error).toContain("Hygiene archives require attention provenance");
+		expect(String(result.error)).toContain("requires a reason");
+	});
+
+	it("still requires attention provenance for archives", async () => {
+		insertEntity("e-arch", "Archived", "archived");
+		insertAspect("a-arch", "e-arch", "old");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [{ operation: "archive_aspect", payload: { target: "a-arch" }, reason: "Unused." }],
+		});
+		expect(result.ok).toBe(false);
+		expect(String(result.error)).toContain("Hygiene archives require attention provenance");
 	});
 });

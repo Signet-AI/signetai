@@ -1637,8 +1637,15 @@ function enforceAspectCapForNewAspect(
 		)
 		.get(entity.id, agentId) as { c: number };
 	if (aspectCount.c >= writeCaps.maxAspectsPerEntity) {
+		const aspects = db
+			.prepare(
+				`SELECT id, name FROM entity_aspects
+				 WHERE entity_id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active'
+				 ORDER BY name`,
+			)
+			.all(entity.id, agentId) as Array<{ id: string; name: string }>;
 		throw new OntologyProposalError(
-			`entity '${entity.name}' is at aspect cap (${aspectCount.c}/${writeCaps.maxAspectsPerEntity}) — consolidate or archive an existing aspect before creating a new one`,
+			`entity '${entity.name}' is at aspect cap (${aspectCount.c}/${writeCaps.maxAspectsPerEntity}), so '${name}' cannot be added as a new aspect. File the claim under the existing aspect that covers it, or make room: merge overlapping aspects (merge_aspects) or rename one to cover both (rename_aspect), with a reason. Existing aspects: ${aspects.map((aspect) => `${aspect.name} (${aspect.id})`).join("; ")}`,
 			409,
 		);
 	}
@@ -2457,7 +2464,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2458" },
+		{ siteToken: "ontology-proposals.ts:2465" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2495,7 +2502,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2475" },
+		{ siteToken: "ontology-proposals.ts:2482" },
 	);
 }
 
@@ -2553,7 +2560,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2507" },
+		{ siteToken: "ontology-proposals.ts:2514" },
 	);
 }
 
@@ -2648,7 +2655,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2591" },
+		{ siteToken: "ontology-proposals.ts:2598" },
 	);
 }
 
@@ -3069,7 +3076,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:3071",
+		siteToken: "ontology-proposals.ts:3078",
 	});
 }
 
@@ -3080,7 +3087,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:3082",
+		siteToken: "ontology-proposals.ts:3089",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3131,7 +3138,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3132" },
+		{ siteToken: "ontology-proposals.ts:3139" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {

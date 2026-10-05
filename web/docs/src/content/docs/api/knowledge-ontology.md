@@ -742,6 +742,17 @@ return `400`; a fully handled request returns `200`.
 `agentId` uses scoped-agent resolution and cannot cross the credential's agent
 scope.
 
+**Provenance by operation.** Content operations (claims, entities, links)
+require exact-quote evidence. Archives and entity merges require hygiene
+attention provenance (`attention:$<index>` or `attention:<uuid>`).
+`merge_aspects` and `rename_aspect` restructure an entity's existing aspects
+without adding facts, so any pass may apply them with a `reason` and no
+evidence or attention; a `merge_aspects` that cites a hygiene flag still
+resolves that flag. An entity holds at most
+`memory.pipelineV2.traversal.maxWriteAspectsPerEntity` aspects (default 20).
+Creating one past the cap fails with the entity's existing aspects listed, so
+the pass can file under one of them or merge or rename to make room.
+
 **Claim time.** `add_claim_value`, `set_claim_value`, and
 `supersede_claim_value` accept `occurredAt` and `occurredUntil` for an event,
 `validFrom` and `validUntil` for a state, and `timePrecision` (`day`, `week`,

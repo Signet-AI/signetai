@@ -10,7 +10,11 @@ import {
 import { runWriteBatches } from "../yielding-writes";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
-import { DREAMING_HYGIENE_ARCHIVE_OPERATIONS, DREAMING_OPERATION_IDS } from "./dreaming-operation-contract";
+import {
+	DREAMING_HYGIENE_ARCHIVE_OPERATIONS,
+	DREAMING_OPERATION_IDS,
+	DREAMING_STRUCTURAL_OPERATIONS,
+} from "./dreaming-operation-contract";
 import { findUnresolvedRelativeTime } from "./claim-relative-time";
 
 export interface DreamingOperationRequest {
@@ -394,6 +398,30 @@ function pinnedTargetMismatch(
 		: `attention ${attention.id} details disagree with its subjectRef`;
 }
 
+function isStructuralWithoutCitation(operation: DreamingOperationRequest): boolean {
+	return (
+		DREAMING_STRUCTURAL_OPERATIONS.has(operation.operation) &&
+		!(operation.provenance?.trim().startsWith("attention:") ?? false) &&
+		(operation.evidence ?? []).length === 0
+	);
+}
+
+function structuralProvenanceError(index: number, operation: DreamingOperationRequest): string | null {
+	return operation.reason?.trim()
+		? null
+		: `Operation ${index} (${operation.operation}) restructures aspects without evidence, so it requires a reason naming why the aspects belong together or what the new name covers.`;
+}
+
+function structuralProvenance(passId: string | undefined): DreamingOperationProvenance {
+	return {
+		evidence: [],
+		sourceKind: "dreaming_pass",
+		sourceId: passId ?? "dreaming",
+		sourcePath: null,
+		sourceRoot: "dreaming",
+	};
+}
+
 function provenanceForEvidence(
 	accessor: DbAccessor,
 	agentId: string,
@@ -742,6 +770,11 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 
 		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
 		if ("error" in applicator) return unresolvedTarget(index, operation.operation, applicator.error);
+		if (isStructuralWithoutCitation(operation)) {
+			const structuralError = structuralProvenanceError(index, operation);
+			if (structuralError !== null) return structuralError;
+			continue;
+		}
 		if (DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) {
 			const reference = operation.provenance?.trim();
 			const sameBatch = reference?.match(/^attention:\$(\d+)$/);
@@ -978,7 +1011,11 @@ export async function applyDreamingOperations(
 		}
 		let provenance: DreamingOperationProvenance | null = null;
 		let attentionId: string | null = null;
-		if (DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) {
+		if (isStructuralWithoutCitation(operation)) {
+			const structuralError = structuralProvenanceError(index, operation);
+			if (structuralError !== null) return { ok: false, items: [], error: structuralError };
+			provenance = structuralProvenance(params.passId);
+		} else if (DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) {
 			const resolved = attentionProvenance(
 				params.accessor,
 				params.agentId,

@@ -119,10 +119,13 @@ export const DREAMING_HYGIENE_ARCHIVE_OPERATIONS: ReadonlySet<string> = new Set(
 	"merge_aspects",
 ]);
 
+export const DREAMING_STRUCTURAL_OPERATIONS: ReadonlySet<string> = new Set(["merge_aspects", "rename_aspect"]);
+
 export const DREAMING_ATTENTION_OPERATIONS: ReadonlySet<string> = new Set([
 	"flag",
 	"decline_attention",
 	...DREAMING_HYGIENE_ARCHIVE_OPERATIONS,
+	...DREAMING_STRUCTURAL_OPERATIONS,
 ]);
 
 export const DREAMING_OPERATION_IDS = [
@@ -143,7 +146,7 @@ const operationBase = {
 		.string()
 		.min(1)
 		.describe(
-			'Hygiene ops only: "attention:$<index>" referencing a flag op earlier in the same batch, or "attention:<uuid>" from a prior batch.',
+			'Hygiene ops only: "attention:$<index>" referencing a flag op earlier in the same batch, or "attention:<uuid>" from a prior batch. merge_aspects and rename_aspect need no attention or evidence: give a reason instead.',
 		)
 		.optional(),
 	confidence: z.number().finite().min(0).max(1).optional(),
