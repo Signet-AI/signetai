@@ -270,7 +270,14 @@ async function main(): Promise<void> {
 	}
 
 	if (files.some(isBiomeCandidate)) {
-		const biome = await run("Running staged Biome validation", ["bun", "run", "biome", "check", "--staged"]);
+		const biome = await run("Running staged Biome validation", [
+			"bun",
+			"run",
+			"biome",
+			"check",
+			"--staged",
+			"--no-errors-on-unmatched",
+		]);
 		if (biome !== 0) {
 			process.exitCode = biome;
 			return;
