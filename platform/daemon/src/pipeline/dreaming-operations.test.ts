@@ -1102,6 +1102,69 @@ describe("dreaming operations", () => {
 		expect(row.review_after).toBe("2026-08-03T06:00:00.000Z");
 	});
 
+	it("carries claim event time from a Dreaming operation onto the claim", async () => {
+		insertEntity("e-user", "User", "user");
+		insertAspect("a-events", "e-user", "events");
+		insertEpisodicMemory("mem-walk", "I just finished the Walk for Hunger this morning!");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "e-user",
+						aspectId: "a-events",
+						claimKey: "charity_walk",
+						value: "On 2023-03-19 the user completed the Walk for Hunger.",
+						occurredAt: "2023-03-19",
+						timePrecision: "day",
+					},
+					evidence: [{ source_ref: "memory:mem-walk", quote: "I just finished the Walk for Hunger" }],
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT occurred_start, time_precision FROM entity_attributes WHERE claim_key = ?")
+					.get("charity_walk") as { occurred_start: string; time_precision: string },
+		);
+		expect(row).toEqual({ occurred_start: "2023-03-19T00:00:00.000Z", time_precision: "day" });
+	});
+
+	it("rejects claim text that still holds a relative time, before writing", async () => {
+		insertEntity("e-user", "User", "user");
+		insertAspect("a-events", "e-user", "events");
+		insertEpisodicMemory("mem-walk", "I just finished the Walk for Hunger this morning!");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "e-user",
+						aspectId: "a-events",
+						claimKey: "charity_walk",
+						value: "The user completed the Walk for Hunger last weekend.",
+					},
+					evidence: [{ source_ref: "memory:mem-walk", quote: "I just finished the Walk for Hunger" }],
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain('relative time "last weekend"');
+		expect(result.error).toContain("capturedAt");
+		const count = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS c FROM entity_attributes").get() as { c: number },
+		);
+		expect(count.c).toBe(0);
+	});
+
 	it("supersedes the current active claim for a key without an explicit attribute id", async () => {
 		insertEntity("e-acme", "Acme", "acme");
 		insertAspect("a-main", "e-acme", "general");

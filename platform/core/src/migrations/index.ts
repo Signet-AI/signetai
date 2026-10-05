@@ -164,6 +164,7 @@ import { up as importAdmissionLedger } from "./160-import-admission-ledger";
 import { up as entityPruneKeysetIndex } from "./161-entity-prune-keyset-index";
 import { up as genericEntityPruneScanGeneration } from "./162-generic-entity-prune-scan-generation";
 import { up as retireMemoryContentSafety } from "./163-retire-memory-content-safety";
+import { up as claimEventTime } from "./164-claim-event-time";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1484,6 +1485,17 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 163,
 		name: "retire-memory-content-safety",
 		up: retireMemoryContentSafety,
+	},
+	{
+		version: 164,
+		name: "claim-event-time",
+		up: claimEventTime,
+		artifacts: {
+			columns: ["occurred_start", "occurred_end", "valid_from", "valid_until", "time_precision"].map((column) => ({
+				table: "entity_attributes",
+				column,
+			})),
+		},
 	},
 ];
 function checksum(m: Migration): string {

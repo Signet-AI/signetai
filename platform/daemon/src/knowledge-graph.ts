@@ -1,6 +1,7 @@
 import type {
 	AttributeKind,
 	AttributeStatus,
+	ClaimTimePrecision,
 	DependencyType,
 	Entity,
 	EntityAlias,
@@ -10,7 +11,7 @@ import type {
 	TaskMeta,
 	TaskStatus,
 } from "@signet/core";
-import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
+import { CLAIM_TIME_PRECISIONS, SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import { getDbAccessorPath, type DbAccessor, type ReadDb } from "./db-accessor";
 import { dbOwnerQuery, getDbOwner } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
@@ -120,6 +121,13 @@ function rowToAttribute(r: Record<string, unknown>): EntityAttribute {
 		sourceRoot: (r.source_root as string) ?? null,
 		proposalId: (r.proposal_id as string) ?? null,
 		proposalEvidence,
+		occurredStart: typeof r.occurred_start === "string" ? r.occurred_start : null,
+		occurredEnd: typeof r.occurred_end === "string" ? r.occurred_end : null,
+		validFrom: typeof r.valid_from === "string" ? r.valid_from : null,
+		validUntil: typeof r.valid_until === "string" ? r.valid_until : null,
+		timePrecision: CLAIM_TIME_PRECISIONS.includes(r.time_precision as ClaimTimePrecision)
+			? (r.time_precision as ClaimTimePrecision)
+			: null,
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};

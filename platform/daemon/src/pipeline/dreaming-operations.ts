@@ -11,6 +11,7 @@ import { runWriteBatches } from "../yielding-writes";
 import { type DreamingAttention, enqueueDreamingAttentionInTx, getDreamingAttentionById } from "./dreaming-attention";
 import { type DreamingAgentEvidence, createDreamingAgentEvidence } from "./dreaming-evidence";
 import { DREAMING_HYGIENE_ARCHIVE_OPERATIONS, DREAMING_OPERATION_IDS } from "./dreaming-operation-contract";
+import { findUnresolvedRelativeTime } from "./claim-relative-time";
 
 export interface DreamingOperationRequest {
 	readonly operation: string;
@@ -527,6 +528,24 @@ function missingFields(
 	return missing.length === 0 ? null : { error: `missing ${missing.map((field) => `payload.${field}`).join(", ")}` };
 }
 
+const CLAIM_TIMING_FIELDS = [
+	["reviewAfter", "review_after"],
+	["occurredAt", "occurred_at"],
+	["occurredUntil", "occurred_until"],
+	["validFrom", "valid_from"],
+	["validUntil", "valid_until"],
+	["timePrecision", "time_precision"],
+] as const;
+
+function claimTimingPayload(payload: Readonly<Record<string, unknown>>): Record<string, string> {
+	const timing: Record<string, string> = {};
+	for (const [field, key] of CLAIM_TIMING_FIELDS) {
+		const value = stringField(payload, field);
+		if (value !== null) timing[key] = value;
+	}
+	return timing;
+}
+
 function notFound(kind: string, id: string, scope: string): ApplicatorPayload {
 	return { error: `${kind} ${id} not found ${scope}; read it back with get_entity before retrying` };
 }
@@ -598,22 +617,24 @@ function toApplicatorPayload(
 			if (name === null) return notFound("entity", entityId, inAgent);
 			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId);
 			if (aspect === null) return notFound("aspect", aspectId, `on entity ${entityId}`);
+			const timing = claimTimingPayload(payload);
 			if (operation !== "supersede_claim_value") {
-				return {
-					payload: {
-						entity: name,
-						aspect,
-						claim_key: claimKey,
-						value,
-						...(stringField(payload, "reviewAfter") ? { review_after: stringField(payload, "reviewAfter") } : {}),
-					},
-				};
+				return { payload: { entity: name, aspect, claim_key: claimKey, value, ...timing } };
 			}
 			const attributeId =
 				stringField(payload, "attributeId") ?? lookupActiveClaimAttributeId(accessor, agentId, aspectId, claimKey);
 			return attributeId === null
 				? { error: `no active claim ${claimKey} on aspect ${aspectId} to supersede` }
-				: { payload: { entity: name, aspect, claim_key: claimKey, attribute_id: attributeId, new_value: value } };
+				: {
+						payload: {
+							entity: name,
+							aspect,
+							claim_key: claimKey,
+							attribute_id: attributeId,
+							new_value: value,
+							...timing,
+						},
+					};
 		}
 		case "rename_entity": {
 			const missing = missingFields(payload, ["entityId", "newName"]);
@@ -681,6 +702,16 @@ function evidenceError(index: number, unmatched: string | undefined): string {
 	return `${EVIDENCE_ERROR}: operation ${index} quotes text not found verbatim in ${unmatched}; copy the source exactly, typos included`;
 }
 
+const CLAIM_VALUE_OPERATIONS: ReadonlySet<string> = new Set([
+	"add_claim_value",
+	"set_claim_value",
+	"supersede_claim_value",
+]);
+
+function relativeTimeError(index: number, operation: string, phrase: string): string {
+	return `Operation ${index} (${operation}) value contains the relative time "${phrase}", which is wrong once the conversation is over. Resolve it against the source's capturedAt, write the absolute date in the value, and set occurredAt (events) or validFrom (states) with timePrecision.`;
+}
+
 function unresolvedTarget(index: number, operation: string, detail: string): string {
 	return `Could not resolve operation ${index} target (${operation}): ${detail}`;
 }
@@ -709,6 +740,10 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			continue;
 		}
 
+		const relativeTime = CLAIM_VALUE_OPERATIONS.has(operation.operation)
+			? findUnresolvedRelativeTime(stringField(operation.payload, "value") ?? "")
+			: null;
+		if (relativeTime !== null) return relativeTimeError(index, operation.operation, relativeTime);
 		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
 		if ("error" in applicator) return unresolvedTarget(index, operation.operation, applicator.error);
 		if (DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation)) {

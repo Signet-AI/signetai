@@ -742,6 +742,29 @@ return `400`; a fully handled request returns `200`.
 `agentId` uses scoped-agent resolution and cannot cross the credential's agent
 scope.
 
+**Claim time.** `add_claim_value`, `set_claim_value`, and
+`supersede_claim_value` accept `occurredAt` and `occurredUntil` for an event,
+`validFrom` and `validUntil` for a state, and `timePrecision` (`day`, `week`,
+`month`, `year`, or `approximate`). Values are ISO dates or timestamps resolved
+against the cited source's capture time; a date-only value defaults to `day`
+precision. `supersede_claim_value` also accepts `reviewAfter`. The time is
+stored on the claim and returned in its version history, and the claim's
+semantic memory gets matching `occurred` and `valid` temporal edges, so
+temporal recall finds claims by when the event happened rather than when it
+was filed. Edges are derived from the claim and removed when its memory is
+purged.
+
+When a claim arrives for a slot whose active claim has a later evidence time
+(`validFrom`, else `occurredAt`), the incoming claim is recorded as already
+superseded by the active one and the result names it in
+`supersededByNewerEvidence`. Without times on both claims, the newest write
+replaces the current value as before.
+
+Claim text that still contains a relative time such as "yesterday", "last
+weekend", or "three weeks ago" is rejected before any write, with an error
+asking for the absolute date and the matching time field. Vague times with no
+anchor, such as "recently", are allowed.
+
 ### GET /api/dream/passes/:passId/tools
 
 Return the local, ordered Pi capability trace for one Dreaming pass: every

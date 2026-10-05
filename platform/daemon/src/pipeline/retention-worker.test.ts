@@ -113,6 +113,12 @@ describe("retention worker", () => {
 			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
 		).run("old-del", "old", "fact", daysAgo(35), now, now, "test");
+		for (const memoryId of ["recent-del", "old-del"]) {
+			db.prepare(
+				`INSERT INTO temporal_edges (id, subject_type, subject_id, facet, start_at, created_at, updated_at)
+				 VALUES (?, 'memory', ?, 'occurred', '2023-03-19T00:00:00.000Z', ?, ?)`,
+			).run(`edge-${memoryId}`, memoryId, now, now);
+		}
 
 		const handle = startRetentionWorker(accessor, testRetentionConfig());
 		const result = await handle.sweep();
@@ -123,6 +129,8 @@ describe("retention worker", () => {
 		expect(recent).toBeTruthy();
 		const old = db.prepare("SELECT id FROM memories WHERE id = ?").get("old-del");
 		expect(old).toBeNull();
+		const edges = db.prepare("SELECT subject_id FROM temporal_edges ORDER BY subject_id").all();
+		expect(edges).toEqual([{ subject_id: "recent-del" }]);
 	});
 
 	it("purges old history events past retention window", async () => {

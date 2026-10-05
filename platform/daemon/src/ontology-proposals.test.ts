@@ -28,6 +28,7 @@ import {
 	rejectOntologyProposal,
 } from "./ontology-proposals";
 import { registerOntologyRoutes } from "./routes/ontology-routes";
+import { resolveTemporalRecall } from "./temporal-recall";
 import { txIngestEnvelope } from "./transactions";
 
 describe("ontology proposals", () => {
@@ -3283,5 +3284,177 @@ describe("ontology proposals", () => {
 				writeCaps: cap,
 			}),
 		).rejects.toThrow(/aspect cap \(2\/2\)/);
+	});
+	describe("claim event time", () => {
+		const slot = {
+			entity: "User",
+			entity_type: "person",
+			aspect: "events",
+			group_key: "general",
+			claim_key: "charity_walk",
+		};
+
+		function attributeTime(id: string): Record<string, unknown> | undefined {
+			return getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						`SELECT status, superseded_by, occurred_start, occurred_end, valid_from, valid_until, time_precision
+						 FROM entity_attributes WHERE id = ?`,
+					)
+					.get(id),
+			) as Record<string, unknown> | undefined;
+		}
+
+		function edgesFor(memoryId: string): Array<Record<string, unknown>> {
+			return getDbAccessor().withReadDb((db) =>
+				db
+					.prepare(
+						`SELECT facet, start_at, end_at, metadata_json FROM temporal_edges
+						 WHERE subject_type = 'memory' AND subject_id = ? ORDER BY facet`,
+					)
+					.all(memoryId),
+			) as Array<Record<string, unknown>>;
+		}
+
+		it("stores event time on the claim and derives occurred edges that temporal recall can find", async () => {
+			const applied = await applyOntologyOperation(getDbAccessor(), {
+				agentId: "default",
+				actor: "dreaming",
+				operation: "set_claim_value",
+				payload: {
+					...slot,
+					value: "On 2023-03-19 the user completed the Walk for Hunger.",
+					occurred_at: "2023-03-19",
+				},
+			});
+			const id = applied.result?.attributeId;
+			if (typeof id !== "string") throw new Error("attribute id was not returned");
+
+			expect(attributeTime(id)).toMatchObject({
+				status: "active",
+				occurred_start: "2023-03-19T00:00:00.000Z",
+				occurred_end: null,
+				time_precision: "day",
+			});
+			const edges = edgesFor(id);
+			expect(edges).toHaveLength(1);
+			expect(edges[0]).toMatchObject({
+				facet: "occurred",
+				start_at: "2023-03-19T00:00:00.000Z",
+				end_at: "2023-03-19T23:59:59.999Z",
+			});
+			expect(JSON.parse(String(edges[0]?.metadata_json))).toMatchObject({ attributeId: id, precision: "day" });
+
+			const versions = await listClaimVersions(getDbAccessor(), {
+				agentId: "default",
+				entity: "User",
+				aspect: "events",
+				group: "general",
+				claim: "charity_walk",
+			});
+			expect(versions.items[0]?.occurredStart).toBe("2023-03-19T00:00:00.000Z");
+			expect(versions.items[0]?.timePrecision).toBe("day");
+
+			const recalled = resolveTemporalRecall({ query: "which charity event did I do on 2023-03-19?", limit: 10 });
+			expect(recalled.candidateIds).toContain(id);
+		});
+
+		it("keeps the newer claim current when an older claim arrives later", async () => {
+			const residence = { ...slot, aspect: "home", claim_key: "city" };
+			const newer = await applyOntologyOperation(getDbAccessor(), {
+				agentId: "default",
+				actor: "dreaming",
+				operation: "set_claim_value",
+				payload: {
+					...residence,
+					value: "The user has lived in Denver since May 2024.",
+					valid_from: "2024-05-01",
+					time_precision: "month",
+				},
+			});
+			const older = await applyOntologyOperation(getDbAccessor(), {
+				agentId: "default",
+				actor: "dreaming",
+				operation: "set_claim_value",
+				payload: {
+					...residence,
+					value: "The user lived in Boston in January 2023.",
+					valid_from: "2023-01-01",
+					time_precision: "month",
+				},
+			});
+			const newerId = newer.result?.attributeId;
+			const olderId = older.result?.attributeId;
+			if (typeof newerId !== "string" || typeof olderId !== "string")
+				throw new Error("attribute ids were not returned");
+
+			expect(older.result?.supersededByNewerEvidence).toBe(newerId);
+			expect(attributeTime(newerId)?.status).toBe("active");
+			expect(attributeTime(olderId)).toMatchObject({ status: "superseded", superseded_by: newerId });
+			const olderMemory = getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT superseded_by FROM memories WHERE id = ?").get(olderId),
+			) as { superseded_by: string | null } | undefined;
+			expect(olderMemory?.superseded_by).toBe(newerId);
+
+			const latest = await applyOntologyOperation(getDbAccessor(), {
+				agentId: "default",
+				actor: "dreaming",
+				operation: "set_claim_value",
+				payload: { ...residence, value: "The user has lived in Austin since June 2025.", valid_from: "2025-06-01" },
+			});
+			const latestId = latest.result?.attributeId;
+			if (typeof latestId !== "string") throw new Error("attribute id was not returned");
+			expect(attributeTime(latestId)?.status).toBe("active");
+			expect(attributeTime(newerId)).toMatchObject({ status: "superseded", superseded_by: latestId });
+		});
+
+		it("forwards review time and event time through supersede_claim_value", async () => {
+			const plan = { ...slot, aspect: "plans", claim_key: "marathon" };
+			await applyOntologyOperation(getDbAccessor(), {
+				agentId: "default",
+				actor: "dreaming",
+				operation: "set_claim_value",
+				payload: { ...plan, value: "The user plans to run a marathon in 2024." },
+			});
+			const replaced = await applyOntologyOperation(getDbAccessor(), {
+				agentId: "default",
+				actor: "dreaming",
+				operation: "supersede_claim_value",
+				payload: {
+					...plan,
+					old_value: "The user plans to run a marathon in 2024.",
+					new_value: "The user registered for the Denver Marathon on 2024-10-20.",
+					review_after: "2024-10-21T00:00:00.000Z",
+					occurred_at: "2024-10-20",
+					time_precision: "day",
+				},
+			});
+			const id = replaced.result?.replacementAttributeId;
+			if (typeof id !== "string") throw new Error("replacement attribute id was not returned");
+			expect(attributeTime(id)).toMatchObject({ occurred_start: "2024-10-20T00:00:00.000Z", time_precision: "day" });
+			const memory = getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT review_after FROM memories WHERE id = ?").get(id),
+			) as { review_after: string | null } | undefined;
+			expect(memory?.review_after).toBe("2024-10-21T00:00:00.000Z");
+			expect(edgesFor(id).map((edge) => edge.facet)).toEqual(["occurred"]);
+		});
+
+		it("rejects malformed claim time", async () => {
+			const attempt = (extra: Record<string, unknown>) =>
+				applyOntologyOperation(getDbAccessor(), {
+					agentId: "default",
+					actor: "dreaming",
+					operation: "set_claim_value",
+					payload: { ...slot, value: "The user walked for charity on 2023-03-19.", ...extra },
+				});
+			await expect(attempt({ occurred_at: "not a date" })).rejects.toThrow(/occurred_at must be a valid ISO/);
+			await expect(attempt({ occurred_until: "2023-03-20" })).rejects.toThrow(/occurred_until requires/);
+			await expect(attempt({ occurred_at: "2023-03-19", time_precision: "hourly" })).rejects.toThrow(
+				/time_precision must be one of/,
+			);
+			await expect(attempt({ valid_from: "2023-03-19", valid_until: "2023-03-01" })).rejects.toThrow(
+				/valid_until must be after/,
+			);
+		});
 	});
 });

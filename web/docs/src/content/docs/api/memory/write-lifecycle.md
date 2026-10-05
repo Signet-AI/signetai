@@ -124,6 +124,8 @@ attach explicit temporal edges to the memory without duplicating the memory
 content. Use them when the memory is saved later than the event, observation,
 source creation time, or validity window it describes. Each value must be a
 valid ISO timestamp; `validUntil` must be after `validFrom` when both are set.
+Dreaming claims carry the same `occurred` and `valid` facets on their semantic
+memories (see [Claim time](/api/knowledge-ontology/#post-api-dream-operations)).
 
 `reviewAfter` is an optional ISO timestamp for a future temporal claim. Dreaming
 uses it to surface the memory for review after the deadline instead of assuming
