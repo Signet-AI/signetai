@@ -3,6 +3,7 @@ import type { DreamingConfig } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { ownerQueryAll, ownerQueryOne } from "../db-owner-maintenance";
+import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { getQueueHealth } from "../diagnostics";
 import { getOrCreateInferenceRouter } from "../inference-router";
 import type { GraphHygieneCaps } from "../knowledge-graph-hygiene";
@@ -81,14 +82,19 @@ interface StartedDreamingPass {
 type DreamingPassResult = { passId: string; applied: number; skipped: number; failed: number; summary: string };
 
 export function partitionDreamingScopes(
-	backlogs: ReadonlyArray<{ readonly scope: string; readonly tokens: number }>,
+	backlogs: ReadonlyArray<{ readonly scope: string; readonly tokens: number; readonly attention?: boolean }>,
 	slots: number,
 ): string[][] {
 	const withBacklog = backlogs
 		.filter((item) => item.tokens > 0)
 		.sort((a, b) => b.tokens - a.tokens || a.scope.localeCompare(b.scope));
-	const idle = backlogs.filter((item) => item.tokens <= 0).map((item) => item.scope);
-	const groups = Array.from({ length: Math.max(1, Math.min(slots, withBacklog.length)) }, () => ({
+	const attentionOnly = backlogs
+		.filter((item) => item.tokens <= 0 && item.attention === true)
+		.map((item) => item.scope)
+		.sort();
+	const work = withBacklog.length + attentionOnly.length;
+	if (work === 0) return [];
+	const groups = Array.from({ length: Math.max(1, Math.min(slots, work)) }, () => ({
 		scopes: [] as string[],
 		tokens: 0,
 	}));
@@ -97,7 +103,15 @@ export function partitionDreamingScopes(
 		target.scopes.push(item.scope);
 		target.tokens += item.tokens;
 	}
-	groups[0]?.scopes.push(...idle);
+	for (const scope of attentionOnly) {
+		const target = groups.reduce((smallest, group) =>
+			group.scopes.length < smallest.scopes.length ||
+			(group.scopes.length === smallest.scopes.length && group.tokens < smallest.tokens)
+				? group
+				: smallest,
+		);
+		target.scopes.push(scope);
+	}
 	return groups.map((group) => [...group.scopes].sort()).filter((scopes) => scopes.length > 0);
 }
 export interface DreamingSchedulerStatus {
@@ -543,14 +557,28 @@ export function startDreamingWorker(
 		return { passId, result, firstToolCall };
 	}
 
-	async function measureScopeBacklogs(
+	async function measureScopeWork(
 		scopes: readonly string[],
-	): Promise<Array<{ readonly scope: string; readonly tokens: number }>> {
+	): Promise<Array<{ readonly scope: string; readonly tokens: number; readonly attention: boolean }>> {
+		const owner = await getDbOwnerForAccessor(accessor);
+		const attention = new Set(
+			(
+				await ownerQueryAll<{ agentId: string }>(
+					owner,
+					"dreaming.worker.pending-attention-scopes",
+					`SELECT DISTINCT agent_id AS agentId FROM dreaming_attention
+					 WHERE resolved_at IS NULL AND agent_id IN (${scopes.map(() => "?").join(", ")})`,
+					[...scopes],
+					{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+				)
+			).map((row) => row.agentId),
+		);
 		return await Promise.all(
 			scopes.map(async (scope) => {
 				const probe = await probeDreamingEpisodicBacklog(accessor, scope, cfg.tokenThreshold, options.ownerMaintenance);
-				if (probe.hasBacklog === false) return { scope, tokens: 0 };
-				return { scope, tokens: Math.max(1, probe.kind === "exact" ? probe.tokens : probe.tokenLowerBound) };
+				const tokens =
+					probe.hasBacklog === false ? 0 : Math.max(1, probe.kind === "exact" ? probe.tokens : probe.tokenLowerBound);
+				return { scope, tokens, attention: attention.has(scope) };
 			}),
 		);
 	}
@@ -558,10 +586,9 @@ export function startDreamingWorker(
 	async function startIncrementalPasses(runAgentId: string, scopes: readonly string[]): Promise<StartedDreamingPass> {
 		const slots = maxPasses() - usedSlots();
 		if (scopes.length === 0 || slots <= 0) throw new AlreadyRunningError();
-		const groups =
-			slots === 1 || scopes.length === 1
-				? [[...scopes]]
-				: partitionDreamingScopes(await measureScopeBacklogs(scopes), slots);
+		const measured =
+			scopes.length === 1 ? [[...scopes]] : partitionDreamingScopes(await measureScopeWork(scopes), slots);
+		const groups = measured.length > 0 ? measured : [[...scopes]];
 		const [firstGroup, ...rest] = groups;
 		const first = startPass(runAgentId, "incremental", firstGroup ?? [...scopes], false);
 		if (rest.length === 0) return first;

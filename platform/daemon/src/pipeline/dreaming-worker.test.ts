@@ -926,7 +926,7 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
-	it("balances agent groups by backlog and keeps idle agents together", () => {
+	it("balances agent groups by backlog and leaves scopes with nothing to do out", () => {
 		expect(
 			partitionDreamingScopes(
 				[
@@ -937,20 +937,41 @@ describe("dreaming worker agent scope", () => {
 				],
 				2,
 			),
-		).toEqual([
-			["alpha", "default"],
-			["beta", "gamma"],
-		]);
+		).toEqual([["alpha"], ["beta", "gamma"]]);
 		expect(
 			partitionDreamingScopes(
 				[
 					{ scope: "alpha", tokens: 10 },
 					{ scope: "default", tokens: 0 },
+					{ scope: "idle", tokens: 0 },
 				],
 				4,
 			),
-		).toEqual([["alpha", "default"]]);
-		expect(partitionDreamingScopes([{ scope: "default", tokens: 0 }], 3)).toEqual([["default"]]);
+		).toEqual([["alpha"]]);
+		expect(partitionDreamingScopes([{ scope: "default", tokens: 0 }], 3)).toEqual([]);
+	});
+
+	it("spreads scopes with only pending attention across free slots", () => {
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "alpha", tokens: 10 },
+					{ scope: "flagged-a", tokens: 0, attention: true },
+					{ scope: "flagged-b", tokens: 0, attention: true },
+					{ scope: "idle", tokens: 0 },
+				],
+				3,
+			),
+		).toEqual([["alpha"], ["flagged-a"], ["flagged-b"]]);
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "alpha", tokens: 10 },
+					{ scope: "flagged-a", tokens: 0, attention: true },
+				],
+				1,
+			),
+		).toEqual([["alpha", "flagged-a"]]);
 	});
 
 	it("runs disjoint agent groups concurrently after the first pass reaches a tool", async () => {
