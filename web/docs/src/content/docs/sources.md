@@ -223,13 +223,16 @@ edited first, bounded by `maxPages` (default 500, maximum 10,000). Page content
 is read through Notion's page-Markdown endpoint; database-entry properties
 are rendered above the page body. Notion reports `last_edited_time` at minute
 granularity, so a page is skipped only when its edit time is unchanged and the
-previous fetch happened after that minute ended; a page is marked synced only
+previous fetch happened after that minute ended, and its rendered title and
+properties are unchanged, so formula, rollup, and person-name values that
+change without an edit are still refreshed; a page is marked synced only
 after both its artifact and its source-graph structure are written. Each page
 artifact records the page ID, URL, parent, and edit time, and is grouped under
 a reference node for its parent page or data source in the source graph.
 
 Pages that are no longer returned are removed from the index after a complete
-enumeration. Pages outside a smaller `maxPages` window are removed directly;
+enumeration. Pages well outside a smaller `maxPages` window are removed
+directly, and pages within a minute of the window's oldest page are looked up first;
 any other missing page is first confirmed gone (`404` or trashed) with a page
 lookup, up to 200 lookups per sync with the least recently confirmed pages
 first, so a page edited while the listing was in progress is not dropped and a
@@ -259,8 +262,7 @@ Stored page text is capped at 750,000 characters, with a note in the page and a
 `clipped` flag in its metadata.
 
 Comments, file attachments, and data-source schemas are not indexed in v1.
-Formula, rollup, and person-name property values that change without editing
-the page are refreshed only when the page is next edited. Pages removed from
+Pages removed from
 the index are soft-deleted and their content is retained until the source
 itself is removed.
 

@@ -7,6 +7,7 @@ import {
 	addImportedSource,
 	addObsidianSource,
 	loadSourcesConfig,
+	notionSourceId,
 	removeSourceIfGeneration,
 } from "@signet/core";
 import { Hono } from "hono";
@@ -709,6 +710,22 @@ describe("Sources routes", () => {
 			expect(res.status).toBe(400);
 		}
 		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+	});
+
+	it("returns 409 for a Notion source whose mutation lease is held", async () => {
+		const releaseDeletion = beginSourceDeletion(notionSourceId("NOTION_TOKEN"));
+		expect(releaseDeletion).toBeTypeOf("function");
+		try {
+			const res = await makeApp().request("/api/sources/notion", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ tokenRef: "  NOTION_TOKEN  " }),
+			});
+			expect(res.status).toBe(409);
+			expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+		} finally {
+			releaseDeletion?.();
+		}
 	});
 
 	it("rejects raw Discord tokens at the route boundary", async () => {

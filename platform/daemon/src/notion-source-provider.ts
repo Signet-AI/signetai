@@ -50,6 +50,7 @@ interface IndexedPageVersion {
 	readonly mtimeMs: number | null;
 	readonly syncedAtMs: number | null;
 	readonly incomplete: boolean;
+	readonly propertiesHash: string | null;
 }
 
 interface CompletedMarkdown {
@@ -206,7 +207,18 @@ async function syncNotionSource(context: SourceProviderSyncContext): Promise<Sou
 function isCurrent(stored: IndexedPageVersion | undefined, page: NotionPage): boolean {
 	if (!stored || stored.incomplete || stored.syncedAtMs === null) return false;
 	const editedMs = Date.parse(page.lastEditedTime);
-	return stored.mtimeMs === editedMs && stored.syncedAtMs >= editedMs + NOTION_EDIT_GRANULARITY_MS;
+	return (
+		stored.mtimeMs === editedMs &&
+		stored.syncedAtMs >= editedMs + NOTION_EDIT_GRANULARITY_MS &&
+		stored.propertiesHash === propertiesHash(page)
+	);
+}
+
+export function propertiesHash(page: NotionPage): string {
+	return createHash("sha256")
+		.update(JSON.stringify([page.title, page.properties]))
+		.digest("hex")
+		.slice(0, 16);
 }
 
 async function syncPage(
@@ -433,6 +445,7 @@ async function writePageArtifact(
 			parentId: page.parentId,
 			createdTime: page.createdTime,
 			lastEditedTime: page.lastEditedTime,
+			propertiesHash: propertiesHash(page),
 			incomplete: markdown.missingBlocks > 0,
 			missingBlocks: markdown.missingBlocks,
 			unsupportedBlocks: markdown.unsupportedBlockIds.length,
@@ -507,12 +520,14 @@ async function readIndexedPageVersions(
 			readonly source_mtime_ms: number | null;
 			readonly synced_at_ms: number | null;
 			readonly incomplete: number | null;
+			readonly properties_hash: string | null;
 		}>
 	>(
 		{
 			sql: `SELECT source_path, source_mtime_ms,
 			        json_extract(source_meta_json, '$.syncedAtMs') AS synced_at_ms,
-			        json_extract(source_meta_json, '$.incomplete') AS incomplete
+			        json_extract(source_meta_json, '$.incomplete') AS incomplete,
+			        json_extract(source_meta_json, '$.propertiesHash') AS properties_hash
 			 FROM memory_artifacts
 			 WHERE agent_id = ? AND source_id = ? AND source_kind = 'source_notion_page'
 			   AND COALESCE(is_deleted, 0) = 0
@@ -527,6 +542,7 @@ async function readIndexedPageVersions(
 			mtimeMs: typeof row.source_mtime_ms === "number" ? row.source_mtime_ms : null,
 			syncedAtMs: typeof row.synced_at_ms === "number" ? row.synced_at_ms : null,
 			incomplete: row.incomplete === 1,
+			propertiesHash: typeof row.properties_hash === "string" ? row.properties_hash : null,
 		});
 	}
 	return versions;
@@ -557,7 +573,7 @@ async function purgeStalePages(
 	candidates.sort((left, right) => (left.confirmedLiveAtMs ?? 0) - (right.confirmedLiveAtMs ?? 0));
 	for (const candidate of candidates) {
 		if (!shouldContinue()) return;
-		if (candidate.mtimeMs !== null && candidate.mtimeMs <= windowFloorMs) {
+		if (candidate.mtimeMs !== null && candidate.mtimeMs < windowFloorMs - NOTION_EDIT_GRANULARITY_MS) {
 			stale.push(candidate);
 			continue;
 		}

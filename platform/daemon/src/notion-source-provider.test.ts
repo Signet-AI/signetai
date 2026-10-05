@@ -5,8 +5,18 @@ import { join } from "node:path";
 import { type SignetSourceEntry, addNotionSource } from "@signet/core";
 import type { SecretKeyringAdapter } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { NOTION_API_VERSION, NOTION_MAX_RESPONSE_BYTES, setNotionSleepForTest } from "./notion-source-fetch";
-import { NOTION_MAX_PAGE_CHARS, notionSourceProvider, setNotionSyncDeadlineForTest } from "./notion-source-provider";
+import {
+	NOTION_API_VERSION,
+	NOTION_MAX_RESPONSE_BYTES,
+	parseNotionPage,
+	setNotionSleepForTest,
+} from "./notion-source-fetch";
+import {
+	NOTION_MAX_PAGE_CHARS,
+	notionSourceProvider,
+	propertiesHash,
+	setNotionSyncDeadlineForTest,
+} from "./notion-source-provider";
 import { putSecret, setSecretKeyringAdapterForTests } from "./secrets";
 
 const originalFetch = globalThis.fetch;
@@ -766,7 +776,9 @@ describe("notion-source-provider", () => {
 					{ has_more: maxPages < ids.length, next_cursor: "more" },
 				);
 			}
-			return markdownResponse("body");
+			if (request.path.endsWith("/markdown")) return markdownResponse("body");
+			const id = request.path.split("/")[2] ?? "";
+			return Response.json(page(id, id, edited));
 		});
 		await sync(wide);
 
@@ -777,7 +789,7 @@ describe("notion-source-provider", () => {
 		const result = await sync(narrow.source);
 
 		expect(result.failures).toEqual([]);
-		expect(requests.map((request) => request.path)).toEqual(["/search"]);
+		expect(requests.filter((request) => request.path.startsWith("/pages/"))).toHaveLength(7);
 		const live = sourceRows(wide.id).filter(
 			(entry) => entry.source_kind === "source_notion_page" && entry.is_deleted === 0,
 		);
@@ -968,6 +980,151 @@ describe("notion-source-provider", () => {
 		expect(JSON.parse(artifact?.source_meta_json ?? "{}")).toMatchObject({ clipped: true });
 	});
 
+	it("refetches a page whose properties changed without an edit", async () => {
+		const source = addSource();
+		let score = 1;
+		const requests = stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse([
+						page("row", "Row", "2026-02-01T00:00:00.000Z", {
+							properties: {
+								Name: { type: "title", title: [{ plain_text: "Row" }] },
+								Score: { type: "formula", formula: { type: "number", number: score } },
+							},
+						}),
+					])
+				: markdownResponse("body"),
+		);
+		await sync(source);
+
+		requests.length = 0;
+		await sync(source);
+		expect(requests.map((request) => request.path)).toEqual(["/search"]);
+
+		score = 2;
+		requests.length = 0;
+		await sync(source);
+		expect(requests.map((request) => request.path)).toEqual(["/search", "/pages/row/markdown"]);
+		expect(sourceRows(source.id).find((entry) => entry.source_external_id === "row")?.content).toContain("- Score: 2");
+	});
+
+	it("confirms floor-adjacent pages before dropping them from a capped window", async () => {
+		const source = addSource(2);
+		seedPageRows(source.id, ["lagged"], Date.parse("2026-02-04T00:00:30.000Z"), Date.now());
+		seedPageRows(source.id, ["old"], Date.parse("2026-01-01T00:00:00.000Z"), Date.now());
+		const requests = stubNotion((request) => {
+			if (request.path === "/search") {
+				return searchResponse(
+					[page("a", "A", "2026-02-05T00:00:00.000Z"), page("b", "B", "2026-02-04T00:01:00.000Z")],
+					{ has_more: true, next_cursor: "more" },
+				);
+			}
+			if (request.path === "/pages/lagged") return Response.json(page("lagged", "Lagged", "2026-02-06T00:00:00.000Z"));
+			return markdownResponse("body");
+		});
+
+		const result = await sync(source);
+
+		expect(result.failures).toEqual([]);
+		expect(requests.filter((request) => /^\/pages\/[^/]+$/.test(request.path)).map((request) => request.path)).toEqual([
+			"/pages/lagged",
+		]);
+		const rows = sourceRows(source.id);
+		expect(rows.find((entry) => entry.source_external_id === "lagged")).toMatchObject({ is_deleted: 0 });
+		expect(rows.find((entry) => entry.source_external_id === "old")).toMatchObject({ is_deleted: 1 });
+	});
+
+	it("treats a trashed page lookup as removed", async () => {
+		const source = addSource();
+		let results = [page("a", "A", "2026-02-01T00:00:00.000Z"), page("t", "T", "2026-02-01T00:00:00.000Z")];
+		stubNotion((request) => {
+			if (request.path === "/search") return searchResponse(results);
+			if (request.path === "/pages/t")
+				return Response.json(page("t", "T", "2026-02-02T00:00:00.000Z", { in_trash: true }));
+			return markdownResponse("body");
+		});
+		await sync(source);
+
+		results = [page("a", "A", "2026-02-01T00:00:00.000Z")];
+		const result = await sync(source);
+
+		expect(result.failures).toEqual([]);
+		expect(sourceRows(source.id).find((entry) => entry.source_external_id === "t")).toMatchObject({ is_deleted: 1 });
+	});
+
+	it("classifies an inaccessible nested block as unsupported", async () => {
+		const source = addSource();
+		stubNotion((request) => {
+			if (request.path === "/search") return searchResponse([page("p", "Synced", "2026-02-01T00:00:00.000Z")]);
+			if (request.path === "/pages/p/markdown") {
+				return Response.json({
+					markdown: 'Body\n<unknown url="https://www.notion.so/p#locked1" alt="synced_block"/>',
+					truncated: true,
+					unknown_block_ids: ["locked-1"],
+				});
+			}
+			return Response.json({ code: "restricted_resource", message: "no access" }, { status: 403 });
+		});
+
+		const result = await sync(source);
+
+		expect(result.failures).toEqual([]);
+		const artifact = sourceRows(source.id).find((entry) => entry.source_kind === "source_notion_page");
+		expect(artifact?.content).toContain("[Unsupported Notion block: synced_block]");
+		expect(JSON.parse(artifact?.source_meta_json ?? "{}")).toMatchObject({ incomplete: false, unsupportedBlocks: 1 });
+	});
+
+	it("keeps agents isolated when they sync the same source", async () => {
+		const source = addSource();
+		let results = [page("a", "A", "2026-02-01T00:00:00.000Z"), page("b", "B", "2026-02-01T00:00:00.000Z")];
+		stubNotion((request) => {
+			if (request.path === "/search") return searchResponse(results);
+			if (request.path === "/pages/b")
+				return Response.json({ code: "object_not_found", message: "gone" }, { status: 404 });
+			return markdownResponse("body");
+		});
+		await sync(source);
+		await notionSourceProvider.sync?.({ source, agentsDir: dir, agentId: "other", shouldContinue: () => true });
+
+		results = [page("a", "A", "2026-02-01T00:00:00.000Z")];
+		await notionSourceProvider.sync?.({ source, agentsDir: dir, agentId: "other", shouldContinue: () => true });
+
+		const rows = agentRows(source.id);
+		expect(rows.filter((row) => row.agent_id === "default" && row.is_deleted === 0)).toHaveLength(2);
+		expect(rows.find((row) => row.agent_id === "other" && row.source_external_id === "b")).toMatchObject({
+			is_deleted: 1,
+		});
+	});
+
+	it("keeps two Notion sources independent when they share a page", async () => {
+		await putSecret("NOTION_TOKEN_TWO", "second-token-value");
+		const first = addSource();
+		const added = addNotionSource({ tokenRef: "NOTION_TOKEN_TWO" }, dir);
+		if (added.ok === false) throw new Error(added.error);
+		const second = added.source;
+		let secondSees = true;
+		stubNotion((request) => {
+			const isSecond = request.headers.get("authorization") === "Bearer second-token-value";
+			if (request.path === "/search")
+				return searchResponse(isSecond && !secondSees ? [] : [page("shared", "Shared", "2026-02-01T00:00:00.000Z")]);
+			if (request.path === "/pages/shared")
+				return Response.json({ code: "object_not_found", message: "gone" }, { status: 404 });
+			return markdownResponse("body");
+		});
+		await sync(first);
+		await sync(second);
+
+		secondSees = false;
+		await sync(second);
+
+		expect(sourceRows(first.id).find((entry) => entry.source_external_id === "shared")).toMatchObject({
+			is_deleted: 0,
+		});
+		expect(sourceRows(second.id).find((entry) => entry.source_external_id === "shared")).toMatchObject({
+			is_deleted: 1,
+		});
+	});
+
 	it("retries a rate limit whose body is not JSON", async () => {
 		const source = addSource();
 		let searches = 0;
@@ -1033,10 +1190,36 @@ function seedPageRows(sourceId: string, ids: readonly string[], editedMs: number
 				editedMs,
 				sourceId,
 				id,
-				JSON.stringify({ provider: "notion", pageId: id, incomplete: false, syncedAtMs }),
+				JSON.stringify({
+					provider: "notion",
+					pageId: id,
+					incomplete: false,
+					syncedAtMs,
+					propertiesHash: seededHash(id, iso),
+				}),
 			);
 		}
 	});
+}
+
+function seededHash(id: string, lastEditedTime: string): string {
+	const parsed = parseNotionPage(page(id, id, lastEditedTime));
+	if (!parsed) throw new Error("seed page did not parse");
+	return propertiesHash(parsed);
+}
+
+function agentRows(
+	sourceId: string,
+): Array<{ agent_id: string; source_external_id: string | null; is_deleted: number }> {
+	return getDbAccessor().withReadDb(
+		(db) =>
+			db
+				.prepare(
+					`SELECT agent_id, source_external_id, COALESCE(is_deleted, 0) AS is_deleted
+					 FROM memory_artifacts WHERE source_id = ? AND source_kind = 'source_notion_page'`,
+				)
+				.all(sourceId) as Array<{ agent_id: string; source_external_id: string | null; is_deleted: number }>,
+	);
 }
 
 function sourceDocumentCount(sourceId: string): number {
