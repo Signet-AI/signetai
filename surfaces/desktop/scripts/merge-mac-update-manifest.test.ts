@@ -122,6 +122,17 @@ describe("macOS update manifest merge", () => {
 				"0.230.6",
 			),
 		).toThrow("published manifest lists no arm64 zip");
+		expect(() =>
+			validateMergedMacUpdateManifest(
+				{
+					...merged,
+					files: merged.files.map((file) =>
+						file.url === "Signet-0.230.6-mac-x64.zip" ? { ...file, url: "Signet-0.230.6-mac-intel.zip" } : file,
+					),
+				},
+				"0.230.6",
+			),
+		).toThrow("published manifest lists no x64 zip named Signet-0.230.6-mac-x64.zip");
 	});
 
 	test("the command writes and verifies the merged manifest", () => {

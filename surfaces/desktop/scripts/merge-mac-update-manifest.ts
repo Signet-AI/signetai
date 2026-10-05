@@ -78,8 +78,9 @@ export function validateMergedMacUpdateManifest(manifest: UpdateManifest, expect
 		fail(`published manifest version mismatch: expected ${expectedVersion}, got ${manifest.version}`);
 	}
 	for (const arch of ["x64", "arm64"] as const) {
-		if (!manifest.files.some((file) => file.url.endsWith(".zip") && isArm64File(file) === (arch === "arm64"))) {
-			fail(`published manifest lists no ${arch} zip`);
+		const zip = `Signet-${expectedVersion}-mac-${arch}.zip`;
+		if (!manifest.files.some((file) => file.url === zip)) {
+			fail(`published manifest lists no ${arch} zip named ${zip}`);
 		}
 	}
 }
