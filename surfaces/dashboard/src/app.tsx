@@ -36,9 +36,9 @@ function Shell() {
 				data-sidebar={sidebarOpen ? "open" : "closed"}
 				className="sig-app-frame flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
 			>
-				<Topbar />
+				<Topbar sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
 				<div className="sig-work-area flex min-h-0 min-w-0 flex-1">
-					<SidebarNav open={sidebarOpen} onToggle={toggleSidebar} />
+					<SidebarNav open={sidebarOpen} />
 					<div
 						ref={contentRef}
 						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "settings" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}

@@ -3,14 +3,7 @@ import { cn } from "@/lib/utils";
 import { ModeToggle } from "@/components/mode-toggle";
 import { Settings } from "@/components/mingcute-icons";
 import { type ViewId, useView } from "@/lib/view-context";
-import {
-	BookRegular,
-	Home1Regular,
-	LayoutLeftbarCloseRegular,
-	LayoutLeftbarOpenRegular,
-	MindMapRegular,
-	MoonRegular,
-} from "@mingcute/react/core-regular";
+import { BookRegular, Home1Regular, MindMapRegular, MoonRegular } from "@mingcute/react/core-regular";
 import { type ButtonHTMLAttributes, type ReactNode, useCallback, useEffect, useState } from "react";
 
 interface NavItem {
@@ -69,10 +62,9 @@ export function useSidebarOpen(): readonly [boolean, () => void] {
 	return [open, toggle] as const;
 }
 
-export function SidebarNav({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+export function SidebarNav({ open }: { open: boolean }) {
 	const { view, setView, openSettings } = useView();
 	const activeView = view === "graph" || view === "memory" ? "memory" : view;
-	const ToggleIcon = open ? LayoutLeftbarCloseRegular : LayoutLeftbarOpenRegular;
 	return (
 		<nav id="dashboard-sidebar" aria-label="Dashboard navigation" className="sig-sidebar">
 			<ul className="m-0 flex list-none flex-col gap-2 p-0">
@@ -98,16 +90,6 @@ export function SidebarNav({ open, onToggle }: { open: boolean; onToggle: () => 
 				})}
 			</ul>
 			<div className="sig-no-drag mt-auto flex flex-col gap-2">
-				<SidebarButton
-					label={open ? "Collapse sidebar" : "Expand sidebar"}
-					open={open}
-					onClick={onToggle}
-					aria-expanded={open}
-					aria-controls="dashboard-sidebar"
-					className="sig-sidebar-toggle"
-				>
-					<ToggleIcon className="size-[22px] shrink-0" aria-hidden="true" />
-				</SidebarButton>
 				<ModeToggle />
 				<SidebarButton
 					label="Settings"

@@ -4,8 +4,10 @@ import { SignetMark } from "@/components/icons";
 import { getDesktopBridge } from "@/lib/desktop";
 import { cn } from "@/lib/utils";
 import { useView } from "@/lib/view-context";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { LayoutLeftbarCloseRegular, LayoutLeftbarOpenRegular } from "@mingcute/react/core-regular";
 
-export function Topbar() {
+export function Topbar({ sidebarOpen, onToggleSidebar }: { sidebarOpen: boolean; onToggleSidebar: () => void }) {
 	const desktop = getDesktopBridge();
 	const unavailable = useSyncExternalStore(
 		dashboardQueryCache.subscribeStatus,
@@ -13,6 +15,8 @@ export function Topbar() {
 		() => 0,
 	);
 	const { view, label } = useView();
+	const ToggleIcon = sidebarOpen ? LayoutLeftbarCloseRegular : LayoutLeftbarOpenRegular;
+	const shortcut = document.documentElement.dataset.platform === "mac" ? "⌘B" : "Ctrl+B";
 
 	return (
 		<header className={cn("relative z-40 flex shrink-0 flex-col bg-background", desktop !== null && "sig-drag")}>
@@ -22,6 +26,23 @@ export function Topbar() {
 						Updates unavailable
 					</span>
 				)}
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<button
+							type="button"
+							onClick={onToggleSidebar}
+							aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
+							aria-expanded={sidebarOpen}
+							aria-controls="dashboard-sidebar"
+							className="sig-topbar-toggle sig-no-drag"
+						>
+							<ToggleIcon className="size-[18px]" aria-hidden="true" />
+						</button>
+					</TooltipTrigger>
+					<TooltipContent side="bottom">
+						{sidebarOpen ? "Collapse sidebar" : "Expand sidebar"} · {shortcut}
+					</TooltipContent>
+				</Tooltip>
 				<SignetMark className="sig-topbar-brand" aria-label="Signet" aria-hidden={false} role="img" />
 				<span className="sig-topbar-wordmark" aria-hidden="true">
 					Signet
