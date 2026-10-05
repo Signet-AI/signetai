@@ -1,6 +1,6 @@
 {
 	"name": "@signet/desktop",
-	"version": "0.230.10",
+	"version": "0.231.0",
 	"private": true,
 	"description": "Electron desktop distribution layer for Signet",
 	"homepage": "https://signetai.sh",
@@ -39,6 +39,7 @@
 		"artifactName": "Signet-${version}-${os}-${arch}.${ext}",
 		"asar": true,
 		"npmRebuild": false,
+		"afterPack": "./scripts/after-pack.mjs",
 		"files": [
 			"dist/**/*",
 			"package.json"

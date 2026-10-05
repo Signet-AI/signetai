@@ -589,7 +589,7 @@ app.on("open-url", (event, value) => {
 app.whenReady().then(async () => {
 	if (!hasSingleInstanceLock) return;
 	configureApplicationMenu();
-	if (process.platform === "darwin" && app.dock) {
+	if (process.platform === "darwin" && app.dock && !app.isPackaged) {
 		app.dock.setIcon(iconPath("icon.png"));
 	}
 	configureDesktopUpdates();
