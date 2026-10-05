@@ -14,11 +14,13 @@ export type SourcesTriggerProps = ComponentProps<typeof Collapsible.Trigger> & {
 };
 
 export const SourcesTrigger = ({ className, count, children, ...props }: SourcesTriggerProps) => (
-	<Collapsible.Trigger className={cn("flex items-center gap-2", className)} {...props}>
+	<Collapsible.Trigger className={cn("group/sources chat-sources-trigger", className)} {...props}>
 		{children ?? (
 			<>
-				<p className="font-medium">Retrieved evidence · {count}</p>
-				<ChevronDownIcon className="h-4 w-4" />
+				<p>
+					{count} {count === 1 ? "source" : "sources"}
+				</p>
+				<ChevronDownIcon className="size-3.5 transition-transform group-data-[state=open]/sources:rotate-180" />
 			</>
 		)}
 	</Collapsible.Trigger>

@@ -19,6 +19,7 @@ type ChatMessage = AssistantChatMessage & {
 	id: string;
 	citations?: Array<{ sourceRef: string; excerpt: string }>;
 	actions?: Array<{ id: string; text: string }>;
+	model?: string;
 };
 
 export interface MemoryChatProps {
@@ -143,7 +144,10 @@ export function MemoryChat({
 						}));
 						setStatus("Dreaming requested — changes are pending");
 					}
-					if (event.type === "done") setStatus(event.model);
+					if (event.type === "done") {
+						setStatus("");
+						updateLastMessage((message) => ({ ...message, model: event.model }));
+					}
 				},
 				controller.signal,
 				conversationId.current,
@@ -276,7 +280,10 @@ export function MemoryChat({
 										</p>
 									))}
 									{message.role === "assistant" && message.content && !streaming && (
-										<MessageCopyAction content={message.content} />
+										<div className="chat-message-footer">
+											<MessageCopyAction content={message.content} />
+											{message.model && <span className="chat-message-model">{message.model}</span>}
+										</div>
 									)}
 								</Message>
 							);
