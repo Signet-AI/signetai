@@ -1,1 +1,0 @@
-# The retained FTS5 memory scripts use only the Python standard library.

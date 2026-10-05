@@ -24,7 +24,7 @@ search:
   rehearsal_enabled: true
 
 memory:
-  database: memory/memories.db
+  database: data/signet.db
   session_budget: 2000
   decay_rate: 0.95
   pipelineV2:
