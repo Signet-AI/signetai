@@ -31,7 +31,7 @@ import {
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
 	routingTargetLocality,
-	scanMemoryContent,
+	redactCredentials,
 	stripSignetBlock,
 	activeVectorProjectionTable,
 } from "@signet/core";
@@ -686,18 +686,17 @@ ${fileList}
 					if (!fileContent) return "";
 					if (
 						name === "MEMORY.md" &&
-						(!scanMemoryContent(fileContent).contextEligible ||
-							(
-								await requestMemoryHead<{ generated: boolean }>({
-									action: "inspect",
-									agentId: "default",
-									content: fileContent,
-								})
-							).generated)
+						(
+							await requestMemoryHead<{ generated: boolean }>({
+								action: "inspect",
+								agentId: "default",
+								content: fileContent,
+							})
+						).generated
 					)
 						return "";
 					const header = name.replace(".md", "");
-					return `\n## ${header}\n\n${fileContent}`;
+					return `\n## ${header}\n\n${name === "MEMORY.md" ? redactCredentials(fileContent) : fileContent}`;
 				} catch {
 					return "";
 				}

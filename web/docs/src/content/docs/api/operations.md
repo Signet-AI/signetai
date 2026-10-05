@@ -250,18 +250,6 @@ The response contains `agentId`, `inference` (`active`, `agentSessions`,
 `mcp` (`inFlight`, `oldestAgeMs`, and `maxInFlight`). MCP requests are admitted
 at most 8 at a time.
 
-### GET /api/diagnostics/memory-content-safety
-
-Return bounded, agent-scoped content-safety ledger diagnostics. The response
-includes counts by source kind and status plus source identifiers, reason codes,
-policy version, and scan time. It does not return raw content; use an
-authorized `GET /api/memory/:id` or source inspection endpoint when the
-retained evidence itself must be audited.
-
-Query parameters are `agentId`, `status` (`clean`, `tainted`, or `blocked`),
-`sourceKind` (`memory`, `artifact`, `transcript`, `summary`, or `source_chunk`),
-`limit` (1–200, default 100), and `offset` (0–100000, default 0).
-
 ### GET /api/diagnostics/database/schema
 
 Read-only SQLite schema explorer data for the dashboard database table view.

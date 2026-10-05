@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { scanMemoryContent } from "@signet/core";
+import { redactCredentials } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
 import type { MemoryHeadCommitInput, MemoryHeadRequest } from "./memory-head";
 import { readEpisodicSource } from "./episodic-sources";
@@ -32,12 +32,15 @@ function currentSource(db: WriteDb, agentId: string, from: string) {
 function knownProjection(db: WriteDb, content: string): boolean {
 	const digest = hash(content.trim().replace(generatedMarker, "").trim());
 	const marker = revisionMarker.exec(content.trim());
-	if (marker)
-		return Boolean(
-			db
-				.prepare("SELECT 1 FROM memory_head_revisions WHERE agent_id=? AND revision=? AND content_hash=? LIMIT 1")
-				.get(marker[1], Number(marker[2]), digest),
+	if (marker) {
+		const revision = db
+			.prepare("SELECT content, content_hash FROM memory_head_revisions WHERE agent_id=? AND revision=? LIMIT 1")
+			.get(marker[1], Number(marker[2])) as { content: string; content_hash: string } | undefined;
+		return (
+			revision !== undefined &&
+			(revision.content_hash === digest || hash(redactCredentials(revision.content)) === digest)
 		);
+	}
 	return (
 		Boolean(db.prepare("SELECT 1 FROM memory_head_revisions WHERE content_hash=? LIMIT 1").get(digest)) ||
 		Boolean(db.prepare("SELECT 1 FROM memory_md_heads WHERE content_hash=? LIMIT 1").get(digest))
@@ -66,7 +69,7 @@ function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
 		if (!isGenerated(db, existing))
 			throw new Error("User-authored MEMORY.md preserved; remove or move it to allow generated projection");
 	}
-	const projection = `<!-- signet-generated-memory agent=${agentId} revision=${head.revision}; inspect only, use Signet for current context -->\n\n${head.content}\n`;
+	const projection = `<!-- signet-generated-memory agent=${agentId} revision=${head.revision}; inspect only, use Signet for current context -->\n\n${redactCredentials(head.content)}\n`;
 	if (existing !== projection) {
 		mkdirSync(dirname(target), { recursive: true });
 		const temporary = `${target}.head-${head.revision}.tmp`;
@@ -119,9 +122,8 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 	const body = input.entries.map((entry) => `- ${entry.text.trim()}`).join("\n");
 	if (input.entries.length === 0 && (head?.content ?? "") === "")
 		return { ok: true, code: "NOOP", revision, hash: currentHash, changed: false, changedIds: [] };
-	const safety = scanMemoryContent(body);
-	if (!body || !safety.contextEligible || countTokens(body) > 1000)
-		return { ok: false, code: "INVALID_HEAD", error: "head must be nonempty, safe, and at most 1000 tokens" };
+	if (!body || countTokens(body) > 1000)
+		return { ok: false, code: "INVALID_HEAD", error: "head must be nonempty and at most 1000 tokens" };
 	const contentHash = hash(body);
 	if (head?.is_current === 1 && currentHash === contentHash)
 		return { ok: true, code: "NOOP", revision, hash: contentHash, changed: false, changedIds: [] };

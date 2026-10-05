@@ -163,6 +163,7 @@ import { up as dreamingCandidateScanIndex } from "./158-dreaming-candidate-scan-
 import { up as importAdmissionLedger } from "./160-import-admission-ledger";
 import { up as entityPruneKeysetIndex } from "./161-entity-prune-keyset-index";
 import { up as genericEntityPruneScanGeneration } from "./162-generic-entity-prune-scan-generation";
+import { up as retireMemoryContentSafety } from "./163-retire-memory-content-safety";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1175,7 +1176,6 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 125,
 		name: "memory-content-safety",
 		up: memoryContentSafety,
-		artifacts: { tables: ["memory_content_safety"] },
 	},
 	{
 		version: 126,
@@ -1479,6 +1479,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "generic-entity-prune-scan-generation",
 		up: genericEntityPruneScanGeneration,
 		artifacts: { tables: ["generic_entity_prune_scan_state"] },
+	},
+	{
+		version: 163,
+		name: "retire-memory-content-safety",
+		up: retireMemoryContentSafety,
 	},
 ];
 function checksum(m: Migration): string {

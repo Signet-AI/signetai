@@ -1,8 +1,8 @@
+import { redactCredentials } from "@signet/core";
 import { extractAnchorTerms } from "./anchor-terms";
 import { getDbAccessor } from "./db-accessor";
 import { tableExists as tableExistsIn } from "./db-helpers";
 import { logger } from "./logger";
-import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { escapeLike } from "./sql-utils";
 import { deriveThreadKey, deriveThreadLabel } from "./thread-heads";
 
@@ -111,7 +111,7 @@ function toHits(
 							sessionKey: row.session_key ?? null,
 							harness: row.harness ?? null,
 						}),
-			excerpt: buildExcerpt(row.content, query),
+			excerpt: buildExcerpt(redactCredentials(row.content), query),
 			rank: typeof row.rank === "number" ? row.rank : 0,
 		}))
 		.filter((row) => row.excerpt.length > 0)
@@ -171,14 +171,7 @@ function searchFromThreadHeads(params: {
 			}
 			parts.push("ORDER BY rank DESC, latest_at DESC LIMIT ?");
 			args.push(params.limit * 4);
-			return (db.prepare(parts.join("\n")).all(...args) as TemporalRow[]).filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId: params.agentId,
-					sourceKind: "summary",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			);
+			return db.prepare(parts.join("\n")).all(...args) as TemporalRow[];
 		}, "temporal-fallback.ts:153");
 
 		return toHits(rows, params.query, params.project, params.termCount, params.anchorCount, params.limit);
@@ -228,15 +221,8 @@ function searchFromSessionSummaries(params: {
 			}
 			parts.push("ORDER BY rank DESC, latest_at DESC LIMIT ?");
 			args.push(params.limit * 4);
-			return (db.prepare(parts.join("\n")).all(...args) as TemporalRow[]).filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId: params.agentId,
-					sourceKind: "summary",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			);
-		}, "temporal-fallback.ts:209");
+			return db.prepare(parts.join("\n")).all(...args) as TemporalRow[];
+		}, "temporal-fallback.ts:202");
 
 		return toHits(rows, params.query, params.project, params.termCount, params.anchorCount, params.limit);
 	} catch (err) {

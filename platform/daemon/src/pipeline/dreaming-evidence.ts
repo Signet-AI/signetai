@@ -1,4 +1,4 @@
-import { MEMORY_CONTENT_WITHHELD_NOTICE, scanMemoryContent } from "@signet/core";
+import { redactCredentials } from "@signet/core";
 import type { EpisodicSourceRecord } from "../episodic-sources";
 export interface DreamingAgentEvidence {
 	readonly sourceRef: string;
@@ -270,7 +270,7 @@ function sanitizePlainTranscript(content: string): string {
 		if (omittingReasoning || omittingToolOutput) continue;
 		if (/^(?:tool[_ -]?(?:call|use)|function[_ -]?call)\b/i.test(trimmed)) {
 			const name = trimmed.split(/\s*[:=]\s*/, 2)[1]?.trim() || "tool";
-			kept.push(`[tool call: ${name.replace(/[\s\[({].*$/, "")}]`);
+			kept.push(`[tool call: ${name.replace(/[\s[({].*$/, "")}]`);
 			continue;
 		}
 		kept.push(line);
@@ -339,30 +339,22 @@ export function renderDreamingEvidence(source: EpisodicSourceRecord): string {
 		source.kind === "transcript" || source.sourceKind === "transcript"
 			? sanitizeTranscriptForDreaming(source.content)
 			: source.content;
-	if (!scanMemoryContent(source.content).contextEligible || !scanMemoryContent(content).contextEligible) {
-		return MEMORY_CONTENT_WITHHELD_NOTICE;
-	}
 	const metadata = renderDreamingEvidenceMeta(source.evidenceMeta);
-	const rendered = metadata ? `${content}\n${metadata}` : content;
-	return scanMemoryContent(rendered).contextEligible ? rendered : MEMORY_CONTENT_WITHHELD_NOTICE;
+	return redactCredentials(metadata ? `${content}\n${metadata}` : content);
 }
 export function createDreamingAgentEvidence(
 	evidence: readonly (EpisodicSourceRecord | DreamingEvidenceFragment)[],
 ): readonly DreamingAgentEvidence[] {
-	return evidence.flatMap((item) => {
+	return evidence.map((item) => {
 		const fragment = "source" in item ? item : completeDreamingEvidenceFragment(item);
 		const { source } = fragment;
-		if (fragment.content === MEMORY_CONTENT_WITHHELD_NOTICE || !scanMemoryContent(fragment.content).contextEligible)
-			return [];
-		return [
-			{
-				sourceRef: `${source.kind}:${source.id}`,
-				content: fragment.content,
-				sourceKind: source.sourceKind,
-				sourceId: source.sourceId,
-				sourcePath: source.sourcePath,
-				sourceEntryId: source.sourceEntryId,
-			},
-		];
+		return {
+			sourceRef: `${source.kind}:${source.id}`,
+			content: fragment.content,
+			sourceKind: source.sourceKind,
+			sourceId: source.sourceId,
+			sourcePath: source.sourcePath,
+			sourceEntryId: source.sourceEntryId,
+		};
 	});
 }

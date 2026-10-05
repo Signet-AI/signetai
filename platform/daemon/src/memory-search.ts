@@ -9,7 +9,8 @@ import {
 	type RecallSurface,
 	type RecallTemporalMeta,
 	SOURCE_CHUNK_SOURCE_TYPE,
-	scanMemoryContent,
+	redactCredentials,
+	redactCredentialsDeep,
 	type VectorSearchCompleteness,
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
@@ -36,7 +37,6 @@ import { isFtsIndexIncomplete } from "./fts-index-state";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
-import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { constructContextBlocksViaOwner } from "./pipeline/context-construction";
 import { DEFAULT_DAMPENING, type ScoredRow, applyDampening } from "./pipeline/dampening";
@@ -326,7 +326,7 @@ function ontologyClaimContent(candidate: StructuredClaimCandidate): string {
 }
 
 function ontologyClaimToRecallResult(candidate: StructuredClaimCandidate, truncateChars: number): RecallResult {
-	const content = ontologyClaimContent(candidate);
+	const content = redactCredentials(ontologyClaimContent(candidate));
 	const truncated = content.length > truncateChars;
 	const sourcePath = ontologyClaimSourcePath(candidate);
 	return {
@@ -498,57 +498,25 @@ async function readLexicalFallbackThroughOwner(
 	);
 }
 
-interface CandidateAuthorizationContext {
-	readonly owner: DbOwnerClient;
-	readonly hasSafetyLedger: boolean;
-}
-
 async function authorizeScoredCandidates(
 	scored: ReadonlyArray<{ id: string; score: number; source: string }>,
 	filter: FilterClause,
-	context?: CandidateAuthorizationContext,
+	authorizationOwner?: DbOwnerClient,
 ): Promise<Array<{ id: string; score: number; source: string }>> {
 	const ids = [...new Set(scored.map((row) => row.id))];
 	if (ids.length === 0) return [];
-	const owner = context?.owner ?? (await getDbOwner(getDbAccessorPath()));
-	const hasSafetyLedger =
-		context?.hasSafetyLedger ??
-		(await ownerReadOne<{ readonly name: string }>(
-			owner,
-			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-			[],
-			{
-				operation: "memory-search.authorize-safety-schema",
-				workloadClass: "foreground",
-				estimatedWorkUnits: 1,
-				deadlineMs: 5_000,
-			},
-		)) != null;
-	const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
-	const safetyJoin = hasSafetyLedger
-		? `LEFT JOIN memory_content_safety AS mcs
-			 ON mcs.agent_id = COALESCE(NULLIF(m.agent_id, ''), 'default')
-			AND mcs.source_kind = 'memory'
-			AND mcs.source_id = m.id`
-		: "";
+	const owner = authorizationOwner ?? (await getDbOwner(getDbAccessorPath()));
 	const allowed = new Set<string>();
 	for (let offset = 0; offset < ids.length; offset += 400) {
 		const batch = ids.slice(offset, offset + 400);
 		const placeholders = batch.map(() => "?").join(", ");
-		const rows = await ownerReadAll<{
-			id: string;
-			content: string;
-			safety_status?: string;
-			context_eligible?: number;
-		}>(
+		const rows = await ownerReadAll<{ id: string }>(
 			owner,
-			`SELECT m.id, m.content${safetySelect}
+			`SELECT m.id
 			 FROM memories m
-			 ${safetyJoin}
 			 WHERE m.id IN (${placeholders})
 			   ${currentMemorySql("m")}
-			   ${filter.sql}
-			   ${hasSafetyLedger ? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))" : ""}`,
+			   ${filter.sql}`,
 			[...batch, ...filter.args],
 			{
 				operation: "memory-search.authorize-candidates",
@@ -557,13 +525,7 @@ async function authorizeScoredCandidates(
 				deadlineMs: 5_000,
 			},
 		);
-		for (const row of rows) {
-			if (
-				scanMemoryContent(row.content).contextEligible &&
-				(row.safety_status == null || (row.safety_status === "clean" && row.context_eligible === 1))
-			)
-				allowed.add(row.id);
-		}
+		for (const row of rows) allowed.add(row.id);
 	}
 	return scored.filter((row) => allowed.has(row.id));
 }
@@ -584,18 +546,6 @@ async function findAuthorizedVectorCandidates(
 	const maxWork = Math.min(DB_OWNER_MAX_WORK_UNITS, 10_000);
 	const targetCount = Math.min(cfg.search.top_k, maxWork);
 	const owner = await getDbRecallOwner(getDbAccessorPath());
-	const safetyTable = await ownerReadOne<{ readonly name: string }>(
-		owner,
-		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-		[],
-		{
-			operation: "memory-search.vector-safety-schema",
-			workloadClass: "foreground",
-			estimatedWorkUnits: 1,
-			deadlineMs: 5_000,
-		},
-	);
-	const authorizationContext = { owner, hasSafetyLedger: safetyTable != null };
 	const discovered = new Set<string>();
 	const authorized = new Map<string, { readonly id: string; readonly score: number }>();
 	let usedWork = 0;
@@ -623,7 +573,7 @@ async function findAuthorizedVectorCandidates(
 			discovered.add(row.id);
 			return [candidate];
 		});
-		const scoped = await authorizeScoredCandidates(fresh, filter, authorizationContext);
+		const scoped = await authorizeScoredCandidates(fresh, filter, owner);
 		for (const row of scoped) authorized.set(row.id, { id: row.id, score: row.score });
 		if (authorized.size >= targetCount) break;
 
@@ -675,14 +625,14 @@ interface CurrentnessInfo {
 }
 
 function shortenCurrentnessContent(content: string): string {
-	const oneLine = content.replace(/\s+/g, " ").trim();
+	const oneLine = redactCredentials(content).replace(/\s+/g, " ").trim();
 	return oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
 }
 
 async function loadCurrentnessInfo(ids: readonly string[], agentId: string): Promise<Map<string, CurrentnessInfo>> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
-	const queried = await ownerReadAll<{
+	const rows = await ownerReadAll<{
 		memory_id: string;
 		content: string;
 		status: string;
@@ -709,11 +659,6 @@ async function loadCurrentnessInfo(ids: readonly string[], agentId: string): Pro
 			estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, ids.length),
 			deadlineMs: 5_000,
 		},
-	);
-	const rows = queried.filter(
-		(row) =>
-			scanMemoryContent(row.content).contextEligible &&
-			(row.replacement_content === null || scanMemoryContent(row.replacement_content).contextEligible),
 	);
 
 	const mutable = new Map<
@@ -982,18 +927,6 @@ export async function buildSourceChunkVectorHits(
 		logger.warn("memory", "Source vector recall skipped because legacy embeddings have no agent ownership column");
 		return outcome("unavailable");
 	}
-	const safetyTable = await ownerReadOne<{ readonly name: string }>(
-		owner,
-		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-		[],
-		{
-			operation: "memory-search.source-chunk-safety-schema",
-			workloadClass: "foreground",
-			estimatedWorkUnits: 1,
-			deadlineMs: 5_000,
-		},
-	);
-	const hasSafetyLedger = safetyTable != null;
 	const indexState = await ownerReadOne<{ readonly active_profile_json: unknown }>(
 		owner,
 		"SELECT active_profile_json FROM embedding_index_state WHERE id = 1",
@@ -1006,13 +939,6 @@ export async function buildSourceChunkVectorHits(
 		},
 	).catch(() => undefined);
 	const vecTable = activeVectorProjectionTable({ prepare: () => ({ get: () => indexState }) });
-	const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
-	const safetyJoin = hasSafetyLedger
-		? "LEFT JOIN memory_content_safety mcs ON mcs.agent_id = ? AND mcs.source_kind = 'source_chunk' AND mcs.source_id = e.id"
-		: "";
-	const safetyFilter = hasSafetyLedger
-		? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))"
-		: "";
 	const types = [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE] as const;
 	const seenIds = new Set<string>();
 	const candidateRows = new Map<
@@ -1046,25 +972,15 @@ export async function buildSourceChunkVectorHits(
 				source_type: string;
 				chunk_text: string;
 				created_at: string;
-				safety_status?: string | null;
-				context_eligible?: number | null;
 			}>(
 				owner,
-				`SELECT e.id, e.source_id, e.source_type, e.chunk_text, e.created_at${safetySelect}
+				`SELECT e.id, e.source_id, e.source_type, e.chunk_text, e.created_at
 				 FROM embeddings e
-				 ${safetyJoin}
 				 WHERE e.id IN (${placeholders})
 				   AND e.agent_id = ?
 				   AND e.source_type IN (?, ?)
-				   AND length(CAST(e.chunk_text AS BLOB)) <= ?
-				   ${safetyFilter}`,
-				[
-					...(hasSafetyLedger ? [agentId] : []),
-					...batch.map((candidate) => candidate.id),
-					agentId,
-					...types,
-					MAX_SOURCE_CHUNK_BODY_BYTES,
-				],
+				   AND length(CAST(e.chunk_text AS BLOB)) <= ?`,
+				[...batch.map((candidate) => candidate.id), agentId, ...types, MAX_SOURCE_CHUNK_BODY_BYTES],
 				{
 					operation: "memory-search.source-chunk-bodies",
 					workloadClass: "foreground",
@@ -1075,14 +991,7 @@ export async function buildSourceChunkVectorHits(
 			stats.materializedBodies += rows.length;
 			for (const row of rows) {
 				stats.materializedBodyBytes += Buffer.byteLength(row.chunk_text, "utf8");
-				if (
-					!scanMemoryContent(row.chunk_text).contextEligible ||
-					(hasSafetyLedger &&
-						row.safety_status != null &&
-						(row.safety_status !== "clean" || row.context_eligible !== 1)) ||
-					existingSourceIds.has(row.source_id)
-				)
-					continue;
+				if (existingSourceIds.has(row.source_id)) continue;
 				const candidate = candidateRows.get(row.id);
 				if (!candidate) continue;
 				hits.push({
@@ -1090,7 +999,7 @@ export async function buildSourceChunkVectorHits(
 					sourceId: row.source_id,
 					sourceType: row.source_type,
 					sourcePath: sourcePathFromChunkText(row.chunk_text),
-					chunkText: row.chunk_text,
+					chunkText: redactCredentials(row.chunk_text),
 					score: candidate.score,
 					createdAt: row.created_at,
 					project: null,
@@ -1117,17 +1026,15 @@ export async function buildSourceChunkVectorHits(
 				distance: number;
 			}>(
 				owner,
-				`SELECT e.id, e.source_id, e.source_type, e.created_at, v.distance${safetySelect}
+				`SELECT e.id, e.source_id, e.source_type, e.created_at, v.distance
 				 FROM ${vecTable} v
 				 JOIN embeddings e ON e.id = v.id
-				 ${safetyJoin}
 				 WHERE v.embedding MATCH ? AND k = ?
 				   AND e.source_type IN (?, ?)
 				   AND e.agent_id = ?
 				   AND length(CAST(e.chunk_text AS BLOB)) <= ?
-				   ${safetyFilter}
 				 ORDER BY v.distance`,
-				[...(hasSafetyLedger ? [agentId] : []), queryBlob, requested, ...types, agentId, MAX_SOURCE_CHUNK_BODY_BYTES],
+				[queryBlob, requested, ...types, agentId, MAX_SOURCE_CHUNK_BODY_BYTES],
 				{
 					operation: "memory-search.source-chunk-knn",
 					workloadClass: "foreground",
@@ -1238,11 +1145,11 @@ export async function buildSourceChunkVectorHits(
 			}>(
 				owner,
 				`SELECT e.rowid, e.id, e.source_type, e.source_id, hex(e.vector) AS vector_hex, e.created_at
-				 FROM embeddings e ${safetyJoin}
+				 FROM embeddings e
 				 WHERE e.rowid > ? AND e.source_type IN (?, ?) AND e.agent_id = ?
-			   AND e.vector IS NOT NULL AND length(CAST(e.chunk_text AS BLOB)) <= ? ${safetyFilter}
+			   AND e.vector IS NOT NULL AND length(CAST(e.chunk_text AS BLOB)) <= ?
 			 ORDER BY e.rowid LIMIT ?`,
-				[...(hasSafetyLedger ? [agentId] : []), cursor, ...types, agentId, MAX_SOURCE_CHUNK_BODY_BYTES, batchLimit],
+				[cursor, ...types, agentId, MAX_SOURCE_CHUNK_BODY_BYTES, batchLimit],
 				{
 					operation: "memory-search.source-chunk-vector-batch",
 					workloadClass: "foreground",
@@ -1414,25 +1321,6 @@ async function buildNativeArtifactRecallHits(
 		const agentId = params.agentId ?? "default";
 		const artifactLimit = Math.max(2, Math.min(50, params.limit ?? 10) + existingSourceIds.size);
 		const artifactProject = params.project ? "AND (ma.project = ? OR ma.project IS NULL)" : "";
-		const safetyTable = await ownerReadOne<{ readonly name: string }>(
-			owner,
-			"SELECT name FROM sqlite_master WHERE type='table' AND name='memory_content_safety' LIMIT 1",
-			[],
-			{
-				operation: "memory-search.artifact-safety-schema",
-				workloadClass: "foreground",
-				estimatedWorkUnits: 1,
-				deadlineMs: 5_000,
-			},
-		);
-		const hasSafetyLedger = safetyTable != null;
-		const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
-		const safetyJoin = hasSafetyLedger
-			? "LEFT JOIN memory_content_safety mcs ON mcs.agent_id = ? AND mcs.source_kind = 'artifact' AND mcs.source_id = ma.source_path"
-			: "";
-		const safetyFilter = hasSafetyLedger
-			? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))"
-			: "";
 		const rows = await ownerReadAll<{
 			rowid: number;
 			source_id: string | null;
@@ -1444,16 +1332,13 @@ async function buildNativeArtifactRecallHits(
 			updated_at: string;
 			content: string;
 			rank: number;
-			safety_status?: string | null;
-			context_eligible?: number | null;
 		}>(
 			owner,
 			`SELECT ma.rowid, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project, ma.source_sha256,
 				COALESCE(ma.updated_at, ma.captured_at) AS updated_at, ma.content,
-				bm25(memory_artifacts_fts) AS rank${safetySelect}
+				bm25(memory_artifacts_fts) AS rank
 			 FROM memory_artifacts_fts
 			 JOIN memory_artifacts ma ON ma.rowid = memory_artifacts_fts.rowid
-			 ${safetyJoin}
 			 WHERE memory_artifacts_fts MATCH ?
 			   AND ma.agent_id = ?
 			   AND (ma.source_kind LIKE 'native_%' OR ma.source_kind LIKE 'source_%')
@@ -1461,16 +1346,8 @@ async function buildNativeArtifactRecallHits(
 			   AND ma.source_node_id = ?
 			   AND ma.harness IS NOT NULL
 			   ${artifactProject}
-			   ${safetyFilter}
 			 ORDER BY rank ASC, updated_at DESC LIMIT ?`,
-			[
-				...(hasSafetyLedger ? [agentId] : []),
-				fts,
-				agentId,
-				NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID,
-				...(params.project ? [params.project] : []),
-				artifactLimit,
-			],
+			[fts, agentId, NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID, ...(params.project ? [params.project] : []), artifactLimit],
 			{
 				operation: "memory-search.native-artifact-fts",
 				workloadClass: "foreground",
@@ -1495,17 +1372,12 @@ async function buildNativeArtifactRecallHits(
 			const mirrorParts = [
 				"SELECT DISTINCT m.content_hash",
 				"FROM memories m",
-				...(hasSafetyLedger
-					? [
-							"LEFT JOIN memory_content_safety mcs ON mcs.agent_id = ? AND mcs.source_kind = 'memory' AND mcs.source_id = m.id",
-						]
-					: []),
 				"WHERE m.agent_id = ?",
 				`${currentMemorySql("m")}`,
 				"AND COALESCE(m.visibility, 'global') != 'archived'",
 				"AND m.source_type = 'hermes-memory-write'",
 			];
-			const mirrorArgs: unknown[] = hasSafetyLedger ? [agentId, agentId] : [agentId];
+			const mirrorArgs: unknown[] = [agentId];
 			if (params.project) {
 				mirrorParts.push("AND m.project = ?");
 				mirrorArgs.push(params.project);
@@ -1515,8 +1387,6 @@ async function buildNativeArtifactRecallHits(
 				mirrorArgs.push(params.scope);
 			} else mirrorParts.push("AND m.scope IS NULL");
 			mirrorParts.push(`AND m.content_hash IN (${hashPlaceholders})`);
-			if (hasSafetyLedger)
-				mirrorParts.push("AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))");
 			mirrorArgs.push(...candidateHashes);
 			const mirrorRows = await ownerReadAll<{ readonly content_hash: string | null }>(
 				owner,
@@ -1551,7 +1421,7 @@ async function buildNativeArtifactRecallHits(
 				harness: row.harness,
 				project: row.project,
 				updatedAt: row.updated_at,
-				content: transcriptExcerpt(row.content, query, 900),
+				content: transcriptExcerpt(redactCredentials(row.content), query, 900),
 				rank: maxRank > 0 ? Math.abs(row.rank) / maxRank : 0.2,
 			}))
 			.filter((row) => row.content.length > 0 && !existingSourceIds.has(nativeArtifactPublicId(row)));
@@ -2498,7 +2368,7 @@ export async function hybridRecall(
 
 			const candidates: RerankCandidate[] = topForRerank.map((s) => ({
 				id: s.id,
-				content: contentMap.get(s.id) ?? "",
+				content: redactCredentials(contentMap.get(s.id) ?? ""),
 				score: s.score,
 			}));
 			const provider = cfg.pipelineV2.reranker.useExtractionModel
@@ -2707,10 +2577,8 @@ export async function hybridRecall(
 			: limit;
 	const topIds = params.sourceOnly === true ? [] : scored.slice(0, preHydrate).map((s) => s.id);
 	const recallTruncate = cfg.pipelineV2.guardrails.recallTruncateChars;
-	const ontologyClaimResults = ontologyClaimCandidates.flatMap((candidate) =>
-		scanMemoryContent(ontologyClaimContent(candidate)).contextEligible
-			? [ontologyClaimToRecallResult(candidate, recallTruncate)]
-			: [],
+	const ontologyClaimResults = ontologyClaimCandidates.map((candidate) =>
+		ontologyClaimToRecallResult(candidate, recallTruncate),
 	);
 	const allowSourceFallbacks = temporalCandidateSet.size === 0 && !hasMemoryMetadataFilters(params);
 	let sourceChunkSearchDiagnostics: SourceChunkVectorDiagnostics | undefined;
@@ -2840,7 +2708,7 @@ export async function hybridRecall(
 				async (db) =>
 					db
 						.prepare(
-							`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
+							`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
         FROM memories m
         WHERE m.id IN (${placeholders})${currentMemorySql("m")}${filter.sql}`,
 						)
@@ -2857,25 +2725,12 @@ export async function hybridRecall(
 						created_at: string;
 						visibility: string | null;
 						scope: string | null;
-						agent_id: string | null;
 					}>,
 				{ siteToken: "db:recall.final-candidates.hydrate" },
 			),
 	);
 
-	const safeRows = await getDbAccessor().withReadDbAsync(
-		async (db) =>
-			rows.filter((row) =>
-				isMemoryContentContextEligible(db, {
-					agentId: row.agent_id?.trim() || "default",
-					sourceKind: "memory",
-					sourceId: row.id,
-					content: row.content,
-				}),
-			),
-		{ siteToken: "db:recall.final-candidates.safety" },
-	);
-	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
+	const rowMap = new Map(rows.map((r) => [r.id, r]));
 	let results: RecallResult[] = timings.time("assemble_results", () =>
 		suppressPreviouslyRecalledForSelection(
 			scored
@@ -2884,7 +2739,7 @@ export async function hybridRecall(
 				.flatMap((s) => {
 					const r = rowMap.get(s.id);
 					if (!r) return [];
-					const content = annotateCurrentness(r.content, currentness.get(r.id));
+					const content = annotateCurrentness(redactCredentials(r.content), currentness.get(r.id));
 					const isTruncated = content.length > recallTruncate;
 					return [
 						{
@@ -3017,7 +2872,7 @@ export async function hybridRecall(
 		try {
 			const summCandidates = results.slice(0, 12).map((r) => ({ id: r.id, content: r.content, score: r.score }));
 			const s = await summarizeRecallWithLlm(getLlmProvider(), query, summCandidates, summarizeLeft);
-			if (s && scanMemoryContent(s).contextEligible) recallSummary = s;
+			if (s) recallSummary = redactCredentials(s);
 		} catch (e) {
 			logger.warn("memory", "LLM summary failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
@@ -3074,20 +2929,6 @@ export async function hybridRecall(
 					: await (async () => {
 							const eIds = entityIds.map((row) => row.entity_id);
 							const ePlaceholders = eIds.map(() => "?").join(", ");
-							const safetyTable = await graphOwnerReadAll<{ name: string }>(
-								"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety'",
-								[],
-								"memory-search.rationale.safety-table",
-								1,
-							);
-							const safetyJoin =
-								safetyTable.length > 0
-									? "LEFT JOIN memory_content_safety mcs ON mcs.agent_id = m.agent_id AND mcs.source_kind = 'memory' AND mcs.source_id = m.id"
-									: "";
-							const safetyFilter =
-								safetyTable.length > 0
-									? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))"
-									: "";
 							return await graphOwnerReadAll<{
 								id: string;
 								content: string;
@@ -3100,18 +2941,15 @@ export async function hybridRecall(
 								created_at: string;
 								visibility?: string | null;
 								scope?: string | null;
-								agent_id: string | null;
 							}>(
 								`SELECT DISTINCT m.id, m.content, m.type, m.tags, m.pinned,
-						        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
+						        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
 						 FROM memory_entity_mentions mem
 						 JOIN memories m ON m.id = mem.memory_id
-						 ${safetyJoin}
 						 WHERE mem.entity_id IN (${ePlaceholders})
 						   AND m.type = 'rationale'
 						   ${currentMemorySql("m")}
 						   ${filter.sql}
-						   ${safetyFilter}
 						 LIMIT 10`,
 								[...eIds, ...filter.args],
 								"memory-search.rationale.memories",
@@ -3123,11 +2961,12 @@ export async function hybridRecall(
 				if (results.length >= limit) break;
 				if (existingIds.has(r.id)) continue;
 				existingIds.add(r.id);
-				const isTrunc = r.content.length > recallTruncate;
+				const content = redactCredentials(r.content);
+				const isTrunc = content.length > recallTruncate;
 				results.push({
 					id: r.id,
-					content: isTrunc ? `${r.content.slice(0, recallTruncate)} [truncated]` : r.content,
-					content_length: r.content.length,
+					content: isTrunc ? `${content.slice(0, recallTruncate)} [truncated]` : content,
+					content_length: content.length,
 					truncated: isTrunc,
 					score: 0,
 					source: "graph",
@@ -3196,7 +3035,7 @@ export async function hybridRecall(
 				})();
 
 				if (ctx) {
-					entityContext = ctx.snapshot.entities;
+					entityContext = redactCredentialsDeep(ctx.snapshot.entities);
 					contextBlocks = ctx.snapshot.blocks;
 					focalEids = ctx.eids;
 				}
@@ -3220,16 +3059,16 @@ export async function hybridRecall(
 			let added = 0;
 			for (const block of blocks) {
 				if (added >= cap || results.length >= limit) break;
-				if (!scanMemoryContent(block.content).contextEligible) continue;
 				const syntheticId = `constructed:${block.provenance.entityName}`;
 				if (existingIds.has(syntheticId)) continue;
 				existingIds.add(syntheticId);
 				added++;
 
+				const content = redactCredentials(block.content);
 				results.push({
 					id: syntheticId,
-					content: block.content,
-					content_length: block.content.length,
+					content,
+					content_length: content.length,
 					truncated: block.truncated,
 					score: Math.round(Math.min(block.score, maxConstructed) * 100) / 100,
 					source: "constructed",

@@ -1,3 +1,4 @@
+import { redactCredentials } from "@signet/core";
 import type { Hono } from "hono";
 
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
@@ -27,7 +28,6 @@ import {
 import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
 import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { loadMemoryConfig } from "../memory-config";
-import { isMemoryContentContextEligible } from "../memory-content-safety";
 import { OntologyProposalError, applyOntologyOperation } from "../ontology-proposals";
 import {
 	getTraversalStatus,
@@ -574,26 +574,17 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					earliest_at: string;
 					latest_at: string;
 				}>;
-				const safeRows = rows.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "summary",
-						sourceId: row.id,
-						content: row.content,
-					}),
-				);
-
 				return c.json({
 					entityName: entity.name,
-					summaries: safeRows.map((row) => ({
+					summaries: rows.map((row) => ({
 						id: row.id,
 						sessionKey: row.session_key,
 						harness: row.harness,
 						earliestAt: row.earliest_at,
 						latestAt: row.latest_at,
-						content: row.content,
+						content: redactCredentials(row.content),
 					})),
-					total: safeRows.length,
+					total: rows.length,
 				});
 			},
 			{ siteToken: "routes/knowledge-routes.ts:511" },
@@ -615,7 +606,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:616" },
+			{ siteToken: "routes/knowledge-routes.ts:607" },
 		);
 		return c.json(result);
 	});

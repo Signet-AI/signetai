@@ -11,8 +11,8 @@ import {
 	loadIdentityMode,
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
+	redactCredentials,
 	resolveStartupIdentityFiles,
-	scanMemoryContent,
 } from "@signet/core";
 import { emitLifecycleProvider } from "@signet/lifecycle-proof";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
@@ -558,28 +558,14 @@ async function getRecentMemories(
 
 	try {
 		const owner = await getDbOwner(getMemoryDbPath());
-		const scopedAgentId = agentScope?.agentId ?? "default";
-		const safetyTable = await ownerReadOne<{ readonly present: number }>(
-			owner,
-			"SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-			[],
-			{ operation: "session-start.recent-memories.safety-table", deadlineMs: 5_000, estimatedWorkUnits: 1 },
-		);
 		const scope = agentScope
 			? buildAgentScopeClause(agentScope.agentId, agentScope.readPolicy, agentScope.policyGroup)
 			: { sql: " AND m.visibility != 'archived'", args: [] };
-		const safetyProjection = safetyTable
-			? `, safety.status AS safety_status, safety.context_eligible AS safety_context_eligible`
-			: ", NULL AS safety_status, NULL AS safety_context_eligible";
-		const safetyJoin = safetyTable
-			? " LEFT JOIN memory_content_safety safety ON safety.agent_id = ? AND safety.source_kind = 'memory' AND safety.source_id = m.id"
-			: "";
 		const query = `
         SELECT
           m.id, m.content, m.type, m.importance, m.created_at,
-          (julianday('now') - julianday(m.created_at)) as age_days${safetyProjection}
+          (julianday('now') - julianday(m.created_at)) as age_days
         FROM memories m
-        ${safetyJoin}
         WHERE 1 = 1${currentMemorySql("m")}${scope.sql}
         ORDER BY
           (m.importance * ${1 - recencyBias}) +
@@ -593,23 +579,14 @@ async function getRecentMemories(
 			readonly type: string;
 			readonly importance: number;
 			readonly created_at: string;
-			readonly safety_status: string | null;
-			readonly safety_context_eligible: number | null;
-		}>(owner, query, safetyTable ? [scopedAgentId, ...scope.args, limit] : [...scope.args, limit], {
+		}>(owner, query, [...scope.args, limit], {
 			operation: "session-start.recent-memories",
 			deadlineMs: 5_000,
 			estimatedWorkUnits: Math.max(1, limit * 3),
 		});
-		const eligibleRows = rows.filter((row) => {
-			const scanned = scanMemoryContent(row.content);
-			return (
-				scanned.contextEligible &&
-				(row.safety_status === null || (row.safety_status === "clean" && row.safety_context_eligible === 1))
-			);
-		});
-		return eligibleRows.map((r) => ({
+		return rows.map((r) => ({
 			id: r.id,
-			content: r.content,
+			content: redactCredentials(r.content),
 			type: r.type || "general",
 			importance: r.importance || 0.5,
 			created_at: r.created_at,
@@ -763,9 +740,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 				agentId,
 				content: readIdentityFile(agentsDir, path, 262144, identityFiles) ?? "",
 			});
-			return inspected.content && scanMemoryContent(inspected.content).contextEligible
-				? budgetIdentityContent(inspected.content, budget)
-				: undefined;
+			return inspected.content ? budgetIdentityContent(redactCredentials(inspected.content), budget) : undefined;
 		} catch (error) {
 			logger.warn("hooks", "Working memory withheld: freshness could not be verified", { error: String(error) });
 			return undefined;
@@ -788,7 +763,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		: config.includeRecentContext !== false
 			? await currentWorkingMemory("MEMORY.md", { maxChars: 10000 })
 			: undefined;
-	const safeProfileIdentitySections = profileIdentitySections;
 
 	const traversalCfg = memoryCfg.pipelineV2.traversal;
 	const traversalEnabled = memoryCfg.pipelineV2.graph.enabled && traversalCfg?.enabled === true;
@@ -1108,12 +1082,12 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		dynamicParts.push(agentsMdContent);
 	}
 
-	if (safeProfileIdentitySections !== null && safeProfileIdentitySections !== undefined) {
-		for (const section of safeProfileIdentitySections) {
+	if (profileIdentitySections !== null && profileIdentitySections !== undefined) {
+		for (const section of profileIdentitySections) {
 			dynamicParts.push(`\n## ${section.header}\n`);
 			dynamicParts.push(section.content);
 		}
-		if (memoryMdContent && !safeProfileIdentitySections.some((section) => isWorkingMemory(section.path))) {
+		if (memoryMdContent && !profileIdentitySections.some((section) => isWorkingMemory(section.path))) {
 			dynamicParts.push("\n## Working Memory\n");
 			dynamicParts.push(memoryMdContent);
 		}

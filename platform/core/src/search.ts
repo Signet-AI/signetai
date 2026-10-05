@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { DEFAULT_HYBRID_ALPHA } from "./constants";
-import { scanMemoryContent } from "./memory-content-safety";
+import { redactCredentials } from "./credential-detection";
 import type { Memory } from "./types";
 let native: typeof import("@signet/native") | null = null;
 try {
@@ -420,7 +420,7 @@ export function hybridSearch(
 	return scored
 		.filter((s) => {
 			const row = rowMap.get(s.id);
-			return row !== undefined && scanMemoryContent(row.content).contextEligible;
+			return row !== undefined;
 		})
 		.slice(0, limit)
 		.map((s) => {
@@ -428,7 +428,7 @@ export function hybridSearch(
 			if (!r) return null;
 			return {
 				id: s.id,
-				content: r.content,
+				content: redactCredentials(r.content),
 				score: Math.round(s.score * 100) / 100,
 				type: r.type,
 				source: s.source,
@@ -472,14 +472,11 @@ export async function search(db: SQLiteDatabase | DatabaseWrapper, options: Sear
 		const memories = typeof wrapper.getMemories === "function" ? wrapper.getMemories(options.type) : [];
 
 		return memories
-			.filter(
-				(m: Memory) =>
-					scanMemoryContent(m.content).contextEligible && m.content.toLowerCase().includes(query.toLowerCase()),
-			)
+			.filter((m: Memory) => m.content.toLowerCase().includes(query.toLowerCase()))
 			.slice(0, limit)
 			.map((m: Memory) => ({
 				id: m.id,
-				content: m.content,
+				content: redactCredentials(m.content),
 				score: 1.0,
 				type: m.type,
 				source: "keyword" as const,

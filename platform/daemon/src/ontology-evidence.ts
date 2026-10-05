@@ -1,6 +1,6 @@
+import { redactCredentials } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import { tableExists } from "./db-helpers";
-import { isMemoryContentContextEligible } from "./memory-content-safety";
 
 export interface OntologyEvidenceRef {
 	readonly sourceKind: string | null;
@@ -95,7 +95,7 @@ function sourceIdCandidates(value: string | null): string[] {
 }
 
 function compactExcerpt(content: string, quote: string | null, max = 1200): string {
-	const text = content.replace(/\s+/g, " ").trim();
+	const text = redactCredentials(content).replace(/\s+/g, " ").trim();
 	if (text.length <= max) return text;
 	if (quote !== null) {
 		const cleanQuote = quote.replace(/\s+/g, " ").trim();
@@ -174,15 +174,7 @@ function readSessionTranscriptEvidence(
 			 LIMIT 1`,
 		)
 		.get(agentId, ...ids) as SessionTranscriptEvidenceRow | undefined;
-	return row &&
-		isMemoryContentContextEligible(db, {
-			agentId,
-			sourceKind: "transcript",
-			sourceId: row.session_key,
-			content: row.content,
-		})
-		? row
-		: null;
+	return row ?? null;
 }
 
 function readOntologyProposalEvidence(
@@ -201,16 +193,7 @@ function readOntologyProposalEvidence(
 			 LIMIT 1`,
 		)
 		.get(proposalId, agentId) as OntologyProposalEvidenceRow | null | undefined;
-	const content = row == null ? "" : [row.operation, row.rationale, row.evidence].join("\n");
-	return row &&
-		isMemoryContentContextEligible(db, {
-			agentId,
-			sourceKind: "artifact",
-			sourceId: row.id,
-			content,
-		})
-		? row
-		: null;
+	return row ?? null;
 }
 
 function readMemoryArtifactEvidence(
@@ -247,15 +230,7 @@ function readMemoryArtifactEvidence(
 			 LIMIT 1`,
 		)
 		.get(...args) as MemoryArtifactEvidenceRow | undefined;
-	return row &&
-		isMemoryContentContextEligible(db, {
-			agentId,
-			sourceKind: "artifact",
-			sourceId: row.source_path,
-			content: row.content,
-		})
-		? row
-		: null;
+	return row ?? null;
 }
 
 function readMemoryEvidence(db: ReadDb, agentId: string, ref: OntologyEvidenceRef): MemoryEvidenceRow | null {
@@ -268,15 +243,7 @@ function readMemoryEvidence(db: ReadDb, agentId: string, ref: OntologyEvidenceRe
 			 LIMIT 1`,
 		)
 		.get(ref.memoryId, agentId) as MemoryEvidenceRow | undefined;
-	return row &&
-		isMemoryContentContextEligible(db, {
-			agentId,
-			sourceKind: "memory",
-			sourceId: row.id,
-			content: row.content,
-		})
-		? row
-		: null;
+	return row ?? null;
 }
 
 function sourceLooksLikeTranscript(ref: OntologyEvidenceRef): boolean {

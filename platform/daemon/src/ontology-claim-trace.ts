@@ -3,6 +3,7 @@ import type { DbAccessor, ReadDb } from "./db-accessor";
 import { tableExists } from "./db-helpers";
 import { findEpisodicSourceAgentIds, readEpisodicSource, sourceIdCandidates } from "./episodic-sources";
 import { listEntityAttributesByPath } from "./knowledge-graph";
+import { redactCredentials } from "@signet/core";
 
 const SOURCE_KINDS = ["memory", "artifact", "transcript", "summary"] as const;
 const MAX_VERSION_LIMIT = 50;
@@ -646,7 +647,7 @@ function readSource(
 		kind: params.kind,
 		id: source.id,
 		path: source.sourcePath,
-		content: state === "available" ? source.content : null,
+		content: state === "available" ? redactCredentials(source.content) : null,
 		project: source.project,
 		visibility: "scoped",
 		scope: null,
@@ -1170,7 +1171,7 @@ export async function explainOntologyClaim(
 			},
 			latencyMs: Math.round((performance.now() - started) * 100) / 100,
 		};
-	}, "ontology-claim-trace.ts:1050");
+	}, "ontology-claim-trace.ts:1051");
 }
 
 export type { TraceAssertion, TraceEvidence, TracePremise, TraceVersion, ReverseTraceItem };

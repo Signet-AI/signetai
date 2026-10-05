@@ -1,4 +1,4 @@
-import { type LlmProvider, type PipelineHintsConfig, scanMemoryContent } from "@signet/core";
+import { type LlmProvider, type PipelineHintsConfig, redactCredentials } from "@signet/core";
 import { DbWriteQueueFullError, type DbAccessor, type WriteDb } from "../db-accessor";
 import {
 	ownerBatch,
@@ -83,8 +83,7 @@ export async function generateHints(
 	content: string,
 	cfg: PipelineHintsConfig,
 ): Promise<readonly string[]> {
-	if (!scanMemoryContent(content).contextEligible) return [];
-	const prompt = buildPrompt(content, cfg.max);
+	const prompt = buildPrompt(redactCredentials(content), cfg.max);
 	const raw = await provider.generate(prompt, {
 		timeoutMs: cfg.timeout,
 		maxTokens: Math.max(cfg.maxTokens, 1024),

@@ -1,7 +1,6 @@
-import { type Entity, type EntityAttribute, MEMORY_CONTENT_WITHHELD_NOTICE, scanMemoryContent } from "@signet/core";
+import { type Entity, redactCredentialsDeep } from "@signet/core";
 import { z } from "zod";
-import { getDbOwnerForAccessor, runDbOwnerDomainOperation } from "../db-owner-runtime";
-import { ownerReadAll, ownerReadOne } from "../db-owner-sql";
+import { runDbOwnerDomainOperation } from "../db-owner-runtime";
 import type {
 	DbOwnerDreamingEvidenceSearch,
 	DbOwnerDreamingEvidenceSource,
@@ -67,80 +66,6 @@ function boundedText(value: string | undefined, maxChars: number): string | unde
 	return value.slice(0, maxChars);
 }
 
-async function filterDreamingAttributes(
-	accessor: DbAccessor,
-	agentId: string,
-	attributes: readonly EntityAttribute[],
-): Promise<readonly EntityAttribute[]> {
-	const owner = await getDbOwnerForAccessor(accessor);
-	const table = await ownerReadOne<{ readonly present: number }>(
-		owner,
-		"SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-		[],
-		{
-			operation: "dreaming.capabilities.safety-schema",
-			workloadClass: "foreground",
-			estimatedWorkUnits: 1,
-			deadlineMs: 5_000,
-		},
-	);
-	if (table === null) return attributes.filter((attribute) => scanMemoryContent(attribute.content).contextEligible);
-	const refs = attributes.flatMap((attribute) => {
-		if (attribute.memoryId) return [{ kind: "memory", id: attribute.memoryId }];
-		if (attribute.sourcePath || attribute.sourceId) {
-			const sourceKind = attribute.sourceKind?.toLowerCase() ?? "";
-			const kind = sourceKind.includes("transcript")
-				? "transcript"
-				: sourceKind.includes("summary")
-					? "summary"
-					: "artifact";
-			return [{ kind, id: attribute.sourcePath ?? attribute.sourceId ?? attribute.id }];
-		}
-		return [];
-	});
-	const predicates = refs.map(() => "(source_kind = ? AND source_id = ?)").join(" OR ");
-	const safetyRows =
-		predicates.length === 0
-			? []
-			: await ownerReadAll<{
-					readonly source_kind: string;
-					readonly source_id: string;
-					readonly status: string;
-					readonly context_eligible: number;
-				}>(
-					owner,
-					`SELECT source_kind, source_id, status, context_eligible
-					 FROM memory_content_safety
-					 WHERE agent_id = ? AND (${predicates})`,
-					[agentId, ...refs.flatMap((ref) => [ref.kind, ref.id])],
-					{
-						operation: "dreaming.capabilities.safety-read",
-						workloadClass: "foreground",
-						estimatedWorkUnits: Math.min(200, refs.length),
-						deadlineMs: 5_000,
-					},
-				);
-	const safety = new Map(safetyRows.map((row) => [`${row.source_kind}:${row.source_id}`, row]));
-	return attributes.filter((attribute) => {
-		if (!scanMemoryContent(attribute.content).contextEligible) return false;
-		const ref = attribute.memoryId
-			? { kind: "memory", id: attribute.memoryId }
-			: attribute.sourcePath || attribute.sourceId
-				? {
-						kind: (attribute.sourceKind?.toLowerCase().includes("transcript")
-							? "transcript"
-							: attribute.sourceKind?.toLowerCase().includes("summary")
-								? "summary"
-								: "artifact") as string,
-						id: attribute.sourcePath ?? attribute.sourceId ?? attribute.id,
-					}
-				: null;
-		if (ref === null) return true;
-		const row = safety.get(`${ref.kind}:${ref.id}`);
-		return row === undefined || (row.status === "clean" && row.context_eligible === 1);
-	});
-}
-
 function evidenceExcerptStart(content: string, query: string, maxChars: number): number {
 	const folded = foldAsciiCase(content);
 	for (const term of episodicQueryTerms(query)) {
@@ -180,14 +105,13 @@ function projectEvidenceItem(
 
 function projectEvidence(sources: readonly EpisodicSourceRecord[], query: string): readonly Record<string, unknown>[] {
 	let remaining = MAX_EVIDENCE_RESULT_CHARS;
-	return sources.flatMap((source) => {
+	return sources.map((source) => {
 		const rendered = renderDreamingEvidence(source);
-		if (rendered === MEMORY_CONTENT_WITHHELD_NOTICE) return [];
 		const offset = evidenceExcerptStart(rendered, query, MAX_EVIDENCE_EXCERPT_CHARS);
 		const excerptLength = Math.min(MAX_EVIDENCE_EXCERPT_CHARS, remaining, rendered.length - offset);
 		const content = excerptLength > 0 ? rendered.slice(offset, offset + excerptLength) : "";
 		remaining = Math.max(0, remaining - content.length);
-		return [projectEvidenceItem(source, content, content.length > 0 ? offset : 0, rendered.length)];
+		return projectEvidenceItem(source, content, content.length > 0 ? offset : 0, rendered.length);
 	});
 }
 
@@ -197,7 +121,7 @@ function projectEvidenceFragment(
 	chunkSize: number,
 ): Record<string, unknown> | null {
 	const fragment = nextDreamingEvidenceFragment(source, offset, chunkSize);
-	return fragment === null || fragment.content === MEMORY_CONTENT_WITHHELD_NOTICE
+	return fragment === null
 		? null
 		: projectEvidenceItem(source, fragment.content, fragment.start, fragment.sourceLength);
 }
@@ -341,7 +265,7 @@ function capability<T extends z.ZodType>(
 			}
 			try {
 				const output = await run(parsed.data);
-				return { tool: id, ...output };
+				return { tool: id, ...redactCredentialsDeep(output) };
 			} catch (error) {
 				return { tool: id, ok: false, error: error instanceof Error ? error.message : String(error) };
 			}
@@ -611,19 +535,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			z.object({ agentId: z.string().min(1), entityId: z.string().min(1), aspectId: z.string().min(1), ...pagination }),
 			async ({ agentId: scopeId, entityId, aspectId, limit, offset }) => ({
 				ok: true,
-				items: await filterDreamingAttributes(
-					accessor,
-					scopeId,
-					await getAttributesForAspectFiltered(accessor, {
-						entityId,
-						aspectId,
-						agentId: scopeId,
-						kind: "attribute",
-						status: "active",
-						limit: bounded(limit, 50, 200),
-						offset: Math.max(0, Math.floor(offset ?? 0)),
-					}),
-				),
+				items: await getAttributesForAspectFiltered(accessor, {
+					entityId,
+					aspectId,
+					agentId: scopeId,
+					kind: "attribute",
+					status: "active",
+					limit: bounded(limit, 50, 200),
+					offset: Math.max(0, Math.floor(offset ?? 0)),
+				}),
 			}),
 		),
 		capability(
@@ -676,26 +596,18 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						);
 						if (aspect) aspectName = aspect.aspect.name;
 					}
-					const result = await getOntologyClaimEvidence(accessor, {
-						agentId: scopeId,
-						entity: entityName,
-						aspect: aspectName,
-						group: ref.group,
-						claim: ref.claim,
-						limit,
-						offset,
-					});
-					const safeIds = new Set(
-						(
-							await filterDreamingAttributes(
-								accessor,
-								scopeId,
-								result.items.map((item) => item.attribute),
-							)
-						).map((attribute) => attribute.id),
-					);
-					const items = result.items.filter((item) => safeIds.has(item.attribute.id));
-					return { ok: true, result: { ...result, items, count: items.length } };
+					return {
+						ok: true,
+						result: await getOntologyClaimEvidence(accessor, {
+							agentId: scopeId,
+							entity: entityName,
+							aspect: aspectName,
+							group: ref.group,
+							claim: ref.claim,
+							limit,
+							offset,
+						}),
+					};
 				}
 				return { ok: true, result: await getOntologyLinkEvidence(accessor, { agentId: scopeId, id: ref.id }) };
 			},
@@ -788,19 +700,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				}
 				if (entityId !== undefined && aspectId !== undefined && value !== undefined) {
 					result.contradiction = (
-						await filterDreamingAttributes(
-							accessor,
-							scopeId,
-							await getAttributesForAspectFiltered(accessor, {
-								entityId,
-								aspectId,
-								agentId: scopeId,
-								kind: "attribute",
-								status: "active",
-								limit: 200,
-								offset: 0,
-							}),
-						)
+						await getAttributesForAspectFiltered(accessor, {
+							entityId,
+							aspectId,
+							agentId: scopeId,
+							kind: "attribute",
+							status: "active",
+							limit: 200,
+							offset: 0,
+						})
 					).map((attribute) => ({
 						attributeId: attribute.id,
 						content: attribute.content,

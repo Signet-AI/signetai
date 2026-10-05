@@ -1,3 +1,4 @@
+import { redactCredentials } from "@signet/core";
 import type { ContinuityState, StructuralSnapshot } from "./continuity-state";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
@@ -46,28 +47,12 @@ export interface WriteCheckpointParams {
 	readonly surfacedConstraintCount?: number;
 	readonly traversalMemoryCount?: number;
 }
-const SECRET_PATTERNS: ReadonlyArray<RegExp> = [
-	/Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi,
-	/\b(sk|pk|api[_-]?key|token|secret|password|credential)[_-]?[=:\s]+\S{8,}/gi,
-	/\b[A-Za-z0-9+/]{32,}={0,2}\b/g,
-	/\$[A-Z_]{4,}=[^\s]+/g,
-	/\b(OPENAI_API_KEY|ANTHROPIC_API_KEY|GITHUB_TOKEN|NPM_TOKEN|AWS_SECRET)[=:\s]+\S+/gi,
-];
-
-export function redactSecrets(text: string): string {
-	let result = text;
-	for (const pattern of SECRET_PATTERNS) {
-		pattern.lastIndex = 0;
-		result = result.replace(pattern, "[REDACTED]");
-	}
-	return result;
-}
 export function redactCheckpointRow(row: CheckpointRow): CheckpointRow {
 	return {
 		...row,
-		digest: redactSecrets(row.digest),
+		digest: redactCredentials(row.digest),
 		recent_remembers: row.recent_remembers
-			? JSON.stringify((JSON.parse(row.recent_remembers) as string[]).map(redactSecrets))
+			? JSON.stringify((JSON.parse(row.recent_remembers) as string[]).map((text) => redactCredentials(text)))
 			: null,
 	};
 }
@@ -79,7 +64,7 @@ export async function writeCheckpointAsync(
 ): Promise<void> {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
-	const digest = redactSecrets(params.digest);
+	const digest = redactCredentials(params.digest);
 
 	await db.withWriteTxAsync(
 		(wdb) => {
@@ -103,7 +88,9 @@ export async function writeCheckpointAsync(
 					digest,
 					params.promptCount,
 					params.memoryQueries.length > 0 ? JSON.stringify(params.memoryQueries) : null,
-					params.recentRemembers.length > 0 ? JSON.stringify(params.recentRemembers.map(redactSecrets)) : null,
+					params.recentRemembers.length > 0
+						? JSON.stringify(params.recentRemembers.map((text) => redactCredentials(text)))
+						: null,
 					params.focalEntityIds && params.focalEntityIds.length > 0 ? JSON.stringify(params.focalEntityIds) : null,
 					params.focalEntityNames && params.focalEntityNames.length > 0
 						? JSON.stringify(params.focalEntityNames)
@@ -132,7 +119,7 @@ export async function writeCheckpointAsync(
 					.run(params.sessionKey, excess);
 			}
 		},
-		{ siteToken: "session-checkpoints.ts:84" },
+		{ siteToken: "session-checkpoints.ts:69" },
 	);
 
 	logger.info("checkpoints", "Checkpoint written", {
@@ -146,7 +133,7 @@ export async function writeCheckpointAsync(
 export function writeCheckpoint(db: DbAccessor, params: WriteCheckpointParams, maxPerSession: number): void {
 	const id = crypto.randomUUID();
 	const now = new Date().toISOString();
-	const digest = redactSecrets(params.digest);
+	const digest = redactCredentials(params.digest);
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	db.withWriteTx((wdb: WriteDb) => {
@@ -170,7 +157,9 @@ export function writeCheckpoint(db: DbAccessor, params: WriteCheckpointParams, m
 				digest,
 				params.promptCount,
 				params.memoryQueries.length > 0 ? JSON.stringify(params.memoryQueries) : null,
-				params.recentRemembers.length > 0 ? JSON.stringify(params.recentRemembers.map(redactSecrets)) : null,
+				params.recentRemembers.length > 0
+					? JSON.stringify(params.recentRemembers.map((text) => redactCredentials(text)))
+					: null,
 				params.focalEntityIds && params.focalEntityIds.length > 0 ? JSON.stringify(params.focalEntityIds) : null,
 				params.focalEntityNames && params.focalEntityNames.length > 0 ? JSON.stringify(params.focalEntityNames) : null,
 				params.activeAspectIds && params.activeAspectIds.length > 0 ? JSON.stringify(params.activeAspectIds) : null,
@@ -196,7 +185,7 @@ export function writeCheckpoint(db: DbAccessor, params: WriteCheckpointParams, m
 				)
 				.run(params.sessionKey, excess);
 		}
-	}, "session-checkpoints.ts:152");
+	}, "session-checkpoints.ts:139");
 
 	logger.info("checkpoints", "Checkpoint written", {
 		id,
@@ -266,7 +255,7 @@ export function getLatestCheckpoint(
 			)
 			.get(projectNormalized, cutoff) as unknown as CheckpointRow | null;
 		return row ?? undefined;
-	}, "session-checkpoints.ts:258");
+	}, "session-checkpoints.ts:247");
 }
 export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string): CheckpointRow | undefined {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
@@ -280,7 +269,7 @@ export function getLatestCheckpointBySession(db: DbAccessor, sessionKey: string)
 			)
 			.get(sessionKey) as unknown as CheckpointRow | null;
 		return row ?? undefined;
-	}, "session-checkpoints.ts:273");
+	}, "session-checkpoints.ts:262");
 }
 export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): ReadonlyArray<CheckpointRow> {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
@@ -292,7 +281,7 @@ export function getCheckpointsBySession(db: DbAccessor, sessionKey: string): Rea
 				 ORDER BY created_at DESC, rowid DESC`,
 			)
 			.all(sessionKey) as unknown as CheckpointRow[];
-	}, "session-checkpoints.ts:287");
+	}, "session-checkpoints.ts:276");
 }
 export async function getCheckpointsBySessionAsync(
 	db: DbAccessor,
@@ -307,7 +296,7 @@ export async function getCheckpointsBySessionAsync(
 					 ORDER BY created_at DESC, rowid DESC`,
 				)
 				.all(sessionKey) as unknown as CheckpointRow[],
-		{ siteToken: "session-checkpoints.ts:301", operation: "http.checkpoints-by-session" },
+		{ siteToken: "session-checkpoints.ts:290", operation: "http.checkpoints-by-session" },
 	);
 }
 export function getCheckpointsByProject(
@@ -325,7 +314,7 @@ export function getCheckpointsByProject(
 				 LIMIT ?`,
 			)
 			.all(projectNormalized, limit) as unknown as CheckpointRow[];
-	}, "session-checkpoints.ts:319");
+	}, "session-checkpoints.ts:308");
 }
 export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number {
 	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
@@ -342,7 +331,7 @@ export function pruneCheckpoints(db: DbAccessor, retentionDays: number): number 
 			});
 		}
 		return deleted;
-	}, "session-checkpoints.ts:334");
+	}, "session-checkpoints.ts:323");
 }
 export async function pruneCheckpointsAsync(db: DbAccessor, retentionDays: number): Promise<number> {
 	const cutoff = new Date(Date.now() - retentionDays * 24 * 60 * 60 * 1000).toISOString();
@@ -353,7 +342,7 @@ export async function pruneCheckpointsAsync(db: DbAccessor, retentionDays: numbe
 			if (deleted > 0) logger.info("checkpoints", "Pruned old checkpoints", { deleted, retentionDays });
 			return deleted;
 		},
-		{ siteToken: "session-checkpoints.ts:349", operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
+		{ siteToken: "session-checkpoints.ts:338", operation: "maintenance.prune-checkpoints", estimatedWorkUnits: 1 },
 	);
 }
 

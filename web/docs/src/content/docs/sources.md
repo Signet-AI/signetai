@@ -286,11 +286,9 @@ response and dashboard show one actionable Full Disk Access instruction per
 denied path, including the exact path. The daemon backs off that path while
 permission is denied so a TCC denial does not create a retry storm.
 
-Source artifacts are also scanned by the memory-content-safety policy before
-native recall, source-chunk fallback, Dreaming, or other prompt-facing
-projections use them. The raw artifact and provenance remain unchanged when a
-record is `tainted` or `blocked`; inspect the record and the bounded
-`/api/diagnostics/memory-content-safety` ledger for the decision.
+When native recall, source-chunk fallback, Dreaming, or another prompt-facing
+projection uses a source artifact, detected credentials in it are replaced with
+`[redacted credential]`. The raw artifact and provenance remain unchanged.
 
 ## Obsidian v1
 

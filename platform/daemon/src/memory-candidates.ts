@@ -1,8 +1,8 @@
 import { existsSync } from "node:fs";
-import { type AgentRosterReadPolicy, scanMemoryContent } from "@signet/core";
+import { type AgentRosterReadPolicy, redactCredentials } from "@signet/core";
 import { yieldEvery } from "./async-yield";
 import { getDbOwner } from "./db-owner-runtime";
-import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
+import { ownerReadAll } from "./db-owner-sql";
 import { logger } from "./logger";
 import { effectiveScore } from "./memory-classification";
 import { buildAgentScopeClause, currentMemorySql } from "./memory-search";
@@ -82,18 +82,21 @@ export function buildActiveConstraintsSection(
 	}>,
 	charBudget: number,
 ): string {
-	const safeConstraints = constraints.filter((item) => scanMemoryContent(item.content).contextEligible);
-	if (safeConstraints.length === 0) return "";
+	const redactedConstraints = constraints.map((item) => ({ ...item, content: redactCredentials(item.content) }));
+	if (redactedConstraints.length === 0) return "";
 
 	const header = "\n## Active Constraints\n\nConstraints for entities in scope. These always apply.\n";
-	const fullLines = safeConstraints.map((item) => `- [${item.entityName}] ${item.content}\n`);
+	const fullLines = redactedConstraints.map((item) => `- [${item.entityName}] ${item.content}\n`);
 	const fullSection = `${header}${fullLines.join("")}`.trimEnd();
 	if (charBudget <= 0 || fullSection.length <= charBudget) return fullSection;
 
-	const fixedOverhead = safeConstraints.reduce((acc, item) => acc + `- [${item.entityName}] \n`.length, header.length);
+	const fixedOverhead = redactedConstraints.reduce(
+		(acc, item) => acc + `- [${item.entityName}] \n`.length,
+		header.length,
+	);
 	const availableForContent = Math.max(0, charBudget - fixedOverhead);
-	const perConstraintBudget = Math.max(24, Math.floor(availableForContent / safeConstraints.length));
-	const compressedLines = safeConstraints.map((item) => {
+	const perConstraintBudget = Math.max(24, Math.floor(availableForContent / redactedConstraints.length));
+	const compressedLines = redactedConstraints.map((item) => {
 		const content =
 			item.content.length <= perConstraintBudget
 				? item.content
@@ -104,7 +107,7 @@ export function buildActiveConstraintsSection(
 
 	logger.warn("hooks", "Constraint section exceeded budget; preserving all constraints", {
 		constraintBudgetChars: charBudget,
-		constraintCount: safeConstraints.length,
+		constraintCount: redactedConstraints.length,
 		fullChars: fullSection.length,
 		injectChars: compressedSection.length,
 	});
@@ -130,36 +133,13 @@ export async function fetchTraversalCandidates(
 
 	try {
 		const owner = await getDbOwner(memoryDbPath);
-		const safetyTable = await ownerReadOne<{ readonly name: string }>(
-			owner,
-			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-			["memory_content_safety"],
-			{
-				operation: "session-start.traversal-candidate-safety-table",
-				lane: "read",
-				deadlineMs: 5_000,
-				estimatedWorkUnits: 1,
-			},
-		);
-		const hasSafetyTable = safetyTable !== null;
-		const safetyJoin = hasSafetyTable
-			? " LEFT JOIN memory_content_safety safety ON safety.agent_id = ? AND safety.source_kind = 'memory' AND safety.source_id = m.id"
-			: "";
-		const safetySelect = hasSafetyTable
-			? ", safety.status AS safety_status, safety.context_eligible AS safety_context_eligible"
-			: ", NULL AS safety_status, NULL AS safety_context_eligible";
 		const rows: ScoredMemory[] = [];
 		const yieldBetweenBatches = yieldEvery(1);
 
 		for (let offset = 0; offset < boundedMemoryIds.length; offset += TRAVERSAL_CANDIDATE_BATCH_SIZE) {
 			const batch = boundedMemoryIds.slice(offset, offset + TRAVERSAL_CANDIDATE_BATCH_SIZE);
 			const placeholders = batch.map(() => "?").join(", ");
-			const batchRows = await ownerReadAll<
-				ScoredMemory & {
-					readonly safety_status: string | null;
-					readonly safety_context_eligible: number | null;
-				}
-			>(
+			const batchRows = await ownerReadAll<ScoredMemory>(
 				owner,
 				`SELECT
 					 m.id,
@@ -181,10 +161,10 @@ export async function fetchTraversalCandidates(
 						    AND ea.status = 'active'),
 						 m.importance,
 						 0.5
-					 ) AS effScore${safetySelect}
-				 FROM memories m${safetyJoin}
+					 ) AS effScore
+				 FROM memories m
 				 WHERE m.id IN (${placeholders})${currentMemorySql("m")}`,
-				hasSafetyTable ? [agentId, agentId, ...batch] : [agentId, ...batch],
+				[agentId, ...batch],
 				{
 					operation: "session-start.traversal-candidate-hydration",
 					lane: "read",
@@ -192,20 +172,13 @@ export async function fetchTraversalCandidates(
 					estimatedWorkUnits: Math.max(1, Math.min(150, batch.length * 3)),
 				},
 			);
-			rows.push(
-				...batchRows.filter(
-					(row) =>
-						scanMemoryContent(row.content).contextEligible &&
-						(!hasSafetyTable ||
-							row.safety_status === null ||
-							(row.safety_status === "clean" && row.safety_context_eligible === 1)),
-				),
-			);
+			rows.push(...batchRows);
 			await yieldBetweenBatches();
 		}
 
 		return rows.map((row) => ({
 			...row,
+			content: redactCredentials(row.content),
 			effScore: clampScore01(row.effScore),
 		}));
 	} catch {
@@ -231,19 +204,6 @@ export async function getAllScoredCandidates(
 			deadlineMs: 5_000,
 			estimatedWorkUnits: Math.max(1, Math.min(10_000, limit * 3)),
 		};
-		const safetyTable = await ownerReadOne<{ readonly name: string }>(
-			owner,
-			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-			["memory_content_safety"],
-			{ ...readOptions, operation: "session-start.candidate-pool.safety-table" },
-		);
-		const hasSafetyTable = safetyTable != null;
-		const safetyJoin = hasSafetyTable
-			? " LEFT JOIN memory_content_safety safety ON safety.agent_id = ? AND safety.source_kind = 'memory' AND safety.source_id = m.id"
-			: "";
-		const safetyPredicate = hasSafetyTable
-			? " AND (safety.agent_id IS NULL OR (safety.status = 'clean' AND safety.context_eligible = 1))"
-			: "";
 		const rows: ReadonlyArray<{
 			id: string;
 			content: string;
@@ -261,17 +221,17 @@ export async function getAllScoredCandidates(
 			`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
 			        m.source_type, m.source_id,
 			        COALESCE(m.access_count, 0) AS access_count
-			 FROM memories m${safetyJoin}
-				 WHERE 1 = 1${currentMemorySql("m")}${scope.sql}${safetyPredicate}
+			 FROM memories m
+				 WHERE 1 = 1${currentMemorySql("m")}${scope.sql}
 			 ORDER BY m.created_at DESC LIMIT ?`,
-			hasSafetyTable ? [agentId, ...scope.args, limit * 3] : [...scope.args, limit * 3],
+			[...scope.args, limit * 3],
 			readOptions,
 		);
 
 		const scored: ScoredMemory[] = rows
-			.filter((row) => scanMemoryContent(row.content).contextEligible)
 			.map((r) => ({
 				...r,
+				content: redactCredentials(r.content),
 				effScore: effectiveScore(r.importance, r.created_at, r.pinned === 1),
 			}))
 			.filter((r) => r.effScore > 0.2 || r.pinned === 1);
@@ -311,41 +271,22 @@ export async function getPredictedContextMemories(
 			deadlineMs: 5_000,
 			estimatedWorkUnits: Math.max(1, Math.min(500, limit * 10)),
 		};
-		const safetyTable = await ownerReadOne<{ readonly name: string }>(
-			owner,
-			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
-			["memory_content_safety"],
-			{ ...readOptions, operation: "session-start.predicted-context.safety-table" },
-		);
-		const hasSafetyTable = safetyTable !== null;
 		const transcriptRows = await ownerReadAll<{
 			readonly session_key: string;
 			readonly transcript: string;
-			readonly safety_status: string | null;
-			readonly safety_context_eligible: number | null;
 		}>(
 			owner,
-			`SELECT st.session_key, st.content AS transcript,
-			        ${hasSafetyTable ? "safety.status" : "NULL"} AS safety_status,
-			        ${hasSafetyTable ? "safety.context_eligible" : "NULL"} AS safety_context_eligible
+			`SELECT st.session_key, st.content AS transcript
 			 FROM session_transcripts st
-			 ${hasSafetyTable ? "LEFT JOIN memory_content_safety safety ON safety.agent_id = ? AND safety.source_kind = 'transcript' AND safety.source_id = st.session_key" : ""}
 			 WHERE st.project = ? AND st.completed_at IS NOT NULL AND st.agent_id = ?
 			 ORDER BY COALESCE(st.updated_at, st.created_at) DESC LIMIT 5`,
-			hasSafetyTable ? [agentId, project, agentId] : [project, agentId],
+			[project, agentId],
 			{ ...readOptions, operation: "session-start.predicted-context.transcripts" },
 		);
-		const eligibleTranscriptRows = transcriptRows.filter(
-			(row) =>
-				scanMemoryContent(row.transcript).contextEligible &&
-				(!hasSafetyTable ||
-					row.safety_status === null ||
-					(row.safety_status === "clean" && row.safety_context_eligible === 1)),
-		);
 
-		if (eligibleTranscriptRows.length === 0) return [];
+		if (transcriptRows.length === 0) return [];
 		const termFreq = new Map<string, number>();
-		for (const row of eligibleTranscriptRows) {
+		for (const row of transcriptRows) {
 			const text = row.transcript.slice(0, 3000);
 			const words = text
 				.toLowerCase()
@@ -380,48 +321,35 @@ export async function getPredictedContextMemories(
 			readonly source_type: string | null;
 			readonly source_id: string | null;
 			readonly access_count: number;
-			readonly safety_status: string | null;
-			readonly safety_context_eligible: number | null;
 		}>(
 			owner,
 			`SELECT m.id, m.content, m.type, m.importance, m.tags,
 			        m.pinned, m.project, m.created_at, m.source_type, m.source_id,
-			        COALESCE(m.access_count, 0) AS access_count,
-			        ${hasSafetyTable ? "safety.status" : "NULL"} AS safety_status,
-			        ${hasSafetyTable ? "safety.context_eligible" : "NULL"} AS safety_context_eligible
+			        COALESCE(m.access_count, 0) AS access_count
 			 FROM memories_fts
 			 JOIN memories m ON memories_fts.rowid = m.rowid
-			 ${hasSafetyTable ? "LEFT JOIN memory_content_safety safety ON safety.agent_id = ? AND safety.source_kind = 'memory' AND safety.source_id = m.id" : ""}
 			 WHERE memories_fts MATCH ?
 			   ${currentMemorySql("m")}
 			   AND m.project = ?
 			   ${scope.sql}
 			 ORDER BY bm25(memories_fts)
 			 LIMIT ?`,
-			hasSafetyTable
-				? [agentId, ftsQuery, project, ...scope.args, limit * 2]
-				: [ftsQuery, project, ...scope.args, limit * 2],
+			[ftsQuery, project, ...scope.args, limit * 2],
 			{ ...readOptions, operation: "session-start.predicted-context.fts" },
 		);
-		const eligibleRows = rows.filter(
-			(row) =>
-				scanMemoryContent(row.content).contextEligible &&
-				(!hasSafetyTable ||
-					row.safety_status === null ||
-					(row.safety_status === "clean" && row.safety_context_eligible === 1)),
-		);
-
 		const selected: ScoredMemory[] = [];
 		let used = 0;
-		for (const r of eligibleRows) {
+		for (const r of rows) {
 			if (excludeIds.has(r.id)) continue;
 			if (selected.length >= limit) break;
-			if (used + r.content.length > charBudget) break;
+			const content = redactCredentials(r.content);
+			if (used + content.length > charBudget) break;
 			selected.push({
 				...r,
+				content,
 				effScore: effectiveScore(r.importance, r.created_at, r.pinned === 1),
 			});
-			used += r.content.length;
+			used += content.length;
 		}
 
 		return selected;

@@ -48,7 +48,6 @@ import {
 } from "../episodic-sources";
 import { type GraphHygieneCaps, getDreamingHygieneCandidatesInDb } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
-import { upsertMemoryContentSafetyInTx } from "../memory-content-safety";
 import type { GraphWriteCaps } from "../ontology-proposals";
 import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
 import { normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
@@ -60,7 +59,7 @@ import type { DreamingToolCallTrace } from "./dreaming-capabilities";
 import { DREAMING_CAPABILITY_IDS, dreamingEvidencePageChars } from "./dreaming-capabilities";
 import { readCuratedMemoryHead, type MemoryHeadCommitInput, type MemoryHeadCommitter } from "../memory-head";
 import { commitCuratedMemoryHeadInDb } from "../memory-head-owner";
-import { renderDreamingEvidence } from "./dreaming-evidence";
+import { renderDreamingEvidence, sanitizeTranscriptForDreaming } from "./dreaming-evidence";
 import {
 	deliveredOffsetForSource,
 	evidenceContentSha256,
@@ -1890,7 +1889,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 			for (const sourceRef of refs) {
 				const source = await readDreamingEvidenceSource(accessor, scope, sourceRef);
 				if (source !== null && source.completed)
-					transcriptManifestEntries.push({ scope, source, content: renderDreamingEvidence(source) });
+					transcriptManifestEntries.push({ scope, source, content: sanitizeTranscriptForDreaming(source.content) });
 			}
 		}
 		const finalizeInput: DbOwnerDreamingPassFinalize = {
@@ -2097,12 +2096,6 @@ function writeDreamingTranscriptManifestInTx(
 			}),
 			now,
 		);
-		upsertMemoryContentSafetyInTx(db, {
-			agentId: entry.scope,
-			sourceKind: "summary",
-			sourceId: nodeId,
-			content,
-		});
 		upsertThreadHead(db as unknown as Database, {
 			agentId: entry.scope,
 			nodeId,

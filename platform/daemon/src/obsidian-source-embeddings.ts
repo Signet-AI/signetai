@@ -5,13 +5,7 @@ import {
 	relPath,
 	type ObsidianSourceChunk,
 } from "./obsidian-source-chunks";
-import {
-	scanMemoryContent,
-	MEMORY_CONTENT_SAFETY_POLICY_VERSION,
-	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
-	SOURCE_CHUNK_SOURCE_TYPE,
-	activeVectorProjectionTable,
-} from "@signet/core";
+import { LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, SOURCE_CHUNK_SOURCE_TYPE, activeVectorProjectionTable } from "@signet/core";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "./db-helpers";
@@ -23,7 +17,6 @@ import { embeddingProfileFingerprint } from "./embedding-profile";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import type { EmbeddingRole } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
-import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import {
 	awaitEmbeddingProviderAvailable,
 	recordEmbeddingProviderFailure,
@@ -155,7 +148,6 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 	const vecTable = await ownerVecTable(input.signal);
 	const vecAvailable = vecTable !== null;
 	const vecDimensions = vecTable !== null ? await ownerVecDimensions(vecTable, input.signal) : null;
-	const safetyAvailable = await ownerSafetyTableExists(input.signal);
 	const currentHashes = new Set<string>();
 	let embedded = 0;
 	let skipped = 0;
@@ -177,13 +169,6 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 			{ operation: "sources.embeddings.owner.existing", lane: "read", signal: input.signal },
 		);
 		if (existing?.content_hash === contentHash) {
-			if (safetyAvailable)
-				await dbOwnerBatch([ownerSafetyStatement(input.agentId, embeddingId, chunk.chunkText)], {
-					operation: "sources.embeddings.owner.safety",
-					lane: "write",
-					workloadClass: "maintenance",
-					signal: input.signal,
-				});
 			skipped++;
 			continue;
 		}
@@ -240,7 +225,6 @@ export async function indexObsidianSourceEmbeddingsViaOwner(
 				],
 			),
 		);
-		if (safetyAvailable) statements.push(ownerSafetyStatement(input.agentId, embeddingId, chunk.chunkText));
 		if (vecAvailable && vecDimensions === vector.length)
 			statements.push(
 				ownerStatement(`INSERT OR REPLACE INTO ${vecTable} (id, embedding) VALUES (?, ?)`, [
@@ -422,42 +406,13 @@ async function ownerVecDimensions(table: string, signal?: AbortSignal): Promise<
 	return match?.[1] === undefined ? null : Number(match[1]);
 }
 
-async function ownerSafetyTableExists(signal?: AbortSignal): Promise<boolean> {
-	const row = await dbOwnerQuery<{ readonly name: string } | null>(
-		ownerStatement("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety'", [], "get"),
-		{ operation: "sources.embeddings.owner.safety-table", lane: "read", signal },
-	);
-	return row !== null;
-}
-
-function ownerSafetyStatement(agentId: string, sourceId: string, content: string): ReturnType<typeof ownerStatement> {
-	const assessment = scanMemoryContent(content);
-	return ownerStatement(
-		`INSERT INTO memory_content_safety
-		 (agent_id, source_kind, source_id, status, context_eligible, reasons_json, policy_version, scanned_at)
-		 VALUES (?, 'source_chunk', ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(agent_id, source_kind, source_id) DO UPDATE SET status = excluded.status,
-		 context_eligible = excluded.context_eligible, reasons_json = excluded.reasons_json,
-		 policy_version = excluded.policy_version, scanned_at = excluded.scanned_at`,
-		[
-			agentId,
-			sourceId,
-			assessment.status,
-			assessment.contextEligible ? 1 : 0,
-			JSON.stringify(assessment.reasons),
-			MEMORY_CONTENT_SAFETY_POLICY_VERSION,
-			new Date().toISOString(),
-		],
-	);
-}
-
 export async function indexObsidianSourceEmbeddings(
 	input: IndexObsidianSourceEmbeddingsInput,
 ): Promise<IndexObsidianSourceEmbeddingsResult> {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const embeddingConfig = getDbAccessor().withReadDb(
 		(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-		"obsidian-source-embeddings.ts:458",
+		"obsidian-source-embeddings.ts:413",
 	);
 	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
@@ -490,17 +445,6 @@ export async function indexObsidianSourceEmbeddings(
 		currentHashes.add(contentHash);
 		const existingChunk = existingChunkEmbedding(input.agentId, chunk.id);
 		if (existingChunk?.content_hash === contentHash) {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			getDbAccessor().withWriteTx(
-				(db: import("./db-accessor").WriteDb) =>
-					upsertMemoryContentSafetyInTx(db, {
-						agentId: input.agentId,
-						sourceKind: "source_chunk",
-						sourceId: existingChunk.id,
-						content: chunk.chunkText,
-					}),
-				"obsidian-source-embeddings.ts:494",
-			);
 			skipped++;
 			await yielder();
 			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
@@ -509,7 +453,7 @@ export async function indexObsidianSourceEmbeddings(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const writeConfig = getDbAccessor().withReadDb(
 			(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-			"obsidian-source-embeddings.ts:510",
+			"obsidian-source-embeddings.ts:454",
 		);
 		let failureCause: PipelineCauseFamily = "provider_unavailable";
 		const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
@@ -572,18 +516,12 @@ export async function indexObsidianSourceEmbeddings(
 				now,
 				input.agentId,
 			);
-			upsertMemoryContentSafetyInTx(db, {
-				agentId: input.agentId,
-				sourceKind: "source_chunk",
-				sourceId: embId,
-				content: chunk.chunkText,
-			});
 			const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 				| { id: string }
 				| undefined;
 			syncVecInsert(db, stored?.id ?? embId, vector);
 			return true;
-		}, "obsidian-source-embeddings.ts:541");
+		}, "obsidian-source-embeddings.ts:485");
 		if (!stored) {
 			skipped++;
 			await yielder();
@@ -621,7 +559,7 @@ export async function indexObsidianSourceEmbeddings(
 				const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
 				for (const id of staleIds) stmt.run(id);
 			}
-		}, "obsidian-source-embeddings.ts:600");
+		}, "obsidian-source-embeddings.ts:538");
 
 	return {
 		chunks: chunks.length,
@@ -650,7 +588,7 @@ function existingChunkEmbedding(agentId: string, chunkId: string): { id: string;
 					"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
 				)
 				.get(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
-		"obsidian-source-embeddings.ts:646",
+		"obsidian-source-embeddings.ts:584",
 	) as { id: string; content_hash: string } | undefined;
 	return row ?? null;
 }
@@ -689,7 +627,7 @@ function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): numb
 			changes += result.changes;
 		}
 		return changes;
-	}, "obsidian-source-embeddings.ts:669");
+	}, "obsidian-source-embeddings.ts:607");
 }
 
 function prefixUpperBound(prefix: string): string {

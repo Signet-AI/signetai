@@ -51,7 +51,6 @@ import { getInferenceRouterOrNull } from "../inference-router";
 import { fetchInternal } from "../internal-fetch.js";
 import { logger } from "../logger";
 import { type EmbeddingConfig, loadMemoryConfig } from "../memory-config";
-import { upsertMemoryContentSafetyInTx } from "../memory-content-safety";
 import { normalizeMarkdownBody, writeCompactionArtifact } from "../memory-lineage.js";
 import { type RecallParams, hybridRecall } from "../memory-search";
 import {
@@ -1185,12 +1184,6 @@ function registerCompactionComplete(app: Hono): void {
 						"system",
 						null,
 					);
-					upsertMemoryContentSafetyInTx(db, {
-						agentId,
-						sourceKind: "memory",
-						sourceId: summaryId,
-						content: summary,
-					});
 
 					const table = db
 						.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
@@ -1219,12 +1212,6 @@ function registerCompactionComplete(app: Hono): void {
 						JSON.stringify({ source: "compaction-complete" }),
 						now,
 					);
-					upsertMemoryContentSafetyInTx(db, {
-						agentId,
-						sourceKind: "summary",
-						sourceId: nodeId,
-						content: summary,
-					});
 					upsertThreadHead(db as unknown as Database, {
 						agentId,
 						nodeId,

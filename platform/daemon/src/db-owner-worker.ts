@@ -12,7 +12,6 @@ import {
 import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./memory-lineage";
-import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
 import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
@@ -772,12 +771,6 @@ export function runDbOwnerWorker(): void {
 				)
 				.get("source_chunk", "obsidian_chunk", chunk.id, input.agentId) as { id: string; content_hash: string } | null;
 			if (existing?.content_hash === contentHash) {
-				upsertMemoryContentSafetyInTx(database as unknown as import("./db-accessor").WriteDb, {
-					agentId: input.agentId,
-					sourceKind: "source_chunk",
-					sourceId: embeddingId,
-					content: chunk.chunkText,
-				});
 				skipped++;
 				continue;
 			}
@@ -832,12 +825,6 @@ export function runDbOwnerWorker(): void {
 					new Date().toISOString(),
 					input.agentId,
 				);
-			upsertMemoryContentSafetyInTx(database as unknown as import("./db-accessor").WriteDb, {
-				agentId: input.agentId,
-				sourceKind: "source_chunk",
-				sourceId: embeddingId,
-				content: chunk.chunkText,
-			});
 			if (vecAvailable && vecDimensions === String(vector.length))
 				database
 					.prepare(`INSERT OR REPLACE INTO ${vecTable} (id, embedding) VALUES (?, ?)`)

@@ -26,19 +26,14 @@ Requires `recall` permission.
 | `limit`   | integer | 100     | Max records to return        |
 | `offset`  | integer | 0       | Pagination offset            |
 
-Each listed memory includes `contentSafety` from the persisted ledger or a
-read-time assessment for legacy rows. This metadata is informational for
-inspection; a `blocked` or `tainted` row remains retained and auditable rather
-than being deleted.
+### Credential redaction
 
-### Memory content safety
-
-Remembered content is scanned before it can become prompt-facing context. The
-versioned policy reports `clean`, `tainted`, or `blocked`, with stable reason
-codes such as `prompt_injection`, `exfiltration`, `credential_harvesting`,
-`malicious_shell`, `tool_directive`, and `invisible_unicode`. Only `clean`
-content is context eligible. The original content and provenance are preserved
-unchanged, and `GET /api/memory/:id` returns the same assessment for inspection.
+Remembered content is stored as written. When it is projected into a prompt,
+recall result, Dreaming evidence, `MEMORY.md`, or an MCP tool response, any
+detected credential (provider API keys and tokens, private keys, JWTs, bearer
+tokens, and values assigned to secret-named keys) is replaced with
+`[redacted credential]`. Nothing is withheld for safety reasons, and the
+original content and provenance stay unchanged.
 
 The scan is not a truth judgment and is not a replacement for permissions or
 agent scoping. A blocked memory can still be inspected by an authorized caller;
@@ -184,14 +179,7 @@ Dreaming owns semantic processing.
   "hints_written": 0,
   "structured": false,
   "structured_applied": false,
-  "deduped": false,
-  "contentSafety": {
-    "status": "clean",
-    "contextEligible": true,
-    "reasons": [],
-    "policyVersion": "memory-content-safety-v1",
-    "scannedAt": "2026-02-21T10:00:00.000Z"
-  }
+  "deduped": false
 }
 ```
 

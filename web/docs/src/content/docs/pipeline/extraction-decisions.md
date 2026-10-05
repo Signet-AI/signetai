@@ -67,9 +67,8 @@ bounded excerpts rather than handing the model an unbounded database view.
 A completed transcript and its related lineage remain one source of evidence,
 not several independent facts to merge blindly. When a captured session has
 both a transcript artifact and a transcript record, the transcript record is
-the one Dreaming input; the artifact is offered only when no record exists. Read-time content-safety rules
-can exclude tainted or blocked content from Dreaming context without deleting
-or rewriting the original source row.
+the one Dreaming input; the artifact is offered only when no record exists. Credentials in delivered evidence
+are redacted on the way to Dreaming; the original source row is not rewritten.
 
 The evidence search capability is `search_evidence`. Other read capabilities
 allow Dreaming to inspect entities, aspects, claims, links, contradictions,

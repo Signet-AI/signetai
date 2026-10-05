@@ -7,8 +7,8 @@ Signet separates canonical evidence from the derived structures used for
 retrieval and maintenance.
 
 Conversation transcripts, memory rows, imported documents, and canonical JSONL
-transcripts are evidence. Embeddings, FTS indexes, graph projections,
-content-safety decisions, and `MEMORY.md` are derived or rebuildable surfaces.
+transcripts are evidence. Embeddings, FTS indexes, graph projections, and
+`MEMORY.md` are derived or rebuildable surfaces.
 Normal capture does not create Markdown transcript copies; Markdown is an
 explicit export or view. See [Workspace v2](/workspace-v2/) for storage
 ownership and migration.
@@ -147,8 +147,8 @@ row without creating a second hidden recall path.
 Canonical Markdown artifacts under `$SIGNET_WORKSPACE/transcripts/` remain the
 lineage surface for transcript, summary, and compaction history. `MEMORY.md` is
 a rebuildable projection over durable memory rows, temporal state, and the
-canonical artifact ledger. Before retained content enters prompt-facing
-projections, the versioned content-safety policy must mark it eligible.
+canonical artifact ledger. Retained content enters prompt-facing projections
+with detected credentials replaced by `[redacted credential]`.
 
 ## Job queue
 
@@ -278,11 +278,6 @@ partial uniqueness rule prevents duplicate non-deleted content hashes. The
 including created, updated, deleted, recovered, and proposal/observation events.
 It stores old and new content where applicable, the actor, reason, metadata,
 session, and request identifiers.
-
-**`memory_content_safety`** is an agent-scoped derived ledger for content-safety
-decisions over memories, artifacts, transcripts, summaries, and source chunks.
-It stores the decision status, prompt eligibility, reasons, policy version, and
-scan time. It never replaces or rewrites the underlying evidence.
 
 **`session_transcripts`** stores the canonical retained conversation index. Its
 current lifecycle fields include completion and content-hash metadata, in

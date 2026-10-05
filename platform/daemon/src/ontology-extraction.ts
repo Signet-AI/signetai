@@ -4,6 +4,7 @@ import { type EpisodicSourceRecord, readEpisodicSource } from "./episodic-source
 import { type CreateEpistemicAssertionInput, createEpistemicAssertionsInTx } from "./ontology-assertions";
 import { type CreateOntologyProposalInput, createOntologyProposalsInTx } from "./ontology-proposals";
 import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";
+import { redactCredentials } from "@signet/core";
 
 type ProposalDraft = {
 	readonly operation: string;
@@ -509,10 +510,11 @@ function boundedInt(value: number | undefined, fallback: number, min: number, ma
 }
 
 function buildProviderPrompt(source: SourceRecord): string {
+	const redacted = redactCredentials(source.content);
 	const content =
-		source.content.length > MAX_PROVIDER_INPUT_CHARS
-			? `${source.content.slice(0, MAX_PROVIDER_INPUT_CHARS)}\n[truncated]`
-			: source.content;
+		redacted.length > MAX_PROVIDER_INPUT_CHARS
+			? `${redacted.slice(0, MAX_PROVIDER_INPUT_CHARS)}\n[truncated]`
+			: redacted;
 	return `You are extracting candidate ontology updates from source evidence.
 
 Source of truth:
@@ -646,7 +648,7 @@ function readSource(accessor: DbAccessor, params: Pick<ExtractOntologyParams, "a
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const source = accessor.withReadDb(
 		(db: import("./db-accessor").ReadDb) => readEpisodicSource(db, { agentId: params.agentId, from }),
-		"ontology-extraction.ts:647",
+		"ontology-extraction.ts:649",
 	);
 	if (source) return source;
 	throw new OntologyExtractionError("Extraction source not found", 404);
@@ -752,7 +754,7 @@ export async function extractOntologyProposals(
 			: { items: [] as readonly OntologyProposal[], count: 0 };
 		const assertionItems = shouldWriteAssertions ? createEpistemicAssertionsInTx(accessor, db, assertionInputs) : [];
 		return { proposalResult, assertionItems };
-	}, "ontology-extraction.ts:749");
+	}, "ontology-extraction.ts:751");
 
 	return {
 		source: sourceInfo(source),

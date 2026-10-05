@@ -1,6 +1,6 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { preflightWorkspace, resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
+import { preflightWorkspace, redactCredentials, resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
 import { logger } from "../logger.js";
 
 export type PluginAuditResultV1 = "ok" | "denied" | "degraded" | "error";
@@ -45,10 +45,6 @@ const DEFAULT_LIMIT = 100;
 const MAX_LIMIT = 500;
 const SENSITIVE_KEY_RE =
 	/(^|[_-])(api-key|apikey|auth-token|authorization|bearer|client-secret|credential|credentials|password|private-key|refresh-token|secret|secret-value|token|value)([_-]|$)/i;
-const SENSITIVE_ASSIGNMENT_RE =
-	/\b((?:access[_-]?token|api[_-]?key|auth(?:orization)?|bearer|client[_-]?secret|credential|password|refresh[_-]?token|secret|token)\s*[:=]\s*)(["']?)([^"'\s,;&]+)/gi;
-const KNOWN_SECRET_VALUE_RE =
-	/\b(AKIA[0-9A-Z]{16}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,}|sk-[A-Za-z0-9_-]{12,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g;
 
 export function getDefaultPluginAuditPath(): string {
 	return join(resolveWorkspaceLayout(resolveDefaultBasePath()).runtime, "plugins", "audit-v1.ndjson");
@@ -166,16 +162,10 @@ function isSensitiveAuditKey(key: string): boolean {
 
 function sanitizeAuditValue(value: unknown): unknown {
 	if (value === null || typeof value === "number" || typeof value === "boolean") return value;
-	if (typeof value === "string") return sanitizeAuditString(value);
+	if (typeof value === "string") return redactCredentials(value);
 	if (Array.isArray(value)) return value.map((entry) => sanitizeAuditValue(entry));
 	if (isRecord(value)) return sanitizeAuditData(value);
 	return String(value);
-}
-
-function sanitizeAuditString(value: string): string {
-	return value
-		.replace(SENSITIVE_ASSIGNMENT_RE, (_match, prefix: string, quote: string) => `${prefix}${quote}[REDACTED]`)
-		.replace(KNOWN_SECRET_VALUE_RE, "[REDACTED]");
 }
 
 function parseAuditResult(value: string): PluginAuditResultV1 {
