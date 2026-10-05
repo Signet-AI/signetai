@@ -29,6 +29,7 @@ const PAGE_KIND = "source_notion_page";
 export const NOTION_EDIT_GRANULARITY_MS = 60_000;
 export const NOTION_MAX_PURGE_CONFIRMATIONS = 200;
 export const NOTION_MAX_UNKNOWN_BLOCK_RESOLUTIONS = 25;
+const MAX_STORED_UNSUPPORTED_BLOCK_IDS = 500;
 const VERSION_BATCH = 100;
 const STALE_SCAN_BATCH = 500;
 const PURGE_BATCH = 100;
@@ -41,7 +42,7 @@ interface IndexedPageVersion {
 
 interface CompletedMarkdown {
 	readonly markdown: string;
-	readonly unsupportedBlocks: number;
+	readonly unsupportedBlockIds: readonly string[];
 	readonly missingBlocks: number;
 }
 
@@ -50,6 +51,7 @@ interface StaleCandidate {
 	readonly sourcePath: string;
 	readonly pageId: string | null;
 	readonly mtimeMs: number | null;
+	readonly confirmedLiveAtMs: number | null;
 }
 
 export const notionSourceProvider: SourceProviderAdapter = {
@@ -174,14 +176,10 @@ async function syncPage(
 	failures: SourceFailureState[],
 	shouldContinue: () => boolean,
 ): Promise<boolean> {
-	const fetchedAtMs = Date.now();
-	let markdown: CompletedMarkdown;
+	const path = pagePath(source, page.id);
+	let fetched: NotionPageMarkdown;
 	try {
-		markdown = await completeMarkdown(
-			token,
-			await fetchNotionPageMarkdown(token, page.id, shouldContinue),
-			shouldContinue,
-		);
+		fetched = await fetchNotionPageMarkdown(token, page.id, shouldContinue);
 	} catch (err) {
 		failures.push(
 			failureState(source, `Notion page fetch failed for "${page.title}": ${errorMessage(err)}`, {
@@ -191,8 +189,28 @@ async function syncPage(
 		);
 		return false;
 	}
+	let known: ReadonlySet<string>;
 	try {
-		await writePageArtifact(source, agentId, page, markdown, fetchedAtMs);
+		known = fetched.truncated ? await readKnownUnsupportedBlocks(source.id, agentId, path) : new Set<string>();
+	} catch (err) {
+		failures.push(failureState(source, `Notion index state read failed: ${errorMessage(err)}`, { phase: "state" }));
+		return false;
+	}
+	let markdown: CompletedMarkdown;
+	try {
+		markdown = await completeMarkdown(token, fetched, known, shouldContinue);
+	} catch (err) {
+		failures.push(
+			failureState(source, `Notion page fetch failed for "${page.title}": ${errorMessage(err)}`, {
+				phase: "markdown",
+				pageId: page.id,
+			}),
+		);
+		return false;
+	}
+	if (!shouldContinue()) return false;
+	try {
+		await writePageArtifact(source, agentId, page, markdown, fetched.servedAtMs);
 	} catch (err) {
 		failures.push(
 			failureState(source, `Notion page indexing failed for "${page.title}": ${errorMessage(err)}`, {
@@ -217,45 +235,72 @@ async function syncPage(
 async function completeMarkdown(
 	token: string,
 	fetched: NotionPageMarkdown,
+	known: ReadonlySet<string>,
 	shouldContinue: () => boolean,
 ): Promise<CompletedMarkdown> {
 	let markdown = fetched.markdown;
-	let unsupportedBlocks = 0;
+	const unsupported = new Set<string>();
+	const missing = new Set<string>();
 	let missingBlocks = fetched.truncated && fetched.unknownBlockIds.length === 0 ? 1 : 0;
-	for (const [index, blockId] of fetched.unknownBlockIds.entries()) {
-		if (index >= NOTION_MAX_UNKNOWN_BLOCK_RESOLUTIONS || !shouldContinue()) {
-			missingBlocks++;
+	const queue = [...fetched.unknownBlockIds];
+	const queued = new Set(queue);
+	let requests = 0;
+	for (let index = 0; index < queue.length; index++) {
+		const blockId = queue[index] ?? "";
+		if (known.has(blockId)) {
+			unsupported.add(blockId);
 			continue;
 		}
+		if (requests >= NOTION_MAX_UNKNOWN_BLOCK_RESOLUTIONS || !shouldContinue()) {
+			missing.add(blockId);
+			continue;
+		}
+		requests++;
 		let resolved: NotionPageMarkdown;
 		try {
 			resolved = await fetchNotionPageMarkdown(token, blockId, shouldContinue);
 		} catch (err) {
-			if (err instanceof NotionRequestError && (err.status === 403 || err.status === 404)) unsupportedBlocks++;
-			else missingBlocks++;
+			if (err instanceof NotionRequestError && (err.status === 403 || err.status === 404)) unsupported.add(blockId);
+			else missing.add(blockId);
 			continue;
 		}
 		const text = resolved.markdown.trim();
 		if (!text.replace(UNKNOWN_TAG, "").trim()) {
-			unsupportedBlocks++;
+			unsupported.add(blockId);
 			continue;
 		}
 		markdown = substituteUnknownBlock(markdown, blockId, text);
+		if (resolved.truncated && resolved.unknownBlockIds.length === 0) missingBlocks++;
+		for (const nested of resolved.unknownBlockIds) {
+			if (queued.has(nested)) continue;
+			queued.add(nested);
+			queue.push(nested);
+		}
 	}
-	return {
-		markdown: markdown.replace(UNKNOWN_TAG, (tag) => `[Unsupported Notion block: ${unknownTagLabel(tag)}]`),
-		unsupportedBlocks,
-		missingBlocks,
-	};
+	missingBlocks += missing.size;
+	const rendered = markdown.replace(UNKNOWN_TAG, (tag) => {
+		const label = unknownTagLabel(tag);
+		if (tagMatchesAny(tag, unsupported)) return `[Unsupported Notion block: ${label}]`;
+		if (!tagMatchesAny(tag, missing)) missingBlocks++;
+		return `[Missing Notion block: ${label}]`;
+	});
+	return { markdown: rendered, unsupportedBlockIds: [...unsupported], missingBlocks };
 }
 
-const UNKNOWN_TAG = /<unknown\b[^>]*>/g;
+const UNKNOWN_TAG = /<unknown(?:\s+(?:url|alt)="[^"]*")+\s*\/>/g;
+
+function tagMatchesAny(tag: string, blockIds: ReadonlySet<string>): boolean {
+	for (const blockId of blockIds) {
+		if (tag.includes(blockId) || tag.includes(blockId.replace(/-/g, ""))) return true;
+	}
+	return false;
+}
 
 function substituteUnknownBlock(markdown: string, blockId: string, replacement: string): string {
-	const compact = blockId.replace(/-/g, "");
 	let replaced = false;
+	const ids = new Set([blockId]);
 	const next = markdown.replace(UNKNOWN_TAG, (tag) => {
-		if (replaced || (!tag.includes(blockId) && !tag.includes(compact))) return tag;
+		if (replaced || !tagMatchesAny(tag, ids)) return tag;
 		replaced = true;
 		return replacement;
 	});
@@ -264,6 +309,27 @@ function substituteUnknownBlock(markdown: string, blockId: string, replacement: 
 
 function unknownTagLabel(tag: string): string {
 	return tag.match(/alt="([^"]*)"/)?.[1] || "block";
+}
+
+async function readKnownUnsupportedBlocks(
+	sourceId: string,
+	agentId: string,
+	sourcePath: string,
+): Promise<ReadonlySet<string>> {
+	const row = await dbOwnerQuery<{ readonly incomplete: number | null; readonly ids: string | null } | null>(
+		{
+			sql: `SELECT json_extract(source_meta_json, '$.incomplete') AS incomplete,
+			        json_extract(source_meta_json, '$.unsupportedBlockIds') AS ids
+			 FROM memory_artifacts
+			 WHERE agent_id = ? AND source_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0`,
+			params: [agentId, sourceId, sourcePath],
+			result: "get",
+		},
+		{ operation: "sources.notion.read_unsupported", lane: "read", deadlineMs: 5_000 },
+	);
+	if (row?.incomplete !== 1 || typeof row.ids !== "string") return new Set();
+	const parsed: unknown = JSON.parse(row.ids);
+	return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === "string") : []);
 }
 
 async function writePageArtifact(
@@ -299,7 +365,8 @@ async function writePageArtifact(
 			lastEditedTime: page.lastEditedTime,
 			incomplete: markdown.missingBlocks > 0,
 			missingBlocks: markdown.missingBlocks,
-			unsupportedBlocks: markdown.unsupportedBlocks,
+			unsupportedBlocks: markdown.unsupportedBlockIds.length,
+			unsupportedBlockIds: markdown.unsupportedBlockIds.slice(0, MAX_STORED_UNSUPPORTED_BLOCK_IDS),
 		},
 	});
 	await indexSourceArtifactStructureAsync({
@@ -404,11 +471,13 @@ async function purgeStalePages(
 		? search.pages.reduce((floor, page) => Math.min(floor, Date.parse(page.lastEditedTime)), Number.POSITIVE_INFINITY)
 		: Number.NEGATIVE_INFINITY;
 	const stale: StaleCandidate[] = [];
+	const confirmedLive: StaleCandidate[] = [];
 	let confirmations = 0;
 	let unconfirmed = 0;
+	candidates.sort((left, right) => (left.confirmedLiveAtMs ?? 0) - (right.confirmedLiveAtMs ?? 0));
 	for (const candidate of candidates) {
 		if (!shouldContinue()) return;
-		if (candidate.mtimeMs !== null && candidate.mtimeMs < windowFloorMs) {
+		if (candidate.mtimeMs !== null && candidate.mtimeMs <= windowFloorMs) {
 			stale.push(candidate);
 			continue;
 		}
@@ -419,7 +488,8 @@ async function purgeStalePages(
 		confirmations++;
 		try {
 			const lookup = await fetchNotionPage(token, candidate.pageId, shouldContinue);
-			if (lookup.status === "gone" || Date.parse(lookup.page.lastEditedTime) < windowFloorMs) stale.push(candidate);
+			if (lookup.status === "gone" || Date.parse(lookup.page.lastEditedTime) <= windowFloorMs) stale.push(candidate);
+			else confirmedLive.push(candidate);
 		} catch {
 			unconfirmed++;
 		}
@@ -432,6 +502,7 @@ async function purgeStalePages(
 			}),
 		);
 	}
+	await recordConfirmedLive(source.id, agentId, confirmedLive);
 	for (let start = 0; start < stale.length; start += PURGE_BATCH) {
 		if (!shouldContinue()) return;
 		const batch = stale.slice(start, start + PURGE_BATCH);
@@ -451,6 +522,29 @@ async function purgeStalePages(
 	}
 }
 
+async function recordConfirmedLive(sourceId: string, agentId: string, rows: readonly StaleCandidate[]): Promise<void> {
+	if (rows.length === 0) return;
+	const confirmedAtMs = Date.now();
+	const statements = [];
+	for (let start = 0; start < rows.length; start += PURGE_BATCH) {
+		const batch = rows.slice(start, start + PURGE_BATCH);
+		statements.push(
+			ownerStatement(
+				`UPDATE memory_artifacts
+				 SET source_meta_json = json_set(COALESCE(source_meta_json, '{}'), '$.confirmedLiveAtMs', ?)
+				 WHERE agent_id = ? AND source_id = ? AND rowid IN (${batch.map(() => "?").join(", ")})`,
+				[confirmedAtMs, agentId, sourceId, ...batch.map((row) => row.rowid)],
+			),
+		);
+	}
+	await dbOwnerTransaction(statements, {
+		operation: "sources.notion.confirm_live",
+		lane: "write",
+		deadlineMs: 30_000,
+		estimatedWorkUnits: rows.length,
+	});
+}
+
 async function readStaleCandidates(
 	sourceId: string,
 	agentId: string,
@@ -465,10 +559,13 @@ async function readStaleCandidates(
 				readonly source_path: string;
 				readonly source_external_id: string | null;
 				readonly source_mtime_ms: number | null;
+				readonly confirmed_live_at_ms: number | null;
 			}>
 		>(
 			{
-				sql: `SELECT rowid, source_path, source_external_id, source_mtime_ms FROM memory_artifacts
+				sql: `SELECT rowid, source_path, source_external_id, source_mtime_ms,
+				        json_extract(source_meta_json, '$.confirmedLiveAtMs') AS confirmed_live_at_ms
+				 FROM memory_artifacts
 				 WHERE agent_id = ? AND source_id = ? AND source_kind = 'source_notion_page'
 				   AND COALESCE(is_deleted, 0) = 0 AND source_path > ?
 				 ORDER BY source_path ASC LIMIT ?`,
@@ -484,6 +581,7 @@ async function readStaleCandidates(
 				sourcePath: row.source_path,
 				pageId: row.source_external_id,
 				mtimeMs: typeof row.source_mtime_ms === "number" ? row.source_mtime_ms : null,
+				confirmedLiveAtMs: typeof row.confirmed_live_at_ms === "number" ? row.confirmed_live_at_ms : null,
 			});
 		}
 		if (rows.length < STALE_SCAN_BATCH) return candidates;

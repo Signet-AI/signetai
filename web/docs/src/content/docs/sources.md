@@ -231,22 +231,25 @@ a reference node for its parent page or data source in the source graph.
 Pages that are no longer returned are removed from the index after a complete
 enumeration. Pages outside a smaller `maxPages` window are removed directly;
 any other missing page is first confirmed gone (`404` or trashed) with a page
-lookup, up to 200 lookups per sync, so a page edited while the listing was in
-progress is not dropped. Unconfirmed removals are kept and reported. A failed
+lookup, up to 200 lookups per sync with the least recently confirmed pages
+first, so a page edited while the listing was in progress is not dropped and a
+large removal completes over successive syncs. Unconfirmed removals are kept and reported. A failed
 page fetch keeps the last indexed version, an incomplete Notion search skips
 removal, and partial page results keep their existing artifacts. Rate-limited
 requests honor Notion's `Retry-After` header with bounded retries, and
 cancelling or removing the source interrupts in-flight requests.
 
 Notion's Markdown endpoint marks a page as truncated whenever it contains a
-block the API cannot render. Signet resolves each such block individually (up
-to 25 per page): blocks Notion can serve are inlined, and blocks it cannot
-serve or the integration cannot access, such as buttons, embeds, and
-templates, become `[Unsupported Notion block: <type>]` placeholders without
-failing the sync. Fetch failures, unconfirmed removals, and pages with blocks
-that could not be retrieved are written as source-owned failure artifacts and
-cause the shared source job to report failure; incomplete pages are refetched
-and reported on every sync.
+block the API cannot render. Signet resolves each such block individually,
+including nested ones, with up to 25 lookups per page per sync: blocks Notion
+can serve are inlined, and blocks it cannot serve or the integration cannot
+access, such as buttons, embeds, and templates, become
+`[Unsupported Notion block: <type>]` placeholders without failing the sync.
+Blocks that could not be retrieved, including those beyond the per-sync
+budget, become `[Missing Notion block: <type>]` and mark the page incomplete;
+the next sync continues from the blocks already classified. Fetch failures,
+unconfirmed removals, and incomplete pages are written as source-owned failure
+artifacts and cause the shared source job to report failure until resolved.
 Comments, file attachments, and data-source schemas are not indexed in v1.
 
 ## Operations diagnostics

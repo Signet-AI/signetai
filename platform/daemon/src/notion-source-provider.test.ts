@@ -650,6 +650,187 @@ describe("notion-source-provider", () => {
 		expect(JSON.parse(artifact?.source_meta_json ?? "{}")).toMatchObject({ incomplete: true, missingBlocks: 3 });
 	});
 
+	it("resolves nested unknown blocks and treats unresolved nested content as missing", async () => {
+		const source = addSource();
+		let deepFails = true;
+		const requests = stubNotion((request) => {
+			if (request.path === "/search") return searchResponse([page("p", "Nested", "2026-02-01T00:00:00.000Z")]);
+			if (request.path === "/pages/p/markdown") {
+				return Response.json({
+					markdown: 'Top\n<unknown url="https://www.notion.so/p#sub1" alt="toggle"/>',
+					truncated: true,
+					unknown_block_ids: ["sub-1"],
+				});
+			}
+			if (request.path === "/pages/sub-1/markdown") {
+				return Response.json({
+					markdown: 'Subtree start\n<unknown url="https://www.notion.so/p#deep1" alt="paragraph"/>',
+					truncated: true,
+					unknown_block_ids: ["deep-1"],
+				});
+			}
+			if (deepFails) return Response.json({ code: "internal_server_error", message: "boom" }, { status: 500 });
+			return Response.json({ markdown: "Deep content", truncated: false, unknown_block_ids: [] });
+		});
+
+		const failed = await sync(source);
+
+		expect(failed.failures.map((failure) => failure.message)).toEqual([
+			'Notion page "Nested" is incomplete: 1 block(s) could not be retrieved',
+		]);
+		let artifact = sourceRows(source.id).find((entry) => entry.source_kind === "source_notion_page");
+		expect(artifact?.content).toContain("Top\nSubtree start\n[Missing Notion block: paragraph]");
+		expect(JSON.parse(artifact?.source_meta_json ?? "{}")).toMatchObject({ incomplete: true });
+
+		deepFails = false;
+		requests.length = 0;
+		const recovered = await sync(source);
+
+		expect(recovered.failures).toEqual([]);
+		artifact = sourceRows(source.id).find((entry) => entry.source_kind === "source_notion_page");
+		expect(artifact?.content).toContain("Top\nSubtree start\nDeep content");
+		expect(JSON.parse(artifact?.source_meta_json ?? "{}")).toMatchObject({ incomplete: false });
+	});
+
+	it("counts unknown tags that Notion did not list as missing", async () => {
+		const source = addSource();
+		stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse([page("p", "Unlisted", "2026-02-01T00:00:00.000Z")])
+				: Response.json({
+						markdown: 'Body\n<unknown url="https://www.notion.so/p#orphan" alt="synced_block"/>',
+						truncated: false,
+						unknown_block_ids: [],
+					}),
+		);
+
+		const result = await sync(source);
+
+		expect(result.failures.map((failure) => failure.message)).toEqual([
+			'Notion page "Unlisted" is incomplete: 1 block(s) could not be retrieved',
+		]);
+	});
+
+	it("finishes classifying more unsupported blocks than one sync's budget", async () => {
+		const source = addSource();
+		const ids = Array.from({ length: 30 }, (_, index) => `embed-${index}`);
+		const markdown = ids.map((id) => `<unknown url="https://www.notion.so/p#${id}" alt="embed"/>`).join("\n");
+		const requests = stubNotion((request) => {
+			if (request.path === "/search") return searchResponse([page("p", "Embeds", "2026-02-01T00:00:00.000Z")]);
+			if (request.path === "/pages/p/markdown") {
+				return Response.json({ markdown, truncated: true, unknown_block_ids: ids });
+			}
+			const id = request.path.split("/")[2] ?? "";
+			return Response.json({
+				markdown: `<unknown url="https://www.notion.so/p#${id}" alt="embed"/>`,
+				truncated: true,
+				unknown_block_ids: [id],
+			});
+		});
+
+		const first = await sync(source);
+		requests.length = 0;
+		const second = await sync(source);
+		const secondRequests = requests.length;
+		requests.length = 0;
+		const third = await sync(source);
+
+		expect(first.failures.map((failure) => failure.message)).toEqual([
+			'Notion page "Embeds" is incomplete: 5 block(s) could not be retrieved',
+		]);
+		expect(second.failures).toEqual([]);
+		expect(secondRequests).toBe(1 + 1 + 5);
+		expect(third.failures).toEqual([]);
+		expect(requests.map((request) => request.path)).toEqual(["/search"]);
+		const artifact = sourceRows(source.id).find((entry) => entry.source_kind === "source_notion_page");
+		expect(artifact?.content.match(/\[Unsupported Notion block: embed\]/g)).toHaveLength(30);
+	});
+
+	it("drops unseen pages tied at the maxPages window floor", async () => {
+		const edited = "2026-02-01T00:00:00.000Z";
+		const ids = Array.from({ length: 10 }, (_, index) => `t${index}`);
+		const wide = addSource(10);
+		let maxPages = 10;
+		const requests = stubNotion((request) => {
+			if (request.path === "/search") {
+				return searchResponse(
+					ids.slice(0, maxPages).map((id) => page(id, id, edited)),
+					{ has_more: maxPages < ids.length, next_cursor: "more" },
+				);
+			}
+			return markdownResponse("body");
+		});
+		await sync(wide);
+
+		maxPages = 3;
+		const narrow = addNotionSource({ tokenRef: "NOTION_TOKEN", maxPages: 3 }, dir);
+		if (narrow.ok === false) throw new Error(narrow.error);
+		requests.length = 0;
+		const result = await sync(narrow.source);
+
+		expect(result.failures).toEqual([]);
+		expect(requests.map((request) => request.path)).toEqual(["/search"]);
+		const live = sourceRows(wide.id).filter(
+			(entry) => entry.source_kind === "source_notion_page" && entry.is_deleted === 0,
+		);
+		expect(live).toHaveLength(3);
+	});
+
+	it("rotates removal lookups so a deleted page is eventually confirmed", async () => {
+		const source = addSource();
+		const live = Array.from({ length: 205 }, (_, index) => `a-${String(index).padStart(3, "0")}`);
+		seedPageRows(source.id, [...live, "zz-gone"], Date.parse("2026-02-01T00:00:00.000Z"), Date.now());
+		stubNotion((request) => {
+			if (request.path === "/search") return searchResponse([]);
+			const id = request.path.split("/")[2] ?? "";
+			if (id === "zz-gone") return Response.json({ code: "object_not_found", message: "gone" }, { status: 404 });
+			return Response.json(page(id, id, "2026-02-01T00:00:00.000Z"));
+		});
+
+		const first = await sync(source);
+		const gone = () => sourceRows(source.id).find((entry) => entry.source_external_id === "zz-gone");
+		expect(first.failures.map((failure) => failure.message)).toEqual([
+			"Could not confirm removal of 6 Notion page(s); kept them for the next sync",
+		]);
+		expect(gone()).toMatchObject({ is_deleted: 0 });
+
+		await sync(source);
+
+		expect(gone()).toMatchObject({ is_deleted: 1 });
+	});
+
+	it("leaves literal unknown text and custom elements untouched", async () => {
+		const source = addSource();
+		const body = '```html\n<unknown-element id="a">hi</unknown-element>\n```\n<unknown>';
+		stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse([page("p", "Literal", "2026-02-01T00:00:00.000Z")])
+				: Response.json({ markdown: body, truncated: false, unknown_block_ids: [] }),
+		);
+
+		const result = await sync(source);
+
+		expect(result.failures).toEqual([]);
+		expect(sourceRows(source.id).find((entry) => entry.source_external_id === "p")?.content).toContain(body);
+	});
+
+	it("uses Notion's response time to decide whether a same-minute edit was captured", async () => {
+		const source = addSource();
+		const requests = stubNotion((request) =>
+			request.path === "/search"
+				? searchResponse([page("a", "A", "2026-02-01T00:00:00.000Z")])
+				: new Response(JSON.stringify({ markdown: "body", truncated: false, unknown_block_ids: [] }), {
+						headers: { "content-type": "application/json", date: "Sun, 01 Feb 2026 00:00:30 GMT" },
+					}),
+		);
+		await sync(source);
+		requests.length = 0;
+
+		await sync(source);
+
+		expect(requests.map((request) => request.path)).toEqual(["/search", "/pages/a/markdown"]);
+	});
+
 	it("retries a rate limit whose body is not JSON", async () => {
 		const source = addSource();
 		let searches = 0;

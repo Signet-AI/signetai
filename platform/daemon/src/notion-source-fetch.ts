@@ -80,6 +80,12 @@ export interface NotionPageMarkdown {
 	readonly markdown: string;
 	readonly truncated: boolean;
 	readonly unknownBlockIds: readonly string[];
+	readonly servedAtMs: number;
+}
+
+interface NotionResponse {
+	readonly body: unknown;
+	readonly servedAtMs: number;
 }
 
 export async function searchNotionPages(
@@ -93,18 +99,20 @@ export async function searchNotionPages(
 	let incomplete = false;
 	while (pages.length < maxPages && shouldContinue()) {
 		const body = asRecord(
-			await notionRequest(
-				token,
-				"POST",
-				"/search",
-				{
-					filter: { property: "object", value: "page" },
-					sort: { timestamp: "last_edited_time", direction: "descending" },
-					page_size: Math.min(SEARCH_PAGE_SIZE, maxPages - pages.length),
-					...(cursor ? { start_cursor: cursor } : {}),
-				},
-				shouldContinue,
-			),
+			(
+				await notionRequest(
+					token,
+					"POST",
+					"/search",
+					{
+						filter: { property: "object", value: "page" },
+						sort: { timestamp: "last_edited_time", direction: "descending" },
+						page_size: Math.min(SEARCH_PAGE_SIZE, maxPages - pages.length),
+						...(cursor ? { start_cursor: cursor } : {}),
+					},
+					shouldContinue,
+				)
+			).body,
 		);
 		const results = Array.isArray(body.results) ? body.results : [];
 		for (const result of results) {
@@ -127,7 +135,7 @@ export async function fetchNotionPage(
 ): Promise<NotionPageLookup> {
 	try {
 		const page = parseNotionPage(
-			await notionRequest(token, "GET", `/pages/${encodeURIComponent(pageId)}`, undefined, shouldContinue),
+			(await notionRequest(token, "GET", `/pages/${encodeURIComponent(pageId)}`, undefined, shouldContinue)).body,
 		);
 		return page ? { status: "live", page } : { status: "gone" };
 	} catch (err) {
@@ -141,9 +149,14 @@ export async function fetchNotionPageMarkdown(
 	pageId: string,
 	shouldContinue: ShouldContinue,
 ): Promise<NotionPageMarkdown> {
-	const body = asRecord(
-		await notionRequest(token, "GET", `/pages/${encodeURIComponent(pageId)}/markdown`, undefined, shouldContinue),
+	const response = await notionRequest(
+		token,
+		"GET",
+		`/pages/${encodeURIComponent(pageId)}/markdown`,
+		undefined,
+		shouldContinue,
 	);
+	const body = asRecord(response.body);
 	if (typeof body.markdown !== "string") {
 		throw new NotionRequestError("Notion page markdown response had no markdown", {
 			status: 200,
@@ -157,6 +170,7 @@ export async function fetchNotionPageMarkdown(
 		unknownBlockIds: Array.isArray(body.unknown_block_ids)
 			? body.unknown_block_ids.filter((id): id is string => typeof id === "string")
 			: [],
+		servedAtMs: response.servedAtMs,
 	};
 }
 
@@ -166,7 +180,7 @@ async function notionRequest(
 	path: string,
 	payload: unknown,
 	shouldContinue: ShouldContinue,
-): Promise<unknown> {
+): Promise<NotionResponse> {
 	let lastError: NotionRequestError | null = null;
 	for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
 		if (lastError) await notionSleep(retryDelay(lastError, attempt), shouldContinue);
@@ -189,7 +203,10 @@ async function notionRequest(
 				signal: controller.signal,
 			});
 			const text = await readBoundedText(response);
-			if (response.ok) return parseJson(text, response.status);
+			if (response.ok) {
+				const served = Date.parse(response.headers.get("date") ?? "");
+				return { body: parseJson(text, response.status), servedAtMs: Number.isFinite(served) ? served : Date.now() };
+			}
 			const error = responseError(response, parseErrorBody(text));
 			if (!error.retryable) throw error;
 			lastError = error;
