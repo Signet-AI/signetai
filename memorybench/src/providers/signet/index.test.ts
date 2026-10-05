@@ -113,6 +113,37 @@ describe("Signet benchmark profiles", () => {
     })
   })
 
+  it("waits for queued transcript captures beyond the HTTP request timeout", async () => {
+    class QueuedCaptureProvider extends SignetDreamingProvider {
+      polls = 0
+      protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+        if (path.startsWith("/api/agents")) return {} as T
+        if (path === "/api/hooks/session-end") return { transcriptCaptureJobId: "capture-1" } as T
+        if (path.startsWith("/api/hooks/transcript-capture/capture-1")) {
+          this.polls += 1
+          return { status: this.polls < 4 ? "pending" : "completed" } as T
+        }
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const previousTimeout = process.env.SIGNET_BENCH_REQUEST_TIMEOUT_MS
+    process.env.SIGNET_BENCH_REQUEST_TIMEOUT_MS = "1"
+    try {
+      const provider = new QueuedCaptureProvider()
+      const session: UnifiedSession = {
+        sessionId: "session-1",
+        messages: [{ role: "user", content: "I adopted a cat named Miso." }],
+        metadata: { date: "2023-05-20T10:20:00.000Z" },
+      }
+      const ingest = await provider.ingest([session], { containerTag: "question-1-run" })
+      await provider.awaitIndexing(ingest, "question-1-run")
+      expect(provider.polls).toBe(4)
+    } finally {
+      if (previousTimeout === undefined) delete process.env.SIGNET_BENCH_REQUEST_TIMEOUT_MS
+      else process.env.SIGNET_BENCH_REQUEST_TIMEOUT_MS = previousTimeout
+    }
+  })
+
   it("preserves session and recall agent scopes for deterministic Dreaming scenarios", async () => {
     class ScopedDreamingProvider extends SignetDreamingProvider {
       calls: Array<{ path: string; init: RequestInit }> = []

@@ -728,7 +728,8 @@ export class SignetProvider implements Provider {
     const pending = new Set(result.taskIds ?? [])
     const completed: string[] = []
     const failed: string[] = []
-    const deadline = Date.now() + this.timeoutMs
+    const waitSecs = readPositiveInt("SIGNET_BENCH_CAPTURE_WAIT_SECS", 1800)
+    const deadline = Date.now() + waitSecs * 1000
     let delay = 100
 
     while (pending.size > 0 && Date.now() < deadline) {
@@ -760,7 +761,9 @@ export class SignetProvider implements Provider {
     }
 
     if (pending.size > 0) {
-      throw new Error(`Timed out waiting for ${pending.size} canonical transcript capture job(s)`)
+      throw new Error(
+        `Timed out after ${waitSecs}s waiting for ${pending.size} canonical transcript capture job(s); raise SIGNET_BENCH_CAPTURE_WAIT_SECS if the capture queue is still draining`
+      )
     }
   }
 

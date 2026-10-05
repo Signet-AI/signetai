@@ -649,6 +649,7 @@ SIGNET_BENCH_DREAMING_WAIT_SECS=<n> Max time to drain the Dreaming backlog, defa
 SIGNET_BENCH_DREAMING_CONCURRENCY=<n> Concurrent Dreaming passes for bulk ingest, default 6, max 16.
 SIGNET_BENCH_DREAMING_CODEMODE=1     Run Dreaming with memory.dreaming.codemode on (0 forces it off; unset keeps the product default).
 SIGNET_BENCH_EMBEDDING_WAIT_SECS=<n> Max time to wait for Dreaming's derived memories to be embedded before retrieval, default 1800.
+SIGNET_BENCH_CAPTURE_WAIT_SECS=<n> Max time to wait for a question's transcript captures to finish during indexing, default 1800.
 MEMORYBENCH_EXTRACTION_MODEL=<m>    Structured extraction model, default gpt-4o.
 MEMORYBENCH_EXTRACTION_MAX_TOKENS=<n> Markdown extraction cap, default 1200.
 MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS=<n> Structured JSON extraction cap, default 1800.
