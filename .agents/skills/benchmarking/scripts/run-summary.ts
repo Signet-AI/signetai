@@ -117,9 +117,13 @@ function summarize(spec: string, note: string | undefined, commitOverride: strin
 				const row = db
 					.query(
 						`SELECT COUNT(*) AS calls, COALESCE(SUM(tokens_input), 0) AS input, COALESCE(SUM(tokens_output), 0) AS output
-						 FROM dreaming_history_nodes WHERE agent_id IN (${placeholders(scopes.length)})`,
+						 FROM dreaming_history_nodes n
+						 WHERE EXISTS (
+						   SELECT 1 FROM json_each(?) scope
+						   WHERE instr(',' || n.scope_key || ',', ',' || scope.value || ',') > 0
+						 )`,
 					)
-					.get(...scopes) as { calls: number; input: number; output: number };
+					.get(JSON.stringify(scopes)) as { calls: number; input: number; output: number };
 				history = row;
 			}
 		} finally {
