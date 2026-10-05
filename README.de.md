@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=389d2b9d84de4aa24028aa43d9aac79097a0a802 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=92869e4d74b0043640c419eb85dd16ab388cab71 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 <div align="center">
 
 <a href="https://signetai.sh/"><img src="public/banner-typography.png" alt="Signet AI"></a>
@@ -77,6 +77,7 @@ Mehr dazu: [Quellen](https://docs.signetai.sh/sources/) · [Datenportabilität](
 |---|---|
 |Obsidian|Echtzeit-Dateiwatcher. Mehrere Vaults können schreibgeschützt verbunden werden; unterstützt das LLM-Wiki-Format.|
 |GitHub|Echtzeit-Ingest von Issues, Pull Requests und Discussions.|
+|Notion|Synchronisiert die Seiten und Datenbankeinträge, die mit einer Notion-Integration geteilt werden; erneute Synchronisierungen rufen nur die Änderungen ab.|
 |Discord|Echtzeit-Crawler, der zum Gedächtnis beiträgt und in den bestehenden Wissensgraph einbindet.|
 |Webseiten|Einmaliger Import einer öffentlichen URL, extrahiert zu lesbarem Markdown mit Seiten-Metadaten.|
 |Slack, E-Mail, Telegram, WhatsApp|_Kommt bald_|

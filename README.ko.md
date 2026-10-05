@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=389d2b9d84de4aa24028aa43d9aac79097a0a802 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=92869e4d74b0043640c419eb85dd16ab388cab71 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 <div align="center">
 
 <a href="https://signetai.sh/"><img src="public/banner-typography.png" alt="Signet AI"></a>
@@ -77,6 +77,7 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 |---|---|
 |Obsidian|실시간 파일 감시자. 여러 볼트를 읽기 전용으로 연결할 수 있으며, LLM-Wiki 형식을 지원합니다.|
 |GitHub|이슈, 풀 리퀘스트, 토론을 실시간으로 가져옵니다.|
+|Notion|Notion 통합에 공유된 페이지와 데이터베이스 항목을 동기화합니다. 다시 동기화할 때는 변경된 내용만 가져옵니다.|
 |Discord|메모리에 기여하고 기존 지식 그래프에 연결되는 실시간 크롤러입니다.|
 |웹페이지|공개 URL을 한 번 가져와서, 페이지 메타데이터와 함께 읽기 좋은 Markdown으로 추출합니다.|
 |Slack, 이메일, Telegram, WhatsApp|_곧 제공 예정_|
