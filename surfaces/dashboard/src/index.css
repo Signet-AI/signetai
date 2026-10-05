@@ -252,9 +252,9 @@
 	html[data-surface="desktop"]:not([data-platform="mac"]) .sig-topbar-row { height:max(56px, env(titlebar-area-height, 56px)); }
 	.sig-work-area { background: var(--home-chrome); }
 	.sig-content { background: var(--background); border-top: 1px solid var(--border); border-left: 1px solid var(--border); border-top-left-radius: 18px; }
-	.sig-topbar-brand { position: absolute; inset-inline-start: 50px; top: 50%; width: 20px; height: 20px; transform: translateY(-50%); color: var(--home-title, var(--foreground)); }
+	.sig-topbar-brand { position: absolute; inset-inline-start: 18px; top: 50%; width: 20px; height: 20px; transform: translateY(-50%); color: var(--home-title, var(--foreground)); }
 	.sig-topbar-title-mark { display: none; }
-	.sig-sidebar-toggle { position: absolute; inset-inline-start: 14px; top: 50%; transform: translateY(-50%); z-index: 5; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--home-secondary, var(--muted-foreground)); transition: background-color 150ms ease, color 150ms ease; }
+	.sig-sidebar-toggle { position: absolute; inset-inline-start: 46px; top: 50%; transform: translateY(-50%); z-index: 5; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; color: var(--home-secondary, var(--muted-foreground)); transition: background-color 150ms ease, color 150ms ease; }
 	.sig-sidebar-toggle svg { width: 18px; height: 18px; }
 	.sig-sidebar-toggle:hover { background: var(--home-interactive, var(--muted)); color: var(--home-title, var(--foreground)); }
 	.sig-sidebar-toggle:focus-visible { outline: 1px solid var(--home-focus, var(--ring)); outline-offset: -1px; }
@@ -267,10 +267,7 @@
 	.sig-app-frame[data-sidebar="open"] .sig-sidebar-label { opacity: 1; transition-delay: 60ms; }
 	.sig-sidebar-soon { padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 10px; line-height: 1.4; color: var(--home-meta, var(--muted-foreground)); }
 	.sig-sidebar-value { font-size: var(--text-small); color: var(--home-meta, var(--muted-foreground)); text-transform: capitalize; }
-	.sig-topbar-wordmark { position: absolute; inset-inline-start: 78px; top: 50%; transform: translateY(-50%); font-size: var(--text-body); font-weight: 500; letter-spacing: -0.01em; color: var(--home-title, var(--foreground)); opacity: 0; pointer-events: none; transition: opacity 150ms ease; }
-	.sig-app-frame[data-sidebar="open"] .sig-topbar-wordmark { opacity: 1; transition-delay: 60ms; }
-	html[data-surface="desktop"][data-platform="mac"] .sig-topbar-wordmark { display: none; }
-	@media (prefers-reduced-motion: reduce) { .sig-sidebar, .sig-sidebar-label, .sig-topbar-wordmark { transition: none; } }
+	@media (prefers-reduced-motion: reduce) { .sig-sidebar, .sig-sidebar-label { transition: none; } }
 	.sig-sidebar-link { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; min-height: 34px; padding-inline: 9px; overflow: hidden; border-radius: 8px; color: var(--home-secondary, var(--muted-foreground)); transition: color 150ms ease, background-color 150ms ease; }
 	.sig-sidebar-link svg { width: 18px; height: 18px; flex-shrink: 0; }
 	.sig-sidebar-link:hover:not(:disabled, .is-active) { color: var(--home-title, var(--foreground)); background: color-mix(in srgb, var(--foreground) 3.5%, transparent); }
@@ -287,8 +284,7 @@
 		.sig-sidebar-link { width: 44px; min-height: 44px; padding-inline: 12px; }
 		.sig-sidebar-link svg { width: 20px; height: 20px; }
 		.sig-app-frame[data-sidebar] .sig-sidebar { width: 100%; }
-		.sig-sidebar-label, .sig-sidebar-toggle, .sig-topbar-wordmark { display: none; }
-		.sig-topbar-brand { inset-inline-start: 18px; }
+		.sig-sidebar-label, .sig-sidebar-toggle { display: none; }
 		.sig-app-frame > header > .sig-topbar-row { padding-inline-start: 12px; }
 	}
 	.sig-theme-control { transition-property: background-color, border-color, color, transform; transition-duration: 150ms; transition-timing-function: ease-out; }

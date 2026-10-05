@@ -23,11 +23,8 @@ export function Topbar({ sidebarOpen, onToggleSidebar }: { sidebarOpen: boolean;
 						Updates unavailable
 					</span>
 				)}
-				<SidebarToggle open={sidebarOpen} onToggle={onToggleSidebar} />
 				<SignetMark className="sig-topbar-brand" aria-label="Signet" aria-hidden={false} role="img" />
-				<span className="sig-topbar-wordmark" aria-hidden="true">
-					Signet
-				</span>
+				<SidebarToggle open={sidebarOpen} onToggle={onToggleSidebar} />
 				<div className="sig-no-drag absolute left-1/2 flex max-w-[calc(100%_-_112px)] min-w-0 -translate-x-1/2 items-center gap-1.5">
 					<SignetMark className="sig-topbar-title-mark h-[19px] w-4 shrink-0" aria-hidden="true" />
 					<span className="truncate text-[16px] font-medium tracking-tight">{label(view)}</span>
