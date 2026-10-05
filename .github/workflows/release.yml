@@ -637,6 +637,13 @@ jobs:
             echo "Waiting for desktop release assets (attempt ${attempt}/60): ${missing[*]}"
             sleep 30
           done
+
+          manifest_dir="${RUNNER_TEMP}/mac-update-manifest"
+          mkdir -p "${manifest_dir}"
+          scripts/retry-github-release.sh gh release download "v${NEW_VERSION}" --pattern "latest-mac.yml" --dir "${manifest_dir}" --repo "${GITHUB_REPOSITORY}"
+          bun surfaces/desktop/scripts/merge-mac-update-manifest.ts \
+            --verify "${manifest_dir}/latest-mac.yml" \
+            --version "${NEW_VERSION}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
