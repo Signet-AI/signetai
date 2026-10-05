@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-10-05
 - Features: Liquid Glass macOS app icon via Icon Composer.
-- Bug fixes: create macOS descriptor files with a mode openat actually reads; require exact manifest zip names; verify published macOS manifest; publish one macOS update manifest for both architectures; ship precompiled Assets.car instead of compiling .icon in CI; select Xcode 26 for deep-link package CI; drop comments; gate mac updates on release team; stop offering updates unsigned macOS builds cannot install.
+- Bug fixes: use shared MCP resolver; register native Signet binary as MCP stdio server; create macOS descriptor files with a mode openat actually reads; require exact manifest zip names; verify published macOS manifest; publish one macOS update manifest for both architectures; ship precompiled Assets.car instead of compiling .icon in CI; select Xcode 26 for deep-link package CI; drop comments; gate mac updates on release team; stop offering updates unsigned macOS builds cannot install.
 
 ### 2026-10-04
 - Bug fixes: close search before client navigation; fail closed on keyring probe errors; persist and deliver first-use events in recorded order; release the store lock without exposing an empty lock directory; decode source-chunk fallback vectors from the DB owner; record a clean shutdown when no cleanup error occurred; yield every reindex batch instead of every 2,500 files; stop sharing default pipeline config by reference; allow machine-id encryption only when the host has no keyring; launch git and protection subprocesses through the shared adapter; mark routed targets unavailable on any HTTP auth failure; flush final SSE drop summaries; retain SSE fallback framing; preserve bounded SSE delivery; bound SSE buffering and teardown.
@@ -38,6 +38,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: move owner protocol reference.
 
 ## Release Ledger
+
+## [0.231.2] - 2026-10-05
+
+Release summary: 2 bug fixes.
+Tag range: `v0.231.1..v0.231.2`.
+
+### Bug Fixes
+
+- **connectors**: use shared MCP resolver
+- **connector-base**: register native Signet binary as MCP stdio server
 
 ## [0.231.1] - 2026-10-05
 
