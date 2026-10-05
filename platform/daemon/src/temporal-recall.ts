@@ -735,6 +735,50 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 		facets: intent.facets,
 	};
 
+	if (intent.mode === "filter" && intent.contentQuery.length > 0) {
+		const exact = selectTemporalRows(intent, params, rowLimit);
+		const exactIds = memorySubjectIds(exact);
+		if (exactIds.length > 0) {
+			return { adjustedQuery: intent.contentQuery, meta: { ...meta, window: "exact" }, candidateIds: exactIds };
+		}
+		if (exact.length > 0) return temporalResponse(params, exact, { ...meta, window: "exact" });
+		const widened = widenTemporalIntent(intent);
+		const widenedRows = selectTemporalRows(widened, params, rowLimit);
+		const widenedMeta: RecallTemporalMeta = { ...meta, start: widened.start, end: widened.end, window: "widened" };
+		const widenedIds = memorySubjectIds(widenedRows);
+		if (widenedIds.length > 0) {
+			return { adjustedQuery: intent.contentQuery, meta: widenedMeta, candidateIds: widenedIds };
+		}
+		if (widenedRows.length > 0) return temporalResponse(params, widenedRows, widenedMeta);
+		return { adjustedQuery: intent.contentQuery, meta: { ...meta, window: "unfiltered" } };
+	}
+
+	return temporalResponse(params, selectTemporalRows(intent, params, rowLimit), meta);
+}
+
+const DAY_MS = 86_400_000;
+const MIN_WIDENED_PAD_MS = 3 * DAY_MS;
+
+function widenTemporalIntent(intent: ParsedTemporalIntent): ParsedTemporalIntent {
+	const startMs = Date.parse(intent.start);
+	const endMs = Date.parse(intent.end);
+	const pad = Math.max(MIN_WIDENED_PAD_MS, Math.round((endMs - startMs) / 4));
+	return {
+		...intent,
+		start: new Date(startMs - pad).toISOString(),
+		end: new Date(endMs + pad).toISOString(),
+	};
+}
+
+function memorySubjectIds(rows: readonly RawTemporalRow[]): string[] {
+	return rows.filter((row) => row.subject_type === "memory").map((row) => row.subject_id);
+}
+
+function selectTemporalRows(
+	intent: ParsedTemporalIntent,
+	params: TemporalRecallParams,
+	rowLimit: number,
+): RawTemporalRow[] {
 	const rows = collectTemporalRows(intent, { ...params, limit: rowLimit })
 		.filter(
 			(row) =>
@@ -746,7 +790,6 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 				b.start_at.localeCompare(a.start_at) ||
 				a.subject_type.localeCompare(b.subject_type),
 		);
-
 	const deduped: RawTemporalRow[] = [];
 	const seen = new Set<string>();
 	for (const row of rows) {
@@ -756,15 +799,15 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 		deduped.push(row);
 		if (deduped.length >= rowLimit) break;
 	}
+	return deduped;
+}
 
-	if (intent.mode === "filter" && intent.contentQuery.length > 0) {
-		const memoryIds = deduped.filter((row) => row.subject_type === "memory").map((row) => row.subject_id);
-		if (memoryIds.length > 0) {
-			return { adjustedQuery: intent.contentQuery, meta, candidateIds: memoryIds };
-		}
-	}
-
-	const results = deduped.slice(0, params.limit).map(toRecallRow);
+function temporalResponse(
+	params: TemporalRecallParams,
+	rows: readonly RawTemporalRow[],
+	meta: RecallTemporalMeta,
+): TemporalRecallResult {
+	const results = rows.slice(0, params.limit).map(toRecallRow);
 	return {
 		response: {
 			results,
