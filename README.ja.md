@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=389d2b9d84de4aa24028aa43d9aac79097a0a802 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=92869e4d74b0043640c419eb85dd16ab388cab71 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 <div align="center">
 
 <a href="https://signetai.sh/"><img src="public/banner-typography.png" alt="Signet AI"></a>
@@ -77,6 +77,7 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 |---|---|
 |Obsidian|リアルタイムのファイルウォッチャー。複数のボールトを読み取り専用で接続でき、LLM-Wiki 形式に対応しています。|
 |GitHub|Issue、プルリクエスト、ディスカッションをリアルタイムで取り込みます。|
+|Notion|Notion インテグレーションと共有されたページとデータベースのエントリを同期します。再同期時には変更のあったものだけを取得します。|
 |Discord|メモリに反映され、既存のナレッジグラフとリンクされるリアルタイムクローラーです。|
 |Webページ|公開 URL のワンタイムインポート。ページのメタデータ付きで読みやすい Markdown に抽出されます。|
 |Slack、メール、Telegram、WhatsApp|_近日公開_|

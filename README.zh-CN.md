@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=389d2b9d84de4aa24028aa43d9aac79097a0a802 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=92869e4d74b0043640c419eb85dd16ab388cab71 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 <div align="center">
 
 <a href="https://signetai.sh/"><img src="public/banner-typography.png" alt="Signet AI"></a>
@@ -77,6 +77,7 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 |---|---|
 |Obsidian|实时文件监视。可以只读方式连接多个 vault；支持 LLM-Wiki 格式。|
 |GitHub|实时摄取 issue、pull request 和 discussion。|
+|Notion|同步与 Notion 集成共享的页面和数据库条目；重新同步时只获取有变化的内容。|
 |Discord|实时爬虫，为记忆贡献内容并链接到现有知识图谱。|
 |网页|一次性导入公开 URL，提取为附带页面元数据的可读 Markdown。|
 |Slack、电子邮件、Telegram、WhatsApp|_即将支持_|
