@@ -20,9 +20,7 @@ export const DREAMING_CODEMODE_TOOL_IDS: ReadonlySet<DreamingCapabilityId> = new
 	"search_entities",
 	"get_entity",
 	"list_aspect_claims",
-	"walk_links",
 	"validate_proposal",
-	"list_contradictions",
 	"attention_list",
 	"zoom_history",
 ]);

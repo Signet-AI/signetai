@@ -974,11 +974,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 											for (const sourceRef of retrieval.evidenceRefs)
 												send({ type: "citation", sourceRef, excerpt: "" });
 									}
-									if (
-										!trace.output.ok ||
-										!["search_evidence", "get_evidence"].includes(trace.tool) ||
-										!Array.isArray(trace.output.items)
-									)
+									if (!trace.output.ok || trace.tool !== "search_evidence" || !Array.isArray(trace.output.items))
 										return;
 									for (const item of trace.output.items.slice(0, 20)) {
 										if (
@@ -997,8 +993,6 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									"search_entities",
 									"get_entity",
 									"list_aspect_claims",
-									"walk_links",
-									"get_evidence",
 									"search_evidence",
 								],
 							}),

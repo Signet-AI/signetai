@@ -129,7 +129,7 @@ describe("dreaming-agent-tools", () => {
 		]) {
 			expect(exposure[lookup]).toBe("codemode");
 		}
-		for (const direct of ["search_evidence", "get_evidence", "apply_ontology_ops", "runbook_write"]) {
+		for (const direct of ["search_evidence", "apply_ontology_ops", "runbook_write"]) {
 			expect(exposure[direct]).toBe("model-only");
 		}
 	});
@@ -835,43 +835,6 @@ describe("dreaming-agent-tools", () => {
 		);
 		expect(fragment.ok).toBe(false);
 		expect(fragment.error).toContain("still in progress");
-	});
-
-	it("get_evidence resolves claim provenance and link provenance through one tool", async () => {
-		insertEntity("e-atlas", "Atlas", "atlas", "owner");
-		insertActiveAttribute("e-atlas", "a-config", "Feature is enabled by default.", "owner");
-		const tools = createDreamingAgentTools({
-			accessor: getDbAccessor(),
-			agentId: "owner",
-			allowedAgentIds: ["owner"],
-			actor: "owner",
-		});
-
-		const claim = readResult(
-			await findTool(tools, "get_evidence").execute(
-				"call",
-				{
-					agentId: "owner",
-					ref: { type: "claim", entity: "Atlas", aspect: "configuration", group: "configuration", claim: "default" },
-				},
-				undefined,
-				undefined,
-				{} as never,
-			),
-		);
-		expect(claim.ok).toBe(true);
-
-		const link = readResult(
-			await findTool(tools, "get_evidence").execute(
-				"call",
-				{ agentId: "owner", ref: { type: "link", id: "missing-link" } },
-				undefined,
-				undefined,
-				{} as never,
-			),
-		);
-		expect(link.ok).toBe(false);
-		expect(typeof link.error).toBe("string");
 	});
 
 	it("validate_proposal runs the label gate, duplicate check, and contradiction guard", async () => {

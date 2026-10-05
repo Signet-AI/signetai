@@ -323,16 +323,21 @@ describe("persisted ontology contradictions", () => {
 	});
 
 	it("makes persisted observations available to the scoped Dreaming reader", async () => {
-		await addClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
+		const first = await addClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
 		await addClaim("owner", "Runtime mode is disabled by default.", "source-disabled");
 		const capability = createDreamingCapabilities({
 			accessor: getDbAccessor(),
 			agentId: "owner",
 			actor: "dreaming-test",
-		}).find((item) => item.id === "list_contradictions");
-		if (!capability) throw new Error("list_contradictions capability was not registered");
+		}).find((item) => item.id === "list_aspect_claims");
+		if (!capability) throw new Error("list_aspect_claims capability was not registered");
 
-		const result = await capability.invoke({ agentId: "owner", status: "active", limit: 10 });
-		expect(result).toMatchObject({ ok: true, count: 1 });
+		const result = await capability.invoke({
+			agentId: "owner",
+			entityId: first.result?.entityId,
+			aspectId: first.result?.aspectId,
+			include: ["contradictions"],
+		});
+		expect(result).toMatchObject({ ok: true, contradictions: { count: 1 } });
 	});
 });

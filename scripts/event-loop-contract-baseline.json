@@ -2487,21 +2487,14 @@
     },
     {
       "path": "pipeline/dreaming-attention.ts",
-      "line": 136,
+      "line": 138,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming-attention.ts",
-      "line": 148,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
-    },
-    {
-      "path": "pipeline/dreaming-attention.ts",
-      "line": 182,
+      "line": 150,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path"

@@ -554,7 +554,7 @@ describe("Dreaming", () => {
 			);
 		const result = await run();
 		expect(result.summary).toBe("Done");
-		expect(prompt).toBe(dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)"));
+		expect(prompt).toBe(dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending"));
 		const firstDelivery = (await getDreamingToolCalls(accessor, AGENT, result.passId)).find(
 			(call) => call.toolName === "search_evidence",
 		);
@@ -1980,7 +1980,7 @@ describe("Dreaming", () => {
 		);
 
 		expect(result.summary).toBe("Reviewed due claim");
-		expect(prompt).toBe(dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)"));
+		expect(prompt).toBe(dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending"));
 		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(1);
 	});
 
@@ -2101,9 +2101,9 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental",
 		);
-		expect(prompt).toBe(dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)"));
+		expect(prompt).toBe(dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending"));
 		expect(toolNames).toEqual(
-			expect.arrayContaining(["search_entities", "get_entity", "list_aspect_claims", "walk_links", "attention_list"]),
+			expect.arrayContaining(["search_entities", "get_entity", "list_aspect_claims", "zoom_history", "attention_list"]),
 		);
 	});
 
@@ -2600,7 +2600,11 @@ describe("Dreaming", () => {
 			"compact",
 		);
 		expect(prompt).toBe(
-			dreamingPassPrompt(DREAMING_AGENT_PROMPT, "0+1|Deferred the deployment review until an owner is confirmed."),
+			dreamingPassPrompt(
+				DREAMING_AGENT_PROMPT,
+				"0+1|Deferred the deployment review until an owner is confirmed.",
+				"none pending",
+			),
 		);
 	});
 
@@ -3214,7 +3218,9 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-hygiene",
 		);
-		expect(hygienePrompt).toBe(dreamingPassPrompt(DREAMING_HYGIENE_AGENT_PROMPT, "(no earlier passes)"));
+		expect(hygienePrompt.startsWith(`${DREAMING_HYGIENE_AGENT_PROMPT}\n\n<pass_history>`)).toBe(true);
+		expect(hygienePrompt).toContain('{"scope":"default","kind":"hygiene","more":false');
+		expect(hygienePrompt).toContain('"subjectRef":"entity:legacy-husk"');
 		expect(hygienePrompt).not.toContain("find new evidence since the cutoff");
 
 		seedSummary(db, "content-prompt", "New evidence for the content runbook.", 8);
@@ -3237,8 +3243,10 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-		expect(contentPrompt).toBe(dreamingPassPrompt(DREAMING_CONTENT_AGENT_PROMPT, "(no earlier passes)"));
-		expect(contentPrompt).not.toContain("Process ALL pending hygiene records");
+		expect(contentPrompt).toBe(
+			dreamingPassPrompt(DREAMING_CONTENT_AGENT_PROMPT, "(no earlier passes)", "none pending"),
+		);
+		expect(contentPrompt).not.toContain("Work the pending hygiene records listed in <pending_attention>");
 		expect(contentPrompt).toContain("kind=surprisal");
 		expect(contentPrompt).toContain("never cite attention:<id>");
 	});
@@ -3566,9 +3574,11 @@ describe("Dreaming runbook structure (#1211)", () => {
 
 	it("keeps the focused-mode boundaries and names the mid-stream blocker (#1098, #1140)", () => {
 		expect(DREAMING_HYGIENE_AGENT_PROMPT).not.toContain("find new evidence since the cutoff");
-		expect(DREAMING_CONTENT_AGENT_PROMPT).not.toContain("Process ALL pending hygiene records");
+		expect(DREAMING_CONTENT_AGENT_PROMPT).not.toContain(
+			"Work the pending hygiene records listed in <pending_attention>",
+		);
 		expect(DREAMING_AGENT_PROMPT).toContain("find new evidence since the cutoff");
-		expect(DREAMING_AGENT_PROMPT).toContain("Process ALL pending hygiene records");
+		expect(DREAMING_AGENT_PROMPT).toContain("Work the pending hygiene records listed in <pending_attention>");
 		for (const prompt of [DREAMING_AGENT_PROMPT, DREAMING_CONTENT_AGENT_PROMPT]) {
 			expect(prompt).toContain("transcript still mid-stream");
 			expect(prompt).toContain("re-verified blocker");

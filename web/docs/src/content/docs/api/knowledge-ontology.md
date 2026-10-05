@@ -804,11 +804,20 @@ JSON Schema. Pi sessions, restricted Dreaming MCP, and `signet dream` bind
 this same registry; clients must not reproduce a separate tool list. Requires
 `modify` permission.
 
-The registry includes `list_contradictions`, a read-only, bounded
-agent-scoped view of persisted competing-claim observations. It exposes both
-claim snapshots and their source/evidence metadata without selecting a winner;
-correction still goes through `apply_ontology_ops` and the normal proposal
-governance path.
+`list_aspect_claims` returns each active claim with its evidence quote and
+`source_ref`; `include: ["contradictions"]` adds the aspect's persisted
+competing-claim observations, exposing claim snapshots and their source and
+evidence metadata without selecting a winner. Correction still goes through
+`apply_ontology_ops` and the normal proposal governance path. Dependency links
+come from `get_entity` with `include: ["links"]`. `walk_links`, `get_evidence`,
+and `list_contradictions` were removed from the registry; callers use these
+options instead.
+
+Each pass prompt also carries the pending attention for the pass's scopes
+(hygiene, review_due, contested_claim, evidence_requeue, and surprisal, as fits
+the pass mode), up to 20 records per kind with long text bounded, so a pass
+works its queue without polling `attention_list`. `attention_list` remains for
+kinds marked `"more": true` and for re-checking after the pass flags something.
 
 `memory_head_commit` is the sole working-memory publication capability. Submit
 its complete retained entry set with exact source/quote support and the revision
@@ -904,8 +913,8 @@ A Dreaming pass retries provider throttling and transient provider errors up to
 eight times with exponential backoff capped at 60 seconds (about four minutes in
 total) before the pass fails; interactive chat keeps the shorter default.
 `memory.dreaming.codemode` (default `false`) moves Dreaming's read-only lookups
-(`search_entities`, `get_entity`, `list_aspect_claims`, `walk_links`,
-`validate_proposal`, `list_contradictions`, `attention_list`, `zoom_history`)
+(`search_entities`, `get_entity`, `list_aspect_claims`, `validate_proposal`,
+`attention_list`, `zoom_history`)
 behind Pi's `codemode` tool, so a pass can batch them in one script. Evidence
 reads and writes stay direct calls, and scripts cannot call them. Nested calls
 run through the same audited tools and are traced like direct calls.

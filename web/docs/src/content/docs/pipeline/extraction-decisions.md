@@ -92,9 +92,9 @@ registry defines the operations available to the agent, including:
   (ASCII case-insensitive) and ranking fuller matches first; unspaced text such
   as CJK matches as one phrase
 - `search_entities` and `get_entity` for scoped graph reads
-- `list_aspect_claims`, `get_evidence`, and `walk_links` for claim and lineage reads
-- `attention_list` for queued review and maintenance attention
-- `list_contradictions` and `validate_proposal` for deterministic checks
+- `list_aspect_claims` for claims with their evidence, and optionally the aspect's contradictions
+- `attention_list` for queued review and maintenance attention beyond what the pass prompt lists
+- `validate_proposal` for deterministic checks
 - `runbook_write` for Dreaming's per-pass operational note, and `zoom_history` to open a
   line of the pass history back into the passes and records it was made from
 - `apply_ontology_ops` for daemon-owned semantic mutations

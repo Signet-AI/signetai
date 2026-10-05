@@ -160,11 +160,8 @@ export const DREAMING_CAPABILITY_IDS = [
 	"search_entities",
 	"get_entity",
 	"list_aspect_claims",
-	"walk_links",
-	"get_evidence",
 	"search_evidence",
 	"validate_proposal",
-	"list_contradictions",
 	"zoom_history",
 	"runbook_write",
 	"attention_list",
@@ -394,6 +391,78 @@ export function collectDreamingReviewDueInDb(
 	);
 }
 
+export async function listDreamingAttention(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId?: string;
+		readonly kind?: string;
+		readonly status?: "pending" | "resolved";
+		readonly limit?: number;
+	},
+): Promise<readonly unknown[]> {
+	const { agentId: scopeId, kind, status, limit } = params;
+	if (kind === "review_due") {
+		if (status === "resolved") return [];
+		const input: DbOwnerDreamingReviewDue = {
+			agentId: scopeId,
+			nowMs: Date.now(),
+			limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200),
+		};
+		const due = await runDbOwnerDomainOperation(accessor, {
+			runWithOwner: async (owner) => {
+				const handle = owner.submit<ReturnType<typeof collectReviewDueClaims>>(
+					{
+						kind: "dreaming_review_due",
+						input,
+					},
+					{
+						operation: "dreaming.capabilities.review-due",
+						lane: "read",
+						workloadClass: "foreground",
+						deadlineMs: 30_000,
+						estimatedWorkUnits: 100,
+					},
+				);
+				return await handle.result;
+			},
+			runInline: ({ read }) => read((db) => collectDreamingReviewDueInDb(db, input)),
+		});
+		return [
+			...due.expired.map((item) => ({
+				id: item.id,
+				kind: "review_due",
+				status: "pending",
+				subjectRef: `memory:${item.id}`,
+				details: { phase: "expired", ...item },
+				priority: "high",
+				createdAt: item.createdAt,
+				agentId: item.agentId,
+			})),
+			...due.approaching.map((item) => ({
+				id: item.id,
+				kind: "review_due",
+				status: "pending",
+				subjectRef: `memory:${item.id}`,
+				details: { phase: "approaching", ...item },
+				priority: "normal",
+				createdAt: item.createdAt,
+				agentId: item.agentId,
+			})),
+		];
+	}
+	return scopeId !== undefined
+		? await getDreamingAttentionScoped(accessor, scopeId, {
+				kind,
+				status: status ?? "pending",
+				limit: bounded(limit, 20, 100),
+			})
+		: getDreamingAttentionAcrossScopes(accessor, {
+				kind,
+				status: status ?? "pending",
+				limit: bounded(limit, 50, 200),
+			});
+}
+
 export function createDreamingCapabilities(params: CreateDreamingCapabilitiesParams): readonly DreamingCapability[] {
 	const { accessor, agentId, actor } = params;
 	return [
@@ -532,86 +601,37 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"list_aspect_claims",
 			"List aspect claims",
-			"List active claim attributes for one entity aspect in one agent scope by stable ids.",
-			true,
-			z.object({ agentId: z.string().min(1), entityId: z.string().min(1), aspectId: z.string().min(1), ...pagination }),
-			async ({ agentId: scopeId, entityId, aspectId, limit, offset }) => ({
-				ok: true,
-				items: await getAttributesForAspectFiltered(accessor, {
-					entityId,
-					aspectId,
-					agentId: scopeId,
-					kind: "attribute",
-					status: "active",
-					limit: bounded(limit, 50, 200),
-					offset: Math.max(0, Math.floor(offset ?? 0)),
-				}),
-			}),
-		),
-		capability(
-			"walk_links",
-			"Walk dependency links",
-			"Walk incoming and/or outgoing dependency links for an entity in one agent scope.",
+			"List active claim attributes for one entity aspect in one agent scope by stable ids, each with its evidence quote and source_ref. include contradictions to add the aspect's active contradiction observations: advisory state alongside competing claim evidence, not a truth choice.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
 				entityId: z.string().min(1),
-				direction: z.enum(["incoming", "outgoing", "both"]).optional(),
-			}),
-			async ({ agentId: scopeId, entityId, direction }) => ({
-				ok: true,
-				items: await getEntityDependenciesDetailed(accessor, {
-					entityId,
-					agentId: scopeId,
-					direction: direction ?? "both",
-				}),
-			}),
-		),
-		capability(
-			"get_evidence",
-			"Get evidence",
-			"Resolve provenance for a claim path in one agent scope (entity/aspect by stable id or name) or a dependency link by stable id.",
-			true,
-			z.object({
-				agentId: z.string().min(1),
-				ref: z.union([
-					z.object({
-						type: z.literal("claim"),
-						entity: z.string().min(1),
-						aspect: z.string().min(1),
-						group: z.string().min(1),
-						claim: z.string().min(1),
-					}),
-					z.object({ type: z.literal("link"), id: z.string().min(1) }),
-				]),
+				aspectId: z.string().min(1),
+				include: z.array(z.enum(["contradictions"])).optional(),
 				...pagination,
 			}),
-			async ({ agentId: scopeId, ref, limit, offset }) => {
-				if (ref.type === "claim") {
-					let entityName = ref.entity;
-					let aspectName = ref.aspect;
-					const detail = await getKnowledgeEntityDetail(accessor, ref.entity, scopeId);
-					if (detail) {
-						entityName = detail.entity.name;
-						const aspect = (await getEntityAspectsWithCounts(accessor, ref.entity, scopeId)).find(
-							(candidate) => candidate.aspect.id === ref.aspect || candidate.aspect.name === ref.aspect,
-						);
-						if (aspect) aspectName = aspect.aspect.name;
-					}
-					return {
-						ok: true,
-						result: await getOntologyClaimEvidence(accessor, {
-							agentId: scopeId,
-							entity: entityName,
-							aspect: aspectName,
-							group: ref.group,
-							claim: ref.claim,
-							limit,
-							offset,
-						}),
-					};
+			async ({ agentId: scopeId, entityId, aspectId, include, limit, offset }) => {
+				const result: MutableCapabilityOutput = {
+					ok: true,
+					items: await getAttributesForAspectFiltered(accessor, {
+						entityId,
+						aspectId,
+						agentId: scopeId,
+						kind: "attribute",
+						status: "active",
+						limit: bounded(limit, 50, 200),
+						offset: Math.max(0, Math.floor(offset ?? 0)),
+					}),
+				};
+				if (include?.includes("contradictions")) {
+					result.contradictions = listOntologyContradictions(accessor, {
+						agentId: scopeId,
+						entityId,
+						aspectId,
+						status: "active",
+					});
 				}
-				return { ok: true, result: await getOntologyLinkEvidence(accessor, { agentId: scopeId, id: ref.id }) };
+				return result;
 			},
 		),
 		capability(
@@ -721,36 +741,6 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
-			"list_contradictions",
-			"List contradiction observations",
-			"Read persisted, agent-scoped contradiction observations alongside competing claim evidence. Contradictions are advisory state, not a truth choice; use governed ontology operations for any correction.",
-			true,
-			z.object({
-				agentId: z.string().min(1),
-				entityId: z.string().min(1).optional(),
-				aspectId: z.string().min(1).optional(),
-				groupKey: z.string().min(1).optional(),
-				claimKey: z.string().min(1).optional(),
-				sourceId: z.string().min(1).optional(),
-				status: z.enum(["active", "resolved", "all"]).optional(),
-				...pagination,
-			}),
-			async ({ agentId: scopeId, entityId, aspectId, groupKey, claimKey, sourceId, status, limit, offset }) => ({
-				ok: true,
-				...listOntologyContradictions(accessor, {
-					agentId: scopeId,
-					entityId,
-					aspectId,
-					groupKey,
-					claimKey,
-					sourceId,
-					status,
-					limit,
-					offset,
-				}),
-			}),
-		),
-		capability(
 			"zoom_history",
 			"Zoom pass history",
 			"Open line id+n of the pass history into the two lines of n/2 passes it was made from; n = 1 returns that pass's full record (runbook note, operation counts and failures, evidence window, quarantines).",
@@ -827,75 +817,10 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				status: z.enum(["pending", "resolved"]).optional(),
 				limit: z.number().finite().optional(),
 			}),
-			async ({ agentId: scopeId, kind, status, limit }) => {
-				if (kind === "review_due") {
-					if (status === "resolved") return { ok: true, items: [] };
-					const input: DbOwnerDreamingReviewDue = {
-						agentId: scopeId,
-						nowMs: Date.now(),
-						limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200),
-					};
-					const due = await runDbOwnerDomainOperation(accessor, {
-						runWithOwner: async (owner) => {
-							const handle = owner.submit<ReturnType<typeof collectReviewDueClaims>>(
-								{
-									kind: "dreaming_review_due",
-									input,
-								},
-								{
-									operation: "dreaming.capabilities.review-due",
-									lane: "read",
-									workloadClass: "foreground",
-									deadlineMs: 30_000,
-									estimatedWorkUnits: 100,
-								},
-							);
-							return await handle.result;
-						},
-						runInline: ({ read }) => read((db) => collectDreamingReviewDueInDb(db, input)),
-					});
-					return {
-						ok: true,
-						items: [
-							...due.expired.map((item) => ({
-								id: item.id,
-								kind: "review_due",
-								status: "pending",
-								subjectRef: `memory:${item.id}`,
-								details: { phase: "expired", ...item },
-								priority: "high",
-								createdAt: item.createdAt,
-								agentId: item.agentId,
-							})),
-							...due.approaching.map((item) => ({
-								id: item.id,
-								kind: "review_due",
-								status: "pending",
-								subjectRef: `memory:${item.id}`,
-								details: { phase: "approaching", ...item },
-								priority: "normal",
-								createdAt: item.createdAt,
-								agentId: item.agentId,
-							})),
-						],
-					};
-				}
-				return {
-					ok: true,
-					items:
-						scopeId !== undefined
-							? getDreamingAttentionScoped(accessor, scopeId, {
-									kind,
-									status: status ?? "pending",
-									limit: bounded(limit, 20, 100),
-								})
-							: getDreamingAttentionAcrossScopes(accessor, {
-									kind,
-									status: status ?? "pending",
-									limit: bounded(limit, 50, 200),
-								}),
-				};
-			},
+			async ({ agentId: scopeId, kind, status, limit }) => ({
+				ok: true,
+				items: await listDreamingAttention(accessor, { agentId: scopeId, kind, status, limit }),
+			}),
 		),
 		capability(
 			"apply_ontology_ops",

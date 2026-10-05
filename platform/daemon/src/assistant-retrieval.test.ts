@@ -8,12 +8,7 @@ test("retrieval reports only successful reads with bounded stable references", (
 		nodeIds: ["entity-1"],
 		evidenceRefs: [],
 	});
-	expect(
-		retrievalEvent("get_evidence", {
-			ok: true,
-			result: { items: [{ attribute: { id: "claim-1", entityId: "entity-1", memoryId: "memory-1" } }] },
-		}),
-	).toEqual({ type: "retrieval", nodeIds: ["claim-1", "entity-1"], evidenceRefs: ["memory:memory-1"] });
+	expect(retrievalEvent("get_evidence", { ok: true, items: [{ id: "retired-tool" }] })).toBeUndefined();
 	expect(
 		retrievalEvent("search_evidence", { ok: true, items: [{ sourceRef: "artifact:a", sourceId: "import:one" }] }),
 	).toEqual({ type: "retrieval", nodeIds: [], evidenceRefs: ["artifact:a", "source:import:one"] });

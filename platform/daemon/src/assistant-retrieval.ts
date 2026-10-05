@@ -1,12 +1,7 @@
 import type { AssistantChatEvent } from "@signet/core";
 
 export function retrievalEvent(tool: string, output: unknown): AssistantChatEvent | undefined {
-	if (
-		!["search_entities", "get_entity", "list_aspect_claims", "walk_links", "get_evidence", "search_evidence"].includes(
-			tool,
-		)
-	)
-		return;
+	if (!["search_entities", "get_entity", "list_aspect_claims", "search_evidence"].includes(tool)) return;
 	if (typeof output !== "object" || output === null || !("ok" in output) || output.ok !== true) return;
 	const nodeIds = new Set<string>();
 	const evidenceRefs = new Set<string>();
