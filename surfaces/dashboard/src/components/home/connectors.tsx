@@ -44,22 +44,19 @@ export function HomeConnectorsPanel({
 				onClick={() => openSettings("connectors")}
 				className="group flex w-full items-center justify-between gap-3 py-2 text-left"
 			>
-				<span id="home-connectors-title" className="text-[14px] font-medium tracking-tight">
+				<span id="home-connectors-title" className="text-title font-medium tracking-tight">
 					Connectors{" "}
-					<span
-						data-testid="connector-count"
-						className="ml-2 font-mono text-[10.5px] font-normal text-muted-foreground"
-					>
+					<span data-testid="connector-count" className="ml-2 text-meta tabular-nums font-normal text-muted-foreground">
 						{available || previous.length ? connectors.length : "—"}
 					</span>
 				</span>
-				<span className="flex items-center gap-2 text-xs text-muted-foreground">
+				<span className="flex items-center gap-2 text-small text-muted-foreground">
 					Connect & manage <ChevronRight className="size-3.5" />
 				</span>
 			</button>
-			<p className="mb-3 text-xs text-muted-foreground">Signet integrations installed on this machine.</p>
+			<p className="mb-3 text-small text-muted-foreground">Signet integrations installed on this machine.</p>
 			{unavailable && (
-				<p role="status" className="mb-3 text-xs text-muted-foreground">
+				<p role="status" className="mb-3 text-small text-muted-foreground">
 					Checks unavailable. Showing the last known installations.
 				</p>
 			)}
@@ -76,8 +73,8 @@ export function HomeConnectorsPanel({
 							className="home-connector-link flex w-full items-center gap-3 rounded-[var(--control-radius)] py-3 text-left"
 						>
 							<ConnectorLogo icon={connector.icon} className="size-5 shrink-0 object-contain" />
-							<span className="flex-1 text-[13px]">{connector.displayName}</span>
-							<span className="text-xs text-muted-foreground">
+							<span className="flex-1 text-body">{connector.displayName}</span>
+							<span className="text-small text-muted-foreground">
 								{!unavailable &&
 								connector.available &&
 								connector.inspectionStatus !== "unavailable" &&
@@ -98,7 +95,7 @@ export function HomeConnectorsPanel({
 				<LoadingRows label="Loading connectors…" rows={2} />
 			) : (
 				!connectors.length && (
-					<p className="py-3 text-sm text-muted-foreground">
+					<p className="py-3 text-body text-muted-foreground">
 						{loading
 							? "Loading connectors…"
 							: unavailable

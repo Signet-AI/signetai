@@ -51,7 +51,7 @@ export function SectionHeading({
 	return (
 		<div className={cn("flex items-baseline gap-2.5", actions && "justify-between", className)}>
 			<div className="flex flex-wrap items-baseline gap-2.5">
-				<Heading id={id} className={cn("m-0 text-[14px] font-medium tracking-tight text-foreground", titleClassName)}>
+				<Heading id={id} className={cn("m-0 text-title font-medium tracking-tight text-foreground", titleClassName)}>
 					{title}
 				</Heading>
 				{meta}

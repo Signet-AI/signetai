@@ -478,8 +478,8 @@
       "name": "signet-dashboard",
       "version": "0.2.0",
       "dependencies": {
-        "@fontsource/geist": "^5.3.0",
         "@fontsource/geist-mono": "^5.3.0",
+        "@fontsource/schibsted-grotesk": "^5.3.0",
         "@mingcute/react": "^3.0.2",
         "@radix-ui/react-slot": "^1.1.2",
         "@shadcn/react": "^0.2.1",
@@ -981,9 +981,9 @@
 
     "@floating-ui/utils": ["@floating-ui/utils@0.2.11", "", {}, "sha512-RiB/yIh78pcIxl6lLMG0CgBXAZ2Y0eVHqMPYugu+9U0AeT6YBeiJpf7lbdJNIugFP5SIjwNRgo4DhR1Qxi26Gg=="],
 
-    "@fontsource/geist": ["@fontsource/geist@5.3.0", "", {}, "sha512-u03ftlfVwb05uijq2jGDJ03/HKGqMKaNFk7KOhkpBUex8+BhrAOfMs/XciJ2UUNUX9fEsZbZQld/RWMA2oFU7g=="],
-
     "@fontsource/geist-mono": ["@fontsource/geist-mono@5.3.0", "", {}, "sha512-UtJ1BBBCVpMYdIcW7nEB45UAoAw5M53ZXs2t0ciPW+IokuAAIc56M8+kW5tXbRJCTpDw4XTtU7proT6NdQAHTg=="],
+
+    "@fontsource/schibsted-grotesk": ["@fontsource/schibsted-grotesk@5.3.0", "", {}, "sha512-9k+Fd2eg7umKxI2JV2HtDcOkXEM0iJx0u4Iu1b+QHikVU8Sl/MtozJ/mtZfsltR6xnVGSQjpcxXQeJPW0KGpIA=="],
 
     "@getzep/zep-cloud": ["@getzep/zep-cloud@3.18.0", "", { "dependencies": { "zod": "^3.23.8" } }, "sha512-Yca399So17gt+rTEC9RmQYxd1EziB5U9fv7tqLOD4KXIsDEEXbpwSFOb76HgYuLy3jORBm2FOo9H7ZHM4jt6eQ=="],
 

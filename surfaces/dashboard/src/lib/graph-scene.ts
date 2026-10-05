@@ -357,7 +357,9 @@ export function createGraphScene(
 			if (x < 0 || x > width || y < 55 || y > height - 100) continue;
 			const text = node.label.length > 30 ? `${node.label.slice(0, 29)}…` : node.label;
 			context.font =
-				node.id === active?.id || node.kind === "entity" ? "500 12px Geist, sans-serif" : "11px Geist, sans-serif";
+				node.id === active?.id || node.kind === "entity"
+					? "500 12px 'Schibsted Grotesk', sans-serif"
+					: "11px 'Schibsted Grotesk', sans-serif";
 			const w = context.measureText(text).width;
 			if (occupied.some((label) => Math.abs(label.y - y) < 16 && x < label.x + label.w + 10 && x + w + 10 > label.x))
 				continue;

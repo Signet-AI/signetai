@@ -17,7 +17,7 @@ const POLICY_LABELS: Record<Policy, string> = {
 
 function ScopeBadge({ children }: { children: string }) {
 	return (
-		<span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
+		<span className="rounded border border-border bg-muted px-1.5 py-0.5 text-meta tabular-nums text-muted-foreground">
 			{children}
 		</span>
 	);
@@ -69,7 +69,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 		<>
 			<section ref={rosterRef} className="py-2.5" aria-labelledby="home-agents-title">
 				<div className="flex items-center justify-between gap-2.5">
-					<span id="home-agents-title" className="text-[14px] font-medium tracking-tight text-foreground">
+					<span id="home-agents-title" className="text-title font-medium tracking-tight text-foreground">
 						Agents
 					</span>
 					{agents?.some((agent) => agent.name !== "default") && (
@@ -94,7 +94,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 				{error && (
 					<div
 						role="alert"
-						className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] text-destructive"
+						className="mt-2 flex items-center justify-between gap-2 text-meta tabular-nums text-destructive"
 					>
 						<span className="truncate" title={error}>
 							{error}
@@ -109,14 +109,14 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 					<LoadingRows label="Loading agents…" rows={2} />
 				) : agents === null ? (
 					<div className="flex min-h-[48px] items-center justify-center gap-2 text-center">
-						<span className="font-mono text-[10px] text-muted-foreground">Unable to load agents.</span>
+						<span className="text-meta tabular-nums text-muted-foreground">Unable to load agents.</span>
 						<button type="button" className="home-text-action shrink-0" onClick={() => void agentsQuery.refresh()}>
 							Retry
 						</button>
 					</div>
 				) : agents.length === 0 ? (
 					<div className="grid min-h-[48px] place-items-center text-center">
-						<span className="font-mono text-[10px] text-muted-foreground">No agents registered yet.</span>
+						<span className="text-meta tabular-nums text-muted-foreground">No agents registered yet.</span>
 					</div>
 				) : (
 					<div className="mt-1.5 divide-y divide-border">
@@ -170,7 +170,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 							type="button"
 							disabled={saving}
 							onClick={() => setPending(null)}
-							className="rounded border border-border px-3 py-1 text-sm"
+							className="rounded border border-border px-3 py-1 text-body"
 						>
 							Cancel
 						</button>
@@ -178,7 +178,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 							type="button"
 							disabled={saving}
 							onClick={() => void confirmEdit()}
-							className="rounded bg-primary px-3 py-1 text-sm text-primary-foreground"
+							className="rounded bg-primary px-3 py-1 text-body text-primary-foreground"
 						>
 							{saving ? "Saving…" : "Save access change"}
 						</button>
@@ -187,7 +187,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 			/>
 
 			{confirmation && (
-				<div role="status" className="mt-2 font-mono text-[10px] text-muted-foreground">
+				<div role="status" className="mt-2 text-meta tabular-nums text-muted-foreground">
 					Saved access for <strong>{confirmation.name}</strong>; effective scope:{" "}
 					{confirmation.effective_scope ?? "unknown"}
 				</div>
@@ -231,9 +231,9 @@ function AgentDisclosure({
 				<span className="grid size-4 shrink-0 place-items-center text-muted-foreground">
 					<UserRound className="size-3" aria-hidden="true" />
 				</span>
-				<span className="min-w-0 flex-1 truncate text-[12px] font-medium">{displayName}</span>
+				<span className="min-w-0 flex-1 truncate text-body">{displayName}</span>
 				{active && (
-					<span className="flex shrink-0 items-center gap-1 font-mono text-[9.5px] text-success">
+					<span className="flex shrink-0 items-center gap-1 text-meta tabular-nums text-success">
 						<span className="size-1.5 rounded-full bg-success" />
 						Active
 					</span>
@@ -253,7 +253,7 @@ function AgentDisclosure({
 
 				{editing ? (
 					<div className="mt-2 flex flex-wrap items-center gap-2">
-						<label className="font-mono text-[9.5px] text-muted-foreground" htmlFor={`agent-policy-${agent.id}`}>
+						<label className="text-meta tabular-nums text-muted-foreground" htmlFor={`agent-policy-${agent.id}`}>
 							Scope
 						</label>
 						<select
@@ -262,7 +262,7 @@ function AgentDisclosure({
 							aria-label={`Memory policy for ${agent.name}`}
 							value={draft.policy}
 							onChange={(event) => onDraftChange({ ...draft, policy: event.target.value as Policy })}
-							className="h-7 rounded-[var(--control-radius)] border border-input bg-background px-2 text-[11px]"
+							className="h-7 rounded-[var(--control-radius)] border border-input bg-background px-2 text-meta"
 						>
 							{policies.map((policy) => (
 								<option key={policy} value={policy}>
@@ -276,23 +276,23 @@ function AgentDisclosure({
 								value={draft.group}
 								onChange={(event) => onDraftChange({ ...draft, group: event.target.value })}
 								placeholder="group name"
-								className="h-7 w-28 rounded-[var(--control-radius)] border border-input bg-background px-2 text-[11px]"
+								className="h-7 w-28 rounded-[var(--control-radius)] border border-input bg-background px-2 text-meta"
 							/>
 						)}
 						<button
 							type="button"
 							disabled={saving}
 							onClick={onConfirm}
-							className="h-7 rounded-[var(--control-radius)] bg-primary px-2.5 text-[11px] font-medium text-primary-foreground"
+							className="h-7 rounded-[var(--control-radius)] bg-primary px-2.5 text-meta font-medium text-primary-foreground"
 						>
 							Review change
 						</button>
-						<button type="button" onClick={onCancel} className="h-7 px-1.5 text-[11px] text-muted-foreground underline">
+						<button type="button" onClick={onCancel} className="h-7 px-1.5 text-meta text-muted-foreground underline">
 							Cancel
 						</button>
 					</div>
 				) : canEdit ? (
-					<button type="button" onClick={onBeginEdit} className="home-text-action mt-1 h-7 text-[11px]">
+					<button type="button" onClick={onBeginEdit} className="home-text-action mt-1 h-7 text-meta">
 						Edit access
 					</button>
 				) : null}

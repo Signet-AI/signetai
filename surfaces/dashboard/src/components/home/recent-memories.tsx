@@ -9,6 +9,8 @@ import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { useMemo, useState } from "react";
 
+const COLLAPSED_ROWS = 6;
+
 const TYPE_TINTS: Record<string, string> = {
 	decision: "home-type-decision",
 	issue: "home-type-issue",
@@ -18,6 +20,7 @@ const TYPE_TINTS: Record<string, string> = {
 export function HomeRecentMemories() {
 	const [query, setQuery] = useState("");
 	const [sourceFilter, setSourceFilter] = useState("all");
+	const [expanded, setExpanded] = useState(false);
 	const trimmedQuery = query.trim();
 	const memoriesQuery = useAsync(
 		async () => {
@@ -43,6 +46,8 @@ export function HomeRecentMemories() {
 	);
 	const visibleMemories =
 		sourceFilter === "all" ? memories : memories.filter((memory) => (memory.source_type ?? "agent") === sourceFilter);
+	const shownMemories = expanded ? visibleMemories : visibleMemories.slice(0, COLLAPSED_ROWS);
+	const hiddenCount = visibleMemories.length - shownMemories.length;
 	const searching = memoriesQuery.loading || memoriesQuery.data?.query !== trimmedQuery;
 	const failed = !searching && memoriesQuery.data?.memories === null;
 	const meta = searching
@@ -54,13 +59,13 @@ export function HomeRecentMemories() {
 			: `${visibleMemories.length} ${trimmedQuery ? (visibleMemories.length === 1 ? "match" : "matches") : "latest"}`;
 
 	return (
-		<section className="home-recent group flex min-h-0 flex-col" aria-labelledby="recent-memories-title">
+		<section className="home-recent group flex flex-col" aria-labelledby="recent-memories-title">
 			<SectionHeading
 				id="recent-memories-title"
 				title="Recently saved"
 				className="shrink-0"
 				meta={
-					<span role="status" className="font-mono text-[10.5px] text-muted-foreground">
+					<span role="status" className="text-meta tabular-nums text-muted-foreground">
 						{meta}
 					</span>
 				}
@@ -89,19 +94,19 @@ export function HomeRecentMemories() {
 				</Select>
 			</div>
 
-			<div className="relative mt-2 min-h-0 flex-1">
-				<div aria-busy={searching} className="h-full overflow-y-auto scrollbar-none">
+			<div className="mt-2">
+				<div aria-busy={searching}>
 					{memoriesQuery.loading && memoriesQuery.data === null ? (
 						<LoadingRows label="Loading memories…" rows={4} />
 					) : failed ? (
-						<div className="flex min-h-[84px] items-center justify-center gap-2 text-[11px] text-muted-foreground">
+						<div className="flex min-h-[84px] items-center justify-center gap-2 text-meta text-muted-foreground">
 							<span>{trimmedQuery ? "Unable to search saved memories." : "Unable to load saved memories."}</span>
 							<button type="button" className="home-text-action" onClick={() => void memoriesQuery.refresh()}>
 								Retry
 							</button>
 						</div>
 					) : visibleMemories.length === 0 ? (
-						<div className="grid min-h-[84px] place-items-center text-center text-[11px] text-muted-foreground">
+						<div className="grid min-h-[84px] place-items-center text-center text-meta text-muted-foreground">
 							{searching
 								? "Searching…"
 								: trimmedQuery
@@ -111,11 +116,23 @@ export function HomeRecentMemories() {
 										: "No saved memories yet."}
 						</div>
 					) : (
-						<div className="flex flex-col">
-							{visibleMemories.map((memory) => (
-								<RecentMemoryRow key={memory.id} memory={memory} />
-							))}
-						</div>
+						<>
+							<div className="flex flex-col">
+								{shownMemories.map((memory) => (
+									<RecentMemoryRow key={memory.id} memory={memory} />
+								))}
+							</div>
+							{(hiddenCount > 0 || expanded) && visibleMemories.length > COLLAPSED_ROWS && (
+								<button
+									type="button"
+									className="home-text-action home-recent-more"
+									aria-expanded={expanded}
+									onClick={() => setExpanded((open) => !open)}
+								>
+									{expanded ? "Show fewer" : `Show ${hiddenCount} more`}
+								</button>
+							)}
+						</>
 					)}
 				</div>
 			</div>
@@ -134,8 +151,8 @@ function RecentMemoryRow({ memory }: { memory: Memory }) {
 						{kind === "manual" ? <MessageCircle aria-hidden="true" /> : <FileText aria-hidden="true" />}
 					</span>
 					<div className="min-w-0 flex-1">
-						<p className="m-0 line-clamp-1 text-[12.5px] font-medium leading-[1.35] text-foreground">{title}</p>
-						<div className="mt-0.5 flex min-w-0 items-center gap-1.5 font-mono text-[9.5px] text-muted-foreground">
+						<p className="m-0 line-clamp-1 text-body font-medium leading-[1.35] text-foreground">{title}</p>
+						<div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-meta tabular-nums text-muted-foreground">
 							<span className="truncate">via {memory.who || sourceLabel(kind)}</span>
 							<span aria-hidden="true">·</span>
 							<span className={cn("shrink-0", TYPE_TINTS[memory.type] ?? "text-muted-foreground")}>
@@ -143,13 +160,13 @@ function RecentMemoryRow({ memory }: { memory: Memory }) {
 							</span>
 						</div>
 					</div>
-					<span className="shrink-0 font-mono text-[9.5px] text-muted-foreground">{timeAgo(memory.created_at)}</span>
+					<span className="shrink-0 text-meta tabular-nums text-muted-foreground">{timeAgo(memory.created_at)}</span>
 					<ChevronRight className="size-3.5 shrink-0 text-muted-foreground/75 transition-transform group-hover/memory:translate-x-0.5" />
 				</button>
 			</DialogTrigger>
 			<DialogContent className="home-memory-reader">
-				<DialogTitle className="text-sm font-medium">Saved memory</DialogTitle>
-				<DialogDescription className="font-mono text-[11px]">
+				<DialogTitle className="text-body font-medium">Saved memory</DialogTitle>
+				<DialogDescription className="text-meta tabular-nums">
 					<span className="block">
 						via {memory.who || sourceLabel(kind)} · {sourceLabel(kind)} · {memory.type || "memory"}
 					</span>
@@ -157,7 +174,7 @@ function RecentMemoryRow({ memory }: { memory: Memory }) {
 						Saved {new Date(memory.created_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}
 					</time>
 				</DialogDescription>
-				<div className="min-h-0 overflow-y-auto whitespace-pre-wrap break-words text-[14px] leading-relaxed">
+				<div className="min-h-0 overflow-y-auto whitespace-pre-wrap break-words text-title leading-relaxed">
 					{memory.content}
 				</div>
 			</DialogContent>

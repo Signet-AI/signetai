@@ -65,7 +65,7 @@ export function HomeView() {
 				<section className="home-today" aria-labelledby="today-title">
 					<PageHeading id="today-title" title="Today" description={today} />
 					{!connected && (
-						<a href="#setup" className="self-start text-sm underline underline-offset-4">
+						<a href="#setup" className="self-start text-body underline underline-offset-4">
 							Set up your memory connection
 						</a>
 					)}
@@ -73,15 +73,11 @@ export function HomeView() {
 					<div className="home-brief-divider" />
 					<HomeRecentMemories />
 					<div className="home-activity">
-						<div className="mb-3 flex items-center justify-between">
-							<SectionHeading title="Activity" />
-						</div>
-						<ActivityHeatmap days={days} />
+						<ActivityHeatmap days={days} heading={<SectionHeading title="Activity" />} />
 					</div>
 				</section>
 
-				{/* biome-ignore lint/a11y/noNoninteractiveTabindex: this independently scrolling panel must be keyboard-scrollable. */}
-				<section className="home-system" aria-labelledby="system-title" tabIndex={0}>
+				<section className="home-system" aria-labelledby="system-title">
 					<PageHeading
 						id="system-title"
 						title="System"
@@ -126,14 +122,14 @@ function ReviewSuggestions() {
 			<SectionHeading
 				id="review-suggestions-title"
 				title="Review suggestions"
-				meta={<span className="font-mono text-[10.5px] text-muted-foreground">{meta}</span>}
+				meta={<span className="text-meta tabular-nums text-muted-foreground">{meta}</span>}
 			/>
 			{proposals.loading && proposals.data === null ? (
-				<div className="py-4 font-mono text-[10.5px] text-muted-foreground">
-					<span className="font-mono text-[10.5px] text-muted-foreground">Loading review suggestions…</span>
+				<div className="py-4 text-meta tabular-nums text-muted-foreground">
+					<span className="text-meta tabular-nums text-muted-foreground">Loading review suggestions…</span>
 				</div>
 			) : proposals.data === null ? (
-				<div className="flex items-center gap-2 py-4 text-[11px] text-muted-foreground">
+				<div className="flex items-center gap-2 py-4 text-meta text-muted-foreground">
 					<span>Unable to load review suggestions. Check the daemon connection and try again.</span>
 					<button type="button" className="home-text-action shrink-0" onClick={() => void proposals.refresh()}>
 						Retry
@@ -143,8 +139,8 @@ function ReviewSuggestions() {
 				<div className="mt-4 flex items-center gap-3 text-muted-foreground">
 					<FileText className="size-5 shrink-0" />
 					<div>
-						<div className="text-[12px] text-foreground">No reviews pending</div>
-						<div className="mt-0.5 text-[11px]">New suggestions will appear here when they are ready for review.</div>
+						<div className="text-body text-foreground">No reviews pending</div>
+						<div className="mt-0.5 text-small">New suggestions will appear here when they are ready for review.</div>
 					</div>
 					<ChevronRight className="ml-auto size-3.5" />
 				</div>
@@ -200,9 +196,9 @@ function ReviewProposalRow({
 				!last && "border-b border-border",
 			)}
 		>
-			<div className="min-w-0 text-[12.5px] leading-[1.4]">
+			<div className="min-w-0 text-body leading-[1.4]">
 				<div>{text}</div>
-				{error && <div className="mt-1 font-mono text-[10px] text-destructive">{error}</div>}
+				{error && <div className="mt-1 text-meta tabular-nums text-destructive">{error}</div>}
 			</div>
 			<div className="flex justify-end gap-1.5">
 				<ReviewActionButton
@@ -242,7 +238,7 @@ function ReviewActionButton({
 			onClick={onClick}
 			disabled={disabled}
 			className={cn(
-				"min-w-[74px] whitespace-nowrap rounded-[var(--radius)] border px-2 py-[5px] text-[11.5px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
+				"min-w-[74px] whitespace-nowrap rounded-[var(--radius)] border px-2 py-[5px] text-small font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
 				primary ? "border-primary bg-primary text-primary-foreground" : "home-review-secondary-action",
 			)}
 		>

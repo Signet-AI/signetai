@@ -73,7 +73,7 @@ export function HomeSourcesPanel({
 					<LoadingRows label="Loading sources…" rows={2} />
 				) : sources === undefined ? (
 					<div className="flex min-h-[72px] items-center justify-center gap-2 text-center">
-						<span className="font-mono text-[10px] text-muted-foreground">Unable to load sources.</span>
+						<span className="text-meta tabular-nums text-muted-foreground">Unable to load sources.</span>
 						<button type="button" className="home-text-action shrink-0" onClick={onRefresh}>
 							Retry
 						</button>
@@ -88,8 +88,8 @@ export function HomeSourcesPanel({
 					<div className="mt-3 flex min-h-[60px] items-center gap-3">
 						<Folder className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
 						<div>
-							<p className="text-[13px] text-foreground">No sources connected yet</p>
-							<p className="mt-1 text-xs text-muted-foreground">Connect a source to start indexing.</p>
+							<p className="text-body text-foreground">No sources connected yet</p>
+							<p className="mt-1 text-small text-muted-foreground">Connect a source to start indexing.</p>
 						</div>
 					</div>
 				)}
@@ -125,9 +125,9 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 					{sourceLogo(source.kind, { className: "size-4" }) ?? <Folder className="size-3.5" />}
 				</span>
 				<span className="flex min-w-0 flex-1 flex-col leading-tight">
-					<span className="truncate text-[12px] font-medium">{source.name}</span>
+					<span className="truncate text-body">{source.name}</span>
 				</span>
-				<span className={cn("flex shrink-0 items-center gap-1 font-mono text-[9px]", HEALTH_STYLES[health])}>
+				<span className={cn("flex shrink-0 items-center gap-1 text-meta tabular-nums", HEALTH_STYLES[health])}>
 					<span className="size-1.5 rounded-full bg-current" />
 					{health}
 					{failures > 0 && ` · ${failures} ${failures === 1 ? "failure" : "failures"}`}
@@ -138,7 +138,7 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 				<div className="flex min-w-0 items-center gap-1.5">
 					<div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--control-radius)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] pl-2 pr-1">
 						<RootIcon kind={source.kind} />
-						<span className="min-w-0 flex-1 break-all py-1 font-mono text-[9.5px] leading-relaxed text-muted-foreground">
+						<span className="min-w-0 flex-1 break-all py-1 font-mono text-meta leading-relaxed text-muted-foreground">
 							{source.root}
 						</span>
 						{source.kind === "obsidian" && (
@@ -166,7 +166,7 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 				</div>
 
 				<div
-					className="mt-1.5 flex flex-wrap items-baseline gap-x-2 font-mono text-[9px] text-muted-foreground"
+					className="mt-1.5 flex flex-wrap items-baseline gap-x-2 text-meta tabular-nums text-muted-foreground"
 					role="group"
 					aria-label="Source indexing totals"
 				>
@@ -186,14 +186,14 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 				<div className="mt-1.5">
 					<PipeStrip job={source.indexJob} health={health} compact />
 				</div>
-				<div className="mt-2 flex items-center justify-between gap-2 font-mono text-[9px] text-muted-foreground">
+				<div className="mt-2 flex items-center justify-between gap-2 text-meta tabular-nums text-muted-foreground">
 					<span>
 						{format} · {source.mode}
 					</span>
 					<span className="shrink-0">{relTime(source.lastIndexedAt)}</span>
 				</div>
 				{source.health?.permission?.status === "denied" && (
-					<div className="home-source-warning mt-2 rounded-md border px-2 py-1.5 font-mono text-[9px]">
+					<div className="home-source-warning mt-2 rounded-md border px-2 py-1.5 text-meta tabular-nums">
 						{source.health.permission.issues.map((issue) => (
 							<div key={issue.path} title={issue.path}>
 								{issue.guidance}
@@ -205,11 +205,11 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 
 				<div className="mt-2 flex items-center justify-between gap-2">
 					{error ? (
-						<span role="alert" className="min-w-0 break-words font-mono text-[9px] text-destructive">
+						<span role="alert" className="min-w-0 break-words text-meta tabular-nums text-destructive">
 							{error}
 						</span>
 					) : (
-						<span role="status" className="font-mono text-[9px] text-muted-foreground">
+						<span role="status" className="text-meta tabular-nums text-muted-foreground">
 							{copied
 								? "Copied"
 								: action === "reindex"
@@ -261,15 +261,15 @@ function ImportExtractionSummary({ extraction }: { extraction: SourceHealth["imp
 		typeof extraction.aspectsCreated !== "number" ||
 		typeof extraction.attributesCreated !== "number"
 	) {
-		return <span className="truncate font-mono text-[9px] text-muted-foreground">extraction result unavailable</span>;
+		return <span className="truncate text-meta tabular-nums text-muted-foreground">extraction result unavailable</span>;
 	}
 	if (extraction.aspectsCreated === 0 && extraction.attributesCreated === 0) {
-		return <span className="truncate font-mono text-[9px] text-muted-foreground">no structured graph result</span>;
+		return <span className="truncate text-meta tabular-nums text-muted-foreground">no structured graph result</span>;
 	}
 	const entity = extraction.documentEntityId ? "entity linked" : "no entity linked";
 	return (
 		<span
-			className="truncate font-mono text-[9px] text-muted-foreground"
+			className="truncate text-meta tabular-nums text-muted-foreground"
 			title={extraction.documentEntityId ? `Document entity ${extraction.documentEntityId}` : undefined}
 		>
 			{extraction.aspectsCreated} aspects · {extraction.attributesCreated} attributes · {entity}
@@ -471,8 +471,8 @@ function PipeStrip({
 			</div>
 			<span
 				className={cn(
-					"shrink-0 truncate font-mono text-muted-foreground",
-					compact ? "max-w-[38%] text-[8px]" : "max-w-[45%] text-[9.5px]",
+					"shrink-0 truncate text-muted-foreground",
+					compact ? "max-w-[38%] text-meta" : "max-w-[45%] text-meta",
 				)}
 				title={text}
 			>
