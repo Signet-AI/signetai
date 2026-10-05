@@ -154,9 +154,9 @@ export function SidebarToggle({ open, onToggle }: { open: boolean; onToggle: () 
 					aria-controls="dashboard-sidebar"
 					className="sig-sidebar-toggle sig-no-drag"
 				>
-					<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4">
-						<rect x="2.75" y="5.25" width="18.5" height="13.5" rx="3.5" />
-						<rect x="5.25" y="7.75" width="5.75" height="8.5" rx="1.75" />
+					<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+						<rect x="3" y="4.5" width="18" height="15" rx="3" />
+						<path d="M9 4.5v15" />
 					</svg>
 				</button>
 			</TooltipTrigger>
