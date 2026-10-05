@@ -134,6 +134,19 @@ export function _testDreamingTriggerLogData(
 	return scheduledTriggerLogData(scopeId, decision, probe, threshold);
 }
 
+function routedFailure(error: { readonly message: string; readonly details?: { readonly attempts?: unknown } }): Error {
+	const attempts = Array.isArray(error.details?.attempts)
+		? error.details.attempts
+				.map((attempt) => {
+					if (!attempt || typeof attempt !== "object") return "unknown target";
+					const value = attempt as { targetRef?: unknown; error?: unknown };
+					return `${typeof value.targetRef === "string" ? value.targetRef : "unknown"}: ${typeof value.error === "string" ? value.error : "failed"}`;
+				})
+				.join("; ")
+		: "";
+	return new Error(attempts ? `${error.message} (${attempts})` : error.message);
+}
+
 export interface DreamingWorkerOptions {
 	readonly executorFactory?: (agentId: string) => DreamingAgentExecutor;
 	readonly historyCompleterFactory?: (agentId: string) => DreamingHistoryCompleter;
@@ -358,16 +371,7 @@ export function startDreamingWorker(
 					},
 				);
 				if (!result.ok) {
-					const attempts = Array.isArray(result.error.details?.attempts)
-						? result.error.details.attempts
-								.map((attempt) => {
-									if (!attempt || typeof attempt !== "object") return "unknown target";
-									const value = attempt as { targetRef?: unknown; error?: unknown };
-									return `${typeof value.targetRef === "string" ? value.targetRef : "unknown"}: ${typeof value.error === "string" ? value.error : "failed"}`;
-								})
-								.join("; ")
-						: "";
-					throw new Error(attempts ? `${result.error.message} (${attempts})` : result.error.message);
+					throw routedFailure(result.error);
 				}
 				return {
 					summary: `Dreaming agent completed through ${result.value.decision.targetRef}`,
@@ -387,7 +391,7 @@ export function startDreamingWorker(
 				const result = await router.execute({ agentId, operation: "memory_extraction" }, input.prompt, {
 					timeoutMs: input.timeoutMs,
 				});
-				if (!result.ok) throw new Error(result.error.message);
+				if (!result.ok) throw routedFailure(result.error);
 				return { text: result.value.text, usage: result.value.usage };
 			},
 		};

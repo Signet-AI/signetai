@@ -11,7 +11,7 @@ export const DREAMING_HISTORY_VIEW_BYTES = 24_000;
 const PENDING_LINE = "(not summarized yet: zoom it)";
 const LINE_TRIES = 3;
 const MAX_CALLS_PER_COMPACTION = 6;
-const COMPACTION_TIMEOUT_MS = 120_000;
+const COMPACTION_TIMEOUT_MS = 300_000;
 
 export interface DreamingHistoryCompleter {
 	complete(input: {
