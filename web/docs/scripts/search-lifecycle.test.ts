@@ -326,14 +326,32 @@ describe("docs search lifecycle", () => {
 			"document.querySelector('dialog')?.open === true && document.activeElement?.matches('dialog input') === true",
 			"Cmd+K focus",
 		);
+		await evaluate("document.querySelector('dialog input')?.select(); true");
 		await client.call("Input.insertText", { text: "daemon" });
 		await waitForTrue(
 			"document.querySelectorAll('dialog .pagefind-ui__result-link').length > 0",
 			"results after Cmd+K",
 		);
+		await evaluate(`new Promise((resolve) => {
+			const dialog = document.querySelector('dialog');
+			dialog.addEventListener('close', () => resolve(true), { once: true });
+			dialog.close();
+			window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, cancelable: true }));
+		})`);
+		await waitForTrue(
+			"document.querySelector('dialog')?.open === true && document.activeElement?.matches('dialog input') === true",
+			"rapid reopening before the queued close notification",
+		);
 		await clickFirstResult();
 		await waitForTrue("location.pathname === '/cli/profiling/'", "result navigation");
 		await waitForTrue("document.querySelector('dialog')?.open !== true", "result modal teardown");
 		expect(await evaluate("document.querySelector('dialog')?.open !== true")).toBe(true);
+		await pressShortcut("Control");
+		await waitForTrue(
+			"document.querySelector('dialog')?.open === true && document.activeElement?.matches('dialog input') === true",
+			"search focus after result navigation",
+		);
+		await pressEscape();
+		await waitForTrue("document.querySelector('dialog')?.open === false", "final Escape dismissal");
 	});
 });

@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addDiscordSource } from "@signet/core";
+import { type SecretKeyringAdapter, addDiscordSource } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { DISCORD_CHANNEL_TYPES } from "./discord-source-fetch";
 import { syncDiscordGatewayTail } from "./discord-gateway-tail";
@@ -20,10 +20,27 @@ import { nativeMemorySourcePermissionHealth, resetNativeMemoryIndexCache } from 
 import { syncDiscordDesktopCacheSource } from "./discord-desktop-cache-source";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { logger } from "./logger";
-import { putSecret } from "./secrets";
+import { putSecret, setSecretKeyringAdapterForTests } from "./secrets";
 import { indexSourceArtifactStructure } from "./source-artifact-graph";
 
 const originalFetch = globalThis.fetch;
+
+function memoryKeyring(): SecretKeyringAdapter {
+	let stored: string | undefined;
+	const read = async () =>
+		stored === undefined ? { state: "missing" as const } : { state: "found" as const, value: stored };
+	return {
+		platform: "test",
+		service: "ai.signet.secrets",
+		account: "discord-source-test",
+		get: read,
+		getStatus: read,
+		async set(value: string) {
+			stored = value;
+			return { state: "found" as const, value };
+		},
+	};
+}
 
 describe("discord-source-provider", () => {
 	let dir = "";
@@ -36,13 +53,15 @@ describe("discord-source-provider", () => {
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"));
+		setSecretKeyringAdapterForTests(memoryKeyring());
 		await putSecret("DISCORD_BOT_TOKEN", "bot-token");
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		globalThis.fetch = originalFetch;
 		setDiscordGatewaySocketFactoryForTest(null);
-		closeDbAccessor();
+		setSecretKeyringAdapterForTests(null);
+		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		rmSync(dir, { recursive: true, force: true });

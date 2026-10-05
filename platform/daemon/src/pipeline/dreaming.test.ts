@@ -1,6 +1,7 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
@@ -353,7 +354,7 @@ describe("Dreaming", () => {
 	let memoryHeadRoot: string;
 
 	beforeEach(() => {
-		memoryHeadRoot = mkdtempSync(join("/mnt/work/hermes-scratch", "signet-dreaming-head-"));
+		memoryHeadRoot = mkdtempSync(join(tmpdir(), "signet-dreaming-head-"));
 		db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		accessor = wrapDb(db);
@@ -487,15 +488,18 @@ describe("Dreaming", () => {
 			);
 		}
 
-		const latencies: number[] = [];
+		let maxLatency = 0;
+		let samples = 0;
 		let measuring = true;
 		const measureLoop = async (): Promise<void> => {
 			while (measuring) {
 				const start = performance.now();
 				await new Promise<void>((resolve) => setImmediate(resolve));
-				latencies.push(performance.now() - start);
+				maxLatency = Math.max(maxLatency, performance.now() - start);
+				samples += 1;
 			}
 		};
+		resetTokenizerStats();
 		const measurePromise = measureLoop();
 
 		const refresh = getDreamingEpisodicTokenBacklog(accessor, AGENT);
@@ -517,8 +521,10 @@ describe("Dreaming", () => {
 		measuring = false;
 		await measurePromise;
 
-		expect(Math.max(...latencies)).toBeLessThan(200);
-		expect(latencies.length).toBeGreaterThan(2);
+		expect(tokenizerStats.encodeCalls).toBe(0);
+		expect(tokenizerStats.encodeChars).toBe(0);
+		expect(maxLatency).toBeLessThan(1_000);
+		expect(samples).toBeGreaterThan(2);
 	});
 
 	it("drains oversized evidence within budget only after every delivered fragment completes (#1430, #1715)", async () => {

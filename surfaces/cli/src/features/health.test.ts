@@ -1490,7 +1490,8 @@ describe("dead-job backlog surfacing (#1048)", () => {
 			expect(jsonOut.findings.some((f) => f.code === "dead_jobs_backlog")).toBe(false);
 			expect(jsonOut.findings.some((f) => f.code === "daemon_unhealthy")).toBe(false);
 		} finally {
-			process.env.HOME = originalHome;
+			if (originalHome === undefined) delete process.env.HOME;
+			else process.env.HOME = originalHome;
 			rmSync(root, { recursive: true, force: true });
 		}
 	});

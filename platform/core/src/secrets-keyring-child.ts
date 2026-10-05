@@ -44,20 +44,40 @@ function loadModule(): typeof import("@napi-rs/keyring") {
 	return require("@napi-rs/keyring") as typeof import("@napi-rs/keyring");
 }
 
-function linuxAvailability(): { readonly state: string; readonly message: string } | null {
-	if (process.platform !== "linux") return null;
-	if (process.env.SIGNET_SECRETS_LINUX_KEYRING === "keyutils")
-		return { state: "unsupported", message: "Linux keyutils is not an implicit Signet secrets backend" };
-	if (!process.env.DBUS_SESSION_BUS_ADDRESS)
-		return { state: "unavailable", message: "Linux Secret Service requires a user D-Bus session" };
+function probeSecretService(): boolean {
+	const names = execFileSyncHidden("busctl", ["--user", "--no-pager", "--no-legend", "list"], {
+		stdio: ["ignore", "pipe", "ignore"],
+		encoding: "utf8",
+		timeout: 1_000,
+		maxBuffer: 64 * 1024,
+	});
+	if (!/^org\.freedesktop\.DBus\s/m.test(names)) throw new Error("Invalid D-Bus service inventory");
+	return /^org\.freedesktop\.secrets\s/m.test(names);
+}
+
+export function linuxKeyringAvailability(
+	platform: NodeJS.Platform = process.platform,
+	env: NodeJS.ProcessEnv = process.env,
+	probe: () => boolean = probeSecretService,
+): { readonly state: "unavailable" | "unsupported"; readonly message: string; readonly backend?: "absent" } | null {
+	if (platform !== "linux") return null;
+	if (env.SIGNET_SECRETS_LINUX_KEYRING === "keyutils")
+		return {
+			state: "unsupported",
+			message: "Linux keyutils is not an implicit Signet secrets backend",
+			backend: "absent",
+		};
+	if (!env.DBUS_SESSION_BUS_ADDRESS)
+		return { state: "unavailable", message: "Linux Secret Service requires a user D-Bus session", backend: "absent" };
 	try {
-		execFileSyncHidden("busctl", ["--user", "status", "org.freedesktop.secrets"], {
-			stdio: "ignore",
-			timeout: 1_000,
-		});
-		return null;
+		if (probe()) return null;
+		return {
+			state: "unavailable",
+			message: "Linux Secret Service is neither registered nor activatable on the user D-Bus session",
+			backend: "absent",
+		};
 	} catch {
-		return { state: "unavailable", message: "Linux Secret Service is not registered on the user D-Bus session" };
+		return { state: "unavailable", message: "Could not verify Linux Secret Service availability" };
 	}
 }
 
@@ -87,7 +107,7 @@ async function readRequest(): Promise<SecretKeyringChildRequest> {
 }
 
 async function execute(request: SecretKeyringChildRequest): Promise<unknown> {
-	const unavailable = linuxAvailability();
+	const unavailable = linuxKeyringAvailability();
 	if (unavailable !== null) return unavailable;
 	let module: typeof import("@napi-rs/keyring");
 	try {

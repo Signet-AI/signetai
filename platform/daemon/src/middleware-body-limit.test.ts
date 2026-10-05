@@ -1,13 +1,18 @@
 import { expect, test } from "bun:test";
-import { serve } from "@hono/node-server";
 import { Hono } from "hono";
+import { createSignetHttpServer } from "./http-server";
 import { registerGlobalMiddleware } from "./middleware";
 test("HTTP bodies are bounded without draining streamed transcript uploads", async () => {
+	const NativeResponse = globalThis.Response;
 	const app = new Hono();
 	registerGlobalMiddleware(app);
 	app.all("*", async (c) => c.json({ bytes: (await c.req.arrayBuffer()).byteLength }));
 	const listening = Promise.withResolvers<number>();
-	const server = serve({ fetch: app.fetch, hostname: "127.0.0.1", port: 0 }, (info) => listening.resolve(info.port));
+	const server = createSignetHttpServer({ fetch: app.fetch });
+	server.listen(0, "127.0.0.1", () => {
+		const address = server.address();
+		listening.resolve(typeof address === "object" && address !== null ? address.port : 0);
+	});
 	try {
 		const origin = `http://127.0.0.1:${await listening.promise}`;
 		const chunked = (count: number): ReadableStream<Uint8Array> =>
@@ -35,6 +40,7 @@ test("HTTP bodies are bounded without draining streamed transcript uploads", asy
 		});
 		expect(wrongMethod.status).toBe(413);
 		await wrongMethod.text();
+		expect(globalThis.Response).toBe(NativeResponse);
 	} finally {
 		const closing = new Promise<void>((resolve, reject) =>
 			server.close((error) => (error ? reject(error) : resolve())),

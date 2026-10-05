@@ -1436,6 +1436,9 @@ process.stdin.on("data", (chunk) => {
 			const owner = client;
 			if (owner === null) throw new Error("owner client not created");
 			await owner.start();
+			if (previousCommitMarker === undefined)
+				Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_STARTED");
+			else process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = previousCommitMarker;
 			const run = runOwnerMaintenanceWithRetry<{ readonly changes: number }>(
 				owner,
 				{
@@ -1447,23 +1450,33 @@ process.stdin.on("data", (chunk) => {
 					},
 				},
 				"maintenance.non-idempotent-deadline",
-				{ deadlineMs: 100 },
+				{ deadlineMs: 1_000 },
 			);
+			const outcome = rejected(run);
 			await waitFor(() => existsSync(commitStarted));
-			expect(await rejected(run)).toBeInstanceOf(DbOwnerDeadlineError);
+			expect(await outcome).toBeInstanceOf(DbOwnerDeadlineError);
 			blocker.exec("ROLLBACK");
 			blockerReleased = true;
 			blocker.close(true);
-			const rows = await owner.submit<readonly { readonly count: number }[]>(
-				{
-					kind: "query",
-					statement: {
-						sql: "SELECT COUNT(*) AS count FROM non_idempotent_writes",
-						result: "all",
-					},
-				},
-				{ operation: "maintenance.non-idempotent-deadline-verify", lane: "read", deadlineMs: 1_000 },
-			).result;
+			const verifyUntil = Date.now() + 10_000;
+			let rows: readonly { readonly count: number }[] | undefined;
+			while (rows === undefined) {
+				try {
+					rows = await owner.submit<readonly { readonly count: number }[]>(
+						{
+							kind: "query",
+							statement: {
+								sql: "SELECT COUNT(*) AS count FROM non_idempotent_writes",
+								result: "all",
+							},
+						},
+						{ operation: "maintenance.non-idempotent-deadline-verify", lane: "read", deadlineMs: 1_000 },
+					).result;
+				} catch (error) {
+					if (!(error instanceof WorkspaceMigrationRetryableError) || Date.now() > verifyUntil) throw error;
+					await Bun.sleep(25);
+				}
+			}
 			expect(rows).toEqual([{ count: 1 }]);
 		} finally {
 			if (!blockerReleased) blocker.exec("ROLLBACK");

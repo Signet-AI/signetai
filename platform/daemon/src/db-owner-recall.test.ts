@@ -66,7 +66,7 @@ afterEach(async () => {
 	Bun.gc(true);
 	if (directory !== null) rmSync(directory, { recursive: true, force: true });
 	directory = null;
-	if (previousSignetPath === undefined) process.env.SIGNET_PATH = undefined;
+	if (previousSignetPath === undefined) delete process.env.SIGNET_PATH;
 	else process.env.SIGNET_PATH = previousSignetPath;
 	previousSignetPath = undefined;
 });

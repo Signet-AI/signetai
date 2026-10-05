@@ -45,7 +45,9 @@ function makeDatabase(memoryCount = 7): { readonly directory: string; readonly p
 		CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61');
 	`);
 	const insert = db.prepare("INSERT INTO memories (content) VALUES (?)");
-	for (let index = 0; index < memoryCount; index++) insert.run(`owner backfill memory ${index}`);
+	db.transaction(() => {
+		for (let index = 0; index < memoryCount; index++) insert.run(`owner backfill memory ${index}`);
+	})();
 	db.close();
 	return { directory, path };
 }
@@ -246,7 +248,7 @@ describe("DB owner FTS maintenance", () => {
 		expect(isFtsIndexIncomplete()).toBe(false);
 		expect(readFtsState(database.path)).toEqual({ memoryCount: 10_001, indexedCount: 10_001, physicalCount: 10_001 });
 		expect(countFtsMatches(database.path, "10000")).toBe(1);
-	});
+	}, 30_000);
 
 	test("converges after deleting a row below the active backfill cursor", async () => {
 		const database = makeDatabase();

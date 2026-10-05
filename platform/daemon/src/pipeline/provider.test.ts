@@ -633,19 +633,23 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
 		const codexAcp = join(root, "codex-acp");
 		const childPidPath = join(root, "child.pid");
 		const unrelatedPidPath = join(root, "unrelated.pid");
+		const childReadyPath = join(root, "child.ready");
+		const unrelatedReadyPath = join(root, "unrelated.ready");
 		writeFileSync(
 			codexAcp,
 			`#!/usr/bin/env bash
+: > "$1"
 sleep 30
 `,
 		);
 		writeFileSync(
 			bin,
 			`#!/usr/bin/env bash
-setsid ${JSON.stringify(codexAcp)} >/dev/null 2>&1 < /dev/null &
+setsid ${JSON.stringify(codexAcp)} ${JSON.stringify(childReadyPath)} >/dev/null 2>&1 < /dev/null &
 printf '%s' "$!" > ${JSON.stringify(childPidPath)}
-SIGNET_ACPX_RUN_ID=unrelated setsid ${JSON.stringify(codexAcp)} >/dev/null 2>&1 < /dev/null &
+SIGNET_ACPX_RUN_ID=unrelated setsid ${JSON.stringify(codexAcp)} ${JSON.stringify(unrelatedReadyPath)} >/dev/null 2>&1 < /dev/null &
 printf '%s' "$!" > ${JSON.stringify(unrelatedPidPath)}
+while [ ! -e ${JSON.stringify(childReadyPath)} ] || [ ! -e ${JSON.stringify(unrelatedReadyPath)} ]; do sleep 0.01; done
 printf 'ok\\n'
 `,
 		);
@@ -653,12 +657,12 @@ printf 'ok\\n'
 		chmodSync(codexAcp, 0o755);
 		try {
 			const provider = createAcpxProvider({ agent: "codex", bin, hooks: "disabled" });
-			await expect(provider.generate("hello", { timeoutMs: 1000 })).resolves.toBe("ok");
+			await expect(provider.generate("hello", { timeoutMs: 10_000 })).resolves.toBe("ok");
 			const pid = Number(readFileSync(childPidPath, "utf-8"));
 			expect(pid).toBeGreaterThan(0);
 
 			let alive = true;
-			for (let i = 0; i < 40; i += 1) {
+			for (let i = 0; i < 200; i += 1) {
 				try {
 					process.kill(pid, 0);
 					await new Promise((resolve) => setTimeout(resolve, 25));

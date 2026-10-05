@@ -54,9 +54,9 @@ describe("recordSkillsFromTranscript", () => {
 		writeFileSync(fixturePath, FIXTURE_JSONL);
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		db.close();
-		closeDbAccessor();
+		await closeDbAccessor();
 		rmSync(dbPath, { force: true });
 		rmSync(fixturePath, { force: true });
 	});

@@ -226,8 +226,8 @@ function legacyDbPath(): { readonly dir: string; readonly path: string } {
 describe("deferred vacuum conversion (#1493)", () => {
 	let dir = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dir) rmSync(dir, { recursive: true, force: true });
 		dir = "";
 	});

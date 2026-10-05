@@ -20,8 +20,8 @@ function makeDbPath(): string {
 describe("agent id registration", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			rmSync(join(dbPath, ".."), { recursive: true, force: true });
 		}

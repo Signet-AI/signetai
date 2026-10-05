@@ -441,6 +441,13 @@ function extractText(content: unknown): string {
 
 interface PiError extends Error {
 	stopReason?: string;
+	status?: number;
+}
+
+function leadingHttpStatus(detail: string): number | undefined {
+	const match = /^(\d{3})\b/.exec(detail.trim());
+	const status = match ? Number(match[1]) : Number.NaN;
+	return status >= 400 && status <= 599 ? status : undefined;
 }
 
 function toError(label: string, message: { stopReason: string; errorMessage?: string }): PiError {
@@ -448,6 +455,8 @@ function toError(label: string, message: { stopReason: string; errorMessage?: st
 	const detail = message.errorMessage ?? reason;
 	const err = new Error(`Pi provider ${label} failed (${reason}): ${detail}`) as PiError;
 	err.stopReason = reason;
+	const status = leadingHttpStatus(detail);
+	if (status !== undefined) err.status = status;
 	return err;
 }
 function callerAbort(

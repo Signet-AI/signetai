@@ -17,9 +17,9 @@ beforeEach(() => {
 	initDbAccessor(join(tempDir, "memory.db"), { agentsDir: tempDir });
 });
 
-afterEach(() => {
+afterEach(async () => {
 	resetCrossAgentStateForTest();
-	closeDbAccessor();
+	await closeDbAccessor();
 	rmSync(tempDir, { recursive: true, force: true });
 });
 

@@ -570,7 +570,7 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 		});
 		db.close();
 		const cwd = join(commandsDir, "..", "..", "..", "..");
-		const cli = join(cwd, "surfaces", "cli", "dist", "cli.js");
+		const cli = join(commandsDir, "..", "cli.ts");
 		const env = {
 			...process.env,
 			HOME: home,
@@ -696,7 +696,7 @@ test("production migration rollback preserves a source after a hard exit followi
 		db.close();
 		const dbBytes = readFileSync(dbPath);
 		const cwd = join(commandsDir, "..", "..", "..", "..");
-		const cli = join(cwd, "surfaces", "cli", "dist", "cli.js");
+		const cli = join(commandsDir, "..", "cli.ts");
 		const env = {
 			...process.env,
 			HOME: join(root, "home"),

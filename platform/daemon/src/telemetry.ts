@@ -710,6 +710,7 @@ export function createTelemetryCollector(
 	let pendingDroppedEventCount = 0;
 	let flushPromise: Promise<void> | null = null;
 	let installLifecycleReady = Promise.resolve();
+	let firstUseWrites = Promise.resolve();
 	const pendingAsyncWrites = new Set<Promise<void>>();
 	let deliveryStatePersistenceFailed = false;
 	let deliveryState: TelemetryDeliveryState = {
@@ -909,7 +910,7 @@ export function createTelemetryCollector(
 					`DELETE FROM telemetry_events WHERE id IN (
 					 SELECT id FROM telemetry_events
 					 WHERE source = 'daemon' AND sent_to_posthog = 0 AND claim_token IS NULL
-					 ORDER BY timestamp ASC LIMIT (
+					 ORDER BY timestamp ASC, rowid ASC LIMIT (
 						 SELECT MAX(0, COUNT(*) - ?) FROM telemetry_events
 						 WHERE source = 'daemon' AND sent_to_posthog = 0 AND claim_token IS NULL
 					 )
@@ -1097,7 +1098,7 @@ export function createTelemetryCollector(
 							 SELECT id FROM telemetry_events
 							 WHERE source = 'daemon' AND sent_to_posthog = 0
 								 AND (claim_token IS NULL OR claimed_at < ?)
-							 ORDER BY timestamp ASC
+							 ORDER BY timestamp ASC, rowid ASC
 							 LIMIT ?
 						 )`,
 						[token, now.toISOString(), now.toISOString(), staleBefore, limit],
@@ -1106,7 +1107,7 @@ export function createTelemetryCollector(
 						`SELECT id, event, timestamp, properties
 						 FROM telemetry_events
 						 WHERE claim_token = ?
-						 ORDER BY timestamp ASC`,
+						 ORDER BY timestamp ASC, rowid ASC`,
 						[token],
 						"all",
 					),
@@ -1408,7 +1409,9 @@ export function createTelemetryCollector(
 
 		recordFirstUse(kind): void {
 			if (recordingStopped) return;
-			const pending = installLifecycleReady
+			const ready = installLifecycleReady;
+			const pending = firstUseWrites
+				.then(() => ready)
 				.then(() => persistFirstUse(kind))
 				.then((event) => {
 					if (!event) return;
@@ -1420,6 +1423,7 @@ export function createTelemetryCollector(
 						error: error instanceof Error ? error.message : String(error),
 					});
 				});
+			firstUseWrites = pending;
 			trackAsyncWrite(pending);
 		},
 

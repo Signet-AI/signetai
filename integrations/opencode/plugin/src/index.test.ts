@@ -90,22 +90,22 @@ async function createHooks(): Promise<OpenCodeHooks> {
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 	if (originalDaemonUrl === undefined) {
-		process.env.SIGNET_DAEMON_URL = undefined;
+		delete process.env.SIGNET_DAEMON_URL;
 	} else {
 		process.env.SIGNET_DAEMON_URL = originalDaemonUrl;
 	}
 	if (originalAgentId === undefined) {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 	} else {
 		process.env.SIGNET_AGENT_ID = originalAgentId;
 	}
 	if (originalEnabled === undefined) {
-		process.env.SIGNET_ENABLED = undefined;
+		delete process.env.SIGNET_ENABLED;
 	} else {
 		process.env.SIGNET_ENABLED = originalEnabled;
 	}
 	if (originalNoHooks === undefined) {
-		process.env.SIGNET_NO_HOOKS = undefined;
+		delete process.env.SIGNET_NO_HOOKS;
 	} else {
 		process.env.SIGNET_NO_HOOKS = originalNoHooks;
 	}
@@ -117,7 +117,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 		["SIGNET_NO_HOOKS=1", "SIGNET_NO_HOOKS", "1"],
 	] as const)("does not register hooks or contact the daemon when %s", async (_label, name, value) => {
 		process.env.SIGNET_ENABLED = "true";
-		process.env.SIGNET_NO_HOOKS = undefined;
+		delete process.env.SIGNET_NO_HOOKS;
 		process.env[name] = value;
 		const records = installFetch();
 
@@ -128,7 +128,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("injects per-session start context when system transform runs before chat.message", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 		const records = installFetch();
 		const hooks = await createHooks();
 		await hooks.event({
@@ -173,7 +173,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("keeps turn context available for title and primary transforms", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 		installFetch();
 		const hooks = await createHooks();
 		await hooks.event({
@@ -219,7 +219,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("keeps provider-bound memory context idempotent on the real messageID path", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 		installFetch();
 		const hooks = await createHooks();
 		const sessionID = "memory-context-replay";
@@ -265,7 +265,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("clears prior turn context when the next message has no text", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 		installFetch();
 		const hooks = await createHooks();
 
@@ -282,7 +282,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("does not let an older prompt response overwrite a newer turn", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 		let releaseSessionStart: (() => void) | undefined;
 		let markSessionStartStarted: (() => void) | undefined;
 		let releaseOlderPrompt: (() => void) | undefined;
@@ -358,7 +358,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("does not restore turn context after session end", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 		let releasePrompt: (() => void) | undefined;
 		let markPromptStarted: (() => void) | undefined;
 		const promptGate = new Promise<void>((resolve) => {
@@ -397,7 +397,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("single-flights concurrent per-session start hooks", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 		const records: RequestRecord[] = [];
 		let releaseSessionStart: (() => void) | undefined;
 		const sessionStartGate = new Promise<void>((resolve) => {
@@ -443,7 +443,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("does not fail closed when per-session start context is unavailable", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 		let sessionStartCount = 0;
 		globalThis.fetch = Object.assign(
 			async (input: RequestInfo | URL): Promise<Response> => {
@@ -466,7 +466,7 @@ describe("SignetPlugin OpenCode lifecycle", () => {
 	});
 
 	test("does not skip prompt-submit when per-session start context is unavailable", async () => {
-		process.env.SIGNET_AGENT_ID = undefined;
+		delete process.env.SIGNET_AGENT_ID;
 		const records: RequestRecord[] = [];
 		globalThis.fetch = Object.assign(
 			async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
