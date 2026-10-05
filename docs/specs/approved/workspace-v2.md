@@ -49,7 +49,7 @@ An existing v1 workspace is upgraded in place the first time a v2-aware daemon s
 | v1 path | v2 path |
 |---------|---------|
 | `memory/memories.db` and its `-wal`, `-shm`, and `-journal` files | `data/signet.db` and matching files |
-| contents of `memory/<harness>/transcripts/` | `transcripts/<harness>/` |
+| Signet's `transcript.jsonl` files in `memory/<harness>/transcripts/` | `transcripts/<harness>/` |
 | top-level `memory/*--summary.md`, `*--transcript.md`, `*--compaction.md`, and `*--manifest.md` | `transcripts/` |
 | `memory/cache/` | `cache/` |
 | `memory/imports/` | `data/imports/` |
