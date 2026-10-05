@@ -355,7 +355,7 @@ function assertNoSymlinkAncestors(base: string, path: string): void {
 	}
 }
 
-function mergeRecreatedRuntime(from: string, to: string, now: Date): void {
+function mergeRecreatedRuntime(from: string, to: string, now: Date, rename: (from: string, to: string) => void): void {
 	for (const name of readdirSync(from)) {
 		const source = join(from, name);
 		const target = join(to, name);
@@ -366,15 +366,15 @@ function mergeRecreatedRuntime(from: string, to: string, now: Date): void {
 			continue;
 		}
 		if (targetEntry?.isDirectory() && !targetEntry.isSymbolicLink() && sourceEntry.isDirectory()) {
-			mergeRecreatedRuntime(source, target, now);
+			mergeRecreatedRuntime(source, target, now, rename);
 			continue;
 		}
 		if (targetEntry) {
 			const aside = `${target}.before-${now.getTime()}`;
 			if (entry(aside)) throw new UpgradeBlocked(`${aside} already exists`);
-			renameSync(target, aside);
+			rename(target, aside);
 		}
-		renameSync(source, target);
+		rename(source, target);
 	}
 	rmdirSync(from);
 }
@@ -411,7 +411,7 @@ function apply(
 					throw new UpgradeBlocked(`cannot verify moved item at ${move.to}: upgrade record lacks a durable identity`);
 				if (!matchesMoveIdentity(to, identity))
 					throw new UpgradeBlocked(`moved item at ${move.to} does not match its recorded identity`);
-				mergeRecreatedRuntime(from, to, now);
+				mergeRecreatedRuntime(from, to, now, rename);
 				continue;
 			}
 			if (!source.isDirectory() || !isEmptyDirectory(to)) throw new UpgradeBlocked(`${move.to} already exists`);
@@ -479,7 +479,7 @@ export function upgradeWorkspaceLayout(
 	deps: WorkspaceLayoutUpgradeDeps = {},
 ): WorkspaceLayoutUpgradeResult {
 	const root = resolve(rootPath);
-	const rename = deps.rename ?? renameSync;
+	const rename = deps.rename ?? ((from: string, to: string) => renameSync(from, to));
 	const now = deps.now ?? (() => new Date());
 	const existing = readWorkspaceLayoutUpgradeRecord(root);
 	const layout: WorkspaceLayout = resolveWorkspaceLayout(root);

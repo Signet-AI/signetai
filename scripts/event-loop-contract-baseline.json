@@ -5692,20 +5692,6 @@
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 375,
-      "api": "renameSync",
-      "source": "renameSync(target, aside);",
-      "category": "hot-path"
-    },
-    {
-      "path": "workspace-layout-upgrade.ts",
-      "line": 377,
-      "api": "renameSync",
-      "source": "renameSync(source, target);",
-      "category": "hot-path"
-    },
-    {
-      "path": "workspace-layout-upgrade.ts",
       "line": 421,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(to), { recursive: true, mode: 0o700 });",
@@ -5716,6 +5702,13 @@
       "line": 441,
       "api": "mkdirSync",
       "source": "const created = mkdirSync(dirname(from), { recursive: true, mode: 0o700 });",
+      "category": "hot-path"
+    },
+    {
+      "path": "workspace-layout-upgrade.ts",
+      "line": 482,
+      "api": "renameSync",
+      "source": "const rename = deps.rename ?? ((from: string, to: string) => renameSync(from, to));",
       "category": "hot-path"
     },
     {

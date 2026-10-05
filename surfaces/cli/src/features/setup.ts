@@ -292,7 +292,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	const basePath = deps.normalizeAgentPath(deps.normalizeStringValue(options.path) ?? deps.AGENTS_DIR);
 	const existing = deps.detectExistingSetup(basePath);
-	if (existing.agentYaml || existing.configYaml || existing.memoryDb) {
+	const hasExistingState = hasExistingAgentState(existing);
+	if (hasExistingState) {
 		const changes = Object.entries(options).filter(
 			([key, value]) =>
 				key !== "path" &&
@@ -308,8 +309,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	console.log(deps.signetBanner());
 	console.log(chalk.dim(`  Workspace: ${basePath}`));
-	let shouldStartLocalDaemon = existing.agentYaml || existing.configYaml || existing.memoryDb;
-	if (!existing.agentYaml && !existing.configYaml && existing.memoryDb) {
+	let shouldStartLocalDaemon = hasExistingState;
+	if (!existing.agentYaml && !existing.configYaml && hasExistingState) {
 		await runExistingSetupWizard(basePath, existing, {}, deps, {
 			openDashboard: options.openDashboard === true,
 			skipGit: options.skipGit === true,

@@ -1488,6 +1488,41 @@ describe("interactive onboarding", () => {
 		else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
 	});
 
+	it("routes transcript-only v1 workspaces through existing interactive setup", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-onboarding-transcript-only-"));
+		const transcriptDir = join(root, "memory", "codex", "transcripts");
+		mkdirSync(transcriptDir, { recursive: true });
+		const transcript = '{"role":"user","content":"keep this conversation"}\n';
+		writeFileSync(join(transcriptDir, "transcript.jsonl"), transcript);
+		const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ agentsDir: root }) });
+		process.env.SIGNET_PORT = String(server.port);
+		const confirm = spyOn(prompts, "confirm").mockImplementation(() =>
+			Object.assign(Promise.resolve(false), { cancel: () => {} }),
+		);
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const previousTty = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: root,
+				DEFAULT_PORT: server.port,
+				detectExistingSetup: () => ({ ...fakeDetection(root), memoryDb: false, hasMemoryDir: true }),
+			});
+			await setupWizard({}, deps);
+
+			expect(existsSync(join(root, "workspace-layout.json"))).toBe(false);
+			expect(readFileSync(join(root, "agent.yaml"), "utf8")).toContain("database: memory/memories.db");
+			expect(readFileSync(join(transcriptDir, "transcript.jsonl"), "utf8")).toBe(transcript);
+			expect(open).not.toHaveBeenCalled();
+		} finally {
+			confirm.mockRestore();
+			open.mockRestore();
+			server.stop(true);
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("resumes through the dashboard without rewriting the workspace", async () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-onboarding-"));
 		const config = "name: Existing agent\noperator_setting: preserve-me\n";

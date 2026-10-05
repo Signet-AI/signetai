@@ -421,6 +421,34 @@ describe("upgradeWorkspaceLayout", () => {
 		expect(logAside && readFileSync(join(root, "runtime/logs", logAside), "utf8")).toBe(".daemon/logs/signet.log");
 	});
 
+	it("resumes after interruption between preserving and replacing a runtime collision", () => {
+		const { root } = v1Workspace();
+		crashAfterRuntimeRename(root);
+		write(root, ".daemon/logs/signet.log", "this launch");
+		const runtimeLog = join(root, "runtime/logs/signet.log");
+		const timestamp = new Date("2026-10-05T12:00:00.000Z").getTime();
+		const aside = `${runtimeLog}.before-${timestamp}`;
+
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				now: () => new Date(timestamp),
+				rename: (from, to) => {
+					renameSync(from, to);
+					if (from === runtimeLog && to === aside) throw new Error("process terminated");
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish an interrupted run");
+		expect(readFileSync(aside, "utf8")).toBe(".daemon/logs/signet.log");
+		expect(readFileSync(join(root, ".daemon/logs/signet.log"), "utf8")).toBe("this launch");
+
+		expect(upgradeWorkspaceLayout(root, { now: () => new Date(timestamp) })).toMatchObject({
+			status: "upgraded",
+			resumed: true,
+		});
+		expect(readFileSync(runtimeLog, "utf8")).toBe("this launch");
+		expect(readFileSync(aside, "utf8")).toBe(".daemon/logs/signet.log");
+	});
+
 	it("resumes through the startup gate after the database already moved", () => {
 		const { root, databaseInode } = v1Workspace();
 		let renames = 0;
