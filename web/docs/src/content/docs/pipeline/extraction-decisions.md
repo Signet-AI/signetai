@@ -118,7 +118,10 @@ as transcript scaffolding. When a source shows several named speakers, such as
 a group chat, each speaker's statements go on that speaker's own entity.
 Separating unnamed users who share one agent scope is best effort (#2037). A pass defers a source only while its transcript is
 still mid-stream or a tool error persists after the call is corrected; a
-missing entity or aspect is created in the same pass. The
+missing entity or aspect is created in the same pass. Each claim holds one fact
+with every date, amount, count, and name the source gives for it, and work the
+user asks for on behalf of their own job, business, trip, or event counts as
+their own situation. The
 `memory_head_read` and `memory_head_commit` tools are offered only to content
 passes, which are the only passes that can publish the head.
 Each entry includes the owning `agentId` and `sourceRef`, so multi-scope passes
