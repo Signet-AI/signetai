@@ -144,6 +144,7 @@ export function createGraphScene(
 	const worker = new Worker(new URL("./graph-worker.ts", import.meta.url), { type: "module" });
 	container.append(canvas, tooltip);
 	let nodes: LayoutNode[] = [];
+	let overviewZoom = Number.POSITIVE_INFINITY;
 	let byId = new Map<string, LayoutNode>();
 	let edges: Array<{ edge: SceneEdge; from: LayoutNode; to: LayoutNode }> = [];
 	let width = 1;
@@ -343,12 +344,15 @@ export function createGraphScene(
 		}
 		context.restore();
 		const occupied: Array<{ x: number; y: number; w: number }> = [];
-		for (const node of [...nodes].sort((a, b) => Number(b.id === active?.id) - Number(a.id === active?.id))) {
+		const sourceCount = nodes.reduce((count, node) => count + (node.kind === "source" ? 1 : 0), 0);
+		const labelSources = sourceCount <= MAX_SOURCE_LABELS || viewport.zoom >= overviewZoom * SOURCE_LABEL_ZOOM;
+		let sourceLabels = 0;
+		for (const node of [...nodes].sort((a, b) => labelPriority(b, active) - labelPriority(a, active))) {
 			const visible =
 				node.id === active?.id ||
 				retrieved.has(node.id) ||
 				node.kind === "entity" ||
-				node.kind === "source" ||
+				(node.kind === "source" && labelSources && sourceLabels < MAX_SOURCE_LABELS) ||
 				((viewport.zoom > 1.1 || active) && node.cluster === active?.cluster);
 			const labelAlpha = fade(`label:${node.id}`, visible ? 1 : 0, 0);
 			if (labelAlpha < 0.005) continue;
@@ -364,6 +368,7 @@ export function createGraphScene(
 			if (occupied.some((label) => Math.abs(label.y - y) < 16 && x < label.x + label.w + 10 && x + w + 10 > label.x))
 				continue;
 			occupied.push({ x, y, w });
+			if (node.kind === "source") sourceLabels++;
 			context.globalAlpha = labelAlpha * (emphasis.get(`node:${node.id}`) ?? 1);
 			context.fillStyle = dark ? "#101113" : "#fafafa";
 			context.fillRect(x - 2, y - 9, w + 4, 17);
@@ -385,6 +390,7 @@ export function createGraphScene(
 			height,
 		);
 		viewport.fitToNodes(bounds, available, height, { animate });
+		if (subset === nodes) overviewZoom = viewport.restingZoom;
 		invalidate();
 	};
 	const focusNode = (id: string) => {
@@ -614,4 +620,14 @@ export function createGraphScene(
 			tooltip.remove();
 		},
 	};
+}
+
+const MAX_SOURCE_LABELS = 20;
+const SOURCE_LABEL_ZOOM = 3;
+
+function labelPriority(node: LayoutNode, active: LayoutNode | undefined): number {
+	if (node.id === active?.id) return 4;
+	if (node.kind === "entity") return 2 + node.weight;
+	if (node.kind === "source") return 1 + node.weight;
+	return node.weight;
 }

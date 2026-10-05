@@ -1,4 +1,5 @@
 import { MemoryChat } from "@/components/memory-chat";
+import { sourceDocumentTitle } from "@/lib/constellation-display";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -82,6 +83,7 @@ export function GraphView() {
 	const [responded, setResponded] = useState(false);
 	const [chatOpen, setChatOpen] = useState(false);
 	const [sceneFailed, setSceneFailed] = useState(false);
+	const [sceneBuilt, setSceneBuilt] = useState(false);
 	const stageRef = useRef<HTMLDivElement>(null);
 	const sceneRef = useRef<GraphSceneHandle | null>(null);
 	const builtSigRef = useRef<number | null>(null);
@@ -145,8 +147,9 @@ export function GraphView() {
 					: "entity";
 			addNode({
 				id: entity.id,
-				label: entity.name,
+				label: entityKind === "source" ? sourceDocumentTitle(entity.name) : entity.name,
 				kind: entityKind,
+				...(entityKind === "source" ? { detail: entity.name } : {}),
 				evidenceRefs:
 					entityKind === "source"
 						? [...new Set(entity.aspects.flatMap((aspect) => aspect.attributes.flatMap(graphEvidenceRefs)))]
@@ -372,6 +375,7 @@ export function GraphView() {
 			sceneRef.current?.dispose();
 			sceneRef.current = null;
 			builtSigRef.current = null;
+			setSceneBuilt(false);
 			return;
 		}
 		if (sceneRef.current) {
@@ -392,6 +396,7 @@ export function GraphView() {
 					() => setSceneFailed(true),
 				);
 				builtSigRef.current = dataSig;
+				setSceneBuilt(true);
 			})
 			.catch((err: unknown) => {
 				console.error("[graph] scene init failed", err);
@@ -637,7 +642,8 @@ export function GraphView() {
 						Fit
 					</button>
 				</fieldset>
-				{graphQuery.loading && !graphQuery.data && (
+				{((graphQuery.loading && !graphQuery.data) ||
+					(!sceneBuilt && !sceneFailed && limitedScene.data.nodes.length > 0)) && (
 					<div
 						role="status"
 						aria-label="Loading constellation…"
@@ -645,23 +651,23 @@ export function GraphView() {
 					>
 						<Skeleton className="size-32 rounded-full opacity-40" />
 						<Skeleton className="h-2 w-36" />
-						<span className="font-mono text-[10.5px] text-muted-foreground">Loading constellation…</span>
+						<span className="text-small text-muted-foreground">Loading your memory graph…</span>
 					</div>
 				)}
 				{graphQuery.error && (
-					<span role="status" className="absolute left-4 top-14 z-[3] text-xs text-muted-foreground">
+					<span role="status" className="absolute left-4 top-14 z-[3] text-small text-muted-foreground">
 						{graphQuery.data
 							? "Showing cached constellation. Updates are unavailable."
 							: "Constellation unavailable. Retrying in the background."}
 					</span>
 				)}
 				{!graphQuery.loading && !graphQuery.error && limitedScene.data.nodes.length === 0 && (
-					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
+					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center text-small text-muted-foreground">
 						No graph nodes are available yet.
 					</span>
 				)}
 				{sceneFailed && (
-					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
+					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center text-small text-muted-foreground">
 						The memory graph could not render in this runtime.
 					</span>
 				)}

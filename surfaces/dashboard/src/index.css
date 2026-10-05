@@ -581,18 +581,18 @@
 		}
 	}
 }
-.graph-view-root { --graph-sidebar-width: clamp(380px, 32vw, 440px); position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 0px; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; transition: grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1), grid-template-rows 380ms cubic-bezier(.22, 1, .36, 1); }
+.graph-view-root { --graph-sidebar-width: clamp(340px, 30%, 560px); position: relative; display: grid; grid-template-columns: minmax(0, 1fr) 0px; grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; transition: grid-template-columns 380ms cubic-bezier(.22, 1, .36, 1), grid-template-rows 380ms cubic-bezier(.22, 1, .36, 1); }
 .graph-view-root.has-sidebar { grid-template-columns: minmax(0, 1fr) var(--graph-sidebar-width); }
+.sig-content { container: sheet / inline-size; }
 .graph-viewport { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
 .graph-view-root.has-sidebar .graph-tooltip { bottom: 20px; }
-.graph-view-root > .graph-chat-sidebar { grid-column: 2; width: var(--graph-sidebar-width); min-height: 0; border: 0; border-left: 1px solid var(--border); border-radius: 0; display: flex; flex-direction: column; background: var(--background); transition: opacity 220ms ease, transform 380ms cubic-bezier(.22, 1, .36, 1); }
+.graph-view-root > .graph-chat-sidebar { grid-column: 2; width: 100%; min-height: 0; border: 0; border-left: 1px solid var(--border); border-radius: 0; display: flex; flex-direction: column; background: var(--background); transition: opacity 220ms ease, transform 380ms cubic-bezier(.22, 1, .36, 1); }
 .graph-view-root.has-sidebar > .graph-chat-sidebar { animation: graph-chat-enter 380ms cubic-bezier(.22, 1, .36, 1); }
 .graph-chat-sidebar.is-closing { opacity: 0; transform: translateX(24px); pointer-events: none; }
 @keyframes graph-chat-enter { from { opacity: 0; transform: translateX(24px); } to { opacity: 1; transform: translateX(0); } }
-@media (max-width: 760px) {
- .graph-view-root { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 0fr); }
- .graph-view-root.has-sidebar { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 2fr) minmax(0, 3fr); }
- .graph-view-root > .graph-chat-sidebar { grid-column: 1; grid-row: 2; width: 100%; border-left: 0; border-top: 1px solid var(--border); }
+@container sheet (max-width: 760px) {
+ .graph-view-root, .graph-view-root.has-sidebar { grid-template-columns: minmax(0, 1fr); }
+ .graph-view-root > .graph-chat-sidebar { position: absolute; inset: 0; z-index: 10; grid-column: 1; border-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
  .graph-view-root, .graph-view-root > .graph-chat-sidebar { transition: none; }
@@ -602,30 +602,29 @@
 :root:not(.dark) .graph-stage { background-image: radial-gradient(oklch(0 0 0 / 0.03) 1px, transparent 1px); }
 .graph-tooltip { position: absolute; left: 24px; bottom: 110px; z-index: 3; display: flex; flex-direction: column; gap: 7px; max-width: min(360px, calc(100% - 48px)); padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); color: var(--foreground); box-shadow: 0 8px 24px #0002; pointer-events: none; font-size: 12px; }
 .graph-tooltip[hidden] { display: none; }
-.graph-tooltip > span:last-child { font: 10px var(--font-mono); color: var(--muted-foreground); overflow-wrap: anywhere; }
-.graph-tooltip-kind { font: 9px var(--font-mono); text-transform: uppercase; letter-spacing: .08em; }
-.graph-navigation { position: absolute; left: 54px; top: 12px; z-index: 4; display: flex; height: 30px; padding: 0; min-width: 0; border: 1px solid var(--border); border-radius: 7px; background: var(--background); overflow: hidden; }
-.graph-navigation button { padding: 5px 10px; font: 11px var(--font-mono); color: var(--muted-foreground); cursor: pointer; }
-.graph-navigation button:hover { background: var(--muted); color: var(--foreground); }
-.graph-chat-open { position: absolute; top: 12px; right: 16px; z-index: 4; color: var(--muted-foreground); border: 1px solid var(--border); background: var(--background); border-radius: 7px; }
-.graph-chat-open:hover { color: var(--foreground); background: var(--muted); }
-.graph-limit { position: absolute; left: 16px; top: 52px; z-index: 4; font: 10px var(--font-mono); color: var(--muted-foreground); }
-.graph-key-summary { font: 10px var(--font-mono); color: var(--muted-foreground); padding-bottom: 8px; border-bottom: 1px solid var(--border); }
-.graph-key-limit { font: 10px var(--font-mono); color: var(--muted-foreground); }
-.graph-key-help { display: flex; flex-direction: column; gap: 5px; padding-top: 8px; margin-top: 3px; border-top: 1px solid var(--border); color: var(--muted-foreground); font: 10px var(--font-mono); }
-.graph-legend-btn { position: absolute; top: 12px; left: 16px; z-index: 4; width: 30px; height: 30px; border-radius: var(--control-radius);
+.graph-tooltip > span:last-child { font-size: var(--text-meta); color: var(--muted-foreground); overflow-wrap: anywhere; }
+.graph-tooltip-kind { font-size: var(--text-meta); font-weight: 500; }
+.graph-navigation { position: absolute; left: 56px; top: 12px; z-index: 4; display: flex; align-items: center; height: 32px; padding: 0 3px; min-width: 0; border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); border-radius: 999px; background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.graph-navigation button { height: 26px; min-width: 26px; padding-inline: 8px; border-radius: 999px; font-size: var(--text-small); color: var(--home-secondary, var(--muted-foreground)); cursor: pointer; transition: background-color 150ms ease, color 150ms ease; }
+.graph-navigation button:hover { background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--home-title, var(--foreground)); }
+.graph-chat-open { position: absolute; top: 12px; right: 16px; z-index: 4; width: 32px; height: 32px; color: var(--home-secondary, var(--muted-foreground)); border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-radius: 999px; }
+.graph-chat-open:hover { color: var(--home-title, var(--foreground)); background: color-mix(in srgb, var(--foreground) 7%, var(--background)); }
+.graph-limit { position: absolute; left: 16px; top: 54px; z-index: 4; font-size: var(--text-meta); color: var(--muted-foreground); }
+.graph-key-summary { font-size: var(--text-meta); font-variant-numeric: tabular-nums; color: var(--muted-foreground); padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.graph-key-limit { font-size: var(--text-meta); color: var(--muted-foreground); }
+.graph-key-help { display: flex; flex-direction: column; gap: 5px; padding-top: 8px; margin-top: 3px; border-top: 1px solid var(--border); color: var(--muted-foreground); font-size: var(--text-meta); }
+.graph-legend-btn { position: absolute; top: 12px; left: 16px; z-index: 4; width: 32px; height: 32px; border-radius: 999px;
 	display: grid; place-items: center; color: var(--muted-foreground); cursor: pointer;
 	background: color-mix(in oklch, var(--background) 60%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-	border: 1px solid oklch(1 0 0 / 0.08); box-shadow: 0 2px 8px oklch(0 0 0 / 0.2); transition: color .15s; }
-:root:not(.dark) .graph-legend-btn { border-color: oklch(0 0 0 / 0.08); }
+	border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); box-shadow: none; transition: color .15s; }
 .graph-legend-btn:hover { color: var(--foreground); }
-.graph-legend-pop { position: absolute; top: 48px; left: 16px; z-index: 4; display: none; flex-direction: column; gap: 7px;
+.graph-legend-pop { position: absolute; top: 52px; left: 16px; z-index: 4; display: none; flex-direction: column; gap: 7px;
 	padding: 12px 14px; border-radius: 10px; background: color-mix(in oklch, var(--background) 80%, transparent);
 	backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid oklch(1 0 0 / 0.1);
 	box-shadow: 0 8px 24px oklch(0 0 0 / 0.4); }
 :root:not(.dark) .graph-legend-pop { border-color: oklch(0 0 0 / 0.1); }
 .graph-legend-pop.show { display: flex; }
-.lg-item { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); }
+.lg-item { display: inline-flex; align-items: center; gap: 8px; font-size: var(--text-small); color: var(--muted-foreground); }
 .lg-item b { color: var(--foreground); font-weight: 500; }
 .lg-dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
 .graph-dock { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 6;
@@ -720,21 +719,22 @@
 .memory-chat { border: 1px solid var(--border); border-radius: 12px; background: var(--background); overflow: hidden; color: var(--foreground); }
 .memory-chat-header { display: flex; align-items: center; gap: 8px; padding: 22px 24px 18px; flex-shrink: 0; }
 .chat-heading { flex: 1; display: flex; flex-direction: column; gap: 3px; }
-.memory-chat-header h2 { margin: 0; font-size: 16px; letter-spacing: -.025em; font-weight: 600; }
-.chat-heading > span { font-size: 11px; color: var(--muted-foreground); }
-.memory-chat-header button { color: var(--muted-foreground); }
+.memory-chat-header h2 { margin: 0; font-size: 15px; letter-spacing: -.015em; font-weight: 500; color: var(--home-title, var(--foreground)); }
+.chat-heading > span { font-size: var(--text-meta); color: var(--muted-foreground); }
+.memory-chat-header button { width: 30px; height: 30px; border-radius: 999px; color: var(--home-secondary, var(--muted-foreground)); }
+.memory-chat-header button:hover:not(:disabled) { background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--home-title, var(--foreground)); }
 .memory-chat-conversation { max-height: min(420px, 50vh); }
 .memory-chat-content { padding: 22px 24px 28px; gap: 30px; }
-.chat-message-label { font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
-.chat-pending { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted-foreground); }
+.chat-message-label { font-size: var(--text-small); font-weight: 500; color: var(--muted-foreground); }
+.chat-pending { display: flex; align-items: center; gap: 8px; font-size: var(--text-small); color: var(--muted-foreground); }
 .memory-chat [data-streamdown] { overflow-wrap: anywhere; line-height: 1.75; }
 .memory-chat [data-streamdown="heading-1"], .memory-chat [data-streamdown="heading-2"], .memory-chat [data-streamdown="heading-3"] { font-size: 15px; }
 .memory-chat [data-streamdown="code-block"] { max-width: 100%; overflow-x: auto; }
 .chat-evidence { max-height: 240px; overflow-y: auto; width: 100%; }
-.chat-evidence blockquote { border-left: 2px solid var(--border); padding: 8px 12px; font-size: 12px; line-height: 1.6; }
-.chat-evidence code { display: block; margin-top: 6px; overflow-wrap: anywhere; font-size: 10px; color: var(--muted-foreground); }
-.chat-action-result { font-size: 11px; color: var(--muted-foreground); overflow-wrap: anywhere; }
-.memory-chat-status, .memory-chat-error { padding: 8px 20px; font-size: 11px; color: var(--muted-foreground); flex-shrink: 0; }
+.chat-evidence blockquote { border-left: 2px solid var(--border); padding: 8px 12px; font-size: var(--text-small); line-height: 1.6; }
+.chat-evidence code { display: block; margin-top: 6px; overflow-wrap: anywhere; font-size: var(--text-meta); color: var(--muted-foreground); }
+.chat-action-result { font-size: var(--text-meta); color: var(--muted-foreground); overflow-wrap: anywhere; }
+.memory-chat-status, .memory-chat-error { padding: 8px 20px; font-size: var(--text-meta); color: var(--muted-foreground); flex-shrink: 0; }
 .memory-chat-error { color: var(--destructive); }
 .chat-prompt { position: relative; flex-shrink: 0; padding: 12px; border-radius: 12px; background: linear-gradient(180deg, oklch(1 0 0 / .018), transparent), var(--background); transition: border-color .15s; }
 :root:not(.dark) .chat-prompt { background-image: linear-gradient(180deg, oklch(1 0 0 / .3), transparent); }
@@ -742,7 +742,7 @@
 .chat-prompt-textarea { display: block; field-sizing: content; width: 100%; min-height: 24px; max-height: 160px; resize: none; overflow-y: auto; border: 0; outline: none; background: transparent; color: var(--foreground); font: 13px/1.65 var(--font-sans); padding: 0 4px; }
 .chat-prompt-textarea::placeholder { color: var(--muted-foreground); }
 .chat-prompt-footer { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin-top: 12px; }
-.chat-prompt-footer > span { color: var(--muted-foreground); font-size: 10px; }
+.chat-prompt-footer > span { color: var(--muted-foreground); font-size: var(--text-meta); }
 .chat-prompt-submit { width: 34px; height: 34px; border-radius: 50%; border: 1px solid color-mix(in oklch, var(--primary-foreground) 12%, transparent); box-shadow: inset 0 1px 0 oklch(1 0 0 / .12), 0 1px 2px oklch(0 0 0 / .08); }
 .chat-prompt-submit:not(:disabled):hover { transform: translateY(-1px); }
 .chat-prompt-submit:not(:disabled):active { transform: translateY(0); }
@@ -751,7 +751,9 @@
 .memory-chat-sidebar .chat-prompt { margin: 8px 20px 20px; margin-top: auto; padding: 14px 12px 10px; border: 1px solid color-mix(in oklch, var(--border) 70%, transparent); border-radius: 16px; background-color: var(--background); }
 .memory-chat-sidebar .chat-prompt-textarea { min-height: 42px; font-size: 14px; }
 .memory-chat-sidebar .chat-prompt-footer { margin-top: 8px; }
-.memory-chat-sidebar .memory-chat-status { font-size: 10px; padding: 6px 24px; opacity: .7; }
+.memory-chat-sidebar .memory-chat-status { font-size: var(--text-meta); padding: 6px 24px; opacity: .7; }
+.memory-chat-sidebar .memory-chat-content { width: 100%; max-width: 72ch; margin-inline: auto; }
+.memory-chat-sidebar .chat-prompt { width: calc(100% - 40px); max-width: calc(72ch + 24px); align-self: center; }
 .graph-dock .chat-prompt-textarea { flex: 1; min-width: 0; }
 
 .chat-source-pill { display: inline-flex; vertical-align: baseline; align-items: center; gap: 5px; max-width: 180px; padding: 2px 8px; margin-inline: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--muted); color: var(--muted-foreground); font: 11px/1.5 var(--font-sans); cursor: pointer; transition: color .15s, background .15s; }
