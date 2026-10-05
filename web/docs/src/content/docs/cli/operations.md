@@ -48,7 +48,7 @@ Output:
 
   ✓ AGENTS.md
   ✓ agent.yaml
-  ✓ memories.db
+  ✓ database
 
   Memories: 42
   Captured sessions: 7

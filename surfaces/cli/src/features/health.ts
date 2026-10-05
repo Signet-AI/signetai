@@ -216,7 +216,7 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 	const files = [
 		...(showIdentityFiles ? [{ name: "AGENTS.md", exists: existing.agentsMd }] : []),
 		{ name: "agent.yaml", exists: existing.agentYaml },
-		{ name: "memories.db", exists: existing.memoryDb },
+		{ name: "database", exists: existing.memoryDb },
 	];
 	const daemon = await deps.getDaemonStatus();
 	const git = getGitRemoteState(basePath);
