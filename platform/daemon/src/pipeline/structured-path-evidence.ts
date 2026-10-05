@@ -5,54 +5,6 @@ import { FTS_STOP } from "./stop-words";
 
 const PUNCT = /[^a-z0-9\s]/g;
 
-const ADVICE_CUES = new Set(["advice", "advise", "idea", "recommend", "recommendation", "suggestion", "tip", "way"]);
-
-const AMOUNT_CUES = new Set(["amount", "balance", "bill", "billing", "cost", "invoice", "paid", "pay", "payment"]);
-const BILLING_PATH_CUES = new Set(["amount", "balance", "billing", "invoice", "pay", "payment"]);
-
-const INTENT_ASPECTS = new Set([
-	"decision_patterns",
-	"decision pattern",
-	"decision patterns",
-	"preferences",
-	"preference",
-	"plans",
-	"decisions",
-	"activities",
-]);
-
-const QUERY_EXPANSIONS: Readonly<Record<string, readonly string[]>> = {
-	advice: ["guidance", "tips", "suggestion", "suggestions", "recommend", "recommendations", "ideas", "ways"],
-	advise: ["guidance", "tips", "suggestion", "suggestions", "recommend", "recommendations", "ideas", "ways"],
-	brand: ["brands", "company", "label", "maker", "retailer", "source", "store", "vendor"],
-	brands: ["brand", "company", "label", "maker", "retailer", "source", "store", "vendor"],
-	colleague: ["coworker", "coworkers", "team", "teammate", "teammates", "work", "workplace"],
-	colleagues: ["coworker", "coworkers", "team", "teammate", "teammates", "work", "workplace"],
-	connected: ["connection", "connect", "socialize", "socializing", "collaborate", "collaboration", "communication"],
-	connection: ["connected", "connect", "socialize", "socializing", "collaborate", "collaboration", "communication"],
-	current: ["currently", "latest", "lately", "now", "preferred", "recent", "recently"],
-	currently: ["current", "latest", "lately", "now", "preferred", "recent", "recently"],
-	idea: ["ideas", "suggestion", "suggestions", "tips", "guidance", "recommendation", "recommendations"],
-	ideas: ["idea", "suggestion", "suggestions", "tips", "guidance", "recommendation", "recommendations"],
-	music: ["audio", "band", "bands", "playlist", "playlists", "song", "songs"],
-	recommend: ["recommendation", "recommendations", "suggestion", "suggestions", "advice", "tips", "ideas"],
-	recommendation: ["recommend", "recommendations", "suggestion", "suggestions", "advice", "tips", "ideas"],
-	recommendations: ["recommend", "recommendation", "suggestion", "suggestions", "advice", "tips", "ideas"],
-	remote: ["virtual", "online", "work", "workday", "workplace"],
-	service: ["app", "application", "platform", "provider", "subscription"],
-	services: ["app", "application", "platform", "provider", "subscription"],
-	streaming: ["listening", "music", "platform"],
-	suggestion: ["suggestions", "advice", "tips", "ideas", "guidance", "recommendation", "recommendations", "ways"],
-	suggestions: ["suggestion", "advice", "tips", "ideas", "guidance", "recommendation", "recommendations", "ways"],
-	tip: ["tips", "advice", "suggestion", "suggestions", "guidance", "ideas"],
-	tips: ["tip", "advice", "suggestion", "suggestions", "guidance", "ideas"],
-	use: ["likes", "prefer", "preferred", "used", "using"],
-	used: ["likes", "prefer", "preferred", "use", "using"],
-	using: ["likes", "prefer", "preferred", "use", "used"],
-	way: ["ways", "idea", "ideas", "suggestion", "suggestions", "advice", "tips", "guidance"],
-	ways: ["way", "idea", "ideas", "suggestion", "suggestions", "advice", "tips", "guidance"],
-};
-
 interface StructuredPathRow {
 	readonly memory_id: string;
 	readonly entity_name: string;
@@ -125,29 +77,10 @@ function tokenize(text: string): string[] {
 		.filter((token) => token.length >= 2 && !FTS_STOP.has(token));
 }
 
-function expandToken(token: string): Set<string> {
-	const normalized = normalizeToken(token);
-	const expanded = new Set<string>([normalized]);
-	for (const item of QUERY_EXPANSIONS[normalized] ?? []) {
-		const next = normalizeToken(item);
-		if (next.length >= 2 && !FTS_STOP.has(next)) expanded.add(next);
-	}
-	return expanded;
-}
-
-function expandedQueryTokens(queryTokens: readonly string[]): string[] {
-	const expanded = new Set<string>();
-	for (const token of queryTokens) {
-		for (const item of expandToken(token)) expanded.add(item);
-	}
-	return [...expanded];
-}
-
 interface MemoryPathAggregate {
 	readonly tokens: Set<string>;
 	importance: number;
 	confidence: number;
-	hasIntentAspect: boolean;
 }
 
 interface PathScoreRow {
@@ -162,69 +95,16 @@ interface PathScoreRow {
 	readonly confidence: number | null;
 }
 
-function queryTokenWeight(token: string): number {
-	if (token === "colleague" || token === "coworker" || token === "teammate") return 1.7;
-	if (token === "connected" || token === "connection" || token === "connect") return 1.5;
-	if (token === "invoice" || token === "billing" || token === "payment" || token === "balance") return 1.8;
-	if (token === "remote") return 1.3;
-	if (ADVICE_CUES.has(token)) return 0.55;
-	return 1;
+function scoreStructuredClaimCandidate(baseScore: number): number {
+	return Math.max(0, Math.min(1.15, baseScore));
 }
 
-function scoreStructuredClaimCandidate(
-	row: StructuredClaimRow,
-	queryTokens: readonly string[],
-	baseScore: number,
-): number {
-	let score = baseScore;
-	const queryHasAmountIntent = queryTokens.some((token) => AMOUNT_CUES.has(token));
-	if (queryHasAmountIntent) {
-		const pathTokens = new Set(
-			tokenize(
-				[row.entity_name, row.aspect, row.group_key ?? "", row.claim_key ?? "", row.kind, row.content].join(" "),
-			),
-		);
-		if ([...BILLING_PATH_CUES].some((token) => pathTokens.has(token))) score += 0.28;
-	}
-	return Math.max(0, Math.min(1.15, score));
-}
-
-function scorePathTokens(
-	queryTokens: readonly string[],
-	hasAdviceIntent: boolean,
-	aggregate: MemoryPathAggregate,
-): number {
-	if (aggregate.tokens.size === 0) return 0;
-
-	let direct = 0;
-	let expanded = 0;
-	let denominator = 0;
-	let anchorMatched = false;
-	for (const token of queryTokens) {
-		const weight = queryTokenWeight(token);
-		denominator += weight;
-		if (aggregate.tokens.has(token)) {
-			direct += weight;
-			expanded += weight;
-			if (weight >= 1.5) anchorMatched = true;
-			continue;
-		}
-		const synonyms = expandToken(token);
-		for (const synonym of synonyms) {
-			if (aggregate.tokens.has(synonym)) {
-				expanded += weight;
-				if (weight >= 1.5) anchorMatched = true;
-				break;
-			}
-		}
-	}
-
-	denominator = Math.max(1, denominator);
-	const coverage = direct / denominator + ((expanded - direct) / denominator) * 0.65;
+function scorePathTokens(queryTokens: readonly string[], aggregate: MemoryPathAggregate): number {
+	if (aggregate.tokens.size === 0 || queryTokens.length === 0) return 0;
+	const matched = queryTokens.filter((token) => aggregate.tokens.has(token)).length;
+	const coverage = matched / queryTokens.length;
 	const weight = 0.55 + aggregate.importance * 0.3 + aggregate.confidence * 0.15;
-	const intentBoost = hasAdviceIntent && aggregate.hasIntentAspect && coverage >= 0.2 ? 0.08 : 0;
-	const anchorBoost = anchorMatched ? 0.18 : 0;
-	return Math.max(0, Math.min(1, coverage * weight + intentBoost + anchorBoost));
+	return Math.max(0, Math.min(1, coverage * weight));
 }
 
 function scorePathRows(rows: readonly PathScoreRow[], queryTokens: readonly string[]): Map<string, number> {
@@ -236,7 +116,6 @@ function scorePathRows(rows: readonly PathScoreRow[], queryTokens: readonly stri
 				tokens: new Set(),
 				importance: 0,
 				confidence: 0,
-				hasIntentAspect: false,
 			};
 			aggregates.set(row.key, aggregate);
 		}
@@ -247,14 +126,11 @@ function scorePathRows(rows: readonly PathScoreRow[], queryTokens: readonly stri
 		}
 		aggregate.importance = Math.max(aggregate.importance, Math.max(0, Math.min(1, row.importance)));
 		aggregate.confidence = Math.max(aggregate.confidence, Math.max(0, Math.min(1, row.confidence ?? 0.8)));
-		const aspect = row.aspect.toLowerCase().replace(/_/g, " ").trim();
-		aggregate.hasIntentAspect = aggregate.hasIntentAspect || INTENT_ASPECTS.has(aspect);
 	}
 
-	const hasAdviceIntent = queryTokens.some((token) => ADVICE_CUES.has(token));
 	const scores = new Map<string, number>();
 	for (const [id, aggregate] of aggregates) {
-		const score = scorePathTokens(queryTokens, hasAdviceIntent, aggregate);
+		const score = scorePathTokens(queryTokens, aggregate);
 		if (score > 0) scores.set(id, score);
 	}
 	return scores;
@@ -338,9 +214,7 @@ function queryTokensForPathSearch(query: string, limit: number): { queryTokens: 
 	const queryTokens = [...new Set(tokenize(query))];
 	if (queryTokens.length === 0 || limit <= 0) return null;
 
-	const tokens = expandedQueryTokens(queryTokens)
-		.filter((token) => token.length >= 3)
-		.slice(0, 18);
+	const tokens = queryTokens.filter((token) => token.length >= 3).slice(0, 18);
 	return tokens.length > 0 ? { queryTokens, tokens } : null;
 }
 
@@ -487,7 +361,7 @@ export function findStructuredClaimCandidates(
 	return rows
 		.flatMap((row): StructuredClaimCandidate[] => {
 			if (!claimHasSourcePointer(row)) return [];
-			const score = scoreStructuredClaimCandidate(row, parsed.queryTokens, scores.get(row.id) ?? 0);
+			const score = scoreStructuredClaimCandidate(scores.get(row.id) ?? 0);
 			if (score < minScore) return [];
 			return [
 				{
@@ -734,7 +608,7 @@ export async function findStructuredClaimCandidatesViaOwner(
 	return rows
 		.flatMap((row): StructuredClaimCandidate[] => {
 			if (!claimHasSourcePointer(row)) return [];
-			const score = scoreStructuredClaimCandidate(row, parsed.queryTokens, scores.get(row.id) ?? 0);
+			const score = scoreStructuredClaimCandidate(scores.get(row.id) ?? 0);
 			if (score < minScore) return [];
 			return [
 				{

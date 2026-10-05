@@ -372,71 +372,6 @@ export function sanitizeFtsQuery(raw: string): string {
 	return tokens.join(" OR ");
 }
 
-const BAKING_QUERY_TRIGGERS = new Set([
-	"bake",
-	"baked",
-	"baking",
-	"brownie",
-	"brownies",
-	"cake",
-	"cakes",
-	"chocolate",
-	"cookie",
-	"cookies",
-	"dessert",
-	"desserts",
-	"pastry",
-	"pastries",
-	"recipe",
-	"recipes",
-]);
-
-const BAKING_QUERY_EXPANSIONS = [
-	"baking",
-	"dessert",
-	"desserts",
-	"flavor",
-	"flavour",
-	"ingredient",
-	"ingredients",
-	"recipe",
-	"recipes",
-	"sugar",
-	"texture",
-] as const;
-
-const ENTERTAINMENT_QUERY_TRIGGERS = new Set([
-	"documentary",
-	"documentaries",
-	"film",
-	"films",
-	"movie",
-	"movies",
-	"netflix",
-	"show",
-	"shows",
-	"streaming",
-	"television",
-	"tv",
-	"watch",
-	"watching",
-]);
-
-const ENTERTAINMENT_QUERY_EXPANSIONS = [
-	"comedy",
-	"documentary",
-	"film",
-	"hulu",
-	"netflix",
-	"show",
-	"stand up",
-	"storytelling",
-	"streaming",
-	"television",
-	"tv",
-	"watchlist",
-] as const;
-
 function normalizeExpansionToken(raw: string): string {
 	const cleaned = raw
 		.toLowerCase()
@@ -447,32 +382,6 @@ function normalizeExpansionToken(raw: string): string {
 	if (cleaned.endsWith("s") && cleaned.length > 3) return cleaned.slice(0, -1);
 	return cleaned;
 }
-export function expandRecallKeywordQuery(raw: string): string {
-	const tokens = raw
-		.split(/\s+/)
-		.map(normalizeExpansionToken)
-		.filter((token) => token.length >= 2 && !FTS_STOP.has(token));
-
-	const expansions: string[] = [];
-	const existing = new Set(tokens);
-	const addMissing = (items: readonly string[]): void => {
-		for (const item of items) {
-			const normalized = normalizeExpansionToken(item);
-			if (!existing.has(normalized) && !expansions.includes(item)) expansions.push(item);
-		}
-	};
-
-	if (tokens.some((token) => BAKING_QUERY_TRIGGERS.has(token))) {
-		addMissing(BAKING_QUERY_EXPANSIONS);
-	}
-	if (tokens.some((token) => ENTERTAINMENT_QUERY_TRIGGERS.has(token))) {
-		addMissing(ENTERTAINMENT_QUERY_EXPANSIONS);
-	}
-
-	if (expansions.length === 0) return raw;
-	return `${raw} ${expansions.join(" ")}`;
-}
-
 async function applyRehearsalBoost(
 	scored: Array<{ id: string; score: number; source: string }>,
 	search: MemorySearchConfig,
@@ -1439,30 +1348,13 @@ export function transcriptExcerpt(content: string, query: string, maxChars = 650
 	const clean = content.replace(/\s+/g, " ").trim();
 	if (clean.length <= maxChars) return clean;
 
-	const weakTerms = new Set([
-		"brand",
-		"brands",
-		"conversation",
-		"end",
-		"going",
-		"high",
-		"previous",
-		"recommend",
-		"recommendation",
-		"recommendations",
-		"remind",
-		"show",
-		"tonight",
-		"watch",
-		"wondering",
-	]);
 	const terms = expandTranscriptTerms(
-		expandRecallKeywordQuery(query)
+		query
 			.toLowerCase()
 			.split(/\W+/)
 			.map(normalizeExpansionToken)
 			.filter((term, index, all) => term.length >= 3 && !FTS_STOP.has(term) && all.indexOf(term) === index)
-			.sort((a, b) => Number(weakTerms.has(a)) - Number(weakTerms.has(b)) || b.length - a.length)
+			.sort((a, b) => b.length - a.length)
 			.slice(0, 12),
 	);
 	const lower = clean.toLowerCase();
@@ -1925,8 +1817,7 @@ export async function hybridRecall(
 	const freshnessIntent =
 		cfg.search.temporal_prior_enabled && !params.since && !params.until && hasFreshnessIntent(params.query);
 
-	const expandedQuery = expandRecallKeywordQuery(query);
-	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? expandedQuery).trim());
+	const keywordQuery = sanitizeFtsQuery((params.keywordQuery ?? query).trim());
 	const queryVecPromise = (() => {
 		const embeddingStart = performance.now();
 		let promise: Promise<number[] | null>;
@@ -2563,8 +2454,7 @@ export async function hybridRecall(
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
 
-				const coverageQuery = params.keywordQuery ? query : expandedQuery;
-				scored = shapeByFacetCoverage(coverageQuery, shaped, contentMap, coverageLimit).map((row) => ({
+				scored = shapeByFacetCoverage(query, shaped, contentMap, coverageLimit).map((row) => ({
 					id: row.id,
 					score: row.score,
 					source: row.source,
@@ -2741,7 +2631,7 @@ export async function hybridRecall(
 						};
 					})
 					.filter((r): r is ScoredRow => r !== null),
-				params.keywordQuery ? query : expandedQuery,
+				query,
 				DEFAULT_DAMPENING,
 				entities,
 				degrees,
@@ -2886,7 +2776,7 @@ export async function hybridRecall(
 			allowSourceFallbacks && results.length < limit
 				? await timings.timeAsync(
 						"native_artifact_fallback",
-						async () => await buildNativeArtifactRecallHits(params, expandedQuery, new Set()),
+						async () => await buildNativeArtifactRecallHits(params, query, new Set()),
 					)
 				: [];
 		if (nativeHits.length > 0 && results.length < limit) {
@@ -3085,7 +2975,7 @@ export async function hybridRecall(
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
 		const nativeHits = allowSourceFallbacks
 			? await timings.timeAsync("native_artifact_supplement", () =>
-					buildNativeArtifactRecallHits(params, expandedQuery, existingSourceIds),
+					buildNativeArtifactRecallHits(params, query, existingSourceIds),
 				)
 			: [];
 		const candidates = nativeHits.map((hit): RecallResult => {
