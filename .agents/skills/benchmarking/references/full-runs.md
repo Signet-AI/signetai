@@ -27,13 +27,13 @@ Dreaming dominates the cost of a run; answering and judging are well under 1% of
 | ---: | ---: | ---: |
 | 5.1M | 1.4M | 79M |
 
-Cost ≈ history (millions) × (5.1 × input price + 1.4 × output price + 79 × cached price), with prices per million tokens. At Z.ai's October 2026 list price for GLM-5.3-Flash ($0.15 input, $0.50 output, $0.03 cached) that is about $3.20 per million history tokens: roughly $200 for full LongMemEval, $140 for BEAM 1M, and $385 for BEAM 10M.
+Cost ≈ history (millions) × (5.1 × input price + 1.4 × output price + 79 × cached price), with prices per million tokens. At Z.ai's October 2026 list price for GLM-5.3-Flash ($0.15 input, $0.50 output, $0.03 cached) that is about $3.85 per million history tokens: roughly $200 for full LongMemEval, $140 for BEAM 1M, and $385 for BEAM 10M.
 
 Recompute the rates from the ledger's most recent comparable runs (`dreamingInputTokens`, `dreamingOutputTokens`, `dreamingCacheReadTokens`, divided by the run's history size) whenever the Dreaming prompt, model, or settings change, and check current provider prices rather than reusing these.
 
 What moves the estimate:
 
-- **Prompt caching.** Cached input is about 90% of Dreaming's input tokens. A provider without prompt caching bills those at the full input price and costs about 3.5 times as much. Pin a provider that caches; marketplace routing can silently land on one that does not, or on a quantized deployment.
+- **Prompt caching.** Cached input is about 94% of Dreaming's input tokens. A provider without prompt caching bills those at the full input price and costs about 3.5 times as much. Pin a provider that caches; marketplace routing can silently land on one that does not, or on a quantized deployment.
 - **BEAM's history shape.** LongMemEval is many independent ~100k-token histories like the smoke's, so it scales close to linearly. A BEAM chat is one history of 1M tokens or more, and per-pass context grows with its graph, so cached tokens may grow faster than linearly. Before a full BEAM run, run one chat and measure the rate.
 - **Coding plans.** One GLM smoke used about 1% of a Z.ai coding plan's weekly allowance, so a full LongMemEval run takes most of a week's quota. Use a pay-per-token API for full runs.
 - **Wall time.** A smoke takes about 70 minutes at 6 concurrent passes; full LongMemEval at that concurrency takes days. Raise `SIGNET_BENCH_DREAMING_CONCURRENCY` within the provider's rate limits.
