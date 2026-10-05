@@ -857,7 +857,10 @@ compress that pass's stored record into one line of at most 512 bytes, and to
 merge the oldest pair of lines when the history outgrows its budget. Lines are
 stored in `dreaming_history_nodes` and derived from the pass records, which
 stay the verbatim source; a pass whose line could not be built is shown as not
-yet summarized and is retried after the next pass.
+yet summarized and is retried after the next pass. History is kept per scope set: a pass sees
+only the history of passes whose scopes are all within its own, each shown
+under a `scopes=` heading when there is more than one, and `zoom_history`
+refuses lines outside the pass's scopes.
 
 ### POST /api/dream/trigger
 
