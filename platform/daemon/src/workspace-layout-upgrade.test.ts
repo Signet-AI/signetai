@@ -674,22 +674,24 @@ describe("upgradeWorkspaceLayout", () => {
 	it("moves only Signet's own leftovers out of memory/ and keeps other notes tracked", () => {
 		const { root } = v1Workspace();
 		const backup = "memories.db.bak-v41-1700000000000";
-		for (const path of ["memory/2026-09-30.md", "memory/my-scripts/run.sh", "memory/tests/notes.md"]) write(root, path);
+		for (const path of ["memory/2026-09-30.md", "memory/my-scripts/run.sh"]) write(root, path);
 		for (const path of [
 			`memory/${backup}`,
 			`memory/${backup}.cursor.json`,
 			"memory/.canonical-transcript-backfill-v1.default",
 			"memory/requirements.txt",
 			"memory/backups/old.db",
+			"memory/tests/test_signetai_like_escaping.py",
 		])
 			write(root, path);
 
 		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded" });
 
+		write(root, "memory/my-tests/notes.md");
 		for (const path of [
 			"memory/2026-09-30.md",
 			"memory/my-scripts/run.sh",
-			"memory/tests/notes.md",
+			"memory/my-tests/notes.md",
 			"memory/MEMORY-backup.md",
 			"memory/claude-code/notes.txt",
 		])
@@ -701,6 +703,7 @@ describe("upgradeWorkspaceLayout", () => {
 			"requirements.txt",
 			"backups/old.db",
 			"scripts/memory.py",
+			"tests/test_signetai_like_escaping.py",
 		])
 			expect(existsSync(join(root, "data/legacy-memory", path))).toBe(true);
 		expect(isSignetGitTrackedPath("memory/2026-09-30.md")).toBe(true);

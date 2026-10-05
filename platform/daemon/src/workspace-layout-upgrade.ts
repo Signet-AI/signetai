@@ -32,9 +32,9 @@ const TRANSCRIPT_FILE = /^transcript\.jsonl(?:\.lock)?$/;
 const DATABASE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_DIRECTORIES: ReadonlySet<string> = new Set(["backups", "cache", "imports"]);
 const LEGACY_TEMPLATE_FILES: ReadonlySet<string> = new Set(["requirements.txt", "requirements-base.txt"]);
-const LEGACY_TEMPLATE_DIRECTORIES: Readonly<Record<string, string>> = {
-	scripts: "memory.py",
-	tests: "test_cli_like_escaping.py",
+const LEGACY_TEMPLATE_DIRECTORIES: Readonly<Record<string, readonly string[]>> = {
+	scripts: ["memory.py"],
+	tests: ["test_cli_like_escaping.py", "test_signetai_like_escaping.py"],
 };
 
 type MoveIdentity = {
@@ -257,8 +257,8 @@ function isSignetLegacyData(database: string, path: string): boolean {
 	if (!existing || existing.isSymbolicLink()) return false;
 	if (LEGACY_TEMPLATE_FILES.has(name)) return existing.isFile();
 	if (LEGACY_DIRECTORIES.has(name)) return existing.isDirectory();
-	const marker = LEGACY_TEMPLATE_DIRECTORIES[name];
-	return marker !== undefined && existing.isDirectory() && entry(join(path, marker))?.isFile() === true;
+	const markers = LEGACY_TEMPLATE_DIRECTORIES[name] ?? [];
+	return existing.isDirectory() && markers.some((marker) => entry(join(path, marker))?.isFile() === true);
 }
 
 function remainingLegacySources(root: string): string[] {
