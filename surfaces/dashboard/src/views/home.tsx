@@ -1,15 +1,16 @@
-import { PageHeading, SectionHeading } from "@/components/dashboard/heading";
+import { PageHeading, SectionAction, SectionHeading, type StatusTone } from "@/components/dashboard/heading";
 import { DailyBrief } from "@/components/home/daily-brief";
 import { HomeAgentsPanel } from "@/components/home/agents";
-import { HomeConnectorsPanel } from "@/components/home/connectors";
+import { HomeConnectorsPanel, connectorIssue } from "@/components/home/connectors";
 import { ActivityHeatmap, type DayBucket, type KpiData, KpiFooter, useDateString } from "@/components/home/kpi";
 import { HomeRecentMemories } from "@/components/home/recent-memories";
 import { HomeSecretsPanel } from "@/components/home/secrets";
-import { api } from "@/lib/api";
+import { type HarnessConnector, type SignetSource, api } from "@/lib/api";
+import { useView } from "@/lib/view-context";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { HomeSourcesPanel } from "@/components/home/sources";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
 
 export function HomeView() {
 	const status = useAsync(() => api.getStatus(), { key: "status", intervalMs: 30000 });
@@ -23,6 +24,7 @@ export function HomeView() {
 	const harnessesQuery = useAsync(() => api.getHarnesses(), { key: "harnesses", intervalMs: 30000 });
 	const connectionRecord = harnessesQuery.data?.data?.configuredHarnesses;
 	const [lastConnected, setLastConnected] = useState(false);
+	const [sourceFocus, setSourceFocus] = useState<{ id: string; at: number } | null>(null);
 	const connected = harnessesQuery.data?.data ? (connectionRecord?.length ?? 0) > 0 : lastConnected;
 	useEffect(() => {
 		if (harnessesQuery.data?.data) setLastConnected((connectionRecord?.length ?? 0) > 0);
@@ -71,19 +73,22 @@ export function HomeView() {
 						level="h2"
 						description="Your knowledge, agents, and connections."
 					/>
-					<HomeSourcesPanel
+					<NeedsAttention
 						sources={sources}
-						loading={sourcesQuery.loading && sources === undefined}
-						onRefresh={sourcesQuery.refresh}
+						connectors={harnessesQuery.data?.error ? undefined : harnessesQuery.data?.data?.connectors}
+						onShowSource={(id) => setSourceFocus({ id, at: Date.now() })}
 					/>
-					<HomeWidgetSeparator />
-					<HomeConnectorsPanel result={harnessesQuery.data} loading={harnessesQuery.loading} />
-					<HomeWidgetSeparator />
-					<HomeAgentsPanel activeAgentId={status.data?.agentId} />
-					<HomeWidgetSeparator />
-					<ReviewSuggestions />
-					<HomeWidgetSeparator />
-					<HomeSecretsPanel />
+					<div className="home-setup-list">
+						<HomeSourcesPanel
+							sources={sources}
+							loading={sourcesQuery.loading && sources === undefined}
+							onRefresh={sourcesQuery.refresh}
+							focus={sourceFocus}
+						/>
+						<HomeConnectorsPanel result={harnessesQuery.data} loading={harnessesQuery.loading} />
+						<HomeAgentsPanel activeAgentId={status.data?.agentId} />
+						<HomeSecretsPanel />
+					</div>
 				</section>
 			</div>
 
@@ -92,53 +97,103 @@ export function HomeView() {
 	);
 }
 
-function HomeWidgetSeparator() {
-	return <div aria-hidden="true" className="home-system-divider" />;
-}
-
-function ReviewSuggestions() {
+// Only things that need the user: unhealthy sources, connectors that need sign-in, and pending suggestions.
+// Renders nothing when all is well, so the setup list leads.
+function NeedsAttention({
+	sources,
+	connectors,
+	onShowSource,
+}: {
+	sources?: readonly SignetSource[];
+	connectors?: readonly HarnessConnector[];
+	onShowSource: (id: string) => void;
+}) {
+	const { openSettings } = useView();
 	const proposals = useAsync(() => api.getOntologyProposals("pending", 20), {
 		key: "proposals:pending:20",
 		intervalMs: 15000,
 	});
-	const items = proposals.data?.items ?? [];
-	const meta = proposals.loading && proposals.data === null ? "loading…" : `${items.length} pending`;
+	const suggestions = proposals.data?.items ?? [];
+	const sourceIssues = (sources ?? []).filter(
+		(source) => source.health?.status === "unhealthy" || source.health?.status === "degraded",
+	);
+	const connectorIssues = (connectors ?? []).flatMap((connector) => {
+		const issue = connectorIssue(connector);
+		return issue ? [{ connector, issue }] : [];
+	});
+	const proposalsFailed = !proposals.loading && proposals.data === null;
+	const count = sourceIssues.length + connectorIssues.length + suggestions.length + (proposalsFailed ? 1 : 0);
+	if (count === 0) return null;
 
 	return (
-		<section aria-labelledby="review-suggestions-title">
+		<section className="home-attention" aria-labelledby="home-attention-title">
 			<SectionHeading
-				id="review-suggestions-title"
-				title="Review suggestions"
-				meta={<span className="text-meta tabular-nums text-muted-foreground">{meta}</span>}
+				id="home-attention-title"
+				title="Needs attention"
+				meta={<span className="text-meta tabular-nums text-muted-foreground">{count}</span>}
 			/>
-			{proposals.loading && proposals.data === null ? (
-				<div className="py-4 text-meta tabular-nums text-muted-foreground">
-					<span className="text-meta tabular-nums text-muted-foreground">Loading review suggestions…</span>
-				</div>
-			) : proposals.data === null ? (
-				<div className="flex items-center gap-2 py-4 text-meta text-muted-foreground">
-					<span>Unable to load review suggestions. Check the daemon connection and try again.</span>
-					<button type="button" className="home-text-action shrink-0" onClick={() => void proposals.refresh()}>
-						Retry
-					</button>
-				</div>
-			) : items.length === 0 ? (
-				<p className="mt-2 text-small text-muted-foreground">
-					Nothing to review. Suggestions from dreaming will show up here.
-				</p>
-			) : (
-				<div className="flex flex-col">
-					{items.map((proposal, index) => (
-						<ReviewProposalRow
-							key={proposal.id}
-							proposal={proposal}
-							last={index === items.length - 1}
-							onSettled={proposals.refresh}
-						/>
-					))}
+			<ul className="home-attention-list">
+				{sourceIssues.map((source) => (
+					<AttentionItem
+						key={source.id}
+						tone={source.health?.status === "unhealthy" ? "error" : "warn"}
+						action="Details"
+						onAction={() => onShowSource(source.id)}
+					>
+						{source.name} is {source.health?.status}
+					</AttentionItem>
+				))}
+				{connectorIssues.map(({ connector, issue }) => (
+					<AttentionItem key={connector.id} tone={issue.tone} action="Fix" onAction={() => openSettings("connectors")}>
+						{connector.displayName}: {issue.label.toLowerCase()}
+					</AttentionItem>
+				))}
+				{proposalsFailed && (
+					<AttentionItem tone="neutral" action="Retry" onAction={() => void proposals.refresh()}>
+						Review suggestions could not be loaded
+					</AttentionItem>
+				)}
+			</ul>
+			{suggestions.length > 0 && (
+				<div className="home-attention-suggestions">
+					<h3 id="review-suggestions-title" className="m-0 text-small font-medium text-muted-foreground">
+						Suggestions from dreaming · {suggestions.length}
+					</h3>
+					<div className="flex flex-col">
+						{suggestions.map((proposal, index) => (
+							<ReviewProposalRow
+								key={proposal.id}
+								proposal={proposal}
+								last={index === suggestions.length - 1}
+								onSettled={proposals.refresh}
+							/>
+						))}
+					</div>
 				</div>
 			)}
 		</section>
+	);
+}
+
+function AttentionItem({
+	tone,
+	action,
+	onAction,
+	children,
+}: {
+	tone: StatusTone;
+	action: string;
+	onAction: () => void;
+	children: ReactNode;
+}) {
+	return (
+		<li className="home-attention-item">
+			<span className="dashboard-status" data-tone={tone}>
+				<span className="dashboard-status-dot" aria-hidden="true" />
+			</span>
+			<span className="min-w-0 flex-1 text-body">{children}</span>
+			<SectionAction onClick={onAction}>{action}</SectionAction>
+		</li>
 	);
 }
 

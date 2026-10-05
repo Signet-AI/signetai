@@ -1,4 +1,4 @@
-import { SectionAction, SectionHeading } from "@/components/dashboard/heading";
+import { SetupRow } from "@/components/home/setup-row";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { useView } from "@/lib/view-context";
@@ -7,20 +7,24 @@ export function HomeSecretsPanel() {
 	const secrets = useAsync(() => api.getSecrets(), { key: "secrets", intervalMs: 30_000 });
 	const { openSettings } = useView();
 	const provider = secrets.data?.provider ?? "local";
-	const meta =
-		secrets.data === null ? (secrets.loading ? "loading…" : "unavailable") : String(secrets.data.secrets?.length ?? 0);
 
 	return (
-		<section aria-labelledby="home-secrets-title">
-			<SectionHeading
+		<section className="home-setup-group" aria-labelledby="home-secrets-title">
+			<SetupRow
 				id="home-secrets-title"
-				title="Secrets"
-				meta={<span className="text-meta tabular-nums text-muted-foreground">{meta}</span>}
-				actions={<SectionAction onClick={() => openSettings("secrets")}>Manage</SectionAction>}
+				label="Secrets"
+				summary={
+					secrets.data === null
+						? secrets.loading
+							? "Loading…"
+							: "Unavailable"
+						: provider === "local"
+							? "Stored on this device"
+							: `Stored in ${provider}`
+				}
+				count={secrets.data?.secrets?.length}
+				onOpen={() => openSettings("secrets")}
 			/>
-			<p className="mt-2 text-small text-muted-foreground">
-				API keys, passwords, and tokens, {provider === "local" ? "stored on this device" : `stored in ${provider}`}.
-			</p>
 		</section>
 	);
 }

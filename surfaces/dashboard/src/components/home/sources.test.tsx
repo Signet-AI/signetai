@@ -44,6 +44,13 @@ async function click(element: Element): Promise<void> {
 	});
 }
 
+// Home shows Sources as one collapsed setup row; source rows and Connect live inside it.
+async function expandSources(container: HTMLElement): Promise<void> {
+	const toggle = container.querySelector('button[aria-expanded="false"][aria-labelledby="home-sources-title"]');
+	if (!toggle) throw new Error("Sources setup row not found");
+	await click(toggle);
+}
+
 function button(container: HTMLElement, label: string): HTMLButtonElement {
 	const match = [...container.querySelectorAll("button")].find((candidate) => candidate.textContent?.includes(label));
 	if (!(match instanceof HTMLButtonElement)) throw new Error(`button not found: ${label}`);
@@ -187,6 +194,7 @@ describe("sources grouping", () => {
 				<HomeSourcesPanel sources={sourcesResponse.sources} loading={false} onRefresh={() => {}} />
 			</ViewProvider>,
 		);
+		await expandSources(mounted.container);
 
 		expect(mounted.container.textContent).toContain("extraction result unavailable");
 		expect(mounted.container.textContent).not.toContain("undefined aspects");
@@ -216,6 +224,7 @@ describe("sources grouping", () => {
 				<HomeSourcesPanel sources={sourcesResponse.sources} loading={false} onRefresh={() => {}} />
 			</ViewProvider>,
 		);
+		await expandSources(mounted.container);
 
 		expect(mounted.container.textContent).toContain("2 aspects · 3 attributes · entity linked");
 		expect(mounted.container.textContent).not.toContain("7 aspects · 42 attributes");
@@ -230,11 +239,11 @@ describe("sources grouping", () => {
 				<HomeSourcesPanel sources={sourcesResponse.sources} loading={false} onRefresh={() => {}} />
 			</ViewProvider>,
 		);
+		await expandSources(mounted.container);
 		const entries = [...mounted.container.querySelectorAll("button")].filter((candidate) =>
 			candidate.textContent?.includes("Connect a source"),
 		);
 		expect(entries).toHaveLength(1);
-		expect(mounted.container.querySelector("button")?.textContent).toContain("Connect a source");
 
 		await click(entries[0]);
 		expect(mounted.container.querySelector("dialog.cs-panel")).not.toBeNull();
@@ -255,6 +264,8 @@ describe("sources grouping", () => {
 		);
 
 		expect(mounted.container.textContent).toContain("Vault");
+		expect(mounted.container.querySelector("details")).toBeNull();
+		await expandSources(mounted.container);
 		expect(mounted.container.querySelector("details")?.open).toBe(false);
 
 		const summary = mounted.container.querySelector("summary");
@@ -290,6 +301,7 @@ describe("sources grouping", () => {
 			</ViewProvider>,
 		);
 		try {
+			await expandSources(mounted.container);
 			const reindex = mounted.container.querySelector('[aria-label="Re-index"]');
 			if (!reindex) throw new Error("Re-index action is missing");
 			await click(reindex);

@@ -1,5 +1,6 @@
 import { LoadingRows } from "@/components/ui/skeleton";
-import { SectionAction, SectionHeading, type StatusTone, StatusLabel } from "@/components/dashboard/heading";
+import { SectionAction, type StatusTone, StatusLabel } from "@/components/dashboard/heading";
+import { SetupRow } from "@/components/home/setup-row";
 import { sourceLogo } from "@/components/icons";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
 import { type SignetSource, type SourceHealth, type SourceIndexJob, api } from "@/lib/api";
@@ -36,12 +37,16 @@ export function HomeSourcesPanel({
 	sources,
 	loading,
 	onRefresh,
+	focus,
 }: {
 	sources?: readonly SignetSource[];
 	loading: boolean;
 	onRefresh: () => void;
+	focus?: { readonly id: string; readonly at: number } | null;
 }) {
 	const [connectOpen, setConnectOpen] = useState(false);
+	const [expanded, setExpanded] = useState(false);
+	const listRef = useRef<HTMLDivElement>(null);
 	const { connectSourceRequested, clearConnectSource } = useView();
 
 	useEffect(() => {
@@ -50,40 +55,67 @@ export function HomeSourcesPanel({
 		clearConnectSource();
 	}, [connectSourceRequested, clearConnectSource]);
 
+	const [pendingFocus, setPendingFocus] = useState<string | null>(null);
+	useEffect(() => {
+		if (!focus) return;
+		setExpanded(true);
+		setPendingFocus(focus.id);
+	}, [focus]);
+	// Runs after the expanded list has committed, so the requested source row exists to open.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: sources re-runs the lookup when rows arrive late.
+	useEffect(() => {
+		if (!expanded || !pendingFocus) return;
+		const row = [...(listRef.current?.querySelectorAll<HTMLDetailsElement>("details[data-source-id]") ?? [])].find(
+			(candidate) => candidate.dataset.sourceId === pendingFocus,
+		);
+		if (!row) return;
+		row.open = true;
+		row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+		setPendingFocus(null);
+	}, [expanded, pendingFocus, sources]);
+
+	const summary = loading
+		? "Loading…"
+		: sources === undefined
+			? "Unavailable"
+			: sources.length === 0
+				? "None connected"
+				: sources.map((source) => source.name).join(", ");
+
 	return (
 		<>
-			<section className="group">
-				<SectionHeading
-					title="Sources"
-					meta={
-						sources && sources.length > 0 ? (
-							<span className="text-meta tabular-nums text-muted-foreground">{sources.length}</span>
-						) : undefined
-					}
-					actions={<SectionAction onClick={() => setConnectOpen(true)}>Connect a source</SectionAction>}
+			<section className="home-setup-group" aria-labelledby="home-sources-title">
+				<SetupRow
+					id="home-sources-title"
+					label="Sources"
+					summary={summary}
+					count={sources?.length || undefined}
+					expanded={expanded}
+					onToggle={() => setExpanded((open) => !open)}
 				/>
-				{loading ? (
-					<LoadingRows label="Loading sources…" rows={2} />
-				) : sources === undefined ? (
-					<div className="flex min-h-[72px] items-center justify-center gap-2 text-center">
-						<span className="text-meta tabular-nums text-muted-foreground">Unable to load sources.</span>
-						<button type="button" className="home-text-action shrink-0" onClick={onRefresh}>
-							Retry
-						</button>
-					</div>
-				) : sources.length > 0 ? (
-					<div className="mt-3 divide-y divide-border">
-						{sources.map((source) => (
-							<HomeSourceRow key={source.id} source={source} onMutate={onRefresh} />
-						))}
-					</div>
-				) : (
-					<div className="mt-3 flex min-h-[60px] items-center gap-3">
-						<Folder className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-						<div>
-							<p className="text-body text-foreground">No sources connected yet</p>
-							<p className="mt-1 text-small text-muted-foreground">Connect a source to start indexing.</p>
-						</div>
+				{expanded && (
+					<div ref={listRef} className="home-setup-detail">
+						{loading ? (
+							<LoadingRows label="Loading sources…" rows={2} />
+						) : sources === undefined ? (
+							<div className="flex min-h-[48px] items-center gap-2">
+								<span className="text-small text-muted-foreground">Unable to load sources.</span>
+								<button type="button" className="home-text-action shrink-0" onClick={onRefresh}>
+									Retry
+								</button>
+							</div>
+						) : sources.length > 0 ? (
+							<div className="divide-y divide-border">
+								{sources.map((source) => (
+									<HomeSourceRow key={source.id} source={source} onMutate={onRefresh} />
+								))}
+							</div>
+						) : (
+							<p className="py-2 text-small text-muted-foreground">Connect a source to start indexing.</p>
+						)}
+						<SectionAction className="mt-1" onClick={() => setConnectOpen(true)}>
+							Connect a source
+						</SectionAction>
 					</div>
 				)}
 			</section>
@@ -112,7 +144,7 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 	const format = typeof source.providerSettings?.format === "string" ? source.providerSettings.format : source.kind;
 
 	return (
-		<details className="group/source" data-health={health}>
+		<details className="group/source" data-health={health} data-source-id={source.id}>
 			<summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 py-2.5 [&::-webkit-details-marker]:hidden">
 				<span className="grid size-4.5 shrink-0 place-items-center text-foreground">
 					{sourceLogo(source.kind, { className: "size-4" }) ?? <Folder className="size-3.5" />}

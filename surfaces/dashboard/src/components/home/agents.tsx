@@ -1,7 +1,8 @@
 import { LoadingRows } from "@/components/ui/skeleton";
 import { useEffect, useRef, useState } from "react";
 import { ChevronRight, UserRound } from "@/components/mingcute-icons";
-import { SectionAction, SectionHeading, StatusLabel } from "@/components/dashboard/heading";
+import { SectionAction, StatusLabel } from "@/components/dashboard/heading";
+import { SetupRow } from "@/components/home/setup-row";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { api, type Agent } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
@@ -38,6 +39,13 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 	const [saving, setSaving] = useState(false);
 
 	const agents = agentsQuery.data;
+	const [expanded, setExpanded] = useState(false);
+	const displayName = (agent: Agent) =>
+		(agent.name === "default" || agent.id === activeAgentId) &&
+		identityQuery.data?.name &&
+		identityQuery.data.name !== "Unknown"
+			? identityQuery.data.name
+			: agent.name;
 
 	const beginEdit = (agent: Agent) => {
 		setEditing(agent.name);
@@ -68,18 +76,74 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 
 	return (
 		<>
-			<section ref={rosterRef} aria-labelledby="home-agents-title">
-				<SectionHeading
+			<section ref={rosterRef} className="home-setup-group" aria-labelledby="home-agents-title">
+				<SetupRow
 					id="home-agents-title"
-					title="Agents"
-					meta={
-						agents && agents.length > 0 ? (
-							<span className="text-meta tabular-nums text-muted-foreground">{agents.length}</span>
-						) : undefined
+					label="Agents"
+					summary={
+						agents === null
+							? agentsQuery.loading
+								? "Loading…"
+								: "Unavailable"
+							: agents.length === 0
+								? "None registered"
+								: agents.map(displayName).join(", ")
 					}
-					actions={
-						agents?.some((agent) => agent.name !== "default") && (
+					count={agents?.length || undefined}
+					expanded={expanded}
+					onToggle={() => setExpanded((open) => !open)}
+				/>
+				{expanded && (
+					<div className="home-setup-detail">
+						{error && (
+							<div
+								role="alert"
+								className="mt-2 flex items-center justify-between gap-2 text-meta tabular-nums text-destructive"
+							>
+								<span className="truncate" title={error}>
+									{error}
+								</span>
+								<button type="button" className="shrink-0 underline" onClick={() => void agentsQuery.refresh()}>
+									Retry
+								</button>
+							</div>
+						)}
+
+						{agentsQuery.loading && agents === null ? (
+							<LoadingRows label="Loading agents…" rows={2} />
+						) : agents === null ? (
+							<div className="flex min-h-[48px] items-center justify-center gap-2 text-center">
+								<span className="text-meta tabular-nums text-muted-foreground">Unable to load agents.</span>
+								<button type="button" className="home-text-action shrink-0" onClick={() => void agentsQuery.refresh()}>
+									Retry
+								</button>
+							</div>
+						) : agents.length === 0 ? (
+							<div className="grid min-h-[48px] place-items-center text-center">
+								<span className="text-meta tabular-nums text-muted-foreground">No agents registered yet.</span>
+							</div>
+						) : (
+							<div className="divide-y divide-border">
+								{agents.map((agent) => (
+									<AgentDisclosure
+										key={agent.id}
+										agent={agent}
+										active={agents.length > 1 && agent.id === activeAgentId}
+										displayName={displayName(agent)}
+										editing={editing === agent.name}
+										draft={draft}
+										saving={saving}
+										onBeginEdit={() => beginEdit(agent)}
+										onDraftChange={setDraft}
+										onConfirm={() => setPending({ agent, draft })}
+										onCancel={() => setEditing(null)}
+									/>
+								))}
+							</div>
+						)}
+						{agents?.some((agent) => agent.name !== "default") && (
 							<SectionAction
+								className="mt-1"
 								onClick={() => {
 									const agent = agents.find((candidate) => candidate.name !== "default");
 									if (!agent) return;
@@ -92,60 +156,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 							>
 								Manage
 							</SectionAction>
-						)
-					}
-				/>
-
-				{error && (
-					<div
-						role="alert"
-						className="mt-2 flex items-center justify-between gap-2 text-meta tabular-nums text-destructive"
-					>
-						<span className="truncate" title={error}>
-							{error}
-						</span>
-						<button type="button" className="shrink-0 underline" onClick={() => void agentsQuery.refresh()}>
-							Retry
-						</button>
-					</div>
-				)}
-
-				{agentsQuery.loading && agents === null ? (
-					<LoadingRows label="Loading agents…" rows={2} />
-				) : agents === null ? (
-					<div className="flex min-h-[48px] items-center justify-center gap-2 text-center">
-						<span className="text-meta tabular-nums text-muted-foreground">Unable to load agents.</span>
-						<button type="button" className="home-text-action shrink-0" onClick={() => void agentsQuery.refresh()}>
-							Retry
-						</button>
-					</div>
-				) : agents.length === 0 ? (
-					<div className="grid min-h-[48px] place-items-center text-center">
-						<span className="text-meta tabular-nums text-muted-foreground">No agents registered yet.</span>
-					</div>
-				) : (
-					<div className="mt-2 divide-y divide-border">
-						{agents.map((agent) => (
-							<AgentDisclosure
-								key={agent.id}
-								agent={agent}
-								active={agent.id === activeAgentId}
-								displayName={
-									(agent.name === "default" || agent.id === activeAgentId) &&
-									identityQuery.data?.name &&
-									identityQuery.data.name !== "Unknown"
-										? identityQuery.data.name
-										: agent.name
-								}
-								editing={editing === agent.name}
-								draft={draft}
-								saving={saving}
-								onBeginEdit={() => beginEdit(agent)}
-								onDraftChange={setDraft}
-								onConfirm={() => setPending({ agent, draft })}
-								onCancel={() => setEditing(null)}
-							/>
-						))}
+						)}
 					</div>
 				)}
 			</section>
