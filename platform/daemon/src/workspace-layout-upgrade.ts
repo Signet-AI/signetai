@@ -14,7 +14,7 @@ import {
 	unlinkSync,
 	writeSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
 	type WorkspaceLayout,
 	WORKSPACE_LAYOUT_V1,
@@ -30,6 +30,12 @@ export const WORKSPACE_LAYOUT_UPGRADE_FILE = ".workspace-layout-upgrade.json";
 const ARTIFACT_FILE = /^[^/\\]+--(?:summary|transcript|compaction|manifest)\.md$/;
 const TRANSCRIPT_FILE = /^transcript\.jsonl(?:\.lock)?$/;
 const DATABASE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
+const LEGACY_DIRECTORIES: ReadonlySet<string> = new Set(["backups", "cache", "imports"]);
+const LEGACY_TEMPLATE_FILES: ReadonlySet<string> = new Set(["requirements.txt", "requirements-base.txt"]);
+const LEGACY_TEMPLATE_DIRECTORIES: Readonly<Record<string, string>> = {
+	scripts: "memory.py",
+	tests: "test_cli_like_escaping.py",
+};
 
 type MoveIdentity = {
 	readonly device: string;
@@ -60,7 +66,12 @@ type UpgradeRecord = InProgressRecord | BlockedRecord;
 
 export type WorkspaceLayoutUpgradeResult =
 	| { readonly status: "current" }
-	| { readonly status: "upgraded"; readonly moved: number; readonly resumed: boolean }
+	| {
+			readonly status: "upgraded";
+			readonly moved: number;
+			readonly resumed: boolean;
+			readonly cleanup?: string;
+	  }
 	| { readonly status: "blocked"; readonly reason: string }
 	| { readonly status: "skipped"; readonly reason: string };
 
@@ -215,10 +226,7 @@ function hasDurableMoveIdentity(
 function matchesMoveIdentity(path: string, expected: MoveIdentity & { readonly birthtimeNs: string }): boolean {
 	const actual = moveIdentity(path);
 	return (
-		actual.device === expected.device &&
-		actual.inode === expected.inode &&
-		actual.birthtimeNs === expected.birthtimeNs &&
-		actual.kind === expected.kind
+		actual.inode === expected.inode && actual.birthtimeNs === expected.birthtimeNs && actual.kind === expected.kind
 	);
 }
 
@@ -234,6 +242,37 @@ function containsOrEquals(parent: string, path: string): boolean {
 function isEmptyDirectory(path: string): boolean {
 	const existing = entry(path);
 	return !!existing && existing.isDirectory() && !existing.isSymbolicLink() && readdirSync(path).length === 0;
+}
+
+function isSignetLegacyData(database: string, path: string): boolean {
+	const name = basename(path);
+	const databaseName = basename(database);
+	if (
+		dirname(database) === dirname(path) &&
+		(name.startsWith(`${databaseName}.`) || name.startsWith(`${databaseName}-`))
+	)
+		return true;
+	if (name.startsWith(".canonical-transcript-backfill-")) return true;
+	const existing = entry(path);
+	if (!existing || existing.isSymbolicLink()) return false;
+	if (LEGACY_TEMPLATE_FILES.has(name)) return existing.isFile();
+	if (LEGACY_DIRECTORIES.has(name)) return existing.isDirectory();
+	const marker = LEGACY_TEMPLATE_DIRECTORIES[name];
+	return marker !== undefined && existing.isDirectory() && entry(join(path, marker))?.isFile() === true;
+}
+
+function remainingLegacySources(root: string): string[] {
+	const v1 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V1);
+	const v2 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V2);
+	const pairs: [string, string][] = [
+		...DATABASE_SUFFIXES.map((suffix): [string, string] => [v1.database + suffix, v2.database + suffix]),
+		[v1.cache, v2.cache],
+		[v1.imports, v2.imports],
+		[v1.runtime, v2.runtime],
+	];
+	return pairs
+		.filter(([from, to]) => from !== to && entry(from) !== null)
+		.map(([from]) => (inside(root, from) ? relative(root, from) : from));
 }
 
 function upgradeBases(root: string): string[] {
@@ -263,6 +302,23 @@ function validateRecordPaths(root: string, record: InProgressRecord): void {
 		throw new Error(
 			`workspace layout upgrade record names a path outside the workspace and its configured roots: ${outside?.from ?? outsideDirectory}`,
 		);
+	const v1 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V1);
+	const v2 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V2);
+	const storage = (layout: WorkspaceLayout): string[] => [
+		layout.data,
+		layout.transcripts,
+		layout.runtime,
+		layout.cache,
+		layout.imports,
+		...DATABASE_SUFFIXES.map((suffix) => layout.database + suffix),
+	];
+	const owned = (roots: readonly string[], path: string): boolean =>
+		roots.some((candidate) => containsOrEquals(candidate, resolve(root, path)));
+	const unplanned = record.moves.find((move) => !owned(storage(v1), move.from) || !owned(storage(v2), move.to));
+	if (unplanned)
+		throw new Error(
+			`workspace layout upgrade record moves ${unplanned.from} to ${unplanned.to}, outside Signet's v1 and v2 storage`,
+		);
 }
 
 function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: string[] } {
@@ -288,7 +344,7 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 			for (const name of readdirSync(nested))
 				if (inside(root, nested) || TRANSCRIPT_FILE.test(name))
 					add(join(nested, name), join(v2.transcripts, harness, name));
-			emptied.push(nested);
+			emptied.push(nested, join(v1.transcripts, harness));
 		}
 		if (v1.transcripts !== v2.transcripts)
 			for (const name of readdirSync(v1.transcripts))
@@ -311,11 +367,9 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 		];
 		for (const name of readdirSync(v1.data)) {
 			const from = join(v1.data, name);
-			if (claimed.has(from) || retained.some((path) => containsOrEquals(from, path))) continue;
-			if (emptied.some((path) => inside(from, path))) {
-				emptied.push(join(legacy, name, "transcripts"), join(legacy, name));
-			}
-			add(from, join(legacy, name));
+			if (claimed.has(from) || retained.some((path) => containsOrEquals(from, path) || containsOrEquals(path, from)))
+				continue;
+			if (isSignetLegacyData(v1.database, from)) add(from, join(legacy, name));
 		}
 		emptied.push(legacy, v1.data);
 	}
@@ -372,7 +426,7 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 function assertNoSymlinkAncestors(base: string, path: string): void {
 	let parent = dirname(path);
 	while (parent !== base && inside(base, parent)) {
-		if (lstatSync(parent).isSymbolicLink())
+		if (entry(parent)?.isSymbolicLink())
 			throw new UpgradeBlocked(`${parent} is a symlink; Signet will not move files through it`);
 		parent = dirname(parent);
 	}
@@ -441,6 +495,7 @@ function apply(
 			rmdirSync(to);
 		}
 		if (inside(root, from)) assertNoSymlinkAncestors(root, from);
+		if (inside(root, to)) assertNoSymlinkAncestors(root, to);
 		mkdirSync(dirname(to), { recursive: true, mode: 0o700 });
 		rename(from, to);
 		performed.push(move);
@@ -506,9 +561,12 @@ export function upgradeWorkspaceLayout(
 	const now = deps.now ?? (() => new Date());
 	const existing = readWorkspaceLayoutUpgradeRecord(root);
 	const layout: WorkspaceLayout = resolveWorkspaceLayout(root);
-	if (layout.version === WORKSPACE_LAYOUT_V2 && existing?.state !== "in-progress") {
-		if (existing) removeRecord(root);
-		return { status: "current" };
+	if (layout.version === WORKSPACE_LAYOUT_V2) {
+		if (existing?.state !== "in-progress") {
+			if (existing) removeRecord(root);
+			return { status: "current" };
+		}
+		return finish(root, existing, 0, true);
 	}
 
 	let record: InProgressRecord;
@@ -517,7 +575,7 @@ export function upgradeWorkspaceLayout(
 		record = existing;
 	} else {
 		try {
-			const planned = plan(root);
+			const planned = planOrBlock(root);
 			record = {
 				version: 1,
 				state: "in-progress",
@@ -552,22 +610,46 @@ export function upgradeWorkspaceLayout(
 	};
 	try {
 		apply(root, record, rename, performed, resumed, now());
+		const remaining = remainingLegacySources(root);
+		if (remaining.length > 0)
+			throw new UpgradeBlocked(`v1 paths remain after the planned renames: ${remaining.join(", ")}`);
 	} catch (error) {
 		return fail(error);
 	}
-	if (layout.version !== WORKSPACE_LAYOUT_V2) {
-		try {
-			persistWorkspaceLayout(root, { version: WORKSPACE_LAYOUT_V2, overrides: readWorkspaceLayoutOverrides(root) });
-		} catch (error) {
-			if (!committed(root)) return fail(error);
-		}
+	try {
+		persistWorkspaceLayout(root, { version: WORKSPACE_LAYOUT_V2, overrides: readWorkspaceLayoutOverrides(root) });
+	} catch (error) {
+		if (!committed(root)) return fail(error);
 	}
+	return finish(root, record, performed.length, resumed);
+}
+
+function planOrBlock(root: string): ReturnType<typeof plan> {
+	try {
+		return plan(root);
+	} catch (error) {
+		if (error instanceof UpgradeBlocked) throw error;
+		throw new UpgradeBlocked(
+			`could not inspect the v1 workspace: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+}
+
+function finish(root: string, record: InProgressRecord, moved: number, resumed: boolean): WorkspaceLayoutUpgradeResult {
 	for (const directory of record.emptiedDirectories) removeIfEmpty(resolve(root, directory));
 	try {
 		syncDirectory(root);
 		removeRecord(root);
-	} catch {}
-	return { status: "upgraded", moved: performed.length, resumed };
+	} catch (error) {
+		const cause = error instanceof Error ? error.message : String(error);
+		return {
+			status: "upgraded",
+			moved,
+			resumed,
+			cleanup: `could not remove ${WORKSPACE_LAYOUT_UPGRADE_FILE}: ${cause}; the next start finishes it`,
+		};
+	}
+	return { status: "upgraded", moved, resumed };
 }
 
 export function readWorkspaceLayoutStatus(

@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
+	chmodSync,
 	existsSync,
 	lstatSync,
 	mkdirSync,
@@ -16,7 +17,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
-import { persistWorkspaceLayout, resolveWorkspaceLayout } from "@signet/core";
+import { isSignetGitTrackedPath, persistWorkspaceLayout, resolveWorkspaceLayout } from "@signet/core";
 import { acquireSingleInstanceLock, releaseSingleInstanceLock } from "./single-instance-lock";
 import { runWorkspaceLayoutStartup } from "./workspace-layout-startup";
 import {
@@ -113,8 +114,8 @@ describe("upgradeWorkspaceLayout", () => {
 			`transcripts/${ARTIFACT}`,
 			"cache/embedding.bin",
 			"data/imports/original.pdf",
-			"data/legacy-memory/claude-code/notes.txt",
-			"data/legacy-memory/MEMORY-backup.md",
+			"memory/claude-code/notes.txt",
+			"memory/MEMORY-backup.md",
 			"data/legacy-memory/scripts/memory.py",
 			"runtime/logs/signet.log",
 			"runtime/pid",
@@ -127,9 +128,10 @@ describe("upgradeWorkspaceLayout", () => {
 			"notes/unrelated.md",
 		])
 			expect(existsSync(join(root, path))).toBe(true);
-		expect(existsSync(join(root, "memory"))).toBe(false);
+		expect(readdirSync(join(root, "memory")).sort()).toEqual(["MEMORY-backup.md", "claude-code"]);
+		expect(readdirSync(join(root, "memory/claude-code"))).toEqual(["notes.txt"]);
 		expect(existsSync(join(root, ".daemon"))).toBe(false);
-		expect(existsSync(join(root, "data/legacy-memory/claude-code/transcripts"))).toBe(false);
+		expect(existsSync(join(root, "data/legacy-memory/claude-code"))).toBe(false);
 		expect(existsSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE))).toBe(false);
 		expect(git(root, ["rev-parse", "HEAD"])).toBe(head);
 		expect(upgradeWorkspaceLayout(root)).toEqual({ status: "current" });
@@ -191,7 +193,7 @@ describe("upgradeWorkspaceLayout", () => {
 		expect(resumed).toMatchObject({ status: "upgraded", resumed: true });
 		expect(resolveWorkspaceLayout(root).version).toBe(2);
 		expect(statSync(join(root, "data/signet.db")).ino).toBe(databaseInode);
-		expect(existsSync(join(root, "memory"))).toBe(false);
+		expect(readdirSync(join(root, "memory")).sort()).toEqual(["MEMORY-backup.md", "claude-code"]);
 		expect(existsSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE))).toBe(false);
 	});
 
@@ -656,7 +658,196 @@ describe("upgradeWorkspaceLayout", () => {
 		expect(upgradeWorkspaceLayout(root)).toEqual({ status: "upgraded", moved: 0, resumed: false });
 		expect(resolveWorkspaceLayout(root).version).toBe(2);
 	});
+	it("keeps transcripts in place when the transcripts root is pinned to memory/", () => {
+		const { root } = v1Workspace();
+		persistWorkspaceLayout(root, { version: 1, overrides: { transcripts: "memory" } });
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded" });
+
+		const layout = resolveWorkspaceLayout(root);
+		expect(layout.transcripts).toBe(join(root, "memory"));
+		expect(readFileSync(join(root, "memory/claude-code/transcript.jsonl"), "utf8")).toBe('{"role":"user"}\n');
+		expect(existsSync(join(root, `memory/${ARTIFACT}`))).toBe(true);
+		expect(existsSync(join(root, "data/legacy-memory/claude-code"))).toBe(false);
+	});
+
+	it("moves only Signet's own leftovers out of memory/ and keeps other notes tracked", () => {
+		const { root } = v1Workspace();
+		const backup = "memories.db.bak-v41-1700000000000";
+		for (const path of ["memory/2026-09-30.md", "memory/my-scripts/run.sh", "memory/tests/notes.md"]) write(root, path);
+		for (const path of [
+			`memory/${backup}`,
+			`memory/${backup}.cursor.json`,
+			"memory/.canonical-transcript-backfill-v1.default",
+			"memory/requirements.txt",
+			"memory/backups/old.db",
+		])
+			write(root, path);
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded" });
+
+		for (const path of [
+			"memory/2026-09-30.md",
+			"memory/my-scripts/run.sh",
+			"memory/tests/notes.md",
+			"memory/MEMORY-backup.md",
+			"memory/claude-code/notes.txt",
+		])
+			expect(existsSync(join(root, path))).toBe(true);
+		for (const path of [
+			backup,
+			`${backup}.cursor.json`,
+			".canonical-transcript-backfill-v1.default",
+			"requirements.txt",
+			"backups/old.db",
+			"scripts/memory.py",
+		])
+			expect(existsSync(join(root, "data/legacy-memory", path))).toBe(true);
+		expect(isSignetGitTrackedPath("memory/2026-09-30.md")).toBe(true);
+	});
+
+	it("finishes cleanup instead of replaying renames when the layout is already v2", () => {
+		const { root } = v1Workspace();
+		write(root, "memory/memories.db-wal", "");
+		let record = "";
+		expect(
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					if (!record) record = readFileSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE), "utf8");
+					renameSync(from, to);
+				},
+			}),
+		).toMatchObject({ status: "upgraded" });
+		writeFileSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE), record);
+		rmSync(join(root, "data/signet.db-wal"));
+
+		expect(upgradeWorkspaceLayout(root)).toEqual({ status: "upgraded", moved: 0, resumed: true });
+		expect(resolveWorkspaceLayout(root).version).toBe(2);
+		expect(existsSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE))).toBe(false);
+	});
+
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"reports a record it could not remove instead of hiding the failure",
+		() => {
+			const { root } = v1Workspace();
+			let record = "";
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					if (!record) record = readFileSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE), "utf8");
+					renameSync(from, to);
+				},
+			});
+			writeFileSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE), record);
+			chmodSync(root, 0o555);
+			try {
+				const result = upgradeWorkspaceLayout(root);
+				expect(result).toMatchObject({ status: "upgraded", resumed: true });
+				expect(result.status === "upgraded" && result.cleanup).toContain(
+					`could not remove ${WORKSPACE_LAYOUT_UPGRADE_FILE}`,
+				);
+			} finally {
+				chmodSync(root, 0o755);
+			}
+			expect(upgradeWorkspaceLayout(root)).toEqual({ status: "upgraded", moved: 0, resumed: true });
+			expect(existsSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE))).toBe(false);
+		},
+	);
+
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"blocks instead of refusing when a v1 directory cannot be read",
+		() => {
+			const { root } = v1Workspace();
+			const unreadable = join(root, "memory/claude-code/transcripts");
+			const before = tree(root);
+			chmodSync(unreadable, 0o000);
+			try {
+				const result = upgradeWorkspaceLayout(root);
+				expect(result.status).toBe("blocked");
+				expect(result.status === "blocked" && result.reason).toContain("could not inspect the v1 workspace");
+			} finally {
+				chmodSync(unreadable, 0o755);
+			}
+			expect(tree(root)).toEqual(before);
+			expect(resolveWorkspaceLayout(root).version).toBe(1);
+		},
+	);
+
+	it("rejects a record that moves files outside Signet's storage", () => {
+		const { root } = v1Workspace();
+		writeFileSync(
+			join(root, WORKSPACE_LAYOUT_UPGRADE_FILE),
+			JSON.stringify({
+				version: 1,
+				state: "in-progress",
+				startedAt: new Date(0).toISOString(),
+				moves: [{ from: "AGENTS.md", to: "data/AGENTS.md" }],
+				createdDirectories: [],
+				emptiedDirectories: [],
+			}),
+		);
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow("outside Signet's v1 and v2 storage");
+		expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe("AGENTS.md");
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+	});
+
+	it("refuses to commit v2 when a resumed record leaves v1 data behind", () => {
+		const { root } = v1Workspace();
+		let renames = 0;
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					renames += 1;
+					if (renames > 1) throw new Error("process terminated");
+					renameSync(from, to);
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish");
+		writeRecordWithout(root, (move) => move.from === "memory/cache");
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow("v1 paths remain after the planned renames: memory/cache");
+		expect(resolveWorkspaceLayout(root).version).toBe(1);
+		expect(existsSync(join(root, "memory/cache/embedding.bin"))).toBe(true);
+	});
+
+	it("resumes when the recorded device number no longer matches", () => {
+		const { root, databaseInode } = v1Workspace();
+		let renames = 0;
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					renames += 1;
+					if (renames > 1) throw new Error("process terminated");
+					renameSync(from, to);
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish");
+		const record = readWorkspaceLayoutUpgradeRecord(root);
+		if (record?.state !== "in-progress") throw new Error("expected an in-progress upgrade record");
+		writeFileSync(
+			join(root, WORKSPACE_LAYOUT_UPGRADE_FILE),
+			JSON.stringify({
+				...record,
+				moves: record.moves.map((move) => ({
+					...move,
+					identity: move.identity && { ...move.identity, device: "1" },
+				})),
+			}),
+		);
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded", resumed: true });
+		expect(statSync(join(root, "data/signet.db")).ino).toBe(databaseInode);
+	});
 });
+
+function writeRecordWithout(root: string, drop: (move: { readonly from: string }) => boolean): void {
+	const record = readWorkspaceLayoutUpgradeRecord(root);
+	if (record?.state !== "in-progress") throw new Error("expected an in-progress upgrade record");
+	writeFileSync(
+		join(root, WORKSPACE_LAYOUT_UPGRADE_FILE),
+		JSON.stringify({ ...record, moves: record.moves.filter((move) => !drop(move)) }),
+	);
+}
 
 describe("runWorkspaceLayoutStartup", () => {
 	it("does nothing outside the daemon process", () => {

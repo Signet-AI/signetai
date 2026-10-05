@@ -2305,7 +2305,13 @@ async function main() {
 	logger.info("daemon", "Signet Daemon starting", { runtime: DAEMON_RUNTIME });
 	logger.info("daemon", `File logging to ${logger.logFilePath}`);
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
-	if (workspaceLayoutStartup.status === "upgraded")
+	if (workspaceLayoutStartup.status === "upgraded" && workspaceLayoutStartup.cleanup)
+		logger.warn(
+			"daemon",
+			"Workspace upgraded to layout v2, but upgrade cleanup did not finish",
+			workspaceLayoutStartup,
+		);
+	else if (workspaceLayoutStartup.status === "upgraded")
 		logger.info("daemon", "Workspace upgraded in place to layout v2", workspaceLayoutStartup);
 	if (workspaceLayoutStartup.status === "blocked" || workspaceLayoutStartup.status === "skipped")
 		logger.warn("daemon", "Workspace layout upgrade did not run", workspaceLayoutStartup);
