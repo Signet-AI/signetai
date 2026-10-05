@@ -11,6 +11,8 @@ Best effort, in this order:
 
 Contributors without access to one of them run what they can and report which run is missing. Never imply a model was checked when it was not.
 
+`gpt-6-luna` is not recommended as a Dreaming model for now. With the literal-instruction prompt it files about a sixth of what GLM files, misses deliverables and counts that GLM keeps, and loses passes to citation mistakes (placeholder ids, mistyped `sourceRef`s), so it ends up slower and costlier than GLM for a lower score (see `smoke-lme-luna-cm5` in the ledger). Closing that gap would take prompt rules specific enough to risk other models' results. Use it as the literal-model check above, not as the model to tune toward or benchmark with.
+
 ## Running Dreaming on a ChatGPT plan
 
 The `openai-codex` provider uses a ChatGPT subscription session, so a human has to sign in once per workspace:
