@@ -675,6 +675,34 @@ describe("runWorkspaceLayoutStartup", () => {
 		}
 	});
 
+	it("does not create lock directories named by an out-of-root interrupted record", () => {
+		const { root } = v1Workspace();
+		const outside = workspace();
+		rmSync(join(root, ".daemon"), { recursive: true, force: true });
+		const target = join(outside, "escaped", "runtime");
+		writeFileSync(
+			join(root, WORKSPACE_LAYOUT_UPGRADE_FILE),
+			JSON.stringify({
+				version: 1,
+				state: "in-progress",
+				startedAt: new Date().toISOString(),
+				moves: [{ from: join(root, ".daemon"), to: target }],
+				createdDirectories: [],
+				emptiedDirectories: [],
+			}),
+		);
+		const env = { ...process.env, SIGNET_PATH: root, SIGNET_DAEMON_ENTRYPOINT: "1" };
+		const previous = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = root;
+		try {
+			expect(runWorkspaceLayoutStartup(env, ["bun", "daemon.ts"], 0).status).toBe("failed");
+			expect(existsSync(join(outside, "escaped"))).toBe(false);
+		} finally {
+			if (previous === undefined) delete process.env.SIGNET_PATH;
+			else process.env.SIGNET_PATH = previous;
+		}
+	});
+
 	it("does not remove a blocked upgrade record without the v2 instance lock", () => {
 		const root = workspace();
 		persistWorkspaceLayout(root, { version: 2 });

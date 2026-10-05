@@ -98,7 +98,16 @@ export function readWorkspaceLayoutUpgradeRecord(root: string): UpgradeRecord | 
 		!isPathList(emptied)
 	)
 		throw new Error(`invalid workspace layout upgrade record at ${path}`);
-	return { version: 1, state, startedAt, moves, createdDirectories: created, emptiedDirectories: emptied };
+	const record = {
+		version: 1 as const,
+		state,
+		startedAt,
+		moves,
+		createdDirectories: created,
+		emptiedDirectories: emptied,
+	};
+	validateRecordPaths(root, record);
+	return record;
 }
 
 function isRecordPath(value: unknown): value is string {
@@ -240,6 +249,20 @@ function upgradeBases(root: string): string[] {
 
 function baseFor(bases: readonly string[], move: LayoutMove): string | undefined {
 	return bases.find((candidate) => inside(candidate, move.from) && inside(candidate, move.to));
+}
+
+function validateRecordPaths(root: string, record: InProgressRecord): void {
+	const bases = upgradeBases(root);
+	const outside = record.moves.find(
+		(move) => !baseFor(bases, { from: resolve(root, move.from), to: resolve(root, move.to) }),
+	);
+	const outsideDirectory = [...record.createdDirectories, ...record.emptiedDirectories].find(
+		(path) => !bases.some((base) => inside(base, resolve(root, path))),
+	);
+	if (outside || outsideDirectory)
+		throw new Error(
+			`workspace layout upgrade record names a path outside the workspace and its configured roots: ${outside?.from ?? outsideDirectory}`,
+		);
 }
 
 function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: string[] } {
@@ -491,17 +514,6 @@ export function upgradeWorkspaceLayout(
 	let record: InProgressRecord;
 	const resumed = existing?.state === "in-progress";
 	if (existing?.state === "in-progress") {
-		const bases = upgradeBases(root);
-		const outside = existing.moves.find(
-			(move) => !baseFor(bases, { from: resolve(root, move.from), to: resolve(root, move.to) }),
-		);
-		const outsideDirectory = [...existing.createdDirectories, ...existing.emptiedDirectories].find(
-			(path) => !bases.some((base) => inside(base, resolve(root, path))),
-		);
-		if (outside || outsideDirectory)
-			throw new Error(
-				`workspace layout upgrade record names a path outside the workspace and its configured roots: ${outside?.from ?? outsideDirectory}`,
-			);
 		record = existing;
 	} else {
 		try {
