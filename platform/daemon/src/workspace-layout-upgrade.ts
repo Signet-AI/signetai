@@ -28,7 +28,7 @@ import {
 export const WORKSPACE_LAYOUT_UPGRADE_FILE = ".workspace-layout-upgrade.json";
 
 const ARTIFACT_FILE = /^[^/\\]+--(?:summary|transcript|compaction|manifest)\.md$/;
-const TRANSCRIPT_FILE = /^transcript\.jsonl(?:\.lock)?$/;
+const TRANSCRIPT_FILE = /^transcript\.jsonl(?:\.(?:lock|snapshot-tmp|rewrite-tmp))?$/;
 const DATABASE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 const LEGACY_DIRECTORIES: ReadonlySet<string> = new Set(["backups", "cache", "imports"]);
 const LEGACY_TEMPLATE_FILES: ReadonlySet<string> = new Set(["requirements.txt", "requirements-base.txt"]);
@@ -249,7 +249,7 @@ function isSignetLegacyData(database: string, path: string): boolean {
 	const databaseName = basename(database);
 	if (
 		dirname(database) === dirname(path) &&
-		(name.startsWith(`${databaseName}.`) || name.startsWith(`${databaseName}-`))
+		(DATABASE_SUFFIXES.some((suffix) => name === databaseName + suffix) || name.startsWith(`${databaseName}.bak`))
 	)
 		return true;
 	if (name.startsWith(".canonical-transcript-backfill-")) return true;
@@ -261,18 +261,25 @@ function isSignetLegacyData(database: string, path: string): boolean {
 	return existing.isDirectory() && markers.some((marker) => entry(join(path, marker))?.isFile() === true);
 }
 
-function remainingLegacySources(root: string): string[] {
+function remainingLegacySources(root: string, includeRuntime: boolean): string[] {
 	const v1 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V1);
 	const v2 = resolveWorkspaceLayoutAs(root, WORKSPACE_LAYOUT_V2);
 	const pairs: [string, string][] = [
 		...DATABASE_SUFFIXES.map((suffix): [string, string] => [v1.database + suffix, v2.database + suffix]),
 		[v1.cache, v2.cache],
 		[v1.imports, v2.imports],
-		[v1.runtime, v2.runtime],
+		...(includeRuntime && !holdsOnlyInstanceLock(v1.runtime) ? [[v1.runtime, v2.runtime] as [string, string]] : []),
 	];
 	return pairs
 		.filter(([from, to]) => from !== to && entry(from) !== null)
 		.map(([from]) => (inside(root, from) ? relative(root, from) : from));
+}
+
+function holdsOnlyInstanceLock(path: string): boolean {
+	const existing = entry(path);
+	return (
+		!!existing?.isDirectory() && !existing.isSymbolicLink() && readdirSync(path).every((name) => name === "daemon.lock")
+	);
 }
 
 function upgradeBases(root: string): string[] {
@@ -342,8 +349,7 @@ function plan(root: string): { moves: LayoutMove[]; created: string[]; emptied: 
 			const nested = join(v1.transcripts, harness, "transcripts");
 			if (!entry(join(v1.transcripts, harness))?.isDirectory() || !entry(nested)?.isDirectory()) continue;
 			for (const name of readdirSync(nested))
-				if (inside(root, nested) || TRANSCRIPT_FILE.test(name))
-					add(join(nested, name), join(v2.transcripts, harness, name));
+				if (TRANSCRIPT_FILE.test(name)) add(join(nested, name), join(v2.transcripts, harness, name));
 			emptied.push(nested, join(v1.transcripts, harness));
 		}
 		if (v1.transcripts !== v2.transcripts)
@@ -566,6 +572,11 @@ export function upgradeWorkspaceLayout(
 			if (existing) removeRecord(root);
 			return { status: "current" };
 		}
+		const remaining = remainingLegacySources(root, false);
+		if (remaining.length > 0)
+			throw new Error(
+				`workspace layout v2 is recorded, but an interrupted upgrade left v1 paths behind: ${remaining.join(", ")}; ${WORKSPACE_LAYOUT_UPGRADE_FILE} lists the planned renames`,
+			);
 		return finish(root, existing, 0, true);
 	}
 
@@ -610,7 +621,7 @@ export function upgradeWorkspaceLayout(
 	};
 	try {
 		apply(root, record, rename, performed, resumed, now());
-		const remaining = remainingLegacySources(root);
+		const remaining = remainingLegacySources(root, true);
 		if (remaining.length > 0)
 			throw new UpgradeBlocked(`v1 paths remain after the planned renames: ${remaining.join(", ")}`);
 	} catch (error) {

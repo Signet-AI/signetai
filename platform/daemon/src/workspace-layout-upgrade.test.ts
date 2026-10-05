@@ -813,6 +813,63 @@ describe("upgradeWorkspaceLayout", () => {
 		expect(existsSync(join(root, "memory/cache/embedding.bin"))).toBe(true);
 	});
 
+	it("refuses to drop an in-progress record on v2 while v1 data remains", () => {
+		const { root } = v1Workspace();
+		let renames = 0;
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					renames += 1;
+					if (renames > 1) throw new Error("process terminated");
+					renameSync(from, to);
+				},
+			}),
+		).toThrow("workspace layout upgrade could not finish");
+		persistWorkspaceLayout(root, { version: 2 });
+
+		expect(() => upgradeWorkspaceLayout(root)).toThrow("an interrupted upgrade left v1 paths behind: memory/cache");
+		expect(readWorkspaceLayoutUpgradeRecord(root)?.state).toBe("in-progress");
+		expect(existsSync(join(root, "memory/cache/embedding.bin"))).toBe(true);
+	});
+
+	it("commits v2 when another daemon's lock attempt recreated an empty .daemon", () => {
+		const { root } = v1Workspace();
+		const result = upgradeWorkspaceLayout(root, {
+			rename: (from, to) => {
+				renameSync(from, to);
+				if (from === join(root, ".daemon")) write(root, ".daemon/daemon.lock", "");
+			},
+		});
+
+		expect(result).toMatchObject({ status: "upgraded", resumed: false });
+		expect(resolveWorkspaceLayout(root).version).toBe(2);
+		expect(readFileSync(join(root, "runtime/pid"), "utf8")).toBe("123");
+	});
+
+	it("moves only Signet transcript files out of memory/<name>/transcripts/", () => {
+		const { root } = v1Workspace();
+		write(root, "memory/meetings/transcripts/2026-09-01-standup.md");
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded" });
+
+		expect(existsSync(join(root, "memory/meetings/transcripts/2026-09-01-standup.md"))).toBe(true);
+		expect(existsSync(join(root, "transcripts/meetings"))).toBe(false);
+		expect(existsSync(join(root, "transcripts/claude-code/transcript.jsonl"))).toBe(true);
+	});
+
+	it("does not treat notes named like an extensionless database as database files", () => {
+		const { root } = v1Workspace();
+		persistWorkspaceLayout(root, { version: 1, overrides: { database: "memory/agent" } });
+		renameSync(join(root, "memory/memories.db"), join(root, "memory/agent"));
+		for (const path of ["memory/agent.md", "memory/agent-ideas.md", "memory/agent.bak-v40-1"]) write(root, path);
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded" });
+
+		expect(existsSync(join(root, "memory/agent.md"))).toBe(true);
+		expect(existsSync(join(root, "memory/agent-ideas.md"))).toBe(true);
+		expect(existsSync(join(root, "data/legacy-memory/agent.bak-v40-1"))).toBe(true);
+	});
+
 	it("resumes when the recorded device number no longer matches", () => {
 		const { root, databaseInode } = v1Workspace();
 		let renames = 0;
