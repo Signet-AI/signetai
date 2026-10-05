@@ -4,7 +4,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mergeMacUpdateManifests, parseUpdateManifest, renderUpdateManifest } from "./merge-mac-update-manifest";
+import {
+	mergeMacUpdateManifests,
+	parseUpdateManifest,
+	renderUpdateManifest,
+	validateMergedMacUpdateManifest,
+} from "./merge-mac-update-manifest";
 
 const x64Manifest = `version: 0.230.6
 files:
@@ -86,7 +91,24 @@ describe("macOS update manifest merge", () => {
 		expect(() => parseUpdateManifest("version: 0.230.6\nfiles: []\n", "empty")).toThrow("empty lists no files");
 	});
 
-	test("the command writes the merged manifest", () => {
+	test("rejects a stale or single-architecture published manifest", () => {
+		const merged = parseUpdateManifest(
+			renderUpdateManifest(
+				mergeMacUpdateManifests(parseUpdateManifest(x64Manifest, "x64"), parseUpdateManifest(arm64Manifest, "arm64")),
+			),
+			"published",
+		);
+		expect(() => validateMergedMacUpdateManifest(merged, "0.230.7")).toThrow("published manifest version mismatch");
+		validateMergedMacUpdateManifest(merged, "0.230.6");
+		expect(() =>
+			validateMergedMacUpdateManifest(
+				{ ...merged, files: merged.files.filter((file) => !file.url.includes("arm64")) },
+				"0.230.6",
+			),
+		).toThrow("published manifest lists no arm64 zip");
+	});
+
+	test("the command writes and verifies the merged manifest", () => {
 		const directory = mkdtempSync(join(tmpdir(), "signet-mac-manifest-"));
 		try {
 			writeFileSync(join(directory, "x64.yml"), x64Manifest);
@@ -107,9 +129,31 @@ describe("macOS update manifest merge", () => {
 			expect(result.status).toBe(0);
 			const written = parseUpdateManifest(readFileSync(join(directory, "latest-mac.yml"), "utf8"), "written");
 			expect(written.files).toHaveLength(4);
+			const verification = spawnSync(
+				process.execPath,
+				[
+					join(import.meta.dir, "merge-mac-update-manifest.ts"),
+					"--verify",
+					join(directory, "latest-mac.yml"),
+					"--version",
+					"0.230.6",
+				],
+				{ encoding: "utf8" },
+			);
+			expect(verification.status).toBe(0);
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
+	});
+
+	test("release finalization verifies the published macOS manifest contents", () => {
+		const workflow = readFileSync(
+			join(import.meta.dir, "..", "..", "..", ".github", "workflows", "release.yml"),
+			"utf8",
+		);
+		expect(workflow).toContain(`gh release download "v\${NEW_VERSION}" --pattern "latest-mac.yml"`);
+		expect(workflow).toContain(`--verify "\${manifest_dir}/latest-mac.yml"`);
+		expect(workflow).toContain(`--version "\${NEW_VERSION}"`);
 	});
 
 	test("macOS build jobs leave latest-mac.yml to the merge job", () => {

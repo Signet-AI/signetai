@@ -73,6 +73,17 @@ function requireArch(manifest: UpdateManifest, arch: "x64" | "arm64"): void {
 	if (!manifest.files.some((file) => file.url.endsWith(".zip"))) fail(`${arch} manifest lists no zip`);
 }
 
+export function validateMergedMacUpdateManifest(manifest: UpdateManifest, expectedVersion: string): void {
+	if (manifest.version !== expectedVersion) {
+		fail(`published manifest version mismatch: expected ${expectedVersion}, got ${manifest.version}`);
+	}
+	for (const arch of ["x64", "arm64"] as const) {
+		if (!manifest.files.some((file) => file.url.endsWith(".zip") && isArm64File(file) === (arch === "arm64"))) {
+			fail(`published manifest lists no ${arch} zip`);
+		}
+	}
+}
+
 export function mergeMacUpdateManifests(x64: UpdateManifest, arm64: UpdateManifest): UpdateManifest {
 	if (x64.version !== arm64.version) fail(`version mismatch: x64 ${x64.version}, arm64 ${arm64.version}`);
 	requireArch(x64, "x64");
@@ -101,14 +112,29 @@ export function renderUpdateManifest(manifest: UpdateManifest): string {
 
 if (import.meta.main) {
 	const { values } = parseArgs({
-		options: { x64: { type: "string" }, arm64: { type: "string" }, out: { type: "string" } },
+		options: {
+			x64: { type: "string" },
+			arm64: { type: "string" },
+			out: { type: "string" },
+			verify: { type: "string" },
+			version: { type: "string" },
+		},
 	});
-	if (!values.x64 || !values.arm64 || !values.out)
-		fail("usage: --x64 <latest-mac.yml> --arm64 <latest-mac.yml> --out <path>");
-	const merged = mergeMacUpdateManifests(
-		parseUpdateManifest(readFileSync(resolve(values.x64), "utf8"), "x64"),
-		parseUpdateManifest(readFileSync(resolve(values.arm64), "utf8"), "arm64"),
-	);
-	writeFileSync(resolve(values.out), renderUpdateManifest(merged));
-	console.log(`Merged ${merged.files.length} macOS update files for ${merged.version} into ${values.out}`);
+	if (values.verify) {
+		if (!values.version) fail("usage: --verify <latest-mac.yml> --version <version>");
+		validateMergedMacUpdateManifest(
+			parseUpdateManifest(readFileSync(resolve(values.verify), "utf8"), "published"),
+			values.version,
+		);
+		console.log(`Verified both macOS architectures for ${values.version} in ${values.verify}`);
+	} else {
+		if (!values.x64 || !values.arm64 || !values.out)
+			fail("usage: --x64 <latest-mac.yml> --arm64 <latest-mac.yml> --out <path>");
+		const merged = mergeMacUpdateManifests(
+			parseUpdateManifest(readFileSync(resolve(values.x64), "utf8"), "x64"),
+			parseUpdateManifest(readFileSync(resolve(values.arm64), "utf8"), "arm64"),
+		);
+		writeFileSync(resolve(values.out), renderUpdateManifest(merged));
+		console.log(`Merged ${merged.files.length} macOS update files for ${merged.version} into ${values.out}`);
+	}
 }
