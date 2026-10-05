@@ -15,13 +15,13 @@ const originalEnv = {
 
 afterEach(() => {
 	if (originalEnv.OPENCLAW_CONFIG_PATH === undefined) {
-		process.env.OPENCLAW_CONFIG_PATH = undefined;
+		delete process.env.OPENCLAW_CONFIG_PATH;
 	} else {
 		process.env.OPENCLAW_CONFIG_PATH = originalEnv.OPENCLAW_CONFIG_PATH;
 	}
 
 	if (originalEnv.HOME === undefined) {
-		process.env.HOME = undefined;
+		delete process.env.HOME;
 	} else {
 		process.env.HOME = originalEnv.HOME;
 	}

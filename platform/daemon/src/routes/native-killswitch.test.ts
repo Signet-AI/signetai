@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, mock } from "bun:test";
+import { LOOPBACK_HOST } from "@signet/core";
 import { fetchEmbedding, setNativeFallbackProvider } from "../embedding-fetch";
 import { checkEmbeddingProvider } from "./utils";
 
 const originalFetch = globalThis.fetch;
+const realNativeEmbedding = { ...(await import("../native-embedding")) };
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
 	setNativeFallbackProvider(null);
+	mock.module("../native-embedding", () => realNativeEmbedding);
 });
 
 describe("checkEmbeddingProvider native kill-switch (#1073)", () => {
@@ -15,7 +18,7 @@ describe("checkEmbeddingProvider native kill-switch (#1073)", () => {
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			const value = url.toString();
 			urls.push(value);
-			if (value.includes("localhost:8080")) return Promise.resolve(new Response("unavailable", { status: 503 }));
+			if (value.includes(`${LOOPBACK_HOST}:8080`)) return Promise.resolve(new Response("unavailable", { status: 503 }));
 			return Promise.resolve(Response.json({ embedding: [0.1, 0.2, 0.3] }));
 		}) as unknown as typeof fetch;
 
@@ -30,12 +33,13 @@ describe("checkEmbeddingProvider native kill-switch (#1073)", () => {
 		expect(status.dimensions).toBe(3);
 		expect(status.error).toContain("warmNative: false");
 		expect(status.error).toContain("local fallback");
-		expect(urls.some((url) => url.includes("localhost:8080/v1/models"))).toBe(true);
-		expect(urls.some((url) => url.includes("localhost:11434/api/embeddings"))).toBe(true);
+		expect(urls.some((url) => url.includes(`${LOOPBACK_HOST}:8080/v1/models`))).toBe(true);
+		expect(urls.some((url) => url.includes(`${LOOPBACK_HOST}:11434/api/embeddings`))).toBe(true);
 	});
 
 	it("probes the configured llama.cpp base_url when native is unavailable (#1159)", async () => {
 		mock.module("../native-embedding", () => ({
+			...realNativeEmbedding,
 			checkNativeProvider: () =>
 				Promise.resolve({ available: false, error: "native unavailable (mocked)", modelCached: false }),
 		}));

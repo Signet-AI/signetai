@@ -78,7 +78,8 @@ describe("memory-lineage", () => {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			return;
 		}
-		process.env.SIGNET_PATH = prev;
+		if (prev === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = prev;
 	});
 
 	it("filters /tmp artifact sessions from the ledger and clips older rows within budget", async () => {

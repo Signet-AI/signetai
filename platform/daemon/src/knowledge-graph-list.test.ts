@@ -167,8 +167,8 @@ function seedMention(memoryId: string, entityId: string): void {
 describe("listKnowledgeEntities (issue #515)", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
@@ -667,8 +667,8 @@ describe("listKnowledgeEntities (issue #515)", () => {
 describe("getKnowledgeEntityDetail (issue #515)", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
@@ -760,8 +760,8 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 describe("getKnowledgeStats (issue #515)", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });

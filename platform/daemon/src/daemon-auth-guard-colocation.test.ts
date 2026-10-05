@@ -39,9 +39,11 @@ auth:
 `,
 );
 process.env.SIGNET_PATH = tmpDir;
-let closeAccessor: (() => void) | null = null;
+let closeAccessor: (() => Promise<void>) | null = null;
+let resetAuth: (() => void) | null = null;
 
 afterAll(async () => {
+	resetAuth?.();
 	await closeAccessor?.();
 	if (prevSignetPath === undefined) {
 		Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -55,11 +57,15 @@ describe("auth guard co-location", () => {
 	beforeAll(async () => {
 		await import("./daemon");
 		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
-		closeDbAccessor();
+		await closeDbAccessor();
 		initDbAccessor(join(tmpDir, "memory", "memories.db"));
 		closeAccessor = closeDbAccessor;
 		const state = await import("./routes/state.js");
 		state.reloadAuthState(tmpDir);
+		resetAuth = () => {
+			writeFileSync(join(tmpDir, "agent.yaml"), "auth:\n  mode: local\n");
+			state.reloadAuthState(tmpDir);
+		};
 	});
 
 	async function makeApp(): Promise<InstanceType<typeof import("hono").Hono>> {
@@ -69,9 +75,10 @@ describe("auth guard co-location", () => {
 
 	it("passes the resolved SQLite runtime to the shared owner", async () => {
 		const { createRecallDbOwnerOptions, daemonMigrationControl } = await import("./daemon");
+		const { MEMORY_DB } = await import("./routes/state.js");
 		const options = createRecallDbOwnerOptions("/tmp/custom-libsqlite3.dylib");
 		expect(options).toEqual({
-			dbPath: join(tmpDir, "memory", "memories.db"),
+			dbPath: MEMORY_DB,
 			sqlitePath: "/tmp/custom-libsqlite3.dylib",
 			migrationControl: daemonMigrationControl,
 		});

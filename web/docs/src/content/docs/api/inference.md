@@ -350,7 +350,7 @@ When `stream: true`, the gateway returns OpenAI-style SSE chunks and includes
 `x-signet-request-id` in the response headers so operators can cancel the
 stream through `DELETE /api/inference/requests/:id`.
 
-## GET /api/assistant/models
+### GET /api/assistant/models
 
 Requires `recall` permission and a resolved agent scope; accepts optional `agentId`.
 Returns `{ models: [{ targetRef, model, name, provider, account }] }` from the Pi AI
@@ -358,7 +358,7 @@ registry for text-capable models associated with configured targets whose Signet
 account credentials resolve successfully. Credentials and secret references are
 never returned. ACPX targets are excluded from this Pi model picker.
 
-## POST /api/assistant/chat
+### POST /api/assistant/chat
 
 Requires `recall` permission and a resolved agent scope. Send UUIDs `requestId` (one per turn) and `conversationId` (stable across turns),
 optional `agentId`, `selectedEntityId`, and `modelSelection: { targetRef, model }`, and `messages` containing `user` or

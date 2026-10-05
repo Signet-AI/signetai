@@ -80,8 +80,8 @@ describe("epistemic assertions", () => {
 		});
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 	});
 

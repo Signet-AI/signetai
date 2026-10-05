@@ -9,6 +9,12 @@ search element alive when ClientRouter swaps the current documentation page. -->
 	<DefaultSearch />
 </div>
 
+<script>
+	document.addEventListener("astro:before-swap", () => {
+		document.querySelector<HTMLDialogElement>(".search-persist dialog")?.close();
+	});
+</script>
+
 <style>
 	.search-persist {
 		display: contents;

@@ -8,8 +8,8 @@ import { searchTranscriptFallback, upsertSessionTranscript } from "./session-tra
 let dir = "";
 
 describe("session transcript lookup", () => {
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dir) rmSync(dir, { recursive: true, force: true });
 		dir = "";
 	});

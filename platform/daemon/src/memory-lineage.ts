@@ -1118,7 +1118,7 @@ async function doReindex(agentId?: string): Promise<void> {
 		);
 	}
 
-	const baseYielder = yieldEvery(REINDEX_BATCH_SIZE);
+	const baseYielder = yieldEvery(1);
 	let itemsSinceYield = 0;
 	const yielder = async (): Promise<void> => {
 		itemsSinceYield += 1;

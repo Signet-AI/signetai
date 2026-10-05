@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, mock } from "bun:test";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,7 +14,12 @@ afterEach(() => {
 	statError = () => null;
 	readdirError = () => null;
 });
+const realFsPromises = { ...(await import("node:fs/promises")) };
+afterAll(() => {
+	mock.module("node:fs/promises", () => realFsPromises);
+});
 mock.module("node:fs/promises", () => ({
+	...realFsPromises,
 	lstat: async () => ({ isSymbolicLink: () => false }),
 	stat: async (path: string) => {
 		const error = statError(path);
@@ -137,7 +142,7 @@ describe("dataless / EDEADLK native artifact reads (#1161)", () => {
 			Object.defineProperty(process, "platform", { value: originalPlatform });
 			if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 			else process.env.SIGNET_PATH = previousSignetPath;
-			closeDbAccessor();
+			await closeDbAccessor();
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

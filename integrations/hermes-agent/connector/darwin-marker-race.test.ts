@@ -6,6 +6,8 @@ import { join } from "node:path";
 
 const fs = await import("node:fs");
 const childProcess = await import("node:child_process");
+const realFs = { ...fs };
+const realChildProcess = { ...childProcess };
 
 function resolveTestPythonPath(): string {
 	for (const command of ["python3", "python"]) {
@@ -130,8 +132,8 @@ test("uninstall does not trust a marker read through a swapped macOS target path
 			fs.renameSync(moved, attacker);
 		}
 	};
-	mock.module("node:fs", () => ({ ...fs, openSync: interceptOpenSync }));
-	mock.module("node:child_process", () => ({ ...childProcess, spawnSync: interceptSpawnSync }));
+	mock.module("node:fs", () => ({ ...realFs, openSync: interceptOpenSync }));
+	mock.module("node:child_process", () => ({ ...realChildProcess, spawnSync: interceptSpawnSync }));
 
 	try {
 		const { HermesAgentConnector } = await import("./src/index.js");
@@ -150,6 +152,8 @@ test("uninstall does not trust a marker read through a swapped macOS target path
 		expect(fs.existsSync(join(attacker, "signet.install.json"))).toBe(true);
 	} finally {
 		mock.restore();
+		mock.module("node:fs", () => realFs);
+		mock.module("node:child_process", () => realChildProcess);
 		if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
 		for (const [name, value] of Object.entries(originalEnv)) {
 			if (value === undefined) delete process.env[name];

@@ -1,6 +1,6 @@
 {
 	"name": "@signet/sdk",
-	"version": "0.230.7",
+	"version": "0.230.10",
 	"license": "Apache-2.0",
 	"description": "HTTP client SDK for the Signet daemon API",
 	"type": "module",
@@ -28,7 +28,7 @@
 		"dist"
 	],
 	"scripts": {
-		"build": "bun build ./src/index.ts ./src/react.tsx ./src/ai-sdk.ts ./src/openai.ts --outdir ./dist --target node --external react --external zod",
+		"build": "bun build ./src/index.ts ./src/react.tsx ./src/ai-sdk.ts ./src/openai.ts --outdir ./dist --target node --external react --external zod --external better-sqlite3",
 		"dev": "bun --watch src/index.ts",
 		"test": "bun test"
 	},

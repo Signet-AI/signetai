@@ -9,10 +9,10 @@ interface HandlerMap {
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
-	process.env.SIGNET_ENABLED = undefined;
-	process.env.SIGNET_AGENT_ID = undefined;
-	process.env.SIGNET_DAEMON_URL = undefined;
-	process.env.SIGNET_BYPASS = undefined;
+	delete process.env.SIGNET_ENABLED;
+	delete process.env.SIGNET_AGENT_ID;
+	delete process.env.SIGNET_DAEMON_URL;
+	delete process.env.SIGNET_BYPASS;
 });
 
 describe("SignetOhMyPiExtension", () => {

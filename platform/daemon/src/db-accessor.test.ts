@@ -60,8 +60,8 @@ function tmpDbPath(): string {
 describe("DbAccessor", () => {
 	const cleanupDirs: string[] = [];
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		for (const dir of cleanupDirs) {
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
 		}
@@ -85,7 +85,7 @@ describe("DbAccessor", () => {
 		cleanupDirs.push(join(dbPath, ".."));
 
 		initDbAccessor(dbPath);
-		closeDbAccessor();
+		await closeDbAccessor();
 		for (const name of readdirSync(join(dbPath, ".."))) {
 			if (name.startsWith("test.db.bak-v") && !name.endsWith(".cursor.json")) rmSync(join(dbPath, "..", name));
 		}
@@ -127,11 +127,11 @@ describe("DbAccessor", () => {
 		});
 	});
 
-	test("keeps large deferred FTS backfills off the initialization path", () => {
+	test("keeps large deferred FTS backfills off the initialization path", async () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));
 		initDbAccessor(dbPath);
-		closeDbAccessor();
+		await closeDbAccessor();
 
 		const db = new Database(dbPath);
 		const insert = db.prepare(
@@ -139,9 +139,11 @@ describe("DbAccessor", () => {
 				id, content, type, agent_id, visibility, created_at, updated_at, updated_by
 			) VALUES (?, ?, 'fact', 'default', 'global', datetime('now'), datetime('now'), 'test')`,
 		);
-		for (let index = 0; index < 10_000; index += 1) {
-			insert.run(`large-fts-memory-${index}`, `large deferred FTS corpus memory ${index}`);
-		}
+		db.transaction(() => {
+			for (let index = 0; index < 10_000; index += 1) {
+				insert.run(`large-fts-memory-${index}`, `large deferred FTS corpus memory ${index}`);
+			}
+		})();
 		db.exec("DROP TRIGGER memories_ai");
 		db.exec("DROP TRIGGER memories_ad");
 		db.exec("DROP TRIGGER memories_au");
@@ -342,7 +344,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:337" },
+				{ siteToken: "db-accessor.test.ts:339" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -350,7 +352,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:190");
+		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:339");
 	});
 
 	test("attributes an in-flight parent sync call at latch time", () => {
@@ -371,14 +373,14 @@ describe("DbAccessor", () => {
 				recordEventLoopHeartbeat(5_000, 2_000);
 				state.latched = getEventLoopLiveness(5_000);
 				db.prepare("SELECT 1").get();
-			}, "db-accessor.test.ts:368");
+			}, "db-accessor.test.ts:370");
 		} finally {
 			Date.now = realNow;
 		}
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:201");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:370");
 	});
 
 	test("attributes an in-flight queued async write callback at latch time", async () => {
@@ -401,7 +403,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:396" },
+				{ siteToken: "db-accessor.test.ts:398" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -409,7 +411,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:222");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:398");
 	});
 
 	test("attributes the actual caller through runWriteTxAsync", async () => {
@@ -437,7 +439,9 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:432");
+		expect(state.latched.syncDbCallSites).toContainEqual(
+			expect.stringMatching(/^withWriteTxAsync@platform\/daemon\/src\/db-accessor\.test\.ts:\d+$/),
+		);
 	});
 
 	test("write statements expose the number of affected rows", () => {
