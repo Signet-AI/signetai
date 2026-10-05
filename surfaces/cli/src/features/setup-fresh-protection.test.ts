@@ -1,12 +1,16 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, mock } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as protection from "../lib/workspace-protection.js";
 import type { SetupDeps } from "./setup-types.js";
 
+const realProtection = { ...protection };
 const realCreateWorkspaceSnapshot = protection.createWorkspaceSnapshot;
 let backupRoot = "";
+afterAll(() => {
+	mock.module("../lib/workspace-protection.js", () => realProtection);
+});
 mock.module("../lib/workspace-protection.js", () => ({
 	...protection,
 	createWorkspaceSnapshot: (basePath: string, root?: string) =>
