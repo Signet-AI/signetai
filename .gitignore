@@ -8,7 +8,8 @@
 .bench/
 .bun-install/
 .bun-tmp/
-.claude/
+.claude/*
+!.claude/skills
 .codex/
 .sisyphus/
 .cursorindexingignore
