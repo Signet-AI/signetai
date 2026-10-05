@@ -263,24 +263,30 @@
 	html[data-surface="desktop"][data-platform="mac"] .sig-topbar-title-mark { display: block; }
 	.sig-sidebar { background: var(--home-chrome); display: flex; flex-direction: column; width: 56px; flex: none; padding: 14px 10px; overflow: hidden; transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1); }
 	.sig-app-frame[data-sidebar="open"] .sig-sidebar { width: 200px; }
+	.sig-sidebar > div { position: relative; padding-top: 8px; }
+	.sig-sidebar > div::before { content: ""; position: absolute; top: 0; inset-inline: 9px; height: 1px; background: var(--border); opacity: 0; transition: opacity 150ms ease; }
+	.sig-app-frame[data-sidebar="open"] .sig-sidebar > div::before { opacity: 1; }
 	.sig-sidebar-label { display: flex; flex: 1; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; white-space: nowrap; font-size: var(--text-body); letter-spacing: -0.005em; color: inherit; opacity: 0; transition: opacity 120ms ease; }
 	.sig-app-frame[data-sidebar="open"] .sig-sidebar-label { opacity: 1; transition-delay: 60ms; }
-	.sig-sidebar-soon { padding: 1px 6px; border: 1px solid var(--border); border-radius: 999px; font-size: 10px; line-height: 1.4; color: var(--home-meta, var(--muted-foreground)); }
+	.sig-sidebar-soon { padding: 1px 7px; border-radius: 999px; background: color-mix(in srgb, var(--foreground) 6%, transparent); font-size: 10px; font-weight: 500; line-height: 1.6; letter-spacing: 0.01em; color: var(--home-meta, var(--muted-foreground)); }
 	.sig-sidebar-value { font-size: var(--text-small); color: var(--home-meta, var(--muted-foreground)); text-transform: capitalize; }
 	@media (prefers-reduced-motion: reduce) { .sig-sidebar, .sig-sidebar-label { transition: none; } }
-	.sig-sidebar-link { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; min-height: 34px; padding-inline: 9px; overflow: hidden; border-radius: 8px; color: var(--home-secondary, var(--muted-foreground)); transition: color 150ms ease, background-color 150ms ease; }
-	.sig-sidebar-link svg { width: 18px; height: 18px; flex-shrink: 0; }
+	.sig-sidebar-link { position: relative; display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 10px; width: 100%; min-height: 32px; padding-inline: 9px; overflow: hidden; border-radius: 8px; color: var(--home-secondary, var(--muted-foreground)); transition: color 150ms ease, background-color 150ms ease, box-shadow 150ms ease; }
+	.sig-sidebar-link svg { width: 18px; height: 18px; flex-shrink: 0; opacity: 0.78; transition: opacity 150ms ease; }
+	.sig-sidebar-link:is(:hover, .is-active) svg { opacity: 1; }
 	.sig-sidebar-link:hover:not(:disabled, .is-active) { color: var(--home-title, var(--foreground)); background: color-mix(in srgb, var(--foreground) 3.5%, transparent); }
-	.sig-sidebar-link.is-active { color: var(--home-title, var(--foreground)); background: color-mix(in srgb, var(--foreground) 9%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--foreground) 5%, transparent); }
+	.sig-sidebar-link.is-active { color: var(--home-title, var(--foreground)); background: color-mix(in srgb, var(--foreground) 7%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--foreground) 6%, transparent), inset 0 1px 0 color-mix(in srgb, var(--foreground) 5%, transparent); }
 	.sig-sidebar-link.is-active .sig-sidebar-label { font-weight: 500; }
 	.sig-sidebar-link:disabled { color: var(--home-disabled, var(--muted-foreground)); cursor: default; }
+	.sig-sidebar-link:disabled svg { opacity: 0.6; }
 	.sig-sidebar-link:focus-visible { outline: 1px solid var(--home-focus, var(--ring)); outline-offset: -1px; }
 	@media (max-width: 640px) {
 		.sig-work-area { flex-direction: column-reverse; }
 		.sig-content { border-left: 0; border-top-left-radius: 0; }
 		.sig-sidebar { width: 100%; flex-direction: row; align-items: center; gap: 4px; padding: 6px 12px calc(6px + env(safe-area-inset-bottom, 0px)); border-top: 1px solid var(--border); }
 		.sig-sidebar > ul { flex-direction: row; gap: 4px; }
-		.sig-sidebar > div { flex-direction: row; margin-top: 0; margin-left: auto; gap: 4px; }
+		.sig-sidebar > div { flex-direction: row; margin-top: 0; margin-left: auto; gap: 4px; padding-top: 0; }
+		.sig-sidebar > div::before { display: none; }
 		.sig-sidebar-link { width: 44px; min-height: 44px; padding-inline: 12px; }
 		.sig-sidebar-link svg { width: 20px; height: 20px; }
 		.sig-app-frame[data-sidebar] .sig-sidebar { width: 100%; }
