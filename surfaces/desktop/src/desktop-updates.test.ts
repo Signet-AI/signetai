@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DESKTOP_UPDATE_FEED,
+	DESKTOP_UPDATE_SIGNING_TEAM,
 	codeSigningTeam,
 	desktopUpdateSupport,
 	desktopUpdateVersion,
@@ -51,7 +52,12 @@ describe("desktop update packaging", () => {
 
 	test("owns packaged macOS and Windows updates instead of treating them as Linux-only", () => {
 		expect(
-			desktopUpdateSupport({ isPackaged: true, platform: "darwin", hasAppImage: false, codeSigningTeam: "TQK8H7V7RP" }),
+			desktopUpdateSupport({
+				isPackaged: true,
+				platform: "darwin",
+				hasAppImage: false,
+				codeSigningTeam: DESKTOP_UPDATE_SIGNING_TEAM,
+			}),
 		).toEqual({
 			supported: true,
 		});
@@ -69,15 +75,17 @@ describe("desktop update packaging", () => {
 		expect(DESKTOP_UPDATE_FEED).toEqual({ provider: "github", owner: "Signet-AI", repo: "signetai" });
 	});
 
-	test("does not offer macOS updates that Squirrel cannot install into a build without a Developer ID", () => {
-		const support = desktopUpdateSupport({
-			isPackaged: true,
-			platform: "darwin",
-			hasAppImage: false,
-			codeSigningTeam: null,
-		});
-		expect(support.supported).toBe(false);
-		expect(support.supported === false && support.reason).toContain("signet desktop install");
+	test("does not offer macOS updates that Squirrel cannot install into a build outside the release team", () => {
+		for (const team of [null, "A1B2C3D4E5"]) {
+			const support = desktopUpdateSupport({
+				isPackaged: true,
+				platform: "darwin",
+				hasAppImage: false,
+				codeSigningTeam: team,
+			});
+			expect(support.supported).toBe(false);
+			expect(support.supported === false && support.reason).toContain("signet desktop install");
+		}
 	});
 
 	test("reads the Developer ID team from codesign output", () => {
@@ -95,7 +103,7 @@ describe("desktop update packaging", () => {
 			"Signature=adhoc",
 			"TeamIdentifier=not set",
 		].join("\n");
-		expect(codeSigningTeam(release)).toBe("TQK8H7V7RP");
+		expect(codeSigningTeam(release)).toBe(DESKTOP_UPDATE_SIGNING_TEAM);
 		expect(codeSigningTeam(sourceBuild)).toBeNull();
 		expect(codeSigningTeam("")).toBeNull();
 	});

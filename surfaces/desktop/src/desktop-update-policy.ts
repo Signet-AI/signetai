@@ -6,6 +6,8 @@ export const DESKTOP_UPDATE_FEED = {
 	repo: "signetai",
 } as const;
 
+export const DESKTOP_UPDATE_SIGNING_TEAM = "TQK8H7V7RP";
+
 export interface DesktopUpdateEnvironment {
 	readonly isPackaged: boolean;
 	readonly platform: NodeJS.Platform;
@@ -29,11 +31,11 @@ export function desktopUpdateSupport(environment: DesktopUpdateEnvironment): Des
 	if (environment.platform === "linux" && !environment.hasAppImage) {
 		return { supported: false, reason: "Desktop auto-updates on Linux require the AppImage build." };
 	}
-	if (environment.platform === "darwin" && environment.codeSigningTeam === null) {
+	if (environment.platform === "darwin" && environment.codeSigningTeam !== DESKTOP_UPDATE_SIGNING_TEAM) {
 		return {
 			supported: false,
 			reason:
-				"This copy of Signet is not signed with a Developer ID, so macOS cannot install signed updates into it. Update it with `signet desktop install`.",
+				"This copy of Signet is not signed by the Signet release team, so macOS cannot install official updates into it. Update it with `signet desktop install`.",
 		};
 	}
 	return { supported: true };
