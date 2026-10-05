@@ -52,6 +52,13 @@ function humanize(value: string): string {
 	return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function nodeKindLabel(kind: SceneNodeKind): string {
+	if (kind === "origin" || kind === "memory") return "Evidence";
+	if (kind === "source") return "Document";
+	if (kind === "claimSlot") return "Claim slot";
+	return humanize(kind);
+}
+
 function percent(value: number): string {
 	return `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%`;
 }
@@ -449,7 +456,7 @@ export function GraphView() {
 		).length;
 		setDetail({
 			id: match.id,
-			name: match.name,
+			name: match.entityType === "source_document" ? sourceDocumentTitle(match.name) : match.name,
 			mentions: match.mentions,
 			aspectCount: match.aspects.length,
 			attributeCount: match.aspects.reduce((n, a) => n + a.attributes.length, 0),
@@ -489,27 +496,30 @@ export function GraphView() {
 		return () => clearTimeout(timer);
 	}, [sidebarOpen]);
 	const sidebarPresented = sidebarOpen || sidebarMounted;
+	const focusIsEntity = !inspected || inspected.kind === "entity" || inspected.id === detail?.id;
 	const selection = responded && (
 		<aside className="graph-inspector" aria-label="Selection details">
 			<header className="graph-inspector-head">
 				<div className="min-w-0">
-					<span className="graph-inspector-kind">{inspected ? humanize(inspected.kind) : "Entity"}</span>
-					<h2 className="graph-inspector-title">{inspected?.label ?? detail?.name ?? "Selection"}</h2>
+					<span className="graph-inspector-kind">
+						{nodeKindLabel(focusIsEntity ? "entity" : (inspected?.kind ?? "entity"))}
+					</span>
+					{focusIsEntity ? (
+						<h2 className="graph-inspector-title">{detail?.name ?? inspected?.label ?? "Selection"}</h2>
+					) : (
+						<h2 className="graph-inspector-fact">{inspected?.detail ?? inspected?.label}</h2>
+					)}
 				</div>
 				<button type="button" className="graph-inspector-close" aria-label="Close details" onClick={closeResponse}>
 					<XIcon className="size-4" />
 				</button>
 			</header>
 			<div className="graph-inspector-body">
-				{inspected && inspected.kind !== "entity" && (
-					<section>
-						<p className="graph-inspector-text">{inspected.detail ?? inspected.label}</p>
-						<p className="graph-inspector-meta">{inspected.metric}</p>
-					</section>
-				)}
+				{!focusIsEntity && inspected && <p className="graph-inspector-meta -mt-2">{inspected.metric}</p>}
 				{detail ? (
 					<>
 						<section>
+							{!focusIsEntity && <h3 className="graph-inspector-label">About {detail.name}</h3>}
 							<p className="graph-inspector-text">
 								{detail.mentions.toLocaleString()} mentions across {detail.aspectCount} aspects and{" "}
 								{detail.attributeCount} facts, linked to {detail.edgeCount} other entities.
@@ -523,14 +533,16 @@ export function GraphView() {
 						</section>
 						{detail.citations.length > 0 && (
 							<section>
-								<h3 className="graph-inspector-label">Stored values</h3>
+								<h3 className="graph-inspector-label">{focusIsEntity ? "Stored values" : "Other stored values"}</h3>
 								<ul className="graph-inspector-list">
-									{detail.citations.map((cite) => (
-										<li key={cite.id}>
-											<p className="graph-inspector-text">{cite.text}</p>
-											<p className="graph-inspector-meta">{cite.meta}</p>
-										</li>
-									))}
+									{detail.citations
+										.filter((cite) => cite.id !== inspected?.id)
+										.map((cite) => (
+											<li key={cite.id}>
+												<p className="graph-inspector-text">{cite.text}</p>
+												<p className="graph-inspector-meta">{cite.meta}</p>
+											</li>
+										))}
 								</ul>
 							</section>
 						)}
@@ -790,8 +802,8 @@ export function GraphView() {
 						The memory graph could not render in this runtime.
 					</span>
 				)}
+				{selection}
 			</div>
-			{selection}
 			<MemoryChat
 				className={sidebarPresented ? cn("graph-chat-sidebar", !sidebarOpen && "is-closing") : "graph-dock"}
 				inactive={sidebarPresented && !sidebarOpen}

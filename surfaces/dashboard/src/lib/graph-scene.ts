@@ -466,14 +466,17 @@ export function createGraphScene(
 	};
 	const fit = (subset = nodes, animate = true) => {
 		const available = width;
-		const bounds = subset.map((node) => ({ x: node.x, y: node.y, size: radius(node) + 30 }));
+		const overview = subset === nodes;
+		const anchors = overview ? nodes.filter((node) => tierOf(node.kind) === 0 && shown(node)) : subset;
+		const framed = anchors.length ? anchors : subset;
+		const bounds = framed.map((node) => ({ x: node.x, y: node.y, size: radius(node) + 30 }));
 		viewport.setMinZoomForNodes(
 			nodes.map((node) => ({ x: node.x, y: node.y, size: radius(node) })),
 			width,
 			height,
 		);
 		viewport.fitToNodes(bounds, available, height, { animate });
-		if (subset === nodes) overviewZoom = viewport.restingZoom;
+		if (overview) overviewZoom = viewport.restingZoom;
 		invalidate();
 	};
 	const focusNode = (id: string) => {

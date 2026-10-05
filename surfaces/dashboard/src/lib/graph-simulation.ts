@@ -12,7 +12,7 @@ const FORCE_CONFIG = {
 	linkDistance: 300 / 3,
 	linkStrength: { docMemory: 0.35, version: 0.6, fallback: 0.05 },
 	preSettleTicks: 150,
-	densePreSettleTicks: 0,
+	densePreSettleTicks: 12,
 	settleMeanVelocity: 1 / 3,
 	settleMaxVelocity: 3 / 3,
 	settleStableTicks: 12,
