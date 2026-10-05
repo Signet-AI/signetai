@@ -5573,140 +5573,140 @@
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 151,
+      "line": 160,
       "api": "renameSync",
       "source": "renameSync(temp, path);",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 157,
+      "line": 166,
       "api": "unlinkSync",
       "source": "unlinkSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE));",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 182,
+      "line": 191,
       "api": "lstatSync",
       "source": "return lstatSync(path);",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 190,
+      "line": 199,
       "api": "lstatSync",
       "source": "const stat = lstatSync(path, { bigint: true });",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 227,
+      "line": 236,
       "api": "readdirSync",
       "source": "return !!existing && existing.isDirectory() && !existing.isSymbolicLink() && readdirSync(path).length === 0;",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 262,
+      "line": 285,
       "api": "readdirSync",
       "source": "for (const harness of readdirSync(v1.transcripts)) {",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 265,
+      "line": 288,
       "api": "readdirSync",
       "source": "for (const name of readdirSync(nested))",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 271,
+      "line": 294,
       "api": "readdirSync",
       "source": "for (const name of readdirSync(v1.transcripts))",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 289,
+      "line": 312,
       "api": "readdirSync",
       "source": "for (const name of readdirSync(v1.data)) {",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 307,
+      "line": 330,
       "api": "lstatSync",
       "source": "const source = lstatSync(move.from);",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 308,
+      "line": 331,
       "api": "statSync",
       "source": "if (source.dev !== statSync(base).dev)",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 312,
+      "line": 335,
       "api": "readlinkSync",
       "source": "if (source.isSymbolicLink() && !isAbsolute(readlinkSync(move.from)))",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 331,
+      "line": 354,
       "api": "readdirSync",
       "source": "if (existing && (!existing.isDirectory() || readdirSync(path).length > 0))",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 352,
+      "line": 375,
       "api": "lstatSync",
       "source": "if (lstatSync(parent).isSymbolicLink())",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 359,
+      "line": 382,
       "api": "readdirSync",
       "source": "for (const name of readdirSync(from)) {",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 362,
+      "line": 385,
       "api": "lstatSync",
       "source": "const sourceEntry = lstatSync(source);",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 365,
+      "line": 388,
       "api": "unlinkSync",
       "source": "unlinkSync(source);",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 421,
+      "line": 444,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(to), { recursive: true, mode: 0o700 });",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 441,
+      "line": 464,
       "api": "mkdirSync",
       "source": "const created = mkdirSync(dirname(from), { recursive: true, mode: 0o700 });",
       "category": "hot-path"
     },
     {
       "path": "workspace-layout-upgrade.ts",
-      "line": 482,
+      "line": 505,
       "api": "renameSync",
       "source": "const rename = deps.rename ?? ((from: string, to: string) => renameSync(from, to));",
       "category": "hot-path"

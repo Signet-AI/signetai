@@ -15,6 +15,10 @@ import {
 	parseSimpleYaml,
 	readNetworkMode,
 	resolveIdentityModeFromConfig,
+	resolveWorkspaceLayout,
+	resolveWorkspaceLayoutAs,
+	WORKSPACE_LAYOUT_V1,
+	WORKSPACE_LAYOUT_V2,
 } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
@@ -68,6 +72,17 @@ import {
 import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:1234/v1";
+
+function refuseIncompleteV2Workspace(basePath: string): void {
+	const layout = resolveWorkspaceLayout(basePath);
+	if (layout.version !== WORKSPACE_LAYOUT_V2) return;
+	const legacyDatabase = resolveWorkspaceLayoutAs(basePath, WORKSPACE_LAYOUT_V1).database;
+	if (legacyDatabase === layout.database || !existsSync(legacyDatabase) || existsSync(layout.database)) return;
+	failSetupValidation(
+		`Workspace ${basePath} is marked as layout v2, but its legacy database exists at ${legacyDatabase} while the configured v2 database is missing at ${layout.database}.`,
+		"Setup will not proceed. Preserve both paths and restore or migrate the database before retrying.",
+	);
+}
 
 function normalizeHttpEndpoint(value: string | null | undefined): string | undefined {
 	if (!value) return undefined;
@@ -293,6 +308,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	const basePath = deps.normalizeAgentPath(deps.normalizeStringValue(options.path) ?? deps.AGENTS_DIR);
 	const existing = deps.detectExistingSetup(basePath);
+	refuseIncompleteV2Workspace(basePath);
 	const hasExistingState = hasExistingInteractiveSetupState(existing);
 	if (hasExistingState) {
 		const changes = Object.entries(options).filter(
@@ -394,6 +410,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			return;
 		}
 		const existing = deps.detectExistingSetup(basePath);
+		refuseIncompleteV2Workspace(basePath);
 		if (hasExistingAgentState(existing)) {
 			failSetupValidation(
 				`An existing Signet installation was found at ${basePath}.`,
@@ -428,6 +445,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	}
 
 	const existing = deps.detectExistingSetup(basePath);
+	refuseIncompleteV2Workspace(basePath);
 
 	console.log(chalk.dim("  Running in non-interactive mode"));
 	if (!explicitPath && basePath !== deps.AGENTS_DIR) {

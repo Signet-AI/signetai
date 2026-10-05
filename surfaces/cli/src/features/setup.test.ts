@@ -1438,6 +1438,47 @@ describe("setupWizard headless plan path", () => {
 		}
 	});
 
+	it("refuses setup when a v2 layout has only the legacy database", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-v2-legacy-db-"));
+		const basePath = join(root, "agents");
+		mkdirSync(basePath, { recursive: true });
+		writeFileSync(join(basePath, "workspace-layout.json"), '{"version":2,"overrides":{}}\n');
+		const legacyDatabase = join(basePath, "memory/memories.db");
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeFileSync(legacyDatabase, "preserve legacy database");
+		const planPath = writePlanFile(root);
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({
+				...fakeDetection(basePath),
+				agentsDir: true,
+				memoryDb: true,
+				agentYaml: false,
+				configYaml: false,
+			})),
+		});
+		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
+		const originalTty = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
+			await expect(setupWizard({ nonInteractive: true }, deps)).rejects.toThrow("process.exit:1");
+			await expect(setupWizard({}, deps)).rejects.toThrow("process.exit:1");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("legacy database");
+			expect(readFileSync(legacyDatabase, "utf8")).toBe("preserve legacy database");
+			expect(existsSync(join(basePath, "data/signet.db"))).toBe(false);
+			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
+		} finally {
+			exitSpy.mockRestore();
+			errorSpy.mockRestore();
+			Object.defineProperty(process.stdin, "isTTY", { value: originalTty, configurable: true });
+		}
+	});
+
 	it("rejects a plan that fails validation", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-invalid-"));
 		const basePath = join(root, "agents");

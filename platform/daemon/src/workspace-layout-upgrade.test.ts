@@ -584,6 +584,39 @@ describe("upgradeWorkspaceLayout", () => {
 		expect(resolveWorkspaceLayout(root).version).toBe(1);
 	});
 
+	it("resumes transcript moves inside an external transcript root", () => {
+		const { root } = v1Workspace();
+		const external = workspace();
+		const source = join(external, "codex/transcripts/transcript.jsonl");
+		const target = join(external, "codex/transcript.jsonl");
+		write(external, "codex/transcripts/transcript.jsonl", "{}\n");
+		persistWorkspaceLayout(root, { version: 1, overrides: { transcripts: external } });
+		let firstTarget: string | null = null;
+		let interruptedExternalMove = false;
+
+		expect(() =>
+			upgradeWorkspaceLayout(root, {
+				rename: (from, to) => {
+					if (firstTarget === null) firstTarget = to;
+					if (from === source) {
+						renameSync(from, to);
+						interruptedExternalMove = true;
+						throw new Error("simulated process interruption");
+					}
+					if (interruptedExternalMove && from === firstTarget) throw new Error("simulated rollback interruption");
+					renameSync(from, to);
+				},
+			}),
+		).toThrow("could not restore");
+		expect(readWorkspaceLayoutUpgradeRecord(root)?.state).toBe("in-progress");
+
+		expect(upgradeWorkspaceLayout(root)).toMatchObject({ status: "upgraded", resumed: true });
+		expect(resolveWorkspaceLayout(root).version).toBe(2);
+		expect(readFileSync(target, "utf8")).toBe("{}\n");
+		expect(existsSync(source)).toBe(false);
+		expect(existsSync(join(root, WORKSPACE_LAYOUT_UPGRADE_FILE))).toBe(false);
+	});
+
 	it("normalizes transcripts inside an external transcript root", () => {
 		const { root } = v1Workspace();
 		const external = workspace();
