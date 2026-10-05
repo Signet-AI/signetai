@@ -1,0 +1,242 @@
+---
+const W = 700;
+const H = 650;
+const S = 54;
+const K = S * 0.866;
+const CX = 340;
+const CY = 420;
+const P = 2.2;
+const T = 0.14;
+const Z = { knowledge: 0, indexes: 2.25, evidence: 4.5 };
+const SHEET = 0.07;
+
+interface Pt {
+	readonly x: number;
+	readonly y: number;
+}
+
+function iso(gx: number, gy: number, z = 0): Pt {
+	return { x: CX + (gx - gy) * K, y: CY + (gx + gy) * S * 0.5 - z * S };
+}
+
+function pts(...points: Pt[]): string {
+	return points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+}
+
+function line(a: Pt, b: Pt): string {
+	return `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+}
+
+function prism(gx: number, gy: number, w: number, d: number, h: number, z: number) {
+	const t = z + h;
+	return {
+		top: pts(iso(gx, gy, t), iso(gx + w, gy, t), iso(gx + w, gy + d, t), iso(gx, gy + d, t)),
+		right: pts(iso(gx + w, gy, t), iso(gx + w, gy + d, t), iso(gx + w, gy + d, z), iso(gx + w, gy, z)),
+		left: pts(iso(gx, gy + d, t), iso(gx + w, gy + d, t), iso(gx + w, gy + d, z), iso(gx, gy + d, z)),
+	};
+}
+
+const plate = (z: number) => prism(-P, -P, 2 * P, 2 * P, T, z - T);
+function sheet(gx: number, gy: number) {
+	const w = 0.72;
+	const d = 0.9;
+	const z = Z.evidence;
+	const box = prism(gx - w / 2, gy - d / 2, w, d, SHEET, z);
+	const lines = [0.25, 0.45, 0.65]
+		.map((f) =>
+			line(
+				iso(gx - w / 2 + 0.12, gy - d / 2 + d * f, z + SHEET),
+				iso(gx + w / 2 - (f === 0.65 ? 0.3 : 0.12), gy - d / 2 + d * f, z + SHEET),
+			),
+		)
+		.join("");
+	return { ...box, lines };
+}
+
+const sheets = [
+	{ gx: -1.5, gy: 0.5 },
+	{ gx: -0.45, gy: 1.05 },
+	{ gx: 0.75, gy: 0.35 },
+	{ gx: 0.25, gy: -0.85 },
+	{ gx: -1.05, gy: -1.15 },
+	{ gx: 1.25, gy: -1.25 },
+].map((s) => sheet(s.gx, s.gy));
+const fresh = { gx: -1.45, gy: 1.6 };
+const freshSheet = sheet(fresh.gx, fresh.gy);
+const dots: Pt[] = [];
+for (let gy = -P + 0.3; gy < P - 0.1; gy += 0.34) {
+	let gx = -P + 0.25 + (Math.round(gy * 7) % 3) * 0.12;
+	let run = 0;
+	while (gx < P - 0.15) {
+		dots.push(iso(gx, gy, Z.indexes));
+		gx += 0.17;
+		run++;
+		if (run % (3 + (Math.round((gx + gy) * 5) % 3)) === 0) gx += 0.24;
+	}
+}
+const dotPath = dots
+	.map((p) => `M${(p.x - 1.6).toFixed(1)} ${p.y.toFixed(1)}a1.6 0.95 0 1 0 3.2 0a1.6 0.95 0 1 0 -3.2 0`)
+	.join("");
+const scan = pts(
+	iso(-0.35, -P, Z.indexes),
+	iso(0.35, -P, Z.indexes),
+	iso(0.35, P, Z.indexes),
+	iso(-0.35, P, Z.indexes),
+);
+const nodes = [
+	{ gx: -0.45, gy: 1.05, r: 6, kind: "claim" },
+	{ gx: 0.75, gy: 0.35, r: 6, kind: "claim" },
+	{ gx: -1.5, gy: 0.5, r: 5, kind: "claim" },
+	{ gx: -0.2, gy: 0.05, r: 10, kind: "entity" },
+	{ gx: 1.2, gy: -1.0, r: 8, kind: "entity" },
+	{ gx: -1.1, gy: -1.0, r: 5, kind: "aspect" },
+	{ gx: 0.4, gy: -0.95, r: 4, kind: "aspect" },
+	{ gx: 1.6, gy: -0.1, r: 4, kind: "aspect" },
+].map((n) => ({ ...n, at: iso(n.gx, n.gy, Z.knowledge) }));
+const edges = [
+	[3, 0],
+	[3, 1],
+	[3, 2],
+	[3, 5],
+	[3, 6],
+	[3, 4],
+	[4, 6],
+	[4, 7],
+] as const;
+const hub = nodes[3]?.at ?? iso(0, 0);
+const entity = nodes[4]?.at ?? iso(0, 0);
+const freshNode = iso(fresh.gx, fresh.gy, Z.knowledge);
+function thread(gx: number, gy: number) {
+	return {
+		upper: line(iso(gx, gy, Z.evidence), iso(gx, gy, Z.indexes)),
+		lower: line(iso(gx, gy, Z.indexes - T), iso(gx, gy, Z.knowledge)),
+	};
+}
+const threads = nodes.slice(0, 3).map((n) => thread(n.gx, n.gy));
+const freshThread = thread(fresh.gx, fresh.gy);
+const inAt = iso(-P, P, Z.evidence);
+const outAt = iso(P, P, Z.knowledge - T);
+const inBeam = `M${inAt.x - 110} ${inAt.y - 70}C${inAt.x - 60} ${inAt.y - 70} ${inAt.x - 40} ${inAt.y - 6} ${inAt.x - 2} ${inAt.y}`;
+const outBeam = `M${outAt.x} ${outAt.y + 2}C${outAt.x} ${outAt.y + 40} ${outAt.x + 50} ${outAt.y + 64} ${outAt.x + 150} ${outAt.y + 66}`;
+
+const labels = [
+	{ key: "evidence", name: "Evidence", note: "kept as received", z: Z.evidence },
+	{ key: "indexes", name: "Indexes", note: "derived · rebuildable", z: Z.indexes },
+	{ key: "knowledge", name: "Knowledge", note: "entities · claims", z: Z.knowledge },
+].map((l) => {
+	const corner = iso(P, -P, l.z - T / 2);
+	return { ...l, from: corner, x: corner.x + 34, y: corner.y - 2 };
+});
+---
+
+<svg class="ls" viewBox={`0 40 ${W} ${H - 40}`} role="img" aria-labelledby="ls-title" data-ls data-step="0">
+  <title id="ls-title">Three stacked layers read top to bottom: evidence arrives on top, indexes are built from it in the middle, and knowledge sits at the bottom, with threads from each claim up to the evidence it cites.</title>
+  <defs>
+    <linearGradient id="ls-know" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2a45c8" />
+      <stop offset="1" stop-color="#101d6e" />
+    </linearGradient>
+    <linearGradient id="ls-beam-in" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a9b8f4" stop-opacity="0" />
+      <stop offset="1" stop-color="#a9b8f4" />
+    </linearGradient>
+    <linearGradient id="ls-beam-out" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a9b8f4" />
+      <stop offset="1" stop-color="#a9b8f4" stop-opacity="0" />
+    </linearGradient>
+    <radialGradient id="ls-glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#3d5ff0" stop-opacity="0.45" />
+      <stop offset="1" stop-color="#3d5ff0" stop-opacity="0" />
+    </radialGradient>
+    <clipPath id="ls-index-clip"><polygon points={plate(Z.indexes).top} /></clipPath>
+    <linearGradient id="ls-scan" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#a9b8f4" stop-opacity="0" />
+      <stop offset="0.5" stop-color="#c3d2ff" stop-opacity="0.55" />
+      <stop offset="1" stop-color="#a9b8f4" stop-opacity="0" />
+    </linearGradient>
+  </defs>
+
+  <ellipse cx={CX} cy={iso(0, 0, Z.knowledge).y} rx={K * 4} ry={S * 2.2} fill="url(#ls-glow)" class="ls-glow" />
+  <g class="ls-layer ls-knowledge" data-layer="2">
+    <polygon points={plate(Z.knowledge).left} class="ls-know-side-l" />
+    <polygon points={plate(Z.knowledge).right} class="ls-know-side-r" />
+    <polygon points={plate(Z.knowledge).top} fill="url(#ls-know)" class="ls-know-top" />
+    {edges.map(([a, b]) => (
+      <path d={`M${nodes[a]?.at.x} ${nodes[a]?.at.y}L${nodes[b]?.at.x} ${nodes[b]?.at.y}`} class="ls-edge" />
+    ))}
+    <path d={line(hub, freshNode)} class="ls-edge ls-edge--fresh" pathLength="1" />
+    {nodes.map((n) => (
+      <g class={`ls-node ls-node--${n.kind}`}>
+        <ellipse cx={n.at.x} cy={n.at.y} rx={n.r * 2.2} ry={n.r * 1.3} class="ls-node-halo" />
+        <ellipse cx={n.at.x} cy={n.at.y} rx={n.r} ry={n.r * 0.6} class="ls-node-dot" />
+      </g>
+    ))}
+    <ellipse cx={hub.x} cy={hub.y} rx="22" ry="13" class="ls-ring" />
+    <g class="ls-node ls-node--claim ls-fresh-node">
+      <ellipse cx={freshNode.x} cy={freshNode.y} rx="15" ry="9" class="ls-node-halo" />
+      <ellipse cx={freshNode.x} cy={freshNode.y} rx="6" ry="3.6" class="ls-node-dot" />
+    </g>
+    <text x={hub.x + 18} y={hub.y + 4} class="ls-node-label">website</text>
+    <text x={entity.x + 16} y={entity.y + 4} class="ls-node-label">deploy</text>
+    <text x={freshNode.x} y={freshNode.y + 22} text-anchor="middle" class="ls-node-label ls-node-label--fresh">cache: sqlite</text>
+  </g>
+
+  <g class="ls-threads" data-layer="2">
+    {threads.map((t) => <path d={t.lower} class="ls-thread" />)}
+    <path d={freshThread.lower} class="ls-thread ls-thread--fresh ls-thread--fresh-lower" pathLength="1" />
+  </g>
+
+  <g class="ls-layer ls-indexes" data-layer="1">
+    <polygon points={plate(Z.indexes).left} class="ls-glass-side" />
+    <polygon points={plate(Z.indexes).right} class="ls-glass-side" />
+    <polygon points={plate(Z.indexes).top} class="ls-glass-top" />
+    <path class="ls-dots" d={dotPath} />
+    <g clip-path="url(#ls-index-clip)">
+      <polygon points={scan} fill="url(#ls-scan)" class="ls-scan" style={`--sx: ${K.toFixed(2)}px; --sy: ${(S * 0.5).toFixed(2)}px`} />
+    </g>
+  </g>
+
+  <g class="ls-threads" data-layer="2">
+    {threads.map((t) => <path d={t.upper} class="ls-thread" />)}
+    <path d={freshThread.upper} class="ls-thread ls-thread--fresh ls-thread--fresh-upper" pathLength="1" />
+  </g>
+
+  <g class="ls-layer ls-evidence" data-layer="0">
+    <polygon points={plate(Z.evidence).left} class="ls-glass-side ls-glass-side--evidence" />
+    <polygon points={plate(Z.evidence).right} class="ls-glass-side ls-glass-side--evidence" />
+    <polygon points={plate(Z.evidence).top} class="ls-glass-top ls-glass-top--evidence" />
+    {sheets.map((sh) => (
+      <g class="ls-sheet">
+        <polygon points={sh.left} class="ls-sheet-side" />
+        <polygon points={sh.right} class="ls-sheet-side ls-sheet-side--dark" />
+        <polygon points={sh.top} class="ls-sheet-top" />
+        <path d={sh.lines} class="ls-sheet-lines" />
+      </g>
+    ))}
+    <g class="ls-sheet ls-fresh-sheet">
+      <polygon points={freshSheet.left} class="ls-sheet-side" />
+      <polygon points={freshSheet.right} class="ls-sheet-side ls-sheet-side--dark" />
+      <polygon points={freshSheet.top} class="ls-sheet-top ls-sheet-top--fresh" />
+      <path d={freshSheet.lines} class="ls-sheet-lines" />
+    </g>
+  </g>
+
+  <g class="ls-beam ls-beam--in" data-layer="0">
+    <path d={inBeam} stroke="url(#ls-beam-in)" class="ls-beam-line" />
+    <path d={inBeam} class="ls-beam-pulse" pathLength="100" />
+    <text x={inAt.x - 110} y={inAt.y - 84} class="ls-beam-label">sessions in</text>
+  </g>
+  <g class="ls-beam ls-beam--out" data-layer="3">
+    <path d={outBeam} stroke="url(#ls-beam-out)" class="ls-beam-line" />
+    <path d={outBeam} class="ls-beam-pulse" pathLength="100" />
+    <text x={outAt.x + 160} y={outAt.y + 70} class="ls-beam-label">context out</text>
+  </g>
+
+  {labels.map((l) => (
+    <g class="ls-label" data-label={l.key}>
+      <path d={`M${l.from.x + 6} ${l.from.y}H${l.x - 8}`} class="ls-label-rule" />
+      <text x={l.x} y={l.y} class="ls-label-name">{l.name}</text>
+      <text x={l.x} y={l.y + 15} class="ls-label-note">{l.note}</text>
+    </g>
+  ))}
+</svg>

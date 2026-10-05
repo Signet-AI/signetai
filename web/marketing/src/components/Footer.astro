@@ -6,38 +6,35 @@
   <div class="footer-left">
     <div class="footer-brand">
       <img src="/Signet-Logo-White.png" alt="" class="footer-logo" width="24" height="24" aria-hidden="true" />
-      <span class="footer-brand-text">SIGNET AI</span>
+      <span class="footer-brand-text">Signet AI</span>
     </div>
     <div class="footer-tagline">Local-first memory and secrets for AI agents.</div>
-    <div class="footer-meta">&copy; 2026 SIGNET. ALL RIGHTS RESERVED.</div>
-  </div>
-
-  <div class="footer-right">
-    <div class="footer-nav">
-      <div class="footer-nav-col">
-        <span class="footer-nav-label">Product</span>
-        <a href="https://docs.signetai.sh/">Docs</a>
-        <a href="https://github.com/Signet-AI/signetai/tree/main/spec">Spec</a>
-      </div>
-      <div class="footer-nav-col">
-        <span class="footer-nav-label">Resources</span>
-        <a href="/blog">Blog</a>
-        <a href="https://discord.gg/pHa5scah9C">Discord</a>
-        <a href="https://x.com/signetai">X / Twitter</a>
-      </div>
-    </div>
-
     <div class="footer-links">
-      <a href="https://github.com/Signet-AI/signetai" aria-label="GitHub">
+      <a href="https://github.com/Signet-AI/signetai" aria-label="GitHub" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
           <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0 1 12 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0 0 22 12.017C22 6.484 17.522 2 12 2z" />
         </svg>
       </a>
-      <a href="https://www.npmjs.com/package/signetai" aria-label="npm">
+      <a href="https://www.npmjs.com/package/signetai" aria-label="npm" target="_blank" rel="noopener noreferrer">
         <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20">
           <path d="M1.763 0C.786 0 0 .786 0 1.763v20.474C0 23.214.786 24 1.763 24h20.474c.977 0 1.763-.786 1.763-1.763V1.763C24 .786 23.214 0 22.237 0zM5.13 5.323l13.837.019-.009 13.836h-3.464l.01-10.382h-3.456L12.04 19.17H5.113z"/>
         </svg>
       </a>
+    </div>
+    <div class="footer-meta">&copy; 2026 Signet · Apache 2.0</div>
+  </div>
+
+  <div class="footer-nav">
+    <div class="footer-nav-col">
+      <span class="footer-nav-label">Product</span>
+      <a href="https://docs.signetai.sh/" target="_blank" rel="noopener noreferrer">Docs</a>
+      <a href="https://github.com/Signet-AI/signetai/tree/main/spec" target="_blank" rel="noopener noreferrer">Spec</a>
+    </div>
+    <div class="footer-nav-col">
+      <span class="footer-nav-label">Resources</span>
+      <a href="/blog">Blog</a>
+      <a href="https://discord.gg/pHa5scah9C" target="_blank" rel="noopener noreferrer">Discord</a>
+      <a href="https://x.com/signetai" target="_blank" rel="noopener noreferrer">X / Twitter</a>
     </div>
   </div>
   </div>
@@ -49,8 +46,8 @@
     overflow: hidden;
     display: block;
     width: 100%;
-    padding-top: var(--space-3xl);
-    padding-bottom: var(--space-xl);
+    padding-top: 88px;
+    padding-bottom: 56px;
     padding-inline: 0;
     border-top: 1px solid rgba(132, 179, 227, 0.32);
     background-color: #050c16;
@@ -87,39 +84,30 @@
   .footer-logo {
     filter: drop-shadow(0 0 8px var(--color-highlight-muted));
   }
-
   .footer-brand-text {
     font-family: var(--font-display);
-    font-size: 1.2rem;
+    font-size: 1rem;
     font-weight: 700;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
     color: var(--color-text-bright);
   }
 
   .footer-tagline {
-    font-size: 13px;
-    color: var(--color-text-muted);
-    letter-spacing: 0.02em;
+    font-size: 0.92rem;
+    color: var(--color-text);
   }
 
   .footer-meta {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    letter-spacing: 0.1em;
+    margin-top: 6px;
+    font-size: 0.8rem;
     color: var(--color-text-muted);
-    opacity: 0.6;
-  }
-
-  .footer-right {
-    display: flex;
-    flex-direction: column;
-    gap: 32px;
-    align-items: flex-end;
   }
 
   .footer-nav {
     display: flex;
-    gap: 48px;
+    align-items: flex-start;
+    gap: 56px;
   }
 
   .footer-nav-col {
@@ -129,42 +117,47 @@
   }
 
   .footer-nav-label {
-    font-family: var(--font-mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.2em;
-    color: var(--color-text-bright);
-    font-weight: 600;
     margin-bottom: 4px;
+    font-family: var(--font-mono);
+    font-size: 0.66rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
   }
 
   .footer-nav-col a {
-    font-family: var(--font-mono);
-    font-size: 12px;
-    color: var(--color-text-muted);
+    font-size: 0.92rem;
+    color: var(--color-text);
     text-decoration: none;
-    transition: all 0.2s var(--ease);
+    transition: color 0.2s var(--ease);
   }
 
   .footer-nav-col a:hover {
-    color: var(--color-accent);
-    transform: translateX(4px);
+    color: var(--color-text-bright);
+  }
+
+  .footer-nav-col a:focus-visible,
+  .footer-links a:focus-visible {
+    outline: 2px solid var(--color-highlight);
+    outline-offset: 3px;
+    border-radius: 4px;
   }
 
   .footer-links {
     display: flex;
-    gap: 20px;
+    gap: 18px;
     align-items: center;
+    margin-top: 8px;
   }
 
   .footer-links a {
+    display: inline-flex;
     color: var(--color-text-muted);
-    transition: all 0.2s var(--ease);
+    transition: color 0.2s var(--ease);
   }
 
   .footer-links a:hover {
     color: var(--color-text-bright);
-    transform: translateY(-2px);
   }
 
   @media (max-width: 720px) {
@@ -180,12 +173,6 @@
       align-items: flex-start;
     }
 
-    .footer-right {
-      width: 100%;
-      align-items: stretch;
-      gap: 36px;
-    }
-
     .footer-nav {
       display: grid;
       width: 100%;
@@ -198,15 +185,8 @@
       font-size: 13px;
     }
 
-    .footer-links {
-      width: 100%;
-      justify-content: flex-start;
-      padding-top: 18px;
-      border-top: 1px solid var(--color-border);
-    }
-
     .footer-nav-col a:hover {
-      transform: none;
+      color: var(--color-text-bright);
     }
   }
 </style>

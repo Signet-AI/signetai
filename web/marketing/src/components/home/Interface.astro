@@ -1,0 +1,46 @@
+---
+import SectionHead from "./SectionHead.astro";
+---
+
+<section class="hs" id="interface">
+  <SectionHead index="01" label="Interface" title="A live console" accent="for your local context." align="center">
+    <p class="hs-lede">Every memory, source, and claim is inspectable in the dashboard: graph traversal, recall, and repair without a black box.</p>
+  </SectionHead>
+
+  <div class="home-console reveal">
+    <div class="home-console-frame" id="showcase-frame">
+      <iframe
+        class="home-console-embed"
+        id="showcase-embed"
+        src="/dashboard/index.html#home"
+        title="Signet dashboard demo"
+        loading="lazy"
+        aria-label="Interactive Signet dashboard demo"
+      ></iframe>
+      <noscript>
+        <img class="home-console-fallback" src="/dashboard-home-16x9.png" alt="Signet dashboard home view" draggable="false" />
+      </noscript>
+    </div>
+  </div>
+</section>
+
+<script>
+  function fitConsole() {
+    const frame = document.getElementById("showcase-frame");
+    const embed = document.getElementById("showcase-embed");
+    if (!frame || !(embed instanceof HTMLIFrameElement)) return;
+    const width = frame.clientWidth;
+    if (width >= 700) {
+      embed.style.width = "1536px";
+      embed.style.height = "864px";
+      embed.style.transform = `scale(${width / 1536})`;
+      return;
+    }
+    embed.style.width = "100%";
+    embed.style.height = "100%";
+    embed.style.transform = "none";
+  }
+
+  window.addEventListener("resize", fitConsole);
+  document.addEventListener("astro:page-load", fitConsole);
+</script>
