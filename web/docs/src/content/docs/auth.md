@@ -33,7 +33,7 @@ SIGNET_ADMIN_PASSWORD='load-this-from-a-secret-manager' \
 signet daemon start
 ```
 
-The daemon creates its signing secret under `.daemon/auth-secret` for non-local modes. Do not copy, commit, or distribute that file. The password value is not written to `agent.yaml`; a persisted configuration may contain only a password hash.
+The daemon creates its signing secret under `runtime/auth-secret` for non-local modes. Do not copy, commit, or distribute that file. The password value is not written to `agent.yaml`; a persisted configuration may contain only a password hash.
 
 `signet daemon` by itself prints the command group help. The command that starts the service is `signet daemon start`.
 

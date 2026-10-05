@@ -161,7 +161,7 @@ may retain raw auditable traces separately in daemon logs.
 
 When transcript text is available, the daemon queues a capture receipt and
 then writes the canonical conversation transcript as JSONL at
-`$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl` and records
+`$SIGNET_WORKSPACE/transcripts/{harness}/transcript.jsonl` and records
 lineage through the session manifest. Existing markdown transcript artifacts
 remain readable for backward compatibility and are backfilled into the JSONL
 history.

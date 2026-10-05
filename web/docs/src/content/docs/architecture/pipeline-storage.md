@@ -113,9 +113,9 @@ performed outside write locks; the resulting index update is applied separately.
 ## Session transcripts and lineage
 
 As of workspace v2, canonical transcript files live under
-`$SIGNET_WORKSPACE/transcripts/{harness}/transcript.jsonl`. The resolver maps
-v1's `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl` during
-migration. The indexed `session_transcripts` table remains available to
+`$SIGNET_WORKSPACE/transcripts/{harness}/transcript.jsonl`. The daemon renames
+v1's `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl` there
+when it upgrades the workspace in place. The indexed `session_transcripts` table remains available to
 episodic evidence and Dreaming; it does not make Markdown a competing
 authority.
 
@@ -144,7 +144,7 @@ keys associated with recalled results are batch-looked up in
 response. This preserves context that may not have become a separate memory
 row without creating a second hidden recall path.
 
-Canonical Markdown artifacts under `$SIGNET_WORKSPACE/memory/` remain the
+Canonical Markdown artifacts under `$SIGNET_WORKSPACE/transcripts/` remain the
 lineage surface for transcript, summary, and compaction history. `MEMORY.md` is
 a rebuildable projection over durable memory rows, temporal state, and the
 canonical artifact ledger. Before retained content enters prompt-facing

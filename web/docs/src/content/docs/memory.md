@@ -4,7 +4,7 @@ description: "The core persistence layer — storage, search, and retrieval."
 ---
 
 The memory system is the core persistence layer of Signet. Memories are
-stored in a SQLite database at `$SIGNET_WORKSPACE/memory/memories.db`. Every
+stored in a SQLite database at `$SIGNET_WORKSPACE/data/signet.db`. Every
 memory is synchronized with the full-text search index (FTS5), carries a
 SHA-256 content hash for deduplication, and participates in a versioned audit
 trail. A vector embedding is written when an embedding provider succeeds, but
