@@ -15,7 +15,13 @@ import {
 	withRegisteredDbOwnerMaintenance,
 } from "./db-owner-maintenance";
 import type { DbOwnerMaintenance } from "./db-owner-maintenance";
-import { createDbOwnerClient, DbOwnerDeadlineError, DbOwnerDiedError, type DbOwnerClient } from "./db-owner-client";
+import {
+	createDbOwnerClient,
+	DbOwnerAdmissionError,
+	DbOwnerDeadlineError,
+	DbOwnerDiedError,
+	type DbOwnerClient,
+} from "./db-owner-client";
 import type { DbOwnerVectorRepairInput } from "./db-owner-protocol";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { completeFtsStartupRecovery } from "./fts-startup-recovery";
@@ -130,6 +136,64 @@ describe("DB owner FTS maintenance", () => {
 		expect(deadlines).toHaveLength(2);
 		expect(deadlines[1]).toBeLessThan(deadlines[0]);
 		expect(Date.now() - startedAt).toBeLessThan(125);
+	});
+
+	test("waits for a full maintenance queue to admit the job within its deadline", async () => {
+		let attempts = 0;
+		const owner = {
+			start: async (): Promise<void> => {},
+			submit: () => {
+				attempts += 1;
+				if (attempts < 4) {
+					throw new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "DB owner maintenance admission queue is full");
+				}
+				return { job: { enqueuedAt: 0 } as never, result: Promise.resolve("ok"), cancel: (): void => {} };
+			},
+		} as unknown as DbOwnerClient;
+
+		await expect(
+			runOwnerMaintenanceWithRetry(owner, { kind: "sleep", durationMs: 0 }, "test.queue-full", { deadlineMs: 1_000 }),
+		).resolves.toBe("ok");
+		expect(attempts).toBe(4);
+	});
+
+	test("fails with the admission error once a full queue outlasts the deadline", async () => {
+		const owner = {
+			start: async (): Promise<void> => {},
+			submit: () => {
+				throw new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "DB owner maintenance admission queue is full");
+			},
+		} as unknown as DbOwnerClient;
+
+		const startedAt = Date.now();
+		await expect(
+			runOwnerMaintenanceWithRetry(owner, { kind: "sleep", durationMs: 0 }, "test.queue-full", { deadlineMs: 60 }),
+		).rejects.toBeInstanceOf(DbOwnerAdmissionError);
+		expect(Date.now() - startedAt).toBeLessThan(200);
+	});
+
+	test("rejects a full queue immediately when the caller backs off itself", async () => {
+		let attempts = 0;
+		let admissionFailures = 0;
+		const owner = {
+			start: async (): Promise<void> => {},
+			submit: () => {
+				attempts += 1;
+				throw new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "DB owner maintenance admission queue is full");
+			},
+		} as unknown as DbOwnerClient;
+
+		await expect(
+			runOwnerMaintenanceWithRetry(owner, { kind: "sleep", durationMs: 0 }, "test.queue-full", {
+				deadlineMs: 1_000,
+				admission: "reject",
+				onOwnerJobAdmissionFailure: () => {
+					admissionFailures += 1;
+				},
+			}),
+		).rejects.toBeInstanceOf(DbOwnerAdmissionError);
+		expect(attempts).toBe(1);
+		expect(admissionFailures).toBe(1);
 	});
 
 	test("waits for a deadline-abandoned owner worker when requested", async () => {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
+	DbOwnerAdmissionError,
 	DbOwnerDeadlineError,
 	DbOwnerDiedError,
 	type DbOwnerClient,
@@ -41,6 +42,7 @@ export interface DbOwnerMaintenanceOptions {
 	readonly onOwnerJobSettled?: () => void | Promise<void>;
 	readonly waitForOwnerCompletionOnDeadline?: boolean;
 	readonly onOwnerJobAdmissionFailure?: (error: unknown) => void;
+	readonly admission?: "wait" | "reject";
 }
 
 export interface DbOwnerMaintenanceMetrics {
@@ -151,12 +153,31 @@ export async function runOwnerMaintenanceWithRetry<Result>(
 		if (remainingMs < 1) throw new DbOwnerDeadlineError(operation);
 		return { ...options, deadlineMs: remainingMs };
 	};
+	const runAdmitted = async (): Promise<Result> => {
+		for (;;) {
+			try {
+				return await runOwnerJob(owner, request, operation, "maintenance", attemptOptions());
+			} catch (error) {
+				if (
+					options.admission === "reject" ||
+					!(error instanceof DbOwnerAdmissionError) ||
+					error.code !== "DB_OWNER_QUEUE_FULL"
+				) {
+					throw error;
+				}
+				if (options.signal?.aborted) throw options.signal.reason instanceof Error ? options.signal.reason : error;
+				const remainingMs = deadlineAt - Date.now();
+				if (remainingMs <= 1) throw error;
+				await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remainingMs - 1)));
+			}
+		}
+	};
 	try {
-		return await runOwnerJob(owner, request, operation, "maintenance", attemptOptions());
+		return await runAdmitted();
 	} catch (error) {
 		if (!(error instanceof DbOwnerDiedError)) throw error;
 		await startOwnerWithinDeadline(owner, deadlineAt, operation);
-		return await runOwnerJob(owner, request, operation, "maintenance", attemptOptions());
+		return await runAdmitted();
 	}
 }
 
