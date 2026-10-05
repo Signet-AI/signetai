@@ -22,8 +22,9 @@ export function Topbar() {
 						Updates unavailable
 					</span>
 				)}
+				<SignetMark className="sig-topbar-brand" aria-label="Signet" aria-hidden={false} role="img" />
 				<div className="sig-no-drag absolute left-1/2 flex max-w-[calc(100%_-_112px)] min-w-0 -translate-x-1/2 items-center gap-1.5">
-					<SignetMark className="h-[19px] w-4 shrink-0" aria-label="Signet" aria-hidden={false} role="img" />
+					<SignetMark className="sig-topbar-title-mark h-[19px] w-4 shrink-0" aria-hidden="true" />
 					<span className="truncate text-[16px] font-medium tracking-tight">{label(view)}</span>
 				</div>
 			</div>

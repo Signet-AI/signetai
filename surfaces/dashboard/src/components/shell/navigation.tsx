@@ -1,6 +1,7 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { ModeToggle } from "@/components/mode-toggle";
+import { Settings } from "@/components/mingcute-icons";
 import { type ViewId, useView } from "@/lib/view-context";
 import { BookRegular, Home1Regular, MindMapRegular, MoonRegular } from "@mingcute/react/core-regular";
 import type { ButtonHTMLAttributes, ReactNode } from "react";
@@ -54,11 +55,7 @@ export function SidebarNav() {
 					aria-current={view === "settings" ? "page" : undefined}
 					data-dashboard-nav="settings"
 				>
-					<svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-						<circle cx="5" cy="12" r="1.7" />
-						<circle cx="12" cy="12" r="1.7" />
-						<circle cx="19" cy="12" r="1.7" />
-					</svg>
+					<Settings className="size-[22px] shrink-0" aria-hidden="true" />
 				</SidebarButton>
 			</div>
 		</nav>
