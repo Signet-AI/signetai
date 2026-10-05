@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
 	type SymlinkOptions,
 	type SymlinkResult,
@@ -173,7 +173,23 @@ export function atomicWriteJson(path: string, data: unknown, indent: number | st
 	atomicWriteText(path, `${JSON.stringify(data, null, indent)}\n`);
 }
 
-export type ResolvedCommand = { readonly command: string; readonly args: readonly string[] };
+export type ResolvedCommand = {
+	readonly command: string;
+	readonly args: readonly string[];
+	readonly env?: Readonly<Record<string, string>>;
+};
+
+export const SIGNET_MCP_STDIO_WORKER_ENV = "SIGNET_MCP_STDIO_WORKER";
+
+function resolveRunningNativeSignetBinary(): string | null {
+	const executable = process.execPath;
+	if (!/^signet(?:\.exe)?$/i.test(basename(executable))) return null;
+	try {
+		return statSync(executable).isFile() ? executable : null;
+	} catch {
+		return null;
+	}
+}
 
 function resolvePackagedSignetCommand(
 	bareCommand: string,
@@ -196,6 +212,8 @@ function resolvePackagedSignetCommand(
 	return { command: bareCommand, args: [] };
 }
 export function resolveSignetMcpCommand(): ResolvedCommand {
+	const nativeBinary = resolveRunningNativeSignetBinary();
+	if (nativeBinary) return { command: nativeBinary, args: [], env: { [SIGNET_MCP_STDIO_WORKER_ENV]: "1" } };
 	return resolvePackagedSignetCommand("signet-mcp", "dist", "mcp-stdio.js", true);
 }
 export function resolveSignetCliCommand(): ResolvedCommand {

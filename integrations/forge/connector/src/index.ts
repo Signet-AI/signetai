@@ -78,7 +78,7 @@ function buildMcpServer(basePath: string): ForgeMcpServer {
 	return {
 		command: mcp.command,
 		...(mcp.args && mcp.args.length > 0 ? { args: mcp.args } : {}),
-		env: buildSignetRuntimeEnv({ basePath }),
+		env: { ...buildSignetRuntimeEnv({ basePath }), ...mcp.env },
 	};
 }
 
