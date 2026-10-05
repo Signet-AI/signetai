@@ -2,13 +2,19 @@
 import Footer from "../components/Footer.astro";
 import Nav from "../components/Nav.astro";
 import StructuredData from "../components/StructuredData.astro";
-import Benchmark from "../components/landing/Benchmark.astro";
-import FeatureSections from "../components/landing/FeatureSections.astro";
-import Hero from "../components/landing/Hero.astro";
-import InstallCta from "../components/landing/InstallCta.astro";
-import Showcase from "../components/landing/Showcase.astro";
+import Benchmark from "../components/home/Benchmark.astro";
+import FromBlog from "../components/home/FromBlog.astro";
+import HarnessStrip from "../components/home/HarnessStrip.astro";
+import Harnesses from "../components/home/Harnesses.astro";
+import Hero from "../components/home/Hero.astro";
+import Interface from "../components/home/Interface.astro";
+import Local from "../components/home/Local.astro";
+import Sources from "../components/home/Sources.astro";
+import Start from "../components/home/Start.astro";
+import Story from "../components/home/Story.astro";
 import Base from "../layouts/Base.astro";
-import "../styles/landing.css";
+import "../styles/blog.css";
+import "../styles/home.css";
 
 const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
 ---
@@ -39,15 +45,20 @@ const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.s
     },
   }} />
 
-  <Nav landing />
-  <main class="landing-page">
-    <Hero />
-    <Showcase />
-    <FeatureSections />
+  <Nav />
+  <Hero />
+  <main class="home">
+    <HarnessStrip />
+    <Interface />
+    <Story />
+    <Local />
+    <Sources />
+    <Harnesses />
     <Benchmark />
-    <InstallCta />
-    <Footer />
+    <FromBlog />
+    <Start />
   </main>
+  <Footer />
 
   <script src="../scripts/interactions.ts"></script>
 </Base>

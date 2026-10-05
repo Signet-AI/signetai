@@ -1,0 +1,28 @@
+---
+import BlogCover from "../BlogCover.astro";
+import { CATEGORIES, formatDate, getPosts, isoDate, postUrl } from "../../lib/blog";
+import SectionHead from "./SectionHead.astro";
+
+const posts = await getPosts();
+const latest = posts.slice(0, 3);
+---
+
+<section class="hs" id="blog">
+  <SectionHead index="07" label="From the blog" title="Notes from" accent="building Signet.">
+    <p class="hs-lede">Announcements, engineering notes, and essays on how agents should remember.</p>
+    <a class="home-text-link" href="/blog/">All posts <span aria-hidden="true">→</span></a>
+  </SectionHead>
+
+  <div class="home-posts reveal">
+    {latest.map((post) => (
+      <a class="bi-card" href={postUrl(post)}>
+        <BlogCover post={post} posts={posts} />
+        <span class="bi-card-title">{post.data.title}</span>
+        <p class="blog-meta">
+          <span class="blog-cat" data-category={post.data.category}>{CATEGORIES[post.data.category].label}</span>
+          <time datetime={isoDate(post.data.date)}>{formatDate(post.data.date)}</time>
+        </p>
+      </a>
+    ))}
+  </div>
+</section>

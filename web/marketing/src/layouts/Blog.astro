@@ -1,250 +1,255 @@
 ---
-import { getCollection } from "astro:content";
+import { getImage } from "astro:assets";
+import BlogCover from "../components/BlogCover.astro";
+import BlogCta from "../components/BlogCta.astro";
 import Footer from "../components/Footer.astro";
 import GraphViewer from "../components/GraphViewer";
 import Nav from "../components/Nav.astro";
 import ShareButtons from "../components/ShareButtons.astro";
+import {
+	CATEGORIES,
+	coverStyle,
+	coverUrl,
+	formatDate,
+	isoDate,
+	issueNumber,
+	postUrl,
+	readingMinutes,
+	type Post,
+} from "../lib/blog";
 import Base from "./Base.astro";
 import "../styles/blog.css";
-import "../styles/prose.css";
 import "../styles/graph.css";
 
 interface Props {
-	title: string;
-	description?: string;
-	date: Date;
-	author: string;
-	tags?: string[];
-	image?: string;
-	headings?: Array<{ depth: number; slug: string; text: string }>;
-	previousPost?: {
-		title: string;
-		url: string;
-	};
-	nextPost?: {
-		title: string;
-		url: string;
-	};
-	pageUrl?: string;
-	currentSlug?: string;
-	recommendedPosts?: Array<{
-		title: string;
-		url: string;
-		image?: string;
-	}>;
+	post: Post;
+	posts: readonly Post[];
+	headings: Array<{ depth: number; slug: string; text: string }>;
+	recommended: Post[];
+	pageUrl: string;
 }
 
-const {
-	title,
-	description,
-	date,
-	author,
-	tags = [],
-	image,
-	headings = [],
-	previousPost,
-	nextPost,
-	pageUrl,
-	currentSlug = "",
-	recommendedPosts = [],
-} = Astro.props;
+const { post, posts, headings, recommended, pageUrl } = Astro.props;
+const { title, description, date, author, category, tags, image, draft } = post.data;
+let section = 0;
+const toc = headings
+	.filter((h) => h.depth === 2 || h.depth === 3)
+	.map((h) => ({ ...h, number: h.depth === 2 ? String(++section).padStart(2, "0") : undefined }));
+const hasToc = section > 2;
+const minutes = readingMinutes(post);
+const { tone } = coverStyle(post, posts);
+const ogImage = image ? (await getImage({ src: image, width: 1200, format: "png" })).src : undefined;
 
-const formattedDate = date.toLocaleDateString("en-US", {
-	year: "numeric",
-	month: "long",
-	day: "numeric",
-});
-
-const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
-const hasToc = tocHeadings.length > 2;
-const allPosts = (await getCollection("blog"))
-	.filter((p) => !p.data.draft)
-	.sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
+const prompt = encodeURIComponent(
+	`Summarize the key ideas in this article from the Signet blog and why they matter: ${pageUrl}`,
+);
+const assistants = [
+	{ label: "ChatGPT", href: `https://chatgpt.com/?q=${prompt}` },
+	{ label: "Claude", href: `https://claude.ai/new?q=${prompt}` },
+	{ label: "Perplexity", href: `https://www.perplexity.ai/search?q=${prompt}` },
+];
 ---
 
-<Base title={`${title} — SignetAI Blog`} description={description} image={image} type="article">
+<Base title={`${title} — SignetAI Blog`} description={description} image={ogImage} type="article">
   <Nav />
+  <div class="post-progress" aria-hidden="true"><span></span></div>
 
-  <div class="blog-shell">
-    <div class="blog-content-grid">
-      <aside class="blog-nav-rail">
-        <div class="blog-nav-rail-sticky">
-          <p class="docs-rail-label">
-            <a href="/blog" class="blog-nav-back">All Posts</a>
-          </p>
-          <ul class="blog-nav-list">
-            {allPosts.map((post) => (
-              <li>
-                <a
-                  href={`/blog/${post.id}/`}
-                  class="blog-nav-link"
-                  aria-current={post.id === currentSlug ? "page" : undefined}
-                >
-                  {post.data.title}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </aside>
-      <main class="blog-main">
-        {image ? (
-          <img class="blog-hero-image" src={image} alt="" width="1408" height="768" loading="eager" />
-        ) : null}
+  <main class="post" data-category={category}>
+    <header class="post-head" data-tone={tone}>
+      <img class="post-head-art" src={coverUrl(post, "wide")} alt="" width="1600" height="600" fetchpriority="high" />
+      <nav class="post-crumbs" aria-label="Breadcrumb">
+        <a href="/blog/">Blog</a>
+        <span aria-hidden="true">/</span>
+        <a href={`/blog/#${category}`}>{CATEGORIES[category].plural}</a>
+        <span aria-hidden="true">/</span>
+        <span>No. {issueNumber(post, posts)}</span>
+      </nav>
+      {draft ? <span class="blog-draft">Draft · not published</span> : null}
+      <h1 class="post-title">{title}</h1>
+      <p class="post-lede">{description}</p>
+      <div class="post-byline">
+        <span class="post-author"><span class="post-avatar" aria-hidden="true">{author.charAt(0)}</span>{author}</span>
+        <span aria-hidden="true">·</span>
+        <time datetime={isoDate(date)}>{formatDate(date)}</time>
+        <span aria-hidden="true">·</span>
+        <span>{minutes} min read</span>
+      </div>
+    </header>
 
-        <header class="blog-article-header">
-          <p class="blog-kicker">
-            <a href="/blog">&larr; Blog</a>
-          </p>
-          <h1>{title}</h1>
-          <div class="blog-meta">
-            <time datetime={date.toISOString().slice(0, 10)}>{formattedDate}</time>
-            <span class="blog-meta-separator">/</span>
-            <span>{author}</span>
-          </div>
-          {description ? <p class="blog-description">{description}</p> : null}
-          {tags.length > 0 ? (
-            <div class="blog-tags">
-              {tags.map((tag) => (
-                <span class="blog-tag">{tag}</span>
-              ))}
-            </div>
-          ) : null}
-          {pageUrl ? <ShareButtons url={pageUrl} title={title} /> : null}
-        </header>
+    <div class="post-grid">
+      <figure class="post-hero">
+        <BlogCover post={post} posts={posts} size="full" eager />
+      </figure>
 
-        {hasToc ? (
-          <nav class="blog-toc-inline" aria-label="Table of contents">
-            <p class="blog-toc-label">On this page</p>
-            <ul class="blog-toc-list">
-              {tocHeadings.map((h) => (
-                <li class:list={[{ "docs-rail-toc-sub": h.depth === 3 }]}>
-                  <a href={`#${h.slug}`}>{h.text}</a>
-                </li>
-              ))}
-            </ul>
-          </nav>
-        ) : null}
-
-        <article class="prose blog-prose">
-          <slot />
-        </article>
-
-        {recommendedPosts.length > 0 ? (
-          <div class="blog-recommended-section">
-            <p class="blog-toc-label">Recommended</p>
-            <div class="blog-recommended-grid">
-              {recommendedPosts.map((rec) => (
-                <a href={rec.url} class="blog-recommended-card">
-                  {rec.image ? (
-                    <img
-                      class="blog-recommended-img"
-                      src={rec.image}
-                      alt=""
-                      width="400"
-                      height="200"
-                      loading="lazy"
-                    />
-                  ) : null}
-                  <span class="blog-recommended-title">{rec.title}</span>
-                </a>
-              ))}
-            </div>
-          </div>
-        ) : null}
-
-        {(previousPost || nextPost) ? (
-          <nav class="blog-pager" aria-label="Post navigation">
-            {previousPost ? (
-              <a class="blog-pager-link" href={previousPost.url} rel="prev">
-                <span class="blog-pager-label">Previous</span>
-                <span class="blog-pager-title">{previousPost.title}</span>
-              </a>
-            ) : <span class="blog-pager-spacer"></span>}
-
-            {nextPost ? (
-              <a class="blog-pager-link" href={nextPost.url} rel="next">
-                <span class="blog-pager-label">Next</span>
-                <span class="blog-pager-title">{nextPost.title}</span>
-              </a>
-            ) : <span class="blog-pager-spacer"></span>}
-          </nav>
-        ) : null}
-      </main>
       {hasToc ? (
-        <aside class="blog-toc-rail">
-          <div class="blog-toc-rail-sticky">
-            <nav aria-label="Table of contents">
-              <p class="docs-rail-label">On this page</p>
-              <ul class="docs-rail-toc-list">
-                {tocHeadings.map((h) => (
-                  <li class:list={[{ "docs-rail-toc-sub": h.depth === 3 }]}>
-                    <a href={`#${h.slug}`} data-toc-link>{h.text}</a>
-                  </li>
-                ))}
-              </ul>
-            </nav>
+        <details class="post-toc-inline">
+          <summary>Contents</summary>
+          <ol>
+            {toc.map((h) => (
+              <li class:list={[{ "is-sub": h.depth === 3 }]}><a href={`#${h.slug}`}>{h.number ? <span>{h.number}</span> : null}{h.text}</a></li>
+            ))}
+          </ol>
+        </details>
+      ) : null}
 
-            {currentSlug ? (
-              <GraphViewer client:idle currentSlug={currentSlug} collection="blog" mode="local" />
-            ) : null}
-          </div>
+      <aside class="post-spec" aria-label="Post details">
+        <dl>
+          <div><dt>Issue</dt><dd>No. {issueNumber(post, posts)}</dd></div>
+          <div><dt>Section</dt><dd><span class="blog-cat" data-category={category}>{CATEGORIES[category].label}</span></dd></div>
+          <div><dt>Published</dt><dd><time datetime={isoDate(date)}>{formatDate(date)}</time></dd></div>
+          <div><dt>Reading</dt><dd>{minutes} min</dd></div>
+        </dl>
+        <ShareButtons url={pageUrl} title={title} />
+      </aside>
+
+      <article class="post-body">
+        <slot />
+      </article>
+
+      {hasToc ? (
+        <aside class="post-toc" aria-label="Contents">
+          <p class="post-toc-label">Contents</p>
+          <ol>
+            {toc.map((h) => (
+              <li class:list={[{ "is-sub": h.depth === 3 }]}><a href={`#${h.slug}`} data-toc-link>{h.number ? <span>{h.number}</span> : null}{h.text}</a></li>
+            ))}
+          </ol>
         </aside>
       ) : null}
+
+      <div class="post-end">
+        <div class="post-signoff">
+          <span class="post-signoff-mark"><img src="/favicon.svg" alt="" width="22" height="22" /></span>
+          <div>
+            <p class="post-signoff-title">Written by {author}</p>
+            <p class="post-signoff-meta">No. {issueNumber(post, posts)} · {CATEGORIES[category].label} · <time datetime={isoDate(date)}>{formatDate(date)}</time></p>
+          </div>
+          <a class="post-signoff-rss" href="/rss.xml">Follow via RSS</a>
+        </div>
+        {tags.length > 0 ? (
+          <ul class="post-tags" aria-label="Tags">
+            {tags.map((tag) => <li>{tag}</li>)}
+          </ul>
+        ) : null}
+        <div class="post-ask">
+          <span class="post-ask-label">Ask an assistant about this post</span>
+          <div class="post-ask-links">
+            {assistants.map((assistant) => (
+              <a href={assistant.href} target="_blank" rel="noopener noreferrer" data-analytics-cta="ask_assistant" data-analytics-placement={assistant.label.toLowerCase()}>
+                {assistant.label} <span aria-hidden="true">↗</span>
+              </a>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
-  </div>
+
+    <footer class="post-foot">
+      {recommended.length > 0 ? (
+        <section class="post-more" aria-labelledby="post-more-title">
+          <div class="post-more-head">
+            <h2 id="post-more-title">Keep reading</h2>
+            <a href="/blog/">All posts <span aria-hidden="true">→</span></a>
+          </div>
+          <div class="post-more-grid">
+            {recommended.map((rec) => (
+              <a class="bi-card" href={postUrl(rec)}>
+                <BlogCover post={rec} posts={posts} />
+                <span class="bi-card-title">{rec.data.title}</span>
+                <p class="blog-meta">
+                  <span class="blog-cat" data-category={rec.data.category}>{CATEGORIES[rec.data.category].label}</span>
+                  <time datetime={isoDate(rec.data.date)}>{formatDate(rec.data.date)}</time>
+                </p>
+              </a>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {draft ? null : (
+        <section class="post-graph" aria-label="Related posts graph">
+          <GraphViewer client:idle currentSlug={post.id} collection="blog" mode="local" />
+        </section>
+      )}
+
+      <BlogCta />
+    </footer>
+  </main>
 
   <Footer />
 </Base>
 
 <script>
-  function initScrollSpy() {
-    const links = document.querySelectorAll<HTMLAnchorElement>('[data-toc-link]');
-    if (!links.length) return;
+  let cleanup: (() => void) | null = null;
 
-    const headingIds = Array.from(links).map((a) => a.getAttribute('href')?.slice(1)).filter(Boolean) as string[];
-    const headings = headingIds.map((id) => document.getElementById(id)).filter(Boolean) as HTMLElement[];
-
-    if (!headings.length) return;
-
-    let active: HTMLAnchorElement | null = null;
-
-    function update() {
-      const scrollY = window.scrollY + 100;
-      let current: string | null = null;
-
-      for (let i = headings.length - 1; i >= 0; i--) {
-        if (headings[i].offsetTop <= scrollY) {
-          current = headings[i].id;
-          break;
-        }
-      }
-
-      if (!current && headings.length) {
-        current = headings[0].id;
-      }
-
-      if (active) active.removeAttribute('data-active');
-      if (current) {
-        const next = document.querySelector<HTMLAnchorElement>(`[data-toc-link][href="#${current}"]`);
-        if (next) {
-          next.setAttribute('data-active', '');
-          active = next;
-        }
-      }
+  function enhanceCode(body: HTMLElement) {
+    for (const pre of body.querySelectorAll<HTMLPreElement>("pre")) {
+      if (pre.parentElement?.classList.contains("code-block")) continue;
+      const wrapper = document.createElement("div");
+      wrapper.className = "code-block";
+      const head = document.createElement("div");
+      head.className = "code-head";
+      const lang = document.createElement("span");
+      lang.textContent = pre.dataset.language && pre.dataset.language !== "plaintext" ? pre.dataset.language : "text";
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.textContent = "Copy";
+      copy.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(pre.innerText);
+        copy.textContent = "Copied";
+        setTimeout(() => (copy.textContent = "Copy"), 1500);
+      });
+      head.append(lang, copy);
+      pre.replaceWith(wrapper);
+      wrapper.append(head, pre);
     }
+  }
+
+  function initPost() {
+    cleanup?.();
+    cleanup = null;
+
+    const body = document.querySelector<HTMLElement>(".post-body");
+    const bar = document.querySelector<HTMLElement>(".post-progress span");
+    if (!body) return;
+    enhanceCode(body);
+
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>("[data-toc-link]"));
+    const headings = links
+      .map((link) => document.getElementById(decodeURIComponent(link.hash.slice(1))))
+      .filter((heading): heading is HTMLElement => heading !== null);
 
     let ticking = false;
-    window.addEventListener('scroll', () => {
-      if (!ticking) {
-        requestAnimationFrame(() => { update(); ticking = false; });
-        ticking = true;
+    function update() {
+      ticking = false;
+      if (bar && body) {
+        const start = body.offsetTop - window.innerHeight * 0.3;
+        const end = body.offsetTop + body.offsetHeight - window.innerHeight * 0.7;
+        const progress = Math.min(1, Math.max(0, (window.scrollY - start) / Math.max(1, end - start)));
+        bar.style.transform = `scaleX(${progress})`;
       }
-    }, { passive: true });
+      if (!headings.length) return;
+      const line = window.scrollY + 140;
+      let current = headings[0];
+      for (const heading of headings) {
+        if (heading.offsetTop <= line) current = heading;
+      }
+      for (const link of links) link.toggleAttribute("data-active", link.hash === `#${current?.id}`);
+    }
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(update);
+    }
 
+    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    cleanup = () => {
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
     update();
   }
 
-  initScrollSpy();
-  document.addEventListener('astro:after-swap', initScrollSpy);
+  document.addEventListener("astro:page-load", initPost);
 </script>

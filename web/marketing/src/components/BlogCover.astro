@@ -1,0 +1,31 @@
+---
+import { Image } from "astro:assets";
+import { CATEGORIES, type CoverSize, coverStyle, coverUrl, issueNumber, type Post } from "../lib/blog";
+
+interface Props {
+	post: Post;
+	posts: readonly Post[];
+	size?: CoverSize;
+	eager?: boolean;
+}
+
+const { post, posts, size = "card", eager = false } = Astro.props;
+const { tone } = coverStyle(post, posts);
+const { image, imageAlt, imageCover } = post.data;
+const loading = eager ? "eager" : "lazy";
+---
+
+{imageCover && image ? (
+  <div class="cover cover--image" data-size={size}>
+    <Image class="cover-art" src={image} alt={imageAlt} widths={size === "full" ? [768, 1200, 1800] : [480, 960]} sizes={size === "full" ? "(min-width: 1180px) 1120px, 100vw" : "(min-width: 900px) 560px, 100vw"} loading={loading} />
+  </div>
+) : (
+  <div class="cover" data-tone={tone} aria-hidden="true">
+    <img class="cover-art" src={coverUrl(post, size)} alt="" width="1600" height="900" loading={loading} decoding="async" />
+    <div class="cover-ui">
+      <span class="cover-mark"><img src="/favicon.svg" alt="" width="14" height="14" />No. {issueNumber(post, posts)}</span>
+      <span class="cover-cat">{CATEGORIES[post.data.category].label}</span>
+      <span class="cover-label">{post.data.coverLabel ?? post.data.title}</span>
+    </div>
+  </div>
+)}

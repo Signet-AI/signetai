@@ -1,0 +1,150 @@
+---
+import WorkspaceCabinet from "./WorkspaceCabinet.astro";
+const drawers = [
+	{
+		label: "Authored",
+		title: "Written by you",
+		text: "The files that say who your agent is and how it works. Plain Markdown and YAML you can open in any editor.",
+		paths: [
+			["AGENTS.md  SOUL.md  IDENTITY.md", ""],
+			["USER.md  MEMORY.md  agent.yaml", ""],
+			["skills/", "its own Git repository"],
+		],
+	},
+	{
+		label: "Evidence",
+		title: "Evidence first",
+		text: "Every session lands as a transcript before anything is interpreted. Files you drop in are imported from the inbox.",
+		paths: [
+			["transcripts/<harness>/transcript.jsonl", "canonical JSONL"],
+			["files/", "import inbox"],
+		],
+	},
+	{
+		label: "Data",
+		title: "One authority",
+		text: "A single SQLite database holds the durable state. Imports keep their original bytes; snapshots are verified before they count.",
+		paths: [
+			["data/signet.db", "SQLite, the authority"],
+			["data/imports/", "retained originals"],
+			["data/snapshots/", "verified snapshots"],
+		],
+	},
+	{
+		label: "Secrets",
+		title: "Locked, not hidden",
+		text: "Credentials are encrypted on disk. The master key lives in your operating system's keyring, never in the folder.",
+		paths: [[".secrets/", "encrypted"]],
+	},
+	{
+		label: "Runtime + cache",
+		title: "Safe to rebuild",
+		text: "Logs, locks, and caches are kept apart from everything durable, so Signet can recreate them whenever it needs to.",
+		paths: [
+			["runtime/", "logs, locks, temporary files"],
+			["cache/", "rebuildable"],
+		],
+	},
+];
+---
+
+<section class="hs hs--paper" id="local">
+  <div class="cab-grid">
+    <div class="cab-copy reveal">
+      <p class="hs-index"><span>03</span>Local by default</p>
+      <h2 class="hs-title">Yours to run.<br /><span>Yours to move.</span></h2>
+      <p class="paper-text">One binary, a daemon on your machine, and one workspace folder, <code>~/.agents/</code>. Every drawer has one job, so you always know what to back up and what Signet can rebuild.</p>
+
+      <ol class="cab-index" data-cab-index>
+        {drawers.map((drawer, i) => (
+          <li class="cab-row">
+            <button type="button" class="cab-row-head" data-drawer={i} aria-expanded="false" aria-controls={`cab-panel-${i}`} id={`cab-row-${i}`}>
+              <span class="cab-row-index">0{i + 1}</span>
+              <span class="cab-row-label">{drawer.label}</span>
+              <span class="cab-row-title">{drawer.title}</span>
+              <svg class="cab-row-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg>
+            </button>
+            <div class="cab-row-panel" id={`cab-panel-${i}`} role="region" aria-labelledby={`cab-row-${i}`}>
+              <div class="cab-row-body">
+                <p>{drawer.text}</p>
+                <ul class="cab-paths">
+                  {drawer.paths.map(([path, note]) => (
+                    <li><code>{path}</code>{note ? <span>{note}</span> : null}</li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </li>
+        ))}
+      </ol>
+    </div>
+
+    <figure class="cab-stage reveal">
+      <WorkspaceCabinet />
+      <figcaption class="cab-hint">Click a drawer to open it</figcaption>
+    </figure>
+  </div>
+</section>
+
+<script>
+  let cleanup: (() => void) | null = null;
+
+  function initCabinet() {
+    cleanup?.();
+    cleanup = null;
+    const index = document.querySelector<HTMLElement>("[data-cab-index]");
+    const trays = Array.from(document.querySelectorAll<SVGGElement>(".cab-tray"));
+    const heads = Array.from(document.querySelectorAll<HTMLButtonElement>(".cab-row-head"));
+    const bodies = Array.from(document.querySelectorAll<HTMLElement>(".cab-row-body"));
+    if (!index || !trays.length) return;
+    let active = 0;
+
+    function open(k: number) {
+      active = k;
+      for (const tray of trays) {
+        const on = Number(tray.dataset.drawer) === k;
+        tray.classList.toggle("is-open", on);
+        tray.setAttribute("aria-pressed", String(on));
+      }
+      for (const head of heads) {
+        const on = Number(head.dataset.drawer) === k;
+        head.setAttribute("aria-expanded", String(on));
+        head.closest(".cab-row")?.toggleAttribute("data-open", on);
+      }
+
+    }
+    const measure = () => {
+      const tallest = Math.max(...bodies.map((body) => body.scrollHeight));
+      index.style.setProperty("--panel-h", `${tallest}px`);
+    };
+    const toggle = (k: number) => {
+      if (k !== active) open(k);
+    };
+    const onClick = (event: Event) => {
+      const target = (event.target as Element | null)?.closest<HTMLElement | SVGElement>("[data-drawer]");
+      if (target) toggle(Number(target.dataset.drawer));
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const target = (event.target as Element | null)?.closest<SVGElement>(".cab-tray");
+      if (!target) return;
+      event.preventDefault();
+      toggle(Number(target.dataset.drawer));
+    };
+
+    const root = index.closest("section");
+    root?.addEventListener("click", onClick);
+    root?.addEventListener("keydown", onKey);
+    window.addEventListener("resize", measure);
+    measure();
+    index.setAttribute("data-ready", "");
+    open(0);
+    cleanup = () => {
+      root?.removeEventListener("click", onClick);
+      root?.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", measure);
+    };
+  }
+
+  document.addEventListener("astro:page-load", initCabinet);
+</script>
