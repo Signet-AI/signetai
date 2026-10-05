@@ -9,8 +9,8 @@ import { cn } from "@/lib/utils";
 import { Activity, AlertCircle, Check, Loader2, Play, X } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useState } from "react";
 
-function parseDate(s: string): Date | null {
-	const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? `${s.replace(" ", "T")}Z` : s;
+export function parseDate(s: string): Date | null {
+	const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(s) ? `${s.replace(" ", "T")}Z` : s;
 	const d = new Date(iso);
 	return Number.isNaN(d.getTime()) ? null : d;
 }
@@ -92,7 +92,6 @@ export function DreamsView() {
 	}, [activePass]);
 
 	const lastPass = status.data?.passes[0] ?? null;
-	const shownPass = activePass ?? lastPass;
 	const pendingAttention = status.data?.attention ?? [];
 	const running = Boolean(activePass);
 	const scheduler = status.data?.scheduler ?? null;
@@ -102,41 +101,40 @@ export function DreamsView() {
 	return (
 		<div className="dreams-page">
 			<div className="dreams-content">
-				<PageHeading title="Dreams" description="How Signet reflects on your memories." className="dreams-heading">
+				<PageHeading
+					title="Dreams"
+					description={
+						<span className="dreams-status-line">
+							<StatusLabel tone={running ? "ok" : "neutral"}>{running ? "Running" : "Idle"}</StatusLabel>
+							{running ? (
+								<span>
+									{modeLabel(activePass?.mode)} pass, {fmtDuration(elapsedMs)}
+								</span>
+							) : (
+								lastPass && (
+									<span>
+										Last pass {fmtTimeShort(lastPass.completedAt ?? lastPass.startedAt)}
+										{lastPass.status === "failed" ? ", failed" : ""}
+									</span>
+								)
+							)}
+							{pendingAttention.length > 0 && <span>{pendingAttention.length} need attention</span>}
+							{(status.data?.episodicTokensPending ?? 0) > 0 && (
+								<span>{fmtTokens(status.data?.episodicTokensPending)} tokens waiting</span>
+							)}
+							{(status.error || queueDeferred) && (
+								<StatusLabel tone={queueDeferred ? "warn" : "neutral"}>
+									{status.error
+										? "Updates unavailable, showing saved data"
+										: "Automatic Dreaming deferred: queue pressure"}
+								</StatusLabel>
+							)}
+						</span>
+					}
+					className="dreams-heading"
+				>
 					<TriggerControl running={running} refresh={status.refresh} />
 				</PageHeading>
-				<div className="dreams-stats">
-					<Stat label="State" value={running ? "Running" : "Idle"} live={running} />
-					<Stat
-						label={running ? "Current pass" : "Last attempt"}
-						value={
-							running
-								? `${modeLabel(activePass?.mode)} · ${fmtDuration(elapsedMs)}`
-								: lastPass
-									? `${modeLabel(lastPass.mode)} · ${fmtTimeShort(lastPass.completedAt ?? lastPass.startedAt)}`
-									: "—"
-						}
-					/>
-					<Stat
-						label="Tokens in / out"
-						value={`${fmtTokens(shownPass?.tokensInput)} / ${fmtTokens(shownPass?.tokensOutput)}`}
-					/>
-					<Stat label="Cost" value={fmtCost(shownPass?.tokensCost)} />
-					<Stat label="Attention" value={String(pendingAttention.length)} />
-					<Stat label="Backlog" value={fmtTokens(status.data?.episodicTokensPending ?? null)} />
-					<StatusLabel
-						className="dreams-daemon"
-						tone={status.error ? "neutral" : queueDeferred ? "warn" : status.loading ? "neutral" : "ok"}
-					>
-						{status.error
-							? "Updates unavailable, showing saved data"
-							: status.loading
-								? "Connecting to daemon…"
-								: queueDeferred
-									? "Automatic Dreaming deferred: queue pressure"
-									: "Daemon reachable"}
-					</StatusLabel>
-				</div>
 
 				<div className="dreams-workspace">
 					<DreamingSummarySection pass={lastSuccessful} summary={summaryText} loading={runbook.loading} />
@@ -148,22 +146,6 @@ export function DreamsView() {
 			</div>
 
 			{detailPass && <PassDetailDialog pass={detailPass} onClose={() => setDetailPass(null)} />}
-		</div>
-	);
-}
-
-function Stat({ label, value, live }: { label: string; value: string; live?: boolean }) {
-	return (
-		<div className="dreams-stat">
-			<span className="text-meta text-muted-foreground">{label}</span>
-			<span className="flex min-w-0 items-center gap-1.5 text-body tabular-nums text-foreground">
-				{live && (
-					<span className="dashboard-status" data-tone="ok">
-						<span className="dashboard-status-dot" aria-hidden="true" />
-					</span>
-				)}
-				<span className="truncate">{value}</span>
-			</span>
 		</div>
 	);
 }
@@ -182,11 +164,14 @@ function TriggerControl({ running, refresh }: { running: boolean; refresh: () =>
 		}
 		refresh();
 	};
-	if (running) return <StatusLabel tone="ok">Pass running</StatusLabel>;
 	return (
 		<div className="flex flex-col items-end gap-1.5">
-			<button type="button" onClick={trigger} disabled={busy} className="dreams-run">
-				{busy ? (
+			<button type="button" onClick={trigger} disabled={busy || running} className="dreams-run">
+				{running ? (
+					<>
+						<Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" /> Running…
+					</>
+				) : busy ? (
 					<>
 						<Loader2 className="size-3.5 animate-spin motion-reduce:animate-none" /> Starting…
 					</>
@@ -210,6 +195,7 @@ function DreamingSummarySection({
 	summary: string | null;
 	loading: boolean;
 }) {
+	const scroll = useScrollEnd<HTMLDivElement>(summary);
 	return (
 		<section className="dreams-summary" aria-labelledby="dreams-summary-title">
 			<SectionHeading
@@ -223,7 +209,7 @@ function DreamingSummarySection({
 					</span>
 				}
 			/>
-			<div className="dreams-reflection-body">
+			<div ref={scroll.ref} onScroll={scroll.onScroll} data-at-end={scroll.atEnd} className="dreams-reflection-body">
 				<MarkdownSummary text={summary ?? (loading ? "Loading reflection…" : "No reflection recorded yet.")} />
 			</div>
 		</section>

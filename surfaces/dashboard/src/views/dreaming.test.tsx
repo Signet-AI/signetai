@@ -165,3 +165,13 @@ describe("dreaming summary layout", () => {
 		}
 	});
 });
+
+describe("dream pass timestamps", () => {
+	test("reads the daemon's SQLite UTC timestamps, with or without milliseconds, as UTC", async () => {
+		const { parseDate } = await import("./dreaming");
+		expect(parseDate("2026-10-05 20:41:40.564")?.toISOString()).toBe("2026-10-05T20:41:40.564Z");
+		expect(parseDate("2026-10-05 14:21:36")?.toISOString()).toBe("2026-10-05T14:21:36.000Z");
+		expect(parseDate("2026-08-10T14:00:00.000Z")?.toISOString()).toBe("2026-08-10T14:00:00.000Z");
+		expect(parseDate("not a date")).toBeNull();
+	});
+});
