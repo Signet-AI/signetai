@@ -44,12 +44,12 @@ export function SecretCard({ name, provider, onDeleted }: { name: string; provid
 
 	return (
 		<details className="group/secret" onToggle={(event) => !event.currentTarget.open && setConfirming(false)}>
-			<summary className="flex cursor-pointer list-none items-center gap-2 py-1.5 text-left [&::-webkit-details-marker]:hidden">
+			<summary className="settings-list-row flex cursor-pointer list-none items-center gap-2.5 text-left [&::-webkit-details-marker]:hidden">
 				<Icon className="size-3.5 shrink-0 text-muted-foreground" />
-				<span className="min-w-0 flex-1 truncate font-mono text-[11px] font-normal" title={name}>
+				<span className="min-w-0 flex-1 truncate font-mono text-small font-normal" title={name}>
 					{name}
 				</span>
-				<span className="font-mono text-[9.5px] text-muted-foreground">{provider}</span>
+				{provider !== "local" && <span className="text-meta text-muted-foreground">{provider}</span>}
 				<ChevronRight className="size-3 shrink-0 text-muted-foreground transition-transform group-open/secret:rotate-90" />
 			</summary>
 			<div className="flex items-center justify-between gap-2 pb-2 pl-5 pt-0.5">

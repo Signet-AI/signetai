@@ -115,7 +115,7 @@ export function SettingsView() {
 							);
 						})}
 						{!visible.length && (
-							<p className="px-3 text-[12px] text-muted-foreground" role="status">
+							<p className="px-3 text-small text-muted-foreground" role="status">
 								No settings found.
 							</p>
 						)}
@@ -123,18 +123,18 @@ export function SettingsView() {
 				</nav>
 
 				<div className="flex min-h-0 min-w-0 flex-1 flex-col">
-					<h2 className="m-0 border-b border-border px-5 pb-4 text-[18px] font-medium">
-						{NAV.find((n) => n.id === section)?.label}
-					</h2>
-					<div className="min-h-0 flex-1 overflow-y-auto p-5">
-						{section === "workspace" && <WorkspaceSettingsSection />}
-						{section === "connectors" && <ConnectorsSection />}
-						{section === "network" && <NetworkSection />}
-						{section === "inference" && <InferenceSection />}
-						{section === "secrets" && <SecretsSection />}
-						{section === "logs" && <LogsSection />}
-						{section === "advanced" && <AdvancedSection />}
-						{section === "licenses" && <LicensesSection />}
+					<div className="settings-scroll">
+						<div className="settings-content">
+							<h2 className="settings-title">{NAV.find((n) => n.id === section)?.label}</h2>
+							{section === "workspace" && <WorkspaceSettingsSection />}
+							{section === "connectors" && <ConnectorsSection />}
+							{section === "network" && <NetworkSection />}
+							{section === "inference" && <InferenceSection />}
+							{section === "secrets" && <SecretsSection />}
+							{section === "logs" && <LogsSection />}
+							{section === "advanced" && <AdvancedSection />}
+							{section === "licenses" && <LicensesSection />}
+						</div>
 					</div>
 				</div>
 			</div>
