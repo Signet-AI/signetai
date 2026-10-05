@@ -1,7 +1,7 @@
 import { Activity, useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SidebarNav } from "@/components/shell/navigation";
+import { SidebarNav, useSidebarOpen } from "@/components/shell/navigation";
 import { Topbar } from "@/components/shell/topbar";
 import { type ViewId, useView } from "@/lib/view-context";
 import { SettingsView, useSettingsHotkey } from "@/views/settings";
@@ -25,6 +25,7 @@ function Shell() {
 	useSettingsHotkey();
 	const { view, setView, setSetupComplete } = useView();
 	const contentRef = useRef<HTMLDivElement>(null);
+	const [sidebarOpen, toggleSidebar] = useSidebarOpen();
 	useEffect(() => {
 		contentRef.current?.scrollTo({ top: 0 });
 	}, [view]);
@@ -32,11 +33,12 @@ function Shell() {
 		<div className="flex h-full min-h-0 flex-col bg-background text-foreground">
 			<main
 				data-view={view}
+				data-sidebar={sidebarOpen ? "open" : "closed"}
 				className="sig-app-frame flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
 			>
 				<Topbar />
 				<div className="sig-work-area flex min-h-0 min-w-0 flex-1">
-					<SidebarNav />
+					<SidebarNav open={sidebarOpen} onToggle={toggleSidebar} />
 					<div
 						ref={contentRef}
 						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "settings" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}

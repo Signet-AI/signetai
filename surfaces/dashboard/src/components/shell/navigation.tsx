@@ -3,8 +3,15 @@ import { cn } from "@/lib/utils";
 import { ModeToggle } from "@/components/mode-toggle";
 import { Settings } from "@/components/mingcute-icons";
 import { type ViewId, useView } from "@/lib/view-context";
-import { BookRegular, Home1Regular, MindMapRegular, MoonRegular } from "@mingcute/react/core-regular";
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import {
+	BookRegular,
+	Home1Regular,
+	LayoutLeftbarCloseRegular,
+	LayoutLeftbarOpenRegular,
+	MindMapRegular,
+	MoonRegular,
+} from "@mingcute/react/core-regular";
+import { type ButtonHTMLAttributes, type ReactNode, useCallback, useEffect, useState } from "react";
 
 interface NavItem {
 	view: ViewId;
@@ -20,11 +27,54 @@ export const TOP_LEVEL_NAV_ITEMS: NavItem[] = [
 	{ view: "skills", label: "Skills", icon: BookRegular, disabled: true },
 ];
 
-export function SidebarNav() {
+const SIDEBAR_STORAGE_KEY = "signet-sidebar-open";
+
+function readSidebarOpen(): boolean {
+	try {
+		return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
+	} catch {
+		return false;
+	}
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+	return (
+		target instanceof HTMLElement &&
+		(target.isContentEditable ||
+			target.tagName === "INPUT" ||
+			target.tagName === "TEXTAREA" ||
+			target.tagName === "SELECT")
+	);
+}
+
+export function useSidebarOpen(): readonly [boolean, () => void] {
+	const [open, setOpen] = useState(readSidebarOpen);
+	const toggle = useCallback(() => setOpen((current) => !current), []);
+	useEffect(() => {
+		try {
+			window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(open));
+		} catch {}
+	}, [open]);
+	useEffect(() => {
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key.toLowerCase() !== "b" || !(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey)
+				return;
+			if (isEditableTarget(event.target)) return;
+			event.preventDefault();
+			toggle();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [toggle]);
+	return [open, toggle] as const;
+}
+
+export function SidebarNav({ open, onToggle }: { open: boolean; onToggle: () => void }) {
 	const { view, setView, openSettings } = useView();
 	const activeView = view === "graph" || view === "memory" ? "memory" : view;
+	const ToggleIcon = open ? LayoutLeftbarCloseRegular : LayoutLeftbarOpenRegular;
 	return (
-		<nav aria-label="Dashboard navigation" className="sig-sidebar">
+		<nav id="dashboard-sidebar" aria-label="Dashboard navigation" className="sig-sidebar">
 			<ul className="m-0 flex list-none flex-col gap-2 p-0">
 				{TOP_LEVEL_NAV_ITEMS.map((item) => {
 					const Icon = item.icon;
@@ -33,6 +83,7 @@ export function SidebarNav() {
 						<li key={item.view}>
 							<SidebarButton
 								label={item.label}
+								open={open}
 								disabled={item.disabled}
 								aria-current={active ? "page" : undefined}
 								data-dashboard-nav={item.view}
@@ -47,9 +98,20 @@ export function SidebarNav() {
 				})}
 			</ul>
 			<div className="sig-no-drag mt-auto flex flex-col gap-2">
+				<SidebarButton
+					label={open ? "Collapse sidebar" : "Expand sidebar"}
+					open={open}
+					onClick={onToggle}
+					aria-expanded={open}
+					aria-controls="dashboard-sidebar"
+					className="sig-sidebar-toggle"
+				>
+					<ToggleIcon className="size-[22px] shrink-0" aria-hidden="true" />
+				</SidebarButton>
 				<ModeToggle />
 				<SidebarButton
 					label="Settings"
+					open={open}
 					className={cn(view === "settings" && "is-active")}
 					onClick={() => openSettings()}
 					aria-current={view === "settings" ? "page" : undefined}
@@ -64,11 +126,12 @@ export function SidebarNav() {
 
 function SidebarButton({
 	label,
+	open,
 	className,
 	disabled,
 	children,
 	...props
-}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+}: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; open: boolean }) {
 	const button = (
 		<button
 			type="button"
@@ -78,11 +141,15 @@ function SidebarButton({
 			{...props}
 		>
 			{children}
+			<span className="sig-sidebar-label" aria-hidden="true">
+				{label}
+				{disabled && <span className="sig-sidebar-soon">Soon</span>}
+			</span>
 		</button>
 	);
 	return (
-		<Tooltip>
-			<TooltipTrigger asChild>{disabled ? <span className="flex">{button}</span> : button}</TooltipTrigger>
+		<Tooltip open={open ? false : undefined}>
+			<TooltipTrigger asChild>{disabled ? <span className="flex w-full">{button}</span> : button}</TooltipTrigger>
 			<TooltipContent side="right">
 				{label}
 				{disabled ? " · Coming soon" : ""}

@@ -53,6 +53,9 @@ export function ModeToggle() {
 				<Moon className={cn("sig-theme-icon", visibleTheme === "dark" && "is-active")} />
 				<Monitor className={cn("sig-theme-icon", visibleTheme === "system" && "is-active")} />
 			</span>
+			<span className="sig-sidebar-label" aria-hidden="true">
+				Theme <span className="sig-sidebar-soon">{visibleTheme}</span>
+			</span>
 		</Button>
 	);
 }
