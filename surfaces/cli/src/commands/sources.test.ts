@@ -319,6 +319,62 @@ describe("sources CLI commands", () => {
 		expect(process.exitCode).not.toBe(1);
 	});
 
+	it("wires Notion source adds through the daemon so the initial index job is queued", async () => {
+		const calls: Array<{ method: string; path: string; body: unknown; timeoutMs?: number }> = [];
+		const program = new Command();
+		program.exitOverride();
+		registerSourcesCommands(program, {
+			agentsDir: dir,
+			secretApiCall: async (method, path, body, timeoutMs) => {
+				calls.push({ method, path, body, timeoutMs });
+				return {
+					ok: true,
+					data: {
+						created: true,
+						queued: true,
+						source: {
+							id: "notion:abc",
+							kind: "notion",
+							name: "Notion CLI",
+							root: "notion://integrations/NOTION_TOKEN",
+							enabled: true,
+							mode: "read-only",
+							createdAt: "2026-10-04T00:00:00.000Z",
+							updatedAt: "2026-10-04T00:00:00.000Z",
+							providerSettings: { tokenRef: "NOTION_TOKEN", maxPages: 75 },
+						},
+						job: { id: "source-index:notion:abc:1" },
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"sources",
+			"add",
+			"notion",
+			"--token-ref",
+			"NOTION_TOKEN",
+			"--max-pages",
+			"75",
+			"--name",
+			"Notion CLI",
+		]);
+
+		expect(calls).toEqual([
+			{
+				method: "POST",
+				path: "/api/sources/notion",
+				timeoutMs: 30_000,
+				body: { tokenRef: "NOTION_TOKEN", name: "Notion CLI", maxPages: 75 },
+			},
+		]);
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+		expect(process.exitCode).not.toBe(1);
+	});
+
 	it("falls back to local GitHub source config when the daemon is unreachable", async () => {
 		const calls: Array<{ method: string; path: string }> = [];
 		const program = new Command();

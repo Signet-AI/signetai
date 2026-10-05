@@ -3,9 +3,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import {
 	type AddDiscordSourceInput,
 	type AddGitHubSourceInput,
+	type AddNotionSourceInput,
 	type SignetSourceEntry,
 	addDiscordSource,
 	addGitHubSource,
+	addNotionSource,
 	addObsidianSource,
 	loadSourcesConfig,
 	removeSource,
@@ -123,6 +125,7 @@ export interface SourcesDeps extends SourceImportDeps {
 	readonly agentsDir: string;
 	readonly addDiscordSourceToDaemon?: (input: AddDiscordSourceInput) => Promise<DaemonAddSourceResult>;
 	readonly addGitHubSourceToDaemon?: (input: AddGitHubSourceInput) => Promise<DaemonAddSourceResult>;
+	readonly addNotionSourceToDaemon?: (input: AddNotionSourceInput) => Promise<DaemonAddSourceResult>;
 	readonly removeSourceFromDaemon?: (sourceId: string) => Promise<DaemonRemoveSourceResult>;
 	readonly exportSourceSnapshotFromDaemon?: (
 		sourceId: string,
@@ -217,6 +220,12 @@ export interface AddGitHubSourceOptions {
 	readonly label?: readonly string[];
 	readonly docPath?: readonly string[];
 	readonly maxItems?: string;
+}
+
+export interface AddNotionSourceOptions {
+	readonly tokenRef: string;
+	readonly name?: string;
+	readonly maxPages?: string;
 }
 
 export async function addObsidianVaultSource(
@@ -353,6 +362,35 @@ export async function addGitHubSourceFromCli(options: AddGitHubSourceOptions, de
 	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
 }
 
+export async function addNotionSourceFromCli(options: AddNotionSourceOptions, deps: SourcesDeps): Promise<void> {
+	const maxPages = parseIntegerOption(options.maxPages, "Notion max-pages");
+	if (isParseError(maxPages)) {
+		console.error(chalk.red(`✗ ${maxPages.error}`));
+		process.exitCode = 1;
+		return;
+	}
+	const input: AddNotionSourceInput = { tokenRef: options.tokenRef, name: options.name, maxPages };
+	const daemonResult = await addSourceThroughDaemon(input, deps.addNotionSourceToDaemon);
+	if (daemonResult) {
+		const handled = printDaemonAddSourceResult("Notion", daemonResult);
+		if (handled) return;
+	}
+
+	const result = addNotionSource(input, deps.agentsDir);
+	if (result.ok === false) {
+		console.error(chalk.red(`✗ ${result.error}`));
+		process.exitCode = 1;
+		return;
+	}
+
+	const verb = result.created ? "Added" : "Updated";
+	console.log(chalk.green(`✓ ${verb} Notion source: ${result.source.name}`));
+	console.log(chalk.dim(`  tokenRef: ${options.tokenRef.trim()}`));
+	console.log();
+	console.log(chalk.dim("The daemon indexes every Notion page shared with the integration."));
+	console.log(chalk.dim("Run `signet daemon restart` if the daemon is already running."));
+}
+
 export async function listSources(deps: SourcesDeps): Promise<void> {
 	const config = loadSourcesConfig(deps.agentsDir);
 	if (config.sources.length === 0) {
@@ -383,6 +421,12 @@ export async function listSources(deps: SourcesDeps): Promise<void> {
 			if (repos.length > 0) console.log(chalk.dim(`  repos: ${repos.join(", ")}`));
 			if (typeof source.providerSettings.tokenRef === "string")
 				console.log(chalk.dim(`  tokenRef: ${source.providerSettings.tokenRef}`));
+		}
+		if (source.kind === "notion" && source.providerSettings) {
+			if (typeof source.providerSettings.tokenRef === "string")
+				console.log(chalk.dim(`  tokenRef: ${source.providerSettings.tokenRef}`));
+			if (typeof source.providerSettings.maxPages === "number")
+				console.log(chalk.dim(`  max pages: ${source.providerSettings.maxPages}`));
 		}
 		if (source.excludeGlobs?.length) console.log(chalk.dim(`  excludes: ${source.excludeGlobs.join(", ")}`));
 		if (source.lastIndexedAt) console.log(chalk.dim(`  last indexed: ${source.lastIndexedAt}`));

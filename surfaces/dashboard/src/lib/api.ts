@@ -1175,11 +1175,13 @@ export const api = {
 			obsidian: { root: source.root, name: source.name, excludeGlobs: source.excludeGlobs },
 			web: { url: source.root },
 			github: { repos: Array.isArray(ps.repos) ? ps.repos : [], tokenRef, name: source.name },
+			notion: { tokenRef, name: source.name },
 			discord: { guildIds: Array.isArray(ps.guildIds) ? ps.guildIds : [], tokenRef, name: source.name },
 		};
 		const body = bodies[source.kind] as { repos?: unknown[]; guildIds?: unknown[] } | undefined;
 		if (!body) return { ok: false, error: `re-index not supported for ${source.kind}` };
 		if (source.kind === "github" && !body.repos?.length) return { ok: false, error: "source config is missing repos" };
+		if (source.kind === "notion" && !tokenRef) return { ok: false, error: "source config is missing tokenRef" };
 		if (source.kind === "discord" && !body.guildIds?.length)
 			return { ok: false, error: "source config is missing guild ids" };
 		try {

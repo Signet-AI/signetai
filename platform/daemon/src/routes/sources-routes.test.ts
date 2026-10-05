@@ -7,6 +7,7 @@ import {
 	addImportedSource,
 	addObsidianSource,
 	loadSourcesConfig,
+	notionSourceId,
 	removeSourceIfGeneration,
 } from "@signet/core";
 import { Hono } from "hono";
@@ -666,6 +667,65 @@ describe("Sources routes", () => {
 		expect(body.queued).toBe(true);
 		expect(body.source).toMatchObject({ kind: "web", root: "https://example.com/route" });
 		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("web");
+	});
+
+	it("connects a Notion source and queues the shared source index job", async () => {
+		globalThis.fetch = mock(() =>
+			Promise.resolve(Response.json({ object: "list", results: [], next_cursor: null, has_more: false })),
+		) as typeof fetch;
+
+		const res = await makeApp().request("/api/sources/notion", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ tokenRef: "NOTION_TOKEN", name: "Route Notion", maxPages: 25 }),
+		});
+
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as {
+			source: { id: string; kind: string; name: string; providerSettings?: Record<string, unknown> };
+			queued: boolean;
+		};
+		expect(body.queued).toBe(true);
+		expect(body.source).toMatchObject({ kind: "notion", name: "Route Notion" });
+		expect(body.source.providerSettings).toEqual({ tokenRef: "NOTION_TOKEN", maxPages: 25 });
+		expect(loadSourcesConfig(dir).sources.map((source) => source.id)).toEqual([body.source.id]);
+	});
+
+	it("rejects malformed Notion source bodies before writing config", async () => {
+		for (const payload of [
+			null,
+			[],
+			{},
+			{ tokenRef: 42 },
+			{ tokenRef: "NOTION_TOKEN", name: ["x"] },
+			{ tokenRef: "NOTION_TOKEN", maxPages: "25" },
+			{ tokenRef: "NOTION_TOKEN", maxPages: 0 },
+			{ tokenRef: `ntn_${"a".repeat(46)}` },
+		]) {
+			const res = await makeApp().request("/api/sources/notion", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(payload),
+			});
+			expect(res.status).toBe(400);
+		}
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+	});
+
+	it("returns 409 for a Notion source whose mutation lease is held", async () => {
+		const releaseDeletion = beginSourceDeletion(notionSourceId("NOTION_TOKEN"));
+		expect(releaseDeletion).toBeTypeOf("function");
+		try {
+			const res = await makeApp().request("/api/sources/notion", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ tokenRef: "  NOTION_TOKEN  " }),
+			});
+			expect(res.status).toBe(409);
+			expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+		} finally {
+			releaseDeletion?.();
+		}
 	});
 
 	it("rejects raw Discord tokens at the route boundary", async () => {

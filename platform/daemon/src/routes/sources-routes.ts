@@ -10,12 +10,14 @@ import {
 	type SignetSourceEntry,
 	addDiscordSource,
 	addGitHubSource,
+	addNotionSource,
 	addObsidianSource,
 	addWebSource,
 	DEFAULT_DISCORD_DESKTOP_CACHE_PATH,
 	loadSourcesConfig,
 	markSourceIndexed,
 	normalizePublicWebUrl,
+	notionSourceId,
 	parseDiscordSettings,
 	parseGitHubSettings,
 	removeSourceIfGeneration,
@@ -508,6 +510,41 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		}
 	});
 
+	app.post("/api/sources/notion", async (c) => {
+		let parsed: unknown;
+		try {
+			parsed = await c.req.json();
+		} catch {
+			recordSourceConnectionFailure("notion", "invalid configuration");
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		const body = parseAddNotionSourceBody(parsed);
+		if ("error" in body) {
+			recordSourceConnectionFailure("notion", "invalid configuration");
+			return c.json({ error: body.error }, 400);
+		}
+		const releaseSourceMutation = beginSourceMutationLease(c, notionSourceId(body.tokenRef));
+		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
+		try {
+			const result = addNotionSource(body, agentsDir);
+			if (result.ok === false) {
+				recordSourceConnectionFailure("notion", result.error);
+				return c.json({ error: result.error }, 400);
+			}
+			await recordSourceConnected(result.source, resolveDaemonAgentId());
+			const job = enqueueSourceIndexJob({
+				source: result.source,
+				agentsDir,
+				startBridge,
+				purgeNativeSource,
+				recordIndexOperation,
+			});
+			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+		} finally {
+			releaseSourceMutation();
+		}
+	});
+
 	app.post("/api/sources/web", async (c) => {
 		let body: AddWebSourceBody = {};
 		try {
@@ -641,6 +678,22 @@ function sourceIdForDiscord(body: AddDiscordSourceBody, guildIds: readonly strin
 	return settings.syncMode === "desktop-cache"
 		? `discord-cache:${createHash("sha256").update(root).digest("hex").slice(0, 16)}`
 		: `discord:${createHash("sha256").update(settings.guildIds.slice().sort().join(",")).digest("hex").slice(0, 16)}`;
+}
+
+function parseAddNotionSourceBody(
+	value: unknown,
+): { readonly tokenRef: string; readonly name?: string; readonly maxPages?: number } | { readonly error: string } {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return { error: "Request body must be an object" };
+	const body = value as Record<string, unknown>;
+	if (typeof body.tokenRef !== "string") return { error: "Notion tokenRef is required" };
+	if (body.name !== undefined && typeof body.name !== "string") return { error: "Notion name must be a string" };
+	if (body.maxPages !== undefined && typeof body.maxPages !== "number")
+		return { error: "Notion maxPages must be a number" };
+	return {
+		tokenRef: body.tokenRef,
+		...(typeof body.name === "string" ? { name: body.name } : {}),
+		...(typeof body.maxPages === "number" ? { maxPages: body.maxPages } : {}),
+	};
 }
 
 function sourceIdForGitHub(repos: readonly string[]): string {

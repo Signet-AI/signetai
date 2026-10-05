@@ -7,6 +7,7 @@ import {
 	type SourcesDeps,
 	addDiscordSourceFromCli,
 	addGitHubSourceFromCli,
+	addNotionSourceFromCli,
 	addObsidianVaultSource,
 	exportConfiguredSourceSnapshot,
 	importConfiguredSourceSnapshot,
@@ -378,6 +379,21 @@ export function registerSourcesCommands(program: Command, deps: RegisterSourcesC
 				...deps,
 				addGitHubSourceToDaemon: deps.secretApiCall
 					? (input) => addSourceThroughDaemon(deps.secretApiCall, "/api/sources/github", input)
+					: undefined,
+			}),
+		);
+
+	add
+		.command("notion")
+		.description("Index Notion pages shared with an internal integration as read-only recall sources")
+		.requiredOption("--token-ref <secret>", "Signet secret name or external secret reference for the integration token")
+		.option("--name <name>", "Display name for the Notion source")
+		.option("--max-pages <count>", "Maximum pages to index, most recently edited first")
+		.action((options) =>
+			addNotionSourceFromCli(options, {
+				...deps,
+				addNotionSourceToDaemon: deps.secretApiCall
+					? (input) => addSourceThroughDaemon(deps.secretApiCall, "/api/sources/notion", input)
 					: undefined,
 			}),
 		);
