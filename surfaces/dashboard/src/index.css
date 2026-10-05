@@ -304,7 +304,9 @@
 	.home-brief-reply:disabled { opacity: 0.5; }
 	.home-brief-pager { display: flex; align-items: center; gap: 4px; }
 	.home-brief-pager > span { min-width: 6ch; text-align: center; }
-	.home-recent-more { align-self: flex-start; margin-block-start: 8px; padding-block: 4px; }
+	/* Recent memories scroll inside a fixed window so the page height stays put; the fade hints at more below. */
+	.home-recent-list { max-block-size: 316px; overflow-y: auto; overflow-x: hidden; padding-inline: 10px; margin-inline: -10px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--foreground) 18%, transparent) transparent; }
+	.home-recent-list[data-at-end="false"] { -webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 36px), transparent); mask-image: linear-gradient(180deg, #000 calc(100% - 36px), transparent); }
 	.home-recent > div:nth-child(2) { gap: 16px; margin-top: 14px; }
 	.home-recent input { font-size: var(--text-small); }
 	.home-memory-row { position: relative; border-bottom: 1px solid transparent; }
@@ -440,6 +442,7 @@
 		.home-daily-brief { padding: 16px 16px 12px; margin-block-end: 24px; border-radius: 14px; }
 		.home-memory-summary { gap: 10px; align-items: flex-start; padding-block: 10px; }
 		.home-memory-summary p { -webkit-line-clamp: 2; }
+		.home-recent-list { max-block-size: 340px; }
 		.home-source-filter { width: 112px; }
 		.home-status-bar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); height: auto; gap: 4px 12px; padding-block: 12px; }
 		.home-status-bar .home-status-sep { display: none; }
