@@ -7,10 +7,10 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-05
-- Features: report blocked layout upgrades in status; create new workspaces on layout v2; upgrade v1 workspaces to v2 in place; Liquid Glass macOS app icon via Icon Composer.
-- Bug fixes: anchor v2 storage roots in gitignore; defer to an interrupted layout upgrade; verify v1 data before finishing upgrades; keep legacy volumes on layout v1; keep same-millisecond snapshots apart; report v2 storage in status and diagnostics; recognize older template test dirs; harden layout upgrade recovery; reject incomplete v2 databases; validate upgrade record paths; preserve legacy workspace state; preserve legacy state; preserve transcript-only workspaces; harden recovery checks; verify interrupted move identity; reject missing upgrade moves; keep original transcript provenance; resolve workspace paths through layout; resume upgrades from the daemon entry; scope upgrade rollback and resume; harden in-place layout upgrade; resolve runtime paths through layout; use shared MCP resolver; register native Signet binary as MCP stdio server; create macOS descriptor files with a mode openat actually reads; require exact manifest zip names; verify published macOS manifest; publish one macOS update manifest for both architectures; ship precompiled Assets.car instead of compiling .icon in CI; select Xcode 26 for deep-link package CI; drop comments; gate mac updates on release team; stop offering updates unsigned macOS builds cannot install.
+- Features: redesign homepage and blog; add Notion source provider; report blocked layout upgrades in status; create new workspaces on layout v2; upgrade v1 workspaces to v2 in place; Liquid Glass macOS app icon via Icon Composer.
+- Bug fixes: refresh changed Notion properties; bound Notion syncs and block passes; use the canonical Notion logo; harden Notion block and purge logic; anchor v2 storage roots in gitignore; defer to an interrupted layout upgrade; verify v1 data before finishing upgrades; keep legacy volumes on layout v1; keep same-millisecond snapshots apart; report v2 storage in status and diagnostics; recognize older template test dirs; harden layout upgrade recovery; reject incomplete v2 databases; validate upgrade record paths; preserve legacy workspace state; preserve legacy state; preserve transcript-only workspaces; harden recovery checks; verify interrupted move identity; reject missing upgrade moves; keep original transcript provenance; resolve workspace paths through layout; resume upgrades from the daemon entry; scope upgrade rollback and resume; harden in-place layout upgrade; resolve runtime paths through layout; use shared MCP resolver; register native Signet binary as MCP stdio server; create macOS descriptor files with a mode openat actually reads; require exact manifest zip names; verify published macOS manifest; publish one macOS update manifest for both architectures; ship precompiled Assets.car instead of compiling .icon in CI; select Xcode 26 for deep-link package CI; drop comments; gate mac updates on release team; stop offering updates unsigned macOS builds cannot install.
 - Refactoring: remove relocation migration.
-- Docs: add German, Korean, Simplified Chinese, and Japanese translations; narrow the transcript upgrade row; describe v2 paths and memory/ rule.
+- Docs: sync translations; list Notion as a supported source; add German, Korean, Simplified Chinese, and Japanese translations; narrow the transcript upgrade row; describe v2 paths and memory/ rule.
 
 ### 2026-10-04
 - Bug fixes: close search before client navigation; fail closed on keyring probe errors; persist and deliver first-use events in recorded order; release the store lock without exposing an empty lock directory; decode source-chunk fallback vectors from the DB owner; record a clean shutdown when no cleanup error occurred; yield every reindex batch instead of every 2,500 files; stop sharing default pipeline config by reference; allow machine-id encryption only when the host has no keyring; launch git and protection subprocesses through the shared adapter; mark routed targets unavailable on any HTTP auth failure; flush final SSE drop summaries; retain SSE fallback framing; preserve bounded SSE delivery; bound SSE buffering and teardown.
@@ -40,6 +40,28 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: move owner protocol reference.
 
 ## Release Ledger
+
+## [0.233.0] - 2026-10-05
+
+Release summary: 2 features, 4 bug fixes, and 2 docs updates.
+Tag range: `v0.232.1..v0.233.0`.
+
+### Features
+
+- **web**: redesign homepage and blog
+- **sources**: add Notion source provider
+
+### Bug Fixes
+
+- **sources**: refresh changed Notion properties
+- **sources**: bound Notion syncs and block passes
+- **dashboard**: use the canonical Notion logo
+- **sources**: harden Notion block and purge logic
+
+### Docs
+
+- **readme**: sync translations
+- **readme**: list Notion as a supported source
 
 ## [0.232.1] - 2026-10-05
 
