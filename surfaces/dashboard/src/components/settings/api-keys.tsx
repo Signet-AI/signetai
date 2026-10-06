@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Copy } from "@/components/mingcute-icons";
 import { GroupLabel } from "@/components/settings/controls";
@@ -155,13 +155,18 @@ export function ApiKeysSection() {
 	const keys = useAsync(() => api.listApiKeys().then((result) => result.data), { key: "api-keys" });
 	const [created, setCreated] = useState<CreatedApiKey | null>(null);
 	const [revoking, setRevoking] = useState<ApiKeyRecord | null>(null);
-	const list = keys.data?.apiKeys ?? [];
+	const [list, setList] = useState<readonly ApiKeyRecord[]>([]);
+
+	useEffect(() => {
+		if (keys.data) setList(keys.data.apiKeys);
+	}, [keys.data]);
 
 	const revoke = async (key: ApiKeyRecord) => {
 		setRevoking(null);
 		const result = await api.revokeApiKey(key.id);
+		const record = result.data?.apiKey;
+		if (result.ok && record) setList((current) => current.map((item) => (item.id === record.id ? record : item)));
 		toast(result.ok ? `Revoked ${key.name}` : (result.data?.error ?? `Could not revoke ${key.name}`));
-		await keys.refresh();
 	};
 
 	return (
@@ -182,7 +187,8 @@ export function ApiKeysSection() {
 					<CreateKeyForm
 						onCreated={(key) => {
 							setCreated(key);
-							void keys.refresh();
+							const { key: _secret, ...record } = key;
+							setList((current) => [record, ...current]);
 						}}
 					/>
 				)}

@@ -104,7 +104,15 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 				typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
 					? body.error
 					: `request failed (${res.status})`;
-			const error = res.status === 403 ? describeForbidden(reason) : reason;
+			const retryAfter = Number(res.headers.get("Retry-After"));
+			const error =
+				res.status === 403
+					? describeForbidden(reason)
+					: res.status === 429
+						? Number.isFinite(retryAfter) && retryAfter > 0
+							? `Too many requests. Try again in ${retryAfter}s.`
+							: "Too many requests. Try again shortly."
+						: reason;
 			const details = typeof body === "object" && body !== null && "details" in body ? body.details : undefined;
 			return { data: null, error, details, status: res.status };
 		}
@@ -1341,7 +1349,7 @@ export const api = {
 			...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
 		}),
 	revokeApiKey: (id: string) =>
-		mutateJSON<{ error?: string }>(`/api/auth/api-keys/${encodeURIComponent(id)}`, "DELETE"),
+		mutateJSON<{ error?: string; apiKey?: ApiKeyRecord }>(`/api/auth/api-keys/${encodeURIComponent(id)}`, "DELETE"),
 	getOnePasswordStatus: async (): Promise<OnePasswordStatus> => {
 		const data = await getJSON<Partial<OnePasswordStatus>>("/api/secrets/1password/status");
 		return {

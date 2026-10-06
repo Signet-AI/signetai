@@ -62,6 +62,17 @@ describe("forbidden responses", () => {
 		expect(result).toMatchObject({ status: 403, error: "Requires the admin permission." });
 	});
 
+	it("turns a rate limit into a wait time", async () => {
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			(async () =>
+				new Response(JSON.stringify({ error: "rate limit exceeded" }), {
+					status: 429,
+					headers: { "Content-Type": "application/json", "Retry-After": "12" },
+				})) as typeof fetch,
+		);
+		expect((await getJSONResult("/api/auth/api-keys")).error).toBe("Too many requests. Try again in 12s.");
+	});
+
 	it("explains a scope restriction", async () => {
 		capture(403, { error: "scope restricted to agent 'alice'" });
 		expect((await getJSONResult("/api/memories")).error).toBe("Your credential is limited to agent alice.");
