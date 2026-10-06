@@ -177,7 +177,14 @@ async function redeemHandoff(): Promise<void> {
 }
 
 export function startSession(): Promise<void> {
-	boot ??= demo ? Promise.resolve() : redeemHandoff().then(refreshSession);
+	if (boot) return boot;
+	boot = demo ? Promise.resolve() : redeemHandoff().then(refreshSession);
+	// A handoff link opened in a tab that already shows the dashboard only changes the hash.
+	if (!demo && typeof window !== "undefined") {
+		window.addEventListener("hashchange", () => {
+			if (location.hash.includes(`${HANDOFF_PARAM}=`)) void redeemHandoff().then(refreshSession);
+		});
+	}
 	return boot;
 }
 

@@ -66,6 +66,15 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			expect(session.currentSession().kind).toBe("signed-in");
 		});
 
+		test("redeems a handoff opened in a tab that already shows the dashboard", async () => {
+			handler = (path) =>
+				path === "/api/auth/handoff/redeem" ? { status: 200, body: { token: "session-3" } } : signedIn;
+			location.hash = "#signet-handoff=code-2";
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(location.hash).toBe("");
+			expect(localStorage.getItem(session.TOKEN_KEY)).toBe("session-3");
+		});
+
 		test("a 401 mid-session ends the session in place and drops the dead token", async () => {
 			handler = () => whoami({ authenticated: false, effectiveAccess: false, error: "token expired" });
 			session.noteUnauthorized();
