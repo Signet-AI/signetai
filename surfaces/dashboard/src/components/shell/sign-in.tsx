@@ -4,6 +4,7 @@ import { SignetMark } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
 import { type Session, type SignInResult, signInWithKey, signInWithPassword, signOut } from "@/lib/session";
+import heroBackground from "@/assets/hero-bg.avif";
 
 type SignedOut = Extract<Session, { kind: "signed-out" }>;
 
@@ -32,17 +33,12 @@ function SignInForm({ session }: { session: SignedOut }) {
 
 	const message = error ?? session.reason;
 	return (
-		<form className="flex flex-col gap-4" onSubmit={submit} aria-label="Sign in to Signet">
-			<div className="flex items-center gap-2.5">
-				<SignetMark className="h-[22px] w-[18px] shrink-0" aria-hidden="true" />
-				<div className="min-w-0">
-					<h1 className="m-0 text-[15px] font-semibold tracking-tight">
-						{session.expired ? "Sign in again" : "Sign in to Signet"}
-					</h1>
-					<p className="m-0 mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
-						{describeTarget(session.mode)}
-					</p>
-				</div>
+		<form className="flex flex-col gap-6" onSubmit={submit} aria-label="Sign in to Signet">
+			<div className="flex flex-col items-center gap-1 text-center">
+				<h1 className="m-0 text-2xl font-semibold tracking-tight">
+					{session.expired ? "Sign in again" : "Sign in to Signet"}
+				</h1>
+				<p className="m-0 text-sm text-balance text-muted-foreground">{describeTarget(session.mode)}</p>
 			</div>
 			{message && (
 				<p role="alert" className="m-0 text-[12px] text-destructive">
@@ -91,24 +87,30 @@ function SignInForm({ session }: { session: SignedOut }) {
 					</Field>
 				</>
 			)}
-			<Button type="submit" disabled={busy}>
+			<Button type="submit" disabled={busy} className="w-full">
 				{busy ? "Signing in…" : "Sign in"}
 			</Button>
 			{password ? (
-				<Button
-					type="button"
-					variant="link"
-					size="xs"
-					className="self-center text-muted-foreground"
-					onClick={() => {
-						setUseKey(!useKey);
-						setError(null);
-					}}
-				>
-					{useKey ? "Use username and password" : "Use an API key instead"}
-				</Button>
+				<>
+					<div className="flex items-center gap-3 text-xs text-muted-foreground">
+						<span className="h-px flex-1 bg-border" />
+						Or
+						<span className="h-px flex-1 bg-border" />
+					</div>
+					<Button
+						type="button"
+						variant="outline"
+						className="w-full"
+						onClick={() => {
+							setUseKey(!useKey);
+							setError(null);
+						}}
+					>
+						{useKey ? "Use username and password" : "Use an API key instead"}
+					</Button>
+				</>
 			) : (
-				<p className="m-0 text-center text-[11px] text-muted-foreground">
+				<p className="m-0 text-center text-sm text-muted-foreground">
 					Password sign-in is not configured on this daemon.
 				</p>
 			)}
@@ -118,13 +120,25 @@ function SignInForm({ session }: { session: SignedOut }) {
 
 export function SignInScreen({ session }: { session: SignedOut }) {
 	return (
-		<div className="flex h-full min-h-0 items-center justify-center bg-background p-4 text-foreground">
-			<div className="w-full max-w-[360px] rounded-lg border bg-card p-6 shadow-sm">
-				<SignInForm session={session} />
+		<div className="grid h-full min-h-0 overflow-auto bg-background text-foreground lg:grid-cols-2">
+			<div className="flex flex-col gap-4 p-6 md:p-10">
+				<div className="flex items-center justify-center gap-2 font-medium md:justify-start">
+					<SignetMark className="h-[19px] w-4 shrink-0" aria-hidden="true" />
+					Signet
+				</div>
+				<div className="flex flex-1 items-center justify-center">
+					<div className="w-full max-w-xs">
+						<SignInForm session={session} />
+					</div>
+				</div>
+			</div>
+			<div className="relative hidden bg-muted lg:block">
+				<img src={heroBackground} alt="" className="absolute inset-0 h-full w-full object-cover object-[72%_center]" />
 			</div>
 		</div>
 	);
 }
+
 export function SignInDialog({ session }: { session: SignedOut }) {
 	return (
 		<DialogPrimitive.Root open>
