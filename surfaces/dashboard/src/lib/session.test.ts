@@ -244,6 +244,7 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			}) as unknown as typeof fetch;
 			await session.refreshSession();
 			expect(session.currentSession().kind).toBe("unreachable");
+			expect(session.can(session.currentSession(), "admin")).toBe(true);
 		});
 	});
 }

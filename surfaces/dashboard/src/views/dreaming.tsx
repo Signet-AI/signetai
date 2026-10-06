@@ -3,6 +3,8 @@ import { PageHeading, SectionAction, SectionHeading, StatusLabel } from "@/compo
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { type DreamPass, type DreamToolCall, api } from "@/lib/api";
+import { NotPermitted } from "@/components/shell/not-permitted";
+import { useCan } from "@/lib/session";
 import { useAsync } from "@/lib/use-async";
 import { useScrollEnd } from "@/lib/use-scroll-end";
 import { cn } from "@/lib/utils";
@@ -60,6 +62,20 @@ interface OntologyOp {
 	payload?: Record<string, unknown>;
 }
 export function DreamsView() {
+	if (!useCan("admin")) {
+		return (
+			<div className="dreams-page">
+				<div className="dreams-content">
+					<PageHeading title="Dreams" description="Dreaming passes and reflections" className="dreams-heading" />
+					<NotPermitted what="Viewing and running Dreaming passes" permission="admin" className="max-w-xl" />
+				</div>
+			</div>
+		);
+	}
+	return <DreamsDashboard />;
+}
+
+function DreamsDashboard() {
 	const [detailPass, setDetailPass] = useState<DreamPass | null>(null);
 	const status = useAsync(() => api.getDreamStatus(), { key: "dream-status", intervalMs: 3000 });
 

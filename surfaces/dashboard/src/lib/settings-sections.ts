@@ -3,6 +3,7 @@ export const SETTINGS_SECTIONS = [
 	"network",
 	"inference",
 	"secrets",
+	"api-keys",
 	"connectors",
 	"logs",
 	"advanced",

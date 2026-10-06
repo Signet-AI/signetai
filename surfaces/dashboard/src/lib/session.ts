@@ -308,7 +308,7 @@ export function cancelRenewal(): Promise<void> {
 }
 
 export function can(session: Session, permission: string): boolean {
-	if (session.kind !== "open" && session.kind !== "signed-in") return false;
+	if (session.kind !== "open" && session.kind !== "signed-in") return true;
 	return session.permissions === null || session.permissions.includes(permission);
 }
 

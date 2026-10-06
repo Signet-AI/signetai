@@ -50,11 +50,45 @@ async function getJSON<T>(path: string, init?: RequestInit): Promise<T | null> {
 	return (await getJSONResult<T>(path, init)).data;
 }
 
+export type ApiKeyRole = "admin" | "operator" | "agent" | "readonly";
+
+export interface ApiKeyRecord {
+	readonly id: string;
+	readonly prefix: string;
+	readonly name: string;
+	readonly role: ApiKeyRole;
+	readonly agentId: string | null;
+	readonly connector: string | null;
+	readonly createdAt: string;
+	readonly lastUsedAt: string | null;
+	readonly revokedAt: string | null;
+	readonly expiresAt: string | null;
+}
+
+export interface CreatedApiKey extends ApiKeyRecord {
+	readonly key: string;
+}
+
+export interface ApiKeyInput {
+	readonly name: string;
+	readonly role: ApiKeyRole;
+	readonly agentId?: string;
+	readonly expiresAt?: string;
+}
+
 export interface ApiReadResult<T> {
 	readonly data: T | null;
 	readonly error: string | null;
 	readonly details?: unknown;
 	readonly status?: number;
+}
+
+function describeForbidden(reason: string): string {
+	const permission = /lacks '([a-z]+)' permission/.exec(reason)?.[1];
+	if (permission) return `Requires the ${permission} permission.`;
+	const scope = /scope restricted to (\w+) '([^']+)'/.exec(reason);
+	if (scope) return `Your credential is limited to ${scope[1]} ${scope[2]}.`;
+	return "Your credential isn't allowed to do this.";
 }
 
 export async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiReadResult<T>> {
@@ -66,10 +100,11 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 		const body = (await res.json().catch(() => null)) as { error?: unknown; details?: unknown } | T | null;
 		const errorBody = typeof body === "object" && body !== null && "error" in body;
 		if (!res.ok || errorBody) {
-			const error =
+			const reason =
 				typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
 					? body.error
 					: `request failed (${res.status})`;
+			const error = res.status === 403 ? describeForbidden(reason) : reason;
 			const details = typeof body === "object" && body !== null && "details" in body ? body.details : undefined;
 			return { data: null, error, details, status: res.status };
 		}
@@ -1297,6 +1332,16 @@ export const api = {
 	getHomeGreeting: () => getJSON<HomeGreeting>("/api/home/greeting"),
 	getContinuityLatest: () => getJSON<{ scores: ContinuityScore[] }>("/api/analytics/continuity/latest"),
 	getSecrets: () => getJSON<{ secrets?: string[]; provider?: string }>("/api/secrets"),
+	listApiKeys: () => getJSONResult<{ apiKeys: ApiKeyRecord[] }>("/api/auth/api-keys"),
+	createApiKey: (input: ApiKeyInput) =>
+		postJSONResult<{ apiKey: CreatedApiKey }>("/api/auth/api-keys", {
+			name: input.name,
+			role: input.role,
+			...(input.agentId ? { agentId: input.agentId, scope: { agent: input.agentId } } : {}),
+			...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+		}),
+	revokeApiKey: (id: string) =>
+		mutateJSON<{ error?: string }>(`/api/auth/api-keys/${encodeURIComponent(id)}`, "DELETE"),
 	getOnePasswordStatus: async (): Promise<OnePasswordStatus> => {
 		const data = await getJSON<Partial<OnePasswordStatus>>("/api/secrets/1password/status");
 		return {
