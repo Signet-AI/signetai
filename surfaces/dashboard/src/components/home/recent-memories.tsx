@@ -43,7 +43,7 @@ export function HomeRecentMemories() {
 	);
 	const visibleMemories =
 		sourceFilter === "all" ? memories : memories.filter((memory) => (memory.source_type ?? "agent") === sourceFilter);
-	const scroll = useScrollEnd<HTMLDivElement>(visibleMemories);
+	const scroll = useScrollEnd<HTMLDivElement>();
 	const searching = memoriesQuery.loading || memoriesQuery.data?.query !== trimmedQuery;
 	const failed = !searching && memoriesQuery.data?.memories === null;
 	const meta = searching

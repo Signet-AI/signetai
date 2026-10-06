@@ -144,9 +144,8 @@ export function HomeSourcesPanel({
 		setExpanded(true);
 		setPendingFocus(focus.id);
 	}, [focus]);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: sources re-runs the lookup when rows arrive late.
 	useEffect(() => {
-		if (!expanded || !pendingFocus) return;
+		if (!expanded || !pendingFocus || !sources?.some((source) => source.id === pendingFocus)) return;
 		const row = [...(listRef.current?.querySelectorAll<HTMLDetailsElement>("details[data-source-id]") ?? [])].find(
 			(candidate) => candidate.dataset.sourceId === pendingFocus,
 		);

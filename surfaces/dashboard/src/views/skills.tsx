@@ -11,7 +11,7 @@ export function SkillsView() {
 	const [query, setQuery] = useState("");
 	const [selected, setSelected] = useState<string | null>(null);
 	const searchRef = useRef<HTMLInputElement>(null);
-	const listScroll = useScrollEnd<HTMLUListElement>(`${skills.data?.length}:${query}`);
+	const listScroll = useScrollEnd<HTMLUListElement>();
 
 	const filtered = useMemo(() => filterSkills(skills.data ?? [], query), [skills.data, query]);
 	const active = selected ?? filtered[0]?.name ?? null;
@@ -96,7 +96,7 @@ export function SkillsView() {
 function SkillDetailPane({ name, onBack }: { name: string; onBack: () => void }) {
 	const detail = useAsync(() => api.getSkill(name), { key: `skill:${name}` });
 	const body = useMemo(() => (detail.data ? stripFrontmatter(detail.data.content) : ""), [detail.data]);
-	const scroll = useScrollEnd<HTMLDivElement>(body);
+	const scroll = useScrollEnd<HTMLDivElement>();
 	const skill = detail.data;
 	const meta = [skill?.version && `v${skill.version}`, skill?.author].filter(Boolean).join(" · ");
 

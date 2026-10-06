@@ -195,7 +195,7 @@ function DreamingSummarySection({
 	summary: string | null;
 	loading: boolean;
 }) {
-	const scroll = useScrollEnd<HTMLDivElement>(summary);
+	const scroll = useScrollEnd<HTMLDivElement>();
 	return (
 		<section className="dreams-summary" aria-labelledby="dreams-summary-title">
 			<SectionHeading
@@ -223,7 +223,7 @@ function PassActivity({ pass, onDetails }: { pass: DreamPass | null; onDetails: 
 		intervalMs: pass?.status === "running" ? 2500 : undefined,
 	});
 	const items = tools.data?.passId === pass?.id ? (tools.data?.items ?? []) : [];
-	const scroll = useScrollEnd<HTMLOListElement>(items);
+	const scroll = useScrollEnd<HTMLOListElement>();
 	return (
 		<section className="dreams-activity" aria-labelledby="dreams-activity-title">
 			<SectionHeading
