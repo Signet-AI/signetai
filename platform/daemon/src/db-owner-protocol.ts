@@ -396,6 +396,7 @@ export interface DbOwnerDreamingPassFinalize {
 	readonly outputTokens: number | null;
 	readonly cacheReadTokens: number | null;
 	readonly cacheCreationTokens: number | null;
+	readonly peakContextTokens: number | null;
 	readonly totalCost: number | null;
 	readonly applied: number;
 	readonly failed: number;

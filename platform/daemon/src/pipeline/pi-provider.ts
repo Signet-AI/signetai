@@ -371,6 +371,14 @@ function effectiveAccountingProvenance(
 	return hasUsage || accountingProvenance === "local_zero_cost" ? accountingProvenance : "unavailable";
 }
 
+function peakContextTokens(usages: readonly Usage[] | undefined): number | null {
+	if (usages === undefined || usages.length === 0) return null;
+	const peak = Math.max(
+		...usages.map((usage) => (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)),
+	);
+	return peak > 0 ? peak : null;
+}
+
 export function mapUsage(usage: Usage, accountingProvenance: AccountingProvenance): LlmUsage {
 	const effectiveProvenance = effectiveAccountingProvenance(usageHasAccounting(usage), accountingProvenance);
 	return {
@@ -383,6 +391,7 @@ export function mapUsage(usage: Usage, accountingProvenance: AccountingProvenanc
 		totalDurationMs: null,
 		accountingProvenance: effectiveProvenance,
 		cacheRequests: summarizeCacheRequests([usage]),
+		peakContextTokens: peakContextTokens([usage]),
 	};
 }
 export function mapSessionStatsToUsage(
@@ -402,6 +411,7 @@ export function mapSessionStatsToUsage(
 			totalDurationMs,
 			accountingProvenance,
 			cacheRequests: requestUsages === undefined ? null : summarizeCacheRequests(requestUsages),
+			peakContextTokens: peakContextTokens(requestUsages),
 		};
 	}
 	const effectiveProvenance = effectiveAccountingProvenance(
@@ -425,6 +435,7 @@ export function mapSessionStatsToUsage(
 		totalDurationMs,
 		accountingProvenance: effectiveProvenance,
 		cacheRequests: requestUsages === undefined ? null : summarizeCacheRequests(requestUsages),
+		peakContextTokens: peakContextTokens(requestUsages),
 	};
 }
 

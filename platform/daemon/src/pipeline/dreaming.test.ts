@@ -2561,6 +2561,40 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		);
 	});
 
+	it("records the largest single-turn context of a pass", async () => {
+		seedSummary(db, "peak-context", "The deployment review is deferred pending an owner.", 10);
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run() {
+					return {
+						summary: "Reviewed the deployment",
+						usage: {
+							inputTokens: 9_000,
+							outputTokens: 600,
+							cacheReadTokens: 150_000,
+							cacheCreationTokens: 4_000,
+							totalTokens: 163_600,
+							totalCost: null,
+							totalDurationMs: 10,
+							peakContextTokens: 93_000,
+						},
+					};
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(db.prepare("SELECT tokens_peak_context FROM dreaming_passes WHERE id = ?").get(result.passId)).toEqual({
+			tokens_peak_context: 93_000,
+		});
+		const [listed] = await getDreamingPasses(accessor, AGENT, 1);
+		expect(listed?.tokensPeakContext).toBe(93_000);
+	});
+
 	it("carries compacted pass history into a later pass", async () => {
 		seedSummary(db, "runbook-summary", "The deployment review is deferred pending an owner.", 10);
 		const first = await runDreamingAgentPass(

@@ -65,6 +65,8 @@ interface Summary {
 	readonly historyCalls: number | null;
 	readonly historyInputTokens: number | null;
 	readonly historyOutputTokens: number | null;
+	readonly peakContextMedian: number | null;
+	readonly peakContextMax: number | null;
 	readonly entities: number | null;
 	readonly claims: number | null;
 	readonly wallMinutes: number;
@@ -92,6 +94,7 @@ function summarize(spec: string, note: string | undefined, commitOverride: strin
 	let entities: number | null = null;
 	let claims: number | null = null;
 	let history: { calls: number; input: number; output: number } | null = null;
+	let peaks: number[] = [];
 	if (workspace) {
 		const scopes = scopeAgentIds(checkpoint);
 		const db = openReadOnly(workspace);
@@ -110,6 +113,18 @@ function summarize(spec: string, note: string | undefined, commitOverride: strin
 					)
 					.get(...scopes) as { c: number }
 			).c;
+			const peakColumn = (db.query("PRAGMA table_info(dreaming_passes)").all() as Array<{ name: string }>).some(
+				(column) => column.name === "tokens_peak_context",
+			);
+			if (peakColumn) {
+				peaks = (
+					db
+						.query(
+							"SELECT tokens_peak_context AS peak FROM dreaming_passes WHERE tokens_peak_context IS NOT NULL ORDER BY peak",
+						)
+						.all() as Array<{ peak: number }>
+				).map((row) => row.peak);
+			}
 			const historyTable = db
 				.query("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_history_nodes'")
 				.get();
@@ -163,6 +178,8 @@ function summarize(spec: string, note: string | undefined, commitOverride: strin
 		historyCalls: history?.calls ?? null,
 		historyInputTokens: history?.input ?? null,
 		historyOutputTokens: history?.output ?? null,
+		peakContextMedian: peaks.length > 0 ? (peaks[Math.floor(peaks.length / 2)] ?? null) : null,
+		peakContextMax: peaks.length > 0 ? (peaks.at(-1) ?? null) : null,
 		entities,
 		claims,
 		wallMinutes: Math.round((Date.parse(checkpoint.updatedAt) - Date.parse(checkpoint.createdAt)) / 60_000),
@@ -194,12 +211,12 @@ function main(): void {
 	if (append && !note) throw new Error("--append requires --note describing what the run tested");
 	const summaries = specs.map((spec) => summarize(spec, note, commitOverride));
 	console.log(
-		"| run | dreaming model | codemode | score | Hit@K | MRR | entities | claims | passes | dreaming in/out/cached | history lines in/out | wall |",
+		"| run | dreaming model | codemode | score | Hit@K | MRR | entities | claims | passes | dreaming in/out/cached | history lines in/out | peak context med/max | wall |",
 	);
-	console.log("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+	console.log("| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
 	for (const s of summaries) {
 		console.log(
-			`| ${s.runId} | ${s.dreamingModel ?? "n/a"} | ${s.codemode ?? "n/a"} | ${s.correct}/${s.questions} | ${fmt(s.hitAtK, 2)} | ${fmt(s.mrr, 3)} | ${fmt(s.entities)} | ${fmt(s.claims)} | ${fmt(s.dreamingPasses)} | ${millions(s.dreamingInputTokens)} / ${millions(s.dreamingOutputTokens)} / ${millions(s.dreamingCacheReadTokens)} | ${s.historyCalls === null ? "n/a" : `${s.historyCalls}: ${millions(s.historyInputTokens)} / ${millions(s.historyOutputTokens)}`} | ${s.wallMinutes} min |`,
+			`| ${s.runId} | ${s.dreamingModel ?? "n/a"} | ${s.codemode ?? "n/a"} | ${s.correct}/${s.questions} | ${fmt(s.hitAtK, 2)} | ${fmt(s.mrr, 3)} | ${fmt(s.entities)} | ${fmt(s.claims)} | ${fmt(s.dreamingPasses)} | ${millions(s.dreamingInputTokens)} / ${millions(s.dreamingOutputTokens)} / ${millions(s.dreamingCacheReadTokens)} | ${s.historyCalls === null ? "n/a" : `${s.historyCalls}: ${millions(s.historyInputTokens)} / ${millions(s.historyOutputTokens)}`} | ${s.peakContextMax === null ? "n/a" : `${Math.round((s.peakContextMedian ?? 0) / 1000)}k / ${Math.round(s.peakContextMax / 1000)}k`} | ${s.wallMinutes} min |`,
 		);
 	}
 	if (append) {

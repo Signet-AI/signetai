@@ -44,6 +44,7 @@ export interface LlmUsage {
 	readonly totalDurationMs: number | null;
 	readonly accountingProvenance?: AccountingProvenance;
 	readonly cacheRequests?: LlmCacheRequestAccounting | null;
+	readonly peakContextTokens?: number | null;
 }
 
 export interface LlmGenerateResult {

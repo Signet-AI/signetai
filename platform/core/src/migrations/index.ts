@@ -166,6 +166,7 @@ import { up as genericEntityPruneScanGeneration } from "./162-generic-entity-pru
 import { up as retireMemoryContentSafety } from "./163-retire-memory-content-safety";
 import { up as claimEventTime } from "./164-claim-event-time";
 import { up as dreamingHistory } from "./165-dreaming-history";
+import { up as dreamingPassPeakContext } from "./166-dreaming-pass-peak-context";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1507,6 +1508,12 @@ export const MIGRATIONS: readonly Migration[] = [
 			indexes: ["idx_dreaming_history_nodes_pass"],
 			columns: [{ table: "dreaming_passes", column: "scope_key" }],
 		},
+	},
+	{
+		version: 166,
+		name: "dreaming-pass-peak-context",
+		up: dreamingPassPeakContext,
+		artifacts: { columns: [{ table: "dreaming_passes", column: "tokens_peak_context" }] },
 	},
 ];
 function checksum(m: Migration): string {

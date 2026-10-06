@@ -269,6 +269,7 @@ export interface DreamingPassRow {
 	readonly tokensOutput: number | null;
 	readonly tokensCacheRead: number | null;
 	readonly tokensCacheWrite: number | null;
+	readonly tokensPeakContext: number | null;
 	readonly tokensCost: number | null;
 	readonly mutationsApplied: number | null;
 	readonly mutationsSkipped: number | null;
@@ -641,6 +642,7 @@ export async function getDreamingPasses(
 		        completed_at AS completedAt, tokens_consumed AS tokensConsumed,
 		        tokens_input AS tokensInput, tokens_output AS tokensOutput,
 		        tokens_cache_read AS tokensCacheRead, tokens_cache_write AS tokensCacheWrite,
+		        tokens_peak_context AS tokensPeakContext,
 		        tokens_cost AS tokensCost,
 		        mutations_applied AS mutationsApplied,
 		        mutations_skipped AS mutationsSkipped,
@@ -668,6 +670,7 @@ function dreamingPassSelect(includeAgent = false): string {
 				completed_at AS completedAt, tokens_consumed AS tokensConsumed,
 				tokens_input AS tokensInput, tokens_output AS tokensOutput,
 				tokens_cache_read AS tokensCacheRead, tokens_cache_write AS tokensCacheWrite,
+		        tokens_peak_context AS tokensPeakContext,
 				tokens_cost AS tokensCost,
 				mutations_applied AS mutationsApplied,
 				mutations_skipped AS mutationsSkipped,
@@ -2007,6 +2010,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 			outputTokens: usage?.outputTokens ?? null,
 			cacheReadTokens: usage?.cacheReadTokens ?? null,
 			cacheCreationTokens: usage?.cacheCreationTokens ?? null,
+			peakContextTokens: usage?.peakContextTokens ?? null,
 			totalCost: usage?.totalCost ?? null,
 			applied,
 			failed,
@@ -2244,7 +2248,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 	db.prepare(
 		`UPDATE dreaming_passes SET status = 'completed', completed_at = datetime('now'),
 		 tokens_consumed = ?, tokens_input = ?, tokens_output = ?,
-		 tokens_cache_read = ?, tokens_cache_write = ?, tokens_cost = ?,
+		 tokens_cache_read = ?, tokens_cache_write = ?, tokens_peak_context = ?, tokens_cost = ?,
 		 mutations_applied = ?, mutations_skipped = ?,
 		 mutations_failed = ?, summary = ? WHERE id = ?`,
 	).run(
@@ -2253,6 +2257,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		input.outputTokens,
 		input.cacheReadTokens,
 		input.cacheCreationTokens,
+		input.peakContextTokens ?? null,
 		input.totalCost,
 		input.applied,
 		0,
