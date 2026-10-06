@@ -24,6 +24,7 @@ const MAX_PASSWORD_LENGTH = 1024;
 const MAX_HANDOFF_CODE_LENGTH = 128;
 const HANDOFF_TTL_MS = 60_000;
 const HANDOFF_LIMIT = 32;
+const HANDOFF_LIMIT_PER_CREDENTIAL = 4;
 
 interface Session {
 	readonly token: string;
@@ -178,7 +179,10 @@ export function registerAuthRoutes(app: Hono): void {
 		if (!claims) return c.json({ error: "a credential is required" }, 401);
 		const now = Date.now();
 		pruneHandoffs(now);
-		if (handoffs.size >= HANDOFF_LIMIT) return c.json({ error: "too many pending handoffs" }, 429);
+		const pending = [...handoffs.values()].filter((entry) => entry.session.sub === claims.sub).length;
+		if (handoffs.size >= HANDOFF_LIMIT || pending >= HANDOFF_LIMIT_PER_CREDENTIAL) {
+			return c.json({ error: "too many pending handoffs" }, 429);
+		}
 		const session = mintSession(claims);
 		if (!session) return c.json({ error: "credential cannot start a session" }, 401);
 		const code = randomBytes(32).toString("base64url");

@@ -62,10 +62,21 @@ export function createAuthMiddleware(
 		if (secret) return verifyToken(secret, token);
 		return { authenticated: false, claims: null, error: "auth secret not configured" };
 	};
+	const verifyOpen = (path: string, token: string): AuthResult => {
+		if (isSignetApiKey(token) && path !== "/api/auth/whoami") return { authenticated: false, claims: null };
+		try {
+			return verify(token);
+		} catch {
+			return { authenticated: false, claims: null, error: "credential could not be verified" };
+		}
+	};
 	return async (c, next) => {
 		const token = extractBearerToken(c.req.header("authorization"));
 		if (isAuthOpenPath(c.req.path) || isDashboardRequest(c)) {
-			c.set("auth", token && config.mode !== "local" ? verify(token) : { authenticated: false, claims: null });
+			c.set(
+				"auth",
+				token && config.mode !== "local" ? verifyOpen(c.req.path, token) : { authenticated: false, claims: null },
+			);
 			if (config.mode === "hybrid" && isLocalhost(c) && !c.get("auth")?.claims) {
 				c.set("auth", { authenticated: false, claims: null, trustedLocal: true });
 			}

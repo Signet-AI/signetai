@@ -146,3 +146,45 @@ describe("dashboard handoff", () => {
 		expect(res.status).toBe(401);
 	});
 });
+
+describe("open paths", () => {
+	test("only whoami verifies API keys, and a verifier failure is not a 500", async () => {
+		if (!state.authSecret) throw new Error("expected auth secret");
+		let calls = 0;
+		const { registerAuthRoutes } = await import("./auth-routes.js");
+		const failing = new Hono();
+		failing.use(
+			"*",
+			createAuthMiddleware(state.authConfig, state.authSecret, () => {
+				calls += 1;
+				throw new Error("database unavailable");
+			}),
+		);
+		failing.get("/health", (c) => c.json({ ok: true }));
+		failing.get("/api/mode", (c) => c.json({ mode: "team" }));
+		registerAuthRoutes(failing);
+
+		expect((await failing.request("/health", { headers: bearer(KEY) })).status).toBe(200);
+		expect((await failing.request("/api/mode", { headers: bearer(KEY) })).status).toBe(200);
+		expect(calls).toBe(0);
+
+		const whoami = await failing.request("/api/auth/whoami", { headers: bearer(KEY) });
+		expect(whoami.status).toBe(200);
+		const body = (await whoami.json()) as { authenticated: boolean; error: string | null };
+		expect(body.authenticated).toBe(false);
+		expect(body.error).toBe("credential could not be verified");
+		expect(calls).toBe(1);
+	});
+});
+
+describe("handoff limits", () => {
+	test("one credential cannot hold every pending handoff slot", async () => {
+		const statuses: number[] = [];
+		for (let i = 0; i < 6; i += 1) {
+			const res = await app.request("/api/auth/handoff", { method: "POST", headers: bearer(KEY) });
+			statuses.push(res.status);
+		}
+		expect(statuses.filter((status) => status === 200).length).toBe(4);
+		expect(statuses.slice(4)).toEqual([429, 429]);
+	});
+});
