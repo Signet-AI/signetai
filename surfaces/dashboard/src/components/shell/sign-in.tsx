@@ -1,9 +1,18 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { Dialog as DialogPrimitive, Popover } from "radix-ui";
 import { SignetMark } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Field, Input } from "@/components/ui/field";
-import { type Session, type SignInResult, signInWithKey, signInWithPassword, signOut } from "@/lib/session";
+import {
+	type Session,
+	type SignInResult,
+	cancelRenewal,
+	requestRenewal,
+	signInWithKey,
+	signInWithPassword,
+	signOut,
+} from "@/lib/session";
 import heroBackground from "@/assets/hero-bg.avif";
 
 type SignedOut = Extract<Session, { kind: "signed-out" }>;
@@ -21,6 +30,16 @@ function SignInForm({ session }: { session: SignedOut }) {
 	const [key, setKey] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	const [retryUntil, setRetryUntil] = useState(0);
+	const [now, setNow] = useState(() => Date.now());
+
+	useEffect(() => {
+		if (retryUntil <= Date.now()) return;
+		const timer = setInterval(() => setNow(Date.now()), 1_000);
+		return () => clearInterval(timer);
+	}, [retryUntil]);
+
+	const waiting = Math.ceil((retryUntil - now) / 1_000);
 
 	const submit = async (event: FormEvent) => {
 		event.preventDefault();
@@ -28,10 +47,15 @@ function SignInForm({ session }: { session: SignedOut }) {
 		setError(null);
 		const result: SignInResult = useKey ? await signInWithKey(key) : await signInWithPassword(username, secret);
 		setBusy(false);
-		if (!result.ok) setError(result.error);
+		if (result.ok) return;
+		setError(result.error);
+		if (result.retryAfter) {
+			setNow(Date.now());
+			setRetryUntil(Date.now() + result.retryAfter * 1_000);
+		}
 	};
 
-	const message = error ?? session.reason;
+	const message = waiting > 0 ? `Too many attempts. Try again in ${waiting}s.` : (error ?? session.reason);
 	return (
 		<form className="flex flex-col gap-6" onSubmit={submit} aria-label="Sign in to Signet">
 			<div className="flex flex-col items-center gap-1 text-center">
@@ -87,7 +111,7 @@ function SignInForm({ session }: { session: SignedOut }) {
 					</Field>
 				</>
 			)}
-			<Button type="submit" disabled={busy} className="w-full">
+			<Button type="submit" disabled={busy || waiting > 0} className="w-full">
 				{busy ? "Signing in…" : "Sign in"}
 			</Button>
 			{password ? (
@@ -113,6 +137,11 @@ function SignInForm({ session }: { session: SignedOut }) {
 				<p className="m-0 text-center text-sm text-muted-foreground">
 					Password sign-in is not configured on this daemon.
 				</p>
+			)}
+			{session.renewal && (
+				<Button type="button" variant="ghost" size="sm" className="self-center" onClick={() => void cancelRenewal()}>
+					Not now
+				</Button>
 			)}
 		</form>
 	);
@@ -187,7 +216,9 @@ export function SessionChip({ session }: { session: Session }) {
 				>
 					<dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
 						<dt className="text-muted-foreground">Signed in as</dt>
-						<dd className="m-0 truncate font-mono">{identity.sub}</dd>
+						<dd className="m-0 truncate font-mono" title={identity.sub}>
+							{identity.name ?? identity.sub}
+						</dd>
 						<dt className="text-muted-foreground">Role</dt>
 						<dd className="m-0 font-mono">{identity.role}</dd>
 						<dt className="text-muted-foreground">Expires</dt>
@@ -200,4 +231,21 @@ export function SessionChip({ session }: { session: Session }) {
 			</Popover.Portal>
 		</Popover.Root>
 	);
+}
+
+export function SessionExpiryToast({ session }: { session: Session }) {
+	const expiresAt = session.kind === "signed-in" && session.expiresSoon ? session.identity.expiresAt : null;
+	useEffect(() => {
+		if (expiresAt === null) {
+			toast.dismiss("session-expiry");
+			return;
+		}
+		const time = new Date(expiresAt).toLocaleTimeString(undefined, { timeStyle: "short" });
+		toast(`Your session ends at ${time}.`, {
+			id: "session-expiry",
+			duration: Number.POSITIVE_INFINITY,
+			action: { label: "Sign in again", onClick: requestRenewal },
+		});
+	}, [expiresAt]);
+	return null;
 }

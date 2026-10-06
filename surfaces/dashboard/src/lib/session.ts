@@ -4,6 +4,7 @@ const HANDOFF_PARAM = "signet-handoff";
 const MAX_TIMER_MS = 2 ** 31 - 1;
 const MIN_RECHECK_MS = 5_000;
 const MAX_RECHECK_MS = 300_000;
+const EXPIRY_WARNING_MS = 300_000;
 
 export interface SignInProvider {
 	readonly id: string;
@@ -14,34 +15,45 @@ export interface SignInProvider {
 
 export interface Identity {
 	readonly sub: string;
+	readonly name: string | null;
 	readonly role: string;
 	readonly expiresAt: number;
 }
 
 export type Session =
 	| { readonly kind: "checking" }
-	| { readonly kind: "open"; readonly mode: string }
-	| { readonly kind: "signed-in"; readonly mode: string; readonly identity: Identity }
+	| { readonly kind: "open"; readonly mode: string; readonly permissions: readonly string[] | null }
+	| {
+			readonly kind: "signed-in";
+			readonly mode: string;
+			readonly identity: Identity;
+			readonly permissions: readonly string[] | null;
+			readonly expiresSoon: boolean;
+	  }
 	| {
 			readonly kind: "signed-out";
 			readonly mode: string;
 			readonly providers: readonly SignInProvider[];
 			readonly reason: string | null;
 			readonly expired: boolean;
+			readonly renewal: boolean;
 	  }
 	| { readonly kind: "unreachable"; readonly error: string };
 
-export type SignInResult = { readonly ok: true } | { readonly ok: false; readonly error: string };
+export type SignInResult =
+	| { readonly ok: true }
+	| { readonly ok: false; readonly error: string; readonly retryAfter?: number };
 
 const demo =
 	import.meta.env.VITE_DEMO === "1" || (import.meta.env.DEV && import.meta.env.VITE_ONBOARDING_PREVIEW === true);
 
-let current: Session = demo ? { kind: "open", mode: "local" } : { kind: "checking" };
+let current: Session = demo ? { kind: "open", mode: "local", permissions: null } : { kind: "checking" };
 let boot: Promise<void> | null = null;
 let signedInOnce = false;
 let pendingReason: string | null = null;
 let refreshing: Promise<void> | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+let warningTimer: ReturnType<typeof setTimeout> | undefined;
 let scheduledExpiry = 0;
 let recheck = 0;
 const listeners = new Set<() => void>();
@@ -66,18 +78,35 @@ export function authHeaders(): HeadersInit {
 	return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-function set(next: Session): void {
+function publish(next: Session): void {
 	current = next;
-	clearTimeout(expiryTimer);
-	if (next.kind === "signed-in") {
-		signedInOnce = true;
-		const { expiresAt } = next.identity;
-		recheck = expiresAt === scheduledExpiry ? Math.min(Math.max(recheck * 2, MIN_RECHECK_MS), MAX_RECHECK_MS) : 0;
-		scheduledExpiry = expiresAt;
-		const wait = Math.min(Math.max(expiresAt - Date.now() + 1_000, recheck), MAX_TIMER_MS);
-		expiryTimer = setTimeout(() => void refreshSession(), wait);
-	}
 	for (const listener of listeners) listener();
+}
+
+function set(next: Session): void {
+	clearTimeout(expiryTimer);
+	clearTimeout(warningTimer);
+	if (next.kind !== "signed-in") {
+		publish(next);
+		return;
+	}
+	signedInOnce = true;
+	const { expiresAt } = next.identity;
+	recheck = expiresAt === scheduledExpiry ? Math.min(Math.max(recheck * 2, MIN_RECHECK_MS), MAX_RECHECK_MS) : 0;
+	scheduledExpiry = expiresAt;
+	const wait = Math.min(Math.max(expiresAt - Date.now() + 1_000, recheck), MAX_TIMER_MS);
+	expiryTimer = setTimeout(() => void refreshSession(), wait);
+	const warnIn = expiresAt - EXPIRY_WARNING_MS - Date.now();
+	const expiresSoon = warnIn <= 0;
+	if (!expiresSoon) {
+		warningTimer = setTimeout(
+			() => {
+				if (current.kind === "signed-in") publish({ ...current, expiresSoon: true });
+			},
+			Math.min(warnIn, MAX_TIMER_MS),
+		);
+	}
+	publish({ ...next, expiresSoon });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -118,7 +147,12 @@ function readIdentity(value: unknown): Identity | null {
 	const sub = text(value.sub);
 	const role = text(value.role);
 	if (!sub || !role || typeof value.exp !== "number") return null;
-	return { sub, role, expiresAt: value.exp * 1000 };
+	return { sub, name: text(value.name), role, expiresAt: value.exp * 1000 };
+}
+
+function readPermissions(value: unknown): readonly string[] | null {
+	if (!Array.isArray(value)) return null;
+	return value.filter((entry): entry is string => typeof entry === "string");
 }
 
 function describeRejection(error: string | null, fallback: string): string {
@@ -139,13 +173,14 @@ async function check(retry = true): Promise<void> {
 	const body = res.body;
 	const mode = text(body.mode) ?? "team";
 	const identity = body.authenticated === true ? readIdentity(body.claims) : null;
+	const permissions = readPermissions(body.permissions);
 	if (identity) {
 		pendingReason = null;
-		set({ kind: "signed-in", mode, identity });
+		set({ kind: "signed-in", mode, identity, permissions, expiresSoon: false });
 		return;
 	}
 	if (body.effectiveAccess === true) {
-		set({ kind: "open", mode });
+		set({ kind: "open", mode, permissions });
 		return;
 	}
 	if (token && readToken() === token) writeToken(null);
@@ -153,7 +188,14 @@ async function check(retry = true): Promise<void> {
 		pendingReason ??
 		(token ? describeRejection(text(body.error), "The saved credential was rejected. Sign in again.") : null);
 	pendingReason = null;
-	set({ kind: "signed-out", mode, providers: readProviders(body.providers), reason, expired: signedInOnce });
+	set({
+		kind: "signed-out",
+		mode,
+		providers: readProviders(body.providers),
+		reason,
+		expired: signedInOnce,
+		renewal: false,
+	});
 }
 
 export function refreshSession(): Promise<void> {
@@ -214,13 +256,9 @@ function failure(res: Awaited<ReturnType<typeof request>>, rejected: string): Si
 	if (!res) return { ok: false, error: "Signet is not reachable." };
 	if (res.status === 429) {
 		const seconds = Number(res.retryAfter);
-		return {
-			ok: false,
-			error:
-				Number.isFinite(seconds) && seconds > 0
-					? `Too many attempts. Try again in ${seconds}s.`
-					: "Too many attempts. Try again shortly.",
-		};
+		return Number.isFinite(seconds) && seconds > 0
+			? { ok: false, error: `Too many attempts. Try again in ${seconds}s.`, retryAfter: seconds }
+			: { ok: false, error: "Too many attempts. Try again shortly." };
 	}
 	if (res.status === 401) return { ok: false, error: rejected };
 	const error = isRecord(res.body) ? text(res.body.error) : null;
@@ -246,6 +284,36 @@ export async function signInWithKey(key: string): Promise<SignInResult> {
 	if (res?.status === 200) return adopt(res);
 	const error = res && isRecord(res.body) ? text(res.body.error) : null;
 	return failure(res, describeRejection(error, "That key was not accepted."));
+}
+
+export function requestRenewal(): void {
+	if (current.kind !== "signed-in") return;
+	void (async () => {
+		const res = await request("/api/auth/methods", {});
+		const providers = res?.status === 200 && isRecord(res.body) ? readProviders(res.body.providers) : [];
+		if (current.kind !== "signed-in") return;
+		publish({
+			kind: "signed-out",
+			mode: current.mode,
+			providers,
+			reason: "Sign in again to start a new session.",
+			expired: true,
+			renewal: true,
+		});
+	})();
+}
+
+export function cancelRenewal(): Promise<void> {
+	return refreshSession();
+}
+
+export function can(session: Session, permission: string): boolean {
+	if (session.kind !== "open" && session.kind !== "signed-in") return false;
+	return session.permissions === null || session.permissions.includes(permission);
+}
+
+export function useCan(permission: string): boolean {
+	return can(useSession(), permission);
 }
 
 export function signOut(): Promise<void> {

@@ -2,7 +2,7 @@ import { Activity, useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarNav, useSidebarOpen } from "@/components/shell/navigation";
-import { SignInDialog, SignInScreen } from "@/components/shell/sign-in";
+import { SessionExpiryToast, SignInDialog, SignInScreen } from "@/components/shell/sign-in";
 import { Topbar } from "@/components/shell/topbar";
 import { useSession } from "@/lib/session";
 import { type ViewId, useView } from "@/lib/view-context";
@@ -24,6 +24,7 @@ export function App() {
 				<>
 					<Shell />
 					{session.kind === "signed-out" && <SignInDialog session={session} />}
+					<SessionExpiryToast session={session} />
 				</>
 			)}
 			<Toaster />

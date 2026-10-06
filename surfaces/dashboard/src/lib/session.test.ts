@@ -33,7 +33,15 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 	const signedIn = whoami({
 		authenticated: true,
 		effectiveAccess: true,
-		claims: { sub: "api-key:k1", role: "agent", scope: {}, iat: 1, exp: Math.floor(Date.now() / 1000) + 600 },
+		permissions: ["remember", "recall"],
+		claims: {
+			sub: "api-key:k1",
+			name: "alice-laptop",
+			role: "agent",
+			scope: {},
+			iat: 1,
+			exp: Math.floor(Date.now() / 1000) + 600,
+		},
 	});
 	const header = (init: RequestInit | undefined, name: string): string | null => new Headers(init?.headers).get(name);
 
@@ -115,6 +123,7 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			expect(await session.signInWithPassword("owner", "nope")).toEqual({
 				ok: false,
 				error: "Too many attempts. Try again in 42s.",
+				retryAfter: 42,
 			});
 			handler = () => ({ status: 503, body: { error: "password login is not configured" } });
 			expect(await session.signInWithPassword("owner", "nope")).toEqual({
@@ -131,10 +140,65 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			});
 		});
 
+		test("exposes the daemon's effective permissions and the credential's name", async () => {
+			localStorage.setItem(session.TOKEN_KEY, "session-perms");
+			handler = () => signedIn;
+			await session.refreshSession();
+			const state = session.currentSession();
+			expect(state.kind === "signed-in" && state.identity.name).toBe("alice-laptop");
+			expect(session.can(state, "recall")).toBe(true);
+			expect(session.can(state, "admin")).toBe(false);
+		});
+
+		test("a daemon that does not report permissions is not gated", async () => {
+			handler = () =>
+				whoami({
+					authenticated: true,
+					effectiveAccess: true,
+					claims: { sub: "token:old", role: "agent", scope: {}, iat: 1, exp: Math.floor(Date.now() / 1000) + 600 },
+				});
+			await session.refreshSession();
+			expect(session.can(session.currentSession(), "admin")).toBe(true);
+		});
+
+		test("flags a session that ends within five minutes", async () => {
+			handler = () =>
+				whoami({
+					authenticated: true,
+					effectiveAccess: true,
+					permissions: ["recall"],
+					claims: { sub: "api-key:k1", role: "agent", scope: {}, iat: 1, exp: Math.floor(Date.now() / 1000) + 120 },
+				});
+			await session.refreshSession();
+			const state = session.currentSession();
+			expect(state.kind === "signed-in" && state.expiresSoon).toBe(true);
+		});
+
+		test("renewal opens sign-in without dropping the session, and can be cancelled", async () => {
+			handler = (path) =>
+				path === "/api/auth/methods"
+					? { status: 200, body: { mode: "team", providers: [{ id: "password", type: "password", enabled: true }] } }
+					: signedIn;
+			await session.refreshSession();
+			session.requestRenewal();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			const state = session.currentSession();
+			expect(state.kind === "signed-out" && state.renewal && state.expired).toBe(true);
+			expect(localStorage.getItem(session.TOKEN_KEY)).toBe("session-perms");
+			await session.cancelRenewal();
+			expect(session.currentSession().kind).toBe("signed-in");
+		});
+
+		test("reports the rate-limit wait so the form can count down", async () => {
+			handler = () => ({ status: 429, body: { error: "rate limit exceeded" }, headers: { "Retry-After": "7" } });
+			const result = await session.signInWithPassword("owner", "nope");
+			expect(result.ok === false && result.retryAfter).toBe(7);
+		});
+
 		test("local mode needs no sign-in", async () => {
 			handler = () => ({ status: 200, body: { mode: "local", authenticated: false, effectiveAccess: true } });
 			await session.refreshSession();
-			expect(session.currentSession()).toEqual({ kind: "open", mode: "local" });
+			expect(session.currentSession()).toEqual({ kind: "open", mode: "local", permissions: null });
 		});
 
 		test("a browser clock ahead of the daemon does not spin the expiry timer", async () => {
