@@ -621,6 +621,9 @@ function registerSessionEnd(app: Hono): void {
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
 			}
+			if (body.lastAssistantMessage !== undefined && typeof body.lastAssistantMessage !== "string") {
+				return c.json({ error: "lastAssistantMessage must be a string" }, 400);
+			}
 			const capturedAt = parseIsoTimestamp(body.capturedAt, "capturedAt");
 			if (capturedAt.error) return c.json({ error: capturedAt.error }, 400);
 			body.capturedAt = capturedAt.value;

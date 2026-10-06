@@ -371,6 +371,7 @@ export interface SessionEndRequest {
 	cwd?: string;
 	capturedAt?: string;
 	reason?: string;
+	lastAssistantMessage?: string;
 	runtimePath?: "plugin" | "legacy";
 }
 
@@ -1873,10 +1874,47 @@ function isClearSessionStart(req: SessionStartRequest): boolean {
 	return req.source?.trim().toLowerCase() === "clear";
 }
 
+// A harness without a transcript source (Muse Code sends transcript_path: null)
+// delivers the final assistant reply only on its turn-end hook, so the live
+// transcript would otherwise hold the user's prompts alone.
+async function appendSessionEndAssistantTurn(
+	req: SessionEndRequest,
+	sessionKey: string | undefined,
+	agentId: string,
+): Promise<void> {
+	if (!sessionKey || req.transcriptPath || req.transcript?.trim()) return;
+	const live = transcriptCapture.formatLiveAssistantTranscript(req.lastAssistantMessage ?? "");
+	if (!live) return;
+	try {
+		const prev = (await getStoredSessionTranscriptInfoAsync(sessionKey, agentId))?.content;
+		await upsertSessionTranscriptAsync(
+			sessionKey,
+			transcriptCapture.appendLivePromptTranscript(prev, live),
+			req.harness,
+			req.cwd ?? null,
+			agentId,
+		);
+		await transcriptCapture.appendCanonicalLiveAssistantTurn({
+			basePath: getAgentsDir(),
+			agentId,
+			harness: req.harness,
+			sessionKey,
+			project: req.cwd ?? null,
+			message: req.lastAssistantMessage ?? "",
+		});
+	} catch (error) {
+		logger.warn("hooks", "Session-end assistant transcript append failed", {
+			error: error instanceof Error ? error.message : String(error),
+			sessionKey,
+		});
+	}
+}
+
 export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionEndResponse> {
 	const sessionKey = req.sessionKey || req.sessionId;
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey || req.sessionId });
 	await ensureAgentRegistered(agentId);
+	await appendSessionEndAssistantTurn(req, sessionKey, agentId);
 	const endedAt = req.capturedAt ?? new Date().toISOString();
 	const boundaryReason = normalizeSessionBoundaryReason(req.reason);
 	try {

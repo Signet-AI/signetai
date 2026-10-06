@@ -172,6 +172,20 @@ describe("buildSessionEndBody", () => {
 		});
 	});
 
+	test("forwards the turn's final assistant reply from Stop payloads", () => {
+		const body = buildSessionEndBody(
+			{
+				session_id: "muse-sess",
+				hook_event_name: "Stop",
+				last_assistant_message: "Ultramarine noted.",
+				transcript_path: null,
+			},
+			"muse-code",
+		);
+		expect(body.lastAssistantMessage).toBe("Ultramarine noted.");
+		expect(body.transcriptPath).toBe("");
+	});
+
 	test("preserves a distinct legacy sessionId alongside canonical sessionKey", () => {
 		expect(
 			buildSessionEndBody(

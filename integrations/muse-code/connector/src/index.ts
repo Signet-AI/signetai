@@ -1,16 +1,19 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
+	MANAGED_AGENT_ID_DEFAULT,
 	MANAGED_DAEMON_URL_DEFAULT,
+	SIGNET_MCP_STDIO_WORKER_ENV,
 	type UninstallResult,
-	atomicWriteJson,
-	buildSignetRuntimeEnv,
+	atomicWriteText,
 	isJsonObject,
 	readTrimmedEnv,
+	resolveSignetAgentId,
 	resolveSignetApiKey,
+	resolveSignetCliCommand,
 	resolveSignetDaemonUrl,
 	resolveSignetMcpCommand,
 } from "@signet/connector-base";
@@ -24,6 +27,11 @@ const SETTINGS_SCHEMA_VERSION = 1;
 const SESSION_START_GRACE_SECONDS = 5;
 const PROMPT_SUBMIT_GRACE_SECONDS = 2;
 const TURN_END_TIMEOUT_SECONDS = 30;
+const TIMEOUT_ENV_KEYS = [
+	"SIGNET_SESSION_START_TIMEOUT",
+	"SIGNET_FETCH_TIMEOUT",
+	"SIGNET_PROMPT_SUBMIT_TIMEOUT",
+] as const;
 
 // Muse cancels SessionEnd hooks after roughly half a second of its shutdown
 // budget, shorter than the Signet CLI's startup, so session-end runs on Stop.
@@ -33,43 +41,43 @@ export type MuseHookEvent = "SessionStart" | "UserPromptSubmit" | "Stop";
 
 type HookSubcommand = "session-start" | "user-prompt-submit" | "session-end";
 
-export interface MuseHookHandler {
+export type MuseHookHandler = {
 	readonly type: "command";
 	readonly command: string;
 	readonly timeout: number;
-}
+};
 
-export interface MuseHookGroup {
+export type MuseHookGroup = {
 	readonly hooks: readonly MuseHookHandler[];
-}
+};
 
 export type MuseHooks = Readonly<Record<MuseHookEvent, readonly MuseHookGroup[]>>;
 
-// Muse Code runs hook commands with a cleared environment (HOME, PATH, USER,
-// SHELL, TERM, LANG, PWD, LOGNAME), so any Signet setting that differs from
-// the CLI default must travel inside the command itself.
-// The workspace is always pinned: the CLI's own resolution reads
-// XDG_CONFIG_HOME and SIGNET_PATH, which Muse also clears.
-export interface MuseHookEnv {
-	readonly signetPath: string;
-	readonly daemonUrl?: string;
-	readonly apiKey?: string;
-}
+export type MuseRuntimeEnv = Readonly<Record<string, string>>;
 
 export interface MuseMcpServer {
 	readonly transport: "stdio";
 	readonly command: string;
 	readonly args: readonly string[];
-	readonly env?: Readonly<Record<string, string>>;
+	readonly env: MuseRuntimeEnv;
 	readonly mode: "optional";
 }
 
+interface HookGroup {
+	readonly hooks: readonly Record<string, unknown>[];
+	readonly [key: string]: unknown;
+}
+
+type HookMap = Readonly<Record<string, readonly HookGroup[]>>;
+
 type SettingsRead =
 	| { readonly kind: "missing" }
-	| { readonly kind: "ok"; readonly value: Record<string, unknown> }
+	| { readonly kind: "ok"; readonly value: Record<string, unknown>; readonly hooks: HookMap }
 	| { readonly kind: "invalid"; readonly reason: string };
 
-const SIGNET_MUSE_HOOK_PATTERN = /\bhook\s+(?:session-start|user-prompt-submit|session-end)\s+-H\s+muse-code\b/;
+const ENV_PREFIX = /^(?:SIGNET_[A-Z_]+=(?:'(?:[^']|'\\'')*'|[^\s'"]+)\s+)*/;
+const SIGNET_INVOCATION =
+	/^(?:'[^']*\/signet'|(?:[^\s'"]*\/)?signet)\s+hook\s+(?:session-start|user-prompt-submit|session-end)\s+-H\s+muse-code(?:\s+--codex-json)?$/;
 
 function shellArg(value: string): string {
 	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
@@ -80,26 +88,39 @@ function defaultWorkspacePath(): string {
 	return join(homedir(), ".agents");
 }
 
-export function resolveMuseHookEnv(basePath: string): MuseHookEnv {
+// Muse starts hooks and MCP servers with a cleared environment (HOME, PATH,
+// USER, SHELL, TERM, LANG, PWD, LOGNAME), so every Signet setting they need
+// is written into their configuration. One map feeds both surfaces so they
+// cannot resolve different daemons or workspaces.
+export function resolveMuseRuntimeEnv(workspace: string): MuseRuntimeEnv {
+	const env: Record<string, string> = {};
 	const daemonUrl = resolveSignetDaemonUrl();
+	if (daemonUrl !== MANAGED_DAEMON_URL_DEFAULT) env.SIGNET_DAEMON_URL = daemonUrl;
 	const apiKey = resolveSignetApiKey();
-	return {
-		signetPath: resolve(basePath),
-		...(daemonUrl !== MANAGED_DAEMON_URL_DEFAULT ? { daemonUrl } : {}),
-		...(apiKey ? { apiKey } : {}),
-	};
+	if (apiKey) env.SIGNET_API_KEY = apiKey;
+	env.SIGNET_PATH = workspace;
+	for (const key of TIMEOUT_ENV_KEYS) {
+		const value = readTrimmedEnv(key);
+		if (value) env[key] = value;
+	}
+	return env;
+}
+
+// Hooks run the same binary the MCP entry uses when setup runs from the
+// native build, so the two cannot drift to different Signet versions.
+export function resolveMuseSignetArgs(): string[] {
+	const mcp = resolveSignetMcpCommand();
+	if (mcp.env?.[SIGNET_MCP_STDIO_WORKER_ENV]) return [mcp.command];
+	const cli = resolveSignetCliCommand();
+	return [cli.command, ...cli.args];
 }
 
 export function buildMuseHookCommand(
 	signetArgs: readonly string[],
 	subcommand: HookSubcommand,
-	env: MuseHookEnv,
+	env: MuseRuntimeEnv,
 ): string {
-	const assignments = [
-		...(env.daemonUrl ? [`SIGNET_DAEMON_URL=${shellArg(env.daemonUrl)}`] : []),
-		...(env.apiKey ? [`SIGNET_API_KEY=${shellArg(env.apiKey)}`] : []),
-		`SIGNET_PATH=${shellArg(env.signetPath)}`,
-	];
+	const assignments = Object.entries(env).map(([key, value]) => `${key}=${shellArg(value)}`);
 	// Muse parses stdout as JSON whenever it starts with "[" or "{", and plain
 	// Signet context starts with "[signet active]", so context hooks emit JSON.
 	const output = subcommand === "session-end" ? [] : ["--codex-json"];
@@ -117,7 +138,7 @@ function promptSubmitTimeoutSeconds(): number {
 	return Math.ceil(resolvePromptSubmitTimeoutMs(raw) / 1000) + PROMPT_SUBMIT_GRACE_SECONDS;
 }
 
-export function buildMuseHooks(signetArgs: readonly string[], env: MuseHookEnv): MuseHooks {
+export function buildMuseHooks(signetArgs: readonly string[], env: MuseRuntimeEnv): MuseHooks {
 	const group = (subcommand: HookSubcommand, timeout: number): MuseHookGroup[] => [
 		{ hooks: [{ type: "command", command: buildMuseHookCommand(signetArgs, subcommand, env), timeout }] },
 	];
@@ -128,57 +149,54 @@ export function buildMuseHooks(signetArgs: readonly string[], env: MuseHookEnv):
 	};
 }
 
+export function isSignetMuseHookCommand(command: string): boolean {
+	return SIGNET_INVOCATION.test(command.trim().replace(ENV_PREFIX, ""));
+}
+
 function isSignetHandler(handler: unknown): boolean {
-	return isJsonObject(handler) && typeof handler.command === "string" && SIGNET_MUSE_HOOK_PATTERN.test(handler.command);
+	return isJsonObject(handler) && typeof handler.command === "string" && isSignetMuseHookCommand(handler.command);
 }
 
-function withoutSignetGroups(groups: unknown): unknown[] {
-	if (!Array.isArray(groups)) return [];
-	const kept: unknown[] = [];
-	for (const group of groups) {
-		if (!isJsonObject(group) || !Array.isArray(group.hooks)) {
-			kept.push(group);
-			continue;
-		}
-		const handlers = group.hooks.filter((handler) => !isSignetHandler(handler));
-		if (handlers.length === group.hooks.length) {
-			kept.push(group);
-			continue;
-		}
-		if (handlers.length > 0) kept.push({ ...group, hooks: handlers });
-	}
-	return kept;
-}
-
-export function removeSignetMuseHooks(hooks: Record<string, unknown>): Record<string, unknown> {
-	const next: Record<string, unknown> = {};
+export function removeSignetMuseHooks(hooks: HookMap): Record<string, readonly HookGroup[]> {
+	const next: Record<string, readonly HookGroup[]> = {};
 	for (const [event, groups] of Object.entries(hooks)) {
-		if (!Array.isArray(groups)) {
-			next[event] = groups;
-			continue;
+		const kept: HookGroup[] = [];
+		for (const group of groups) {
+			const handlers = group.hooks.filter((handler) => !isSignetHandler(handler));
+			if (handlers.length === group.hooks.length) kept.push(group);
+			else if (handlers.length > 0) kept.push({ ...group, hooks: handlers });
 		}
-		const kept = withoutSignetGroups(groups);
 		if (kept.length > 0) next[event] = kept;
 	}
 	return next;
 }
 
-export function mergeSignetMuseHooks(hooks: Record<string, unknown>, ours: MuseHooks): Record<string, unknown> {
+export function mergeSignetMuseHooks(hooks: HookMap, ours: MuseHooks): Record<string, readonly HookGroup[]> {
 	const next = removeSignetMuseHooks(hooks);
 	for (const [event, groups] of Object.entries(ours)) {
-		const existing = next[event];
-		next[event] = [...(Array.isArray(existing) ? existing : []), ...groups];
+		next[event] = [...(next[event] ?? []), ...groups];
 	}
 	return next;
 }
 
-function hasSignetHooks(hooks: unknown): boolean {
-	if (!isJsonObject(hooks)) return false;
-	return Object.values(hooks).some(
-		(groups) =>
-			Array.isArray(groups) &&
-			groups.some((group) => isJsonObject(group) && Array.isArray(group.hooks) && group.hooks.some(isSignetHandler)),
-	);
+function isHookGroup(value: unknown): value is HookGroup {
+	return isJsonObject(value) && Array.isArray(value.hooks) && value.hooks.every(isJsonObject);
+}
+
+function parseHooks(value: Record<string, unknown>): HookMap | string {
+	const hooks: Record<string, readonly HookGroup[]> = {};
+	for (const [event, groups] of Object.entries(value)) {
+		if (!Array.isArray(groups)) return `hooks.${event} must be an array`;
+		const parsed: HookGroup[] = [];
+		for (const [index, group] of groups.entries()) {
+			// Muse disables every hook in the file when one group is malformed,
+			// so adding Signet's hooks next to it would report a false success.
+			if (!isHookGroup(group)) return `hooks.${event}[${index}] must be an object with a hooks array of objects`;
+			parsed.push(group);
+		}
+		hooks[event] = parsed;
+	}
+	return hooks;
 }
 
 export function readMuseSettings(path: string): SettingsRead {
@@ -198,24 +216,34 @@ export function readMuseSettings(path: string): SettingsRead {
 	if (parsed.hooks !== undefined && !isJsonObject(parsed.hooks)) {
 		return { kind: "invalid", reason: "hooks must be a JSON object" };
 	}
+	const hooks = parseHooks(parsed.hooks ?? {});
+	if (typeof hooks === "string") return { kind: "invalid", reason: hooks };
 	if (parsed.mcp_servers !== undefined && !isJsonObject(parsed.mcp_servers)) {
 		return { kind: "invalid", reason: "mcp_servers must be a JSON object" };
 	}
-	return { kind: "ok", value: parsed };
+	return { kind: "ok", value: parsed, hooks };
 }
 
-export function buildMuseMcpServer(basePath: string): MuseMcpServer {
+export function buildMuseMcpServer(env: MuseRuntimeEnv): MuseMcpServer {
 	const mcp = resolveSignetMcpCommand();
-	const env = { ...(mcp.env ?? {}), ...buildSignetRuntimeEnv({ basePath }) };
 	return {
 		transport: "stdio",
 		command: mcp.command,
 		args: [...mcp.args],
-		...(Object.keys(env).length > 0 ? { env } : {}),
+		env: { ...(mcp.env ?? {}), ...env },
 		// A required server that fails to start aborts the whole Muse run;
 		// optional keeps the session usable and surfaces a startup warning.
 		mode: "optional",
 	};
+}
+
+// Settings can carry SIGNET_API_KEY, so a file Signet creates is owner-only.
+// Writes follow a symlinked settings.json to its target, as Muse does.
+function writeMuseSettings(path: string, value: unknown): void {
+	const exists = existsSync(path);
+	const target = exists ? realpathSync(path) : path;
+	if (!exists) mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
+	atomicWriteText(target, `${JSON.stringify(value, null, 2)}\n`, exists ? undefined : 0o600);
 }
 
 export class MuseCodeConnector extends BaseConnector {
@@ -245,23 +273,22 @@ export class MuseCodeConnector extends BaseConnector {
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
+		const refuse = (message: string): InstallResult => ({ success: false, message, filesWritten: [] });
 		if (process.platform === "win32") {
-			return {
-				success: false,
-				message: "Muse Code integration is not supported on Windows yet: Muse runs hooks through PowerShell",
-				filesWritten: [],
-			};
+			return refuse("Muse Code integration is not supported on Windows yet: Muse runs hooks through PowerShell");
 		}
-		const workspace = expandHome(basePath || defaultWorkspacePath());
+		// `signet hook user-prompt-submit` and `session-end` take no agent option,
+		// so Muse hooks can only write as the daemon's default agent.
+		const agentId = resolveSignetAgentId();
+		if (agentId !== MANAGED_AGENT_ID_DEFAULT) {
+			return refuse(
+				`Muse Code hooks cannot carry agent "${agentId}" yet; unset SIGNET_AGENT_ID to connect Muse Code as the default agent`,
+			);
+		}
+		const workspace = resolve(expandHome(basePath || defaultWorkspacePath()));
 		const settingsPath = this.getConfigPath();
 		const settings = readMuseSettings(settingsPath);
-		if (settings.kind === "invalid") {
-			return {
-				success: false,
-				message: `Refusing to modify ${settingsPath}: ${settings.reason}`,
-				filesWritten: [],
-			};
-		}
+		if (settings.kind === "invalid") return refuse(`Refusing to modify ${settingsPath}: ${settings.reason}`);
 
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
@@ -269,21 +296,21 @@ export class MuseCodeConnector extends BaseConnector {
 		const stripped = this.stripLegacySignetBlock(workspace);
 		if (stripped !== null) filesWritten.push(stripped);
 
+		const env = resolveMuseRuntimeEnv(workspace);
 		const current = settings.kind === "ok" ? settings.value : { schema_version: SETTINGS_SCHEMA_VERSION };
-		const hooks = isJsonObject(current.hooks) ? current.hooks : {};
+		const hooks = settings.kind === "ok" ? settings.hooks : {};
 		const servers = isJsonObject(current.mcp_servers) ? current.mcp_servers : {};
 		const next = {
 			...current,
-			hooks: mergeSignetMuseHooks(hooks, buildMuseHooks(["signet"], resolveMuseHookEnv(workspace))),
-			mcp_servers: { ...servers, signet: buildMuseMcpServer(workspace) },
+			hooks: mergeSignetMuseHooks(hooks, buildMuseHooks(resolveMuseSignetArgs(), env)),
+			mcp_servers: { ...servers, signet: buildMuseMcpServer(env) },
 		};
 		if (JSON.stringify(next) !== JSON.stringify(current)) {
-			mkdirSync(this.getConfigDir(), { recursive: true });
-			atomicWriteJson(settingsPath, next);
+			writeMuseSettings(settingsPath, next);
 			configsPatched.push(settingsPath);
 		}
 
-		if (resolve(workspace) !== defaultWorkspacePath()) {
+		if (workspace !== defaultWorkspacePath()) {
 			warnings.push(
 				`Muse Code discovers skills from ~/.agents/skills, not ${workspace}/skills; Signet skills in this workspace are not visible to Muse`,
 			);
@@ -301,10 +328,13 @@ export class MuseCodeConnector extends BaseConnector {
 	async uninstall(): Promise<UninstallResult> {
 		const settingsPath = this.getConfigPath();
 		const settings = readMuseSettings(settingsPath);
-		if (settings.kind !== "ok") return { filesRemoved: [], configsPatched: [] };
+		if (settings.kind === "missing") return { filesRemoved: [], configsPatched: [] };
+		if (settings.kind === "invalid") {
+			throw new Error(`Cannot remove Signet entries from ${settingsPath}: ${settings.reason}`);
+		}
 
-		const { hooks, mcp_servers: servers, ...rest } = settings.value;
-		const keptHooks = isJsonObject(hooks) ? removeSignetMuseHooks(hooks) : {};
+		const { hooks: _hooks, mcp_servers: servers, ...rest } = settings.value;
+		const keptHooks = removeSignetMuseHooks(settings.hooks);
 		const keptServers: Record<string, unknown> = isJsonObject(servers) ? { ...servers } : {};
 		Reflect.deleteProperty(keptServers, "signet");
 		const next = {
@@ -313,17 +343,21 @@ export class MuseCodeConnector extends BaseConnector {
 			...(Object.keys(keptServers).length > 0 ? { mcp_servers: keptServers } : {}),
 		};
 		if (JSON.stringify(next) === JSON.stringify(settings.value)) return { filesRemoved: [], configsPatched: [] };
-		atomicWriteJson(settingsPath, next);
+		writeMuseSettings(settingsPath, next);
 		return { filesRemoved: [], configsPatched: [settingsPath] };
 	}
 
 	isInstalled(): boolean {
-		const settings = readMuseSettings(this.getConfigPath());
-		if (settings.kind !== "ok") return false;
-		return (
-			hasSignetHooks(settings.value.hooks) ||
-			(isJsonObject(settings.value.mcp_servers) && "signet" in settings.value.mcp_servers)
+		const settingsPath = this.getConfigPath();
+		const settings = readMuseSettings(settingsPath);
+		// An unreadable file can still hold Signet entries and credentials;
+		// report it as installed so it is not shown as cleanly disconnected.
+		if (settings.kind === "invalid") return readFileSync(settingsPath, "utf-8").includes("-H muse-code");
+		if (settings.kind === "missing") return false;
+		const hasHooks = Object.values(settings.hooks).some((groups) =>
+			groups.some((group) => group.hooks.some(isSignetHandler)),
 		);
+		return hasHooks || (isJsonObject(settings.value.mcp_servers) && "signet" in settings.value.mcp_servers);
 	}
 }
 

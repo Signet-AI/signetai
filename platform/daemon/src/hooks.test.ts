@@ -1633,6 +1633,62 @@ describe("direct transcript regressions", () => {
 		}
 	});
 
+	test.serial("records the final assistant reply when a harness has no transcript source", async () => {
+		createMemoryDb([]);
+
+		const result = await handleSessionEnd({
+			harness: "muse-code",
+			sessionKey: "muse-stop-session",
+			sessionId: "muse-stop-session",
+			cwd: "/home/user/signetai",
+			lastAssistantMessage: "The probe color is ultramarine.",
+		});
+		await handleSessionEnd({
+			harness: "muse-code",
+			sessionKey: "muse-stop-session",
+			sessionId: "muse-stop-session",
+			cwd: "/home/user/signetai",
+			lastAssistantMessage: "The probe color is ultramarine.",
+		});
+		expect(result.queued).toBe(false);
+
+		const db = openTestDb();
+		try {
+			const stored = db
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get("muse-stop-session", "default") as { content: string } | undefined;
+			expect(stored?.content).toBe("Assistant: The probe color is ultramarine.");
+		} finally {
+			db.close();
+		}
+		const canonical = readFileSync(join(TEST_DIR, "memory", "muse-code", "transcripts", "transcript.jsonl"), "utf-8");
+		expect(canonical).toContain("The probe color is ultramarine.");
+	});
+
+	test.serial("leaves the assistant reply to the transcript source when one is supplied", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "stop-with-source.jsonl");
+		writeFileSync(transcriptPath, "User: hi\nAssistant: from the source file\n");
+
+		await handleSessionEnd({
+			harness: "codex",
+			transcriptPath,
+			sessionKey: "codex-stop-session",
+			sessionId: "codex-stop-session",
+			cwd: "/home/user/signetai",
+			lastAssistantMessage: "from the hook payload",
+		});
+
+		const db = openTestDb();
+		try {
+			expect(
+				db.prepare("SELECT COUNT(*) AS count FROM session_transcripts WHERE session_key = ?").get("codex-stop-session"),
+			).toEqual({ count: 0 });
+		} finally {
+			db.close();
+		}
+	});
+
 	test.serial("writes full canonical transcript content without a summary input copy", async () => {
 		createMemoryDb([]);
 		const transcriptPath = join(TEST_DIR, "long-transcript.txt");
