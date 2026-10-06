@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import type { AuthResult, TokenClaims, TokenRole, TokenScope } from "./types";
+import type { AuthResult, Permission, TokenClaims, TokenRole, TokenScope } from "./types";
 import { TOKEN_ROLES } from "./types";
 
 function base64urlEncode(data: Buffer | Uint8Array): string {
@@ -51,6 +51,8 @@ export function createToken(
 		readonly sub: string;
 		readonly scope: TokenScope;
 		readonly role: TokenRole;
+		readonly permissions?: readonly Permission[];
+		readonly notAfter?: number;
 	},
 	ttlSeconds: number,
 ): string {
@@ -60,7 +62,8 @@ export function createToken(
 		scope: claims.scope,
 		role: claims.role,
 		iat: now,
-		exp: now + ttlSeconds,
+		exp: Math.min(now + ttlSeconds, claims.notAfter ?? Number.POSITIVE_INFINITY),
+		...(claims.permissions ? { permissions: claims.permissions } : {}),
 	};
 	const payloadStr = JSON.stringify(fullClaims);
 	const payloadB64 = base64urlEncode(Buffer.from(payloadStr, "utf-8"));
