@@ -8,7 +8,7 @@ export interface FtsSchemaQueryDb {
 	};
 }
 
-const MEMORIES_FTS_TOKENIZER = "unicode61";
+export const MEMORIES_FTS_TOKENIZER = "porter unicode61";
 const FTS_STATE_TABLE = "memories_fts_state";
 
 function normalizeSql(sql: string): string {
@@ -196,7 +196,5 @@ export function readMemoriesFtsIndexRowCount(db: FtsSchemaQueryDb): number | nul
 
 export function memoriesFtsNeedsTokenizerRepair(sql: string | null): boolean {
 	if (sql === null) return false;
-	const normalized = normalizeSql(sql);
-	if (normalized.includes("porter unicode61")) return true;
-	return !normalized.includes(`tokenize='${MEMORIES_FTS_TOKENIZER}'`);
+	return !normalizeSql(sql).includes(`tokenize='${MEMORIES_FTS_TOKENIZER}'`);
 }

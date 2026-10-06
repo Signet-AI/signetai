@@ -345,9 +345,9 @@ reached `max_attempts` are moved to `dead` instead of being requeued again.
 
 ### POST /api/repair/check-fts
 
-Check FTS5 index consistency against the memories table and detect legacy
-tokenizer drift. Optionally repair mismatches by rebuilding the index or
-recreating `memories_fts` with the canonical `unicode61` tokenizer.
+Check FTS5 index consistency against the memories table and detect tokenizer
+drift. Optionally repair mismatches by rebuilding the index or recreating
+`memories_fts` with the canonical `porter unicode61` tokenizer.
 
 **Request body** (optional)
 

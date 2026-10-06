@@ -445,7 +445,7 @@ export async function checkFtsConsistency(
 							reason: ctx.reason,
 							actorType: ctx.actorType,
 							requestId: ctx.requestId,
-							message: "FTS recreated with unicode61 tokenizer",
+							message: "FTS recreated with the porter unicode61 tokenizer",
 						},
 					});
 				} else {
@@ -453,7 +453,7 @@ export async function checkFtsConsistency(
 						accessor,
 						(db) => {
 							recreateMemoriesFts(db);
-							writeRepairAudit(db, action, ctx, 1, "FTS recreated with unicode61 tokenizer");
+							writeRepairAudit(db, action, ctx, 1, "FTS recreated with the porter unicode61 tokenizer");
 						},
 						"db:repair.fts.tokenizer-rebuild",
 					);
@@ -466,7 +466,7 @@ export async function checkFtsConsistency(
 
 		limiter.record(action);
 		const message = repair
-			? "FTS tokenizer drift detected — recreated with unicode61 tokenizer"
+			? "FTS tokenizer drift detected — recreated with the porter unicode61 tokenizer"
 			: "FTS tokenizer drift detected — run with repair=true to recreate";
 		logger.warn("pipeline", "repair: FTS tokenizer drift", {
 			memCount,

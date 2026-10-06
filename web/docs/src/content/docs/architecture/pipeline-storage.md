@@ -309,7 +309,10 @@ metadata. **`vec_embeddings`** is the sqlite-vec ANN mirror and is rebuildable.
 
 **`memories_fts`** is an FTS5 external-content index over memory text and
 prospective hints. Its triggers keep it synchronized with the canonical memory
-rows.
+rows. It uses the `porter unicode61` tokenizer, so a query word matches its
+inflections ("bake" matches "baked" and "baking"; "albums" matches "album").
+Stemming can also join unrelated words that share a stem ("celebrate" and
+"celebrity"); the vector lane and reranker carry meaning beyond that.
 
 **`memory_search_telemetry`** is an opt-in, local-only recall QA ledger. It may
 contain query text and result snapshots, so routes that expose it enforce

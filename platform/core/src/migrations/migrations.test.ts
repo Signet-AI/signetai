@@ -37,7 +37,7 @@ function rewindToMigration(db: Database, version: 138 | 139): void {
 	db.exec("PRAGMA foreign_keys = ON");
 }
 
-function installLegacyPorterMemoriesFts(db: Database): void {
+function installMemoriesFtsWithTokenizer(db: Database, tokenizer: string): void {
 	db.exec("DROP TRIGGER IF EXISTS memories_ai");
 	db.exec("DROP TRIGGER IF EXISTS memories_ad");
 	db.exec("DROP TRIGGER IF EXISTS memories_au");
@@ -47,7 +47,7 @@ function installLegacyPorterMemoriesFts(db: Database): void {
 			content,
 			content='memories',
 			content_rowid='rowid',
-			tokenize='porter unicode61'
+			tokenize='${tokenizer}'
 		);
 	`);
 	db.exec(`
@@ -415,7 +415,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(166);
+			expect(applied.version).toBe(167);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -2253,41 +2253,34 @@ describe("migration framework", () => {
 		}
 	});
 
-	test("migration 057 recreates legacy porter-tokenized memories_fts", () => {
+	test("migration 167 rebuilds a unicode61 memories_fts with porter stemming", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
 		db.exec(`
 			INSERT INTO memories (id, content, type, confidence, created_at, updated_at, updated_by)
 			VALUES
-				('mem-celebrate', 'We celebrate wins together', 'fact', 0.9, datetime('now'), datetime('now'), 'test'),
-				('mem-celebrity', 'Celebrity filter blocks face likenesses', 'fact', 0.9, datetime('now'), datetime('now'), 'test')
+				('mem-baked', 'The user baked a chocolate cake', 'fact', 0.9, datetime('now'), datetime('now'), 'test'),
+				('mem-albums', 'The user bought an album on vinyl', 'fact', 0.9, datetime('now'), datetime('now'), 'test')
 		`);
 
-		installLegacyPorterMemoriesFts(db);
-		const before = db
-			.query<{ content: string }, [string]>(
-				"SELECT content FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rowid",
-			)
-			.all("celebrate")
-			.map((row) => row.content);
-		expect(before).toContain("Celebrity filter blocks face likenesses");
+		installMemoriesFtsWithTokenizer(db, "unicode61");
+		const match = (term: string) =>
+			db
+				.query<{ content: string }, [string]>(
+					"SELECT content FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rowid",
+				)
+				.all(term)
+				.map((row) => row.content);
+		expect(match("bake")).toEqual([]);
 
-		db.prepare("DELETE FROM schema_migrations WHERE version = 57").run();
+		db.prepare("DELETE FROM schema_migrations WHERE version = 167").run();
 		runMigrations(db);
 
 		const sql = readMemoriesFtsSql(db);
-		expect(sql).toContain("tokenize='unicode61'");
-		expect(sql).not.toContain("porter unicode61");
-
-		const after = db
-			.query<{ content: string }, [string]>(
-				"SELECT content FROM memories_fts WHERE memories_fts MATCH ? ORDER BY rowid",
-			)
-			.all("celebrate")
-			.map((row) => row.content);
-		expect(after).toContain("We celebrate wins together");
-		expect(after).not.toContain("Celebrity filter blocks face likenesses");
+		expect(sql).toContain("tokenize='porter unicode61'");
+		expect(match("bake")).toEqual(["The user baked a chocolate cake"]);
+		expect(match("albums")).toEqual(["The user bought an album on vinyl"]);
 	});
 
 	test("migration 063 limits memories_fts updates to content changes", () => {

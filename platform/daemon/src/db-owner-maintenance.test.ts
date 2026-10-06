@@ -48,7 +48,7 @@ function makeDatabase(memoryCount = 7): { readonly directory: string; readonly p
 			session_id TEXT,
 			request_id TEXT
 		);
-		CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61');
+		CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='porter unicode61');
 	`);
 	const insert = db.prepare("INSERT INTO memories (content) VALUES (?)");
 	db.transaction(() => {
@@ -357,7 +357,7 @@ describe("DB owner FTS maintenance", () => {
 		const db = new Database(database.path);
 		db.exec("DROP TABLE memories_fts");
 		db.exec(
-			"CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61')",
+			"CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='porter unicode61')",
 		);
 		db.close();
 
@@ -379,7 +379,7 @@ describe("DB owner FTS maintenance", () => {
 		const db = new Database(database.path);
 		db.exec("DROP TABLE memories_fts");
 		db.exec(
-			"CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61')",
+			"CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='porter unicode61')",
 		);
 		db.close();
 

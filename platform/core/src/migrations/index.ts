@@ -167,6 +167,7 @@ import { up as retireMemoryContentSafety } from "./163-retire-memory-content-saf
 import { up as claimEventTime } from "./164-claim-event-time";
 import { up as dreamingHistory } from "./165-dreaming-history";
 import { up as dreamingPassPeakContext } from "./166-dreaming-pass-peak-context";
+import { up as memoriesFtsPorter } from "./167-memories-fts-porter";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1514,6 +1515,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "dreaming-pass-peak-context",
 		up: dreamingPassPeakContext,
 		artifacts: { columns: [{ table: "dreaming_passes", column: "tokens_peak_context" }] },
+	},
+	{
+		version: 167,
+		name: "memories-fts-porter",
+		up: memoriesFtsPorter,
 	},
 ];
 function checksum(m: Migration): string {
