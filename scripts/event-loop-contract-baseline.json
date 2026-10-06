@@ -2123,56 +2123,112 @@
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 208,
+      "line": 209,
       "api": "mkdirSync",
       "source": "mkdirSync(dir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 211,
+      "line": 210,
+      "api": "readdirSync",
+      "source": "for (const entry of readdirSync(root)) {",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 213,
+      "api": "rmSync",
+      "source": "rmSync(join(root, entry), { recursive: true, force: true });",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 217,
+      "api": "existsSync",
+      "source": "existsSync(path) && createHash(\"sha256\").update(readFileSync(path)).digest(\"hex\").slice(0, 16) === hash;",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 217,
+      "api": "readFileSync",
+      "source": "existsSync(path) && createHash(\"sha256\").update(readFileSync(path)).digest(\"hex\").slice(0, 16) === hash;",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 221,
+      "api": "writeFileSync",
+      "source": "writeFileSync(tempPath, content);",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 222,
+      "api": "renameSync",
+      "source": "renameSync(tempPath, path);",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 224,
+      "api": "rmSync",
+      "source": "rmSync(tempPath, { force: true });",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 240,
+      "api": "mkdirSync",
+      "source": "mkdirSync(dir, { recursive: true });",
+      "category": "hot-path"
+    },
+    {
+      "path": "native-runtime-assets.ts",
+      "line": 243,
       "api": "existsSync",
       "source": "if (!existsSync(path)) {",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 212,
+      "line": 244,
       "api": "writeFileSync",
       "source": "writeFileSync(path, Buffer.from(asset.contentBase64, \"base64\"));",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 226,
+      "line": 258,
       "api": "mkdirSync",
       "source": "mkdirSync(root, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 231,
+      "line": 263,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 232,
+      "line": 264,
       "api": "existsSync",
       "source": "if (!existsSync(path)) {",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 233,
+      "line": 265,
       "api": "writeFileSync",
       "source": "writeFileSync(path, Buffer.from(asset.contentBase64, \"base64\"));",
       "category": "hot-path"
     },
     {
       "path": "native-runtime-assets.ts",
-      "line": 238,
+      "line": 270,
       "api": "writeFileSync",
       "source": "writeFileSync(join(root, \".signet-assets.json\"), `${JSON.stringify({ kind, sourceHash }, null, 2)}\\n`);",
       "category": "hot-path"
