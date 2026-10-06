@@ -134,10 +134,9 @@ describe("startEmbeddingTracker admission", () => {
 		});
 		const embedded: string[] = [];
 		const activeCfg = {
-			provider: "ollama",
-			model: "nomic-embed-text",
+			provider: "native",
+			model: "nomic-embed-text-v1.5",
 			dimensions: 768,
-			base_url: "http://127.0.0.1:11434",
 		} as const;
 		const tracker = startEmbeddingTracker(
 			accessor,
@@ -167,4 +166,58 @@ describe("startEmbeddingTracker admission", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+	it("drains a backlog of first-time embeddings without waiting a poll interval between full batches", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-embedding-tracker-drain-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		const accessor = getDbAccessor();
+		const trackerCfg = { enabled: true, pollMs: 2_000, batchSize: 2 };
+		const repairCfg = {
+			reembedCooldownMs: 3_600_000,
+			reembedHourlyBudget: 1,
+			requeueCooldownMs: 0,
+			requeueHourlyBudget: 1,
+			dedupCooldownMs: 0,
+			dedupHourlyBudget: 1,
+			dedupSemanticThreshold: 0.9,
+			dedupBatchSize: 1,
+		};
+		const now = new Date().toISOString();
+		accessor.withWriteTx((db) => {
+			const insert = db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, agent_id, created_at, updated_at, embedding_model)
+				 VALUES (?, ?, ?, 'fact', 'default', ?, ?, NULL)`,
+			);
+			for (let index = 0; index < 7; index++)
+				insert.run(`fresh-${index}`, `Fresh memory ${index}.`, `hash-${index}`, now, now);
+		});
+		const activeCfg = {
+			provider: "native",
+			model: "nomic-embed-text-v1.5",
+			dimensions: 768,
+		} as const;
+		const embedded: string[] = [];
+		const startedAt = Date.now();
+		const tracker = startEmbeddingTracker(
+			accessor,
+			activeCfg,
+			trackerCfg,
+			repairCfg,
+			async (text) => {
+				embedded.push(text);
+				return Array.from({ length: activeCfg.dimensions }, () => 0.01);
+			},
+			async () => ({ available: true }),
+		);
+		try {
+			const deadline = startedAt + 10_000;
+			while (embedded.length < 7 && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(embedded).toHaveLength(7);
+			expect(Date.now() - startedAt).toBeLessThan(3_500);
+		} finally {
+			await tracker.stop();
+			closeDbAccessor();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 15_000);
 });

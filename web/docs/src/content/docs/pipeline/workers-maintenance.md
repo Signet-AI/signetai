@@ -322,7 +322,12 @@ configured embedding dimensions. If the table was created with stale
 table with the configured size, and backfills stored embeddings that match that
 dimension.
 
-The tracker uses `setTimeout` chains for natural backpressure. It
+The tracker uses `setTimeout` chains for natural backpressure. After a cycle
+that saves a full batch of never-embedded memories, the next cycle starts
+immediately instead of after `pollMs`, so a backlog from a Dreaming run drains
+at the provider's speed rather than `batchSize` per `pollMs`. Each cycle is
+still one bounded batch, yields to the event loop, and checks system pressure;
+re-embedding stays on the repair budget and the normal interval. It
 exposes a `getStats()` method returning `{ running, processed, failed,
 skippedCycles, lastCycleAt, queueDepth }`.
 
@@ -331,5 +336,5 @@ Configuration lives under `embeddingTracker` in the pipeline config:
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `enabled` | `true` | — | Master switch |
-| `pollMs` | `5000` | 1000–60000 ms | Polling interval between cycles |
+| `pollMs` | `5000` | 1000–60000 ms | Interval between cycles when there is no full batch of new memories to embed |
 | `batchSize` | `8` | 1–20 | Max embeddings refreshed per cycle |
