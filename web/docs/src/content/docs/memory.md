@@ -236,10 +236,23 @@ embeddings carry a strong source root/project binding. Project-scoped searches
 still use authorized memory rows and native source artifacts; they do not guess
 source ownership from chunk text metadata.
 
-Transcript lookup is intentionally outside memory recall. Raw session
-transcripts are searched through the dedicated `/api/sessions/search` API,
-MCP `session_search` tool, and CLI `signet session search` command so callers
-must ask for transcript evidence explicitly.
+Recall also returns a bounded amount of transcript evidence. After the memory
+results are ranked, keyword search over the requesting agent's own captured
+session transcripts adds at most `search.transcript_evidence_limit` excerpts
+(default 2, maximum 5, `0` disables). Each takes one of the bottom result
+slots, so the result count stays within `limit`. An excerpt is the
+best-matching window of about 900 characters with credentials redacted, has
+`source: "transcript"`, `type: "transcript"`, `supplementary: true`, an id of
+the form `transcript:<session>`, and the session in `session_id`. Sessions
+already represented in the results are skipped. Transcripts are never read
+across agents, whatever the read policy, and the lane is skipped for temporal
+windows and metadata filters (`type`, `tags`, `who`, `pinned`,
+`importance_min`, `since`, `until`, `scope`), which transcripts cannot
+satisfy. This keeps details Dreaming does not file, such as general
+information the assistant gave, reachable without filing them as claims.
+Prompt-submit injection does not include transcripts. Full transcript search
+remains available through `/api/sessions/search`, MCP `session_search`, and
+`signet session search`.
 
 ### Timing and Failure Behavior
 

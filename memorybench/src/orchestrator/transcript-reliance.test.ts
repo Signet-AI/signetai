@@ -10,6 +10,7 @@ describe("Signet recall evidence classification", () => {
   it("marks transcript fallbacks as raw evidence and everything else as derived", () => {
     expect(classifySignetRecallResult({ id: "source-chunk:abc" })).toBe("raw-evidence")
     expect(classifySignetRecallResult({ id: "native-artifact:42" })).toBe("raw-evidence")
+    expect(classifySignetRecallResult({ id: "transcript:session-1" })).toBe("raw-evidence")
     expect(classifySignetRecallResult({ id: "mem_123", source: "sec" })).toBe("derived")
     expect(classifySignetRecallResult({ id: "entity:atlas", source: "constructed" })).toBe(
       "derived"

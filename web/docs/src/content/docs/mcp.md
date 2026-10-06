@@ -68,8 +68,9 @@ not drift into separate request shapes or result formatting.
 
 Hybrid vector + keyword search over stored memories. Returns results ranked
 by combined BM25 + vector similarity score with optional graph boost and
-reranking. Transcript search is intentionally separate; use `session_search`
-when you need session transcript evidence.
+reranking. Up to `search.transcript_evidence_limit` excerpts (default 2) from
+the agent's own session transcripts fill the last result slots; use
+`session_search` to search transcripts directly.
 
 **Parameters:**
 

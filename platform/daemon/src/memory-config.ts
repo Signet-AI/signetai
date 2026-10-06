@@ -49,6 +49,7 @@ export interface MemorySearchConfig {
 	temporal_prior_enabled: boolean;
 	temporal_prior_weight: number;
 	temporal_prior_half_life_days: number;
+	transcript_evidence_limit: number;
 }
 
 export { PIPELINE_FLAGS };
@@ -338,6 +339,7 @@ const runtimeSchema = z.object({
 			temporal_prior_enabled: z.boolean().default(true),
 			temporal_prior_weight: fraction.default(0.15),
 			temporal_prior_half_life_days: z.number().min(1).max(365).default(14),
+			transcript_evidence_limit: z.number().int().min(0).max(5).default(2),
 		})
 		.prefault({}),
 	memory: z.record(z.string(), z.unknown()).optional(),

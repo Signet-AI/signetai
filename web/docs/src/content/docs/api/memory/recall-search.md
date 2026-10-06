@@ -162,6 +162,13 @@ or synthesis stopped after retrieving only partial evidence.
 milliseconds. Aggregate recall fills the same field with aggregate-specific
 stages such as `aggregate_planning`, `aggregate_followup_recalls`, and
 `aggregate_synthesis`.
+
+`meta.transcriptEvidence`, when the transcript lane ran, reports how many
+transcript excerpts were returned (`returned`) and `failed: true` if the lane
+failed; recall then returns memory results only. Transcript excerpts have
+`source: "transcript"` and an id of the form `transcript:<session>`; see
+[Hybrid Recall](/memory/#hybrid-recall) for the bounds.
+
 `meta.temporal`, when present, describes the resolved temporal window, facets,
 and content query used by automatic date parsing or an explicit `time` request.
 When session dedupe is enabled, `meta.dedupe.suppressed` counts rows omitted

@@ -143,6 +143,7 @@ export interface RecallResponse {
 		sourceVectorSearch?: SourceChunkVectorDiagnostics;
 		reranker?: RerankOutcome;
 		graphPartial?: boolean;
+		transcriptEvidence?: { readonly returned: number; readonly failed?: true };
 		graphError?: {
 			channel: "graph_traversal";
 			code: string | number | null;
@@ -1298,6 +1299,80 @@ export function transcriptExcerpt(content: string, query: string, maxChars = 650
 	return `${prefix}${clean.slice(start, end).trim()}${suffix}`;
 }
 
+async function buildTranscriptEvidenceResults(
+	agentId: string,
+	project: string | undefined,
+	query: string,
+	maxResults: number,
+	existing: readonly RecallResult[],
+): Promise<RecallResult[]> {
+	const fts = sanitizeFtsQuery(query);
+	if (fts.length === 0 || maxResults <= 0) return [];
+	const represented = new Set(
+		existing.flatMap((row) => [row.session_id, row.source_id]).filter((id): id is string => !!id),
+	);
+	const owner = await getDbOwner(getDbAccessorPath());
+	const rows = await ownerReadAll<{
+		readonly session_id: string | null;
+		readonly source_id: string | null;
+		readonly source_path: string;
+		readonly harness: string | null;
+		readonly project: string | null;
+		readonly captured_at: string;
+		readonly content: string;
+		readonly rank: number;
+	}>(
+		owner,
+		`SELECT ma.session_id, ma.source_id, ma.source_path, ma.harness, ma.project,
+			COALESCE(ma.started_at, ma.captured_at) AS captured_at, ma.content,
+			bm25(memory_artifacts_fts) AS rank
+		 FROM memory_artifacts_fts
+		 JOIN memory_artifacts ma ON ma.rowid = memory_artifacts_fts.rowid
+		 WHERE memory_artifacts_fts MATCH ?
+		   AND ma.agent_id = ?
+		   AND ma.source_kind = 'transcript'
+		   AND COALESCE(ma.is_deleted, 0) = 0
+		   ${project ? "AND (ma.project = ? OR ma.project IS NULL)" : ""}
+		 ORDER BY rank ASC LIMIT ?`,
+		[fts, agentId, ...(project ? [project] : []), maxResults + represented.size],
+		{
+			operation: "memory-search.transcript-evidence",
+			workloadClass: "foreground",
+			estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, maxResults + represented.size),
+			deadlineMs: 30_000,
+		},
+	);
+	return rows
+		.filter((row) => {
+			const sessionId = row.session_id ?? row.source_path;
+			return !represented.has(sessionId) && !(row.source_id && represented.has(row.source_id));
+		})
+		.slice(0, maxResults)
+		.map((row): RecallResult => {
+			const sessionId = row.session_id ?? row.source_path;
+			const content = transcriptExcerpt(redactCredentials(row.content), query, 900);
+			return {
+				id: `transcript:${sessionId}`,
+				content,
+				content_length: content.length,
+				truncated: content.length < row.content.length,
+				score: Math.round((1 / (1 + Math.abs(row.rank))) * 100) / 100,
+				source: "transcript",
+				source_id: row.source_id ?? sessionId,
+				session_id: sessionId,
+				source_path: row.source_path,
+				type: "transcript",
+				tags: null,
+				pinned: false,
+				importance: 0.5,
+				who: row.harness ?? "transcript",
+				project: row.project,
+				created_at: row.captured_at,
+				supplementary: true,
+			};
+		});
+}
+
 async function buildNativeArtifactRecallHits(
 	params: RecallParams,
 	query: string,
@@ -1565,7 +1640,32 @@ export async function hybridRecall(
 		}
 		return deduped.items;
 	};
+	let transcriptEvidenceAllowed = false;
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
+		let transcriptEvidence: { readonly returned: number; readonly failed?: true } | undefined;
+		if (transcriptEvidenceAllowed && params.agentId) {
+			const agentId = params.agentId;
+			try {
+				const evidence = await timings.timeAsync("transcript_evidence", () =>
+					buildTranscriptEvidenceResults(
+						agentId,
+						params.project,
+						params.keywordQuery ?? query,
+						Math.min(cfg.search.transcript_evidence_limit, limit),
+						response.results,
+					),
+				);
+				if (evidence.length > 0) {
+					response.results = [...response.results.slice(0, Math.max(0, limit - evidence.length)), ...evidence];
+				}
+				transcriptEvidence = { returned: evidence.length };
+			} catch (e) {
+				transcriptEvidence = { returned: 0, failed: true };
+				logger.warn("memory", "Transcript evidence recall failed (non-fatal)", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}
 		const deduped = applyRecallDedupe({
 			sessionKey: params.sessionKey,
 			agentId: params.agentId,
@@ -1590,6 +1690,7 @@ export async function hybridRecall(
 			noHits: response.results.length === 0,
 			...(lexicalSearchPartial || graphPartial ? { partial: true } : {}),
 			...(graphPartial ? { graphPartial: true } : {}),
+			...(transcriptEvidence ? { transcriptEvidence } : {}),
 			...(graphError ? { graphError } : {}),
 			...(graphDegradation
 				? { degradation: graphDegradation }
@@ -1682,6 +1783,11 @@ export async function hybridRecall(
 	if (temporal.adjustedQuery) {
 		query = temporal.adjustedQuery;
 	}
+	transcriptEvidenceAllowed =
+		!temporal.meta &&
+		params.sourceOnly !== true &&
+		!hasMemoryMetadataFilters(params) &&
+		cfg.search.transcript_evidence_limit > 0;
 	const temporalCandidateSet = new Set(temporal.candidateIds ?? []);
 	const temporalCandidateMap = new Map<string, number>(
 		[...temporalCandidateSet].map((id) => [id, Math.max(minScore, 0.05)]),

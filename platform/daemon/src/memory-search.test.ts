@@ -911,6 +911,76 @@ describe("hybridRecall", () => {
 		expect(result.results[0]?.content).toContain("Ada");
 	});
 
+	it("adds bounded transcript evidence from the requesting agent's own transcripts", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const memory = db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, is_deleted
+				) VALUES (?, ?, 'fact', ?, 'global', ?, ?, 'test', 0)`,
+			);
+			for (let index = 0; index < 4; index++) {
+				memory.run(`mem-speyer-${index}`, `The user is planning a Speyer trip, note ${index}.`, "agent-a", now, now);
+			}
+			const transcript = db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					harness, captured_at, content, updated_at, is_deleted
+				) VALUES (?, ?, ?, 'transcript', ?, ?, 'claude-code', ?, ?, ?, ?)`,
+			);
+			const add = (agent: string, session: string, content: string, deleted = 0): void => {
+				transcript.run(
+					agent,
+					`transcripts/${session}.jsonl`,
+					createHash("sha256").update(session).digest("hex"),
+					session,
+					`token-${session}`,
+					now,
+					content,
+					now,
+					deleted,
+				);
+			};
+			add("agent-a", "own-speyer", "user: What is the Speyer tourism board phone number? assistant: +49 6232 142.");
+			add("agent-a", "own-deleted", "user: Speyer tourism board phone number again? assistant: deleted copy.", 1);
+			add("agent-b", "other-speyer", "user: Speyer tourism board phone number for agent b.");
+		});
+
+		const recall = async (overrides: Partial<Parameters<typeof hybridRecall>[0]> = {}, limit = 3) =>
+			await hybridRecall(
+				{
+					query: "Speyer tourism board phone number",
+					limit,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					trackRecallAccess: false,
+					...overrides,
+				},
+				testCfg(),
+				async () => null,
+			);
+
+		const result = await recall();
+		expect(result.results).toHaveLength(3);
+		const transcripts = result.results.filter((row) => row.id.startsWith("transcript:"));
+		expect(transcripts.map((row) => row.session_id)).toEqual(["own-speyer"]);
+		expect(transcripts[0]?.content).toContain("+49 6232 142");
+		expect(transcripts[0]?.supplementary).toBe(true);
+		expect(result.results.at(-1)?.id).toBe("transcript:own-speyer");
+		expect(result.meta.transcriptEvidence).toEqual({ returned: 1 });
+
+		const filtered = await recall({ type: "fact" });
+		expect(filtered.results.some((row) => row.id.startsWith("transcript:"))).toBe(false);
+
+		const disabledCfg = testCfg();
+		const disabled = await hybridRecall(
+			{ query: "Speyer tourism board phone number", limit: 3, agentId: "agent-a", readPolicy: "isolated" },
+			{ ...disabledCfg, search: { ...disabledCfg.search, transcript_evidence_limit: 0 } },
+			async () => null,
+		);
+		expect(disabled.results.some((row) => row.id.startsWith("transcript:"))).toBe(false);
+	});
+
 	it("skips source chunk vector fallback for project-scoped recall", async () => {
 		const now = new Date().toISOString();
 		const vec = unitVector();

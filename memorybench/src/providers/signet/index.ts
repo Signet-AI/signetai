@@ -122,7 +122,7 @@ function passHadNothingToDo(pass: DreamingStatusPass): boolean {
 const MAX_IDLE_DREAMING_PASSES = 3
 const MAX_FAILED_DREAMING_PASSES = 3
 
-const RAW_EVIDENCE_ID_PREFIXES = ["source-chunk:", "native-artifact:"] as const
+const RAW_EVIDENCE_ID_PREFIXES = ["source-chunk:", "native-artifact:", "transcript:"] as const
 
 export function classifySignetRecallResult(result: unknown): RecallEvidenceKind {
   const id =
