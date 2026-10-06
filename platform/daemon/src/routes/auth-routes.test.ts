@@ -10,6 +10,7 @@ const KEY = "sig_sk_narrow_secretvalue";
 const KEY_EXP = Math.floor(Date.now() / 1000) + 120;
 const KEY_CLAIMS: TokenClaims = {
 	sub: "api-key:k1",
+	name: "alice-laptop",
 	role: "agent",
 	scope: { agent: "alice" },
 	permissions: ["recall"],
@@ -144,6 +145,53 @@ describe("dashboard handoff", () => {
 	test("requires a credential to issue a code", async () => {
 		const res = await app.request("/api/auth/handoff", { method: "POST" });
 		expect(res.status).toBe(401);
+	});
+});
+
+describe("effective permissions and display name", () => {
+	test("whoami lists the permissions the daemon will grant this credential", async () => {
+		const res = await app.request("/api/auth/whoami", { headers: bearer(KEY) });
+		const body = (await res.json()) as { permissions: string[]; claims: TokenClaims | null };
+		expect(body.permissions).toEqual(["recall"]);
+		expect(body.claims?.name).toBe("alice-laptop");
+	});
+
+	test("whoami lists no permissions without a credential in team mode", async () => {
+		const body = (await (await app.request("/api/auth/whoami")).json()) as { permissions: string[] };
+		expect(body.permissions).toEqual([]);
+	});
+
+	test("an admin session from password sign-in carries every permission and the username", async () => {
+		const prevUsername = process.env.SIGNET_ADMIN_USERNAME;
+		const prevPassword = process.env.SIGNET_ADMIN_PASSWORD;
+		process.env.SIGNET_ADMIN_USERNAME = "owner";
+		process.env.SIGNET_ADMIN_PASSWORD = "secret-password";
+		try {
+			const login = await app.request("/api/auth/login", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ username: "owner", password: "secret-password" }),
+			});
+			const { token } = (await login.json()) as { token: string };
+			const body = (await (await app.request("/api/auth/whoami", { headers: bearer(token) })).json()) as {
+				permissions: string[];
+				claims: TokenClaims | null;
+			};
+			expect(body.claims?.name).toBe("owner");
+			expect(body.permissions).toContain("admin");
+			expect(body.permissions).toContain("diagnostics");
+		} finally {
+			if (prevUsername === undefined) Reflect.deleteProperty(process.env, "SIGNET_ADMIN_USERNAME");
+			else process.env.SIGNET_ADMIN_USERNAME = prevUsername;
+			if (prevPassword === undefined) Reflect.deleteProperty(process.env, "SIGNET_ADMIN_PASSWORD");
+			else process.env.SIGNET_ADMIN_PASSWORD = prevPassword;
+		}
+	});
+
+	test("a session keeps the credential's display name", async () => {
+		const { token } = await mint();
+		if (!state.authSecret) throw new Error("expected auth secret");
+		expect(verifyToken(state.authSecret, token).claims?.name).toBe("alice-laptop");
 	});
 });
 

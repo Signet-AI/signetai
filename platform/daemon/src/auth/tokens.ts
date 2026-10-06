@@ -49,6 +49,7 @@ export function createToken(
 	secret: Buffer,
 	claims: {
 		readonly sub: string;
+		readonly name?: string;
 		readonly scope: TokenScope;
 		readonly role: TokenRole;
 		readonly permissions?: readonly Permission[];
@@ -59,6 +60,7 @@ export function createToken(
 	const now = Math.floor(Date.now() / 1000);
 	const fullClaims: TokenClaims = {
 		sub: claims.sub,
+		...(claims.name ? { name: claims.name } : {}),
 		scope: claims.scope,
 		role: claims.role,
 		iat: now,
@@ -97,6 +99,10 @@ export function verifyToken(secret: Buffer, token: string): AuthResult {
 
 	if (typeof claims.sub !== "string") {
 		return { authenticated: false, claims: null, error: "invalid sub" };
+	}
+
+	if (claims.name !== undefined && typeof claims.name !== "string") {
+		return { authenticated: false, claims: null, error: "invalid name" };
 	}
 
 	if (!TOKEN_ROLES.includes(claims.role)) {

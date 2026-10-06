@@ -1,11 +1,13 @@
 import type { Context, Hono, Next } from "hono";
 import { randomBytes } from "node:crypto";
 import {
+	PERMISSIONS,
 	type Permission,
 	type TokenClaims,
 	type TokenRole,
 	type TokenScope,
 	createApiKey,
+	checkPermission,
 	createToken,
 	getPeerAddress,
 	listApiKeys,
@@ -42,6 +44,7 @@ function mintSession(claims: TokenClaims): Session | null {
 		authSecret,
 		{
 			sub: claims.sub,
+			name: claims.name,
 			scope: claims.scope,
 			role: claims.role,
 			permissions: claims.permissions,
@@ -111,12 +114,19 @@ export function registerAuthRoutes(app: Hono): void {
 	app.get("/api/auth/whoami", (c) => {
 		const auth = c.get("auth");
 		const effectiveAccess = authConfig.mode === "local" || auth?.authenticated === true || auth?.trustedLocal === true;
+		const permissions =
+			authConfig.mode === "local" || auth?.trustedLocal === true
+				? [...PERMISSIONS]
+				: PERMISSIONS.filter(
+						(permission) => checkPermission(auth?.claims ?? null, permission, authConfig.mode).allowed,
+					);
 		return c.json({
 			authenticated: auth?.authenticated ?? false,
 			trustedLocal: auth?.trustedLocal === true,
 			effectiveAccess,
 			claims: auth?.claims ?? null,
 			error: auth?.error ?? null,
+			permissions,
 			mode: authConfig.mode,
 			providers: authProviderResponse().providers,
 		});
@@ -161,7 +171,11 @@ export function registerAuthRoutes(app: Hono): void {
 		}
 
 		const ttl = authConfig.sessionTokenTtlSeconds;
-		const token = createToken(authSecret, { sub: "dashboard:admin", scope: {}, role: "admin" }, ttl);
+		const token = createToken(
+			authSecret,
+			{ sub: "dashboard:admin", name: login.username, scope: {}, role: "admin" },
+			ttl,
+		);
 		const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
 		return c.json({ token, expiresAt, role: "admin", username: login.username });
 	});
