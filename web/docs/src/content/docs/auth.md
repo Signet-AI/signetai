@@ -52,7 +52,7 @@ Do not put the bootstrap password, admin bearer token, or issued key into shell 
 
 ## Create and use API keys
 
-Once an admin bearer credential is available to the CLI as `SIGNET_API_KEY`, create a named, scoped remote-client key:
+Admins signed in to the dashboard can create, list, and revoke keys under **Settings → API keys**. From the CLI, once an admin bearer credential is available as `SIGNET_API_KEY`, create a named, scoped remote-client key:
 
 ```bash
 signet api-key create \

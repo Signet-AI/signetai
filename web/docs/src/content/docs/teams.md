@@ -12,7 +12,8 @@ This guide covers setup and day-to-day access. [Authentication](/auth/) has the 
 - One daemon and one workspace that the whole team reads and writes.
 - A required credential on every request, from localhost too.
 - A dashboard sign-in screen, with password sign-in for the admin and API-key sign-in for everyone else.
-- API keys you can scope to an agent, give a role, set to expire, and revoke.
+- API keys you can scope to an agent, give a role, set to expire, and revoke, from the dashboard or the CLI.
+- A dashboard that shows each person only what their key allows.
 
 It does not yet have accounts for individual people. Password sign-in is one shared admin login, and an API key identifies a key, not a person, so name each key after the person and device it belongs to. Anything a key's role and agent scope allow, its holder can read. Per-person accounts, SSO, and hidden classifications are planned but not available.
 
@@ -62,7 +63,18 @@ If you run `signet dashboard` on the daemon machine with `SIGNET_API_KEY` set, t
 
 ## 4. Create a key for each teammate
 
-Creating keys needs an admin credential. On the daemon machine, trade the admin password for a short-lived admin session. `printf` keeps the password off the command line:
+Signed in as the admin, open **Settings → API keys** and fill in the form:
+
+- **Name**: the person and device, like `alice-laptop`.
+- **Role**: **Agent** reads and writes memories; **Read-only** can only recall. See [Roles and scopes](/auth/#roles-and-scopes).
+- **Agent**: optional. Limits the key to one agent's memories. Leave it empty to give the key the whole workspace within its role.
+- **Expires**: 30 days, 90 days, 1 year, or never.
+
+Select **Create key**. The key is shown once, with a copy button. Send it to the teammate through your secret manager, never in chat or email. The list below the form shows every key with its role, agent, last use, and expiry.
+
+### From the command line
+
+To script key creation, use the CLI on the daemon machine. It needs an admin credential, so first trade the admin password for a short-lived admin session. `printf` keeps the password off the command line:
 
 ```bash
 export SIGNET_API_KEY="$(
@@ -85,11 +97,9 @@ signet api-key create \
   --expires-at 2027-01-01T00:00:00Z
 ```
 
-- `--role agent` allows reading and writing memories; `readonly` allows recall only. See [Roles and scopes](/auth/#roles-and-scopes).
-- `--agent-id` limits the key to one agent's memories. Leave it out to give the key the whole workspace within its role.
-- `--expires-at` is optional but recommended.
+The flags match the dashboard form. The raw key is printed once. `signet api-key list` shows existing keys and when each was last used.
 
-The raw key is printed once. Send it to the teammate through your secret manager, never in chat or email. `signet api-key list` shows existing keys and when each was last used.
+Key management counts against the daemon's admin rate limit of 10 requests a minute per credential, and everyone who signs in with the admin password shares one credential. If you hit it, the dashboard says how many seconds to wait.
 
 ## 5. Teammates sign in
 
@@ -107,15 +117,28 @@ signet dashboard
 
 **From a harness.** To connect Claude Code, Codex, OpenCode, or another harness to the team daemon, follow [Remote connectors](/remote-connectors/).
 
+## What teammates see
+
+The dashboard asks the daemon which permissions the signed-in key has and adjusts to them. With an **Agent** or **Read-only** key:
+
+- Home and Memory work as usual within the key's role and agent scope.
+- Dreams, and the Connectors, Network, Inference, Secrets, API keys, Logs, and Advanced settings, say they require the admin permission instead of loading. The settings list marks them **Admin**.
+- The daily brief isn't generated automatically, because generating it needs the admin permission.
+
+These notices only reflect what the daemon allows. The daemon enforces every request either way.
+
 ## Sessions
 
-A browser session lasts `auth.sessionTokenTtlSeconds`, and never longer than the key it came from. When a session ends while someone is working, a sign-in dialog opens over the page so they keep their place. The dialog says why the session ended, for example that it expired or that the key was revoked.
+A browser session lasts `auth.sessionTokenTtlSeconds`, and never longer than the key it came from.
 
-**Sign out of this browser**, in the topbar menu, ends the session in that browser only.
+- Five minutes before a session ends, a notice offers **Sign in again**. Choose **Not now** in the sign-in dialog to keep working until the session runs out.
+- When a session ends while someone is working, a sign-in dialog opens over the page so they keep their place. The dialog says why the session ended, for example that it expired or that the key was revoked.
+- After too many failed sign-ins, the form counts down until it accepts another attempt.
+- **Sign out of this browser**, in the topbar menu, ends the session in that browser only.
 
 ## Remove someone's access
 
-Revoke their key:
+Revoke their key in **Settings → API keys**, or from the CLI:
 
 ```bash
 signet api-key list

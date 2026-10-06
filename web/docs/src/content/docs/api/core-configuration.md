@@ -20,7 +20,13 @@ current request can use the dashboard without another login, including trusted
 localhost requests in `hybrid` mode. `error` is the reason a presented
 credential was rejected, such as `token expired`, `invalid api key`,
 `api key revoked`, or `credential could not be verified` when the key store is
-unavailable, and `null` when none was presented or it was accepted. Other open
+unavailable, and `null` when none was presented or it was accepted.
+`permissions` lists what the daemon's policy grants this request: every
+permission in `local` mode or for trusted localhost requests in `hybrid` mode,
+otherwise the permissions the credential's role and permission list both allow.
+Clients can use it to show what a credential may do; the daemon still checks
+each route. `claims.name`, when present, is a display name: the API key's name,
+or the username for password sign-in. Other open
 routes, such as `/health` and `/api/mode`, do not look up API keys.
 
 **Response**
@@ -30,6 +36,7 @@ routes, such as `/health` and `/api/mode`, do not look up API keys.
   "authenticated": true,
   "claims": {
     "sub": "token:operator",
+    "name": "ci-runner",
     "role": "operator",
     "scope": { "project": "my-project" },
     "iat": 1740000000,
@@ -38,6 +45,7 @@ routes, such as `/health` and `/api/mode`, do not look up API keys.
   "trustedLocal": false,
   "effectiveAccess": true,
   "error": null,
+  "permissions": ["remember", "recall", "modify", "forget", "recover", "documents", "connectors", "diagnostics", "analytics"],
   "mode": "team",
   "providers": [
     { "id": "password", "type": "password", "enabled": true, "username": "admin" },
