@@ -36,6 +36,10 @@ export async function nativeRerank(modelId: string, query: string, documents: re
 	inFlight = true;
 	try {
 		const handle = await handleFor(modelId);
+		if (!handle.getStatus().initialized) {
+			if (!handle.getStatus().initializing) void handle.checkAvailable();
+			throw new Error("cross-encoder loading");
+		}
 		try {
 			return await handle.rerank(query, documents);
 		} catch (error) {

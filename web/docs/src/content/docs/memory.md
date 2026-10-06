@@ -180,9 +180,11 @@ post-processing:
   use), and fuses its order with the retrieval order by reciprocal rank so it
   can lift a relevant memory that shares no words with the question without
   overturning order retrieval already got right. It runs in its own worker
-  thread, one rerank at a time; while it is loading, busy, or slower than
-  three quarters of `reranker.timeoutMs`, recall falls back to an embedding
-  blend for that request. `meta.reranker` reports which reranker ran
+  thread, one rerank at a time, and adds roughly 150 to 250 ms per recall on
+  the source runtime and 350 to 450 ms in the compiled binary, which runs it
+  on WebAssembly. The model loads in the background on first use; while it is
+  loading, busy, or slower than three quarters of `reranker.timeoutMs`,
+  recall falls back to an embedding blend for that request. `meta.reranker` reports which reranker ran
   (`cross-encoder`, `embedding`, `llm`, or `none`) and why a fallback
   happened. Set `crossEncoderModel: ""` to use the embedding blend only, or
   `useExtractionModel: true` for the LLM reranker.

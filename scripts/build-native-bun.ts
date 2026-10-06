@@ -290,7 +290,7 @@ const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]
 }));
 writeFileSync(
 	join(buildDir, "embedding-worker-transformers-runtime.ts"),
-	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { env, pipeline } = transformers;\n`,
+	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;\n`,
 );
 runBunBuild([
 	"--target=bun",
@@ -322,7 +322,7 @@ writeFileSync(
 	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};
 globalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;
 const transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});
-export const { env, pipeline } = transformers;
+export const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;
 `,
 );
 
