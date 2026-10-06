@@ -1,12 +1,11 @@
 import { MemoryChat } from "@/components/memory-chat";
 import { sourceDocumentTitle } from "@/lib/constellation-display";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchIcon, XIcon } from "lucide-react";
-import { PanelIcon } from "@/components/shell/panel-icon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
+import { useView } from "@/lib/view-context";
 import { cn } from "@/lib/utils";
 import type {
 	GraphSceneData,
@@ -95,7 +94,7 @@ export function GraphView() {
 	const [legendOpen, setLegendOpen] = useState(false);
 	const [detail, setDetail] = useState<EntityDetail | null>(null);
 	const [responded, setResponded] = useState(false);
-	const [chatOpen, setChatOpen] = useState(false);
+	const { chatOpen, setChatOpen } = useView();
 	const [sceneFailed, setSceneFailed] = useState(false);
 	const [sceneBuilt, setSceneBuilt] = useState(false);
 	const [isolated, setIsolated] = useState<string | null>(null);
@@ -486,6 +485,12 @@ export function GraphView() {
 	};
 
 	const sidebarOpen = chatOpen;
+	const wasOpen = useRef(chatOpen);
+	useEffect(() => {
+		if (wasOpen.current && !chatOpen) closeResponse();
+		wasOpen.current = chatOpen;
+	});
+	useEffect(() => () => setChatOpen(false), [setChatOpen]);
 	const [sidebarMounted, setSidebarMounted] = useState(false);
 	useEffect(() => {
 		if (sidebarOpen) {
@@ -612,19 +617,6 @@ export function GraphView() {
 	return (
 		<div className={cn("graph-view-root", sidebarPresented && "has-sidebar")}>
 			<div className="graph-viewport">
-				{!sidebarOpen && (
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon-sm"
-						className="graph-chat-open"
-						aria-label="Open chat"
-						title="Open chat"
-						onClick={() => setChatOpen(true)}
-					>
-						<PanelIcon side="right" className="size-[18px]" />
-					</Button>
-				)}
 				{limitedScene.capped && (
 					<span className="graph-limit" role="status">
 						Limited view
@@ -809,10 +801,6 @@ export function GraphView() {
 				className={sidebarPresented ? cn("graph-chat-sidebar", !sidebarOpen && "is-closing") : "graph-dock"}
 				inactive={sidebarPresented && !sidebarOpen}
 				presentation={sidebarPresented ? "sidebar" : "compact"}
-				onClose={() => {
-					setChatOpen(false);
-					closeResponse();
-				}}
 				onNewChat={() => {
 					setChatOpen(false);
 					closeResponse();

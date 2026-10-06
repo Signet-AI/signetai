@@ -260,6 +260,7 @@
 	.sig-sidebar-toggle:focus-visible { outline: 1px solid var(--home-focus, var(--ring)); outline-offset: -1px; }
 	html[data-surface="desktop"][data-platform="mac"] .sig-topbar-brand { display: none; }
 	html[data-surface="desktop"][data-platform="mac"] .sig-sidebar-toggle { inset-inline-start: 82px; }
+	.sig-sidebar-toggle.sig-chat-toggle { inset-inline-start: auto; inset-inline-end: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 14px); }
 	html[data-surface="desktop"][data-platform="mac"] .sig-topbar-title-mark { display: block; }
 	.sig-sidebar { background: var(--home-chrome); display: flex; flex-direction: column; width: 56px; flex: none; padding: 14px 10px; overflow: hidden; transition: width 220ms cubic-bezier(0.22, 1, 0.36, 1); }
 	.sig-app-frame[data-sidebar="open"] .sig-sidebar { width: 200px; }
@@ -290,7 +291,7 @@
 		.sig-sidebar-link { width: 44px; min-height: 44px; padding-inline: 12px; }
 		.sig-sidebar-link svg { width: 20px; height: 20px; }
 		.sig-app-frame[data-sidebar] .sig-sidebar { width: 100%; }
-		.sig-sidebar-label, .sig-sidebar-toggle { display: none; }
+		.sig-sidebar-label, .sig-sidebar-toggle:not(.sig-chat-toggle) { display: none; }
 		.sig-app-frame > header > .sig-topbar-row { padding-inline-start: 12px; }
 	}
 	.sig-theme-control { transition-property: background-color, border-color, color, transform; transition-duration: 150ms; transition-timing-function: ease-out; }
@@ -618,8 +619,6 @@
 .graph-navigation { position: absolute; left: 56px; top: 12px; z-index: 4; display: flex; align-items: center; height: 32px; padding: 0 3px; min-width: 0; border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); border-radius: 999px; background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .graph-navigation button { height: 26px; min-width: 26px; padding-inline: 8px; border-radius: 999px; font-size: var(--text-small); color: var(--home-secondary, var(--muted-foreground)); cursor: pointer; transition: background-color 150ms ease, color 150ms ease; }
 .graph-navigation button:hover { background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--home-title, var(--foreground)); }
-.graph-chat-open { position: absolute; top: 12px; right: 16px; z-index: 4; width: 32px; height: 32px; color: var(--home-secondary, var(--muted-foreground)); border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border-radius: 999px; }
-.graph-chat-open:hover { color: var(--home-title, var(--foreground)); background: color-mix(in srgb, var(--foreground) 7%, var(--background)); }
 .graph-limit { position: absolute; left: 16px; top: 54px; z-index: 4; font-size: var(--text-meta); color: var(--muted-foreground); }
 .graph-key-summary { font-size: var(--text-meta); font-variant-numeric: tabular-nums; color: var(--muted-foreground); padding-bottom: 8px; border-bottom: 1px solid var(--border); }
 .graph-key-limit { font-size: var(--text-meta); color: var(--muted-foreground); }

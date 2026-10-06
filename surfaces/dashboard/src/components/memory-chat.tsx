@@ -14,7 +14,6 @@ import { Message, MessageContent, MessageResponse, MessageCopyAction } from "@/c
 import { PromptInput, PromptInputTextarea, PromptInputSubmit } from "@/components/ai-elements/prompt-input";
 import { Sources, SourcesContent, SourcesTrigger } from "@/components/ai-elements/sources";
 import { LoaderCircleIcon, PlusIcon } from "lucide-react";
-import { PanelIcon } from "@/components/shell/panel-icon";
 
 type ChatMessage = AssistantChatMessage & {
 	id: string;
@@ -27,7 +26,6 @@ export interface MemoryChatProps {
 	readonly className?: string;
 	readonly inactive?: boolean;
 	readonly presentation?: "compact" | "sidebar";
-	readonly onClose?: () => void;
 	readonly onNewChat?: () => void;
 	readonly selectedEntityId?: string;
 	readonly onFocusEntity?: (entityId: string) => void;
@@ -41,7 +39,6 @@ export function MemoryChat({
 	className,
 	inactive,
 	presentation,
-	onClose,
 	onNewChat,
 	selectedEntityId,
 	onFocusEntity,
@@ -231,18 +228,6 @@ export function MemoryChat({
 					>
 						<PlusIcon className="size-4" />
 					</Button>
-					{presentation === "sidebar" && onClose && (
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon-sm"
-							className="memory-chat-close"
-							aria-label="Close chat"
-							onClick={onClose}
-						>
-							<PanelIcon side="right" className="size-[18px]" />
-						</Button>
-					)}
 				</div>
 			)}
 			{presentation !== "compact" && expanded && (

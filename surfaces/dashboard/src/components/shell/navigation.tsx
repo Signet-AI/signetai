@@ -141,6 +141,26 @@ function SidebarButton({
 	);
 }
 
+export function ChatToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+	const label = open ? "Close chat" : "Open chat";
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					onClick={onToggle}
+					aria-label={label}
+					aria-expanded={open}
+					className="sig-sidebar-toggle sig-chat-toggle sig-no-drag"
+				>
+					<PanelIcon side="right" />
+				</button>
+			</TooltipTrigger>
+			<TooltipContent side="bottom">{label}</TooltipContent>
+		</Tooltip>
+	);
+}
+
 export function SidebarToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
 	const label = open ? "Collapse sidebar" : "Expand sidebar";
 	const shortcut = document.documentElement.dataset.platform === "mac" ? "⌘B" : "Ctrl+B";
