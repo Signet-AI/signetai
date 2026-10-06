@@ -4,7 +4,7 @@ import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@sig
 import type { Context, Hono } from "hono";
 import { DbOwnerCancelledError } from "../db-owner-client";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
-import { requirePermission, requireRateLimit } from "../auth";
+import { requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import {
 	getDbOwnerMaintenanceState,
@@ -181,13 +181,8 @@ async function workloadDiagnostics(c: Context): Promise<Response> {
 	return c.json({ agentId, ...(await workloadDiagnosticsSnapshot(agentId)) });
 }
 
-const pipelineAdminGuard = async (c: Context, next: () => Promise<void>): Promise<Response | undefined> => {
-	const permDenied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
-	if (permDenied) return permDenied;
-	const rateDenied = await requireRateLimit("admin", authAdminLimiter, authConfig)(c, () => Promise.resolve());
-	if (rateDenied) return rateDenied;
-	await next();
-};
+const pipelineAdminGuard = (c: Context, next: () => Promise<void>) =>
+	requirePermissionWithRateLimit("admin", "admin", authAdminLimiter, authConfig)(c, next);
 
 function asRecord(value: unknown): Record<string, unknown> {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
@@ -621,7 +616,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:624",
+				"routes/pipeline-routes.ts:619",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -926,7 +921,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:929",
+						"routes/pipeline-routes.ts:924",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,

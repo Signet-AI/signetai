@@ -236,3 +236,27 @@ describe("handoff limits", () => {
 		expect(statuses.slice(4)).toEqual([429, 429]);
 	});
 });
+
+describe("admin routes", () => {
+	test("a non-admin credential gets 403 from key management, not a server error", async () => {
+		const res = await app.request("/api/auth/api-keys", { headers: bearer(KEY) });
+		expect(res.status).toBe(403);
+	});
+
+	test("a tripped admin rate limit answers 429, not a server error", async () => {
+		if (!state.authSecret) throw new Error("expected auth secret");
+		const { createToken } = await import("../auth");
+		const admin = createToken(state.authSecret, { sub: "rate-limit-probe", scope: {}, role: "admin" }, 60);
+		const statuses: number[] = [];
+		for (let i = 0; i < 12; i += 1) {
+			const res = await app.request("/api/auth/token", {
+				method: "POST",
+				headers: { ...bearer(admin), "content-type": "application/json" },
+				body: JSON.stringify({ role: "readonly", ttlSeconds: 60 }),
+			});
+			statuses.push(res.status);
+		}
+		expect(statuses.slice(0, 10).every((status) => status === 200)).toBe(true);
+		expect(statuses.slice(10)).toEqual([429, 429]);
+	});
+});

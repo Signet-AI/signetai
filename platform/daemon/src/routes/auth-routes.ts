@@ -11,8 +11,7 @@ import {
 	createToken,
 	getPeerAddress,
 	listApiKeys,
-	requirePermission,
-	requireRateLimit,
+	requirePermissionWithRateLimit,
 	revokeApiKey,
 	verifyPasswordHash,
 	verifyPlainPassword,
@@ -232,13 +231,8 @@ export function registerAuthRoutes(app: Hono): void {
 	app.post("/api/auth/saml/acs", (c) => c.json({ error: "SAML ACS is not configured", provider: "saml" }, 501));
 	app.get("/api/auth/saml/start", (c) => c.json({ error: "SAML login is not configured", provider: "saml" }, 501));
 
-	const requireAdminAuth = async (c: Context, next: Next) => {
-		const perm = requirePermission("admin", authConfig);
-		const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
-		await perm(c, async () => {
-			await rate(c, next);
-		});
-	};
+	const requireAdminAuth = (c: Context, next: Next) =>
+		requirePermissionWithRateLimit("admin", "admin", authAdminLimiter, authConfig)(c, next);
 
 	app.use("/api/auth/token", requireAdminAuth);
 	app.use("/api/auth/api-keys", requireAdminAuth);

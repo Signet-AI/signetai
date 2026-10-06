@@ -134,6 +134,21 @@ export function requirePermission(permission: Permission, config: AuthConfig): M
 	};
 }
 
+export function requirePermissionWithRateLimit(
+	permission: Permission,
+	operation: string,
+	limiter: AuthRateLimiter,
+	config: AuthConfig,
+): MiddlewareHandler {
+	return async (c, next) => {
+		const denied = await requirePermission(permission, config)(c, () => Promise.resolve());
+		if (denied) return denied;
+		const limited = await requireRateLimit(operation, limiter, config)(c, () => Promise.resolve());
+		if (limited) return limited;
+		await next();
+	};
+}
+
 export function requireScope(getTarget: (c: Context) => TokenScope, config: AuthConfig): MiddlewareHandler {
 	return async (c, next) => {
 		const auth = c.get("auth");
