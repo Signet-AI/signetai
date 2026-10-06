@@ -2097,6 +2097,10 @@ async function cleanup() {
 		const { shutdownNativeProvider } = await import("./native-embedding");
 		await shutdownNativeProvider();
 	} catch {}
+	try {
+		const { shutdownNativeReranker } = await import("./native-rerank");
+		await shutdownNativeReranker();
+	} catch {}
 
 	const released = releaseAllSessions();
 	const cleared = clearAllPresence();

@@ -265,6 +265,7 @@ export interface PipelineTraversalConfig {
 export interface PipelineRerankerConfig {
 	readonly enabled: boolean;
 	readonly model: string;
+	readonly crossEncoderModel: string;
 	readonly useExtractionModel: boolean;
 	readonly topN: number;
 	readonly timeoutMs: number;

@@ -50,6 +50,8 @@ import {
 import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker";
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
+import { type RerankOutcome, createCrossEncoderReranker } from "./pipeline/reranker-cross-encoder";
+import { nativeRerank } from "./native-rerank";
 import { FTS_STOP } from "./pipeline/stop-words";
 import {
 	type EvidenceCandidateInput,
@@ -139,6 +141,7 @@ export interface RecallResponse {
 		vectorCompleteness?: VectorSearchCompleteness;
 		searchedWindow?: number;
 		sourceVectorSearch?: SourceChunkVectorDiagnostics;
+		reranker?: RerankOutcome;
 		graphPartial?: boolean;
 		graphError?: {
 			channel: "graph_traversal";
@@ -2344,6 +2347,7 @@ export async function hybridRecall(
 	);
 	let recallSummary: string | undefined;
 	let summarizeLeft = 0;
+	let rerankOutcome: RerankOutcome | undefined;
 	if (cfg.pipelineV2.reranker.enabled && scored.length > 0) {
 		const rerankerStageStart = performance.now();
 		try {
@@ -2371,11 +2375,20 @@ export async function hybridRecall(
 				content: redactCredentials(contentMap.get(s.id) ?? ""),
 				score: s.score,
 			}));
+			const blend = queryVecF32 ? createEmbeddingReranker(getDbAccessor(), queryVecF32) : noopReranker;
+			rerankOutcome = { kind: cfg.pipelineV2.reranker.useExtractionModel ? "llm" : queryVecF32 ? "embedding" : "none" };
+			const outcome = rerankOutcome;
+			const crossEncoderModel = cfg.pipelineV2.reranker.crossEncoderModel;
 			const provider = cfg.pipelineV2.reranker.useExtractionModel
 				? createLlmReranker(getLlmProvider())
-				: queryVecF32
-					? createEmbeddingReranker(getDbAccessor(), queryVecF32)
-					: noopReranker;
+				: crossEncoderModel.length > 0
+					? createCrossEncoderReranker({
+							model: crossEncoderModel,
+							score: (rerankQuery, documents) => nativeRerank(crossEncoderModel, rerankQuery, documents),
+							fallback: blend,
+							outcome,
+						})
+					: blend;
 			const reranked = await rerank(query, candidates, provider, {
 				topN: cfg.pipelineV2.reranker.topN,
 				timeoutMs: cfg.pipelineV2.reranker.timeoutMs,
@@ -2696,6 +2709,7 @@ export async function hybridRecall(
 				...(vectorCompleteness === undefined ? {} : { vectorCompleteness }),
 				...(searchedWindow === undefined ? {} : { searchedWindow }),
 				...(sourceChunkOutcome === undefined ? {} : { sourceVectorSearch: sourceChunkOutcome.diagnostics }),
+				...(rerankOutcome === undefined ? {} : { reranker: rerankOutcome }),
 			},
 		});
 	}
@@ -3106,6 +3120,7 @@ export async function hybridRecall(
 			...(searchedWindow === undefined ? {} : { searchedWindow }),
 			...(sourceChunkSearchDiagnostics === undefined ? {} : { sourceVectorSearch: sourceChunkSearchDiagnostics }),
 			...(temporal.meta ? { temporal: temporal.meta } : {}),
+			...(rerankOutcome === undefined ? {} : { reranker: rerankOutcome }),
 		},
 		entities: entityContext && entityContext.length > 0 ? entityContext : undefined,
 	});

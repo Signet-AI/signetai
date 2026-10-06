@@ -173,9 +173,19 @@ post-processing:
   more of the query's facets.
 - **Rehearsal boost** applies a small access-frequency and recency signal
   when enabled.
-- **Reranking** can use an embedding reranker or an LLM reranker on the
-  authorized top-N candidates. If the reranker fails or times out, recall
-  keeps the existing ordering.
+- **Reranking** reads the query against each of the authorized top-N
+  candidates (`memory.pipelineV2.reranker.topN`, default 20) with a local
+  cross-encoder (`reranker.crossEncoderModel`, default
+  `mixedbread-ai/mxbai-rerank-xsmall-v1`, about 90 MB, downloaded on first
+  use), and fuses its order with the retrieval order by reciprocal rank so it
+  can lift a relevant memory that shares no words with the question without
+  overturning order retrieval already got right. It runs in its own worker
+  thread, one rerank at a time; while it is loading, busy, or slower than
+  three quarters of `reranker.timeoutMs`, recall falls back to an embedding
+  blend for that request. `meta.reranker` reports which reranker ran
+  (`cross-encoder`, `embedding`, `llm`, or `none`) and why a fallback
+  happened. Set `crossEncoderModel: ""` to use the embedding blend only, or
+  `useExtractionModel: true` for the LLM reranker.
 - **Dampening** penalizes low-overlap semantic hits, hub-like entity
   dominance, and other noisy retrieval shapes. The low-overlap penalty never
   drops a hit below the scores it leaves untouched, and an entity counts as a

@@ -151,6 +151,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	reranker: {
 		enabled: true,
 		model: "",
+		crossEncoderModel: "mixedbread-ai/mxbai-rerank-xsmall-v1",
 		useExtractionModel: false,
 		topN: 20,
 		timeoutMs: 2000,
@@ -699,6 +700,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 					: typeof raw.rerankerModel === "string"
 						? (raw.rerankerModel as string)
 						: d.reranker.model,
+			crossEncoderModel:
+				typeof rerankerRaw?.crossEncoderModel === "string"
+					? rerankerRaw.crossEncoderModel.trim()
+					: d.reranker.crossEncoderModel,
 			useExtractionModel: resolveBool(
 				rerankerRaw?.useExtractionModel,
 				raw.rerankerUseExtractionModel,
