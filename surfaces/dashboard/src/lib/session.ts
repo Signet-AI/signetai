@@ -1,7 +1,4 @@
 import { useSyncExternalStore } from "react";
-
-// The only reader and writer of the dashboard credential. The browser holds a session token here,
-// never an API key: password sign-in, pasted keys, and CLI handoffs all exchange for a session first.
 export const TOKEN_KEY = "signet-token";
 const HANDOFF_PARAM = "signet-handoff";
 const MAX_TIMER_MS = 2 ** 31 - 1;
@@ -179,7 +176,6 @@ async function redeemHandoff(): Promise<void> {
 export function startSession(): Promise<void> {
 	if (boot) return boot;
 	boot = demo ? Promise.resolve() : redeemHandoff().then(refreshSession);
-	// A handoff link opened in a tab that already shows the dashboard only changes the hash.
 	if (!demo && typeof window !== "undefined") {
 		window.addEventListener("hashchange", () => {
 			if (location.hash.includes(`${HANDOFF_PARAM}=`)) void redeemHandoff().then(refreshSession);
@@ -187,8 +183,6 @@ export function startSession(): Promise<void> {
 	}
 	return boot;
 }
-
-// Called by the API client when a request is rejected as unauthenticated.
 export function noteUnauthorized(): void {
 	if (current.kind === "signed-in" || current.kind === "open" || current.kind === "unreachable") {
 		void refreshSession();

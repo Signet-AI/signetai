@@ -31,8 +31,6 @@ interface Session {
 	readonly role: TokenRole;
 	readonly sub: string;
 }
-
-// Handoff codes live only in memory: a restart invalidates them and the dashboard falls back to sign-in.
 const handoffs = new Map<string, { readonly session: Session; readonly expiresAt: number }>();
 
 function mintSession(claims: TokenClaims): Session | null {

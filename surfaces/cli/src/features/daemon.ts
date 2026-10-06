@@ -116,9 +116,6 @@ export async function launchDashboard(options: PathOptions, deps: Deps): Promise
 		open: deps.openUrl,
 	});
 }
-
-// Opens the page already signed in when a credential is configured. The credential never enters the URL:
-// the daemon trades it for a single-use code that the dashboard redeems and strips from the address bar.
 async function signedInDashboardUrl(target: DashboardTarget): Promise<string> {
 	if (!target.hasCredential) return target.url;
 	const result = await target.fetchDaemonResult<{ code?: unknown }>("/api/auth/handoff", { method: "POST" });

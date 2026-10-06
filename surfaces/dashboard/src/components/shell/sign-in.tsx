@@ -125,8 +125,6 @@ export function SignInScreen({ session }: { session: SignedOut }) {
 		</div>
 	);
 }
-
-// Shown over the current view when a session ends mid-use, so the page and any unsaved input stay put.
 export function SignInDialog({ session }: { session: SignedOut }) {
 	return (
 		<DialogPrimitive.Root open>
