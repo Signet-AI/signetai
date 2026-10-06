@@ -971,7 +971,18 @@ describe("dreaming worker agent scope", () => {
 				],
 				1,
 			),
-		).toEqual([["alpha", "flagged-a"]]);
+		).toEqual([["alpha"]]);
+	});
+
+	it("never piles attention-only scopes into one pass and serves the oldest attention first", () => {
+		const flagged = [
+			{ scope: "newer", tokens: 0, attention: true, oldestAttentionAt: "2026-10-05 12:00:00" },
+			{ scope: "older", tokens: 0, attention: true, oldestAttentionAt: "2026-10-05 09:00:00" },
+			{ scope: "oldest", tokens: 0, attention: true, oldestAttentionAt: "2026-10-04 23:00:00" },
+		];
+		expect(partitionDreamingScopes(flagged, 1)).toEqual([["oldest"]]);
+		expect(partitionDreamingScopes(flagged, 2)).toEqual([["oldest"], ["older"]]);
+		expect(partitionDreamingScopes([{ scope: "busy", tokens: 500 }, ...flagged], 2)).toEqual([["busy"], ["oldest"]]);
 	});
 
 	it("runs disjoint agent groups concurrently after the first pass reaches a tool", async () => {

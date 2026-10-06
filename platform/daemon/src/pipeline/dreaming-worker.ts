@@ -82,7 +82,12 @@ interface StartedDreamingPass {
 type DreamingPassResult = { passId: string; applied: number; skipped: number; failed: number; summary: string };
 
 export function partitionDreamingScopes(
-	backlogs: ReadonlyArray<{ readonly scope: string; readonly tokens: number; readonly attention?: boolean }>,
+	backlogs: ReadonlyArray<{
+		readonly scope: string;
+		readonly tokens: number;
+		readonly attention?: boolean;
+		readonly oldestAttentionAt?: string | null;
+	}>,
 	slots: number,
 ): string[][] {
 	const withBacklog = backlogs
@@ -90,11 +95,12 @@ export function partitionDreamingScopes(
 		.sort((a, b) => b.tokens - a.tokens || a.scope.localeCompare(b.scope));
 	const attentionOnly = backlogs
 		.filter((item) => item.tokens <= 0 && item.attention === true)
-		.map((item) => item.scope)
-		.sort();
-	const work = withBacklog.length + attentionOnly.length;
-	if (work === 0) return [];
-	const groups = Array.from({ length: Math.max(1, Math.min(slots, work)) }, () => ({
+		.sort(
+			(a, b) => (a.oldestAttentionAt ?? "").localeCompare(b.oldestAttentionAt ?? "") || a.scope.localeCompare(b.scope),
+		)
+		.map((item) => item.scope);
+	const free = Math.max(1, slots);
+	const groups = Array.from({ length: Math.min(free, withBacklog.length) }, () => ({
 		scopes: [] as string[],
 		tokens: 0,
 	}));
@@ -103,15 +109,7 @@ export function partitionDreamingScopes(
 		target.scopes.push(item.scope);
 		target.tokens += item.tokens;
 	}
-	for (const scope of attentionOnly) {
-		const target = groups.reduce((smallest, group) =>
-			group.scopes.length < smallest.scopes.length ||
-			(group.scopes.length === smallest.scopes.length && group.tokens < smallest.tokens)
-				? group
-				: smallest,
-		);
-		target.scopes.push(scope);
-	}
+	for (const scope of attentionOnly.slice(0, free - groups.length)) groups.push({ scopes: [scope], tokens: 0 });
 	return groups.map((group) => [...group.scopes].sort()).filter((scopes) => scopes.length > 0);
 }
 export interface DreamingSchedulerStatus {
@@ -557,28 +555,34 @@ export function startDreamingWorker(
 		return { passId, result, firstToolCall };
 	}
 
-	async function measureScopeWork(
-		scopes: readonly string[],
-	): Promise<Array<{ readonly scope: string; readonly tokens: number; readonly attention: boolean }>> {
+	async function measureScopeWork(scopes: readonly string[]): Promise<
+		Array<{
+			readonly scope: string;
+			readonly tokens: number;
+			readonly attention: boolean;
+			readonly oldestAttentionAt: string | null;
+		}>
+	> {
 		const owner = await getDbOwnerForAccessor(accessor);
-		const attention = new Set(
+		const attention = new Map(
 			(
-				await ownerQueryAll<{ agentId: string }>(
+				await ownerQueryAll<{ agentId: string; oldest: string }>(
 					owner,
 					"dreaming.worker.pending-attention-scopes",
-					`SELECT DISTINCT agent_id AS agentId FROM dreaming_attention
-					 WHERE resolved_at IS NULL AND agent_id IN (${scopes.map(() => "?").join(", ")})`,
+					`SELECT agent_id AS agentId, MIN(created_at) AS oldest FROM dreaming_attention
+					 WHERE resolved_at IS NULL AND agent_id IN (${scopes.map(() => "?").join(", ")})
+					 GROUP BY agent_id`,
 					[...scopes],
 					{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 				)
-			).map((row) => row.agentId),
+			).map((row) => [row.agentId, row.oldest] as const),
 		);
 		return await Promise.all(
 			scopes.map(async (scope) => {
 				const probe = await probeDreamingEpisodicBacklog(accessor, scope, cfg.tokenThreshold, options.ownerMaintenance);
 				const tokens =
 					probe.hasBacklog === false ? 0 : Math.max(1, probe.kind === "exact" ? probe.tokens : probe.tokenLowerBound);
-				return { scope, tokens, attention: attention.has(scope) };
+				return { scope, tokens, attention: attention.has(scope), oldestAttentionAt: attention.get(scope) ?? null };
 			}),
 		);
 	}
