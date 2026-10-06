@@ -55,6 +55,7 @@
 				"@signet/connector-forge#build",
 				"@signet/connector-gemini#build",
 				"@signet/connector-hermes-agent#build",
+				"@signet/connector-muse-code#build",
 				"@signet/connector-oh-my-pi#build",
 				"@signet/connector-openclaw#build",
 				"@signet/connector-opencode#build",

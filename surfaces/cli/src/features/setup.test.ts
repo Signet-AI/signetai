@@ -20,6 +20,7 @@ const NO_HARNESSES = {
 	forge: false,
 	codex: false,
 	kimi: false,
+	museCode: false,
 	ohMyPi: false,
 	pi: false,
 	hermesAgent: false,

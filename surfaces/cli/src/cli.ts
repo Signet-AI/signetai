@@ -20,6 +20,7 @@ import { ForgeConnector } from "@signet/connector-forge";
 import { GeminiConnector } from "@signet/connector-gemini";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { KimiConnector } from "@signet/connector-kimi";
+import { MuseCodeConnector } from "@signet/connector-muse-code";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
@@ -171,6 +172,18 @@ async function configureHarnessHooks(
 			}
 			for (const warning of result.warnings ?? []) {
 				console.warn(chalk.yellow(`  ${warning}`));
+			}
+			break;
+		}
+		case "muse-code": {
+			const connector = new MuseCodeConnector();
+			const result = await connector.install(basePath);
+			if (!result.success) {
+				throw new Error(`Muse Code integration setup failed: ${result.message}`);
+			}
+			console.log(chalk.green(`  ✓ ${result.message}`));
+			for (const w of result.warnings ?? []) {
+				console.warn(chalk.yellow(`  ${w}`));
 			}
 			break;
 		}

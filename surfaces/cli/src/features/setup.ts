@@ -586,6 +586,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			if (h.forge) detectedIds.add("forge");
 			if (h.codex) detectedIds.add("codex");
 			if (h.kimi) detectedIds.add("kimi");
+			if (h.museCode) detectedIds.add("muse-code");
 			if (h.ohMyPi) detectedIds.add("oh-my-pi");
 			if (h.pi) detectedIds.add("pi");
 			if (h.hermesAgent) detectedIds.add("hermes-agent");

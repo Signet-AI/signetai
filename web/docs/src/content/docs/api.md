@@ -131,7 +131,7 @@ include `success`, `id`, `action`, and `message`; failures return an error.
 
 `POST /api/harnesses/:id/connect` requires admin permission and accepts
 `claude-code`, `codex`, `hermes-agent`, `opencode`, `openclaw`, `gemini`,
-`pi`, `oh-my-pi`, `kimi`, or `forge`. It installs into the daemon host's agent
+`pi`, `oh-my-pi`, `kimi`, `muse-code`, or `forge`. It installs into the daemon host's agent
 configuration using the same connector implementation as the CLI, with the
 resolved daemon workspace. No request body or arbitrary filesystem path is
 accepted. Success returns `{success: true, id}` after connector verification and

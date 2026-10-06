@@ -167,6 +167,7 @@ export function detectedHarnessesForExistingSetup(
 	if (detection.harnesses.opencode) detected.push("opencode");
 	if (detection.harnesses.forge || configuredHarnessList.includes("forge")) detected.push("forge");
 	if (detection.harnesses.codex) detected.push("codex");
+	if (detection.harnesses.museCode) detected.push("muse-code");
 	if (detection.harnesses.hermesAgent) detected.push("hermes-agent");
 	if (detection.harnesses.gemini) detected.push("gemini");
 	if (detection.harnesses.ohMyPi || configuredHarnessList.includes("oh-my-pi")) detected.push("oh-my-pi");

@@ -146,6 +146,21 @@
         "typescript": "^5.7.0",
       },
     },
+    "integrations/muse-code/connector": {
+      "name": "@signet/connector-muse-code",
+      "version": "0.235.2",
+      "bin": {
+        "signet-connector-muse-code": "bin/install.js",
+      },
+      "dependencies": {
+        "@signet/connector-base": "0.235.2",
+        "@signet/core": "0.235.2",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+        "typescript": "^5.7.0",
+      },
+    },
     "integrations/oh-my-pi/connector": {
       "name": "@signet/connector-oh-my-pi",
       "version": "0.235.2",
@@ -394,6 +409,7 @@
         "@signet/connector-gemini": "workspace:*",
         "@signet/connector-hermes-agent": "workspace:*",
         "@signet/connector-kimi": "workspace:*",
+        "@signet/connector-muse-code": "workspace:*",
         "@signet/connector-oh-my-pi": "workspace:*",
         "@signet/connector-openclaw": "workspace:*",
         "@signet/connector-opencode": "workspace:*",
@@ -456,6 +472,7 @@
         "@signet/connector-gemini": "workspace:*",
         "@signet/connector-hermes-agent": "workspace:*",
         "@signet/connector-kimi": "workspace:*",
+        "@signet/connector-muse-code": "workspace:*",
         "@signet/connector-oh-my-pi": "workspace:*",
         "@signet/connector-openclaw": "workspace:*",
         "@signet/connector-opencode": "workspace:*",
@@ -1606,6 +1623,8 @@
     "@signet/connector-hermes-agent": ["@signet/connector-hermes-agent@workspace:integrations/hermes-agent/connector"],
 
     "@signet/connector-kimi": ["@signet/connector-kimi@workspace:integrations/kimi/connector"],
+
+    "@signet/connector-muse-code": ["@signet/connector-muse-code@workspace:integrations/muse-code/connector"],
 
     "@signet/connector-oh-my-pi": ["@signet/connector-oh-my-pi@workspace:integrations/oh-my-pi/connector"],
 
@@ -3921,6 +3940,8 @@
 
     "@signet/connector-kimi/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
 
+    "@signet/connector-muse-code/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
+
     "@signet/connector-oh-my-pi/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
 
     "@signet/connector-openclaw/@types/node": ["@types/node@22.19.17", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-wGdMcf+vPYM6jikpS/qhg6WiqSV/OhG+jeeHT/KlVqxYfD40iYJf9/AE1uQxVWFvU7MipKRkRv8NSHiCGgPr8Q=="],
@@ -4406,6 +4427,8 @@
     "@signet/connector-hermes-agent/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-kimi/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
+
+    "@signet/connector-muse-code/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 
     "@signet/connector-oh-my-pi/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
 

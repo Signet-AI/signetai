@@ -229,6 +229,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-gemini"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-hermes-agent"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-kimi"');
+		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-muse-code"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-oh-my-pi"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-openclaw"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-opencode"');
@@ -251,6 +252,7 @@ describe("check-publish-manifests", () => {
 		expect(promoteWorkflow).toContain('"@signetai/connector-gemini"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-hermes-agent"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-kimi"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-muse-code"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-oh-my-pi"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-openclaw"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-opencode"');
@@ -491,6 +493,7 @@ describe("check-publish-manifests", () => {
 			["integrations/codex/connector/package.json", "@signet/connector-codex", "signet-connector-codex"],
 			["integrations/gemini/connector/package.json", "@signet/connector-gemini", "signet-connector-gemini"],
 			["integrations/kimi/connector/package.json", "@signet/connector-kimi", "signet-connector-kimi"],
+			["integrations/muse-code/connector/package.json", "@signet/connector-muse-code", "signet-connector-muse-code"],
 			[
 				"integrations/hermes-agent/connector/package.json",
 				"@signet/connector-hermes-agent",
