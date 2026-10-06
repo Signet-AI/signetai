@@ -2,14 +2,11 @@ import { dashboardQueryCache } from "./query-cache";
 import { installDemoApi } from "./demo";
 import { getDesktopBridge } from "./desktop";
 import { onboardingPreviewFetch, installOnboardingPreview } from "./onboarding-preview";
+import { authHeaders, noteUnauthorized } from "./session";
 
 export const onboardingPreview = import.meta.env.DEV && import.meta.env.VITE_ONBOARDING_PREVIEW === true;
 
 const API_BASE = "";
-function authHeaders(): HeadersInit {
-	const token = typeof localStorage !== "undefined" ? localStorage.getItem("signet-token") : null;
-	return token ? { Authorization: `Bearer ${token}` } : {};
-}
 
 function invalidateMutation(path: string): void {
 	const resources = path.includes("/harnesses/")
@@ -42,6 +39,7 @@ async function dashboardFetch(path: string, init?: RequestInit): Promise<Respons
 	const deadline = method === "GET" ? AbortSignal.timeout(20_000) : undefined;
 	const signal = init?.signal && deadline ? AbortSignal.any([init.signal, deadline]) : (init?.signal ?? deadline);
 	const response = await fetch(path, { ...init, signal });
+	if (response.status === 401) noteUnauthorized();
 	if (response.status === 401 || response.status === 403) dashboardQueryCache.clear(false);
 	else if (response.ok && method !== "GET" && !path.includes("/probe") && !path.includes("/decision"))
 		invalidateMutation(path);

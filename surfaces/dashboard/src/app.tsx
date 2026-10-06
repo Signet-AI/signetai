@@ -2,7 +2,9 @@ import { Activity, useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarNav, useSidebarOpen } from "@/components/shell/navigation";
+import { SignInDialog, SignInScreen } from "@/components/shell/sign-in";
 import { Topbar } from "@/components/shell/topbar";
+import { useSession } from "@/lib/session";
 import { type ViewId, useView } from "@/lib/view-context";
 import { SettingsView, useSettingsHotkey } from "@/views/settings";
 import { HomeView } from "@/views/home";
@@ -13,9 +15,17 @@ import { GraphView } from "@/views/graph";
 import { OnboardingPage } from "@/components/onboarding/page";
 
 export function App() {
+	const session = useSession();
 	return (
 		<TooltipProvider delayDuration={200}>
-			<Shell />
+			{session.kind === "checking" ? null : session.kind === "signed-out" && !session.expired ? (
+				<SignInScreen session={session} />
+			) : (
+				<>
+					<Shell />
+					{session.kind === "signed-out" && <SignInDialog session={session} />}
+				</>
+			)}
 			<Toaster />
 		</TooltipProvider>
 	);

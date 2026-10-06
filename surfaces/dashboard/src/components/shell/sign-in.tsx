@@ -1,0 +1,191 @@
+import { type FormEvent, useState } from "react";
+import { Dialog as DialogPrimitive, Popover } from "radix-ui";
+import { SignetMark } from "@/components/icons";
+import { Button } from "@/components/ui/button";
+import { Field, Input } from "@/components/ui/field";
+import { type Session, type SignInResult, signInWithKey, signInWithPassword, signOut } from "@/lib/session";
+
+type SignedOut = Extract<Session, { kind: "signed-out" }>;
+
+export function describeTarget(mode: string): string {
+	const label = mode.charAt(0).toUpperCase() + mode.slice(1);
+	return typeof location === "undefined" ? label : `${label} · ${location.host}`;
+}
+
+function SignInForm({ session }: { session: SignedOut }) {
+	const password = session.providers.find((provider) => provider.type === "password" && provider.enabled);
+	const [useKey, setUseKey] = useState(!password);
+	const [username, setUsername] = useState(password?.username ?? "");
+	const [secret, setSecret] = useState("");
+	const [key, setKey] = useState("");
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
+
+	const submit = async (event: FormEvent) => {
+		event.preventDefault();
+		setBusy(true);
+		setError(null);
+		const result: SignInResult = useKey ? await signInWithKey(key) : await signInWithPassword(username, secret);
+		setBusy(false);
+		if (!result.ok) setError(result.error);
+	};
+
+	const message = error ?? session.reason;
+	return (
+		<form className="flex flex-col gap-4" onSubmit={submit} aria-label="Sign in to Signet">
+			<div className="flex items-center gap-2.5">
+				<SignetMark className="h-[22px] w-[18px] shrink-0" aria-hidden="true" />
+				<div className="min-w-0">
+					<h1 className="m-0 text-[15px] font-semibold tracking-tight">
+						{session.expired ? "Sign in again" : "Sign in to Signet"}
+					</h1>
+					<p className="m-0 mt-0.5 truncate font-mono text-[10px] text-muted-foreground">
+						{describeTarget(session.mode)}
+					</p>
+				</div>
+			</div>
+			{message && (
+				<p role="alert" className="m-0 text-[12px] text-destructive">
+					{message}
+				</p>
+			)}
+			{useKey ? (
+				<Field
+					label="API key"
+					htmlFor="signet-sign-in-key"
+					hint="Signet exchanges the key for a browser session. The key itself is not stored."
+				>
+					<Input
+						id="signet-sign-in-key"
+						type="password"
+						autoComplete="off"
+						spellCheck={false}
+						value={key}
+						onChange={(event) => setKey(event.target.value)}
+						required
+						autoFocus
+					/>
+				</Field>
+			) : (
+				<>
+					<Field label="Username" htmlFor="signet-sign-in-username">
+						<Input
+							id="signet-sign-in-username"
+							autoComplete="username"
+							value={username}
+							onChange={(event) => setUsername(event.target.value)}
+							required
+							autoFocus={!username}
+						/>
+					</Field>
+					<Field label="Password" htmlFor="signet-sign-in-password">
+						<Input
+							id="signet-sign-in-password"
+							type="password"
+							autoComplete="current-password"
+							value={secret}
+							onChange={(event) => setSecret(event.target.value)}
+							required
+							autoFocus={Boolean(username)}
+						/>
+					</Field>
+				</>
+			)}
+			<Button type="submit" disabled={busy}>
+				{busy ? "Signing in…" : "Sign in"}
+			</Button>
+			{password ? (
+				<Button
+					type="button"
+					variant="link"
+					size="xs"
+					className="self-center text-muted-foreground"
+					onClick={() => {
+						setUseKey(!useKey);
+						setError(null);
+					}}
+				>
+					{useKey ? "Use username and password" : "Use an API key instead"}
+				</Button>
+			) : (
+				<p className="m-0 text-center text-[11px] text-muted-foreground">
+					Password sign-in is not configured on this daemon.
+				</p>
+			)}
+		</form>
+	);
+}
+
+export function SignInScreen({ session }: { session: SignedOut }) {
+	return (
+		<div className="flex h-full min-h-0 items-center justify-center bg-background p-4 text-foreground">
+			<div className="w-full max-w-[360px] rounded-lg border bg-card p-6 shadow-sm">
+				<SignInForm session={session} />
+			</div>
+		</div>
+	);
+}
+
+// Shown over the current view when a session ends mid-use, so the page and any unsaved input stay put.
+export function SignInDialog({ session }: { session: SignedOut }) {
+	return (
+		<DialogPrimitive.Root open>
+			<DialogPrimitive.Portal>
+				<DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50" />
+				<DialogPrimitive.Content
+					className="fixed top-1/2 left-1/2 z-50 w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 rounded-lg border bg-background p-6 shadow-lg outline-none sm:max-w-[360px]"
+					onEscapeKeyDown={(event) => event.preventDefault()}
+					onPointerDownOutside={(event) => event.preventDefault()}
+					aria-describedby={undefined}
+				>
+					<DialogPrimitive.Title className="sr-only">Session ended</DialogPrimitive.Title>
+					<SignInForm session={session} />
+				</DialogPrimitive.Content>
+			</DialogPrimitive.Portal>
+		</DialogPrimitive.Root>
+	);
+}
+
+function formatExpiry(expiresAt: number): string {
+	return new Date(expiresAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+export function SessionChip({ session }: { session: Session }) {
+	if (session.kind === "open" && session.mode !== "local") {
+		return (
+			<span className="font-mono text-[10px] text-muted-foreground" title="Trusted loopback request">
+				{describeTarget(session.mode)}
+			</span>
+		);
+	}
+	if (session.kind !== "signed-in") return null;
+	const { identity } = session;
+	return (
+		<Popover.Root>
+			<Popover.Trigger asChild>
+				<Button variant="ghost" size="xs" className="sig-no-drag font-mono text-[10px] text-muted-foreground">
+					{describeTarget(session.mode)}
+				</Button>
+			</Popover.Trigger>
+			<Popover.Portal>
+				<Popover.Content
+					sideOffset={6}
+					align="end"
+					className="z-50 flex w-[260px] flex-col gap-3 rounded-lg border bg-popover p-3 text-popover-foreground shadow-md"
+				>
+					<dl className="m-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11px]">
+						<dt className="text-muted-foreground">Signed in as</dt>
+						<dd className="m-0 truncate font-mono">{identity.sub}</dd>
+						<dt className="text-muted-foreground">Role</dt>
+						<dd className="m-0 font-mono">{identity.role}</dd>
+						<dt className="text-muted-foreground">Expires</dt>
+						<dd className="m-0">{formatExpiry(identity.expiresAt)}</dd>
+					</dl>
+					<Button variant="secondary" size="sm" onClick={() => void signOut()}>
+						Sign out of this browser
+					</Button>
+				</Popover.Content>
+			</Popover.Portal>
+		</Popover.Root>
+	);
+}
