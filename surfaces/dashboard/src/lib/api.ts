@@ -628,8 +628,34 @@ export interface HarnessActionResponse {
 	readonly warnings?: readonly string[];
 }
 
-export interface SkillsResponse {
-	count: number;
+export interface Skill {
+	readonly name: string;
+	readonly description: string;
+	readonly version?: string;
+	readonly author?: string;
+	readonly userInvocable: boolean;
+	readonly argHint?: string;
+	readonly path?: string;
+}
+
+export interface SkillDetail extends Skill {
+	readonly content: string;
+}
+
+function readSkill(value: unknown): Skill | null {
+	if (!value || typeof value !== "object") return null;
+	const raw = value as Record<string, unknown>;
+	if (typeof raw.name !== "string" || raw.name.length === 0) return null;
+	const text = (key: string) => (typeof raw[key] === "string" && raw[key] ? (raw[key] as string) : undefined);
+	return {
+		name: raw.name,
+		description: text("description") ?? "",
+		version: text("version"),
+		author: text("author") ?? text("maintainer"),
+		userInvocable: raw.user_invocable === true,
+		argHint: text("arg_hint"),
+		path: text("path"),
+	};
 }
 
 export interface Agent {
@@ -860,13 +886,20 @@ export const api = {
 		const qs = p.toString();
 		return getJSON<{ memories: Memory[]; stats: MemoryStats }>(`/api/memories${qs ? `?${qs}` : ""}`);
 	},
-	getSkills: async (): Promise<SkillsResponse | null> => {
-		const result = await getJSONResult<{ count?: unknown; skills?: unknown; error?: unknown }>("/api/skills");
-		if (result.error) return null;
+	getSkills: async (): Promise<readonly Skill[] | null> => {
+		const result = await getJSONResult<{ skills?: unknown; error?: unknown }>("/api/skills");
 		const data = result.data;
-		if (typeof data?.error === "string") return null;
-		if (typeof data?.count === "number") return { count: data.count };
-		return Array.isArray(data?.skills) ? { count: data.skills.length } : null;
+		if (result.error || typeof data?.error === "string" || !Array.isArray(data?.skills)) return null;
+		return data.skills
+			.map(readSkill)
+			.filter((skill): skill is Skill => skill !== null)
+			.sort((a, b) => a.name.localeCompare(b.name));
+	},
+	getSkill: async (name: string): Promise<SkillDetail | null> => {
+		const result = await getJSONResult<Record<string, unknown>>(`/api/skills/${encodeURIComponent(name)}`);
+		const skill = readSkill(result.data);
+		const content = result.data?.content;
+		return skill && typeof content === "string" ? { ...skill, content } : null;
 	},
 	getMemoryTimeline: (tzOffset = 0) => getJSON<MemoryTimeline>(`/api/memory/timeline?tzOffset=${tzOffset}`),
 	getEmbeddingHealth: () => getJSON<EmbeddingHealthReport>("/api/embeddings/health"),

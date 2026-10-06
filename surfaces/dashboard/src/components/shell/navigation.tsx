@@ -11,14 +11,13 @@ interface NavItem {
 	view: ViewId;
 	label: string;
 	icon: (props: { className?: string }) => ReactNode;
-	disabled?: boolean;
 }
 
 export const TOP_LEVEL_NAV_ITEMS: NavItem[] = [
 	{ view: "home", label: "Home", icon: Home1Regular },
 	{ view: "memory", label: "Memory", icon: MindMapRegular },
 	{ view: "dreaming", label: "Dreams", icon: MoonRegular },
-	{ view: "skills", label: "Skills", icon: BookRegular, disabled: true },
+	{ view: "skills", label: "Skills", icon: BookRegular },
 ];
 
 const SIDEBAR_STORAGE_KEY = "signet-sidebar-open";
@@ -77,7 +76,6 @@ export function SidebarNav({ open }: { open: boolean }) {
 							<SidebarButton
 								label={item.label}
 								open={open}
-								disabled={item.disabled}
 								aria-current={active ? "page" : undefined}
 								data-dashboard-nav={item.view}
 								data-dashboard-nav-active={active ? "true" : undefined}
@@ -111,32 +109,21 @@ function SidebarButton({
 	label,
 	open,
 	className,
-	disabled,
 	children,
 	...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string; open: boolean }) {
 	const button = (
-		<button
-			type="button"
-			aria-label={label}
-			disabled={disabled}
-			className={cn("sig-sidebar-link", className)}
-			{...props}
-		>
+		<button type="button" aria-label={label} className={cn("sig-sidebar-link", className)} {...props}>
 			{children}
 			<span className="sig-sidebar-label" aria-hidden="true">
 				{label}
-				{disabled && <span className="sig-sidebar-soon">Soon</span>}
 			</span>
 		</button>
 	);
 	return (
 		<Tooltip open={open ? false : undefined}>
-			<TooltipTrigger asChild>{disabled ? <span className="flex w-full">{button}</span> : button}</TooltipTrigger>
-			<TooltipContent side="right">
-				{label}
-				{disabled ? " · Coming soon" : ""}
-			</TooltipContent>
+			<TooltipTrigger asChild>{button}</TooltipTrigger>
+			<TooltipContent side="right">{label}</TooltipContent>
 		</Tooltip>
 	);
 }

@@ -701,6 +701,7 @@ export function installDemoApi(target: ApiClient): void {
 	target.getKnowledgeStats = async () => demoStats;
 	target.getSources = async () => demoSources;
 	target.getSkills = async () => null;
+	target.getSkill = async () => null;
 	target.getMemoryTimeline = async () => demoTimeline;
 	target.getKnowledgeConstellation = async () => demoConstellation();
 	target.getOntologyProposals = async () => ({ items: demoOntologyProposals, limit: 20, offset: 0 });

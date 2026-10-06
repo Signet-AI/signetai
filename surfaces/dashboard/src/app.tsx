@@ -6,7 +6,7 @@ import { Topbar } from "@/components/shell/topbar";
 import { type ViewId, useView } from "@/lib/view-context";
 import { SettingsView, useSettingsHotkey } from "@/views/settings";
 import { HomeView } from "@/views/home";
-import { SkillsView } from "@/views/stubs";
+import { SkillsView } from "@/views/skills";
 import { DreamsView } from "@/views/dreaming";
 import { GraphView } from "@/views/graph";
 
