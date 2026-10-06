@@ -21,6 +21,7 @@ const DEFAULT_TIMEOUT_MS = 60_000
 const DREAM_STATUS_CONCURRENCY = 4
 const STRICT_SEARCH_LIMIT = 10
 const SUPERMEMORY_PARITY_SEARCH_LIMIT = 30
+const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
 const MONTH_NAMES = [
   "January",
   "February",
@@ -194,6 +195,10 @@ export function buildSignetRecallQuery(query: string, questionDate?: string): st
     four: 4,
     five: 5,
     six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
   }
   if (weekMatch) {
     const raw = (weekMatch[1] ?? "").toLowerCase()
@@ -203,6 +208,26 @@ export function buildSignetRecallQuery(query: string, questionDate?: string): st
       date.setUTCDate(date.getUTCDate() - weeks * 7)
       hints.push(`${weekMatch[0]} resolves near ${formatTemporalHintDate(date)}`)
     }
+  }
+
+  const dayMatch = query.match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\s+ago\b/i)
+  if (dayMatch) {
+    const raw = (dayMatch[1] ?? "").toLowerCase()
+    const days = wordNumbers[raw] ?? Number.parseInt(raw, 10)
+    if (Number.isFinite(days) && days > 0) {
+      const date = new Date(anchor)
+      date.setUTCDate(date.getUTCDate() - days)
+      hints.push(`${dayMatch[0]} resolves near ${formatTemporalHintDate(date)}`)
+    }
+  }
+
+  const weekdayMatch = query.match(/\blast\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i)
+  if (weekdayMatch) {
+    const target = WEEKDAY_NAMES.indexOf((weekdayMatch[1] ?? "").toLowerCase())
+    const date = new Date(anchor)
+    const back = (date.getUTCDay() - target + 7) % 7 || 7
+    date.setUTCDate(date.getUTCDate() - back)
+    hints.push(`${weekdayMatch[0]} resolves near ${formatTemporalHintDate(date)}`)
   }
 
   const monthMatch = query.match(

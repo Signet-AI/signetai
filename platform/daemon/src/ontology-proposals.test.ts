@@ -3359,6 +3359,31 @@ describe("ontology proposals", () => {
 			expect(recalled.candidateIds).toContain(id);
 		});
 
+		it("spans an approximate claim time across its day so a day query still finds it", async () => {
+			const applied = await applyOntologyOperation(getDbAccessor(), {
+				agentId: "default",
+				actor: "dreaming",
+				operation: "set_claim_value",
+				payload: {
+					...slot,
+					claim_key: "concert",
+					value: "In mid-April 2023 the user saw Queen live with their parents.",
+					occurred_at: "2023-04-15",
+					time_precision: "approximate",
+				},
+			});
+			const id = applied.result?.attributeId;
+			if (typeof id !== "string") throw new Error("attribute id was not returned");
+
+			expect(edgesFor(id)[0]).toMatchObject({
+				facet: "occurred",
+				start_at: "2023-04-15T00:00:00.000Z",
+				end_at: "2023-04-15T23:59:59.999Z",
+			});
+			const recalled = resolveTemporalRecall({ query: "who did I see a concert with on 2023-04-15?", limit: 10 });
+			expect(recalled.candidateIds).toContain(id);
+		});
+
 		it("keeps the newer claim current when an older claim arrives later", async () => {
 			const residence = { ...slot, aspect: "home", claim_key: "city" };
 			const newer = await applyOntologyOperation(getDbAccessor(), {

@@ -690,6 +690,16 @@ describe("Signet benchmark profiles", () => {
     expect(query).toContain("4 March 2023")
     expect(query).toContain("2023-03-04")
   })
+
+  it("resolves days ago and last weekday against the question date", () => {
+    expect(buildSignetRecallQuery("What kitchen appliance did I buy 10 days ago?", "2023/03/25 (Sat) 18:26")).toContain(
+      "10 days ago resolves near 15 March 2023"
+    )
+    expect(buildSignetRecallQuery("Who did I go with last Saturday?", "2023/04/22 (Sat) 08:01")).toContain(
+      "last Saturday resolves near 15 April 2023"
+    )
+    expect(buildSignetRecallQuery("What did I eat last Friday?", "2023/04/22 (Sat) 08:01")).toContain("2023-04-21")
+  })
 })
 
 describe("Signet structured ingestion guards", () => {

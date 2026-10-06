@@ -485,7 +485,7 @@ function claimEvidenceTime(time: {
 
 function precisionSpanEnd(start: string, precision: ClaimTimePrecision | null): string {
 	const end = new Date(start);
-	if (precision === "day") end.setUTCDate(end.getUTCDate() + 1);
+	if (precision === "day" || precision === "approximate") end.setUTCDate(end.getUTCDate() + 1);
 	else if (precision === "week") end.setUTCDate(end.getUTCDate() + 7);
 	else if (precision === "month") end.setUTCMonth(end.getUTCMonth() + 1);
 	else if (precision === "year") end.setUTCFullYear(end.getUTCFullYear() + 1);
