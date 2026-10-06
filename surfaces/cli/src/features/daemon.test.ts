@@ -130,8 +130,21 @@ describe("daemon start workspace setup", () => {
 	});
 });
 
+type DashboardTarget = ReturnType<Parameters<typeof launchDashboard>[1]["daemonTarget"]>;
+
+function dashboardTarget(overrides?: Partial<DashboardTarget>): DashboardTarget {
+	return {
+		url: "http://127.0.0.1:3850",
+		localWorkspace: true,
+		hasCredential: false,
+		fetchDaemonResult: async () => ({ ok: false, reason: "offline" }),
+		...overrides,
+	};
+}
+
 function makeDeps(overrides?: Partial<Parameters<typeof doRestart>[1]>): Parameters<typeof doRestart>[1] {
 	return {
+		daemonTarget: () => dashboardTarget(),
 		agentsDir: "/tmp/.agents",
 		defaultPort: 3850,
 		extractPathOption: () => null,
@@ -584,8 +597,11 @@ describe("launchDashboard", () => {
 			networkMode: string | null;
 		}>;
 		startDaemon?: () => Promise<boolean>;
+		setupUnconfiguredWorkspace?: () => Promise<boolean>;
+		daemonTarget?: () => DashboardTarget;
 	}) {
 		return {
+			daemonTarget: () => dashboardTarget(),
 			agentsDir: "/tmp/.agents",
 			defaultPort: 3850,
 			extractPathOption: () => null,
@@ -691,6 +707,77 @@ describe("launchDashboard", () => {
 		expect(lines.join("\n")).toContain("Daemon is not running. Starting...");
 		expect(lines.join("\n")).toContain("Daemon started");
 		expect(lines.join("\n")).toContain("OPEN:http://127.0.0.1:3850");
+	});
+
+	it("opens a remote daemon without setting up or starting a local one", async () => {
+		const calls: string[] = [];
+		const deps = dashboardDeps({
+			daemonTarget: () => dashboardTarget({ url: "https://signet.example.com", localWorkspace: false }),
+			setupUnconfiguredWorkspace: async () => {
+				calls.push("setup");
+				return false;
+			},
+			getDaemonStatus: async () => {
+				calls.push("status");
+				throw new Error("must not probe the local daemon");
+			},
+			startDaemon: async () => {
+				calls.push("start");
+				return true;
+			},
+		});
+		await launchDashboard({}, deps);
+		expect(calls).toEqual([]);
+		expect(lines).toContain("OPEN:https://signet.example.com");
+	});
+
+	it("opens the dashboard signed in through a one-time handoff code when a credential is set", async () => {
+		const requests: Array<{ path: string; method: string | undefined }> = [];
+		const deps = dashboardDeps({
+			daemonTarget: () =>
+				dashboardTarget({
+					url: "https://signet.example.com",
+					localWorkspace: false,
+					hasCredential: true,
+					fetchDaemonResult: async <T>(path: string, opts?: RequestInit) => {
+						requests.push({ path, method: opts?.method });
+						return { ok: true, data: { code: "abc-123" } as T };
+					},
+				}),
+		});
+		await launchDashboard({}, deps);
+		expect(requests).toEqual([{ path: "/api/auth/handoff", method: "POST" }]);
+		expect(lines).toContain("OPEN:https://signet.example.com/#signet-handoff=abc-123");
+		expect(lines.filter((line) => !line.startsWith("OPEN:")).join("\n")).not.toContain("abc-123");
+	});
+
+	it("falls back to the sign-in page when the daemon rejects the handoff", async () => {
+		const deps = dashboardDeps({
+			daemonTarget: () =>
+				dashboardTarget({
+					hasCredential: true,
+					fetchDaemonResult: async () => ({ ok: false, reason: "http", status: 401, error: "api key revoked" }),
+				}),
+		});
+		await launchDashboard({}, deps);
+		expect(lines).toContain("OPEN:http://127.0.0.1:3850");
+		expect(lines.join("\n")).toContain("the daemon rejected your credential (api key revoked)");
+	});
+
+	it("does not request a handoff without a configured credential", async () => {
+		let requests = 0;
+		const deps = dashboardDeps({
+			daemonTarget: () =>
+				dashboardTarget({
+					fetchDaemonResult: async () => {
+						requests += 1;
+						return { ok: false, reason: "offline" };
+					},
+				}),
+		});
+		await launchDashboard({}, deps);
+		expect(requests).toBe(0);
+		expect(lines).toContain("OPEN:http://127.0.0.1:3850");
 	});
 
 	it("prints a manual URL when the dashboard browser cannot be opened (#1477)", async () => {
