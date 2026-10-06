@@ -42,7 +42,7 @@ The daemon creates its signing secret under `runtime/auth-secret` for non-local 
 In team mode, token and API-key creation are admin-protected endpoints. A new server therefore needs an initial admin authentication path before it can issue API keys:
 
 1. Set `SIGNET_ADMIN_PASSWORD` or `SIGNET_ADMIN_PASSWORD_HASH` when starting the daemon, as above.
-2. Sign in to the dashboard with that admin credential, or authenticate against `POST /api/auth/login` from a secret-aware client.
+2. Sign in to the dashboard with that admin credential, or authenticate against `POST /api/auth/login` from a secret-aware client. The dashboard also accepts an API key, which it exchanges for a browser session, and `signet dashboard` opens it signed in when `SIGNET_API_KEY` is set. See [Dashboard](/dashboard/#signing-in).
 3. Use the resulting short-lived admin bearer session to create scoped API keys or tokens.
 4. Store each issued key only in the remote consumer's secret store. The raw API key is shown once.
 

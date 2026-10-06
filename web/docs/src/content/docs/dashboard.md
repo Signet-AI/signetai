@@ -12,7 +12,19 @@ signet daemon start
 signet dashboard
 ```
 
-The default URL is `http://localhost:3850`. If you set `SIGNET_PORT`, use that port instead.
+The default URL is `http://localhost:3850`. `signet dashboard` opens the daemon the CLI is configured for, resolved from `SIGNET_DAEMON_URL`, then `daemon.url` in `agent.yaml`, then `SIGNET_HOST` and `SIGNET_PORT`. It sets up or starts a daemon only when that target is local.
+
+## Signing in
+
+In `local` mode the dashboard needs no sign-in. When the daemon runs in `team` mode, or in `hybrid` mode and you open the dashboard from another machine, the dashboard shows a sign-in screen instead of empty panels. The screen names the mode and the daemon address, for example `Team · signet.example.com`.
+
+- **Username and password** is offered when the daemon has password login configured. See [Auth](/auth/).
+- **Use an API key instead** accepts an existing API key. The dashboard exchanges the key for a browser session and never stores the key itself.
+- **`signet dashboard`** opens the page already signed in when `SIGNET_API_KEY` (or the older `SIGNET_TOKEN`) is set. The CLI asks the daemon for a single-use code that expires after 60 seconds and opens the dashboard with it in the URL fragment. The page redeems the code and removes it from the address bar. The credential itself never appears in the URL. If the code can't be issued, the CLI says why and opens the sign-in screen.
+
+A browser session lasts for `auth.sessionTokenTtlSeconds`, and never longer than the credential it came from. Its claims match that credential: role, scope, and permissions are copied, never widened. When a session ends while you work, a sign-in dialog opens over the current page so your place and any unsaved input stay put. The topbar shows the mode and address. Select it to see who you are signed in as, your role, when the session expires, and **Sign out of this browser**.
+
+Signing out clears the session from this browser only. Sessions are signed tokens that the daemon does not track, so revoking an API key stops new sign-ins with it but does not end dashboard sessions already started from it. Those sessions end when they expire.
 
 ## Navigation and cached data
 
