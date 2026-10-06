@@ -164,8 +164,10 @@ stages such as `aggregate_planning`, `aggregate_followup_recalls`, and
 `aggregate_synthesis`.
 
 `meta.transcriptEvidence`, when the transcript lane ran, reports how many
-transcript excerpts were returned (`returned`) and `failed: true` if the lane
-failed; recall then returns memory results only. Transcript excerpts have
+transcript excerpts were returned (`returned`), how they were placed
+(`ranking`: `cross-encoder` when they competed with the bottom results by
+relevance, `keyword` when the cross-encoder was unavailable), and
+`failed: true` if the lane failed; recall then returns memory results only. Transcript excerpts have
 `source: "transcript"` and an id of the form `transcript:<session>`; see
 [Hybrid Recall](/memory/#hybrid-recall) for the bounds.
 

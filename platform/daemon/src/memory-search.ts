@@ -107,6 +107,12 @@ export interface RecallParams {
 	telemetrySurface?: RecallSurface;
 }
 
+export interface RecallTranscriptEvidenceMeta {
+	readonly returned: number;
+	readonly ranking?: "cross-encoder" | "keyword";
+	readonly failed?: true;
+}
+
 export interface RecallResult {
 	id: string;
 	content: string;
@@ -143,7 +149,7 @@ export interface RecallResponse {
 		sourceVectorSearch?: SourceChunkVectorDiagnostics;
 		reranker?: RerankOutcome;
 		graphPartial?: boolean;
-		transcriptEvidence?: { readonly returned: number; readonly failed?: true };
+		transcriptEvidence?: RecallTranscriptEvidenceMeta;
 		graphError?: {
 			channel: "graph_traversal";
 			code: string | number | null;
@@ -1299,6 +1305,50 @@ export function transcriptExcerpt(content: string, query: string, maxChars = 650
 	return `${prefix}${clean.slice(start, end).trim()}${suffix}`;
 }
 
+export async function placeTranscriptEvidence(
+	results: readonly RecallResult[],
+	candidates: readonly RecallResult[],
+	maxExcerpts: number,
+	limit: number,
+	query: string,
+	score: ((query: string, documents: readonly string[]) => Promise<number[]>) | null,
+): Promise<{ results: RecallResult[]; returned: number; ranking: "cross-encoder" | "keyword" }> {
+	if (candidates.length === 0 || maxExcerpts <= 0) return { results: [...results], returned: 0, ranking: "keyword" };
+	if (score !== null) {
+		try {
+			const kept = results.slice(0, Math.max(0, Math.min(results.length, limit - maxExcerpts)));
+			const pool = [...results.slice(kept.length), ...candidates];
+			const scores = await score(
+				query,
+				pool.map((row) => row.content),
+			);
+			const ordered = pool
+				.map((row, index) => ({ row, score: scores[index] ?? Number.NEGATIVE_INFINITY }))
+				.sort((a, b) => b.score - a.score);
+			const chosen: RecallResult[] = [];
+			let excerpts = 0;
+			for (const { row } of ordered) {
+				if (kept.length + chosen.length >= limit) break;
+				const isExcerpt = row.id.startsWith("transcript:");
+				if (isExcerpt && excerpts >= maxExcerpts) continue;
+				chosen.push(row);
+				if (isExcerpt) excerpts++;
+			}
+			return { results: [...kept, ...chosen], returned: excerpts, ranking: "cross-encoder" };
+		} catch (error) {
+			logger.warn("memory", "Transcript evidence fell back to keyword placement", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+	const excerpts = candidates.slice(0, maxExcerpts);
+	return {
+		results: [...results.slice(0, Math.max(0, limit - excerpts.length)), ...excerpts],
+		returned: excerpts.length,
+		ranking: "keyword",
+	};
+}
+
 async function buildTranscriptEvidenceResults(
 	agentId: string,
 	project: string | undefined,
@@ -1642,23 +1692,31 @@ export async function hybridRecall(
 	};
 	let transcriptEvidenceAllowed = false;
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
-		let transcriptEvidence: { readonly returned: number; readonly failed?: true } | undefined;
+		let transcriptEvidence: RecallTranscriptEvidenceMeta | undefined;
 		if (transcriptEvidenceAllowed && params.agentId) {
 			const agentId = params.agentId;
+			const textQuery = params.keywordQuery ?? query;
+			const maxExcerpts = Math.min(cfg.search.transcript_evidence_limit, limit);
+			const reranker = cfg.pipelineV2.reranker;
+			const crossEncoderModel =
+				reranker.enabled && !reranker.useExtractionModel && reranker.crossEncoderModel.length > 0
+					? reranker.crossEncoderModel
+					: null;
 			try {
-				const evidence = await timings.timeAsync("transcript_evidence", () =>
-					buildTranscriptEvidenceResults(
-						agentId,
-						params.project,
-						params.keywordQuery ?? query,
-						Math.min(cfg.search.transcript_evidence_limit, limit),
+				const placed = await timings.timeAsync("transcript_evidence", async () =>
+					placeTranscriptEvidence(
 						response.results,
+						await buildTranscriptEvidenceResults(agentId, params.project, textQuery, maxExcerpts * 2, response.results),
+						maxExcerpts,
+						limit,
+						textQuery,
+						crossEncoderModel === null
+							? null
+							: (rerankQuery, documents) => nativeRerank(crossEncoderModel, rerankQuery, documents),
 					),
 				);
-				if (evidence.length > 0) {
-					response.results = [...response.results.slice(0, Math.max(0, limit - evidence.length)), ...evidence];
-				}
-				transcriptEvidence = { returned: evidence.length };
+				response.results = placed.results;
+				transcriptEvidence = { returned: placed.returned, ranking: placed.ranking };
 			} catch (e) {
 				transcriptEvidence = { returned: 0, failed: true };
 				logger.warn("memory", "Transcript evidence recall failed (non-fatal)", {

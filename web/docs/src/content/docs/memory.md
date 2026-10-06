@@ -239,8 +239,13 @@ source ownership from chunk text metadata.
 Recall also returns a bounded amount of transcript evidence. After the memory
 results are ranked, keyword search over the requesting agent's own captured
 session transcripts adds at most `search.transcript_evidence_limit` excerpts
-(default 2, maximum 5, `0` disables). Each takes one of the bottom result
-slots, so the result count stays within `limit`. An excerpt is the
+(default 2, maximum 5, `0` disables). Keyword search proposes up to twice that
+many candidates; when the cross-encoder reranker is configured, the candidates
+and the bottom results they would replace are scored together and the most
+relevant fill those slots, so an excerpt displaces a memory only when it is
+judged more relevant. Without the cross-encoder, or when it is busy or still
+loading, the top keyword candidates take the bottom slots. Either way the
+result count stays within `limit`. An excerpt is the
 best-matching window of about 900 characters with credentials redacted, has
 `source: "transcript"`, `type: "transcript"`, `supplementary: true`, an id of
 the form `transcript:<session>`, and the session in `session_id`. Sessions

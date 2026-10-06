@@ -15,6 +15,7 @@ import {
 	buildAgentScopeClause,
 	classifyRecallTelemetry,
 	hybridRecall,
+	placeTranscriptEvidence,
 	MAX_LEXICAL_FALLBACK_SCAN_ROWS,
 	transcriptExcerpt,
 } from "./memory-search";
@@ -967,7 +968,7 @@ describe("hybridRecall", () => {
 		expect(transcripts[0]?.content).toContain("+49 6232 142");
 		expect(transcripts[0]?.supplementary).toBe(true);
 		expect(result.results.at(-1)?.id).toBe("transcript:own-speyer");
-		expect(result.meta.transcriptEvidence).toEqual({ returned: 1 });
+		expect(result.meta.transcriptEvidence).toEqual({ returned: 1, ranking: "keyword" });
 
 		const filtered = await recall({ type: "fact" });
 		expect(filtered.results.some((row) => row.id.startsWith("transcript:"))).toBe(false);
@@ -979,6 +980,61 @@ describe("hybridRecall", () => {
 			async () => null,
 		);
 		expect(disabled.results.some((row) => row.id.startsWith("transcript:"))).toBe(false);
+	});
+
+	it("places transcript excerpts by cross-encoder relevance against the bottom results", async () => {
+		const row = (id: string, content: string): RecallResult => ({
+			id,
+			content,
+			content_length: content.length,
+			truncated: false,
+			score: 0.5,
+			source: id.startsWith("transcript:") ? "transcript" : "sec",
+			type: id.startsWith("transcript:") ? "transcript" : "fact",
+			tags: null,
+			pinned: false,
+			importance: 0.5,
+			who: "test",
+			project: null,
+			created_at: "2026-01-01T00:00:00.000Z",
+		});
+		const memories = ["m1", "m2", "m3", "m4"].map((id) => row(id, `memory ${id}`));
+		const relevant = row("transcript:relevant", "relevant excerpt");
+		const noise = row("transcript:noise", "noise excerpt");
+		const extra = row("transcript:extra", "relevant extra excerpt");
+		const byContent = (weights: Record<string, number>) => async (_query: string, documents: readonly string[]) =>
+			documents.map((document) => weights[document] ?? 0);
+
+		const placed = await placeTranscriptEvidence(
+			memories,
+			[relevant, noise],
+			2,
+			4,
+			"query",
+			byContent({ "relevant excerpt": 9, "memory m3": 5, "memory m4": 1, "noise excerpt": -3 }),
+		);
+		expect(placed.results.map((r) => r.id)).toEqual(["m1", "m2", "transcript:relevant", "m3"]);
+		expect(placed).toMatchObject({ returned: 1, ranking: "cross-encoder" });
+
+		const capped = await placeTranscriptEvidence(
+			memories,
+			[relevant, extra, noise],
+			2,
+			4,
+			"query",
+			byContent({ "relevant excerpt": 9, "relevant extra excerpt": 8, "noise excerpt": 7 }),
+		);
+		expect(capped.results.filter((r) => r.id.startsWith("transcript:")).map((r) => r.id)).toEqual([
+			"transcript:relevant",
+			"transcript:extra",
+		]);
+		expect(capped.results).toHaveLength(4);
+
+		const fallback = await placeTranscriptEvidence(memories, [relevant, noise], 2, 4, "query", async () => {
+			throw new Error("cross-encoder loading");
+		});
+		expect(fallback.results.map((r) => r.id)).toEqual(["m1", "m2", "transcript:relevant", "transcript:noise"]);
+		expect(fallback.ranking).toBe("keyword");
 	});
 
 	it("skips source chunk vector fallback for project-scoped recall", async () => {
