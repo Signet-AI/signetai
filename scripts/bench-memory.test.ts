@@ -11,6 +11,7 @@ import {
 	benchDreamingConcurrency,
 	buildSetupArgs,
 	loadEnvFile,
+	pinnedBunMismatch,
 	resolveBenchModel,
 	setBenchDreamingCodemode,
 	setBenchDreamingConcurrency,
@@ -144,6 +145,14 @@ describe("MemoryBench launcher", () => {
 			codemode: true,
 		});
 		expect(() => benchDreamingCodemode({ SIGNET_BENCH_DREAMING_CODEMODE: "yes" })).toThrow("must be 1, 0");
+	});
+
+	test("refuses a Bun other than the one package.json pins", () => {
+		expect(pinnedBunMismatch("bun@1.4.2", "1.4.2", "/usr/bin/bun")).toBeNull();
+		expect(pinnedBunMismatch(undefined, "1.3.8", "/usr/bin/bun")).toBeNull();
+		const mismatch = pinnedBunMismatch("bun@1.4.2", "1.3.8", "/home/u/node_modules/bun/bin/bun.exe");
+		expect(mismatch).toContain("pinned Bun 1.4.2");
+		expect(mismatch).toContain("Bun 1.3.8 at /home/u/node_modules/bun/bin/bun.exe");
 	});
 
 	test("loads the bench env file without overriding values already set", async () => {

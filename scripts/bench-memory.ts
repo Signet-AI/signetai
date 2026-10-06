@@ -310,6 +310,16 @@ export function setBenchDreamingCodemode(agentsDir: string, enabled: boolean | u
 	writeFileSync(path, stringifyYaml(config));
 }
 
+export function pinnedBunMismatch(
+	packageManager: unknown,
+	version: string = Bun.version,
+	execPath: string = process.execPath,
+): string | null {
+	const pinned = typeof packageManager === "string" ? /^bun@(.+)$/.exec(packageManager)?.[1] : undefined;
+	if (pinned === undefined || pinned === version) return null;
+	return `MemoryBench needs the pinned Bun ${pinned}, but this is Bun ${version} at ${execPath}. A bun from an ancestor node_modules/.bin can shadow it under "bun run"; run "bun scripts/bench-memory.ts" with the pinned bun instead.`;
+}
+
 export function loadEnvFile(path: string, env: NodeJS.ProcessEnv = process.env): void {
 	if (!existsSync(path)) return;
 	for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
@@ -462,25 +472,30 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	const runtimeMismatch = pinnedBunMismatch(
+		(JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")) as { packageManager?: unknown }).packageManager,
+	);
+	if (runtimeMismatch !== null) throw new Error(runtimeMismatch);
+
 	let daemon: ReturnType<typeof spawn> | null = null;
 	try {
 		if (parsed.build) {
-			await run("bun", ["run", "build"]);
+			await run(process.execPath, ["run", "build"]);
 		}
 		if (parsed.build || !existsSync(join(repoRoot, "surfaces", "dashboard", "build", "index.html"))) {
-			await run("bun", ["run", "build"], process.env, join(repoRoot, "surfaces", "dashboard"));
+			await run(process.execPath, ["run", "build"], process.env, join(repoRoot, "surfaces", "dashboard"));
 		}
 		if (isSetUp(agentsDir)) {
 			console.log("Reusing the existing benchmark workspace and database.");
 		} else {
-			await run("bun", setupArgs, env);
+			await run(process.execPath, setupArgs, env);
 			attachBenchCredential(agentsDir, model.providerFamily);
 		}
 
 		setBenchDreamingConcurrency(agentsDir, benchDreamingConcurrency());
 		setBenchDreamingCodemode(agentsDir, benchDreamingCodemode());
 		mkdirSync(join(agentsDir, ".daemon", "logs"), { recursive: true });
-		daemon = spawn("bun", ["platform/daemon/src/daemon.ts"], {
+		daemon = spawn(process.execPath, ["platform/daemon/src/daemon.ts"], {
 			cwd: repoRoot,
 			env,
 			stdio: ["ignore", "inherit", "inherit"],
@@ -493,7 +508,7 @@ async function main(): Promise<void> {
 
 		await waitForHealth(baseUrl, 180_000);
 		console.log(`Benchmark dashboard: ${baseUrl}/`);
-		await run("bun", ["src/index.ts", ...memorybenchArgs], env, join(repoRoot, "memorybench"));
+		await run(process.execPath, ["src/index.ts", ...memorybenchArgs], env, join(repoRoot, "memorybench"));
 	} finally {
 		if (daemon && daemon.exitCode === null) {
 			daemon.kill("SIGTERM");

@@ -5377,7 +5377,7 @@
     },
     {
       "path": "transcript-recovery-child.ts",
-      "line": 22,
+      "line": 26,
       "api": "existsSync",
       "source": "while (holdFile !== undefined && existsSync(holdFile)) await new Promise((resolve) => setTimeout(resolve, 5));",
       "category": "hot-path"
