@@ -9,25 +9,27 @@ export const onboardingPreview = import.meta.env.DEV && import.meta.env.VITE_ONB
 const API_BASE = "";
 
 function invalidateMutation(path: string): void {
-	const resources = path.includes("/harnesses/")
-		? ["harnesses", "status", "identity", "agent-list"]
-		: path.includes("/secrets")
-			? ["secrets", "inference-"]
-			: path.includes("/inference/")
-				? ["inference-"]
-				: /\/(sources|memory|memories|knowledge|ontology|dream|reflections)(?:\/|\?|$)/.test(path)
-					? [
-							"sources",
-							"source-import",
-							"protection",
-							"knowledge-stats",
-							"constellation",
-							"recent-memories",
-							"timeline",
-							"proposals",
-							"dream-",
-						]
-					: null;
+	const resources = path.startsWith("/api/auth/api-keys")
+		? ["api-keys"]
+		: path.includes("/harnesses/")
+			? ["harnesses", "status", "identity", "agent-list"]
+			: path.includes("/secrets")
+				? ["secrets", "inference-"]
+				: path.includes("/inference/")
+					? ["inference-"]
+					: /\/(sources|memory|memories|knowledge|ontology|dream|reflections)(?:\/|\?|$)/.test(path)
+						? [
+								"sources",
+								"source-import",
+								"protection",
+								"knowledge-stats",
+								"constellation",
+								"recent-memories",
+								"timeline",
+								"proposals",
+								"dream-",
+							]
+						: null;
 	dashboardQueryCache.invalidate(
 		resources ? (key) => resources.some((resource) => key.includes(`:${resource}`)) : undefined,
 	);
