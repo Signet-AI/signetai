@@ -49,8 +49,9 @@ The cache retains at most 48 results and 12 MiB of serialized payloads, with a
 inactive results expire after five minutes. These are payload bounds, not a
 measurement of JavaScript heap usage. Parameterized reads, including constellation
 snapshots, memory searches, and individual Dreaming passes, have separate keys.
-The cache is scoped to the daemon origin and authentication token, is cleared
-on authorization failures. Successful dashboard mutations invalidate the affected
+The cache is scoped to the daemon origin and authentication token, and is
+cleared when the daemon rejects a request as unauthenticated (401). A refused
+request (403) leaves other cached panels in place. Successful dashboard mutations invalidate the affected
 queries for background refresh. The cache is never
 persisted to disk. Refreshing the application starts a new cache.
 

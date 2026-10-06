@@ -238,7 +238,7 @@ stored hashed at rest.
 }
 ```
 
-`name` is required. `role` defaults to `agent` and must be one of `admin`,
+`name` is required, at most 128 characters. `role` defaults to `agent` and must be one of `admin`,
 `operator`, `agent`, or `readonly` when provided. `connector`, `harness`,
 `agentId`, `allowedProjects`, `scope`, `permissions`, and `expiresAt` are
 optional. `agentId` is connector metadata; API callers should also set

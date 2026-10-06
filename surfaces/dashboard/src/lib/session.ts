@@ -37,6 +37,7 @@ export type Session =
 			readonly reason: string | null;
 			readonly expired: boolean;
 			readonly renewal: boolean;
+			readonly permissions: readonly string[] | null;
 	  }
 	| { readonly kind: "unreachable"; readonly error: string };
 
@@ -97,8 +98,8 @@ function set(next: Session): void {
 	const wait = Math.min(Math.max(expiresAt - Date.now() + 1_000, recheck), MAX_TIMER_MS);
 	expiryTimer = setTimeout(() => void refreshSession(), wait);
 	const warnIn = expiresAt - EXPIRY_WARNING_MS - Date.now();
-	const expiresSoon = warnIn <= 0;
-	if (!expiresSoon) {
+	const expiresSoon = current.kind === "signed-in" && current.identity.expiresAt === expiresAt && current.expiresSoon;
+	if (warnIn > 0) {
 		warningTimer = setTimeout(
 			() => {
 				if (current.kind === "signed-in") publish({ ...current, expiresSoon: true });
@@ -195,6 +196,7 @@ async function check(retry = true): Promise<void> {
 		reason,
 		expired: signedInOnce,
 		renewal: false,
+		permissions: knownPermissions(),
 	});
 }
 
@@ -299,6 +301,7 @@ export function requestRenewal(): void {
 			reason: "Sign in again to start a new session.",
 			expired: true,
 			renewal: true,
+			permissions: current.permissions,
 		});
 	})();
 }
@@ -307,8 +310,14 @@ export function cancelRenewal(): Promise<void> {
 	return refreshSession();
 }
 
+function knownPermissions(): readonly string[] | null {
+	return current.kind === "signed-in" || current.kind === "open" || current.kind === "signed-out"
+		? current.permissions
+		: null;
+}
+
 export function can(session: Session, permission: string): boolean {
-	if (session.kind !== "open" && session.kind !== "signed-in") return true;
+	if (session.kind === "checking" || session.kind === "unreachable") return true;
 	return session.permissions === null || session.permissions.includes(permission);
 }
 

@@ -152,15 +152,18 @@ function NewKeyNotice({ created, onDone }: { created: CreatedApiKey; onDone: () 
 
 export function ApiKeysSection() {
 	const session = useSession();
-	const keys = useAsync(() => api.listApiKeys().then((result) => result.data), { key: "api-keys" });
+	const keys = useAsync(() => api.listApiKeys(), { key: "api-keys" });
 	const [created, setCreated] = useState<CreatedApiKey | null>(null);
 	const [revoking, setRevoking] = useState<ApiKeyRecord | null>(null);
-	const list = keys.data?.apiKeys ?? [];
+	const [pending, setPending] = useState<string | null>(null);
+	const list = keys.data?.data?.apiKeys ?? [];
 
 	const revoke = async (key: ApiKeyRecord) => {
 		setRevoking(null);
+		setPending(key.id);
 		const result = await api.revokeApiKey(key.id);
-		toast(result.ok ? `Revoked ${key.name}` : (result.data?.error ?? `Could not revoke ${key.name}`));
+		setPending(null);
+		toast(result.error ? `Could not revoke ${key.name}: ${result.error}` : `Revoked ${key.name}`);
 	};
 
 	return (
@@ -186,15 +189,20 @@ export function ApiKeysSection() {
 				)}
 			</section>
 			<section className="flex flex-col gap-3" aria-labelledby="api-keys-list">
-				<GroupLabel suffix={keys.data ? `· ${list.filter((key) => !key.revokedAt).length} active` : undefined}>
+				<GroupLabel suffix={keys.data?.data ? `· ${list.filter((key) => !key.revokedAt).length} active` : undefined}>
 					<span id="api-keys-list">Keys</span>
 				</GroupLabel>
+				{keys.error && (
+					<p role="alert" className="m-0 settings-row-description text-destructive">
+						{keys.error}
+					</p>
+				)}
 				{keys.loading ? (
 					<p className="m-0 settings-row-description">Loading keys…</p>
-				) : keys.error ? (
-					<p className="m-0 settings-row-description">{keys.error}</p>
 				) : list.length === 0 ? (
-					<p className="m-0 settings-row-description">No API keys yet.</p>
+					keys.error ? null : (
+						<p className="m-0 settings-row-description">No API keys yet.</p>
+					)
 				) : (
 					<ul className="m-0 flex list-none flex-col divide-y p-0">
 						{list.map((key) => (
@@ -209,8 +217,14 @@ export function ApiKeysSection() {
 									</p>
 								</div>
 								{!key.revokedAt && (
-									<Button type="button" variant="outline" size="compact" onClick={() => setRevoking(key)}>
-										Revoke
+									<Button
+										type="button"
+										variant="outline"
+										size="compact"
+										disabled={pending === key.id}
+										onClick={() => setRevoking(key)}
+									>
+										{pending === key.id ? "Revoking…" : "Revoke"}
 									</Button>
 								)}
 							</li>

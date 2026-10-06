@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { api, getJSONResult } from "./api";
+import { dashboardQueryCache } from "./query-cache";
 
 function capture(status: number, body: unknown) {
 	const calls: Array<{ url: string; method: string; body: unknown }> = [];
@@ -48,7 +49,8 @@ describe("API key client", () => {
 	it("revokes by id", async () => {
 		const calls = capture(200, { apiKey: { id: "key/1" } });
 		const result = await api.revokeApiKey("key/1");
-		expect(result.ok).toBe(true);
+		expect(result.error).toBeNull();
+		expect(result.data?.apiKey.id).toBe("key/1");
 		expect(calls[0]).toMatchObject({ url: "/api/auth/api-keys/key%2F1", method: "DELETE" });
 	});
 });
@@ -76,5 +78,21 @@ describe("forbidden responses", () => {
 	it("explains a scope restriction", async () => {
 		capture(403, { error: "scope restricted to agent 'alice'" });
 		expect((await getJSONResult("/api/memories")).error).toBe("Your credential is limited to agent alice.");
+	});
+
+	it("keeps other cached panels after a 403 and clears them after a 401", async () => {
+		await dashboardQueryCache.fetch("test:panel", () => Promise.resolve({ value: 1 }), 60_000);
+		capture(403, { error: "role 'readonly' lacks 'modify' permission" });
+		await getJSONResult("/api/sources/imports");
+		expect(dashboardQueryCache.read("test:panel").data).toEqual({ value: 1 });
+		vi.restoreAllMocks();
+		capture(401, { error: "token expired" });
+		await getJSONResult("/api/memories");
+		expect(dashboardQueryCache.read("test:panel").data).toBeNull();
+	});
+
+	it("keeps an unrecognized refusal's own reason", async () => {
+		capture(403, { error: "agent scope denied" });
+		expect((await getJSONResult("/api/agents/x")).error).toBe("agent scope denied");
 	});
 });

@@ -738,6 +738,27 @@ const demoSkills: SkillDetail[] = [
 type ApiClient = typeof import("./api").api;
 export function installDemoApi(target: ApiClient): void {
 	target.getHealth = async () => true;
+	target.listApiKeys = async () => ({
+		data: {
+			apiKeys: [
+				{
+					id: "key_demo",
+					prefix: "d3m0a1b2",
+					name: "alice-laptop",
+					role: "agent",
+					agentId: null,
+					connector: null,
+					createdAt: "2026-09-01T12:00:00.000Z",
+					lastUsedAt: "2026-10-05T09:30:00.000Z",
+					revokedAt: null,
+					expiresAt: "2026-12-01T00:00:00.000Z",
+				},
+			],
+		},
+		error: null,
+	});
+	target.createApiKey = async () => ({ data: null, error: "Creating keys is disabled in the demo." });
+	target.revokeApiKey = async () => ({ data: null, error: "Revoking keys is disabled in the demo." });
 	target.getStatus = async () => demoStatus;
 	target.getIdentity = async () => demoIdentity;
 	target.getHarnesses = async () => ({ data: demoHarnesses, error: null });

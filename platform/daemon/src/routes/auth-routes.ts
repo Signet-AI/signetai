@@ -23,6 +23,7 @@ import { authAdminLimiter, authConfig, authLoginLimiter, authSecret } from "./st
 const MAX_USERNAME_LENGTH = 128;
 const MAX_PASSWORD_LENGTH = 1024;
 const MAX_HANDOFF_CODE_LENGTH = 128;
+const MAX_KEY_NAME_LENGTH = 128;
 const HANDOFF_TTL_MS = 60_000;
 const HANDOFF_LIMIT = 32;
 const HANDOFF_LIMIT_PER_CREDENTIAL = 4;
@@ -274,6 +275,9 @@ export function registerAuthRoutes(app: Hono): void {
 		if (!payload) return c.json({ error: "invalid request body" }, 400);
 		const name = typeof payload.name === "string" ? payload.name.trim() : "";
 		if (!name) return c.json({ error: "name is required" }, 400);
+		if (name.length > MAX_KEY_NAME_LENGTH) {
+			return c.json({ error: `name must be at most ${MAX_KEY_NAME_LENGTH} characters` }, 400);
+		}
 		const role = typeof payload.role === "string" ? payload.role : undefined;
 		const validRoles: TokenRole[] = ["admin", "operator", "agent", "readonly"];
 		if (role !== undefined && !validRoles.includes(role as TokenRole)) {

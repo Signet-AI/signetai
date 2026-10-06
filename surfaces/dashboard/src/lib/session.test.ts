@@ -161,20 +161,38 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			expect(session.can(session.currentSession(), "admin")).toBe(true);
 		});
 
-		test("flags a session that ends within five minutes", async () => {
+		test("warns five minutes before a session ends", async () => {
+			const exp = (Date.now() + 300_000 + 150) / 1000;
 			handler = () =>
 				whoami({
 					authenticated: true,
 					effectiveAccess: true,
 					permissions: ["recall"],
-					claims: { sub: "api-key:k1", role: "agent", scope: {}, iat: 1, exp: Math.floor(Date.now() / 1000) + 120 },
+					claims: { sub: "api-key:k1", role: "agent", scope: {}, iat: 1, exp },
+				});
+			await session.refreshSession();
+			const before = session.currentSession();
+			expect(before.kind === "signed-in" && before.expiresSoon).toBe(false);
+			await new Promise((resolve) => setTimeout(resolve, 250));
+			const after = session.currentSession();
+			expect(after.kind === "signed-in" && after.expiresSoon).toBe(true);
+		});
+
+		test("does not warn about a session that starts inside the warning window", async () => {
+			handler = () =>
+				whoami({
+					authenticated: true,
+					effectiveAccess: true,
+					permissions: ["recall"],
+					claims: { sub: "api-key:short", role: "agent", scope: {}, iat: 1, exp: Math.floor(Date.now() / 1000) + 120 },
 				});
 			await session.refreshSession();
 			const state = session.currentSession();
-			expect(state.kind === "signed-in" && state.expiresSoon).toBe(true);
+			expect(state.kind === "signed-in" && state.expiresSoon).toBe(false);
 		});
 
 		test("renewal opens sign-in without dropping the session, and can be cancelled", async () => {
+			localStorage.setItem(session.TOKEN_KEY, "session-perms");
 			handler = (path) =>
 				path === "/api/auth/methods"
 					? { status: 200, body: { mode: "team", providers: [{ id: "password", type: "password", enabled: true }] } }
@@ -184,6 +202,8 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			await new Promise((resolve) => setTimeout(resolve, 20));
 			const state = session.currentSession();
 			expect(state.kind === "signed-out" && state.renewal && state.expired).toBe(true);
+			expect(session.can(state, "recall")).toBe(true);
+			expect(session.can(state, "admin")).toBe(false);
 			expect(localStorage.getItem(session.TOKEN_KEY)).toBe("session-perms");
 			await session.cancelRenewal();
 			expect(session.currentSession().kind).toBe("signed-in");

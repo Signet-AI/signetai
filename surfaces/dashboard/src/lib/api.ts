@@ -41,9 +41,10 @@ async function dashboardFetch(path: string, init?: RequestInit): Promise<Respons
 	const deadline = method === "GET" ? AbortSignal.timeout(20_000) : undefined;
 	const signal = init?.signal && deadline ? AbortSignal.any([init.signal, deadline]) : (init?.signal ?? deadline);
 	const response = await fetch(path, { ...init, signal });
-	if (response.status === 401) noteUnauthorized();
-	if (response.status === 401 || response.status === 403) dashboardQueryCache.clear(false);
-	else if (response.ok && method !== "GET" && !path.includes("/probe") && !path.includes("/decision"))
+	if (response.status === 401) {
+		noteUnauthorized();
+		dashboardQueryCache.clear(false);
+	} else if (response.ok && method !== "GET" && !path.includes("/probe") && !path.includes("/decision"))
 		invalidateMutation(path);
 	return response;
 }
@@ -90,7 +91,7 @@ function describeForbidden(reason: string): string {
 	if (permission) return `Requires the ${permission} permission.`;
 	const scope = /scope restricted to (\w+) '([^']+)'/.exec(reason);
 	if (scope) return `Your credential is limited to ${scope[1]} ${scope[2]}.`;
-	return "Your credential isn't allowed to do this.";
+	return reason;
 }
 
 export async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiReadResult<T>> {
@@ -1351,7 +1352,7 @@ export const api = {
 			...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
 		}),
 	revokeApiKey: (id: string) =>
-		mutateJSON<{ error?: string; apiKey?: ApiKeyRecord }>(`/api/auth/api-keys/${encodeURIComponent(id)}`, "DELETE"),
+		getJSONResult<{ apiKey: ApiKeyRecord }>(`/api/auth/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
 	getOnePasswordStatus: async (): Promise<OnePasswordStatus> => {
 		const data = await getJSON<Partial<OnePasswordStatus>>("/api/secrets/1password/status");
 		return {

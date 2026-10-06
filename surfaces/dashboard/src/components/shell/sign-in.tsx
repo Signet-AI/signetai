@@ -35,7 +35,14 @@ function SignInForm({ session }: { session: SignedOut }) {
 
 	useEffect(() => {
 		if (retryUntil <= Date.now()) return;
-		const timer = setInterval(() => setNow(Date.now()), 1_000);
+		const timer = setInterval(() => {
+			const time = Date.now();
+			setNow(time);
+			if (time < retryUntil) return;
+			clearInterval(timer);
+			setRetryUntil(0);
+			setError(null);
+		}, 1_000);
 		return () => clearInterval(timer);
 	}, [retryUntil]);
 

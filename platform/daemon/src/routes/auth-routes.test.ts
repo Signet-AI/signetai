@@ -238,6 +238,19 @@ describe("handoff limits", () => {
 });
 
 describe("admin routes", () => {
+	test("rejects an API key name that would bloat every session token", async () => {
+		if (!state.authSecret) throw new Error("expected auth secret");
+		const { createToken } = await import("../auth");
+		const admin = createToken(state.authSecret, { sub: "name-limit-probe", scope: {}, role: "admin" }, 60);
+		const res = await app.request("/api/auth/api-keys", {
+			method: "POST",
+			headers: { ...bearer(admin), "content-type": "application/json" },
+			body: JSON.stringify({ name: "x".repeat(129) }),
+		});
+		expect(res.status).toBe(400);
+		expect(((await res.json()) as { error: string }).error).toBe("name must be at most 128 characters");
+	});
+
 	test("a non-admin credential gets 403 from key management, not a server error", async () => {
 		const res = await app.request("/api/auth/api-keys", { headers: bearer(KEY) });
 		expect(res.status).toBe(403);
