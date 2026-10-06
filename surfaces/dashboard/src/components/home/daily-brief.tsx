@@ -5,6 +5,14 @@ import { ChevronLeft, ChevronRight, RotateCw } from "@/components/mingcute-icons
 import { useCallback, useEffect, useRef, useState } from "react";
 const BRIEF_CHAR_BUDGET = 236;
 
+function formatBriefDate(date: string): string {
+	const parsed = new Date(`${date}T12:00:00`);
+	if (parsed.toDateString() === new Date().toDateString()) return "Today";
+	return Number.isNaN(parsed.getTime())
+		? date
+		: parsed.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+}
+
 function budgetText(text: string, budget: number): string {
 	if (text.length <= budget) return text;
 	const cut = text.slice(0, budget);
@@ -106,52 +114,22 @@ export function DailyBrief({
 		}
 	};
 
-	const pad = (n: number) => String(n + 1).padStart(2, "0");
 	const show = (n: number) => setI(((n % items.length) + items.length) % items.length);
 
 	return (
-		<section className="home-daily-brief flex flex-col gap-3.5">
+		<section className="home-daily-brief flex flex-col gap-3">
 			<div className="flex shrink-0 items-center justify-between gap-3">
-				<span className="text-[13px] font-semibold tracking-tight text-foreground">Daily brief</span>
-				<div className="flex items-center gap-1.5">
-					{items.length > 0 && (
-						<span className="font-mono text-[11px] text-muted-foreground">
-							{pad(clamped)} / {pad(items.length - 1)}
-						</span>
-					)}
-					<button
-						type="button"
-						aria-label="Generate a new brief"
-						title={draftFor ? "Save or cancel your draft before refreshing" : "Generate a new brief"}
-						disabled={generating || loading || draftFor !== null}
-						onClick={() => void generate(1)}
-						className="grid size-5 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-40"
-					>
-						<RotateCw className={cn("size-3", generating && "animate-spin")} />
-					</button>
-					{items.length > 1 && (
-						<>
-							<button
-								type="button"
-								aria-label="Previous brief"
-								disabled={draftFor !== null}
-								onClick={() => show(clamped - 1)}
-								className="grid size-5 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
-							>
-								<ChevronLeft className="size-3" />
-							</button>
-							<button
-								type="button"
-								aria-label="Next brief"
-								disabled={draftFor !== null}
-								onClick={() => show(clamped + 1)}
-								className="grid size-5 place-items-center rounded-[var(--radius)] border border-border bg-card text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40"
-							>
-								<ChevronRight className="size-3" />
-							</button>
-						</>
-					)}
-				</div>
+				<span className="text-small font-medium text-muted-foreground">Daily brief</span>
+				<button
+					type="button"
+					aria-label="Generate a new brief"
+					title={draftFor ? "Save or cancel your draft before refreshing" : "Generate a new brief"}
+					disabled={generating || loading || draftFor !== null}
+					onClick={() => void generate(1)}
+					className="home-brief-icon"
+				>
+					<RotateCw className={cn("size-3.5", generating && "animate-spin")} />
+				</button>
 			</div>
 
 			{loading && current === null ? (
@@ -174,42 +152,72 @@ export function DailyBrief({
 				<div className="flex shrink-0 flex-col gap-2.25">
 					<div
 						key={current.id}
-						className="insight-text home-brief-copy line-clamp-3 min-h-[74px] text-[17px] leading-[1.45] tracking-[-0.01em] text-foreground"
+						className="insight-text home-brief-copy text-foreground"
 						title={current.summary.length > BRIEF_CHAR_BUDGET ? current.summary : undefined}
 					>
 						{budgetText(current.summary, BRIEF_CHAR_BUDGET)}
 					</div>
-					<div className="mt-1 flex items-baseline gap-2 font-mono text-[10.5px] text-muted-foreground">
-						<span>
-							{current.patterns.length > 0
-								? current.patterns.slice(0, 4).join(" · ")
-								: current.answer
-									? "answered"
-									: current.date}
+					<div className="home-brief-footer">
+						<span className="min-w-0 truncate text-meta tabular-nums text-muted-foreground">
+							{error && draftFor === null ? (
+								<span className="text-destructive">{error}</span>
+							) : current.patterns.length > 0 ? (
+								current.patterns.slice(0, 4).join(" · ")
+							) : current.answer ? (
+								"Answered"
+							) : (
+								formatBriefDate(current.date)
+							)}
 						</span>
-						{!current.answer && draftFor !== current.id && (
-							<button
-								type="button"
-								disabled={generating}
-								onClick={() => {
-									setAnswerText("");
-									setError(null);
-									setDraftFor(current.id);
-								}}
-								className="transition-colors hover:text-foreground disabled:opacity-40"
-							>
-								· {generating ? "generating…" : "write back"}
-							</button>
-						)}
-						{error && draftFor === null && <span className="text-destructive">{error}</span>}
+						<div className="flex shrink-0 items-center gap-2">
+							{!current.answer && draftFor !== current.id && (
+								<button
+									type="button"
+									disabled={generating}
+									onClick={() => {
+										setAnswerText("");
+										setError(null);
+										setDraftFor(current.id);
+									}}
+									className="home-brief-reply"
+								>
+									{generating ? "Generating…" : "Write back"}
+								</button>
+							)}
+							{items.length > 1 && (
+								<div className="home-brief-pager">
+									<button
+										type="button"
+										aria-label="Previous brief"
+										disabled={draftFor !== null}
+										onClick={() => show(clamped - 1)}
+										className="home-brief-icon"
+									>
+										<ChevronLeft className="size-3.5" />
+									</button>
+									<span className="text-meta tabular-nums text-muted-foreground">
+										{clamped + 1} of {items.length}
+									</span>
+									<button
+										type="button"
+										aria-label="Next brief"
+										disabled={draftFor !== null}
+										onClick={() => show(clamped + 1)}
+										className="home-brief-icon"
+									>
+										<ChevronRight className="size-3.5" />
+									</button>
+								</div>
+							)}
+						</div>
 					</div>
 
 					{current.answer ? (
 						<div className="mt-1 flex flex-col gap-1.5 rounded-[var(--radius)] border border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-2.5 py-2">
-							<span className="font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted-foreground">
+							<span className="text-meta tabular-nums uppercase tracking-[0.08em] text-muted-foreground">
 								Your answer
 							</span>
-							<p className="m-0 line-clamp-2 text-[12.5px] leading-[1.55] text-foreground" title={current.answer}>
+							<p className="m-0 line-clamp-2 text-body leading-[1.55] text-foreground" title={current.answer}>
 								{current.answer}
 							</p>
 						</div>
@@ -222,14 +230,14 @@ export function DailyBrief({
 								rows={2}
 								autoFocus
 								aria-label="Your answer"
-								className="w-full resize-none rounded-[var(--control-radius)] border border-[oklch(1_0_0/0.1)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-2.5 py-1.5 text-[12px] leading-[1.5] text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-[color-mix(in_oklch,var(--foreground)_30%,transparent)]"
+								className="w-full resize-none rounded-xl border border-[oklch(1_0_0/0.1)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-2.5 py-1.5 text-small leading-[1.5] text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-[color-mix(in_oklch,var(--foreground)_30%,transparent)]"
 							/>
 							<div className="flex items-center gap-2">
 								<button
 									type="button"
 									disabled={!answerText.trim() || submitting}
 									onClick={() => void submitAnswer(current)}
-									className="h-6 rounded-[var(--radius)] bg-foreground px-2.5 text-[11px] font-medium text-background transition-opacity hover:opacity-88 disabled:opacity-40"
+									className="h-7 rounded-full bg-foreground px-3.5 text-small font-medium text-background transition-opacity hover:opacity-88 disabled:opacity-40"
 								>
 									{submitting ? "Saving…" : "Save"}
 								</button>
@@ -239,18 +247,18 @@ export function DailyBrief({
 										setDraftFor(null);
 										setAnswerText("");
 									}}
-									className="h-6 rounded-[var(--radius)] px-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+									className="h-7 rounded-full px-3 text-small text-muted-foreground transition-colors hover:text-foreground"
 								>
 									Cancel
 								</button>
-								{error && <span className="font-mono text-[9.5px] text-destructive">{error}</span>}
+								{error && <span className="text-meta tabular-nums text-destructive">{error}</span>}
 							</div>
 						</div>
 					) : null}
 				</div>
 			) : (
 				<div className="flex shrink-0 flex-col gap-2.5">
-					<p className="m-0 text-[13px] leading-[1.55] text-muted-foreground">
+					<p className="m-0 text-body leading-[1.55] text-muted-foreground">
 						{generating
 							? slow
 								? "Generation is taking longer than expected. It may take a minute…"
@@ -262,7 +270,7 @@ export function DailyBrief({
 							<button
 								type="button"
 								onClick={() => void generate()}
-								className="h-6 rounded-[var(--radius)] border border-[oklch(1_0_0/0.16)] bg-[color-mix(in_oklch,var(--foreground)_6%,transparent)] px-2.5 text-[11px] font-medium transition-colors hover:border-[oklch(1_0_0/0.3)] hover:bg-[color-mix(in_oklch,var(--foreground)_10%,transparent)]"
+								className="h-6 rounded-[var(--radius)] border border-[oklch(1_0_0/0.16)] bg-[color-mix(in_oklch,var(--foreground)_6%,transparent)] px-2.5 text-meta font-medium transition-colors hover:border-[oklch(1_0_0/0.3)] hover:bg-[color-mix(in_oklch,var(--foreground)_10%,transparent)]"
 							>
 								Generate today's briefs
 							</button>

@@ -197,7 +197,29 @@ metadata:
 # Agent Architect`;
 
 		const meta = parseSkillFrontmatter(content);
-		expect(meta.description.length).toBeGreaterThan(0);
+		expect(meta.description).toBe(
+			"Design agents with genuine humanity — craft SOUL.md, IDENTITY.md, USER.md, and AGENTS.md files that produce agents people actually connect with.",
+		);
+	});
+
+	it("parses multiline YAML description using | literal scalar", () => {
+		const content = `---
+name: shorts
+description: |
+  First line of the description.
+  Second line stays separate.
+version: 2.0.0
+---`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("First line of the description.\nSecond line stays separate.");
+		expect(meta.version).toBe("2.0.0");
+	});
+
+	it("does not read the next key as an empty field's value", () => {
+		const meta = parseSkillFrontmatter("---\nauthor:\ndescription: Real description\n---");
+		expect(meta.author).toBeUndefined();
+		expect(meta.description).toBe("Real description");
 	});
 
 	it("ignores metadata block keys when parsing top-level fields", () => {

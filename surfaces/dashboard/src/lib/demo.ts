@@ -15,6 +15,7 @@ import type {
 	MemoryTimeline,
 	OnePasswordStatus,
 	OntologyProposal,
+	SkillDetail,
 	SourcesResponse,
 	TelemetryHealth,
 	TodayReflectionResponse,
@@ -691,6 +692,49 @@ const demoOnePassword: OnePasswordStatus = {
 	vaults: [],
 };
 
+const demoSkills: SkillDetail[] = [
+	{
+		name: "changelog-writer",
+		description: "Draft release notes from merged pull requests. Use when preparing a release or summarizing a sprint.",
+		version: "1.2.0",
+		author: "Signet",
+		userInvocable: true,
+		argHint: "<since-tag>",
+		path: "/home/demo/.agents/skills/changelog-writer",
+		content:
+			'# Changelog Writer\n\nTurn merged pull requests into release notes people actually read.\n\n## When to use\n\n- Preparing a tagged release\n- Summarizing a sprint for the team\n\n## Steps\n\n1. List merged PRs since the last tag.\n2. Group them by `feat`, `fix`, and `perf`.\n3. Lead each group with the change a user will notice.\n\n```bash\ngh pr list --state merged --search "merged:>2026-09-01"\n```',
+	},
+	{
+		name: "meeting-notes",
+		description: "Turn a meeting transcript into decisions, owners, and follow-ups.",
+		version: "0.4.1",
+		author: "Demo Team",
+		userInvocable: false,
+		path: "/home/demo/.agents/skills/meeting-notes",
+		content:
+			"# Meeting Notes\n\nExtract what was decided, who owns it, and what happens next.\n\n## Output\n\n| Section | Contents |\n| --- | --- |\n| Decisions | One line each, with the reason |\n| Owners | Name and next action |\n| Follow-ups | Dated, linked to the source |",
+	},
+	{
+		name: "recipe-scaler",
+		description: "Scale a recipe to a new serving count and convert units.",
+		author: "Demo Team",
+		userInvocable: true,
+		argHint: "<servings>",
+		path: "/home/demo/.agents/skills/recipe-scaler",
+		content: "# Recipe Scaler\n\nScale every ingredient proportionally, then round to kitchen-friendly measures.",
+	},
+	{
+		name: "research-brief",
+		description: "Collect sources on a question and write a short, cited brief. Use for quick literature scans.",
+		version: "2.0.0",
+		author: "Signet",
+		userInvocable: false,
+		path: "/home/demo/.agents/skills/research-brief",
+		content:
+			"# Research Brief\n\nAnswer one question with a short brief that cites every claim.\n\n## Rules\n\n- Prefer primary sources.\n- Quote numbers exactly and link them.\n- Say plainly when the evidence is thin.",
+	},
+];
+
 type ApiClient = typeof import("./api").api;
 export function installDemoApi(target: ApiClient): void {
 	target.getHealth = async () => true;
@@ -700,7 +744,8 @@ export function installDemoApi(target: ApiClient): void {
 	target.getAgents = async () => ({ data: demoAgents, error: null });
 	target.getKnowledgeStats = async () => demoStats;
 	target.getSources = async () => demoSources;
-	target.getSkills = async () => null;
+	target.getSkills = async () => demoSkills.map(({ content: _content, ...skill }) => skill);
+	target.getSkill = async (name) => demoSkills.find((skill) => skill.name === name) ?? null;
 	target.getMemoryTimeline = async () => demoTimeline;
 	target.getKnowledgeConstellation = async () => demoConstellation();
 	target.getOntologyProposals = async () => ({ items: demoOntologyProposals, limit: 20, offset: 0 });

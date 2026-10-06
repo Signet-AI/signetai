@@ -126,8 +126,8 @@ export function OnePasswordPanel({ onImported, compact = false }: { onImported: 
 					) : (
 						<ChevronRight className="size-3.5 text-muted-foreground" />
 					)}
-					<span className="text-[11px] font-medium">1Password</span>
-					<span className={cn("font-mono text-[10px]", statusColor)}>{statusLabel}</span>
+					<span className="text-body font-medium">1Password</span>
+					<span className={cn("text-meta", statusColor)}>{statusLabel}</span>
 				</button>
 				<Button
 					variant="ghost"

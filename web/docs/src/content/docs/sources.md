@@ -274,9 +274,11 @@ artifact and chunk counts, latest artifact/checkpoint timestamps, Discord
 partial-failure artifacts, partial and stale checkpoints, purge residue, and
 source-provenance graph row counts. Discord sources degrade when Signet has
 recorded fetch failures, partial checkpoints, stale checkpoints, deleted
-artifact residue, or orphan chunks. If diagnostics cannot read the backing
-tables, the source health reports `unhealthy` with error context rather than
-pretending the source is healthy.
+artifact residue, or orphan chunks. If the diagnostics themselves fail, the
+source health reports `unknown` with error context: Signet could not verify the
+source, so it reports neither healthy nor unhealthy, and the counts in that
+response are placeholders. Diagnostics read sources in bounded pages, so a
+large source does not exceed the database owner's per-result limit.
 
 On macOS, a protected source path denied with `EACCES` is reported as a
 permission issue instead of a transient filesystem failure. The source health

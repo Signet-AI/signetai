@@ -28,6 +28,10 @@ export class ViewportState {
 		this.targetZoom = initialZoom;
 	}
 
+	get restingZoom(): number {
+		return this.targetZoom;
+	}
+
 	worldToScreen(wx: number, wy: number): { x: number; y: number } {
 		return {
 			x: wx * this.zoom + this.panX,

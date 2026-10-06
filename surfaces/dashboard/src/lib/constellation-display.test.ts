@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { GraphSceneData } from "./graph-scene";
 import {
+	sourceDocumentTitle,
 	capGraphSceneData,
 	MAX_CONSTELLATION_ENTITY_LIMIT,
 	MAX_VISIBLE_CONSTELLATION_NODES,
@@ -42,5 +43,15 @@ describe("constellation display limits", () => {
 	test("matches the server entity bound and uses a finite total display bound", () => {
 		expect(MAX_CONSTELLATION_ENTITY_LIMIT).toBe(300);
 		expect(MAX_VISIBLE_CONSTELLATION_NODES).toBe(5_000);
+	});
+});
+
+describe("source document labels", () => {
+	test("show the document title without its source reference and agent suffix", () => {
+		expect(
+			sourceDocumentTitle("2017-01-09 — obsidian:obsidian:f03eb7369df99093:document:2017-01-09.md — default"),
+		).toBe("2017-01-09");
+		expect(sourceDocumentTitle("Plain title")).toBe("Plain title");
+		expect(sourceDocumentTitle(" — orphan suffix")).toBe(" — orphan suffix");
 	});
 });
