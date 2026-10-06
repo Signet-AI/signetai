@@ -238,6 +238,18 @@ describe("handoff limits", () => {
 });
 
 describe("admin routes", () => {
+	test("each key-management request spends the admin rate limit once", async () => {
+		if (!state.authSecret) throw new Error("expected auth secret");
+		const { createToken } = await import("../auth");
+		const admin = createToken(state.authSecret, { sub: "double-count-probe", scope: {}, role: "admin" }, 60);
+		const statuses: number[] = [];
+		for (let i = 0; i < 10; i += 1) {
+			statuses.push((await app.request("/api/auth/api-keys", { headers: bearer(admin) })).status);
+		}
+		expect(statuses).not.toContain(429);
+		expect((await app.request("/api/auth/api-keys", { headers: bearer(admin) })).status).toBe(429);
+	});
+
 	test("rejects an API key name that would bloat every session token", async () => {
 		if (!state.authSecret) throw new Error("expected auth secret");
 		const { createToken } = await import("../auth");

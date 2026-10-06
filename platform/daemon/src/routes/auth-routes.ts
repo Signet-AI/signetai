@@ -236,7 +236,6 @@ export function registerAuthRoutes(app: Hono): void {
 		requirePermissionWithRateLimit("admin", "admin", authAdminLimiter, authConfig)(c, next);
 
 	app.use("/api/auth/token", requireAdminAuth);
-	app.use("/api/auth/api-keys", requireAdminAuth);
 	app.use("/api/auth/api-keys/*", requireAdminAuth);
 
 	app.post("/api/auth/token", async (c) => {
