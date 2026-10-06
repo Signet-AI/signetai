@@ -77,7 +77,7 @@ type SettingsRead =
 
 const ENV_PREFIX = /^(?:SIGNET_[A-Z_]+=(?:'(?:[^']|'\\'')*'|[^\s'"]+)\s+)*/;
 const SIGNET_INVOCATION =
-	/^(?:'[^']*\/signet'|(?:[^\s'"]*\/)?signet)\s+hook\s+(?:session-start|user-prompt-submit|session-end)\s+-H\s+muse-code(?:\s+--codex-json)?$/;
+	/^(?:'(?:[^']|'\\'')*\/signet'|(?:[^\s'"]*\/)?signet)\s+hook\s+(?:session-start|user-prompt-submit|session-end)\s+-H\s+muse-code(?:\s+--codex-json)?$/i;
 
 function shellArg(value: string): string {
 	if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
@@ -179,8 +179,17 @@ export function mergeSignetMuseHooks(hooks: HookMap, ours: MuseHooks): Record<st
 	return next;
 }
 
+// Muse rejects the whole hook config for a non-integer timeout; other handler
+// problems (missing command, unknown type) only skip that handler.
+function isHookHandler(value: unknown): value is Record<string, unknown> {
+	return (
+		isJsonObject(value) &&
+		(value.timeout === undefined || (Number.isInteger(value.timeout) && Number(value.timeout) >= 0))
+	);
+}
+
 function isHookGroup(value: unknown): value is HookGroup {
-	return isJsonObject(value) && Array.isArray(value.hooks) && value.hooks.every(isJsonObject);
+	return isJsonObject(value) && Array.isArray(value.hooks) && value.hooks.every(isHookHandler);
 }
 
 function parseHooks(value: Record<string, unknown>): HookMap | string {
@@ -191,7 +200,9 @@ function parseHooks(value: Record<string, unknown>): HookMap | string {
 		for (const [index, group] of groups.entries()) {
 			// Muse disables every hook in the file when one group is malformed,
 			// so adding Signet's hooks next to it would report a false success.
-			if (!isHookGroup(group)) return `hooks.${event}[${index}] must be an object with a hooks array of objects`;
+			if (!isHookGroup(group)) {
+				return `hooks.${event}[${index}] must be an object whose hooks are objects with integer timeouts`;
+			}
 			parsed.push(group);
 		}
 		hooks[event] = parsed;
@@ -352,7 +363,13 @@ export class MuseCodeConnector extends BaseConnector {
 		const settings = readMuseSettings(settingsPath);
 		// An unreadable file can still hold Signet entries and credentials;
 		// report it as installed so it is not shown as cleanly disconnected.
-		if (settings.kind === "invalid") return readFileSync(settingsPath, "utf-8").includes("-H muse-code");
+		if (settings.kind === "invalid") {
+			try {
+				return readFileSync(settingsPath, "utf-8").includes("-H muse-code");
+			} catch {
+				return false;
+			}
+		}
 		if (settings.kind === "missing") return false;
 		const hasHooks = Object.values(settings.hooks).some((groups) =>
 			groups.some((group) => group.hooks.some(isSignetHandler)),

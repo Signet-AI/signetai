@@ -20,9 +20,9 @@ Muse requires `"schema_version": 1` in that file. When the file is missing, Sign
 - it is not valid JSON;
 - it lacks `schema_version: 1`;
 - `hooks` or `mcp_servers` is not an object;
-- any hook group is malformed.
+- a hook group is not an object with a `hooks` array of objects, or a handler `timeout` is not a non-negative integer.
 
-Muse rejects the first three outright, and one malformed group disables every hook in the file. Fix the file first. A symlinked `settings.json` is updated at its target.
+Muse rejects the first three outright, and either of the last problems disables every hook in the file. Other handler problems, such as a missing command, make Muse skip only that handler, so setup leaves them alone. Fix the file first. A symlinked `settings.json` is updated at its target.
 
 Signet detects Muse from its config directory, its data directory (`~/.local/share/muse`), or a `muse` binary on `PATH`.
 

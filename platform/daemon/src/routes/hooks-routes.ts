@@ -638,7 +638,9 @@ function registerSessionEnd(app: Hono): void {
 			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath, agentId);
 			if (conflict) return c.json(conflict);
 			const transcriptPath = parseOptionalString(body.transcriptPath);
-			if (transcriptPath) {
+			// A final assistant reply is a transcript write too, so it needs the
+			// same permission and agent scope as a transcript path.
+			if (transcriptPath || parseOptionalString(body.lastAssistantMessage)) {
 				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 				if (denied) return denied;
 				const scopedAgent = resolveScopedAgentId(c, agentId);

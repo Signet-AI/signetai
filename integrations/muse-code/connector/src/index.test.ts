@@ -92,6 +92,12 @@ describe("buildMuseHookCommand", () => {
 
 	test("recognizes only whole Signet invocations for this harness", () => {
 		expect(isSignetMuseHookCommand("'/opt/my tools/signet' hook session-end -H muse-code")).toBe(true);
+		expect(
+			isSignetMuseHookCommand(buildMuseHookCommand(["/opt/o'neil/signet"], "session-end", { SIGNET_PATH: "/a" })),
+		).toBe(true);
+		expect(
+			isSignetMuseHookCommand("/Applications/Signet.app/Contents/MacOS/Signet hook session-end -H muse-code"),
+		).toBe(true);
 		expect(isSignetMuseHookCommand("signet hook session-end -H muse-code-dev")).toBe(false);
 		expect(isSignetMuseHookCommand("wrapper.sh; signet hook session-end -H muse-code")).toBe(false);
 		expect(isSignetMuseHookCommand("signet hook session-start -H muse-code && notify-send done")).toBe(false);
@@ -173,6 +179,7 @@ describe("MuseCodeConnector", () => {
 			'{"schema_version":1,"hooks":[]}',
 			'{"schema_version":1,"hooks":{"PreToolUse":["junk"]}}',
 			'{"schema_version":1,"hooks":{"Stop":{"hooks":[]}}}',
+			'{"schema_version":1,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"true","timeout":"5"}]}]}}',
 		]) {
 			writeSettings(content);
 			const result = await connector.install(workspace());
