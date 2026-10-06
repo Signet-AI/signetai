@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { EXTERNAL_NODE } from "../platform/daemon/build-externals";
+import { NATIVE_BINARY_MAX_BYTES, NATIVE_DAEMON_JS_MAX_BYTES } from "../platform/daemon/src/native-release-limits";
 
 import {
 	collectManifestIssues,
@@ -322,6 +323,32 @@ describe("check-publish-manifests", () => {
 			reason:
 				"platforms must match npm wrapper support: expected darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64, got linux-x64",
 		});
+
+		expect(
+			collectNativeManifestIssues(
+				{
+					schemaVersion: 1,
+					version: "0.1.0",
+					assets: supportedPlatforms.map((platform) => ({
+						name: platform.startsWith("win32-") ? `signet-${platform}.exe` : `signet-${platform}`,
+						platform,
+						sha256: validSha,
+						size: platform === "linux-x64" ? NATIVE_BINARY_MAX_BYTES + 1 : 1,
+					})),
+					components: { daemonJs: { url: "x.tar.gz", sha256: validSha, size: NATIVE_DAEMON_JS_MAX_BYTES + 1 } },
+				},
+				supportedPlatforms,
+			),
+		).toEqual([
+			{
+				file: "dist/native/native-manifest.json",
+				reason: `asset linux-x64 is ${NATIVE_BINARY_MAX_BYTES + 1} bytes, above the ${NATIVE_BINARY_MAX_BYTES} byte updater limit`,
+			},
+			{
+				file: "dist/native/native-manifest.json",
+				reason: `component daemonJs is ${NATIVE_DAEMON_JS_MAX_BYTES + 1} bytes, above the ${NATIVE_DAEMON_JS_MAX_BYTES} byte updater limit`,
+			},
+		]);
 	});
 
 	test("validates native release package tarball wiring", () => {

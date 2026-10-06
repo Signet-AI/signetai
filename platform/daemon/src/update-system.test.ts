@@ -5,6 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { pathToFileURL } from "node:url";
+import { NATIVE_BINARY_MAX_BYTES } from "./native-release-limits";
 import { parseExecutableVersion, parseNativeReleaseManifest, verifyExecutableVersion } from "./update-install";
 import {
 	MAX_UPDATE_INTERVAL_SECONDS,
@@ -830,6 +831,22 @@ describe("native update validation", () => {
 			},
 		});
 		expect(() => parseNativeReleaseManifest(valid, "1.2.4", "darwin-arm64")).toThrow("version does not match");
+	});
+
+	it("accepts binaries above 256 MiB and names an oversized entry", () => {
+		const sha256 = "a".repeat(64);
+		const manifest = (size: number) =>
+			JSON.stringify({
+				schemaVersion: 1,
+				version: "1.2.3",
+				assets: [{ name: "signet-linux-x64", platform: "linux-x64", sha256, size }],
+			});
+
+		// v0.234.0 shipped a 270,124,512 byte linux-x64 binary.
+		expect(parseNativeReleaseManifest(manifest(270_124_512), "1.2.3", "linux-x64").asset.size).toBe(270_124_512);
+		expect(() => parseNativeReleaseManifest(manifest(NATIVE_BINARY_MAX_BYTES + 1), "1.2.3", "linux-x64")).toThrow(
+			`linux-x64 asset entry is ${NATIVE_BINARY_MAX_BYTES + 1} bytes, above the ${NATIVE_BINARY_MAX_BYTES} byte limit`,
+		);
 	});
 
 	it("verifies the exact version reported by the active path", async () => {

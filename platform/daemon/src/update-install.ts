@@ -4,6 +4,12 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, posix, win32 } from "node:path";
 import { type SignetUpdateTarget, getGlobalInstallCommand } from "@signet/core";
+import {
+	NATIVE_BINARY_MAX_BYTES,
+	NATIVE_CONNECTORS_MAX_BYTES,
+	NATIVE_DAEMON_JS_MAX_BYTES,
+	NATIVE_MANIFEST_MAX_BYTES,
+} from "./native-release-limits";
 
 export type UpdateLogCategory = "system" | "update";
 
@@ -75,10 +81,6 @@ export interface NativeReleaseSelection {
 }
 
 export const UPDATE_INSTALL_TIMEOUT_MS = 15 * 60_000;
-export const NATIVE_MANIFEST_MAX_BYTES = 1024 * 1024;
-export const NATIVE_BINARY_MAX_BYTES = 256 * 1024 * 1024;
-export const NATIVE_CONNECTORS_MAX_BYTES = 64 * 1024 * 1024;
-export const NATIVE_DAEMON_JS_MAX_BYTES = 128 * 1024 * 1024;
 export const VERSION_VERIFY_TIMEOUT_MS = 30_000;
 
 const MAX_COMMAND_OUTPUT_BYTES = 1024 * 1024;
@@ -279,17 +281,19 @@ function readManifestComponent(value: unknown, maxBytes: number, label: string):
 	const url = typeof value.url === "string" ? value.url.trim() : "";
 	const sha256 = typeof value.sha256 === "string" ? value.sha256.toLowerCase() : "";
 	const size = value.size;
-	if (
-		!url ||
-		!SHA256_PATTERN.test(sha256) ||
-		typeof size !== "number" ||
-		!Number.isSafeInteger(size) ||
-		size <= 0 ||
-		size > maxBytes
-	) {
+	if (!url) {
+		throw new UpdateInstallFailure("manifest_invalid", `Native manifest ${label} entry has no URL`);
+	}
+	if (!SHA256_PATTERN.test(sha256)) {
+		throw new UpdateInstallFailure("manifest_invalid", `Native manifest ${label} entry has an invalid SHA-256`);
+	}
+	if (typeof size !== "number" || !Number.isSafeInteger(size) || size <= 0) {
+		throw new UpdateInstallFailure("manifest_invalid", `Native manifest ${label} entry has an invalid size`);
+	}
+	if (size > maxBytes) {
 		throw new UpdateInstallFailure(
 			"manifest_invalid",
-			`Native manifest ${label} entry failed URL, checksum, or size validation`,
+			`Native manifest ${label} entry is ${size} bytes, above the ${maxBytes} byte limit`,
 		);
 	}
 	return { url, sha256, size };
