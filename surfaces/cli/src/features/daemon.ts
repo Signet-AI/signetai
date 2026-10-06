@@ -117,7 +117,17 @@ export async function launchDashboard(options: PathOptions, deps: Deps): Promise
 	});
 }
 async function signedInDashboardUrl(target: DashboardTarget): Promise<string> {
-	if (!target.hasCredential) return target.url;
+	const mode = await target.fetchDaemonResult<{ mode?: unknown }>("/api/mode");
+	if (!mode.ok) {
+		if (mode.reason === "offline" || mode.reason === "timeout") {
+			const hint = target.localWorkspace
+				? ""
+				: " Start it on that host, or unset SIGNET_DAEMON_URL and daemon.url to use a local daemon.";
+			console.log(chalk.yellow(`  No Signet daemon answered at ${target.url}.${hint}`));
+		}
+		return target.url;
+	}
+	if (mode.data.mode === "local" || !target.hasCredential) return target.url;
 	const result = await target.fetchDaemonResult<{ code?: unknown }>("/api/auth/handoff", { method: "POST" });
 	if (result.ok && typeof result.data.code === "string") {
 		return `${target.url}/#signet-handoff=${encodeURIComponent(result.data.code)}`;
@@ -131,7 +141,7 @@ async function signedInDashboardUrl(target: DashboardTarget): Promise<string> {
 				: result.reason === "offline" || result.reason === "timeout"
 					? "the daemon could not be reached"
 					: (result.error ?? `HTTP ${result.status ?? "error"}`);
-	console.log(chalk.dim(`  Could not open the dashboard signed in: ${reason}. Sign in on the page instead.`));
+	console.log(chalk.dim(`  Could not open the dashboard signed in: ${reason}. Sign in on the page if it asks.`));
 	return target.url;
 }
 

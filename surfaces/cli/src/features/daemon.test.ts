@@ -741,12 +741,15 @@ describe("launchDashboard", () => {
 					hasCredential: true,
 					fetchDaemonResult: async <T>(path: string, opts?: RequestInit) => {
 						requests.push({ path, method: opts?.method });
-						return { ok: true, data: { code: "abc-123" } as T };
+						return { ok: true, data: (path === "/api/mode" ? { mode: "team" } : { code: "abc-123" }) as T };
 					},
 				}),
 		});
 		await launchDashboard({}, deps);
-		expect(requests).toEqual([{ path: "/api/auth/handoff", method: "POST" }]);
+		expect(requests).toEqual([
+			{ path: "/api/mode", method: undefined },
+			{ path: "/api/auth/handoff", method: "POST" },
+		]);
 		expect(lines).toContain("OPEN:https://signet.example.com/#signet-handoff=abc-123");
 		expect(lines.filter((line) => !line.startsWith("OPEN:")).join("\n")).not.toContain("abc-123");
 	});
@@ -756,7 +759,10 @@ describe("launchDashboard", () => {
 			daemonTarget: () =>
 				dashboardTarget({
 					hasCredential: true,
-					fetchDaemonResult: async () => ({ ok: false, reason: "http", status: 401, error: "api key revoked" }),
+					fetchDaemonResult: async <T>(path: string) =>
+						path === "/api/mode"
+							? { ok: true as const, data: { mode: "team" } as T }
+							: { ok: false as const, reason: "http" as const, status: 401, error: "api key revoked" },
 				}),
 		});
 		await launchDashboard({}, deps);
@@ -765,19 +771,46 @@ describe("launchDashboard", () => {
 	});
 
 	it("does not request a handoff without a configured credential", async () => {
-		let requests = 0;
+		const paths: string[] = [];
 		const deps = dashboardDeps({
 			daemonTarget: () =>
 				dashboardTarget({
-					fetchDaemonResult: async () => {
-						requests += 1;
-						return { ok: false, reason: "offline" };
+					fetchDaemonResult: async <T>(path: string) => {
+						paths.push(path);
+						return { ok: true, data: { mode: "team" } as T };
 					},
 				}),
 		});
 		await launchDashboard({}, deps);
-		expect(requests).toBe(0);
+		expect(paths).toEqual(["/api/mode"]);
 		expect(lines).toContain("OPEN:http://127.0.0.1:3850");
+	});
+
+	it("skips the handoff quietly when the daemon needs no sign-in", async () => {
+		const paths: string[] = [];
+		const deps = dashboardDeps({
+			daemonTarget: () =>
+				dashboardTarget({
+					hasCredential: true,
+					fetchDaemonResult: async <T>(path: string) => {
+						paths.push(path);
+						return { ok: true, data: { mode: "local" } as T };
+					},
+				}),
+		});
+		await launchDashboard({}, deps);
+		expect(paths).toEqual(["/api/mode"]);
+		expect(lines.join("\n")).not.toContain("Could not open the dashboard signed in");
+		expect(lines).toContain("OPEN:http://127.0.0.1:3850");
+	});
+
+	it("says when no daemon answers at a remote target", async () => {
+		const deps = dashboardDeps({
+			daemonTarget: () => dashboardTarget({ url: "http://127.0.0.1:9999", localWorkspace: false }),
+		});
+		await launchDashboard({}, deps);
+		expect(lines.join("\n")).toContain("No Signet daemon answered at http://127.0.0.1:9999.");
+		expect(lines.join("\n")).toContain("unset SIGNET_DAEMON_URL and daemon.url");
 	});
 
 	it("prints a manual URL when the dashboard browser cannot be opened (#1477)", async () => {

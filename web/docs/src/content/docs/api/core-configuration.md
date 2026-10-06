@@ -18,8 +18,10 @@ same way protected routes validate it. In `local` mode, `authenticated` is
 always `false` and `claims` is `null`. `effectiveAccess` is `true` when the
 current request can use the dashboard without another login, including trusted
 localhost requests in `hybrid` mode. `error` is the reason a presented
-credential was rejected, such as `token expired`, `invalid api key`, or
-`api key revoked`, and `null` when none was presented or it was accepted.
+credential was rejected, such as `token expired`, `invalid api key`,
+`api key revoked`, or `credential could not be verified` when the key store is
+unavailable, and `null` when none was presented or it was accepted. Other open
+routes, such as `/health` and `/api/mode`, do not look up API keys.
 
 **Response**
 
@@ -109,8 +111,8 @@ their `expiresAt`.
 Mints a session as `POST /api/auth/session` does and holds it behind a
 single-use code that expires after 60 seconds. `signet dashboard` uses this
 route to open the dashboard signed in without putting a credential in the URL.
-At most 32 codes can be pending at once. Codes are held in daemon memory and do
-not survive a restart.
+At most 32 codes can be pending at once, and at most 4 for one credential.
+Codes are held in daemon memory and do not survive a restart.
 
 **Response**
 
