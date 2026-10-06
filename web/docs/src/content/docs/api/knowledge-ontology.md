@@ -769,8 +769,11 @@ purged.
 When a claim arrives for a slot whose active claim has a later evidence time
 (`validFrom`, else `occurredAt`), the incoming claim is recorded as already
 superseded by the active one and the result names it in
-`supersededByNewerEvidence`. Without times on both claims, the newest write
-replaces the current value as before.
+`supersededByNewerEvidence`. When the evidence times are equal (two updates on
+the same day) or neither claim has one, the claim whose cited source was
+captured later stays current, so the order Dreaming happens to file sources in
+does not decide the current value. A claim whose source has no capture time
+falls back to the newest write.
 
 Claim text that contains a relative time such as "yesterday", "last
 weekend", or "three weeks ago" and no absolute date is rejected before any

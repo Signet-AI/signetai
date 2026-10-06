@@ -3384,6 +3384,49 @@ describe("ontology proposals", () => {
 			expect(recalled.candidateIds).toContain(id);
 		});
 
+		it("orders same-day claims by when their sources were captured, not by write order", async () => {
+			getDbAccessor().withWriteTx((db) => {
+				const source = db.prepare(
+					`INSERT INTO memories
+					 (id, content, type, agent_id, visibility, memory_kind, created_at, updated_at)
+					 VALUES (?, ?, 'fact', 'default', 'global', 'episodic', ?, ?)`,
+				);
+				source.run(
+					"morning-source",
+					"I have 1250 followers now.",
+					"2023-05-25T05:26:00.000Z",
+					"2023-05-25T05:26:00.000Z",
+				);
+				source.run(
+					"later-source",
+					"I think I'm close to 1300 now.",
+					"2023-05-25T09:28:00.000Z",
+					"2023-05-25T09:28:00.000Z",
+				);
+			});
+			const followers = { ...slot, aspect: "social media", claim_key: "instagram_followers" };
+			const file = async (sourceId: string, value: string) =>
+				await applyOntologyOperation(getDbAccessor(), {
+					agentId: "default",
+					actor: "dreaming",
+					operation: "set_claim_value",
+					payload: { ...followers, value, valid_from: "2023-05-25" },
+					evidence: [{ source_ref: `memory:${sourceId}`, source_kind: "manual", source_id: sourceId }],
+					sourceKind: "memory",
+					sourceId,
+				});
+			const later = await file("later-source", "As of 2023-05-25 the user had close to 1,300 Instagram followers.");
+			const morning = await file("morning-source", "On 2023-05-25 the user had 1,250 Instagram followers.");
+			const laterId = later.result?.attributeId;
+			const morningId = morning.result?.attributeId;
+			if (typeof laterId !== "string" || typeof morningId !== "string")
+				throw new Error("attribute ids were not returned");
+
+			expect(morning.result?.supersededByNewerEvidence).toBe(laterId);
+			expect(attributeTime(laterId)?.status).toBe("active");
+			expect(attributeTime(morningId)).toMatchObject({ status: "superseded", superseded_by: laterId });
+		});
+
 		it("keeps the newer claim current when an older claim arrives later", async () => {
 			const residence = { ...slot, aspect: "home", claim_key: "city" };
 			const newer = await applyOntologyOperation(getDbAccessor(), {

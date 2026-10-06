@@ -16,7 +16,7 @@ import { runWriteTxAsync } from "./db-accessor";
 import { requireDependencyReason } from "./dependency-history";
 import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { classifyEntityQuality } from "./entity-quality";
-import { resolveStrictEpisodicSourceRef } from "./episodic-sources";
+import { readEpisodicSource, resolveStrictEpisodicSourceRef } from "./episodic-sources";
 import {
 	reconcileOntologyContradictionsInTx,
 	recordOntologyContradictionsForAttributeInTx,
@@ -483,6 +483,19 @@ function claimEvidenceTime(time: {
 	return time.valid_from ?? time.occurred_start;
 }
 
+function claimSourceCapturedAt(
+	db: ReadDb,
+	agentId: string,
+	sourceKind: string | null,
+	sourceId: string | null,
+): string | null {
+	if (!sourceKind || !sourceId) return null;
+	const capturedAt = readEpisodicSource(db, { agentId, from: `${sourceKind}:${sourceId}` })?.capturedAt;
+	if (!capturedAt) return null;
+	const ms = Date.parse(capturedAt);
+	return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
 function precisionSpanEnd(start: string, precision: ClaimTimePrecision | null): string {
 	const end = new Date(start);
 	if (precision === "day" || precision === "approximate") end.setUTCDate(end.getUTCDate() + 1);
@@ -585,7 +598,7 @@ async function getProposalReadRow(accessor: DbAccessor, id: string, agentId: str
 				| undefined;
 			return row ?? null;
 		},
-		{ siteToken: "ontology-proposals.ts:581" },
+		{ siteToken: "ontology-proposals.ts:594" },
 	);
 }
 
@@ -1250,7 +1263,7 @@ function applySetClaimValue(
 	const slot = db
 		.prepare(
 			`SELECT id, memory_id, content, normalized_content, version, version_root_id, kind, status,
-			        occurred_start, valid_from
+			        occurred_start, valid_from, source_kind, source_id
 			 FROM entity_attributes
 			 WHERE aspect_id = ?
 			   AND agent_id = ?
@@ -1270,6 +1283,8 @@ function applySetClaimValue(
 		status: string;
 		occurred_start: string | null;
 		valid_from: string | null;
+		source_kind: string | null;
+		source_id: string | null;
 	}>;
 	const active = slot.filter((row) => row.status === "active");
 	const normalized = canonical(value);
@@ -1315,15 +1330,21 @@ function applySetClaimValue(
 	const reviewAfter = readReviewAfter(payload);
 	const time = readClaimTime(payload);
 	const incomingTime = claimEvidenceTime({ valid_from: time.validFrom, occurred_start: time.occurredStart });
-	const newerActive =
-		incomingTime === null
-			? undefined
-			: active
-					.filter((row) => {
-						const activeTime = claimEvidenceTime(row);
-						return activeTime !== null && activeTime > incomingTime;
-					})
-					.sort((a, b) => (claimEvidenceTime(b) ?? "").localeCompare(claimEvidenceTime(a) ?? ""))[0];
+	const incomingCapturedAt = claimSourceCapturedAt(db, agentId, proposal.source_kind, proposal.source_id);
+	const newerActive = active
+		.filter((row) => {
+			const activeTime = claimEvidenceTime(row);
+			if (activeTime !== incomingTime) return activeTime !== null && incomingTime !== null && activeTime > incomingTime;
+			const activeCapturedAt = claimSourceCapturedAt(db, agentId, row.source_kind, row.source_id);
+			return activeCapturedAt !== null && incomingCapturedAt !== null && activeCapturedAt > incomingCapturedAt;
+		})
+		.sort(
+			(a, b) =>
+				(claimEvidenceTime(b) ?? "").localeCompare(claimEvidenceTime(a) ?? "") ||
+				(claimSourceCapturedAt(db, agentId, b.source_kind, b.source_id) ?? "").localeCompare(
+					claimSourceCapturedAt(db, agentId, a.source_kind, a.source_id) ?? "",
+				),
+		)[0];
 	db.prepare(
 		`INSERT INTO entity_attributes
 		 (id, aspect_id, agent_id, kind, content, normalized_content,
@@ -2464,7 +2485,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2465" },
+		{ siteToken: "ontology-proposals.ts:2486" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2502,7 +2523,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2482" },
+		{ siteToken: "ontology-proposals.ts:2503" },
 	);
 }
 
@@ -2560,7 +2581,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2514" },
+		{ siteToken: "ontology-proposals.ts:2535" },
 	);
 }
 
@@ -2655,7 +2676,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2598" },
+		{ siteToken: "ontology-proposals.ts:2619" },
 	);
 }
 
@@ -3076,7 +3097,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:3078",
+		siteToken: "ontology-proposals.ts:3099",
 	});
 }
 
@@ -3087,7 +3108,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:3089",
+		siteToken: "ontology-proposals.ts:3110",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3138,7 +3159,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3139" },
+		{ siteToken: "ontology-proposals.ts:3160" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {
