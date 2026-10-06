@@ -1,9 +1,9 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, type ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Dialog as DialogPrimitive, Popover } from "radix-ui";
 import { SignetMark } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { Field, Input } from "@/components/ui/field";
+import { Input } from "@/components/ui/field";
 import {
 	type Session,
 	type SignInResult,
@@ -57,27 +57,30 @@ function SignInForm({ session }: { session: SignedOut }) {
 
 	const message = waiting > 0 ? `Too many attempts. Try again in ${waiting}s.` : (error ?? session.reason);
 	return (
-		<form className="flex flex-col gap-6" onSubmit={submit} aria-label="Sign in to Signet">
-			<div className="flex flex-col items-center gap-1 text-center">
-				<h1 className="m-0 text-2xl font-semibold tracking-tight">
+		<form className="flex flex-col gap-5" onSubmit={submit} aria-label="Sign in to Signet">
+			<div className="flex flex-col items-center gap-3 text-center">
+				<h1 className="m-0 text-[28px] leading-[1.1] font-medium tracking-[-0.035em]">
 					{session.expired ? "Sign in again" : "Sign in to Signet"}
 				</h1>
-				<p className="m-0 text-sm text-balance text-muted-foreground">{describeTarget(session.mode)}</p>
+				<p className="m-0 rounded-full border px-2.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+					{describeTarget(session.mode)}
+				</p>
 			</div>
 			{message && (
-				<p role="alert" className="m-0 text-[12px] text-destructive">
+				<p role="alert" className="m-0 text-center text-[13px] text-destructive">
 					{message}
 				</p>
 			)}
 			{useKey ? (
-				<Field
+				<FormField
+					id="signet-sign-in-key"
 					label="API key"
-					htmlFor="signet-sign-in-key"
-					hint="Signet exchanges the key for a browser session. The key itself is not stored."
+					hint="Signet trades the key for a browser session and doesn't store the key."
 				>
 					<Input
 						id="signet-sign-in-key"
 						type="password"
+						className="h-9 text-[13px]"
 						autoComplete="off"
 						spellCheck={false}
 						value={key}
@@ -85,46 +88,48 @@ function SignInForm({ session }: { session: SignedOut }) {
 						required
 						autoFocus
 					/>
-				</Field>
+				</FormField>
 			) : (
 				<>
-					<Field label="Username" htmlFor="signet-sign-in-username">
+					<FormField id="signet-sign-in-username" label="Username">
 						<Input
 							id="signet-sign-in-username"
+							className="h-9 text-[13px]"
 							autoComplete="username"
 							value={username}
 							onChange={(event) => setUsername(event.target.value)}
 							required
 							autoFocus={!username}
 						/>
-					</Field>
-					<Field label="Password" htmlFor="signet-sign-in-password">
+					</FormField>
+					<FormField id="signet-sign-in-password" label="Password">
 						<Input
 							id="signet-sign-in-password"
 							type="password"
+							className="h-9 text-[13px]"
 							autoComplete="current-password"
 							value={secret}
 							onChange={(event) => setSecret(event.target.value)}
 							required
 							autoFocus={Boolean(username)}
 						/>
-					</Field>
+					</FormField>
 				</>
 			)}
-			<Button type="submit" disabled={busy || waiting > 0} className="w-full">
+			<Button type="submit" disabled={busy || waiting > 0} className="mt-1 h-9 w-full rounded-full">
 				{busy ? "Signing in…" : "Sign in"}
 			</Button>
 			{password ? (
 				<>
 					<div className="flex items-center gap-3 text-xs text-muted-foreground">
 						<span className="h-px flex-1 bg-border" />
-						Or
+						or
 						<span className="h-px flex-1 bg-border" />
 					</div>
 					<Button
 						type="button"
 						variant="outline"
-						className="w-full"
+						className="h-9 w-full rounded-full"
 						onClick={() => {
 							setUseKey(!useKey);
 							setError(null);
@@ -134,7 +139,7 @@ function SignInForm({ session }: { session: SignedOut }) {
 					</Button>
 				</>
 			) : (
-				<p className="m-0 text-center text-sm text-muted-foreground">
+				<p className="m-0 text-center text-[13px] text-muted-foreground">
 					Password sign-in is not configured on this daemon.
 				</p>
 			)}
@@ -147,22 +152,52 @@ function SignInForm({ session }: { session: SignedOut }) {
 	);
 }
 
+function FormField({ id, label, hint, children }: { id: string; label: string; hint?: string; children: ReactNode }) {
+	return (
+		<div className="flex flex-col gap-1.5">
+			<label htmlFor={id} className="text-[13px] font-medium">
+				{label}
+			</label>
+			{children}
+			{hint && <p className="m-0 text-xs text-muted-foreground">{hint}</p>}
+		</div>
+	);
+}
+
+const HERO_SHADE = [
+	"linear-gradient(180deg, rgba(4, 15, 26, 0) 55%, rgba(4, 15, 26, 0.82) 100%)",
+	"linear-gradient(90deg, rgba(4, 15, 26, 0.25) 0%, rgba(4, 15, 26, 0) 40%)",
+].join(", ");
+
 export function SignInScreen({ session }: { session: SignedOut }) {
 	return (
 		<div className="grid h-full min-h-0 overflow-auto bg-background text-foreground lg:grid-cols-2">
-			<div className="flex flex-col gap-4 p-6 md:p-10">
-				<div className="flex items-center justify-center gap-2 font-medium md:justify-start">
-					<SignetMark className="h-[19px] w-4 shrink-0" aria-hidden="true" />
-					Signet
+			<div className="flex flex-col p-6 md:p-10">
+				<div className="flex items-center justify-center gap-2.5 md:justify-start">
+					<SignetMark className="h-6 w-5 shrink-0" aria-hidden="true" />
+					<span className="text-[15px] font-medium tracking-tight">Signet</span>
 				</div>
-				<div className="flex flex-1 items-center justify-center">
-					<div className="w-full max-w-xs">
+				<div className="flex flex-1 items-center justify-center py-10">
+					<div className="w-full max-w-[340px]">
 						<SignInForm session={session} />
 					</div>
 				</div>
 			</div>
-			<div className="relative hidden bg-muted lg:block">
-				<img src={heroBackground} alt="" className="absolute inset-0 h-full w-full object-cover object-[72%_center]" />
+			<div className="hidden p-3 lg:block">
+				<div
+					className="relative h-full overflow-hidden rounded-[20px] bg-[#040f1a]"
+					style={{
+						backgroundImage: `${HERO_SHADE}, url(${heroBackground})`,
+						backgroundSize: "cover",
+						backgroundPosition: "84% 50%",
+					}}
+				>
+					<p className="absolute inset-x-10 bottom-10 m-0 text-[clamp(28px,2.7vw,44px)] leading-[1] font-medium tracking-[-0.055em] text-white">
+						The memory layer
+						<br />
+						<span className="text-[#a9b8f4]">for every agent you use.</span>
+					</p>
+				</div>
 			</div>
 		</div>
 	);
