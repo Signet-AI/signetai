@@ -98,6 +98,7 @@ import {
 } from "./dreaming-live-events";
 import { countTokens } from "./tokenizer";
 import { dreamingScopeKey, renderDreamingHistoryForPass } from "./dreaming-history";
+import { detectLocalTimeZone } from "../memory-config";
 
 export type DreamingMode = "incremental" | "compact" | "incremental-hygiene" | "incremental-content";
 
@@ -1135,6 +1136,27 @@ ${attention}
 </pending_attention>`;
 }
 
+export function dreamingPassClock(now: Date, timeZone: string): string {
+	const parts = Object.fromEntries(
+		new Intl.DateTimeFormat("en-CA", {
+			timeZone,
+			weekday: "long",
+			year: "numeric",
+			month: "2-digit",
+			day: "2-digit",
+			hour: "2-digit",
+			minute: "2-digit",
+			hourCycle: "h23",
+			timeZoneName: "longOffset",
+		})
+			.formatToParts(now)
+			.map((part) => [part.type, part.value]),
+	);
+	return `<current_time>
+It is now ${parts.weekday}, ${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${timeZone} (${parts.timeZoneName}). Use this for what is current, upcoming, or past due. Relative times inside evidence still resolve against that source's capturedAt, not this time.
+</current_time>`;
+}
+
 const ATTENTION_KINDS_BY_FOCUS: Readonly<Record<"hygiene" | "content" | "all", readonly string[]>> = {
 	hygiene: ["hygiene"],
 	content: ["review_due", "contested_claim", "evidence_requeue", "surprisal"],
@@ -1925,7 +1947,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 			prompt,
 			await renderDreamingHistoryForPass(accessor, agentId, historyScopes),
 			await renderPendingDreamingAttention(accessor, historyScopes, mode),
-		);
+		).concat("\n\n", dreamingPassClock(new Date(), detectLocalTimeZone()));
 		logger.info("dreaming", "Starting agentic dreaming pass", {
 			mode,
 			promptChars: passPrompt.length,

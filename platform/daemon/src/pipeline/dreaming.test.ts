@@ -14,6 +14,7 @@ import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from
 import { countTokens, resetTokenizerStats, tokenizerStats } from "../pipeline/tokenizer";
 import {
 	DREAMING_AGENT_PROMPT,
+	dreamingPassClock,
 	dreamingPassPrompt,
 	DREAMING_CONTENT_AGENT_PROMPT,
 	DREAMING_FAILURE_HALT_THRESHOLD,
@@ -554,7 +555,11 @@ describe("Dreaming", () => {
 			);
 		const result = await run();
 		expect(result.summary).toBe("Done");
-		expect(prompt).toBe(dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending"));
+		expect(
+			prompt.startsWith(
+				`${dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
+			),
+		).toBe(true);
 		const firstDelivery = (await getDreamingToolCalls(accessor, AGENT, result.passId)).find(
 			(call) => call.toolName === "search_evidence",
 		);
@@ -1980,7 +1985,11 @@ describe("Dreaming", () => {
 		);
 
 		expect(result.summary).toBe("Reviewed due claim");
-		expect(prompt).toBe(dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending"));
+		expect(
+			prompt.startsWith(
+				`${dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
+			),
+		).toBe(true);
 		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(1);
 	});
 
@@ -2101,7 +2110,11 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental",
 		);
-		expect(prompt).toBe(dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending"));
+		expect(
+			prompt.startsWith(
+				`${dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
+			),
+		).toBe(true);
 		expect(toolNames).toEqual(
 			expect.arrayContaining(["search_entities", "get_entity", "list_aspect_claims", "zoom_history", "attention_list"]),
 		);
@@ -2536,6 +2549,18 @@ describe("Dreaming", () => {
 		});
 	});
 
+	it("tells a pass the local date and time without changing how evidence times resolve", () => {
+		expect(dreamingPassClock(new Date("2026-10-06T00:42:00Z"), "America/Denver")).toBe(`<current_time>
+It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what is current, upcoming, or past due. Relative times inside evidence still resolve against that source's capturedAt, not this time.
+</current_time>`);
+		expect(dreamingPassClock(new Date("2026-01-06T00:42:00Z"), "America/Denver")).toContain(
+			"Monday, 2026-01-05 17:42 America/Denver (GMT-07:00)",
+		);
+		expect(dreamingPassClock(new Date("2026-10-06T00:42:00Z"), "UTC")).toContain(
+			"Tuesday, 2026-10-06 00:42 UTC (GMT+00:00)",
+		);
+	});
+
 	it("carries compacted pass history into a later pass", async () => {
 		seedSummary(db, "runbook-summary", "The deployment review is deferred pending an owner.", 10);
 		const first = await runDreamingAgentPass(
@@ -2599,13 +2624,15 @@ describe("Dreaming", () => {
 			[AGENT],
 			"compact",
 		);
-		expect(prompt).toBe(
-			dreamingPassPrompt(
-				DREAMING_AGENT_PROMPT,
-				"0+1|Deferred the deployment review until an owner is confirmed.",
-				"none pending",
+		expect(
+			prompt.startsWith(
+				`${dreamingPassPrompt(
+					DREAMING_AGENT_PROMPT,
+					"0+1|Deferred the deployment review until an owner is confirmed.",
+					"none pending",
+				)}\n\n<current_time>`,
 			),
-		);
+		).toBe(true);
 	});
 
 	it("offers the memory-head tools only to content passes", async () => {
@@ -3243,9 +3270,11 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-		expect(contentPrompt).toBe(
-			dreamingPassPrompt(DREAMING_CONTENT_AGENT_PROMPT, "(no earlier passes)", "none pending"),
-		);
+		expect(
+			contentPrompt.startsWith(
+				`${dreamingPassPrompt(DREAMING_CONTENT_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>`,
+			),
+		).toBe(true);
 		expect(contentPrompt).not.toContain("Work the pending hygiene records listed in <pending_attention>");
 		expect(contentPrompt).toContain("kind=surprisal");
 		expect(contentPrompt).toContain("never cite attention:<id>");

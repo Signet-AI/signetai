@@ -817,7 +817,9 @@ Each pass prompt also carries the pending attention for the pass's scopes
 (hygiene, review_due, contested_claim, evidence_requeue, and surprisal, as fits
 the pass mode), up to 20 records per kind with long text bounded, so a pass
 works its queue without polling `attention_list`. `attention_list` remains for
-kinds marked `"more": true` and for re-checking after the pass flags something.
+kinds marked `"more": true` and for re-checking after the pass flags something. The prompt ends with the current date and time in the daemon's local timezone,
+for judging what is current, upcoming, or past due; relative times inside
+evidence still resolve against each source's `capturedAt`.
 
 `memory_head_commit` is the sole working-memory publication capability. Submit
 its complete retained entry set with exact source/quote support and the revision
