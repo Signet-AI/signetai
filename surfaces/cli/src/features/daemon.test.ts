@@ -804,6 +804,19 @@ describe("launchDashboard", () => {
 		expect(lines).toContain("OPEN:http://127.0.0.1:3850");
 	});
 
+	it("explains when the daemon cannot report its auth mode", async () => {
+		const deps = dashboardDeps({
+			daemonTarget: () =>
+				dashboardTarget({
+					hasCredential: true,
+					fetchDaemonResult: async () => ({ ok: false, reason: "http", status: 503, error: "server initializing" }),
+				}),
+		});
+		await launchDashboard({}, deps);
+		expect(lines.join("\n")).toContain("(server initializing). Opening it anyway.");
+		expect(lines).toContain("OPEN:http://127.0.0.1:3850");
+	});
+
 	it("says when no daemon answers at a remote target", async () => {
 		const deps = dashboardDeps({
 			daemonTarget: () => dashboardTarget({ url: "http://127.0.0.1:9999", localWorkspace: false }),

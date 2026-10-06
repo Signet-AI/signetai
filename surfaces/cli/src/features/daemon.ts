@@ -124,6 +124,9 @@ async function signedInDashboardUrl(target: DashboardTarget): Promise<string> {
 				? ""
 				: " Start it on that host, or unset SIGNET_DAEMON_URL and daemon.url to use a local daemon.";
 			console.log(chalk.yellow(`  No Signet daemon answered at ${target.url}.${hint}`));
+		} else {
+			const detail = mode.error ?? `HTTP ${mode.status ?? "error"}`;
+			console.log(chalk.dim(`  Could not check how ${target.url} signs in (${detail}). Opening it anyway.`));
 		}
 		return target.url;
 	}
