@@ -7,8 +7,9 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-06
-- Features: show sample skills in demo mode; add the Skills library; make the memory graph readable and navigable; scale the memory chat and calm the graph; bring Dreams up to Home's polish; pin the sidebar toggle in the header; put the sidebar toggle in the content corner; move the sidebar toggle to the window corner; let the sidebar expand to show page names; anchor the brand where header and sidebar meet; explain source problems where they appear; compact the home System column; scroll recent memories in place; raise the daily brief and quiet the lists; unify home section headers and status; responsive home layout and type scale.
-- Bug fixes: read multiline skill descriptions from frontmatter; restore graph layout and keep the inspector clear of chat; smooth the chat dock to sidebar transition; calmer Dreams and correct pass times; page health reads and report failed checks as unknown.
+- Features: show what a credential may do, manage keys; warn before sessions end, count down retries; report effective permissions in whoami; sign in when the daemon requires auth; show sample skills in demo mode; add the Skills library; make the memory graph readable and navigable; scale the memory chat and calm the graph; bring Dreams up to Home's polish; pin the sidebar toggle in the header; put the sidebar toggle in the content corner; move the sidebar toggle to the window corner; let the sidebar expand to show page names; anchor the brand where header and sidebar meet; explain source problems where they appear; compact the home System column; scroll recent memories in place; raise the daily brief and quiet the lists; unify home section headers and status; responsive home layout and type scale.
+- Bug fixes: count key management against the admin limit once; count only usable keys as active; address review of permission gating; list a new API key once; spend fewer admin calls on API keys; return 403 and 429 from combined auth guards; say why the auth mode check failed; skip handoff in local mode, flag dead targets; bound session rechecks, follow other tabs; keep open paths off the key database; redeem handoff links in an open tab; open the resolved daemon in signet dashboard; verify API keys on whoami, add session exchange; read multiline skill descriptions from frontmatter; restore graph layout and keep the inspector clear of chat; smooth the chat dock to sidebar transition; calmer Dreams and correct pass times; page health reads and report failed checks as unknown.
+- Docs: cover dashboard key management and permission states; add a Teams guide for shared daemons; document dashboard sign-in and session routes.
 
 ### 2026-10-05
 - Features: redesign homepage and blog; add Notion source provider; report blocked layout upgrades in status; create new workspaces on layout v2; upgrade v1 workspaces to v2 in place; Liquid Glass macOS app icon via Icon Composer.
@@ -40,6 +41,40 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: show dashboard onboarding screenshot.
 
 ## Release Ledger
+
+## [0.235.0] - 2026-10-06
+
+Release summary: 4 features, 13 bug fixes, and 3 docs updates.
+Tag range: `v0.234.0..v0.235.0`.
+
+### Features
+
+- **dashboard**: show what a credential may do, manage keys
+- **dashboard**: warn before sessions end, count down retries
+- **daemon**: report effective permissions in whoami
+- **dashboard**: sign in when the daemon requires auth
+
+### Bug Fixes
+
+- **daemon**: count key management against the admin limit once
+- **dashboard**: count only usable keys as active
+- **dashboard**: address review of permission gating
+- **dashboard**: list a new API key once
+- **dashboard**: spend fewer admin calls on API keys
+- **daemon**: return 403 and 429 from combined auth guards
+- **cli**: say why the auth mode check failed
+- **cli**: skip handoff in local mode, flag dead targets
+- **dashboard**: bound session rechecks, follow other tabs
+- **daemon**: keep open paths off the key database
+- **dashboard**: redeem handoff links in an open tab
+- **cli**: open the resolved daemon in signet dashboard
+- **daemon**: verify API keys on whoami, add session exchange
+
+### Docs
+
+- cover dashboard key management and permission states
+- add a Teams guide for shared daemons
+- document dashboard sign-in and session routes
 
 ## [0.234.0] - 2026-10-06
 
