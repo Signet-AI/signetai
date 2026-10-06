@@ -137,6 +137,43 @@ if (!process.env.SIGNET_SESSION_TEST_CHILD) {
 			expect(session.currentSession()).toEqual({ kind: "open", mode: "local" });
 		});
 
+		test("a browser clock ahead of the daemon does not spin the expiry timer", async () => {
+			localStorage.setItem(session.TOKEN_KEY, "session-skewed");
+			const past = whoami({
+				authenticated: true,
+				effectiveAccess: true,
+				claims: { sub: "api-key:k1", role: "agent", scope: {}, iat: 1, exp: Math.floor(Date.now() / 1000) - 30 },
+			});
+			handler = () => past;
+			calls.length = 0;
+			await session.refreshSession();
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(calls.filter((call) => call.path === "/api/auth/whoami").length).toBeLessThanOrEqual(2);
+			handler = () => whoami({ authenticated: false, effectiveAccess: false, error: null });
+			await session.signOut();
+		});
+
+		test("follows a sign-in from another tab", async () => {
+			handler = () => signedIn;
+			localStorage.setItem(session.TOKEN_KEY, "session-other-tab");
+			expect(session.currentSession().kind).toBe("signed-out");
+			window.dispatchEvent(new window.StorageEvent("storage", { key: session.TOKEN_KEY }));
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(session.currentSession().kind).toBe("signed-in");
+		});
+
+		test("a token written during a check is checked instead of being discarded", async () => {
+			localStorage.setItem(session.TOKEN_KEY, "session-old");
+			handler = (_path, init) => {
+				if (header(init, "Authorization") === "Bearer session-new") return signedIn;
+				localStorage.setItem(session.TOKEN_KEY, "session-new");
+				return whoami({ authenticated: false, effectiveAccess: false, error: "token expired" });
+			};
+			await session.refreshSession();
+			expect(localStorage.getItem(session.TOKEN_KEY)).toBe("session-new");
+			expect(session.currentSession().kind).toBe("signed-in");
+		});
+
 		test("an unreachable daemon is not mistaken for signed out", async () => {
 			globalThis.fetch = (async () => {
 				throw new TypeError("connection refused");

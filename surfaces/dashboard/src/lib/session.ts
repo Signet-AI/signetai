@@ -2,6 +2,8 @@ import { useSyncExternalStore } from "react";
 export const TOKEN_KEY = "signet-token";
 const HANDOFF_PARAM = "signet-handoff";
 const MAX_TIMER_MS = 2 ** 31 - 1;
+const MIN_RECHECK_MS = 5_000;
+const MAX_RECHECK_MS = 300_000;
 
 export interface SignInProvider {
 	readonly id: string;
@@ -40,6 +42,8 @@ let signedInOnce = false;
 let pendingReason: string | null = null;
 let refreshing: Promise<void> | null = null;
 let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+let scheduledExpiry = 0;
+let recheck = 0;
 const listeners = new Set<() => void>();
 
 export function readToken(): string | null {
@@ -67,7 +71,10 @@ function set(next: Session): void {
 	clearTimeout(expiryTimer);
 	if (next.kind === "signed-in") {
 		signedInOnce = true;
-		const wait = Math.min(Math.max(next.identity.expiresAt - Date.now() + 1_000, 0), MAX_TIMER_MS);
+		const { expiresAt } = next.identity;
+		recheck = expiresAt === scheduledExpiry ? Math.min(Math.max(recheck * 2, MIN_RECHECK_MS), MAX_RECHECK_MS) : 0;
+		scheduledExpiry = expiresAt;
+		const wait = Math.min(Math.max(expiresAt - Date.now() + 1_000, recheck), MAX_TIMER_MS);
 		expiryTimer = setTimeout(() => void refreshSession(), wait);
 	}
 	for (const listener of listeners) listener();
@@ -121,9 +128,10 @@ function describeRejection(error: string | null, fallback: string): string {
 	return fallback;
 }
 
-async function check(): Promise<void> {
+async function check(retry = true): Promise<void> {
 	const token = readToken();
 	const res = await request("/api/auth/whoami", { headers: authHeaders() });
+	if (retry && readToken() !== token) return check(false);
 	if (res?.status !== 200 || !isRecord(res.body)) {
 		set({ kind: "unreachable", error: res ? `Signet answered with HTTP ${res.status}.` : "Signet is not reachable." });
 		return;
@@ -140,7 +148,7 @@ async function check(): Promise<void> {
 		set({ kind: "open", mode });
 		return;
 	}
-	if (token) writeToken(null);
+	if (token && readToken() === token) writeToken(null);
 	const reason =
 		pendingReason ??
 		(token ? describeRejection(text(body.error), "The saved credential was rejected. Sign in again.") : null);
@@ -179,6 +187,9 @@ export function startSession(): Promise<void> {
 	if (!demo && typeof window !== "undefined") {
 		window.addEventListener("hashchange", () => {
 			if (location.hash.includes(`${HANDOFF_PARAM}=`)) void redeemHandoff().then(refreshSession);
+		});
+		window.addEventListener("storage", (event) => {
+			if (event.key === TOKEN_KEY || event.key === null) void refreshSession();
 		});
 	}
 	return boot;
