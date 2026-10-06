@@ -11,12 +11,23 @@ Auth, config, and identity endpoints.
 
 ### GET /api/auth/whoami
 
-Returns the identity and claims of the current request's token. This route is
-open so the dashboard can determine whether to show the login screen; if an
-`Authorization` header is present, the token is validated opportunistically. In
-`local` mode, `authenticated` is always `false` and `claims` is `null`.
-`effectiveAccess` is `true` when the current request can use the dashboard
-without another login, including trusted localhost requests in `hybrid` mode.
+Returns the identity and claims of the current request's credential. This route
+is open so the dashboard can determine whether to show the login screen; if an
+`Authorization` header is present, the signed token or API key is validated the
+same way protected routes validate it. In `local` mode, `authenticated` is
+always `false` and `claims` is `null`. `effectiveAccess` is `true` when the
+current request can use the dashboard without another login, including trusted
+localhost requests in `hybrid` mode. `error` is the reason a presented
+credential was rejected, such as `token expired`, `invalid api key`,
+`api key revoked`, or `credential could not be verified` when the key store is
+unavailable, and `null` when none was presented or it was accepted.
+`permissions` lists what the daemon's policy grants this request: every
+permission in `local` mode or for trusted localhost requests in `hybrid` mode,
+otherwise the permissions the credential's role and permission list both allow.
+Clients can use it to show what a credential may do; the daemon still checks
+each route. `claims.name`, when present, is a display name: the API key's name,
+or the username for password sign-in. Other open
+routes, such as `/health` and `/api/mode`, do not look up API keys.
 
 **Response**
 
@@ -25,6 +36,7 @@ without another login, including trusted localhost requests in `hybrid` mode.
   "authenticated": true,
   "claims": {
     "sub": "token:operator",
+    "name": "ci-runner",
     "role": "operator",
     "scope": { "project": "my-project" },
     "iat": 1740000000,
@@ -32,6 +44,8 @@ without another login, including trusted localhost requests in `hybrid` mode.
   },
   "trustedLocal": false,
   "effectiveAccess": true,
+  "error": null,
+  "permissions": ["remember", "recall", "modify", "forget", "recover", "documents", "connectors", "diagnostics", "analytics"],
   "mode": "team",
   "providers": [
     { "id": "password", "type": "password", "enabled": true, "username": "admin" },
@@ -72,6 +86,67 @@ admin session bearer token. Rate-limited to 5 attempts/minute.
 
 Returns `401` for invalid credentials, `429` when rate-limited, and `503` when
 password login has not been configured.
+
+### POST /api/auth/session
+
+Exchanges the request's credential, a signed token or an API key, for a session
+token. Requires a valid credential. The session copies the credential's `sub`,
+`role`, `scope`, and `permissions`, so it can never grant more than the
+credential that minted it. It expires after `auth.sessionTokenTtlSeconds` or
+when the presented credential expires, whichever comes first. The dashboard uses
+this route so the browser stores a session instead of an API key.
+
+**Response**
+
+```json
+{
+  "token": "<token>",
+  "expiresAt": "2026-02-22T10:00:00.000Z",
+  "role": "agent",
+  "sub": "api-key:key_..."
+}
+```
+
+Returns `401` when no valid credential is presented or the credential has
+already expired.
+
+Session tokens are not tracked by the daemon. Revoking an API key prevents new
+sessions from it but does not end sessions already minted from it; those end at
+their `expiresAt`.
+
+### POST /api/auth/handoff
+
+Mints a session as `POST /api/auth/session` does and holds it behind a
+single-use code that expires after 60 seconds. `signet dashboard` uses this
+route to open the dashboard signed in without putting a credential in the URL.
+At most 32 codes can be pending at once, and at most 4 for one credential.
+Codes are held in daemon memory and do not survive a restart.
+
+**Response**
+
+```json
+{ "code": "<code>", "expiresAt": "2026-02-22T10:00:00.000Z" }
+```
+
+Returns `401` without a valid credential and `429` when too many codes are
+pending.
+
+### POST /api/auth/handoff/redeem
+
+Open route that returns the session held behind a handoff code, once. Shares
+the login rate limit.
+
+**Request body**
+
+```json
+{ "code": "<code>" }
+```
+
+**Response**
+
+Same shape as `POST /api/auth/session`. Returns `400` when `code` is missing or
+not a string, `401` when the code is unknown, expired, or already redeemed, and
+`429` when rate-limited.
 
 ### GET /api/auth/sso/start
 ### GET /api/auth/sso/callback
@@ -163,7 +238,7 @@ stored hashed at rest.
 }
 ```
 
-`name` is required. `role` defaults to `agent` and must be one of `admin`,
+`name` is required, at most 128 characters. `role` defaults to `agent` and must be one of `admin`,
 `operator`, `agent`, or `readonly` when provided. `connector`, `harness`,
 `agentId`, `allowedProjects`, `scope`, `permissions`, and `expiresAt` are
 optional. `agentId` is connector metadata; API callers should also set

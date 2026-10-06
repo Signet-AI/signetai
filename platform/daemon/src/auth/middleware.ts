@@ -24,6 +24,7 @@ export function isAuthOpenPath(path: string): boolean {
 	if (path === "/health" || path === "/health/live" || path === "/health/ready") return true;
 	if (path === "/api/mode") return true;
 	if (path === "/api/auth/login" || path === "/api/auth/methods" || path === "/api/auth/whoami") return true;
+	if (path === "/api/auth/handoff/redeem") return true;
 	if (path.startsWith("/api/auth/sso/") || path.startsWith("/api/auth/saml/")) return true;
 	return false;
 }
@@ -51,23 +52,31 @@ function isLocalhost(c: Context): boolean {
 	return remote ? LOOPBACK.has(remote) : false;
 }
 
-function setOptionalAuth(c: Context, secret: Buffer | null): void {
-	const token = extractBearerToken(c.req.header("authorization"));
-	if (token && secret) {
-		c.set("auth", verifyToken(secret, token));
-		return;
-	}
-	c.set("auth", { authenticated: false, claims: null });
-}
-
 export function createAuthMiddleware(
 	config: AuthConfig,
 	secret: Buffer | null,
 	verifyApiKey?: (token: string) => AuthResult,
 ): MiddlewareHandler {
+	const verify = (token: string): AuthResult => {
+		if (isSignetApiKey(token) && verifyApiKey) return verifyApiKey(token);
+		if (secret) return verifyToken(secret, token);
+		return { authenticated: false, claims: null, error: "auth secret not configured" };
+	};
+	const verifyOpen = (path: string, token: string): AuthResult => {
+		if (isSignetApiKey(token) && path !== "/api/auth/whoami") return { authenticated: false, claims: null };
+		try {
+			return verify(token);
+		} catch {
+			return { authenticated: false, claims: null, error: "credential could not be verified" };
+		}
+	};
 	return async (c, next) => {
+		const token = extractBearerToken(c.req.header("authorization"));
 		if (isAuthOpenPath(c.req.path) || isDashboardRequest(c)) {
-			setOptionalAuth(c, secret);
+			c.set(
+				"auth",
+				token && config.mode !== "local" ? verifyOpen(c.req.path, token) : { authenticated: false, claims: null },
+			);
 			if (config.mode === "hybrid" && isLocalhost(c) && !c.get("auth")?.claims) {
 				c.set("auth", { authenticated: false, claims: null, trustedLocal: true });
 			}
@@ -80,20 +89,10 @@ export function createAuthMiddleware(
 			return;
 		}
 		if (config.mode === "hybrid" && isLocalhost(c)) {
-			const token = extractBearerToken(c.req.header("authorization"));
-			if (token && isSignetApiKey(token) && verifyApiKey) {
-				const result = verifyApiKey(token);
-				c.set("auth", result);
-			} else if (token && secret) {
-				const result = verifyToken(secret, token);
-				c.set("auth", result);
-			} else {
-				c.set("auth", { authenticated: false, claims: null });
-			}
+			c.set("auth", token ? verify(token) : { authenticated: false, claims: null });
 			await next();
 			return;
 		}
-		const token = extractBearerToken(c.req.header("authorization"));
 		if (!token) {
 			c.status(401);
 			c.header("WWW-Authenticate", "Bearer");
@@ -105,7 +104,7 @@ export function createAuthMiddleware(
 			return c.json({ error: "auth secret not configured" });
 		}
 
-		const result = isSignetApiKey(token) && verifyApiKey ? verifyApiKey(token) : verifyToken(secret as Buffer, token);
+		const result = verify(token);
 		if (!result.authenticated) {
 			c.status(401);
 			c.header("WWW-Authenticate", "Bearer");
@@ -131,6 +130,21 @@ export function requirePermission(permission: Permission, config: AuthConfig): M
 			return c.json({ error: decision.reason ?? "forbidden" });
 		}
 
+		await next();
+	};
+}
+
+export function requirePermissionWithRateLimit(
+	permission: Permission,
+	operation: string,
+	limiter: AuthRateLimiter,
+	config: AuthConfig,
+): MiddlewareHandler {
+	return async (c, next) => {
+		const denied = await requirePermission(permission, config)(c, () => Promise.resolve());
+		if (denied) return denied;
+		const limited = await requireRateLimit(operation, limiter, config)(c, () => Promise.resolve());
+		if (limited) return limited;
 		await next();
 	};
 }

@@ -1,11 +1,14 @@
 import { ProtectionRecoveryData } from "@/components/sources/protection-recovery";
 import { DurableImportStatus } from "@/components/workspace/import-inbox";
 import { SettingsGroup } from "@/components/settings/controls";
+import { NotPermitted } from "@/components/shell/not-permitted";
 import { api } from "@/lib/api";
+import { useCan } from "@/lib/session";
 import { useAsync } from "@/lib/use-async";
 
 export function WorkspaceSettingsSection() {
 	const status = useAsync(() => api.getStatus(), { key: "status", intervalMs: 30_000 });
+	const canImport = useCan("modify");
 	return (
 		<section aria-label="Data & files settings" className="flex flex-col gap-3">
 			<SettingsGroup title="Storage location">
@@ -24,7 +27,7 @@ export function WorkspaceSettingsSection() {
 				<p className="settings-row-description mt-2">This page does not change your storage location automatically.</p>
 			</SettingsGroup>
 			<ProtectionRecoveryData />
-			<DurableImportStatus />
+			{canImport ? <DurableImportStatus /> : <NotPermitted what="Viewing file imports" permission="modify" />}
 		</section>
 	);
 }

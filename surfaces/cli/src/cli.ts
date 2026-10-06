@@ -893,6 +893,7 @@ const daemonDeps = {
 	},
 	stopDaemon,
 	syncTemplates: runSyncTemplates,
+	daemonTarget: (agentsDir: string) => createDaemonClient(DEFAULT_PORT, agentsDir),
 };
 
 const setupDeps: import("./features/setup-types.js").SetupDeps = {

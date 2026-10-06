@@ -12,6 +12,7 @@ import {
 import chalk from "chalk";
 import ora from "ora";
 import type { LogOptions, PathOptions, RestartOptions, StartOptions } from "../commands/shared.js";
+import type { DaemonFetchResult } from "../lib/daemon.js";
 import { inspectDaemonJsBundle } from "../lib/runtime.js";
 import { daemonAccessLines } from "../lib/network.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
@@ -50,6 +51,16 @@ interface LogPayload {
 
 type FetchLike = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+interface DashboardTarget {
+	readonly url: string;
+	readonly localWorkspace: boolean;
+	readonly hasCredential: boolean;
+	readonly fetchDaemonResult: <T>(
+		path: string,
+		opts?: RequestInit & { timeout?: number },
+	) => Promise<DaemonFetchResult<T>>;
+}
+
 interface Deps {
 	readonly agentsDir: string;
 	readonly defaultPort: number;
@@ -69,37 +80,72 @@ interface Deps {
 	readonly isInteractive?: () => boolean;
 	readonly syncTemplates?: (basePath: string) => Promise<void>;
 	readonly openUrl?: (url: string) => Promise<ChildProcess | undefined>;
+	readonly daemonTarget: (agentsDir: string) => DashboardTarget;
 }
 
 export async function launchDashboard(options: PathOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
-	if (await deps.setupUnconfiguredWorkspace?.(basePath)) return;
-	const before = await deps.getDaemonStatus();
+	const target = deps.daemonTarget(basePath);
+	if (target.localWorkspace) {
+		if (await deps.setupUnconfiguredWorkspace?.(basePath)) return;
+		const before = await deps.getDaemonStatus();
 
-	if (!before.running) {
-		console.log(chalk.yellow("  Daemon is not running. Starting..."));
-		const started = await deps.startDaemon(basePath);
-		const after = await deps.getDaemonStatus();
+		if (!before.running) {
+			console.log(chalk.yellow("  Daemon is not running. Starting..."));
+			const started = await deps.startDaemon(basePath);
+			const after = await deps.getDaemonStatus();
 
-		if (!started || !after.running) {
-			console.error(chalk.red("  Failed to start daemon"));
-			process.exit(1);
-		}
-		if (before.pid !== null && before.pid === after.pid) {
-			console.log(chalk.dim("  Daemon is running"));
-		} else {
-			console.log(chalk.green("  Daemon started"));
+			if (!started || !after.running) {
+				console.error(chalk.red("  Failed to start daemon"));
+				process.exit(1);
+			}
+			if (before.pid !== null && before.pid === after.pid) {
+				console.log(chalk.dim("  Daemon is running"));
+			} else {
+				console.log(chalk.green("  Daemon started"));
+			}
 		}
 	}
 
 	console.log();
-	console.log(`  ${chalk.cyan(`http://127.0.0.1:${deps.defaultPort}`)}`);
+	console.log(`  ${chalk.cyan(target.url)}`);
 	console.log();
 
-	await openUrlWithFallback(`http://127.0.0.1:${deps.defaultPort}`, {
+	await openUrlWithFallback(await signedInDashboardUrl(target), {
 		open: deps.openUrl,
 	});
+}
+async function signedInDashboardUrl(target: DashboardTarget): Promise<string> {
+	const mode = await target.fetchDaemonResult<{ mode?: unknown }>("/api/mode");
+	if (!mode.ok) {
+		if (mode.reason === "offline" || mode.reason === "timeout") {
+			const hint = target.localWorkspace
+				? ""
+				: " Start it on that host, or unset SIGNET_DAEMON_URL and daemon.url to use a local daemon.";
+			console.log(chalk.yellow(`  No Signet daemon answered at ${target.url}.${hint}`));
+		} else {
+			const detail = mode.error ?? `HTTP ${mode.status ?? "error"}`;
+			console.log(chalk.dim(`  Could not check how ${target.url} signs in (${detail}). Opening it anyway.`));
+		}
+		return target.url;
+	}
+	if (mode.data.mode === "local" || !target.hasCredential) return target.url;
+	const result = await target.fetchDaemonResult<{ code?: unknown }>("/api/auth/handoff", { method: "POST" });
+	if (result.ok && typeof result.data.code === "string") {
+		return `${target.url}/#signet-handoff=${encodeURIComponent(result.data.code)}`;
+	}
+	const reason = result.ok
+		? "the daemon returned no handoff code"
+		: result.status === 404
+			? "this daemon does not support signed-in handoff"
+			: result.status === 401
+				? `the daemon rejected your credential${result.error ? ` (${result.error})` : ""}`
+				: result.reason === "offline" || result.reason === "timeout"
+					? "the daemon could not be reached"
+					: (result.error ?? `HTTP ${result.status ?? "error"}`);
+	console.log(chalk.dim(`  Could not open the dashboard signed in: ${reason}. Sign in on the page if it asks.`));
+	return target.url;
 }
 
 export async function migrateSchema(options: PathOptions, deps: Deps): Promise<void> {

@@ -1,5 +1,6 @@
 import { Skeleton } from "@/components/ui/skeleton";
 import { type DailyReflection, api } from "@/lib/api";
+import { useCan } from "@/lib/session";
 import { cn } from "@/lib/utils";
 import { ChevronLeft, ChevronRight, RotateCw } from "@/components/mingcute-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -32,6 +33,7 @@ export function DailyBrief({
 	const [reflections, setReflections] = useState<DailyReflection[]>([]);
 	const [loading, setLoading] = useState(true);
 	const [generating, setGenerating] = useState(false);
+	const canGenerate = useCan("admin");
 	const [slow, setSlow] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [emptyMsg, setEmptyMsg] = useState<string | null>(null);
@@ -86,7 +88,7 @@ export function DailyBrief({
 			const items = today?.reflections ?? (today?.reflection ? [today.reflection] : []);
 			setReflections(items);
 			setLoading(false);
-			if (items.length === 0) void generate();
+			if (items.length === 0 && canGenerate) void generate();
 		})();
 		return () => {
 			active = false;
@@ -94,7 +96,7 @@ export function DailyBrief({
 			setGenerating(false);
 			setSlow(false);
 		};
-	}, [agentId, agentSettled, generate]);
+	}, [agentId, agentSettled, generate, canGenerate]);
 
 	const submitAnswer = async (item: DailyReflection) => {
 		if (!answerText.trim() || submitting) return;
@@ -263,9 +265,13 @@ export function DailyBrief({
 							? slow
 								? "Generation is taking longer than expected. It may take a minute…"
 								: "Generating today's briefs from recent memories…"
-							: (error ?? emptyMsg ?? "No daily brief is available yet.")}
+							: (error ??
+								emptyMsg ??
+								(canGenerate
+									? "No daily brief is available yet."
+									: "No daily brief is available yet. Generating briefs requires the admin permission."))}
 					</p>
-					{!generating && (
+					{!generating && canGenerate && (
 						<div>
 							<button
 								type="button"

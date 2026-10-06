@@ -2,35 +2,34 @@ import { dashboardQueryCache } from "./query-cache";
 import { installDemoApi } from "./demo";
 import { getDesktopBridge } from "./desktop";
 import { onboardingPreviewFetch, installOnboardingPreview } from "./onboarding-preview";
+import { authHeaders, noteUnauthorized } from "./session";
 
 export const onboardingPreview = import.meta.env.DEV && import.meta.env.VITE_ONBOARDING_PREVIEW === true;
 
 const API_BASE = "";
-function authHeaders(): HeadersInit {
-	const token = typeof localStorage !== "undefined" ? localStorage.getItem("signet-token") : null;
-	return token ? { Authorization: `Bearer ${token}` } : {};
-}
 
 function invalidateMutation(path: string): void {
-	const resources = path.includes("/harnesses/")
-		? ["harnesses", "status", "identity", "agent-list"]
-		: path.includes("/secrets")
-			? ["secrets", "inference-"]
-			: path.includes("/inference/")
-				? ["inference-"]
-				: /\/(sources|memory|memories|knowledge|ontology|dream|reflections)(?:\/|\?|$)/.test(path)
-					? [
-							"sources",
-							"source-import",
-							"protection",
-							"knowledge-stats",
-							"constellation",
-							"recent-memories",
-							"timeline",
-							"proposals",
-							"dream-",
-						]
-					: null;
+	const resources = path.startsWith("/api/auth/api-keys")
+		? ["api-keys"]
+		: path.includes("/harnesses/")
+			? ["harnesses", "status", "identity", "agent-list"]
+			: path.includes("/secrets")
+				? ["secrets", "inference-"]
+				: path.includes("/inference/")
+					? ["inference-"]
+					: /\/(sources|memory|memories|knowledge|ontology|dream|reflections)(?:\/|\?|$)/.test(path)
+						? [
+								"sources",
+								"source-import",
+								"protection",
+								"knowledge-stats",
+								"constellation",
+								"recent-memories",
+								"timeline",
+								"proposals",
+								"dream-",
+							]
+						: null;
 	dashboardQueryCache.invalidate(
 		resources ? (key) => resources.some((resource) => key.includes(`:${resource}`)) : undefined,
 	);
@@ -42,8 +41,10 @@ async function dashboardFetch(path: string, init?: RequestInit): Promise<Respons
 	const deadline = method === "GET" ? AbortSignal.timeout(20_000) : undefined;
 	const signal = init?.signal && deadline ? AbortSignal.any([init.signal, deadline]) : (init?.signal ?? deadline);
 	const response = await fetch(path, { ...init, signal });
-	if (response.status === 401 || response.status === 403) dashboardQueryCache.clear(false);
-	else if (response.ok && method !== "GET" && !path.includes("/probe") && !path.includes("/decision"))
+	if (response.status === 401) {
+		noteUnauthorized();
+		dashboardQueryCache.clear(false);
+	} else if (response.ok && method !== "GET" && !path.includes("/probe") && !path.includes("/decision"))
 		invalidateMutation(path);
 	return response;
 }
@@ -52,11 +53,45 @@ async function getJSON<T>(path: string, init?: RequestInit): Promise<T | null> {
 	return (await getJSONResult<T>(path, init)).data;
 }
 
+export type ApiKeyRole = "admin" | "operator" | "agent" | "readonly";
+
+export interface ApiKeyRecord {
+	readonly id: string;
+	readonly prefix: string;
+	readonly name: string;
+	readonly role: ApiKeyRole;
+	readonly agentId: string | null;
+	readonly connector: string | null;
+	readonly createdAt: string;
+	readonly lastUsedAt: string | null;
+	readonly revokedAt: string | null;
+	readonly expiresAt: string | null;
+}
+
+export interface CreatedApiKey extends ApiKeyRecord {
+	readonly key: string;
+}
+
+export interface ApiKeyInput {
+	readonly name: string;
+	readonly role: ApiKeyRole;
+	readonly agentId?: string;
+	readonly expiresAt?: string;
+}
+
 export interface ApiReadResult<T> {
 	readonly data: T | null;
 	readonly error: string | null;
 	readonly details?: unknown;
 	readonly status?: number;
+}
+
+function describeForbidden(reason: string): string {
+	const permission = /lacks '([a-z]+)' permission/.exec(reason)?.[1];
+	if (permission) return `Requires the ${permission} permission.`;
+	const scope = /scope restricted to (\w+) '([^']+)'/.exec(reason);
+	if (scope) return `Your credential is limited to ${scope[1]} ${scope[2]}.`;
+	return reason;
 }
 
 export async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiReadResult<T>> {
@@ -68,10 +103,19 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 		const body = (await res.json().catch(() => null)) as { error?: unknown; details?: unknown } | T | null;
 		const errorBody = typeof body === "object" && body !== null && "error" in body;
 		if (!res.ok || errorBody) {
-			const error =
+			const reason =
 				typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
 					? body.error
 					: `request failed (${res.status})`;
+			const retryAfter = Number(res.headers.get("Retry-After"));
+			const error =
+				res.status === 403
+					? describeForbidden(reason)
+					: res.status === 429
+						? Number.isFinite(retryAfter) && retryAfter > 0
+							? `Too many requests. Try again in ${retryAfter}s.`
+							: "Too many requests. Try again shortly."
+						: reason;
 			const details = typeof body === "object" && body !== null && "details" in body ? body.details : undefined;
 			return { data: null, error, details, status: res.status };
 		}
@@ -1299,6 +1343,16 @@ export const api = {
 	getHomeGreeting: () => getJSON<HomeGreeting>("/api/home/greeting"),
 	getContinuityLatest: () => getJSON<{ scores: ContinuityScore[] }>("/api/analytics/continuity/latest"),
 	getSecrets: () => getJSON<{ secrets?: string[]; provider?: string }>("/api/secrets"),
+	listApiKeys: () => getJSONResult<{ apiKeys: ApiKeyRecord[] }>("/api/auth/api-keys"),
+	createApiKey: (input: ApiKeyInput) =>
+		postJSONResult<{ apiKey: CreatedApiKey }>("/api/auth/api-keys", {
+			name: input.name,
+			role: input.role,
+			...(input.agentId ? { agentId: input.agentId, scope: { agent: input.agentId } } : {}),
+			...(input.expiresAt ? { expiresAt: input.expiresAt } : {}),
+		}),
+	revokeApiKey: (id: string) =>
+		getJSONResult<{ apiKey: ApiKeyRecord }>(`/api/auth/api-keys/${encodeURIComponent(id)}`, { method: "DELETE" }),
 	getOnePasswordStatus: async (): Promise<OnePasswordStatus> => {
 		const data = await getJSON<Partial<OnePasswordStatus>>("/api/secrets/1password/status");
 		return {

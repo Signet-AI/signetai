@@ -1,3 +1,4 @@
+import { readToken } from "./session";
 interface Entry {
 	value: unknown;
 	updatedAt: number;
@@ -141,7 +142,7 @@ function readFailure(value: unknown): string | null {
 export const dashboardQueryCache = new QueryCache();
 let scope: string | undefined;
 export function scopedQueryKey(key: string): string {
-	const current = `${typeof location === "undefined" ? "" : location.origin}:${typeof localStorage === "undefined" ? "" : (localStorage.getItem("signet-token") ?? "")}`;
+	const current = `${typeof location === "undefined" ? "" : location.origin}:${readToken() ?? ""}`;
 	if (scope !== current) {
 		scope = current;
 		dashboardQueryCache.clear(false, false);
