@@ -2,7 +2,8 @@ import { MemoryChat } from "@/components/memory-chat";
 import { sourceDocumentTitle } from "@/lib/constellation-display";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PanelRightOpenIcon, SearchIcon, XIcon } from "lucide-react";
+import { SearchIcon, XIcon } from "lucide-react";
+import { PanelIcon } from "@/components/shell/panel-icon";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
@@ -621,7 +622,7 @@ export function GraphView() {
 						title="Open chat"
 						onClick={() => setChatOpen(true)}
 					>
-						<PanelRightOpenIcon className="size-4" />
+						<PanelIcon side="right" className="size-[18px]" />
 					</Button>
 				)}
 				{limitedScene.capped && (

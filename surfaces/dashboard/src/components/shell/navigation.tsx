@@ -2,6 +2,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { cn } from "@/lib/utils";
 import { ModeToggle } from "@/components/mode-toggle";
 import { Settings } from "@/components/mingcute-icons";
+import { PanelIcon } from "@/components/shell/panel-icon";
 import { type ViewId, useView } from "@/lib/view-context";
 import { BookRegular, Home1Regular, MindMapRegular, MoonRegular } from "@mingcute/react/core-regular";
 import { type ButtonHTMLAttributes, type ReactNode, useCallback, useEffect, useState } from "react";
@@ -154,10 +155,7 @@ export function SidebarToggle({ open, onToggle }: { open: boolean; onToggle: () 
 					aria-controls="dashboard-sidebar"
 					className="sig-sidebar-toggle sig-no-drag"
 				>
-					<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-						<rect x="3" y="4.5" width="18" height="15" rx="3" />
-						<path d="M9 4.5v15" />
-					</svg>
+					<PanelIcon side="left" />
 				</button>
 			</TooltipTrigger>
 			<TooltipContent side="bottom">

@@ -13,7 +13,8 @@ import {
 import { Message, MessageContent, MessageResponse, MessageCopyAction } from "@/components/ai-elements/message";
 import { PromptInput, PromptInputTextarea, PromptInputSubmit } from "@/components/ai-elements/prompt-input";
 import { Sources, SourcesContent, SourcesTrigger } from "@/components/ai-elements/sources";
-import { LoaderCircleIcon, XIcon, PlusIcon } from "lucide-react";
+import { LoaderCircleIcon, PlusIcon } from "lucide-react";
+import { PanelIcon } from "@/components/shell/panel-icon";
 
 type ChatMessage = AssistantChatMessage & {
 	id: string;
@@ -239,7 +240,7 @@ export function MemoryChat({
 							aria-label="Close chat"
 							onClick={onClose}
 						>
-							<XIcon className="size-4" />
+							<PanelIcon side="right" className="size-[18px]" />
 						</Button>
 					)}
 				</div>
