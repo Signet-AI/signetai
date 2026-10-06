@@ -16,7 +16,7 @@ The default URL is `http://localhost:3850`. `signet dashboard` opens the daemon 
 
 ## Signing in
 
-In `local` mode the dashboard needs no sign-in. When the daemon runs in `team` mode, or in `hybrid` mode and you open the dashboard from another machine, the dashboard shows a sign-in screen instead of empty panels. The screen names the mode and the daemon address, for example `Team · signet.example.com`.
+In `local` mode the dashboard needs no sign-in. To set up a daemon for several people, see [Teams](/teams/). When the daemon runs in `team` mode, or in `hybrid` mode and you open the dashboard from another machine, the dashboard shows a sign-in screen instead of empty panels. The screen names the mode and the daemon address, for example `Team · signet.example.com`.
 
 - **Username and password** is offered when the daemon has password login configured. See [Auth](/auth/).
 - **Use an API key instead** accepts an existing API key. The dashboard exchanges the key for a browser session and never stores the key itself.

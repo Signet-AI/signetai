@@ -5,6 +5,8 @@ description: "Configure daemon authentication for local, hybrid, and team deploy
 
 Authentication is optional for a single local machine. Use `team` mode for a daemon shared over a network or by multiple people. Do not expose a daemon that remains in `local` mode.
 
+Setting up a daemon for several people? [Teams](/teams/) walks through it end to end, from team mode to dashboard sign-in and handing out keys.
+
 ## Modes
 
 - **`local`**: no bearer credential is required. This is the default and should remain localhost-only.

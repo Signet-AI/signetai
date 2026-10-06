@@ -115,6 +115,7 @@ export default defineConfig({
 								{ label: "Files and integrations", slug: "configuration/files-integrations" },
 							],
 						},
+						{ label: "Teams", slug: "teams" },
 						{ label: "Authentication", slug: "auth" },
 						{ label: "Self-hosting", slug: "self-hosting" },
 						{ label: "Remote connectors", slug: "remote-connectors" },
