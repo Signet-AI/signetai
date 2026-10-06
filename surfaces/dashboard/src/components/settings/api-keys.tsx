@@ -29,6 +29,10 @@ function formatDate(value: string | null): string {
 	return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString(undefined, { dateStyle: "medium" });
 }
 
+function isActive(key: ApiKeyRecord): boolean {
+	return !key.revokedAt && !(key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now());
+}
+
 function keyStatus(key: ApiKeyRecord): string {
 	if (key.revokedAt) return `Revoked ${formatDate(key.revokedAt)}`;
 	if (key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now()) return `Expired ${formatDate(key.expiresAt)}`;
@@ -189,7 +193,7 @@ export function ApiKeysSection() {
 				)}
 			</section>
 			<section className="flex flex-col gap-3" aria-labelledby="api-keys-list">
-				<GroupLabel suffix={keys.data?.data ? `· ${list.filter((key) => !key.revokedAt).length} active` : undefined}>
+				<GroupLabel suffix={keys.data?.data ? `· ${list.filter(isActive).length} active` : undefined}>
 					<span id="api-keys-list">Keys</span>
 				</GroupLabel>
 				{keys.error && (
@@ -216,7 +220,7 @@ export function ApiKeysSection() {
 										{formatDate(key.lastUsedAt)} · {keyStatus(key)}
 									</p>
 								</div>
-								{!key.revokedAt && (
+								{isActive(key) && (
 									<Button
 										type="button"
 										variant="outline"
