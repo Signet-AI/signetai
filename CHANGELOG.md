@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-10-07
 - Features: add Muse Code connector.
-- Bug fixes: scope session-end assistant writes; align hook and MCP runtime state.
+- Bug fixes: close pause guard and unfreeze gaps; keep pipeline pause on one route; control pause and Dreaming; keep setup from re-pausing the pipeline after it resumes; scope session-end assistant writes; align hook and MCP runtime state.
 
 ### 2026-10-06
 - Features: show what a credential may do, manage keys; warn before sessions end, count down retries; report effective permissions in whoami; sign in when the daemon requires auth; show sample skills in demo mode; add the Skills library; make the memory graph readable and navigable; scale the memory chat and calm the graph; bring Dreams up to Home's polish; pin the sidebar toggle in the header; put the sidebar toggle in the content corner; move the sidebar toggle to the window corner; let the sidebar expand to show page names; anchor the brand where header and sidebar meet; explain source problems where they appear; compact the home System column; scroll recent memories in place; raise the daily brief and quiet the lists; unify home section headers and status; responsive home layout and type scale.
@@ -40,6 +40,18 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: align controls with repository guardrails; refresh connector source inventory; consolidate UI and cache daemon reads.
 
 ## Release Ledger
+
+## [0.236.1] - 2026-10-07
+
+Release summary: 4 bug fixes.
+Tag range: `v0.236.0..v0.236.1`.
+
+### Bug Fixes
+
+- **daemon**: close pause guard and unfreeze gaps
+- **daemon**: keep pipeline pause on one route
+- **dashboard**: control pause and Dreaming
+- **dashboard**: keep setup from re-pausing the pipeline after it resumes
 
 ## [0.236.0] - 2026-10-07
 
