@@ -155,6 +155,20 @@ describe("desktop source checkout resolution", () => {
 });
 
 describe("desktop source build", () => {
+	test("old Bun blocks both build and install before source sync or dependency installation", () => {
+		const ctx = {
+			bunVersion: () => "1.3.14",
+			syncWorkspaceSourceRepo: () => {
+				throw new Error("unexpected source sync");
+			},
+			runner: () => {
+				throw new Error("unexpected dependency installation");
+			},
+		};
+		expect(() => buildDesktopFromSource({}, ctx)).toThrow("require Bun 1.4.2");
+		expect(() => installDesktopFromSource({}, ctx)).toThrow("require Bun 1.4.2");
+	});
+
 	test("syncs the managed workspace checkout before building by default", () => {
 		const root = makeCheckout();
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
@@ -178,6 +192,7 @@ describe("desktop source build", () => {
 							defaultBranch: "main",
 						};
 					},
+					bunVersion: () => "1.4.2",
 					runner: (cmd, args, opts) => {
 						calls.push(`${cmd} ${args.join(" ")} @ ${opts.cwd}`);
 						return { status: 0 };
@@ -200,6 +215,7 @@ describe("desktop source build", () => {
 			const result = buildDesktopFromSource(
 				{ repo: root },
 				{
+					bunVersion: () => "1.4.2",
 					runner: (cmd, args, opts) => {
 						calls.push(`${cmd} ${args.join(" ")} @ ${opts.cwd}`);
 						return { status: 0 };
@@ -233,6 +249,7 @@ describe("desktop source build", () => {
 						localChanges: "stashed",
 						stashRef,
 					}),
+					bunVersion: () => "1.4.2",
 					runner: () => ({ status: 0 }),
 				},
 			);
@@ -264,6 +281,7 @@ describe("desktop source build", () => {
 							localChanges: "stashed",
 							stashRef,
 						}),
+						bunVersion: () => "1.4.2",
 						runner: (_cmd, args) => ({ status: args.includes("build:desktop") ? 1 : 0 }),
 					},
 				),
@@ -439,6 +457,7 @@ describe("linux desktop install", () => {
 							defaultBranch: "main",
 						};
 					},
+					bunVersion: () => "1.4.2",
 					runner: (cmd, args, opts) => {
 						calls.push(`${cmd} ${args.join(" ")} @ ${opts.cwd}`);
 						return { status: 0 };
@@ -468,6 +487,9 @@ describe("linux desktop install", () => {
 					home,
 					env: { SIGNET_PATH: join(home, "workspace") },
 					platform: "linux",
+					bunVersion: () => {
+						throw new Error("skip-build must not check Bun");
+					},
 					runner: () => {
 						throw new Error("runner should not be called");
 					},
@@ -1138,6 +1160,7 @@ describe("Windows desktop install", () => {
 					env: { SIGNET_PATH: workspace, LOCALAPPDATA: localAppData },
 					home,
 					platform: "win32",
+					bunVersion: () => "1.4.2",
 					runner: () => {
 						throw new Error("runner should not be called");
 					},

@@ -101,6 +101,7 @@ function contentTypeFor(path: string): string {
 	if (path.endsWith(".png")) return "image/png";
 	if (path.endsWith(".ico")) return "image/x-icon";
 	if (path.endsWith(".webp")) return "image/webp";
+	if (path.endsWith(".avif")) return "image/avif";
 	if (path.endsWith(".woff2")) return "font/woff2";
 	if (path.endsWith(".otf")) return "font/otf";
 	return "application/octet-stream";

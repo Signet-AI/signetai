@@ -33,7 +33,7 @@ export function ConnectorsSection() {
 	};
 	return (
 		<div className="space-y-6">
-			<p className="text-[13px] leading-relaxed text-muted-foreground">
+			<p className="settings-row-description">
 				Manage Signet integrations for the agents on this machine. Install an agent first, then connect it here.
 			</p>
 			{query.data?.error && (
@@ -65,9 +65,9 @@ export function ConnectorsSection() {
 					{connectors.map((connector) => {
 						const button = (
 							<Button
-								variant="outline"
+								variant={connector.installed ? "ghost" : "outline"}
 								size="compact"
-								className="w-[96px] shrink-0"
+								className={connector.installed ? "settings-quiet-action shrink-0" : "shrink-0"}
 								disabled={busy !== null || !connector.available || Boolean(query.data?.error)}
 								onClick={(event) => {
 									event.preventDefault();
@@ -80,10 +80,7 @@ export function ConnectorsSection() {
 							</Button>
 						);
 						return (
-							<li
-								key={connector.id}
-								className={`border-l-2 px-3 ${connector.installed ? "border-l-emerald-500/50 bg-muted/30" : "border-l-transparent"}`}
-							>
+							<li key={connector.id} className="settings-connector">
 								{connector.installed ? (
 									<ConnectorDetailsRow
 										connector={connector}

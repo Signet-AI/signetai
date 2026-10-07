@@ -35,6 +35,8 @@ interface ViewCtx {
 	connectSourceRequested: boolean;
 	requestConnectSource: () => void;
 	clearConnectSource: () => void;
+	chatOpen: boolean;
+	setChatOpen: (open: boolean) => void;
 }
 
 const Ctx = createContext<ViewCtx | null>(null);
@@ -44,6 +46,7 @@ export function ViewProvider({ children }: { children: ReactNode }) {
 	const view = route.view;
 	const settingsSection = route.settingsSection ?? "network";
 	const [connectSourceRequested, setConnectSourceRequested] = useState(false);
+	const [chatOpen, setChatOpen] = useState(false);
 	const setupComplete = useRef(false);
 	const [pendingRoute, setPendingRoute] = useState<{ view: ViewId; settingsSection?: SettingsSection } | null>(null);
 	const commitRoute = useCallback((next: ViewId, section?: SettingsSection) => {
@@ -103,6 +106,8 @@ export function ViewProvider({ children }: { children: ReactNode }) {
 					setView("home");
 				},
 				clearConnectSource: () => setConnectSourceRequested(false),
+				chatOpen,
+				setChatOpen,
 			}}
 		>
 			{children}

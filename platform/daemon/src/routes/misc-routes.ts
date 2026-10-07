@@ -1,6 +1,12 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { parseSimpleYaml, resolveAgentMemoryPolicy } from "@signet/core";
+import { basename, join } from "node:path";
+import {
+	PIPELINE_CONFIG_FILES,
+	findPipelineConfigFile,
+	parseSimpleYaml,
+	readPipelinePauseState,
+	resolveAgentMemoryPolicy,
+} from "@signet/core";
 import type { Hono } from "hono";
 import { invalidateAgentScopeCache } from "../agent-id.js";
 import { requirePermission } from "../auth";
@@ -152,10 +158,26 @@ export function registerMiscRoutes(app: Hono): void {
 						error: `${guardDecision.reason ?? "forbidden"} - guarded config files require admin permission`,
 					});
 				}
+				let paused: boolean;
 				try {
-					loadPipelineConfig(parseSimpleYaml(content));
+					paused = loadPipelineConfig(parseSimpleYaml(content)).paused;
 				} catch (error) {
 					return c.json({ error: error instanceof Error ? error.message : "Invalid memory pipeline config" }, 400);
+				}
+				const active = findPipelineConfigFile(AGENTS_DIR);
+				const rankOf = (name: string): number =>
+					PIPELINE_CONFIG_FILES.findIndex((candidate) => candidate.toLowerCase() === name.toLowerCase());
+				const rank = rankOf(file);
+				const activeRank = active === null ? -1 : rankOf(basename(active));
+				const selected = rank !== -1 && (activeRank === -1 || rank <= activeRank);
+				if (selected && paused !== readPipelinePauseState(AGENTS_DIR).paused) {
+					return c.json(
+						{
+							error:
+								"memory.pipelineV2.paused changes only through /api/pipeline/pause or /api/pipeline/resume. Reload the config and retry.",
+						},
+						409,
+					);
 				}
 			}
 

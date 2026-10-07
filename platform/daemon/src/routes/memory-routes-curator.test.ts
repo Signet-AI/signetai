@@ -436,3 +436,13 @@ describe("memory curator routes", () => {
 		expect(v2Row.superseded_by).toBeNull();
 	});
 });
+
+describe("legacy memory search", () => {
+	it("finds saved content when the query has surrounding whitespace", async () => {
+		seedMemory("mem-first", "I prefer short answers.");
+		const res = await makeApp().request(`/memory/search?${new URLSearchParams({ q: "I prefer short answers. " })}`);
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { results: Array<{ id: string }> };
+		expect(body.results.map((row) => row.id)).toEqual(["mem-first"]);
+	});
+});

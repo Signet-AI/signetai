@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import type { AuthResult, TokenClaims, TokenRole, TokenScope } from "./types";
+import type { AuthResult, Permission, TokenClaims, TokenRole, TokenScope } from "./types";
 import { TOKEN_ROLES } from "./types";
 
 function base64urlEncode(data: Buffer | Uint8Array): string {
@@ -49,18 +49,23 @@ export function createToken(
 	secret: Buffer,
 	claims: {
 		readonly sub: string;
+		readonly name?: string;
 		readonly scope: TokenScope;
 		readonly role: TokenRole;
+		readonly permissions?: readonly Permission[];
+		readonly notAfter?: number;
 	},
 	ttlSeconds: number,
 ): string {
 	const now = Math.floor(Date.now() / 1000);
 	const fullClaims: TokenClaims = {
 		sub: claims.sub,
+		...(claims.name ? { name: claims.name } : {}),
 		scope: claims.scope,
 		role: claims.role,
 		iat: now,
-		exp: now + ttlSeconds,
+		exp: Math.min(now + ttlSeconds, claims.notAfter ?? Number.POSITIVE_INFINITY),
+		...(claims.permissions ? { permissions: claims.permissions } : {}),
 	};
 	const payloadStr = JSON.stringify(fullClaims);
 	const payloadB64 = base64urlEncode(Buffer.from(payloadStr, "utf-8"));
@@ -94,6 +99,10 @@ export function verifyToken(secret: Buffer, token: string): AuthResult {
 
 	if (typeof claims.sub !== "string") {
 		return { authenticated: false, claims: null, error: "invalid sub" };
+	}
+
+	if (claims.name !== undefined && typeof claims.name !== "string") {
+		return { authenticated: false, claims: null, error: "invalid name" };
 	}
 
 	if (!TOKEN_ROLES.includes(claims.role)) {

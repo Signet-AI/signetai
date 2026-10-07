@@ -61,6 +61,31 @@ export async function appendCanonicalLiveTranscriptTurns(params: {
 	});
 }
 
+export async function appendCanonicalLiveAssistantTurn(params: {
+	readonly basePath: string;
+	readonly agentId: string;
+	readonly harness: string;
+	readonly sessionKey: string;
+	readonly project?: string | null;
+	readonly message: string;
+}): Promise<void> {
+	await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
+	await appendCanonicalTranscriptTurns({
+		basePath: params.basePath,
+		agentId: params.agentId,
+		harness: params.harness,
+		sessionKey: params.sessionKey,
+		project: params.project ?? null,
+		sourceFormat: "live",
+		turns: [{ role: "assistant", content: stripInternalMemoryContext(params.message) }],
+	});
+}
+
+export function formatLiveAssistantTranscript(message: string): string {
+	const clean = stripInternalMemoryContext(message).trim();
+	return clean ? `Assistant: ${clean}` : "";
+}
+
 export function formatLivePromptTranscript(userMessage: string, lastAssistantMessage?: string): string {
 	const cleanUserMessage = stripInternalMemoryContext(userMessage);
 	const cleanAssistantMessage = lastAssistantMessage ? stripInternalMemoryContext(lastAssistantMessage) : "";

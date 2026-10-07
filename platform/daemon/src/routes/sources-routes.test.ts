@@ -2016,6 +2016,58 @@ describe("Sources routes", () => {
 		});
 	});
 
+	it("counts orphan chunks for sources whose chunk text exceeds one owner result", async () => {
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Large Discord",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord://guild/123/channel/456/message/live",
+			sourceKind: "source_discord_message",
+			content: "live message",
+			metaJson: "{}",
+		});
+		const body = "x".repeat(1_200);
+		getDbAccessor().withWriteTx((db) => {
+			const insert = db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			);
+			for (let i = 0; i < 1_005; i++) {
+				const orphan = i % 201 === 200;
+				insert.run(
+					`large-chunk-${i}`,
+					`large-chunk-${i}-hash`,
+					new Uint8Array([0]),
+					1,
+					"source_chunk",
+					`${added.source.id}:guild/123/channel/456/message/${orphan ? `deleted-${i}` : "live"}#${i}`,
+					orphan ? body : `source_path: discord://guild/123/channel/456/message/live\n\n${body}`,
+					"2026-05-24T00:00:00.000Z",
+					"default",
+				);
+			}
+		});
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
+		expect(res.status).toBe(200);
+		const result = (await res.json()) as {
+			health?: { status?: string; error?: string; purge?: { orphanChunks?: number } };
+		};
+		expect(result.health?.error).toBeUndefined();
+		expect(result.health).toMatchObject({ status: "degraded", purge: { orphanChunks: 5 } });
+	});
+
 	it("degrades source health when only deleted artifact residue remains", async () => {
 		const added = addDiscordSource(
 			{
@@ -2059,7 +2111,7 @@ describe("Sources routes", () => {
 		expect(((await res.json()) as { error: string }).error).toContain("Source not found");
 	});
 
-	it("marks source health unhealthy when diagnostics queries fail", async () => {
+	it("reports source health as unknown when diagnostics queries fail", async () => {
 		const added = addDiscordSource(
 			{
 				guildIds: ["123456789012345678"],
@@ -2078,11 +2130,11 @@ describe("Sources routes", () => {
 		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { health?: { status?: string; error?: string } };
-		expect(body.health?.status).toBe("unhealthy");
+		expect(body.health?.status).toBe("unknown");
 		expect(body.health?.error).toContain("Source health diagnostics failed");
 	});
 
-	it("marks source health unhealthy when semantic diagnostics queries fail", async () => {
+	it("reports source health as unknown when semantic diagnostics queries fail", async () => {
 		const added = addDiscordSource(
 			{
 				guildIds: ["123456789012345678"],
@@ -2101,7 +2153,7 @@ describe("Sources routes", () => {
 		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { health?: { status?: string; error?: string } };
-		expect(body.health?.status).toBe("unhealthy");
+		expect(body.health?.status).toBe("unknown");
 		expect(body.health?.error).toContain("Source health diagnostics failed");
 	});
 

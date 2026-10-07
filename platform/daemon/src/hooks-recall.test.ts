@@ -659,6 +659,38 @@ memory:
 		}
 	});
 
+	it("requires remember permission before recording a session-end assistant reply", async () => {
+		const { authConfig } = await import("./routes/state");
+		const { registerHooksRoutes } = await import("./routes/hooks-routes");
+		const { Hono } = await import("hono");
+		const routes = new Hono();
+		registerHooksRoutes(routes);
+		const sessionKey = `muse-unauthorized-${crypto.randomUUID()}`;
+		const previousMode = authConfig.mode;
+		authConfig.mode = "team";
+		try {
+			const resp = await routes.request("/api/hooks/session-end", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					harness: "muse-code",
+					sessionKey,
+					agentId: "someone-else",
+					lastAssistantMessage: "forged assistant turn",
+				}),
+			});
+
+			expect(resp.status).toBe(403);
+			const row = getDbAccessor?.().withReadDb((db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM session_transcripts WHERE session_key = ?").get(sessionKey),
+			);
+			expect(row).toEqual({ count: 0 });
+		} finally {
+			authConfig.mode = previousMode;
+			releaseSession?.(sessionKey);
+		}
+	});
+
 	it("records pre-compaction transcript skill scans under the explicit agent scope", async () => {
 		const sessionKey = "pre-compaction-scan-agent";
 		const toolUseId = `toolu_precompact_${crypto.randomUUID()}`;

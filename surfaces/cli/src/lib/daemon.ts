@@ -101,6 +101,7 @@ export function createDaemonClient(
 ): {
 	readonly url: string;
 	readonly localWorkspace: boolean;
+	readonly hasCredential: boolean;
 	readonly fetchFromDaemon: DaemonFetch;
 	readonly fetchDaemonResult: <T>(
 		path: string,
@@ -219,6 +220,7 @@ export function createDaemonClient(
 	return {
 		url,
 		localWorkspace,
+		hasCredential: readAuthToken() !== undefined,
 		fetchFromDaemon,
 		fetchDaemonResult,
 		fetchDaemonStream,

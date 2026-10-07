@@ -26,6 +26,7 @@ export interface TokenScope {
 
 export interface TokenClaims {
 	readonly sub: string;
+	readonly name?: string;
 	readonly scope: TokenScope;
 	readonly role: TokenRole;
 	readonly iat: number;

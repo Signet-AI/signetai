@@ -6,6 +6,15 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-10-07
+- Features: add Muse Code connector.
+- Bug fixes: scope session-end assistant writes; align hook and MCP runtime state.
+
+### 2026-10-06
+- Features: show what a credential may do, manage keys; warn before sessions end, count down retries; report effective permissions in whoami; sign in when the daemon requires auth; show sample skills in demo mode; add the Skills library; make the memory graph readable and navigable; scale the memory chat and calm the graph; bring Dreams up to Home's polish; pin the sidebar toggle in the header; put the sidebar toggle in the content corner; move the sidebar toggle to the window corner; let the sidebar expand to show page names; anchor the brand where header and sidebar meet; explain source problems where they appear; compact the home System column; scroll recent memories in place; raise the daily brief and quiet the lists; unify home section headers and status; responsive home layout and type scale.
+- Bug fixes: check Bun before desktop source installation; accept native binaries above 256 MiB; count key management against the admin limit once; count only usable keys as active; address review of permission gating; list a new API key once; spend fewer admin calls on API keys; return 403 and 429 from combined auth guards; say why the auth mode check failed; skip handoff in local mode, flag dead targets; bound session rechecks, follow other tabs; keep open paths off the key database; redeem handoff links in an open tab; open the resolved daemon in signet dashboard; verify API keys on whoami, add session exchange; read multiline skill descriptions from frontmatter; restore graph layout and keep the inspector clear of chat; smooth the chat dock to sidebar transition; calmer Dreams and correct pass times; page health reads and report failed checks as unknown.
+- Docs: cover dashboard key management and permission states; add a Teams guide for shared daemons; document dashboard sign-in and session routes.
+
 ### 2026-10-05
 - Features: redesign homepage and blog; add Notion source provider; report blocked layout upgrades in status; create new workspaces on layout v2; upgrade v1 workspaces to v2 in place; Liquid Glass macOS app icon via Icon Composer.
 - Bug fixes: refresh changed Notion properties; bound Notion syncs and block passes; use the canonical Notion logo; harden Notion block and purge logic; anchor v2 storage roots in gitignore; defer to an interrupted layout upgrade; verify v1 data before finishing upgrades; keep legacy volumes on layout v1; keep same-millisecond snapshots apart; report v2 storage in status and diagnostics; recognize older template test dirs; harden layout upgrade recovery; reject incomplete v2 databases; validate upgrade record paths; preserve legacy workspace state; preserve legacy state; preserve transcript-only workspaces; harden recovery checks; verify interrupted move identity; reject missing upgrade moves; keep original transcript provenance; resolve workspace paths through layout; resume upgrades from the daemon entry; scope upgrade rollback and resume; harden in-place layout upgrade; resolve runtime paths through layout; use shared MCP resolver; register native Signet binary as MCP stdio server; create macOS descriptor files with a mode openat actually reads; require exact manifest zip names; verify published macOS manifest; publish one macOS update manifest for both architectures; ship precompiled Assets.car instead of compiling .icon in CI; select Xcode 26 for deep-link package CI; drop comments; gate mac updates on release team; stop offering updates unsigned macOS builds cannot install.
@@ -30,16 +39,105 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: default on in onboarding; refresh route DB site tokens; enforce trigger gates; allow manual triggers.
 - Refactoring: align controls with repository guardrails; refresh connector source inventory; consolidate UI and cache daemon reads.
 
-### 2026-09-30
-- Features: refresh Pi model presets.
-- Bug fixes: check ownership on opened marker; protect swapped uninstall entries; support macOS secure filesystem paths; add cross-platform desktop handoff; guide first-run setup in dashboard; open first-run onboarding.
-- Docs: show dashboard onboarding screenshot.
-
-### 2026-09-29
-- Bug fixes: allow canonical source refs; pass inline codesign requirements; stabilize macOS keyring signing; handle empty args in Bash 3.2; set up unconfigured workspaces on start.
-- Docs: move owner protocol reference.
-
 ## Release Ledger
+
+## [0.236.0] - 2026-10-07
+
+Release summary: 1 feature and 2 bug fixes.
+Tag range: `v0.235.2..v0.236.0`.
+
+### Features
+
+- **muse-code**: add Muse Code connector
+
+### Bug Fixes
+
+- **daemon**: scope session-end assistant writes
+- **muse-code**: align hook and MCP runtime state
+
+## [0.235.2] - 2026-10-06
+
+Release summary: 1 bug fix.
+Tag range: `v0.235.1..v0.235.2`.
+
+### Bug Fixes
+
+- **cli**: check Bun before desktop source installation
+
+## [0.235.1] - 2026-10-06
+
+Release summary: 1 bug fix.
+Tag range: `v0.235.0..v0.235.1`.
+
+### Bug Fixes
+
+- **update**: accept native binaries above 256 MiB
+
+## [0.235.0] - 2026-10-06
+
+Release summary: 4 features, 13 bug fixes, and 3 docs updates.
+Tag range: `v0.234.0..v0.235.0`.
+
+### Features
+
+- **dashboard**: show what a credential may do, manage keys
+- **dashboard**: warn before sessions end, count down retries
+- **daemon**: report effective permissions in whoami
+- **dashboard**: sign in when the daemon requires auth
+
+### Bug Fixes
+
+- **daemon**: count key management against the admin limit once
+- **dashboard**: count only usable keys as active
+- **dashboard**: address review of permission gating
+- **dashboard**: list a new API key once
+- **dashboard**: spend fewer admin calls on API keys
+- **daemon**: return 403 and 429 from combined auth guards
+- **cli**: say why the auth mode check failed
+- **cli**: skip handoff in local mode, flag dead targets
+- **dashboard**: bound session rechecks, follow other tabs
+- **daemon**: keep open paths off the key database
+- **dashboard**: redeem handoff links in an open tab
+- **cli**: open the resolved daemon in signet dashboard
+- **daemon**: verify API keys on whoami, add session exchange
+
+### Docs
+
+- cover dashboard key management and permission states
+- add a Teams guide for shared daemons
+- document dashboard sign-in and session routes
+
+## [0.234.0] - 2026-10-06
+
+Release summary: 16 features and 5 bug fixes.
+Tag range: `v0.233.0..v0.234.0`.
+
+### Features
+
+- **dashboard**: show sample skills in demo mode
+- **dashboard**: add the Skills library
+- **dashboard**: make the memory graph readable and navigable
+- **dashboard**: scale the memory chat and calm the graph
+- **dashboard**: bring Dreams up to Home's polish
+- **dashboard**: pin the sidebar toggle in the header
+- **dashboard**: put the sidebar toggle in the content corner
+- **dashboard**: move the sidebar toggle to the window corner
+- **dashboard**: let the sidebar expand to show page names
+- **dashboard**: anchor the brand where header and sidebar meet
+- **dashboard**: explain source problems where they appear
+- **dashboard**: compact the home System column
+- **dashboard**: scroll recent memories in place
+- **dashboard**: raise the daily brief and quiet the lists
+- **dashboard**: unify home section headers and status
+- **dashboard**: responsive home layout and type scale
+
+### Bug Fixes
+
+- **daemon**: read multiline skill descriptions from frontmatter
+- **dashboard**: restore graph layout and keep the inspector clear of chat
+- **dashboard**: smooth the chat dock to sidebar transition
+- **dashboard**: calmer Dreams and correct pass times
+- **sources**: page health reads and report failed checks as unknown
 
 ## [0.233.0] - 2026-10-05
 

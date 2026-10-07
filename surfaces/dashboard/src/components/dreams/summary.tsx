@@ -2,29 +2,27 @@ import type { ReactNode } from "react";
 export function MarkdownSummary({ text }: { text: string }) {
 	const blocks = splitMarkdownBlocks(text);
 	return (
-		<div className="dreams-summary-copy flex flex-col gap-4 text-sm leading-relaxed text-foreground">
+		<div className="dreams-summary-copy">
 			{blocks.map((block) => {
 				if (block.type === "heading") {
 					const Tag = block.level === 1 ? "h3" : block.level === 2 ? "h4" : "h5";
 					return (
-						<Tag key={block.id} className="m-0 text-[13px] font-semibold tracking-tight text-foreground">
+						<Tag key={block.id} className="dreams-md-heading">
 							{renderInline(block.text, block.id)}
 						</Tag>
 					);
 				}
 				if (block.type === "list") {
 					return (
-						<ul key={block.id} className="m-0 flex list-disc flex-col gap-1 pl-4">
+						<ul key={block.id} className="dreams-md-list">
 							{block.items?.map((item) => (
-								<li key={item.id} className="pl-0.5">
-									{renderInline(item.text, item.id)}
-								</li>
+								<li key={item.id}>{renderInline(item.text, item.id)}</li>
 							))}
 						</ul>
 					);
 				}
 				return (
-					<p key={block.id} className="m-0 whitespace-pre-wrap">
+					<p key={block.id} className="dreams-md-para">
 						{renderInline(block.text, block.id)}
 					</p>
 				);
@@ -44,13 +42,13 @@ function renderInline(text: string, keyBase: string): ReactNode[] {
 		const tok = m[0];
 		if (tok.startsWith("**")) {
 			out.push(
-				<strong key={`${keyBase}b${n}`} className="font-semibold text-foreground">
+				<strong key={`${keyBase}b${n}`} className="dreams-md-strong">
 					{tok.slice(2, -2)}
 				</strong>,
 			);
 		} else if (tok.startsWith("`")) {
 			out.push(
-				<code key={`${keyBase}c${n}`} className="break-all font-mono text-xs text-muted-foreground">
+				<code key={`${keyBase}c${n}`} className="dreams-md-code">
 					{tok.slice(1, -1)}
 				</code>,
 			);
@@ -94,11 +92,11 @@ function renderTinted(text: string, keyBase: string): ReactNode[] {
 		const looksLikeId = /^[0-9a-f]/.test(token) || /^(entity|aspect|attention):/.test(token);
 		out.push(
 			looksLikeId ? (
-				<span key={`${keyBase}i${n}`} className="break-all font-mono text-xs text-muted-foreground">
+				<span key={`${keyBase}i${n}`} className="dreams-md-code">
 					{token}
 				</span>
 			) : (
-				<span key={`${keyBase}e${n}`} className="font-medium text-foreground">
+				<span key={`${keyBase}e${n}`} className="dreams-md-strong">
 					{token}
 				</span>
 			),

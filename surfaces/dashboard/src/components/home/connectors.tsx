@@ -1,6 +1,7 @@
-import { LoadingRows } from "@/components/ui/skeleton";
 import { ConnectorLogo } from "@/components/connector-logo";
+import type { StatusTone } from "@/components/dashboard/heading";
 import { ChevronRight } from "@/components/mingcute-icons";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ApiReadResult, HarnessConnector, HarnessesResponse } from "@/lib/api";
 import { useView } from "@/lib/view-context";
 import { useEffect, useState } from "react";
@@ -37,76 +38,81 @@ export function HomeConnectorsPanel({
 		Boolean(result?.error) ||
 		(Boolean(result) && !available) ||
 		Boolean(available?.some((item) => !item.available || item.inspectionStatus === "unavailable"));
+	const statusOf = (connector: HarnessConnector) => (unavailable ? null : connectorIssue(connector));
 	return (
-		<section className="home-connectors pb-3" aria-labelledby="home-connectors-title">
-			<button
-				type="button"
-				onClick={() => openSettings("connectors")}
-				className="group flex w-full items-center justify-between gap-3 py-2 text-left"
-			>
-				<span id="home-connectors-title" className="text-[14px] font-medium tracking-tight">
-					Connectors{" "}
-					<span
-						data-testid="connector-count"
-						className="ml-2 font-mono text-[10.5px] font-normal text-muted-foreground"
-					>
-						{available || previous.length ? connectors.length : "—"}
-					</span>
+		<section className="home-setup-group home-connectors" aria-labelledby="home-connectors-title">
+			<div className="home-setup-row" data-static="">
+				<span id="home-connectors-title" className="home-setup-label">
+					Connectors
 				</span>
-				<span className="flex items-center gap-2 text-xs text-muted-foreground">
-					Connect & manage <ChevronRight className="size-3.5" />
+				<span className="home-setup-summary">
+					{connectors.length > 0 ? (
+						<TooltipProvider delayDuration={150}>
+							<ul
+								data-testid="connector-rows"
+								aria-label="Installed connectors"
+								className="home-connectors-rows flex min-w-0 list-none flex-wrap overflow-y-auto"
+							>
+								{connectors.map((connector) => {
+									const status = statusOf(connector);
+									const label = status?.label ?? "Installed";
+									return (
+										<li key={connector.id}>
+											<Tooltip>
+												<TooltipTrigger asChild>
+													<button
+														type="button"
+														onClick={() => openSettings("connectors")}
+														className="home-connector-tile"
+														data-tone={status?.tone}
+													>
+														<ConnectorLogo icon={connector.icon} className="size-[18px] shrink-0 object-contain" />
+														<span className="sr-only">
+															{connector.displayName}, {label}
+														</span>
+													</button>
+												</TooltipTrigger>
+												<TooltipContent side="bottom">
+													{connector.displayName} · {label}
+												</TooltipContent>
+											</Tooltip>
+										</li>
+									);
+								})}
+							</ul>
+						</TooltipProvider>
+					) : loading ? (
+						"Loading…"
+					) : unavailable ? (
+						"Installed connectors could not be checked."
+					) : (
+						"No Signet connectors installed."
+					)}
 				</span>
-			</button>
-			<p className="mb-3 text-xs text-muted-foreground">Signet integrations installed on this machine.</p>
+				<span data-testid="connector-count" className="home-setup-count">
+					{available || previous.length ? connectors.length : "—"}
+				</span>
+				<button
+					type="button"
+					aria-label="Manage connectors"
+					onClick={() => openSettings("connectors")}
+					className="home-setup-open"
+				>
+					<ChevronRight className="home-setup-chevron" aria-hidden="true" />
+				</button>
+			</div>
 			{unavailable && (
-				<p role="status" className="mb-3 text-xs text-muted-foreground">
+				<p role="status" className="home-setup-note">
 					Checks unavailable. Showing the last known installations.
 				</p>
 			)}
-			<ul
-				data-testid="connector-rows"
-				aria-label="Installed connectors"
-				className="overflow-y-auto home-connectors-rows list-none divide-y divide-border"
-			>
-				{connectors.map((connector) => (
-					<li key={connector.id}>
-						<button
-							type="button"
-							onClick={() => openSettings("connectors")}
-							className="home-connector-link flex w-full items-center gap-3 rounded-[var(--control-radius)] py-3 text-left"
-						>
-							<ConnectorLogo icon={connector.icon} className="size-5 shrink-0 object-contain" />
-							<span className="flex-1 text-[13px]">{connector.displayName}</span>
-							<span className="text-xs text-muted-foreground">
-								{!unavailable &&
-								connector.available &&
-								connector.inspectionStatus !== "unavailable" &&
-								connector.health.status === "needs-auth"
-									? "Sign in needed"
-									: !unavailable &&
-											connector.available &&
-											connector.inspectionStatus !== "unavailable" &&
-											["degraded", "unhealthy"].includes(connector.health.status)
-										? "Needs attention"
-										: "Installed"}
-							</span>
-						</button>
-					</li>
-				))}
-			</ul>
-			{loading && !connectors.length ? (
-				<LoadingRows label="Loading connectors…" rows={2} />
-			) : (
-				!connectors.length && (
-					<p className="py-3 text-sm text-muted-foreground">
-						{loading
-							? "Loading connectors…"
-							: unavailable
-								? "Installed connectors could not be checked."
-								: "No Signet connectors installed."}
-					</p>
-				)
-			)}
 		</section>
 	);
+}
+export function connectorIssue(connector: HarnessConnector): { tone: StatusTone; label: string } | null {
+	if (!connector.installed || !connector.available || connector.inspectionStatus === "unavailable") return null;
+	if (connector.health.status === "needs-auth") return { tone: "error", label: "Sign in needed" };
+	if (connector.health.status === "degraded" || connector.health.status === "unhealthy")
+		return { tone: "warn", label: "Needs attention" };
+	return null;
 }

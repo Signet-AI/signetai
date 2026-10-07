@@ -1,14 +1,17 @@
 import type { Context, Hono, Next } from "hono";
+import { randomBytes } from "node:crypto";
 import {
+	PERMISSIONS,
 	type Permission,
+	type TokenClaims,
 	type TokenRole,
 	type TokenScope,
 	createApiKey,
+	checkPermission,
 	createToken,
 	getPeerAddress,
 	listApiKeys,
-	requirePermission,
-	requireRateLimit,
+	requirePermissionWithRateLimit,
 	revokeApiKey,
 	verifyPasswordHash,
 	verifyPlainPassword,
@@ -19,6 +22,45 @@ import { authAdminLimiter, authConfig, authLoginLimiter, authSecret } from "./st
 
 const MAX_USERNAME_LENGTH = 128;
 const MAX_PASSWORD_LENGTH = 1024;
+const MAX_HANDOFF_CODE_LENGTH = 128;
+const MAX_KEY_NAME_LENGTH = 128;
+const HANDOFF_TTL_MS = 60_000;
+const HANDOFF_LIMIT = 32;
+const HANDOFF_LIMIT_PER_CREDENTIAL = 4;
+
+interface Session {
+	readonly token: string;
+	readonly expiresAt: string;
+	readonly role: TokenRole;
+	readonly sub: string;
+}
+const handoffs = new Map<string, { readonly session: Session; readonly expiresAt: number }>();
+
+function mintSession(claims: TokenClaims): Session | null {
+	if (!authSecret) return null;
+	const now = Math.floor(Date.now() / 1000);
+	if (claims.exp <= now) return null;
+	const token = createToken(
+		authSecret,
+		{
+			sub: claims.sub,
+			name: claims.name,
+			scope: claims.scope,
+			role: claims.role,
+			permissions: claims.permissions,
+			notAfter: claims.exp,
+		},
+		authConfig.sessionTokenTtlSeconds,
+	);
+	const exp = Math.min(now + authConfig.sessionTokenTtlSeconds, claims.exp);
+	return { token, expiresAt: new Date(exp * 1000).toISOString(), role: claims.role, sub: claims.sub };
+}
+
+function pruneHandoffs(now: number): void {
+	for (const [code, entry] of handoffs) {
+		if (entry.expiresAt <= now) handoffs.delete(code);
+	}
+}
 
 function resolvePasswordLogin(): {
 	readonly username: string;
@@ -72,11 +114,19 @@ export function registerAuthRoutes(app: Hono): void {
 	app.get("/api/auth/whoami", (c) => {
 		const auth = c.get("auth");
 		const effectiveAccess = authConfig.mode === "local" || auth?.authenticated === true || auth?.trustedLocal === true;
+		const permissions =
+			authConfig.mode === "local" || auth?.trustedLocal === true
+				? [...PERMISSIONS]
+				: PERMISSIONS.filter(
+						(permission) => checkPermission(auth?.claims ?? null, permission, authConfig.mode).allowed,
+					);
 		return c.json({
 			authenticated: auth?.authenticated ?? false,
 			trustedLocal: auth?.trustedLocal === true,
 			effectiveAccess,
 			claims: auth?.claims ?? null,
+			error: auth?.error ?? null,
+			permissions,
 			mode: authConfig.mode,
 			providers: authProviderResponse().providers,
 		});
@@ -121,9 +171,60 @@ export function registerAuthRoutes(app: Hono): void {
 		}
 
 		const ttl = authConfig.sessionTokenTtlSeconds;
-		const token = createToken(authSecret, { sub: "dashboard:admin", scope: {}, role: "admin" }, ttl);
+		const token = createToken(
+			authSecret,
+			{ sub: "dashboard:admin", name: login.username, scope: {}, role: "admin" },
+			ttl,
+		);
 		const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
 		return c.json({ token, expiresAt, role: "admin", username: login.username });
+	});
+
+	app.post("/api/auth/session", (c) => {
+		const claims = c.get("auth")?.claims;
+		if (!claims) return c.json({ error: "a credential is required" }, 401);
+		const session = mintSession(claims);
+		if (!session) return c.json({ error: "credential cannot start a session" }, 401);
+		return c.json(session);
+	});
+
+	app.post("/api/auth/handoff", (c) => {
+		const claims = c.get("auth")?.claims;
+		if (!claims) return c.json({ error: "a credential is required" }, 401);
+		const now = Date.now();
+		pruneHandoffs(now);
+		const pending = [...handoffs.values()].filter((entry) => entry.session.sub === claims.sub).length;
+		if (handoffs.size >= HANDOFF_LIMIT || pending >= HANDOFF_LIMIT_PER_CREDENTIAL) {
+			return c.json({ error: "too many pending handoffs" }, 429);
+		}
+		const session = mintSession(claims);
+		if (!session) return c.json({ error: "credential cannot start a session" }, 401);
+		const code = randomBytes(32).toString("base64url");
+		const expiresAt = now + HANDOFF_TTL_MS;
+		handoffs.set(code, { session, expiresAt });
+		return c.json({ code, expiresAt: new Date(expiresAt).toISOString() });
+	});
+
+	app.post("/api/auth/handoff/redeem", async (c) => {
+		const limitKey = `handoff:${getPeerAddress(c) ?? "anonymous"}`;
+		const check = authLoginLimiter.check(limitKey);
+		if (!check.allowed) {
+			c.header("Retry-After", String(Math.ceil((check.resetAt - Date.now()) / 1000)));
+			return c.json({ error: "rate limit exceeded", retryAfter: check.resetAt }, 429);
+		}
+		authLoginLimiter.record(limitKey);
+		const payload: unknown = await c.req.json().catch(() => null);
+		const code =
+			typeof payload === "object" && payload !== null && !Array.isArray(payload)
+				? Reflect.get(payload, "code")
+				: undefined;
+		if (!isValidLoginString(code, MAX_HANDOFF_CODE_LENGTH)) return c.json({ error: "code is required" }, 400);
+		const now = Date.now();
+		pruneHandoffs(now);
+		const entry = handoffs.get(code);
+		handoffs.delete(code);
+		if (!entry) return c.json({ error: "handoff code is invalid or expired" }, 401);
+		return c.json(entry.session);
 	});
 
 	app.get("/api/auth/sso/start", (c) => c.json({ error: "SSO login is not configured", provider: "sso" }, 501));
@@ -131,16 +232,10 @@ export function registerAuthRoutes(app: Hono): void {
 	app.post("/api/auth/saml/acs", (c) => c.json({ error: "SAML ACS is not configured", provider: "saml" }, 501));
 	app.get("/api/auth/saml/start", (c) => c.json({ error: "SAML login is not configured", provider: "saml" }, 501));
 
-	const requireAdminAuth = async (c: Context, next: Next) => {
-		const perm = requirePermission("admin", authConfig);
-		const rate = requireRateLimit("admin", authAdminLimiter, authConfig);
-		await perm(c, async () => {
-			await rate(c, next);
-		});
-	};
+	const requireAdminAuth = (c: Context, next: Next) =>
+		requirePermissionWithRateLimit("admin", "admin", authAdminLimiter, authConfig)(c, next);
 
 	app.use("/api/auth/token", requireAdminAuth);
-	app.use("/api/auth/api-keys", requireAdminAuth);
 	app.use("/api/auth/api-keys/*", requireAdminAuth);
 
 	app.post("/api/auth/token", async (c) => {
@@ -179,6 +274,9 @@ export function registerAuthRoutes(app: Hono): void {
 		if (!payload) return c.json({ error: "invalid request body" }, 400);
 		const name = typeof payload.name === "string" ? payload.name.trim() : "";
 		if (!name) return c.json({ error: "name is required" }, 400);
+		if (name.length > MAX_KEY_NAME_LENGTH) {
+			return c.json({ error: `name must be at most ${MAX_KEY_NAME_LENGTH} characters` }, 400);
+		}
 		const role = typeof payload.role === "string" ? payload.role : undefined;
 		const validRoles: TokenRole[] = ["admin", "operator", "agent", "readonly"];
 		if (role !== undefined && !validRoles.includes(role as TokenRole)) {

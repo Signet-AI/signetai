@@ -122,8 +122,14 @@ export const DASHBOARD_LICENSES = [
 		href: "https://github.com/microsoft/TypeScript",
 	},
 	{
-		name: "Geist",
-		packages: "@fontsource/geist · @fontsource/geist-mono",
+		name: "Geist Mono",
+		packages: "@fontsource/geist-mono",
+		license: "OFL-1.1",
+		href: "https://github.com/fontsource/font-files",
+	},
+	{
+		name: "Schibsted Grotesk",
+		packages: "@fontsource/schibsted-grotesk",
 		license: "OFL-1.1",
 		href: "https://github.com/fontsource/font-files",
 	},

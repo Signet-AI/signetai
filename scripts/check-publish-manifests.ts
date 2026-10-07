@@ -2,6 +2,11 @@
 
 import { execSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
+import {
+	NATIVE_BINARY_MAX_BYTES,
+	NATIVE_CONNECTORS_MAX_BYTES,
+	NATIVE_DAEMON_JS_MAX_BYTES,
+} from "../platform/daemon/src/native-release-limits";
 
 const RUNTIME_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
 
@@ -264,6 +269,25 @@ export function collectNativeManifestIssues(
 
 		if (typeof asset.size !== "number" || !Number.isInteger(asset.size) || asset.size <= 0) {
 			issues.push({ file, reason: `asset ${platform} size must be a positive integer` });
+		} else if (asset.size > NATIVE_BINARY_MAX_BYTES) {
+			issues.push({
+				file,
+				reason: `asset ${platform} is ${asset.size} bytes, above the ${NATIVE_BINARY_MAX_BYTES} byte updater limit`,
+			});
+		}
+	}
+
+	const components = isRecord(manifest.components) ? manifest.components : {};
+	for (const [name, maxBytes] of [
+		["connectors", NATIVE_CONNECTORS_MAX_BYTES],
+		["daemonJs", NATIVE_DAEMON_JS_MAX_BYTES],
+	] as const) {
+		const component = components[name];
+		if (isRecord(component) && typeof component.size === "number" && component.size > maxBytes) {
+			issues.push({
+				file,
+				reason: `component ${name} is ${component.size} bytes, above the ${maxBytes} byte updater limit`,
+			});
 		}
 	}
 

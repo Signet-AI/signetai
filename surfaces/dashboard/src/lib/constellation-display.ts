@@ -55,3 +55,8 @@ export function capGraphSceneData(
 		capped: data.nodes.length > nodes.length,
 	};
 }
+
+export function sourceDocumentTitle(name: string): string {
+	const title = name.split(" — ")[0]?.trim();
+	return title || name;
+}

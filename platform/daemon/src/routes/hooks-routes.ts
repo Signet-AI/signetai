@@ -621,6 +621,9 @@ function registerSessionEnd(app: Hono): void {
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
 			}
+			if (body.lastAssistantMessage !== undefined && typeof body.lastAssistantMessage !== "string") {
+				return c.json({ error: "lastAssistantMessage must be a string" }, 400);
+			}
 			const capturedAt = parseIsoTimestamp(body.capturedAt, "capturedAt");
 			if (capturedAt.error) return c.json({ error: capturedAt.error }, 400);
 			body.capturedAt = capturedAt.value;
@@ -635,7 +638,7 @@ function registerSessionEnd(app: Hono): void {
 			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath, agentId);
 			if (conflict) return c.json(conflict);
 			const transcriptPath = parseOptionalString(body.transcriptPath);
-			if (transcriptPath) {
+			if (transcriptPath || parseOptionalString(body.lastAssistantMessage)) {
 				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 				if (denied) return denied;
 				const scopedAgent = resolveScopedAgentId(c, agentId);
