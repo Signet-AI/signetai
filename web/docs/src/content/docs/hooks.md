@@ -116,6 +116,13 @@ Requests without a recognized boundary reason, including ordinary
 `session.idle` calls, emit `session.turn` telemetry instead. They still persist
 the transcript and queue normal session-end processing.
 
+An optional `lastAssistantMessage` string carries the turn's final assistant
+reply. The daemon appends it to the session's live transcript only when the
+request supplies neither `transcriptPath` nor `transcript`, which is the case
+for harnesses such as Muse Code whose hooks expose no transcript source. A
+non-string value returns `400`. `signet hook session-end` fills it from a
+`last_assistant_message` field in the hook payload.
+
 The daemon's stale-session sweeper processes at most 10 abandoned sessions per
 15-minute timer tick. It is single-flight, yields between finalizations, pauses
 when system pressure is elevated, and defers when downstream capture or summary

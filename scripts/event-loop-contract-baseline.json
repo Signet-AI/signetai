@@ -1335,35 +1335,35 @@
     },
     {
       "path": "harness-registry.ts",
-      "line": 188,
+      "line": 189,
       "api": "existsSync",
       "source": "detected = connector.isDetected?.() ?? (configPath !== null && existsSync(configPath));",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 468,
+      "line": 469,
       "api": "existsSync",
       "source": "if (!existsSync(getMemoryDbPath())) return undefined;",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 556,
+      "line": 557,
       "api": "existsSync",
       "source": "if (!existsSync(getMemoryDbPath())) return [];",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 797,
+      "line": 798,
       "api": "existsSync",
       "source": "if (req.sessionKey && existsSync(getMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 800,
+      "line": 801,
       "api": "withReadDbAsync",
       "source": "const block = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1371,14 +1371,14 @@
     },
     {
       "path": "hooks.ts",
-      "line": 2141,
+      "line": 2175,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2143,
+      "line": 2177,
       "api": "readFileSync",
       "source": "const raw = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
@@ -3354,14 +3354,14 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1116,
+      "line": 1119,
       "api": "existsSync",
       "source": "if (!existsSync(getCurrentMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1131,
+      "line": 1134,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb(",
       "category": "hot-path",
@@ -3369,7 +3369,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1161,
+      "line": 1164,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -3377,7 +3377,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1286,
+      "line": 1289,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",

@@ -5,5 +5,6 @@ Brand assets identify supported tools; they are bundled locally, with no runtime
 - Hermes uses Nous Research: https://nousresearch.com/safari-pinned-tab.svg
 - ForgeCode: https://forgecode.dev/images/favicon-dark.svg
 - Kimi: https://moonshotai.github.io/kimi-code/assets/Kimi.CThWxdLR.png
+- Muse Code (Meta): https://dev.meta.ai/favicon.ico (64x64 frame)
 - Pi: https://pi.dev/logo.svg
 - Signet and source marks use the existing dashboard icons component.

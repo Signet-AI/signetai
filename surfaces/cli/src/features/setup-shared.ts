@@ -17,6 +17,7 @@ export type HarnessChoice =
 	| "pi"
 	| "codex"
 	| "kimi"
+	| "muse-code"
 	| "hermes-agent"
 	| "gemini";
 export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
@@ -51,6 +52,7 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"pi",
 	"codex",
 	"kimi",
+	"muse-code",
 	"hermes-agent",
 	"gemini",
 ];
@@ -115,6 +117,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.pi) harnesses.push("Pi");
 	if (detection.harnesses.codex) harnesses.push("Codex");
 	if (detection.harnesses.kimi) harnesses.push("Kimi");
+	if (detection.harnesses.museCode) harnesses.push("Muse Code");
 	if (detection.harnesses.hermesAgent) harnesses.push("Hermes Agent");
 	if (detection.harnesses.gemini) harnesses.push("Gemini");
 	if (harnesses.length > 0) {

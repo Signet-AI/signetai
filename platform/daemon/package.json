@@ -70,6 +70,7 @@
 		"@signet/connector-forge": "workspace:*",
 		"@signet/connector-gemini": "workspace:*",
 		"@signet/connector-kimi": "workspace:*",
+		"@signet/connector-muse-code": "workspace:*",
 		"@signet/connector-oh-my-pi": "workspace:*",
 		"@signet/connector-openclaw": "workspace:*",
 		"@signet/connector-opencode": "workspace:*",

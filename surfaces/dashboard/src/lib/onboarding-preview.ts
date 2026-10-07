@@ -21,6 +21,7 @@ const previewHarnesses: HarnessSummary[] = [
 	["pi", "pi", "pi.svg"],
 	["oh-my-pi", "Oh My Pi", "oh-my-pi.svg"],
 	["kimi", "Kimi", "kimi.png"],
+	["muse-code", "Muse Code", "muse-code.png"],
 	["forge", "ForgeCode", "forge.svg"],
 ].map(([id, name, icon]) => ({ id, name, icon, path: "preview", exists: false, lastSeen: null }));
 

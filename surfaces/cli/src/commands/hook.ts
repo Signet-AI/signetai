@@ -650,11 +650,13 @@ export function buildSessionEndBody(
 	agentId?: string;
 	cwd: string;
 	reason: string;
+	lastAssistantMessage?: string;
 	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
 	const body = input ?? {};
 	const sessionKey = pickSessionKey(body);
 	const sessionId = pickString(body.session_id, body.sessionId, sessionKey);
+	const lastAssistantMessage = readLastAssistantMessage(body);
 	const nativeAgentId = harness === "claude-code" ? pickString(body.agent_id) : "";
 	const agentId = pickString(
 		body.signet_agent_id,
@@ -671,6 +673,7 @@ export function buildSessionEndBody(
 		...(agentId ? { agentId } : {}),
 		cwd: pickString(body.cwd),
 		reason: pickString(body.reason),
+		...(lastAssistantMessage ? { lastAssistantMessage } : {}),
 		runtimePath: LEGACY_RUNTIME_PATH,
 	};
 }

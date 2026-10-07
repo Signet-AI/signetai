@@ -19,6 +19,7 @@ export const HARNESS_INSTALLERS = {
 	pi: () => import("@signet/connector-pi").then((module) => module.PiConnector),
 	"oh-my-pi": () => import("@signet/connector-oh-my-pi").then((module) => module.OhMyPiConnector),
 	kimi: () => import("@signet/connector-kimi").then((module) => module.KimiConnector),
+	"muse-code": () => import("@signet/connector-muse-code").then((module) => module.MuseCodeConnector),
 	forge: () => import("@signet/connector-forge").then((module) => module.ForgeConnector),
 } satisfies Readonly<Record<string, HarnessConnectorLoader>>;
 

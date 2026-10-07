@@ -49,6 +49,8 @@ areas:
         name: "@signet/connector-hermes-agent"
       - path: integrations/kimi/connector
         name: "@signet/connector-kimi"
+      - path: integrations/muse-code/connector
+        name: "@signet/connector-muse-code"
       - path: integrations/oh-my-pi/connector
         name: "@signet/connector-oh-my-pi"
       - path: integrations/oh-my-pi/extension

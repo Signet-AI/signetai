@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { MuseCodeConnector } from "@signet/connector-muse-code";
 import { hasOhMyPiSetup } from "@signet/connector-oh-my-pi";
 import { hasPiSetup } from "@signet/connector-pi";
 import { IDENTITY_FILES, resolveHermesRepoPath, resolveKimiHomePath, resolveWorkspaceLayout } from "@signet/core";
@@ -24,6 +25,7 @@ export interface SetupDetection {
 		forge: boolean;
 		codex: boolean;
 		kimi: boolean;
+		museCode: boolean;
 		ohMyPi: boolean;
 		pi: boolean;
 		hermesAgent: boolean;
@@ -88,6 +90,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 				existsSync(join(resolveKimiHomePath(), "config.toml")) ||
 				existsSync(join(home, ".kimi-code", "config.toml")) ||
 				isBinaryOnPath("kimi"),
+			museCode: new MuseCodeConnector().isDetected() || isBinaryOnPath("muse"),
 			ohMyPi: hasOhMyPiSetup(),
 			pi: hasPiSetup(),
 			hermesAgent: resolveHermesRepoPath() !== null,

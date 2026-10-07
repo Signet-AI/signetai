@@ -191,6 +191,7 @@ export default defineConfig({
 								{ label: "Overview", slug: "harnesses" },
 								{ label: "Claude Code", slug: "harnesses/claude-code" },
 								{ label: "Kimi Code", slug: "harnesses/kimi" },
+								{ label: "Muse Code", slug: "harnesses/muse-code" },
 								{ label: "Codex", slug: "harnesses/codex" },
 								{ label: "OpenCode", slug: "harnesses/opencode" },
 								{ label: "Oh My Pi", slug: "harnesses/oh-my-pi" },
