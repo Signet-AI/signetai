@@ -16,6 +16,7 @@ let probeError: string | null = null;
 const calls: string[] = [];
 let identityFiles: Record<string, string> = {};
 let importFiles: Array<{ id: string; name: string }> = [];
+const pausedIn = (content: string): boolean => /paused: true/.test(content);
 if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 	test("onboarding browser fixture", () => {
 		const result = spawnSync(process.execPath, ["test", import.meta.filename], {
@@ -41,6 +42,11 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 				if (init?.method === "POST") {
 					if (saveFails) return Response.json({ error: "disk full" }, { status: 500 });
 					const body = JSON.parse(String(init.body));
+					if (body.file === "agent.yaml" && pausedIn(body.content) !== pausedIn(config))
+						return Response.json(
+							{ error: "memory.pipelineV2.paused changes only through pause or resume" },
+							{ status: 409 },
+						);
 					if (body.file === "agent.yaml") config = body.content;
 					else identityFiles[body.file] = body.content;
 					return Response.json({ success: true });
@@ -115,7 +121,13 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 					);
 				return Response.json({ text: "OK", decision: { targetRef: "background/default" }, attempts: [{ ok: true }] });
 			}
-			if (path === "/api/pipeline/resume") return Response.json({ success: true, mode: "controlled-write" });
+			if (path === "/api/pipeline/pause" || path === "/api/pipeline/resume") {
+				const paused = path === "/api/pipeline/pause";
+				config = /paused: (true|false)/.test(config)
+					? config.replace(/paused: (true|false)/, `paused: ${paused}`)
+					: config.replace(/( *)pipelineV2:\n( *)/, `$1pipelineV2:\n$2paused: ${paused}\n$2`);
+				return Response.json({ success: true, paused, mode: "controlled-write" });
+			}
 			if (path === "/api/agents") return Response.json({ agents: [{ id: "alice", name: "alice" }] });
 			if (path === "/api/memory/remember") {
 				const body = JSON.parse(String(init?.body));
@@ -383,6 +395,33 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			expect(document.body.textContent).toContain("What should your agents know about you");
 		} finally {
 			saveFails = false;
+			await view.close();
+		}
+	});
+
+	test("later setup saves keep the pipeline resumed and recall ignores surrounding whitespace", async () => {
+		config = "name: Example\nharnesses: []\n";
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
+			await view.click("Continue");
+			await view.click("Local model");
+			await view.input("Model name", "fixture-model");
+			await view.click("Test and enable memory");
+			expect(config).toContain("paused: false");
+			await view.click("Continue");
+			await view.click("Continue");
+			await view.click("Save search settings");
+			expect(config).toContain("paused: false");
+			await view.input("Your first memory", "I prefer short answers. ");
+			await view.click("Remember this");
+			await view.click("Recall it");
+			const query = new URLSearchParams({ q: "I prefer short answers.", agentId: "alice", limit: "20" });
+			expect(calls).toContain(`GET /memory/search?${query}`);
+		} finally {
 			await view.close();
 		}
 	});

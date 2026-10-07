@@ -829,3 +829,7 @@ Requires `admin` permission and uses the admin rate limit bucket.
 
 `changed` is `false` when the persisted pause flag already matches the
 requested state.
+
+Pause and resume are the only API routes that change `memory.pipelineV2.paused`.
+`POST /api/config` rejects an `agent.yaml` save that changes it, so the persisted
+flag and the running pipeline cannot drift apart.

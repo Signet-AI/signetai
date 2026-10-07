@@ -698,6 +698,30 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
+	it("follows the live automatic Dreaming setting instead of its startup snapshot", async () => {
+		let queueHealthChecks = 0;
+		let enabled = false;
+		const ownerMaintenance = {
+			queueIsHealthy: async () => {
+				queueHealthChecks += 1;
+				return false;
+			},
+		} as unknown as DbOwnerMaintenance;
+		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: true }), agentsDir, "default", {
+			checkIntervalMs: 10,
+			enabled: () => enabled,
+			ownerMaintenance,
+		});
+		try {
+			await new Promise<void>((resolve) => setTimeout(resolve, 50));
+			expect(queueHealthChecks).toBe(0);
+			enabled = true;
+			await waitFor(() => queueHealthChecks > 0, 2_000);
+		} finally {
+			worker.stop();
+		}
+	});
+
 	it("writes manual async trigger passes when automatic Dreaming is disabled", async () => {
 		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: false }), agentsDir, "default");
 		try {

@@ -351,7 +351,10 @@ contain path separators.
 Returns `400` for invalid file names, path traversal attempts, or wrong file
 or payload types. Returns `403` when saving a guarded config file (`agent.yaml`,
 `AGENT.yaml`, `config.yaml`) without `admin` permission in team or hybrid auth
-mode.
+mode. Returns `409` when an `agent.yaml` save would change
+`memory.pipelineV2.paused`; use [`POST /api/pipeline/pause`](/api/operations/#post-apipipelinepause)
+and [`POST /api/pipeline/resume`](/api/operations/#post-apipipelineresume), which
+also restart the pipeline runtime. Reload the file and retry the save.
 
 Provider selection is configured through the canonical `inference` routing
 block. Retired `memory.pipelineV2` provider/model/endpoint fields are rejected
