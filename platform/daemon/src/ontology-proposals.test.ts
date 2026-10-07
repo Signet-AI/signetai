@@ -1612,6 +1612,85 @@ describe("ontology proposals", () => {
 		expect(rows.map((row) => row.content)).toContain("Proposal-first mutation loop");
 	});
 
+	it("carries aliases and assertions through merge_entities without touching unrelated relations", async () => {
+		insertEntity("entity-signet", "Signet", "signet", "ant", 2);
+		insertEntity("entity-signet-ai", "Signet AI", "signet ai", "ant", 1);
+		insertEntity("entity-daemon", "Daemon", "daemon", "ant", 1);
+		insertEntity("entity-dot", "Dot Project", "dot project", "dot", 1);
+		getDbAccessor().withWriteTx((db) => {
+			const alias = db.prepare(
+				`INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, status)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+			);
+			alias.run("alias-target-active", "entity-signet", "ant", "Sig", "sig", "active");
+			alias.run("alias-target-archived", "entity-signet", "ant", "Old Signet", "old signet", "archived");
+			alias.run("alias-source-active", "entity-signet-ai", "ant", "SAI", "sai", "active");
+			alias.run("alias-source-archived-dup", "entity-signet-ai", "ant", "old signet", "old signet", "archived");
+			alias.run("alias-source-archived", "entity-signet-ai", "ant", "Sig", "sig", "archived");
+			alias.run("alias-dot", "entity-dot", "dot", "SAI", "sai", "active");
+			const assertion = db.prepare(
+				`INSERT INTO epistemic_assertions
+				 (id, agent_id, subject_entity_id, predicate, content, normalized_content, asserted_at)
+				 VALUES (?, ?, ?, 'claims', ?, ?, '2026-05-06T00:00:00.000Z')`,
+			);
+			assertion.run("assertion-target", "ant", "entity-signet", "Target claim", "target claim");
+			assertion.run("assertion-source", "ant", "entity-signet-ai", "Source claim", "source claim");
+			assertion.run("assertion-dot", "dot", "entity-dot", "Dot claim", "dot claim");
+			const relation = db.prepare(
+				`INSERT INTO relations (id, source_entity_id, target_entity_id, relation_type, created_at)
+				 VALUES (?, ?, ?, 'related_to', '2026-05-06T00:00:00.000Z')`,
+			);
+			relation.run("relation-source-target", "entity-signet-ai", "entity-signet");
+			relation.run("relation-target-source", "entity-signet", "entity-signet-ai");
+			relation.run("relation-source-daemon", "entity-signet-ai", "entity-daemon");
+			relation.run("relation-target-self", "entity-signet", "entity-signet");
+			relation.run("relation-dot-self", "entity-dot", "entity-dot");
+		});
+
+		const merge = await createOntologyProposal(getDbAccessor(), {
+			agentId: "ant",
+			operation: "merge_entities",
+			payload: { target_entity_id: "entity-signet", source_entity_ids: ["entity-signet-ai"] },
+		});
+		const applied = await applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: merge.id, actor: "test" });
+
+		expect(applied.status).toBe("applied");
+		const state = getDbAccessor().withReadDb((db) => ({
+			aliases: db.prepare("SELECT id, entity_id, agent_id, status FROM entity_aliases ORDER BY id").all() as Array<{
+				id: string;
+				entity_id: string;
+				agent_id: string;
+				status: string;
+			}>,
+			assertions: db
+				.prepare("SELECT id, subject_entity_id, agent_id FROM epistemic_assertions ORDER BY id")
+				.all() as Array<{ id: string; subject_entity_id: string; agent_id: string }>,
+			relations: db.prepare("SELECT id, source_entity_id, target_entity_id FROM relations ORDER BY id").all() as Array<{
+				id: string;
+				source_entity_id: string;
+				target_entity_id: string;
+			}>,
+		}));
+
+		expect(state.aliases).toEqual([
+			{ id: "alias-dot", entity_id: "entity-dot", agent_id: "dot", status: "active" },
+			{ id: "alias-source-active", entity_id: "entity-signet", agent_id: "ant", status: "active" },
+			{ id: "alias-source-archived", entity_id: "entity-signet", agent_id: "ant", status: "archived" },
+			{ id: "alias-target-active", entity_id: "entity-signet", agent_id: "ant", status: "active" },
+			{ id: "alias-target-archived", entity_id: "entity-signet", agent_id: "ant", status: "archived" },
+		]);
+		expect(state.assertions).toEqual([
+			{ id: "assertion-dot", subject_entity_id: "entity-dot", agent_id: "dot" },
+			{ id: "assertion-source", subject_entity_id: "entity-signet", agent_id: "ant" },
+			{ id: "assertion-target", subject_entity_id: "entity-signet", agent_id: "ant" },
+		]);
+		expect(state.relations).toEqual([
+			{ id: "relation-dot-self", source_entity_id: "entity-dot", target_entity_id: "entity-dot" },
+			{ id: "relation-source-daemon", source_entity_id: "entity-signet", target_entity_id: "entity-daemon" },
+			{ id: "relation-target-self", source_entity_id: "entity-signet", target_entity_id: "entity-signet" },
+		]);
+	});
+
 	it("applies ID-first merge_entities when entity names are ambiguous", async () => {
 		const target = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",

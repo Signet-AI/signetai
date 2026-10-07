@@ -1945,17 +1945,49 @@ function mergeEntityEdges(db: WriteDb, agentId: string, sourceId: string, target
 	let relationshipChanges = mergeEntityDependencies(db, agentId, sourceId, targetId);
 
 	relationshipChanges += db
+		.prepare(
+			`DELETE FROM relations
+			 WHERE (source_entity_id = ? AND target_entity_id IN (?, ?))
+			    OR (source_entity_id = ? AND target_entity_id = ?)`,
+		)
+		.run(sourceId, sourceId, targetId, targetId, sourceId).changes;
+	relationshipChanges += db
 		.prepare("UPDATE relations SET source_entity_id = ? WHERE source_entity_id = ?")
 		.run(targetId, sourceId).changes;
 	relationshipChanges += db
 		.prepare("UPDATE relations SET target_entity_id = ? WHERE target_entity_id = ?")
 		.run(targetId, sourceId).changes;
-	relationshipChanges += db.prepare("DELETE FROM relations WHERE source_entity_id = target_entity_id").run().changes;
 	db.prepare(
 		"INSERT OR IGNORE INTO memory_entity_mentions (memory_id, entity_id) SELECT memory_id, ? FROM memory_entity_mentions WHERE entity_id = ?",
 	).run(targetId, sourceId);
 	db.prepare("DELETE FROM memory_entity_mentions WHERE entity_id = ?").run(sourceId);
 	return relationshipChanges;
+}
+
+function mergeEntityAliases(db: WriteDb, agentId: string, sourceId: string, targetId: string): void {
+	db.prepare(
+		`DELETE FROM entity_aliases
+		 WHERE agent_id = ? AND entity_id = ?
+		   AND EXISTS (
+			 SELECT 1 FROM entity_aliases kept
+			 WHERE kept.agent_id = entity_aliases.agent_id AND kept.entity_id = ?
+			   AND kept.canonical_alias = entity_aliases.canonical_alias
+			   AND kept.status = entity_aliases.status
+		   )`,
+	).run(agentId, sourceId, targetId);
+	db.prepare(
+		`UPDATE entity_aliases
+		 SET entity_id = ?, updated_at = datetime('now')
+		 WHERE agent_id = ? AND entity_id = ?`,
+	).run(targetId, agentId, sourceId);
+}
+
+function mergeEntityAssertions(db: WriteDb, agentId: string, sourceId: string, targetId: string): void {
+	db.prepare(
+		`UPDATE epistemic_assertions
+		 SET subject_entity_id = ?, updated_at = datetime('now')
+		 WHERE agent_id = ? AND subject_entity_id = ?`,
+	).run(targetId, agentId, sourceId);
 }
 
 function mergeEntityDependencies(db: WriteDb, agentId: string, sourceId: string, targetId: string): number {
@@ -2063,6 +2095,8 @@ function applyMergeEntities(
 	for (const source of plan.sources) {
 		const movedAspects = mergeEntityAspects(db, agentId, source.id, plan.target.id);
 		relationshipChanges += mergeEntityEdges(db, agentId, source.id, plan.target.id);
+		mergeEntityAliases(db, agentId, source.id, plan.target.id);
+		mergeEntityAssertions(db, agentId, source.id, plan.target.id);
 		db.prepare(
 			`UPDATE entities
 			 SET mentions = COALESCE(mentions, 0) + COALESCE((SELECT mentions FROM entities WHERE id = ?), 0),
@@ -2528,7 +2562,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2529" },
+		{ siteToken: "ontology-proposals.ts:2563" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2566,7 +2600,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2546" },
+		{ siteToken: "ontology-proposals.ts:2580" },
 	);
 }
 
@@ -2624,7 +2658,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2578" },
+		{ siteToken: "ontology-proposals.ts:2612" },
 	);
 }
 
@@ -2719,7 +2753,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2662" },
+		{ siteToken: "ontology-proposals.ts:2696" },
 	);
 }
 
@@ -3140,7 +3174,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:3142",
+		siteToken: "ontology-proposals.ts:3176",
 	});
 }
 
@@ -3151,7 +3185,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:3153",
+		siteToken: "ontology-proposals.ts:3187",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3202,7 +3236,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3203" },
+		{ siteToken: "ontology-proposals.ts:3237" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {
