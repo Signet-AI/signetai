@@ -1454,6 +1454,24 @@ describe("Sources routes", () => {
 			sourcePath: "discord://guild/123/channel/456/message/stale",
 			content: "# Stale Message\n\nThis stale graph claim should disappear after snapshot import.",
 		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('snapshot-person', 'Stale Author', 'stale author', 'person', 'default', 1, datetime('now'), datetime('now'))`,
+			).run();
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('snapshot-aspect', 'snapshot-person', 'default', 'messages', 'messages', 0.5, datetime('now'), datetime('now'))`,
+			).run();
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, group_key,
+				  claim_key, version, created_at, updated_at, source_id, source_kind, source_path, source_root)
+				 VALUES ('snapshot-dreamed-claim', 'snapshot-aspect', 'default', 'attribute', 'Posted the stale message',
+				  'posted the stale message', 0.8, 0.5, 'active', 'general', 'posted', 1, datetime('now'), datetime('now'),
+				  ?, 'source_discord_message', 'discord://guild/123/channel/456/message/stale', 'dreaming')`,
+			).run(added.source.id);
+		});
 		insertSourceChunk({
 			id: "snapshot-stale-discord-chunk",
 			sourceId: `${added.source.id}:guild/123/channel/456/message/stale#0`,
@@ -1519,8 +1537,18 @@ describe("Sources routes", () => {
 				.all("default", added.source.id) as Array<{ source_path: string; content: string }>,
 		}));
 		expect(graph.documentPaths).toEqual(["discord://guild/123/channel/456/message/fresh"]);
-		expect(graph.attributes.some((row) => row.content.includes("Fresh imported Discord message"))).toBe(true);
-		expect(graph.attributes.some((row) => row.content.includes("stale graph claim"))).toBe(false);
+		expect(graph.attributes).toEqual([
+			{ source_path: "discord://guild/123/channel/456/message/stale", content: "Posted the stale message" },
+		]);
+		const flag = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT json_extract(details_json, '$.reason') AS reason FROM dreaming_attention WHERE subject_ref = 'attribute:snapshot-dreamed-claim'",
+					)
+					.get() as { reason: string } | null,
+		);
+		expect(flag?.reason).toBe("source_removed");
 	});
 
 	it("preserves local Discord cache DM artifacts during default snapshot import", async () => {
@@ -1826,7 +1854,7 @@ describe("Sources routes", () => {
 		const importedBody = (await imported.json()) as {
 			files: Array<{
 				sourceId: string;
-				extraction: { documentEntityId: string | null; aspectsCreated: number; attributesCreated: number };
+				extraction: { documentEntityId: string | null };
 			}>;
 		};
 		const importedFile = importedBody.files[0];
@@ -1840,7 +1868,7 @@ describe("Sources routes", () => {
 					id: string;
 					health?: {
 						semantic?: { attributes: number };
-						importExtraction?: { documentEntityId: string | null; aspectsCreated: number; attributesCreated: number };
+						importExtraction?: { documentEntityId: string | null };
 					};
 				}>;
 			};
@@ -1882,7 +1910,7 @@ describe("Sources routes", () => {
 		});
 
 		const afterDreaming = await readHealth();
-		expect(afterDreaming?.semantic?.attributes).toBeGreaterThan(first.attributesCreated);
+		expect(afterDreaming?.semantic?.attributes).toBeGreaterThan(0);
 		expect(afterDreaming?.importExtraction).toEqual(first);
 		const duplicateForm = new FormData();
 		duplicateForm.append("files", file);

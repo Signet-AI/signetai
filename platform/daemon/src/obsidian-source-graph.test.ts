@@ -38,7 +38,7 @@ describe("Obsidian source graph structure", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("maps vault folders, files, wikilinks, headings, and body claims into the existing graph", () => {
+	it("maps vault folders, files, and wikilinks into the graph without writing aspects or claims", () => {
 		const doc = join(vault, "literature", "Arch-Linux", "hyprland-desktop-shells.md");
 		const linked = join(vault, "literature", "Arch-Linux", "quickshell.md");
 		writeFileSync(
@@ -60,8 +60,6 @@ describe("Obsidian source graph structure", () => {
 		expect(result.folderEntitiesTouched).toBeGreaterThanOrEqual(2);
 		expect(result.documentEntitiesTouched).toBeGreaterThanOrEqual(1);
 		expect(result.dependenciesTouched).toBeGreaterThanOrEqual(3);
-		expect(result.aspectsTouched).toBeGreaterThanOrEqual(2);
-		expect(result.attributesTouched).toBeGreaterThanOrEqual(2);
 
 		const db = getDbAccessor();
 		const rows = db.withReadDb((read) => {
@@ -115,11 +113,8 @@ describe("Obsidian source graph structure", () => {
 		expect(rows.folder.entity_type).toBe("source_folder");
 		expect(rows.folder.source_path).toBe(join(vault, "literature", "Arch-Linux"));
 		expect(rows.community.name).toBe("literature/Arch-Linux");
-		expect(rows.aspects.map((row) => row.name)).toContain("Hyprland Desktop Shells");
-		expect(rows.aspects.map((row) => row.name)).toContain("Constraints");
-		expect(rows.attrs.some((row) => String(row.content).includes("Hyprland and Quickshell"))).toBe(true);
-		expect(rows.attrs.every((row) => row.source_path === doc)).toBe(true);
-		expect(rows.attrs.some((row) => row.group_key === "literature_arch_linux")).toBe(true);
+		expect(rows.aspects).toEqual([]);
+		expect(rows.attrs).toEqual([]);
 		expect(rows.links.some((row) => row.dependency_type === "contains")).toBe(true);
 		expect(rows.links.some((row) => row.dependency_type === "wiki_link")).toBe(true);
 		expect(rows.links.every((row) => row.source_path === doc)).toBe(true);
@@ -206,7 +201,7 @@ describe("Obsidian source graph structure", () => {
 		});
 	});
 
-	it("refreshes a changed note by removing stale headings, claims, and wiki-link dependencies", () => {
+	it("refreshes a changed note by replacing its wiki-link dependencies", () => {
 		const doc = join(vault, "literature", "Arch-Linux", "mutable.md");
 		writeFileSync(
 			doc,
@@ -250,15 +245,13 @@ describe("Obsidian source graph structure", () => {
 				.all("obsidian-graph-agent", doc) as Array<{ reason: string }>,
 		}));
 
-		expect(rows.aspects.map((row) => row.name)).toContain("New Heading");
-		expect(rows.aspects.map((row) => row.name)).not.toContain("Old Heading");
-		expect(rows.attrs.some((row) => row.content.includes("replacement paragraph"))).toBe(true);
-		expect(rows.attrs.some((row) => row.content.includes("original paragraph"))).toBe(false);
+		expect(rows.aspects).toEqual([]);
+		expect(rows.attrs).toEqual([]);
 		expect(rows.deps.some((row) => row.reason.includes("New Target"))).toBe(true);
 		expect(rows.deps.some((row) => row.reason.includes("Old Target"))).toBe(false);
 	});
 
-	it("purges graph structure for a removed source file without dropping sibling notes", () => {
+	it("removes a deleted file's structure, keeps sibling notes, and flags Dreaming claims citing it", () => {
 		const doc = join(vault, "literature", "Arch-Linux", "removed.md");
 		const sibling = join(vault, "literature", "Arch-Linux", "sibling.md");
 		writeFileSync(doc, "# Removed\n\nA removed note claim should leave the graph when the source file disappears.\n");
@@ -274,13 +267,17 @@ describe("Obsidian source graph structure", () => {
 			});
 		}
 		getDbAccessor().withWriteTx((db) => {
-			const aspect = db
-				.prepare(
-					`SELECT attr.aspect_id
-					 FROM entity_attributes attr
-					 WHERE attr.agent_id = ? AND attr.source_path = ? LIMIT 1`,
-				)
-				.get("obsidian-graph-agent", doc) as { aspect_id: string };
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('removed-project', 'Removed Project', 'removed project', 'project', 'obsidian-graph-agent', 1,
+				         datetime('now'), datetime('now'))`,
+			).run();
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('removed-aspect', 'removed-project', 'obsidian-graph-agent', 'facts', 'facts', 0.5,
+				         datetime('now'), datetime('now'))`,
+			).run();
+			const aspect = { aspect_id: "removed-aspect" };
 			txIngestEnvelope(db, {
 				id: "removed-dreaming-claim",
 				content: "The removed note contains this semantic claim.",
@@ -337,17 +334,19 @@ describe("Obsidian source graph structure", () => {
 			).count,
 			removedAttrs: (
 				db
-					.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE agent_id = ? AND source_path = ?")
+					.prepare(
+						"SELECT COUNT(*) AS count FROM entity_attributes WHERE agent_id = ? AND source_path = ? AND status = 'active'",
+					)
 					.get("obsidian-graph-agent", doc) as { count: number }
 			).count,
+			flag: db
+				.prepare(
+					"SELECT json_extract(details_json, '$.reason') AS reason FROM dreaming_attention WHERE subject_ref = ?",
+				)
+				.get("attribute:removed-dreaming-claim") as { reason: string } | null,
 			siblingEntities: (
 				db
 					.prepare("SELECT COUNT(*) AS count FROM entities WHERE agent_id = ? AND source_path = ?")
-					.get("obsidian-graph-agent", sibling) as { count: number }
-			).count,
-			siblingAttrs: (
-				db
-					.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE agent_id = ? AND source_path = ?")
 					.get("obsidian-graph-agent", sibling) as { count: number }
 			).count,
 			removedSemanticMemory: (
@@ -357,10 +356,10 @@ describe("Obsidian source graph structure", () => {
 			).is_deleted,
 		}));
 		expect(remaining.removedEntities).toBe(0);
-		expect(remaining.removedAttrs).toBe(0);
+		expect(remaining.removedAttrs).toBe(1);
+		expect(remaining.flag?.reason).toBe("source_removed");
 		expect(remaining.siblingEntities).toBeGreaterThan(0);
-		expect(remaining.siblingAttrs).toBeGreaterThan(0);
-		expect(remaining.removedSemanticMemory).toBe(1);
+		expect(remaining.removedSemanticMemory).toBe(0);
 	});
 
 	it("keeps same-agent vaults with identical relative paths isolated by source id", () => {
@@ -570,7 +569,7 @@ describe("Obsidian source graph structure", () => {
 			root,
 		});
 		expect(purged.entities).toBeGreaterThan(0);
-		expect(purged.attributes).toBeGreaterThan(0);
+		expect(purged.dependencies).toBeGreaterThan(0);
 
 		const remaining = getDbAccessor().withReadDb((read) => ({
 			topologyEntities: (
@@ -688,6 +687,12 @@ describe("Obsidian source graph structure", () => {
 			root: vault,
 			filePath: doc,
 		});
-		expect(state().active).toEqual([]);
+		const removed = state();
+		expect(removed.active).toEqual(["editor-claim", "terminal-claim"]);
+		expect(removed.aspect.count).toBe(1);
+		expect(removed.flags.map((flag) => [flag.subject_ref, JSON.parse(flag.details_json).reason]).sort()).toEqual([
+			["attribute:editor-claim", "source_removed"],
+			["attribute:terminal-claim", "source_removed"],
+		]);
 	});
 });

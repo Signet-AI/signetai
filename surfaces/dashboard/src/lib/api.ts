@@ -404,6 +404,9 @@ export interface KnowledgeConstellation {
 		entityType: string;
 		mentions: number;
 		pinned: boolean;
+		sourceId?: string | null;
+		sourceKind?: string | null;
+		sourcePath?: string | null;
 		aspects: Array<{
 			id: string;
 			name: string;
@@ -542,8 +545,6 @@ export interface SourceHealth {
 	};
 	importExtraction?: {
 		documentEntityId: string | null;
-		aspectsCreated: number;
-		attributesCreated: number;
 	};
 	permission?: {
 		status: "clear" | "denied";
@@ -729,8 +730,6 @@ export interface ImportSourcesResponse {
 				duplicate: boolean;
 				extraction?: {
 					documentEntityId: string | null;
-					aspectsCreated: number;
-					attributesCreated: number;
 				};
 		  }
 		| {
@@ -739,8 +738,6 @@ export interface ImportSourcesResponse {
 				sourceId: string;
 				extraction?: {
 					documentEntityId: string | null;
-					aspectsCreated: number;
-					attributesCreated: number;
 				};
 		  }
 		| { fileName: string; status: "failed"; error: string }

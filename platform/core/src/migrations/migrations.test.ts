@@ -415,7 +415,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(167);
+			expect(applied.version).toBe(168);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -2281,6 +2281,49 @@ describe("migration framework", () => {
 		expect(sql).toContain("tokenize='porter unicode61'");
 		expect(match("bake")).toEqual(["The user baked a chocolate cake"]);
 		expect(match("albums")).toEqual(["The user bought an album on vinyl"]);
+	});
+
+	test("migration 168 retires source paragraph claims and keeps Dreaming claims", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.exec(`
+			INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at,
+			                      source_id, source_kind, source_path, source_root)
+			VALUES ('doc', 'Note', 'obsidian:vault:document:note.md', 'source_document', 'default', 1, datetime('now'),
+			        datetime('now'), 'obsidian:vault', 'source_obsidian_markdown', '/vault/note.md', '/vault');
+			INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+			VALUES ('heading', 'doc', 'default', 'Overview', 'overview', 0.9, datetime('now'), datetime('now')),
+			       ('dreamed', 'doc', 'default', 'Tools', 'tools', 0.5, datetime('now'), datetime('now'));
+			INSERT INTO memories (id, content, type, confidence, created_at, updated_at, updated_by, agent_id)
+			VALUES ('paragraph', 'The note says a paragraph.', 'semantic', 0.9, datetime('now'), datetime('now'), 'dreaming', 'default'),
+			       ('aggregate', 'An aggregate built from the paragraph.', 'semantic', 0.9, datetime('now'), datetime('now'), 'recall', 'default');
+			INSERT INTO entity_attributes (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence,
+			                               importance, status, group_key, claim_key, created_at, updated_at,
+			                               source_id, source_kind, source_path, source_root)
+			VALUES ('paragraph', 'heading', 'default', 'paragraph', 'claim', 'The note says a paragraph.',
+			        'the note says a paragraph.', 0.85, 0.55, 'active', 'root', 'overview_0', datetime('now'), datetime('now'),
+			        'obsidian:vault', 'source_obsidian_markdown', '/vault/note.md', '/vault'),
+			       ('dreamed-claim', 'dreamed', 'default', NULL, 'attribute', 'Uses Neovim', 'uses neovim', 0.9, 0.5,
+			        'active', 'general', 'editor', datetime('now'), datetime('now'),
+			        'obsidian:vault', 'source_obsidian_markdown', '/vault/note.md', 'dreaming');
+			INSERT INTO derived_memory_sources (derived_memory_id, source_kind, source_id, agent_id, created_at)
+			VALUES ('aggregate', 'ontology_claim', 'paragraph', 'default', datetime('now'));
+		`);
+
+		db.prepare("DELETE FROM schema_migrations WHERE version = 168").run();
+		runMigrations(db);
+
+		const ids = (sql: string) => (db.query(sql).all() as Array<{ id: string }>).map((row) => row.id);
+		expect(ids("SELECT id FROM entity_attributes ORDER BY id")).toEqual(["dreamed-claim"]);
+		expect(ids("SELECT id FROM entity_aspects ORDER BY id")).toEqual(["dreamed"]);
+		expect(db.query("SELECT is_deleted FROM memories WHERE id = 'paragraph'").get()).toEqual({ is_deleted: 1 });
+		expect(db.query("SELECT event, changed_by FROM memory_history WHERE memory_id = 'paragraph'").get()).toEqual({
+			event: "deleted",
+			changed_by: "migration:168",
+		});
+		expect(
+			(db.query("SELECT stale_at FROM memories WHERE id = 'aggregate'").get() as { stale_at: string | null }).stale_at,
+		).not.toBeNull();
 	});
 
 	test("migration 063 limits memories_fts updates to content changes", () => {

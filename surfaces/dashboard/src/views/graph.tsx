@@ -219,7 +219,16 @@ export function GraphView() {
 				...(entityKind === "source" ? { detail: entity.name } : {}),
 				evidenceRefs:
 					entityKind === "source"
-						? [...new Set(entity.aspects.flatMap((aspect) => aspect.attributes.flatMap(graphEvidenceRefs)))]
+						? [
+								...new Set([
+									...graphEvidenceRefs({
+										sourceId: entity.sourceId ?? null,
+										sourceKind: entity.sourceKind ?? null,
+										sourcePath: entity.sourcePath ?? null,
+									}),
+									...entity.aspects.flatMap((aspect) => aspect.attributes.flatMap(graphEvidenceRefs)),
+								]),
+							]
 						: [],
 				cluster: entity.id,
 				weight: Math.sqrt(entity.mentions / maxMentions),

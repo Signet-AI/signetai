@@ -705,13 +705,10 @@ function extractionLabel(
 	extraction:
 		| {
 				readonly documentEntityId: string | null;
-				readonly aspectsCreated: number;
-				readonly attributesCreated: number;
 		  }
 		| undefined,
 	base: string,
 ): string {
-	if (!extraction) return `${base}; extraction result unavailable`;
-	const entity = extraction.documentEntityId ? "entity linked" : "no entity linked";
-	return `${base}; ${extraction.aspectsCreated} aspects · ${extraction.attributesCreated} attributes · ${entity}`;
+	if (!extraction) return `${base}; import result unavailable`;
+	return `${base}; ${extraction.documentEntityId ? "document linked" : "no document entity"}`;
 }

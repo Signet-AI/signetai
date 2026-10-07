@@ -1490,17 +1490,19 @@
     },
     {
       "path": "imported-source-outcome.ts",
-      "line": 16,
+      "line": 14,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:sources.import-outcome.write"
     },
     {
       "path": "imported-source-outcome.ts",
-      "line": 62,
+      "line": 60,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:sources.import-outcome.read"
     },
     {
       "path": "knowledge-graph-hygiene.ts",
@@ -1519,7 +1521,7 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 2118,
+      "line": 2121,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2269,21 +2271,21 @@
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 321,
+      "line": 284,
       "api": "existsSync",
       "source": "return existsSync(path) && statSync(path).isFile() ? normalizedPath(path) : null;",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 321,
+      "line": 284,
       "api": "statSync",
       "source": "return existsSync(path) && statSync(path).isFile() ? normalizedPath(path) : null;",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 736,
+      "line": 633,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -2291,7 +2293,7 @@
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 746,
+      "line": 643,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -2299,7 +2301,7 @@
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 824,
+      "line": 721,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -4993,7 +4995,7 @@
     },
     {
       "path": "source-artifact-graph.ts",
-      "line": 323,
+      "line": 275,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -5001,7 +5003,7 @@
     },
     {
       "path": "source-artifact-graph.ts",
-      "line": 347,
+      "line": 299,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -5009,10 +5011,11 @@
     },
     {
       "path": "source-snapshots.ts",
-      "line": 106,
+      "line": 107,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:sources.snapshot.export.read"
     },
     {
       "path": "startup-recovery.ts",

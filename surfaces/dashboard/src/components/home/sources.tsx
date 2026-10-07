@@ -370,23 +370,15 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 }
 
 function ImportExtractionSummary({ extraction }: { extraction: SourceHealth["importExtraction"] | undefined }) {
-	if (
-		!extraction ||
-		typeof extraction.aspectsCreated !== "number" ||
-		typeof extraction.attributesCreated !== "number"
-	) {
-		return <span className="truncate text-meta tabular-nums text-muted-foreground">extraction result unavailable</span>;
+	if (!extraction) {
+		return <span className="truncate text-meta tabular-nums text-muted-foreground">import result unavailable</span>;
 	}
-	if (extraction.aspectsCreated === 0 && extraction.attributesCreated === 0) {
-		return <span className="truncate text-meta tabular-nums text-muted-foreground">no structured graph result</span>;
-	}
-	const entity = extraction.documentEntityId ? "entity linked" : "no entity linked";
 	return (
 		<span
 			className="truncate text-meta tabular-nums text-muted-foreground"
 			title={extraction.documentEntityId ? `Document entity ${extraction.documentEntityId}` : undefined}
 		>
-			{extraction.aspectsCreated} aspects · {extraction.attributesCreated} attributes · {entity}
+			{extraction.documentEntityId ? "document indexed · read by Dreaming" : "no document entity"}
 		</span>
 	);
 }

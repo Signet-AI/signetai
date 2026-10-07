@@ -1858,6 +1858,9 @@ export interface ConstellationEntity {
 	readonly pinned: boolean;
 	readonly status: "active" | "archived";
 	readonly proposalId: string | null;
+	readonly sourceId: string | null;
+	readonly sourceKind: string | null;
+	readonly sourcePath: string | null;
 	readonly aspects: readonly ConstellationAspect[];
 }
 
@@ -2125,7 +2128,8 @@ export async function getKnowledgeGraphForConstellation(
 			const sourceClaimEntityTypePlaceholders = placeholders(SOURCE_CLAIM_ENTITY_TYPES.length);
 			const entityRows = db
 				.prepare(
-					`SELECT e.id, e.agent_id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id
+					`SELECT e.id, e.agent_id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id,
+				        e.source_id, e.source_kind, e.source_path
 				 FROM entities e
 				 WHERE e.agent_id IN (${agentPlaceholders})
 				   AND COALESCE(e.status, 'active') = 'active'
@@ -2138,19 +2142,12 @@ export async function getKnowledgeGraphForConstellation(
 							LOWER(TRIM(e.entity_type)) IN (${sourceClaimEntityTypePlaceholders})
 							AND EXISTS (
 								SELECT 1
-								FROM entity_aspects asp
-								JOIN entity_attributes attr
-								  ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
-								WHERE asp.entity_id = e.id
-								  AND asp.agent_id = e.agent_id
-								  AND COALESCE(asp.status, 'active') = 'active'
+								FROM entity_attributes attr
+								WHERE attr.agent_id = e.agent_id
+								  AND attr.source_id = e.source_id
+								  AND attr.source_path = e.source_path
+								  AND attr.source_root = 'dreaming'
 								  AND attr.status = 'active'
-								  AND attr.kind = 'claim'
-								  AND (
-									attr.source_id IS NOT NULL OR
-									attr.source_path IS NOT NULL OR
-									NULLIF(TRIM(attr.source_kind), '') IS NOT NULL
-								)
 							)
 						)
 				   )
@@ -2343,6 +2340,9 @@ export async function getKnowledgeGraphForConstellation(
 					pinned: row.pinned === 1,
 					status: row.status === "archived" ? "archived" : "active",
 					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+					sourceId: typeof row.source_id === "string" ? row.source_id : null,
+					sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+					sourcePath: typeof row.source_path === "string" ? row.source_path : null,
 					aspects,
 				};
 			});

@@ -189,8 +189,8 @@ agent.
 ```
 
 For `import` sources, `health.importExtraction` is present when the daemon has
-the durable extraction outcome. It reports the source-document entity id plus
-the aspects and attributes created by the import pipeline. This is distinct
+the durable import outcome. It reports the source-document entity id. Imports
+do not create aspects or claims; Dreaming files those later. This is distinct
 from `health.semantic`, which remains the current source-attributed graph
 diagnostic and can include later Dreaming-derived work.
 
@@ -383,19 +383,16 @@ one Dreaming job per conversation.
       "format": "json",
       "duplicate": false,
       "extraction": {
-        "documentEntityId": "entity-abc123",
-        "aspectsCreated": 2,
-        "attributesCreated": 3
+        "documentEntityId": "entity-abc123"
       }
     }
   ]
 }
 ```
 
-For an imported result, `extraction` reports the graph rows created by the
-source-artifact extraction transaction. A duplicate result also includes the
-current persisted extraction counts when the existing source has a linked
-document entity. Failed results omit `extraction` and retain their structured
+For an imported result, `extraction` reports the source-document entity the
+import linked. A duplicate result also includes the persisted outcome when the
+existing source has a linked document entity. Failed results omit `extraction` and retain their structured
 error. Older daemons may omit this object; clients should show an unavailable
 state rather than infer zero counts.
 

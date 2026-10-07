@@ -168,6 +168,7 @@ import { up as claimEventTime } from "./164-claim-event-time";
 import { up as dreamingHistory } from "./165-dreaming-history";
 import { up as dreamingPassPeakContext } from "./166-dreaming-pass-peak-context";
 import { up as memoriesFtsPorter } from "./167-memories-fts-porter";
+import { up as retireSourceParagraphClaims } from "./168-retire-source-paragraph-claims";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1520,6 +1521,11 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 167,
 		name: "memories-fts-porter",
 		up: memoriesFtsPorter,
+	},
+	{
+		version: 168,
+		name: "retire-source-paragraph-claims",
+		up: retireSourceParagraphClaims,
 	},
 ];
 function checksum(m: Migration): string {

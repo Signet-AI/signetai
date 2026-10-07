@@ -58,11 +58,7 @@ describe("imported source outcomes", () => {
 					agentId,
 					sourceId,
 					sourcePath,
-					outcome: {
-						documentEntityId: extraction.documentEntityId,
-						aspectsCreated: extraction.aspectsCreated,
-						attributesCreated: extraction.attributesCreated,
-					},
+					outcome: { documentEntityId: extraction.documentEntityId },
 				});
 				throw new Error("fault injection: crash before import extraction transaction commit");
 			}),

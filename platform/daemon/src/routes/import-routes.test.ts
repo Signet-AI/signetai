@@ -132,19 +132,13 @@ describe("import routes", () => {
 			files: Array<{
 				status: string;
 				sourceId?: string;
-				extraction?: { documentEntityId: string | null; aspectsCreated: number; attributesCreated: number };
+				extraction?: { documentEntityId: string | null };
 			}>;
 		};
 		expect(body.imported).toBe(1);
 		expect(body.failed).toBe(0);
 		expect(body.files[0]?.status).toBe("imported");
-		expect(body.files[0]?.extraction).toEqual({
-			documentEntityId: expect.any(String),
-			aspectsCreated: expect.any(Number),
-			attributesCreated: expect.any(Number),
-		});
-		expect(body.files[0]?.extraction?.aspectsCreated).toBeGreaterThan(0);
-		expect(body.files[0]?.extraction?.attributesCreated).toBeGreaterThan(0);
+		expect(body.files[0]?.extraction).toEqual({ documentEntityId: expect.any(String) });
 		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("import");
 		expect(loadSourcesConfig(dir).sources[0]?.providerSettings?.format).toBe("json");
 		const artifacts = getDbAccessor().withReadDb(
@@ -237,11 +231,7 @@ describe("import routes", () => {
 					fileName: "contacts.csv",
 					status: "duplicate",
 					sourceId: expect.any(String),
-					extraction: {
-						documentEntityId: expect.any(String),
-						aspectsCreated: expect.any(Number),
-						attributesCreated: expect.any(Number),
-					},
+					extraction: { documentEntityId: expect.any(String) },
 				},
 			],
 		});

@@ -2,8 +2,6 @@ import { type WriteDb, getDbAccessor } from "./db-accessor";
 
 export interface ImportExtractionOutcome {
 	readonly documentEntityId: string | null;
-	readonly aspectsCreated: number;
-	readonly attributesCreated: number;
 }
 
 export function persistImportedSourceOutcome(input: {
@@ -15,7 +13,7 @@ export function persistImportedSourceOutcome(input: {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => persistImportedSourceOutcomeInTx(db, input),
-		"imported-source-outcome.ts:16",
+		"db:sources.import-outcome.write",
 	);
 }
 
@@ -74,23 +72,16 @@ export function readImportedSourceOutcome(sourceId: string, agentId: string): Im
 			)
 			.get(agentId, sourceId) as { source_meta_json: string | null } | null | undefined;
 		return parseImportExtractionOutcome(parseJsonObject(row?.source_meta_json ?? null)?.importExtraction);
-	}, "imported-source-outcome.ts:62");
+	}, "db:sources.import-outcome.read");
 }
 
 function parseImportExtractionOutcome(value: unknown): ImportExtractionOutcome | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const candidate = value as Record<string, unknown>;
 	const documentEntityId = candidate.documentEntityId;
-	const aspectsCreated = candidate.aspectsCreated;
-	const attributesCreated = candidate.attributesCreated;
 	if (documentEntityId !== null && (typeof documentEntityId !== "string" || documentEntityId.length === 0))
 		return undefined;
-	if (!isNonNegativeInteger(aspectsCreated) || !isNonNegativeInteger(attributesCreated)) return undefined;
-	return { documentEntityId, aspectsCreated, attributesCreated };
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+	return { documentEntityId };
 }
 
 function parseJsonObject(value: string | null): Readonly<Record<string, unknown>> | null {

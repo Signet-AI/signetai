@@ -1161,7 +1161,7 @@ describe("native memory sources", () => {
 			).count,
 		}));
 		expect(before.entities).toBeGreaterThan(0);
-		expect(before.attrs).toBeGreaterThan(0);
+		expect(before.attrs).toBe(0);
 
 		await removeNativeMemoryFile(source, file, "agent-native");
 

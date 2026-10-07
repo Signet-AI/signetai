@@ -839,7 +839,9 @@ quote. Source re-indexing writes it instead of deleting the claim. A content
 pass reads the source's current text and keeps the claim (`decline_attention`),
 supersedes it with a quote from the new text, or archives it with
 `archive_claim_value` citing the record as `attention:<id>`, the one archive a
-content pass may make.
+content pass may make. Deleting a synced file or provider item writes the same
+record with reason `source_removed`, and the pass archives the claim unless other
+evidence still states it. Removing a whole source still purges its Dreaming rows.
 
 `memory_head_commit` is the sole working-memory publication capability. Submit
 its complete retained entry set with exact source/quote support and the revision

@@ -80,7 +80,7 @@ describe("source artifact graph structure", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("projects provider artifacts into source-owned graph rows without creating memories", () => {
+	it("projects provider artifacts into source topology without aspects, claims, or memories", () => {
 		const result = indexSourceArtifactStructure({
 			agentId: "default",
 			sourceId: "discord:test",
@@ -96,8 +96,6 @@ describe("source artifact graph structure", () => {
 		expect(result.documentEntityId).toBeTruthy();
 		expect(result.entitiesTouched).toBeGreaterThanOrEqual(3);
 		expect(result.dependenciesTouched).toBe(1);
-		expect(result.aspectsTouched).toBe(2);
-		expect(result.attributesTouched).toBeGreaterThanOrEqual(2);
 
 		const rows = getDbAccessor().withReadDb((db) => ({
 			memories: (db.prepare("SELECT COUNT(*) AS count FROM memories").get() as { count: number }).count,
@@ -129,10 +127,7 @@ describe("source artifact graph structure", () => {
 		expect(rows.doc.entity_type).toBe("source_document");
 		expect(rows.doc.source_id).toBe("discord:test");
 		expect(rows.doc.source_kind).toBe("source_discord_message");
-		expect(rows.attrs.length).toBeGreaterThanOrEqual(2);
-		expect(rows.attrs.every((row) => row.memory_id === null)).toBe(true);
-		expect(rows.attrs.every((row) => row.source_id === "discord:test")).toBe(true);
-		expect(rows.attrs.some((row) => String(row.content).includes("provider provenance"))).toBe(true);
+		expect(rows.attrs).toEqual([]);
 		expect(rows.deps).toEqual([
 			{
 				dependency_type: "contains",
@@ -335,8 +330,7 @@ describe("source artifact graph structure", () => {
 					.prepare("SELECT content FROM entity_attributes WHERE agent_id = ? AND source_path = ?")
 					.all("default", base.sourcePath) as Array<{ content: string }>,
 		);
-		expect(attrs.some((row) => row.content.includes("replacement"))).toBe(true);
-		expect(attrs.some((row) => row.content.includes("original"))).toBe(false);
+		expect(attrs).toEqual([]);
 
 		const purged = purgeSourceArtifactStructure({
 			agentId: "default",
@@ -373,7 +367,14 @@ describe("source artifact graph structure", () => {
 			sourceRoot: "github://repos/Signet-AI/signetai",
 			sourcePath: "github://Signet-AI/signetai/docs/README.md",
 			displayName: "README",
-			content: "# README\n\nThis source document has a claim that creates an aspect row.\n",
+			content: "# README\n\nThis source document is linked into the graph.\n",
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 SELECT 'readme-aspect', id, 'default', 'overview', 'overview', 0.5, datetime('now'), datetime('now')
+				 FROM entities WHERE source_path = 'github://Signet-AI/signetai/docs/README.md'`,
+			).run();
 		});
 
 		const purged = await purgeSourceOwnedRows({ agentId: "default", sourceId: "github:test" });
@@ -706,6 +707,15 @@ describe("source artifact graph structure", () => {
 		expect(flags()[0]?.resolved_at).not.toBeNull();
 
 		purgeSourceArtifactStructure({ agentId: "default", sourceId: base.sourceId, sourcePath: base.sourcePath });
-		expect(claims()).toEqual([]);
+		expect(claims().map((claim) => claim.status)).toEqual(["active", "deleted"]);
+		const removed = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT json_extract(details_json, '$.reason') AS reason FROM dreaming_attention WHERE subject_ref = ? AND resolved_at IS NULL",
+					)
+					.get(`attribute:${detection?.id}`) as { reason: string } | null,
+		);
+		expect(removed?.reason).toBe("source_removed");
 	});
 });

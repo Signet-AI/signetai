@@ -128,7 +128,7 @@ describe("discord-source-provider", () => {
 			).count,
 		}));
 		expect(graph.docs).toBeGreaterThan(0);
-		expect(graph.attrs).toBeGreaterThan(0);
+		expect(graph.attrs).toBe(0);
 	});
 
 	it("optionally indexes bounded text-like Discord attachments", async () => {

@@ -8,6 +8,7 @@ import { syncVecDeleteByEmbeddingIds } from "./db-helpers";
 import { hashNormalizedBody, upsertMemoryArtifactInTx } from "./memory-lineage";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { indexSourceArtifactStructureInTx } from "./source-artifact-graph";
+import { flagDreamingClaimsForMissingSourcePathsInTx } from "./source-claim-review";
 
 export const SOURCE_SNAPSHOT_VERSION = 1;
 
@@ -143,7 +144,7 @@ export function exportSourceSnapshot(options: ExportSourceSnapshotOptions): Sour
 			artifacts,
 			skipped: { localDiscordArtifacts: skippedLocal },
 		};
-	}, "source-snapshots.ts:106");
+	}, "db:sources.snapshot.export.read");
 }
 
 export async function importSourceSnapshot(options: ImportSourceSnapshotOptions): Promise<ImportSourceSnapshotResult> {
@@ -253,6 +254,7 @@ export function applySourceSnapshotImportInTx(
 			);
 		}
 	}
+	flagDreamingClaimsForMissingSourcePathsInTx(db as WriteDb, { agentId: input.agentId, sourceId: input.sourceId });
 	return { imported: artifacts.length };
 }
 
@@ -328,7 +330,8 @@ function purgeImportScopeGraph(
 			`SELECT id, source_path
 			   FROM entities
 			  WHERE agent_id = ?
-			    AND source_id = ?`,
+			    AND source_id = ?
+			    AND COALESCE(source_root, '') NOT IN ('dreaming', 'dreaming_attention')`,
 		)
 		.all(agentId, sourceId) as Array<{ id: string; source_path: string | null }>;
 	const entityIds = entityRows
@@ -340,7 +343,8 @@ function purgeImportScopeGraph(
 			`SELECT id, source_path
 			   FROM entity_attributes
 			  WHERE agent_id = ?
-			    AND source_id = ?`,
+			    AND source_id = ?
+			    AND COALESCE(source_root, '') NOT IN ('dreaming', 'dreaming_attention')`,
 		)
 		.all(agentId, sourceId) as Array<{ id: string; source_path: string | null }>;
 	const depRows = db
@@ -348,7 +352,8 @@ function purgeImportScopeGraph(
 			`SELECT id, source_path
 			   FROM entity_dependencies
 			  WHERE agent_id = ?
-			    AND source_id = ?`,
+			    AND source_id = ?
+			    AND COALESCE(source_root, '') NOT IN ('dreaming', 'dreaming_attention')`,
 		)
 		.all(agentId, sourceId) as Array<{ id: string; source_path: string | null }>;
 	const communityRows = db
@@ -356,11 +361,15 @@ function purgeImportScopeGraph(
 			`SELECT id, source_path
 			   FROM entity_communities
 			  WHERE agent_id = ?
-			    AND source_id = ?`,
+			    AND source_id = ?
+			    AND COALESCE(source_root, '') NOT IN ('dreaming', 'dreaming_attention')`,
 		)
 		.all(agentId, sourceId) as Array<{ id: string; source_path: string | null }>;
 
-	const deleteAspect = db.prepare("DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?");
+	const deleteAspect = db.prepare(
+		`DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?
+		 AND NOT EXISTS (SELECT 1 FROM entity_attributes attr WHERE attr.aspect_id = entity_aspects.id)`,
+	);
 	for (const entityId of entityIds) deleteAspect.run(agentId, entityId);
 
 	const deleteAttr = db.prepare("DELETE FROM entity_attributes WHERE agent_id = ? AND id = ?");
@@ -381,7 +390,10 @@ function purgeImportScopeGraph(
 		}
 	}
 
-	const deleteEntity = db.prepare("DELETE FROM entities WHERE agent_id = ? AND id = ?");
+	const deleteEntity = db.prepare(
+		`DELETE FROM entities WHERE agent_id = ? AND id = ?
+		 AND NOT EXISTS (SELECT 1 FROM entity_aspects asp WHERE asp.entity_id = entities.id)`,
+	);
 	for (const entityId of entityIds) deleteEntity.run(agentId, entityId);
 	reconcileOntologyContradictionsInTx(db as WriteDb, { agentId, sourceId });
 }
