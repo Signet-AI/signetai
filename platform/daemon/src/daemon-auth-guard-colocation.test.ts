@@ -657,8 +657,9 @@ inference:
 			registerMiscRoutes(app);
 			const agentPath = join(state.AGENTS_DIR, "agent.yaml");
 			const configPath = join(state.AGENTS_DIR, "config.yaml");
-			const original = readFileSync(agentPath, "utf-8");
+			const original = existsSync(agentPath) ? readFileSync(agentPath, "utf-8") : null;
 			const originalConfig = existsSync(configPath) ? readFileSync(configPath, "utf-8") : null;
+			const fixture = readFileSync(join(tmpDir, "agent.yaml"), "utf-8");
 			const token = createToken(secret, { sub: "config-admin", role: "admin", scope: {} }, 60);
 			const save = (content: string) =>
 				app.request("/api/config", {
@@ -667,10 +668,12 @@ inference:
 					body: JSON.stringify({ file: "agent.yaml", content }),
 				});
 			try {
-				expect(original).not.toContain("paused");
+				mkdirSync(state.AGENTS_DIR, { recursive: true });
+				writeFileSync(agentPath, fixture);
+				expect(fixture).not.toContain("paused");
 				const paused = await save("memory:\n  pipelineV2:\n    paused: true\n");
 				expect(paused.status).toBe(409);
-				expect(readFileSync(agentPath, "utf-8")).toBe(original);
+				expect(readFileSync(agentPath, "utf-8")).toBe(fixture);
 
 				const unchanged = "memory:\n  pipelineV2:\n    paused: false\n";
 				expect((await save(unchanged)).status).toBe(200);
@@ -684,7 +687,8 @@ inference:
 			} finally {
 				if (originalConfig === null) rmSync(configPath, { force: true });
 				else writeFileSync(configPath, originalConfig);
-				writeFileSync(agentPath, original);
+				if (original === null) rmSync(agentPath, { force: true });
+				else writeFileSync(agentPath, original);
 			}
 		});
 		it("POST /api/agents distinguishes omitted, null, valid, and invalid policy_group", async () => {
