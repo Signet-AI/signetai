@@ -28,6 +28,11 @@ export interface PendingSessionSwitch {
 	readonly toSessionId: string;
 }
 
+export interface PromptRecall {
+	readonly inject: string | undefined;
+	readonly clockContext: string | undefined;
+}
+
 export interface BaseSessionState {
 	setActiveSession(sessionId: string | undefined, sessionFile: string | undefined): void;
 	getActiveSessionId(): string | undefined;
@@ -47,6 +52,9 @@ export interface BaseSessionState {
 	clearPendingSessionData(sessionId: string | undefined): void;
 	hasPendingRecall(sessionId: string | undefined): boolean;
 	consumePendingRecall(sessionId: string | undefined): string | undefined;
+	setPendingPromptSubmit(sessionId: string, submit: Promise<PromptRecall | undefined>): void;
+	hasPendingPromptSubmit(sessionId: string | undefined): boolean;
+	takePendingPromptSubmit(sessionId: string | undefined): Promise<PromptRecall | undefined> | undefined;
 	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void;
 	clearPendingSessionEnd(sessionId: string | undefined): void;
 	getPendingSessionEnds(): ReadonlyArray<PendingSessionEnd>;
@@ -59,6 +67,7 @@ export class BaseSessionStateStore implements BaseSessionState {
 	protected readonly pendingSessionContext = new Map<string, string>();
 	protected readonly pendingRecall = new Map<string, string[]>();
 	protected readonly pendingClock = new Map<string, string>();
+	private readonly pendingPromptSubmits = new Map<string, Promise<PromptRecall | undefined>>();
 	private readonly pendingSessionEnds = new Map<string, PendingSessionEnd>();
 	private readonly pendingSessionSwitches: PendingSessionSwitch[] = [];
 	private readonly endedSessions = new Map<string, number>();
@@ -161,6 +170,7 @@ export class BaseSessionStateStore implements BaseSessionState {
 		this.pendingSessionContext.delete(sessionId);
 		this.pendingRecall.delete(sessionId);
 		this.pendingClock.delete(sessionId);
+		this.pendingPromptSubmits.delete(sessionId);
 		this.pendingSessionEnds.delete(sessionId);
 	}
 
@@ -177,6 +187,25 @@ export class BaseSessionStateStore implements BaseSessionState {
 		const inject = queue.shift();
 		if (queue.length === 0) this.pendingRecall.delete(sessionId);
 		return readTrimmedString(inject);
+	}
+
+	setPendingPromptSubmit(sessionId: string, submit: Promise<PromptRecall | undefined>): void {
+		if (!this.pendingPromptSubmits.has(sessionId)) {
+			evictOldestKey(this.pendingPromptSubmits, MAX_PENDING_SESSIONS);
+		}
+		this.pendingPromptSubmits.set(sessionId, submit);
+	}
+
+	hasPendingPromptSubmit(sessionId: string | undefined): boolean {
+		if (!sessionId) return false;
+		return this.pendingPromptSubmits.has(sessionId);
+	}
+
+	takePendingPromptSubmit(sessionId: string | undefined): Promise<PromptRecall | undefined> | undefined {
+		if (!sessionId) return undefined;
+		const submit = this.pendingPromptSubmits.get(sessionId);
+		this.pendingPromptSubmits.delete(sessionId);
+		return submit;
 	}
 
 	queuePendingSessionEnd(sessionId: string, sessionFile: string, agentId: string | undefined, reason: string): void {

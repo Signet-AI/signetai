@@ -3,13 +3,14 @@ import { createDaemonClient } from "./daemon-client.js";
 import {
 	type LifecycleDeps,
 	OMP_LIFECYCLE_CONFIG,
+	beginPromptSubmit,
 	currentSessionRef,
 	endCurrentSession,
 	endPreviousSession,
 	ensureSessionContext,
 	refreshSessionStart,
 	requestNotifications,
-	requestRecallForPrompt,
+	settlePromptSubmit,
 } from "./lifecycle.js";
 import { type OmpSessionState, createSessionState } from "./session-state.js";
 import {
@@ -53,20 +54,18 @@ interface OmpDeps extends LifecycleDeps {
 }
 
 function registerPromptHandlers(pi: OmpExtensionApi, deps: OmpDeps): void {
-	pi.on("input", async (event: OmpInputEvent, ctx) => {
-		const session = currentSessionRef(ctx);
-		deps.state.clearPendingRecall(session.sessionId);
-		deps.state.clearPendingClock(session.sessionId);
-		await requestRecallForPrompt(deps, ctx, event.text);
+	pi.on("input", (event: OmpInputEvent, ctx) => {
+		beginPromptSubmit(deps, ctx, event.text);
 	});
 
 	pi.on("before_agent_start", async (event: OmpBeforeAgentStartEvent, ctx) => {
+		if (!deps.state.hasPendingPromptSubmit(currentSessionRef(ctx).sessionId)) {
+			beginPromptSubmit(deps, ctx, event.prompt);
+		}
+		await settlePromptSubmit(deps, ctx);
 		await ensureSessionContext(deps, ctx);
 		const session = currentSessionRef(ctx);
 		if (!session.sessionId) return;
-		if (!deps.state.hasPendingRecall(session.sessionId)) {
-			await requestRecallForPrompt(deps, ctx, event.prompt);
-		}
 		const notificationInject = await requestNotifications(deps, ctx, "before_agent_start", false);
 		if (notificationInject) deps.state.mergeIntoNextPendingRecall(session.sessionId, notificationInject);
 

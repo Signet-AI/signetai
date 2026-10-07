@@ -29,7 +29,7 @@ Otherwise it writes to `~/.pi/agent/extensions/`.
 - Existing unrelated pi extensions are left untouched.
 - Signet refuses to overwrite a colliding unmanaged `signet-pi.js`.
 - Daemon or network failures are fail-open, so prompt handling, compaction, session switches, and shutdown continue even if Signet is unavailable.
-- **Automatic recall**: On every user prompt, the extension automatically fetches relevant memories from the daemon and injects them as hidden messages (`display: false`) into the agent's context. These injections are kept out of transcript reconstruction.
+- **Automatic recall**: On every user prompt, the extension starts a prompt-submit request without delaying input acceptance, waits for it once before the agent starts (or before the next model call for steering and follow-up messages), and injects the result as hidden messages (`display: false`) into the agent's context. A failed or timed-out prompt-submit is not retried for the same prompt. These injections are kept out of transcript reconstruction.
 - **Manual commands**: `/recall <query>` and `/remember <content>` let users explicitly search and store memories. The `/recall` command **displays results in the UI only** — it does not inject them into the conversation context. `/signet-status` shows connection and memory stats.
   - `/remember <content>` — save a memory
   - `/remember critical: <content>` — save as pinned (never decays)
@@ -59,9 +59,10 @@ environment variable overrides the file setting.
 
 **Environment Variable** (overrides file config):
 
-| Variable         | Description                    |
-|------------------|--------------------------------|
-| `SIGNET_ENABLED` | Set to `false` to disable      |
+| Variable                       | Description                                              |
+|--------------------------------|----------------------------------------------------------|
+| `SIGNET_ENABLED`               | Set to `false` to disable                                |
+| `SIGNET_PROMPT_SUBMIT_TIMEOUT` | Prompt-submit daemon wait budget in ms (default `5000`)  |
 
 Examples:
 
