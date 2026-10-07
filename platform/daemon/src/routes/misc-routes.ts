@@ -11,7 +11,8 @@ import type { Hono } from "hono";
 import { invalidateAgentScopeCache } from "../agent-id.js";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
-import { dbOwnerBatch, dbOwnerQuery } from "../db-owner-runtime.js";
+import type { AgentRemovalResult } from "../agent-removal.js";
+import { dbOwnerAgentRemove, dbOwnerQuery } from "../db-owner-runtime.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { loadPipelineConfig } from "../memory-config.js";
 import { openBoundedSse } from "../sse-stream.js";
@@ -348,21 +349,28 @@ export function registerMiscRoutes(app: Hono): void {
 			{ operation: "agents.get_for_delete", lane: "read", deadlineMs: 2_000 },
 		);
 		if (!agent) return c.json({ error: "Agent not found" }, 404);
-		await dbOwnerBatch(
-			[
+		let result: AgentRemovalResult;
+		try {
+			result = await dbOwnerAgentRemove(
 				{
-					sql: purge
-						? "DELETE FROM memories WHERE agent_id = ?"
-						: "UPDATE memories SET visibility = 'archived' WHERE agent_id = ?",
-					params: [name],
-					result: "run",
+					agentId: agent.id,
+					mode: purge ? "purge" : "archive",
+					changedBy: "agents-api",
+					changedAt: new Date().toISOString(),
 				},
-				{ sql: "DELETE FROM agents WHERE id = ?", params: [agent.id], result: "run" },
-			],
-			{ operation: "agents.delete", lane: "write", deadlineMs: 10_000 },
-		);
-		invalidateAgentScopeCache(agent.id);
-		return c.json({ success: true, purged: purge });
+				{ operation: purge ? "agents.purge" : "agents.archive", lane: "write", deadlineMs: 60_000 },
+			);
+		} catch (error) {
+			logger.error("api", "Agent removal failed", error instanceof Error ? error : new Error(String(error)), {
+				agentId: agent.id,
+				purge,
+			});
+			return c.json({ error: error instanceof Error ? error.message : "Agent removal failed" }, 500);
+		} finally {
+			invalidateAgentScopeCache(agent.id);
+		}
+		if (result.status === "not_found") return c.json({ error: "Agent not found" }, 404);
+		return c.json({ success: true, purged: purge, mode: result.mode, rows: result.rows });
 	});
 
 	app.get("/api/update/check", async (c) => {

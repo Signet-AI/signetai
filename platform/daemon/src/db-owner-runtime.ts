@@ -21,6 +21,7 @@ import {
 } from "./db-owner-maintenance";
 import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
+import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
 import type {
 	DbOwnerJob,
 	DbOwnerParameter,
@@ -180,6 +181,8 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 				purged: purged + purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId),
 			};
 		});
+	if (request.kind === "agent_remove")
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => removeAgentInTx(db as never, request.input));
 	if (request.kind === "vector_search") {
 		return invokeAccessor(accessor, "withReadDb", (db) =>
 			vectorSearchWithMetadata(db as never, new Float32Array(request.payload.queryEmbedding), request.payload.options),
@@ -581,6 +584,18 @@ export async function dbOwnerSourcePurge(
 	return await submitWithAdmission<{ readonly purged: number }>(
 		owner,
 		{ kind: "source_purge", input },
+		{ ...options, lane: options.lane ?? "write" },
+	);
+}
+
+export async function dbOwnerAgentRemove(
+	input: AgentRemovalInput,
+	options: DbOwnerSqlOptions,
+): Promise<AgentRemovalResult> {
+	const owner = await getDbOwner();
+	return await submitWithAdmission<AgentRemovalResult>(
+		owner,
+		{ kind: "agent_remove", input },
 		{ ...options, lane: options.lane ?? "write" },
 	);
 }
