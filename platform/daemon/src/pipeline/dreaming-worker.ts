@@ -627,7 +627,14 @@ export function startDreamingWorker(
 	}
 
 	async function check(): Promise<void> {
-		if (stopped || admission !== null || exclusiveRunning() || usedSlots() >= maxPasses() || !(options.enabled ? options.enabled() : cfg.enabled)) return;
+		if (
+			stopped ||
+			admission !== null ||
+			exclusiveRunning() ||
+			usedSlots() >= maxPasses() ||
+			!(options.enabled ? options.enabled() : cfg.enabled)
+		)
+			return;
 		const checkedAt = new Date().toISOString();
 		if (isSystemPressureHigh()) {
 			scheduler = { status: "deferred", reason: "system_pressure", checkedAt };

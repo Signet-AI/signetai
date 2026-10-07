@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type PipelineReflectionsConfig, redactCredentials, resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
+import {
+	type PipelineReflectionsConfig,
+	redactCredentials,
+	resolveDefaultBasePath,
+	resolveWorkspaceLayout,
+} from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
 import { getDbOwner } from "../db-owner-runtime";
 import { ownerReadAll } from "../db-owner-sql";
@@ -358,7 +363,7 @@ export function collectReflectionContext(
 			tags: r.tags ?? "",
 			createdAt: r.created_at,
 		}));
-	}, "pipeline/reflection-worker.ts:340");
+	}, "pipeline/reflection-worker.ts:345");
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const existingReflections = dbAccessor.withReadDb((db: import("../db-accessor").ReadDb) => {
@@ -370,7 +375,7 @@ export function collectReflectionContext(
 			)
 			.all(agentId) as { id: string; question: string | null; summary: string; created_at: string }[];
 		return rows.map((r) => ({ id: r.id, question: r.question, summary: r.summary, createdAt: r.created_at }));
-	}, "pipeline/reflection-worker.ts:364");
+	}, "pipeline/reflection-worker.ts:369");
 
 	return { memories, summaries: [], transcripts: [], graphFacts: [], existingReflections };
 }
@@ -436,7 +441,7 @@ export async function generateDailyBriefInsights(
 				);
 			if (result.changes > 0) ids.push(id);
 		}
-	}, "pipeline/reflection-worker.ts:414");
+	}, "pipeline/reflection-worker.ts:419");
 
 	return ids;
 }
