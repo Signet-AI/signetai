@@ -11,6 +11,7 @@ import {
 } from "./obsidian-source-graph";
 import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
+import { removeAgentInTx } from "./agent-removal";
 import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./memory-lineage";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
@@ -1123,6 +1124,19 @@ export function runDbOwnerWorker(): void {
 				const transcriptPurged = purgeTranscriptImportSourceInTx(db as never, input.agentId, input.sourceId);
 				commit(context);
 				return { purged: purged + transcriptPurged };
+			} catch (error) {
+				try {
+					db.exec("ROLLBACK");
+				} catch {}
+				throw error;
+			}
+		}
+		if (job.request.kind === "agent_remove") {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const result = removeAgentInTx(db as never, job.request.input);
+				commit(context);
+				return result;
 			} catch (error) {
 				try {
 					db.exec("ROLLBACK");
