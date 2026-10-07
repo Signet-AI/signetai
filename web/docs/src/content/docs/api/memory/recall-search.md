@@ -57,7 +57,13 @@ Exact date phrases in `query`, such as `2026/05/13`, `2026-05-13`, or
 `May 13 2026`, activate temporal recall automatically. Date-only queries return
 a timeline assembled from existing session, source, captured-memory,
 and explicit temporal-edge metadata. A date plus topic uses the date as a
-filter and the remaining words as the content query. Date ranges accept full
+filter and the remaining words as the content query. Memories in the window
+that match the topic rank first; when they leave result slots empty, other
+memories from the same window fill them, ordered by similarity to the query
+and marked `source: "temporal_window"`. A memory dated in the window can
+match a topic without sharing its words ("saw Queen live" for "music event"),
+so the window is not discarded for lack of keyword overlap. Fill never
+crosses the caller's scope or read policy. Date ranges accept full
 `YYYY-MM-DD/YYYY-MM-DD` or abbreviated same-month `YYYY-MM-DD/DD` notation;
 named ranges such as `July 25/26 2026` are also accepted. Callers can also pass
 a `time` object directly. Supported temporal facets are `session`, `source`,

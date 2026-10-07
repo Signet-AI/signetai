@@ -2746,6 +2746,34 @@ export async function hybridRecall(
 			const bObserved = observedScores.get(b.id);
 			return (bObserved ?? b.score) - (aObserved ?? a.score);
 		});
+		if (temporalCandidateSet.size > 0 && scored.length < limit) {
+			const present = new Set(scored.map((row) => row.id));
+			const missing = [...temporalCandidateSet].filter((id) => !present.has(id));
+			if (missing.length > 0) {
+				const similarity = new Map<string, number>();
+				if (queryVecF32) {
+					const queryVector = queryVecF32;
+					const embRows = await graphOwnerReadAll<{ source_id: string; vector: Buffer | null }>(
+						`SELECT source_id, vector FROM embeddings
+						 WHERE source_type = 'memory' AND source_id IN (${missing.map(() => "?").join(", ")}) AND vector IS NOT NULL`,
+						missing,
+						"memory-search.temporal-window-fill",
+						missing.length,
+					);
+					for (const row of embRows) {
+						if (!row.vector) continue;
+						const vector = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
+						similarity.set(row.source_id, cosineSimilarity(queryVector, vector));
+					}
+				}
+				const floor = Math.min(minScore, ...scored.map((row) => row.score));
+				const fill = missing
+					.sort((a, b) => (similarity.get(b) ?? 0) - (similarity.get(a) ?? 0))
+					.slice(0, limit - scored.length)
+					.map((id, index) => ({ id, score: floor * (1 - (index + 1) / (limit * 2)), source: "temporal_window" }));
+				scored.push(...(await authorizeScoredCandidates(fill, filter)));
+			}
+		}
 	});
 	const preHydrate = selectionDedupeEnabled
 		? Math.max(needsPostFilter ? limit * 3 : limit, Math.min(scored.length, Math.max(limit * 4, limit + 10)))

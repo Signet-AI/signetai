@@ -1394,7 +1394,7 @@ describe("hybridRecall", () => {
 		expect(result.results.map((row) => row.id)).not.toContain("mem-later");
 	});
 
-	it("lets hybrid topic evidence filter scoped temporal edge candidates", async () => {
+	it("ranks topic-matched temporal edge candidates first and never fills across scope", async () => {
 		const savedAt = "2026-05-24T18:00:00.000Z";
 		getDbAccessor().withWriteTx((db) => {
 			const agent = db.prepare(
@@ -1481,12 +1481,13 @@ describe("hybridRecall", () => {
 			async () => null,
 		);
 
-		expect(result.results.map((row) => row.id)).toContain("mem-alpha-edge");
-		expect(result.results.map((row) => row.id)).not.toContain("mem-alpha-offtopic-edge");
-		expect(result.results.map((row) => row.id)).not.toContain("mem-beta-edge");
+		const ids = result.results.map((row) => row.id);
+		expect(ids[0]).toBe("mem-alpha-edge");
+		expect(ids.indexOf("mem-alpha-offtopic-edge")).not.toBe(0);
+		expect(ids).not.toContain("mem-beta-edge");
 	});
 
-	it("does not cap temporal edge candidates to result limit before topic evidence", async () => {
+	it("ranks the topic match first and fills remaining slots with same-window memories", async () => {
 		const savedAt = "2026-05-24T18:00:00.000Z";
 		getDbAccessor().withWriteTx((db) => {
 			for (let index = 0; index < 8; index += 1) {
@@ -1547,8 +1548,9 @@ describe("hybridRecall", () => {
 			async () => null,
 		);
 
-		expect(result.results.map((row) => row.id)).toContain("mem-relevant-limit");
-		expect(result.results.some((row) => row.id.startsWith("mem-offtopic-limit-"))).toBe(false);
+		expect(result.results[0]?.id).toBe("mem-relevant-limit");
+		expect(result.results).toHaveLength(2);
+		expect(result.results[1]?.source).toBe("temporal_window");
 	});
 
 	it("honors explicit timeline mode even when query text is present", async () => {
