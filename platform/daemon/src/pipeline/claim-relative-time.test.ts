@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { findUnresolvedRelativeTime } from "./claim-relative-time";
+import { findUnresolvedRelativeTime, findUntimedIsoDate } from "./claim-relative-time";
 
 describe("claim relative time", () => {
 	it("finds relative times that go stale once the conversation is over", () => {
@@ -30,5 +30,23 @@ describe("claim relative time", () => {
 			"On 19 March 2023 the user said they had started running last month.",
 		];
 		for (const text of allowed) expect(findUnresolvedRelativeTime(text)).toBeNull();
+	});
+});
+
+describe("findUntimedIsoDate", () => {
+	it("flags a dated claim that sets no claim time", () => {
+		expect(findUntimedIsoDate("The user saw Queen live with their parents shortly before 2023-04-15.", {})).toBe(
+			"2023-04-15",
+		);
+	});
+
+	it("accepts any claim time field, and undated text", () => {
+		const text = "As of 2023-05-23 the user was thinking of getting a new wireless mouse.";
+		expect(findUntimedIsoDate(text, { valid_from: "2023-05-23" })).toBeNull();
+		expect(findUntimedIsoDate(text, { occurred_at: "2023-05-23" })).toBeNull();
+		expect(findUntimedIsoDate("The user's lease ends 2024-06-30.", { valid_until: "2024-06-30" })).toBeNull();
+		expect(findUntimedIsoDate("Acme plans to travel on 2026-08-03.", { review_after: "2026-08-03" })).toBeNull();
+		expect(findUntimedIsoDate("The user prefers to work in the morning.", {})).toBeNull();
+		expect(findUntimedIsoDate("The user ran a campaign in April 2023.", {})).toBeNull();
 	});
 });

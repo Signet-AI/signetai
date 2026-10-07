@@ -1102,6 +1102,36 @@ describe("dreaming operations", () => {
 		expect(row.review_after).toBe("2026-08-03T06:00:00.000Z");
 	});
 
+	it("rejects a dated claim that sets no claim time, so date-filtered recall can find it", async () => {
+		insertEntity("e-user", "User", "user");
+		insertAspect("a-events", "e-user", "events");
+		insertEpisodicMemory("mem-concert", "We saw Queen with my parents last weekend!");
+		const attempt = (timing: Record<string, string>) =>
+			applyDreamingOperations({
+				accessor: getDbAccessor(),
+				agentId: "agent-a",
+				actor: "dreaming",
+				operations: [
+					{
+						operation: "add_claim_value",
+						payload: {
+							entityId: "e-user",
+							aspectId: "a-events",
+							claimKey: "queen_concert",
+							value: "Shortly before 2023-04-15 the user saw Queen live with their parents.",
+							...timing,
+						},
+						evidence: [{ source_ref: "memory:mem-concert", quote: "We saw Queen with my parents" }],
+					},
+				],
+			});
+		const untimed = await attempt({});
+		expect(untimed.ok).toBe(false);
+		expect(untimed.items[0]?.error).toContain("names the date 2023-04-15 but sets no claim time");
+		const timed = await attempt({ occurredAt: "2023-04-15", timePrecision: "approximate" });
+		expect(timed.ok).toBe(true);
+	});
+
 	it("carries claim event time from a Dreaming operation onto the claim", async () => {
 		insertEntity("e-user", "User", "user");
 		insertAspect("a-events", "e-user", "events");

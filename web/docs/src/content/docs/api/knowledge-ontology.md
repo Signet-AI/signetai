@@ -782,6 +782,13 @@ A relative phrase kept next to its resolved date ("the next week (week of
 2023-06-05)") is allowed, as are durations ("in one day") and vague times with
 no anchor ("recently").
 
+Claim text that names an ISO date (`2023-04-15`) must also set a claim time
+(`occurredAt`, `validFrom`, `validUntil`, or `reviewAfter`); otherwise that
+operation is rejected with an error asking for the time field, using
+`timePrecision: approximate` when the source is vague ("shortly before
+2023-04-15"). Without a stored time, date-filtered recall cannot find the
+claim.
+
 ### GET /api/dream/passes/:passId/tools
 
 Return the local, ordered Pi capability trace for one Dreaming pass: every

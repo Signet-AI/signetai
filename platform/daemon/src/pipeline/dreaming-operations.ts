@@ -15,7 +15,7 @@ import {
 	DREAMING_OPERATION_IDS,
 	DREAMING_STRUCTURAL_OPERATIONS,
 } from "./dreaming-operation-contract";
-import { findUnresolvedRelativeTime } from "./claim-relative-time";
+import { findUnresolvedRelativeTime, findUntimedIsoDate } from "./claim-relative-time";
 
 export interface DreamingOperationRequest {
 	readonly operation: string;
@@ -565,6 +565,15 @@ const CLAIM_TIMING_FIELDS = [
 	["timePrecision", "time_precision"],
 ] as const;
 
+function snakeTimingFields(payload: Readonly<Record<string, unknown>>): Record<string, string> {
+	const timing: Record<string, string> = {};
+	for (const [, key] of CLAIM_TIMING_FIELDS) {
+		const value = stringField(payload, key);
+		if (value !== null) timing[key] = value;
+	}
+	return timing;
+}
+
 function claimTimingPayload(payload: Readonly<Record<string, unknown>>): Record<string, string> {
 	const timing: Record<string, string> = {};
 	for (const [field, key] of CLAIM_TIMING_FIELDS) {
@@ -740,6 +749,10 @@ function relativeTimeError(index: number, operation: string, phrase: string): st
 	return `Operation ${index} (${operation}) value contains the relative time "${phrase}", which is wrong once the conversation is over. Resolve it against the source's capturedAt, write the absolute date in the value, and set occurredAt (events) or validFrom (states) with timePrecision.`;
 }
 
+function untimedDateError(index: number, operation: string, date: string): string {
+	return `Operation ${index} (${operation}) value names the date ${date} but sets no claim time, so date-filtered recall cannot find it. Set occurredAt for an event or validFrom for a state (validUntil for an end date), with timePrecision approximate when the source is vague ("shortly before ${date}").`;
+}
+
 function unresolvedTarget(index: number, operation: string, detail: string): string {
 	return `Could not resolve operation ${index} target (${operation}): ${detail}`;
 }
@@ -865,6 +878,15 @@ function applyValidatedOperationBody(
 				index: entry.index,
 				ok: false,
 				error: relativeTimeError(entry.index, entry.input.operation, relativeTime),
+			};
+		}
+		const timing = { ...claimTimingPayload(entry.input.payload), ...snakeTimingFields(entry.input.payload) };
+		const untimedDate = findUntimedIsoDate(claimValue, timing);
+		if (untimedDate !== null) {
+			return {
+				index: entry.index,
+				ok: false,
+				error: untimedDateError(entry.index, entry.input.operation, untimedDate),
 			};
 		}
 	}

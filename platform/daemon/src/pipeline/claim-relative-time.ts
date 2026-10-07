@@ -30,3 +30,10 @@ export function findUnresolvedRelativeTime(text: string): string | null {
 	if (match === null || ABSOLUTE_DATE.test(text)) return null;
 	return match[0];
 }
+
+const ISO_DATE = /\b\d{4}-\d{2}-\d{2}\b/;
+
+export function findUntimedIsoDate(text: string, timing: Readonly<Record<string, string>>): string | null {
+	if (timing.occurred_at || timing.valid_from || timing.valid_until || timing.review_after) return null;
+	return ISO_DATE.exec(text)?.[0] ?? null;
+}
