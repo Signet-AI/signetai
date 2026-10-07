@@ -1,6 +1,6 @@
 import { parse, stringify } from "yaml";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { type ApiReadResult, api, getJSONResult } from "@/lib/api";
 
 type YamlObject = Record<string, unknown>;
 
@@ -67,13 +67,29 @@ function delPath(obj: YamlObject, path: readonly string[]): void {
 	if (path.length > 0) del(obj, 0);
 }
 
-export function isDreamingEnabled(agent: Record<string, unknown>): boolean {
-	const memory = agent.memory;
-	if (memory === null || typeof memory !== "object" || Array.isArray(memory)) return false;
-	const pipeline = (memory as Record<string, unknown>).pipelineV2;
-	if (pipeline === null || typeof pipeline !== "object" || Array.isArray(pipeline)) return true;
-	const gates = pipeline as Record<string, unknown>;
-	return gates.paused !== true && gates.mutationsFrozen !== true;
+export function dreamingBlockedBy(agent: Record<string, unknown>): "paused" | "frozen" | null {
+	if (getPath(agent, ["memory", "pipelineV2", "paused"]) === true) return "paused";
+	if (getPath(agent, ["memory", "pipelineV2", "mutationsFrozen"]) === true) return "frozen";
+	return null;
+}
+
+export interface PipelinePauseResult {
+	readonly success: boolean;
+	readonly paused: boolean;
+	readonly mode: string;
+}
+
+export async function setPipelinePaused(
+	store: Pick<AgentConfigStore, "aSetBool">,
+	paused: boolean,
+	signal?: AbortSignal,
+): Promise<ApiReadResult<PipelinePauseResult>> {
+	const result = await getJSONResult<PipelinePauseResult>(`/api/pipeline/${paused ? "pause" : "resume"}`, {
+		method: "POST",
+		signal,
+	});
+	if (result.data?.success) store.aSetBool(["memory", "pipelineV2", "paused"], result.data.paused);
+	return result;
 }
 
 export interface AgentConfigStore {

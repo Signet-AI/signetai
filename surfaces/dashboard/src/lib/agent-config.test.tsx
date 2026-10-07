@@ -5,7 +5,7 @@ import { useEffect, useRef } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import {
 	type AgentConfigStore,
-	isDreamingEnabled,
+	dreamingBlockedBy,
 	pv2MaintenanceMode,
 	pv2ToggleValue,
 	pv2ToggleWriteForm,
@@ -118,11 +118,12 @@ afterAll(() => {
 
 describe("agent config store", () => {
 	test("dreaming follows the daemon's pipeline gate contract", () => {
-		expect(isDreamingEnabled({ memory: { pipelineV2: { enabled: true } } })).toBe(true);
-		expect(isDreamingEnabled({ memory: { pipelineV2: { paused: false, mutationsFrozen: false } } })).toBe(true);
-		expect(isDreamingEnabled({ memory: { pipelineV2: { paused: true } } })).toBe(false);
-		expect(isDreamingEnabled({ memory: { pipelineV2: { mutationsFrozen: true } } })).toBe(false);
-		expect(isDreamingEnabled({ memory: { dreaming: {} } })).toBe(true);
+		expect(dreamingBlockedBy({ memory: { pipelineV2: { enabled: true } } })).toBeNull();
+		expect(dreamingBlockedBy({ memory: { pipelineV2: { paused: false, mutationsFrozen: false } } })).toBeNull();
+		expect(dreamingBlockedBy({ memory: { pipelineV2: { paused: true } } })).toBe("paused");
+		expect(dreamingBlockedBy({ memory: { pipelineV2: { mutationsFrozen: true } } })).toBe("frozen");
+		expect(dreamingBlockedBy({ memory: { pipelineV2: { paused: true, mutationsFrozen: true } } })).toBe("paused");
+		expect(dreamingBlockedBy({ memory: { dreaming: {} } })).toBeNull();
 	});
 
 	test("config readers can display daemon defaults without overwriting explicit values", async () => {

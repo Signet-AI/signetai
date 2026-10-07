@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useEffect, useRef, useState } from "react";
 import { api, getJSONResult, onboardingPreview, type Memory } from "@/lib/api";
-import { useAgentConfig } from "@/lib/agent-config";
+import { setPipelinePaused, useAgentConfig } from "@/lib/agent-config";
 import { useAsync } from "@/lib/use-async";
 import { allowRemoteMemoryExtraction, ensureInferenceRoute } from "@/lib/inference-route-config";
 import { providerKeySecretName } from "@/lib/inference-keys";
@@ -473,20 +473,19 @@ export function OnboardingPage({
 				if (!probe.data?.text.trim() || !probe.data.attempts.some((a) => a.ok))
 					throw new Error("The model did not answer. Check the connection and try again.");
 				store.aSetBool(["memory", "pipelineV2", "enabled"], true);
-				store.aSetBool(["memory", "pipelineV2", "paused"], true);
 				if (!(await store.save()))
 					throw new Error("The test passed, but memory settings could not be saved. Retry to finish.");
 				signal.throwIfAborted();
-				const result = await getJSONResult<{ success: boolean; mode: string }>("/api/pipeline/resume", {
-					method: "POST",
-					signal,
-				});
+				const pause = await setPipelinePaused(store, true, signal);
+				if (!pause.data?.success)
+					throw new Error(pause.error ?? "The test passed, but memory could not be restarted. Retry to finish.");
+				signal.throwIfAborted();
+				const result = await setPipelinePaused(store, false, signal);
 				if (!result.data?.success || result.data.mode !== "controlled-write")
 					throw new Error(
 						result.error ??
 							"Memory is still paused, frozen, or in shadow mode. Review its controls in Settings before retrying.",
 					);
-				store.aSetBool(["memory", "pipelineV2", "paused"], false);
 				setVerified(true);
 			});
 			return;

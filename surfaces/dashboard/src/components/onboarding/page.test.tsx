@@ -16,6 +16,7 @@ let probeError: string | null = null;
 const calls: string[] = [];
 let identityFiles: Record<string, string> = {};
 let importFiles: Array<{ id: string; name: string }> = [];
+const pausedIn = (content: string): boolean => /paused: true/.test(content);
 if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 	test("onboarding browser fixture", () => {
 		const result = spawnSync(process.execPath, ["test", import.meta.filename], {
@@ -41,6 +42,11 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 				if (init?.method === "POST") {
 					if (saveFails) return Response.json({ error: "disk full" }, { status: 500 });
 					const body = JSON.parse(String(init.body));
+					if (body.file === "agent.yaml" && pausedIn(body.content) !== pausedIn(config))
+						return Response.json(
+							{ error: "memory.pipelineV2.paused changes only through pause or resume" },
+							{ status: 409 },
+						);
 					if (body.file === "agent.yaml") config = body.content;
 					else identityFiles[body.file] = body.content;
 					return Response.json({ success: true });
@@ -115,9 +121,12 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 					);
 				return Response.json({ text: "OK", decision: { targetRef: "background/default" }, attempts: [{ ok: true }] });
 			}
-			if (path === "/api/pipeline/resume") {
-				config = config.replace("paused: true", "paused: false");
-				return Response.json({ success: true, mode: "controlled-write" });
+			if (path === "/api/pipeline/pause" || path === "/api/pipeline/resume") {
+				const paused = path === "/api/pipeline/pause";
+				config = /paused: (true|false)/.test(config)
+					? config.replace(/paused: (true|false)/, `paused: ${paused}`)
+					: config.replace(/( *)pipelineV2:\n( *)/, `$1pipelineV2:\n$2paused: ${paused}\n$2`);
+				return Response.json({ success: true, paused, mode: "controlled-write" });
 			}
 			if (path === "/api/agents") return Response.json({ agents: [{ id: "alice", name: "alice" }] });
 			if (path === "/api/memory/remember") {
