@@ -3793,7 +3793,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 452,
+      "line": 451,
       "api": "withReadDb",
       "source": "accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -3801,7 +3801,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 502,
+      "line": 501,
       "api": "withWriteTx",
       "source": "const result = getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -3809,7 +3809,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 534,
+      "line": 533,
       "api": "withReadDb",
       "source": "const unlinked = accessor.withReadDb(",
       "category": "hot-path",
@@ -3817,7 +3817,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 565,
+      "line": 564,
       "api": "withReadDb",
       "source": "const preview = accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -3825,7 +3825,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 616,
+      "line": 615,
       "api": "withWriteTx",
       "source": "const result = accessor.withWriteTx(",
       "category": "hot-path",
@@ -3833,7 +3833,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 627,
+      "line": 626,
       "api": "withReadDb",
       "source": "const remaining = accessor.withReadDb(",
       "category": "hot-path",
@@ -3841,7 +3841,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 669,
+      "line": 668,
       "api": "withReadDb",
       "source": "const unhinted = accessor.withReadDb(",
       "category": "hot-path",
@@ -3849,7 +3849,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 695,
+      "line": 694,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -3857,7 +3857,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 703,
+      "line": 702,
       "api": "withReadDb",
       "source": "const remaining = accessor.withReadDb(",
       "category": "hot-path",
@@ -3865,7 +3865,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 744,
+      "line": 743,
       "api": "withReadDb",
       "source": "const dead = getDbAccessor().withReadDb(",
       "category": "hot-path",
