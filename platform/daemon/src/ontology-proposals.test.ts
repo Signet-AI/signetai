@@ -174,7 +174,7 @@ describe("ontology proposals", () => {
 			content: "Ontology extraction preserves provenance before mutating semantic state.",
 			type: "semantic",
 			memory_kind: "derived",
-			source_type: "dreaming",
+			source_type: "ant",
 			source_id: "transcript:test",
 			mentions: 1,
 		});
@@ -2273,6 +2273,65 @@ describe("ontology proposals", () => {
 			superseded_by: null,
 		});
 		expect(restoredMemoryState.find((memory) => memory.id === v3.result?.attributeId)?.superseded_by).toBe(shown?.id);
+	});
+
+	it("records the applying actor on projected claim memories and their history", async () => {
+		const claim = {
+			entity: "Signet",
+			entity_type: "project",
+			aspect: "architecture",
+			group_key: "ontology",
+		};
+		const apply = (operation: string, payload: Record<string, unknown>) =>
+			applyOntologyOperation(getDbAccessor(), { agentId: "ant", actor: "operator", operation, payload });
+
+		const added = await apply("add_claim_value", { ...claim, claim_key: "added", value: "Added value." });
+		const first = await apply("set_claim_value", { ...claim, claim_key: "set", value: "First value." });
+		const second = await apply("set_claim_value", { ...claim, claim_key: "set", value: "Second value." });
+		const superseded = await apply("supersede_claim_value", {
+			...claim,
+			claim_key: "added",
+			attribute_id: added.result?.attributeId,
+			new_value: "Superseding value.",
+		});
+		await apply("restore_claim_version", { attribute_id: first.result?.attributeId });
+		await apply("archive_claim_value", { attribute_id: superseded.result?.replacementAttributeId });
+
+		const memoryIds = [
+			added.result?.attributeId,
+			first.result?.attributeId,
+			second.result?.attributeId,
+			superseded.result?.replacementAttributeId,
+		];
+		expect(memoryIds.every((id) => typeof id === "string")).toBe(true);
+		const placeholders = memoryIds.map(() => "?").join(", ");
+		const memories = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(`SELECT who, updated_by, source_type FROM memories WHERE id IN (${placeholders})`)
+					.all(...memoryIds) as Array<{ who: string; updated_by: string; source_type: string }>,
+		);
+		expect(memories).toHaveLength(4);
+		for (const memory of memories) {
+			expect(memory).toEqual({ who: "operator", updated_by: "operator", source_type: "operator" });
+		}
+		const history = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT memory_id, event, changed_by FROM memory_history
+						 WHERE memory_id IN (${placeholders}) ORDER BY memory_id, event`,
+					)
+					.all(...memoryIds) as Array<{ memory_id: string; event: string; changed_by: string }>,
+		);
+		expect(history.map((row) => row.event).sort()).toEqual([
+			"deleted",
+			"recovered",
+			"superseded",
+			"superseded",
+			"superseded",
+		]);
+		expect(history.every((row) => row.changed_by === "operator")).toBe(true);
 	});
 
 	it("archives claim values and hides them from default active reads", async () => {

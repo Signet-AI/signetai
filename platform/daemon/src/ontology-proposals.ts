@@ -905,6 +905,7 @@ function applyCreatePolicy(
 	agentId: string,
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
+	actor: string,
 ): Readonly<Record<string, unknown>> {
 	const target = readPayloadSelector(payload, "target_entity", "entity", "entity_id");
 	const policyKind = readString(payload, "kind");
@@ -912,17 +913,23 @@ function applyCreatePolicy(
 	if (target === null) throw new OntologyProposalError("payload.target_entity is required", 400);
 	if (policyKind === null) throw new OntologyProposalError("payload.kind is required", 400);
 	if (content === null) throw new OntologyProposalError("payload.content is required", 400);
-	const result = applyAddClaimValue(db, agentId, proposal, {
-		entity: target,
-		entity_type: readString(payload, "entity_type") ?? undefined,
-		aspect: "policy",
-		group_key: "policy",
-		claim_key: canonicalKey(policyKind) ?? policyKind,
-		value: content,
-		kind: "constraint",
-		confidence: readNumber(payload, "confidence") ?? proposal.confidence,
-		importance: readNumber(payload, "importance") ?? proposal.confidence,
-	});
+	const result = applyAddClaimValue(
+		db,
+		agentId,
+		proposal,
+		{
+			entity: target,
+			entity_type: readString(payload, "entity_type") ?? undefined,
+			aspect: "policy",
+			group_key: "policy",
+			claim_key: canonicalKey(policyKind) ?? policyKind,
+			value: content,
+			kind: "constraint",
+			confidence: readNumber(payload, "confidence") ?? proposal.confidence,
+			importance: readNumber(payload, "importance") ?? proposal.confidence,
+		},
+		actor,
+	);
 	return { ...result, policyKind, policy: content };
 }
 
@@ -979,6 +986,7 @@ function materializeAttributeMemoryInTx(
 		readonly reviewAfter: string | null;
 		readonly time: ClaimTime;
 		readonly proposal: ProposalRow;
+		readonly actor: string;
 	},
 ): string {
 	const existing = db.prepare("SELECT id FROM memories WHERE id = ?").get(input.attributeId) as
@@ -990,7 +998,7 @@ function materializeAttributeMemoryInTx(
 			content: input.content,
 			normalizedContent: input.normalizedContent,
 			contentHash: `semantic-attribute:${input.attributeId}`,
-			who: "dreaming",
+			who: input.actor,
 			why: input.proposal.rationale || null,
 			project: null,
 			importance: input.importance,
@@ -998,9 +1006,9 @@ function materializeAttributeMemoryInTx(
 			tags: "semantic,attribute",
 			pinned: 0,
 			extractionStatus: "completed",
-			updatedBy: "dreaming",
+			updatedBy: input.actor,
 			memoryKind: "derived",
-			sourceType: "dreaming",
+			sourceType: input.actor,
 			sourceId: input.proposal.source_id,
 			sourcePath: input.proposal.source_path,
 			agentId: input.agentId,
@@ -1041,14 +1049,19 @@ function materializeAttributeMemoryInTx(
 
 function supersedeAttributeMemoryInTx(
 	db: WriteDb,
-	input: { readonly memoryId: string | null; readonly replacementMemoryId: string; readonly proposal: ProposalRow },
+	input: {
+		readonly memoryId: string | null;
+		readonly replacementMemoryId: string;
+		readonly proposal: ProposalRow;
+		readonly actor: string;
+	},
 ): void {
 	if (!input.memoryId || input.memoryId === input.replacementMemoryId) return;
 	const result = txSupersedeMemory(db, {
 		memoryId: input.memoryId,
 		supersededBy: input.replacementMemoryId,
 		reason: input.proposal.rationale || null,
-		changedBy: "dreaming",
+		changedBy: input.actor,
 		changedAt: now(),
 	});
 	if (result.status !== "superseded" && result.status !== "already_superseded") {
@@ -1062,12 +1075,18 @@ function supersedeAttributeMemoryInTx(
 	});
 }
 
-function archiveAttributeMemoryInTx(db: WriteDb, memoryId: string | null, proposal: ProposalRow, force: boolean): void {
+function archiveAttributeMemoryInTx(
+	db: WriteDb,
+	memoryId: string | null,
+	proposal: ProposalRow,
+	actor: string,
+	force: boolean,
+): void {
 	if (!memoryId) return;
 	const result = txForgetMemory(db, {
 		memoryId,
 		reason: proposal.rationale || "Semantic claim archived",
-		changedBy: "dreaming",
+		changedBy: actor,
 		changedAt: now(),
 		force,
 	});
@@ -1085,7 +1104,7 @@ function archiveAttributeMemoryInTx(db: WriteDb, memoryId: string | null, propos
 	});
 }
 
-function restoreAttributeMemoryInTx(db: WriteDb, memoryId: string | null, proposal: ProposalRow): void {
+function restoreAttributeMemoryInTx(db: WriteDb, memoryId: string | null, proposal: ProposalRow, actor: string): void {
 	if (!memoryId) return;
 	const memory = db.prepare("SELECT id, content, is_deleted, superseded_by FROM memories WHERE id = ?").get(memoryId) as
 		| { id: string; content: string; is_deleted: number; superseded_by: string | null }
@@ -1096,15 +1115,15 @@ function restoreAttributeMemoryInTx(db: WriteDb, memoryId: string | null, propos
 	db.prepare(
 		`UPDATE memories
 		 SET is_deleted = 0, deleted_at = NULL, superseded_by = NULL, superseded_at = NULL,
-		     superseded_reason = NULL, updated_at = ?, updated_by = 'dreaming', version = version + 1
+		     superseded_reason = NULL, updated_at = ?, updated_by = ?, version = version + 1
 		 WHERE id = ?`,
-	).run(changedAt, memoryId);
+	).run(changedAt, actor, memoryId);
 	insertHistoryEvent(db, {
 		memoryId,
 		event: "recovered",
 		oldContent: null,
 		newContent: memory.content,
-		changedBy: "dreaming",
+		changedBy: actor,
 		reason: proposal.rationale || "Semantic claim restored",
 		metadata: JSON.stringify({ previousSupersededBy: memory.superseded_by }),
 		createdAt: changedAt,
@@ -1116,6 +1135,7 @@ function applyAddClaimValue(
 	agentId: string,
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
+	actor: string,
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
 	const entity = readString(payload, "entity");
@@ -1229,6 +1249,7 @@ function applyAddClaimValue(
 		reviewAfter,
 		time,
 		proposal,
+		actor,
 	});
 	return {
 		entityId,
@@ -1245,6 +1266,7 @@ function applySetClaimValue(
 	agentId: string,
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
+	actor: string,
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
 	const entity = readString(payload, "entity");
@@ -1394,12 +1416,14 @@ function applySetClaimValue(
 		reviewAfter,
 		time,
 		proposal,
+		actor,
 	});
 	if (newerActive !== undefined) {
 		supersedeAttributeMemoryInTx(db, {
 			memoryId,
 			replacementMemoryId: newerActive.memory_id ?? newerActive.id,
 			proposal,
+			actor,
 		});
 		return {
 			entityId,
@@ -1430,7 +1454,12 @@ function applySetClaimValue(
 			   AND id != ?`,
 		).run(id, agentId, aspectId, kind, groupKey, claimKey, id);
 		for (const prior of active) {
-			supersedeAttributeMemoryInTx(db, { memoryId: prior.memory_id, replacementMemoryId: memoryId, proposal });
+			supersedeAttributeMemoryInTx(db, {
+				memoryId: prior.memory_id,
+				replacementMemoryId: memoryId,
+				proposal,
+				actor,
+			});
 		}
 	}
 
@@ -1453,6 +1482,7 @@ function applySupersedeClaimValue(
 	agentId: string,
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
+	actor: string,
 ): Readonly<Record<string, unknown>> {
 	const entity = readString(payload, "entity");
 	const aspect = readString(payload, "aspect");
@@ -1501,19 +1531,25 @@ function applySupersedeClaimValue(
 		if (oldValue !== null && canonical(replacementValue) === canonical(oldValue)) {
 			throw new OntologyProposalError("payload.new_value must differ from payload.old_value", 400);
 		}
-		const replacement = applySetClaimValue(db, agentId, proposal, {
-			entity,
-			aspect,
-			claim_key: claimKey,
-			group_key: groupKey,
-			kind,
-			value: replacementValue,
-			confidence: readNumber(payload, "confidence") ?? proposal.confidence,
-			importance: readNumber(payload, "importance") ?? readNumber(payload, "confidence") ?? proposal.confidence,
-			entity_type: readString(payload, "entity_type") ?? undefined,
-			review_after: readString(payload, "review_after") ?? undefined,
-			...claimTimeFields(payload),
-		});
+		const replacement = applySetClaimValue(
+			db,
+			agentId,
+			proposal,
+			{
+				entity,
+				aspect,
+				claim_key: claimKey,
+				group_key: groupKey,
+				kind,
+				value: replacementValue,
+				confidence: readNumber(payload, "confidence") ?? proposal.confidence,
+				importance: readNumber(payload, "importance") ?? readNumber(payload, "confidence") ?? proposal.confidence,
+				entity_type: readString(payload, "entity_type") ?? undefined,
+				review_after: readString(payload, "review_after") ?? undefined,
+				...claimTimeFields(payload),
+			},
+			actor,
+		);
 		replacementId = typeof replacement.attributeId === "string" ? replacement.attributeId : null;
 		if (typeof replacement.supersededByNewerEvidence === "string") {
 			return {
@@ -1548,10 +1584,10 @@ function applySupersedeClaimValue(
 		 WHERE agent_id = ? AND id IN (${ids.map(() => "?").join(", ")})`,
 	).run(supersededBy, agentId, ...ids);
 	if (replacementMemoryId === null) {
-		for (const row of rows) archiveAttributeMemoryInTx(db, row.memory_id, proposal, false);
+		for (const row of rows) archiveAttributeMemoryInTx(db, row.memory_id, proposal, actor, false);
 	} else {
 		for (const row of rows) {
-			supersedeAttributeMemoryInTx(db, { memoryId: row.memory_id, replacementMemoryId, proposal });
+			supersedeAttributeMemoryInTx(db, { memoryId: row.memory_id, replacementMemoryId, proposal, actor });
 		}
 	}
 
@@ -1619,7 +1655,7 @@ function applyArchiveEntity(
 		)
 		.all(entity.id, agentId) as Array<{ memory_id: string | null }>;
 	for (const attribute of attributeMemories)
-		archiveAttributeMemoryInTx(db, attribute.memory_id, proposal, truthy(payload.force));
+		archiveAttributeMemoryInTx(db, attribute.memory_id, proposal, actor, truthy(payload.force));
 	db.prepare(
 		`UPDATE entities
 		 SET status = 'archived', archived_at = datetime('now'), archived_by = ?,
@@ -1756,7 +1792,7 @@ function applyArchiveAspect(
 		.prepare("SELECT memory_id FROM entity_attributes WHERE aspect_id = ? AND agent_id = ? AND status = 'active'")
 		.all(aspect.id, agentId) as Array<{ memory_id: string | null }>;
 	for (const attribute of attributeMemories)
-		archiveAttributeMemoryInTx(db, attribute.memory_id, proposal, truthy(payload.force));
+		archiveAttributeMemoryInTx(db, attribute.memory_id, proposal, actor, truthy(payload.force));
 	db.prepare(
 		`UPDATE entity_aspects
 		 SET status = 'archived', archived_at = datetime('now'), archived_by = ?,
@@ -1795,7 +1831,7 @@ function applyArchiveClaimValue(
 	if (row.kind === "constraint" && !truthy(payload.force)) {
 		throw new OntologyProposalError("Refusing to archive constraint attribute without force", 409);
 	}
-	archiveAttributeMemoryInTx(db, row.memory_id, proposal, truthy(payload.force));
+	archiveAttributeMemoryInTx(db, row.memory_id, proposal, actor, truthy(payload.force));
 	db.prepare(
 		`UPDATE entity_attributes
 		 SET status = 'deleted', archived_at = datetime('now'), archived_by = ?,
@@ -1817,6 +1853,7 @@ function applyRestoreClaimVersion(
 	agentId: string,
 	proposal: ProposalRow,
 	payload: Readonly<Record<string, unknown>>,
+	actor: string,
 ): Readonly<Record<string, unknown>> {
 	const attributeId = readString(payload, "attribute_id");
 	if (attributeId === null) throw new OntologyProposalError("payload.attribute_id is required", 400);
@@ -1848,9 +1885,14 @@ function applyRestoreClaimVersion(
 		.all(agentId, row.aspect_id, row.kind, row.group_key, row.claim_key, attributeId) as Array<{
 		memory_id: string | null;
 	}>;
-	restoreAttributeMemoryInTx(db, row.memory_id, proposal);
+	restoreAttributeMemoryInTx(db, row.memory_id, proposal, actor);
 	for (const active of activeMemories) {
-		supersedeAttributeMemoryInTx(db, { memoryId: active.memory_id, replacementMemoryId: attributeId, proposal });
+		supersedeAttributeMemoryInTx(db, {
+			memoryId: active.memory_id,
+			replacementMemoryId: attributeId,
+			proposal,
+			actor,
+		});
 	}
 	db.prepare(
 		`UPDATE entity_attributes
@@ -2393,23 +2435,24 @@ function applyOperation(
 		if (proposal.operation === "archive_aspect")
 			return applyArchiveAspect(db, proposal.agent_id, proposal, payload, actor);
 		if (proposal.operation === "add_claim_value")
-			return applyAddClaimValue(db, proposal.agent_id, proposal, payload, writeCaps);
+			return applyAddClaimValue(db, proposal.agent_id, proposal, payload, actor, writeCaps);
 		if (proposal.operation === "set_claim_value")
-			return applySetClaimValue(db, proposal.agent_id, proposal, payload, writeCaps);
+			return applySetClaimValue(db, proposal.agent_id, proposal, payload, actor, writeCaps);
 		if (proposal.operation === "merge_entities") return applyMergeEntities(db, proposal.agent_id, payload);
 		if (proposal.operation === "merge_aspects") return applyMergeAspects(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "supersede_claim_value") {
-			return applySupersedeClaimValue(db, proposal.agent_id, proposal, payload);
+			return applySupersedeClaimValue(db, proposal.agent_id, proposal, payload, actor);
 		}
 		if (proposal.operation === "archive_claim_value")
 			return applyArchiveClaimValue(db, proposal.agent_id, proposal, payload, actor);
 		if (proposal.operation === "restore_claim_version") {
-			return applyRestoreClaimVersion(db, proposal.agent_id, proposal, payload);
+			return applyRestoreClaimVersion(db, proposal.agent_id, proposal, payload, actor);
 		}
 		if (proposal.operation === "create_link") return applyCreateLink(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "update_link") return applyUpdateLink(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "archive_link") return applyArchiveLink(db, proposal.agent_id, proposal, payload, actor);
-		if (proposal.operation === "create_policy") return applyCreatePolicy(db, proposal.agent_id, proposal, payload);
+		if (proposal.operation === "create_policy")
+			return applyCreatePolicy(db, proposal.agent_id, proposal, payload, actor);
 		if (proposal.operation === "create_action_type")
 			return applyCreateActionType(db, proposal.agent_id, proposal, payload);
 		if (proposal.operation === "create_interface")
@@ -2485,7 +2528,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2486" },
+		{ siteToken: "ontology-proposals.ts:2529" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2523,7 +2566,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2503" },
+		{ siteToken: "ontology-proposals.ts:2546" },
 	);
 }
 
@@ -2581,7 +2624,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2535" },
+		{ siteToken: "ontology-proposals.ts:2578" },
 	);
 }
 
@@ -2676,7 +2719,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2619" },
+		{ siteToken: "ontology-proposals.ts:2662" },
 	);
 }
 
@@ -3097,7 +3140,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:3099",
+		siteToken: "ontology-proposals.ts:3142",
 	});
 }
 
@@ -3108,7 +3151,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:3110",
+		siteToken: "ontology-proposals.ts:3153",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3159,7 +3202,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3160" },
+		{ siteToken: "ontology-proposals.ts:3203" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {
