@@ -490,6 +490,48 @@ describe("fetchEmbedding", () => {
 		expect(llamaUrls.some((u) => u.includes(":8080"))).toBe(false);
 	});
 
+	it("bounds native inputs to the model attention budget", async () => {
+		const seen: string[] = [];
+		setNativeEmbeddingProviderForTest(
+			async (text) => {
+				seen.push(text);
+				return [0.1, 0.2, 0.3];
+			},
+			() => true,
+		);
+
+		const embedding = await fetchEmbedding("transcript turn ".repeat(4000), {
+			provider: "native",
+			model: "nomic-embed-text-v1.5",
+			dimensions: 3,
+			base_url: "",
+		});
+
+		expect(embedding).toEqual([0.1, 0.2, 0.3]);
+		expect(seen).toHaveLength(1);
+		expect(countTokens(seen[0] ?? "")).toBeLessThanOrEqual(2048);
+	});
+
+	it("fails one oversized input without disabling native embedding for the session", async () => {
+		let fallbackRequests = 0;
+		globalThis.fetch = mock(() => {
+			fallbackRequests++;
+			return Promise.resolve(new Response("unreachable", { status: 503 }));
+		}) as unknown as typeof fetch;
+		setNativeEmbeddingProviderForTest(
+			async (text) => {
+				if (text.startsWith("oversized")) throw new Error("failed to call OrtRun(). ERROR_CODE: 6, std::bad_alloc");
+				return [0.4, 0.5, 0.6];
+			},
+			() => true,
+		);
+		const cfg = { provider: "native" as const, model: "nomic-embed-text-v1.5", dimensions: 3, base_url: "" };
+
+		await expect(fetchEmbedding("oversized input", cfg)).resolves.toBeNull();
+		await expect(fetchEmbedding("next input", cfg)).resolves.toEqual([0.4, 0.5, 0.6]);
+		expect(fallbackRequests).toBe(0);
+	});
+
 	it("single-flights failed local fallback discovery and negative-caches the result", async () => {
 		let nativeCalls = 0;
 		let llamaModelProbes = 0;

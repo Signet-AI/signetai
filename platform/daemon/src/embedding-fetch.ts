@@ -7,6 +7,7 @@ import type { EmbeddingConfig } from "./memory-config";
 import {
 	DEFAULT_LLAMACPP_BASE_URL,
 	DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
+	NATIVE_EMBEDDING_MAX_INPUT_TOKENS,
 	DEFAULT_OLLAMA_BASE_URL,
 	DEFAULT_OPENAI_BASE_URL,
 } from "./memory-config";
@@ -49,6 +50,7 @@ export async function findLlamaCppEmbeddingModel(
 }
 
 let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
+let nativeProviderInitializedOverride: (() => boolean) | null = null;
 type NativeFallbackProvider = "llama-cpp" | "ollama";
 type NativeFallbackState = NativeFallbackProvider | "unavailable" | null;
 type NativeFallbackProbeResult = {
@@ -72,8 +74,12 @@ export function setNativeFallbackProvider(provider: NativeFallbackState, model?:
 	nativeFallbackProbe = null;
 }
 
-export function setNativeEmbeddingProviderForTest(provider: ((text: string) => Promise<number[]>) | null): void {
+export function setNativeEmbeddingProviderForTest(
+	provider: ((text: string) => Promise<number[]>) | null,
+	initialized?: () => boolean,
+): void {
 	cachedNativeEmbed = provider;
+	nativeProviderInitializedOverride = initialized ?? null;
 }
 
 export type EmbeddingFetchOptions = {
@@ -225,10 +231,14 @@ async function fetchOllamaEmbedding(
 	};
 }
 
-function boundLlamaCppEmbeddingInput(text: string, maxInputTokens: number): { text: string; tokenCount: number } {
+function boundEmbeddingInput(
+	text: string,
+	maxInputTokens: number,
+	truncationMessage: string,
+): { text: string; tokenCount: number } {
 	const tokenCount = countTokens(text);
 	if (tokenCount <= maxInputTokens) return { text, tokenCount };
-	logger.warn("embedding", "Truncating llama.cpp embedding input to physical-batch safety limit", {
+	logger.warn("embedding", truncationMessage, {
 		inputTokens: tokenCount,
 		maxInputTokens,
 	});
@@ -248,7 +258,11 @@ async function fetchLlamaCppEmbedding(
 	readonly tokenCount: number;
 	readonly failureCause?: PipelineCauseFamily;
 }> {
-	const bounded = boundLlamaCppEmbeddingInput(text, maxInputTokens);
+	const bounded = boundEmbeddingInput(
+		text,
+		maxInputTokens,
+		"Truncating llama.cpp embedding input to physical-batch safety limit",
+	);
 	const res = await fetchWithEmbeddingTimeout(
 		`${baseUrl.replace(/\/$/, "")}/v1/embeddings`,
 		{
@@ -476,7 +490,7 @@ export async function fetchEmbedding(
 		cfg.indexGeneration === "staging" || !hasDbAccessor()
 			? cfg
 			: await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
-					siteToken: "embedding-fetch.ts:478",
+					siteToken: "embedding-fetch.ts:492",
 					operation: "embedding.resolve-active-config",
 				});
 	if (effectiveCfg.provider === "none") return null;
@@ -532,20 +546,41 @@ async function serveEmbedding(
 			return { embedding: null, provider: null, tokenCount: 0, failureCause: "provider_unavailable" };
 		}
 		if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, formattedText, effectiveCfg, opts);
+		const bounded = boundEmbeddingInput(
+			formattedText,
+			NATIVE_EMBEDDING_MAX_INPUT_TOKENS,
+			"Truncating native embedding input to the model attention budget",
+		);
+		let nativeProviderInitialized = nativeProviderInitializedOverride ?? (() => false);
 		try {
 			const mod = await import("./native-embedding");
 			mod.configureNativeEmbeddingLifecycle({ idleTtlMs: effectiveCfg.idleTtlMs });
 			if (!cachedNativeEmbed) {
 				cachedNativeEmbed = mod.nativeEmbed;
 			}
-			const embedding = await cachedNativeEmbed(formattedText);
+			if (!nativeProviderInitializedOverride) {
+				nativeProviderInitialized = () => mod.getNativeProviderStatus().initialized;
+			}
+			const embedding = await cachedNativeEmbed(bounded.text);
 			return {
 				embedding: isEmbeddingVector(embedding) ? embedding : null,
 				provider: "native",
-				tokenCount: countTokens(formattedText),
+				tokenCount: bounded.tokenCount,
 				...(isEmbeddingVector(embedding) ? {} : { failureCause: "parse_failure" as const }),
 			};
 		} catch (nativeErr) {
+			if (nativeProviderInitialized()) {
+				logger.warn("embedding", "Native embedding failed for one input; native embedding stays enabled", {
+					inputTokens: bounded.tokenCount,
+					error: nativeErr instanceof Error ? nativeErr.message : String(nativeErr),
+				});
+				return {
+					embedding: null,
+					provider: "native",
+					tokenCount: bounded.tokenCount,
+					failureCause: normalizePipelineCause(nativeErr),
+				};
+			}
 			const fallback = await resolveNativeFallback(
 				formattedText,
 				effectiveCfg,
