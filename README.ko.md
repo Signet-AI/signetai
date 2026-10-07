@@ -109,6 +109,7 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 |Oh My Pi|확장|
 |[Gemini CLI](https://github.com/google-gemini/gemini-cli)|MCP + GEMINI.md 동기화|
 |[ForgeCode](https://forgecode.dev/)|Hooks + MCP|
+|[Muse Code](https://dev.meta.ai/docs/muse-code)|Hooks + MCP|
 
 에이전트는 Signet을 통해 서로 메시지를 주고받을 수도 있습니다. 메시지는 재시작 후에도 유지되며, 받는 쪽의 다음 세션이나 프롬프트가 시작될 때 전달됩니다.
 

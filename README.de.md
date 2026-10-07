@@ -109,6 +109,7 @@ Ein „Harness“ ist die App oder Umgebung, in der dein Agent läuft. Signet ve
 |Oh My Pi|Erweiterung|
 |[Gemini CLI](https://github.com/google-gemini/gemini-cli)|MCP + GEMINI.md-Sync|
 |[ForgeCode](https://forgecode.dev/)|Hooks + MCP|
+|[Muse Code](https://dev.meta.ai/docs/muse-code)|Hooks + MCP|
 
 Agenten können sich darüber hinaus über Signet Nachrichten schicken. Nachrichten überstehen Neustarts und kommen zu Beginn der nächsten Sitzung bzw. des nächsten Prompts des Empfängers an.
 
