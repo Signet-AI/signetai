@@ -412,6 +412,102 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content.match(/first reply/g)?.length).toBe(1);
 	});
 
+	test("overlapping backfills with stale session snapshots append a session once", async () => {
+		const root = makeRoot("append-snapshot-stale-known");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		const input = {
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "imported-session",
+			capturedAt: "2026-09-20T00:00:00.000Z",
+			sourceFormat: "db" as const,
+			transcript: "User: imported prompt\nAssistant: imported reply",
+		};
+
+		await Promise.all([
+			appendCanonicalTranscriptSnapshotIfMissing(input, new Set()),
+			appendCanonicalTranscriptSnapshotIfMissing(input, new Set()),
+		]);
+		await appendCanonicalTranscriptSnapshotIfMissing(input, new Set());
+
+		expect(readFileSync(jsonlPath, "utf8").trim().split("\n")).toHaveLength(2);
+		await expect(readCanonicalTranscriptSessionKeys({ basePath: root, harness: "claude-code" })).resolves.toBeDefined();
+	});
+
+	test("backfill with a stale session snapshot does not restart a live session's sequence", async () => {
+		const root = makeRoot("append-snapshot-after-live");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "pi",
+			sessionKey: "live-then-import",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "live prompt" }],
+		});
+
+		await appendCanonicalTranscriptSnapshotIfMissing(
+			{
+				basePath: root,
+				agentId: "default",
+				harness: "pi",
+				sessionKey: "live-then-import",
+				sourceFormat: "db",
+				transcript: "User: imported prompt\nAssistant: imported reply",
+			},
+			new Set(),
+		);
+
+		await expect(readCanonicalTranscriptSessionKeys({ basePath: root, harness: "pi" })).resolves.toBeDefined();
+	});
+
+	test("continues a session's sequence when its records are outside the recent tail", async () => {
+		const root = makeRoot("append-seq-outside-tail");
+		const jsonlPath = canonicalTranscriptPath(root, "oh-my-pi");
+		const record = (sessionKey: string, seq: number, content: string): string =>
+			JSON.stringify({
+				schema: "signet.transcript.v1",
+				id: `${sessionKey}-${seq}`,
+				captured_at: "2026-09-20T00:00:00.000Z",
+				agent_id: "default",
+				harness: "oh-my-pi",
+				session_key: sessionKey,
+				session_id: sessionKey,
+				project: null,
+				seq,
+				role: "user",
+				content,
+				source_format: "live",
+				source_sha256: "0",
+			});
+		mkdirSync(dirname(jsonlPath), { recursive: true });
+		writeFileSync(
+			jsonlPath,
+			`${[
+				record("long-session", 1, "first"),
+				record("long-session", 2, "second"),
+				...Array.from({ length: 300 }, (_, index) => record("other-session", index + 1, "x".repeat(1024))),
+			].join("\n")}\n`,
+		);
+
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "oh-my-pi",
+			sessionKey: "long-session",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "resumed after restart" }],
+		});
+
+		await expect(readCanonicalTranscriptSessionKeys({ basePath: root, harness: "oh-my-pi" })).resolves.toBeDefined();
+		const resumed = readFileSync(jsonlPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { content: string; seq: number })
+			.find((entry) => entry.content === "resumed after restart");
+		expect(resumed?.seq).toBe(3);
+	});
+
 	test("writeCanonicalTranscriptSnapshot replaces live partial turns for a session", async () => {
 		const root = makeRoot("replace-snapshot");
 		const jsonlPath = canonicalTranscriptPath(root, "codex");
