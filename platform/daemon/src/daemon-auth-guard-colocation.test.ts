@@ -655,7 +655,10 @@ inference:
 			if (!secret) throw new Error("expected auth secret for team-mode config test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
 			registerMiscRoutes(app);
-			const original = readFileSync(join(tmpDir, "agent.yaml"), "utf-8");
+			const agentPath = join(state.AGENTS_DIR, "agent.yaml");
+			const configPath = join(state.AGENTS_DIR, "config.yaml");
+			const original = readFileSync(agentPath, "utf-8");
+			const originalConfig = existsSync(configPath) ? readFileSync(configPath, "utf-8") : null;
 			const token = createToken(secret, { sub: "config-admin", role: "admin", scope: {} }, 60);
 			const save = (content: string) =>
 				app.request("/api/config", {
@@ -667,20 +670,21 @@ inference:
 				expect(original).not.toContain("paused");
 				const paused = await save("memory:\n  pipelineV2:\n    paused: true\n");
 				expect(paused.status).toBe(409);
-				expect(readFileSync(join(tmpDir, "agent.yaml"), "utf-8")).toBe(original);
+				expect(readFileSync(agentPath, "utf-8")).toBe(original);
 
 				const unchanged = "memory:\n  pipelineV2:\n    paused: false\n";
 				expect((await save(unchanged)).status).toBe(200);
-				expect(readFileSync(join(tmpDir, "agent.yaml"), "utf-8")).toBe(unchanged);
+				expect(readFileSync(agentPath, "utf-8")).toBe(unchanged);
 
-				rmSync(join(tmpDir, "agent.yaml"));
-				writeFileSync(join(tmpDir, "config.yaml"), "memory:\n  pipelineV2:\n    paused: true\n");
+				rmSync(agentPath);
+				writeFileSync(configPath, "memory:\n  pipelineV2:\n    paused: true\n");
 				expect((await save(unchanged)).status).toBe(409);
-				expect(existsSync(join(tmpDir, "agent.yaml"))).toBe(false);
+				expect(existsSync(agentPath)).toBe(false);
 				expect((await save("memory:\n  pipelineV2:\n    paused: true\n")).status).toBe(200);
 			} finally {
-				rmSync(join(tmpDir, "config.yaml"), { force: true });
-				writeFileSync(join(tmpDir, "agent.yaml"), original);
+				if (originalConfig === null) rmSync(configPath, { force: true });
+				else writeFileSync(configPath, originalConfig);
+				writeFileSync(agentPath, original);
 			}
 		});
 		it("POST /api/agents distinguishes omitted, null, valid, and invalid policy_group", async () => {
