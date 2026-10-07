@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-10-07
+- Features: add Muse Code connector.
+- Bug fixes: scope session-end assistant writes; align hook and MCP runtime state.
+
 ### 2026-10-06
 - Features: show what a credential may do, manage keys; warn before sessions end, count down retries; report effective permissions in whoami; sign in when the daemon requires auth; show sample skills in demo mode; add the Skills library; make the memory graph readable and navigable; scale the memory chat and calm the graph; bring Dreams up to Home's polish; pin the sidebar toggle in the header; put the sidebar toggle in the content corner; move the sidebar toggle to the window corner; let the sidebar expand to show page names; anchor the brand where header and sidebar meet; explain source problems where they appear; compact the home System column; scroll recent memories in place; raise the daily brief and quiet the lists; unify home section headers and status; responsive home layout and type scale.
 - Bug fixes: check Bun before desktop source installation; accept native binaries above 256 MiB; count key management against the admin limit once; count only usable keys as active; address review of permission gating; list a new API key once; spend fewer admin calls on API keys; return 403 and 429 from combined auth guards; say why the auth mode check failed; skip handoff in local mode, flag dead targets; bound session rechecks, follow other tabs; keep open paths off the key database; redeem handoff links in an open tab; open the resolved daemon in signet dashboard; verify API keys on whoami, add session exchange; read multiline skill descriptions from frontmatter; restore graph layout and keep the inspector clear of chat; smooth the chat dock to sidebar transition; calmer Dreams and correct pass times; page health reads and report failed checks as unknown.
@@ -35,12 +39,21 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: default on in onboarding; refresh route DB site tokens; enforce trigger gates; allow manual triggers.
 - Refactoring: align controls with repository guardrails; refresh connector source inventory; consolidate UI and cache daemon reads.
 
-### 2026-09-30
-- Features: refresh Pi model presets.
-- Bug fixes: check ownership on opened marker; protect swapped uninstall entries; support macOS secure filesystem paths; add cross-platform desktop handoff; guide first-run setup in dashboard; open first-run onboarding.
-- Docs: show dashboard onboarding screenshot.
-
 ## Release Ledger
+
+## [0.236.0] - 2026-10-07
+
+Release summary: 1 feature and 2 bug fixes.
+Tag range: `v0.235.2..v0.236.0`.
+
+### Features
+
+- **muse-code**: add Muse Code connector
+
+### Bug Fixes
+
+- **daemon**: scope session-end assistant writes
+- **muse-code**: align hook and MCP runtime state
 
 ## [0.235.2] - 2026-10-06
 
