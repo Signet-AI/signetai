@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { WriteDb } from "./db-accessor";
+import { readEpisodicSource } from "./episodic-sources";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 
 export interface SourceRevisionClaimReviewInput {
@@ -13,7 +14,11 @@ function collapseWhitespace(value: string): string {
 	return value.replace(/\s+/g, " ").trim();
 }
 
-function quotesCitingSource(evidenceJson: string | null, sourcePath: string): readonly string[] {
+function quotesCitingSource(
+	db: WriteDb,
+	evidenceJson: string | null,
+	input: SourceRevisionClaimReviewInput,
+): readonly string[] {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(evidenceJson ?? "[]");
@@ -27,7 +32,15 @@ function quotesCitingSource(evidenceJson: string | null, sourcePath: string): re
 		const citation = item as Record<string, unknown>;
 		const quote = typeof citation.quote === "string" ? citation.quote.trim() : "";
 		if (!quote) continue;
-		if (citation.source_path === sourcePath || citation.source_ref === `artifact:${sourcePath}`) quotes.push(quote);
+		if (citation.source_path === input.sourcePath || citation.source_ref === `artifact:${input.sourcePath}`) {
+			quotes.push(quote);
+			continue;
+		}
+		if (typeof citation.source_ref !== "string") continue;
+		const source = readEpisodicSource(db, { agentId: input.agentId, from: citation.source_ref });
+		if (source?.sourcePath === input.sourcePath && (source.sourceEntryId ?? source.sourceId) === input.sourceId) {
+			quotes.push(quote);
+		}
 	}
 	return quotes;
 }
@@ -58,7 +71,7 @@ export function flagDreamingClaimsForSourceRevisionInTx(db: WriteDb, input: Sour
 	const sourceRevision = createHash("sha256").update(input.content).digest("hex").slice(0, 16);
 	let flagged = 0;
 	for (const row of rows) {
-		if (stillStated(input.content, quotesCitingSource(row.proposal_evidence, input.sourcePath))) continue;
+		if (stillStated(input.content, quotesCitingSource(db, row.proposal_evidence, input))) continue;
 		enqueueDreamingAttentionInTx(db, {
 			agentId: input.agentId,
 			kind: "contested_claim",

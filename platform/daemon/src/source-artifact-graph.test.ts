@@ -565,7 +565,7 @@ describe("source artifact graph structure", () => {
 		).toBe(0);
 	});
 
-	it("keeps Dreaming claims through a provider reindex and flags the ones the edit no longer states", async () => {
+	it.each(["metadata", "artifact", "memory"] as const)("preserves claims cited as %s on reindex", async (form) => {
 		const base = {
 			agentId: "default",
 			sourceId: "github:test",
@@ -587,6 +587,12 @@ describe("source artifact graph structure", () => {
 				  'source-session', 'source-token', datetime('now'), ?, datetime('now'), 0)`,
 			).run(base.sourcePath, original);
 			db.prepare(
+				`INSERT INTO memories (id, content, source_type, memory_kind, visibility,
+				 agent_id, source_id, source_path, created_at, updated_at)
+				 VALUES ('fleet-capture', ?, 'source_github_issue', 'episodic', 'normal',
+				 'default', 'github:test', ?, datetime('now'), datetime('now'))`,
+			).run(original, base.sourcePath);
+			db.prepare(
 				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
 				 VALUES ('e-fleet', 'Edge Fleet', 'edge fleet', 'project', 'default', 1, datetime('now'), datetime('now'))`,
 			).run();
@@ -596,12 +602,22 @@ describe("source artifact graph structure", () => {
 			).run();
 		});
 		indexSourceArtifactStructure({ ...base, content: original });
+		const references = {
+			metadata: `artifact:${base.sourcePath}`,
+			artifact: `artifact:${base.sourcePath}`,
+			memory: "memory:fleet-capture",
+		};
+		const reference = references[form];
 		const evidence = (quote: string) => [
 			{
-				source_ref: `artifact:${base.sourcePath}`,
-				source_kind: "source_github_issue",
-				source_id: "issue-12",
-				source_path: base.sourcePath,
+				source_ref: reference,
+				...(form === "metadata"
+					? {
+							source_kind: "source_github_issue",
+							source_id: "issue-12",
+							source_path: base.sourcePath,
+						}
+					: {}),
 				quote,
 			},
 		];
