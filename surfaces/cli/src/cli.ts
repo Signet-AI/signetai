@@ -1067,6 +1067,7 @@ registerContextCommands(program, {
 registerPortableCommands(program, {
 	AGENTS_DIR,
 	fetchDaemonStream,
+	daemonOwnsWorkspace: async (agentsDir) => (await isDaemonRunning()) || (await hasDaemonProcess(agentsDir)),
 });
 
 registerWorkspaceCommands(program, {
