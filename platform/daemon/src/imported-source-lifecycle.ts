@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges, syncVecDeleteByEmbeddingIds } from "./db-helpers";
+import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 
 export interface MarkImportedSourceUnsupportedInput {
@@ -135,6 +136,8 @@ export function markImportedSourceUnsupported(
 				)
 				.run(now, "source-lifecycle", archiveReason, now, agentId, sourceId),
 		);
+		reconcileOntologyContradictionsInTx(db, { agentId, sourceId });
+		for (const entityId of entityIdValues) reconcileOntologyContradictionsInTx(db, { agentId, entityId });
 
 		enqueueDreamingAttentionInTx(db, {
 			agentId,
@@ -152,5 +155,5 @@ export function markImportedSourceUnsupported(
 			attributes,
 			dependencies,
 		};
-	}, "imported-source-lifecycle.ts:30");
+	}, "imported-source-lifecycle.ts:31");
 }
