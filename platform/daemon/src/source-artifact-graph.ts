@@ -8,6 +8,7 @@ import {
 	recordOntologyContradictionsForAttributeInTx,
 } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
+import { flagDreamingClaimsForSourceRevisionInTx } from "./source-claim-review";
 
 interface HeadingSection {
 	readonly heading: string;
@@ -249,6 +250,19 @@ export function purgeSourceArtifactStructureInTx(
 	db: WriteDb,
 	input: PurgeSourceArtifactStructureInput,
 ): PurgeSourceArtifactStructureResult {
+	return removeSourceArtifactStructureInTx(db, input, null);
+}
+
+function removeSourceArtifactStructureInTx(
+	db: WriteDb,
+	input: PurgeSourceArtifactStructureInput,
+	ownedRoot: string | null,
+): PurgeSourceArtifactStructureResult {
+	const rootFilter = ownedRoot === null ? "" : " AND source_root = ?";
+	const scope =
+		ownedRoot === null
+			? [input.agentId, input.sourceId, input.sourcePath]
+			: [input.agentId, input.sourceId, input.sourcePath, ownedRoot];
 	const entityRows = db
 		.prepare(
 			`SELECT id FROM entities
@@ -259,22 +273,27 @@ export function purgeSourceArtifactStructureInTx(
 		)
 		.all(input.agentId, input.sourceId, input.sourcePath) as Array<{ id: string }>;
 	const entityIds = entityRows.map((row) => row.id);
-	purgeAttributeMemoryProjectionsInTx(db, input);
+	purgeAttributeMemoryProjectionsInTx(db, ownedRoot === null ? input : { ...input, sourceRoot: ownedRoot });
 
 	const attributes = countChanges(
 		db
-			.prepare("DELETE FROM entity_attributes WHERE agent_id = ? AND source_id = ? AND source_path = ?")
-			.run(input.agentId, input.sourceId, input.sourcePath),
+			.prepare(`DELETE FROM entity_attributes WHERE agent_id = ? AND source_id = ? AND source_path = ?${rootFilter}`)
+			.run(...scope),
 	);
 	const dependencies = countChanges(
 		db
-			.prepare("DELETE FROM entity_dependencies WHERE agent_id = ? AND source_id = ? AND source_path = ?")
-			.run(input.agentId, input.sourceId, input.sourcePath),
+			.prepare(`DELETE FROM entity_dependencies WHERE agent_id = ? AND source_id = ? AND source_path = ?${rootFilter}`)
+			.run(...scope),
 	);
 
 	let aspects = 0;
 	if (entityIds.length > 0) {
-		const stmt = db.prepare("DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?");
+		const stmt = db.prepare(
+			ownedRoot === null
+				? "DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?"
+				: `DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?
+				   AND NOT EXISTS (SELECT 1 FROM entity_attributes attr WHERE attr.aspect_id = entity_aspects.id)`,
+		);
 		for (const entityId of entityIds) aspects += countChanges(stmt.run(input.agentId, entityId));
 	}
 
@@ -303,7 +322,7 @@ export function purgeSourceArtifactStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => purgeSourceArtifactStructureInTx(db, input),
-		"source-artifact-graph.ts:304",
+		"db:source-graph.artifact.purge.write",
 	);
 }
 
@@ -327,7 +346,7 @@ export function indexSourceArtifactStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => indexSourceArtifactStructureInTx(db, input, now),
-		"source-artifact-graph.ts:328",
+		"db:source-graph.artifact.index.write",
 	);
 }
 
@@ -349,7 +368,13 @@ export function indexSourceArtifactStructureInTx(
 	input: IndexSourceArtifactStructureInput,
 	now = new Date().toISOString(),
 ): IndexSourceArtifactStructureResult {
-	purgeSourceArtifactStructureInTx(db, input);
+	removeSourceArtifactStructureInTx(db, input, input.sourceRoot);
+	flagDreamingClaimsForSourceRevisionInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourcePath: input.sourcePath,
+		content: input.content,
+	});
 
 	let entitiesTouched = 0;
 	let dependenciesTouched = 0;

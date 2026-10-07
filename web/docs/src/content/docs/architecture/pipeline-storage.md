@@ -377,5 +377,8 @@ The ownership boundary is the important part of the schema:
   attribution, and deletion/tombstone state;
 - removing a source purges its source-owned projections without mutating the
   external source or silently deleting unrelated Dreaming-derived history;
+- re-indexing an edited source replaces only the rows source sync wrote. Dreaming
+  claims that cite the source stay, and the ones whose cited quote is gone are
+  flagged for review with a `contested_claim` attention record;
 - every semantic mutation must be attributable to a scoped actor, an exact
   evidence citation, or a validated hygiene-attention record.

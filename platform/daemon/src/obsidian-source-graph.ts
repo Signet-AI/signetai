@@ -10,6 +10,7 @@ import {
 	recordOntologyContradictionsForAttributeInTx,
 } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
+import { flagDreamingClaimsForSourceRevisionInTx } from "./source-claim-review";
 
 const OBSIDIAN_SOURCE_KIND = "source_obsidian_markdown";
 
@@ -422,6 +423,14 @@ export function purgeObsidianSourceFileStructureInTx(
 	db: WriteDb,
 	input: PurgeObsidianSourceFileStructureInput,
 ): PurgeObsidianSourceStructureResult {
+	return removeObsidianSourceFileStructureInTx(db, input, "purge");
+}
+
+function removeObsidianSourceFileStructureInTx(
+	db: WriteDb,
+	input: PurgeObsidianSourceFileStructureInput,
+	mode: "purge" | "reindex",
+): PurgeObsidianSourceStructureResult {
 	const root = normalizedRoot(input.root);
 	const filePath = normalizedPath(input.filePath);
 	const fileRel = relPath(root, filePath);
@@ -432,12 +441,14 @@ export function purgeObsidianSourceFileStructureInTx(
 		sourceRoot: root,
 		sourcePath: filePath,
 	});
-	purgeAttributeMemoryProjectionsInTx(db, {
-		agentId: input.agentId,
-		sourceId: input.sourceId,
-		sourceRoot: "dreaming",
-		sourcePath: filePath,
-	});
+	if (mode === "purge") {
+		purgeAttributeMemoryProjectionsInTx(db, {
+			agentId: input.agentId,
+			sourceId: input.sourceId,
+			sourceRoot: "dreaming",
+			sourcePath: filePath,
+		});
+	}
 
 	const attributes = db
 		.prepare(
@@ -448,14 +459,22 @@ export function purgeObsidianSourceFileStructureInTx(
 			   AND source_path = ?`,
 		)
 		.run(input.agentId, input.sourceId, root, filePath).changes;
-	const derivedAttributes = db
-		.prepare(
-			`DELETE FROM entity_attributes
-			 WHERE agent_id = ? AND source_id = ? AND source_root = 'dreaming' AND source_path = ?`,
-		)
-		.run(input.agentId, input.sourceId, filePath).changes;
+	const derivedAttributes =
+		mode === "purge"
+			? db
+					.prepare(
+						`DELETE FROM entity_attributes
+						 WHERE agent_id = ? AND source_id = ? AND source_root = 'dreaming' AND source_path = ?`,
+					)
+					.run(input.agentId, input.sourceId, filePath).changes
+			: 0;
 	const aspects = db
-		.prepare("DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?")
+		.prepare(
+			mode === "purge"
+				? "DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?"
+				: `DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?
+				   AND NOT EXISTS (SELECT 1 FROM entity_attributes attr WHERE attr.aspect_id = entity_aspects.id)`,
+		)
 		.run(input.agentId, documentEntityId).changes;
 	const dependencies = db
 		.prepare(
@@ -494,7 +513,13 @@ export function applyObsidianSourceStructureInTx(
 	const fileRel = relPath(root, filePath);
 	const now = new Date().toISOString();
 	const content = stripFrontmatter(input.content);
-	purgeObsidianSourceFileStructureInTx(db, input);
+	removeObsidianSourceFileStructureInTx(db, input, "reindex");
+	flagDreamingClaimsForSourceRevisionInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourcePath: filePath,
+		content: input.content,
+	});
 
 	let folderEntitiesTouched = 0;
 	let documentEntitiesTouched = 0;
@@ -710,7 +735,7 @@ export function indexObsidianSourceStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => applyObsidianSourceStructureInTx(db, input),
-		"obsidian-source-graph.ts:711",
+		"db:source-graph.obsidian.index.write",
 	);
 }
 
@@ -720,7 +745,7 @@ export function purgeObsidianSourceFileStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => purgeObsidianSourceFileStructureInTx(db, input),
-		"obsidian-source-graph.ts:721",
+		"db:source-graph.obsidian.file-purge.write",
 	);
 }
 
@@ -798,7 +823,7 @@ export function purgeObsidianSourceStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => applyObsidianSourceStructurePurgeInTx(db, input),
-		"obsidian-source-graph.ts:799",
+		"db:source-graph.obsidian.source-purge.write",
 	);
 }
 

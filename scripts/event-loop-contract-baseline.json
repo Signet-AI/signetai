@@ -2269,38 +2269,41 @@
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 320,
+      "line": 321,
       "api": "existsSync",
       "source": "return existsSync(path) && statSync(path).isFile() ? normalizedPath(path) : null;",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 320,
+      "line": 321,
       "api": "statSync",
       "source": "return existsSync(path) && statSync(path).isFile() ? normalizedPath(path) : null;",
       "category": "hot-path"
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 711,
+      "line": 736,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:source-graph.obsidian.index.write"
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 721,
+      "line": 746,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:source-graph.obsidian.file-purge.write"
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 799,
+      "line": 824,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:source-graph.obsidian.source-purge.write"
     },
     {
       "path": "ontology-assertions.ts",
@@ -2579,7 +2582,7 @@
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 475,
+      "line": 481,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path",
@@ -2587,7 +2590,7 @@
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 489,
+      "line": 495,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path",
@@ -2595,7 +2598,7 @@
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 504,
+      "line": 510,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path",
@@ -2603,7 +2606,7 @@
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 523,
+      "line": 529,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path",
@@ -2611,7 +2614,7 @@
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 770,
+      "line": 776,
       "api": "withReadDb",
       "source": "const pending = params.accessor.withReadDb(",
       "category": "hot-path",
@@ -4990,17 +4993,19 @@
     },
     {
       "path": "source-artifact-graph.ts",
-      "line": 304,
+      "line": 323,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:source-graph.artifact.purge.write"
     },
     {
       "path": "source-artifact-graph.ts",
-      "line": 328,
+      "line": 347,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:source-graph.artifact.index.write"
     },
     {
       "path": "source-snapshots.ts",

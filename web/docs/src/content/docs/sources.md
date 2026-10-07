@@ -390,6 +390,7 @@ The watcher path is deliberately conservative:
 - scans are single-flight to avoid overlapping source-wide reindex storms;
 - overlapping sync requests are coalesced into one trailing resync;
 - content fingerprints prevent unchanged files from being reprocessed;
+- an edited file keeps the Dreaming claims that cite it. A claim whose cited quote the new text no longer contains gets a `contested_claim` attention record, and a later Dreaming pass keeps, supersedes, or archives it;
 - removed files are soft-deleted from source artifacts and have their source-owned chunks purged;
 - disconnected sources stop participating in future configured-source scans.
 

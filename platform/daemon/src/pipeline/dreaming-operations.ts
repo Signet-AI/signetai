@@ -220,7 +220,7 @@ function attentionProvenance(
 		const attentionId = reference.slice("attention:".length);
 		if (attentionId) attention = getDreamingAttentionById(accessor, { agentId, id: attentionId });
 	}
-	if (attention === null || attention.kind !== "hygiene") return null;
+	if (attention === null || !attentionAuthorizesArchive(attention, operation)) return null;
 
 	if (!hasExpectedAttentionTarget(accessor, agentId, operation, attention)) return null;
 
@@ -244,6 +244,12 @@ function attentionProvenance(
 		attentionId: attention.id,
 	};
 }
+function attentionAuthorizesArchive(attention: DreamingAttention, operation: DreamingOperationRequest): boolean {
+	return (
+		attention.kind === "hygiene" ||
+		(attention.kind === "contested_claim" && operation.operation === "archive_claim_value")
+	);
+}
 const HYGIENE_PROVENANCE_ERROR =
 	"Hygiene archives require attention provenance (attention:$<index> or attention:<uuid>)";
 
@@ -252,7 +258,7 @@ function hygieneProvenanceError(accessor: DbAccessor, agentId: string, operation
 	if (!reference.startsWith("attention:") || /^attention:\$\d+$/.test(reference)) return HYGIENE_PROVENANCE_ERROR;
 	const id = reference.slice("attention:".length);
 	const attention = id ? getDreamingAttentionById(accessor, { agentId, id }) : null;
-	if (attention === null || attention.kind !== "hygiene") {
+	if (attention === null || !attentionAuthorizesArchive(attention, operation)) {
 		return `${HYGIENE_PROVENANCE_ERROR}: ${id} is not a pending hygiene attention in this agent (already resolved, or the id is mistyped); copy a pending id from attention_list`;
 	}
 	const mismatch = attentionTargetMismatch(accessor, agentId, operation, attention);

@@ -593,4 +593,101 @@ describe("Obsidian source graph structure", () => {
 		expect(remaining.userClaim).toBe(1);
 		expect(remaining.otherDerived).toBe(1);
 	});
+
+	it("keeps Dreaming claims when a note is reindexed and flags the ones the edit no longer states", () => {
+		const doc = join(vault, "literature", "Arch-Linux", "editor.md");
+		const original = "# Editor\n\nThe editor of choice is Neovim.\n\nThe terminal is Kitty.\n";
+		const edited = "# Editor\n\nThe editor of choice is Neovim.\n\nThe terminal is Ghostty.\n";
+		const index = (content: string) =>
+			indexObsidianSourceStructure({
+				agentId: "obsidian-graph-agent",
+				sourceId: "obsidian:test-vault",
+				sourceName: "Test Vault",
+				root: vault,
+				filePath: doc,
+				content,
+			});
+		writeFileSync(doc, original);
+		const first = index(original);
+		const citation = (quote: string) => JSON.stringify([{ source_ref: `artifact:${doc}`, source_path: doc, quote }]);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('dreaming-tools', ?, 'obsidian-graph-agent', 'tools', 'tools', 0.5, datetime('now'), datetime('now'))`,
+			).run(first.documentEntityId);
+			const insert = db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status,
+				  group_key, claim_key, version, created_at, updated_at, source_id, source_kind, source_path, source_root,
+				  proposal_evidence)
+				 VALUES (?, 'dreaming-tools', 'obsidian-graph-agent', 'attribute', ?, ?, 0.9, 0.5, 'active', 'general', ?, 1,
+				         datetime('now'), datetime('now'), 'obsidian:test-vault', 'source_obsidian_markdown', ?, 'dreaming', ?)`,
+			);
+			insert.run(
+				"editor-claim",
+				"Uses Neovim",
+				"uses neovim",
+				"editor",
+				doc,
+				citation("The editor of choice is Neovim."),
+			);
+			insert.run("terminal-claim", "Uses Kitty", "uses kitty", "terminal", doc, citation("The terminal is Kitty."));
+		});
+		const state = () =>
+			getDbAccessor().withReadDb((db) => ({
+				active: (
+					db
+						.prepare(
+							"SELECT id FROM entity_attributes WHERE source_root = 'dreaming' AND status = 'active' ORDER BY id",
+						)
+						.all() as Array<{ id: string }>
+				).map((row) => row.id),
+				aspect: db.prepare("SELECT COUNT(*) AS count FROM entity_aspects WHERE id = 'dreaming-tools'").get() as {
+					count: number;
+				},
+				flags: db
+					.prepare(
+						"SELECT subject_ref, details_json, generation, resolved_at FROM dreaming_attention WHERE kind = 'contested_claim'",
+					)
+					.all() as Array<{
+					subject_ref: string;
+					details_json: string;
+					generation: number;
+					resolved_at: string | null;
+				}>,
+			}));
+
+		index(original);
+		expect(state().active).toEqual(["editor-claim", "terminal-claim"]);
+		expect(state().flags).toEqual([]);
+
+		writeFileSync(doc, edited);
+		index(edited);
+		const afterEdit = state();
+		expect(afterEdit.active).toEqual(["editor-claim", "terminal-claim"]);
+		expect(afterEdit.aspect.count).toBe(1);
+		expect(afterEdit.flags.map((flag) => flag.subject_ref)).toEqual(["attribute:terminal-claim"]);
+		expect(JSON.parse(afterEdit.flags[0]?.details_json ?? "{}")).toMatchObject({
+			reason: "source_changed",
+			attributeId: "terminal-claim",
+			sourceRef: `artifact:${doc}`,
+		});
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE dreaming_attention SET resolved_at = datetime('now') WHERE kind = 'contested_claim'").run();
+		});
+		index(edited);
+		const repeated = state();
+		expect(repeated.flags).toHaveLength(1);
+		expect(repeated.flags[0]?.resolved_at).not.toBeNull();
+		expect(repeated.flags[0]?.generation).toBe(afterEdit.flags[0]?.generation);
+
+		purgeObsidianSourceFileStructure({
+			agentId: "obsidian-graph-agent",
+			sourceId: "obsidian:test-vault",
+			root: vault,
+			filePath: doc,
+		});
+		expect(state().active).toEqual([]);
+	});
 });
