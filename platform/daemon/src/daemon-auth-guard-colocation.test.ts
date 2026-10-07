@@ -657,7 +657,12 @@ inference:
 			registerMiscRoutes(app);
 			const agentPath = join(state.AGENTS_DIR, "agent.yaml");
 			const configPath = join(state.AGENTS_DIR, "config.yaml");
-			const original = readFileSync(agentPath, "utf-8");
+			const originalAgent = existsSync(agentPath) ? readFileSync(agentPath, "utf-8") : null;
+			const original = originalAgent ?? "auth:\n  mode: local\n";
+			if (originalAgent === null) {
+				mkdirSync(state.AGENTS_DIR, { recursive: true });
+				writeFileSync(agentPath, original);
+			}
 			const originalConfig = existsSync(configPath) ? readFileSync(configPath, "utf-8") : null;
 			const token = createToken(secret, { sub: "config-admin", role: "admin", scope: {} }, 60);
 			const save = (content: string) =>
@@ -684,7 +689,8 @@ inference:
 			} finally {
 				if (originalConfig === null) rmSync(configPath, { force: true });
 				else writeFileSync(configPath, originalConfig);
-				writeFileSync(agentPath, original);
+				if (originalAgent === null) rmSync(agentPath, { force: true });
+				else writeFileSync(agentPath, originalAgent);
 			}
 		});
 		it("POST /api/agents distinguishes omitted, null, valid, and invalid policy_group", async () => {
