@@ -7,8 +7,10 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-07
-- Features: add Muse Code connector.
-- Bug fixes: close pause guard and unfreeze gaps; keep pipeline pause on one route; control pause and Dreaming; keep setup from re-pausing the pipeline after it resumes; scope session-end assistant writes; align hook and MCP runtime state.
+- Features: stem the memory keyword index; return bounded transcript evidence; rerank with a local cross-encoder fused with retrieval order; record each pass's peak context; tell each pass the current local date and time; list pending attention in the pass prompt and fold idle tools; let any pass merge and rename aspects at the aspect cap; carry pass history as a compacted view instead of runbook reads; give claims structured event time and validity; add a seeded proportional LongMemEval question sampler; support subscription providers for Dreaming; edit Dreaming concurrency and input budget in Advanced settings; run read-only lookups through Pi codemode behind a flag; pick the agent shown in the memory graph; run incremental passes for disjoint agent groups concurrently; add Muse Code connector.
+- Bug fixes: report the full queue when the admission wait outlasts the deadline; stop source sync from writing claims and deleting Dreaming's; resolve memory claim citations; declare root YAML dependency; flag Dreaming claims for review when a source is edited; isolate pipeline config fixture; synchronize benchmark dependencies; fill a date window's empty slots with its other memories; require a claim time when a claim names a date; run the Supermemory provider against a self-hosted server; place transcript excerpts by cross-encoder relevance; keep same-attribute updates in one claim slot, ordered by capture; drain new-memory embeddings back to back; find relative-time claims filed with approximate dates; let the transcript recovery child exit after its scan; embed sqlite-vec in the compiled binary; make the cross-encoder work in the compiled binary; say what each named thing is when filing a claim; give attention-only scopes their own pass or let them wait; leave scopes with nothing to do out of incremental passes; give history compaction more time and name provider failures; reject relative times per operation and file history by scopes used; keep pass history inside each pass's scopes; keep dates and states out of entity names; only reject relative times that have no absolute date; widen or drop an empty temporal filter instead of returning nothing; replace heuristic content safety with credential redaction; remove ranking rules tuned to LongMemEval questions; poll Dreaming status with bounded concurrency; wait for maintenance admission instead of failing Dreaming; wait for queued transcript captures past the request timeout; let commits that stage only Biome-ignored files pass; file one fact per claim and finish identified work; file each named speaker on their own entity; let instruction-following models file user disclosures; show sign-in for unauthenticated OAuth providers; drop the Pi tool-call budget and queue calls past eight in flight; keep evidence delivery durable when a tool trace is truncated; backfill missing vectors into the active projection slot; ride out provider throttling instead of failing the pass; count an entity as a recall hub only when it is generic; file what users disclose about themselves when asking for advice; record sources whose failed citation a retry filed; keep hygiene failures from withholding read evidence; name the citation whose quote is not verbatim; say why a hygiene op does not match its attention; say when a hygiene op cites an unknown attention id; say which operation and id failed to resolve; keep vector-only recall hits through shaping and dampening; write vectors to the active projection slot; embed new memories without the re-embed repair budget; bound status measure=1 to the backlog probe; keep filed sources when an uncited write fails; let the queue continue partly read sources; bound the backlog probe to sources still waiting; file each evidence page, keep user-specific deliverables; measure the exact backlog for status measure=1; let status measure the backlog on request; keep the graph rendering without entity agent IDs; close new evidence delivery halfway through a pass; withhold evidence when a failed write cannot be attributed; size the Pi agent worker pool from the shared LLM limit; admit no more passes than there are Pi agent workers; admit no more passes than the shared LLM limit; stop capping Dreaming replies below the model's limit; keep content passes and pass failures from stalling Dreaming; stop Dreaming from losing or re-reading queued evidence; close pause guard and unfreeze gaps; keep pipeline pause on one route; control pause and Dreaming; keep setup from re-pausing the pipeline after it resumes; scope session-end assistant writes; align hook and MCP runtime state.
+- Performance: size evidence pages from the Dreaming input budget.
+- Docs: note that pass history is scoped; correct the cost model's per-token rate and cache share; add a Dreaming cost model to the benchmarking skill; advise against gpt-6-luna as a Dreaming model for now; add a benchmarking skill with run tooling and a results ledger; sync translations; list Muse Code in README and site.
 
 ### 2026-10-06
 - Features: show what a credential may do, manage keys; warn before sessions end, count down retries; report effective permissions in whoami; sign in when the daemon requires auth; show sample skills in demo mode; add the Skills library; make the memory graph readable and navigable; scale the memory chat and calm the graph; bring Dreams up to Home's polish; pin the sidebar toggle in the header; put the sidebar toggle in the content corner; move the sidebar toggle to the window corner; let the sidebar expand to show page names; anchor the brand where header and sidebar meet; explain source problems where they appear; compact the home System column; scroll recent memories in place; raise the daily brief and quiet the lists; unify home section headers and status; responsive home layout and type scale.
@@ -40,6 +42,113 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: align controls with repository guardrails; refresh connector source inventory; consolidate UI and cache daemon reads.
 
 ## Release Ledger
+
+## [0.237.0] - 2026-10-07
+
+Release summary: 15 features, 67 bug fixes, 1 performance improvement, and 7 docs updates.
+Tag range: `v0.236.1..v0.237.0`.
+
+### Features
+
+- **recall**: stem the memory keyword index
+- **recall**: return bounded transcript evidence
+- **recall**: rerank with a local cross-encoder fused with retrieval order
+- **dreaming**: record each pass's peak context
+- **dreaming**: tell each pass the current local date and time
+- **dreaming**: list pending attention in the pass prompt and fold idle tools
+- **dreaming**: let any pass merge and rename aspects at the aspect cap
+- **dreaming**: carry pass history as a compacted view instead of runbook reads
+- **dreaming**: give claims structured event time and validity
+- **bench**: add a seeded proportional LongMemEval question sampler
+- **bench**: support subscription providers for Dreaming
+- **dashboard**: edit Dreaming concurrency and input budget in Advanced settings
+- **dreaming**: run read-only lookups through Pi codemode behind a flag
+- **dashboard**: pick the agent shown in the memory graph
+- **dreaming**: run incremental passes for disjoint agent groups concurrently
+
+### Bug Fixes
+
+- **daemon**: report the full queue when the admission wait outlasts the deadline
+- **sources**: stop source sync from writing claims and deleting Dreaming's
+- **sources**: resolve memory claim citations
+- **bench**: declare root YAML dependency
+- **sources**: flag Dreaming claims for review when a source is edited
+- **test**: isolate pipeline config fixture
+- **bench**: synchronize benchmark dependencies
+- **recall**: fill a date window's empty slots with its other memories
+- **dreaming**: require a claim time when a claim names a date
+- **memorybench**: run the Supermemory provider against a self-hosted server
+- **recall**: place transcript excerpts by cross-encoder relevance
+- **dreaming**: keep same-attribute updates in one claim slot, ordered by capture
+- **embeddings**: drain new-memory embeddings back to back
+- **recall**: find relative-time claims filed with approximate dates
+- **daemon**: let the transcript recovery child exit after its scan
+- **native**: embed sqlite-vec in the compiled binary
+- **recall**: make the cross-encoder work in the compiled binary
+- **dreaming**: say what each named thing is when filing a claim
+- **dreaming**: give attention-only scopes their own pass or let them wait
+- **dreaming**: leave scopes with nothing to do out of incremental passes
+- **dreaming**: give history compaction more time and name provider failures
+- **dreaming**: reject relative times per operation and file history by scopes used
+- **dreaming**: keep pass history inside each pass's scopes
+- **dreaming**: keep dates and states out of entity names
+- **dreaming**: only reject relative times that have no absolute date
+- **recall**: widen or drop an empty temporal filter instead of returning nothing
+- **memory**: replace heuristic content safety with credential redaction
+- **recall**: remove ranking rules tuned to LongMemEval questions
+- **memorybench**: poll Dreaming status with bounded concurrency
+- **daemon**: wait for maintenance admission instead of failing Dreaming
+- **memorybench**: wait for queued transcript captures past the request timeout
+- **hooks**: let commits that stage only Biome-ignored files pass
+- **dreaming**: file one fact per claim and finish identified work
+- **dreaming**: file each named speaker on their own entity
+- **dreaming**: let instruction-following models file user disclosures
+- **dashboard**: show sign-in for unauthenticated OAuth providers
+- **daemon**: drop the Pi tool-call budget and queue calls past eight in flight
+- **dreaming**: keep evidence delivery durable when a tool trace is truncated
+- **daemon**: backfill missing vectors into the active projection slot
+- **dreaming**: ride out provider throttling instead of failing the pass
+- **daemon**: count an entity as a recall hub only when it is generic
+- **dreaming**: file what users disclose about themselves when asking for advice
+- **dreaming**: record sources whose failed citation a retry filed
+- **dreaming**: keep hygiene failures from withholding read evidence
+- **dreaming**: name the citation whose quote is not verbatim
+- **dreaming**: say why a hygiene op does not match its attention
+- **dreaming**: say when a hygiene op cites an unknown attention id
+- **dreaming**: say which operation and id failed to resolve
+- **daemon**: keep vector-only recall hits through shaping and dampening
+- **daemon**: write vectors to the active projection slot
+- **daemon**: embed new memories without the re-embed repair budget
+- **dreaming**: bound status measure=1 to the backlog probe
+- **dreaming**: keep filed sources when an uncited write fails
+- **dreaming**: let the queue continue partly read sources
+- **dreaming**: bound the backlog probe to sources still waiting
+- **dreaming**: file each evidence page, keep user-specific deliverables
+- **dreaming**: measure the exact backlog for status measure=1
+- **dreaming**: let status measure the backlog on request
+- **dashboard**: keep the graph rendering without entity agent IDs
+- **dreaming**: close new evidence delivery halfway through a pass
+- **dreaming**: withhold evidence when a failed write cannot be attributed
+- **daemon**: size the Pi agent worker pool from the shared LLM limit
+- **dreaming**: admit no more passes than there are Pi agent workers
+- **dreaming**: admit no more passes than the shared LLM limit
+- **daemon**: stop capping Dreaming replies below the model's limit
+- **daemon**: keep content passes and pass failures from stalling Dreaming
+- **daemon**: stop Dreaming from losing or re-reading queued evidence
+
+### Performance
+
+- **dreaming**: size evidence pages from the Dreaming input budget
+
+### Docs
+
+- **dreaming**: note that pass history is scoped
+- **agents**: correct the cost model's per-token rate and cache share
+- **agents**: add a Dreaming cost model to the benchmarking skill
+- **agents**: advise against gpt-6-luna as a Dreaming model for now
+- **agents**: add a benchmarking skill with run tooling and a results ledger
+- **readme**: sync translations
+- list Muse Code in README and site
 
 ## [0.236.1] - 2026-10-07
 
