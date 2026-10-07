@@ -38,7 +38,24 @@ interface StoredTranscriptBackfillRow {
 	readonly updated_at?: string | null;
 }
 
+const CANONICAL_BACKFILL_RETRY_BASE_MS = 60_000;
+const CANONICAL_BACKFILL_RETRY_MAX_MS = 60 * 60_000;
+
+interface CanonicalBackfillRetry {
+	readonly attempts: number;
+	readonly retryAt: number;
+}
+
+interface CanonicalBackfillGap {
+	readonly markdownFailures?: number;
+	readonly databaseOk?: boolean;
+	readonly markerWritten?: boolean;
+	readonly threw?: boolean;
+}
+
 const canonicalBackfills = new Set<string>();
+const canonicalBackfillRuns = new Map<string, Promise<void>>();
+const canonicalBackfillRetries = new Map<string, CanonicalBackfillRetry>();
 
 const OMP_UUID_LIKE_SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}[:-][0-9a-f]{4}[:-][0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -127,7 +144,7 @@ function tableExists(name: string): boolean {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		return getDbAccessor().withReadDb(
 			(db: import("./db-accessor").ReadDb) => tableExistsInDatabase(db, name),
-			"session-transcripts.ts:128",
+			"session-transcripts.ts:145",
 		);
 	} catch {
 		return false;
@@ -140,7 +157,7 @@ function sessionTranscriptsHasColumn(column: string): boolean {
 		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === column);
-		}, "session-transcripts.ts:140");
+		}, "session-transcripts.ts:157");
 	} catch {
 		return false;
 	}
@@ -293,7 +310,7 @@ async function backfillDatabaseTranscripts(
 						ORDER BY agent_id, harness, session_key, rowid
 						LIMIT ? OFFSET ?`;
 				return db.prepare(sql).all(PAGE_SIZE, offset) as unknown as StoredTranscriptBackfillRow[];
-			}, "session-transcripts.ts:281");
+			}, "session-transcripts.ts:298");
 			if (rows.length === 0) break;
 			for (const row of rows) {
 				const rowAgentId = row.agent_id?.trim() || "default";
@@ -379,31 +396,64 @@ function markerMatches(path: string, agentId?: string): boolean {
 	}
 }
 
-export async function ensureCanonicalTranscriptHistory(basePath: string, agentId?: string): Promise<void> {
+export function ensureCanonicalTranscriptHistory(basePath: string, agentId?: string): Promise<void> {
 	const key = `${basePath}:${agentId ?? "*"}`;
-	if (canonicalBackfills.has(key)) return;
+	if (canonicalBackfills.has(key)) return Promise.resolve();
+	const running = canonicalBackfillRuns.get(key);
+	if (running) return running;
+	const retry = canonicalBackfillRetries.get(key);
+	if (retry && Date.now() < retry.retryAt) return Promise.resolve();
+	const run = runCanonicalTranscriptBackfill(key, basePath, agentId).finally(() => {
+		canonicalBackfillRuns.delete(key);
+	});
+	canonicalBackfillRuns.set(key, run);
+	return run;
+}
 
-	const markerPath = getMarkerPath(basePath, agentId);
-	if (existsSync(markerPath) && markerMatches(markerPath, agentId)) {
-		canonicalBackfills.add(key);
-		return;
+async function runCanonicalTranscriptBackfill(key: string, basePath: string, agentId?: string): Promise<void> {
+	let incomplete: CanonicalBackfillGap | null = { threw: true };
+	try {
+		incomplete = await backfillCanonicalTranscriptHistory(basePath, agentId);
+	} finally {
+		if (incomplete) {
+			deferCanonicalBackfillRetry(key, basePath, agentId, incomplete);
+		} else {
+			canonicalBackfills.add(key);
+			canonicalBackfillRetries.delete(key);
+		}
 	}
+}
+
+function deferCanonicalBackfillRetry(
+	key: string,
+	basePath: string,
+	agentId: string | undefined,
+	gap: CanonicalBackfillGap,
+): void {
+	const attempts = (canonicalBackfillRetries.get(key)?.attempts ?? 0) + 1;
+	const retryInMs = Math.min(CANONICAL_BACKFILL_RETRY_BASE_MS * 2 ** (attempts - 1), CANONICAL_BACKFILL_RETRY_MAX_MS);
+	canonicalBackfillRetries.set(key, { attempts, retryAt: Date.now() + retryInMs });
+	logger.warn("transcripts", "Canonical transcript backfill incomplete; retry deferred", {
+		agentId: agentId ?? "*",
+		basePath,
+		...gap,
+		attempts,
+		retryInMs,
+	});
+}
+
+async function backfillCanonicalTranscriptHistory(
+	basePath: string,
+	agentId?: string,
+): Promise<CanonicalBackfillGap | null> {
+	const markerPath = getMarkerPath(basePath, agentId);
+	if (existsSync(markerPath) && markerMatches(markerPath, agentId)) return null;
 
 	const getSeen = createBackfillSeenReader(basePath, agentId);
-	const failures = await backfillMarkdownTranscriptArtifacts(basePath, agentId, getSeen);
+	const markdownFailures = await backfillMarkdownTranscriptArtifacts(basePath, agentId, getSeen);
 	const databaseOk = await backfillDatabaseTranscripts(basePath, agentId, getSeen);
-	if (failures > 0 || !databaseOk) {
-		logger.warn("transcripts", "Canonical transcript backfill incomplete; will retry on next write", {
-			agentId: agentId ?? "*",
-			basePath,
-			markdownFailures: failures,
-			databaseOk,
-		});
-		return;
-	}
-
-	if (!writeMarker(markerPath, agentId)) return;
-	canonicalBackfills.add(key);
+	if (markdownFailures > 0 || !databaseOk) return { markdownFailures, databaseOk };
+	return writeMarker(markerPath, agentId) ? null : { markerWritten: false };
 }
 
 function writeMarker(markerPath: string, agentId?: string): boolean {
@@ -429,7 +479,7 @@ function hasUpdatedAt(): boolean {
 		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === "updated_at");
-		}, "session-transcripts.ts:429");
+		}, "session-transcripts.ts:479");
 	} catch {
 		return false;
 	}
@@ -539,7 +589,7 @@ export function upsertSessionTranscript(
 					 ON CONFLICT(agent_id, session_key) DO UPDATE SET ${updates.join(", ")}`,
 			).run(...values);
 			return true;
-		}, "session-transcripts.ts:483");
+		}, "session-transcripts.ts:533");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript upsert failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -622,7 +672,7 @@ export async function upsertSessionTranscriptAsync(
 				).run(...values);
 				return true;
 			},
-			{ siteToken: "session-transcripts.ts:565", operation: "transcripts.upsert", signal: options?.signal },
+			{ siteToken: "session-transcripts.ts:615", operation: "transcripts.upsert", signal: options?.signal },
 		);
 	} catch (error) {
 		if (options?.signal?.aborted) throw error;
@@ -668,7 +718,7 @@ export function markSessionTranscriptCompleted(
 		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
-		}, "session-transcripts.ts:668");
+		}, "session-transcripts.ts:718");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript completion marker failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -731,7 +781,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				completedAt: row.completed_at ?? null,
 				contentHash: row.content_hash ?? null,
 			};
-		}, "session-transcripts.ts:700");
+		}, "session-transcripts.ts:750");
 	} catch {
 		return undefined;
 	}
@@ -799,7 +849,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ siteToken: "session-transcripts.ts:797", operation: "transcripts.lookup", signal },
+			{ siteToken: "session-transcripts.ts:847", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;
@@ -823,7 +873,7 @@ export function getSessionTranscriptContent(sessionKey: string, agentId: string)
 				)
 				.get(agentId, ...aliases, sessionKey) as { content: string } | undefined;
 			return row?.content;
-		}, "session-transcripts.ts:816");
+		}, "session-transcripts.ts:866");
 	} catch {
 		return undefined;
 	}
@@ -871,7 +921,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:847");
+		}, "session-transcripts.ts:897");
 	} catch {
 		return [];
 	}
@@ -919,7 +969,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:902");
+		}, "session-transcripts.ts:952");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -962,7 +1012,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:947");
+						}, "session-transcripts.ts:997");
 
 					const hits = rows
 						.map((row) => ({
@@ -1032,7 +1082,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1011");
+			}, "session-transcripts.ts:1061");
 
 		return rows
 			.map((row) => ({
