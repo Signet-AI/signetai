@@ -29,7 +29,7 @@ The biggest changes in this release are about making Signet easier to use day to
 - Setup is guided, and there are new ways to bring conversations and documents into Signet.
 - Memory is easier to inspect, with clearer provenance, revision history, and review state.
 
-> **Upgrading an existing workspace?** This release introduces Workspace v2. Updating Signet and migrating your workspace are separate steps; see **Installing and updating** below.
+> **Upgrading an existing workspace?** This release introduces Workspace v2. Updating Signet and migrating your workspace are separate steps; see **Installing and updating** below. If you installed with the native installer on Linux or Windows, rerun the installer instead of `signet update install`.
 
 ## Sources and Dreaming: bringing your context together
 
@@ -153,6 +153,14 @@ signet update install
 ```
 
 `signet update channel stable` moves you to the stable track; `signet update install` installs the latest stable release. Follow any restart instructions printed by the updater, then check `signet status`. See [upgrading](https://docs.signetai.sh/upgrading/) for details.
+
+**If you used the native installer on Linux or Windows,** `signet update install` from `v0.157.3` (or any release before `v0.235.1`) will stop with:
+
+```
+✖ Native manifest linux-x64 asset entry failed URL, checksum, or size validation
+```
+
+Nothing is wrong with the download. The older updater rejects binaries larger than 256 MiB, and the Linux and Windows 1.0 binaries are larger than that. Run the native installer for your platform from above instead; it replaces the binary and leaves your workspace alone. Then run `signet daemon restart`. npm and Bun installs update through the package manager and aren't affected. From 1.0 on, `signet update install` works normally.
 
 ### Migrate an existing workspace
 
