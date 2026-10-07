@@ -645,6 +645,37 @@ inference:
 			});
 			expect(readFileSync(join(tmpDir, "agent.yaml"), "utf-8")).toBe(original);
 		});
+
+		it("POST /api/config leaves pipeline pause changes to the pause and resume routes", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode config test");
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerMiscRoutes(app);
+			const original = readFileSync(join(tmpDir, "agent.yaml"), "utf-8");
+			const token = createToken(secret, { sub: "config-admin", role: "admin", scope: {} }, 60);
+			const save = (content: string) =>
+				app.request("/api/config", {
+					method: "POST",
+					headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+					body: JSON.stringify({ file: "agent.yaml", content }),
+				});
+			try {
+				expect(original).not.toContain("paused");
+				const paused = await save("memory:\n  pipelineV2:\n    paused: true\n");
+				expect(paused.status).toBe(409);
+				expect(readFileSync(join(tmpDir, "agent.yaml"), "utf-8")).toBe(original);
+
+				const unchanged = "memory:\n  pipelineV2:\n    paused: false\n";
+				expect((await save(unchanged)).status).toBe(200);
+				expect(readFileSync(join(tmpDir, "agent.yaml"), "utf-8")).toBe(unchanged);
+			} finally {
+				writeFileSync(join(tmpDir, "agent.yaml"), original);
+			}
+		});
 		it("POST /api/agents distinguishes omitted, null, valid, and invalid policy_group", async () => {
 			const app = await makeApp();
 			const { registerMiscRoutes } = await import("./routes/misc-routes");

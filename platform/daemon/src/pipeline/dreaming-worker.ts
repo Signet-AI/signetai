@@ -89,6 +89,7 @@ export function _testDreamingTriggerLogData(
 export interface DreamingWorkerOptions {
 	readonly executorFactory?: (agentId: string) => DreamingAgentExecutor;
 	readonly checkIntervalMs?: number;
+	readonly enabled?: () => boolean;
 	readonly acpxMcp?: {
 		readonly daemonUrl: string;
 		readonly authorizationTokenForAgent?: (agentId: string) => string | undefined;
@@ -105,7 +106,7 @@ export async function shouldDeferDreamingSweep(
 ): Promise<boolean> {
 	if (ownerMaintenance) return !(await ownerMaintenance.queueIsHealthy());
 	return await accessor.withReadDbAsync((db) => getQueueHealth(db).status !== "healthy", {
-		siteToken: "pipeline/dreaming-worker.ts:107",
+		siteToken: "pipeline/dreaming-worker.ts:108",
 		operation: "dreaming.worker.queue-health",
 	});
 }
@@ -158,7 +159,7 @@ export async function getDreamingWorkerAgentIds(
 				(db) => {
 					return db.prepare(sql).all() as Array<{ id: string | null }>;
 				},
-				{ siteToken: "pipeline/dreaming-worker.ts:157", operation: "dreaming.worker.agent-scopes" },
+				{ siteToken: "pipeline/dreaming-worker.ts:158", operation: "dreaming.worker.agent-scopes" },
 			);
 	const ids = new Set<string>([defaultAgentId]);
 	for (const row of rows) {
@@ -213,7 +214,7 @@ export async function selectDreamingCheckMode(
 							[scope, "hygiene"],
 						).then((row) => row != null)
 					: accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"]), {
-							siteToken: "pipeline/dreaming-worker.ts:215",
+							siteToken: "pipeline/dreaming-worker.ts:216",
 							operation: "dreaming.worker.hygiene-attention",
 						}),
 			),
@@ -235,7 +236,7 @@ export async function selectDreamingCheckMode(
 					: accessor.withReadDbAsync(
 							(db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
 							{
-								siteToken: "pipeline/dreaming-worker.ts:235",
+								siteToken: "pipeline/dreaming-worker.ts:236",
 								operation: "dreaming.worker.content-attention",
 							},
 						),
@@ -364,7 +365,7 @@ export function startDreamingWorker(
 	}
 
 	async function check(): Promise<void> {
-		if (stopped || active || !cfg.enabled) return;
+		if (stopped || active || !(options.enabled ? options.enabled() : cfg.enabled)) return;
 		const checkedAt = new Date().toISOString();
 		if (isSystemPressureHigh()) {
 			scheduler = { status: "deferred", reason: "system_pressure", checkedAt };

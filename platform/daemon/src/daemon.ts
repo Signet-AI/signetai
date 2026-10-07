@@ -1782,6 +1782,10 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 						AGENTS_DIR,
 						defaultAgentId,
 						{
+							enabled: () => {
+								const live = loadMemoryConfig(AGENTS_DIR);
+								return live.dreaming.enabled && !live.pipelineV2.paused && !live.pipelineV2.mutationsFrozen;
+							},
 							acpxMcp: {
 								daemonUrl: `http://${INTERNAL_SELF_HOST}:${PORT}`,
 								authorizationTokenForAgent: (agentId) =>
