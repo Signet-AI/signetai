@@ -286,9 +286,12 @@ describe("fetchEmbedding", () => {
 		globalThis.fetch = mock(() =>
 			Promise.resolve(new Response("unreachable", { status: 503 })),
 		) as unknown as typeof fetch;
-		setNativeEmbeddingProviderForTest(async () => {
-			throw new Error("native unavailable");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				throw new Error("native unavailable");
+			},
+			() => false,
+		);
 
 		await expect(
 			fetchEmbedding("test", {
@@ -391,9 +394,12 @@ describe("fetchEmbedding", () => {
 		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
-		setNativeEmbeddingProviderForTest(async () => {
-			throw new Error("native unavailable");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				throw new Error("native unavailable");
+			},
+			() => false,
+		);
 		const result = await fetchEmbedding("token ".repeat(1000), {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
@@ -443,9 +449,12 @@ describe("fetchEmbedding", () => {
 		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
-		setNativeEmbeddingProviderForTest(async () => {
-			throw new Error("native unavailable");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				throw new Error("native unavailable");
+			},
+			() => false,
+		);
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
@@ -475,9 +484,12 @@ describe("fetchEmbedding", () => {
 		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
-		setNativeEmbeddingProviderForTest(async () => {
-			throw new Error("native unavailable");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				throw new Error("native unavailable");
+			},
+			() => false,
+		);
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
@@ -543,10 +555,13 @@ describe("fetchEmbedding", () => {
 			return Promise.resolve(new Response("unreachable", { status: 503 }));
 		}) as unknown as typeof fetch;
 
-		setNativeEmbeddingProviderForTest(async () => {
-			nativeCalls++;
-			throw new Error("native worker timed out");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				nativeCalls++;
+				throw new Error("native worker timed out");
+			},
+			() => false,
+		);
 		const cfg = {
 			provider: "native" as const,
 			model: "nomic-embed-text-v1.5",
