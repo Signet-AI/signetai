@@ -155,7 +155,9 @@ export async function runOwnerMaintenanceWithRetry<Result>(
 		return { ...options, deadlineMs: remainingMs };
 	};
 	const runAdmitted = async (): Promise<Result> => {
+		let queueFull: DbOwnerAdmissionError | null = null;
 		for (;;) {
+			if (queueFull !== null && Math.floor(deadlineAt - Date.now()) < 1) throw queueFull;
 			try {
 				return await runOwnerJob(owner, request, operation, "maintenance", attemptOptions());
 			} catch (error) {
@@ -166,6 +168,7 @@ export async function runOwnerMaintenanceWithRetry<Result>(
 				) {
 					throw error;
 				}
+				queueFull = error;
 				if (options.signal?.aborted) throw options.signal.reason instanceof Error ? options.signal.reason : error;
 				const remainingMs = deadlineAt - Date.now();
 				if (remainingMs <= 1) throw error;

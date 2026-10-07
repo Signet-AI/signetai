@@ -1,5 +1,5 @@
 import { Database } from "bun:sqlite";
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -170,6 +170,25 @@ describe("DB owner FTS maintenance", () => {
 			runOwnerMaintenanceWithRetry(owner, { kind: "sleep", durationMs: 0 }, "test.queue-full", { deadlineMs: 60 }),
 		).rejects.toBeInstanceOf(DbOwnerAdmissionError);
 		expect(Date.now() - startedAt).toBeLessThan(200);
+	});
+
+	test("reports the full queue, not the deadline, when the deadline lapses during the admission wait", async () => {
+		const base = 1_000_000;
+		const clock = [base, base, base + 50];
+		const now = spyOn(Date, "now").mockImplementation(() => clock.shift() ?? base + 61);
+		const owner = {
+			start: async (): Promise<void> => {},
+			submit: () => {
+				throw new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "DB owner maintenance admission queue is full");
+			},
+		} as unknown as DbOwnerClient;
+		try {
+			await expect(
+				runOwnerMaintenanceWithRetry(owner, { kind: "sleep", durationMs: 0 }, "test.queue-full", { deadlineMs: 60 }),
+			).rejects.toBeInstanceOf(DbOwnerAdmissionError);
+		} finally {
+			now.mockRestore();
+		}
 	});
 
 	test("rejects a full queue immediately when the caller backs off itself", async () => {
