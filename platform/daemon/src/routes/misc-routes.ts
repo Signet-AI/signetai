@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
+	PIPELINE_CONFIG_FILES,
 	findPipelineConfigFile,
 	parseSimpleYaml,
 	readPipelinePauseState,
@@ -164,7 +165,12 @@ export function registerMiscRoutes(app: Hono): void {
 					return c.json({ error: error instanceof Error ? error.message : "Invalid memory pipeline config" }, 400);
 				}
 				const active = findPipelineConfigFile(AGENTS_DIR);
-				if (active !== null && basename(active) === file && paused !== readPipelinePauseState(AGENTS_DIR).paused) {
+				const rankOf = (name: string): number =>
+					PIPELINE_CONFIG_FILES.findIndex((candidate) => candidate.toLowerCase() === name.toLowerCase());
+				const rank = rankOf(file);
+				const activeRank = active === null ? -1 : rankOf(basename(active));
+				const selected = rank !== -1 && (activeRank === -1 || rank <= activeRank);
+				if (selected && paused !== readPipelinePauseState(AGENTS_DIR).paused) {
 					return c.json(
 						{
 							error:

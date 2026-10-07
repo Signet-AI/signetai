@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DbOwnerClient, DbOwnerJobHandle, DbOwnerSubmitOptions } from "./db-owner-client";
@@ -672,7 +672,14 @@ inference:
 				const unchanged = "memory:\n  pipelineV2:\n    paused: false\n";
 				expect((await save(unchanged)).status).toBe(200);
 				expect(readFileSync(join(tmpDir, "agent.yaml"), "utf-8")).toBe(unchanged);
+
+				rmSync(join(tmpDir, "agent.yaml"));
+				writeFileSync(join(tmpDir, "config.yaml"), "memory:\n  pipelineV2:\n    paused: true\n");
+				expect((await save(unchanged)).status).toBe(409);
+				expect(existsSync(join(tmpDir, "agent.yaml"))).toBe(false);
+				expect((await save("memory:\n  pipelineV2:\n    paused: true\n")).status).toBe(200);
 			} finally {
+				rmSync(join(tmpDir, "config.yaml"), { force: true });
 				writeFileSync(join(tmpDir, "agent.yaml"), original);
 			}
 		});

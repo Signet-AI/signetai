@@ -1774,7 +1774,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	const activeEmbeddingCfg = await startDeferredRuntimeAfterDreaming(
 		() => {
-			if (!pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
+			if (!pipelinePaused) {
 				try {
 					dreamingWorkerHandle = startDreamingWorker(
 						getDbAccessor(),
