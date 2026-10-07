@@ -478,20 +478,14 @@ export type {
 	SourceSyncResult,
 	SourceSyncStatus,
 } from "./source-substrate";
-export {
-	collectExportData,
-	serializeExportData,
-	importMemories,
-	importEntities,
-	importRelations,
-} from "./export";
+export { collectExportData, serializeExportData, importBundle } from "./export";
 export type {
 	ExportOptions,
 	ExportManifest,
 	ExportData,
 	ImportOptions,
+	ImportInput,
 	ExportImportResult,
-	ImportConflictStrategy,
 } from "./export";
 export { runMigrations, hasPendingMigrations, MIGRATIONS, LATEST_SCHEMA_VERSION } from "./migrations/index";
 export type { MigrationDb, Migration } from "./migrations/index";

@@ -58,6 +58,7 @@ test("CLI streams the daemon export with all filters through the real command tr
 	const program = new Command();
 	registerPortableCommands(program, {
 		AGENTS_DIR: directory,
+		daemonOwnsWorkspace: async () => false,
 		fetchDaemonStream: async (path) => {
 			requested = path;
 			return {
