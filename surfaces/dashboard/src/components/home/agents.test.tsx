@@ -41,6 +41,12 @@ test("Manage opens and focuses an editable agent, not every disclosure", async (
 		await act(async () => {
 			root.render(<HomeAgentsPanel />);
 		});
+		await act(async () => {
+			(container.querySelector('button[aria-labelledby="home-agents-title"]') as HTMLButtonElement | null)?.click();
+		});
+		expect(container.querySelector('button[aria-labelledby="home-agents-title"]')?.getAttribute("aria-expanded")).toBe(
+			"true",
+		);
 		const manage = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Manage"));
 		expect(manage).toBeDefined();
 		await act(async () => {
@@ -68,6 +74,12 @@ test("daemon-managed-only roster does not advertise an unavailable Manage action
 		await act(async () => {
 			root.render(<HomeAgentsPanel />);
 		});
+		await act(async () => {
+			(container.querySelector('button[aria-labelledby="home-agents-title"]') as HTMLButtonElement | null)?.click();
+		});
+		expect(container.querySelector('button[aria-labelledby="home-agents-title"]')?.getAttribute("aria-expanded")).toBe(
+			"true",
+		);
 		expect([...container.querySelectorAll("button")].some((button) => button.textContent?.includes("Manage"))).toBe(
 			false,
 		);

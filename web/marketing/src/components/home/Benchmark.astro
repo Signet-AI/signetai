@@ -1,0 +1,37 @@
+---
+import SectionHead from "./SectionHead.astro";
+
+const evidence = [
+	{ value: "Local", label: "No LLM at search time", text: "Search and ranking stay on-device." },
+	{ value: "Receipt", label: "Verified on a shared harness", text: "Methodology attached." },
+];
+---
+
+<section class="hs" id="benchmark">
+  <SectionHead index="06" label="Benchmark" title="One tracked run." accent="Receipts attached.">
+    <p class="hs-lede">Rules profile, bounded daemon recall, and no model at search time.</p>
+  </SectionHead>
+
+  <div class="score reveal">
+    <div class="score-main">
+      <p class="score-value">97.6<span>%</span></p>
+      <p class="score-label">LongMemEval answer accuracy</p>
+      <p class="score-text">MemoryBench rules profile · tracked local and canary score set.</p>
+    </div>
+    <ul class="score-evidence">
+      {evidence.map((item, i) => (
+        <li>
+          <span class="score-index">0{i + 1}</span>
+          <strong>{item.value}</strong>
+          <div>
+            <span>{item.label}</span>
+            <p>{item.text}</p>
+          </div>
+        </li>
+      ))}
+      <li class="score-link">
+        <a href="https://docs.signetai.sh/benchmarking/" target="_blank" rel="noopener noreferrer" class="benchmark-link home-text-link" data-analytics-guide="benchmarking">Methodology and full results <span aria-hidden="true">↗</span></a>
+      </li>
+    </ul>
+  </div>
+</section>

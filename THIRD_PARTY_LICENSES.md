@@ -15,8 +15,8 @@ upstream project for that package; the canonical license texts are listed below.
 
 | Package | Version range | License | Upstream |
 | --- | --- | --- | --- |
-| `@fontsource/geist` | `^5.3.0` | SIL Open Font License 1.1 | [Fontsource font files](https://github.com/fontsource/font-files) |
 | `@fontsource/geist-mono` | `^5.3.0` | SIL Open Font License 1.1 | [Fontsource font files](https://github.com/fontsource/font-files) |
+| `@fontsource/schibsted-grotesk` | `^5.3.0` | SIL Open Font License 1.1 | [Fontsource font files](https://github.com/fontsource/font-files) |
 | `@mingcute/react` | `^3.0.2` | Apache-2.0 | [MingCute Icons](https://github.com/mingcute-design/mingcute-icons) |
 | `@radix-ui/react-slot` | `^1.1.2` | MIT | [Radix Primitives](https://github.com/radix-ui/primitives) |
 | `@shadcn/react` | `^0.2.1` | MIT | [shadcn/ui](https://github.com/shadcn-ui/ui) |

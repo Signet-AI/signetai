@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 import { FolderOpen, Globe, Loader2, MessageCircle, RotateCcw, Upload } from "@/components/mingcute-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type SourceKind = "files" | "web" | "transcripts" | "obsidian" | "github" | "discord";
+export type SourceKind = "files" | "web" | "transcripts" | "obsidian" | "github" | "notion" | "discord";
 
 const IMPORT_KINDS: readonly { id: "files" | "web" | "transcripts"; label: string; description: string }[] = [
 	{ id: "files", label: "Files", description: "Import documents and notes" },
@@ -16,9 +16,14 @@ const IMPORT_KINDS: readonly { id: "files" | "web" | "transcripts"; label: strin
 	{ id: "transcripts", label: "Agent transcripts", description: "Import lossless JSONL transcript exports" },
 ];
 
-const CONNECT_KINDS: readonly { id: "obsidian" | "github" | "discord"; label: string; namePlaceholder: string }[] = [
+const CONNECT_KINDS: readonly {
+	id: "obsidian" | "github" | "notion" | "discord";
+	label: string;
+	namePlaceholder: string;
+}[] = [
 	{ id: "obsidian", label: "Obsidian", namePlaceholder: "Research Vault" },
 	{ id: "github", label: "GitHub", namePlaceholder: "Signet GitHub" },
+	{ id: "notion", label: "Notion", namePlaceholder: "Team Notion" },
 	{ id: "discord", label: "Discord", namePlaceholder: "Team Discord" },
 ];
 
@@ -42,6 +47,11 @@ const FIELD: Record<Exclude<SourceKind, "files">, { label: string; placeholder: 
 		label: "Repository",
 		placeholder: "Signet-AI/signetai",
 		hint: "owner/repo — use owner/* for org-wide glob",
+	},
+	notion: {
+		label: "Token secret",
+		placeholder: "NOTION_TOKEN",
+		hint: "Name of the secret holding your internal integration token. Signet indexes the pages you share with that integration.",
 	},
 	discord: {
 		label: "Guild ID",
@@ -73,6 +83,12 @@ function validate(kind: Exclude<SourceKind, "files">, target: string, tokenRef: 
 		if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_*.-]+$/.test(value)) return "Use owner/repo or owner/*";
 		return null;
 	}
+	if (kind === "notion") {
+		if (!value) return "Enter the Notion token secret name";
+		if (/^(?:bearer\s+)?(?:ntn|secret)_[A-Za-z0-9]{20,}$/i.test(value))
+			return "Store the token in Secrets and enter the secret name";
+		return null;
+	}
 	if (!/^\d{17,20}$/.test(value)) return "Enter a 17–20 digit Guild ID";
 	if (!tokenRef.trim()) return "Enter the Discord token secret name";
 	return null;
@@ -95,6 +111,7 @@ function sourceDescription(kind: SourceKind): string {
 	if (kind === "transcripts") return "Import lossless JSONL transcript exports";
 	if (kind === "obsidian") return "Index a local vault";
 	if (kind === "github") return "Index repositories and issues";
+	if (kind === "notion") return "Index pages shared with an integration";
 	return "Index messages from a Discord server";
 }
 
@@ -349,7 +366,9 @@ export function ConnectSourceDialog({
 					? { root: target.trim(), name: displayName }
 					: kind === "github"
 						? { repo: target.trim(), name: displayName, tokenRef: tokenRef.trim() || undefined }
-						: { guildId: target.trim(), name: displayName, tokenRef: tokenRef.trim() };
+						: kind === "notion"
+							? { tokenRef: target.trim(), name: displayName }
+							: { guildId: target.trim(), name: displayName, tokenRef: tokenRef.trim() };
 		const response = await api.addSource(kind, body);
 		setBusy(false);
 		if (!response.ok) {
@@ -644,7 +663,7 @@ export function ConnectSourceDialog({
 											/>
 										</div>
 									)}
-									{kind !== "obsidian" && kind !== "web" && (
+									{kind !== "obsidian" && kind !== "web" && kind !== "notion" && (
 										<div className="ui-field-label">
 											<span>Token secret{kind === "github" ? " (optional)" : ""}</span>
 											<Input

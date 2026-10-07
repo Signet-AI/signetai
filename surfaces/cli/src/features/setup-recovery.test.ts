@@ -63,6 +63,7 @@ describe("setup recovery", () => {
 					forge: false,
 					codex: false,
 					kimi: false,
+					museCode: false,
 					ohMyPi: false,
 					pi: false,
 					hermesAgent: false,

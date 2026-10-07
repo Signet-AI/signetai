@@ -1,0 +1,23 @@
+---
+import { ART, artUrl } from "../../lib/art";
+import { SOURCES, STROKED } from "../../lib/sources";
+import SectionHead from "./SectionHead.astro";
+---
+
+<section class="hs hs--sources" id="sources">
+  <img class="src-art" src={artUrl("sources")} alt="" width={ART.sources.width} height={ART.sources.height} loading="lazy" decoding="async" />
+  <SectionHead index="04" label="Sources" title="Bring what you" accent="already know." align="center">
+    <p class="hs-lede">Connect your notes, docs, repos, and chats where they already live. Signet reads them, never edits them, and every answer cites the exact page, path, or line it came from.</p>
+    <a class="home-text-link" href="https://docs.signetai.sh/sources/" target="_blank" rel="noopener noreferrer" data-analytics-guide="sources">Read about Sources <span aria-hidden="true">↗</span></a>
+  </SectionHead>
+
+  <ul class="src-row reveal" aria-label="Supported sources">
+    {SOURCES.map((source) => (
+      <li>
+        <svg class:list={["src-icon", { "src-icon--line": STROKED.has(source.key) }]} viewBox="0 0 24 24" aria-hidden="true"><path d={source.icon} /></svg>
+        <span>{source.name}</span>
+      </li>
+    ))}
+  </ul>
+
+</section>

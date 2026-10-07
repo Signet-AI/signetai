@@ -41,13 +41,15 @@ The daemon supports three [Auth](/auth/) modes, set in `agent.yaml`:
 - `hybrid` — requests from `localhost` are trusted without a token; requests
   from any other origin require a `Bearer` token.
 
-Tokens use Signet's signed bearer-token format with a role and optional scope.
-Dashboard password login uses `POST /api/auth/login` to exchange the configured
-admin username/password for an admin session token. The dashboard shell,
-`/api/auth/login`, `/api/auth/methods`, `/api/auth/whoami`, and reserved
-`/api/auth/sso/*` and `/api/auth/saml/*` provider paths are reachable without an
-existing bearer token so users can sign in. Other daemon API routes remain
-protected in `team` mode.
+Tokens use Signet's signed bearer-token format with a role, optional scope, and
+optional permissions. Dashboard password login uses `POST /api/auth/login` to
+exchange the configured admin username/password for an admin session token, and
+`POST /api/auth/session` exchanges any valid credential, including an API key,
+for a session with the same claims. The dashboard shell, `/api/auth/login`,
+`/api/auth/methods`, `/api/auth/whoami`, `/api/auth/handoff/redeem`, and
+reserved `/api/auth/sso/*` and `/api/auth/saml/*` provider paths are reachable
+without an existing bearer token so users can sign in. Other daemon API routes
+remain protected in `team` mode. See [Core configuration](/api/core-configuration/#auth).
 
 Roles and their permissions:
 
@@ -129,7 +131,7 @@ include `success`, `id`, `action`, and `message`; failures return an error.
 
 `POST /api/harnesses/:id/connect` requires admin permission and accepts
 `claude-code`, `codex`, `hermes-agent`, `opencode`, `openclaw`, `gemini`,
-`pi`, `oh-my-pi`, `kimi`, or `forge`. It installs into the daemon host's agent
+`pi`, `oh-my-pi`, `kimi`, `muse-code`, or `forge`. It installs into the daemon host's agent
 configuration using the same connector implementation as the CLI, with the
 resolved daemon workspace. No request body or arbitrary filesystem path is
 accepted. Success returns `{success: true, id}` after connector verification and

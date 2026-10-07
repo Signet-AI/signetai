@@ -298,6 +298,7 @@ export function verifyApiKey(accessor: DbAccessor, token: string): AuthResult {
 		const permissions = normalizePermissions(safeStringArray(row.permissions_json), []);
 		const claims: TokenClaims = {
 			sub: `api-key:${row.id}`,
+			name: row.name,
 			role,
 			scope,
 			iat,

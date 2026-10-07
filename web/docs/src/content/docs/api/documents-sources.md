@@ -138,7 +138,7 @@ number of chunk links on the document.
 
 Sources connect read-only external knowledge bases to Signet recall without
 turning them into ordinary saved memories. Supported source kinds are
-`obsidian`, `discord`, `github`, and `import`.
+`obsidian`, `discord`, `github`, `notion`, `web`, and `import`.
 
 ### GET /api/sources
 
@@ -612,6 +612,49 @@ The sync path indexes source-owned artifacts for issues, pull requests,
 discussions, selected Markdown docs, comments, and partial-failure artifacts.
 Partial GitHub failures cause the shared source job to report failure while
 preserving source-owned rows that were indexed successfully.
+
+### POST /api/sources/notion
+
+Add or update a Notion source and queue a shared source index job. The source
+indexes every page shared with the Notion internal integration whose token
+`tokenRef` resolves to. Raw Notion tokens are rejected; pass a Signet secret
+name or external secret reference instead. The source ID is derived from
+`tokenRef`, so posting the same `tokenRef` again updates the existing source
+and preserves omitted settings.
+
+**Request body**
+
+```json
+{
+  "tokenRef": "NOTION_TOKEN",
+  "name": "Team Notion",
+  "maxPages": 500
+}
+```
+
+`tokenRef` is required. `maxPages` is an integer from 1 to 10000 (default
+500); pages are enumerated most recently edited first. Malformed bodies and
+wrongly typed fields return `400` without changing source config.
+
+**Response**
+
+```json
+{
+  "source": { "id": "notion:abc123", "kind": "notion" },
+  "created": true,
+  "indexed": 0,
+  "queued": true,
+  "job": { "status": "queued", "sourceId": "notion:abc123" }
+}
+```
+
+The sync path writes one `source_notion_page` artifact per shared page, with
+database-entry properties rendered above the page Markdown, and
+`source_notion_failure` artifacts for failed page fetches, pages with blocks
+that could not be retrieved, and unconfirmed removals. Blocks the API cannot
+render become `[Unsupported Notion block: <type>]` placeholders. Pages whose edit minute has not changed since a completed
+fetch are not refetched, and pages no longer shared are removed after a complete
+enumeration once Notion confirms they are gone.
 
 ### DELETE /api/sources/:sourceId
 

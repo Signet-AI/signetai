@@ -7,6 +7,7 @@ import {
 	addImportedSource,
 	addObsidianSource,
 	loadSourcesConfig,
+	notionSourceId,
 	removeSourceIfGeneration,
 } from "@signet/core";
 import { Hono } from "hono";
@@ -666,6 +667,65 @@ describe("Sources routes", () => {
 		expect(body.queued).toBe(true);
 		expect(body.source).toMatchObject({ kind: "web", root: "https://example.com/route" });
 		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("web");
+	});
+
+	it("connects a Notion source and queues the shared source index job", async () => {
+		globalThis.fetch = mock(() =>
+			Promise.resolve(Response.json({ object: "list", results: [], next_cursor: null, has_more: false })),
+		) as typeof fetch;
+
+		const res = await makeApp().request("/api/sources/notion", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ tokenRef: "NOTION_TOKEN", name: "Route Notion", maxPages: 25 }),
+		});
+
+		expect(res.status).toBe(202);
+		const body = (await res.json()) as {
+			source: { id: string; kind: string; name: string; providerSettings?: Record<string, unknown> };
+			queued: boolean;
+		};
+		expect(body.queued).toBe(true);
+		expect(body.source).toMatchObject({ kind: "notion", name: "Route Notion" });
+		expect(body.source.providerSettings).toEqual({ tokenRef: "NOTION_TOKEN", maxPages: 25 });
+		expect(loadSourcesConfig(dir).sources.map((source) => source.id)).toEqual([body.source.id]);
+	});
+
+	it("rejects malformed Notion source bodies before writing config", async () => {
+		for (const payload of [
+			null,
+			[],
+			{},
+			{ tokenRef: 42 },
+			{ tokenRef: "NOTION_TOKEN", name: ["x"] },
+			{ tokenRef: "NOTION_TOKEN", maxPages: "25" },
+			{ tokenRef: "NOTION_TOKEN", maxPages: 0 },
+			{ tokenRef: `ntn_${"a".repeat(46)}` },
+		]) {
+			const res = await makeApp().request("/api/sources/notion", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(payload),
+			});
+			expect(res.status).toBe(400);
+		}
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+	});
+
+	it("returns 409 for a Notion source whose mutation lease is held", async () => {
+		const releaseDeletion = beginSourceDeletion(notionSourceId("NOTION_TOKEN"));
+		expect(releaseDeletion).toBeTypeOf("function");
+		try {
+			const res = await makeApp().request("/api/sources/notion", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ tokenRef: "  NOTION_TOKEN  " }),
+			});
+			expect(res.status).toBe(409);
+			expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+		} finally {
+			releaseDeletion?.();
+		}
 	});
 
 	it("rejects raw Discord tokens at the route boundary", async () => {
@@ -1956,6 +2016,58 @@ describe("Sources routes", () => {
 		});
 	});
 
+	it("counts orphan chunks for sources whose chunk text exceeds one owner result", async () => {
+		const added = addDiscordSource(
+			{
+				guildIds: ["123456789012345678"],
+				tokenRef: "DISCORD_BOT_TOKEN",
+				name: "Large Discord",
+			},
+			dir,
+		);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		insertSourceArtifact({
+			sourceId: added.source.id,
+			sourceRoot: added.source.root,
+			sourcePath: "discord://guild/123/channel/456/message/live",
+			sourceKind: "source_discord_message",
+			content: "live message",
+			metaJson: "{}",
+		});
+		const body = "x".repeat(1_200);
+		getDbAccessor().withWriteTx((db) => {
+			const insert = db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			);
+			for (let i = 0; i < 1_005; i++) {
+				const orphan = i % 201 === 200;
+				insert.run(
+					`large-chunk-${i}`,
+					`large-chunk-${i}-hash`,
+					new Uint8Array([0]),
+					1,
+					"source_chunk",
+					`${added.source.id}:guild/123/channel/456/message/${orphan ? `deleted-${i}` : "live"}#${i}`,
+					orphan ? body : `source_path: discord://guild/123/channel/456/message/live\n\n${body}`,
+					"2026-05-24T00:00:00.000Z",
+					"default",
+				);
+			}
+		});
+
+		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
+		expect(res.status).toBe(200);
+		const result = (await res.json()) as {
+			health?: { status?: string; error?: string; purge?: { orphanChunks?: number } };
+		};
+		expect(result.health?.error).toBeUndefined();
+		expect(result.health).toMatchObject({ status: "degraded", purge: { orphanChunks: 5 } });
+	});
+
 	it("degrades source health when only deleted artifact residue remains", async () => {
 		const added = addDiscordSource(
 			{
@@ -1999,7 +2111,7 @@ describe("Sources routes", () => {
 		expect(((await res.json()) as { error: string }).error).toContain("Source not found");
 	});
 
-	it("marks source health unhealthy when diagnostics queries fail", async () => {
+	it("reports source health as unknown when diagnostics queries fail", async () => {
 		const added = addDiscordSource(
 			{
 				guildIds: ["123456789012345678"],
@@ -2018,11 +2130,11 @@ describe("Sources routes", () => {
 		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { health?: { status?: string; error?: string } };
-		expect(body.health?.status).toBe("unhealthy");
+		expect(body.health?.status).toBe("unknown");
 		expect(body.health?.error).toContain("Source health diagnostics failed");
 	});
 
-	it("marks source health unhealthy when semantic diagnostics queries fail", async () => {
+	it("reports source health as unknown when semantic diagnostics queries fail", async () => {
 		const added = addDiscordSource(
 			{
 				guildIds: ["123456789012345678"],
@@ -2041,7 +2153,7 @@ describe("Sources routes", () => {
 		const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as { health?: { status?: string; error?: string } };
-		expect(body.health?.status).toBe("unhealthy");
+		expect(body.health?.status).toBe("unknown");
 		expect(body.health?.error).toContain("Source health diagnostics failed");
 	});
 

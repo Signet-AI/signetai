@@ -1,0 +1,52 @@
+---
+import OsInstallSelector from "../OsInstallSelector.astro";
+import { ART, artUrl } from "../../lib/art";
+const steps = [
+	{
+		name: "Install",
+		text: "One command installs Signet and starts its daemon on your machine.",
+		tag: "signet daemon · running",
+	},
+	{
+		name: "Set up",
+		text: "Guided onboarding picks a provider and connects your sources and agents.",
+		tag: "dashboard · localhost:3850",
+	},
+	{
+		name: "Work as usual",
+		text: "Your next session starts with context, in whichever harness you open.",
+		tag: "<signet-memory-context>",
+	},
+];
+---
+
+<section class="hs hs--start" id="install">
+  <img class="start-art" src={artUrl("floor")} alt="" width={ART.floor.width} height={ART.floor.height} loading="lazy" decoding="async" />
+  <div class="start reveal">
+    <p class="hs-index"><span>08</span>Get started</p>
+    <h2 class="hs-title">Persistent memory<br /><span>in five minutes.</span></h2>
+    <p class="hs-lede">No cloud account, no config files to write. Install, follow the guided setup, and get back to work.</p>
+
+    <div class="start-install">
+      <OsInstallSelector placement="install_cta" compact />
+    </div>
+
+    <ol class="start-steps" aria-label="First-run steps">
+      {steps.map((step, i) => (
+        <li>
+          <span class="start-num" aria-hidden="true">0{i + 1}</span>
+          <strong>{step.name}</strong>
+          <p>{step.text}</p>
+          <code class="start-tag">{step.tag}</code>
+        </li>
+      ))}
+    </ol>
+
+    <div class="start-links">
+      <a class="hero-btn hero-btn--primary" href="https://docs.signetai.sh/quickstart/" target="_blank" rel="noopener noreferrer" data-analytics-guide="quickstart">Read the quickstart <span aria-hidden="true">↗</span></a>
+      <a class="hero-btn start-github" href="https://github.com/Signet-AI/signetai" target="_blank" rel="noopener noreferrer">Star on GitHub <span aria-hidden="true">↗</span></a>
+      <a class="hero-btn" href="https://discord.gg/pHa5scah9C" target="_blank" rel="noopener noreferrer" data-analytics-cta="join_discord" data-analytics-placement="install_cta">Join Discord <span aria-hidden="true">↗</span></a>
+    </div>
+    <p class="start-meta">Apache 2.0 · Open source · Runs on macOS, Linux, and Windows</p>
+  </div>
+</section>

@@ -1,5 +1,6 @@
 import { LoadingRows } from "@/components/ui/skeleton";
-import { SectionHeading } from "@/components/dashboard/heading";
+import { SectionAction, type StatusTone, StatusLabel } from "@/components/dashboard/heading";
+import { SetupRow } from "@/components/home/setup-row";
 import { sourceLogo } from "@/components/icons";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
 import { type SignetSource, type SourceHealth, type SourceIndexJob, api } from "@/lib/api";
@@ -14,23 +15,104 @@ import {
 	FolderOpen,
 	GitBranch,
 	Globe,
-	Plus,
 	RotateCw,
 	Trash2,
 	X,
 } from "@/components/mingcute-icons";
 import { useEffect, useRef, useState } from "react";
 
-const HEALTH_STYLES: Record<string, string> = {
-	healthy: "home-health-healthy",
-	degraded: "home-health-degraded",
-	unhealthy: "home-health-unhealthy",
-	empty: "home-health-empty",
+const HEALTH_STATUS: Record<string, { tone: StatusTone; label: string } | undefined> = {
+	degraded: { tone: "warn", label: "Degraded" },
+	unhealthy: { tone: "error", label: "Unhealthy" },
+	empty: { tone: "neutral", label: "Empty" },
+	unknown: { tone: "neutral", label: "Couldn't check" },
 };
+
+const REINDEXABLE_KINDS = new Set(["obsidian", "web", "github", "notion", "discord"]);
+
+export interface SourceIssue {
+	readonly tone: StatusTone;
+	readonly title: string;
+	readonly detail?: string;
+	readonly fix: "reindex" | "details";
+	readonly actionable: boolean;
+}
+
+function plural(count: number, word: string): string {
+	return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+export function sourceIssue(source: SignetSource): SourceIssue | null {
+	const health = source.health;
+	if (!health) return null;
+	const reindex = REINDEXABLE_KINDS.has(source.kind) ? "reindex" : "details";
+	if (health.status === "unknown")
+		return {
+			tone: "neutral",
+			title: "Signet couldn't check this source",
+			detail: health.error,
+			fix: "details",
+			actionable: false,
+		};
+	if (health.permission?.status === "denied")
+		return {
+			tone: "error",
+			title: "Signet can't read this folder",
+			detail: health.permission.issues[0]?.guidance,
+			fix: "details",
+			actionable: true,
+		};
+	const failures = health.failures?.total ?? 0;
+	if (failures > 0) {
+		const recoverable = health.failures?.recoverable ?? 0;
+		return {
+			tone: "warn",
+			title: `${plural(failures, "item")} failed to sync`,
+			detail:
+				recoverable > 0
+					? `${recoverable} can be retried by re-indexing.`
+					: "None can be retried automatically; check the source itself.",
+			fix: recoverable > 0 ? reindex : "details",
+			actionable: true,
+		};
+	}
+	const stale = health.checkpoints?.stale ?? 0;
+	const partial = health.checkpoints?.partial ?? 0;
+	if (stale + partial > 0)
+		return {
+			tone: "warn",
+			title: "Sync didn't finish",
+			detail:
+				[stale ? `${stale} stale` : "", partial ? `${partial} partial` : ""].filter(Boolean).join(" and ") +
+				" checkpoints.",
+			fix: reindex,
+			actionable: true,
+		};
+	const orphans = health.purge?.orphanChunks ?? 0;
+	const deleted = health.purge?.deletedArtifacts ?? 0;
+	if (orphans + deleted > 0)
+		return {
+			tone: "warn",
+			title: "Index still holds data from deleted items",
+			detail: [orphans ? plural(orphans, "orphaned chunk") : "", deleted ? plural(deleted, "deleted item") : ""]
+				.filter(Boolean)
+				.join(" and ")
+				.concat("."),
+			fix: "details",
+			actionable: true,
+		};
+	if (health.status === "unhealthy" || health.status === "degraded")
+		return {
+			tone: health.status === "unhealthy" ? "error" : "warn",
+			title: `Source is ${health.status}`,
+			fix: "details",
+			actionable: true,
+		};
+	return null;
+}
 function RootIcon({ kind }: { kind: string }) {
 	const cls = "size-[13px] shrink-0 text-muted-foreground";
 	if (kind === "github") return <GitBranch className={cls} aria-hidden="true" />;
-	if (kind === "web") return <Globe className={cls} aria-hidden="true" />;
+	if (kind === "web" || kind === "notion") return <Globe className={cls} aria-hidden="true" />;
 	if (kind === "discord" || kind === "slack") return <Globe className={cls} aria-hidden="true" />;
 	return <Folder className={cls} aria-hidden="true" />;
 }
@@ -38,12 +120,16 @@ export function HomeSourcesPanel({
 	sources,
 	loading,
 	onRefresh,
+	focus,
 }: {
 	sources?: readonly SignetSource[];
 	loading: boolean;
 	onRefresh: () => void;
+	focus?: { readonly id: string; readonly at: number } | null;
 }) {
 	const [connectOpen, setConnectOpen] = useState(false);
+	const [expanded, setExpanded] = useState(false);
+	const listRef = useRef<HTMLDivElement>(null);
 	const { connectSourceRequested, clearConnectSource } = useView();
 
 	useEffect(() => {
@@ -52,45 +138,65 @@ export function HomeSourcesPanel({
 		clearConnectSource();
 	}, [connectSourceRequested, clearConnectSource]);
 
+	const [pendingFocus, setPendingFocus] = useState<string | null>(null);
+	useEffect(() => {
+		if (!focus) return;
+		setExpanded(true);
+		setPendingFocus(focus.id);
+	}, [focus]);
+	useEffect(() => {
+		if (!expanded || !pendingFocus || !sources?.some((source) => source.id === pendingFocus)) return;
+		const row = [...(listRef.current?.querySelectorAll<HTMLDetailsElement>("details[data-source-id]") ?? [])].find(
+			(candidate) => candidate.dataset.sourceId === pendingFocus,
+		);
+		if (!row) return;
+		row.open = true;
+		row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+		setPendingFocus(null);
+	}, [expanded, pendingFocus, sources]);
+
+	const summary = loading
+		? "Loading…"
+		: sources === undefined
+			? "Unavailable"
+			: sources.length === 0
+				? "None connected"
+				: sources.map((source) => source.name).join(", ");
+
 	return (
 		<>
-			<section className="group pb-3">
-				<SectionHeading
-					title="Sources"
-					className="items-center gap-3"
-					actions={
-						<button
-							type="button"
-							onClick={() => setConnectOpen(true)}
-							className="home-text-action h-7 rounded-[var(--control-radius)] px-1 hover:text-foreground"
-						>
-							<Plus className="size-3" />
-							Connect a source
-						</button>
-					}
+			<section className="home-setup-group" aria-labelledby="home-sources-title">
+				<SetupRow
+					id="home-sources-title"
+					label="Sources"
+					summary={summary}
+					count={sources?.length || undefined}
+					expanded={expanded}
+					onToggle={() => setExpanded((open) => !open)}
 				/>
-				{loading ? (
-					<LoadingRows label="Loading sources…" rows={2} />
-				) : sources === undefined ? (
-					<div className="flex min-h-[72px] items-center justify-center gap-2 text-center">
-						<span className="font-mono text-[10px] text-muted-foreground">Unable to load sources.</span>
-						<button type="button" className="home-text-action shrink-0" onClick={onRefresh}>
-							Retry
-						</button>
-					</div>
-				) : sources.length > 0 ? (
-					<div className="mt-3 divide-y divide-border">
-						{sources.map((source) => (
-							<HomeSourceRow key={source.id} source={source} onMutate={onRefresh} />
-						))}
-					</div>
-				) : (
-					<div className="mt-3 flex min-h-[60px] items-center gap-3">
-						<Folder className="size-5 shrink-0 text-muted-foreground" aria-hidden="true" />
-						<div>
-							<p className="text-[13px] text-foreground">No sources connected yet</p>
-							<p className="mt-1 text-xs text-muted-foreground">Connect a source to start indexing.</p>
-						</div>
+				{expanded && (
+					<div ref={listRef} className="home-setup-detail">
+						{loading ? (
+							<LoadingRows label="Loading sources…" rows={2} />
+						) : sources === undefined ? (
+							<div className="flex min-h-[48px] items-center gap-2">
+								<span className="text-small text-muted-foreground">Unable to load sources.</span>
+								<button type="button" className="home-text-action shrink-0" onClick={onRefresh}>
+									Retry
+								</button>
+							</div>
+						) : sources.length > 0 ? (
+							<div className="divide-y divide-border">
+								{sources.map((source) => (
+									<HomeSourceRow key={source.id} source={source} onMutate={onRefresh} />
+								))}
+							</div>
+						) : (
+							<p className="py-2 text-small text-muted-foreground">Connect a source to start indexing.</p>
+						)}
+						<SectionAction className="mt-1" onClick={() => setConnectOpen(true)}>
+							Connect a source
+						</SectionAction>
 					</div>
 				)}
 			</section>
@@ -117,28 +223,36 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 		setConfirming,
 	} = useSourceActions(source, onMutate);
 	const format = typeof source.providerSettings?.format === "string" ? source.providerSettings.format : source.kind;
+	const issue = sourceIssue(source);
 
 	return (
-		<details className="group/source" data-health={health}>
+		<details className="group/source" data-health={health} data-source-id={source.id}>
 			<summary className="flex min-w-0 cursor-pointer list-none items-center gap-2 py-2.5 [&::-webkit-details-marker]:hidden">
 				<span className="grid size-4.5 shrink-0 place-items-center text-foreground">
 					{sourceLogo(source.kind, { className: "size-4" }) ?? <Folder className="size-3.5" />}
 				</span>
 				<span className="flex min-w-0 flex-1 flex-col leading-tight">
-					<span className="truncate text-[12px] font-medium">{source.name}</span>
+					<span className="truncate text-body">{source.name}</span>
 				</span>
-				<span className={cn("flex shrink-0 items-center gap-1 font-mono text-[9px]", HEALTH_STYLES[health])}>
-					<span className="size-1.5 rounded-full bg-current" />
-					{health}
-					{failures > 0 && ` · ${failures} ${failures === 1 ? "failure" : "failures"}`}
-				</span>
+				{(HEALTH_STATUS[health] || failures > 0) && (
+					<StatusLabel tone={HEALTH_STATUS[health]?.tone ?? "warn"}>
+						{HEALTH_STATUS[health]?.label ?? "Healthy"}
+						{failures > 0 && ` · ${failures} ${failures === 1 ? "failure" : "failures"}`}
+					</StatusLabel>
+				)}
 				<ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/source:rotate-90" />
 			</summary>
 			<div className="pb-2.5 pl-6.5">
+				{issue && (
+					<p className="home-source-reason" data-tone={issue.tone}>
+						<span>{issue.title}.</span>
+						{issue.detail && source.health?.permission?.status !== "denied" && <> {issue.detail}</>}
+					</p>
+				)}
 				<div className="flex min-w-0 items-center gap-1.5">
 					<div className="flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--control-radius)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] pl-2 pr-1">
 						<RootIcon kind={source.kind} />
-						<span className="min-w-0 flex-1 break-all py-1 font-mono text-[9.5px] leading-relaxed text-muted-foreground">
+						<span className="min-w-0 flex-1 break-all py-1 font-mono text-meta leading-relaxed text-muted-foreground">
 							{source.root}
 						</span>
 						{source.kind === "obsidian" && (
@@ -166,7 +280,7 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 				</div>
 
 				<div
-					className="mt-1.5 flex flex-wrap items-baseline gap-x-2 font-mono text-[9px] text-muted-foreground"
+					className="mt-1.5 flex flex-wrap items-baseline gap-x-2 text-meta tabular-nums text-muted-foreground"
 					role="group"
 					aria-label="Source indexing totals"
 				>
@@ -186,14 +300,14 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 				<div className="mt-1.5">
 					<PipeStrip job={source.indexJob} health={health} compact />
 				</div>
-				<div className="mt-2 flex items-center justify-between gap-2 font-mono text-[9px] text-muted-foreground">
+				<div className="mt-2 flex items-center justify-between gap-2 text-meta tabular-nums text-muted-foreground">
 					<span>
 						{format} · {source.mode}
 					</span>
 					<span className="shrink-0">{relTime(source.lastIndexedAt)}</span>
 				</div>
 				{source.health?.permission?.status === "denied" && (
-					<div className="home-source-warning mt-2 rounded-md border px-2 py-1.5 font-mono text-[9px]">
+					<div className="home-source-warning mt-2 rounded-md border px-2 py-1.5 text-meta tabular-nums">
 						{source.health.permission.issues.map((issue) => (
 							<div key={issue.path} title={issue.path}>
 								{issue.guidance}
@@ -205,11 +319,11 @@ function HomeSourceRow({ source, onMutate }: { source: SignetSource; onMutate: (
 
 				<div className="mt-2 flex items-center justify-between gap-2">
 					{error ? (
-						<span role="alert" className="min-w-0 break-words font-mono text-[9px] text-destructive">
+						<span role="alert" className="min-w-0 break-words text-meta tabular-nums text-destructive">
 							{error}
 						</span>
 					) : (
-						<span role="status" className="font-mono text-[9px] text-muted-foreground">
+						<span role="status" className="text-meta tabular-nums text-muted-foreground">
 							{copied
 								? "Copied"
 								: action === "reindex"
@@ -261,15 +375,15 @@ function ImportExtractionSummary({ extraction }: { extraction: SourceHealth["imp
 		typeof extraction.aspectsCreated !== "number" ||
 		typeof extraction.attributesCreated !== "number"
 	) {
-		return <span className="truncate font-mono text-[9px] text-muted-foreground">extraction result unavailable</span>;
+		return <span className="truncate text-meta tabular-nums text-muted-foreground">extraction result unavailable</span>;
 	}
 	if (extraction.aspectsCreated === 0 && extraction.attributesCreated === 0) {
-		return <span className="truncate font-mono text-[9px] text-muted-foreground">no structured graph result</span>;
+		return <span className="truncate text-meta tabular-nums text-muted-foreground">no structured graph result</span>;
 	}
 	const entity = extraction.documentEntityId ? "entity linked" : "no entity linked";
 	return (
 		<span
-			className="truncate font-mono text-[9px] text-muted-foreground"
+			className="truncate text-meta tabular-nums text-muted-foreground"
 			title={extraction.documentEntityId ? `Document entity ${extraction.documentEntityId}` : undefined}
 		>
 			{extraction.aspectsCreated} aspects · {extraction.attributesCreated} attributes · {entity}
@@ -471,8 +585,8 @@ function PipeStrip({
 			</div>
 			<span
 				className={cn(
-					"shrink-0 truncate font-mono text-muted-foreground",
-					compact ? "max-w-[38%] text-[8px]" : "max-w-[45%] text-[9.5px]",
+					"shrink-0 truncate text-muted-foreground",
+					compact ? "max-w-[38%] text-meta" : "max-w-[45%] text-meta",
 				)}
 				title={text}
 			>

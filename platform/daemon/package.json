@@ -1,6 +1,6 @@
 {
 	"name": "@signet/daemon",
-	"version": "0.232.0",
+	"version": "0.236.0",
 	"license": "Apache-2.0",
 	"description": "Background daemon for Signet - serves dashboard, API, and memory system",
 	"type": "module",
@@ -70,6 +70,7 @@
 		"@signet/connector-forge": "workspace:*",
 		"@signet/connector-gemini": "workspace:*",
 		"@signet/connector-kimi": "workspace:*",
+		"@signet/connector-muse-code": "workspace:*",
 		"@signet/connector-oh-my-pi": "workspace:*",
 		"@signet/connector-openclaw": "workspace:*",
 		"@signet/connector-opencode": "workspace:*",

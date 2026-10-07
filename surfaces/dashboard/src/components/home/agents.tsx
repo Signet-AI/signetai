@@ -1,6 +1,8 @@
 import { LoadingRows } from "@/components/ui/skeleton";
 import { useEffect, useRef, useState } from "react";
-import { ArrowRight, ChevronRight, UserRound } from "@/components/mingcute-icons";
+import { ChevronRight, UserRound } from "@/components/mingcute-icons";
+import { SectionAction, StatusLabel } from "@/components/dashboard/heading";
+import { SetupRow } from "@/components/home/setup-row";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { api, type Agent } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
@@ -17,7 +19,7 @@ const POLICY_LABELS: Record<Policy, string> = {
 
 function ScopeBadge({ children }: { children: string }) {
 	return (
-		<span className="rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[9px] text-muted-foreground">
+		<span className="rounded border border-border bg-muted px-1.5 py-0.5 text-meta tabular-nums text-muted-foreground">
 			{children}
 		</span>
 	);
@@ -37,6 +39,13 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 	const [saving, setSaving] = useState(false);
 
 	const agents = agentsQuery.data;
+	const [expanded, setExpanded] = useState(false);
+	const displayName = (agent: Agent) =>
+		(agent.name === "default" || agent.id === activeAgentId) &&
+		identityQuery.data?.name &&
+		identityQuery.data.name !== "Unknown"
+			? identityQuery.data.name
+			: agent.name;
 
 	const beginEdit = (agent: Agent) => {
 		setEditing(agent.name);
@@ -67,80 +76,87 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 
 	return (
 		<>
-			<section ref={rosterRef} className="py-2.5" aria-labelledby="home-agents-title">
-				<div className="flex items-center justify-between gap-2.5">
-					<span id="home-agents-title" className="text-[14px] font-medium tracking-tight text-foreground">
-						Agents
-					</span>
-					{agents?.some((agent) => agent.name !== "default") && (
-						<button
-							type="button"
-							className="home-text-action"
-							onClick={() => {
-								const agent = agents.find((candidate) => candidate.name !== "default");
-								if (!agent) return;
-								const row = Array.from(rosterRef.current?.querySelectorAll("details") ?? []).find(
-									(candidate) => candidate.dataset.agentId === agent.id,
-								);
-								if (row) row.open = true;
-								beginEdit(agent);
-							}}
-						>
-							Manage <ArrowRight className="size-3.5" />
-						</button>
-					)}
-				</div>
+			<section ref={rosterRef} className="home-setup-group" aria-labelledby="home-agents-title">
+				<SetupRow
+					id="home-agents-title"
+					label="Agents"
+					summary={
+						agents === null
+							? agentsQuery.loading
+								? "Loading…"
+								: "Unavailable"
+							: agents.length === 0
+								? "None registered"
+								: agents.map(displayName).join(", ")
+					}
+					count={agents?.length || undefined}
+					expanded={expanded}
+					onToggle={() => setExpanded((open) => !open)}
+				/>
+				{expanded && (
+					<div className="home-setup-detail">
+						{error && (
+							<div
+								role="alert"
+								className="mt-2 flex items-center justify-between gap-2 text-meta tabular-nums text-destructive"
+							>
+								<span className="truncate" title={error}>
+									{error}
+								</span>
+								<button type="button" className="shrink-0 underline" onClick={() => void agentsQuery.refresh()}>
+									Retry
+								</button>
+							</div>
+						)}
 
-				{error && (
-					<div
-						role="alert"
-						className="mt-2 flex items-center justify-between gap-2 font-mono text-[10px] text-destructive"
-					>
-						<span className="truncate" title={error}>
-							{error}
-						</span>
-						<button type="button" className="shrink-0 underline" onClick={() => void agentsQuery.refresh()}>
-							Retry
-						</button>
-					</div>
-				)}
-
-				{agentsQuery.loading && agents === null ? (
-					<LoadingRows label="Loading agents…" rows={2} />
-				) : agents === null ? (
-					<div className="flex min-h-[48px] items-center justify-center gap-2 text-center">
-						<span className="font-mono text-[10px] text-muted-foreground">Unable to load agents.</span>
-						<button type="button" className="home-text-action shrink-0" onClick={() => void agentsQuery.refresh()}>
-							Retry
-						</button>
-					</div>
-				) : agents.length === 0 ? (
-					<div className="grid min-h-[48px] place-items-center text-center">
-						<span className="font-mono text-[10px] text-muted-foreground">No agents registered yet.</span>
-					</div>
-				) : (
-					<div className="mt-1.5 divide-y divide-border">
-						{agents.map((agent) => (
-							<AgentDisclosure
-								key={agent.id}
-								agent={agent}
-								active={agent.id === activeAgentId}
-								displayName={
-									(agent.name === "default" || agent.id === activeAgentId) &&
-									identityQuery.data?.name &&
-									identityQuery.data.name !== "Unknown"
-										? identityQuery.data.name
-										: agent.name
-								}
-								editing={editing === agent.name}
-								draft={draft}
-								saving={saving}
-								onBeginEdit={() => beginEdit(agent)}
-								onDraftChange={setDraft}
-								onConfirm={() => setPending({ agent, draft })}
-								onCancel={() => setEditing(null)}
-							/>
-						))}
+						{agentsQuery.loading && agents === null ? (
+							<LoadingRows label="Loading agents…" rows={2} />
+						) : agents === null ? (
+							<div className="flex min-h-[48px] items-center justify-center gap-2 text-center">
+								<span className="text-meta tabular-nums text-muted-foreground">Unable to load agents.</span>
+								<button type="button" className="home-text-action shrink-0" onClick={() => void agentsQuery.refresh()}>
+									Retry
+								</button>
+							</div>
+						) : agents.length === 0 ? (
+							<div className="grid min-h-[48px] place-items-center text-center">
+								<span className="text-meta tabular-nums text-muted-foreground">No agents registered yet.</span>
+							</div>
+						) : (
+							<div className="divide-y divide-border">
+								{agents.map((agent) => (
+									<AgentDisclosure
+										key={agent.id}
+										agent={agent}
+										active={agents.length > 1 && agent.id === activeAgentId}
+										displayName={displayName(agent)}
+										editing={editing === agent.name}
+										draft={draft}
+										saving={saving}
+										onBeginEdit={() => beginEdit(agent)}
+										onDraftChange={setDraft}
+										onConfirm={() => setPending({ agent, draft })}
+										onCancel={() => setEditing(null)}
+									/>
+								))}
+							</div>
+						)}
+						{agents?.some((agent) => agent.name !== "default") && (
+							<SectionAction
+								className="mt-1"
+								onClick={() => {
+									const agent = agents.find((candidate) => candidate.name !== "default");
+									if (!agent) return;
+									const row = Array.from(rosterRef.current?.querySelectorAll("details") ?? []).find(
+										(candidate) => candidate.dataset.agentId === agent.id,
+									);
+									if (row) row.open = true;
+									beginEdit(agent);
+								}}
+							>
+								Manage
+							</SectionAction>
+						)}
 					</div>
 				)}
 			</section>
@@ -170,7 +186,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 							type="button"
 							disabled={saving}
 							onClick={() => setPending(null)}
-							className="rounded border border-border px-3 py-1 text-sm"
+							className="rounded border border-border px-3 py-1 text-body"
 						>
 							Cancel
 						</button>
@@ -178,7 +194,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 							type="button"
 							disabled={saving}
 							onClick={() => void confirmEdit()}
-							className="rounded bg-primary px-3 py-1 text-sm text-primary-foreground"
+							className="rounded bg-primary px-3 py-1 text-body text-primary-foreground"
 						>
 							{saving ? "Saving…" : "Save access change"}
 						</button>
@@ -187,7 +203,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 			/>
 
 			{confirmation && (
-				<div role="status" className="mt-2 font-mono text-[10px] text-muted-foreground">
+				<div role="status" className="mt-2 text-meta tabular-nums text-muted-foreground">
 					Saved access for <strong>{confirmation.name}</strong>; effective scope:{" "}
 					{confirmation.effective_scope ?? "unknown"}
 				</div>
@@ -231,15 +247,12 @@ function AgentDisclosure({
 				<span className="grid size-4 shrink-0 place-items-center text-muted-foreground">
 					<UserRound className="size-3" aria-hidden="true" />
 				</span>
-				<span className="min-w-0 flex-1 truncate text-[12px] font-medium">{displayName}</span>
-				{active && (
-					<span className="flex shrink-0 items-center gap-1 font-mono text-[9.5px] text-success">
-						<span className="size-1.5 rounded-full bg-success" />
-						Active
-					</span>
-				)}
-				<ScopeBadge>{POLICY_LABELS[agent.read_policy]}</ScopeBadge>
-				{agent.policy_group && <ScopeBadge>{agent.policy_group}</ScopeBadge>}
+				<span className="min-w-0 flex-1 truncate text-body">{displayName}</span>
+				{active && <StatusLabel tone="ok">Active</StatusLabel>}
+				<span className="shrink-0 text-meta text-muted-foreground">
+					{POLICY_LABELS[agent.read_policy]}
+					{agent.policy_group && ` · ${agent.policy_group}`}
+				</span>
 				<ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-open/agent:rotate-90" />
 			</summary>
 			<div className="home-agent-detail">
@@ -253,7 +266,7 @@ function AgentDisclosure({
 
 				{editing ? (
 					<div className="mt-2 flex flex-wrap items-center gap-2">
-						<label className="font-mono text-[9.5px] text-muted-foreground" htmlFor={`agent-policy-${agent.id}`}>
+						<label className="text-meta tabular-nums text-muted-foreground" htmlFor={`agent-policy-${agent.id}`}>
 							Scope
 						</label>
 						<select
@@ -262,7 +275,7 @@ function AgentDisclosure({
 							aria-label={`Memory policy for ${agent.name}`}
 							value={draft.policy}
 							onChange={(event) => onDraftChange({ ...draft, policy: event.target.value as Policy })}
-							className="h-7 rounded-[var(--control-radius)] border border-input bg-background px-2 text-[11px]"
+							className="h-7 rounded-[var(--control-radius)] border border-input bg-background px-2 text-meta"
 						>
 							{policies.map((policy) => (
 								<option key={policy} value={policy}>
@@ -276,23 +289,23 @@ function AgentDisclosure({
 								value={draft.group}
 								onChange={(event) => onDraftChange({ ...draft, group: event.target.value })}
 								placeholder="group name"
-								className="h-7 w-28 rounded-[var(--control-radius)] border border-input bg-background px-2 text-[11px]"
+								className="h-7 w-28 rounded-[var(--control-radius)] border border-input bg-background px-2 text-meta"
 							/>
 						)}
 						<button
 							type="button"
 							disabled={saving}
 							onClick={onConfirm}
-							className="h-7 rounded-[var(--control-radius)] bg-primary px-2.5 text-[11px] font-medium text-primary-foreground"
+							className="h-7 rounded-[var(--control-radius)] bg-primary px-2.5 text-meta font-medium text-primary-foreground"
 						>
 							Review change
 						</button>
-						<button type="button" onClick={onCancel} className="h-7 px-1.5 text-[11px] text-muted-foreground underline">
+						<button type="button" onClick={onCancel} className="h-7 px-1.5 text-meta text-muted-foreground underline">
 							Cancel
 						</button>
 					</div>
 				) : canEdit ? (
-					<button type="button" onClick={onBeginEdit} className="home-text-action mt-1 h-7 text-[11px]">
+					<button type="button" onClick={onBeginEdit} className="home-text-action mt-1 h-7 text-meta">
 						Edit access
 					</button>
 				) : null}

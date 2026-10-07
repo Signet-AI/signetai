@@ -1,0 +1,46 @@
+---
+import { getImage } from "astro:assets";
+import OsInstallSelector from "../OsInstallSelector.astro";
+import { CATEGORIES, coverUrl, formatDate, getPosts, postUrl } from "../../lib/blog";
+
+const announcement = (await getPosts()).find((post) => post.data.banner);
+const thumb = announcement
+	? announcement.data.imageCover && announcement.data.image
+		? (await getImage({ src: announcement.data.image, width: 240, format: "webp" })).src
+		: coverUrl(announcement, "card")
+	: undefined;
+---
+
+<section class="home-hero">
+  <div class="home-hero-bg" aria-hidden="true"></div>
+
+  <div class="home-hero-copy reveal">
+    {announcement ? (
+      <a class="hero-announce" href={postUrl(announcement)} data-analytics-cta="announcement" data-analytics-placement="hero">
+        {thumb ? <img class="hero-announce-thumb" src={thumb} alt="" width="120" height="68" /> : null}
+        <span class="hero-announce-text">
+          <span class="hero-announce-meta"><span class="hero-announce-tag">New</span>{CATEGORIES[announcement.data.category].label} · {formatDate(announcement.data.date)}</span>
+          <span class="hero-announce-title">{announcement.data.banner}</span>
+        </span>
+        <span class="hero-announce-arrow" aria-hidden="true">→</span>
+      </a>
+    ) : (
+      <p class="blog-eyebrow">Memory + secrets, outside the harness</p>
+    )}
+
+    <h1 class="home-hero-title">The memory layer<br /><span>for every agent you use.</span></h1>
+
+    <p class="home-hero-desc">
+      One local memory shared by Claude Code, Codex, OpenCode, and the rest. Inspectable, source&#8209;backed, and yours to keep when your tools change.
+    </p>
+
+    <div class="hero-install">
+      <OsInstallSelector placement="hero" />
+    </div>
+
+    <div class="home-hero-links">
+      <a class="hero-btn hero-btn--primary" href="https://docs.signetai.sh/quickstart/" target="_blank" rel="noopener noreferrer" data-analytics-guide="quickstart">Get started <span aria-hidden="true">↗</span></a>
+      <a class="hero-btn" href="https://discord.gg/pHa5scah9C" target="_blank" rel="noopener noreferrer" data-analytics-cta="join_discord" data-analytics-placement="hero">Join Discord <span aria-hidden="true">↗</span></a>
+    </div>
+  </div>
+</section>

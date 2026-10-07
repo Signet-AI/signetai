@@ -28,6 +28,7 @@ export {
 	getPeerAddress,
 	isAuthOpenPath,
 	requirePermission,
+	requirePermissionWithRateLimit,
 	requireScope,
 	requireRateLimit,
 } from "./middleware";

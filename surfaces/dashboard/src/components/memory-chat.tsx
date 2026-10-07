@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { AssistantChatMessage } from "@signet/core";
 import { type AssistantModelOption, streamAssistantChat } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -13,19 +13,19 @@ import {
 import { Message, MessageContent, MessageResponse, MessageCopyAction } from "@/components/ai-elements/message";
 import { PromptInput, PromptInputTextarea, PromptInputSubmit } from "@/components/ai-elements/prompt-input";
 import { Sources, SourcesContent, SourcesTrigger } from "@/components/ai-elements/sources";
-import { LoaderCircleIcon, XIcon, PlusIcon } from "lucide-react";
+import { LoaderCircleIcon, PlusIcon } from "lucide-react";
 
 type ChatMessage = AssistantChatMessage & {
 	id: string;
 	citations?: Array<{ sourceRef: string; excerpt: string }>;
 	actions?: Array<{ id: string; text: string }>;
+	model?: string;
 };
 
 export interface MemoryChatProps {
 	readonly className?: string;
 	readonly inactive?: boolean;
 	readonly presentation?: "compact" | "sidebar";
-	readonly onClose?: () => void;
 	readonly onNewChat?: () => void;
 	readonly selectedEntityId?: string;
 	readonly onFocusEntity?: (entityId: string) => void;
@@ -39,7 +39,6 @@ export function MemoryChat({
 	className,
 	inactive,
 	presentation,
-	onClose,
 	onNewChat,
 	selectedEntityId,
 	onFocusEntity,
@@ -143,7 +142,10 @@ export function MemoryChat({
 						}));
 						setStatus("Dreaming requested — changes are pending");
 					}
-					if (event.type === "done") setStatus(event.model);
+					if (event.type === "done") {
+						setStatus("");
+						updateLastMessage((message) => ({ ...message, model: event.model }));
+					}
 				},
 				controller.signal,
 				conversationId.current,
@@ -167,6 +169,27 @@ export function MemoryChat({
 			abortRef.current = null;
 		}
 	};
+	const promptRef = useRef<HTMLFormElement>(null);
+	const dockRect = useRef<DOMRect | null>(null);
+	useLayoutEffect(() => {
+		const prompt = promptRef.current;
+		if (!prompt) return;
+		if (presentation === "compact") {
+			dockRect.current = prompt.getBoundingClientRect();
+			return;
+		}
+		const from = dockRect.current;
+		dockRect.current = null;
+		if (!from || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+		const to = prompt.getBoundingClientRect();
+		prompt.animate(
+			[
+				{ transform: `translate(${from.left - to.left}px, ${from.top - to.top}px)`, width: `${from.width}px` },
+				{ transform: "translate(0, 0)", width: `${to.width}px` },
+			],
+			{ duration: 360, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+		);
+	}, [presentation]);
 	return (
 		<section
 			className={cn("memory-chat", presentation === "sidebar" && "memory-chat-sidebar", className)}
@@ -205,18 +228,6 @@ export function MemoryChat({
 					>
 						<PlusIcon className="size-4" />
 					</Button>
-					{presentation === "sidebar" && onClose && (
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon-sm"
-							className="memory-chat-close"
-							aria-label="Close chat"
-							onClick={onClose}
-						>
-							<XIcon className="size-4" />
-						</Button>
-					)}
 				</div>
 			)}
 			{presentation !== "compact" && expanded && (
@@ -276,7 +287,10 @@ export function MemoryChat({
 										</p>
 									))}
 									{message.role === "assistant" && message.content && !streaming && (
-										<MessageCopyAction content={message.content} />
+										<div className="chat-message-footer">
+											<MessageCopyAction content={message.content} />
+											{message.model && <span className="chat-message-model">{message.model}</span>}
+										</div>
 									)}
 								</Message>
 							);
@@ -297,6 +311,7 @@ export function MemoryChat({
 				</p>
 			)}
 			<PromptInput
+				ref={promptRef}
 				onSubmit={(event) => {
 					event.preventDefault();
 					void submit();

@@ -104,11 +104,13 @@ Verify remote unauthenticated requests are rejected in `hybrid` or `team` mode
 from the remote machine:
 
 ```bash
-curl -i http://signet-home:3850/api/auth/whoami
+curl -i http://signet-home:3850/api/memories
 ```
 
 A `401 Unauthorized` response is expected for a remote request without a key.
-`/health` may still be reachable because it is a basic health endpoint.
+`/health`, `/api/mode`, and `/api/auth/whoami` stay reachable without a key so
+clients can check health and sign in; `whoami` answers `200` with
+`"authenticated": false`.
 
 ## 3. Create a connector API key
 
@@ -447,12 +449,13 @@ That usually means auth is working: localhost is allowed without a key, while
 remote requests require one. Verify with:
 
 ```bash
-curl -i http://signet-home:3850/api/auth/whoami
-curl -i http://signet-home:3850/api/auth/whoami \
+curl -i http://signet-home:3850/api/memories
+curl -i http://signet-home:3850/api/memories \
   -H "Authorization: Bearer $SIGNET_API_KEY"
 ```
 
-The first remote request should be `401`; the second should succeed.
+The first remote request should be `401`; the second should succeed. To see
+why a key is rejected, call `/api/auth/whoami` with it and read `error`.
 
 ### You exposed a key accidentally
 

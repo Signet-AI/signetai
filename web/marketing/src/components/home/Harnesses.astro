@@ -1,0 +1,76 @@
+---
+import { HARNESSES } from "../../lib/harnesses";
+import IsoBoard from "./IsoBoard.astro";
+---
+
+<section class="hs" id="harnesses">
+  <div class="hub-grid">
+    <div class="hub-copy reveal">
+      <p class="hs-index"><span>05</span>Portable context</p>
+      <h2 class="hs-title">One context.<br /><span>Every harness.</span></h2>
+      <p class="hs-lede">Signet installs underneath the tools you already use. Switch shells without starting over; the same memory and secrets follow.</p>
+
+      <ul class="hub-list" data-hub-list>
+        {HARNESSES.map((h, i) => (
+          <li>
+            <a href={h.href} target="_blank" rel="noopener noreferrer" data-harness={i} data-analytics-harness={h.analytics}>
+              <img class:list={[{ "logo-invert": h.invert }]} src={h.logo} alt="" width="20" height="20" loading="lazy" />
+              <span><strong>{h.name}</strong><small>{h.kind}</small></span>
+            </a>
+          </li>
+        ))}
+      </ul>
+
+      <p class="hub-foot">
+        <span>The harness is where the work happens. Memory is what travels.</span>
+        <a class="home-text-link" href="https://docs.signetai.sh/harnesses/" target="_blank" rel="noopener noreferrer" data-analytics-guide="harnesses">Connector docs <span aria-hidden="true">↗</span></a>
+      </p>
+    </div>
+
+    <div class="hub-stage">
+      <IsoBoard />
+    </div>
+  </div>
+</section>
+
+<script>
+  let cleanup: (() => void) | null = null;
+
+  function initHub() {
+    cleanup?.();
+    cleanup = null;
+    const section = document.querySelector<HTMLElement>("#harnesses");
+    if (!section) return;
+    const items = Array.from(section.querySelectorAll<HTMLElement>("[data-harness]"));
+    const tiles = Array.from(section.querySelectorAll<SVGElement>("[data-tile]"));
+    const traces = Array.from(section.querySelectorAll<SVGElement>('[data-build="trace"]'));
+
+    const light = (k: string | null) => {
+      for (const el of items) el.classList.toggle("is-hot", el.dataset.harness === k);
+      for (const el of tiles) el.classList.toggle("is-hot", el.dataset.tile === k);
+      for (const el of traces) el.classList.toggle("is-hot", el.dataset.order === k);
+    };
+    const key = (event: Event) => (event.target as Element | null)?.closest<HTMLElement | SVGElement>("[data-harness], [data-tile]");
+    const onOver = (event: Event) => {
+      const el = key(event);
+      light(el ? (el.dataset.harness ?? el.dataset.tile ?? null) : null);
+    };
+    const onOut = (event: Event) => {
+      const related = (event as MouseEvent).relatedTarget as Element | null;
+      if (!related?.closest("[data-harness], [data-tile]")) light(null);
+    };
+
+    section.addEventListener("mouseover", onOver);
+    section.addEventListener("focusin", onOver);
+    section.addEventListener("mouseout", onOut);
+    section.addEventListener("focusout", onOut);
+    cleanup = () => {
+      section.removeEventListener("mouseover", onOver);
+      section.removeEventListener("focusin", onOver);
+      section.removeEventListener("mouseout", onOut);
+      section.removeEventListener("focusout", onOut);
+    };
+  }
+
+  document.addEventListener("astro:page-load", initHub);
+</script>

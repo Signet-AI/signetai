@@ -1,0 +1,23 @@
+---
+import { HARNESSES } from "../../lib/harnesses";
+---
+
+<div class="home-harnesses">
+  <p class="home-harnesses-label">Portable context across the ecosystem</p>
+  <div class="marquee">
+    <div class="marquee-track">
+      {[false, true].map((copy) => (
+        <ul aria-hidden={copy ? "true" : undefined} inert={copy}>
+          {HARNESSES.map((harness) => (
+            <li>
+              <a href={harness.href} target="_blank" rel="noopener noreferrer" data-analytics-harness={copy ? undefined : harness.analytics}>
+                <img class:list={[{ "logo-invert": harness.invert }]} src={harness.logo} alt="" width="18" height="18" loading="lazy" />
+                <span>{harness.name}</span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      ))}
+    </div>
+  </div>
+</div>

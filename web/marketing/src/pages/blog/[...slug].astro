@@ -1,73 +1,44 @@
 ---
-import { getCollection, render } from "astro:content";
+import { render } from "astro:content";
 import Blog from "../../layouts/Blog.astro";
 import StructuredData from "../../components/StructuredData.astro";
+import { getPosts, isoDate, postUrl, type Post } from "../../lib/blog";
 
 export async function getStaticPaths() {
-	const posts = await getCollection("blog");
-	return posts
-		.filter((post) => !post.data.draft)
-		.map((post) => ({
-			params: { slug: post.id },
-			props: { post },
-		}));
+	const posts = await getPosts();
+	return posts.map((post) => ({
+		params: { slug: post.id },
+		props: { post, posts },
+	}));
 }
 
-const { post } = Astro.props;
+interface Props {
+	post: Post;
+	posts: Post[];
+}
+
+const { post, posts } = Astro.props;
 const { Content, headings } = await render(post);
-const allPosts = (await getCollection("blog"))
-	.filter((p) => !p.data.draft)
-	.sort((a, b) => a.data.date.getTime() - b.data.date.getTime());
-
-const currentIndex = allPosts.findIndex((p) => p.id === post.id);
-const previousPost =
-	currentIndex > 0
-		? { title: allPosts[currentIndex - 1].data.title, url: `/blog/${allPosts[currentIndex - 1].id}/` }
-		: undefined;
-const nextPost =
-	currentIndex < allPosts.length - 1
-		? { title: allPosts[currentIndex + 1].data.title, url: `/blog/${allPosts[currentIndex + 1].id}/` }
-		: undefined;
-
-const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
-const pageUrl = `${siteUrl}/blog/${post.id}/`;
-const currentTags = new Set(post.data.tags);
-const recommended = allPosts
-	.filter((p) => p.id !== post.id)
-	.map((p) => ({
-		post: p,
-		score: p.data.tags.filter((t: string) => currentTags.has(t)).length,
-	}))
+const tags = new Set(post.data.tags);
+const others = posts.filter((p) => p.id !== post.id);
+const related = others
+	.map((p) => ({ post: p, score: p.data.tags.filter((tag) => tags.has(tag)).length }))
 	.filter((r) => r.score > 0)
 	.sort((a, b) => b.score - a.score || b.post.data.date.getTime() - a.post.data.date.getTime())
-	.slice(0, 3)
-	.map((r) => ({
-		title: r.post.data.title,
-		url: `/blog/${r.post.id}/`,
-		image: r.post.data.image,
-	}));
+	.map((r) => r.post);
+const recommended = [...new Set([...related, ...others])].slice(0, 3);
+
+const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
+const pageUrl = `${siteUrl}${postUrl(post)}`;
 ---
 
-<Blog
-  title={post.data.title}
-  description={post.data.description}
-  date={post.data.date}
-  author={post.data.author}
-  tags={post.data.tags}
-  image={post.data.image}
-  headings={headings}
-  previousPost={previousPost}
-  nextPost={nextPost}
-  pageUrl={pageUrl}
-  currentSlug={post.id}
-  recommendedPosts={recommended}
->
+<Blog post={post} posts={posts} headings={headings} recommended={recommended} pageUrl={pageUrl}>
   <StructuredData data={{
     '@context': 'https://schema.org',
-    '@type': 'TechArticle',
+    '@type': post.data.category === 'announcement' ? 'NewsArticle' : 'TechArticle',
     headline: post.data.title,
     description: post.data.description,
-    datePublished: post.data.date.toISOString().slice(0, 10),
+    datePublished: isoDate(post.data.date),
     author: {
       '@type': 'Person',
       name: post.data.author,

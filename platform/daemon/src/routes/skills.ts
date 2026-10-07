@@ -154,14 +154,35 @@ export async function readCatalogResponseJson<T>(res: Response, limit = MAX_CATA
 	return JSON.parse(await readCatalogResponseText(res, limit)) as T;
 }
 
+function readBlockScalar(after: string, literal: boolean): string {
+	const lines: string[] = [];
+	for (const line of after.split("\n").slice(1)) {
+		if (line.trim() !== "" && !/^\s/.test(line)) break;
+		lines.push(line);
+	}
+	while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+	const indent = lines.find((line) => line.trim() !== "")?.match(/^\s*/)?.[0].length ?? 0;
+	const body = lines.map((line) => line.slice(indent).trimEnd());
+	if (literal) return body.join("\n");
+	return body.reduce((out, line) => {
+		if (line === "") return `${out}\n`;
+		return out === "" || out.endsWith("\n") ? out + line : `${out} ${line}`;
+	}, "");
+}
+
 export function parseSkillFrontmatter(content: string): SkillMeta {
 	const match = content.match(/^---\n([\s\S]*?)\n---/);
 	if (!match) return { description: "" };
 
 	const fm = match[1];
 	const get = (key: string) => {
-		const m = fm.match(new RegExp(`^${key}:\\s*(.+)$`, "m"));
-		return m ? m[1].trim().replace(/^["']|["']$/g, "") : "";
+		const m = fm.match(new RegExp(`^${key}:[ \\t]*(.*)$`, "m"));
+		if (!m) return "";
+		const value = m[1].trim();
+		const block = /^([|>])[+-]?$/.exec(value);
+		return block
+			? readBlockScalar(fm.slice((m.index ?? 0) + m[0].length), block[1] === "|")
+			: value.replace(/^["']|["']$/g, "");
 	};
 	const getList = (key: string): string[] | undefined => {
 		const raw = get(key);

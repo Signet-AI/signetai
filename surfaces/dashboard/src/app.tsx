@@ -1,21 +1,32 @@
 import { Activity, useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { SidebarNav } from "@/components/shell/navigation";
+import { SidebarNav, useSidebarOpen } from "@/components/shell/navigation";
+import { SessionExpiryToast, SignInDialog, SignInScreen } from "@/components/shell/sign-in";
 import { Topbar } from "@/components/shell/topbar";
+import { useSession } from "@/lib/session";
 import { type ViewId, useView } from "@/lib/view-context";
 import { SettingsView, useSettingsHotkey } from "@/views/settings";
 import { HomeView } from "@/views/home";
-import { SkillsView } from "@/views/stubs";
+import { SkillsView } from "@/views/skills";
 import { DreamsView } from "@/views/dreaming";
 import { GraphView } from "@/views/graph";
 
 import { OnboardingPage } from "@/components/onboarding/page";
 
 export function App() {
+	const session = useSession();
 	return (
 		<TooltipProvider delayDuration={200}>
-			<Shell />
+			{session.kind === "checking" ? null : session.kind === "signed-out" && !session.expired ? (
+				<SignInScreen session={session} />
+			) : (
+				<>
+					<Shell />
+					{session.kind === "signed-out" && <SignInDialog session={session} />}
+					<SessionExpiryToast session={session} />
+				</>
+			)}
 			<Toaster />
 		</TooltipProvider>
 	);
@@ -25,6 +36,7 @@ function Shell() {
 	useSettingsHotkey();
 	const { view, setView, setSetupComplete } = useView();
 	const contentRef = useRef<HTMLDivElement>(null);
+	const [sidebarOpen, toggleSidebar] = useSidebarOpen();
 	useEffect(() => {
 		contentRef.current?.scrollTo({ top: 0 });
 	}, [view]);
@@ -32,11 +44,12 @@ function Shell() {
 		<div className="flex h-full min-h-0 flex-col bg-background text-foreground">
 			<main
 				data-view={view}
+				data-sidebar={sidebarOpen ? "open" : "closed"}
 				className="sig-app-frame flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
 			>
-				<Topbar />
+				<Topbar sidebarOpen={sidebarOpen} onToggleSidebar={toggleSidebar} />
 				<div className="sig-work-area flex min-h-0 min-w-0 flex-1">
-					<SidebarNav />
+					<SidebarNav open={sidebarOpen} />
 					<div
 						ref={contentRef}
 						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "settings" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}

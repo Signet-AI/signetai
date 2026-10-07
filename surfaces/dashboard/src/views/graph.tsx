@@ -1,29 +1,36 @@
 import { MemoryChat } from "@/components/memory-chat";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { sourceDocumentTitle } from "@/lib/constellation-display";
 import { Skeleton } from "@/components/ui/skeleton";
-import { PanelRightOpenIcon } from "lucide-react";
+import { SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
+import { useView } from "@/lib/view-context";
 import { cn } from "@/lib/utils";
-import type { GraphSceneData, GraphSceneHandle, SceneEdge, SceneEdgeKind, SceneNode } from "@/lib/graph-scene";
+import type {
+	GraphSceneData,
+	GraphSceneHandle,
+	SceneEdge,
+	SceneEdgeKind,
+	SceneNode,
+	SceneNodeKind,
+} from "@/lib/graph-scene";
 import { capGraphSceneData, graphEvidenceRefs, MAX_VISIBLE_CONSTELLATION_NODES } from "@/lib/constellation-display";
 
 const ENTITY_LIMIT = 150;
 
-const LEGEND = [
-	{ color: "#a1a1aa", label: "entity" },
-	{ color: "#34d399", label: "aspect" },
-	{ color: "#60a5fa", label: "group" },
-	{ color: "#f59e0b", label: "claim slot" },
-	{ color: "#a78bfa", label: "attribute" },
-	{ color: "#fbbf24", label: "claim" },
-	{ color: "#fb7185", label: "constraint" },
-	{ color: "#f472b6", label: "assertion" },
-	{ color: "#22d3ee", label: "evidence" },
-	{ color: "#38bdf8", label: "source" },
-] as const;
+const FILTERS: ReadonlyArray<{
+	readonly key: string;
+	readonly label: string;
+	readonly kinds: readonly SceneNodeKind[];
+}> = [
+	{ key: "entity", label: "Entities", kinds: ["entity"] },
+	{ key: "source", label: "Documents", kinds: ["source"] },
+	{ key: "aspect", label: "Aspects", kinds: ["aspect", "group"] },
+	{ key: "fact", label: "Facts", kinds: ["claimSlot", "attribute", "claim", "assertion"] },
+	{ key: "constraint", label: "Constraints", kinds: ["constraint"] },
+	{ key: "evidence", label: "Evidence", kinds: ["origin", "memory"] },
+];
 
 interface EntityDetail {
 	id: string;
@@ -43,6 +50,13 @@ function shorten(value: string, maxLength: number): string {
 
 function humanize(value: string): string {
 	return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function nodeKindLabel(kind: SceneNodeKind): string {
+	if (kind === "origin" || kind === "memory") return "Evidence";
+	if (kind === "source") return "Document";
+	if (kind === "claimSlot") return "Claim slot";
+	return humanize(kind);
 }
 
 function percent(value: number): string {
@@ -80,8 +94,14 @@ export function GraphView() {
 	const [legendOpen, setLegendOpen] = useState(false);
 	const [detail, setDetail] = useState<EntityDetail | null>(null);
 	const [responded, setResponded] = useState(false);
-	const [chatOpen, setChatOpen] = useState(false);
+	const { chatOpen, setChatOpen } = useView();
 	const [sceneFailed, setSceneFailed] = useState(false);
+	const [sceneBuilt, setSceneBuilt] = useState(false);
+	const [isolated, setIsolated] = useState<string | null>(null);
+	const [hiddenFilters, setHiddenFilters] = useState<ReadonlySet<string>>(() => new Set());
+	const [searchQuery, setSearchQuery] = useState("");
+	const [searchOpen, setSearchOpen] = useState(false);
+	const searchRef = useRef<HTMLInputElement>(null);
 	const stageRef = useRef<HTMLDivElement>(null);
 	const sceneRef = useRef<GraphSceneHandle | null>(null);
 	const builtSigRef = useRef<number | null>(null);
@@ -145,8 +165,9 @@ export function GraphView() {
 					: "entity";
 			addNode({
 				id: entity.id,
-				label: entity.name,
+				label: entityKind === "source" ? sourceDocumentTitle(entity.name) : entity.name,
 				kind: entityKind,
+				...(entityKind === "source" ? { detail: entity.name } : {}),
 				evidenceRefs:
 					entityKind === "source"
 						? [...new Set(entity.aspects.flatMap((aspect) => aspect.attributes.flatMap(graphEvidenceRefs)))]
@@ -372,6 +393,7 @@ export function GraphView() {
 			sceneRef.current?.dispose();
 			sceneRef.current = null;
 			builtSigRef.current = null;
+			setSceneBuilt(false);
 			return;
 		}
 		if (sceneRef.current) {
@@ -390,8 +412,12 @@ export function GraphView() {
 					limitedScene.data,
 					(node) => selectionRef.current(node),
 					() => setSceneFailed(true),
+					undefined,
+					setIsolated,
 				);
+				sceneRef.current.setHiddenKinds(hiddenKindsRef.current);
 				builtSigRef.current = dataSig;
+				setSceneBuilt(true);
 			})
 			.catch((err: unknown) => {
 				console.error("[graph] scene init failed", err);
@@ -430,7 +456,7 @@ export function GraphView() {
 		).length;
 		setDetail({
 			id: match.id,
-			name: match.name,
+			name: match.entityType === "source_document" ? sourceDocumentTitle(match.name) : match.name,
 			mentions: match.mentions,
 			aspectCount: match.aspects.length,
 			attributeCount: match.aspects.reduce((n, a) => n + a.attributes.length, 0),
@@ -459,98 +485,138 @@ export function GraphView() {
 	};
 
 	const sidebarOpen = chatOpen;
+	const wasOpen = useRef(chatOpen);
+	useEffect(() => {
+		if (wasOpen.current && !chatOpen) closeResponse();
+		wasOpen.current = chatOpen;
+	});
+	useEffect(() => () => setChatOpen(false), [setChatOpen]);
 	const [sidebarMounted, setSidebarMounted] = useState(false);
 	useEffect(() => {
 		if (sidebarOpen) {
 			setSidebarMounted(true);
 			return;
 		}
-		const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 420;
+		const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 200;
 		const timer = setTimeout(() => setSidebarMounted(false), delay);
 		return () => clearTimeout(timer);
 	}, [sidebarOpen]);
 	const sidebarPresented = sidebarOpen || sidebarMounted;
-	const selection = (
-		<Dialog
-			open={responded}
-			onOpenChange={(open) => {
-				if (!open) closeResponse();
-			}}
-		>
-			<DialogContent className="home-memory-reader">
-				<DialogTitle>{inspected?.label ?? detail?.name ?? "Selection"}</DialogTitle>
-				<DialogDescription>{inspected ? humanize(inspected.kind) : "Entity"} · Memory graph</DialogDescription>
-				<div className="gr-body">
-					{inspected && inspected.kind !== "entity" && (
-						<div className="gr-answer">
-							<div className="gr-section-label">
-								{inspected.kind === "memory" || inspected.kind === "origin" ? "Evidence" : humanize(inspected.kind)}
-							</div>
-							<p>{inspected.detail ?? inspected.label}</p>
-							<div className="gr-cite__meta">{inspected.metric}</div>
-						</div>
-					)}
-					{detail ? (
-						<>
-							<div>
-								<div className="gr-answer">
-									<b>{detail.name}</b> — {detail.mentions.toLocaleString()} mentions across {detail.aspectCount} aspects
-									and {detail.attributeCount} attributes, linked to {detail.edgeCount} neighboring entities.
-									{detail.topAspects.length > 0 && (
-										<>
-											{" "}
-											Strongest aspect: <b>{detail.topAspects[0].name}</b> (
-											{Math.round(detail.topAspects[0].weight * 100)}% weight).
-										</>
-									)}
-									<div className="gr-prov">
-										<span className="dot" /> constellation · entity cluster
-									</div>
-								</div>
-							</div>
-							{detail.citations.length > 0 && (
-								<div>
-									<div className="gr-section-label" style={{ marginBottom: 8 }}>
-										Stored values
-									</div>
-									<div className="flex flex-col gap-2">
-										{detail.citations.map((cite) => (
-											<div key={cite.id} className="gr-cite">
-												<span className="gr-cite__dot" style={{ background: "#22d3ee" }} />
-												<div>
-													<div className="gr-cite__txt">{cite.text}</div>
-													<div className="gr-cite__meta">{cite.meta}</div>
-												</div>
-											</div>
-										))}
-									</div>
-								</div>
-							)}
-						</>
+	const focusIsEntity = !inspected || inspected.kind === "entity" || inspected.id === detail?.id;
+	const selection = responded && (
+		<aside className="graph-inspector" aria-label="Selection details">
+			<header className="graph-inspector-head">
+				<div className="min-w-0">
+					<span className="graph-inspector-kind">
+						{nodeKindLabel(focusIsEntity ? "entity" : (inspected?.kind ?? "entity"))}
+					</span>
+					{focusIsEntity ? (
+						<h2 className="graph-inspector-title">{detail?.name ?? inspected?.label ?? "Selection"}</h2>
 					) : (
-						<div className="gr-answer">{inspected ? "" : "Select an entity to inspect its stored values."}</div>
+						<h2 className="graph-inspector-fact">{inspected?.detail ?? inspected?.label}</h2>
 					)}
 				</div>
-			</DialogContent>
-		</Dialog>
+				<button type="button" className="graph-inspector-close" aria-label="Close details" onClick={closeResponse}>
+					<XIcon className="size-4" />
+				</button>
+			</header>
+			<div className="graph-inspector-body">
+				{!focusIsEntity && inspected && <p className="graph-inspector-meta -mt-2">{inspected.metric}</p>}
+				{detail ? (
+					<>
+						<section>
+							{!focusIsEntity && <h3 className="graph-inspector-label">About {detail.name}</h3>}
+							<p className="graph-inspector-text">
+								{detail.mentions.toLocaleString()} mentions across {detail.aspectCount} aspects and{" "}
+								{detail.attributeCount} facts, linked to {detail.edgeCount} other entities.
+								{detail.topAspects.length > 0 && (
+									<>
+										{" "}
+										Strongest aspect: <b>{detail.topAspects[0].name}</b>.
+									</>
+								)}
+							</p>
+						</section>
+						{detail.citations.length > 0 && (
+							<section>
+								<h3 className="graph-inspector-label">{focusIsEntity ? "Stored values" : "Other stored values"}</h3>
+								<ul className="graph-inspector-list">
+									{detail.citations
+										.filter((cite) => cite.id !== inspected?.id)
+										.map((cite) => (
+											<li key={cite.id}>
+												<p className="graph-inspector-text">{cite.text}</p>
+												<p className="graph-inspector-meta">{cite.meta}</p>
+											</li>
+										))}
+								</ul>
+							</section>
+						)}
+						{isolated !== detail.id && (
+							<button
+								type="button"
+								className="graph-inspector-action"
+								onClick={() => sceneRef.current?.isolate(detail.id)}
+							>
+								Focus on this entity
+							</button>
+						)}
+					</>
+				) : (
+					!inspected && <p className="graph-inspector-meta">Select an entity to inspect its stored values.</p>
+				)}
+			</div>
+		</aside>
 	);
+	const hiddenKinds = useMemo(
+		() => FILTERS.filter((filter) => hiddenFilters.has(filter.key)).flatMap((filter) => filter.kinds),
+		[hiddenFilters],
+	);
+	const hiddenKindsRef = useRef<readonly SceneNodeKind[]>(hiddenKinds);
+	hiddenKindsRef.current = hiddenKinds;
+	useEffect(() => {
+		sceneRef.current?.setHiddenKinds(hiddenKinds);
+	}, [hiddenKinds]);
+	const searchResults = useMemo(() => {
+		const query = searchQuery.trim().toLowerCase();
+		if (!query) return [];
+		return limitedScene.data.nodes
+			.filter((node) => (node.kind === "entity" || node.kind === "source") && node.label.toLowerCase().includes(query))
+			.sort(
+				(a, b) =>
+					Number(b.label.toLowerCase().startsWith(query)) - Number(a.label.toLowerCase().startsWith(query)) ||
+					Number(b.kind === "entity") - Number(a.kind === "entity") ||
+					b.weight - a.weight,
+			)
+			.slice(0, 8);
+	}, [searchQuery, limitedScene]);
+	const jumpTo = (node: SceneNode) => {
+		pauseAgent();
+		sceneRef.current?.focusNode(node.id);
+		selectionRef.current(node);
+		setSearchQuery("");
+		setSearchOpen(false);
+		searchRef.current?.blur();
+	};
+	useEffect(() => {
+		const onKey = (event: KeyboardEvent) => {
+			if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+			const target = event.target;
+			if (
+				target instanceof HTMLElement &&
+				(target.isContentEditable || target.tagName === "INPUT" || target.tagName === "TEXTAREA")
+			)
+				return;
+			event.preventDefault();
+			searchRef.current?.focus();
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, []);
 
 	return (
-		<div className={cn("graph-view-root", sidebarOpen && "has-sidebar")}>
+		<div className={cn("graph-view-root", sidebarPresented && "has-sidebar")}>
 			<div className="graph-viewport">
-				{!sidebarOpen && (
-					<Button
-						type="button"
-						variant="ghost"
-						size="icon-sm"
-						className="graph-chat-open"
-						aria-label="Open chat"
-						title="Open chat"
-						onClick={() => setChatOpen(true)}
-					>
-						<PanelRightOpenIcon className="size-4" />
-					</Button>
-				)}
 				{limitedScene.capped && (
 					<span className="graph-limit" role="status">
 						Limited view
@@ -590,16 +656,33 @@ export function GraphView() {
 							Showing up to {MAX_VISIBLE_CONSTELLATION_NODES.toLocaleString()} nodes
 						</span>
 					)}
-					{LEGEND.map((item) => (
-						<span key={item.label} className="lg-item" style={{ color: item.color }}>
-							<span className="lg-dot" style={{ background: item.color }} />
-							<b>{item.label}</b>
-						</span>
-					))}
+					{FILTERS.map((filter) => {
+						const off = hiddenFilters.has(filter.key);
+						return (
+							<button
+								key={filter.key}
+								type="button"
+								className="lg-item"
+								aria-pressed={!off}
+								onClick={() =>
+									setHiddenFilters((current) => {
+										const next = new Set(current);
+										if (next.has(filter.key)) next.delete(filter.key);
+										else next.add(filter.key);
+										return next;
+									})
+								}
+							>
+								<span className="lg-dot" data-kind={filter.key} />
+								{filter.label}
+							</button>
+						);
+					})}
 					<div className="graph-key-help">
 						<span>Drag to pan</span>
 						<span>Scroll to zoom</span>
-						<span>Select to inspect</span>
+						<span>Click to inspect · double-click to focus</span>
+						<span>Press / to find</span>
 					</div>
 				</div>
 
@@ -637,7 +720,54 @@ export function GraphView() {
 						Fit
 					</button>
 				</fieldset>
-				{graphQuery.loading && !graphQuery.data && (
+				<search className="graph-search">
+					<SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
+					<input
+						ref={searchRef}
+						value={searchQuery}
+						onChange={(event) => {
+							setSearchQuery(event.target.value);
+							setSearchOpen(true);
+						}}
+						onFocus={() => setSearchOpen(true)}
+						onBlur={() => setTimeout(() => setSearchOpen(false), 120)}
+						onKeyDown={(event) => {
+							if (event.key === "Enter" && searchResults[0]) jumpTo(searchResults[0]);
+							if (event.key === "Escape") {
+								setSearchQuery("");
+								event.currentTarget.blur();
+							}
+						}}
+						placeholder="Find in graph"
+						aria-label="Find a node in the graph"
+					/>
+					<kbd title="Press / to search">/</kbd>
+					{searchOpen && searchQuery.trim() && (
+						<ul className="graph-search-results">
+							{searchResults.length ? (
+								searchResults.map((node) => (
+									<li key={node.id}>
+										<button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => jumpTo(node)}>
+											<span className="graph-search-dot" data-kind={node.kind} aria-hidden="true" />
+											<span className="truncate">{node.label}</span>
+											<span className="graph-search-kind">{node.kind === "entity" ? "Entity" : "Document"}</span>
+										</button>
+									</li>
+								))
+							) : (
+								<li className="graph-search-empty">No matching entities or documents</li>
+							)}
+						</ul>
+					)}
+				</search>
+				{isolated && (
+					<button type="button" className="graph-isolation" onClick={() => sceneRef.current?.isolate(null)}>
+						<XIcon className="size-3.5" aria-hidden="true" />
+						Back to all
+					</button>
+				)}
+				{((graphQuery.loading && !graphQuery.data) ||
+					(!sceneBuilt && !sceneFailed && limitedScene.data.nodes.length > 0)) && (
 					<div
 						role="status"
 						aria-label="Loading constellation…"
@@ -645,36 +775,32 @@ export function GraphView() {
 					>
 						<Skeleton className="size-32 rounded-full opacity-40" />
 						<Skeleton className="h-2 w-36" />
-						<span className="font-mono text-[10.5px] text-muted-foreground">Loading constellation…</span>
+						<span className="text-small text-muted-foreground">Loading your memory graph…</span>
 					</div>
 				)}
 				{graphQuery.error && (
-					<span role="status" className="absolute left-4 top-14 z-[3] text-xs text-muted-foreground">
+					<span role="status" className="absolute left-4 top-14 z-[3] text-small text-muted-foreground">
 						{graphQuery.data
 							? "Showing cached constellation. Updates are unavailable."
 							: "Constellation unavailable. Retrying in the background."}
 					</span>
 				)}
 				{!graphQuery.loading && !graphQuery.error && limitedScene.data.nodes.length === 0 && (
-					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
+					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center text-small text-muted-foreground">
 						No graph nodes are available yet.
 					</span>
 				)}
 				{sceneFailed && (
-					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
+					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center text-small text-muted-foreground">
 						The memory graph could not render in this runtime.
 					</span>
 				)}
+				{selection}
 			</div>
-			{selection}
 			<MemoryChat
 				className={sidebarPresented ? cn("graph-chat-sidebar", !sidebarOpen && "is-closing") : "graph-dock"}
 				inactive={sidebarPresented && !sidebarOpen}
 				presentation={sidebarPresented ? "sidebar" : "compact"}
-				onClose={() => {
-					setChatOpen(false);
-					closeResponse();
-				}}
 				onNewChat={() => {
 					setChatOpen(false);
 					closeResponse();

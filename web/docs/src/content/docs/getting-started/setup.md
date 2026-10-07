@@ -14,7 +14,7 @@ Setup creates a local workspace when needed, starts or reaches its daemon, and o
 ## The onboarding flow
 
 1. **Welcome** explains what memory carries between conversations.
-2. **Agents** offers Claude Code, Codex, Hermes Agent, OpenCode, OpenClaw, Gemini CLI, Pi, Oh My Pi, Kimi, and ForgeCode. OpenClaw requires its Signet plugin package from CLI setup before connecting here. You may connect an agent later.
+2. **Agents** offers Claude Code, Codex, Hermes Agent, OpenCode, OpenClaw, Gemini CLI, Pi, Oh My Pi, Kimi, Muse Code, and ForgeCode. OpenClaw requires its Signet plugin package from CLI setup before connecting here. You may connect an agent later.
 3. **Connection** signs in to a provider, stores an API key, or connects a local model. The screen also asks whether to enable Dreaming, defaulting on for a fresh workspace. Dreaming remains enabled but unavailable until a working provider is connected and tested. **Test and enable memory** saves the model configuration, checks a real response, and starts automatic processing. Saved credentials can be replaced or signed in again. Failed saves or tests show an error; **Set up later** keeps the Dreaming choice but does not run inference or start automatic processing. Existing frozen or shadow controls are respected.
 4. **Bring your context** optionally connects an Obsidian vault or imports files and [transcript exports](/sources/#agent-transcript-imports). You can add multiple sources. Indexing and import jobs may continue in the background; their reported state is not a claim that semantic processing has completed. Sources provides progress, errors, retry, and removal.
 5. **First memory** saves a private note under your active agent, then retrieves that same note through scoped search.
@@ -54,6 +54,15 @@ A partially written agent integration can be retried: the same connector reconci
 Headless setup retains identity presets, network options, Git protection, roster creation, and explicit source flags. Use `--non-interactive` when supplying configuration changes to an existing workspace; interactive setup will not silently apply those flags. See [CLI environment and exit codes](/cli/environment/) for workspace selection.
 
 ## Source checkouts
+
+Desktop source builds require Bun 1.4.2 or newer. Before syncing source or
+installing dependencies, `signet desktop build` and `signet desktop install`
+check the installed Bun version. In an interactive terminal, an older version
+prompts you to run `bun upgrade --stable`; declining stops the command. The
+command checks the version again after upgrading. For package-manager installs
+of Bun, decline and upgrade through that package manager. In a non-interactive
+terminal, upgrade Bun manually before retrying. `--skip-build` installs an
+existing artifact without requiring Bun.
 
 Setup, `signet workspace set`, and the workspace layout upgrade do not clone
 the Signet repository. Saving and recalling memories use the installed

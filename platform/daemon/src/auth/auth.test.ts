@@ -8,7 +8,12 @@ import { generateSecret, loadOrCreateSecret, createToken, verifyToken } from "./
 import { hashPassword, verifyPasswordHash } from "./password";
 import { checkPermission, checkScope } from "./policy";
 import { AuthRateLimiter } from "./rate-limiter";
-import { createAuthMiddleware, requirePermission, requireRateLimit } from "./middleware";
+import {
+	createAuthMiddleware,
+	requirePermission,
+	requirePermissionWithRateLimit,
+	requireRateLimit,
+} from "./middleware";
 import { parseAuthConfig } from "./config";
 import type { TokenClaims, TokenRole } from "./types";
 
@@ -851,5 +856,35 @@ describe("security hardening", () => {
 			);
 			expect(res.status).toBe(429);
 		});
+	});
+});
+
+describe("middleware - requirePermissionWithRateLimit", () => {
+	const secret = generateSecret();
+	const appWith = (limiter: AuthRateLimiter) => {
+		const app = new Hono();
+		app.use("*", createAuthMiddleware(teamConfig, secret));
+		app.use("*", requirePermissionWithRateLimit("forget", "forget", limiter, teamConfig));
+		app.post("/forget", (c) => c.json({ ok: true }));
+		return app;
+	};
+	const call = (app: Hono, role: TokenRole) =>
+		app.request("/forget", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${createToken(secret, { sub: `u-${role}`, scope: {}, role }, 60)}` },
+		});
+
+	test("returns 403 for a credential without the permission", async () => {
+		const res = await call(appWith(new AuthRateLimiter(60_000, 5)), "readonly");
+		expect(res.status).toBe(403);
+	});
+
+	test("returns 429 with Retry-After once the limit is spent", async () => {
+		const app = appWith(new AuthRateLimiter(60_000, 2));
+		expect((await call(app, "agent")).status).toBe(200);
+		expect((await call(app, "agent")).status).toBe(200);
+		const limited = await call(app, "agent");
+		expect(limited.status).toBe(429);
+		expect(limited.headers.get("Retry-After")).not.toBeNull();
 	});
 });

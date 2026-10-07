@@ -1,82 +1,160 @@
 ---
-import { getCollection } from "astro:content";
 import Base from "../../layouts/Base.astro";
 import Nav from "../../components/Nav.astro";
 import Footer from "../../components/Footer.astro";
+import BlogCover from "../../components/BlogCover.astro";
+import BlogCta from "../../components/BlogCta.astro";
 import StructuredData from "../../components/StructuredData.astro";
+import { artUrl } from "../../lib/art";
+import { CATEGORIES, type Category, formatDate, getPosts, isoDate, postUrl, readingMinutes } from "../../lib/blog";
 import "../../styles/blog.css";
 
-const posts = (await getCollection("blog"))
-	.filter((post) => !post.data.draft)
-	.sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
+const posts = await getPosts();
+const [lead, ...rest] = posts;
+
+const order: Category[] = ["announcement", "engineering", "essay", "guide"];
+const filters = [
+	{ id: "all", label: "All", count: posts.length },
+	...order
+		.map((id) => ({
+			id,
+			label: CATEGORIES[id].plural,
+			count: posts.filter((post) => post.data.category === id).length,
+		}))
+		.filter((filter) => filter.count > 0),
+];
+
+const searchText = (title: string, description: string, tags: readonly string[]): string =>
+	[title, description, ...tags].join(" ").toLowerCase();
 
 const siteUrl = Astro.site?.toString().replace(/\/$/, "") ?? "https://signetai.sh";
-
-const featured = posts[0];
-const rest = posts.slice(1);
-
-function formatDate(date: Date) {
-	return date.toLocaleDateString("en-US", {
-		year: "numeric",
-		month: "long",
-		day: "numeric",
-	});
-}
 ---
 
-<Base title="Blog — SignetAI" description="Updates, ideas, and technical writing from the Signet team.">
+<Base title="Blog — SignetAI" description="Announcements, engineering notes, and essays on how AI agents should remember, from the Signet team.">
   <Nav />
 
-  <div class="blog-shell">
-    <main class="blog-main blog-main--index">
-      <header class="blog-index-header">
-        <h1>Blog</h1>
-      </header>
+  <StructuredData data={{
+    '@context': 'https://schema.org',
+    '@type': 'Blog',
+    name: 'SignetAI Blog',
+    url: `${siteUrl}/blog/`,
+    publisher: {
+      '@type': 'Organization',
+      name: 'SignetAI',
+      url: siteUrl,
+    },
+  }} />
 
-      <StructuredData data={{
-        '@context': 'https://schema.org',
-        '@type': 'Blog',
-        name: 'SignetAI Blog',
-        url: `${siteUrl}/blog/`,
-        publisher: {
-          '@type': 'Organization',
-          name: 'SignetAI',
-          url: siteUrl,
-        },
-      }} />
+  <main class="bi">
+    <header class="bi-head">
+      <img class="bi-head-art" src={artUrl("masthead")} alt="" width="2000" height="750" fetchpriority="high" />
+      <p class="blog-eyebrow">The Signet blog</p>
+      <h1 class="bi-title">Memory, kept<br /><span>in the open.</span></h1>
+      <p class="bi-intro">Announcements, engineering notes, and essays on how AI agents should remember, and who should own what they know.</p>
+    </header>
 
-      {}
-      {featured ? (
-        <a class="blog-featured" href={`/blog/${featured.id}/`}>
-          {featured.data.image ? (
-            <img class="blog-featured-image" src={featured.data.image} alt="" width="780" height="400" loading="eager" />
-          ) : null}
-          <div class="blog-featured-body">
-            <h2>{featured.data.title}</h2>
-            <p>{featured.data.description}</p>
-            <div class="blog-featured-meta">
-              <time datetime={featured.data.date.toISOString().slice(0, 10)}>{formatDate(featured.data.date)}</time>
-            </div>
-          </div>
-        </a>
-      ) : null}
-
-      {}
-      <div class="blog-grid">
-        {rest.map((post) => (
-          <a class="blog-grid-card" href={`/blog/${post.id}/`}>
-            <div class="blog-grid-card-body">
-              <h2>{post.data.title}</h2>
-              <p>{post.data.description}</p>
-            </div>
-            <div class="blog-grid-card-footer">
-              <time datetime={post.data.date.toISOString().slice(0, 10)}>{formatDate(post.data.date)}</time>
-            </div>
-          </a>
+    <div class="bi-controls">
+      <div class="bi-filters" role="group" aria-label="Filter by category">
+        {filters.map((filter) => (
+          <button type="button" class="bi-filter" data-filter={filter.id} aria-pressed={filter.id === "all" ? "true" : "false"}>
+            {filter.label}
+            <span class="bi-filter-count">{filter.count}</span>
+          </button>
         ))}
       </div>
-    </main>
-  </div>
+      <div class="bi-tools">
+        <label class="bi-search">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <span class="sr-only">Search posts</span>
+          <input type="search" placeholder="Search posts" autocomplete="off" />
+        </label>
+        <a class="bi-rss" href="/rss.xml" aria-label="RSS feed">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1"/></svg>
+        </a>
+      </div>
+    </div>
+
+    {lead ? (
+      <a class="bi-lead" href={postUrl(lead)} data-category={lead.data.category} data-search={searchText(lead.data.title, lead.data.description, lead.data.tags)}>
+        <div class="bi-lead-media">
+          <BlogCover post={lead} posts={posts} size="full" eager />
+        </div>
+        <div class="bi-lead-body">
+          <p class="blog-meta">
+            <span class="blog-cat" data-category={lead.data.category}>{CATEGORIES[lead.data.category].label}</span>
+            {lead.data.draft ? <span class="blog-draft">Draft</span> : null}
+            <time datetime={isoDate(lead.data.date)}>{formatDate(lead.data.date)}</time>
+          </p>
+          <h2 class="bi-lead-title">{lead.data.title}</h2>
+          <p class="bi-lead-desc">{lead.data.description}</p>
+          <span class="bi-lead-cta">Read {lead.data.category === "announcement" ? "the announcement" : "more"} <span aria-hidden="true">→</span></span>
+        </div>
+      </a>
+    ) : null}
+
+    <ol class="bi-grid">
+      {rest.map((post) => (
+        <li data-category={post.data.category} data-search={searchText(post.data.title, post.data.description, post.data.tags)}>
+          <a class="bi-card" href={postUrl(post)}>
+            <BlogCover post={post} posts={posts} />
+            <h2 class="bi-card-title">{post.data.title}</h2>
+            <p class="blog-meta">
+              <span class="blog-cat" data-category={post.data.category}>{CATEGORIES[post.data.category].label}</span>
+              {post.data.draft ? <span class="blog-draft">Draft</span> : null}
+              <time datetime={isoDate(post.data.date)}>{formatDate(post.data.date)}</time>
+              <span aria-hidden="true">·</span>
+              <span>{readingMinutes(post)} min</span>
+            </p>
+          </a>
+        </li>
+      ))}
+    </ol>
+
+    <p class="bi-empty" hidden>No posts match that yet.</p>
+
+    <BlogCta />
+  </main>
 
   <Footer />
 </Base>
+
+<script>
+  function initBlogFilters() {
+    const buttons = document.querySelectorAll<HTMLButtonElement>(".bi-filter");
+    const input = document.querySelector<HTMLInputElement>(".bi-search input");
+    const items = document.querySelectorAll<HTMLElement>(".bi-lead, .bi-grid > li");
+    const empty = document.querySelector<HTMLElement>(".bi-empty");
+    if (!buttons.length || !input) return;
+
+    let category = "all";
+
+    function apply() {
+      const terms = (input?.value ?? "").toLowerCase().split(/\s+/).filter(Boolean);
+      let visible = 0;
+      for (const item of items) {
+        const text = item.dataset.search ?? "";
+        const show =
+          (category === "all" || item.dataset.category === category) && terms.every((term) => text.includes(term));
+        item.hidden = !show;
+        if (show) visible++;
+      }
+      for (const button of buttons) button.setAttribute("aria-pressed", String(button.dataset.filter === category));
+      if (empty) empty.hidden = visible > 0;
+    }
+
+    for (const button of buttons) {
+      button.addEventListener("click", () => {
+        category = button.dataset.filter ?? "all";
+        apply();
+      });
+    }
+    input.addEventListener("input", apply);
+    const requested = decodeURIComponent(location.hash.slice(1));
+    if ([...buttons].some((button) => button.dataset.filter === requested)) {
+      category = requested;
+      apply();
+    }
+  }
+
+  document.addEventListener("astro:page-load", initBlogFilters);
+</script>
