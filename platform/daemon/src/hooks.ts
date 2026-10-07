@@ -1873,10 +1873,6 @@ export async function handleUserPromptSubmit(
 function isClearSessionStart(req: SessionStartRequest): boolean {
 	return req.source?.trim().toLowerCase() === "clear";
 }
-
-// A harness without a transcript source (Muse Code sends transcript_path: null)
-// delivers the final assistant reply only on its turn-end hook, so the live
-// transcript would otherwise hold the user's prompts alone.
 async function appendSessionEndAssistantTurn(
 	req: SessionEndRequest,
 	sessionKey: string | undefined,

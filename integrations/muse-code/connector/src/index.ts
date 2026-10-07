@@ -21,9 +21,6 @@ import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs 
 
 const HARNESS_ID = "muse-code";
 const SETTINGS_SCHEMA_VERSION = 1;
-
-// Muse Code hook timeouts are seconds. The grace covers CLI startup on top of
-// the daemon request budget the hook command itself enforces.
 const SESSION_START_GRACE_SECONDS = 5;
 const PROMPT_SUBMIT_GRACE_SECONDS = 2;
 const TURN_END_TIMEOUT_SECONDS = 30;
@@ -32,11 +29,6 @@ const TIMEOUT_ENV_KEYS = [
 	"SIGNET_FETCH_TIMEOUT",
 	"SIGNET_PROMPT_SUBMIT_TIMEOUT",
 ] as const;
-
-// Muse cancels SessionEnd hooks after roughly half a second of its shutdown
-// budget, shorter than the Signet CLI's startup, so session-end runs on Stop.
-// The daemon treats a session-end without a boundary reason as a turn
-// checkpoint, which is what Muse's SessionEnd (reason "other") would send too.
 export type MuseHookEvent = "SessionStart" | "UserPromptSubmit" | "Stop";
 
 type HookSubcommand = "session-start" | "user-prompt-submit" | "session-end";
@@ -87,11 +79,6 @@ function shellArg(value: string): string {
 function defaultWorkspacePath(): string {
 	return join(homedir(), ".agents");
 }
-
-// Muse starts hooks and MCP servers with a cleared environment (HOME, PATH,
-// USER, SHELL, TERM, LANG, PWD, LOGNAME), so every Signet setting they need
-// is written into their configuration. One map feeds both surfaces so they
-// cannot resolve different daemons or workspaces.
 export function resolveMuseRuntimeEnv(workspace: string): MuseRuntimeEnv {
 	const env: Record<string, string> = {};
 	const daemonUrl = resolveSignetDaemonUrl();
@@ -105,9 +92,6 @@ export function resolveMuseRuntimeEnv(workspace: string): MuseRuntimeEnv {
 	}
 	return env;
 }
-
-// Hooks run the same binary the MCP entry uses when setup runs from the
-// native build, so the two cannot drift to different Signet versions.
 export function resolveMuseSignetArgs(): string[] {
 	const mcp = resolveSignetMcpCommand();
 	if (mcp.env?.[SIGNET_MCP_STDIO_WORKER_ENV]) return [mcp.command];
@@ -121,8 +105,6 @@ export function buildMuseHookCommand(
 	env: MuseRuntimeEnv,
 ): string {
 	const assignments = Object.entries(env).map(([key, value]) => `${key}=${shellArg(value)}`);
-	// Muse parses stdout as JSON whenever it starts with "[" or "{", and plain
-	// Signet context starts with "[signet active]", so context hooks emit JSON.
 	const output = subcommand === "session-end" ? [] : ["--codex-json"];
 	const invocation = [...signetArgs, "hook", subcommand, "-H", HARNESS_ID, ...output].map(shellArg);
 	return [...assignments, ...invocation].join(" ");
@@ -178,9 +160,6 @@ export function mergeSignetMuseHooks(hooks: HookMap, ours: MuseHooks): Record<st
 	}
 	return next;
 }
-
-// Muse rejects the whole hook config for a non-integer timeout; other handler
-// problems (missing command, unknown type) only skip that handler.
 function isHookHandler(value: unknown): value is Record<string, unknown> {
 	return (
 		isJsonObject(value) &&
@@ -198,8 +177,6 @@ function parseHooks(value: Record<string, unknown>): HookMap | string {
 		if (!Array.isArray(groups)) return `hooks.${event} must be an array`;
 		const parsed: HookGroup[] = [];
 		for (const [index, group] of groups.entries()) {
-			// Muse disables every hook in the file when one group is malformed,
-			// so adding Signet's hooks next to it would report a false success.
 			if (!isHookGroup(group)) {
 				return `hooks.${event}[${index}] must be an object whose hooks are objects with integer timeouts`;
 			}
@@ -219,8 +196,6 @@ export function readMuseSettings(path: string): SettingsRead {
 		return { kind: "invalid", reason: `could not parse JSON (${error instanceof Error ? error.message : error})` };
 	}
 	if (!isJsonObject(parsed)) return { kind: "invalid", reason: "settings must be a JSON object" };
-	// Muse Code rejects every command when schema_version is absent or unknown.
-	// Repairing the file here would hide that state from the user, so refuse.
 	if (parsed.schema_version !== SETTINGS_SCHEMA_VERSION) {
 		return { kind: "invalid", reason: `schema_version must be ${SETTINGS_SCHEMA_VERSION}` };
 	}
@@ -242,14 +217,9 @@ export function buildMuseMcpServer(env: MuseRuntimeEnv): MuseMcpServer {
 		command: mcp.command,
 		args: [...mcp.args],
 		env: { ...(mcp.env ?? {}), ...env },
-		// A required server that fails to start aborts the whole Muse run;
-		// optional keeps the session usable and surfaces a startup warning.
 		mode: "optional",
 	};
 }
-
-// Settings can carry SIGNET_API_KEY, so a file Signet creates is owner-only.
-// Writes follow a symlinked settings.json to its target, as Muse does.
 function writeMuseSettings(path: string, value: unknown): void {
 	const exists = existsSync(path);
 	const target = exists ? realpathSync(path) : path;
@@ -288,8 +258,6 @@ export class MuseCodeConnector extends BaseConnector {
 		if (process.platform === "win32") {
 			return refuse("Muse Code integration is not supported on Windows yet: Muse runs hooks through PowerShell");
 		}
-		// `signet hook user-prompt-submit` and `session-end` take no agent option,
-		// so Muse hooks can only write as the daemon's default agent.
 		const agentId = resolveSignetAgentId();
 		if (agentId !== MANAGED_AGENT_ID_DEFAULT) {
 			return refuse(
@@ -361,8 +329,6 @@ export class MuseCodeConnector extends BaseConnector {
 	isInstalled(): boolean {
 		const settingsPath = this.getConfigPath();
 		const settings = readMuseSettings(settingsPath);
-		// An unreadable file can still hold Signet entries and credentials;
-		// report it as installed so it is not shown as cleanly disconnected.
 		if (settings.kind === "invalid") {
 			try {
 				return readFileSync(settingsPath, "utf-8").includes("-H muse-code");
