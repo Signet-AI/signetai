@@ -73,7 +73,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `discord-source-provider.ts:875` (withReadDbAsync)
 - `discord-source-provider.ts:959` (withReadDbAsync)
 - `discord-source-provider.ts:974` (withWriteTxAsync)
-- `embedding-fetch.ts:478` (withReadDbAsync)
+- `embedding-fetch.ts:492` (withReadDbAsync)
 - `embedding-index-migration.ts:267` (withReadDbAsync)
 - `embedding-index-migration.ts:417` (withReadDbAsync)
 - `embedding-index-migration.ts:895` (withReadDbAsync)
