@@ -80,4 +80,11 @@ export const HARNESSES: readonly Harness[] = [
 		href: "https://github.com/MoonshotAI/kimi-cli",
 		analytics: "kimi",
 	},
+	{
+		name: "Muse Code",
+		kind: "hooks + MCP",
+		logo: "/dashboard/logos/muse-code.png",
+		href: "https://dev.meta.ai/docs/muse-code",
+		analytics: "muse_code",
+	},
 ];

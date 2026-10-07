@@ -106,6 +106,7 @@ A "harness" is the app or environment your agent runs in. Signet connects throug
 |Oh My Pi|Extension|
 |[Gemini CLI](https://github.com/google-gemini/gemini-cli)|MCP + GEMINI.md sync|
 |[ForgeCode](https://forgecode.dev/)|Hooks + MCP|
+|[Muse Code](https://dev.meta.ai/docs/muse-code)|Hooks + MCP|
 
 Agents can also message each other through Signet. Messages survive restarts and arrive at the start of the recipient's next session or prompt.
 

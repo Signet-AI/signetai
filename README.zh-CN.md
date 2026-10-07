@@ -109,6 +109,7 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 |Oh My Pi|扩展|
 |[Gemini CLI](https://github.com/google-gemini/gemini-cli)|MCP + GEMINI.md 同步|
 |[ForgeCode](https://forgecode.dev/)|Hooks + MCP|
+|[Muse Code](https://dev.meta.ai/docs/muse-code)|Hooks + MCP|
 
 智能体之间也可以通过 Signet 互发消息。消息在重启后依然保留，并会在接收方下一次会话或提示开始时送达。
 
