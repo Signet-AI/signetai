@@ -4,7 +4,9 @@ import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
 import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
+const TRANSFORMERS_LOG_LEVEL_NONE = 50;
 interface TransformersEnv {
+	logLevel?: number;
 	cacheDir?: string;
 	localModelPath?: string;
 	allowLocalModels?: boolean;
@@ -118,6 +120,7 @@ async function doInit(): Promise<void> {
 
 		mkdirSync(init.cacheDir, { recursive: true });
 		transformers = await loadTransformers();
+		transformers.env.logLevel = TRANSFORMERS_LOG_LEVEL_NONE;
 		transformers.env.cacheDir = init.cacheDir;
 		transformers.env.localModelPath = init.cacheDir;
 		transformers.env.allowLocalModels = true;
