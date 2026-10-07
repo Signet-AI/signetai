@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { MEMORIES_FTS_TOKENIZER } from "@signet/core";
 import {
+	DbOwnerAdmissionError,
 	DbOwnerDeadlineError,
 	DbOwnerDiedError,
 	type DbOwnerClient,
@@ -41,6 +43,7 @@ export interface DbOwnerMaintenanceOptions {
 	readonly onOwnerJobSettled?: () => void | Promise<void>;
 	readonly waitForOwnerCompletionOnDeadline?: boolean;
 	readonly onOwnerJobAdmissionFailure?: (error: unknown) => void;
+	readonly admission?: "wait" | "reject";
 }
 
 export interface DbOwnerMaintenanceMetrics {
@@ -151,12 +154,34 @@ export async function runOwnerMaintenanceWithRetry<Result>(
 		if (remainingMs < 1) throw new DbOwnerDeadlineError(operation);
 		return { ...options, deadlineMs: remainingMs };
 	};
+	const runAdmitted = async (): Promise<Result> => {
+		let queueFull: DbOwnerAdmissionError | null = null;
+		for (;;) {
+			if (queueFull !== null && Math.floor(deadlineAt - Date.now()) < 1) throw queueFull;
+			try {
+				return await runOwnerJob(owner, request, operation, "maintenance", attemptOptions());
+			} catch (error) {
+				if (
+					options.admission === "reject" ||
+					!(error instanceof DbOwnerAdmissionError) ||
+					error.code !== "DB_OWNER_QUEUE_FULL"
+				) {
+					throw error;
+				}
+				queueFull = error;
+				if (options.signal?.aborted) throw options.signal.reason instanceof Error ? options.signal.reason : error;
+				const remainingMs = deadlineAt - Date.now();
+				if (remainingMs <= 1) throw error;
+				await new Promise<void>((resolve) => setTimeout(resolve, Math.min(25, remainingMs - 1)));
+			}
+		}
+	};
 	try {
-		return await runOwnerJob(owner, request, operation, "maintenance", attemptOptions());
+		return await runAdmitted();
 	} catch (error) {
 		if (!(error instanceof DbOwnerDiedError)) throw error;
 		await startOwnerWithinDeadline(owner, deadlineAt, operation);
-		return await runOwnerJob(owner, request, operation, "maintenance", attemptOptions());
+		return await runAdmitted();
 	}
 }
 
@@ -499,7 +524,7 @@ async function ensureFtsSchema(client: DbOwnerClient, deadlineMs: number): Promi
 			kind: "batch",
 			statements: [
 				runStatement(
-					"CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61')",
+					`CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='${MEMORIES_FTS_TOKENIZER}')`,
 				),
 				runStatement(
 					`CREATE TABLE IF NOT EXISTS ${FTS_STATE_TABLE} (
@@ -1070,7 +1095,7 @@ export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOption
 					runStatement("DROP TABLE IF EXISTS memories_fts"),
 					runStatement("DROP TABLE IF EXISTS memories_fts_state"),
 					runStatement(
-						`CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='unicode61')`,
+						`CREATE VIRTUAL TABLE memories_fts USING fts5(content, content='memories', content_rowid='rowid', tokenize='${MEMORIES_FTS_TOKENIZER}')`,
 					),
 					runStatement(
 						`CREATE TABLE memories_fts_state (id INTEGER PRIMARY KEY CHECK (id = 1), memory_count INTEGER NOT NULL, indexed_count INTEGER NOT NULL, updated_at TEXT NOT NULL)`,

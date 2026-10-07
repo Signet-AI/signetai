@@ -1,5 +1,6 @@
 import { MemoryChat } from "@/components/memory-chat";
 import { sourceDocumentTitle } from "@/lib/constellation-display";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -18,6 +19,22 @@ import type {
 import { capGraphSceneData, graphEvidenceRefs, MAX_VISIBLE_CONSTELLATION_NODES } from "@/lib/constellation-display";
 
 const ENTITY_LIMIT = 150;
+const ALL_AGENTS = "all";
+
+const AGENT_COLORS = [
+	"#f97316",
+	"#22c55e",
+	"#3b82f6",
+	"#e11d48",
+	"#a855f7",
+	"#14b8a6",
+	"#eab308",
+	"#ec4899",
+	"#84cc16",
+	"#06b6d4",
+	"#8b5cf6",
+	"#f43f5e",
+] as const;
 
 const FILTERS: ReadonlyArray<{
 	readonly key: string;
@@ -34,6 +51,7 @@ const FILTERS: ReadonlyArray<{
 
 interface EntityDetail {
 	id: string;
+	agentId: string;
 	name: string;
 	mentions: number;
 	aspectCount: number;
@@ -83,11 +101,42 @@ function provenanceLabel(
 }
 export function GraphView() {
 	const entityLimit = ENTITY_LIMIT;
-	const graphQuery = useAsync(() => api.getKnowledgeConstellation(entityLimit, Math.min(2000, entityLimit * 4)), {
-		key: `constellation:${entityLimit}:${Math.min(2000, entityLimit * 4)}`,
+	const [agentScope, setAgentScope] = useState(ALL_AGENTS);
+	const graphQuery = useAsync(
+		() => api.getKnowledgeConstellation(entityLimit, Math.min(2000, entityLimit * 4), agentScope),
+		{
+			key: `constellation:${entityLimit}:${Math.min(2000, entityLimit * 4)}:${agentScope}`,
+			intervalMs: 30_000,
+			deps: [entityLimit, agentScope],
+		},
+	);
+	const agentRoster = useAsync(async () => (await api.getAgents()).data?.agents ?? null, {
+		key: "agent-list",
 		intervalMs: 30_000,
-		deps: [entityLimit],
-	});
+	}).data;
+	const agentIds = useMemo(
+		() =>
+			[
+				...new Set([
+					...(agentRoster ?? []).map((agent) => agent.id),
+					...(graphQuery.data?.entities ?? []).map((entity) => entity.agentId),
+				]),
+			]
+				.filter((id): id is string => typeof id === "string" && id.length > 0)
+				.sort(),
+		[agentRoster, graphQuery.data],
+	);
+	const agentColors = useMemo(
+		() => new Map(agentIds.map((id, index) => [id, AGENT_COLORS[index % AGENT_COLORS.length]])),
+		[agentIds],
+	);
+	const agentName = (id: string) => agentRoster?.find((agent) => agent.id === id)?.name ?? id;
+	const entitiesByAgent = useMemo(() => {
+		const counts = new Map<string, number>();
+		for (const entity of graphQuery.data?.entities ?? [])
+			if (entity.agentId) counts.set(entity.agentId, (counts.get(entity.agentId) ?? 0) + 1);
+		return [...counts].sort(([a], [b]) => a.localeCompare(b));
+	}, [graphQuery.data]);
 	const sources = useAsync(() => api.getSources(), { key: "sources", intervalMs: 30_000 }).data?.sources;
 	const [inspected, setInspected] = useState<SceneNode | null>(null);
 	const selectionRef = useRef<(node: SceneNode) => void>(() => {});
@@ -170,7 +219,16 @@ export function GraphView() {
 				...(entityKind === "source" ? { detail: entity.name } : {}),
 				evidenceRefs:
 					entityKind === "source"
-						? [...new Set(entity.aspects.flatMap((aspect) => aspect.attributes.flatMap(graphEvidenceRefs)))]
+						? [
+								...new Set([
+									...graphEvidenceRefs({
+										sourceId: entity.sourceId ?? null,
+										sourceKind: entity.sourceKind ?? null,
+										sourcePath: entity.sourcePath ?? null,
+									}),
+									...entity.aspects.flatMap((aspect) => aspect.attributes.flatMap(graphEvidenceRefs)),
+								]),
+							]
 						: [],
 				cluster: entity.id,
 				weight: Math.sqrt(entity.mentions / maxMentions),
@@ -317,6 +375,12 @@ export function GraphView() {
 				dependency.strength,
 			);
 		}
+		const entityAgents = new Map(entities.map((entity) => [entity.id, entity.agentId]));
+		const spansAgents = new Set(entityAgents.values()).size > 1;
+		for (const node of nodes) {
+			const owner = entityAgents.get(node.cluster);
+			if (owner && (spansAgents || node.kind === "entity")) node.scopeColor = agentColors.get(owner);
+		}
 		for (const source of sources ?? []) {
 			addNode({
 				id: `source:${source.id}`,
@@ -328,7 +392,7 @@ export function GraphView() {
 			});
 		}
 		return { nodes, edges };
-	}, [graphQuery.data, sources]);
+	}, [graphQuery.data, sources, agentColors]);
 	const limitedScene = useMemo(() => capGraphSceneData(sceneData), [sceneData]);
 	const dataSig = useMemo(() => {
 		const entities = graphQuery.data?.entities ?? [];
@@ -336,8 +400,10 @@ export function GraphView() {
 		const mix = (value: string) => {
 			for (let i = 0; i < value.length; i++) h = (h * 33 + value.charCodeAt(i)) | 0;
 		};
+		for (const id of agentIds) mix(id);
 		for (const e of entities) {
 			mix(e.id);
+			mix(e.agentId ?? "");
 			mix(e.name);
 			mix(e.entityType);
 			mix(String(e.mentions));
@@ -385,7 +451,7 @@ export function GraphView() {
 			mix(String(source.stats?.indexed ?? 0));
 		}
 		return h;
-	}, [graphQuery.data, sources]);
+	}, [graphQuery.data, sources, agentIds]);
 	useEffect(() => {
 		const stage = stageRef.current;
 		if (!stage) return;
@@ -456,6 +522,7 @@ export function GraphView() {
 		).length;
 		setDetail({
 			id: match.id,
+			agentId: match.agentId,
 			name: match.entityType === "source_document" ? sourceDocumentTitle(match.name) : match.name,
 			mentions: match.mentions,
 			aspectCount: match.aspects.length,
@@ -509,6 +576,7 @@ export function GraphView() {
 				<div className="min-w-0">
 					<span className="graph-inspector-kind">
 						{nodeKindLabel(focusIsEntity ? "entity" : (inspected?.kind ?? "entity"))}
+						{focusIsEntity && detail ? ` · ${agentName(detail.agentId)}` : ""}
 					</span>
 					{focusIsEntity ? (
 						<h2 className="graph-inspector-title">{detail?.name ?? inspected?.label ?? "Selection"}</h2>
@@ -678,6 +746,16 @@ export function GraphView() {
 							</button>
 						);
 					})}
+					{entitiesByAgent.length > 0 && (
+						<div className="graph-key-agents">
+							{entitiesByAgent.map(([id, count]) => (
+								<span key={id} className="lg-item" style={{ color: agentColors.get(id) }}>
+									<span className="lg-dot" style={{ background: agentColors.get(id) }} />
+									<b>{agentName(id)}</b> {count.toLocaleString()} {count === 1 ? "entity" : "entities"}
+								</span>
+							))}
+						</div>
+					)}
 					<div className="graph-key-help">
 						<span>Drag to pan</span>
 						<span>Scroll to zoom</span>
@@ -687,79 +765,99 @@ export function GraphView() {
 				</div>
 
 				<div ref={stageRef} className="graph-stage" />
-				<fieldset className="graph-navigation" aria-label="Graph navigation">
-					<button
-						type="button"
-						aria-label="Zoom in"
-						onClick={() => {
-							pauseAgent();
-							sceneRef.current?.zoom(1.3);
-						}}
-					>
-						+
-					</button>
-					<button
-						type="button"
-						aria-label="Zoom out"
-						onClick={() => {
-							pauseAgent();
-							sceneRef.current?.zoom(1 / 1.3);
-						}}
-					>
-						−
-					</button>
-					<button
-						type="button"
-						aria-label="Fit graph"
-						title="Fit graph"
-						onClick={() => {
-							pauseAgent();
-							sceneRef.current?.resetView();
-						}}
-					>
-						Fit
-					</button>
-				</fieldset>
-				<search className="graph-search">
-					<SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
-					<input
-						ref={searchRef}
-						value={searchQuery}
-						onChange={(event) => {
-							setSearchQuery(event.target.value);
-							setSearchOpen(true);
-						}}
-						onFocus={() => setSearchOpen(true)}
-						onBlur={() => setTimeout(() => setSearchOpen(false), 120)}
-						onKeyDown={(event) => {
-							if (event.key === "Enter" && searchResults[0]) jumpTo(searchResults[0]);
-							if (event.key === "Escape") {
-								setSearchQuery("");
-								event.currentTarget.blur();
-							}
-						}}
-						placeholder="Find in graph"
-						aria-label="Find a node in the graph"
-					/>
-					<kbd title="Press / to search">/</kbd>
-					{searchOpen && searchQuery.trim() && (
-						<ul className="graph-search-results">
-							{searchResults.length ? (
-								searchResults.map((node) => (
-									<li key={node.id}>
-										<button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => jumpTo(node)}>
-											<span className="graph-search-dot" data-kind={node.kind} aria-hidden="true" />
-											<span className="truncate">{node.label}</span>
-											<span className="graph-search-kind">{node.kind === "entity" ? "Entity" : "Document"}</span>
-										</button>
-									</li>
-								))
-							) : (
-								<li className="graph-search-empty">No matching entities or documents</li>
-							)}
-						</ul>
-					)}
-				</search>
+				<div className="graph-toolbar">
+					<fieldset className="graph-navigation" aria-label="Graph navigation">
+						<button
+							type="button"
+							aria-label="Zoom in"
+							onClick={() => {
+								pauseAgent();
+								sceneRef.current?.zoom(1.3);
+							}}
+						>
+							+
+						</button>
+						<button
+							type="button"
+							aria-label="Zoom out"
+							onClick={() => {
+								pauseAgent();
+								sceneRef.current?.zoom(1 / 1.3);
+							}}
+						>
+							−
+						</button>
+						<button
+							type="button"
+							aria-label="Fit graph"
+							title="Fit graph"
+							onClick={() => {
+								pauseAgent();
+								sceneRef.current?.resetView();
+							}}
+						>
+							Fit
+						</button>
+					</fieldset>
+					<Select value={agentScope} onValueChange={setAgentScope}>
+						<SelectTrigger className="graph-agent-picker" aria-label="Show the graph for an agent">
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent className="graph-agent-options" position="popper" align="start" sideOffset={4}>
+							<SelectItem value={ALL_AGENTS}>All agents</SelectItem>
+							{agentIds.map((id) => (
+								<SelectItem key={id} value={id}>
+									<span className="lg-dot" style={{ background: agentColors.get(id) }} />
+									{agentName(id)}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+					<search className="graph-search">
+						<SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
+						<input
+							ref={searchRef}
+							value={searchQuery}
+							onChange={(event) => {
+								setSearchQuery(event.target.value);
+								setSearchOpen(true);
+							}}
+							onFocus={() => setSearchOpen(true)}
+							onBlur={() => setTimeout(() => setSearchOpen(false), 120)}
+							onKeyDown={(event) => {
+								if (event.key === "Enter" && searchResults[0]) jumpTo(searchResults[0]);
+								if (event.key === "Escape") {
+									setSearchQuery("");
+									event.currentTarget.blur();
+								}
+							}}
+							placeholder="Find in graph"
+							aria-label="Find a node in the graph"
+						/>
+						<kbd title="Press / to search">/</kbd>
+						{searchOpen && searchQuery.trim() && (
+							<ul className="graph-search-results">
+								{searchResults.length ? (
+									searchResults.map((node) => (
+										<li key={node.id}>
+											<button
+												type="button"
+												onMouseDown={(event) => event.preventDefault()}
+												onClick={() => jumpTo(node)}
+											>
+												<span className="graph-search-dot" data-kind={node.kind} aria-hidden="true" />
+												<span className="truncate">{node.label}</span>
+												<span className="graph-search-kind">{node.kind === "entity" ? "Entity" : "Document"}</span>
+											</button>
+										</li>
+									))
+								) : (
+									<li className="graph-search-empty">No matching entities or documents</li>
+								)}
+							</ul>
+						)}
+					</search>
+				</div>
 				{isolated && (
 					<button type="button" className="graph-isolation" onClick={() => sceneRef.current?.isolate(null)}>
 						<XIcon className="size-3.5" aria-hidden="true" />

@@ -3,17 +3,12 @@ import type { WriteDb } from "./db-accessor";
 import { getDbAccessor } from "./db-accessor";
 import { countChanges } from "./db-helpers";
 import { requireDependencyReason } from "./dependency-history";
-import {
-	reconcileOntologyContradictionsInTx,
-	recordOntologyContradictionsForAttributeInTx,
-} from "./ontology-contradictions";
+import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
-
-interface HeadingSection {
-	readonly heading: string;
-	readonly level: number;
-	readonly body: string;
-}
+import {
+	flagDreamingClaimsForRemovedSourcePathInTx,
+	flagDreamingClaimsForSourceRevisionInTx,
+} from "./source-claim-review";
 
 export interface IndexSourceArtifactStructureInput {
 	readonly agentId: string;
@@ -30,10 +25,6 @@ export interface IndexSourceArtifactStructureResult {
 	readonly documentEntityId: string;
 	readonly entitiesTouched: number;
 	readonly dependenciesTouched: number;
-	readonly aspectsTouched: number;
-	readonly attributesTouched: number;
-	readonly aspectsCreated: number;
-	readonly attributesCreated: number;
 }
 
 export interface PurgeSourceArtifactStructureInput {
@@ -62,50 +53,11 @@ function idFor(...parts: readonly string[]): string {
 	return `src_${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 32)}`;
 }
 
-function slug(value: string): string {
-	const out = value
-		.trim()
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, "_")
-		.replace(/^_+|_+$/g, "")
-		.replace(/_{2,}/g, "_");
-	return out || "general";
-}
-
 function stripFrontmatter(content: string): string {
 	const normalized = content.replace(/\r\n?/g, "\n");
 	if (!normalized.startsWith("---\n")) return normalized;
 	const end = normalized.indexOf("\n---\n", 4);
 	return end === -1 ? normalized : normalized.slice(end + 5);
-}
-
-function parseSections(content: string): HeadingSection[] {
-	const lines = stripFrontmatter(content).split("\n");
-	const sections: Array<{ heading: string; level: number; lines: string[] }> = [];
-	let current: { heading: string; level: number; lines: string[] } = { heading: "Overview", level: 0, lines: [] };
-	for (const line of lines) {
-		const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
-		if (match) {
-			if (current.lines.join("\n").trim().length > 0 || current.heading !== "Overview") sections.push(current);
-			current = { heading: match[2] ?? "Untitled", level: match[1]?.length ?? 1, lines: [] };
-			continue;
-		}
-		current.lines.push(line);
-	}
-	if (current.lines.join("\n").trim().length > 0 || current.heading !== "Overview") sections.push(current);
-	return sections.map((section) => ({
-		heading: section.heading,
-		level: section.level,
-		body: section.lines.join("\n"),
-	}));
-}
-
-function bodyClaims(body: string): string[] {
-	return body
-		.split(/\n{2,}|\n(?=-\s+)/)
-		.map((part) => part.replace(/^[-*]\s+/gm, "").trim())
-		.filter((part) => part.length >= 20)
-		.slice(0, 12);
 }
 
 function safeDecodeURIComponent(value: string): string {
@@ -249,6 +201,17 @@ export function purgeSourceArtifactStructureInTx(
 	db: WriteDb,
 	input: PurgeSourceArtifactStructureInput,
 ): PurgeSourceArtifactStructureResult {
+	const removed = removeSourceArtifactStructureInTx(db, input);
+	flagDreamingClaimsForRemovedSourcePathInTx(db, input);
+	return removed;
+}
+
+const SOURCE_OWNED_ROW = "source_root NOT IN ('dreaming', 'dreaming_attention')";
+
+function removeSourceArtifactStructureInTx(
+	db: WriteDb,
+	input: PurgeSourceArtifactStructureInput,
+): PurgeSourceArtifactStructureResult {
 	const entityRows = db
 		.prepare(
 			`SELECT id FROM entities
@@ -259,22 +222,29 @@ export function purgeSourceArtifactStructureInTx(
 		)
 		.all(input.agentId, input.sourceId, input.sourcePath) as Array<{ id: string }>;
 	const entityIds = entityRows.map((row) => row.id);
-	purgeAttributeMemoryProjectionsInTx(db, input);
+	purgeAttributeMemoryProjectionsInTx(db, { ...input, keepDreaming: true });
 
 	const attributes = countChanges(
 		db
-			.prepare("DELETE FROM entity_attributes WHERE agent_id = ? AND source_id = ? AND source_path = ?")
+			.prepare(
+				`DELETE FROM entity_attributes WHERE agent_id = ? AND source_id = ? AND source_path = ? AND ${SOURCE_OWNED_ROW}`,
+			)
 			.run(input.agentId, input.sourceId, input.sourcePath),
 	);
 	const dependencies = countChanges(
 		db
-			.prepare("DELETE FROM entity_dependencies WHERE agent_id = ? AND source_id = ? AND source_path = ?")
+			.prepare(
+				`DELETE FROM entity_dependencies WHERE agent_id = ? AND source_id = ? AND source_path = ? AND ${SOURCE_OWNED_ROW}`,
+			)
 			.run(input.agentId, input.sourceId, input.sourcePath),
 	);
 
 	let aspects = 0;
 	if (entityIds.length > 0) {
-		const stmt = db.prepare("DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?");
+		const stmt = db.prepare(
+			`DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?
+			 AND NOT EXISTS (SELECT 1 FROM entity_attributes attr WHERE attr.aspect_id = entity_aspects.id)`,
+		);
 		for (const entityId of entityIds) aspects += countChanges(stmt.run(input.agentId, entityId));
 	}
 
@@ -285,7 +255,8 @@ export function purgeSourceArtifactStructureInTx(
 				 WHERE agent_id = ?
 				   AND source_id = ?
 				   AND source_path = ?
-				   AND entity_type IN ('source_document', 'source_document_reference')`,
+				   AND entity_type IN ('source_document', 'source_document_reference')
+				   AND NOT EXISTS (SELECT 1 FROM entity_aspects asp WHERE asp.entity_id = entities.id)`,
 			)
 			.run(input.agentId, input.sourceId, input.sourcePath),
 	);
@@ -303,7 +274,7 @@ export function purgeSourceArtifactStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => purgeSourceArtifactStructureInTx(db, input),
-		"source-artifact-graph.ts:304",
+		"db:source-graph.artifact.purge.write",
 	);
 }
 
@@ -327,7 +298,7 @@ export function indexSourceArtifactStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => indexSourceArtifactStructureInTx(db, input, now),
-		"source-artifact-graph.ts:328",
+		"db:source-graph.artifact.index.write",
 	);
 }
 
@@ -349,14 +320,16 @@ export function indexSourceArtifactStructureInTx(
 	input: IndexSourceArtifactStructureInput,
 	now = new Date().toISOString(),
 ): IndexSourceArtifactStructureResult {
-	purgeSourceArtifactStructureInTx(db, input);
+	removeSourceArtifactStructureInTx(db, input);
+	flagDreamingClaimsForSourceRevisionInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourcePath: input.sourcePath,
+		content: input.content,
+	});
 
 	let entitiesTouched = 0;
 	let dependenciesTouched = 0;
-	let aspectsTouched = 0;
-	let attributesTouched = 0;
-	let aspectsCreated = 0;
-	let attributesCreated = 0;
 
 	const source = upsertSourceEntity(db, {
 		id: idFor(input.agentId, input.sourceId, "source", input.sourceRoot),
@@ -421,76 +394,9 @@ export function indexSourceArtifactStructureInTx(
 		dependenciesTouched++;
 	}
 
-	for (const section of parseSections(input.content)) {
-		const aspectId = idFor(input.agentId, input.sourceId, "aspect", input.sourcePath, section.heading);
-		const aspectCanon = slug(section.heading);
-		const existingAspect = db
-			.prepare("SELECT id FROM entity_aspects WHERE agent_id = ? AND entity_id = ? AND canonical_name = ? LIMIT 1")
-			.get(input.agentId, doc.id, aspectCanon) as { id: string } | null | undefined;
-		db.prepare(
-			`INSERT INTO entity_aspects
-				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-				 ON CONFLICT(entity_id, canonical_name) DO UPDATE SET updated_at = excluded.updated_at, name = excluded.name`,
-		).run(aspectId, doc.id, input.agentId, section.heading, aspectCanon, section.level === 1 ? 0.9 : 0.7, now, now);
-		aspectsTouched++;
-		if (existingAspect == null) aspectsCreated++;
-
-		let claimIndex = 0;
-		for (const claim of bodyClaims(section.body)) {
-			const attrId = idFor(
-				input.agentId,
-				input.sourceId,
-				"attribute",
-				input.sourcePath,
-				section.heading,
-				claimIndex.toString(),
-			);
-			const existingAttribute = db
-				.prepare("SELECT id FROM entity_attributes WHERE agent_id = ? AND id = ? LIMIT 1")
-				.get(input.agentId, attrId) as { id: string } | null | undefined;
-			db.prepare(
-				`INSERT INTO entity_attributes
-					 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, group_key, claim_key,
-					  confidence, importance, status, created_at, updated_at, source_id, source_kind, source_path, source_root)
-					 VALUES (?, ?, ?, NULL, 'claim', ?, ?, ?, ?, 0.8, 0.5, 'active', ?, ?, ?, ?, ?, ?)
-					 ON CONFLICT(id) DO UPDATE SET
-					   content = excluded.content,
-					   normalized_content = excluded.normalized_content,
-					   updated_at = excluded.updated_at,
-					   source_id = excluded.source_id,
-					   source_kind = excluded.source_kind,
-					   source_path = excluded.source_path,
-					   source_root = excluded.source_root`,
-			).run(
-				attrId,
-				aspectId,
-				input.agentId,
-				claim,
-				claim.toLowerCase(),
-				slug(input.sourceKind),
-				`${aspectCanon}_${claimIndex}`,
-				now,
-				now,
-				input.sourceId,
-				input.sourceKind,
-				input.sourcePath,
-				input.sourceRoot,
-			);
-			recordOntologyContradictionsForAttributeInTx(db, { agentId: input.agentId, attributeId: attrId });
-			attributesTouched++;
-			if (existingAttribute == null) attributesCreated++;
-			claimIndex++;
-		}
-	}
-
 	return {
 		documentEntityId: doc.id,
 		entitiesTouched,
 		dependenciesTouched,
-		aspectsTouched,
-		attributesTouched,
-		aspectsCreated,
-		attributesCreated,
 	};
 }

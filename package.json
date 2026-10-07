@@ -104,7 +104,8 @@
 		"hono": "^4.13.0",
 		"node-gyp": "^12.4.0",
 		"turbo": "^2.9.14",
-		"typescript": "^5.7.0"
+		"typescript": "^5.7.0",
+		"yaml": "^2.9.0"
 	},
 	"keywords": [
 		"ai",

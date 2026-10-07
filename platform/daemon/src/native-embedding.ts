@@ -34,6 +34,9 @@ export function configureNativeEmbeddingAssets(paths: {
 }): void {
 	assetPathsOverride = paths;
 }
+export function nativeEmbeddingAssetPaths(): typeof assetPathsOverride {
+	return assetPathsOverride;
+}
 let initPromise: Promise<unknown> | null = null;
 
 function clearIdleTimer(): void {

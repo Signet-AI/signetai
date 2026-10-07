@@ -7,6 +7,7 @@ export function purgeAttributeMemoryProjectionsInTx(
 		readonly agentId?: string;
 		readonly sourcePath?: string;
 		readonly sourceRoot?: string;
+		readonly keepDreaming?: boolean;
 	},
 ): number {
 	const filters = ["source_id = ?", "memory_id IS NOT NULL"];
@@ -23,6 +24,7 @@ export function purgeAttributeMemoryProjectionsInTx(
 		filters.push("source_root = ?");
 		args.push(input.sourceRoot);
 	}
+	if (input.keepDreaming) filters.push("source_root NOT IN ('dreaming', 'dreaming_attention')");
 	const rows = db
 		.prepare(
 			`SELECT DISTINCT attr.memory_id, attr.agent_id AS attribute_agent_id, mem.agent_id AS memory_agent_id

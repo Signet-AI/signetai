@@ -76,7 +76,7 @@ function asAccessor(db: Database, onAsyncWrite?: () => void, onAsyncRead?: () =>
 	};
 }
 
-function installLegacyPorterMemoriesFts(db: Database, indexedId?: string, tokenizer = "porter unicode61"): void {
+function installMemoriesFtsWithTokenizer(db: Database, indexedId?: string, tokenizer = "unicode61"): void {
 	db.exec("DROP TRIGGER IF EXISTS memories_ai");
 	db.exec("DROP TRIGGER IF EXISTS memories_ad");
 	db.exec("DROP TRIGGER IF EXISTS memories_au");
@@ -1180,31 +1180,30 @@ describe("checkFtsConsistency", () => {
 		expect(result.success).toBe(true);
 	});
 
-	it("detects legacy porter tokenizer drift", async () => {
+	it("detects unicode61 tokenizer drift", async () => {
 		insertMemory(db, "We celebrate wins together");
-		installLegacyPorterMemoriesFts(db);
+		installMemoriesFtsWithTokenizer(db);
 		const limiter = createRateLimiter();
 		const result = await checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, false);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
 		expect(result.message).toMatch(/tokenizer drift/i);
-		expect(readMemoriesFtsSql(toFtsSchemaQueryDb(db))).toContain("porter unicode61");
+		expect(readMemoriesFtsSql(toFtsSchemaQueryDb(db))).toContain("tokenize='unicode61'");
 	});
 
-	it("repairs legacy porter tokenizer drift when repair=true", async () => {
+	it("repairs unicode61 tokenizer drift to porter stemming when repair=true", async () => {
 		insertMemory(db, "We celebrate wins together");
-		installLegacyPorterMemoriesFts(db);
+		installMemoriesFtsWithTokenizer(db);
 		const limiter = createRateLimiter();
 		const result = await checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, limiter, true);
 
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
-		expect(result.message).toMatch(/unicode61 tokenizer/i);
+		expect(result.message).toMatch(/porter unicode61 tokenizer/i);
 
 		const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
-		expect(sql).toContain("tokenize='unicode61'");
-		expect(sql).not.toContain("porter unicode61");
+		expect(sql).toContain("tokenize='porter unicode61'");
 	});
 
 	it("does not treat legitimate tombstones as FTS corruption", async () => {
@@ -1222,7 +1221,7 @@ describe("checkFtsConsistency", () => {
 	it("defers autonomous repair until a genuine mismatch persists", async () => {
 		insertMemory(db, "mem-fts-deferred");
 		insertMemory(db, "mem-fts-deferred-missing");
-		installLegacyPorterMemoriesFts(db, "mem-fts-deferred", "unicode61");
+		installMemoriesFtsWithTokenizer(db, "mem-fts-deferred", "porter unicode61");
 
 		const first = await checkFtsConsistency(accessor, TEST_CFG, CTX_DAEMON, createRateLimiter(), true);
 		expect(first.success).toBe(true);
@@ -1242,7 +1241,7 @@ describe("checkFtsConsistency", () => {
 	it("repairs a genuinely incomplete FTS index", async () => {
 		insertMemory(db, "mem-fts-corrupt-indexed");
 		insertMemory(db, "mem-fts-corrupt-missing");
-		installLegacyPorterMemoriesFts(db, "mem-fts-corrupt-indexed", "unicode61");
+		installMemoriesFtsWithTokenizer(db, "mem-fts-corrupt-indexed", "porter unicode61");
 
 		const result = await checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), true);
 		expect(result.success).toBe(true);
@@ -1256,7 +1255,7 @@ describe("checkFtsConsistency", () => {
 	it("coalesces concurrent FTS rebuilds through one async write", async () => {
 		insertMemory(db, "mem-fts-concurrent-indexed");
 		insertMemory(db, "mem-fts-concurrent-missing");
-		installLegacyPorterMemoriesFts(db, "mem-fts-concurrent-indexed", "unicode61");
+		installMemoriesFtsWithTokenizer(db, "mem-fts-concurrent-indexed", "porter unicode61");
 
 		const results = await Promise.all([
 			checkFtsConsistency(accessor, TEST_CFG, CTX_OPERATOR, createRateLimiter(), true),

@@ -399,10 +399,14 @@ export interface KnowledgeStats {
 export interface KnowledgeConstellation {
 	entities: Array<{
 		id: string;
+		agentId: string;
 		name: string;
 		entityType: string;
 		mentions: number;
 		pinned: boolean;
+		sourceId?: string | null;
+		sourceKind?: string | null;
+		sourcePath?: string | null;
 		aspects: Array<{
 			id: string;
 			name: string;
@@ -541,8 +545,6 @@ export interface SourceHealth {
 	};
 	importExtraction?: {
 		documentEntityId: string | null;
-		aspectsCreated: number;
-		attributesCreated: number;
 	};
 	permission?: {
 		status: "clear" | "denied";
@@ -728,8 +730,6 @@ export interface ImportSourcesResponse {
 				duplicate: boolean;
 				extraction?: {
 					documentEntityId: string | null;
-					aspectsCreated: number;
-					attributesCreated: number;
 				};
 		  }
 		| {
@@ -738,8 +738,6 @@ export interface ImportSourcesResponse {
 				sourceId: string;
 				extraction?: {
 					documentEntityId: string | null;
-					aspectsCreated: number;
-					attributesCreated: number;
 				};
 		  }
 		| { fileName: string; status: "failed"; error: string }
@@ -854,7 +852,7 @@ export interface DreamStatus {
 		tokenThreshold: number;
 		backfillOnFirstRun: boolean;
 		maxInputTokens: number;
-		maxOutputTokens: number;
+		maxOutputTokens: number | null;
 		timeout: number;
 	};
 	passes: DreamPass[];
@@ -1032,9 +1030,9 @@ export const api = {
 		}
 	},
 	getKnowledgeStats: () => getJSON<KnowledgeStats>("/api/knowledge/stats"),
-	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160) =>
+	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160, agentId = "all") =>
 		getJSON<KnowledgeConstellation>(
-			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=4&dependency_limit=${dependencyLimit}`,
+			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=4&dependency_limit=${dependencyLimit}&agent_id=${encodeURIComponent(agentId)}`,
 		),
 	getOntologyProposals: (status: "pending" | "applied" | "rejected" | "failed" = "pending", limit = 20) =>
 		getJSON<{ items: OntologyProposal[]; limit: number; offset: number }>(

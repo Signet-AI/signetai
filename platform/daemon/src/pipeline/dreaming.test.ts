@@ -14,6 +14,8 @@ import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from
 import { countTokens, resetTokenizerStats, tokenizerStats } from "../pipeline/tokenizer";
 import {
 	DREAMING_AGENT_PROMPT,
+	dreamingPassClock,
+	dreamingPassPrompt,
 	DREAMING_CONTENT_AGENT_PROMPT,
 	DREAMING_FAILURE_HALT_THRESHOLD,
 	DREAMING_HALT_COOLDOWN_MS,
@@ -41,7 +43,7 @@ import {
 	selectDreamingPassMode,
 	shouldTriggerDreaming,
 } from "./dreaming";
-import { searchDreamingEvidenceInDb } from "./dreaming-capabilities";
+import { dreamingEvidencePageChars, searchDreamingEvidenceInDb } from "./dreaming-capabilities";
 import { selectDreamingCheckMode } from "./dreaming-worker";
 import {
 	enqueueDreamingAttentionInTx,
@@ -57,7 +59,9 @@ import {
 	collectRejectedDreamingEvidence,
 	resolveRequeuedDreamingEvidenceInTx,
 } from "./dreaming-evidence-retry";
-import { readDreamingRunbook } from "./dreaming-runbook";
+import { compactDreamingHistory } from "./dreaming-history";
+import { readDreamingPassRecord } from "./dreaming-runbook";
+import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { requestDreamingReviewedEvidenceRequeue } from "./dreaming-evidence-reviews";
 import {
 	beginDreamingEpisodicTokenBacklogMeasurement,
@@ -528,7 +532,7 @@ describe("Dreaming", () => {
 	});
 
 	it("drains oversized evidence within budget only after every delivered fragment completes (#1430, #1715)", async () => {
-		seedTranscript(db, "s1", "x".repeat(5_000));
+		seedTranscript(db, "s1", "x".repeat(40_000));
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		let prompt = "";
 		const run = async () =>
@@ -551,19 +555,23 @@ describe("Dreaming", () => {
 			);
 		const result = await run();
 		expect(result.summary).toBe("Done");
-		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
+		expect(
+			prompt.startsWith(
+				`${dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
+			),
+		).toBe(true);
 		const firstDelivery = (await getDreamingToolCalls(accessor, AGENT, result.passId)).find(
 			(call) => call.toolName === "search_evidence",
 		);
 		expect(firstDelivery?.output).toMatchObject({
-			items: [expect.objectContaining({ sourceRef: "transcript:s1", contentOffset: 0, contentLength: 5_000 })],
+			items: [expect.objectContaining({ sourceRef: "transcript:s1", contentOffset: 0, contentLength: 40_000 })],
 		});
 		const partial = db
 			.prepare(
 				"SELECT delivered_offset AS offset, source_length AS length FROM dreaming_evidence_consumption WHERE source_id = ?",
 			)
 			.get("s1") as { offset: number; length: number } | null;
-		expect(partial).toEqual(expect.objectContaining({ length: 5_000 }));
+		expect(partial).toEqual(expect.objectContaining({ length: 40_000 }));
 		expect(partial?.offset).toBeGreaterThan(0);
 		expect(partial?.offset).toBeLessThan(partial?.length ?? 0);
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
@@ -573,7 +581,7 @@ describe("Dreaming", () => {
 			(call) => call.toolName === "search_evidence",
 		);
 		expect(secondDelivery?.output).toMatchObject({
-			items: [expect.objectContaining({ sourceRef: "transcript:s1", contentOffset: 2_000, contentLength: 5_000 })],
+			items: [expect.objectContaining({ sourceRef: "transcript:s1", contentOffset: 16_000, contentLength: 40_000 })],
 		});
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		await run();
@@ -677,7 +685,7 @@ describe("Dreaming", () => {
 	});
 
 	it("terminalizes reviewed evidence after cross-pass fragments (#1712)", async () => {
-		seedTranscript(db, "reviewed-large", "x".repeat(5_000));
+		seedTranscript(db, "reviewed-large", "x".repeat(40_000));
 		let passNumber = 0;
 		const run = async () =>
 			runDreamingAgentPass(
@@ -1145,7 +1153,7 @@ describe("Dreaming", () => {
 	it("pins a capped frontier ahead of newer evidence on its next pass (#1430)", async () => {
 		const now = Date.now();
 		const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
-		seedTranscript(db, "partial-frontier", "x".repeat(5_000), new Date(now).toISOString());
+		seedTranscript(db, "partial-frontier", "x".repeat(40_000), new Date(now).toISOString());
 		const run = async () =>
 			runDreamingAgentPass(
 				accessor,
@@ -1184,7 +1192,7 @@ describe("Dreaming", () => {
 			(call) => call.toolName === "search_evidence",
 		);
 		expect(delivery?.output).toMatchObject({
-			items: [expect.objectContaining({ sourceRef: "transcript:partial-frontier", contentOffset: 2_000 })],
+			items: [expect.objectContaining({ sourceRef: "transcript:partial-frontier", contentOffset: 16_000 })],
 		});
 		expect(
 			db
@@ -1192,7 +1200,7 @@ describe("Dreaming", () => {
 					"SELECT pass_id AS passId, delivered_offset AS offset FROM dreaming_evidence_consumption WHERE source_id = ?",
 				)
 				.get("partial-frontier"),
-		).toEqual({ passId: second.passId, offset: 4_000 });
+		).toEqual({ passId: second.passId, offset: 32_000 });
 		expect(second.passId).not.toBe(first.passId);
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now + 21_000)).toBe(true);
 	}, 15_000);
@@ -1403,6 +1411,41 @@ describe("Dreaming", () => {
 		).toEqual({ trigger: true, reason: "token-threshold" });
 	});
 
+	it("measures a drained agent with more than 50 sources as an exact empty backlog", async () => {
+		for (let index = 0; index < 60; index += 1) {
+			seedTranscript(db, `drained-${index}`, `Session ${index} settled who owns build ${index}.`);
+		}
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					for (let page = 0; page < 5; page += 1) {
+						const result = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT, limit: 50 });
+						if (result.hasMore !== true) break;
+					}
+					return { summary: "Read every session" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(
+			db
+				.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_consumption WHERE delivered_offset >= source_length")
+				.get(),
+		).toEqual({ n: 60 });
+		expect(await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, AGENT, 1_000_000, 50)).toEqual({
+			kind: "exact",
+			tokens: 0,
+			hasBacklog: false,
+			sourcesScanned: 0,
+		});
+		expect(await hasDreamingEpisodicBacklog(accessor, AGENT)).toBe(false);
+	});
+
 	it("treats exactly 50 sources as a complete bounded page", async () => {
 		const agentId = "exact-fifty";
 		for (let index = 0; index < 50; index += 1) {
@@ -1426,7 +1469,7 @@ describe("Dreaming", () => {
 		expect(Number.isFinite(exact)).toBe(true);
 	});
 
-	it("does not claim an exact backlog after the bounded probe exhausts reviewed candidates", async () => {
+	it("finds a pending source behind more than 50 reviewed candidates", async () => {
 		const agentId = "bounded-reviewed-candidates";
 		const capturedAt = "2026-08-01T00:00:00.000Z";
 		for (let index = 0; index < 51; index += 1) {
@@ -1450,11 +1493,9 @@ describe("Dreaming", () => {
 
 		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
 
-		expect(probe.kind).toBe("indeterminate");
-		if (probe.kind !== "indeterminate") throw new Error("expected an indeterminate backlog probe");
-		expect(probe.tokenLowerBound).toBe(0);
-		expect(probe.hasBacklog).toBeNull();
-		expect(probe.sourcesScanned).toBe(0);
+		expect(probe).toMatchObject({ kind: "exact", hasBacklog: true, sourcesScanned: 1 });
+		if (probe.kind !== "exact") throw new Error("expected an exact backlog probe");
+		expect(probe.tokens).toBeGreaterThan(0);
 	});
 
 	it("does not claim an exact legacy backlog after the bounded probe exhausts ineligible sources", async () => {
@@ -1490,7 +1531,7 @@ describe("Dreaming", () => {
 		expect(JSON.stringify(evidence)).toContain("transcript:z-pending");
 	});
 
-	it("schedules an indeterminate backlog and surfaces distinct evidence beyond a duplicate reviewed page", async () => {
+	it("schedules a backlog behind a duplicate reviewed page and surfaces the distinct evidence", async () => {
 		const agentId = "bounded-reviewed-pass";
 		const capturedAt = "2026-08-01T00:00:00.000Z";
 		for (let index = 0; index < 51; index += 1) {
@@ -1524,7 +1565,7 @@ describe("Dreaming", () => {
 		});
 
 		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
-		expect(probe).toMatchObject({ kind: "indeterminate", hasBacklog: null, sourcesScanned: 0 });
+		expect(probe).toMatchObject({ kind: "exact", hasBacklog: true, sourcesScanned: 1 });
 		expect(await evaluateDreamingTrigger(accessor, cfg, agentId, probe, now)).toEqual({
 			trigger: true,
 			reason: "attention",
@@ -1620,7 +1661,8 @@ describe("Dreaming", () => {
 
 		expect(query.parameters[query.parameters.length - 1]).toBe(51);
 		expect(plan.some((row) => row.detail.includes("idx_memories_agent_kind"))).toBe(true);
-		expect(plan.some((row) => row.detail.includes("SEARCH memory_artifacts"))).toBe(true);
+		expect(plan.some((row) => /SEARCH (memory_artifacts|ma) /.test(row.detail))).toBe(true);
+		expect(plan.some((row) => /SCAN (dec|der)\b/.test(row.detail))).toBe(false);
 		expect(plan.some((row) => row.detail.includes("SEARCH session_transcripts"))).toBe(true);
 		expect(plan.some((row) => row.detail.includes("USE TEMP B-TREE"))).toBe(false);
 		const filteredSearch = captured.queries.find(
@@ -1943,7 +1985,11 @@ describe("Dreaming", () => {
 		);
 
 		expect(result.summary).toBe("Reviewed due claim");
-		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
+		expect(
+			prompt.startsWith(
+				`${dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
+			),
+		).toBe(true);
 		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(1);
 	});
 
@@ -2064,9 +2110,13 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental",
 		);
-		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
+		expect(
+			prompt.startsWith(
+				`${dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
+			),
+		).toBe(true);
 		expect(toolNames).toEqual(
-			expect.arrayContaining(["search_entities", "get_entity", "list_aspect_claims", "walk_links", "attention_list"]),
+			expect.arrayContaining(["search_entities", "get_entity", "list_aspect_claims", "zoom_history", "attention_list"]),
 		);
 	});
 
@@ -2419,7 +2469,7 @@ describe("Dreaming", () => {
 			defaultCfg(),
 			"/tmp",
 			AGENT,
-			[AGENT],
+			[AGENT, "other-agent"],
 			"incremental",
 		);
 
@@ -2493,13 +2543,59 @@ describe("Dreaming", () => {
 			input: { operations: expect.any(Array) },
 			output: { tool: "apply_ontology_ops", ok: true },
 		});
-		expect(readDreamingRunbook(accessor, AGENT)[0]).toMatchObject({
+		expect(await readDreamingPassRecord(await getDbOwnerForAccessor(accessor), AGENT, result.passId)).toMatchObject({
 			passId: result.passId,
-			operations: [{ operation: "create_entity", ok: true, error: null }],
+			operations: { applied: { create_entity: 1 }, failed: [] },
 		});
 	});
 
-	it("carries scoped runbook history into a later pass", async () => {
+	it("tells a pass the local date and time without changing how evidence times resolve", () => {
+		expect(dreamingPassClock(new Date("2026-10-06T00:42:00Z"), "America/Denver")).toBe(`<current_time>
+It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what is current, upcoming, or past due. Relative times inside evidence still resolve against that source's capturedAt, not this time.
+</current_time>`);
+		expect(dreamingPassClock(new Date("2026-01-06T00:42:00Z"), "America/Denver")).toContain(
+			"Monday, 2026-01-05 17:42 America/Denver (GMT-07:00)",
+		);
+		expect(dreamingPassClock(new Date("2026-10-06T00:42:00Z"), "UTC")).toContain(
+			"Tuesday, 2026-10-06 00:42 UTC (GMT+00:00)",
+		);
+	});
+
+	it("records the largest single-turn context of a pass", async () => {
+		seedSummary(db, "peak-context", "The deployment review is deferred pending an owner.", 10);
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run() {
+					return {
+						summary: "Reviewed the deployment",
+						usage: {
+							inputTokens: 9_000,
+							outputTokens: 600,
+							cacheReadTokens: 150_000,
+							cacheCreationTokens: 4_000,
+							totalTokens: 163_600,
+							totalCost: null,
+							totalDurationMs: 10,
+							peakContextTokens: 93_000,
+						},
+					};
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(db.prepare("SELECT tokens_peak_context FROM dreaming_passes WHERE id = ?").get(result.passId)).toEqual({
+			tokens_peak_context: 93_000,
+		});
+		const [listed] = await getDreamingPasses(accessor, AGENT, 1);
+		expect(listed?.tokensPeakContext).toBe(93_000);
+	});
+
+	it("carries compacted pass history into a later pass", async () => {
 		seedSummary(db, "runbook-summary", "The deployment review is deferred pending an owner.", 10);
 		const first = await runDreamingAgentPass(
 			accessor,
@@ -2531,6 +2627,21 @@ describe("Dreaming", () => {
 			runbook_json: string;
 		};
 		expect(JSON.parse(stored.runbook_json)).toMatchObject({ openQuestions: ["Who owns the review?"] });
+		const compactionPrompts: string[] = [];
+		const built = await compactDreamingHistory(
+			accessor,
+			{
+				async complete(input) {
+					compactionPrompts.push(input.prompt);
+					return { text: "Deferred the deployment review until an owner is confirmed.", usage: null };
+				},
+			},
+			AGENT,
+			AGENT,
+		);
+		expect(built).toBe(1);
+		expect(compactionPrompts[0]).toContain("Who owns the review?");
+		expect(compactionPrompts[0]).not.toContain("Purpose: maintain durable");
 
 		let prompt = "";
 		await runDreamingAgentPass(
@@ -2547,7 +2658,452 @@ describe("Dreaming", () => {
 			[AGENT],
 			"compact",
 		);
-		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
+		expect(
+			prompt.startsWith(
+				`${dreamingPassPrompt(
+					DREAMING_AGENT_PROMPT,
+					"0+1|Deferred the deployment review until an owner is confirmed.",
+					"none pending",
+				)}\n\n<current_time>`,
+			),
+		).toBe(true);
+	});
+
+	it("offers the memory-head tools only to content passes", async () => {
+		seedTranscript(db, "tool-list", "Juno owns the release notes.");
+		const toolsFor = async (mode: "incremental" | "incremental-content") => {
+			let names: string[] = [];
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						names = input.tools.map((tool) => tool.name);
+						if (mode === "incremental-content") {
+							const head = await invokeDreamingTool(input, "memory_head_read", { agentId: AGENT });
+							const current = head.head as { revision: number; hash: string };
+							await invokeDreamingTool(input, "memory_head_commit", {
+								agentId: AGENT,
+								passId: input.passId,
+								baseRevision: current.revision,
+								baseHash: current.hash,
+								entries: [],
+							});
+						}
+						return { summary: "Listed tools" };
+					},
+				},
+				defaultCfg(),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				mode,
+			);
+			return names;
+		};
+		const incremental = await toolsFor("incremental");
+		expect(incremental).not.toContain("memory_head_read");
+		expect(incremental).not.toContain("memory_head_commit");
+		expect(incremental).toContain("search_evidence");
+		expect(await toolsFor("incremental-content")).toEqual(
+			expect.arrayContaining(["memory_head_read", "memory_head_commit"]),
+		);
+	});
+
+	it("sizes evidence pages from the Dreaming input budget", async () => {
+		expect(dreamingEvidencePageChars(128_000)).toBe(32_000);
+		expect(dreamingEvidencePageChars(8_000)).toBe(16_000);
+		expect(dreamingEvidencePageChars(1_000_000)).toBe(250_000);
+		for (const id of ["session-a", "session-b", "session-c"]) seedTranscript(db, id, id.repeat(1_200));
+		let page: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const items = page.items as Array<{ content: string; contentHasNext: boolean }>;
+		expect(items.slice(0, 2).every((item) => item.contentHasNext === false)).toBe(true);
+		expect(items.reduce((sum, item) => sum + item.content.length, 0)).toBeLessThanOrEqual(32_000);
+		expect(page.hasMore).toBe(true);
+	});
+
+	it("keeps delivery ranges durable when a large evidence page exceeds the trace limit", async () => {
+		seedTranscript(db, "large-source", 'The user said "keep going" on line\n'.repeat(15_000));
+		const pages: Array<Record<string, unknown>> = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+					return { summary: "Read two large pages" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 800_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const offsets = pages.map((page) => (page.items as Array<{ contentOffset: number }>)[0]?.contentOffset);
+		expect(offsets[0]).toBe(0);
+		expect(offsets[1]).toBeGreaterThan(0);
+		const trace = db
+			.prepare("SELECT output_json AS output FROM dreaming_tool_calls WHERE tool_name = 'search_evidence' LIMIT 1")
+			.get() as { output: string };
+		expect(JSON.parse(trace.output)).toMatchObject({ truncated: true });
+		const consumed = db
+			.prepare("SELECT delivered_offset AS offset FROM dreaming_evidence_consumption WHERE source_id = ?")
+			.get("large-source") as { offset: number } | null;
+		expect(consumed?.offset ?? 0).toBeGreaterThan(offsets[1] ?? 0);
+	});
+
+	it("pages the delivery queue within a pass and records the full read offsets", async () => {
+		seedTranscript(db, "queue-long", "a".repeat(40_000));
+		seedTranscript(db, "queue-short", "b".repeat(1_200));
+		const pages: Record<string, unknown>[] = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					for (let call = 0; call < 5; call += 1) {
+						pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+					}
+					return { summary: "Drained the delivery queue" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const served = pages.map((page) =>
+			(page.items as Array<Record<string, unknown>>).map((item) => `${String(item.id)}@${String(item.contentOffset)}`),
+		);
+		const flat = served.flat();
+		expect(new Set(flat).size).toBe(flat.length);
+		expect(flat.filter((entry) => entry.startsWith("queue-long@"))).toHaveLength(3);
+		expect(flat.filter((entry) => entry.startsWith("queue-short@"))).toHaveLength(1);
+		const lastNonEmpty = pages.findLastIndex((page) => (page.items as unknown[]).length > 0);
+		expect(pages.slice(0, lastNonEmpty).every((page) => page.hasMore === true)).toBe(true);
+		expect(pages[lastNonEmpty]?.hasMore).toBe(false);
+		expect(pages.slice(lastNonEmpty + 1).every((page) => (page.items as unknown[]).length === 0)).toBe(true);
+		const consumed = db
+			.prepare(
+				"SELECT source_id AS id, delivered_offset AS offset, source_length AS length FROM dreaming_evidence_consumption WHERE source_kind = 'transcript' ORDER BY source_id",
+			)
+			.all() as Array<{ id: string; offset: number; length: number }>;
+		expect(consumed.map((row) => row.id)).toEqual(["queue-long", "queue-short"]);
+		expect(consumed.every((row) => row.offset === row.length)).toBe(true);
+	});
+
+	it("closes new evidence delivery halfway through the pass timeout", async () => {
+		seedTranscript(db, "late-source", "Ines maintains the on-call rota.");
+		let page: Record<string, unknown> = {};
+		let reread: Record<string, unknown> = {};
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await new Promise((resolve) => setTimeout(resolve, 60));
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					reread = await invokeDreamingTool(input, "search_evidence", {
+						agentId: AGENT,
+						sourceRef: "transcript:late-source",
+						offset: 0,
+					});
+					return { summary: "Delivery closed before reading" };
+				},
+			},
+			defaultCfg({ timeout: 100 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBe(0);
+		expect(page).toMatchObject({ ok: true, items: [], hasMore: false, deliveryClosed: true });
+		expect((reread.items as unknown[]).length).toBe(1);
+	});
+
+	it("withholds only the sources a failed operation cited", async () => {
+		seedTranscript(db, "cited-source", "Briar owns the release process.");
+		seedTranscript(db, "uncited-source", "Corin owns the staging cluster.");
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [
+							{
+								operation: "create_entity",
+								payload: { name: "Briar", entity_type: "person" },
+								evidence: [{ quote: "This quote is not in the transcript.", source_ref: "transcript:cited-source" }],
+							},
+						],
+					});
+					return { summary: "One rejected write" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = (
+			db
+				.prepare("SELECT source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'")
+				.all() as Array<{
+				id: string;
+			}>
+		).map((row) => row.id);
+		expect(consumed).toEqual(["uncited-source"]);
+	});
+
+	it("withholds delivered evidence when a failed write's operations cannot be parsed", async () => {
+		seedTranscript(db, "schema-rejected", "Fenna owns the release calendar.");
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					const apply = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: "invalid array",
+					});
+					expect(apply.ok).toBe(false);
+					return { summary: "Schema-rejected write" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result).toMatchObject({ applied: 0, failed: 1 });
+		expect(
+			db.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_consumption WHERE source_id = 'schema-rejected'").get(),
+		).toEqual({ n: 0 });
+	});
+
+	it("withholds every agent in the pass when a write trace cannot be read", async () => {
+		const other = "dreaming-unreadable-trace";
+		accessor.withWriteTx((tx) => {
+			tx.prepare("INSERT OR IGNORE INTO agents (id, name, read_policy) VALUES (?, ?, 'isolated')").run(other, other);
+		});
+		seedTranscript(db, "trace-a", "Gale runs the payments service.");
+		seedTranscript(db, "trace-b", "Hale runs the ledger service.", undefined, other);
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					await invokeDreamingTool(input, "search_evidence", { agentId: other });
+					accessor.withWriteTx((tx) => {
+						tx.prepare(
+							`INSERT INTO dreaming_tool_calls
+							 (id, agent_id, pass_id, sequence, tool_name, input_json, output_json, success, latency_ms)
+							 VALUES ('unreadable-call', ?, ?, 999, 'apply_ontology_ops', '{not json', '{"ok":false}', 0, 1)`,
+						).run(AGENT, input.passId);
+					});
+					return { summary: "A write whose trace cannot be read" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT, other],
+			"incremental",
+		);
+		expect(db.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_consumption").get()).toEqual({ n: 0 });
+	});
+
+	it("keeps progress for sources a pass filed when an uncited write fails in the same agent", async () => {
+		seedTranscript(db, "filed-source", "Aster is the durable release project.");
+		seedTranscript(db, "unfiled-source", "Weather small talk about the weekend.");
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					const filed = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [
+							{
+								operation: "create_entity",
+								payload: { name: "Aster", type: "project" },
+								reason: "The evidence names a durable project.",
+								evidence: [
+									{
+										source_ref: "transcript:filed-source",
+										quote: "Aster is the durable release project.",
+									},
+								],
+							},
+						],
+					});
+					expect(filed.ok).toBe(true);
+					await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [{ operation: "not_an_ontology_operation", payload: {} }],
+					});
+					return { summary: "One filed write and one uncited rejection" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = (
+			db
+				.prepare("SELECT source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'")
+				.all() as Array<{
+				id: string;
+			}>
+		).map((row) => row.id);
+		expect(consumed).toEqual(["filed-source"]);
+	});
+
+	it("records a source whose failed citation a retry filed with the same quote", async () => {
+		seedTranscript(db, "retried-source", "Aster is the durable release project.");
+		seedTranscript(db, "typo-source", "The user wants more examples for each crteirion.");
+		const aster = {
+			operation: "create_entity",
+			payload: { name: "Aster", type: "project" },
+			reason: "The evidence names a durable project.",
+			evidence: [{ source_ref: "transcript:retried-source", quote: "Aster is the durable release project." }],
+		};
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					const rejected = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [
+							aster,
+							{
+								operation: "create_entity",
+								payload: { name: "Example rubric", type: "project" },
+								reason: "The user asked for rubric examples.",
+								evidence: [{ source_ref: "transcript:typo-source", quote: "more examples for each criterion" }],
+							},
+						],
+					});
+					expect(rejected.ok).toBe(false);
+					const retried = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [aster],
+					});
+					expect(retried.ok).toBe(true);
+					return { summary: "Retried the valid write" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = (
+			db
+				.prepare("SELECT source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'")
+				.all() as Array<{
+				id: string;
+			}>
+		).map((row) => row.id);
+		expect(consumed).toEqual(["retried-source"]);
+	});
+
+	it("does not withhold evidence when only a hygiene operation fails", async () => {
+		seedTranscript(db, "read-source", "Aster is the durable release project.");
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					const merge = await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: AGENT,
+						operations: [
+							{
+								operation: "merge_entities",
+								payload: { targets: ["entity-a", "entity-b"], survivor: "entity-a" },
+								provenance: "attention:00000000-0000-4000-8000-000000000000",
+							},
+						],
+					});
+					expect(merge.ok).toBe(false);
+					return { summary: "Read one page; a hygiene merge was rejected" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = (
+			db
+				.prepare("SELECT source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'")
+				.all() as Array<{
+				id: string;
+			}>
+		).map((row) => row.id);
+		expect(consumed).toEqual(["read-source"]);
+	});
+
+	it("withholds an uncited failure's agent without discarding other agents' progress", async () => {
+		const other = "dreaming-other-scope";
+		accessor.withWriteTx((tx) => {
+			tx.prepare("INSERT OR IGNORE INTO agents (id, name, read_policy) VALUES (?, ?, 'isolated')").run(other, other);
+		});
+		seedTranscript(db, "scope-a-source", "Delta runs the billing service.");
+		seedTranscript(db, "scope-b-source", "Echo runs the search service.", undefined, other);
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					await invokeDreamingTool(input, "search_evidence", { agentId: other });
+					await invokeDreamingTool(input, "apply_ontology_ops", {
+						agentId: other,
+						operations: [{ operation: "not_an_ontology_operation", payload: {} }],
+					});
+					return { summary: "One uncited rejected write in the second scope" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT, other],
+			"incremental",
+		);
+		expect(result.failed).toBeGreaterThan(0);
+		const consumed = db
+			.prepare(
+				"SELECT agent_id AS agentId, source_id AS id FROM dreaming_evidence_consumption WHERE source_kind = 'transcript'",
+			)
+			.all();
+		expect(consumed).toEqual([{ agentId: AGENT, id: "scope-a-source" }]);
 	});
 
 	it("reports a rejected unsupported operation as a failed mutation", async () => {
@@ -2723,7 +3279,9 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-hygiene",
 		);
-		expect(hygienePrompt).toBe(DREAMING_HYGIENE_AGENT_PROMPT);
+		expect(hygienePrompt.startsWith(`${DREAMING_HYGIENE_AGENT_PROMPT}\n\n<pass_history>`)).toBe(true);
+		expect(hygienePrompt).toContain('{"scope":"default","kind":"hygiene","more":false');
+		expect(hygienePrompt).toContain('"subjectRef":"entity:legacy-husk"');
 		expect(hygienePrompt).not.toContain("find new evidence since the cutoff");
 
 		seedSummary(db, "content-prompt", "New evidence for the content runbook.", 8);
@@ -2746,8 +3304,12 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-		expect(contentPrompt).toBe(DREAMING_CONTENT_AGENT_PROMPT);
-		expect(contentPrompt).not.toContain("Process ALL pending hygiene records");
+		expect(
+			contentPrompt.startsWith(
+				`${dreamingPassPrompt(DREAMING_CONTENT_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>`,
+			),
+		).toBe(true);
+		expect(contentPrompt).not.toContain("Work the pending hygiene records listed in <pending_attention>");
 		expect(contentPrompt).toContain("kind=surprisal");
 		expect(contentPrompt).toContain("never cite attention:<id>");
 	});
@@ -3075,9 +3637,11 @@ describe("Dreaming runbook structure (#1211)", () => {
 
 	it("keeps the focused-mode boundaries and names the mid-stream blocker (#1098, #1140)", () => {
 		expect(DREAMING_HYGIENE_AGENT_PROMPT).not.toContain("find new evidence since the cutoff");
-		expect(DREAMING_CONTENT_AGENT_PROMPT).not.toContain("Process ALL pending hygiene records");
+		expect(DREAMING_CONTENT_AGENT_PROMPT).not.toContain(
+			"Work the pending hygiene records listed in <pending_attention>",
+		);
 		expect(DREAMING_AGENT_PROMPT).toContain("find new evidence since the cutoff");
-		expect(DREAMING_AGENT_PROMPT).toContain("Process ALL pending hygiene records");
+		expect(DREAMING_AGENT_PROMPT).toContain("Work the pending hygiene records listed in <pending_attention>");
 		for (const prompt of [DREAMING_AGENT_PROMPT, DREAMING_CONTENT_AGENT_PROMPT]) {
 			expect(prompt).toContain("transcript still mid-stream");
 			expect(prompt).toContain("re-verified blocker");

@@ -2,7 +2,7 @@ import { requestMemoryHead } from "./memory-head";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { scanMemoryContent } from "@signet/core";
+import { redactCredentials } from "@signet/core";
 import { writeFileIfChangedAsync } from "./file-sync";
 
 export interface SyncAgentWorkspacesOptions {
@@ -74,7 +74,7 @@ export async function syncAgentWorkspaces({
 	const memoryPath = join(agentsDir, "MEMORY.md");
 	const memoryContent = await readFileIfExists(memoryPath);
 	let authoredMemory = false;
-	if (memoryContent && scanMemoryContent(memoryContent).contextEligible) {
+	if (memoryContent) {
 		try {
 			authoredMemory = !(
 				await requestMemoryHead<{ generated: boolean }>({
@@ -87,7 +87,7 @@ export async function syncAgentWorkspaces({
 	}
 	const sharedIdentity =
 		(await composeIdentitySections([join(agentsDir, "USER.md")])) +
-		(authoredMemory ? `\n## MEMORY\n\n${memoryContent?.trim()}` : "");
+		(authoredMemory && memoryContent ? `\n## MEMORY\n\n${redactCredentials(memoryContent.trim())}` : "");
 
 	await forEachInBatches(entries, batchSize, async (name) => {
 		const agentDir = join(agentsRoot, name);

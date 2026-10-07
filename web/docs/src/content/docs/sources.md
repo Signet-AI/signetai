@@ -286,11 +286,9 @@ response and dashboard show one actionable Full Disk Access instruction per
 denied path, including the exact path. The daemon backs off that path while
 permission is denied so a TCC denial does not create a retry storm.
 
-Source artifacts are also scanned by the memory-content-safety policy before
-native recall, source-chunk fallback, Dreaming, or other prompt-facing
-projections use them. The raw artifact and provenance remain unchanged when a
-record is `tainted` or `blocked`; inspect the record and the bounded
-`/api/diagnostics/memory-content-safety` ledger for the decision.
+When native recall, source-chunk fallback, Dreaming, or another prompt-facing
+projection uses a source artifact, detected credentials in it are replaced with
+`[redacted credential]`. The raw artifact and provenance remain unchanged.
 
 ## Obsidian v1
 
@@ -337,8 +335,8 @@ Signet mounts the vault's shape into the graph instead of flattening it into a b
 | Folder | source folder entity and community/group |
 | Markdown file | source document entity |
 | Wiki link / backlink | source-owned dependency/relationship |
-| Heading | aspect |
-| Paragraph or durable block | attribute / claim |
+
+Source sync does not turn headings or paragraphs into aspects or claims. The note text stays evidence: Dreaming reads it and files claims that cite it, and recall reaches the raw text through source chunks.
 
 The physical vault hierarchy is the primary topology. Semantic enrichment attaches to that topology; it does not replace it.
 
@@ -392,6 +390,7 @@ The watcher path is deliberately conservative:
 - scans are single-flight to avoid overlapping source-wide reindex storms;
 - overlapping sync requests are coalesced into one trailing resync;
 - content fingerprints prevent unchanged files from being reprocessed;
+- an edited file keeps the Dreaming claims that cite it. A claim whose cited quote the new text no longer contains gets a `contested_claim` attention record, and a later Dreaming pass keeps, supersedes, or archives it. A deleted file flags its claims the same way (reason `source_removed`); removing the whole source purges them;
 - removed files are soft-deleted from source artifacts and have their source-owned chunks purged;
 - disconnected sources stop participating in future configured-source scans.
 
@@ -428,8 +427,8 @@ imports in the same request.
 Duplicate content is selected in the import dialog: skip the existing source,
 replace and re-index it, or re-import it as a separate source. The normalized
 content hash, format, original file name, and converter metadata are retained
-as provenance. The import result reports the linked source-document entity and
-the aspects and attributes created by extraction. That extraction outcome is
+as provenance. The import result reports the linked source-document entity;
+claims come later, from Dreaming reading the import. That outcome is
 stored with the import's primary source artifact, so refresh and restart retain
 the result without relabeling later Dreaming-attributed source work as import
 output. The Sources page shows an unavailable state when connected to an older

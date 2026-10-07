@@ -35,6 +35,7 @@ import { isSystemPressureHigh } from "../system-pressure";
 import { txDecrementEntityMentions } from "./graph-transactions";
 import { invalidateTraversalCache } from "./graph-traversal";
 import { runWriteBatches } from "../yielding-writes";
+import { txDeleteMemoryTemporalEdges } from "../temporal-edges";
 
 export interface RetentionConfig {
 	readonly intervalMs: number;
@@ -233,6 +234,7 @@ function purgeTombstones(db: WriteDb, cutoff: string, limit: number): number {
 	const placeholders = expiredIds.map(() => "?").join(", ");
 	const ids = expiredIds.map((r) => r.id);
 	archiveToCold(db, ids, "retention_decay");
+	txDeleteMemoryTemporalEdges(db, ids);
 	db.prepare(`DELETE FROM memories WHERE id IN (${placeholders})`).run(...ids);
 
 	return expiredIds.length;

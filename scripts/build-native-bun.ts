@@ -163,13 +163,26 @@ const nativeAddonAssets = (() => {
 		if (!existsSync(nodeFile)) {
 			throw new Error(`Required @napi-rs/keyring native asset is missing for ${platformKey}: ${nodeFile}`);
 		}
-		return [{ name: "napi-rs-keyring", contentBase64: readFileSync(nodeFile).toString("base64") }];
+		return [{ name: "napi-rs-keyring", contentBase64: readFileSync(nodeFile).toString("base64") }, sqliteVecAsset()];
 	} catch (error) {
 		throw new Error(
-			`Required @napi-rs/keyring native asset is not resolvable for ${platformKey}: ${platformPackageName} (${(error as Error).message})`,
+			`Required native asset is not resolvable for ${platformKey}: ${platformPackageName} (${(error as Error).message})`,
 		);
 	}
 })();
+
+function sqliteVecFileName(): string {
+	return platformKey.startsWith("win32-") ? "vec0.dll" : platformKey.startsWith("darwin-") ? "vec0.dylib" : "vec0.so";
+}
+
+function sqliteVecAsset(): { readonly name: string; readonly contentBase64: string } {
+	const packageName = `sqlite-vec-${platformKey.replace(/^win32-/, "windows-")}`;
+	const extension = join(dirname(coreRequire.resolve(`${packageName}/package.json`)), sqliteVecFileName());
+	if (!existsSync(extension)) {
+		throw new Error(`Required sqlite-vec extension is missing for ${platformKey}: ${extension}`);
+	}
+	return { name: "sqlite-vec", contentBase64: readFileSync(extension).toString("base64") };
+}
 
 for (const [name, entry] of workerEntries) {
 	const output = join(workerDir, `${name}.mjs`);
@@ -290,7 +303,7 @@ const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]
 }));
 writeFileSync(
 	join(buildDir, "embedding-worker-transformers-runtime.ts"),
-	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { env, pipeline } = transformers;\n`,
+	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;\n`,
 );
 runBunBuild([
 	"--target=bun",
@@ -322,13 +335,13 @@ writeFileSync(
 	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};
 globalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;
 const transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});
-export const { env, pipeline } = transformers;
+export const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;
 `,
 );
 
 writeFileSync(
 	join(buildDir, "cli-native.ts"),
-	`import { materializeEmbeddedAssetTree, materializeEmbeddedNativeAddon, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
+	`import { materializeEmbeddedAssetTree, materializeEmbeddedNativeAddon, materializeEmbeddedNativeLibrary, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
 import tokenizerWasmAsset from ${JSON.stringify(tokenizerWasmPath)};
 import { handoffInspectorParent } from "../surfaces/cli/src/lib/inspector-proxy";
 import { connectorAssets, dashboardAssets, graphiqAssets, nativeAddonAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
@@ -344,6 +357,10 @@ process.env.SIGNET_VERSION = process.env.SIGNET_VERSION?.trim() || ${JSON.string
 process.env.SIGNET_TEMPLATES_DIR ??= materializeEmbeddedAssetTree("templates") ?? "";
 process.env.SIGNET_SKILLS_SOURCE ??= materializeEmbeddedAssetTree("skills") ?? "";
 process.env.SIGNET_CONNECTOR_ASSETS_DIR ??= materializeEmbeddedAssetTree("connectors") ?? "";
+if (!process.env.SIGNET_VEC_PATH?.trim()) {
+	const sqliteVecPath = materializeEmbeddedNativeLibrary("sqlite-vec", ${JSON.stringify(sqliteVecFileName())});
+	if (sqliteVecPath) process.env.SIGNET_VEC_PATH = sqliteVecPath;
+}
 if (!process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH?.trim()) {
 	const keyringAddonPath = materializeEmbeddedNativeAddon("napi-rs-keyring");
 	if (keyringAddonPath) process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH = keyringAddonPath;

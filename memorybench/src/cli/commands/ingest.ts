@@ -1,12 +1,18 @@
 import type { ProviderName } from "../../types/provider"
-import type { BenchmarkName } from "../../types/benchmark"
+import type { BenchmarkConfig, BenchmarkName } from "../../types/benchmark"
 import type { ConcurrencyConfig } from "../../types/concurrency"
 import type { SamplingConfig, SampleType } from "../../types/checkpoint"
 import { orchestrator, CheckpointManager } from "../../orchestrator"
 import { getAvailableProviders } from "../../providers"
 import { getAvailableBenchmarks } from "../../benchmarks"
 import { logger } from "../../utils/logger"
-import { appendCsvValues, parseCommaSeparated, readIdListFile } from "../args"
+import {
+  appendCsvValues,
+  applyBenchmarkConfigArg,
+  isBenchmarkConfigFlag,
+  parseCommaSeparated,
+  readIdListFile,
+} from "../args"
 
 interface IngestArgs {
   provider?: string
@@ -18,6 +24,7 @@ interface IngestArgs {
   sample?: number
   sampleType?: SampleType
   concurrency?: ConcurrencyConfig
+  benchmarkConfig?: BenchmarkConfig
   force?: boolean
 }
 
@@ -31,6 +38,7 @@ function generateRunId(): string {
 export function parseIngestArgs(args: string[]): IngestArgs | null {
   const parsed: Partial<IngestArgs> = {}
   const concurrency: ConcurrencyConfig = {}
+  const benchmarkConfig: BenchmarkConfig = {}
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
@@ -91,6 +99,12 @@ export function parseIngestArgs(args: string[]): IngestArgs | null {
       concurrency.indexing = parseInt(args[++i], 10)
     } else if (arg === "--force") {
       parsed.force = true
+    } else if (isBenchmarkConfigFlag(arg)) {
+      const error = applyBenchmarkConfigArg(benchmarkConfig, arg, args[++i])
+      if (error) {
+        logger.error(error)
+        return null
+      }
     }
   }
   if (!parsed.runId && (!parsed.provider || !parsed.benchmark)) {
@@ -103,6 +117,9 @@ export function parseIngestArgs(args: string[]): IngestArgs | null {
 
   if (Object.keys(concurrency).length > 0) {
     parsed.concurrency = concurrency
+  }
+  if (Object.keys(benchmarkConfig).length > 0) {
+    parsed.benchmarkConfig = benchmarkConfig
   }
 
   return parsed as IngestArgs
@@ -196,6 +213,7 @@ export async function ingestCommand(args: string[]): Promise<void> {
     questionTypes: parsed.questionTypes,
     sampling,
     concurrency: parsed.concurrency,
+    benchmarkConfig: parsed.benchmarkConfig,
     force: parsed.force,
   })
 }

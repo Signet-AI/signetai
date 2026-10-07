@@ -163,6 +163,12 @@ import { up as dreamingCandidateScanIndex } from "./158-dreaming-candidate-scan-
 import { up as importAdmissionLedger } from "./160-import-admission-ledger";
 import { up as entityPruneKeysetIndex } from "./161-entity-prune-keyset-index";
 import { up as genericEntityPruneScanGeneration } from "./162-generic-entity-prune-scan-generation";
+import { up as retireMemoryContentSafety } from "./163-retire-memory-content-safety";
+import { up as claimEventTime } from "./164-claim-event-time";
+import { up as dreamingHistory } from "./165-dreaming-history";
+import { up as dreamingPassPeakContext } from "./166-dreaming-pass-peak-context";
+import { up as memoriesFtsPorter } from "./167-memories-fts-porter";
+import { up as retireSourceParagraphClaims } from "./168-retire-source-paragraph-claims";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1175,7 +1181,6 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 125,
 		name: "memory-content-safety",
 		up: memoryContentSafety,
-		artifacts: { tables: ["memory_content_safety"] },
 	},
 	{
 		version: 126,
@@ -1479,6 +1484,48 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "generic-entity-prune-scan-generation",
 		up: genericEntityPruneScanGeneration,
 		artifacts: { tables: ["generic_entity_prune_scan_state"] },
+	},
+	{
+		version: 163,
+		name: "retire-memory-content-safety",
+		up: retireMemoryContentSafety,
+	},
+	{
+		version: 164,
+		name: "claim-event-time",
+		up: claimEventTime,
+		artifacts: {
+			columns: ["occurred_start", "occurred_end", "valid_from", "valid_until", "time_precision"].map((column) => ({
+				table: "entity_attributes",
+				column,
+			})),
+		},
+	},
+	{
+		version: 165,
+		name: "dreaming-history",
+		up: dreamingHistory,
+		artifacts: {
+			tables: ["dreaming_history_nodes"],
+			indexes: ["idx_dreaming_history_nodes_pass"],
+			columns: [{ table: "dreaming_passes", column: "scope_key" }],
+		},
+	},
+	{
+		version: 166,
+		name: "dreaming-pass-peak-context",
+		up: dreamingPassPeakContext,
+		artifacts: { columns: [{ table: "dreaming_passes", column: "tokens_peak_context" }] },
+	},
+	{
+		version: 167,
+		name: "memories-fts-porter",
+		up: memoriesFtsPorter,
+	},
+	{
+		version: 168,
+		name: "retire-source-paragraph-claims",
+		up: retireSourceParagraphClaims,
 	},
 ];
 function checksum(m: Migration): string {

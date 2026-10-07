@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { applyRecallScoreThreshold, scanMemoryContent, vectorSearchWithMetadata } from "@signet/core";
+import { applyRecallScoreThreshold, redactCredentials, vectorSearchWithMetadata } from "@signet/core";
 import type { Context, Hono, MiddlewareHandler } from "hono";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
@@ -30,11 +30,6 @@ import { fetchInternal } from "../internal-fetch.js";
 import { logger } from "../logger";
 import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
 import {
-	isMemoryContentContextEligible,
-	parseMemorySafetyReasons,
-	readMemoryContentSafety,
-} from "../memory-content-safety";
-import {
 	type RecallParams,
 	type RecallResponse,
 	buildAgentScopeClause,
@@ -56,7 +51,8 @@ import {
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
 import { upsertSessionTranscriptAsync } from "../session-transcripts";
 import { getActiveTelemetry } from "../telemetry";
-import { createTemporalEdgeId, normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
+import { txInsertMemoryTemporalEdges, type MemoryTemporalEdgeInput } from "../temporal-edges";
+import { normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
 import {
 	type SupersedeMemoryTxStatus,
 	txForgetMemory,
@@ -119,7 +115,7 @@ async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<Res
 	return {
 		...cfg,
 		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
-			siteToken: "routes/memory-routes.ts:121",
+			siteToken: "routes/memory-routes.ts:117",
 		}),
 	};
 }
@@ -139,23 +135,6 @@ export interface MemoryRoutesDeps {
 	readonly recallOwner?: DbOwnerClient;
 }
 
-function contentSafetyForInspection(db: ReadDb, agentId: string, memoryId: string, content: unknown) {
-	const persisted = readMemoryContentSafety(db, {
-		agentId: agentId || "default",
-		sourceKind: "memory",
-		sourceId: memoryId,
-	});
-	const current = scanMemoryContent(typeof content === "string" ? content : String(content ?? ""));
-	const persistedUnsafe = persisted !== null && (persisted.status !== "clean" || persisted.context_eligible !== 1);
-	return {
-		status: persistedUnsafe ? persisted.status : current.status,
-		contextEligible: current.contextEligible && !persistedUnsafe,
-		reasons: persistedUnsafe ? parseMemorySafetyReasons(persisted.reasons_json) : [...current.reasons],
-		policyVersion: persisted?.policy_version ?? current.policyVersion,
-		scannedAt: persisted?.scanned_at ?? null,
-	};
-}
-
 function parseOptionalIsoTimestamp(value: unknown): string | null {
 	if (typeof value !== "string") return null;
 	const trimmed = value.trim();
@@ -164,20 +143,13 @@ function parseOptionalIsoTimestamp(value: unknown): string | null {
 	return Number.isNaN(ts.getTime()) ? null : ts.toISOString();
 }
 
-interface ExplicitTemporalInput {
-	readonly facet: "source" | "observed" | "occurred" | "valid";
-	readonly startAt: string;
-	readonly endAt: string | null;
-	readonly provenance: string;
-}
-
 function collectExplicitTemporalInputs(body: {
 	readonly sourceCreatedAt?: string;
 	readonly observedAt?: string;
 	readonly occurredAt?: string;
 	readonly validFrom?: string;
 	readonly validUntil?: string;
-}): { inputs?: readonly ExplicitTemporalInput[]; error?: string } {
+}): { inputs?: readonly MemoryTemporalEdgeInput[]; error?: string } {
 	const sourceCreatedAt = normalizeTemporalTimestamp(body.sourceCreatedAt);
 	const observedAt = normalizeTemporalTimestamp(body.observedAt);
 	const occurredAt = normalizeTemporalTimestamp(body.occurredAt);
@@ -191,7 +163,7 @@ function collectExplicitTemporalInputs(body: {
 	if (body.validUntil !== undefined && !validUntil) return { error: "validUntil must be a valid ISO timestamp" };
 	if (validUntil && validFrom && validUntil <= validFrom) return { error: "validUntil must be after validFrom" };
 
-	const inputs: ExplicitTemporalInput[] = [];
+	const inputs: MemoryTemporalEdgeInput[] = [];
 	if (sourceCreatedAt)
 		inputs.push({
 			facet: "source",
@@ -206,48 +178,6 @@ function collectExplicitTemporalInputs(body: {
 	if (validFrom)
 		inputs.push({ facet: "valid", startAt: validFrom, endAt: validUntil, provenance: "remember.validRange" });
 	return { inputs };
-}
-
-function txInsertExplicitTemporalEdges(params: {
-	readonly db: WriteDb;
-	readonly memoryId: string;
-	readonly agentId: string;
-	readonly inputs: readonly ExplicitTemporalInput[];
-	readonly now: string;
-}): void {
-	if (params.inputs.length === 0) return;
-	const table = params.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='temporal_edges'").get();
-	if (!table) return;
-	const stmt = params.db.prepare(
-		`INSERT INTO temporal_edges
-		   (id, agent_id, subject_type, subject_id, facet, start_at, end_at, confidence,
-		    provenance_json, metadata_json, created_at, updated_at)
-		 VALUES (?, ?, 'memory', ?, ?, ?, ?, 1.0, ?, NULL, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET
-		   end_at = excluded.end_at,
-		   confidence = excluded.confidence,
-		   provenance_json = excluded.provenance_json,
-		   updated_at = excluded.updated_at`,
-	);
-	for (const input of params.inputs) {
-		stmt.run(
-			createTemporalEdgeId({
-				agentId: params.agentId,
-				subjectType: "memory",
-				subjectId: params.memoryId,
-				facet: input.facet,
-				startAt: input.startAt,
-			}),
-			params.agentId,
-			params.memoryId,
-			input.facet,
-			input.startAt,
-			input.endAt,
-			JSON.stringify({ source: input.provenance }),
-			params.now,
-			params.now,
-		);
-	}
 }
 
 function codexHome(): string {
@@ -962,31 +892,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const result = await getDbAccessor().withReadDbAsync(
 				async (db) => {
-					const queriedMemories = db
+					const memories = db
 						.prepare(`
-	      SELECT id, content, created_at, who, importance, tags, source_type, pinned, type, agent_id
+	      SELECT id, content, created_at, who, importance, tags, source_type, pinned, type
 	      FROM memories
       WHERE COALESCE(is_deleted, 0) = 0 AND superseded_by IS NULL
       ORDER BY created_at DESC
 						LIMIT ? OFFSET ?
 	    `)
-						.all(limit, offset) as Array<Record<string, unknown>>;
-					const memories = queriedMemories.map((memory) => {
-						const safety =
-							typeof memory.id === "string"
-								? contentSafetyForInspection(
-										db,
-										typeof memory.agent_id === "string" ? memory.agent_id : "default",
-										memory.id,
-										memory.content,
-									)
-								: null;
-						const { agent_id: _agentId, ...publicMemory } = memory;
-						return {
-							...publicMemory,
-							contentSafety: safety,
-						};
-					});
+						.all(limit, offset);
 
 					const totalResult = db
 						.prepare(
@@ -1017,7 +931,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						},
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:963" },
+				{ siteToken: "routes/memory-routes.ts:893" },
 			);
 
 			return c.json(result);
@@ -1038,7 +952,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				async (db) => {
 					const rows = db
 						.prepare(`
-					SELECT id, content, agent_id, access_count, importance, type, tags
+					SELECT id, content, access_count, importance, type, tags
 					FROM memories
 					WHERE access_count > 0
 					  AND COALESCE(is_deleted, 0) = 0
@@ -1046,19 +960,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					ORDER BY access_count DESC, importance DESC
 					LIMIT ?
 				`)
-						.all(limit) as Array<{ id: string; content: string; agent_id: string | null }>;
-					return rows
-						.filter((row) =>
-							isMemoryContentContextEligible(db, {
-								agentId: row.agent_id?.trim() || "default",
-								sourceKind: "memory",
-								sourceId: row.id,
-								content: row.content,
-							}),
-						)
-						.map(({ agent_id: _agentId, ...row }) => row);
+						.all(limit) as Array<{ id: string; content: string }>;
+					return rows.map((row) => ({ ...row, content: redactCredentials(row.content) }));
 				},
-				{ siteToken: "routes/memory-routes.ts:1037" },
+				{ siteToken: "routes/memory-routes.ts:951" },
 			);
 			return c.json({ memories });
 		} catch (e) {
@@ -1087,18 +992,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const scopeArgs = shouldEnforceAuthScope(c) ? (scopeProject ? [...access.args, scopeProject] : access.args) : [];
 			const slices = await getDbAccessor().withReadDbAsync(
 				async (db) => {
-					const filterSafe = <T extends { id: string; content: string; agent_id: string | null }>(rows: T[]): T[] =>
-						rows.filter((row) =>
-							isMemoryContentContextEligible(db, {
-								agentId: row.agent_id?.trim() || "default",
-								sourceKind: "memory",
-								sourceId: row.id,
-								content: row.content,
-							}),
-						);
+					const redact = <T extends { content: string }>(rows: T[]): T[] =>
+						rows.map((row) => ({ ...row, content: redactCredentials(row.content) }));
 					const injectedNeverUsed = db
 						.prepare(
-							`SELECT m.id, m.content, m.agent_id, COUNT(DISTINCT sm.session_key) AS sessions
+							`SELECT m.id, m.content, COUNT(DISTINCT sm.session_key) AS sessions
 						 FROM session_memories sm
 						 JOIN memories m ON m.id = sm.memory_id
 						 WHERE sm.agent_id = ?
@@ -1115,12 +1013,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						.all(agentId, ...scopeArgs, minSessions, limit) as Array<{
 						id: string;
 						content: string;
-						agent_id: string | null;
 						sessions: number;
 					}>;
 					const contradicted = db
 						.prepare(
-							`SELECT m.id, m.content, m.agent_id, COUNT(*) AS contradicted_count
+							`SELECT m.id, m.content, COUNT(*) AS contradicted_count
 						 FROM session_memories sm
 						 JOIN memories m ON m.id = sm.memory_id
 						 WHERE sm.agent_id = ?
@@ -1135,12 +1032,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						.all(agentId, ...scopeArgs, limit) as Array<{
 						id: string;
 						content: string;
-						agent_id: string | null;
 						contradicted_count: number;
 					}>;
 					const highUsed = db
 						.prepare(
-							`SELECT m.id, m.content, m.agent_id, COUNT(*) AS used_count
+							`SELECT m.id, m.content, COUNT(*) AS used_count
 						 FROM session_memories sm
 						 JOIN memories m ON m.id = sm.memory_id
 						 WHERE sm.agent_id = ?
@@ -1155,16 +1051,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						.all(agentId, ...scopeArgs, limit) as Array<{
 						id: string;
 						content: string;
-						agent_id: string | null;
 						used_count: number;
 					}>;
 					return {
-						injectedNeverUsed: filterSafe(injectedNeverUsed).map(({ agent_id: _agentId, ...row }) => row),
-						contradicted: filterSafe(contradicted).map(({ agent_id: _agentId, ...row }) => row),
-						highUsed: filterSafe(highUsed).map(({ agent_id: _agentId, ...row }) => row),
+						injectedNeverUsed: redact(injectedNeverUsed),
+						contradicted: redact(contradicted),
+						highUsed: redact(highUsed),
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1088" },
+				{ siteToken: "routes/memory-routes.ts:993" },
 			);
 			return c.json({ agentId, minSessions, limit, ...slices });
 		} catch (e) {
@@ -1190,7 +1085,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						readPolicy: agentScope.readPolicy,
 						policyGroup: agentScope.policyGroup ?? undefined,
 					}),
-				{ siteToken: "routes/memory-routes.ts:1185" },
+				{ siteToken: "routes/memory-routes.ts:1080" },
 			);
 			return c.json(timeline);
 		} catch (e) {
@@ -1292,7 +1187,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							rows = prepareTypedStatement<Record<string, unknown>>(
 								db,
 								`
-							SELECT m.id, m.content, m.agent_id, m.created_at, m.who, m.importance, m.tags,
+							SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags,
 							       m.type, m.pinned, bm25(memories_fts) as score
             FROM memories_fts
             JOIN memories m ON memories_fts.rowid = m.rowid
@@ -1306,7 +1201,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							rows = prepareTypedStatement<Record<string, unknown>>(
 								db,
 								`
-							SELECT id, content, agent_id, created_at, who, importance, tags, type, pinned
+							SELECT id, content, created_at, who, importance, tags, type, pinned
             FROM memories
             WHERE (content LIKE ? OR tags LIKE ?)${rc}
             ORDER BY created_at DESC
@@ -1319,7 +1214,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						rows = prepareTypedStatement<Record<string, unknown>>(
 							db,
 							`
-						SELECT id, content, agent_id, created_at, who, importance, tags, type, pinned,
+						SELECT id, content, created_at, who, importance, tags, type, pinned,
                  CASE WHEN pinned = 1 THEN 1.0
                       ELSE importance * MAX(0.1, POWER(0.95,
                         CAST(JulianDay('now') - JulianDay(created_at) AS INTEGER)))
@@ -1332,24 +1227,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						).all(...args);
 					}
 
-					return rows
-						.filter((row) => {
-							if (!row || typeof row !== "object") return false;
-							const record = row as Record<string, unknown>;
-							if (typeof record.id !== "string") return false;
-							return isMemoryContentContextEligible(db, {
-								agentId: typeof record.agent_id === "string" ? record.agent_id : "default",
-								sourceKind: "memory",
-								sourceId: record.id,
-								content: typeof record.content === "string" ? record.content : String(record.content ?? ""),
-							});
-						})
-						.map((row) => {
-							const { agent_id: _agentId, ...publicRow } = row as Record<string, unknown>;
-							return publicRow;
-						});
+					return rows.map((row) => {
+						const record = row as Record<string, unknown>;
+						return typeof record.content === "string"
+							? { ...record, content: redactCredentials(record.content) }
+							: record;
+					});
 				},
-				{ siteToken: "routes/memory-routes.ts:1285" },
+				{ siteToken: "routes/memory-routes.ts:1180" },
 			);
 
 			recordRecallOutcome({
@@ -1455,7 +1340,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const raw = body.content?.trim();
 		if (!raw) return c.json({ error: "content is required" }, 400);
-		const contentSafety = scanMemoryContent(raw);
 		const requestedCreatedAt = parseOptionalIsoTimestamp(body.createdAt);
 		if (body.createdAt !== undefined && !requestedCreatedAt) {
 			return c.json({ error: "createdAt must be a valid ISO timestamp" }, 400);
@@ -1560,7 +1444,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1561" },
+				{ siteToken: "routes/memory-routes.ts:1445" },
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
@@ -1568,7 +1452,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const existingChunks = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1569" },
+				{ siteToken: "routes/memory-routes.ts:1453" },
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1591,7 +1475,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					ids: existingChunks.map((row) => row.id),
 					group_id: Array.from(groupIds)[0],
 					deduped: true,
-					contentSafety,
 				});
 			}
 			const contentHashes = new Set<string>();
@@ -1602,7 +1485,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				contentHashes.add(plan.normalized.contentHash);
 				const byHash = await getDbAccessor().withReadDbAsync(
 					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "routes/memory-routes.ts:1603" },
+					{ siteToken: "routes/memory-routes.ts:1486" },
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1678,7 +1561,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							agentId,
 							visibility,
 							reviewAfter: requestedReviewAfter ?? undefined,
-							contentSafety,
 							createdAt: now,
 						});
 					}
@@ -1704,7 +1586,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						ids: result.ids,
 						group_id: result.groupId,
 						deduped: true,
-						contentSafety,
 					});
 				}
 
@@ -1765,7 +1646,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					chunk_count: savedChunkIds.length,
 					ids: savedChunkIds,
 					group_id: groupId,
-					contentSafety,
 				});
 			} catch (e) {
 				if (isMemoryContentHashUniqueError(e)) {
@@ -1808,7 +1688,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1809" },
+						{ siteToken: "routes/memory-routes.ts:1689" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -1860,10 +1740,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					agentId,
 					visibility,
 					reviewAfter: requestedReviewAfter ?? undefined,
-					contentSafety,
 					createdAt,
 				});
-				txInsertExplicitTemporalEdges({
+				txInsertMemoryTemporalEdges({
 					db,
 					memoryId: id,
 					agentId,
@@ -1895,7 +1774,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			if (result.deduped) {
 				c.header("x-signet-operation-skipped", "1");
 				await runWriteTxAsync(getDbAccessor(), (db) =>
-					txInsertExplicitTemporalEdges({
+					txInsertMemoryTemporalEdges({
 						db,
 						memoryId: result.row.id,
 						agentId: result.row.agentId,
@@ -1913,7 +1792,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					content: result.row.content,
 					embedded: true,
 					deduped: true,
-					contentSafety,
 				});
 			}
 		} catch (e) {
@@ -1925,12 +1803,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:1922" },
+					{ siteToken: "routes/memory-routes.ts:1800" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
 					await runWriteTxAsync(getDbAccessor(), (db) =>
-						txInsertExplicitTemporalEdges({
+						txInsertMemoryTemporalEdges({
 							db,
 							memoryId: existing.id,
 							agentId: existing.agentId,
@@ -1948,7 +1826,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						content: existing.content,
 						embedded: true,
 						deduped: true,
-						contentSafety,
 					});
 				}
 			}
@@ -2054,7 +1931,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			structured: structuredRetained,
 			structured_applied: false,
 			...(supersededStatus !== null ? { superseded: supersededStatus } : {}),
-			contentSafety,
 		});
 	});
 	app.post("/api/memory/save", async (c) => {
@@ -2100,18 +1976,18 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const access = buildAgentScopeClause(agentId, agentScope.readPolicy, agentScope.policyGroup);
 		const scopeProject = c.get("auth")?.claims?.scope?.project;
 		const projectSql = scopeProject ? " AND m.project = ?" : "";
-		const memoryRead = await getDbAccessor().withReadDbAsync(
+		const row = await getDbAccessor().withReadDbAsync(
 			async (db) => {
 				const sessionSelect = hasMemoriesSessionIdColumn(db) ? "m.session_id," : "NULL AS session_id,";
 
-				const row = db
+				return db
 					.prepare(
 						`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.who,
 					        m.source_id, m.source_type, m.source_path, m.runtime_path,
 					        m.idempotency_key, m.project, ${sessionSelect} m.confidence,
 					        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
 					        m.extraction_status, m.embedding_model, m.version,
-					        m.memory_kind, m.created_at, m.updated_at, m.updated_by, m.agent_id
+					        m.memory_kind, m.created_at, m.updated_at, m.updated_by
 					 FROM memories m
 					 WHERE m.id = ?
 					   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)
@@ -2121,19 +1997,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					.get(memoryId, ...access.args, ...(scopeProject ? [scopeProject] : [])) as
 					| Record<string, unknown>
 					| undefined;
-				const safety = row
-					? contentSafetyForInspection(
-							db,
-							typeof row.agent_id === "string" ? row.agent_id : "default",
-							memoryId,
-							row.content,
-						)
-					: null;
-				return { row, safety };
 			},
-			{ siteToken: "routes/memory-routes.ts:2103" },
+			{ siteToken: "routes/memory-routes.ts:1979" },
 		);
-		const row = memoryRead.row;
 
 		if (!row) {
 			return c.json({ error: "not found" }, 404);
@@ -2148,14 +2014,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? row.source_id
 					: undefined;
 
-		const { agent_id: _agentId, ...publicRow } = row;
 		return c.json({
-			...publicRow,
+			...row,
 			sourcePath: row.source_path,
 			runtimePath: row.runtime_path,
 			idempotencyKey: row.idempotency_key,
 			sessionId,
-			contentSafety: memoryRead.safety,
 		});
 	});
 	app.get("/api/memory/:id/history", async (c) => {
@@ -2304,7 +2168,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				}
 				return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version);
 			},
-			{ siteToken: "routes/memory-routes.ts:2272" },
+			{ siteToken: "routes/memory-routes.ts:2136" },
 		);
 
 		return c.json({
@@ -3421,7 +3285,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
         LIMIT 1
       `)
 						.get(id) as { vector: Buffer } | undefined,
-				{ siteToken: "routes/memory-routes.ts:3411" },
+				{ siteToken: "routes/memory-routes.ts:3275" },
 			);
 
 			if (!embeddingRow) {
@@ -3443,7 +3307,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3445",
+							siteToken: "routes/memory-routes.ts:3309",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3461,32 +3325,22 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const placeholders = ids.map(() => "?").join(", ");
 
 			const rows = await getDbAccessor().withReadDbAsync(
-				async (db) => {
-					const queried = db
+				async (db) =>
+					db
 						.prepare(`
-	        SELECT id, content, agent_id, type, tags, confidence, created_at
+	        SELECT id, content, type, tags, confidence, created_at
 	        FROM memories m
         WHERE id IN (${placeholders})${currentMemorySql("m")}
 	      `)
 						.all(...ids) as Array<{
 						id: string;
 						content: string;
-						agent_id: string | null;
 						type: string;
 						tags: string | null;
 						confidence: number;
 						created_at: string;
-					}>;
-					return queried.filter((row) =>
-						isMemoryContentContextEligible(db, {
-							agentId: row.agent_id?.trim() || "default",
-							sourceKind: "memory",
-							sourceId: row.id,
-							content: row.content,
-						}),
-					);
-				},
-				{ siteToken: "routes/memory-routes.ts:3463" },
+					}>,
+				{ siteToken: "routes/memory-routes.ts:3327" },
 			);
 
 			const rowMap = new Map(rows.map((r) => [r.id, r]));
@@ -3497,7 +3351,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					if (!row) return null;
 					return {
 						id: r.id,
-						content: row.content,
+						content: redactCredentials(row.content),
 						type: row.type,
 						tags: parseTagsField(row.tags),
 						score: Math.round(r.score * 100) / 100,
@@ -3577,7 +3431,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3540" },
+				{ siteToken: "routes/memory-routes.ts:3394" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3625,7 +3479,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3621" },
+			{ siteToken: "routes/memory-routes.ts:3475" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3634,7 +3488,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3635" },
+			{ siteToken: "routes/memory-routes.ts:3489" },
 		);
 		return c.json(report);
 	});
@@ -3711,7 +3565,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									}
 								: undefined,
 						}),
-					{ siteToken: "routes/memory-routes.ts:3694" },
+					{ siteToken: "routes/memory-routes.ts:3548" },
 				);
 
 				return c.json({
@@ -3741,7 +3595,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: 0;
 				return { cached: cachedResult, total: count };
 			},
-			{ siteToken: "routes/memory-routes.ts:3734" },
+			{ siteToken: "routes/memory-routes.ts:3588" },
 		);
 
 		if (cached !== null && cached.embeddingCount === total) {
@@ -3773,7 +3627,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const computation = (async () => {
 				try {
 					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:3775",
+						siteToken: "routes/memory-routes.ts:3629",
 					});
 					const count = await getDbAccessor().withReadDbAsync(
 						async (db) => {
@@ -3782,7 +3636,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								? row.count
 								: 0;
 						},
-						{ siteToken: "routes/memory-routes.ts:3778" },
+						{ siteToken: "routes/memory-routes.ts:3632" },
 					);
 					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {

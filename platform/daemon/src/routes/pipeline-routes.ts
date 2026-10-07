@@ -22,7 +22,6 @@ import { getLlmProvider } from "../llm.js";
 import { getMcpWorkloadDiagnostics } from "../mcp/route.js";
 import { getLlmConcurrencyStatus } from "../pipeline/provider.js";
 import { graphWriteCaps, loadMemoryConfig } from "../memory-config.js";
-import { listMemoryContentSafety, parseMemorySafetyReasons } from "../memory-content-safety.js";
 import {
 	getDreamingAttention,
 	getDreamingEvidenceExclusions,
@@ -45,6 +44,7 @@ import {
 	type DreamingLiveEvent,
 } from "../pipeline/dreaming-live-events";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
+import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreaming-token-cache";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
@@ -482,60 +482,6 @@ export function registerPipelineRoutes(app: Hono): void {
 		});
 	});
 
-	app.get("/api/diagnostics/memory-content-safety", (c) => {
-		const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
-		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
-		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const limitRaw = c.req.query("limit");
-		const offsetRaw = c.req.query("offset");
-		const limit = limitRaw === undefined ? 100 : Number(limitRaw);
-		const offset = offsetRaw === undefined ? 0 : Number(offsetRaw);
-		if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
-			return c.json({ error: "limit must be an integer between 1 and 200" }, 400);
-		}
-		if (!Number.isInteger(offset) || offset < 0 || offset > 100_000) {
-			return c.json({ error: "offset must be a non-negative integer at most 100000" }, 400);
-		}
-		const status = c.req.query("status")?.trim() || undefined;
-		if (status !== undefined && !["clean", "tainted", "blocked"].includes(status)) {
-			return c.json({ error: "status must be clean, tainted, or blocked" }, 400);
-		}
-		const sourceKind = c.req.query("sourceKind")?.trim() || undefined;
-		if (
-			sourceKind !== undefined &&
-			!["memory", "artifact", "transcript", "summary", "source_chunk"].includes(sourceKind)
-		) {
-			return c.json({ error: "sourceKind is invalid" }, 400);
-		}
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-		const report: ReturnType<typeof listMemoryContentSafety> = getDbAccessor().withReadDb(
-			(db: import("../db-accessor").ReadDb) =>
-				listMemoryContentSafety(db, {
-					agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
-					status,
-					sourceKind,
-					limit,
-					offset,
-				}),
-			"db:pipeline.memory-content-safety.list.read",
-		);
-		return c.json({
-			agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
-			policyVersion: report.policyVersion,
-			counts: report.counts,
-			items: report.items.map((item) => ({
-				agentId: item.agent_id,
-				sourceKind: item.source_kind,
-				sourceId: item.source_id,
-				status: item.status,
-				contextEligible: item.context_eligible === 1,
-				reasons: parseMemorySafetyReasons(item.reasons_json),
-				policyVersion: item.policy_version,
-				scannedAt: item.scanned_at,
-			})),
-		});
-	});
-
 	app.get("/api/diagnostics/:domain", async (c, next) => {
 		const domain = c.req.param("domain");
 		if (domain === "queue" || domain === "openclaw" || domain === "workloads") return next();
@@ -616,7 +562,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:619",
+				"routes/pipeline-routes.ts:565",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -735,7 +681,16 @@ export function registerPipelineRoutes(app: Hono): void {
 		const agentId = scopedAgent.agentId;
 
 		const state = await getDreamingState(accessor, agentId);
-		const episodicTokensPending = getDreamingEpisodicTokenBacklogCachedOrNull(agentId);
+		const probe =
+			c.req.query("measure") === "1"
+				? await probeDreamingEpisodicBacklog(accessor, agentId, cfg.dreaming.tokenThreshold)
+				: null;
+		const episodicTokensPending =
+			probe === null
+				? getDreamingEpisodicTokenBacklogCachedOrNull(agentId)
+				: probe.kind === "exact"
+					? probe.tokens
+					: null;
 		const passes = await getDreamingPasses(accessor, agentId, 10);
 		const exclusions = await getDreamingEvidenceExclusions(accessor, agentId);
 		const reviewedEvidence = await getDreamingReviewedEvidence(accessor, agentId);
@@ -756,6 +711,8 @@ export function registerPipelineRoutes(app: Hono): void {
 				backfillOnFirstRun: cfg.dreaming.backfillOnFirstRun,
 				maxInputTokens: cfg.dreaming.maxInputTokens,
 				maxOutputTokens: cfg.dreaming.maxOutputTokens,
+				maxConcurrentPasses: cfg.dreaming.maxConcurrentPasses,
+				codemode: cfg.dreaming.codemode,
 				timeout: cfg.dreaming.timeout,
 				surprisal: cfg.dreaming.surprisal,
 			},
@@ -921,7 +878,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:924",
+						"routes/pipeline-routes.ts:881",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,

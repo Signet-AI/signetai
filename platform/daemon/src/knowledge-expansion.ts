@@ -1,4 +1,4 @@
-import { MEMORY_CONTENT_WITHHELD_NOTICE, scanMemoryContent } from "@signet/core";
+import { redactCredentialsDeep } from "@signet/core";
 
 import type { DbOwnerClient } from "./db-owner-client";
 import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
@@ -26,8 +26,6 @@ interface AttributeRow {
 	readonly importance: number;
 	readonly confidence: number;
 	readonly memory_id: string | null;
-	readonly safety_status?: string | null;
-	readonly safety_context_eligible?: number | null;
 }
 
 interface DependencyRow {
@@ -39,9 +37,6 @@ interface DependencyRow {
 interface MemoryRow {
 	readonly id: string;
 	readonly content: string;
-	readonly agent_id: string | null;
-	readonly safety_status?: string | null;
-	readonly safety_context_eligible?: number | null;
 }
 
 export interface KnowledgeExpansionResponse {
@@ -99,16 +94,6 @@ function readOptions(
 		deadlineMs: Math.max(1, deadlineAt - Date.now()),
 		estimatedWorkUnits: Math.max(1, Math.min(1_200, estimatedWorkUnits)),
 	};
-}
-
-function isContextEligible(row: {
-	readonly content: string;
-	readonly safety_status?: string | null;
-	readonly safety_context_eligible?: number | null;
-}): boolean {
-	if (!scanMemoryContent(row.content).contextEligible) return false;
-	if (row.safety_status === undefined || row.safety_status === null) return true;
-	return row.safety_status === "clean" && row.safety_context_eligible === 1;
 }
 
 function traversalMetadata(
@@ -175,13 +160,6 @@ export async function expandKnowledgeGraphViaOwner(
 		option("knowledge.expand.aspects", params.traversalConfig.maxAspectsPerEntity),
 	);
 
-	const safetyTable = await ownerReadOne<{ readonly name: string }>(
-		owner,
-		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-		[],
-		option("knowledge.expand.safety-table", 1),
-	);
-	const hasSafetyTable = safetyTable !== null;
 	const aspectIds = aspects.map((aspect) => aspect.id);
 	const attributes =
 		aspectIds.length === 0
@@ -190,7 +168,6 @@ export async function expandKnowledgeGraphViaOwner(
 					owner,
 					`SELECT selected.aspect_id, selected.content, selected.kind,
 					        selected.importance, selected.confidence, selected.memory_id
-					        ${hasSafetyTable ? ", safety.status AS safety_status, safety.context_eligible AS safety_context_eligible" : ""}
 					 FROM (
 						 SELECT ea.aspect_id, ea.content, ea.kind, ea.importance,
 						        ea.confidence, ea.memory_id,
@@ -203,19 +180,9 @@ export async function expandKnowledgeGraphViaOwner(
 						   AND ea.agent_id = ?
 						   AND ea.status = 'active'
 					 ) selected
-					 ${
-							hasSafetyTable
-								? "LEFT JOIN memory_content_safety safety ON safety.agent_id = ? AND safety.source_kind = 'memory' AND safety.source_id = selected.memory_id"
-								: ""
-}
 					 WHERE selected.attribute_rank <= ?
 					 ORDER BY selected.aspect_id, selected.importance DESC`,
-					[
-						...aspectIds,
-						params.agentId,
-						...(hasSafetyTable ? [params.agentId] : []),
-						params.traversalConfig.maxAttributesPerAspect,
-					],
+					[...aspectIds, params.agentId, params.traversalConfig.maxAttributesPerAspect],
 					option("knowledge.expand.attributes", aspects.length * params.traversalConfig.maxAttributesPerAspect),
 				);
 
@@ -229,7 +196,6 @@ export async function expandKnowledgeGraphViaOwner(
 		}>
 	>();
 	for (const attribute of attributes) {
-		if (!isContextEligible(attribute)) continue;
 		const existing = attributesByAspect.get(attribute.aspect_id) ?? [];
 		if (existing.length >= params.traversalConfig.maxAttributesPerAspect) continue;
 		existing.push({
@@ -269,14 +235,8 @@ export async function expandKnowledgeGraphViaOwner(
 			? []
 			: await ownerReadAll<MemoryRow>(
 					owner,
-					`SELECT m.id, m.content, m.agent_id
-					        ${hasSafetyTable ? ", safety.status AS safety_status, safety.context_eligible AS safety_context_eligible" : ""}
+					`SELECT m.id, m.content
 					 FROM memories m
-					 ${
-							hasSafetyTable
-								? "LEFT JOIN memory_content_safety safety ON safety.agent_id = COALESCE(NULLIF(TRIM(m.agent_id), ''), 'default') AND safety.source_kind = 'memory' AND safety.source_id = m.id"
-								: ""
-}
 					 WHERE m.id IN (${memoryIds.map(() => "?").join(", ")})
 					   AND m.is_deleted = 0
 					   AND (m.agent_id = ? OR m.agent_id IS NULL OR TRIM(m.agent_id) = '')`,
@@ -289,30 +249,23 @@ export async function expandKnowledgeGraphViaOwner(
 	for (const memoryId of memoryIds) {
 		if (tokenBudget <= 0) break;
 		const memory = memoryById.get(memoryId);
-		if (!memory || !isContextEligible(memory)) continue;
+		if (!memory) continue;
 		const approxTokens = Math.ceil(memory.content.length / 4);
 		if (approxTokens > tokenBudget) continue;
 		hydratedMemories.push({ id: memory.id, content: memory.content });
 		tokenBudget -= approxTokens;
 	}
 
-	const entityDescription = entityRow?.description
-		? scanMemoryContent(entityRow.description).contextEligible
-			? entityRow.description
-			: MEMORY_CONTENT_WITHHELD_NOTICE
-		: null;
-	return {
+	return redactCredentialsDeep({
 		entity: entityRow
 			? {
 					id: entityRow.id,
 					name: entityRow.name,
 					type: entityRow.entity_type,
-					description: entityDescription,
+					description: entityRow.description,
 				}
 			: null,
-		constraints: params.traversal.constraints.filter(
-			(constraint) => scanMemoryContent(constraint.content).contextEligible,
-		),
+		constraints: params.traversal.constraints,
 		aspects: aspects.map((aspect) => ({
 			name: aspect.canonical_name,
 			weight: aspect.weight,
@@ -322,5 +275,5 @@ export async function expandKnowledgeGraphViaOwner(
 		memoryCount: params.traversal.memoryIds.size,
 		memories: hydratedMemories,
 		...traversalMetadata(params.traversal),
-	};
+	});
 }

@@ -1,3 +1,4 @@
+import { redactCredentials } from "@signet/core";
 import type { Hono } from "hono";
 
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
@@ -27,7 +28,6 @@ import {
 import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
 import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { loadMemoryConfig } from "../memory-config";
-import { isMemoryContentContextEligible } from "../memory-content-safety";
 import { OntologyProposalError, applyOntologyOperation } from "../ontology-proposals";
 import {
 	getTraversalStatus,
@@ -341,7 +341,13 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	});
 
 	app.get("/api/knowledge/constellation", async (c) => {
-		const agentId = c.req.query("agent_id") ?? resolveDaemonAgentId();
+		const requested = c.req.query("agent_id") ?? c.req.query("agentId");
+		const allAgents = requested === "all";
+		if (allAgents) {
+			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+		}
+		const agentId = allAgents ? resolveDaemonAgentId() : (requested ?? resolveDaemonAgentId());
 		const accessor = getDbAccessor();
 		const backlogProbe = await probeDreamingEpisodicBacklog(
 			accessor,
@@ -356,6 +362,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				dependencyLimit: parseNavigationLimit(c.req.query("dependency_limit"), 500, 2000),
 				assertionLimit: parseNavigationLimit(c.req.query("assertion_limit"), 250, 1000),
 				backlogProbe,
+				allAgents,
 			}),
 		);
 	});
@@ -491,7 +498,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:487" },
+			{ siteToken: "routes/knowledge-routes.ts:494" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -567,29 +574,20 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					earliest_at: string;
 					latest_at: string;
 				}>;
-				const safeRows = rows.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "summary",
-						sourceId: row.id,
-						content: row.content,
-					}),
-				);
-
 				return c.json({
 					entityName: entity.name,
-					summaries: safeRows.map((row) => ({
+					summaries: rows.map((row) => ({
 						id: row.id,
 						sessionKey: row.session_key,
 						harness: row.harness,
 						earliestAt: row.earliest_at,
 						latestAt: row.latest_at,
-						content: row.content,
+						content: redactCredentials(row.content),
 					})),
-					total: safeRows.length,
+					total: rows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:504" },
+			{ siteToken: "routes/knowledge-routes.ts:511" },
 		);
 	});
 
@@ -608,7 +606,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:609" },
+			{ siteToken: "routes/knowledge-routes.ts:607" },
 		);
 		return c.json(result);
 	});

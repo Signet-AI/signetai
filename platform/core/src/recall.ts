@@ -63,6 +63,7 @@ export interface RecallTemporalMeta {
 	readonly start: string;
 	readonly end: string;
 	readonly facets: readonly TemporalFacet[];
+	readonly window?: "exact" | "widened" | "unfiltered";
 }
 
 export interface AggregateRecallMeta {

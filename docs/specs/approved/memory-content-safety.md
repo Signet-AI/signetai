@@ -7,67 +7,62 @@ status: approved
 
 ## Problem
 
-Memories, native harness artifacts, transcripts, and summaries are retained as
-source-backed evidence but are later projected into recall, reranking,
-Dreaming, `MEMORY.md`, and aggregate prompts. Stored content is untrusted
-input at every one of those boundaries. A malicious instruction must not become
-trusted context merely because it was saved successfully.
+Memories, native harness artifacts, transcripts, summaries and source chunks
+are retained as source-backed evidence and later projected into recall,
+reranking, Dreaming, `MEMORY.md`, MCP tools and LLM prompts. Users paste API
+keys, tokens and private keys into conversations and documents. Those
+credentials must not be repeated into prompts or agent-facing output merely
+because they were captured as evidence.
+
+An earlier version of this contract tried to classify content as hostile
+(prompt injection, exfiltration, tool directives, shell payloads, invisible
+Unicode) with text heuristics and withheld whole items. Heuristics cannot
+decide whether content is safe; in practice they withheld ordinary
+conversation (2.7% of benign LongMemEval sessions) and silently dropped it
+from Dreaming. That policy and its per-item ledger are retired (#2045).
 
 ## Contract
 
-1. A deterministic, versioned policy scans content for high-confidence prompt
-   injection, exfiltration, credential-harvesting, malicious-shell, tool
-   directive, and invisible-Unicode patterns.
-2. The policy returns `clean`, `tainted`, or `blocked`. Only `clean` content is
-   context eligible. Invisible Unicode is retained as evidence but is
-   ineligible until the source is replaced by a clean capture.
-3. The original content, source path, timestamps, ownership, and provenance are
-   never rewritten or deleted by the scan. A separate agent-scoped safety ledger
-   records the policy version, reasons, status, and context eligibility.
-4. Remember writes, native-artifact indexing, transcript/summary writes, and
-   source-chunk embedding writes register an assessment. Migration backfill
-   assesses existing rows without changing their content.
-5. Recall authorizes memory IDs before reranking, dampening, summaries,
-   hydration, or access tracking. The authorization gate and every native
-   artifact/source-chunk fallback reject non-eligible content; legacy rows are
-   scanned on read when no ledger row exists.
-   Other derived LLM stages, including prospective hints, daily reflections,
-   and artifact sentence generation, must also reject non-eligible source
-   content before constructing a provider prompt.
-6. Dreaming, `MEMORY.md`, harness identity synchronization, and temporal
-   expansion use the same eligibility decision. Blocked source records remain
-   auditable through source/memory inspection and diagnostics, but are omitted
-   from ordinary prompt projections.
-7. Prompt-facing MCP memory and knowledge projections replace non-eligible
-   `content` fields with an explicit withheld notice while retaining the
-   assessment metadata. User-facing HTTP inspection exposes the assessment
-   without treating a
-   blocked row as deleted. Diagnostics expose bounded, agent-scoped status and
-   reason counts without returning raw content.
+1. One credential detector, `findCredentialSpans` / `redactCredentials` in
+   `@signet/core`, finds high-confidence credentials: provider API keys and
+   tokens with known prefixes, private-key blocks, JWTs, bearer tokens, and
+   values assigned to secret-named keys. It is the only secret detector;
+   checkpoint, subagent-context and plugin-audit redaction use it.
+2. Every prompt-facing or agent-facing projection of stored content replaces
+   each detected credential span with `[redacted credential]`: recall
+   results, Dreaming evidence, `MEMORY.md` and head rendering, identity
+   synchronization, MCP memory and knowledge tools, chat recall, and derived
+   LLM stages (prospective hints, reflections, artifact sentences).
+   Structured projections use `redactCredentialsDeep`.
+3. Nothing is withheld or filtered for content-safety reasons. Items with a
+   credential are still recalled, delivered to Dreaming and rendered, with
+   only the credential span replaced.
+4. Stored evidence is never rewritten. Redaction happens on the way out; the
+   original content, source path, timestamps, ownership and provenance stay
+   intact and remain available to user-facing inspection.
+5. There is no per-item safety ledger. Redaction is computed from the content
+   at projection time, so there is no derived state to rebuild or purge.
 
 ## False-positive boundary
 
-The policy is intentionally high-confidence. Ordinary technical prose, quoted
-shell examples, security guidance, non-English text, and emoji remain clean
-when they are descriptive or defensive. A direct imperative payload remains
-ineligible even if it is embedded in a larger technical record.
+Detection is intentionally narrow. Ordinary prose about secrets, passwords or
+tokens, variable names, placeholders, code that computes a token, commit
+SHAs, content hashes and UUIDs are not credentials. Secret-named assignments
+are redacted only when the value contains a digit and no code punctuation.
+A false positive replaces a short span, never a whole item.
 
 ## Non-goals
 
-- silently deleting, redacting, or rewriting immutable evidence;
-- treating query metadata as a substitute for scanning stored content;
-- claiming that a clean scan proves content is factual or safe for every
-  downstream use;
-- replacing provenance, agent scoping, or permission checks.
+- classifying content as hostile, injected or unsafe;
+- withholding, deleting or rewriting stored evidence;
+- claiming that unredacted content is free of secrets or safe for every use;
+- replacing provenance, agent scoping or permission checks.
 
 ## Verification
 
-- Core policy tests cover every threat family plus technical, shell-example,
-  security-discussion, Unicode, and emoji false positives.
-- Migration tests cover fresh databases, idempotent reruns, and backfill.
-- Daemon tests prove blocked remembered content remains inspectable but is
-  absent from recall, native fallback, source chunks, and Dreaming evidence.
-- Recall tests cover authorization before reranking and summary stages, while
-  derived LLM-stage tests prove blocked content is not sent to prospective
-  hints, daily reflections, or artifact-sentence providers.
-- Route tests cover the memory inspection and diagnostics response shapes.
+- Core detector tests cover each credential kind, value-only redaction of
+  assignments, private-key blocks, and benign text that must stay unchanged.
+- Migration tests prove migration 163 drops the retired ledger and its
+  triggers without touching evidence.
+- Daemon tests prove a stored credential is redacted in recall, Dreaming
+  evidence and MCP projections while the stored row is unchanged.

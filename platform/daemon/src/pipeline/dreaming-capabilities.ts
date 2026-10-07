@@ -1,7 +1,6 @@
-import { type Entity, type EntityAttribute, MEMORY_CONTENT_WITHHELD_NOTICE, scanMemoryContent } from "@signet/core";
+import { type Entity, redactCredentialsDeep } from "@signet/core";
 import { z } from "zod";
-import { getDbOwnerForAccessor, runDbOwnerDomainOperation } from "../db-owner-runtime";
-import { ownerReadAll, ownerReadOne } from "../db-owner-sql";
+import { runDbOwnerDomainOperation } from "../db-owner-runtime";
 import type {
 	DbOwnerDreamingEvidenceSearch,
 	DbOwnerDreamingEvidenceSource,
@@ -26,7 +25,13 @@ import { type GraphWriteCaps, findDuplicateEntityMerges } from "../ontology-prop
 import { detectProspectiveContradictionRisk } from "./antonyms";
 import { getDreamingAttentionAcrossScopes, getDreamingAttentionScoped } from "./dreaming-attention";
 import { nextDreamingEvidenceFragment, renderDreamingEvidence } from "./dreaming-evidence";
-import { deliveredOffsetForSource, pendingDreamingEvidenceContinuations } from "./dreaming-evidence-consumption";
+import {
+	deliveredOffsetForSource,
+	extendDeliveredOffset,
+	passDeliveredRanges,
+	passFullyServedSourceRefs,
+	pendingDreamingEvidenceContinuations,
+} from "./dreaming-evidence-consumption";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import {
 	type ApplyDreamingOperationsResult,
@@ -34,7 +39,8 @@ import {
 	type DreamingOperationRequest,
 	applyDreamingOperations,
 } from "./dreaming-operations";
-import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
+import { dreamingScopeKey, zoomDreamingHistory } from "./dreaming-history";
+import { writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
 import { readCuratedMemoryHead, type MemoryHeadCommitter } from "../memory-head";
 
@@ -43,86 +49,22 @@ const bounded = (value: number | undefined, fallback: number, max: number): numb
 
 const MAX_EVIDENCE_EXCERPT_CHARS = 2_000;
 const MAX_EVIDENCE_RESULT_CHARS = 16_000;
+const MAX_EVIDENCE_PAGE_CHARS = 250_000;
+
+export function dreamingEvidencePageChars(maxInputTokens: number): number {
+	return evidencePageChars(Math.floor(maxInputTokens / 4));
+}
+
+function evidencePageChars(requested: number | undefined): number {
+	const chars = Number.isFinite(requested) ? Math.floor(requested ?? 0) : 0;
+	return Math.min(MAX_EVIDENCE_PAGE_CHARS, Math.max(MAX_EVIDENCE_RESULT_CHARS, chars));
+}
 const MAX_HYDRATED_ITEMS = 50;
 const MAX_ENTITY_TEXT_CHARS = 2_000;
 
 function boundedText(value: string | undefined, maxChars: number): string | undefined {
 	if (value === undefined || value.length <= maxChars) return value;
 	return value.slice(0, maxChars);
-}
-
-async function filterDreamingAttributes(
-	accessor: DbAccessor,
-	agentId: string,
-	attributes: readonly EntityAttribute[],
-): Promise<readonly EntityAttribute[]> {
-	const owner = await getDbOwnerForAccessor(accessor);
-	const table = await ownerReadOne<{ readonly present: number }>(
-		owner,
-		"SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-		[],
-		{
-			operation: "dreaming.capabilities.safety-schema",
-			workloadClass: "foreground",
-			estimatedWorkUnits: 1,
-			deadlineMs: 5_000,
-		},
-	);
-	if (table === null) return attributes.filter((attribute) => scanMemoryContent(attribute.content).contextEligible);
-	const refs = attributes.flatMap((attribute) => {
-		if (attribute.memoryId) return [{ kind: "memory", id: attribute.memoryId }];
-		if (attribute.sourcePath || attribute.sourceId) {
-			const sourceKind = attribute.sourceKind?.toLowerCase() ?? "";
-			const kind = sourceKind.includes("transcript")
-				? "transcript"
-				: sourceKind.includes("summary")
-					? "summary"
-					: "artifact";
-			return [{ kind, id: attribute.sourcePath ?? attribute.sourceId ?? attribute.id }];
-		}
-		return [];
-	});
-	const predicates = refs.map(() => "(source_kind = ? AND source_id = ?)").join(" OR ");
-	const safetyRows =
-		predicates.length === 0
-			? []
-			: await ownerReadAll<{
-					readonly source_kind: string;
-					readonly source_id: string;
-					readonly status: string;
-					readonly context_eligible: number;
-				}>(
-					owner,
-					`SELECT source_kind, source_id, status, context_eligible
-					 FROM memory_content_safety
-					 WHERE agent_id = ? AND (${predicates})`,
-					[agentId, ...refs.flatMap((ref) => [ref.kind, ref.id])],
-					{
-						operation: "dreaming.capabilities.safety-read",
-						workloadClass: "foreground",
-						estimatedWorkUnits: Math.min(200, refs.length),
-						deadlineMs: 5_000,
-					},
-				);
-	const safety = new Map(safetyRows.map((row) => [`${row.source_kind}:${row.source_id}`, row]));
-	return attributes.filter((attribute) => {
-		if (!scanMemoryContent(attribute.content).contextEligible) return false;
-		const ref = attribute.memoryId
-			? { kind: "memory", id: attribute.memoryId }
-			: attribute.sourcePath || attribute.sourceId
-				? {
-						kind: (attribute.sourceKind?.toLowerCase().includes("transcript")
-							? "transcript"
-							: attribute.sourceKind?.toLowerCase().includes("summary")
-								? "summary"
-								: "artifact") as string,
-						id: attribute.sourcePath ?? attribute.sourceId ?? attribute.id,
-					}
-				: null;
-		if (ref === null) return true;
-		const row = safety.get(`${ref.kind}:${ref.id}`);
-		return row === undefined || (row.status === "clean" && row.context_eligible === 1);
-	});
 }
 
 function evidenceExcerptStart(content: string, query: string, maxChars: number): number {
@@ -164,14 +106,13 @@ function projectEvidenceItem(
 
 function projectEvidence(sources: readonly EpisodicSourceRecord[], query: string): readonly Record<string, unknown>[] {
 	let remaining = MAX_EVIDENCE_RESULT_CHARS;
-	return sources.flatMap((source) => {
+	return sources.map((source) => {
 		const rendered = renderDreamingEvidence(source);
-		if (rendered === MEMORY_CONTENT_WITHHELD_NOTICE) return [];
 		const offset = evidenceExcerptStart(rendered, query, MAX_EVIDENCE_EXCERPT_CHARS);
 		const excerptLength = Math.min(MAX_EVIDENCE_EXCERPT_CHARS, remaining, rendered.length - offset);
 		const content = excerptLength > 0 ? rendered.slice(offset, offset + excerptLength) : "";
 		remaining = Math.max(0, remaining - content.length);
-		return [projectEvidenceItem(source, content, content.length > 0 ? offset : 0, rendered.length)];
+		return projectEvidenceItem(source, content, content.length > 0 ? offset : 0, rendered.length);
 	});
 }
 
@@ -181,7 +122,7 @@ function projectEvidenceFragment(
 	chunkSize: number,
 ): Record<string, unknown> | null {
 	const fragment = nextDreamingEvidenceFragment(source, offset, chunkSize);
-	return fragment === null || fragment.content === MEMORY_CONTENT_WITHHELD_NOTICE
+	return fragment === null
 		? null
 		: projectEvidenceItem(source, fragment.content, fragment.start, fragment.sourceLength);
 }
@@ -219,12 +160,9 @@ export const DREAMING_CAPABILITY_IDS = [
 	"search_entities",
 	"get_entity",
 	"list_aspect_claims",
-	"walk_links",
-	"get_evidence",
 	"search_evidence",
 	"validate_proposal",
-	"list_contradictions",
-	"runbook_read",
+	"zoom_history",
 	"runbook_write",
 	"attention_list",
 	"apply_ontology_ops",
@@ -271,9 +209,12 @@ export interface DreamingCapability {
 export interface CreateDreamingCapabilitiesParams {
 	readonly accessor: DbAccessor;
 	readonly agentId: string;
+	readonly allowedScopes?: readonly string[];
 	readonly actor: string;
 	readonly memoryHeadCommitter?: MemoryHeadCommitter;
 	readonly passId?: string;
+	readonly evidenceDeliveryDeadline?: number;
+	readonly evidenceChars?: number;
 	readonly mode?: DreamingCapabilityMode;
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
@@ -323,7 +264,7 @@ function capability<T extends z.ZodType>(
 			}
 			try {
 				const output = await run(parsed.data);
-				return { tool: id, ...output };
+				return { tool: id, ...redactCredentialsDeep(output) };
 			} catch (error) {
 				return { tool: id, ok: false, error: error instanceof Error ? error.message : String(error) };
 			}
@@ -340,40 +281,96 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 		const fragment = projectEvidenceFragment(
 			source,
 			Math.max(0, Math.floor(input.offset ?? 0)),
-			Math.min(Math.max(Math.floor(input.chunkSize ?? MAX_EVIDENCE_EXCERPT_CHARS), 1), MAX_EVIDENCE_EXCERPT_CHARS),
+			Math.min(
+				Math.max(Math.floor(input.chunkSize ?? MAX_EVIDENCE_EXCERPT_CHARS), 1),
+				evidencePageChars(input.evidenceChars),
+			),
 		);
 		return fragment === null
 			? { ok: false, error: "Evidence fragment offset is outside the source" }
 			: { ok: true, items: [fragment] };
 	}
 	const query = input.query?.trim() || undefined;
-	const scanFirst = query === undefined && input.since === undefined && input.before === undefined;
-	const continuations = scanFirst
-		? pendingDreamingEvidenceContinuations(db, scopeId, input.limit ?? 20, input.kind)
-		: [];
-	const sources =
-		continuations.length > 0
-			? continuations
-			: searchEpisodicSources(db, {
-					agentId: scopeId,
-					query: query ?? "",
-					since: input.since,
-					before: input.before,
-					kind: input.kind,
-					excludeDelivered: scanFirst,
-					limit: input.limit,
-				});
-	const items = scanFirst
-		? sources.flatMap((source) => {
-				const fragment = projectEvidenceFragment(
-					source,
-					deliveredOffsetForSource(db, scopeId, source),
-					MAX_EVIDENCE_EXCERPT_CHARS,
-				);
-				return fragment === null ? [] : [fragment];
-			})
-		: projectEvidence(sources, query ?? "");
-	return { ok: true, items };
+	if (query === undefined && input.since === undefined && input.before === undefined) {
+		return drainDreamingEvidenceQueueInDb(db, input);
+	}
+	const sources = searchEpisodicSources(db, {
+		agentId: scopeId,
+		query: query ?? "",
+		since: input.since,
+		before: input.before,
+		kind: input.kind,
+		limit: input.limit,
+	});
+	return { ok: true, items: projectEvidence(sources, query ?? "") };
+}
+
+const DELIVERY_QUEUE_SCAN_LIMIT = 51;
+
+function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
+	const scopeId = input.agentId;
+	const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 20), 50));
+	const servedInPass = input.passId ? passDeliveredRanges(db, input.passId, scopeId) : new Map();
+	const pageChars = evidencePageChars(input.evidenceChars);
+	let budgetExhausted = false;
+	const fresh = searchEpisodicSources(db, {
+		agentId: scopeId,
+		query: "",
+		kind: input.kind,
+		excludeDelivered: true,
+		excludeSourceRefs: input.passId ? passFullyServedSourceRefs(db, input.passId, scopeId) : [],
+		limit: DELIVERY_QUEUE_SCAN_LIMIT,
+	});
+	const page = (sources: readonly EpisodicSourceRecord[], max: number, skip = new Set<string>()) => {
+		const items: Record<string, unknown>[] = [];
+		let remaining = pageChars;
+		for (const source of sources) {
+			const ref = `${source.kind}:${source.id}`;
+			if (skip.has(ref)) continue;
+			if (items.length > 0 && remaining < MAX_EVIDENCE_EXCERPT_CHARS) {
+				budgetExhausted = true;
+				break;
+			}
+			skip.add(ref);
+			const offset = extendDeliveredOffset(deliveredOffsetForSource(db, scopeId, source), servedInPass.get(ref));
+			const fragment = projectEvidenceFragment(source, offset, Math.max(remaining, MAX_EVIDENCE_EXCERPT_CHARS));
+			if (fragment !== null) {
+				items.push(fragment);
+				remaining -= typeof fragment.content === "string" ? fragment.content.length : 0;
+			}
+			if (items.length >= max) break;
+		}
+		return items;
+	};
+	const continuationRefs = new Set<string>();
+	const continuations = page(
+		pendingDreamingEvidenceContinuations(db, scopeId, 50, input.kind),
+		limit + 1,
+		continuationRefs,
+	);
+	if (continuations.length > 0) {
+		const returned = continuations.slice(0, limit);
+		return {
+			ok: true,
+			items: returned,
+			hasMore:
+				continuations.length > limit ||
+				budgetExhausted ||
+				returned.some((item) => item.contentHasNext === true) ||
+				page(fresh, 1, continuationRefs).length > 0,
+		};
+	}
+	const items = page(fresh, limit + 1);
+	const returned = items.slice(0, limit);
+	return {
+		ok: true,
+		items: returned,
+		hasMore:
+			items.length > limit ||
+			budgetExhausted ||
+			returned.some((item) => item.contentHasNext === true) ||
+			(items.length > 0 && fresh.length >= DELIVERY_QUEUE_SCAN_LIMIT),
+	};
 }
 
 export function readDreamingEvidenceSourceInDb(
@@ -392,6 +389,78 @@ export function collectDreamingReviewDueInDb(
 		new Date(input.nowMs),
 		{ agentId: input.agentId, limit: input.limit },
 	);
+}
+
+export async function listDreamingAttention(
+	accessor: DbAccessor,
+	params: {
+		readonly agentId?: string;
+		readonly kind?: string;
+		readonly status?: "pending" | "resolved";
+		readonly limit?: number;
+	},
+): Promise<readonly unknown[]> {
+	const { agentId: scopeId, kind, status, limit } = params;
+	if (kind === "review_due") {
+		if (status === "resolved") return [];
+		const input: DbOwnerDreamingReviewDue = {
+			agentId: scopeId,
+			nowMs: Date.now(),
+			limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200),
+		};
+		const due = await runDbOwnerDomainOperation(accessor, {
+			runWithOwner: async (owner) => {
+				const handle = owner.submit<ReturnType<typeof collectReviewDueClaims>>(
+					{
+						kind: "dreaming_review_due",
+						input,
+					},
+					{
+						operation: "dreaming.capabilities.review-due",
+						lane: "read",
+						workloadClass: "foreground",
+						deadlineMs: 30_000,
+						estimatedWorkUnits: 100,
+					},
+				);
+				return await handle.result;
+			},
+			runInline: ({ read }) => read((db) => collectDreamingReviewDueInDb(db, input)),
+		});
+		return [
+			...due.expired.map((item) => ({
+				id: item.id,
+				kind: "review_due",
+				status: "pending",
+				subjectRef: `memory:${item.id}`,
+				details: { phase: "expired", ...item },
+				priority: "high",
+				createdAt: item.createdAt,
+				agentId: item.agentId,
+			})),
+			...due.approaching.map((item) => ({
+				id: item.id,
+				kind: "review_due",
+				status: "pending",
+				subjectRef: `memory:${item.id}`,
+				details: { phase: "approaching", ...item },
+				priority: "normal",
+				createdAt: item.createdAt,
+				agentId: item.agentId,
+			})),
+		];
+	}
+	return scopeId !== undefined
+		? await getDreamingAttentionScoped(accessor, scopeId, {
+				kind,
+				status: status ?? "pending",
+				limit: bounded(limit, 20, 100),
+			})
+		: getDreamingAttentionAcrossScopes(accessor, {
+				kind,
+				status: status ?? "pending",
+				limit: bounded(limit, 50, 200),
+			});
 }
 
 export function createDreamingCapabilities(params: CreateDreamingCapabilitiesParams): readonly DreamingCapability[] {
@@ -416,7 +485,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"memory_head_commit",
 			"Commit curated memory head",
-			"Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Use the revision/hash from memory_head_read and exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. Record deferrals and no-change reasons with runbook_write.",
+			"Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Use the revision/hash from memory_head_read and exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. Every content pass must stage exactly one commit, even when nothing changed: resubmit the current entries, or an empty entry set when the head is empty. Record deferrals and no-change reasons with runbook_write.",
 			false,
 			z.object({
 				agentId: z.string().min(1),
@@ -532,15 +601,19 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"list_aspect_claims",
 			"List aspect claims",
-			"List active claim attributes for one entity aspect in one agent scope by stable ids.",
+			"List active claim attributes for one entity aspect in one agent scope by stable ids, each with its evidence quote and source_ref. include contradictions to add the aspect's active contradiction observations: advisory state alongside competing claim evidence, not a truth choice.",
 			true,
-			z.object({ agentId: z.string().min(1), entityId: z.string().min(1), aspectId: z.string().min(1), ...pagination }),
-			async ({ agentId: scopeId, entityId, aspectId, limit, offset }) => ({
-				ok: true,
-				items: await filterDreamingAttributes(
-					accessor,
-					scopeId,
-					await getAttributesForAspectFiltered(accessor, {
+			z.object({
+				agentId: z.string().min(1),
+				entityId: z.string().min(1),
+				aspectId: z.string().min(1),
+				include: z.array(z.enum(["contradictions"])).optional(),
+				...pagination,
+			}),
+			async ({ agentId: scopeId, entityId, aspectId, include, limit, offset }) => {
+				const result: MutableCapabilityOutput = {
+					ok: true,
+					items: await getAttributesForAspectFiltered(accessor, {
 						entityId,
 						aspectId,
 						agentId: scopeId,
@@ -549,87 +622,22 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						limit: bounded(limit, 50, 200),
 						offset: Math.max(0, Math.floor(offset ?? 0)),
 					}),
-				),
-			}),
-		),
-		capability(
-			"walk_links",
-			"Walk dependency links",
-			"Walk incoming and/or outgoing dependency links for an entity in one agent scope.",
-			true,
-			z.object({
-				agentId: z.string().min(1),
-				entityId: z.string().min(1),
-				direction: z.enum(["incoming", "outgoing", "both"]).optional(),
-			}),
-			async ({ agentId: scopeId, entityId, direction }) => ({
-				ok: true,
-				items: await getEntityDependenciesDetailed(accessor, {
-					entityId,
-					agentId: scopeId,
-					direction: direction ?? "both",
-				}),
-			}),
-		),
-		capability(
-			"get_evidence",
-			"Get evidence",
-			"Resolve provenance for a claim path in one agent scope (entity/aspect by stable id or name) or a dependency link by stable id.",
-			true,
-			z.object({
-				agentId: z.string().min(1),
-				ref: z.union([
-					z.object({
-						type: z.literal("claim"),
-						entity: z.string().min(1),
-						aspect: z.string().min(1),
-						group: z.string().min(1),
-						claim: z.string().min(1),
-					}),
-					z.object({ type: z.literal("link"), id: z.string().min(1) }),
-				]),
-				...pagination,
-			}),
-			async ({ agentId: scopeId, ref, limit, offset }) => {
-				if (ref.type === "claim") {
-					let entityName = ref.entity;
-					let aspectName = ref.aspect;
-					const detail = await getKnowledgeEntityDetail(accessor, ref.entity, scopeId);
-					if (detail) {
-						entityName = detail.entity.name;
-						const aspect = (await getEntityAspectsWithCounts(accessor, ref.entity, scopeId)).find(
-							(candidate) => candidate.aspect.id === ref.aspect || candidate.aspect.name === ref.aspect,
-						);
-						if (aspect) aspectName = aspect.aspect.name;
-					}
-					const result = await getOntologyClaimEvidence(accessor, {
+				};
+				if (include?.includes("contradictions")) {
+					result.contradictions = listOntologyContradictions(accessor, {
 						agentId: scopeId,
-						entity: entityName,
-						aspect: aspectName,
-						group: ref.group,
-						claim: ref.claim,
-						limit,
-						offset,
+						entityId,
+						aspectId,
+						status: "active",
 					});
-					const safeIds = new Set(
-						(
-							await filterDreamingAttributes(
-								accessor,
-								scopeId,
-								result.items.map((item) => item.attribute),
-							)
-						).map((attribute) => attribute.id),
-					);
-					const items = result.items.filter((item) => safeIds.has(item.attribute.id));
-					return { ok: true, result: { ...result, items, count: items.length } };
 				}
-				return { ok: true, result: await getOntologyLinkEvidence(accessor, { agentId: scopeId, id: ref.id }) };
+				return result;
 			},
 		),
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. If contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it lists every incomplete source revision and resumes at its delivered offset, regardless of time watermark. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. When you look up a specific source and contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit incomplete source revisions, each resuming at its delivered offset (including fragments already served earlier in this pass), regardless of time watermark. hasMore is true while more of the queue remains. A queued source that is only partly read continues on a later queue page, so do not page it yourself. File what each page establishes before calling again without a query for the next one, and stop when hasMore is false. Partway through a pass the queue closes (deliveryClosed: true): stop reading new sources, file what you have read, and finish so your progress is recorded. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
@@ -643,6 +651,22 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				chunkSize: z.number().finite().optional(),
 			}),
 			async ({ agentId: scopeId, query, since, before, kind, limit, sourceRef, offset, chunkSize }) => {
+				if (
+					params.evidenceDeliveryDeadline !== undefined &&
+					Date.now() >= params.evidenceDeliveryDeadline &&
+					(query === undefined || query.trim() === "") &&
+					since === undefined &&
+					before === undefined &&
+					sourceRef === undefined
+				) {
+					return {
+						ok: true,
+						items: [],
+						hasMore: false,
+						deliveryClosed: true,
+						note: "This pass has used its time for new evidence. File what you have read, write the runbook, and finish; the rest of the queue is delivered to the next pass.",
+					};
+				}
 				const input: DbOwnerDreamingEvidenceSearch = {
 					agentId: scopeId,
 					...(query === undefined ? {} : { query }),
@@ -653,6 +677,8 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					...(sourceRef === undefined ? {} : { sourceRef }),
 					...(offset === undefined ? {} : { offset }),
 					...(chunkSize === undefined ? {} : { chunkSize }),
+					...(params.passId === undefined ? {} : { passId: params.passId }),
+					...(params.evidenceChars === undefined ? {} : { evidenceChars: params.evidenceChars }),
 				};
 				return await runDbOwnerDomainOperation(accessor, {
 					runWithOwner: async (owner) => {
@@ -696,19 +722,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				}
 				if (entityId !== undefined && aspectId !== undefined && value !== undefined) {
 					result.contradiction = (
-						await filterDreamingAttributes(
-							accessor,
-							scopeId,
-							await getAttributesForAspectFiltered(accessor, {
-								entityId,
-								aspectId,
-								agentId: scopeId,
-								kind: "attribute",
-								status: "active",
-								limit: 200,
-								offset: 0,
-							}),
-						)
+						await getAttributesForAspectFiltered(accessor, {
+							entityId,
+							aspectId,
+							agentId: scopeId,
+							kind: "attribute",
+							status: "active",
+							limit: 200,
+							offset: 0,
+						})
 					).map((attribute) => ({
 						attributeId: attribute.id,
 						content: attribute.content,
@@ -719,42 +741,30 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			},
 		),
 		capability(
-			"list_contradictions",
-			"List contradiction observations",
-			"Read persisted, agent-scoped contradiction observations alongside competing claim evidence. Contradictions are advisory state, not a truth choice; use governed ontology operations for any correction.",
+			"zoom_history",
+			"Zoom pass history",
+			"Open line id+n of the pass history into the two lines of n/2 passes it was made from; n = 1 returns that pass's full record (runbook note, operation counts and failures, evidence window, quarantines).",
 			true,
 			z.object({
 				agentId: z.string().min(1),
-				entityId: z.string().min(1).optional(),
-				aspectId: z.string().min(1).optional(),
-				groupKey: z.string().min(1).optional(),
-				claimKey: z.string().min(1).optional(),
-				sourceId: z.string().min(1).optional(),
-				status: z.enum(["active", "resolved", "all"]).optional(),
-				...pagination,
+				id: z.number().int().min(0).describe("The first pass of the line, as shown before the +."),
+				n: z.number().int().min(1).describe("How many passes the line covers, as shown after the +."),
+				scopes: z
+					.string()
+					.min(1)
+					.describe("The scopes= value of the history section the line is in. Omit for this pass's own history.")
+					.optional(),
 			}),
-			async ({ agentId: scopeId, entityId, aspectId, groupKey, claimKey, sourceId, status, limit, offset }) => ({
-				ok: true,
-				...listOntologyContradictions(accessor, {
-					agentId: scopeId,
-					entityId,
-					aspectId,
-					groupKey,
-					claimKey,
-					sourceId,
-					status,
-					limit,
-					offset,
-				}),
-			}),
-		),
-		capability(
-			"runbook_read",
-			"Read Dreaming runbook",
-			"Read recent scoped pass outcomes, evidence windows, quarantines, and structured runbook notes.",
-			true,
-			z.object({ limit: z.number().finite().optional() }),
-			async ({ limit }) => ({ ok: true, items: readDreamingRunbook(accessor, agentId, bounded(limit, 5, 20)) }),
+			async ({ agentId: scopeId, id, n, scopes }) => {
+				const allowedScopes = params.allowedScopes ?? [scopeId];
+				return await zoomDreamingHistory(accessor, {
+					agentId,
+					scopeKey: scopes ?? dreamingScopeKey(allowedScopes),
+					allowedScopes,
+					id,
+					n,
+				});
+			},
 		),
 		capability(
 			"runbook_write",
@@ -807,75 +817,10 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				status: z.enum(["pending", "resolved"]).optional(),
 				limit: z.number().finite().optional(),
 			}),
-			async ({ agentId: scopeId, kind, status, limit }) => {
-				if (kind === "review_due") {
-					if (status === "resolved") return { ok: true, items: [] };
-					const input: DbOwnerDreamingReviewDue = {
-						agentId: scopeId,
-						nowMs: Date.now(),
-						limit: bounded(limit, scopeId ? 50 : 100, scopeId ? 100 : 200),
-					};
-					const due = await runDbOwnerDomainOperation(accessor, {
-						runWithOwner: async (owner) => {
-							const handle = owner.submit<ReturnType<typeof collectReviewDueClaims>>(
-								{
-									kind: "dreaming_review_due",
-									input,
-								},
-								{
-									operation: "dreaming.capabilities.review-due",
-									lane: "read",
-									workloadClass: "foreground",
-									deadlineMs: 30_000,
-									estimatedWorkUnits: 100,
-								},
-							);
-							return await handle.result;
-						},
-						runInline: ({ read }) => read((db) => collectDreamingReviewDueInDb(db, input)),
-					});
-					return {
-						ok: true,
-						items: [
-							...due.expired.map((item) => ({
-								id: item.id,
-								kind: "review_due",
-								status: "pending",
-								subjectRef: `memory:${item.id}`,
-								details: { phase: "expired", ...item },
-								priority: "high",
-								createdAt: item.createdAt,
-								agentId: item.agentId,
-							})),
-							...due.approaching.map((item) => ({
-								id: item.id,
-								kind: "review_due",
-								status: "pending",
-								subjectRef: `memory:${item.id}`,
-								details: { phase: "approaching", ...item },
-								priority: "normal",
-								createdAt: item.createdAt,
-								agentId: item.agentId,
-							})),
-						],
-					};
-				}
-				return {
-					ok: true,
-					items:
-						scopeId !== undefined
-							? getDreamingAttentionScoped(accessor, scopeId, {
-									kind,
-									status: status ?? "pending",
-									limit: bounded(limit, 20, 100),
-								})
-							: getDreamingAttentionAcrossScopes(accessor, {
-									kind,
-									status: status ?? "pending",
-									limit: bounded(limit, 50, 200),
-								}),
-				};
-			},
+			async ({ agentId: scopeId, kind, status, limit }) => ({
+				ok: true,
+				items: await listDreamingAttention(accessor, { agentId: scopeId, kind, status, limit }),
+			}),
 		),
 		capability(
 			"apply_ontology_ops",

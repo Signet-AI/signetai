@@ -128,7 +128,8 @@ export function shapeStructuredEvidence(
 			score = Math.min(score, cfg.traversalUnanchoredCap);
 		}
 		score = Math.max(0, Math.min(1, score));
-		if (score < cfg.minScore) return [];
+		const direct = evidence.lexical > 0 || evidence.semantic > 0;
+		if (score < cfg.minScore && !direct) return [];
 
 		return [
 			{

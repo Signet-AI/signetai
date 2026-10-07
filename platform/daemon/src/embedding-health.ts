@@ -1,3 +1,4 @@
+import { activeVectorProjectionTable } from "@signet/core";
 import { type ReadDb, type VectorRuntimeStatus, getVectorRuntimeStatus } from "./db-accessor";
 import type { EmbeddingConfig } from "./memory-config";
 
@@ -206,7 +207,9 @@ function checkNullVectors(db: ReadDb, runtime: VectorRuntimeStatus): EmbeddingCh
 	let count = 0;
 	try {
 		const row = db
-			.prepare("SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN vec_embeddings v ON v.id = e.id WHERE v.id IS NULL")
+			.prepare(
+				`SELECT COUNT(*) AS n FROM embeddings e LEFT JOIN ${activeVectorProjectionTable(db)} v ON v.id = e.id WHERE v.id IS NULL`,
+			)
 			.get() as { n: number } | undefined;
 		count = row?.n ?? 0;
 	} catch (err) {
@@ -267,7 +270,9 @@ function checkVecTableSync(db: ReadDb, runtime: VectorRuntimeStatus): EmbeddingC
 
 	let vecCount = 0;
 	try {
-		const vecRow = db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get() as { n: number } | undefined;
+		const vecRow = db.prepare(`SELECT COUNT(*) AS n FROM ${activeVectorProjectionTable(db)}`).get() as
+			| { n: number }
+			| undefined;
 		vecCount = vecRow?.n ?? 0;
 	} catch (err) {
 		if (!missing(err, "vec_embeddings")) {

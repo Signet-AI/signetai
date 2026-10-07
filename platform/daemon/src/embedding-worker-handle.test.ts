@@ -99,6 +99,36 @@ describe("embedding-worker-handle", () => {
 		await expect(p).resolves.toHaveLength(DIM);
 	});
 
+	it("reranks via RPC and passes the rerank task to the worker", async () => {
+		const worker = new FakeWorker();
+		let seenInit: EmbeddingWorkerInit | null = null;
+		const factory: EmbeddingWorkerFactory = (_path, init) => {
+			seenInit = init;
+			return worker;
+		};
+		const handle = await createEmbeddingWorkerHandle({
+			workerFactory: factory,
+			modelId: "cross-encoder",
+			task: "rerank",
+		});
+		worker.emit({ type: "ready" });
+		handles.push(handle);
+		expect(seenInit).toMatchObject({ modelId: "cross-encoder", task: "rerank" });
+
+		const p = handle.rerank("music streaming service", ["netflix", "spotify"]);
+		await flush();
+		const request = worker.posted.find((m) => m.type === "rerank");
+		expect(request).toMatchObject({ query: "music streaming service", documents: ["netflix", "spotify"] });
+		worker.emit({ type: "rerank_result", id: request?.type === "rerank" ? request.id : -1, scores: [0.1, 0.9] });
+		await expect(p).resolves.toEqual([0.1, 0.9]);
+
+		const failed = handle.rerank("q", ["a"]);
+		await flush();
+		const second = [...worker.posted].reverse().find((m) => m.type === "rerank");
+		worker.emit({ type: "rerank_error", id: second?.type === "rerank" ? second.id : -1, error: "model failed" });
+		await expect(failed).rejects.toThrow("model failed");
+	});
+
 	it("checkAvailable reports available when the worker inits", async () => {
 		const { worker, factory } = fakePair();
 		const handle = await makeHandle(worker, factory);

@@ -378,14 +378,15 @@ The response is an SSE stream of JSON `data` events: `delta`, `tool`, `citation`
 cleanup while retaining the idle session. Output is bounded to 1 MiB and agent execution to 90 seconds.
 
 The daemon uses the shared Pi agent worker boundary also used by Dreaming.
-At most four Pi workers exist concurrently; at most three are retained chat sessions.
+The Pi worker pool holds the shared LLM limit (`worker.maxLlmConcurrency`) plus three retained chat sessions.
 Additional sessions fail explicitly when capacity is reached. Conversations are scoped
 to the authenticated subject, resolved agent, and conversation UUID. One turn may run
 per conversation. The daemon retains each chat's native Pi session and tool history
 for 15 minutes of inactivity after its last settled turn. Continuations append only
 the new user message; request history seeds a session when it is first created or
-has expired. Switching models updates the existing Pi session. Each turn has a
-64-call tool budget. Shutdown disposes all workers. Dreaming sessions remain bounded
+has expired. Switching models updates the existing Pi session. A session has no
+total tool-call budget; at most eight of its tool calls run at once, and further
+calls wait for a slot. Shutdown disposes all workers. Dreaming sessions remain bounded
 to their pass lifecycle.
 The worker owns model execution and the agent loop; tools execute through
 existing daemon capabilities and the asynchronous database owner protocol.
@@ -396,8 +397,8 @@ Chat reads memory through scoped daemon capabilities: the ontology readers,
 `search_evidence` over the full history of episodic memories, artifacts, and
 transcripts, and `recall_memories`, which calls `POST /api/memory/recall` with the
 resolved agent and recall surface `dashboard`. Recall covers memories curated by
-Dreaming as well as captured ones. Its output passes the memory content-safety
-projection before reaching the model; withheld or malformed rows are dropped.
+Dreaming as well as captured ones. Credentials in its output are
+redacted before reaching the model, and malformed rows are dropped.
 A recalled memory that resolves as episodic evidence through `search_evidence`
 carries a `memory:<id>` sourceRef and emits `citation` and `retrieval` events.
 Dreaming-curated memories, ontology claims, and source rows carry only a

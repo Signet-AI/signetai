@@ -81,6 +81,7 @@ export {
 	ENTITY_TYPES,
 	ATTRIBUTE_KINDS,
 	ATTRIBUTE_STATUSES,
+	CLAIM_TIME_PRECISIONS,
 	DEPENDENCY_DESCRIPTIONS,
 	DEPENDENCY_TYPES,
 	TASK_STATUSES,
@@ -148,6 +149,7 @@ export type {
 	DecisionResult,
 	EntityType,
 	AttributeKind,
+	ClaimTimePrecision,
 	AttributeStatus,
 	DependencyType,
 	TaskStatus,
@@ -193,19 +195,13 @@ export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory, type ParsedMemory } from "./memory";
 export {
-	MEMORY_CONTENT_SAFETY_POLICY_VERSION,
-	MEMORY_CONTENT_SAFETY_REASONS,
-	MEMORY_CONTENT_SAFETY_STATUSES,
-	MEMORY_CONTENT_WITHHELD_NOTICE,
-	assessMemoryContent,
-	isMemoryContentContextEligible,
-	scanMemoryContent,
-} from "./memory-content-safety";
-export type {
-	MemoryContentSafetyAssessment,
-	MemoryContentSafetyReason,
-	MemoryContentSafetyStatus,
-} from "./memory-content-safety";
+	CREDENTIAL_KINDS,
+	REDACTED_CREDENTIAL,
+	findCredentialSpans,
+	redactCredentials,
+	redactCredentialsDeep,
+} from "./credential-detection";
+export type { CredentialKind, CredentialSpan } from "./credential-detection";
 export {
 	LOOPBACK_HOST,
 	NETWORK_MODES,
@@ -283,6 +279,7 @@ export {
 	keywordSearch,
 	hybridSearch,
 	cosineSimilarity,
+	activeVectorProjectionTable,
 	buildFtsMatchQuery,
 	type SearchOptions,
 	type SearchResult,
@@ -321,6 +318,7 @@ export type {
 } from "./recall";
 export {
 	createMemoriesFts,
+	MEMORIES_FTS_TOKENIZER,
 	memoriesFtsIntegrityIsComplete,
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsIndexRowCount,

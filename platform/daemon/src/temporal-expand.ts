@@ -1,6 +1,5 @@
-import { MEMORY_CONTENT_WITHHELD_NOTICE, scanMemoryContent } from "@signet/core";
-import { type ReadDb, getDbAccessor } from "./db-accessor";
-import { isMemoryContentContextEligible } from "./memory-content-safety";
+import { redactCredentials } from "@signet/core";
+import { getDbAccessor } from "./db-accessor";
 
 type TemporalQuery = {
 	get(...args: ReadonlyArray<unknown>): unknown;
@@ -44,7 +43,6 @@ interface RawMemory {
 	readonly content: string;
 	readonly type: string;
 	readonly created_at: string;
-	readonly agent_id: string | null;
 	readonly is_deleted?: number;
 }
 
@@ -97,7 +95,7 @@ function mapNode(row: RawNode): TemporalExpandNode {
 		project: row.project,
 		depth: row.depth,
 		kind: row.kind,
-		content: row.content,
+		content: redactCredentials(row.content),
 		tokenCount: row.token_count,
 		earliestAt: row.earliest_at,
 		latestAt: row.latest_at,
@@ -106,27 +104,8 @@ function mapNode(row: RawNode): TemporalExpandNode {
 		agentId: row.agent_id,
 		sourceType: row.source_type,
 		sourceRef: row.source_ref,
-		metaJson: row.meta_json,
+		metaJson: row.meta_json ? redactCredentials(row.meta_json) : null,
 		createdAt: row.created_at,
-	};
-}
-
-function safeNode(db: TemporalDb, row: RawNode, agentId: string): TemporalExpandNode {
-	const contentEligible = isMemoryContentContextEligible(db as unknown as ReadDb, {
-		agentId,
-		sourceKind: "summary",
-		sourceId: row.id,
-		content: row.content,
-	});
-	return {
-		...mapNode(row),
-		content: contentEligible ? row.content : MEMORY_CONTENT_WITHHELD_NOTICE,
-		metaJson:
-			row.meta_json && scanMemoryContent(row.meta_json).contextEligible
-				? row.meta_json
-				: row.meta_json
-					? MEMORY_CONTENT_WITHHELD_NOTICE
-					: null,
 	};
 }
 
@@ -226,7 +205,6 @@ export function expandTemporalNode(
 				        COALESCE(m.content, '[deleted memory]') AS content,
 				        COALESCE(m.type, 'unknown') AS type,
 				        COALESCE(m.created_at, ss.created_at) AS created_at,
-				        m.agent_id,
 				        CASE WHEN m.id IS NULL OR COALESCE(m.is_deleted, 0) = 1 THEN 1 ELSE 0 END AS is_deleted
 				 FROM session_summary_memories ssm
 				 JOIN session_summaries ss ON ss.id = ssm.summary_id
@@ -239,7 +217,7 @@ export function expandTemporalNode(
 			)
 			.all(id, agentId, ...(opts?.project ? [opts.project, opts.project] : [])) as RawMemory[];
 
-		const mapped = safeNode(db, node, agentId);
+		const mapped = mapNode(node);
 		const transcriptKey = resolveTranscriptKey(mapped);
 		let transcript: TemporalExpandTranscript | undefined;
 		if (opts?.includeTranscript !== false && transcriptKey) {
@@ -263,13 +241,7 @@ export function expandTemporalNode(
 				| undefined;
 			if (row) {
 				const limit = Math.max(400, Math.min(opts?.transcriptCharLimit ?? 2000, 12000));
-				const contentEligible = isMemoryContentContextEligible(db as unknown as ReadDb, {
-					agentId,
-					sourceKind: "transcript",
-					sourceId: row.session_key,
-					content: row.content,
-				});
-				const raw = contentEligible ? clean(row.content) : MEMORY_CONTENT_WITHHELD_NOTICE;
+				const raw = clean(redactCredentials(row.content));
 				transcript = {
 					sessionKey: row.session_key,
 					harness: row.harness,
@@ -283,23 +255,16 @@ export function expandTemporalNode(
 
 		return {
 			node: mapped,
-			parents: parentRows.map((row) => safeNode(db, row, agentId)),
-			children: childRows.map((row) => safeNode(db, row, agentId)),
+			parents: parentRows.map(mapNode),
+			children: childRows.map(mapNode),
 			linkedMemories: memories.map((row) => ({
 				id: row.id,
-				content: isMemoryContentContextEligible(db as unknown as ReadDb, {
-					agentId: row.agent_id?.trim() || "default",
-					sourceKind: "memory",
-					sourceId: row.id,
-					content: row.content,
-				})
-					? row.content
-					: MEMORY_CONTENT_WITHHELD_NOTICE,
+				content: redactCredentials(row.content),
 				type: row.type,
 				createdAt: row.created_at,
 				deleted: row.is_deleted === 1,
 			})),
 			...(transcript ? { transcript } : {}),
 		};
-	}, "temporal-expand.ts:178");
+	}, "temporal-expand.ts:157");
 }

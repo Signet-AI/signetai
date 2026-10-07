@@ -52,6 +52,7 @@ export interface SceneNode {
 	confidence?: number;
 	detail?: string;
 	evidenceRefs?: readonly string[];
+	scopeColor?: string;
 }
 
 export interface SceneEdge {
@@ -402,11 +403,16 @@ export function createGraphScene(
 			context.beginPath();
 			if (node.kind === "source") context.rect(node.x - r, node.y - r, r * 2, r * 2);
 			else context.arc(node.x, node.y, r, 0, Math.PI * 2);
-			context.fillStyle = colors[node.kind];
+			context.fillStyle = node.kind === "entity" ? (node.scopeColor ?? colors[node.kind]) : colors[node.kind];
 			context.fill();
 			if (tierOf(node.kind) === 0) {
 				context.strokeStyle = surface;
 				context.lineWidth = 2 / viewport.zoom;
+				context.stroke();
+			}
+			if (node.scopeColor && node.kind !== "entity") {
+				context.strokeStyle = node.scopeColor;
+				context.lineWidth = 1.25 / viewport.zoom;
 				context.stroke();
 			}
 			const ring = fade(`ring:${node.id}`, node.id === active?.id || retrieved.has(node.id) ? 1 : 0, 0);

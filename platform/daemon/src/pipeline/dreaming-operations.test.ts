@@ -768,6 +768,66 @@ describe("dreaming operations", () => {
 		expect(result.error).toContain("Hygiene archives require attention provenance");
 	});
 
+	it("says when a hygiene merge cites an attention id that is not pending in this agent", async () => {
+		insertEntity("e-target", "Acme", "acme");
+		insertEntity("e-source", "Acme App", "acme");
+		const flagged = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				flag({ subjectRef: "duplicate:acme", details: { canonicalName: "acme", reason: "duplicate_canonical_name" } }),
+			],
+		});
+		const attentionId = (flagged.items[0] as { result?: { attentionId?: string } }).result?.attentionId ?? "";
+		const miscopied = `${attentionId.slice(0, -4)}${[...attentionId.slice(-4)].reverse().join("")}`;
+		expect(miscopied).not.toBe(attentionId);
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "merge_entities",
+					payload: { targets: ["e-target", "e-source"], survivor: "e-target" },
+					provenance: `attention:${miscopied}`,
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain(`${miscopied} is not a pending hygiene attention in this agent`);
+	});
+
+	it("names merge targets outside the flagged duplicate group", async () => {
+		insertEntity("e-target", "Acme", "acme");
+		insertEntity("e-source", "Acme App", "acme");
+		insertEntity("e-other", "Acme Holdings", "acme holdings");
+		const flagged = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				flag({ subjectRef: "duplicate:acme", details: { canonicalName: "acme", reason: "duplicate_canonical_name" } }),
+			],
+		});
+		const attentionId = (flagged.items[0] as { result?: { attentionId?: string } }).result?.attentionId ?? "";
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "merge_entities",
+					payload: { targets: ["e-other", "e-target"], survivor: "e-target" },
+					provenance: `attention:${attentionId}`,
+				},
+			],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain('targets e-other are not in the "acme" duplicate group');
+		expect(result.error).toContain("decline_attention");
+	});
+
 	it("merges a flagged duplicate group via targets/survivor", async () => {
 		insertEntity("e-target", "Acme", "acme");
 		insertEntity("e-source", "Acme App", "acme");
@@ -846,7 +906,10 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(false);
-		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(result.error).toContain("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(result.error).toContain(
+			'operation 0 quotes text not found verbatim in memory:mem-1: "This quote was never in the source."',
+		);
 	});
 
 	it("validates later evidence before minting an earlier flag (#1414)", async () => {
@@ -873,7 +936,8 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(false);
-		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(result.error).toContain("Every operation must cite an exact quote from scoped episodic evidence");
+		expect(result.error).toContain("operation 1 quotes text not found verbatim in memory:mem-1414-invalid");
 		expect(
 			getDbAccessor().withReadDb(
 				(db) =>
@@ -966,6 +1030,34 @@ describe("dreaming operations", () => {
 		expect(result.error).toBe("Every operation must cite an exact quote from scoped episodic evidence");
 	});
 
+	it("names the operation and the id that did not resolve", async () => {
+		insertEntity("e-trip", "June Business Trip", "june-business-trip");
+		insertAspect("eb9f4323-95c4-43f1-9b98-b092d545dc45", "e-trip", "trip preparation");
+		insertEpisodicMemory("mem-trip", "I need help with packing for my upcoming business trip next month.");
+		const evidence = [
+			{
+				source_ref: "memory:mem-trip",
+				source_kind: "manual",
+				source_id: "mem-trip",
+				quote: "I need help with packing for my upcoming business trip next month.",
+			},
+		];
+		const claim = (aspectId: string) => ({
+			operation: "add_claim_value",
+			payload: { entityId: "e-trip", aspectId, claimKey: "packing", value: "The user is packing for a trip." },
+			evidence,
+		});
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [claim("eb9f4323-95c4-43f1-9b98-b092d545dc45"), claim("eb9f4323-95c4-4f51-9b98-b092d545dc45")],
+		});
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain("operation 1 target (add_claim_value)");
+		expect(result.error).toContain("aspect eb9f4323-95c4-4f51-9b98-b092d545dc45 not found on entity e-trip");
+	});
+
 	it("stores review_after on a semantic memory for a future temporal claim", async () => {
 		insertEntity("e-acme", "Acme", "acme");
 		insertAspect("a-main", "e-acme", "general");
@@ -1008,6 +1100,162 @@ describe("dreaming operations", () => {
 					.get("agent-a", "travel_plan") as { review_after: string },
 		);
 		expect(row.review_after).toBe("2026-08-03T06:00:00.000Z");
+	});
+
+	it("rejects a dated claim that sets no claim time, so date-filtered recall can find it", async () => {
+		insertEntity("e-user", "User", "user");
+		insertAspect("a-events", "e-user", "events");
+		insertEpisodicMemory("mem-concert", "We saw Queen with my parents last weekend!");
+		const attempt = (timing: Record<string, string>) =>
+			applyDreamingOperations({
+				accessor: getDbAccessor(),
+				agentId: "agent-a",
+				actor: "dreaming",
+				operations: [
+					{
+						operation: "add_claim_value",
+						payload: {
+							entityId: "e-user",
+							aspectId: "a-events",
+							claimKey: "queen_concert",
+							value: "Shortly before 2023-04-15 the user saw Queen live with their parents.",
+							...timing,
+						},
+						evidence: [{ source_ref: "memory:mem-concert", quote: "We saw Queen with my parents" }],
+					},
+				],
+			});
+		const untimed = await attempt({});
+		expect(untimed.ok).toBe(false);
+		expect(untimed.items[0]?.error).toContain("names the date 2023-04-15 but sets no claim time");
+		const timed = await attempt({ occurredAt: "2023-04-15", timePrecision: "approximate" });
+		expect(timed.ok).toBe(true);
+	});
+
+	it("carries claim event time from a Dreaming operation onto the claim", async () => {
+		insertEntity("e-user", "User", "user");
+		insertAspect("a-events", "e-user", "events");
+		insertEpisodicMemory("mem-walk", "I just finished the Walk for Hunger this morning!");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "e-user",
+						aspectId: "a-events",
+						claimKey: "charity_walk",
+						value: "On 2023-03-19 the user completed the Walk for Hunger.",
+						occurredAt: "2023-03-19",
+						timePrecision: "day",
+					},
+					evidence: [{ source_ref: "memory:mem-walk", quote: "I just finished the Walk for Hunger" }],
+				},
+			],
+		});
+		expect(result.ok).toBe(true);
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT occurred_start, time_precision FROM entity_attributes WHERE claim_key = ?")
+					.get("charity_walk") as { occurred_start: string; time_precision: string },
+		);
+		expect(row).toEqual({ occurred_start: "2023-03-19T00:00:00.000Z", time_precision: "day" });
+	});
+
+	it("rejects only the claim that still holds a relative time and applies the rest of the batch", async () => {
+		insertEntity("e-user", "User", "user");
+		insertAspect("a-events", "e-user", "events");
+		insertEpisodicMemory("mem-walk", "I just finished the Walk for Hunger this morning! I also adopted a cat.");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "e-user",
+						aspectId: "a-events",
+						claimKey: "charity_walk",
+						value: "The user completed the Walk for Hunger last weekend.",
+					},
+					evidence: [{ source_ref: "memory:mem-walk", quote: "I just finished the Walk for Hunger" }],
+				},
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "e-user",
+						aspectId: "a-events",
+						claimKey: "pet",
+						value: "The user adopted a cat.",
+					},
+					evidence: [{ source_ref: "memory:mem-walk", quote: "I also adopted a cat." }],
+				},
+			],
+		});
+		const rejected = result.items[0] as { ok: boolean; error?: string } | undefined;
+		expect(rejected?.ok).toBe(false);
+		expect(String(rejected?.error)).toContain('relative time "last weekend"');
+		expect(String(rejected?.error)).toContain("capturedAt");
+		expect(result.items[1]).toMatchObject({ ok: true });
+		const claims = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT claim_key FROM entity_attributes").all() as Array<{ claim_key: string }>,
+		);
+		expect(claims.map((claim) => claim.claim_key)).toEqual(["pet"]);
+	});
+
+	it("lets a content pass merge and rename aspects with a reason instead of a hygiene flag", async () => {
+		insertEntity("e-user", "User", "user");
+		insertAspect("a-running", "e-user", "running and fitness");
+		insertAspect("a-fitness", "e-user", "fitness and exercise");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, group_key, claim_key, version, version_root_id, created_at, updated_at)
+				 VALUES ('attr-run', 'a-running', 'agent-a', 'attribute', 'The user runs 5k on Saturdays.', 'the user runs 5k on saturdays.', 0.8, 0.5, 'active', 'general', 'weekend_run', 1, 'attr-run', datetime('now'), datetime('now'))`,
+			).run();
+		});
+		const withoutReason = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{ operation: "rename_aspect", payload: { entityId: "e-user", aspectId: "a-fitness", newName: "fitness" } },
+			],
+		});
+		expect(withoutReason.ok).toBe(false);
+		expect(String(withoutReason.error)).toContain("requires a reason");
+
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "merge_aspects",
+					payload: { entityId: "e-user", target: "a-fitness", sources: ["a-running"] },
+					reason: "Running is part of the user's fitness routine.",
+				},
+				{
+					operation: "rename_aspect",
+					payload: { entityId: "e-user", aspectId: "a-fitness", newName: "fitness and running" },
+					reason: "The merged aspect now covers running too.",
+				},
+			],
+		});
+		expect(result.items.map((item) => item.ok)).toEqual([true, true]);
+		const state = getDbAccessor().withReadDb((db) => ({
+			aspects: db
+				.prepare("SELECT id, name, COALESCE(status, 'active') AS status FROM entity_aspects ORDER BY id")
+				.all() as Array<{ id: string; name: string; status: string }>,
+			claim: db.prepare("SELECT aspect_id FROM entity_attributes WHERE id = 'attr-run'").get() as { aspect_id: string },
+		}));
+		expect(state.claim.aspect_id).toBe("a-fitness");
+		expect(state.aspects.find((aspect) => aspect.id === "a-fitness")?.name).toBe("fitness and running");
+		expect(state.aspects.find((aspect) => aspect.id === "a-running")?.status).not.toBe("active");
 	});
 
 	it("supersedes the current active claim for a key without an explicit attribute id", async () => {
@@ -1116,7 +1364,7 @@ describe("dreaming operations", () => {
 		).toEqual({ c: 3 });
 	});
 
-	it("requires attention provenance for merge_aspects like other hygiene ops", async () => {
+	it("requires a reason for merge_aspects without attention provenance", async () => {
 		insertEntity("e-merge2", "MergeTwo", "mergetwo");
 		insertAspect("a-t2", "e-merge2", "target");
 		insertAspect("a-s2", "e-merge2", "source");
@@ -1132,6 +1380,19 @@ describe("dreaming operations", () => {
 			],
 		});
 		expect(result.ok).toBe(false);
-		expect(result.error).toContain("Hygiene archives require attention provenance");
+		expect(String(result.error)).toContain("requires a reason");
+	});
+
+	it("still requires attention provenance for archives", async () => {
+		insertEntity("e-arch", "Archived", "archived");
+		insertAspect("a-arch", "e-arch", "old");
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [{ operation: "archive_aspect", payload: { target: "a-arch" }, reason: "Unused." }],
+		});
+		expect(result.ok).toBe(false);
+		expect(String(result.error)).toContain("Hygiene archives require attention provenance");
 	});
 });

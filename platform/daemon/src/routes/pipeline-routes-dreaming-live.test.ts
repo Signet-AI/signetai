@@ -205,6 +205,27 @@ describe("Dreaming live routes", () => {
 		expect((await response.json()).episodicTokensPending).toBeNull();
 	});
 
+	it("measures the backlog on request instead of reporting the empty cache", async () => {
+		invalidateDreamingEpisodicTokenBacklog("agent-a");
+		const app = new Hono();
+		registerPipelineRoutes(app);
+		const pending = async (query: string) =>
+			((await (await app.request(`/api/dream/status${query}`)).json()) as { episodicTokensPending: number | null })
+				.episodicTokensPending;
+
+		expect(await pending("")).toBeNull();
+		expect(await pending("?measure=1")).toBe(0);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+				 VALUES ('measured', 'agent-a', 'A settled fact about the release train.', 'pi',
+				         datetime('now'), datetime('now'), datetime('now'))`,
+			).run();
+		});
+		expect(await pending("?measure=1")).toBeGreaterThan(0);
+	});
+
 	it("emits an initial snapshot over the scoped SSE stream", async () => {
 		const app = createPipelineApp();
 		const response = await app.request("/api/dream/passes/live-pass-a/events");

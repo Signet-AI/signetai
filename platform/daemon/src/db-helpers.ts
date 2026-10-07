@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { activeVectorProjectionTable } from "@signet/core";
 import { type ReadDb, type WriteDb, readVecEmbeddingDimensions } from "./db-accessor";
 let native: typeof import("@signet/native") | null = null;
 try {
@@ -24,20 +25,21 @@ function invalidateUmapCache(db: WriteDb): void {
 	} catch {}
 }
 
-function vecTableExists(db: WriteDb): boolean {
+function activeVecTable(db: ReadDb): "vec_embeddings" | "vec_embeddings_staging" | null {
+	const table = activeVectorProjectionTable(db);
 	try {
-		const row = db.prepare("SELECT name FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get();
-		return row != null;
+		const row = db.prepare("SELECT name FROM sqlite_master WHERE name = ? AND type = 'table'").get(table);
+		return row != null ? table : null;
 	} catch {
-		return false;
+		return null;
 	}
 }
 export function readLiveVecDimensions(db: ReadDb): number | null {
 	let row: { sql: string } | undefined;
 	try {
-		row = db.prepare("SELECT sql FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get() as
-			| { sql: string }
-			| undefined;
+		row = db
+			.prepare("SELECT sql FROM sqlite_master WHERE name = ? AND type = 'table'")
+			.get(activeVectorProjectionTable(db)) as { sql: string } | undefined;
 	} catch {
 		return null;
 	}
@@ -45,18 +47,20 @@ export function readLiveVecDimensions(db: ReadDb): number | null {
 }
 export function syncVecInsert(db: WriteDb, embeddingId: string, vector: readonly number[]): void {
 	invalidateUmapCache(db);
-	if (!vecTableExists(db)) return;
+	const table = activeVecTable(db);
+	if (table === null) return;
 	try {
 		const f32 = new Float32Array(vector);
-		db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(embeddingId, f32);
+		db.prepare(`INSERT OR REPLACE INTO ${table} (id, embedding) VALUES (?, ?)`).run(embeddingId, f32);
 	} catch {}
 }
 export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly string[]): boolean {
 	if (embeddingIds.length === 0) return true;
 	invalidateUmapCache(db);
-	if (!vecTableExists(db)) return true;
+	const table = activeVecTable(db);
+	if (table === null) return true;
 	try {
-		const stmt = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
+		const stmt = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
 		for (const id of embeddingIds) {
 			stmt.run(id);
 		}
@@ -67,13 +71,14 @@ export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly 
 }
 export function syncVecDeleteBySourceId(db: WriteDb, sourceType: string, sourceId: string): void {
 	invalidateUmapCache(db);
-	if (!vecTableExists(db)) return;
+	const table = activeVecTable(db);
+	if (table === null) return;
 	try {
 		const rows = db
 			.prepare("SELECT id FROM embeddings WHERE source_type = ? AND source_id = ?")
 			.all(sourceType, sourceId) as Array<{ id: string }>;
 		if (rows.length === 0) return;
-		const stmt = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
+		const stmt = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
 		for (const row of rows) {
 			stmt.run(row.id);
 		}
@@ -86,13 +91,14 @@ export function syncVecDeleteBySourceExceptHash(
 	keepContentHash: string,
 ): void {
 	invalidateUmapCache(db);
-	if (!vecTableExists(db)) return;
+	const table = activeVecTable(db);
+	if (table === null) return;
 	try {
 		const rows = db
 			.prepare("SELECT id FROM embeddings WHERE source_type = ? AND source_id = ? AND content_hash <> ?")
 			.all(sourceType, sourceId, keepContentHash) as Array<{ id: string }>;
 		if (rows.length === 0) return;
-		const stmt = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
+		const stmt = db.prepare(`DELETE FROM ${table} WHERE id = ?`);
 		for (const row of rows) {
 			stmt.run(row.id);
 		}

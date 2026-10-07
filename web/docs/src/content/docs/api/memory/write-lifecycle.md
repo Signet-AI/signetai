@@ -26,19 +26,14 @@ Requires `recall` permission.
 | `limit`   | integer | 100     | Max records to return        |
 | `offset`  | integer | 0       | Pagination offset            |
 
-Each listed memory includes `contentSafety` from the persisted ledger or a
-read-time assessment for legacy rows. This metadata is informational for
-inspection; a `blocked` or `tainted` row remains retained and auditable rather
-than being deleted.
+### Credential redaction
 
-### Memory content safety
-
-Remembered content is scanned before it can become prompt-facing context. The
-versioned policy reports `clean`, `tainted`, or `blocked`, with stable reason
-codes such as `prompt_injection`, `exfiltration`, `credential_harvesting`,
-`malicious_shell`, `tool_directive`, and `invisible_unicode`. Only `clean`
-content is context eligible. The original content and provenance are preserved
-unchanged, and `GET /api/memory/:id` returns the same assessment for inspection.
+Remembered content is stored as written. When it is projected into a prompt,
+recall result, Dreaming evidence, `MEMORY.md`, or an MCP tool response, any
+detected credential (provider API keys and tokens, private keys, JWTs, bearer
+tokens, and values assigned to secret-named keys) is replaced with
+`[redacted credential]`. Nothing is withheld for safety reasons, and the
+original content and provenance stay unchanged.
 
 The scan is not a truth judgment and is not a replacement for permissions or
 agent scoping. A blocked memory can still be inspected by an authorized caller;
@@ -129,6 +124,8 @@ attach explicit temporal edges to the memory without duplicating the memory
 content. Use them when the memory is saved later than the event, observation,
 source creation time, or validity window it describes. Each value must be a
 valid ISO timestamp; `validUntil` must be after `validFrom` when both are set.
+Dreaming claims carry the same `occurred` and `valid` facets on their semantic
+memories (see [Claim time](/api/knowledge-ontology/#post-api-dream-operations)).
 
 `reviewAfter` is an optional ISO timestamp for a future temporal claim. Dreaming
 uses it to surface the memory for review after the deadline instead of assuming
@@ -184,14 +181,7 @@ Dreaming owns semantic processing.
   "hints_written": 0,
   "structured": false,
   "structured_applied": false,
-  "deduped": false,
-  "contentSafety": {
-    "status": "clean",
-    "contextEligible": true,
-    "reasons": [],
-    "policyVersion": "memory-content-safety-v1",
-    "scannedAt": "2026-02-21T10:00:00.000Z"
-  }
+  "deduped": false
 }
 ```
 

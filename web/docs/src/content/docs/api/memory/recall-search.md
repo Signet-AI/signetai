@@ -10,12 +10,9 @@ authorizes candidate IDs before any content-bearing rerank, summary,
 dampening, expansion, or access-tracking stage runs. Requires `recall`
 permission. For the full execution model, see [Hybrid Recall](/memory/#hybrid-recall).
 
-Recall applies the memory content-safety policy at that authorization boundary.
-Only `clean` content is hydrated for reranking, summaries, dampening, or the
-final response. Tainted or blocked memories are retained as source evidence
-and remain inspectable through the memory APIs, but they are not ordinary
-prompt context. Native artifact and source-chunk fallback results use the same
-policy.
+Result content has detected credentials replaced with `[redacted credential]`,
+including native artifact and source-chunk fallback results. The stored
+memories are unchanged.
 
 **Request body**
 
@@ -60,7 +57,13 @@ Exact date phrases in `query`, such as `2026/05/13`, `2026-05-13`, or
 `May 13 2026`, activate temporal recall automatically. Date-only queries return
 a timeline assembled from existing session, source, captured-memory,
 and explicit temporal-edge metadata. A date plus topic uses the date as a
-filter and the remaining words as the content query. Date ranges accept full
+filter and the remaining words as the content query. Memories in the window
+that match the topic rank first; when they leave result slots empty, other
+memories from the same window fill them, ordered by similarity to the query
+and marked `source: "temporal_window"`. A memory dated in the window can
+match a topic without sharing its words ("saw Queen live" for "music event"),
+so the window is not discarded for lack of keyword overlap. Fill never
+crosses the caller's scope or read policy. Date ranges accept full
 `YYYY-MM-DD/YYYY-MM-DD` or abbreviated same-month `YYYY-MM-DD/DD` notation;
 named ranges such as `July 25/26 2026` are also accepted. Callers can also pass
 a `time` object directly. Supported temporal facets are `session`, `source`,
@@ -165,6 +168,15 @@ or synthesis stopped after retrieving only partial evidence.
 milliseconds. Aggregate recall fills the same field with aggregate-specific
 stages such as `aggregate_planning`, `aggregate_followup_recalls`, and
 `aggregate_synthesis`.
+
+`meta.transcriptEvidence`, when the transcript lane ran, reports how many
+transcript excerpts were returned (`returned`), how they were placed
+(`ranking`: `cross-encoder` when they competed with the bottom results by
+relevance, `keyword` when the cross-encoder was unavailable), and
+`failed: true` if the lane failed; recall then returns memory results only. Transcript excerpts have
+`source: "transcript"` and an id of the form `transcript:<session>`; see
+[Hybrid Recall](/memory/#hybrid-recall) for the bounds.
+
 `meta.temporal`, when present, describes the resolved temporal window, facets,
 and content query used by automatic date parsing or an explicit `time` request.
 When session dedupe is enabled, `meta.dedupe.suppressed` counts rows omitted

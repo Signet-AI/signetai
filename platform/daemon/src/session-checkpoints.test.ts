@@ -22,7 +22,6 @@ import {
 	pruneCheckpoints,
 	queueCheckpointWrite,
 	redactCheckpointRow,
-	redactSecrets,
 	writeCheckpoint,
 	writeCheckpointAsync,
 } from "./session-checkpoints";
@@ -246,30 +245,6 @@ describe("session-checkpoints", () => {
 });
 
 describe("redaction", () => {
-	test("redactSecrets catches Bearer tokens", () => {
-		const input = "Using Bearer eyJhbGciOiJIUzI1NiJ9.test for auth";
-		const result = redactSecrets(input);
-		expect(result).not.toContain("eyJhbGci");
-		expect(result).toContain("[REDACTED]");
-	});
-
-	test("redactSecrets catches API key patterns", () => {
-		const input = "Set api_key=sk-1234567890abcdef in config";
-		const result = redactSecrets(input);
-		expect(result).toContain("[REDACTED]");
-	});
-
-	test("redactSecrets catches env var assignments", () => {
-		const input = "Export $OPENAI_API_KEY=sk-abc123xyz";
-		const result = redactSecrets(input);
-		expect(result).toContain("[REDACTED]");
-	});
-
-	test("redactSecrets preserves normal text", () => {
-		const input = "User prefers dark mode and vim keybindings";
-		expect(redactSecrets(input)).toBe(input);
-	});
-
 	test("redactCheckpointRow redacts digest and remembers", () => {
 		const row: CheckpointRow = {
 			id: "test-id",
@@ -278,7 +253,7 @@ describe("redaction", () => {
 			project: "/tmp/p",
 			project_normalized: "/tmp/p",
 			trigger: "periodic",
-			digest: "Used Bearer eyJtoken1234567890abcdef for API call",
+			digest: "Used Bearer eyJtoken1234567890abcdef for API call at commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b",
 			prompt_count: 5,
 			memory_queries: null,
 			recent_remembers: JSON.stringify(["api_key=sk-secret1234567890"]),
@@ -291,11 +266,12 @@ describe("redaction", () => {
 		};
 
 		const redacted = redactCheckpointRow(row);
-		expect(redacted.digest).not.toContain("eyJtoken");
-		expect(redacted.digest).toContain("[REDACTED]");
+		expect(redacted.digest).toBe(
+			"Used Bearer [redacted credential] for API call at commit 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b",
+		);
 		if (!redacted.recent_remembers) throw new Error("redacted remembers missing");
 		const remembers = JSON.parse(redacted.recent_remembers);
-		expect(remembers[0]).toContain("[REDACTED]");
+		expect(remembers[0]).toBe("api_key=[redacted credential]");
 	});
 });
 

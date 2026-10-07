@@ -119,6 +119,6 @@ describe("plugin routes", () => {
 		expect(body.events[0]?.data.secret).toBe("[REDACTED]");
 		expect(body.events[0]?.data.name).toBe("OPENAI_API_KEY");
 		expect(body.events[0]?.data.nested).toEqual({ clientSecret: "[REDACTED]" });
-		expect(body.events[0]?.data.command).toBe("OPENAI_API_KEY=[REDACTED] bun test");
+		expect(body.events[0]?.data.command).toBe("OPENAI_API_KEY=[redacted credential] bun test");
 	});
 });

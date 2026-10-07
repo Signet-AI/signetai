@@ -1,11 +1,10 @@
 import { retrievalEvent } from "../assistant-retrieval";
 import * as Type from "typebox";
 import { z } from "zod";
-import { type AssistantChatEvent, MEMORY_CONTENT_WITHHELD_NOTICE, buildRecallRequestBody } from "@signet/core";
+import { type AssistantChatEvent, buildRecallRequestBody, redactCredentialsDeep } from "@signet/core";
 import { resolveScopedAgent } from "../request-scope";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
-import { redactUnsafeMemoryProjection } from "../memory-content-safety";
 import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
 import { getDreamingCapability } from "../pipeline/dreaming-capabilities";
 import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
@@ -966,7 +965,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								accessor: getDbAccessor(),
 								agentId: scope.agentId,
 								actor: "dashboard-chat",
-								restrictToAgent: true,
+								allowedAgentIds: [scope.agentId],
 								onToolCall(trace) {
 									const retrieval = retrievalEvent(trace.tool, trace.output);
 									if (retrieval) {
@@ -975,11 +974,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 											for (const sourceRef of retrieval.evidenceRefs)
 												send({ type: "citation", sourceRef, excerpt: "" });
 									}
-									if (
-										!trace.output.ok ||
-										!["search_evidence", "get_evidence"].includes(trace.tool) ||
-										!Array.isArray(trace.output.items)
-									)
+									if (!trace.output.ok || trace.tool !== "search_evidence" || !Array.isArray(trace.output.items))
 										return;
 									for (const item of trace.output.items.slice(0, 20)) {
 										if (
@@ -998,8 +993,6 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									"search_entities",
 									"get_entity",
 									"list_aspect_claims",
-									"walk_links",
-									"get_evidence",
 									"search_evidence",
 								],
 							}),
@@ -1027,7 +1020,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 							async execute(_id, input) {
 								const { query, limit } = recallInputSchema.parse(input);
 								const recalled = recallResponseSchema.parse(
-									redactUnsafeMemoryProjection(
+									redactCredentialsDeep(
 										await internal(
 											"/api/memory/recall",
 											buildRecallRequestBody(query, { limit, agentId: scope.agentId, recallSurface: "dashboard" }),
@@ -1036,7 +1029,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								);
 								const rows = recalled.results.flatMap((value) => {
 									const row = recallRowSchema.safeParse(value);
-									return row.success && row.data.content !== MEMORY_CONTENT_WITHHELD_NOTICE ? [row.data] : [];
+									return row.success ? [row.data] : [];
 								});
 								const evidence = getDreamingCapability(
 									{ accessor: getDbAccessor(), agentId: scope.agentId, actor: "dashboard-chat" },

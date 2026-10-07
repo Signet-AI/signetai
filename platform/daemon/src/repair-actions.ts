@@ -3,6 +3,7 @@ import {
 	readMemoriesFtsIndexRowCount,
 	readMemoriesFtsSql,
 	recreateMemoriesFts,
+	activeVectorProjectionTable,
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import type { IntegrityCheckStatus } from "./database-integrity";
@@ -444,7 +445,7 @@ export async function checkFtsConsistency(
 							reason: ctx.reason,
 							actorType: ctx.actorType,
 							requestId: ctx.requestId,
-							message: "FTS recreated with unicode61 tokenizer",
+							message: "FTS recreated with the porter unicode61 tokenizer",
 						},
 					});
 				} else {
@@ -452,7 +453,7 @@ export async function checkFtsConsistency(
 						accessor,
 						(db) => {
 							recreateMemoriesFts(db);
-							writeRepairAudit(db, action, ctx, 1, "FTS recreated with unicode61 tokenizer");
+							writeRepairAudit(db, action, ctx, 1, "FTS recreated with the porter unicode61 tokenizer");
 						},
 						"db:repair.fts.tokenizer-rebuild",
 					);
@@ -465,7 +466,7 @@ export async function checkFtsConsistency(
 
 		limiter.record(action);
 		const message = repair
-			? "FTS tokenizer drift detected — recreated with unicode61 tokenizer"
+			? "FTS tokenizer drift detected — recreated with the porter unicode61 tokenizer"
 			: "FTS tokenizer drift detected — run with repair=true to recreate";
 		logger.warn("pipeline", "repair: FTS tokenizer drift", {
 			memCount,
@@ -2091,7 +2092,8 @@ async function findSemanticDuplicates(
 
 		const neighbors = await accessor.withReadDbAsync(
 			async (db) => {
-				const vecRow = db.prepare("SELECT embedding FROM vec_embeddings WHERE id = ?").get(candidate.embedding_id) as
+				const vecTable = activeVectorProjectionTable(db);
+				const vecRow = db.prepare(`SELECT embedding FROM ${vecTable} WHERE id = ?`).get(candidate.embedding_id) as
 					| { embedding: ArrayBuffer }
 					| undefined;
 
@@ -2101,7 +2103,7 @@ async function findSemanticDuplicates(
 				const rows = db
 					.prepare(
 						`SELECT e.source_id, v.distance
-					 FROM vec_embeddings v
+					 FROM ${vecTable} v
 					 JOIN embeddings e ON v.id = e.id
 					 JOIN memories m ON e.source_id = m.id
 					 WHERE v.embedding MATCH ? AND k = 6

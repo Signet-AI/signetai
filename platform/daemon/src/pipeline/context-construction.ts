@@ -1,9 +1,8 @@
-import { scanMemoryContent } from "@signet/core";
+import { redactCredentials } from "@signet/core";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerReadAll } from "../db-owner-sql";
 import type { ReadDb } from "../db-accessor";
 import { memoryOriginEligibilitySql, type MemorySearchFilterClause } from "../memory-search-filters";
-import { isMemoryContentContextEligible } from "../memory-content-safety";
 
 export interface ConstructedProvenance {
 	readonly entityId: string;
@@ -70,7 +69,7 @@ interface DependencyRow {
 const MAX_BLOCK_CHARS = 900;
 
 function cleanValue(value: string): string {
-	return value.replace(/\s+/g, " ").trim();
+	return redactCredentials(value).replace(/\s+/g, " ").trim();
 }
 
 function isNoise(value: string): boolean {
@@ -146,19 +145,7 @@ export function constructContextBlocks(
 				)
 				.all(asp.id, agentId, ...(filter?.args ?? [])) as AttributeRow[];
 
-			const values = attrs
-				.filter((a) =>
-					a.memory_id
-						? isMemoryContentContextEligible(db, {
-								agentId,
-								sourceKind: "memory",
-								sourceId: a.memory_id,
-								content: a.content,
-							})
-						: scanMemoryContent(a.content).contextEligible,
-				)
-				.map((a) => cleanValue(a.content))
-				.filter((value) => !isNoise(value));
+			const values = attrs.map((a) => cleanValue(a.content)).filter((value) => !isNoise(value));
 			if (values.length === 0) continue;
 
 			aspectIds.push(asp.id);
@@ -181,19 +168,7 @@ export function constructContextBlocks(
 			)
 			.all(ent.id, agentId, ...(filter?.args ?? [])) as ConstraintRow[];
 
-		const cleanConstraints = constraints
-			.filter((c) =>
-				c.memory_id
-					? isMemoryContentContextEligible(db, {
-							agentId,
-							sourceKind: "memory",
-							sourceId: c.memory_id,
-							content: c.content,
-						})
-					: scanMemoryContent(c.content).contextEligible,
-			)
-			.map((c) => cleanValue(c.content))
-			.filter((value) => !isNoise(value));
+		const cleanConstraints = constraints.map((c) => cleanValue(c.content)).filter((value) => !isNoise(value));
 		if (cleanConstraints.length > 0) {
 			const vals = cleanConstraints.join("; ");
 			lines.push(`- Constraints: ${vals}`);
@@ -276,19 +251,6 @@ export async function constructContextBlocksViaOwner(
 	}
 	if (entities.length === 0) return { blocks: [], entities: [] };
 
-	const safetyRows = await query<{ readonly name: string }>(
-		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-		[],
-		"memory-search.constructed.safety-schema",
-		1,
-	);
-	const hasSafetyLedger = safetyRows.length > 0;
-	const safetyJoin = hasSafetyLedger
-		? "LEFT JOIN memory_content_safety safety ON safety.agent_id = ea.agent_id AND safety.source_kind = 'memory' AND safety.source_id = ea.memory_id"
-		: "";
-	const safetyFilter = hasSafetyLedger
-		? "AND (safety.source_id IS NULL OR (safety.status = 'clean' AND safety.context_eligible = 1))"
-		: "";
 	const originEligibility = filter ? memoryOriginEligibilitySql("ea", filter, allowUnlinked) : "1 = 1";
 	const validEntities = entities.map((entity) => entity.id);
 	const aspects: Array<AspectRow & { readonly entity_id: string; readonly aspect_rank: number }> = [];
@@ -319,10 +281,10 @@ export async function constructContextBlocksViaOwner(
 				`SELECT aspect_id, content, importance, memory_id, status FROM (
 				 SELECT ea.aspect_id, ea.content, ea.importance, ea.memory_id, ea.status,
 				        row_number() OVER (PARTITION BY ea.aspect_id ORDER BY ea.importance DESC) AS attribute_rank
-				 FROM entity_attributes ea ${safetyJoin}
+				 FROM entity_attributes ea
 				 WHERE ea.aspect_id IN (${placeholders}) AND ea.agent_id = ?
 				   AND ea.status = 'active' AND ea.kind != 'constraint'
-				   AND ${originEligibility} ${safetyFilter}
+				   AND ${originEligibility}
 				) WHERE attribute_rank <= 5 ORDER BY aspect_id, attribute_rank`,
 				[...batch, agentId, ...(filter?.args ?? [])],
 				"memory-search.constructed.attributes",
@@ -342,10 +304,10 @@ export async function constructContextBlocksViaOwner(
 				 SELECT asp.entity_id, ea.content, ea.importance, ea.memory_id,
 				        row_number() OVER (PARTITION BY asp.entity_id ORDER BY ea.importance DESC) AS constraint_rank
 				 FROM entity_aspects asp
-				 JOIN entity_attributes ea ON ea.aspect_id = asp.id ${safetyJoin}
+				 JOIN entity_attributes ea ON ea.aspect_id = asp.id
 				 WHERE asp.entity_id IN (${placeholders}) AND asp.agent_id = ? AND ea.agent_id = ?
 				   AND ea.kind = 'constraint' AND ea.status = 'active'
-				   AND ${originEligibility} ${safetyFilter}
+				   AND ${originEligibility}
 				) WHERE constraint_rank <= 10 ORDER BY entity_id, constraint_rank`,
 					[...batch, agentId, agentId, ...(filter?.args ?? [])],
 					"memory-search.constructed.constraints",
@@ -358,10 +320,10 @@ export async function constructContextBlocksViaOwner(
 	const dependencyEligibility =
 		filter && !allowUnlinked
 			? `AND ed.aspect_id IS NOT NULL AND EXISTS (
-			SELECT 1 FROM entity_attributes ea ${safetyJoin}
+			SELECT 1 FROM entity_attributes ea
 			WHERE ea.aspect_id = ed.aspect_id AND ea.agent_id = ed.agent_id
 			  AND ea.kind != 'constraint' AND ea.status = 'active'
-			  AND ${originEligibility} ${safetyFilter}
+			  AND ${originEligibility}
 		)`
 			: "";
 	const dependencies: Array<DependencyRow & { readonly source_entity_id: string }> = [];
@@ -395,14 +357,12 @@ export async function constructContextBlocksViaOwner(
 	}
 	const attributesByAspect = new Map<string, Array<(typeof attributes)[number]>>();
 	for (const attribute of attributes) {
-		if (!scanMemoryContent(attribute.content).contextEligible) continue;
 		const values = attributesByAspect.get(attribute.aspect_id) ?? [];
 		values.push(attribute);
 		attributesByAspect.set(attribute.aspect_id, values);
 	}
 	const constraintsByEntity = new Map<string, Array<(typeof constraints)[number]>>();
 	for (const constraint of constraints) {
-		if (!scanMemoryContent(constraint.content).contextEligible) continue;
 		const values = constraintsByEntity.get(constraint.entity_id) ?? [];
 		values.push(constraint);
 		constraintsByEntity.set(constraint.entity_id, values);
@@ -422,7 +382,7 @@ export async function constructContextBlocksViaOwner(
 			const values = (attributesByAspect.get(aspect.id) ?? [])
 				.filter((attribute) => !isNoise(attribute.content))
 				.map((attribute) => ({
-					content: attribute.content,
+					content: redactCredentials(attribute.content),
 					status: attribute.status,
 					importance: attribute.importance,
 				}));

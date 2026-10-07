@@ -129,6 +129,44 @@ benchmark:
 bun run bench -- --dry-run
 ```
 
+## GLM and BEAM runs
+
+MemoryBench resolves the answering model, judge, and harness-side extraction
+model through one client, so a run can use Z.ai's GLM-5.3-Flash for all three:
+
+```bash
+ZAI_API_KEY=... \
+SIGNET_BENCH_ANSWERING_MODEL=glm-5.3-flash \
+SIGNET_BENCH_JUDGE=glm-5.3-flash \
+MEMORYBENCH_EXTRACTION_MODEL=glm-5.3-flash \
+bun run bench -- --limit 20
+```
+
+`glm-5.3-flash` sends Chat Completions with thinking disabled;
+`glm-5.3-flash-thinking` enables it. Numbers produced with GLM are not
+like-for-like with results published using GPT-4o or GPT-4.1-mini. Compare
+Signet against the `filesystem` and `rag` baselines run with the same models.
+
+BEAM (`beam-1m`, `beam-10m`) needs a prepared, hash-verified snapshot:
+
+```bash
+cd memorybench
+bun run src/index.ts beam prepare --tiers 1M
+cd ..
+bun run bench -- -b beam-1m --evaluation-profile custom-judge \
+  --data-path ./data/benchmarks/beam --dataset-revision <fingerprint> --sample 1
+```
+
+The `paper` evaluation profile (default) requires `gpt-4.1-mini` as judge and
+reports `beamScore` only for a complete tier. `custom-judge` keeps the paper's
+rubric prompts and scoring with any judge and reports `beamRubricScore`.
+BEAM-1M is about 36M tokens across 37,315 sessions; the 20 questions of each
+conversation share one ingest.
+
+Reports record API-reported token usage for answering, judging, extraction,
+and observed Dreaming passes, plus a list-price cost estimate where model
+pricing is known. See `memorybench/README.md` for the field reference.
+
 ## Two-stage local model workflow
 
 For local tuning, keep extraction cheap and reserve the stronger model for the
@@ -157,10 +195,8 @@ OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
 MEMORYBENCH_EXTRACTION_MODEL=google/gemma-4-E4B-it \
 MEMORYBENCH_EXTRACTION_MAX_TOKENS=1200 \
 MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS=1800 \
-SIGNET_BENCH_EMBEDDING_PROVIDER=ollama \
-SIGNET_BENCH_EMBEDDING_MODEL=nomic-embed-text \
 SIGNET_BENCH_RUN_ID="$RUN_ID" \
-bun run bench:ingest -- --no-build --workspace "$WORKSPACE" --limit 6 --concurrency-ingest 1
+bun run bench:ingest -- --profile rules --no-build --workspace "$WORKSPACE" --limit 6 --concurrency-ingest 1
 ```
 
 For impatient local iteration, ingestion can use OpenRouter while answer/judge
@@ -175,7 +211,7 @@ signet secret put OPENROUTER_API_KEY
 ```bash
 SIGNET_BENCH_RUN_ID="$RUN_ID" \
 MEMORYBENCH_SESSION_CONCURRENCY=4 \
-bun run bench:ingest -- --ingest-openrouter --no-build --workspace "$WORKSPACE" --limit 6 --concurrency-ingest 2
+bun run bench:ingest -- --profile rules --ingest-openrouter --no-build --workspace "$WORKSPACE" --limit 6 --concurrency-ingest 2
 ```
 
 `--ingest-openrouter` only affects `bench:ingest`. It maps the injected
@@ -195,91 +231,90 @@ OPENAI_API_KEY=dummy \
 OPENAI_BASE_URL=http://127.0.0.1:8000/v1 \
 SIGNET_BENCH_ANSWERING_MODEL=google_gemma-4-26B-A4B-it-Q5_K_M.gguf \
 SIGNET_BENCH_JUDGE=google_gemma-4-26B-A4B-it-Q5_K_M.gguf \
-SIGNET_BENCH_EMBEDDING_PROVIDER=ollama \
-SIGNET_BENCH_EMBEDDING_MODEL=nomic-embed-text \
 SIGNET_BENCH_RUN_ID="$RUN_ID" \
-bun run bench:evaluate -- --no-build --workspace "$WORKSPACE"
+bun run bench:evaluate -- --profile rules --no-build --workspace "$WORKSPACE"
 ```
 
 The `--resume` flag is a wrapper guardrail. It prevents `bun run bench` from
 adding `--force` when continuing a checkpoint. Use it whenever the run already
 has ingested data that should be preserved.
 
+## Benchmark workspace
+
+`bun run bench` benchmarks a default Signet install. For every run it:
+
+1. creates a temporary root with its own `HOME` and workspace
+2. runs `signet setup --non-interactive` into it, with the embedding provider
+   pinned to `native` and the extraction model set to the benchmark model
+3. adds one inference account so the daemon can authenticate to the model
+   provider
+4. starts that workspace's daemon on a private port and runs MemoryBench
+   against it
+
+Pipeline, graph, reranker, autonomous, and Dreaming settings are whatever
+setup writes. When a benchmark shows a better value, change the product default
+so the next run measures it. Do not add bench-only configuration.
+
+Setup is passed `--remote-url` pointing at the benchmark port so it does not
+start a daemon on the default port. Only clients read that value.
+
+The credential step changes three things in the setup-written target, because
+a fresh non-interactive install cannot reach a remote model otherwise:
+
+- `account`: a reference to `SIGNET_BENCH_DREAMING_API_KEY`, which the wrapper
+  fills from `ZAI_API_KEY`. Setup writes no credential for a remote endpoint.
+- `privacy: restricted_remote`: setup's `memory_extraction` task class requires
+  it, and a remote target is otherwise inferred as `remote_ok`, which the
+  router blocks.
+- `executor`: set to the catalog provider family (default `zai-coding-cn`)
+  with no endpoint, matching how an installed Z.ai target is configured. The
+  generic OpenAI-compatible executor appends `/v1` to the Z.ai `/v4` base URL.
+
+Two concurrency settings are deliberately raised, because a benchmark ingests
+its whole corpus at once and each question is its own agent:
+`memory.dreaming.maxConcurrentPasses` is 6 instead of the product default of 2,
+and `memory.pipelineV2.worker.maxLlmConcurrency` is that value plus 2 so the
+shared LLM limit does not hold passes back. Dreaming never runs more passes than
+the shared LLM limit allows. Set `SIGNET_BENCH_DREAMING_CONCURRENCY` to measure
+another value, including the default. While draining, the harness triggers a new
+incremental pass whenever a slot frees up and the backlog is not yet zero, rather
+than waiting for every running pass to finish. It stops after three failed
+passes per slot in a row, or three passes per slot that apply no mutations.
+
+Set `SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=openai-compatible` with
+`SIGNET_BENCH_DREAMING_ENDPOINT` to keep a generic endpoint, for example a local
+model server.
+
 ## Benchmark profiles
 
-The wrapper supports explicit Signet profiles:
-
 ```bash
+bun run bench                                  # dreaming (default)
 bun run bench -- --profile rules
 bun run bench -- --profile supermemory-parity
-bun run bench -- --profile dreaming-parity
 ```
 
-`rules` is the default. It uses the `signet` provider and follows the common
-MemoryBench phase contract:
+`dreaming` is the default and the publishable profile. It uses the
+`signet-dreaming` provider:
 
-- ingest extracted structured memories through `/api/memory/remember`
-- search with the orchestrator's requested limit, currently `10`
-- answer from bounded recall results only
-- use `/api/memory/recall` with `expand: true`, so any lossless source snippets
-  come from the recall API surface itself, not a benchmark-side hidden context
-  channel
-- pass LongMemEval `question_date` into the Signet provider so relative
-  temporal search phrases such as "four weeks ago" can be resolved into
-  mechanical absolute-date search hints before recall
-- do not dump full raw transcripts into the answer prompt
+- each benchmark session is sent to `/api/hooks/session-end` with
+  `reason: "session_shutdown"` and an inline transcript, the same path the Pi
+  connectors use. A session-end without a boundary reason is treated as a turn
+  and captures nothing
+  ([#2014](https://github.com/Signet-AI/signetai/issues/2014)).
+- each haystack gets its own agent, `memorybench-<container tag>`, so one
+  question's evidence cannot answer another's
+- after capture, the provider triggers one incremental Dreaming pass and waits
+  until every agent's measured episodic backlog is zero
+- recall goes through `/api/memory/recall` for the haystack's agent
 
-`supermemory-parity` uses the `signet-supermemory-parity` provider. It is not a
-publishable fair-score profile. It intentionally mirrors the upstream
-Supermemory adapter shape, which does **not** match the common provider shape
-required for fair testing. Use it only to diagnose whether a low Signet score is
-caused by Signet itself or by comparing against Supermemory's non-conforming,
-more permissive adapter:
+`rules` uses the `signet` provider. The harness runs its own LLM extraction and
+writes results through `/api/memory/remember`. That is not the path a user's
+memory takes, so do not publish `rules` numbers as Signet results.
 
-- ingest each session as the same date header plus stringified raw JSON
-  conversation that the Supermemory adapter stores
-- search with a limit of `30`, matching the Supermemory adapter's current
-  hardcoded limit
-- answer from raw session-shaped memory content instead of extracted memory
-  summaries
-
-Keep results from these profiles separate. A `supermemory-parity` result answers
-"how does Signet perform when given Supermemory's adapter advantage?" A `rules`
-result answers "how does Signet perform under the harness contract we intend to
-publish?"
-
-### Dreaming parity profile
-
-`dreaming-parity` is an opt-in, higher-cost profile for measuring the canonical
-Dreaming pass with the production default configuration. It uses the same
-`signet-dreaming` provider as `dreaming`, but writes these production-equivalent
-values into the isolated workspace:
-
-| Setting | Default `dreaming` profile | `dreaming-parity` |
-| --- | ---: | ---: |
-| `memory.dreaming.tokenThreshold` | `1000000` | `100000` |
-| `memory.dreaming.maxInputTokens` | `64000` | `128000` |
-| `memory.dreaming.maxOutputTokens` | `32000` | `16000` |
-| `memory.pipelineV2.enabled` | `false` | `true` |
-| Graph and traversal defaults | reduced | production defaults |
-
-The parity profile still uses one explicit `mode: incremental` trigger after
-the fixture is ingested. This is deliberate: the benchmark needs a bounded,
-reproducible pass. Production runs reach the same pass through the periodic
-five-minute worker and `selectDreamingCheckMode`, so scheduler firing,
-alternating focus selection, and queue-pressure deferral remain a known delta
-outside this profile. The pass itself remains canonical:
-`triggerAsync` → `runPass` → `runDreamingAgentPass`.
-
-Because the profile raises the input budget and enables the production pipeline,
-it can consume more inference time and tokens. Keep `dreaming` as the default
-for fast local iteration, and label parity results separately from the cheaper
-bench profile. The profile requires the same explicit Dreaming model and
-endpoint configuration as `dreaming`. This profile addresses the bench realism
-concern in [#1543](https://github.com/Signet-AI/signetai/issues/1543) and is
-compatible with the deterministic Dreaming gate tracked in
-[#1326](https://github.com/Signet-AI/signetai/issues/1326) and
-[#1558](https://github.com/Signet-AI/signetai/issues/1558).
+`supermemory-parity` uses the `signet-supermemory-parity` provider. It mirrors
+the upstream Supermemory adapter shape (raw session JSON, a hardcoded recall
+limit of `30`) to diagnose whether a gap comes from Signet or from that
+adapter's more permissive contract. It is not a publishable profile.
 
 ## Supermemory adapter contract violation
 
@@ -312,21 +347,15 @@ adapter shape, not to produce a publishable score.
 
 ## Isolation rules
 
-Benchmarks must never read from or write to `~/.agents/memory/memories.db`.
-The wrapper sets `SIGNET_PATH` and `HOME` to temporary benchmark directories
-before starting the daemon. This prevents production memory, Claude project
-memory, and user identity files from being mounted into benchmark runs.
+Benchmarks must never read from or write to a user workspace. The wrapper
+creates a temporary root with its own `HOME` and `SIGNET_PATH`, sets up a fresh
+workspace there, and runs that workspace's daemon on a private port.
 
-The MemoryBench Signet provider scopes every write and search with:
-
-```text
-agentId: memorybench
-project: memorybench
-scope: <question-id>-<data-source-run-id>
-sourceType: memorybench-session
-```
-
-That scope is per question, matching MemoryBench's provider isolation model.
+The `signet-dreaming` provider captures each haystack's sessions under its own
+agent, `memorybench-<question-id>-<data-source-run-id>` (BEAM uses one agent per
+conversation). Recall reads the same agent. Dreaming passes cover every
+registered agent, and each write must cite evidence from the agent it writes
+to.
 
 ## Persistent tuning workspaces
 
@@ -334,7 +363,7 @@ Clean benchmark runs use a fresh temporary Signet database. For development
 tuning, you can preserve and reuse a benchmark workspace explicitly:
 
 ```bash
-SIGNET_BENCH_EMBEDDING_PROVIDER=ollama bun run bench -- --workspace .bench/workspaces/longmemeval-structured --sample 1
+bun run bench -- --workspace .bench/workspaces/longmemeval-structured --sample 1
 ```
 
 A persistent workspace keeps the Signet database under `.bench/`, which is
@@ -491,24 +520,25 @@ quality measurements; `rules` is not a substitute for it.
 
 ### Retrieval uplift ablation
 
-`--graph off` disables both graph boost and graph traversal while leaving
-episodic inputs and ordinary recall unchanged. For a controlled ablation, keep
-one workspace and run id: first ingest, Dream, and retrieve with the graph on;
-then restart from the `search` phase with the graph off. This preserves the
-exact same episodic and semantic state for both retrieval surfaces.
+The first pass measures the shipped defaults, with graph boost and traversal
+on. For a controlled ablation, keep one workspace and run id, then turn the
+graph off in that workspace and restart from the `search` phase. Both retrieval
+passes read the same episodic and semantic state.
 
 ```bash
 export RUN_ID="dreaming-uplift-$(date -u +%Y%m%dT%H%M%SZ)"
 export WORKSPACE=".bench/workspaces/dreaming-uplift"
 
-# Capture the graph-on report before reusing the run checkpoint.
+# Capture the default (graph-on) report before reusing the run checkpoint.
 SIGNET_BENCH_RUN_ID="$RUN_ID" \
-bun scripts/bench-memory.ts --profile dreaming --graph on --workspace "$WORKSPACE" --full
+bun scripts/bench-memory.ts --workspace "$WORKSPACE" --full
 cp "memorybench/data/runs/$RUN_ID/report.json" "memorybench/data/runs/$RUN_ID/report-graph-on.json"
 
-# Re-run only search → answer → evaluate → report against the unchanged DB.
+# Set memory.pipelineV2.graph.enabled and memory.pipelineV2.traversal.enabled
+# to false in "$WORKSPACE/agents/agent.yaml", then re-run only
+# search → answer → evaluate → report against the unchanged DB.
 SIGNET_BENCH_RUN_ID="$RUN_ID" \
-bun scripts/bench-memory.ts --profile dreaming --graph off --workspace "$WORKSPACE" --resume -r "$RUN_ID" -f search
+bun scripts/bench-memory.ts --workspace "$WORKSPACE" --resume -r "$RUN_ID" -f search
 cp "memorybench/data/runs/$RUN_ID/report.json" "memorybench/data/runs/$RUN_ID/report-graph-off.json"
 ```
 
@@ -599,15 +629,11 @@ changes to MemoryBench scoring logic.
 SIGNET_BENCH_FULL=1                 Run the full benchmark by default.
 SIGNET_BENCH_SKIP_BUILD=1           Skip `bun run build`.
 SIGNET_BENCH_KEEP_WORKSPACE=1       Keep the isolated workspace after the run.
-SIGNET_BENCH_PROFILE=<profile>      rules, dreaming, or supermemory-parity; default rules.
-SIGNET_BENCH_GRAPH=on|off           Enable graph boost/traversal for the benchmark, default on.
+SIGNET_BENCH_PROFILE=<profile>      dreaming, rules, or supermemory-parity; default dreaming.
 SIGNET_BENCH_RUN_ID=<id>            Override the MemoryBench run id.
-SIGNET_BENCH_JUDGE=<model>          Default judge model, default gpt-4o.
-SIGNET_BENCH_ANSWERING_MODEL=<m>    Default answering model, default gpt-4o.
+SIGNET_BENCH_JUDGE=<model>          Default judge model, default glm-5.3-flash.
+SIGNET_BENCH_ANSWERING_MODEL=<m>    Default answering model, default glm-5.3-flash.
 SIGNET_BENCH_SAMPLE_PER_TYPE=<n>    Default dev sample size, default 1.
-SIGNET_BENCH_EMBEDDING_PROVIDER=<p> Generated daemon embedding provider, default native.
-SIGNET_BENCH_EMBEDDING_MODEL=<m>    Generated daemon embedding model.
-SIGNET_BENCH_EMBEDDING_DIMENSIONS=<n> Generated daemon embedding dimensions.
 SIGNET_BENCH_AGENT_ID=<id>          Signet agent scope, default memorybench.
 SIGNET_BENCH_PROJECT=<name>         Signet project scope, default memorybench.
 SIGNET_BENCH_REQUEST_TIMEOUT_MS=<n> Daemon request timeout, default 60000.
@@ -615,20 +641,23 @@ SIGNET_BENCH_SESSION_CONCURRENCY=<n> Per-question session ingest concurrency, de
 SIGNET_BENCH_INGEST_OPENROUTER=1    Use OpenRouter defaults for bench:ingest.
 SIGNET_BENCH_OPENROUTER_MODEL=<m>   OpenRouter extraction model, default inception/mercury-2.
 SIGNET_BENCH_OPENROUTER_BASE_URL=<u> OpenRouter-compatible base URL override.
-SIGNET_BENCH_DREAMING_MODEL=<id>    Required routed model id for the dreaming profile.
-SIGNET_BENCH_DREAMING_ENDPOINT=<u>  Optional OpenAI-compatible base endpoint (for example LM Studio); a pasted `/v1/chat/completions` URL is normalized to its base. Bypasses OpenRouter.
-SIGNET_BENCH_DREAMING_API_KEY=<key> Credential for a remote Dreaming endpoint; stays in the runner environment.
-SIGNET_BENCH_DREAMING_CREDENTIAL_REF=<name> Optional isolated-workspace credential env name; defaults to SIGNET_BENCH_DREAMING_API_KEY.
-SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=<name> Optional Pi catalog provider family for a compatible endpoint. Use `opencode-go` with OpenCode Zen Go so Pi preserves model-specific tool/thinking protocol metadata.
-SIGNET_BENCH_DREAMING_WAIT_SECS=<n> Max time to await its bounded Dreaming pass, default 720.
-SIGNET_BENCH_DREAMING_TIMEOUT_MS=<n> Per-pass routed inference timeout, default 600000. Raise it with the wait budget for slower agentic models.
-SIGNET_BENCH_DREAMING_MAX_OUTPUT_TOKENS=<n> Per-turn Dreaming output cap, default 32000. Keep it high enough for an agentic pass to finish rather than terminate mid-tool-loop.
+SIGNET_BENCH_DREAMING_MODEL=<id>    Benchmark model for setup and Dreaming, default glm-5.3-flash.
+SIGNET_BENCH_DREAMING_ENDPOINT=<u>  Model endpoint, default https://open.bigmodel.cn/api/coding/paas/v4.
+SIGNET_BENCH_DREAMING_API_KEY=<key> Daemon credential; defaults to ZAI_API_KEY from memorybench/.env.
+SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=<name> Pi catalog provider family, default zai-coding-cn; openai-compatible keeps the endpoint.
+SIGNET_BENCH_DREAMING_WAIT_SECS=<n> Max time to drain the Dreaming backlog, default 720.
+SIGNET_BENCH_DREAMING_CONCURRENCY=<n> Concurrent Dreaming passes for bulk ingest, default 6, max 16.
+SIGNET_BENCH_DREAMING_CODEMODE=1     Run Dreaming with memory.dreaming.codemode on (0 forces it off; unset keeps the product default).
+SIGNET_BENCH_EMBEDDING_WAIT_SECS=<n> Max time to wait for Dreaming's derived memories to be embedded before retrieval, default 1800.
+SIGNET_BENCH_CAPTURE_WAIT_SECS=<n> Max time to wait for a question's transcript captures to finish during indexing, default 1800.
 MEMORYBENCH_EXTRACTION_MODEL=<m>    Structured extraction model, default gpt-4o.
 MEMORYBENCH_EXTRACTION_MAX_TOKENS=<n> Markdown extraction cap, default 1200.
 MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS=<n> Structured JSON extraction cap, default 1800.
 MEMORYBENCH_SESSION_CONCURRENCY=<n> Per-question session ingest concurrency, default 1, max 16.
 OPENROUTER_API_KEY                  Preferred injected env var for OpenRouter ingestion.
 OPENAI_BASE_URL                     OpenAI-compatible API base URL.
+ZAI_API_KEY                         Z.ai key for glm-* answering, judge, and extraction models.
+ZAI_BASE_URL                        Z.ai base URL, default https://open.bigmodel.cn/api/coding/paas/v4.
 ```
 
 ## Reports

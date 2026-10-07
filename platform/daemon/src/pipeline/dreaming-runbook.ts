@@ -1,4 +1,6 @@
 import type { DbAccessor, WriteDb } from "../db-accessor";
+import type { DbOwnerClient } from "../db-owner-client";
+import { ownerQueryAll, ownerQueryOne } from "../db-owner-maintenance";
 import type { DreamingAgentEvidence } from "./dreaming-evidence";
 import type { DreamingReviewedExcludedEvidenceEntry } from "./dreaming-evidence-reviews";
 
@@ -33,6 +35,11 @@ export interface DreamingEvidenceWindow {
 	}[];
 }
 
+export interface DreamingRunbookOperations {
+	readonly applied: Readonly<Record<string, number>>;
+	readonly failed: readonly { readonly operation: string; readonly error: string | null; readonly count: number }[];
+}
+
 export interface DreamingRunbookPass {
 	readonly passId: string;
 	readonly mode: string;
@@ -43,7 +50,7 @@ export interface DreamingRunbookPass {
 	readonly error: string | null;
 	readonly mutationsApplied: number | null;
 	readonly mutationsFailed: number | null;
-	readonly operations: readonly { readonly operation: string; readonly ok: boolean; readonly error: string | null }[];
+	readonly operations: DreamingRunbookOperations;
 	readonly evidenceWindow: DreamingEvidenceWindow | null;
 	readonly runbook: DreamingRunbookEntry | null;
 	readonly quarantines: readonly { readonly sourceKind: string; readonly sourceId: string; readonly reason: string }[];
@@ -182,6 +189,24 @@ function operationResults(
 	});
 }
 
+function summarizeOperations(
+	results: readonly { readonly operation: string; readonly ok: boolean; readonly error: string | null }[],
+): DreamingRunbookOperations {
+	const applied: Record<string, number> = {};
+	const failed = new Map<string, { operation: string; error: string | null; count: number }>();
+	for (const result of results) {
+		if (result.ok) {
+			applied[result.operation] = (applied[result.operation] ?? 0) + 1;
+			continue;
+		}
+		const key = `${result.operation}\u0000${result.error ?? ""}`;
+		const existing = failed.get(key);
+		if (existing === undefined) failed.set(key, { operation: result.operation, error: result.error, count: 1 });
+		else existing.count += 1;
+	}
+	return { applied, failed: [...failed.values()] };
+}
+
 function serializeRunbook(entry: DreamingRunbookEntry): string {
 	return JSON.stringify(entry);
 }
@@ -198,7 +223,7 @@ export function writeDreamingRunbook(
 			)
 			.run(serializeRunbook(params.entry), params.passId, params.agentId);
 		return result.changes === 1;
-	}, "pipeline/dreaming-runbook.ts:193");
+	}, "pipeline/dreaming-runbook.ts:218");
 }
 export function recordDreamingEvidenceWindowInTx(
 	db: WriteDb,
@@ -225,54 +250,55 @@ export function recordDreamingEvidenceWindowInTx(
 		params.agentId,
 	);
 }
-export function readDreamingRunbook(accessor: DbAccessor, agentId: string, limit = 5): readonly DreamingRunbookPass[] {
-	const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 20);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-		const rows = db
-			.prepare(
-				`SELECT id, mode, status, started_at AS startedAt, completed_at AS completedAt,
-				        summary, error, mutations_applied AS mutationsApplied, mutations_failed AS mutationsFailed,
-				        evidence_window_json AS evidenceWindowJson, runbook_json AS runbookJson
-				 FROM dreaming_passes WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?`,
-			)
-			.all(agentId, boundedLimit) as Array<Record<string, unknown>>;
-		const quarantines = db.prepare(
-			`SELECT source_kind AS sourceKind, source_id AS sourceId, reason
-			 FROM dreaming_evidence_exclusions WHERE agent_id = ? AND pass_id = ? AND resolved_at IS NULL
-			 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
-		);
-		const operationCalls = db.prepare(
+export async function readDreamingPassRecord(
+	owner: DbOwnerClient,
+	agentId: string,
+	passId: string,
+): Promise<DreamingRunbookPass | null> {
+	const row = await ownerQueryOne<Record<string, unknown>>(
+		owner,
+		"dreaming.pass-record.read",
+		`SELECT id, mode, status, started_at AS startedAt, completed_at AS completedAt,
+		        summary, error, mutations_applied AS mutationsApplied, mutations_failed AS mutationsFailed,
+		        evidence_window_json AS evidenceWindowJson, runbook_json AS runbookJson
+		 FROM dreaming_passes WHERE agent_id = ? AND id = ?`,
+		[agentId, passId],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+	);
+	if (row === undefined) return null;
+	const [calls, quarantines] = await Promise.all([
+		ownerQueryAll<{ inputJson: string; outputJson: string }>(
+			owner,
+			"dreaming.pass-record.operations",
 			`SELECT input_json AS inputJson, output_json AS outputJson
 			 FROM dreaming_tool_calls WHERE agent_id = ? AND pass_id = ? AND tool_name = 'apply_ontology_ops'
 			 ORDER BY sequence ASC`,
-		);
-		return rows.map((row) => ({
-			passId: row.id as string,
-			mode: row.mode as string,
-			status: row.status as string,
-			startedAt: row.startedAt as string,
-			completedAt: (row.completedAt as string) ?? null,
-			summary: (row.summary as string) ?? null,
-			error: (row.error as string) ?? null,
-			mutationsApplied: typeof row.mutationsApplied === "number" ? row.mutationsApplied : null,
-			mutationsFailed: typeof row.mutationsFailed === "number" ? row.mutationsFailed : null,
-			operations: (operationCalls.all(agentId, row.id) as Array<{ inputJson: string; outputJson: string }>).flatMap(
-				(call) => operationResults(call.inputJson, call.outputJson),
-			),
-			evidenceWindow: parseEvidenceWindow((row.evidenceWindowJson as string) ?? null),
-			runbook: parseRunbook((row.runbookJson as string) ?? null),
-			quarantines: quarantines.all(agentId, row.id) as DreamingRunbookPass["quarantines"],
-		}));
-	}, "pipeline/dreaming-runbook.ts:231");
-}
-export function renderDreamingRunbookForPrompt(items: readonly DreamingRunbookPass[], maxChars = 6_000): string {
-	if (items.length === 0) return "";
-	const rendered = JSON.stringify(items);
-	if (rendered.length <= maxChars) return rendered;
-	return JSON.stringify({
-		truncated: true,
-		originalChars: rendered.length,
-		recentPassIds: items.map((item) => item.passId),
-	});
+			[agentId, passId],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		),
+		ownerQueryAll<DreamingRunbookPass["quarantines"][number]>(
+			owner,
+			"dreaming.pass-record.quarantines",
+			`SELECT source_kind AS sourceKind, source_id AS sourceId, reason
+			 FROM dreaming_evidence_exclusions WHERE agent_id = ? AND pass_id = ? AND resolved_at IS NULL
+			 ORDER BY excluded_at DESC, source_kind ASC, source_id ASC`,
+			[agentId, passId],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		),
+	]);
+	return {
+		passId: row.id as string,
+		mode: row.mode as string,
+		status: row.status as string,
+		startedAt: row.startedAt as string,
+		completedAt: (row.completedAt as string) ?? null,
+		summary: (row.summary as string) ?? null,
+		error: (row.error as string) ?? null,
+		mutationsApplied: typeof row.mutationsApplied === "number" ? row.mutationsApplied : null,
+		mutationsFailed: typeof row.mutationsFailed === "number" ? row.mutationsFailed : null,
+		operations: summarizeOperations(calls.flatMap((call) => operationResults(call.inputJson, call.outputJson))),
+		evidenceWindow: parseEvidenceWindow((row.evidenceWindowJson as string) ?? null),
+		runbook: parseRunbook((row.runbookJson as string) ?? null),
+		quarantines,
+	};
 }

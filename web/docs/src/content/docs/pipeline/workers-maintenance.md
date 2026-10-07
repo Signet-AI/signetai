@@ -299,7 +299,11 @@ Each cycle:
    and writes any failure backoff. A superseded profile or pressure-aborted
    batch releases its lease without consuming the promoted profile's budget.
    The lease spans the accounting window, so a slow batch cannot run twice;
-   the existing repair cooldown and hourly budget control admission.
+   the existing repair cooldown and hourly budget control admission for
+   re-embedding. When a cycle finds memories that have never been embedded,
+   it embeds those first under the lease without the cooldown or budget, so
+   new memories, including Dreaming's derived memories, become searchable
+   promptly.
 
 4. **Sequential embedding fetch** — each stale row's content is embedded
    one at a time, outside any transaction. Failed fetches increment the
@@ -318,7 +322,12 @@ configured embedding dimensions. If the table was created with stale
 table with the configured size, and backfills stored embeddings that match that
 dimension.
 
-The tracker uses `setTimeout` chains for natural backpressure. It
+The tracker uses `setTimeout` chains for natural backpressure. After a cycle
+that saves a full batch of never-embedded memories, the next cycle starts
+immediately instead of after `pollMs`, so a backlog from a Dreaming run drains
+at the provider's speed rather than `batchSize` per `pollMs`. Each cycle is
+still one bounded batch, yields to the event loop, and checks system pressure;
+re-embedding stays on the repair budget and the normal interval. It
 exposes a `getStats()` method returning `{ running, processed, failed,
 skippedCycles, lastCycleAt, queueDepth }`.
 
@@ -327,5 +336,5 @@ Configuration lives under `embeddingTracker` in the pipeline config:
 | Field | Default | Range | Description |
 |-------|---------|-------|-------------|
 | `enabled` | `true` | — | Master switch |
-| `pollMs` | `5000` | 1000–60000 ms | Polling interval between cycles |
+| `pollMs` | `5000` | 1000–60000 ms | Interval between cycles when there is no full batch of new memories to embed |
 | `batchSize` | `8` | 1–20 | Max embeddings refreshed per cycle |

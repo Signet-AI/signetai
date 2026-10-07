@@ -885,6 +885,44 @@ describe("transcript recovery worker", () => {
 		expect(capturedPaths()).toEqual([firstPath, secondPath]);
 	}, 15_000);
 
+	it("completes a scan through the real recovery child process", async () => {
+		writeSettled(
+			join(claudeRoot, "-repo", "real-child.jsonl"),
+			JSON.stringify({ sessionId: "real-child", message: { role: "user", content: "real child" } }),
+		);
+		const infoMessages: string[] = [];
+		const warnMessages: string[] = [];
+		const originalInfo = logger.info;
+		const originalWarn = logger.warn;
+		logger.info = ((category, message) => {
+			infoMessages.push(`${category}:${message}`);
+		}) as typeof logger.info;
+		logger.warn = ((category, message, data) => {
+			warnMessages.push(`${category}:${message}:${JSON.stringify(data)}`);
+		}) as typeof logger.warn;
+		const handle = startTranscriptRecoveryWorker(getDbAccessor(), dir, "agent-a", {
+			roots: { claudeCode: claudeRoot, codex: codexRoot },
+			intervalMs: 60_000,
+		});
+		try {
+			const deadline = Date.now() + 10_000;
+			while (
+				!infoMessages.includes("transcripts:Transcript recovery scan complete") &&
+				warnMessages.length === 0 &&
+				Date.now() < deadline
+			) {
+				await Bun.sleep(25);
+			}
+			expect(warnMessages).toEqual([]);
+			expect(infoMessages).toContain("transcripts:Transcript recovery scan complete");
+			expect(handle.childPid).toBeNull();
+		} finally {
+			await handle.stop();
+			logger.info = originalInfo;
+			logger.warn = originalWarn;
+		}
+	}, 15_000);
+
 	it("closes the recovery database when its daemon parent is killed", async () => {
 		const databasePath = join(dir, "recovery-lock.db");
 		const childPath = join(dir, "locking-recovery-child.ts");

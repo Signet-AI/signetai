@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
 import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
@@ -14,8 +15,30 @@ interface TransformersEnv {
 		};
 	};
 }
+interface RerankInputs {
+	readonly [key: string]: unknown;
+}
+type RerankTokenizer = (
+	texts: string[],
+	opts: { text_pair: string[]; padding: boolean; truncation: boolean; max_length: number },
+) => RerankInputs;
+interface RerankModel {
+	(inputs: RerankInputs): Promise<{ logits: { data: ArrayLike<number>; dims: readonly number[] } }>;
+	dispose?: () => Promise<void>;
+}
+interface PretrainedLoader<T> {
+	from_pretrained(
+		model: string,
+		opts?: {
+			dtype?: "q8";
+			progress_callback?: (progress: { status: string; progress?: number; file?: string }) => void;
+		},
+	): Promise<T>;
+}
 interface TransformersBindings {
 	readonly env: TransformersEnv;
+	readonly AutoTokenizer: PretrainedLoader<RerankTokenizer>;
+	readonly AutoModelForSequenceClassification: PretrainedLoader<RerankModel>;
 	readonly pipeline: (
 		task: string,
 		model: string,
@@ -50,14 +73,16 @@ function log(level: string, message: string, data?: Record<string, unknown>): vo
 
 let transformers: TransformersBindings | null = null;
 let embedFn: EmbedCallable | null = null;
+let rerankFn: ((query: string, documents: readonly string[]) => Promise<number[]>) | null = null;
+let rerankModel: RerankModel | null = null;
 let initPromise: Promise<void> | null = null;
 let initError: string | null = null;
 let modelCached = false;
 
 function snapshot() {
 	return {
-		initialized: embedFn !== null,
-		initializing: initPromise !== null && embedFn === null,
+		initialized: embedFn !== null || rerankFn !== null,
+		initializing: initPromise !== null && embedFn === null && rerankFn === null,
 		modelCached,
 		error: initError,
 	};
@@ -69,21 +94,13 @@ function pushStatus(): void {
 
 async function loadTransformers(): Promise<TransformersBindings> {
 	if (init.transformersRuntimePath) {
-		const mod = (await import(init.transformersRuntimePath)) as {
-			env: TransformersEnv;
-			pipeline: TransformersBindings["pipeline"];
-		};
-		return { env: mod.env, pipeline: mod.pipeline };
+		return (await import(init.transformersRuntimePath)) as TransformersBindings;
 	}
-	const mod = (await import("./transformers-runtime")) as {
-		env: TransformersEnv;
-		pipeline: TransformersBindings["pipeline"];
-	};
-	return { env: mod.env, pipeline: mod.pipeline };
+	return (await import("./transformers-runtime")) as unknown as TransformersBindings;
 }
 
 async function ensureInitialized(): Promise<void> {
-	if (embedFn) return;
+	if (embedFn || rerankFn) return;
 	if (initPromise) return initPromise;
 	initPromise = doInit();
 	try {
@@ -108,6 +125,9 @@ async function doInit(): Promise<void> {
 			transformers.env.remoteHost = init.remoteHostOverride;
 		}
 		configureEmbeddingWasm(transformers.env.backends?.onnx?.wasm, init.wasmDir);
+		if (init.task === "rerank" && transformers.env.backends?.onnx?.wasm) {
+			transformers.env.backends.onnx.wasm.numThreads = Math.max(1, Math.min(4, availableParallelism() - 1));
+		}
 		if (init.wasmDir && transformers.env.backends?.onnx?.wasm) {
 			const wasmBytes = readFileSync(join(init.wasmDir, "ort-wasm-simd-threaded.wasm"));
 			transformers.env.backends.onnx.wasm.wasmBinary = wasmBytes.buffer.slice(
@@ -116,22 +136,49 @@ async function doInit(): Promise<void> {
 			) as ArrayBuffer;
 		}
 
+		const progress_callback = (progress: { status: string; progress?: number; file?: string }) => {
+			if (progress.status === "download" && typeof progress.progress === "number") {
+				log("info", `Downloading ${progress.file ?? "model"}: ${Math.round(progress.progress)}%`);
+			} else if (progress.status === "ready") {
+				log("info", "Model ready");
+			}
+		};
+		if (init.task === "rerank") {
+			log("info", `Initializing cross-encoder ${init.modelId} (q8 quantization)`, { cachePath: init.cacheDir });
+			const tokenizer = await transformers.AutoTokenizer.from_pretrained(init.modelId, { progress_callback });
+			const model = await transformers.AutoModelForSequenceClassification.from_pretrained(init.modelId, {
+				dtype: "q8",
+				progress_callback,
+			});
+			const score = async (query: string, documents: readonly string[]): Promise<number[]> => {
+				if (documents.length === 0) return [];
+				const inputs = tokenizer(new Array<string>(documents.length).fill(query), {
+					text_pair: [...documents],
+					padding: true,
+					truncation: true,
+					max_length: 512,
+				});
+				const { logits } = await model(inputs);
+				const width = logits.dims.at(-1) ?? 1;
+				return documents.map((_, index) => Number(logits.data[index * width + width - 1]));
+			};
+			const warmup = await score("test", ["test"]);
+			if (warmup.length !== 1 || !Number.isFinite(warmup[0])) throw new Error("Cross-encoder warmup returned no score");
+			rerankModel = model;
+			rerankFn = score;
+			modelCached = true;
+			log("info", "Cross-encoder ready");
+			pushStatus();
+			return;
+		}
+
 		log("info", `Initializing ${init.modelId} (q8 quantization)`, {
 			cachePath: init.cacheDir,
 			wasmPath: init.wasmDir ?? "node_modules",
 			remoteHost: transformers.env.remoteHost,
 		});
 
-		const pipe = await transformers.pipeline("feature-extraction", init.modelId, {
-			dtype: "q8",
-			progress_callback: (progress) => {
-				if (progress.status === "download" && typeof progress.progress === "number") {
-					log("info", `Downloading ${progress.file ?? "model"}: ${Math.round(progress.progress)}%`);
-				} else if (progress.status === "ready") {
-					log("info", "Model ready");
-				}
-			},
-		});
+		const pipe = await transformers.pipeline("feature-extraction", init.modelId, { dtype: "q8", progress_callback });
 
 		const embed = toEmbedCallable(pipe);
 		const warmup = await embed("test", { pooling: "mean", normalize: true });
@@ -146,6 +193,7 @@ async function doInit(): Promise<void> {
 	} catch (err) {
 		initError = err instanceof Error ? err.message : String(err);
 		embedFn = null;
+		rerankFn = null;
 		modelCached = false;
 		log("error", `Init failed: ${initError}`);
 		pushStatus();
@@ -184,10 +232,21 @@ async function handleEmbed(id: number, text: string): Promise<void> {
 	}
 }
 
+async function handleRerank(id: number, query: string, documents: readonly string[]): Promise<void> {
+	try {
+		await ensureInitialized();
+		if (!rerankFn) throw new Error(initError ?? "Cross-encoder not initialized");
+		post({ type: "rerank_result", id, scores: await rerankFn(query, documents) });
+	} catch (err) {
+		post({ type: "rerank_error", id, error: err instanceof Error ? err.message : String(err) });
+	}
+}
+
 async function handleCheckAvailable(id: number): Promise<void> {
 	try {
 		await ensureInitialized();
-		post({ type: "check_result", id, available: embedFn !== null, error: embedFn ? null : (initError ?? "not ready") });
+		const ready = embedFn !== null || rerankFn !== null;
+		post({ type: "check_result", id, available: ready, error: ready ? null : (initError ?? "not ready") });
 	} catch (err) {
 		post({ type: "check_result", id, available: false, error: err instanceof Error ? err.message : String(err) });
 	}
@@ -199,7 +258,14 @@ async function handleShutdown(): Promise<void> {
 			await embedFn.dispose();
 		} catch {}
 	}
+	if (rerankModel?.dispose) {
+		try {
+			await rerankModel.dispose();
+		} catch {}
+	}
 	embedFn = null;
+	rerankFn = null;
+	rerankModel = null;
 	modelCached = false;
 	initPromise = null;
 	initError = null;
@@ -212,6 +278,9 @@ port.on("message", (msg: MainToWorkerMessage) => {
 			break;
 		case "checkAvailable":
 			void handleCheckAvailable(msg.id);
+			break;
+		case "rerank":
+			void handleRerank(msg.id, msg.query, msg.documents);
 			break;
 		case "shutdown":
 			void handleShutdown();

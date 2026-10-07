@@ -658,9 +658,11 @@
 :root:not(.dark) .graph-stage { background-image: radial-gradient(oklch(0 0 0 / 0.03) 1px, transparent 1px); }
 .graph-tooltip { position: absolute; left: 24px; bottom: 110px; z-index: 3; display: flex; flex-direction: column; gap: 7px; max-width: min(360px, calc(100% - 48px)); padding: 14px 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); color: var(--foreground); box-shadow: 0 8px 24px #0002; pointer-events: none; font-size: 12px; }
 .graph-tooltip[hidden] { display: none; }
+.graph-toolbar { position: absolute; left: 56px; top: 12px; right: 16px; z-index: 5; display: flex; align-items: center; gap: 8px; min-width: 0; pointer-events: none; }
+.graph-toolbar > * { pointer-events: auto; }
 .graph-tooltip > span:last-child { font-size: var(--text-meta); color: var(--muted-foreground); overflow-wrap: anywhere; }
 .graph-tooltip-kind { font-size: var(--text-meta); font-weight: 500; }
-.graph-navigation { position: absolute; left: 56px; top: 12px; z-index: 4; display: flex; align-items: center; height: 32px; padding: 0 3px; min-width: 0; border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); border-radius: 999px; background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.graph-navigation { position: relative; flex-shrink: 0; display: flex; align-items: center; height: 32px; padding: 0 3px; min-width: 0; border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); border-radius: 999px; background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
 .graph-navigation button { height: 26px; min-width: 26px; padding-inline: 8px; border-radius: 999px; font-size: var(--text-small); color: var(--home-secondary, var(--muted-foreground)); cursor: pointer; transition: background-color 150ms ease, color 150ms ease; }
 .graph-navigation button:hover { background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--home-title, var(--foreground)); }
 .graph-limit { position: absolute; left: 16px; top: 54px; z-index: 4; font-size: var(--text-meta); color: var(--muted-foreground); }
@@ -672,6 +674,15 @@
 	background: color-mix(in oklch, var(--background) 60%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 	border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); box-shadow: none; transition: color .15s; }
 .graph-legend-btn:hover { color: var(--foreground); }
+.graph-agent-picker { flex-shrink: 0; width: auto; max-width: 200px; height: 32px; font-size: var(--text-small);
+	color: var(--home-secondary, var(--muted-foreground)); border-radius: 999px;
+	background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+	border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); box-shadow: none; }
+.graph-agent-picker:hover { color: var(--home-title, var(--foreground)); }
+.graph-agent-options { max-width: 260px; font-size: var(--text-small); }
+.graph-agent-options .lg-dot { display: inline-block; flex-shrink: 0; margin-right: 6px; vertical-align: middle; }
+.graph-agent-options [role="option"] > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-key-agents { display: flex; flex-direction: column; gap: 7px; padding-top: 8px; border-top: 1px solid var(--border); }
 .graph-legend-pop { position: absolute; top: 52px; left: 16px; z-index: 4; display: none; flex-direction: column; gap: 7px;
 	padding: 12px 14px; border-radius: 10px; background: color-mix(in oklch, var(--background) 80%, transparent);
 	backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border: 1px solid oklch(1 0 0 / 0.1);
@@ -693,7 +704,7 @@
 :root:not(.dark) .lg-dot[data-kind="fact"] { background: #a16207; }
 :root:not(.dark) .lg-dot[data-kind="constraint"] { background: #be123c; }
 :root:not(.dark) .lg-dot[data-kind="evidence"] { background: #a1a1aa; }
-.graph-search { position: absolute; top: 12px; left: 160px; z-index: 5; display: flex; align-items: center; gap: 8px; width: min(280px, calc(100% - 232px)); height: 32px; padding-inline: 12px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); color: var(--muted-foreground); }
+.graph-search { position: relative; display: flex; align-items: center; gap: 8px; flex: 0 1 280px; min-width: 0; height: 32px; padding-inline: 12px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); color: var(--muted-foreground); }
 .graph-search:focus-within { border-color: color-mix(in srgb, var(--foreground) 22%, transparent); }
 .graph-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; font-size: var(--text-small); color: var(--foreground); }
 .graph-search input::placeholder { color: var(--muted-foreground); }
@@ -724,7 +735,7 @@
 .graph-inspector-list > li { padding-inline-start: 10px; border-inline-start: 2px solid color-mix(in srgb, var(--foreground) 12%, transparent); }
 .graph-inspector-action { align-self: flex-start; height: 30px; padding-inline: 12px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--foreground) 14%, transparent); font-size: var(--text-small); font-weight: 500; color: var(--foreground); }
 .graph-inspector-action:hover { background: color-mix(in srgb, var(--foreground) 7%, transparent); }
-@container sheet (max-width: 760px) { .graph-search { left: 16px; top: 52px; width: calc(100% - 32px); } .graph-inspector { top: 96px; } }
+@container sheet (max-width: 760px) { .graph-toolbar { flex-wrap: wrap; } .graph-search { flex-basis: 100%; } .graph-inspector { top: 96px; } }
 .lg-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; }
 .graph-dock { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 6;
 	display: flex; flex-direction: column; width: 600px; max-width: calc(100% - 48px); padding: 0;

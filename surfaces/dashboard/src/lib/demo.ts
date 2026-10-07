@@ -360,6 +360,7 @@ function demoConstellation(): KnowledgeConstellation {
 		}
 		return {
 			id: `demo-entity-${i + 1}`,
+			agentId: "demo-agent-default",
 			name,
 			entityType: i < 8 ? "concept" : i % 4 === 0 ? "tool" : "project",
 			mentions: 12 + Math.floor(rng() * 890),

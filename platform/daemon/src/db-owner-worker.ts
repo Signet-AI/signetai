@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { Database as BunDatabase } from "bun:sqlite";
-import { findSqliteVecExtension, vectorSearchWithMetadata } from "@signet/core";
+import { activeVectorProjectionTable, findSqliteVecExtension, vectorSearchWithMetadata } from "@signet/core";
 import {
 	applyObsidianSourceStructureInTx,
 	applyObsidianSourceStructurePurgeInTx,
@@ -12,7 +12,6 @@ import {
 import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./memory-lineage";
-import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
 import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
@@ -748,9 +747,10 @@ export function runDbOwnerWorker(): void {
 			providerGate = await awaitEmbeddingProviderAvailable(providerKey, undefined, 10_000);
 			return providerGate.available;
 		};
+		const vecTable = activeVectorProjectionTable(database);
 		const vecSchema = database
-			.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vec_embeddings'")
-			.get() as { sql?: string } | null;
+			.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+			.get(vecTable) as { sql?: string } | null;
 		const vecAvailable = vecSchema !== null;
 		const vecDimensions = vecSchema?.sql?.match(/float\\s*\\[\\s*(\\d+)\\s*\\]/i)?.[1];
 		const currentHashes = new Set<string>();
@@ -771,12 +771,6 @@ export function runDbOwnerWorker(): void {
 				)
 				.get("source_chunk", "obsidian_chunk", chunk.id, input.agentId) as { id: string; content_hash: string } | null;
 			if (existing?.content_hash === contentHash) {
-				upsertMemoryContentSafetyInTx(database as unknown as import("./db-accessor").WriteDb, {
-					agentId: input.agentId,
-					sourceKind: "source_chunk",
-					sourceId: embeddingId,
-					content: chunk.chunkText,
-				});
 				skipped++;
 				continue;
 			}
@@ -808,7 +802,7 @@ export function runDbOwnerWorker(): void {
 				continue;
 			}
 			if (existing !== null) {
-				if (vecAvailable) database.prepare("DELETE FROM vec_embeddings WHERE id = ?").run(existing.id);
+				if (vecAvailable) database.prepare(`DELETE FROM ${vecTable} WHERE id = ?`).run(existing.id);
 				database.prepare("DELETE FROM embeddings WHERE id = ?").run(existing.id);
 			}
 			database
@@ -831,15 +825,9 @@ export function runDbOwnerWorker(): void {
 					new Date().toISOString(),
 					input.agentId,
 				);
-			upsertMemoryContentSafetyInTx(database as unknown as import("./db-accessor").WriteDb, {
-				agentId: input.agentId,
-				sourceKind: "source_chunk",
-				sourceId: embeddingId,
-				content: chunk.chunkText,
-			});
 			if (vecAvailable && vecDimensions === String(vector.length))
 				database
-					.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)")
+					.prepare(`INSERT OR REPLACE INTO ${vecTable} (id, embedding) VALUES (?, ?)`)
 					.run(embeddingId, vectorToBlob(vector));
 			embedded++;
 		}
@@ -855,7 +843,7 @@ export function runDbOwnerWorker(): void {
 		}>;
 		for (const row of stale) {
 			if (row.source_type === "obsidian_chunk" || currentHashes.has(row.content_hash)) continue;
-			if (vecAvailable) database.prepare("DELETE FROM vec_embeddings WHERE id = ?").run(row.id);
+			if (vecAvailable) database.prepare(`DELETE FROM ${vecTable} WHERE id = ?`).run(row.id);
 			database.prepare("DELETE FROM embeddings WHERE id = ?").run(row.id);
 		}
 		return { embedded, skipped, providerUnavailable: false };

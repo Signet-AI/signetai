@@ -83,7 +83,7 @@ beforeEach(() => {
 						sourceId: "source-1",
 						format: "markdown",
 						duplicate: false,
-						extraction: { documentEntityId: "entity-1", aspectsCreated: 2, attributesCreated: 3 },
+						extraction: { documentEntityId: "entity-1" },
 					},
 				],
 			},
@@ -138,11 +138,7 @@ function sourceFixture(
 							total: 6,
 							documentEntityId: "entity-1",
 						},
-						importExtraction: {
-							documentEntityId: "entity-1",
-							aspectsCreated: 2,
-							attributesCreated: 3,
-						},
+						importExtraction: { documentEntityId: "entity-1" },
 					}
 				: {}),
 		},
@@ -194,7 +190,7 @@ describe("sources grouping", () => {
 		);
 		await expandSources(mounted.container);
 
-		expect(mounted.container.textContent).toContain("extraction result unavailable");
+		expect(mounted.container.textContent).toContain("import result unavailable");
 		expect(mounted.container.textContent).not.toContain("undefined aspects");
 
 		await act(async () => mounted.root.unmount());
@@ -214,7 +210,7 @@ describe("sources grouping", () => {
 				total: 51,
 				documentEntityId: "later-dreaming-entity",
 			},
-			importExtraction: { documentEntityId: "entity-1", aspectsCreated: 2, attributesCreated: 3 },
+			importExtraction: { documentEntityId: "entity-1" },
 		};
 		sourcesResponse = { version: 1, sources: [source] };
 		const mounted = await mount(
@@ -224,8 +220,8 @@ describe("sources grouping", () => {
 		);
 		await expandSources(mounted.container);
 
-		expect(mounted.container.textContent).toContain("2 aspects · 3 attributes · entity linked");
-		expect(mounted.container.textContent).not.toContain("7 aspects · 42 attributes");
+		expect(mounted.container.textContent).toContain("document indexed · read by Dreaming");
+		expect(mounted.container.textContent).not.toContain("42 attributes");
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();
@@ -465,7 +461,7 @@ describe("sources grouping", () => {
 		expect(mounted.container.textContent).toContain("notes.md · desktop path");
 		await click(button(mounted.container, "Import & index"));
 		expect(importCall).toEqual({ files: [], duplicateMode: "skip", paths: ["/tmp/notes.md"] });
-		expect(mounted.container.textContent).toContain("2 aspects · 3 attributes · entity linked");
+		expect(mounted.container.textContent).toContain("indexed; document linked");
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();

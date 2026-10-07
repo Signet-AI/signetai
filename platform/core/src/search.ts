@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { DEFAULT_HYBRID_ALPHA } from "./constants";
-import { scanMemoryContent } from "./memory-content-safety";
+import { redactCredentials } from "./credential-detection";
 import type { Memory } from "./types";
 let native: typeof import("@signet/native") | null = null;
 try {
@@ -133,17 +133,28 @@ function withReadTransaction(db: SQLiteDatabase, read: () => void): void {
 	}
 }
 
+export function activeVectorProjectionTable(db: {
+	prepare(sql: string): { get(...args: unknown[]): unknown };
+}): "vec_embeddings" | "vec_embeddings_staging" {
+	try {
+		const row = db.prepare("SELECT active_profile_json FROM embedding_index_state WHERE id = 1").get() as
+			| { active_profile_json?: unknown }
+			| undefined;
+		if (typeof row?.active_profile_json !== "string") return "vec_embeddings";
+		const active = JSON.parse(row.active_profile_json) as { projectionSlot?: unknown };
+		return active.projectionSlot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
+	} catch {
+		return "vec_embeddings";
+	}
+}
+
 function activeVectorSearchTables(db: SQLiteDatabase): VectorSearchTables {
 	try {
 		const row = db
 			.prepare("SELECT active_profile_json, state, staging_profile_json FROM embedding_index_state WHERE id = 1")
 			.get() as { active_profile_json?: unknown; state?: unknown; staging_profile_json?: unknown } | undefined;
 		if (!row) return { projection: "vec_embeddings", embeddings: "embeddings" };
-		const active =
-			typeof row.active_profile_json === "string"
-				? (JSON.parse(row.active_profile_json) as { projectionSlot?: unknown })
-				: {};
-		const activeProjection = active.projectionSlot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
+		const activeProjection = activeVectorProjectionTable(db);
 		if (row.state !== "building" || typeof row.staging_profile_json !== "string") {
 			return { projection: activeProjection, embeddings: "embeddings" };
 		}
@@ -409,7 +420,7 @@ export function hybridSearch(
 	return scored
 		.filter((s) => {
 			const row = rowMap.get(s.id);
-			return row !== undefined && scanMemoryContent(row.content).contextEligible;
+			return row !== undefined;
 		})
 		.slice(0, limit)
 		.map((s) => {
@@ -417,7 +428,7 @@ export function hybridSearch(
 			if (!r) return null;
 			return {
 				id: s.id,
-				content: r.content,
+				content: redactCredentials(r.content),
 				score: Math.round(s.score * 100) / 100,
 				type: r.type,
 				source: s.source,
@@ -461,14 +472,11 @@ export async function search(db: SQLiteDatabase | DatabaseWrapper, options: Sear
 		const memories = typeof wrapper.getMemories === "function" ? wrapper.getMemories(options.type) : [];
 
 		return memories
-			.filter(
-				(m: Memory) =>
-					scanMemoryContent(m.content).contextEligible && m.content.toLowerCase().includes(query.toLowerCase()),
-			)
+			.filter((m: Memory) => m.content.toLowerCase().includes(query.toLowerCase()))
 			.slice(0, limit)
 			.map((m: Memory) => ({
 				id: m.id,
-				content: m.content,
+				content: redactCredentials(m.content),
 				score: 1.0,
 				type: m.type,
 				source: "keyword" as const,

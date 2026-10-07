@@ -167,11 +167,7 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 				agentId,
 				sourceId: added.source.id,
 				sourcePath,
-				outcome: {
-					documentEntityId: result.documentEntityId,
-					aspectsCreated: result.aspectsCreated,
-					attributesCreated: result.attributesCreated,
-				},
+				outcome: { documentEntityId: result.documentEntityId },
 			});
 			return result;
 		});
@@ -218,11 +214,7 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 				sourceId: added.source.id,
 				format: normalized.value.format,
 				duplicate: added.duplicate,
-				extraction: {
-					documentEntityId: extraction.documentEntityId,
-					aspectsCreated: extraction.aspectsCreated,
-					attributesCreated: extraction.attributesCreated,
-				},
+				extraction: { documentEntityId: extraction.documentEntityId },
 			},
 			persistedBytes,
 		};

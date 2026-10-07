@@ -47,6 +47,32 @@ function finalizeIngestResult(result: IngestResult): IngestResult {
   return { documentIds: result.documentIds }
 }
 
+interface IngestGroup {
+  containerTag: string
+  leader: { questionId: string }
+  questionIds: string[]
+}
+
+export function groupByContainer(
+  checkpoint: RunCheckpoint,
+  questions: readonly { questionId: string }[]
+): IngestGroup[] {
+  const groups = new Map<string, IngestGroup>()
+  for (const question of questions) {
+    const containerTag = checkpoint.questions[question.questionId]?.containerTag
+    if (!containerTag) {
+      throw new Error(`Question ${question.questionId} has no container tag in the checkpoint`)
+    }
+    const group = groups.get(containerTag)
+    if (group) {
+      group.questionIds.push(question.questionId)
+      continue
+    }
+    groups.set(containerTag, { containerTag, leader: question, questionIds: [question.questionId] })
+  }
+  return [...groups.values()]
+}
+
 export async function runIngestPhase(
   provider: Provider,
   benchmark: Benchmark,
@@ -69,18 +95,22 @@ export async function runIngestPhase(
     return
   }
 
+  const groups = groupByContainer(checkpoint, pendingQuestions)
   const concurrency = resolveConcurrency("ingest", checkpoint.concurrency, provider.concurrency)
 
-  logger.info(`Ingesting ${pendingQuestions.length} questions (concurrency: ${concurrency})...`)
+  logger.info(
+    `Ingesting ${groups.length} haystack(s) for ${pendingQuestions.length} questions (concurrency: ${concurrency})...`
+  )
 
   await ConcurrentExecutor.executeBatched({
-    items: pendingQuestions,
+    items: groups,
     concurrency,
     rateLimitMs: RATE_LIMIT_MS,
     runId: checkpoint.runId,
     phaseName: "ingest",
-    executeTask: async ({ item: question, index, total }) => {
-      const containerTag = `${question.questionId}-${checkpoint.dataSourceRunId}`
+    executeTask: async ({ item: group, index, total }) => {
+      const question = group.leader
+      const containerTag = group.containerTag
       const sessions = benchmark.getHaystackSessions(question.questionId)
 
       const sessionsMetadata = sessions.map((s) => ({
@@ -133,14 +163,27 @@ export async function runIngestPhase(
         })
 
         const durationMs = Date.now() - startTime
+        const completedAt = new Date().toISOString()
         checkpointManager.updatePhase(checkpoint, question.questionId, "ingest", {
           status: "completed",
           ingestResult: finalizeIngestResult(combinedResult),
-          completedAt: new Date().toISOString(),
+          completedAt,
           durationMs,
         })
+        for (const member of group.questionIds) {
+          if (member === question.questionId) continue
+          checkpointManager.updatePhase(checkpoint, member, "ingest", {
+            status: "completed",
+            completedAt,
+            durationMs,
+          })
+        }
 
-        logger.progress(index + 1, total, `Ingested ${question.questionId} (${durationMs}ms)`)
+        logger.progress(
+          index + 1,
+          total,
+          `Ingested ${containerTag} for ${group.questionIds.length} question(s) (${durationMs}ms)`
+        )
 
         return { questionId: question.questionId, durationMs }
       } catch (e) {

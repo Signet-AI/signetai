@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { runDreamingAgentPass } from "./pipeline/dreaming";
+import { applyDreamingOperations } from "./pipeline/dreaming-operations";
 import {
 	indexSourceArtifactStructure,
 	indexSourceArtifactStructureAsync,
@@ -79,7 +80,7 @@ describe("source artifact graph structure", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("projects provider artifacts into source-owned graph rows without creating memories", () => {
+	it("projects provider artifacts into source topology without aspects, claims, or memories", () => {
 		const result = indexSourceArtifactStructure({
 			agentId: "default",
 			sourceId: "discord:test",
@@ -95,8 +96,6 @@ describe("source artifact graph structure", () => {
 		expect(result.documentEntityId).toBeTruthy();
 		expect(result.entitiesTouched).toBeGreaterThanOrEqual(3);
 		expect(result.dependenciesTouched).toBe(1);
-		expect(result.aspectsTouched).toBe(2);
-		expect(result.attributesTouched).toBeGreaterThanOrEqual(2);
 
 		const rows = getDbAccessor().withReadDb((db) => ({
 			memories: (db.prepare("SELECT COUNT(*) AS count FROM memories").get() as { count: number }).count,
@@ -128,10 +127,7 @@ describe("source artifact graph structure", () => {
 		expect(rows.doc.entity_type).toBe("source_document");
 		expect(rows.doc.source_id).toBe("discord:test");
 		expect(rows.doc.source_kind).toBe("source_discord_message");
-		expect(rows.attrs.length).toBeGreaterThanOrEqual(2);
-		expect(rows.attrs.every((row) => row.memory_id === null)).toBe(true);
-		expect(rows.attrs.every((row) => row.source_id === "discord:test")).toBe(true);
-		expect(rows.attrs.some((row) => String(row.content).includes("provider provenance"))).toBe(true);
+		expect(rows.attrs).toEqual([]);
 		expect(rows.deps).toEqual([
 			{
 				dependency_type: "contains",
@@ -334,8 +330,7 @@ describe("source artifact graph structure", () => {
 					.prepare("SELECT content FROM entity_attributes WHERE agent_id = ? AND source_path = ?")
 					.all("default", base.sourcePath) as Array<{ content: string }>,
 		);
-		expect(attrs.some((row) => row.content.includes("replacement"))).toBe(true);
-		expect(attrs.some((row) => row.content.includes("original"))).toBe(false);
+		expect(attrs).toEqual([]);
 
 		const purged = purgeSourceArtifactStructure({
 			agentId: "default",
@@ -372,7 +367,14 @@ describe("source artifact graph structure", () => {
 			sourceRoot: "github://repos/Signet-AI/signetai",
 			sourcePath: "github://Signet-AI/signetai/docs/README.md",
 			displayName: "README",
-			content: "# README\n\nThis source document has a claim that creates an aspect row.\n",
+			content: "# README\n\nThis source document is linked into the graph.\n",
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 SELECT 'readme-aspect', id, 'default', 'overview', 'overview', 0.5, datetime('now'), datetime('now')
+				 FROM entities WHERE source_path = 'github://Signet-AI/signetai/docs/README.md'`,
+			).run();
 		});
 
 		const purged = await purgeSourceOwnedRows({ agentId: "default", sourceId: "github:test" });
@@ -562,5 +564,158 @@ describe("source artifact graph structure", () => {
 					},
 			).count,
 		).toBe(0);
+	});
+
+	it.each(["metadata", "artifact", "memory"] as const)("preserves claims cited as %s on reindex", async (form) => {
+		const base = {
+			agentId: "default",
+			sourceId: "github:test",
+			sourceKind: "source_github_issue",
+			sourceRoot: "github://repos/Signet-AI/signetai",
+			sourcePath: "github://Signet-AI/signetai/issues/12",
+			displayName: "Fleet issue",
+		};
+		const kept = "The edge fleet runs nightly drift detection.";
+		const dropped = "Drift reports go to the ops channel.";
+		const original = `# Fleet\n\n${kept}\n\n${dropped}\n`;
+		const edited = `# Fleet\n\n${kept}\n\nDrift reports go to the on-call pager.\n`;
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, source_id, source_node_id,
+				  session_id, session_token, captured_at, content, updated_at, is_deleted)
+				 VALUES ('default', ?, 'fleet-sha', 'source_github_issue', 'github:test', 'issue-12',
+				  'source-session', 'source-token', datetime('now'), ?, datetime('now'), 0)`,
+			).run(base.sourcePath, original);
+			db.prepare(
+				`INSERT INTO memories (id, content, source_type, memory_kind, visibility,
+				 agent_id, source_id, source_path, created_at, updated_at)
+				 VALUES ('fleet-capture', ?, 'source_github_issue', 'episodic', 'normal',
+				 'default', 'github:test', ?, datetime('now'), datetime('now'))`,
+			).run(original, base.sourcePath);
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('e-fleet', 'Edge Fleet', 'edge fleet', 'project', 'default', 1, datetime('now'), datetime('now'))`,
+			).run();
+			db.prepare(
+				`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('a-ops', 'e-fleet', 'default', 'operations', 'operations', 0.5, datetime('now'), datetime('now'))`,
+			).run();
+		});
+		indexSourceArtifactStructure({ ...base, content: original });
+		const references = {
+			metadata: `artifact:${base.sourcePath}`,
+			artifact: `artifact:${base.sourcePath}`,
+			memory: "memory:fleet-capture",
+		};
+		const reference = references[form];
+		const evidence = (quote: string) => [
+			{
+				source_ref: reference,
+				...(form === "metadata"
+					? {
+							source_kind: "source_github_issue",
+							source_id: "issue-12",
+							source_path: base.sourcePath,
+						}
+					: {}),
+				quote,
+			},
+		];
+		const filed = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "default",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "e-fleet",
+						aspectId: "a-ops",
+						claimKey: "drift_detection",
+						value: "Runs nightly drift detection.",
+					},
+					evidence: evidence(kept),
+				},
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "e-fleet",
+						aspectId: "a-ops",
+						claimKey: "drift_reports",
+						value: "Drift reports go to the ops channel.",
+					},
+					evidence: evidence(dropped),
+				},
+			],
+		});
+		expect(filed.ok).toBe(true);
+		const claims = () =>
+			getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT id, claim_key, status FROM entity_attributes WHERE aspect_id = 'a-ops' ORDER BY claim_key")
+						.all() as Array<{ id: string; claim_key: string; status: string }>,
+			);
+		const flags = () =>
+			getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare("SELECT id, subject_ref, resolved_at FROM dreaming_attention WHERE kind = 'contested_claim'")
+						.all() as Array<{ id: string; subject_ref: string; resolved_at: string | null }>,
+			);
+		const [detection, reports] = claims();
+		expect(detection?.claim_key).toBe("drift_detection");
+		expect(reports?.claim_key).toBe("drift_reports");
+
+		indexSourceArtifactStructure({ ...base, content: original });
+		expect(flags()).toEqual([]);
+
+		indexSourceArtifactStructure({ ...base, content: edited });
+		expect(claims().map((claim) => claim.status)).toEqual(["active", "active"]);
+		const pending = flags();
+		expect(pending.map((flag) => flag.subject_ref)).toEqual([`attribute:${reports?.id}`]);
+
+		const wrongTarget = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "default",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "archive_claim_value",
+					payload: { target: detection?.id, reason: "The issue no longer states this." },
+					provenance: `attention:${pending[0]?.id}`,
+				},
+			],
+		});
+		expect(wrongTarget.ok).toBe(false);
+
+		const archived = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "default",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "archive_claim_value",
+					payload: { target: reports?.id, reason: "The issue now routes drift reports to the pager." },
+					provenance: `attention:${pending[0]?.id}`,
+				},
+			],
+		});
+		expect(archived.ok).toBe(true);
+		expect(claims().map((claim) => claim.status)).toEqual(["active", "deleted"]);
+		expect(flags()[0]?.resolved_at).not.toBeNull();
+
+		purgeSourceArtifactStructure({ agentId: "default", sourceId: base.sourceId, sourcePath: base.sourcePath });
+		expect(claims().map((claim) => claim.status)).toEqual(["active", "deleted"]);
+		const removed = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT json_extract(details_json, '$.reason') AS reason FROM dreaming_attention WHERE subject_ref = ? AND resolved_at IS NULL",
+					)
+					.get(`attribute:${detection?.id}`) as { reason: string } | null,
+		);
+		expect(removed?.reason).toBe("source_removed");
 	});
 });

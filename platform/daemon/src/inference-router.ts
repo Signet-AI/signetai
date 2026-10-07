@@ -1,5 +1,5 @@
 import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
-import type { PiAgentTool } from "./pipeline/pi-agent-protocol";
+import type { PiAgentRetryPolicy, PiAgentTool } from "./pipeline/pi-agent-protocol";
 import { randomUUID } from "node:crypto";
 import { readFile as readFileAsync, stat as statAsync } from "node:fs/promises";
 import { isAbsolute, join, normalize, resolve } from "node:path";
@@ -1083,6 +1083,7 @@ export class InferenceRouter {
 			readonly persistentSessionKey?: string;
 			readonly continuationPrompt?: string;
 			readonly systemPrompt?: string;
+			readonly retry?: PiAgentRetryPolicy;
 			readonly signal?: AbortSignal;
 			readonly onEvent?: (event: AgentSessionEvent) => void;
 			readonly onSessionInfo?: (info: {
@@ -1260,6 +1261,7 @@ export class InferenceRouter {
 								systemPrompt: opts?.systemPrompt,
 								persistentSessionKey: opts?.persistentSessionKey,
 								continuationPrompt: opts?.continuationPrompt,
+								...(opts?.retry ? { retry: opts.retry } : {}),
 							});
 						} catch (error) {
 							if (initializationTimedOut) {

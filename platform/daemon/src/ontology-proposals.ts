@@ -1,6 +1,8 @@
 import {
 	ATTRIBUTE_KINDS,
 	type AttributeKind,
+	CLAIM_TIME_PRECISIONS,
+	type ClaimTimePrecision,
 	DEPENDENCY_TYPES,
 	type DependencyType,
 	ENTITY_TYPES,
@@ -14,7 +16,7 @@ import { runWriteTxAsync } from "./db-accessor";
 import { requireDependencyReason } from "./dependency-history";
 import { linkDerivedMemorySourcesInTx, markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { classifyEntityQuality } from "./entity-quality";
-import { resolveStrictEpisodicSourceRef } from "./episodic-sources";
+import { readEpisodicSource, resolveStrictEpisodicSourceRef } from "./episodic-sources";
 import {
 	reconcileOntologyContradictionsInTx,
 	recordOntologyContradictionsForAttributeInTx,
@@ -26,6 +28,7 @@ import {
 	resolveOntologyEvidenceRef,
 	uniqueOntologyEvidenceRefs,
 } from "./ontology-evidence";
+import { type MemoryTemporalEdgeInput, txInsertMemoryTemporalEdges } from "./temporal-edges";
 import { insertHistoryEvent, txForgetMemory, txIngestEnvelope, txSupersedeMemory } from "./transactions";
 
 type ProposalRow = {
@@ -322,6 +325,11 @@ export interface ClaimVersionItem {
 	readonly sourceKind: string | null;
 	readonly sourceId: string | null;
 	readonly sourcePath: string | null;
+	readonly occurredStart: string | null;
+	readonly occurredEnd: string | null;
+	readonly validFrom: string | null;
+	readonly validUntil: string | null;
+	readonly timePrecision: string | null;
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }
@@ -411,6 +419,117 @@ function readReviewAfter(payload: Readonly<Record<string, unknown>>): string | n
 	return parsed.toISOString();
 }
 
+interface ClaimTime {
+	readonly occurredStart: string | null;
+	readonly occurredEnd: string | null;
+	readonly validFrom: string | null;
+	readonly validUntil: string | null;
+	readonly precision: ClaimTimePrecision | null;
+}
+
+const CLAIM_TIME_FIELDS = ["occurred_at", "occurred_until", "valid_from", "valid_until", "time_precision"] as const;
+
+function readClaimTimestamp(payload: Readonly<Record<string, unknown>>, key: string): string | null {
+	const value = readString(payload, key);
+	if (value === null) return null;
+	const parsed = new Date(value);
+	if (Number.isNaN(parsed.getTime())) {
+		throw new OntologyProposalError(`payload.${key} must be a valid ISO date or timestamp`, 400);
+	}
+	return parsed.toISOString();
+}
+
+function readClaimTime(payload: Readonly<Record<string, unknown>>): ClaimTime {
+	const occurredStart = readClaimTimestamp(payload, "occurred_at");
+	const occurredEnd = readClaimTimestamp(payload, "occurred_until");
+	const validFrom = readClaimTimestamp(payload, "valid_from");
+	const validUntil = readClaimTimestamp(payload, "valid_until");
+	const rawPrecision = readString(payload, "time_precision");
+	if (rawPrecision !== null && !CLAIM_TIME_PRECISIONS.includes(rawPrecision as ClaimTimePrecision)) {
+		throw new OntologyProposalError(`payload.time_precision must be one of ${CLAIM_TIME_PRECISIONS.join(", ")}`, 400);
+	}
+	if (occurredEnd !== null && occurredStart === null) {
+		throw new OntologyProposalError("payload.occurred_until requires payload.occurred_at", 400);
+	}
+	if (occurredStart !== null && occurredEnd !== null && occurredEnd < occurredStart) {
+		throw new OntologyProposalError("payload.occurred_until must not be before payload.occurred_at", 400);
+	}
+	if (validFrom !== null && validUntil !== null && validUntil <= validFrom) {
+		throw new OntologyProposalError("payload.valid_until must be after payload.valid_from", 400);
+	}
+	const hasTime = occurredStart !== null || validFrom !== null || validUntil !== null;
+	if (rawPrecision !== null && !hasTime) {
+		throw new OntologyProposalError("payload.time_precision needs payload.occurred_at or payload.valid_from", 400);
+	}
+	const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(
+		readString(payload, "occurred_at") ?? readString(payload, "valid_from") ?? "",
+	);
+	const precision = (rawPrecision as ClaimTimePrecision | null) ?? (hasTime && dateOnly ? "day" : null);
+	return { occurredStart, occurredEnd, validFrom, validUntil, precision };
+}
+
+function claimTimeFields(payload: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+	const fields: Record<string, unknown> = {};
+	for (const key of CLAIM_TIME_FIELDS) {
+		if (payload[key] !== undefined) fields[key] = payload[key];
+	}
+	return fields;
+}
+
+function claimEvidenceTime(time: {
+	readonly valid_from: string | null;
+	readonly occurred_start: string | null;
+}): string | null {
+	return time.valid_from ?? time.occurred_start;
+}
+
+function claimSourceCapturedAt(
+	db: ReadDb,
+	agentId: string,
+	sourceKind: string | null,
+	sourceId: string | null,
+): string | null {
+	if (!sourceKind || !sourceId) return null;
+	const capturedAt = readEpisodicSource(db, { agentId, from: `${sourceKind}:${sourceId}` })?.capturedAt;
+	if (!capturedAt) return null;
+	const ms = Date.parse(capturedAt);
+	return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
+
+function precisionSpanEnd(start: string, precision: ClaimTimePrecision | null): string {
+	const end = new Date(start);
+	if (precision === "day" || precision === "approximate") end.setUTCDate(end.getUTCDate() + 1);
+	else if (precision === "week") end.setUTCDate(end.getUTCDate() + 7);
+	else if (precision === "month") end.setUTCMonth(end.getUTCMonth() + 1);
+	else if (precision === "year") end.setUTCFullYear(end.getUTCFullYear() + 1);
+	else return start;
+	return new Date(end.getTime() - 1).toISOString();
+}
+
+function claimTemporalEdges(time: ClaimTime, attributeId: string, proposal: ProposalRow): MemoryTemporalEdgeInput[] {
+	const metadata = { attributeId, precision: time.precision, proposalId: proposal.id, sourceId: proposal.source_id };
+	const edges: MemoryTemporalEdgeInput[] = [];
+	if (time.occurredStart !== null) {
+		edges.push({
+			facet: "occurred",
+			startAt: time.occurredStart,
+			endAt: time.occurredEnd ?? precisionSpanEnd(time.occurredStart, time.precision),
+			provenance: "dreaming.claim.occurred",
+			metadata,
+		});
+	}
+	if (time.validFrom !== null) {
+		edges.push({
+			facet: "valid",
+			startAt: time.validFrom,
+			endAt: time.validUntil,
+			provenance: "dreaming.claim.valid",
+			metadata,
+		});
+	}
+	return edges;
+}
+
 function readNumber(record: Readonly<Record<string, unknown>>, key: string): number | null {
 	const value = record[key];
 	return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -479,7 +598,7 @@ async function getProposalReadRow(accessor: DbAccessor, id: string, agentId: str
 				| undefined;
 			return row ?? null;
 		},
-		{ siteToken: "ontology-proposals.ts:475" },
+		{ siteToken: "ontology-proposals.ts:594" },
 	);
 }
 
@@ -690,7 +809,7 @@ function resolveEntity(db: WriteDb, agentId: string, name: string): string | nul
 function resolveOrCreateEntity(db: WriteDb, agentId: string, name: string, type: EntityType): string {
 	const existing = resolveEntity(db, agentId, name);
 	if (existing !== null) return existing;
-	const quality = classifyEntityQuality(name);
+	const quality = classifyEntityQuality(name, type === "person" ? type : undefined);
 	if (!quality.ok) throw new OntologyProposalError(`Entity name rejected: ${quality.reason}`, 400);
 	const id = crypto.randomUUID();
 	db.prepare(
@@ -858,6 +977,7 @@ function materializeAttributeMemoryInTx(
 		readonly normalizedContent: string;
 		readonly importance: number;
 		readonly reviewAfter: string | null;
+		readonly time: ClaimTime;
 		readonly proposal: ProposalRow;
 	},
 ): string {
@@ -908,6 +1028,13 @@ function materializeAttributeMemoryInTx(
 		agentId: input.agentId,
 		sources: derivedMemorySourcesForProposalInTx(db, input.proposal),
 		createdAt: now(),
+	});
+	txInsertMemoryTemporalEdges({
+		db,
+		memoryId: input.attributeId,
+		agentId: input.agentId,
+		inputs: claimTemporalEdges(input.time, input.attributeId, input.proposal),
+		now: now(),
 	});
 	return input.attributeId;
 }
@@ -1054,6 +1181,7 @@ function applyAddClaimValue(
 	const confidence = clamp01(readNumber(payload, "confidence") ?? proposal.confidence);
 	const importance = clamp01(readNumber(payload, "importance") ?? confidence);
 	const reviewAfter = readReviewAfter(payload);
+	const time = readClaimTime(payload);
 	const proposalEvidence = proposalAuditEvidence(proposal);
 	db.prepare(
 		`INSERT INTO entity_attributes
@@ -1061,10 +1189,12 @@ function applyAddClaimValue(
 		  confidence, importance, status, group_key, claim_key,
 		  version, version_root_id, previous_attribute_id,
 		  created_at, updated_at, source_id, source_kind, source_path, source_root,
-		  proposal_id, proposal_evidence)
+		  proposal_id, proposal_evidence,
+		  occurred_start, occurred_end, valid_from, valid_until, time_precision)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?,
 		         1, ?, NULL,
-		         datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)`,
+		         datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?,
+		         ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		aspectId,
@@ -1083,6 +1213,11 @@ function applyAddClaimValue(
 		proposal.source_root,
 		proposal.id,
 		JSON.stringify(proposalEvidence),
+		time.occurredStart,
+		time.occurredEnd,
+		time.validFrom,
+		time.validUntil,
+		time.precision,
 	);
 	const memoryId = materializeAttributeMemoryInTx(db, {
 		attributeId: id,
@@ -1092,6 +1227,7 @@ function applyAddClaimValue(
 		normalizedContent: normalized,
 		importance,
 		reviewAfter,
+		time,
 		proposal,
 	});
 	return {
@@ -1126,7 +1262,8 @@ function applySetClaimValue(
 	const kind = normalizeAttributeKind(readString(payload, "kind"));
 	const slot = db
 		.prepare(
-			`SELECT id, memory_id, content, normalized_content, version, version_root_id, kind, status
+			`SELECT id, memory_id, content, normalized_content, version, version_root_id, kind, status,
+			        occurred_start, valid_from, source_kind, source_id
 			 FROM entity_attributes
 			 WHERE aspect_id = ?
 			   AND agent_id = ?
@@ -1144,6 +1281,10 @@ function applySetClaimValue(
 		version_root_id: string | null;
 		kind: string;
 		status: string;
+		occurred_start: string | null;
+		valid_from: string | null;
+		source_kind: string | null;
+		source_id: string | null;
 	}>;
 	const active = slot.filter((row) => row.status === "active");
 	const normalized = canonical(value);
@@ -1187,15 +1328,34 @@ function applySetClaimValue(
 	const confidence = clamp01(readNumber(payload, "confidence") ?? proposal.confidence);
 	const importance = clamp01(readNumber(payload, "importance") ?? confidence);
 	const reviewAfter = readReviewAfter(payload);
+	const time = readClaimTime(payload);
+	const incomingTime = claimEvidenceTime({ valid_from: time.validFrom, occurred_start: time.occurredStart });
+	const incomingCapturedAt = claimSourceCapturedAt(db, agentId, proposal.source_kind, proposal.source_id);
+	const newerActive = active
+		.filter((row) => {
+			const activeTime = claimEvidenceTime(row);
+			if (activeTime !== incomingTime) return activeTime !== null && incomingTime !== null && activeTime > incomingTime;
+			const activeCapturedAt = claimSourceCapturedAt(db, agentId, row.source_kind, row.source_id);
+			return activeCapturedAt !== null && incomingCapturedAt !== null && activeCapturedAt > incomingCapturedAt;
+		})
+		.sort(
+			(a, b) =>
+				(claimEvidenceTime(b) ?? "").localeCompare(claimEvidenceTime(a) ?? "") ||
+				(claimSourceCapturedAt(db, agentId, b.source_kind, b.source_id) ?? "").localeCompare(
+					claimSourceCapturedAt(db, agentId, a.source_kind, a.source_id) ?? "",
+				),
+		)[0];
 	db.prepare(
 		`INSERT INTO entity_attributes
 		 (id, aspect_id, agent_id, kind, content, normalized_content,
-		  confidence, importance, status, group_key, claim_key,
+		  confidence, importance, status, superseded_by, group_key, claim_key,
 		  version, version_root_id, previous_attribute_id,
 		  created_at, updated_at, source_id, source_kind, source_path, source_root,
-		  proposal_id, proposal_evidence)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?,
-		         datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)`,
+		  proposal_id, proposal_evidence,
+		  occurred_start, occurred_end, valid_from, valid_until, time_precision)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+		         datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?,
+		         ?, ?, ?, ?, ?)`,
 	).run(
 		id,
 		aspectId,
@@ -1205,6 +1365,8 @@ function applySetClaimValue(
 		normalized,
 		confidence,
 		importance,
+		newerActive === undefined ? "active" : "superseded",
+		newerActive?.id ?? null,
 		groupKey,
 		claimKey,
 		version,
@@ -1216,6 +1378,11 @@ function applySetClaimValue(
 		proposal.source_root,
 		proposal.id,
 		JSON.stringify(proposalAuditEvidence(proposal)),
+		time.occurredStart,
+		time.occurredEnd,
+		time.validFrom,
+		time.validUntil,
+		time.precision,
 	);
 	const memoryId = materializeAttributeMemoryInTx(db, {
 		attributeId: id,
@@ -1225,8 +1392,29 @@ function applySetClaimValue(
 		normalizedContent: normalized,
 		importance,
 		reviewAfter,
+		time,
 		proposal,
 	});
+	if (newerActive !== undefined) {
+		supersedeAttributeMemoryInTx(db, {
+			memoryId,
+			replacementMemoryId: newerActive.memory_id ?? newerActive.id,
+			proposal,
+		});
+		return {
+			entityId,
+			aspectId,
+			attributeId: id,
+			memoryId,
+			version,
+			versionRootId: rootId,
+			previousAttributeId: previous?.id ?? null,
+			previousWasActive: previous?.status === "active",
+			supersededAttributeIds: [],
+			supersededByNewerEvidence: newerActive.id,
+			contradictionIds: [],
+		};
+	}
 	const contradictionIds = recordOntologyContradictionsForAttributeInTx(db, { agentId, attributeId: id });
 
 	if (active.length > 0) {
@@ -1323,8 +1511,18 @@ function applySupersedeClaimValue(
 			confidence: readNumber(payload, "confidence") ?? proposal.confidence,
 			importance: readNumber(payload, "importance") ?? readNumber(payload, "confidence") ?? proposal.confidence,
 			entity_type: readString(payload, "entity_type") ?? undefined,
+			review_after: readString(payload, "review_after") ?? undefined,
+			...claimTimeFields(payload),
 		});
 		replacementId = typeof replacement.attributeId === "string" ? replacement.attributeId : null;
+		if (typeof replacement.supersededByNewerEvidence === "string") {
+			return {
+				supersededAttributeIds: [],
+				replacementAttributeId: replacementId,
+				replacementCreated: true,
+				supersededByNewerEvidence: replacement.supersededByNewerEvidence,
+			};
+		}
 		replacementCreated = replacement.deduped !== true && replacementId !== null;
 	}
 
@@ -1460,8 +1658,15 @@ function enforceAspectCapForNewAspect(
 		)
 		.get(entity.id, agentId) as { c: number };
 	if (aspectCount.c >= writeCaps.maxAspectsPerEntity) {
+		const aspects = db
+			.prepare(
+				`SELECT id, name FROM entity_aspects
+				 WHERE entity_id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active'
+				 ORDER BY name`,
+			)
+			.all(entity.id, agentId) as Array<{ id: string; name: string }>;
 		throw new OntologyProposalError(
-			`entity '${entity.name}' is at aspect cap (${aspectCount.c}/${writeCaps.maxAspectsPerEntity}) — consolidate or archive an existing aspect before creating a new one`,
+			`entity '${entity.name}' is at aspect cap (${aspectCount.c}/${writeCaps.maxAspectsPerEntity}), so '${name}' cannot be added as a new aspect. File the claim under the existing aspect that covers it, or make room: merge overlapping aspects (merge_aspects) or rename one to cover both (rename_aspect), with a reason. Existing aspects: ${aspects.map((aspect) => `${aspect.name} (${aspect.id})`).join("; ")}`,
 			409,
 		);
 	}
@@ -2280,7 +2485,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2281" },
+		{ siteToken: "ontology-proposals.ts:2486" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2318,7 +2523,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2298" },
+		{ siteToken: "ontology-proposals.ts:2503" },
 	);
 }
 
@@ -2376,7 +2581,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2330" },
+		{ siteToken: "ontology-proposals.ts:2535" },
 	);
 }
 
@@ -2393,6 +2598,11 @@ function claimVersionRow(row: Record<string, unknown>): ClaimVersionItem {
 		sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
 		sourceId: typeof row.source_id === "string" ? row.source_id : null,
 		sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+		occurredStart: typeof row.occurred_start === "string" ? row.occurred_start : null,
+		occurredEnd: typeof row.occurred_end === "string" ? row.occurred_end : null,
+		validFrom: typeof row.valid_from === "string" ? row.valid_from : null,
+		validUntil: typeof row.valid_until === "string" ? row.valid_until : null,
+		timePrecision: typeof row.time_precision === "string" ? row.time_precision : null,
 		createdAt: row.created_at as string,
 		updatedAt: row.updated_at as string,
 	};
@@ -2466,7 +2676,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2409" },
+		{ siteToken: "ontology-proposals.ts:2619" },
 	);
 }
 
@@ -2887,7 +3097,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:2889",
+		siteToken: "ontology-proposals.ts:3099",
 	});
 }
 
@@ -2898,7 +3108,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:2900",
+		siteToken: "ontology-proposals.ts:3110",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -2949,7 +3159,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:2950" },
+		{ siteToken: "ontology-proposals.ts:3160" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {

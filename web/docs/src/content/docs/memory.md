@@ -167,16 +167,32 @@ post-processing:
 
 - **Structured Evidence Convolution (SEC-lite)** compares lexical, semantic,
   hint, traversal, and structured signals so graph-only results do not blindly
-  dominate direct evidence.
+  dominate direct evidence. It reorders admitted candidates; only candidates
+  without lexical or semantic evidence can fall below `min_score` here.
 - **Facet coverage** can read candidate content and prefer rows that cover
   more of the query's facets.
 - **Rehearsal boost** applies a small access-frequency and recency signal
   when enabled.
-- **Reranking** can use an embedding reranker or an LLM reranker on the
-  authorized top-N candidates. If the reranker fails or times out, recall
-  keeps the existing ordering.
+- **Reranking** reads the query against each of the authorized top-N
+  candidates (`memory.pipelineV2.reranker.topN`, default 20) with a local
+  cross-encoder (`reranker.crossEncoderModel`, default
+  `mixedbread-ai/mxbai-rerank-xsmall-v1`, about 90 MB, downloaded on first
+  use), and fuses its order with the retrieval order by reciprocal rank so it
+  can lift a relevant memory that shares no words with the question without
+  overturning order retrieval already got right. It runs in its own worker
+  thread, one rerank at a time, and adds roughly 150 to 250 ms per recall on
+  the source runtime and 350 to 450 ms in the compiled binary, which runs it
+  on WebAssembly. The model loads in the background on first use; while it is
+  loading, busy, or slower than three quarters of `reranker.timeoutMs`,
+  recall falls back to an embedding blend for that request. `meta.reranker` reports which reranker ran
+  (`cross-encoder`, `embedding`, `llm`, or `none`) and why a fallback
+  happened. Set `crossEncoderModel: ""` to use the embedding blend only, or
+  `useExtractionModel: true` for the LLM reranker.
 - **Dampening** penalizes low-overlap semantic hits, hub-like entity
-  dominance, and other noisy retrieval shapes.
+  dominance, and other noisy retrieval shapes. The low-overlap penalty never
+  drops a hit below the scores it leaves untouched, and an entity counts as a
+  hub only when it is linked to at least a quarter of the agent's memories, so
+  the topics a user talks about most are not penalized for being central.
 - **Currentness** annotates superseded memories and boosts current
   replacements.
 
@@ -220,10 +236,28 @@ embeddings carry a strong source root/project binding. Project-scoped searches
 still use authorized memory rows and native source artifacts; they do not guess
 source ownership from chunk text metadata.
 
-Transcript lookup is intentionally outside memory recall. Raw session
-transcripts are searched through the dedicated `/api/sessions/search` API,
-MCP `session_search` tool, and CLI `signet session search` command so callers
-must ask for transcript evidence explicitly.
+Recall also returns a bounded amount of transcript evidence. After the memory
+results are ranked, keyword search over the requesting agent's own captured
+session transcripts adds at most `search.transcript_evidence_limit` excerpts
+(default 2, maximum 5, `0` disables). Keyword search proposes up to twice that
+many candidates; when the cross-encoder reranker is configured, the candidates
+and the bottom results they would replace are scored together and the most
+relevant fill those slots, so an excerpt displaces a memory only when it is
+judged more relevant. Without the cross-encoder, or when it is busy or still
+loading, the top keyword candidates take the bottom slots. Either way the
+result count stays within `limit`. An excerpt is the
+best-matching window of about 900 characters with credentials redacted, has
+`source: "transcript"`, `type: "transcript"`, `supplementary: true`, an id of
+the form `transcript:<session>`, and the session in `session_id`. Sessions
+already represented in the results are skipped. Transcripts are never read
+across agents, whatever the read policy, and the lane is skipped for temporal
+windows and metadata filters (`type`, `tags`, `who`, `pinned`,
+`importance_min`, `since`, `until`, `scope`), which transcripts cannot
+satisfy. This keeps details Dreaming does not file, such as general
+information the assistant gave, reachable without filing them as claims.
+Prompt-submit injection does not include transcripts. Full transcript search
+remains available through `/api/sessions/search`, MCP `session_search`, and
+`signet session search`.
 
 ### Timing and Failure Behavior
 
