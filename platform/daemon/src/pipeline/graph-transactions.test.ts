@@ -20,85 +20,65 @@ describe("graph-transactions", () => {
 		db.close();
 	});
 
+	function insertEntity(id: string, name: string, mentions: number): void {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run(id, name, name.toLowerCase(), "extracted", mentions, now, now);
+	}
+
+	function mentionsOf(id: string): number | null {
+		const row = db.prepare("SELECT mentions FROM entities WHERE id = ?").get(id) as { mentions: number } | null;
+		return row?.mentions ?? null;
+	}
+
 	describe("txDecrementEntityMentions", () => {
-		it("deletes entity with 1 mention after decrement", () => {
-			const now = new Date().toISOString();
-			db.prepare(
-				`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, 1, ?, ?)`,
-			).run("ent-1", "Solo", "solo", "extracted", now, now);
+		it("keeps an entity whose mention count reaches zero", () => {
+			insertEntity("ent-1", "Solo", 1);
 
-			const result = txDecrementEntityMentions(asWriteDb(db), {
-				entityIds: ["ent-1"],
-			});
+			txDecrementEntityMentions(asWriteDb(db), { entityIds: ["ent-1"] });
 
-			expect(result.entitiesOrphaned).toBe(1);
-			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-1")).toBeNull();
+			expect(mentionsOf("ent-1")).toBe(0);
 		});
 
-		it("preserves entity with multiple mentions after single decrement", () => {
-			const now = new Date().toISOString();
-			db.prepare(
-				`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, 3, ?, ?)`,
-			).run("ent-2", "Popular", "popular", "extracted", now, now);
+		it("decrements an entity with multiple mentions by one", () => {
+			insertEntity("ent-2", "Popular", 3);
 
-			const result = txDecrementEntityMentions(asWriteDb(db), {
-				entityIds: ["ent-2"],
-			});
+			txDecrementEntityMentions(asWriteDb(db), { entityIds: ["ent-2"] });
 
-			expect(result.entitiesOrphaned).toBe(0);
-			const row = db.prepare("SELECT mentions FROM entities WHERE id = ?").get("ent-2") as { mentions: number };
-			expect(row.mentions).toBe(2);
+			expect(mentionsOf("ent-2")).toBe(2);
 		});
 
-		it("does not delete another agent's unrelated zero-mention entity", () => {
-			const now = new Date().toISOString();
-			db.prepare(
-				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run("ent-owner", "Owner", "owner", "project", "agent-a", 1, now, now);
-			db.prepare(
-				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run("ent-other", "Other", "other", "project", "agent-b", 0, now, now);
+		it("never decrements below zero", () => {
+			insertEntity("ent-3", "Empty", 0);
 
-			const result = txDecrementEntityMentions(asWriteDb(db), { entityIds: ["ent-owner"] });
+			txDecrementEntityMentions(asWriteDb(db), { entityIds: ["ent-3"] });
 
-			expect(result.entitiesOrphaned).toBe(1);
-			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-owner")).toBeNull();
-			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-other")).toBeTruthy();
+			expect(mentionsOf("ent-3")).toBe(0);
 		});
 
-		it("cleans dangling relations when entity is orphaned", () => {
+		it("keeps relations of an entity whose mention count reaches zero", () => {
 			const now = new Date().toISOString();
-			db.prepare(
-				`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, 1, ?, ?)`,
-			).run("ent-a", "Alpha", "alpha", "extracted", now, now);
-			db.prepare(
-				`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, 5, ?, ?)`,
-			).run("ent-b", "Beta", "beta", "extracted", now, now);
-
+			insertEntity("ent-a", "Alpha", 1);
+			insertEntity("ent-b", "Beta", 5);
 			db.prepare(
 				`INSERT INTO relations (id, source_entity_id, target_entity_id, relation_type, strength, mentions, confidence, created_at)
 				 VALUES (?, ?, ?, ?, 1.0, 1, 0.8, ?)`,
 			).run("rel-1", "ent-a", "ent-b", "links_to", now);
 
-			txDecrementEntityMentions(asWriteDb(db), {
-				entityIds: ["ent-a"],
-			});
-			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-a")).toBeNull();
-			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-b")).toBeTruthy();
-			expect(db.prepare("SELECT id FROM relations WHERE id = ?").get("rel-1")).toBeNull();
+			txDecrementEntityMentions(asWriteDb(db), { entityIds: ["ent-a"] });
+
+			expect(mentionsOf("ent-a")).toBe(0);
+			expect(db.prepare("SELECT id FROM relations WHERE id = ?").get("rel-1")).toBeTruthy();
 		});
 
-		it("returns zero for empty input", () => {
-			const result = txDecrementEntityMentions(asWriteDb(db), {
-				entityIds: [],
-			});
-			expect(result.entitiesOrphaned).toBe(0);
+		it("does nothing for empty input", () => {
+			insertEntity("ent-4", "Untouched", 2);
+
+			txDecrementEntityMentions(asWriteDb(db), { entityIds: [] });
+
+			expect(mentionsOf("ent-4")).toBe(2);
 		});
 	});
 });

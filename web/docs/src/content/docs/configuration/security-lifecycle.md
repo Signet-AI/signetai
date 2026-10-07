@@ -111,8 +111,8 @@ when the pipeline is running.
 | `batchLimit` | `500` | Max rows purged per step per sweep (backpressure) |
 
 The retention worker also cleans up graph links and embeddings that
-belong to purged tombstones, and orphans entity nodes with no remaining
-mentions. The `batchLimit` prevents a single sweep from locking the
+belong to purged tombstones and decrements entity mention counts. It does
+not delete entities. The `batchLimit` prevents a single sweep from locking the
 database for too long under high load.
 
 Soft-deleted memories remain recoverable via `POST /api/memory/:id/recover`
