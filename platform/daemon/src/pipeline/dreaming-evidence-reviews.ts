@@ -7,6 +7,7 @@ import { enqueueDreamingAttentionInTx } from "./dreaming-attention";
 import {
 	deliveredOffsetForSource,
 	persistedEvidenceDeliveries,
+	resolveStalledEvidenceAttentionInTx,
 	verifiedDreamingEvidenceDelivery,
 } from "./dreaming-evidence-consumption";
 import { renderDreamingEvidence } from "./dreaming-evidence";
@@ -130,6 +131,8 @@ export function recordDreamingReviewedExcludedEvidenceInTx(
 		   pass_id = excluded.pass_id,
 		   reviewed_at = excluded.reviewed_at`,
 	);
+	const attention =
+		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_attention'").get() != null;
 	const seen = new Set<string>();
 	let recorded = 0;
 	for (const entry of params.entries) {
@@ -173,6 +176,7 @@ export function recordDreamingReviewedExcludedEvidenceInTx(
 			entry.reason,
 			params.passId,
 		);
+		if (attention) resolveStalledEvidenceAttentionInTx(db, params.passId, agentId, `${source.kind}:${source.id}`);
 		recorded += 1;
 	}
 	return recorded;
@@ -229,6 +233,6 @@ export async function requestDreamingReviewedEvidenceRequeue(
 			});
 			return true;
 		},
-		{ siteToken: "pipeline/dreaming-evidence-reviews.ts:232" },
+		{ siteToken: "pipeline/dreaming-evidence-reviews.ts:236" },
 	);
 }
