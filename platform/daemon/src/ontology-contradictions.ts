@@ -516,24 +516,12 @@ export function reconcileOntologyContradictionsInTx(
 	return resolved;
 }
 
-export function reconcileOntologyContradictions(
-	accessor: DbAccessor,
-	params: ReconcileOntologyContradictionsParams,
-): number {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx(
-		(db: import("./db-accessor").WriteDb) => reconcileOntologyContradictionsInTx(db, params),
-		"ontology-contradictions.ts:524",
-	);
-}
-
 export function listOntologyContradictions(
 	accessor: DbAccessor,
 	params: ListOntologyContradictionsParams,
 ): ListOntologyContradictionsResult {
 	const limit = Math.min(Math.max(params.limit ?? 50, 1), 200);
 	const offset = Math.max(params.offset ?? 0, 0);
-	reconcileOntologyContradictions(accessor, { agentId: params.agentId, sourceId: params.sourceId });
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const where = ["c.agent_id = ?"];
@@ -582,14 +570,13 @@ export function listOntologyContradictions(
 			limit,
 			offset,
 		};
-	}, "ontology-contradictions.ts:538");
+	}, "ontology-contradictions.ts:526");
 }
 
 export function getOntologyContradiction(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly id: string },
 ): OntologyContradiction | null {
-	reconcileOntologyContradictions(accessor, { agentId: params.agentId });
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
 		const row = db
@@ -597,7 +584,7 @@ export function getOntologyContradiction(
 				WHERE c.id = ? AND c.agent_id = ?`)
 			.get(params.id, params.agentId) as ContradictionRow | undefined | null;
 		return row == null ? null : rowToContradiction(row);
-	}, "ontology-contradictions.ts:594");
+	}, "ontology-contradictions.ts:581");
 }
 
 export function parseOntologyContradictionStatus(

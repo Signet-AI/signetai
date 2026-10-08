@@ -4,10 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { listOntologyContradictions } from "./ontology-contradictions";
+import { markImportedSourceUnsupported } from "./imported-source-lifecycle";
+import { propagateMemoryStatus } from "./knowledge-graph";
+import { DEFAULT_PIPELINE_V2 } from "./memory-config";
+import { getOntologyContradiction, listOntologyContradictions } from "./ontology-contradictions";
 import { applyOntologyOperation } from "./ontology-proposals";
 import { createDreamingCapabilities } from "./pipeline/dreaming-capabilities";
+import { uninstallSkillNode } from "./pipeline/skill-graph";
 import { registerOntologyRoutes } from "./routes/ontology-routes";
+import { createRateLimiter, pruneGenericEntities } from "./repair-actions";
 import { purgeSourceOwnedRows } from "./source-purge";
 
 describe("persisted ontology contradictions", () => {
@@ -91,6 +96,100 @@ describe("persisted ontology contradictions", () => {
 			sourcePath: `fixtures/${sourceId}.json`,
 		});
 	}
+
+	function storedStatuses(agentId: string): Array<{ status: string; updated_at: string }> {
+		return getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT status, updated_at FROM ontology_contradictions WHERE agent_id = ? ORDER BY id")
+					.all(agentId) as Array<{ status: string; updated_at: string }>,
+		);
+	}
+
+	async function seedContradiction(): Promise<string> {
+		await addClaim("owner", "Runtime mode is enabled by default.", "source-enabled");
+		await addClaim("owner", "Runtime mode is disabled by default.", "source-disabled");
+		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["active"]);
+		const attributeId = getDbAccessor().withReadDb(
+			(db) =>
+				(
+					db
+						.prepare("SELECT id FROM entity_attributes WHERE agent_id = ? AND source_id = ?")
+						.get("owner", "source-enabled") as { id: string } | null
+				)?.id,
+		);
+		if (attributeId === undefined) throw new Error("expected enabled claim fixture");
+		return attributeId;
+	}
+
+	it("reads contradictions without reconciling them", async () => {
+		const attributeId = await seedContradiction();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entity_attributes SET status = 'archived' WHERE id = ?").run(attributeId);
+		});
+		const before = storedStatuses("owner");
+
+		const listed = listOntologyContradictions(getDbAccessor(), { agentId: "owner" });
+		const contradiction = listed.items[0];
+		if (!contradiction) throw new Error("expected contradiction fixture");
+		expect(getOntologyContradiction(getDbAccessor(), { agentId: "owner", id: contradiction.id })?.status).toBe(
+			"active",
+		);
+		expect(storedStatuses("owner")).toEqual(before);
+	});
+
+	it("reconciles when imported-source lifecycle archives a competing claim", async () => {
+		await seedContradiction();
+		markImportedSourceUnsupported({ agentId: "owner", sourceId: "source-enabled" });
+		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
+	});
+
+	it("reconciles when memory status propagation supersedes a competing claim", async () => {
+		const attributeId = await seedContradiction();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				"UPDATE memories SET is_deleted = 1 WHERE id = (SELECT memory_id FROM entity_attributes WHERE id = ?)",
+			).run(attributeId);
+		});
+		expect(await propagateMemoryStatus(getDbAccessor(), "owner")).toBeGreaterThan(0);
+		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
+	});
+
+	it("reconciles when generic entity repair deletes the contested entity", async () => {
+		await seedContradiction();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE entities SET name = 'Sender', canonical_name = 'sender' WHERE agent_id = ? AND name = ?").run(
+				"owner",
+				"Runtime",
+			);
+		});
+		const result = await pruneGenericEntities(
+			getDbAccessor(),
+			{ ...DEFAULT_PIPELINE_V2, shadowMode: false, mutationsFrozen: false },
+			{ reason: "test run", actor: "test-operator", actorType: "operator" },
+			createRateLimiter(),
+			{ agentId: "owner", dryRun: false },
+		);
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(1);
+		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
+	});
+
+	it("reconciles when skill uninstall deletes the contested entity", async () => {
+		await seedContradiction();
+		const entityId = getDbAccessor().withReadDb(
+			(db) =>
+				(
+					db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("owner", "Runtime") as {
+						id: string;
+					} | null
+				)?.id,
+		);
+		if (entityId === undefined) throw new Error("expected contested entity fixture");
+		const result = await uninstallSkillNode({ skillName: "runtime", agentId: "owner", entityId }, getDbAccessor());
+		expect(result.removed).toBe(true);
+		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
+	});
 
 	it("records set-claim contradiction evidence before governance supersedes the prior value", async () => {
 		await setClaim("owner", "Runtime mode is enabled by default.", "source-enabled");

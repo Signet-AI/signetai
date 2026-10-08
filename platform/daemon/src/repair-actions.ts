@@ -54,6 +54,7 @@ import {
 } from "./embedding-repair-state";
 import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
+import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
 import { recoverStaleLeases } from "./pipeline/stale-leases";
 import { isSystemPressureHigh } from "./system-pressure";
@@ -2681,6 +2682,7 @@ export async function pruneGenericEntities(
 				if (ids.length === 0) return 0;
 
 				deleteEntityGraphRows(db, ids);
+				for (const entityId of ids) reconcileOntologyContradictionsInTx(db, { agentId, entityId });
 				writeRepairAudit(
 					db,
 					action,

@@ -16,6 +16,7 @@ import { getDbAccessorPath, type DbAccessor, type ReadDb } from "./db-accessor";
 import { dbOwnerQuery, getDbOwner } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import { runWriteTxAsync } from "./db-accessor";
+import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import type { DreamingEpisodicBacklogProbe } from "./pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "./pipeline/dreaming-token-cache";
 
@@ -1798,6 +1799,7 @@ export async function propagateMemoryStatus(accessor: DbAccessor, agentId: strin
 			 SET status = 'superseded', updated_at = ?
 			 WHERE id IN (${placeholders}) AND agent_id = ?`,
 		).run(now(), ...ids, agentId);
+		reconcileOntologyContradictionsInTx(db, { agentId });
 		return ids.length;
 	});
 }
