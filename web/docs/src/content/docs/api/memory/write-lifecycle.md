@@ -25,6 +25,9 @@ same scope recall uses. The agent comes from `agentId`, the
 to the credential's scoped agent, then `default`. A scoped credential that asks
 for another agent gets `403`.
 
+Listed `content` goes through [credential redaction](#credential-redaction).
+`GET /api/memory/:id` returns the stored content.
+
 **Query parameters**
 
 | Parameter | Type    | Default   | Description                       |
@@ -37,9 +40,9 @@ for another agent gets `403`.
 ### Credential redaction
 
 Remembered content is stored as written. When it is projected into a prompt,
-recall result, Dreaming evidence, `MEMORY.md`, or an MCP tool response, any
-detected credential (provider API keys and tokens, private keys, JWTs, bearer
-tokens, and values assigned to secret-named keys) is replaced with
+recall result, memory list, Dreaming evidence, `MEMORY.md`, or an MCP tool
+response, any detected credential (provider API keys and tokens, private keys,
+JWTs, bearer tokens, and values assigned to secret-named keys) is replaced with
 `[redacted credential]`. Nothing is withheld for safety reasons, and the
 original content and provenance stay unchanged.
 
