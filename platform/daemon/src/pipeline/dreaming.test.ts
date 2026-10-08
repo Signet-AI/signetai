@@ -52,6 +52,7 @@ import {
 	resolveDreamingAttentionInTx,
 } from "./dreaming-attention";
 import {
+	DREAMING_EVIDENCE_STALL_PASSES,
 	IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET,
 	IMPORTED_SOURCE_ATTENTION_ROWS_PER_SCOPE,
 	pendingDreamingEvidenceContinuations,
@@ -3178,6 +3179,57 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 				.get("stuck-first"),
 		).toEqual({ stalled: 0 });
 	}, 15_000);
+
+	it("does not schedule passes for stall attention and resolves it on reviewed exclusion (#2094)", async () => {
+		seedTranscript(db, "stalled-noise", "Weekend small talk with no durable fact.");
+		const runPass = (run: (input: DreamingAgentInput) => Promise<void>) =>
+			runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						await run(input);
+						return { summary: "Read the queue" };
+					},
+				},
+				defaultCfg(),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				"incremental",
+			);
+		for (let pass = 0; pass < DREAMING_EVIDENCE_STALL_PASSES; pass += 1) {
+			await runPass(async (input) => {
+				await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+			});
+		}
+		const stalled = () =>
+			db
+				.prepare(
+					"SELECT resolved_at AS resolvedAt FROM dreaming_attention WHERE kind = 'evidence_requeue' AND subject_ref = ?",
+				)
+				.get("transcript:stalled-noise") as { resolvedAt: string | null } | null;
+		expect(stalled()).toEqual({ resolvedAt: null });
+		const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
+		expect(
+			await evaluateDreamingTrigger(accessor, cfg, AGENT, {
+				kind: "indeterminate",
+				tokenLowerBound: 0,
+				hasBacklog: true,
+				sourcesScanned: 1,
+			}),
+		).toEqual({ trigger: false });
+
+		await runPass(async (input) => {
+			await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+			await invokeDreamingTool(input, "runbook_write", {
+				summary: "## No-op\n- transcript:stalled-noise is small talk.",
+				reviewedExcludedEvidence: [
+					{ agentId: AGENT, sourceRef: "transcript:stalled-noise", reason: "Small talk with no durable fact." },
+				],
+			});
+		});
+		expect(stalled()?.resolvedAt).toEqual(expect.any(String));
+	});
 
 	it("serves fresh sources before a stalled continuation (#2094)", async () => {
 		const capturedAt = "2026-08-11T00:00:00.000Z";

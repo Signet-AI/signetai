@@ -106,8 +106,10 @@ registry defines the operations available to the agent, including:
   `apply_ontology_ops` operation, extended contiguously from the stored cursor
   when the pass finalizes. Delivered text that is never acknowledged stays
   queued. A source revision delivered in three successful passes without
-  progress gets a visible `evidence_requeue` attention record and stops
-  leading the continuation queue. Cursors written before this rule are marked
+  progress gets a visible `evidence_requeue` attention record and leaves the
+  continuation queue, so fresh sources are served before it. That record does
+  not schedule a pass by itself, and it resolves when the source makes progress
+  or is excluded as reviewed. Cursors written before this rule are marked
   with `cursor_basis = 'delivery'`; new writes use `'review'`.
 - `search_entities` and `get_entity` for scoped graph reads
 - `list_aspect_claims` for claims with their evidence, and optionally the aspect's contradictions

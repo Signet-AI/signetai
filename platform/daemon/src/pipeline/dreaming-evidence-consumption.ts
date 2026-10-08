@@ -584,11 +584,6 @@ export function recordDreamingEvidenceConsumptionInTx(
 		 WHERE dreaming_attention.resolved_at IS NOT NULL
 		    OR json_extract(dreaming_attention.details_json, '$.reason') = 'evidence-stalled'`,
 	);
-	const clearStall = db.prepare(
-		`UPDATE dreaming_attention SET resolved_at = datetime('now'), resolved_by_pass_id = ?
-		 WHERE agent_id = ? AND kind = 'evidence_requeue' AND subject_ref = ? AND resolved_at IS NULL
-		   AND json_extract(details_json, '$.reason') = 'evidence-stalled'`,
-	);
 	const ordered = [...revisions.values()].sort(
 		(a, b) =>
 			a.delivery.agentId.localeCompare(b.delivery.agentId) ||
@@ -613,7 +608,7 @@ export function recordDreamingEvidenceConsumptionInTx(
 		const ref = `${delivery.kind}:${delivery.id}`;
 		if (next > current) {
 			advance.run(...identity, next, delivery.length, params.passId);
-			if (attention) clearStall.run(params.passId, delivery.agentId, ref);
+			if (attention) resolveStalledEvidenceAttentionInTx(db, params.passId, delivery.agentId, ref);
 			continue;
 		}
 		if (!queued || current >= delivery.length) continue;
@@ -634,6 +629,16 @@ export function recordDreamingEvidenceConsumptionInTx(
 			}),
 		);
 	}
+}
+
+export const STALLED_EVIDENCE_ATTENTION_SQL =
+	"(kind = 'evidence_requeue' AND json_valid(details_json) AND json_extract(details_json, '$.reason') = 'evidence-stalled')";
+
+export function resolveStalledEvidenceAttentionInTx(db: WriteDb, passId: string, agentId: string, ref: string): void {
+	db.prepare(
+		`UPDATE dreaming_attention SET resolved_at = datetime('now'), resolved_by_pass_id = ?
+		 WHERE agent_id = ? AND subject_ref = ? AND resolved_at IS NULL AND ${STALLED_EVIDENCE_ATTENTION_SQL}`,
+	).run(passId, agentId, ref);
 }
 
 export interface DreamingEvidenceCursor {
