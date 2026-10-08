@@ -1,7 +1,5 @@
+import { resolveRuntimeAsset } from "./runtime-assets";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { spawnHidden } from "./child-process";
 import { decodeSecretMasterKey } from "./secrets-key.js";
 
@@ -79,9 +77,7 @@ function errorMessage(error: unknown): string {
 }
 
 function sourceHelperPath(): string {
-	const directory = dirname(fileURLToPath(import.meta.url));
-	const built = join(directory, "secrets-keyring-child.js");
-	return existsSync(built) ? built : join(directory, "secrets-keyring-child.ts");
+	return resolveRuntimeAsset("secrets-keyring-child.js", import.meta.url);
 }
 
 function defaultDeadlineMs(): number {

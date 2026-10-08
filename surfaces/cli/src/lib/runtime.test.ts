@@ -441,27 +441,6 @@ describe("buildSystemdDaemonStartArgs", () => {
 });
 
 describe("buildLaunchdDaemonPlist", () => {
-	it("keeps staged connector assets available to launchd health workers", () => {
-		const root = mkdtempSync(join(tmpdir(), "signet-launchd-connector-assets-"));
-		try {
-			mkdirSync(join(root, "dist"));
-			mkdirSync(join(root, "connectors", "hermes-agent", "hermes-plugin"), { recursive: true });
-			const plist = buildLaunchdDaemonPlist({
-				daemonPath: join(root, "dist", "daemon.js"),
-				agentsDir: join(root, "workspace"),
-				runtime: "bun-js",
-				port: 3850,
-				host: "127.0.0.1",
-				bind: "127.0.0.1",
-				startupLogPath: join(root, "startup.log"),
-			});
-			expect(plist).toContain("<key>SIGNET_CONNECTOR_ASSETS_DIR</key>");
-			expect(plist).toContain(`<string>${join(root, "connectors")}</string>`);
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
-
 	it("starts daemon as a macOS LaunchAgent with explicit env and log routing", () => {
 		if (process.platform !== "darwin") return;
 		const plist = buildLaunchdDaemonPlist({

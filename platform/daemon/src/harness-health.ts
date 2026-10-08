@@ -1,6 +1,4 @@
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveRuntimeAsset } from "@signet/core";
 import { spawnHidden as spawn } from "@signet/core";
 import { HARNESS_INSTALLERS, getHarnessLoader, type HarnessConnectorStatus } from "./harness-registry";
 import { hasNativeRuntimeAssets } from "./native-runtime-assets";
@@ -22,9 +20,7 @@ const active = new Map<string, ActiveInspection>();
 let stopping = false;
 
 function workerPath(): string {
-	const directory = dirname(fileURLToPath(import.meta.url));
-	const built = join(directory, "harness-health-worker.js");
-	return existsSync(built) ? built : join(directory, "harness-health-worker.ts");
+	return resolveRuntimeAsset("harness-health-worker.js", import.meta.url);
 }
 
 function failed(request: HarnessHealthRequest, message: string): HarnessConnectorStatus {

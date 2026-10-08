@@ -1,7 +1,5 @@
+import { resolveRuntimeAsset } from "@signet/core";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import type { AgentSessionEvent, SessionStats } from "@earendil-works/pi-coding-agent";
 import type { Usage } from "@earendil-works/pi-ai";
@@ -38,11 +36,8 @@ export async function createWorkerAgentSession(
 	if (workers.size >= piAgentWorkerLimit()) throw new Error("Pi agent worker capacity reached");
 	if (Buffer.byteLength(JSON.stringify(input)) > PI_AGENT_MAX_MESSAGE_BYTES)
 		throw new Error("Pi agent input limit exceeded");
-	const directory = dirname(fileURLToPath(import.meta.url));
-	const bundled = join(directory, "pi-agent-worker.js");
 	const worker = new Worker(
-		resolveEmbeddedWorkerPath("pi-agent-worker") ??
-			(existsSync(bundled) ? bundled : join(directory, "pi-agent-worker.ts")),
+		resolveEmbeddedWorkerPath("pi-agent-worker") ?? resolveRuntimeAsset("pi-agent-worker.js", import.meta.url),
 		{ workerData: JSON.parse(JSON.stringify(input)) },
 	);
 	workers.add(worker);

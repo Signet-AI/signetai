@@ -1,44 +1,10 @@
-import { existsSync } from "node:fs";
-import { dirname, join, normalize, relative, resolve, win32 } from "node:path";
+import { dirname, join, normalize, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveLaunchdExecutable } from "@signet/core";
+import { resolveRuntimeAsset, resolveRuntimeAssetDirectory } from "@signet/core";
 import { app } from "electron";
 
 const distDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = normalize(resolve(distDir, ".."));
-const repoRoot = normalize(resolve(appRoot, "../.."));
-
-interface BunPathInput {
-	readonly bundled: string;
-	readonly platform?: NodeJS.Platform;
-	readonly environment?: NodeJS.ProcessEnv;
-	readonly home?: string;
-	readonly exists?: (path: string) => boolean;
-}
-
-function windowsBunFallback(environment: NodeJS.ProcessEnv, home: string, exists: (path: string) => boolean): string {
-	const userProfile = environment.USERPROFILE?.trim() || environment.HOME?.trim() || home;
-	const localAppData = environment.LOCALAPPDATA?.trim() || win32.join(userProfile, "AppData", "Local");
-	const bunInstall = environment.BUN_INSTALL?.trim();
-	const candidates = [
-		...(bunInstall ? [win32.join(bunInstall, "bin", "bun.exe")] : []),
-		win32.join(userProfile, ".bun", "bin", "bun.exe"),
-		win32.join(localAppData, "bun", "bin", "bun.exe"),
-	];
-	return candidates.find(exists) ?? win32.join(userProfile, ".bun", "bin", "bun.exe");
-}
-
-export function resolveBunPath({
-	bundled,
-	platform = process.platform,
-	environment = process.env,
-	home = process.env.HOME ?? "",
-	exists = existsSync,
-}: BunPathInput): string {
-	if (exists(bundled)) return bundled;
-	if (platform === "win32") return windowsBunFallback(environment, home, exists);
-	return resolveLaunchdExecutable("bun", { environment, home });
-}
 
 function assertSafePath(base: string, target: string): string {
 	const normalized = normalize(target);
@@ -56,17 +22,15 @@ export function appResourcePath(...parts: readonly string[]): string {
 
 export function bunPath(): string {
 	const executable = process.platform === "win32" ? "bun.exe" : "bun";
-	return resolveBunPath({ bundled: appResourcePath("runtime", executable) });
+	return resolveRuntimeAsset(appResourcePath("runtime", executable), import.meta.url);
 }
 
 export function daemonRoot(): string {
-	const bundled = appResourcePath("daemon");
-	if (existsSync(join(bundled, "dist", "daemon.js"))) return bundled;
-	return assertSafePath(repoRoot, resolve(repoRoot, "platform/daemon"));
+	return resolveRuntimeAssetDirectory(appResourcePath("daemon"), import.meta.url);
 }
 
 export function daemonEntry(): string {
-	return join(daemonRoot(), "dist", "daemon.js");
+	return resolveRuntimeAsset(join(daemonRoot(), "dist", "daemon.js"), import.meta.url);
 }
 
 export function dashboardRoot(): string {
@@ -79,9 +43,10 @@ export function dashboardIndex(): string {
 
 export function iconPath(name: string): string {
 	const sanitized = name.replace(/[/\\]/g, "");
-	const bundled = appResourcePath("icons", sanitized);
-	if (existsSync(bundled)) return bundled;
-	return assertSafePath(appRoot, join(appRoot, "icons", sanitized));
+	const target = app.isPackaged
+		? appResourcePath("icons", sanitized)
+		: assertSafePath(appRoot, join(appRoot, "icons", sanitized));
+	return resolveRuntimeAsset(target, import.meta.url);
 }
 
 export function preloadPath(): string {

@@ -10,7 +10,7 @@ import {
 	type ThinkingLevel,
 	type Usage,
 } from "@earendil-works/pi-ai";
-import { ModelRuntime, type AgentSessionEvent, type SessionStats } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, SessionStats } from "@earendil-works/pi-coding-agent";
 import type {
 	AccountingProvenance,
 	LlmCacheRequestAccounting,
@@ -515,19 +515,23 @@ export function createPiModelProvider(
 	const accountingProvenance = accountingProvenanceForConfig(config, piModel);
 	const defaultTimeoutMs = config.defaultTimeoutMs ?? 60_000;
 	const reasoning = config.reasoning;
-	const modelRuntime = ModelRuntime.create({
-		credentials: new InMemoryCredentialStore(),
-		modelsPath: null,
-	}).then((runtime) => {
-		runtime.registerProvider(piModel.provider, {
-			name: piModel.provider,
-			baseUrl: piModel.baseUrl,
-			api: piModel.api,
-			apiKey: apiKey ?? KEYLESS_API_KEY,
-			models: [{ ...piModel }],
+	const modelRuntime = import("@earendil-works/pi-coding-agent")
+		.then(({ ModelRuntime }) =>
+			ModelRuntime.create({
+				credentials: new InMemoryCredentialStore(),
+				modelsPath: null,
+			}),
+		)
+		.then((runtime) => {
+			runtime.registerProvider(piModel.provider, {
+				name: piModel.provider,
+				baseUrl: piModel.baseUrl,
+				api: piModel.api,
+				apiKey: apiKey ?? KEYLESS_API_KEY,
+				models: [{ ...piModel }],
+			});
+			return runtime;
 		});
-		return runtime;
-	});
 
 	function buildContext(prompt: string): Context {
 		return {

@@ -286,14 +286,6 @@ export class DaemonManager {
 				SIGNET_DESKTOP: "1",
 				SIGNET_DAEMON_RUNTIME: "bun-js",
 				SIGNET_DAEMON_JS_PATH: this.#runtimePaths.daemonEntry(),
-				SIGNET_TIKTOKEN_WASM_PATH: join(
-					this.#runtimePaths.daemonRoot(),
-					"node_modules",
-					"tiktoken",
-					"tiktoken_bg.wasm",
-				),
-				SIGNET_CONNECTOR_ASSETS_DIR:
-					process.env.SIGNET_CONNECTOR_ASSETS_DIR ?? join(this.#runtimePaths.daemonRoot(), "connectors"),
 				SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "desktop",
 			},
 		});

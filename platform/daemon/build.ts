@@ -1,32 +1,42 @@
-import { rmSync } from "node:fs";
+import { rmSync, readdirSync, statSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import { EXTERNAL_BUN, EXTERNAL_NODE } from "./build-externals";
+import { RuntimeManifest, runtimeReferences } from "./build-manifest/build";
+
+process.chdir(import.meta.dir);
 
 const ALIAS: Record<string, string> = {
 	sharp: "./src/shims/sharp.ts",
 };
 
-const targets: Array<{
-	entrypoint: string;
-	outfile: string;
-}> = [
-	{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" },
-	{ entrypoint: "./src/mcp-stdio.ts", outfile: "./dist/mcp-stdio.js" },
-	{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" },
-	{ entrypoint: "../core/src/secrets-keyring-child.ts", outfile: "./dist/secrets-keyring-child.js" },
-	{ entrypoint: "./src/synthesis-render-worker.ts", outfile: "./dist/synthesis-render-worker.js" },
-	{ entrypoint: "./src/database-integrity-worker.ts", outfile: "./dist/database-integrity-worker.js" },
-	{ entrypoint: "./src/db-owner-worker.ts", outfile: "./dist/db-owner-worker.js" },
-	{ entrypoint: "./src/native-memory-source-worker.ts", outfile: "./dist/native-memory-source-worker.js" },
-	{ entrypoint: "./src/embedding-worker.ts", outfile: "./dist/embedding-worker.js" },
-	{ entrypoint: "./src/harness-install-worker.ts", outfile: "./dist/harness-install-worker.js" },
-	{ entrypoint: "./src/harness-health-worker.ts", outfile: "./dist/harness-health-worker.js" },
-	{ entrypoint: "./src/pipeline/dreaming-token-worker.ts", outfile: "./dist/dreaming-token-worker.js" },
-	{ entrypoint: "./src/pipeline/pi-agent-worker.ts", outfile: "./dist/pi-agent-worker.js" },
-	{ entrypoint: "./src/transcript-recovery-child.ts", outfile: "./dist/transcript-recovery-child.js" },
-	{ entrypoint: "./src/transcript-recovery-supervisor.ts", outfile: "./dist/transcript-recovery-supervisor.js" },
-];
-
 const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";
+const root = resolve(import.meta.dir, "../..");
+const referenced = new Set<string>();
+const manifest = new RuntimeManifest(root);
+function sourceFiles(directory: string): string[] {
+	return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+		const path = join(directory, entry.name);
+		if (entry.isDirectory()) return entry.name === "__tests__" ? [] : sourceFiles(path);
+		return entry.name.endsWith(".ts") && !/\.(test|spec|bench)\.ts$/.test(entry.name) ? [path] : [];
+	});
+}
+const sources = [...sourceFiles(join(root, "platform/daemon/src")), ...sourceFiles(join(root, "platform/core/src"))];
+const targets = ["daemon", "mcp-stdio", "index"].map((name) => ({
+	entrypoint: `./src/${name}.ts`,
+	outfile: `./dist/${name}.js`,
+}));
+for (const name of new Set(sources.flatMap(runtimeReferences).filter((name) => /\.[cm]?js$/.test(name)))) {
+	if (targets.some((target) => target.outfile === `./dist/${name}`)) continue;
+	const matches = sources.filter((path) =>
+		path.replaceAll("\\", "/").endsWith(`/${name.replace(/\.[cm]?js$/, ".ts")}`),
+	);
+	if (matches.length !== 1) throw new Error(`Missing or ambiguous runtime asset producer: ${name}`);
+	const entrypoint = matches[0];
+	if (entrypoint) targets.push({ entrypoint, outfile: `./dist/${name}` });
+}
+for (const name of forceNodeBuild ? [] : ["runtime-diagnostics"]) {
+	targets.push({ entrypoint: join(root, "surfaces/desktop/scripts", `${name}.ts`), outfile: `./dist/${name}.js` });
+}
 const profileBuild = process.env.SIGNET_DAEMON_PROFILE === "1" || process.argv.includes("--profile");
 if (!profileBuild) {
 	for (const target of targets) rmSync(`${target.outfile}.map`, { force: true });
@@ -38,6 +48,15 @@ if (isBun) {
 	for (const { entrypoint, outfile } of targets) {
 		const result = await Bun.build({
 			entrypoints: [entrypoint],
+			metafile: true,
+			plugins: [
+				manifest.plugin({
+					output: resolve(outfile),
+					directory: join(import.meta.dir, "dist"),
+					aliases: ALIAS,
+					external: EXTERNAL_BUN,
+				}),
+			],
 			outdir: ".",
 			naming: {
 				entry: outfile,
@@ -57,6 +76,15 @@ if (isBun) {
 			}
 			ok = false;
 		} else {
+			if (!result.metafile) throw new Error("Runtime build metafile is missing");
+			for (const name of manifest.graph(result.metafile, process.cwd())) referenced.add(name);
+			for (const output of result.outputs)
+				manifest.add(
+					resolve(output.path),
+					`dist/${relative(join(import.meta.dir, "dist"), resolve(output.path))
+						.split(sep)
+						.join("/")}`,
+				);
 			const size = result.outputs[0]?.size ?? 0;
 			const mb = (size / 1024 / 1024).toFixed(1);
 			console.log(`  ${outfile}  ${mb} MB`);
@@ -85,7 +113,6 @@ if (isBun) {
 				logLevel: "warning",
 			});
 
-			const { statSync } = await import("node:fs");
 			const size = statSync(outfile).size;
 			const mb = (size / 1024 / 1024).toFixed(1);
 			console.log(`  ${outfile}  ${mb} MB`);
@@ -98,3 +125,18 @@ if (isBun) {
 }
 
 if (!ok) process.exit(1);
+if (!forceNodeBuild) {
+	for (const name of referenced) manifest.require(`dist/${name}`);
+	manifest.tree(join(root, "platform/daemon/dashboard"), "dashboard");
+	manifest.tree(join(root, "platform/daemon/skills"), "skills");
+	manifest.dependency(
+		`sqlite-vec-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`,
+		join(root, "platform/core/package.json"),
+	);
+	manifest.tree(
+		join(root, "integrations/hermes-agent/connector/hermes-plugin"),
+		"connectors/hermes-agent/hermes-plugin",
+	);
+	manifest.materialize(import.meta.dir);
+	manifest.write(join(root, "platform/daemon/dist/runtime-manifest.json"));
+}

@@ -173,6 +173,17 @@ bun run build
 
 For daemon changes specifically:
 
+Development and packaged runtimes use built worker and helper assets. They do
+not fall back to TypeScript sources when an asset is missing. The package's
+`dev` and `start` commands build those assets before launching. After changing
+a worker or helper while the source daemon is watching, rerun the command to
+rebuild its executable asset. A direct `bun src/daemon.ts` invocation requires
+an up-to-date daemon build first.
+
+Desktop `dev` stages the same runtime resources as `build:desktop` before
+launching Electron. Missing packaged resources are errors, not requests to
+use the source checkout or a globally installed Bun.
+
 ```bash
 cd platform/daemon
 bun run dev           # watch mode

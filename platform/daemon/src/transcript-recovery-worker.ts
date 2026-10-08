@@ -1,9 +1,9 @@
+import { resolveRuntimeAsset } from "@signet/core";
 import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
 import { createHash } from "node:crypto";
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename, join } from "node:path";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 import { deriveSessionEndFallbackId } from "./session-end-recovery";
@@ -556,14 +556,9 @@ export function startTranscriptRecoveryWorker(
 	};
 
 	const runChild = async (): Promise<TranscriptRecoveryScanResult> => {
-		const childName = fileURLToPath(import.meta.url).endsWith(".ts")
-			? "transcript-recovery-child.ts"
-			: "transcript-recovery-child.js";
-		const supervisorName = fileURLToPath(import.meta.url).endsWith(".ts")
-			? "transcript-recovery-supervisor.ts"
-			: "transcript-recovery-supervisor.js";
-		const childPath = options.childPath ?? join(dirname(fileURLToPath(import.meta.url)), childName);
-		const supervisorPath = options.supervisorPath ?? join(dirname(fileURLToPath(import.meta.url)), supervisorName);
+		const childPath = options.childPath ?? resolveRuntimeAsset("transcript-recovery-child.js", import.meta.url);
+		const supervisorPath =
+			options.supervisorPath ?? resolveRuntimeAsset("transcript-recovery-supervisor.js", import.meta.url);
 		const {
 			intervalMs: _intervalMs,
 			signal: _signal,

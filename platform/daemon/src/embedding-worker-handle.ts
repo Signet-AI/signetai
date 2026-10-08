@@ -1,6 +1,5 @@
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolveRuntimeAsset } from "@signet/core";
+import { join } from "node:path";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { resolveDefaultBasePath } from "@signet/core";
 import type {
@@ -103,14 +102,10 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		...(opts.task ? { task: opts.task } : {}),
 	};
 
-	const __dirname = dirname(fileURLToPath(import.meta.url));
-	const bundled = join(__dirname, "embedding-worker.js");
 	const workerPath =
-		opts.embeddingWorkerPath !== undefined
-			? (opts.embeddingWorkerPath ?? join(__dirname, "embedding-worker.ts"))
-			: existsSync(bundled)
-				? bundled
-				: (resolveEmbeddedWorkerPath("embedding-worker") ?? join(__dirname, "embedding-worker.ts"));
+		opts.embeddingWorkerPath ??
+		resolveEmbeddedWorkerPath("embedding-worker") ??
+		resolveRuntimeAsset("embedding-worker.js", import.meta.url);
 	const workerOptions = { workerData: init, type: "module" } as const;
 	const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init, workerOptions);
 

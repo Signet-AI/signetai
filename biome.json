@@ -24,6 +24,7 @@
 			"!**/*.generated.*",
 			"!**/platform/daemon-rs/contracts/replay-corpus",
 			"!**/platform/daemon/dashboard",
+			"!**/surfaces/desktop/resources",
 			"!**/web/marketing/public/contentIndex.json",
 			"!**/web/marketing/public/marketing",
 			"!**/memorybench/data",

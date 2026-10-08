@@ -1,3 +1,4 @@
+import { resolveRuntimeAsset } from "@signet/core";
 import { isMainThread, parentPort, workerData, Worker } from "node:worker_threads";
 import { getHarnessLoader, inspectRegisteredConnector } from "./harness-registry";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
@@ -21,9 +22,13 @@ if (!isMainThread && parentPort !== null) {
 	const request = JSON.parse(process.env.SIGNET_HEALTH_INSPECTION) as HarnessHealthRequest;
 	setTimeout(() => process.exit(1), 5000);
 	let reported = false;
-	const worker = new Worker(resolveEmbeddedWorkerPath("harness-health-worker") ?? new URL(import.meta.url), {
-		workerData: request,
-	});
+	const worker = new Worker(
+		resolveEmbeddedWorkerPath("harness-health-worker") ??
+			resolveRuntimeAsset("harness-health-worker.js", import.meta.url),
+		{
+			workerData: request,
+		},
+	);
 	worker.once("message", (status) => {
 		reported = true;
 		process.stdout.write(`SIGNET_HEALTH_RESULT ${JSON.stringify(status)}\n`, () => process.exit(0));

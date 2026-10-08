@@ -1,0 +1,204 @@
+name: Installed desktop smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installed-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x64
+            package: deb
+            name: linux-x64
+          - runner: windows-latest
+            arch: x64
+            package: nsis
+            name: windows-x64
+          - runner: macos-14
+            arch: arm64
+            package: dmg
+            name: macos-arm64
+          - runner: macos-15-intel
+            arch: x64
+            package: dmg
+            name: macos-x64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install Linux keyring prerequisites
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y dbus-daemon gnome-keyring
+      - name: Prepare smoke log directory
+        run: mkdir -p "$RUNNER_TEMP/signet-smoke-logs"
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build desktop app and stage resources
+        env:
+          ELECTRON_BUILDER_ARCH: ${{ matrix.arch }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          set -euo pipefail
+          cd surfaces/desktop
+          bun run build:desktop --dir --${{ matrix.arch }}
+      - name: Build Debian installer
+        if: runner.os == 'Linux'
+        working-directory: surfaces/desktop
+        run: bunx electron-builder --publish never --linux deb --${{ matrix.arch }}
+      - name: Build macOS DMG installer
+        if: runner.os == 'macOS'
+        working-directory: surfaces/desktop
+        run: bunx electron-builder --publish never --mac dmg --${{ matrix.arch }}
+      - name: Build Windows NSIS installer
+        if: runner.os == 'Windows'
+        working-directory: surfaces/desktop
+        run: bunx electron-builder --publish never --win nsis --${{ matrix.arch }}
+      - name: Install Debian package
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          package=$(find surfaces/desktop/release -maxdepth 1 -name '*.deb' -print -quit)
+          test -n "$package"
+          sudo apt-get install -y "./$package"
+          package_name=$(dpkg-deb -f "$package" Package)
+          install_manifest="$RUNNER_TEMP/signet-installed-files.txt"
+          dpkg-query -L "$package_name" | tee "$install_manifest"
+          bun_path=$(awk '/\/resources\/runtime\/bun$/ { print; exit }' "$install_manifest")
+          test -n "$bun_path"
+          test -x "$bun_path"
+          resources_root=${bun_path%/runtime/bun}
+          test -f "$resources_root/daemon/dist/daemon.js"
+          executable="${resources_root%/resources}/signet"
+          test -x "$executable"
+          printf 'SIGNET_SMOKE_RESOURCES=%s\nSIGNET_SMOKE_ELECTRON=%s\n' "$resources_root" "$executable" >> "$GITHUB_ENV"
+      - name: Install macOS DMG app bundle preserving symlinks
+        if: runner.os == 'macOS'
+        run: |
+          set -euo pipefail
+          dmg=$(find surfaces/desktop/release -maxdepth 1 -name '*.dmg' -print -quit)
+          test -n "$dmg"
+          mount_point="$RUNNER_TEMP/signet-dmg"
+          installed_root="$RUNNER_TEMP/signet-installed"
+          mkdir -p "$mount_point" "$installed_root"
+          hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mount_point"
+          cleanup() { hdiutil detach "$mount_point" -quiet || true; }
+          trap cleanup EXIT
+          apps=("$mount_point"/*.app)
+          if [[ ${#apps[@]} -ne 1 || ! -d "${apps[0]}" ]]; then
+            printf 'Expected exactly one app bundle in the mounted installer\n' >&2
+            exit 1
+          fi
+          app=${apps[0]}
+          ditto "$app" "$installed_root/Signet.app"
+          test -d "$installed_root/Signet.app/Contents/Resources/runtime"
+          executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$installed_root/Signet.app/Contents/Info.plist")
+          test -n "$executable"
+          test -x "$installed_root/Signet.app/Contents/MacOS/$executable"
+          printf 'SIGNET_SMOKE_RESOURCES=%s\n' "$installed_root/Signet.app/Contents/Resources" >> "$GITHUB_ENV"
+          printf 'SIGNET_SMOKE_ELECTRON=%s\n' "$installed_root/Signet.app/Contents/MacOS/$executable" >> "$GITHUB_ENV"
+          hdiutil detach "$mount_point" -quiet
+          trap - EXIT
+      - name: Install Windows NSIS package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem surfaces/desktop/release/*.exe | Select-Object -First 1
+          if (-not $installer) { throw 'NSIS installer not found' }
+          $installRoot = Join-Path $env:RUNNER_TEMP 'Signet-installed-smoke'
+          $process = Start-Process -FilePath $installer.FullName -Wait -PassThru -ArgumentList @('/S', "/D=$installRoot")
+          if ($process.ExitCode -ne 0) { throw "NSIS installer failed with exit code $($process.ExitCode)" }
+          $resourcesRoot = Join-Path $installRoot 'resources'
+          if (-not (Test-Path (Join-Path $resourcesRoot 'runtime/bun.exe'))) { throw 'Installed Bun runtime missing' }
+          if (-not (Test-Path (Join-Path $resourcesRoot 'daemon/dist/daemon.js'))) { throw 'Installed daemon missing' }
+          if (-not (Test-Path (Join-Path $installRoot 'signet.exe'))) { throw 'Installed Electron executable missing' }
+          "SIGNET_SMOKE_RESOURCES=$resourcesRoot" >> $env:GITHUB_ENV
+          "SIGNET_SMOKE_ELECTRON=$(Join-Path $installRoot 'signet.exe')" >> $env:GITHUB_ENV
+      - name: Run installed-resource smoke with private Linux Secret Service
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          export SMOKE_LOG_DIR="$RUNNER_TEMP/signet-smoke-logs"
+          exec > >(tee "$SMOKE_LOG_DIR/resource-smoke.log") 2>&1
+          bash surfaces/desktop/scripts/with-private-keyring.sh surfaces/desktop/scripts/installed-desktop-smoke.ts "$SIGNET_SMOKE_RESOURCES" "$(command -v bun)"
+      - name: Prepare macOS temporary unlocked keychain
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signet-smoke.keychain-db"
+          password="signet-installed-smoke-temporary"
+          security list-keychains -d user > "$RUNNER_TEMP/old-keychains.txt"
+          security default-keychain -d user > "$RUNNER_TEMP/old-default-keychain.txt"
+          printf '%s\n' "$keychain" > "$RUNNER_TEMP/signet-keychain-path.txt"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" $(tr -d '\"' < "$RUNNER_TEMP/old-keychains.txt")
+          security default-keychain -d user -s "$keychain"
+          printf 'SIGNET_TEST_KEYCHAIN=%s\nSIGNET_TEST_KEYCHAIN_PASSWORD=%s\n' "$keychain" "$password" >> "$GITHUB_ENV"
+      - name: Run installed-resource smoke
+        if: runner.os != 'Linux'
+        env:
+          SIGNET_DESKTOP_SMOKE_INSTALLER: "1"
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/signet-smoke-logs" | Out-Null
+          & bun surfaces/desktop/scripts/installed-desktop-smoke.ts --resources-root "$env:SIGNET_SMOKE_RESOURCES" *> "$env:RUNNER_TEMP/signet-smoke-logs/resource-smoke.log"
+          if ($LASTEXITCODE -ne 0) { throw "Installed resource smoke failed with exit code $LASTEXITCODE" }
+      - name: Verify installed Electron runtime
+        if: runner.os != 'Linux'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP/signet-smoke-logs" | Out-Null
+          if (-not (Test-Path $env:SIGNET_SMOKE_ELECTRON)) { throw 'Installed Electron executable missing' }
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          $log = "$env:RUNNER_TEMP/signet-smoke-logs/electron.log"
+          $errorLog = "$env:RUNNER_TEMP/signet-smoke-logs/electron-error.log"
+          $process = Start-Process -FilePath $env:SIGNET_SMOKE_ELECTRON -Wait -PassThru -ArgumentList @('-e', '"if (!process.versions.electron) process.exit(1); console.log(process.versions.electron)"') -RedirectStandardOutput $log -RedirectStandardError $errorLog
+          if ($process.ExitCode -ne 0) { throw "Installed Electron verification failed with exit code $($process.ExitCode)" }
+          $version = (Get-Content -Raw $log).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "Installed Electron did not report its runtime version" }
+      - name: Verify installed Electron runtime on Linux
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          ELECTRON_RUN_AS_NODE=1 "$SIGNET_SMOKE_ELECTRON" -e 'if (!process.versions.electron) process.exit(1); console.log(process.versions.electron)' > "$RUNNER_TEMP/signet-smoke-logs/electron.log" 2>&1
+      - name: Upload installed smoke logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installed-smoke-${{ matrix.name }}
+          path: ${{ runner.temp }}/signet-smoke-logs/*.log
+          if-no-files-found: ignore
+      - name: Remove installed Debian package
+        if: always() && runner.os == 'Linux'
+        run: sudo dpkg -r "$(dpkg-deb -f "$(find surfaces/desktop/release -maxdepth 1 -name '*.deb' -print -quit)" Package)" || true
+      - name: Restore macOS keychain state
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          keychain=$(cat "$RUNNER_TEMP/signet-keychain-path.txt" 2>/dev/null || true)
+          if [[ -f "$RUNNER_TEMP/old-keychains.txt" ]]; then
+            security list-keychains -d user -s $(tr -d '\"' < "$RUNNER_TEMP/old-keychains.txt")
+          fi
+          if [[ -f "$RUNNER_TEMP/old-default-keychain.txt" ]]; then
+            default=$(< "$RUNNER_TEMP/old-default-keychain.txt")
+            default=${default#*\"}
+            default=${default%%\"*}
+            security default-keychain -d user -s "$default"
+          fi
+          if [[ -n "$keychain" ]]; then security delete-keychain "$keychain" || true; fi

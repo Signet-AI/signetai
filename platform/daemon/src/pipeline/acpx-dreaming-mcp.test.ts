@@ -32,7 +32,8 @@ describe("Dreaming ACPX MCP config", () => {
 			name: "signet_dreaming",
 			command: process.execPath,
 		});
-		expect(parsed.mcpServers[0]?.args[0]).toEndWith("mcp-stdio.ts");
+		expect(parsed.mcpServers[0]?.args[0]).toEndWith("mcp-stdio.js");
+		expect(existsSync(parsed.mcpServers[0]?.args[0] ?? "")).toBe(true);
 		expect(parsed.mcpServers[0]?.env).toEqual(
 			expect.arrayContaining([
 				{ name: "SIGNET_DREAMING_AGENT_ID", value: "agent-a" },

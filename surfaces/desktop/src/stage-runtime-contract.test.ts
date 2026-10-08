@@ -1,48 +1,28 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { expect, test } from "bun:test";
-import { platformVecPackage, runtimeDependencies } from "../scripts/stage-runtime.mjs";
-test("desktop runtime staging ships the full daemon dist and tiktoken", () => {
-	const source = readFileSync(join(import.meta.dir, "..", "scripts", "stage-runtime.mjs"), "utf8");
-	expect(source).toContain("for (const entry of readdirSync(daemonDist))");
-	expect(source).not.toContain('for (const name of ["daemon.js"');
-	const daemonManifest = readFileSync(
-		join(import.meta.dir, "..", "..", "..", "platform", "daemon", "package.json"),
-		"utf8",
-	);
-	const daemonPkg = JSON.parse(daemonManifest) as { dependencies?: Record<string, string> };
-	expect(source).toContain('"tiktoken"');
-	expect(typeof daemonPkg.dependencies?.tiktoken).toBe("string");
-});
-test("desktop runtime staging ships connector assets for harness install", () => {
-	const source = readFileSync(join(import.meta.dir, "..", "scripts", "stage-runtime.mjs"), "utf8");
-	expect(source).toContain('resolve(connectorsOut, "hermes-agent", "hermes-plugin")');
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { copyManifest } from "../scripts/stage-runtime-manifest.mjs";
 
-	const daemonManager = readFileSync(join(import.meta.dir, "daemon-manager.ts"), "utf8");
-	expect(daemonManager).toContain("SIGNET_CONNECTOR_ASSETS_DIR");
-});
-
-test("stages Bun runtime dependencies without the Node-only SQLite fallback", () => {
-	const daemonPkg = { dependencies: { "@firecrawl/anydoc": "^1.0.0", tiktoken: "^1.0.0" } };
-	const corePkg = {
-		dependencies: { "sqlite-vec": "^0.1.0", "@napi-rs/keyring": "1.3.0" },
-		optionalDependencies: {
-			"better-sqlite3": "^11.0.0",
-			"sqlite-vec-linux-x64": "^0.1.0",
-		},
-	};
-	const dependencies = runtimeDependencies(daemonPkg, corePkg, "linux", "x64");
-	expect(dependencies).toEqual({
-		"@firecrawl/anydoc": "^1.0.0",
-		tiktoken: "^1.0.0",
-		"@napi-rs/keyring": "1.3.0",
-		"sqlite-vec": "^0.1.0",
-		"sqlite-vec-linux-x64": "^0.1.0",
-	});
-	expect(dependencies).not.toHaveProperty("better-sqlite3");
-});
-
-test("selects the native sqlite-vec package for the target platform", () => {
-	expect(platformVecPackage("darwin", "arm64")).toBe("sqlite-vec-darwin-arm64");
-	expect(platformVecPackage("win32", "x64")).toBe("sqlite-vec-windows-x64");
+test("the stage copier rejects an incomplete runtime inventory before staging", () => {
+	const root = mkdtempSync(join(tmpdir(), "desktop-runtime-boundary-"));
+	try {
+		const source = join(root, "source");
+		const destination = join(root, "resources");
+		mkdirSync(source);
+		mkdirSync(destination);
+		const manifest = join(root, "manifest.json");
+		writeFileSync(
+			manifest,
+			JSON.stringify({
+				version: 1,
+				platform: process.platform,
+				arch: process.arch,
+				files: [{ source: "dist/daemon.js", path: "dist/daemon.js", size: 1, sha256: "0".repeat(64), mode: 0o644 }],
+			}),
+		);
+		expect(() => copyManifest(source, destination, manifest)).toThrow("Missing runtime asset");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });

@@ -1,0 +1,61 @@
+import { statSync, existsSync, readFileSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+function modulePath(origin: string | URL): string {
+	return origin instanceof URL || origin.startsWith("file:") ? fileURLToPath(origin) : resolve(origin);
+}
+
+function runtimePackage(directory: string, origin: string | URL): string {
+	const file = join(directory, "package.json");
+	if (!existsSync(file)) throw new Error(`Missing runtime package metadata for ${String(origin)}`);
+	const metadata: unknown = JSON.parse(readFileSync(file, "utf8"));
+	const name = metadata !== null && typeof metadata === "object" ? Reflect.get(metadata, "name") : undefined;
+	if (
+		typeof name !== "string" ||
+		(name !== "signetai" && !name.startsWith("@signet/") && !name.startsWith("@signetai/"))
+	) {
+		throw new Error(`Invalid runtime package metadata for ${String(origin)}`);
+	}
+	return directory;
+}
+
+export function resolveRuntimePackageRoot(origin: string | URL): string {
+	let directory = dirname(modulePath(origin));
+	for (let depth = 0; depth < 12; depth++) {
+		if (basename(directory) === "src" || basename(directory) === "dist")
+			return runtimePackage(dirname(directory), origin);
+		if (existsSync(join(directory, "package.json"))) return runtimePackage(directory, origin);
+		const parent = dirname(directory);
+		if (parent === directory) break;
+		directory = parent;
+	}
+	throw new Error(`Missing runtime package metadata for ${String(origin)}`);
+}
+
+function requireAsset(path: string, name: string, directory: boolean): string {
+	const info = statSync(path, { throwIfNoEntry: false });
+	if (!info || (directory ? !info.isDirectory() : !info.isFile())) {
+		throw new Error(`Missing runtime asset ${name}: ${path}`);
+	}
+	return path;
+}
+
+function validateName(name: string): void {
+	if (!name || name.includes("\0") || (!isAbsolute(name) && name.split(/[\\/]/).includes(".."))) {
+		throw new TypeError(`Invalid runtime asset name: ${name}`);
+	}
+	if (/\.tsx?$/.test(name)) throw new TypeError(`Runtime assets must be built, not source files: ${name}`);
+}
+
+export function resolveRuntimeAsset(name: string, origin: string | URL): string {
+	validateName(name);
+	const path = isAbsolute(name) ? name : join(resolveRuntimePackageRoot(origin), "dist", name);
+	return requireAsset(path, name, false);
+}
+
+export function resolveRuntimeAssetDirectory(name: string, origin: string | URL): string {
+	validateName(name);
+	const path = isAbsolute(name) ? name : join(resolveRuntimePackageRoot(origin), name);
+	return requireAsset(path, name, true);
+}
