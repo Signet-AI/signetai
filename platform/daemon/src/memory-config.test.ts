@@ -280,6 +280,28 @@ network:
 		}
 	});
 
+	it("selects every native harness memory source unless memory.nativeSources is set (#1991)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "memory:\n  dreaming:\n    enabled: true\n");
+		expect(loadMemoryConfig(agentsDir).nativeSources).toEqual(["codex", "claude-code", "hermes-agent"]);
+
+		writeFileSync(join(agentsDir, "agent.yaml"), "memory:\n  nativeSources: []\n");
+		expect(loadMemoryConfig(agentsDir).nativeSources).toEqual([]);
+
+		writeFileSync(join(agentsDir, "agent.yaml"), "memory:\n  nativeSources:\n    - hermes-agent\n    - hermes-agent\n");
+		expect(loadMemoryConfig(agentsDir).nativeSources).toEqual(["hermes-agent"]);
+	});
+
+	it("rejects an unknown or malformed memory.nativeSources selection (#1991)", () => {
+		const agentsDir = makeTempAgentsDir();
+		for (const value of ["codex", "[codex, gemini]", "", "false"]) {
+			writeFileSync(join(agentsDir, "agent.yaml"), `memory:\n  nativeSources: ${value}\n`);
+			expect(() => loadMemoryConfig(agentsDir)).toThrow(
+				"memory.nativeSources must be a list of codex, claude-code, hermes-agent",
+			);
+		}
+	});
+
 	it("rejects retired memory.embeddings configuration with actionable guidance", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(

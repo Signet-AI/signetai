@@ -23,6 +23,15 @@ signet workspace set /path/to/workspace
 
 Use `SIGNET_PATH` for a one-off daemon, test, or service invocation. Do not point two writable daemons at the same workspace.
 
+`SIGNET_PATH` selects the workspace, not the harness memory it reads. The daemon's native memory bridge indexes Codex (`~/.codex`), Claude Code (`~/.claude`), and Hermes Agent (`HERMES_HOME`) memory files from the OS home directory for every workspace. To keep a test workspace to its own sources, list the harness memory it may read under `memory.nativeSources` in its `agent.yaml`:
+
+```yaml
+memory:
+  nativeSources: []   # or any of: codex, claude-code, hermes-agent
+```
+
+When the key is absent, all three are read. An unknown name or a value that is not a list stops the daemon with a configuration error. Restart the daemon after changing it. Leaving a harness out stops reading its files; artifacts that harness already indexed stay in the workspace until you purge them.
+
 ## Workspace files
 
 | File or directory                                | Ownership                                                                    |

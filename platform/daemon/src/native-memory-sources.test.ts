@@ -7,12 +7,14 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 import { logger } from "./logger";
+import { loadMemoryConfig } from "./memory-config";
 import { buildObsidianSourceChunks, resetObsidianSourceEmbeddingBackoff } from "./obsidian-source-embeddings";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import type { NativeMemoryBridgeOptions } from "./native-memory-sources";
 import {
 	claudeCodeNativeMemorySource,
 	codexNativeMemorySource,
+	configuredNativeMemorySources,
 	hermesNativeMemorySource,
 	indexNativeMemoryFile,
 	obsidianNativeMemorySource,
@@ -418,6 +420,32 @@ describe("native memory sources", () => {
 		} finally {
 			await handle.close();
 		}
+	});
+
+	it("selects only the harness memory roots the workspace configures (#1991)", () => {
+		const vault = join(dir, "vault");
+		mkdirSync(vault, { recursive: true });
+		const added = addObsidianSource({ root: vault, name: "Workspace Vault" }, dir);
+		if (!added.ok) throw new Error(added.error);
+		const vaultRoot = added.source.root;
+		const harnesses = (agentsDir: string, selected?: Parameters<typeof configuredNativeMemorySources>[1]) =>
+			configuredNativeMemorySources(agentsDir, selected).map((source) => source.harness);
+
+		expect(harnesses(dir)).toEqual(["codex", "claude-code", "hermes-agent", "obsidian"]);
+		expect(harnesses(dir, loadMemoryConfig(dir).nativeSources)).toEqual([
+			"codex",
+			"claude-code",
+			"hermes-agent",
+			"obsidian",
+		]);
+
+		writeFileSync(join(dir, "agent.yaml"), "name: NativeMemoryTest\nmemory:\n  nativeSources: []\n");
+		const isolated = configuredNativeMemorySources(dir, loadMemoryConfig(dir).nativeSources);
+		expect(isolated.map((source) => source.harness)).toEqual(["obsidian"]);
+		expect(isolated[0]?.root).toBe(vaultRoot);
+
+		writeFileSync(join(dir, "agent.yaml"), "name: NativeMemoryTest\nmemory:\n  nativeSources: [hermes-agent]\n");
+		expect(harnesses(dir, loadMemoryConfig(dir).nativeSources)).toEqual(["hermes-agent", "obsidian"]);
 	});
 
 	it("resolves the configured Hermes profile memory directory", () => {

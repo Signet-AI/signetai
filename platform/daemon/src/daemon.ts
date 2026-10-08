@@ -3416,7 +3416,11 @@ async function main() {
 						markSourceIndexInFlight(source.id);
 						markSourceIndexJobRunning(source.id, job.id);
 					}
-					nativeMemoryBridge = startNativeMemoryBridge(configuredNativeMemorySources(AGENTS_DIR), {
+					logger.info("watcher", "Native harness memory sources selected", {
+						harnesses: memoryCfg.nativeSources,
+					});
+					const nativeSources = configuredNativeMemorySources(AGENTS_DIR, memoryCfg.nativeSources);
+					nativeMemoryBridge = startNativeMemoryBridge(nativeSources, {
 						agentsDir: AGENTS_DIR,
 						includeConfiguredSources: true,
 						pollIntervalMs: 10_000,

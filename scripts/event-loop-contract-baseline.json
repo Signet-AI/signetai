@@ -1655,14 +1655,14 @@
     },
     {
       "path": "memory-config.ts",
-      "line": 359,
+      "line": 363,
       "api": "existsSync",
       "source": ".find((path) => existsSync(path));",
       "category": "hot-path"
     },
     {
       "path": "memory-config.ts",
-      "line": 361,
+      "line": 365,
       "api": "readFileSync",
       "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
       "category": "hot-path"
