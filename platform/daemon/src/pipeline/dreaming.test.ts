@@ -3397,6 +3397,73 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(importAttention()).toEqual({ resolvedAt: expect.any(String), passId: second.passId });
 	});
 
+	it("keeps fully reviewed imported transcripts out of the delivery queue (#2094)", async () => {
+		const insertImported = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, agent_id, created_at, updated_at, completed_at, source_id, content_hash)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		);
+		const seedImported = (sessionKey: string, capturedAt: string): void => {
+			insertImported.run(
+				sessionKey,
+				`${sessionKey} owns one durable fact.`,
+				AGENT,
+				capturedAt,
+				capturedAt,
+				capturedAt,
+				"import:queue-2094",
+				`hash-${sessionKey}`,
+			);
+		};
+		for (let index = 0; index < 52; index += 1)
+			seedImported(`reviewed-${String(index).padStart(2, "0")}`, `2026-10-08 01:${String(index).padStart(2, "0")}:00`);
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					for (let page = 0; page < 10; page += 1) {
+						const result = await readAndReviewEvidence(input, { agentId: AGENT });
+						if (result.hasMore !== true) break;
+					}
+					return { summary: "Reviewed every imported conversation" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(
+			db
+				.prepare(
+					"SELECT COUNT(*) AS count FROM dreaming_evidence_consumption WHERE delivered_offset >= source_length AND source_entry_id = ?",
+				)
+				.get("import:queue-2094"),
+		).toEqual({ count: 52 });
+
+		seedImported("older-unreviewed", "2026-10-08 00:00:00");
+		let page: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read the next page" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect((page.items as Array<Record<string, unknown>>).map((item) => item.sourceRef)).toEqual([
+			"transcript:older-unreviewed",
+		]);
+		expect(page.hasMore).toBe(false);
+	});
+
 	describe("imported-source attention drain checks (#2094)", () => {
 		const capturedAt = "2026-10-08 00:00:00";
 		const seedImported = (sourceId: string, sessionKey: string, content: string): void => {

@@ -883,6 +883,17 @@ function selectEpisodicSourceRefs(
 		: transcriptHasUpdatedAt
 			? "COALESCE(session_transcripts.updated_at, session_transcripts.created_at)"
 			: "session_transcripts.created_at";
+	const transcriptEntryId = tableHasColumn(db, "session_transcripts", "source_id")
+		? "COALESCE(session_transcripts.source_id, '')"
+		: "''";
+	const transcriptRevision =
+		transcriptEntryId === "''"
+			? transcriptSearchTime
+			: `CASE WHEN ${transcriptEntryId} = '' THEN ${transcriptSearchTime} ELSE ${
+					tableHasColumn(db, "session_transcripts", "content_hash")
+						? `COALESCE(session_transcripts.content_hash, ${transcriptSearchTime})`
+						: transcriptSearchTime
+				} END`;
 	const transcriptCompleted = transcriptHasCompletedAt ? "session_transcripts.completed_at IS NOT NULL" : "0";
 	const commonArgs = [...contentArgs, params.agentId, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs];
 	const candidateKinds =
@@ -956,8 +967,8 @@ function selectEpisodicSourceRefs(
 			      WHERE agent_id = ? AND ${transcriptCompleted}
 			        ${params.since ? `AND (julianday(${transcriptSearchTime}) >= julianday(?) OR julianday(${transcriptSearchTime}) < julianday(?))` : ""}
 			        ${params.before ? `AND julianday(${transcriptSearchTime}) <= julianday(?)` : ""}
-			        ${deliveredPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}
-			        ${reviewedPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}
+			        ${deliveredPredicate("transcript", "session_key", transcriptSearchTime, transcriptEntryId, transcriptRevision)}
+			        ${reviewedPredicate("transcript", "session_key", transcriptSearchTime, transcriptEntryId, transcriptRevision)}
 			        ${transcriptCandidate.sql}
 			        ${transcriptExcluded.sql}`,
 			args: [...commonArgs, ...transcriptCandidate.args, ...transcriptExcluded.args],
