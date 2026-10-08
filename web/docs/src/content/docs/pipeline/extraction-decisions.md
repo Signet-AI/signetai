@@ -107,7 +107,9 @@ registry defines the operations available to the agent, including:
   when the pass finalizes. Delivered text that is never acknowledged stays
   queued. A source revision delivered in three successful passes without
   progress gets a visible `evidence_requeue` attention record and leaves the
-  continuation queue, so fresh sources are served before it. That record does
+  continuation queue, so fresh sources are served before it. A pass that
+  defers the source, or withholds its progress after a failed write, does not
+  count toward those three. That record does
   not schedule a pass by itself, and it resolves when the source makes progress
   or is excluded as reviewed. Cursors written before this rule are marked
   with `cursor_basis = 'delivery'`; new writes use `'review'`.
