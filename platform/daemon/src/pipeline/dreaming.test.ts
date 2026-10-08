@@ -214,8 +214,8 @@ class TestMemoryHeadReader {
 		private readonly root: string,
 	) {}
 
-	async read(agentId: string): Promise<Record<string, unknown>> {
-		const request = { action: "read", agentId } as const;
+	async read(agentId: string, passId?: string): Promise<Record<string, unknown>> {
+		const request = { action: "read", agentId, passId } as const;
 		return await runDbOwnerDomainOperation(this.accessor, {
 			runWithOwner: async (owner) => {
 				const handle = owner.submit<Record<string, unknown>>(
@@ -292,9 +292,11 @@ async function commitDreamingTestHead(input: DreamingAgentInput, support: Dreami
 		!("revision" in head) ||
 		typeof head.revision !== "number" ||
 		!("hash" in head) ||
-		typeof head.hash !== "string"
+		typeof head.hash !== "string" ||
+		!("committedEntries" in head) ||
+		!Array.isArray(head.committedEntries)
 	) {
-		throw new Error("Missing memory-head revision/hash");
+		throw new Error("Missing memory-head revision/hash or the pass's committed entries");
 	}
 	const result = await invokeDreamingTool(input, "memory_head_commit", {
 		agentId,
@@ -394,7 +396,8 @@ describe("Dreaming", () => {
 			writeCaps,
 			{
 				...liveOptions,
-				memoryHeadReader: (scopeId) => getTestMemoryHeadReader(activeAccessor, memoryHeadRoot).read(scopeId),
+				memoryHeadReader: (scopeId, passId) =>
+					getTestMemoryHeadReader(activeAccessor, memoryHeadRoot).read(scopeId, passId),
 			},
 			maintenance,
 		);

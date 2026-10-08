@@ -59,7 +59,7 @@ function isGenerated(db: WriteDb, content: string): boolean {
 	return generatedMarker.test(content.trim());
 }
 function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
-	if (head.is_current !== 1 || !head.content) return;
+	if (head.is_current !== 1) return;
 	const target = agentId === "default" ? join(root, "MEMORY.md") : join(root, "agents", agentId, "MEMORY.md");
 	let existing = "";
 	if (existsSync(target)) {
@@ -70,7 +70,7 @@ function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
 			throw new Error("User-authored MEMORY.md preserved; remove or move it to allow generated projection");
 	}
 	const projection = `<!-- signet-generated-memory agent=${agentId} revision=${head.revision}; inspect only, use Signet for current context -->\n\n${redactCredentials(head.content)}\n`;
-	if (existing !== projection) {
+	if ((head.content || existing) && existing !== projection) {
 		mkdirSync(dirname(target), { recursive: true });
 		const temporary = `${target}.head-${head.revision}.tmp`;
 		try {
@@ -147,8 +147,13 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 	const body = input.entries.map((entry) => `- ${entry.text.trim()}`).join("\n");
 	if (input.entries.length === 0 && (head?.content ?? "") === "")
 		return { ok: true, code: "NOOP", revision, hash: currentHash, changed: false, changedIds: [] };
-	if (!body || countTokens(body) > 1000)
-		return { ok: false, code: "INVALID_HEAD", error: "head must be nonempty and at most 1000 tokens" };
+	if (input.entries.length === 0 && committedEntries(db, agentId, head?.revision_id ?? null).length > 0)
+		return {
+			ok: false,
+			code: "INVALID_HEAD",
+			error: "committed entries still have valid support; resubmit or replace them instead of clearing the head",
+		};
+	if (countTokens(body) > 1000) return { ok: false, code: "INVALID_HEAD", error: "head must be at most 1000 tokens" };
 	const contentHash = hash(body);
 	if (head?.is_current === 1 && currentHash === contentHash)
 		return { ok: true, code: "NOOP", revision, hash: contentHash, changed: false, changedIds: [] };
@@ -245,7 +250,7 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 	};
 }
 
-function committedEntries(db: WriteDb, agentId: string, revisionId: string | null): Record<string, unknown>[] {
+function committedEntries(db: WriteDb, agentId: string, revisionId: string | null): MemoryHeadCommitInput["entries"] {
 	if (revisionId === null) return [];
 	const rows = db
 		.prepare(
@@ -256,13 +261,47 @@ function committedEntries(db: WriteDb, agentId: string, revisionId: string | nul
 			 WHERE r.id = ? AND r.agent_id = ? ORDER BY e.ordinal`,
 		)
 		.all(revisionId, agentId) as Array<{ entryId: string; text: string; support: string }>;
-	return rows.map((row) => {
+	return rows.flatMap((row) => {
 		let support: unknown = [];
 		try {
 			support = JSON.parse(row.support);
 		} catch {}
-		return { entryId: row.entryId, text: row.text, support: Array.isArray(support) ? support : [] };
+		const entry = {
+			entryId: row.entryId,
+			text: row.text,
+			support: Array.isArray(support)
+				? support.filter(
+						(item): item is Record<string, unknown> =>
+							typeof item === "object" && item !== null && !Array.isArray(item),
+					)
+				: [],
+		};
+		return invalidSupport(db, agentId, entry) === null ? [entry] : [];
 	});
+}
+
+function invalidSupport(
+	db: WriteDb,
+	agentId: string,
+	entry: { readonly entryId: string; readonly support: readonly Record<string, unknown>[] },
+): { code: string; error: string } | null {
+	if (entry.support.length === 0)
+		return { code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` };
+	for (const support of entry.support) {
+		const sourceRef =
+			typeof support.source_ref === "string"
+				? support.source_ref
+				: typeof support.sourceRef === "string"
+					? support.sourceRef
+					: "";
+		const quote = typeof support.quote === "string" ? support.quote.trim() : "";
+		if (!quote || sourceRef.startsWith("attention:") || !/^(memory|artifact|transcript|summary):.+$/.test(sourceRef))
+			return { code: "INVALID_PROVENANCE", error: `entry ${entry.entryId} requires scoped exact evidence` };
+		const source = currentSource(db, agentId, sourceRef);
+		if (source === null || !renderDreamingEvidence(source).includes(quote))
+			return { code: "INVALID_PROVENANCE", error: `entry ${entry.entryId} quote is not exact scoped evidence` };
+	}
+	return null;
 }
 
 function commitEntries(
@@ -274,30 +313,8 @@ function commitEntries(
 	currentHash: string,
 ): Record<string, unknown> {
 	for (const entry of input.entries) {
-		if (entry.support.length === 0)
-			return { ok: false, code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` };
-		for (const support of entry.support) {
-			const sourceRef =
-				typeof support.source_ref === "string"
-					? support.source_ref
-					: typeof support.sourceRef === "string"
-						? support.sourceRef
-						: "";
-			const quote = typeof support.quote === "string" ? support.quote.trim() : "";
-			if (!quote || sourceRef.startsWith("attention:") || !/^(memory|artifact|transcript|summary):.+$/.test(sourceRef))
-				return {
-					ok: false,
-					code: "INVALID_PROVENANCE",
-					error: `entry ${entry.entryId} requires scoped exact evidence`,
-				};
-			const source = currentSource(db, input.agentId, sourceRef);
-			if (source === null || !renderDreamingEvidence(source).includes(quote))
-				return {
-					ok: false,
-					code: "INVALID_PROVENANCE",
-					error: `entry ${entry.entryId} quote is not exact scoped evidence`,
-				};
-		}
+		const invalid = invalidSupport(db, input.agentId, entry);
+		if (invalid !== null) return { ok: false, ...invalid };
 	}
 	const nextRevision = revision + 1;
 	const revisionId = randomUUID();
