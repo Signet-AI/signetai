@@ -194,6 +194,20 @@ describe("GET /api/memories agent scope", () => {
 		expect(row.content).toBe(stored);
 	});
 
+	it("lists as the shared default agent when no agent is given", async () => {
+		seedAgent("default", "shared");
+		seedMemory("default-private", "default", { visibility: "private" });
+		const app = await makeApp("local");
+
+		const { body } = await list(app, "");
+		expect(ids(body)).toEqual(["alpha-global", "beta-global", "default-private", "team-b-global"]);
+		expect(body.stats).toEqual({ total: 4, withEmbeddings: 2, critical: 2 });
+
+		const page = await list(app, "?type=fact&limit=2&offset=3");
+		expect(page.body.memories).toHaveLength(1);
+		expect(page.body.stats.total).toBe(4);
+	});
+
 	it("resolves the agent from the agent header", async () => {
 		const app = await makeApp("local");
 		const { body } = await list(app, "", { "x-signet-agent-id": "beta" });
