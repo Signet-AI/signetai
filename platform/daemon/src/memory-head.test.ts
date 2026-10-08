@@ -26,14 +26,12 @@ describe("memory head owner runtime", () => {
 		);
 	async function commit(id: string, text = "Meeting is Tuesday.", agentId = "default") {
 		await pass(id, agentId);
-		const base = await snapshot(agentId);
+		await snapshot(agentId);
 		return head({
 			action: "commit",
 			input: {
 				passId: id,
 				agentId,
-				baseRevision: Number(base.revision),
-				baseHash: String(base.hash),
 				entries: [{ entryId: "meeting", text, support: [{ source_ref: "memory:meeting", quote: text }] }],
 			},
 		});
@@ -85,12 +83,10 @@ describe("memory head owner runtime", () => {
 	it("fences a commit even when stale work reads a new base after correction", async () => {
 		await pass("queued");
 		await sql("UPDATE memories SET content='Meeting is Thursday.' WHERE id='meeting'");
-		const base = await snapshot();
+		await snapshot();
 		const common = {
 			passId: "queued",
 			agentId: "default",
-			baseRevision: Number(base.revision),
-			baseHash: String(base.hash),
 		};
 		expect(
 			await head({
@@ -142,8 +138,6 @@ describe("memory head owner runtime", () => {
 						input: {
 							passId: "retired",
 							agentId: "default",
-							baseRevision: 0,
-							baseHash: "",
 							content: "Meeting is Tuesday.",
 							entries: [
 								{
@@ -209,15 +203,13 @@ describe("memory head owner runtime", () => {
 	it("keeps structured entry removal and evidence audit in the same publication", async () => {
 		expect(await commit("first")).toMatchObject({ ok: true });
 		await pass("replace-entry");
-		const base = await snapshot();
+		await snapshot();
 		expect(
 			await head({
 				action: "commit",
 				input: {
 					agentId: "default",
 					passId: "replace-entry",
-					baseRevision: Number(base.revision),
-					baseHash: String(base.hash),
 					entries: [
 						{
 							entryId: "new-entry",
@@ -268,14 +260,12 @@ describe("memory head owner runtime", () => {
 		);
 		async function fromTranscript(passId: string) {
 			await pass(passId);
-			const base = await snapshot();
+			await snapshot();
 			return head({
 				action: "commit",
 				input: {
 					agentId: "default",
 					passId,
-					baseRevision: Number(base.revision),
-					baseHash: String(base.hash),
 					entries: [
 						{
 							entryId: "meeting",

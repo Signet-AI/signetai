@@ -1024,8 +1024,6 @@ hooks:
 			await commitCuratedMemoryHead({
 				agentId: "default",
 				passId: "head-hook-pass",
-				baseRevision: 0,
-				baseHash: "",
 				entries: [
 					{
 						entryId: "meeting",

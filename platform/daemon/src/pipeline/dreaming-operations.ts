@@ -1,6 +1,7 @@
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import { findEpisodicSourceAgentIds, readEpisodicSource } from "../episodic-sources";
+import { withContentPassWrites } from "../memory-head-owner";
 import {
 	type GraphWriteCaps,
 	type OntologyOperationInput,
@@ -1097,7 +1098,7 @@ export async function applyDreamingOperations(
 	const result = await runWriteBatches(
 		params.accessor,
 		validated,
-		(db, entry) => applyValidatedOperationInTx(db, entry, params),
+		(db, entry) => withContentPassWrites(db, params.passId, () => applyValidatedOperationInTx(db, entry, params)),
 		{
 			label: "dreaming ontology operations",
 			maxPerTx: DREAMING_WRITE_MAX_OPERATIONS_PER_TX,

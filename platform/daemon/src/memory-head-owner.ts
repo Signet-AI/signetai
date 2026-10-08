@@ -86,6 +86,31 @@ function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
 	).run(new Date().toISOString(), agentId, head.revision);
 }
 
+export function withContentPassWrites<T>(db: WriteDb, passId: string | undefined, write: () => T): T {
+	const pass =
+		passId === undefined
+			? null
+			: (db
+					.prepare(
+						"SELECT agent_id, head_base_revision FROM dreaming_passes WHERE id=? AND status='running' AND mode='incremental-content'",
+					)
+					.get(passId) as { agent_id: string; head_base_revision: number | null } | null | undefined);
+	if (pass == null) return write();
+	const revision = (): number =>
+		(
+			db.prepare("SELECT revision FROM memory_md_heads WHERE agent_id=?").get(pass.agent_id) as
+				| { revision: number }
+				| null
+				| undefined
+		)?.revision ?? 0;
+	const before = revision();
+	const result = write();
+	const after = revision();
+	if (after !== before && pass.head_base_revision === before)
+		db.prepare("UPDATE dreaming_passes SET head_base_revision=? WHERE id=?").run(after, passId);
+	return result;
+}
+
 export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommitInput): Record<string, unknown> {
 	const agentId = input.agentId;
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
@@ -105,11 +130,11 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 		};
 	const revision = head?.revision ?? 0;
 	const currentHash = head?.content_hash ?? "";
-	if (input.baseRevision !== revision || input.baseHash !== currentHash || pass.head_base_revision !== revision)
+	if (pass.head_base_revision !== revision)
 		return {
 			ok: false,
 			code: "STALE_HEAD",
-			error: "evidence or head changed since the content pass started",
+			error: "evidence or head changed outside this content pass since it started",
 			revision,
 			hash: currentHash,
 		};
@@ -275,6 +300,7 @@ function commitEntries(
 		.prepare("SELECT entry_id FROM memory_head_entries WHERE agent_id = ? AND status = 'active'")
 		.all(input.agentId) as Array<{ entry_id: string }>;
 	const retained = new Set(input.entries.map((entry) => entry.entryId));
+	let ordinal = input.entries.length;
 	for (const old of activeEntries) {
 		if (retained.has(old.entry_id)) continue;
 		db.prepare(
@@ -282,7 +308,7 @@ function commitEntries(
 		).run(nextRevision, now, input.agentId, old.entry_id);
 		db.prepare(
 			"INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json) VALUES (?, ?, ?, ?, 'remove', '[]')",
-		).run(input.agentId, nextRevision, old.entry_id, input.entries.length);
+		).run(input.agentId, nextRevision, old.entry_id, ordinal++);
 	}
 
 	return {
