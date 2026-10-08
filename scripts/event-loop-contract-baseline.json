@@ -1200,15 +1200,15 @@
     },
     {
       "path": "embedding-tracker.ts",
-      "line": 165,
+      "line": 181,
       "api": "withReadDbAsync",
-      "source": "const staleRows: StaleRow[] = await accessor.withReadDbAsync(",
+      "source": "const staleRows: StaleRow[] | null = await accessor.withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:embedding-tracker.stale-rows.read"
     },
     {
       "path": "embedding-tracker.ts",
-      "line": 242,
+      "line": 268,
       "api": "withWriteTxAsync",
       "source": "applied = await accessor.withWriteTxAsync(",
       "category": "hot-path",
