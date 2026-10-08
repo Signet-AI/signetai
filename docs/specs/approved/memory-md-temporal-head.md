@@ -109,7 +109,8 @@ separate dependency index, revision service, or automatic regeneration queue is
 introduced.
 
 `memory_head_commit` takes the complete ordered set of retained entries, each
-with an entry ID, text, and exact source/quote support. The owner renders the
+with an entry ID, text, and exact source/quote support. The daemon binds the
+commit to the running content pass; callers never supply a pass ID. The owner renders the
 body and records entry provenance and removals. Deferrals and reasons for no
 change belong in the existing pass log, not a second publication format.
 

@@ -489,7 +489,6 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			false,
 			z.object({
 				agentId: z.string().min(1),
-				passId: z.string().min(1),
 				baseRevision: z.number().int().nonnegative(),
 				baseHash: z.string(),
 				entries: z.array(
@@ -501,8 +500,8 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				),
 			}),
 			async (input) =>
-				input.agentId === agentId && input.passId === params.passId && params.memoryHeadCommitter
-					? params.memoryHeadCommitter.commit(input)
+				params.passId && params.memoryHeadCommitter
+					? params.memoryHeadCommitter.commit({ ...input, passId: params.passId })
 					: {
 							ok: false,
 							code: "PASS_NOT_AUTHORIZED",

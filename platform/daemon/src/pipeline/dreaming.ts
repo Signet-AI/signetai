@@ -1818,23 +1818,24 @@ ${JSON.stringify(liveOptions.userRequest)}
 
 		let applyCallbackReported = false;
 		let memoryHeadCommitInput: MemoryHeadCommitInput | null = null;
+		let memoryHeadCommitRejection = null as { readonly code: string; readonly error: string } | null;
 		const memoryHeadCommitter: MemoryHeadCommitter = {
 			read: liveOptions?.memoryHeadReader ?? readCuratedMemoryHead,
 			async commit(input) {
 				if (mode !== "incremental-content" || input.agentId !== agentId || input.passId !== passId) {
-					return {
-						ok: false,
+					memoryHeadCommitRejection = {
 						code: "PASS_NOT_AUTHORIZED",
 						error: "only the active content pass may stage its memory-head commit",
 					};
+					return { ok: false, ...memoryHeadCommitRejection };
 				}
 				if (memoryHeadCommitInput !== null) {
 					memoryHeadCommitInput = null;
-					return {
-						ok: false,
+					memoryHeadCommitRejection = {
 						code: "MULTIPLE_COMMIT_ATTEMPTS",
 						error: "a content pass may stage only one memory-head commit",
 					};
+					return { ok: false, ...memoryHeadCommitRejection };
 				}
 				memoryHeadCommitInput = input;
 				return {
@@ -1967,8 +1968,11 @@ ${JSON.stringify(liveOptions.userRequest)}
 			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
 		});
 		if (mode === "incremental-content" && memoryHeadCommitInput === null) {
+			const rejection = memoryHeadCommitRejection;
 			throw new Error(
-				"Content pass finalization requires a successful memory-head commit: the agent ended without calling memory_head_commit",
+				rejection === null
+					? "Content pass finalization requires a successful memory-head commit: the agent ended without calling memory_head_commit"
+					: `Content pass finalization requires a successful memory-head commit: memory_head_commit was rejected (${rejection.code}): ${rejection.error}`,
 			);
 		}
 		const summary = executorResult.summary?.trim() || "Agentic Dreaming pass completed";
