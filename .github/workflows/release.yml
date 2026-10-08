@@ -54,8 +54,6 @@ jobs:
             echo "Resume requested; signing preflight is not required"
             exit 0
           fi
-          # Match the release job's check: the release ships everything since
-          # the last tag, so signing must be verified whenever that is code.
           git fetch --force --tags origin +refs/heads/main:refs/remotes/origin/main
           CODE_CHANGES=$(scripts/release-code-changes.sh --since-release origin/main)
           if [ -z "$CODE_CHANGES" ]; then
@@ -106,12 +104,6 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-    # Queue instead of cancel: this job pushes the version commit, tag, and draft
-    # release, so cancelling it mid-run orphans a tagged version that is never
-    # built or published. A newer pending job still replaces an older pending
-    # one, and the change check below makes the survivor cover its commits.
-    # Resume runs rebuild an existing tag without touching main, so each gets
-    # its own group rather than displacing (or being displaced by) a push run.
     concurrency:
       group: ${{ inputs.resume_from_tag && format('nightly-release-resume-{0}', inputs.resume_from_tag) || 'nightly-release-pipeline' }}
       cancel-in-progress: false
@@ -176,9 +168,6 @@ jobs:
             exit 0
           fi
           set -euo pipefail
-          # Diff against the newest release tag on main, not the triggering
-          # commit's parent: a superseded queued run's code must still ship,
-          # and code an earlier release already included must not ship twice.
           git fetch --force --tags origin +refs/heads/main:refs/remotes/origin/main
           CODE_CHANGES=$(scripts/release-code-changes.sh --since-release origin/main)
           if [ -z "$CODE_CHANGES" ]; then

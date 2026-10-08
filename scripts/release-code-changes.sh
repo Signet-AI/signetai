@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Prints the first release-relevant path changed between two refs, or nothing.
-# With --since-release, the base is the newest v* tag reachable from head.
-
 if [ "$#" -ne 2 ]; then
   echo "usage: $0 <base-ref|--since-release> <head-ref>" >&2
   exit 2
