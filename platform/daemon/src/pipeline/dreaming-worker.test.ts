@@ -35,6 +35,7 @@ import { recallThroughDbOwner } from "../db-owner-recall";
 import { reportEventLoopLag, resetPressureState } from "../system-pressure";
 import {
 	DREAMING_AGENT_PROMPT,
+	DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES,
 	type DreamingAgentExecutor,
 	type DreamingPassFocus,
 	dreamingFocusOfMode,
@@ -1233,6 +1234,23 @@ describe("dreaming worker agent scope", () => {
 			worker.stop();
 			configureLlmConcurrency(previousLimit);
 		}
+	});
+
+	it("adds passes for a scope with more small sources than the backlog probe reads", async () => {
+		const seed = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES (?, 'default', ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+		);
+		for (let index = 0; index < DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES + 10; index++) {
+			seed.run(`small-${index}`, `User: small fact number ${index}.`);
+		}
+		const { delivered, peak } = await runSharedScopeWorker({ maxPassesPerScope: 3 }, 3);
+
+		expect(peak).toBe(3);
+		expect(delivered.every((refs) => refs.length > 0)).toBe(true);
+		const all = delivered.flat();
+		expect(new Set(all).size).toBe(all.length);
 	});
 
 	it("keeps one pass on a scope whose backlog is below the token threshold", async () => {

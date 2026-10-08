@@ -625,7 +625,8 @@ export function startDreamingWorker(
 				const tokens =
 					probe.hasBacklog === false ? 0 : Math.max(1, probe.kind === "exact" ? probe.tokens : probe.tokenLowerBound);
 				const held = running.get(scope) ?? 0;
-				const wanted = sharesScopes && tokens >= cfg.tokenThreshold ? passesPerScope : 1;
+				const deep = tokens >= cfg.tokenThreshold || (probe.kind === "indeterminate" && probe.hasBacklog === true);
+				const wanted = sharesScopes && deep ? passesPerScope : 1;
 				return {
 					scope,
 					tokens,
