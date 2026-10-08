@@ -630,15 +630,21 @@ summary nodes remain readable for provenance. Results are agent-scoped.
 
 ### POST /api/sessions/summaries/expand
 
-Read a temporal node by id, with its source transcript context, for
-`MEMORY.md` drill-down. This route powers the `lcm_expand` MCP tool. Expansion
-is agent-scoped.
+Read a temporal node by id for `MEMORY.md` drill-down. This route powers the
+`lcm_expand` MCP tool. Expansion is agent-scoped.
+
+`transcript` is included when `includeTranscript` is not `false` and the node's
+session still has a row in `session_transcripts`; otherwise the key is omitted.
+Compaction deletes the session's stored transcript after it writes its summary
+node, so a compaction node has a `transcript` only if the session was captured
+again after the compaction.
 
 Current writers (compaction summaries and Dreaming's transcript manifest) store
-standalone depth-0 `session` nodes and write no edges or memory links, so
-`parents`, `children`, and `linkedMemories` are empty for them. Those fields are
-only populated for legacy nodes written by the retired summary worker and its
-arc/epoch condensation.
+depth-0 `session` nodes and write no edges or memory links. `parents`,
+`children`, and `linkedMemories` are only populated by links left from the
+retired summary worker and its arc/epoch condensation. That includes a legacy
+summary row that Dreaming later rewrote in place as a `transcript` node, since
+the row keeps its id and links.
 
 **Request body**
 
@@ -658,14 +664,15 @@ arc/epoch condensation.
     "id": "node-id",
     "kind": "session",
     "depth": 0,
-    "sourceType": "summary"
+    "sourceType": "transcript"
   },
   "parents": [],
   "children": [],
   "linkedMemories": [],
   "transcript": {
     "sessionKey": "session-uuid",
-    "excerpt": "..."
+    "excerpt": "...",
+    "content": "..."
   }
 }
 ```
