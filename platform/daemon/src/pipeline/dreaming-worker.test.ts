@@ -35,6 +35,7 @@ import { recallThroughDbOwner } from "../db-owner-recall";
 import { reportEventLoopLag, resetPressureState } from "../system-pressure";
 import {
 	DREAMING_AGENT_PROMPT,
+	DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES,
 	type DreamingAgentExecutor,
 	type DreamingPassFocus,
 	dreamingFocusOfMode,
@@ -1023,6 +1024,241 @@ describe("dreaming worker agent scope", () => {
 		expect(partitionDreamingScopes(flagged, 1)).toEqual([["oldest"]]);
 		expect(partitionDreamingScopes(flagged, 2)).toEqual([["oldest"], ["older"]]);
 		expect(partitionDreamingScopes([{ scope: "busy", tokens: 500 }, ...flagged], 2)).toEqual([["busy"], ["oldest"]]);
+	});
+
+	it("adds passes for a large scope only from slots the other scopes leave free", () => {
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "large", tokens: 900_000, passes: 3 },
+					{ scope: "small", tokens: 500, passes: 1 },
+				],
+				4,
+			),
+		).toEqual([["large"], ["small"], ["large"], ["large"]]);
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "large", tokens: 900_000, passes: 3 },
+					{ scope: "small", tokens: 500, passes: 1 },
+				],
+				2,
+			),
+		).toEqual([["large"], ["small"]]);
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "large", tokens: 900_000, passes: 4 },
+					{ scope: "other", tokens: 800_000, passes: 4 },
+				],
+				5,
+			),
+		).toEqual([["large"], ["other"], ["large"], ["other"], ["large"]]);
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "held", tokens: 900_000, passes: 0 },
+					{ scope: "flagged", tokens: 0, attention: true, passes: 0 },
+				],
+				3,
+			),
+		).toEqual([]);
+	});
+
+	function seedLargeScope(count: number): void {
+		const seed = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES (?, 'default', ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+		);
+		for (let index = 0; index < count; index++) {
+			seed.run(`large-${index}`, `User: in session ${index} I mentioned a durable fact. `.repeat(40));
+		}
+	}
+
+	async function runSharedScopeWorker(
+		cfg: Partial<DreamingConfig>,
+		expectedRunning: number,
+	): Promise<{ readonly delivered: string[][]; readonly scopes: string[][]; readonly peak: number }> {
+		const delivered: string[][] = [];
+		const scopes: string[][] = [];
+		let running = 0;
+		let peak = 0;
+		let releaseBarrier: () => void = () => undefined;
+		const barrier = new Promise<void>((resolve) => {
+			releaseBarrier = resolve;
+		});
+		const previousLimit = getLlmConcurrencyLimit();
+		configureLlmConcurrency(4);
+		const worker = startDreamingWorker(
+			accessor,
+			defaultCfg({ maxConcurrentPasses: 3, tokenThreshold: 10_000, ...cfg }),
+			agentsDir,
+			"default",
+			{
+				checkIntervalMs: 60_000,
+				executorFactory: () => ({
+					async run(input) {
+						running++;
+						peak = Math.max(peak, running);
+						const search = input.tools.find((tool) => tool.name === "search_evidence");
+						if (!search) throw new Error("Missing search_evidence");
+						let refs: string[] = [];
+						for (let attempt = 0; attempt < 5 && refs.length === 0; attempt++) {
+							const page = await search.execute(
+								"drain",
+								{ agentId: "default", limit: 5 },
+								undefined,
+								undefined,
+								{} as never,
+							);
+							const output = JSON.parse((page.content[0] as { text: string }).text);
+							refs = (output.items as Array<{ sourceRef: string }>).map((item) => item.sourceRef);
+							if (output.hasMore !== true) break;
+						}
+						delivered.push(refs);
+						const review = input.tools.find((tool) => tool.name === "review_evidence");
+						if (refs.length > 0 && review) {
+							await review.execute(
+								"review",
+								{ agentId: "default", items: refs.map((sourceRef) => ({ sourceRef, contentOffset: 0 })) },
+								undefined,
+								undefined,
+								{} as never,
+							);
+						}
+						scopes.push([...(worker.activePasses.find((pass) => pass.passId === input.passId)?.scopes ?? [])]);
+						await Promise.race([barrier, new Promise((resolve) => setTimeout(resolve, 3_000))]);
+						running--;
+						return { summary: "Read one page" };
+					},
+				}),
+			},
+		);
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => delivered.length === expectedRunning, 3_000);
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			if (expectedRunning === 1) {
+				await expect(worker.triggerAsync("incremental")).rejects.toBeInstanceOf(AlreadyRunningError);
+			}
+			releaseBarrier();
+			await waitFor(() => !worker.running, 5_000);
+			return { delivered, scopes, peak };
+		} finally {
+			worker.stop();
+			configureLlmConcurrency(previousLimit);
+		}
+	}
+
+	it("drains one large scope with several passes that never share a source", async () => {
+		seedLargeScope(40);
+		const { delivered, scopes, peak } = await runSharedScopeWorker({ maxPassesPerScope: 3 }, 3);
+
+		expect(peak).toBe(3);
+		expect(scopes).toEqual([["default"], ["default"], ["default"]]);
+		expect(delivered.every((refs) => refs.length > 0)).toBe(true);
+		const all = delivered.flat();
+		expect(new Set(all).size).toBe(all.length);
+		expect(db.prepare("SELECT status, COUNT(*) AS n FROM dreaming_passes GROUP BY status").all()).toEqual([
+			{ status: "completed", n: 3 },
+		]);
+		expect(
+			db
+				.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_consumption WHERE delivered_offset >= source_length")
+				.get(),
+		).toEqual({ n: all.length });
+		expect(db.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_leases").get()).toEqual({ n: 0 });
+	});
+
+	it("keeps one pass per scope unless maxPassesPerScope allows more", async () => {
+		seedLargeScope(40);
+		const { delivered, peak } = await runSharedScopeWorker({}, 1);
+
+		expect(peak).toBe(1);
+		expect(delivered).toHaveLength(1);
+		expect(db.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_leases").get()).toEqual({ n: 0 });
+	});
+
+	it("hands pending attention to a joining pass once its owner finishes", async () => {
+		seedLargeScope(40);
+		db.prepare(
+			`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
+			 VALUES ('contested', 'default', 'contested_claim', 'memory:claim', '{}', 90)`,
+		).run();
+		const prompts: string[] = [];
+		const finish: Array<() => void> = [];
+		const previousLimit = getLlmConcurrencyLimit();
+		configureLlmConcurrency(4);
+		const worker = startDreamingWorker(
+			accessor,
+			defaultCfg({ maxConcurrentPasses: 2, maxPassesPerScope: 2, tokenThreshold: 10_000 }),
+			agentsDir,
+			"default",
+			{
+				checkIntervalMs: 60_000,
+				executorFactory: () => ({
+					async run(input) {
+						const index = prompts.push(input.prompt) - 1;
+						const done = new Promise<void>((resolve) => {
+							finish[index] = resolve;
+						});
+						const search = input.tools.find((tool) => tool.name === "search_evidence");
+						await search?.execute("drain", { agentId: "default", limit: 1 }, undefined, undefined, {} as never);
+						await done;
+						return { summary: "Read one page" };
+					},
+				}),
+			},
+		);
+		const pending = (prompt: string | undefined) =>
+			(prompt ?? "").slice(
+				(prompt ?? "").lastIndexOf("<pending_attention>"),
+				(prompt ?? "").lastIndexOf("</pending_attention>"),
+			);
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => prompts.length === 2, 3_000);
+			finish[0]?.();
+			await waitFor(() => worker.activePasses.length === 1, 3_000);
+
+			await worker.triggerAsync("incremental");
+			await waitFor(() => prompts.length === 3, 3_000);
+
+			expect(pending(prompts[0])).toContain('"kind":"contested_claim"');
+			expect(pending(prompts[1])).not.toContain("contested_claim");
+			expect(pending(prompts[2])).toContain('"kind":"contested_claim"');
+		} finally {
+			for (const open of finish) open?.();
+			await waitFor(() => !worker.running, 5_000);
+			worker.stop();
+			configureLlmConcurrency(previousLimit);
+		}
+	});
+
+	it("adds passes for a scope with more small sources than the backlog probe reads", async () => {
+		const seed = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES (?, 'default', ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+		);
+		for (let index = 0; index < DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES + 10; index++) {
+			seed.run(`small-${index}`, `User: small fact number ${index}.`);
+		}
+		const { delivered, peak } = await runSharedScopeWorker({ maxPassesPerScope: 3 }, 3);
+
+		expect(peak).toBe(3);
+		expect(delivered.every((refs) => refs.length > 0)).toBe(true);
+		const all = delivered.flat();
+		expect(new Set(all).size).toBe(all.length);
+	});
+
+	it("keeps one pass on a scope whose backlog is below the token threshold", async () => {
+		seedLargeScope(2);
+		const { delivered, peak } = await runSharedScopeWorker({ maxPassesPerScope: 3 }, 1);
+
+		expect(peak).toBe(1);
+		expect(delivered).toHaveLength(1);
 	});
 
 	it("runs disjoint agent groups concurrently after the first pass reaches a tool", async () => {
