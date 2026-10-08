@@ -36,6 +36,7 @@ import {
 	pendingDreamingEvidenceContinuations,
 	reviewDreamingEvidenceInDb,
 } from "./dreaming-evidence-consumption";
+import { evidenceLeasedByOtherPasses, leaseDreamingEvidence } from "./dreaming-evidence-leases";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import {
 	type ApplyDreamingOperationsResult,
@@ -221,6 +222,7 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly passId?: string;
 	readonly evidenceDeliveryDeadline?: number;
 	readonly evidenceChars?: number;
+	readonly evidenceLeaseMs?: number;
 	readonly mode?: DreamingCapabilityMode;
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
@@ -328,12 +330,16 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 	};
 	const stalled = (source: EpisodicSourceRecord): boolean =>
 		cursorFor(source).stalledPasses >= DREAMING_EVIDENCE_STALL_PASSES;
+	const leasedElsewhere = evidenceLeasedByOtherPasses(db, scopeId, input.passId);
 	const scanned = searchEpisodicSources(db, {
 		agentId: scopeId,
 		query: "",
 		kind: input.kind,
 		excludeDelivered: true,
-		excludeSourceRefs: input.passId ? passFullyServedSourceRefs(db, input.passId, scopeId) : [],
+		excludeSourceRefs: [
+			...(input.passId ? passFullyServedSourceRefs(db, input.passId, scopeId) : []),
+			...leasedElsewhere,
+		],
 		limit: DELIVERY_QUEUE_SCAN_LIMIT,
 	});
 	const fresh = [...scanned.filter((source) => !stalled(source)), ...scanned.filter(stalled)];
@@ -365,7 +371,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		}
 		return items;
 	};
-	const continuationRefs = new Set<string>();
+	const continuationRefs = new Set<string>(leasedElsewhere);
 	const continuations = page(
 		pendingDreamingEvidenceContinuations(db, scopeId, 50, input.kind),
 		limit + 1,
@@ -703,7 +709,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					...(params.passId === undefined ? {} : { passId: params.passId }),
 					...(params.evidenceChars === undefined ? {} : { evidenceChars: params.evidenceChars }),
 				};
-				return await runDbOwnerDomainOperation(accessor, {
+				const result = await runDbOwnerDomainOperation(accessor, {
 					runWithOwner: async (owner) => {
 						const handle = owner.submit<DreamingCapabilityOutput>(
 							{
@@ -722,6 +728,25 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					},
 					runInline: ({ read }) => read((db) => searchDreamingEvidenceInDb(db, input)),
 				});
+				const drainsQueue = sourceRef === undefined && !query?.trim() && since === undefined && before === undefined;
+				if (
+					!drainsQueue ||
+					params.evidenceLeaseMs === undefined ||
+					params.passId === undefined ||
+					result.ok !== true ||
+					!Array.isArray(result.items) ||
+					result.items.length === 0
+				)
+					return result;
+				const items = result.items as ReadonlyArray<Record<string, unknown>>;
+				const held = await leaseDreamingEvidence(accessor, {
+					agentId: scopeId,
+					passId: params.passId,
+					sourceRefs: items.flatMap((item) => (typeof item.sourceRef === "string" ? [item.sourceRef] : [])),
+					ttlMs: params.evidenceLeaseMs,
+				});
+				const leased = items.filter((item) => typeof item.sourceRef === "string" && held.has(item.sourceRef));
+				return leased.length === items.length ? result : { ...result, items: leased, hasMore: true };
 			},
 		),
 		capability(

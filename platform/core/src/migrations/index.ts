@@ -170,6 +170,7 @@ import { up as dreamingPassPeakContext } from "./166-dreaming-pass-peak-context"
 import { up as memoriesFtsPorter } from "./167-memories-fts-porter";
 import { up as retireSourceParagraphClaims } from "./168-retire-source-paragraph-claims";
 import { up as dreamingEvidenceReviewCursor } from "./169-dreaming-evidence-review-cursor";
+import { up as dreamingEvidenceLeases } from "./170-dreaming-evidence-leases";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1538,6 +1539,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "dreaming_evidence_consumption", column: "stalled_passes" },
 			],
 		},
+	},
+	{
+		version: 170,
+		name: "dreaming-evidence-leases",
+		up: dreamingEvidenceLeases,
+		artifacts: { tables: ["dreaming_evidence_leases"], indexes: ["idx_dreaming_evidence_leases_pass"] },
 	},
 ];
 function checksum(m: Migration): string {
