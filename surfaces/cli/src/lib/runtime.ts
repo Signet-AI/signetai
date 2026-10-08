@@ -38,7 +38,7 @@ import {
 } from "@signet/core";
 import { formatInspectorEndpoint, parseInspectorEndpoint } from "./inspector-proxy.js";
 import { resolveDaemonNetwork } from "./network.js";
-import { resolveAgentsDir } from "./workspace.js";
+import { normalizeWorkspacePath, resolveAgentsDir } from "./workspace.js";
 
 export const AGENTS_DIR = resolveAgentsDir().path;
 export const DEFAULT_PORT = 3850;
@@ -609,7 +609,7 @@ function readPidArtifact(agentsDir: string): { pid: number | null; stale: boolea
 async function buildUnreachableDaemonProbe(agentsDir: string): Promise<DaemonHealthProbe> {
 	const artifact = readPidArtifact(agentsDir);
 	const managedPid = readManagedDaemonPid(agentsDir);
-	const processPid = managedPid ?? findMarkedDaemonProcessPids()[0] ?? null;
+	const processPid = managedPid ?? findMarkedDaemonProcessPids(agentsDir)[0] ?? null;
 	const url = resolveDaemonProbeUrls(agentsDir)[0] ?? `http://127.0.0.1:${DEFAULT_PORT}`;
 	const parsedUrl = new URL(url);
 	const listenerPort = parsedUrl.port
@@ -1094,15 +1094,31 @@ function readDaemonEntrypoint(pid: number): boolean | null {
 	}
 }
 
-function findMarkedDaemonProcessPids(): number[] {
+function readDaemonWorkspace(pid: number): string | null {
+	if (process.platform !== "linux") return null;
+	try {
+		const env: Record<string, string> = {};
+		for (const entry of readFileSync(`/proc/${pid}/environ`, "utf-8").split("\u0000")) {
+			const index = entry.indexOf("=");
+			if (index > 0) env[entry.slice(0, index)] = entry.slice(index + 1);
+		}
+		const resolution = resolveAgentsDir(env);
+		return resolution.source === "env" ? resolution.path : null;
+	} catch {
+		return null;
+	}
+}
+
+function findMarkedDaemonProcessPids(agentsDir: string): number[] {
 	if (process.platform !== "linux") return [];
+	const workspace = normalizeWorkspacePath(agentsDir);
 	try {
 		return readdirSync("/proc", { withFileTypes: true })
 			.flatMap((entry) => {
 				if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) return [];
 				const pid = Number.parseInt(entry.name, 10);
 				if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return [];
-				return readDaemonEntrypoint(pid) === true ? [pid] : [];
+				return readDaemonEntrypoint(pid) === true && readDaemonWorkspace(pid) === workspace ? [pid] : [];
 			})
 			.filter((pid, index, items) => items.indexOf(pid) === index);
 	} catch {
@@ -1238,7 +1254,7 @@ export function readManagedDaemonPid(agentsDir: string = AGENTS_DIR, deps: Daemo
 }
 
 export async function hasDaemonProcess(agentsDir: string = AGENTS_DIR): Promise<boolean> {
-	return readManagedDaemonPid(agentsDir) !== null || findMarkedDaemonProcessPids().length > 0;
+	return readManagedDaemonPid(agentsDir) !== null || findMarkedDaemonProcessPids(agentsDir).length > 0;
 }
 
 async function readDaemonStatus(): Promise<{
@@ -1266,7 +1282,10 @@ async function readDaemonStatus(): Promise<{
 	const instances = await getDaemonInstances();
 	if (instances.length > 0) {
 		const preferred = instances.find((instance) => typeof instance.uptime === "number") ?? instances[0];
-		const fallbackPid = typeof preferred.pid === "number" ? null : (findMarkedDaemonProcessPids()[0] ?? null);
+		const fallbackPid =
+			typeof preferred.pid === "number"
+				? null
+				: (findMarkedDaemonProcessPids(preferred.workspacePath ?? AGENTS_DIR)[0] ?? null);
 		return {
 			running: true,
 			workspacePath: preferred.workspacePath,
@@ -2226,12 +2245,14 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: 
 		pids.add(managed);
 	}
 
+	const workspace = normalizeWorkspacePath(agentsDir);
 	for (const instance of await getDaemonInstances()) {
+		if (instance.workspacePath === null || normalizeWorkspacePath(instance.workspacePath) !== workspace) continue;
 		if (typeof instance.pid === "number" && readManagedDaemonProcess(instance.pid)) {
 			pids.add(instance.pid);
 		}
 	}
-	for (const pid of findMarkedDaemonProcessPids()) {
+	for (const pid of findMarkedDaemonProcessPids(agentsDir)) {
 		pids.add(pid);
 	}
 
@@ -2244,7 +2265,14 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: 
 		} catch {}
 	}
 
-	return !(await isDaemonRunning());
+	if (!(await isDaemonRunning())) return true;
+	const remaining = await getDaemonInstances();
+	return (
+		remaining.length > 0 &&
+		remaining.every(
+			(instance) => instance.workspacePath !== null && normalizeWorkspacePath(instance.workspacePath) !== workspace,
+		)
+	);
 }
 
 export function formatUptime(seconds: number): string {
