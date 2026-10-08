@@ -1,4 +1,4 @@
-import { defaultPipelineModel } from "@signet/core";
+import { defaultPipelineModel, isLocalInferenceEndpoint } from "@signet/core";
 import type { ExtractionProviderChoice, HarnessChoice } from "./setup-shared.js";
 
 export const EXTRACTION_SAFETY_WARNING =
@@ -161,14 +161,18 @@ export function buildSetupInference(
 		models: { default: { model: resolved, reasoning: "medium" } },
 	};
 	let accounts: Record<string, unknown> | undefined;
+	let remote = false;
 	if (provider === "openai-compatible") {
-		target.endpoint = endpoint?.trim() || "http://127.0.0.1:1234/v1";
+		const resolvedEndpoint = endpoint?.trim() || "http://127.0.0.1:1234/v1";
+		target.endpoint = resolvedEndpoint;
+		remote = !isLocalInferenceEndpoint(resolvedEndpoint);
 	}
 	if (provider === "openrouter") {
 		target.account = "extraction";
 		accounts = {
 			extraction: { kind: "api", providerFamily: "openrouter", credentialRef: "OPENROUTER_API_KEY" },
 		};
+		remote = true;
 	}
 	const targetRef = "background/default";
 	return {
@@ -183,7 +187,11 @@ export function buildSetupInference(
 			},
 		},
 		taskClasses: {
-			memory_extraction: { reasoning: "medium", toolsRequired: true, privacy: "restricted_remote" },
+			memory_extraction: {
+				reasoning: "medium",
+				toolsRequired: true,
+				privacy: remote ? "remote_ok" : "restricted_remote",
+			},
 		},
 		workloads: {
 			memoryExtraction: { target: targetRef, taskClass: "memory_extraction" },
@@ -236,7 +244,11 @@ export function applySetupInferenceRoute(
 function isGeneratedSetupTaskClass(value: unknown): boolean {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
 	const record = value as { reasoning?: unknown; toolsRequired?: unknown; privacy?: unknown };
-	return record.reasoning === "medium" && record.toolsRequired === true && record.privacy === "restricted_remote";
+	return (
+		record.reasoning === "medium" &&
+		record.toolsRequired === true &&
+		(record.privacy === "restricted_remote" || record.privacy === "remote_ok")
+	);
 }
 
 function isGeneratedSetupWorkload(value: unknown, target: string): boolean {
