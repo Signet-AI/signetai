@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
@@ -46,6 +47,7 @@ import {
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
 import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreaming-token-cache";
+import { callRunningDreamingPassTool } from "../pipeline/dreaming-agent-tools.js";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
 import { AlreadyRunningError, type DreamingSchedulerStatus } from "../pipeline/dreaming-worker.js";
@@ -576,7 +578,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:579",
+				"routes/pipeline-routes.ts:581",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -892,7 +894,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:895",
+						"routes/pipeline-routes.ts:897",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
@@ -977,12 +979,13 @@ export function registerPipelineRoutes(app: Hono): void {
 		const body = asRecord(raw);
 		const scopedAgent = resolveScopedDreamAgent(c, body);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const passId = readString(body, "passId") ?? undefined;
 		const capability = getDreamingCapability(
 			{
 				accessor: getDbAccessor(),
 				agentId: scopedAgent.agentId,
 				actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "dreaming-client",
-				passId: readString(body, "passId") ?? undefined,
+				passId,
 			},
 			c.req.param("capability"),
 		);
@@ -992,7 +995,12 @@ export function registerPipelineRoutes(app: Hono): void {
 		if (requestedInputAgent !== undefined && requestedInputAgent !== scopedAgent.agentId) {
 			return c.json({ error: "Dreaming capability agent scope does not match the credential" }, 403);
 		}
-		const result = await capability.invoke({ ...input, agentId: scopedAgent.agentId });
+		const scopedInput = { ...input, agentId: scopedAgent.agentId };
+		const result =
+			(passId === undefined
+				? undefined
+				: await callRunningDreamingPassTool(passId, scopedAgent.agentId, capability.id, randomUUID(), scopedInput)) ??
+			(await capability.invoke(scopedInput));
 		return c.json({ ...result, agentId: scopedAgent.agentId }, result.ok ? 200 : result.retryable === true ? 503 : 400);
 	});
 

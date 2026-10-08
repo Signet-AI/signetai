@@ -54,7 +54,11 @@ import { isPipelineTimeout, recordPipelineError } from "../pipeline-error";
 import { normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { getActiveTelemetry } from "../telemetry";
 import { upsertThreadHead } from "../thread-heads";
-import { createDreamingAgentTools } from "./dreaming-agent-tools";
+import {
+	type DreamingAgentToolset,
+	bindRunningDreamingPassTools,
+	createDreamingAgentToolset,
+} from "./dreaming-agent-tools";
 import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
 import { DREAMING_CAPABILITY_IDS, dreamingEvidencePageChars, listDreamingAttention } from "./dreaming-capabilities";
@@ -350,7 +354,7 @@ export interface DreamingAgentExecutor {
 	run(input: {
 		readonly passId: string;
 		readonly prompt: string;
-		readonly tools: ReturnType<typeof createDreamingAgentTools>;
+		readonly tools: DreamingAgentToolset["tools"];
 		readonly timeoutMs: number;
 		readonly maxTokens?: number;
 		readonly onEvent?: (event: unknown) => void;
@@ -1846,7 +1850,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const rejectedEvidence: RejectedDreamingEvidence[] = [];
 		const surfacedWatermarkByScope = new Map<string, string>();
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
-		const tools = createDreamingAgentTools({
+		const { tools, call: callPassTool } = createDreamingAgentToolset({
 			allowedAgentIds: liveOptions?.userRequest !== undefined ? [agentId] : scopes,
 			codemode: cfg.codemode,
 			...(mode === "incremental-content"
@@ -1954,15 +1958,18 @@ ${JSON.stringify(liveOptions.userRequest)}
 			mode,
 			promptChars: passPrompt.length,
 		});
-		const executorResult = await executor.run({
-			passId,
-			prompt: passPrompt,
-			tools,
-			timeoutMs: cfg.timeout,
-			maxTokens: cfg.maxOutputTokens ?? undefined,
-			onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
-			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
-		});
+		const unbindPassTools = bindRunningDreamingPassTools(passId, agentId, callPassTool);
+		const executorResult = await executor
+			.run({
+				passId,
+				prompt: passPrompt,
+				tools,
+				timeoutMs: cfg.timeout,
+				maxTokens: cfg.maxOutputTokens ?? undefined,
+				onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
+				onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
+			})
+			.finally(unbindPassTools);
 		if (mode === "incremental-content" && memoryHeadCommitInput === null) {
 			const rejection = memoryHeadCommitRejection;
 			throw new Error(

@@ -35,10 +35,55 @@ function scopedInput(value: unknown, allowed: ReadonlySet<string>): void {
 function textResult(payload: DreamingCapabilityResult): { readonly type: "text"; readonly text: string } {
 	return { type: "text", text: JSON.stringify(payload) };
 }
+type DreamingPassToolCall = (
+	tool: DreamingCapabilityId,
+	toolCallId: string,
+	input: unknown,
+) => Promise<DreamingCapabilityResult | undefined>;
+
+export interface DreamingAgentToolset {
+	readonly tools: readonly PiAgentTool[];
+	readonly call: DreamingPassToolCall;
+}
+
+const runningPassTools = new Map<string, { readonly agentId: string; readonly call: DreamingPassToolCall }>();
+
+export function bindRunningDreamingPassTools(passId: string, agentId: string, call: DreamingPassToolCall): () => void {
+	const binding = { agentId, call };
+	runningPassTools.set(passId, binding);
+	return () => {
+		if (runningPassTools.get(passId) === binding) runningPassTools.delete(passId);
+	};
+}
+
+export async function callRunningDreamingPassTool(
+	passId: string,
+	agentId: string,
+	tool: DreamingCapabilityId,
+	toolCallId: string,
+	input: unknown,
+): Promise<DreamingCapabilityResult | undefined> {
+	const binding = runningPassTools.get(passId);
+	if (binding?.agentId !== agentId) return undefined;
+	try {
+		return await binding.call(tool, toolCallId, input);
+	} catch (error) {
+		return { tool, ok: false, error: error instanceof Error ? error.message : String(error) };
+	}
+}
+
 export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams): readonly PiAgentTool[] {
-	return createDreamingCapabilities({ ...params, allowedScopes: params.allowedAgentIds })
+	return createDreamingAgentToolset(params).tools;
+}
+
+export function createDreamingAgentToolset(params: CreateDreamingAgentToolsParams): DreamingAgentToolset {
+	const runs = new Map<
+		DreamingCapabilityId,
+		(toolCallId: string, rawParams: unknown) => Promise<DreamingCapabilityResult>
+	>();
+	const tools = createDreamingCapabilities({ ...params, allowedScopes: params.allowedAgentIds })
 		.filter((capability) => !params.capabilityIds || params.capabilityIds.includes(capability.id))
-		.map((capability) => {
+		.map((capability): PiAgentTool => {
 			const schema = z.toJSONSchema(capability.inputSchema);
 			const allowed = new Set(params.allowedAgentIds);
 			const agentIdSchema =
@@ -54,6 +99,26 @@ export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams)
 						? (schema.required ?? [])
 						: [...new Set([...(schema.required ?? []), "agentId"])],
 			};
+			const run = async (toolCallId: string, rawParams: unknown): Promise<DreamingCapabilityResult> => {
+				const startedAt = Date.now();
+				if (
+					typeof rawParams !== "object" ||
+					rawParams === null ||
+					(!("agentId" in rawParams) && !defaultsToSessionAgent)
+				)
+					throw new Error("Tool agent scope must be one of this pass's agents");
+				scopedInput(rawParams, allowed);
+				const result = await capability.invoke(rawParams);
+				await params.onToolCall?.({
+					toolCallId,
+					tool: capability.id,
+					input: rawParams,
+					output: result,
+					latencyMs: Date.now() - startedAt,
+				});
+				return result;
+			};
+			runs.set(capability.id, run);
 			return {
 				name: capability.id,
 				label: capability.title,
@@ -68,24 +133,14 @@ export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams)
 						}
 					: {}),
 				async execute(toolCallId, rawParams) {
-					const startedAt = Date.now();
-					if (
-						typeof rawParams !== "object" ||
-						rawParams === null ||
-						(!("agentId" in rawParams) && !defaultsToSessionAgent)
-					)
-						throw new Error("Tool agent scope must be one of this pass's agents");
-					scopedInput(rawParams, allowed);
-					const result = await capability.invoke(rawParams);
-					await params.onToolCall?.({
-						toolCallId,
-						tool: capability.id,
-						input: rawParams,
-						output: result,
-						latencyMs: Date.now() - startedAt,
-					});
-					return { content: [textResult(result)], details: { tool: capability.id } };
+					return { content: [textResult(await run(toolCallId, rawParams))], details: { tool: capability.id } };
 				},
 			};
 		});
+	return {
+		tools,
+		async call(tool, toolCallId, input) {
+			return await runs.get(tool)?.(toolCallId, input);
+		},
+	};
 }
