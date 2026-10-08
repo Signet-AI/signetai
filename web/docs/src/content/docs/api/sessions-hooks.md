@@ -40,7 +40,9 @@ identity, and context for injection into the harness system prompt. Requires
 
 `harness` is required. `agentId` is the Signet persistence scope. First-seen
 named agent IDs are registered in the `agents` table with `read_policy` set to
-`shared` as the initial policy; existing agent policy rows are preserved.
+`isolated`, the same default as `POST /api/agents`; existing agent policy rows
+are preserved. Granting `shared` or `group` access is an explicit operator
+action (`signet agent set` or `PATCH /api/agents/:name`).
 Harness native sub-agent identifiers, such as Claude Code's `agent_id`, must be
 sent as `harnessAgentId`; they are lineage hints and are not used for Signet data
 scoping. `parentSessionKey` may be provided when the harness exposes explicit
