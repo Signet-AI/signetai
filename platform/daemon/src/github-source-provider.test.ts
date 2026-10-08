@@ -6,6 +6,7 @@ import { type SignetSourceEntry, addGitHubSource } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { githubSourceProvider } from "./github-source-provider";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
+import { getSecret } from "./secrets";
 
 const originalFetch = globalThis.fetch;
 
@@ -95,6 +96,7 @@ describe("github-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -149,6 +151,7 @@ describe("github-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures[0]?.message).toContain("discussions require tokenRef");
@@ -181,6 +184,7 @@ describe("github-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures[0]?.message).toContain("matched no repositories");
@@ -242,6 +246,7 @@ describe("github-source-provider", () => {
 				agentsDir: dir,
 				agentId: "default",
 				shouldContinue: () => true,
+				getSecret,
 			});
 
 			const failureRows = sourceRows(source.id).filter((row) => row.source_kind === "source_github_failure");
@@ -308,6 +313,7 @@ describe("github-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		const rows = sourceRows(source.id);
@@ -390,6 +396,7 @@ describe("github-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		const rows = sourceRows(source.id);
@@ -498,6 +505,7 @@ describe("github-source-provider", () => {
 				agentsDir: dir,
 				agentId: "default",
 				shouldContinue: () => true,
+				getSecret,
 			});
 
 			const rows = sourceRows(source.id);
@@ -586,6 +594,7 @@ describe("github-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		const rows = sourceRows(source.id);
@@ -680,6 +689,7 @@ describe("github-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		const rows = sourceRows(source.id);
@@ -753,6 +763,7 @@ describe("github-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		const rows = sourceRows(source.id);
@@ -816,6 +827,7 @@ describe("github-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures[0]?.message).toContain("comment fetch failed");

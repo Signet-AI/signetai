@@ -405,7 +405,13 @@ function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
 		},
 	};
 }
+let relayOwner: DbOwnerClient | null = null;
+export function registerDbOwnerRelay(owner: DbOwnerClient): void {
+	relayOwner = owner;
+}
+
 export async function getDbOwner(dbPath?: string): Promise<DbOwnerClient> {
+	if (relayOwner !== null) return relayOwner;
 	if (process.env.SIGNET_DB_OWNER_WORKER === "1") return await getCurrentProcessOwner();
 	const registered = getDbOwnerMaintenance()?.owner;
 	if (registered !== undefined) return registeredOwnerProxy(registered);

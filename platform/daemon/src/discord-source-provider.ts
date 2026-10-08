@@ -32,7 +32,6 @@ import {
 	snowflakeIdForTimestamp,
 } from "./discord-source-fetch";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
-import { getSecret } from "./secrets";
 import { indexSourceArtifactStructureAsync, purgeSourceArtifactStructureAsync } from "./source-artifact-graph";
 import type { SourceProviderAdapter, SourceProviderSyncContext, SourceProviderSyncResult } from "./source-providers";
 import { purgeSourceOwnedRows } from "./source-purge";
@@ -105,7 +104,7 @@ async function syncDiscordSource(context: SourceProviderSyncContext): Promise<So
 	let scanned = 0;
 	const syncStartedAt = new Date().toISOString();
 	const total = settings.guildIds.length;
-	const token = await getSecret(settings.tokenRef);
+	const token = await context.getSecret(settings.tokenRef);
 	const fetchConfig: DiscordFetchConfig = { token };
 	const incrementalMessageChannelPaths = new Set<string>();
 
@@ -581,7 +580,7 @@ async function purgeStaleDiscordArtifacts(
 					   ${preserveClause}`,
 				)
 				.all(...params) as Array<{ source_path: string }>,
-		{ siteToken: "discord-source-provider.ts:573", operation: "discord-source.purge-stale.read" },
+		{ siteToken: "discord-source-provider.ts:572", operation: "discord-source.purge-stale.read" },
 	);
 	for (const row of rows) await purgeSourceArtifactStructureAsync({ agentId, sourceId, sourcePath: row.source_path });
 	return await getDbAccessor().withWriteTxAsync(
@@ -597,7 +596,7 @@ async function purgeStaleDiscordArtifacts(
 					)
 					.run(...params),
 			),
-		{ siteToken: "discord-source-provider.ts:587", operation: "discord-source.purge-stale.delete" },
+		{ siteToken: "discord-source-provider.ts:586", operation: "discord-source.purge-stale.delete" },
 	);
 }
 
@@ -641,7 +640,7 @@ async function readDiscordCheckpoint(
 				.get(agentId, sourceId, `discord://source/${sourceId}/checkpoint/${guildId}/${channelId}`) as
 				| { source_meta_json: string | null }
 				| undefined,
-		{ siteToken: "discord-source-provider.ts:630", operation: "discord-source.checkpoint.read" },
+		{ siteToken: "discord-source-provider.ts:629", operation: "discord-source.checkpoint.read" },
 	);
 	if (!row?.source_meta_json) return null;
 	try {
@@ -887,7 +886,7 @@ async function patchedMessageArtifact(
 				.get(agentId, source.id, `discord://guild/${guildId}/channel/${channelId}/messages/${messageId}`) as
 				| { content: string; source_meta_json: string | null }
 				| undefined,
-		{ siteToken: "discord-source-provider.ts:875" },
+		{ siteToken: "discord-source-provider.ts:874" },
 	);
 	if (!row) return null;
 	const meta = parseMetaJson(row.source_meta_json);
@@ -967,7 +966,7 @@ async function purgeClearedPartialUpdateArtifacts(
 					   AND source_kind IN (${placeholders})`,
 				)
 				.all(...params) as Array<{ source_path: string }>,
-		{ siteToken: "discord-source-provider.ts:959", operation: "discord-source.partial-purge.read" },
+		{ siteToken: "discord-source-provider.ts:958", operation: "discord-source.partial-purge.read" },
 	);
 	for (const row of rows)
 		await purgeSourceArtifactStructureAsync({ agentId, sourceId: source.id, sourcePath: row.source_path });
@@ -984,7 +983,7 @@ async function purgeClearedPartialUpdateArtifacts(
 					)
 					.run(...params),
 			),
-		{ siteToken: "discord-source-provider.ts:974", operation: "discord-source.partial-purge.delete" },
+		{ siteToken: "discord-source-provider.ts:973", operation: "discord-source.partial-purge.delete" },
 	);
 }
 

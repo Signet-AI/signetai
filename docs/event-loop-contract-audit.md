@@ -4,18 +4,18 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 810 sites
+- Exact ledger inventory: 811 sites
 - Synchronous `withWriteTx()` sites: 56
 - Synchronous `withReadDb()` sites: 88
 - Async-named DB sites: 168
 - Async-named ON-PARENT DB sites: 166
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 498
+- Synchronous filesystem/process sites: 499
 - Compile-visible legacy DB sites remaining: 144
   - `withWriteTx`: 56
   - `withReadDb`: 88
 
-The 810-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 56 synchronous writes, 88 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 144 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 811-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 56 synchronous writes, 88 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 144 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
@@ -67,12 +67,12 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db-vacuum.ts:350` (withWriteTxAsync)
 - `discord-desktop-cache-source.ts:484` (withReadDbAsync)
 - `discord-desktop-cache-source.ts:497` (withWriteTxAsync)
-- `discord-source-provider.ts:573` (withReadDbAsync)
-- `discord-source-provider.ts:587` (withWriteTxAsync)
-- `discord-source-provider.ts:630` (withReadDbAsync)
-- `discord-source-provider.ts:875` (withReadDbAsync)
-- `discord-source-provider.ts:959` (withReadDbAsync)
-- `discord-source-provider.ts:974` (withWriteTxAsync)
+- `discord-source-provider.ts:572` (withReadDbAsync)
+- `discord-source-provider.ts:586` (withWriteTxAsync)
+- `discord-source-provider.ts:629` (withReadDbAsync)
+- `discord-source-provider.ts:874` (withReadDbAsync)
+- `discord-source-provider.ts:958` (withReadDbAsync)
+- `discord-source-provider.ts:973` (withWriteTxAsync)
 - `embedding-fetch.ts:492` (withReadDbAsync)
 - `embedding-index-migration.ts:267` (withReadDbAsync)
 - `embedding-index-migration.ts:417` (withReadDbAsync)
@@ -92,9 +92,9 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:embedding-tracker.persist.write` (withWriteTxAsync)
 - `embedding-usage.ts:57` (withWriteTxAsync)
 - `embedding-usage.ts:94` (withReadDbAsync)
-- `github-source-provider.ts:460` (withReadDbAsync)
-- `github-source-provider.ts:482` (withWriteTxAsync)
-- `github-source-provider.ts:502` (withWriteTxAsync)
+- `github-source-provider.ts:459` (withReadDbAsync)
+- `github-source-provider.ts:481` (withWriteTxAsync)
+- `github-source-provider.ts:501` (withWriteTxAsync)
 - `db:hooks.session-start.inheritance` (withReadDbAsync)
 - `imported-source-lifecycle.ts:31` (withWriteTx)
 - `db:sources.import-outcome.write` (withWriteTx)

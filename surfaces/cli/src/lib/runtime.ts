@@ -243,6 +243,7 @@ export const DAEMON_JS_WORKER_FILES = [
 	"database-integrity-worker.js",
 	"db-owner-worker.js",
 	"native-memory-source-worker.js",
+	"source-sync-worker.js",
 	"embedding-worker.js",
 	"harness-install-worker.js",
 	"dreaming-token-worker.js",

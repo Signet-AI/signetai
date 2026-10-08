@@ -18,7 +18,6 @@ import {
 	fetchNotionPageMarkdown,
 	searchNotionPages,
 } from "./notion-source-fetch";
-import { getSecret } from "./secrets";
 import { indexSourceArtifactStructureAsync, purgeSourceArtifactStructureAsync } from "./source-artifact-graph";
 import type { SourceProviderAdapter, SourceProviderSyncContext, SourceProviderSyncResult } from "./source-providers";
 import { purgeSourceOwnedRows } from "./source-purge";
@@ -76,16 +75,16 @@ interface StaleCandidate {
 
 export const notionSourceProvider: SourceProviderAdapter = {
 	kind: NOTION_PROVIDER_KIND,
-	sync: syncNotionSource,
+	syncInWorker: true,
 	purge: async (source, agentId) => await purgeSourceOwnedRows({ sourceId: source.id, agentId }),
 };
 
-async function syncNotionSource(context: SourceProviderSyncContext): Promise<SourceProviderSyncResult> {
+export async function syncNotionSource(context: SourceProviderSyncContext): Promise<SourceProviderSyncResult> {
 	const source = context.source;
 	const agentId = context.agentId;
 	const settings = parseNotionSettings(source.providerSettings);
 	const syncStartedAt = new Date().toISOString();
-	const token = await resolveToken(settings.tokenRef);
+	const token = await resolveToken(context.getSecret, settings.tokenRef);
 	const failures: SourceFailureState[] = [];
 	let indexed = 0;
 	let scanned = 0;
@@ -754,7 +753,7 @@ function failureState(
 	};
 }
 
-async function resolveToken(tokenRef: string): Promise<string> {
+async function resolveToken(getSecret: SourceProviderSyncContext["getSecret"], tokenRef: string): Promise<string> {
 	try {
 		return await getSecret(tokenRef);
 	} catch (err) {
