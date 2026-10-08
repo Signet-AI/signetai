@@ -1181,7 +1181,7 @@ describe("showStatus readiness labeling", () => {
 						blockedReason: null,
 						hasWorkloadState: true,
 					},
-					dreaming: { enabled: true, workerRunning: true },
+					dreaming: { enabled: true, workerRunning: true, blockedBy: null },
 					scheduler: { status: "idle" as const, reason: null, checkedAt: null },
 					transcripts: null,
 					queue: {
@@ -1246,6 +1246,26 @@ describe("showStatus readiness labeling", () => {
 			expect(output).toContain("counts unavailable");
 			expect(output).not.toContain("p=0");
 			expect(jsonOutput.daemon.queue.memory).toMatchObject({ pending: null, completeness: "unknown" });
+
+			const status = await deps.getDaemonStatus();
+			const waiting = await captureStatus({
+				...deps,
+				getDaemonStatus: async () => ({
+					...status,
+					dreaming: { enabled: true, workerRunning: true, blockedBy: "no_provider" as const },
+				}),
+			});
+			expect(waiting).toContain("Memory is paused until you connect a provider");
+			expect(waiting).not.toContain("Dreaming: enabled (worker running)");
+			const paused = await captureStatus({
+				...deps,
+				getDaemonStatus: async () => ({
+					...status,
+					dreaming: { enabled: true, workerRunning: true, blockedBy: "paused" as const },
+				}),
+			});
+			expect(paused).toContain("Dreaming: enabled (worker running) — pipeline paused");
+			expect(paused).not.toContain("connect a provider");
 		} finally {
 			if (previousOpenClawConfigPath === undefined) Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
 			else process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfigPath;

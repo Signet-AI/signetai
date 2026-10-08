@@ -378,6 +378,11 @@ export interface DaemonStatus {
 		};
 		extraction?: { provider?: string; model?: string };
 	};
+	dreaming?: {
+		enabled: boolean;
+		workerRunning: boolean;
+		blockedBy?: "disabled" | "paused" | "frozen" | "no_provider" | null;
+	};
 }
 
 export interface DashboardIdentity {

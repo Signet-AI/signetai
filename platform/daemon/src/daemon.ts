@@ -1787,8 +1787,15 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 						{
 							enabled: () => {
 								const live = loadMemoryConfig(AGENTS_DIR);
-								return live.dreaming.enabled && !live.pipelineV2.paused && !live.pipelineV2.mutationsFrozen;
+								return (
+									live.dreaming.enabled &&
+									live.pipelineV2.enabled &&
+									!live.pipelineV2.paused &&
+									!live.pipelineV2.mutationsFrozen
+								);
 							},
+							inferenceAvailable: async (agentId) =>
+								(await router.explain({ agentId, operation: "memory_extraction" })).ok,
 							acpxMcp: {
 								daemonUrl: `http://${INTERNAL_SELF_HOST}:${PORT}`,
 								authorizationTokenForAgent: (agentId) =>

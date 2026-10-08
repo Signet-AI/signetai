@@ -69,6 +69,7 @@ interface DaemonStatus {
 	readonly dreaming?: {
 		readonly enabled: boolean;
 		readonly workerRunning: boolean;
+		readonly blockedBy?: "disabled" | "paused" | "frozen" | "no_provider" | null;
 	} | null;
 	readonly workspaceLayoutUpgrade?: string | null;
 	readonly workspaceStats?: {
@@ -361,10 +362,19 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 			console.log(chalk.dim(`      ${report.daemon.workspaceLayoutUpgrade}. Fix it and restart the daemon.`));
 		}
 		const dreaming = report.daemon.dreaming;
-		if (dreaming) {
+		if (dreaming?.enabled && dreaming.blockedBy === "no_provider") {
+			console.log(chalk.yellow("    ⚠ Memory is paused until you connect a provider"));
+			console.log(
+				chalk.dim("      Connect one under Settings → Inference in the dashboard. Dreaming starts on its own."),
+			);
+		} else if (dreaming) {
 			const mismatch = dreaming.enabled !== dreaming.workerRunning;
-			const summary = `Dreaming: ${dreaming.enabled ? "enabled" : "disabled"} (worker ${dreaming.workerRunning ? "running" : "stopped"})`;
-			console.log(mismatch ? chalk.yellow(`    ⚠ ${summary}`) : chalk.dim(`    ${summary}`));
+			const summary = `Dreaming: ${dreaming.enabled ? "enabled" : "disabled"} (worker ${dreaming.workerRunning ? "running" : "stopped"})${dreaming.enabled && dreaming.blockedBy ? ` — pipeline ${dreaming.blockedBy}` : ""}`;
+			console.log(
+				mismatch || (dreaming.enabled && dreaming.blockedBy)
+					? chalk.yellow(`    ⚠ ${summary}`)
+					: chalk.dim(`    ${summary}`),
+			);
 		}
 	} else {
 		const probe = report.daemon.probe;

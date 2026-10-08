@@ -732,6 +732,46 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
+	it("waits for an inference provider and resumes once one is available", async () => {
+		let queueHealthChecks = 0;
+		let available = false;
+		const checkedAgents: string[] = [];
+		const ownerMaintenance = {
+			queueIsHealthy: async () => {
+				queueHealthChecks += 1;
+				return false;
+			},
+		} as unknown as DbOwnerMaintenance;
+		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: true }), agentsDir, "default", {
+			checkIntervalMs: 10,
+			inferenceAvailable: async (agentId) => {
+				checkedAgents.push(agentId);
+				return available || agentId === "scoped";
+			},
+			ownerMaintenance,
+		});
+		try {
+			await waitFor(() => worker.scheduler.reason === "inference_unavailable", 2_000);
+			expect(worker.scheduler).toEqual({
+				status: "blocked",
+				reason: "inference_unavailable",
+				checkedAt: expect.any(String),
+			});
+			await new Promise<void>((resolve) => setTimeout(resolve, 50));
+			expect(queueHealthChecks).toBe(0);
+			expect(await worker.inferenceReady()).toBe(false);
+			expect(await worker.inferenceReady("scoped")).toBe(true);
+			expect(checkedAgents).toContain("scoped");
+			expect(worker.scheduler.reason).toBe("inference_unavailable");
+			available = true;
+			await waitFor(() => queueHealthChecks > 0, 2_000);
+			expect(worker.scheduler.reason).not.toBe("inference_unavailable");
+			expect(await worker.inferenceReady()).toBe(true);
+		} finally {
+			worker.stop();
+		}
+	});
+
 	it("writes manual async trigger passes when automatic Dreaming is disabled", async () => {
 		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: false }), agentsDir, "default");
 		try {

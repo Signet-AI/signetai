@@ -54,11 +54,6 @@ export function HomeView() {
 			<div className="home-workspace">
 				<section className="home-today" aria-labelledby="today-title">
 					<PageHeading id="today-title" title="Today" description={today} />
-					{!connected && (
-						<a href="#setup" className="self-start text-body underline underline-offset-4">
-							Set up your memory connection
-						</a>
-					)}
 					<DailyBrief agentId={status.data?.agentId} agentSettled={!status.loading} />
 					<HomeRecentMemories />
 					<div className="home-activity">
@@ -74,6 +69,10 @@ export function HomeView() {
 						description="Your knowledge, agents, and connections."
 					/>
 					<NeedsAttention
+						setupNeeded={!connected}
+						waitingForProvider={
+							status.data?.dreaming?.enabled === true && status.data.dreaming.blockedBy === "no_provider"
+						}
 						sources={sources}
 						connectors={harnessesQuery.data?.error ? undefined : harnessesQuery.data?.data?.connectors}
 						onShowSource={(id) => setSourceFocus({ id, at: Date.now() })}
@@ -98,17 +97,21 @@ export function HomeView() {
 	);
 }
 function NeedsAttention({
+	setupNeeded,
+	waitingForProvider,
 	sources,
 	connectors,
 	onShowSource,
 	onSourcesChanged,
 }: {
+	setupNeeded: boolean;
+	waitingForProvider: boolean;
 	sources?: readonly SignetSource[];
 	connectors?: readonly HarnessConnector[];
 	onShowSource: (id: string) => void;
 	onSourcesChanged: () => void;
 }) {
-	const { openSettings } = useView();
+	const { openSettings, setView } = useView();
 	const proposals = useAsync(() => api.getOntologyProposals("pending", 20), {
 		key: "proposals:pending:20",
 		intervalMs: 15000,
@@ -123,7 +126,13 @@ function NeedsAttention({
 		return issue ? [{ connector, issue }] : [];
 	});
 	const proposalsFailed = !proposals.loading && proposals.data === null;
-	const count = sourceIssues.length + connectorIssues.length + suggestions.length + (proposalsFailed ? 1 : 0);
+	const count =
+		(setupNeeded ? 1 : 0) +
+		(waitingForProvider ? 1 : 0) +
+		sourceIssues.length +
+		connectorIssues.length +
+		suggestions.length +
+		(proposalsFailed ? 1 : 0);
 	if (count === 0) return null;
 
 	return (
@@ -134,6 +143,24 @@ function NeedsAttention({
 				meta={<span className="text-meta tabular-nums text-muted-foreground">{count}</span>}
 			/>
 			<ul className="home-attention-list">
+				{setupNeeded && (
+					<AttentionItem
+						tone="neutral"
+						title="Set up your memory connection"
+						detail="Connect an agent so Signet can capture and recall your work."
+						action="Set up"
+						onAction={() => setView("setup")}
+					/>
+				)}
+				{waitingForProvider && (
+					<AttentionItem
+						tone="warn"
+						title="Memory is paused until you connect a provider"
+						detail="Dreaming needs a model to organize what Signet captures. It starts on its own once one is connected."
+						action="Connect"
+						onAction={() => openSettings("inference")}
+					/>
+				)}
 				{sourceIssues.map(({ source, issue }) =>
 					issue.fix === "reindex" ? (
 						<AttentionItem

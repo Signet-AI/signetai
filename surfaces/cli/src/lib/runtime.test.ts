@@ -1346,7 +1346,7 @@ describe("getDaemonStatus", () => {
 						version: 1,
 						upgrade: { state: "blocked", reason: "runtime already exists", at: "2026-10-04T00:00:00.000Z" },
 					},
-					dreaming: { enabled: true, workerRunning: true },
+					dreaming: { enabled: true, workerRunning: true, blockedBy: "no_provider" },
 					resources: {
 						rss: 169,
 						heapUsed: 106,
@@ -1399,7 +1399,7 @@ describe("getDaemonStatus", () => {
 		expect(status.probe.readinessReasons).toBeUndefined();
 		expect(status.workspacePath).toBe("/tmp/status-workspace");
 		expect(status.workspaceLayoutUpgrade).toBe("runtime already exists");
-		expect(status.dreaming).toEqual({ enabled: true, workerRunning: true });
+		expect(status.dreaming).toEqual({ enabled: true, workerRunning: true, blockedBy: "no_provider" });
 		expect(status.workspaceStats).toEqual({
 			agentId: "default",
 			memoryCount: 190,
