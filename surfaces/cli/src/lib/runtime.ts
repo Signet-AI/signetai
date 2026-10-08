@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { createServer, connect } from "node:net";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join, normalize } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import {
@@ -33,6 +33,7 @@ import {
 	resolveDaemonRuntime,
 	resolveLaunchdExecutable,
 	resolveSignetDaemonUrl,
+	WORKSPACE_ENV_KEYS,
 	type DaemonRuntime,
 	type SchemaType,
 } from "@signet/core";
@@ -1082,16 +1083,22 @@ function readDaemonEntrypoint(pid: number): boolean | null {
 	}
 }
 
+function daemonWorkspaceFromEnvironment(value: string): string | null {
+	const env: Record<string, string> = {};
+	for (const entry of value.split("\u0000")) {
+		const index = entry.indexOf("=");
+		if (index > 0) env[entry.slice(0, index)] = entry.slice(index + 1);
+	}
+	const raw = WORKSPACE_ENV_KEYS.map((key) => env[key]?.trim() ?? "").find((entry) => entry.length > 0);
+	if (raw === undefined || !(isAbsolute(raw) || raw === "~" || raw.startsWith("~/"))) return null;
+	const resolution = resolveAgentsDir(env);
+	return resolution.source === "env" ? resolution.path : null;
+}
+
 function readDaemonWorkspace(pid: number): string | null {
 	if (process.platform !== "linux") return null;
 	try {
-		const env: Record<string, string> = {};
-		for (const entry of readFileSync(`/proc/${pid}/environ`, "utf-8").split("\u0000")) {
-			const index = entry.indexOf("=");
-			if (index > 0) env[entry.slice(0, index)] = entry.slice(index + 1);
-		}
-		const resolution = resolveAgentsDir(env);
-		return resolution.source === "env" ? resolution.path : null;
+		return daemonWorkspaceFromEnvironment(readFileSync(`/proc/${pid}/environ`, "utf-8"));
 	} catch {
 		return null;
 	}
@@ -1230,7 +1237,14 @@ export function readManagedDaemonPid(agentsDir: string = AGENTS_DIR, deps: Daemo
 		}
 
 		const marker = deps.readEnv ? isDaemonEntrypointEnvironment(deps.readEnv(pid) ?? "") : readDaemonEntrypoint(pid);
-		if (marker === true) return pid;
+		if (marker === true) {
+			const workspace = deps.readEnv
+				? daemonWorkspaceFromEnvironment(deps.readEnv(pid) ?? "")
+				: readDaemonWorkspace(pid);
+			if (workspace === null || workspace === normalizeWorkspacePath(agentsDir)) return pid;
+			rmSync(path, { force: true });
+			return null;
+		}
 		if (marker === false) return null;
 		const cmd = (deps.readCmd ?? readCmd)(pid);
 		if (!cmd) return null;
@@ -2208,7 +2222,7 @@ export async function startDaemon(
 	return false;
 }
 
-export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: number): Promise<boolean> {
+export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	if (process.platform === "darwin") {
 		const migration = resolveLaunchdDaemonMigration(agentsDir);
 		if (migration.action === "migrate") {
@@ -2225,9 +2239,6 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: 
 	}
 
 	const pids = new Set<number>();
-	if (preferredPid !== undefined && readManagedDaemonProcess(preferredPid)) {
-		pids.add(preferredPid);
-	}
 	const managed = readManagedDaemonPid(agentsDir);
 	if (managed !== null) {
 		pids.add(managed);
