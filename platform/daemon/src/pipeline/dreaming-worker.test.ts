@@ -1179,6 +1179,62 @@ describe("dreaming worker agent scope", () => {
 		expect(db.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_leases").get()).toEqual({ n: 0 });
 	});
 
+	it("hands pending attention to a joining pass once its owner finishes", async () => {
+		seedLargeScope(40);
+		db.prepare(
+			`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
+			 VALUES ('contested', 'default', 'contested_claim', 'memory:claim', '{}', 90)`,
+		).run();
+		const prompts: string[] = [];
+		const finish: Array<() => void> = [];
+		const previousLimit = getLlmConcurrencyLimit();
+		configureLlmConcurrency(4);
+		const worker = startDreamingWorker(
+			accessor,
+			defaultCfg({ maxConcurrentPasses: 2, maxPassesPerScope: 2, tokenThreshold: 10_000 }),
+			agentsDir,
+			"default",
+			{
+				checkIntervalMs: 60_000,
+				executorFactory: () => ({
+					async run(input) {
+						const index = prompts.push(input.prompt) - 1;
+						const done = new Promise<void>((resolve) => {
+							finish[index] = resolve;
+						});
+						const search = input.tools.find((tool) => tool.name === "search_evidence");
+						await search?.execute("drain", { agentId: "default", limit: 1 }, undefined, undefined, {} as never);
+						await done;
+						return { summary: "Read one page" };
+					},
+				}),
+			},
+		);
+		const pending = (prompt: string | undefined) =>
+			(prompt ?? "").slice(
+				(prompt ?? "").lastIndexOf("<pending_attention>"),
+				(prompt ?? "").lastIndexOf("</pending_attention>"),
+			);
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => prompts.length === 2, 3_000);
+			finish[0]?.();
+			await waitFor(() => worker.activePasses.length === 1, 3_000);
+
+			await worker.triggerAsync("incremental");
+			await waitFor(() => prompts.length === 3, 3_000);
+
+			expect(pending(prompts[0])).toContain('"kind":"contested_claim"');
+			expect(pending(prompts[1])).not.toContain("contested_claim");
+			expect(pending(prompts[2])).toContain('"kind":"contested_claim"');
+		} finally {
+			for (const open of finish) open?.();
+			await waitFor(() => !worker.running, 5_000);
+			worker.stop();
+			configureLlmConcurrency(previousLimit);
+		}
+	});
+
 	it("keeps one pass on a scope whose backlog is below the token threshold", async () => {
 		seedLargeScope(2);
 		const { delivered, peak } = await runSharedScopeWorker({ maxPassesPerScope: 3 }, 1);

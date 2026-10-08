@@ -73,6 +73,7 @@ interface RunningDreamingPass {
 	readonly scopes: readonly string[];
 	readonly exclusive: boolean;
 	readonly shared: boolean;
+	readonly attentionScopes: readonly string[];
 	readonly slots: number;
 	readonly settled: Promise<void>;
 }
@@ -529,9 +530,10 @@ export function startDreamingWorker(
 		});
 		let release: () => void = () => undefined;
 		const shared = sharesScopes && !exclusive && live?.userRequest === undefined;
-		const held = leasedScopes();
+		const attentionHeld = new Set([...runningPasses].flatMap((pass) => pass.attentionScopes));
+		const attentionScopes = shared ? scopes.filter((scope) => !attentionHeld.has(scope)) : scopes;
 		const passLive: DreamingPassLiveOptions | undefined = shared
-			? { ...live, sharedScope: { evidenceLeaseMs, attentionScopes: scopes.filter((scope) => !held.has(scope)) } }
+			? { ...live, sharedScope: { evidenceLeaseMs, attentionScopes } }
 			: live;
 		const entry: RunningDreamingPass = {
 			passId: null,
@@ -540,6 +542,7 @@ export function startDreamingWorker(
 			scopes,
 			exclusive,
 			shared,
+			attentionScopes,
 			slots: 1,
 			settled: new Promise<void>((resolve) => {
 				release = resolve;
@@ -656,6 +659,7 @@ export function startDreamingWorker(
 			scopes: rest.flat(),
 			exclusive: false,
 			shared: sharesScopes,
+			attentionScopes: [],
 			slots: rest.length,
 			settled: new Promise<void>((resolve) => {
 				releaseReservation = resolve;

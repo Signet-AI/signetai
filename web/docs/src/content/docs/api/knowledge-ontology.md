@@ -932,8 +932,9 @@ left after every agent with work has a pass, an agent whose backlog reaches
 `maxConcurrentPasses`. These passes lease the evidence they draw from the
 delivery queue, so no source is handed to two running passes. A lease ends when
 its pass finishes, fails, or is cancelled, or after twice the pass timeout, and
-a source whose pass did not finish it is delivered again. Only the first pass
-on an agent works its pending attention; the others read evidence. A claim
+a source whose pass did not finish it is delivered again. One running pass on
+an agent works its pending attention and the passes that join it only read
+evidence; the next pass to start after it finishes takes the attention over. A claim
 written from older evidence after a newer contradicting claim lands as
 superseded, so the current value follows the evidence rather than which pass
 wrote last. The first pass starts immediately; the other groups start
