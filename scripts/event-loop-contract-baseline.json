@@ -2707,7 +2707,7 @@
     },
     {
       "path": "pipeline/pi-agent-client.ts",
-      "line": 45,
+      "line": 51,
       "api": "existsSync",
       "source": "(existsSync(bundled) ? bundled : join(directory, \"pi-agent-worker.ts\")),",
       "category": "hot-path"

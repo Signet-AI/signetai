@@ -498,3 +498,45 @@ test("stopping a chat turn retains its worker for the next turn", async () => {
 		server.stop(true);
 	}
 }, 10000);
+
+test("a long streamed reply crosses the worker boundary as deltas, not repeated partial messages", async () => {
+	const chunk = "x".repeat(16 * 1024);
+	const chunks = 80;
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		fetch() {
+			let content = completion({ role: "assistant", content: "" });
+			for (let index = 0; index < chunks; index++) content += completion({ content: chunk });
+			return new Response(`${content}${completion({}, "stop")}data: [DONE]\n\n`, {
+				headers: { "Content-Type": "text/event-stream" },
+			});
+		},
+	});
+	try {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "test-model",
+			baseUrl: `http://127.0.0.1:${server.port}/v1`,
+			contextWindow: 1_000_000,
+		});
+		const session = await provider.createAgentSession([]);
+		let answer = "";
+		let largestDelta = 0;
+		session.subscribe?.((event) => {
+			if (event.type !== "message_update" || event.assistantMessageEvent.type !== "text_delta") return;
+			largestDelta = Math.max(largestDelta, JSON.stringify(event).length);
+			answer += event.assistantMessageEvent.delta;
+		});
+		try {
+			await session.prompt("Write at length.");
+			expect(session.getFailureMessage()).toBeUndefined();
+			expect(answer.length).toBe(chunk.length * chunks);
+			expect(largestDelta).toBeLessThan(chunk.length * 2);
+		} finally {
+			await session.dispose();
+		}
+	} finally {
+		server.stop(true);
+	}
+}, 30000);

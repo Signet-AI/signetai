@@ -24,6 +24,23 @@ export interface PiAgentWorkerInput {
 	readonly retry?: PiAgentRetryPolicy;
 }
 
+type MessageUpdateEvent = Extract<AgentSessionEvent, { type: "message_update" }>;
+type WithoutPartial<T> = T extends unknown ? Omit<T, "partial"> : never;
+
+export type PiAgentEvent =
+	| Exclude<AgentSessionEvent, { type: "message_update" }>
+	| (Omit<MessageUpdateEvent, "message" | "assistantMessageEvent"> & {
+			readonly assistantMessageEvent: WithoutPartial<MessageUpdateEvent["assistantMessageEvent"]>;
+	  });
+
+export function toPiAgentEvent(event: AgentSessionEvent): PiAgentEvent {
+	if (event.type !== "message_update") return event;
+	const { message: _message, assistantMessageEvent, ...rest } = event;
+	if (!("partial" in assistantMessageEvent)) return { ...rest, assistantMessageEvent };
+	const { partial: _partial, ...delta } = assistantMessageEvent;
+	return { ...rest, assistantMessageEvent: delta };
+}
+
 export type PiAgentWorkerRequest =
 	| { readonly type: "prompt"; readonly text: string }
 	| { readonly type: "abort" }
@@ -38,7 +55,7 @@ export type PiAgentWorkerRequest =
 
 export type PiAgentWorkerResponse =
 	| { readonly type: "ready"; readonly sessionId: string; readonly threadId: number }
-	| { readonly type: "event"; readonly event: AgentSessionEvent }
+	| { readonly type: "event"; readonly event: PiAgentEvent }
 	| {
 			readonly type: "tool";
 			readonly id: number;

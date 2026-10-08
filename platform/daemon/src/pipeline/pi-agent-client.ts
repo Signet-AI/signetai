@@ -3,13 +3,19 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
-import type { AgentSessionEvent, SessionStats } from "@earendil-works/pi-coding-agent";
+import type { SessionStats } from "@earendil-works/pi-coding-agent";
 import type { Usage } from "@earendil-works/pi-ai";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
 import type { PiAgentSession } from "./pi-provider";
 import { PI_AGENT_MAX_MESSAGE_BYTES, PI_CHAT_MAX_PERSISTENT_SESSIONS } from "./pi-agent-protocol";
 import { getLlmConcurrencyLimit } from "./provider";
-import type { PiAgentTool, PiAgentWorkerInput, PiAgentWorkerRequest, PiAgentWorkerResponse } from "./pi-agent-protocol";
+import type {
+	PiAgentEvent,
+	PiAgentTool,
+	PiAgentWorkerInput,
+	PiAgentWorkerRequest,
+	PiAgentWorkerResponse,
+} from "./pi-agent-protocol";
 
 const workers = new Set<Worker>();
 let accepting = true;
@@ -49,7 +55,7 @@ export async function createWorkerAgentSession(
 	let controller = new AbortController();
 	let activeTools = tools;
 	let activeModel = input.model;
-	const listeners = new Set<(event: AgentSessionEvent) => void>();
+	const listeners = new Set<(event: PiAgentEvent) => void>();
 	const toolCalls = new Set<Promise<void>>();
 	let stats: SessionStats | undefined;
 	let usages: readonly Usage[] | undefined;
