@@ -1,0 +1,57 @@
+---
+// Fixed facts for one endpoint, shown directly under its heading.
+
+interface Props {
+	rows: Record<string, string>;
+}
+
+const { rows } = Astro.props;
+
+const escapeHtml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const inline = (text: string) =>
+	escapeHtml(text)
+		.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>')
+		.replace(/`([^`]+)`/g, "<code>$1</code>");
+---
+
+<dl class="spec">
+	{Object.entries(rows).map(([term, value]) => (
+		<div>
+			<dt>{term}</dt>
+			<dd set:html={inline(value)} />
+		</div>
+	))}
+</dl>
+
+<style>
+	.spec {
+		display: grid;
+		grid-template-columns: max-content 1fr;
+		gap: 0.35rem 1.5rem;
+		margin-block: 1rem 1.5rem;
+		padding-block: 0.85rem;
+		border-block: 1px solid var(--signet-border);
+		font-size: var(--sl-text-sm);
+	}
+	.spec > div {
+		display: contents;
+	}
+	dt {
+		color: var(--sl-color-gray-3);
+		font-weight: 400;
+	}
+	dd {
+		margin: 0;
+		color: var(--sl-color-white);
+	}
+	@media (max-width: 30rem) {
+		.spec {
+			grid-template-columns: 1fr;
+			gap: 0;
+		}
+		dd + dt,
+		.spec > div + div dt {
+			margin-top: 0.5rem;
+		}
+	}
+</style>

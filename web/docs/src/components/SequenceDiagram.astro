@@ -1,0 +1,320 @@
+---
+// Build-time sequence diagram. Renders static SVG themed by site tokens, plus
+// an ordered text equivalent for assistive technology.
+
+type Participant = { id: string; label: string; sub?: string };
+type Message = { from: string; to: string; label: string; reply?: boolean };
+type Note = { note: string; over: [string] | [string, string] };
+type Frame = { frame: string; steps: Step[] };
+type Step = Message | Note | Frame;
+type Boundary = { label: string; from: string; to: string };
+
+interface Props {
+	title: string;
+	participants: Participant[];
+	steps: Step[];
+	boundaries?: Boundary[];
+}
+
+const { title, participants, steps, boundaries = [] } = Astro.props;
+
+const COL = 150;
+const PAD_X = 24;
+const BOX_H = 44;
+const TOP = boundaries.length > 0 ? 30 : 8;
+const ROW = 34;
+const NOTE_ROW = 38;
+const FRAME_HEAD = 30;
+const FRAME_TAIL = 14;
+const CHAR = 7.2;
+
+const index = new Map(participants.map((p, i) => [p.id, i]));
+const x = (id: string) => {
+	const i = index.get(id);
+	if (i === undefined) throw new Error(`SequenceDiagram: unknown participant "${id}"`);
+	return PAD_X + COL / 2 + i * COL;
+};
+const width = PAD_X * 2 + participants.length * COL;
+const labelOf = (id: string) => participants.find((p) => p.id === id)?.label ?? id;
+
+type Drawn =
+	| { kind: "message"; y: number; n: number; step: Message }
+	| { kind: "note"; y: number; step: Note }
+	| { kind: "frame"; y: number; h: number; label: string; x1: number; x2: number };
+
+const drawn: Drawn[] = [];
+const text: string[] = [];
+let n = 0;
+
+function span(list: Step[]): [number, number] {
+	let lo = Infinity;
+	let hi = -Infinity;
+	for (const s of list) {
+		const ids = "frame" in s ? [] : "note" in s ? s.over : [s.from, s.to];
+		for (const id of ids) {
+			lo = Math.min(lo, x(id));
+			hi = Math.max(hi, x(id));
+		}
+		if ("frame" in s) {
+			const [a, b] = span(s.steps);
+			lo = Math.min(lo, a);
+			hi = Math.max(hi, b);
+		}
+	}
+	return [lo, hi];
+}
+
+function layout(list: Step[], y: number, depth: number): number {
+	for (const s of list) {
+		if ("frame" in s) {
+			const [a, b] = span(s.steps);
+			const inset = depth * 8;
+			const start = y;
+			text.push(`${s.frame}:`);
+			y = layout(s.steps, y + FRAME_HEAD, depth + 1) + FRAME_TAIL;
+			drawn.push({
+				kind: "frame",
+				y: start,
+				h: y - start - 6,
+				label: s.frame,
+				x1: a - COL / 2 + 14 + inset,
+				x2: b + COL / 2 - 14 - inset,
+			});
+		} else if ("note" in s) {
+			drawn.push({ kind: "note", y, step: s });
+			text.push(`Note: ${s.note}`);
+			y += NOTE_ROW;
+		} else {
+			n += 1;
+			drawn.push({ kind: "message", y: y + ROW - 10, n, step: s });
+			const by = labelOf(s.from);
+			const to = labelOf(s.to);
+			text.push(s.from === s.to ? `${by}: ${s.label}` : `${by} to ${to}: ${s.label}`);
+			y += s.from === s.to ? ROW + 14 : ROW;
+		}
+	}
+	return y;
+}
+
+const bodyTop = TOP + BOX_H + 18;
+const bodyEnd = layout(steps, bodyTop, 0) + 10;
+const height = bodyEnd + 8;
+---
+
+<figure class="seq">
+	<div class="seq-scroll">
+		<svg
+			viewBox={`0 0 ${width} ${height}`}
+			width={width}
+			height={height}
+			role="img"
+			aria-labelledby="seq-title"
+			style={`--seq-min:${width}px`}
+		>
+			<title>{title}</title>
+			<defs>
+				<marker id="seq-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+					<path d="M0 0 L10 5 L0 10 z" class="seq-head" />
+				</marker>
+				<marker id="seq-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+					<path d="M0 0 L10 5 L0 10" class="seq-open" />
+				</marker>
+			</defs>
+
+			{boundaries.map((b) => {
+				const x1 = x(b.from) - COL / 2 + 4;
+				const x2 = x(b.to) + COL / 2 - 4;
+				return (
+					<g class="seq-boundary">
+						<rect x={x1} y={4} width={x2 - x1} height={height - 8} />
+						<text x={x1 + 10} y={20}>{b.label}</text>
+					</g>
+				);
+			})}
+
+			{participants.map((p) => (
+				<line class="seq-life" x1={x(p.id)} x2={x(p.id)} y1={TOP + BOX_H} y2={bodyEnd} />
+			))}
+
+			{drawn.filter((d) => d.kind === "frame").map((d) => d.kind === "frame" && (
+				<g class="seq-frame">
+					<rect x={d.x1} y={d.y} width={d.x2 - d.x1} height={d.h} />
+					<path d={`M${d.x1} ${d.y + 20} H${d.x1 + d.label.length * CHAR + 16} l8 -8 V${d.y}`} />
+					<text x={d.x1 + 8} y={d.y + 14}>{d.label}</text>
+				</g>
+			))}
+
+			{participants.map((p) => (
+				<g class="seq-actor">
+					<rect x={x(p.id) - COL / 2 + 12} y={TOP} width={COL - 24} height={BOX_H} />
+					<text x={x(p.id)} y={TOP + (p.sub ? 19 : 26)} class="seq-actor-label">{p.label}</text>
+					{p.sub && <text x={x(p.id)} y={TOP + 34} class="seq-actor-sub">{p.sub}</text>}
+				</g>
+			))}
+
+			{drawn.map((d) => {
+				if (d.kind === "note") {
+					const xs = d.step.over.map(x);
+					const mid = (Math.min(...xs) + Math.max(...xs)) / 2;
+					const half = Math.max((Math.max(...xs) - Math.min(...xs) + COL - 44) / 2, (d.step.note.length * 6.6) / 2 + 14);
+					const shift = Math.min(0, width - 6 - (mid + half)) + Math.max(0, 6 - (mid - half));
+					const x1 = mid - half + shift;
+					const x2 = mid + half + shift;
+					return (
+						<g class="seq-note">
+							<rect x={x1} y={d.y + 4} width={x2 - x1} height={NOTE_ROW - 10} />
+							<text x={(x1 + x2) / 2} y={d.y + 22}>{d.step.note}</text>
+						</g>
+					);
+				}
+				if (d.kind !== "message") return null;
+				const { from, to, label, reply } = d.step;
+				const x1 = x(from);
+				const x2 = x(to);
+				const cls = reply ? "seq-msg seq-reply" : "seq-msg";
+				const marker = reply ? "url(#seq-open)" : "url(#seq-head)";
+				if (from === to) {
+					return (
+						<g class={cls}>
+							<path d={`M${x1} ${d.y} h28 v14 h-26`} marker-end={marker} />
+							<text x={x1 + 36} y={d.y + 11} class="seq-self">{label}</text>
+							<text x={x1 - 8} y={d.y + 4} class="seq-num">{d.n}</text>
+						</g>
+					);
+				}
+				const dir = x2 > x1 ? 1 : -1;
+				return (
+					<g class={cls}>
+						<line x1={x1} x2={x2 - dir * 2} y1={d.y} y2={d.y} marker-end={marker} />
+						<text x={(x1 + x2) / 2} y={d.y - 7}>{label}</text>
+						<text x={x1 - dir * 8} y={d.y + 4} class="seq-num" text-anchor={dir > 0 ? "end" : "start"}>{d.n}</text>
+					</g>
+				);
+			})}
+		</svg>
+	</div>
+	<figcaption id="seq-title">{title}</figcaption>
+	<ol class="sr-only">
+		{text.map((t) => <li>{t}</li>)}
+	</ol>
+</figure>
+
+<style>
+	.seq {
+		margin-block: 2rem;
+	}
+	.seq-scroll {
+		overflow-x: auto;
+	}
+	svg {
+		display: block;
+		width: 100%;
+		min-width: min(var(--seq-min), 34rem);
+		height: auto;
+		margin-inline: auto;
+		max-width: var(--seq-min);
+		font-family: var(--sl-font-mono);
+		font-size: 12px;
+	}
+	figcaption {
+		margin-top: 0.6rem;
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+	}
+	text {
+		fill: var(--sl-color-gray-2);
+		text-anchor: middle;
+		paint-order: stroke;
+		stroke: var(--sl-color-bg);
+		stroke-width: 5px;
+		stroke-linejoin: round;
+	}
+	.seq-actor text,
+	.seq-note text {
+		stroke: none;
+	}
+	.seq-actor rect {
+		fill: var(--sl-color-gray-6);
+		stroke: var(--sl-color-gray-4);
+	}
+	.seq-actor-label {
+		fill: var(--sl-color-white);
+		font-weight: 600;
+	}
+	.seq-actor-sub {
+		fill: var(--sl-color-gray-3);
+		font-size: 10.5px;
+	}
+	.seq-life {
+		stroke: var(--sl-color-gray-5);
+		stroke-dasharray: 2 4;
+	}
+	.seq-msg line,
+	.seq-msg path {
+		fill: none;
+		stroke: var(--sl-color-gray-2);
+		stroke-width: 1.25;
+	}
+	.seq-reply line,
+	.seq-reply path {
+		stroke: var(--sl-color-gray-3);
+		stroke-dasharray: 5 4;
+	}
+	.seq-reply text:not(.seq-num) {
+		fill: var(--sl-color-gray-3);
+	}
+	.seq-head {
+		fill: var(--sl-color-gray-2);
+	}
+	.seq-open {
+		fill: none;
+		stroke: var(--sl-color-gray-3);
+		stroke-width: 1.25;
+	}
+	.seq-self {
+		text-anchor: start;
+	}
+	.seq-num {
+		fill: var(--signet-blue);
+		font-size: 10px;
+		font-weight: 600;
+	}
+	.seq-note rect {
+		fill: var(--sl-color-bg);
+		stroke: var(--sl-color-gray-5);
+	}
+	.seq-note text {
+		fill: var(--sl-color-gray-3);
+		font-size: 11px;
+	}
+	.seq-frame rect,
+	.seq-frame path {
+		fill: none;
+		stroke: var(--sl-color-gray-4);
+	}
+	.seq-frame text {
+		text-anchor: start;
+		fill: var(--sl-color-gray-3);
+		font-size: 10.5px;
+		font-weight: 600;
+	}
+	.seq-boundary rect {
+		fill: none;
+		stroke: var(--sl-color-gray-5);
+		stroke-dasharray: 6 4;
+	}
+	.seq-boundary text {
+		text-anchor: start;
+		fill: var(--sl-color-gray-3);
+		font-size: 10.5px;
+		letter-spacing: 0.04em;
+	}
+	.sr-only {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+		white-space: nowrap;
+	}
+</style>

@@ -1,0 +1,64 @@
+---
+// Interactive isometric figure from @lucasmarkes/hairline. The figure draws on
+// the client; the accessible label renders statically. With a slot, the figure
+// sits beside the slotted intro on wide screens.
+
+interface Props {
+	figure: string;
+	label: string;
+}
+
+const { figure, label } = Astro.props;
+const hasIntro = Astro.slots.has("default");
+---
+
+<div class:list={["hairline", { "hairline-intro": hasIntro }]}>
+	{hasIntro && <div class="hairline-text"><slot /></div>}
+	<div class="hairline-mount" data-figure={figure} data-label={label} role="img" aria-label={label}></div>
+</div>
+
+<script>
+	import * as figures from "@lucasmarkes/hairline";
+
+	type Draw = (el: HTMLElement, options?: { label?: string; intensity?: number }) => { destroy(): void };
+
+	const mounted = new Set<{ destroy(): void }>();
+
+	function mount() {
+		for (const figure of mounted) figure.destroy();
+		mounted.clear();
+		for (const el of document.querySelectorAll<HTMLElement>(".hairline-mount")) {
+			const draw = (figures as unknown as Record<string, Draw | undefined>)[el.dataset.figure ?? ""];
+			if (draw) mounted.add(draw(el, { label: el.dataset.label, intensity: 0.5 }));
+		}
+	}
+
+	document.addEventListener("astro:page-load", mount);
+</script>
+
+<style>
+	.hairline {
+		margin-block: 1rem 2rem;
+	}
+	.hairline-mount {
+		aspect-ratio: 5 / 4;
+		width: 100%;
+		max-width: 18rem;
+	}
+	.hairline-intro {
+		display: grid;
+		gap: 1rem 2.5rem;
+		align-items: center;
+	}
+	.hairline-text :global(> :first-child) {
+		margin-top: 0;
+	}
+	@media (min-width: 50rem) {
+		.hairline-intro {
+			grid-template-columns: 1fr 15rem;
+		}
+		.hairline-intro .hairline-mount {
+			max-width: none;
+		}
+	}
+</style>

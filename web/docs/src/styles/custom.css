@@ -1,8 +1,13 @@
 :root {
-	--sl-font: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	--sl-font: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 	--sl-font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 	--sl-font-system: var(--sl-font);
 	--sl-content-width: 50rem;
+	--sl-text-h1: 2rem;
+	--sl-text-h2: 1.375rem;
+	--sl-text-h3: 1.125rem;
+	--sl-text-h4: 1rem;
+	--sl-text-h5: 0.9375rem;
 	--sl-sidebar-width: 21.5rem;
 	--sl-nav-height: 4.75rem;
 	--sl-content-pad-x: 3.25rem;
@@ -116,7 +121,7 @@ h3,
 h4,
 h5 {
 	font-weight: 600;
-	letter-spacing: -0.035em;
+	letter-spacing: -0.02em;
 }
 
 header.header {
@@ -243,11 +248,12 @@ header.header > .header {
 
 .main-pane .content-panel + .content-panel {
 	border-top: 0;
+	padding-top: 0;
 }
 
 .sl-markdown-content {
-	font-size: 0.97rem;
-	line-height: 1.72;
+	font-size: 1rem;
+	line-height: 1.7;
 }
 
 .sl-markdown-content > :where(h2, h3, h4) {
@@ -255,9 +261,25 @@ header.header > .header {
 }
 
 .sl-markdown-content h2 {
-	margin-top: 3.75rem;
+	margin-top: 3.5rem;
 	padding-top: 0;
 	border-top: 0;
+}
+
+.sl-markdown-content h3 {
+	margin-top: 2.25rem;
+}
+
+.sl-markdown-content h4 {
+	margin-top: 1.75rem;
+}
+
+.sl-markdown-content :where(h2, h3, h4) {
+	line-height: 1.3;
+}
+
+.sl-markdown-content :where(h2, h3, h4) + * {
+	margin-top: 0.6rem;
 }
 
 .sl-markdown-content a:not(.sl-link-button) {
@@ -267,11 +289,20 @@ header.header > .header {
 }
 
 .sl-markdown-content :not(pre) > code {
-	border: 1px solid var(--signet-border);
-	border-radius: 0.12rem;
+	border: 0;
+	border-radius: 0.15rem;
 	background: var(--sl-color-gray-6);
-	padding: 0.1em 0.34em;
-	font-size: 0.84em;
+	padding: 0.12em 0.32em;
+	color: var(--sl-color-white);
+	font-size: 0.86em;
+}
+
+.sl-markdown-content table {
+	font-size: var(--sl-text-sm);
+}
+
+.sl-markdown-content td:first-child code {
+	white-space: nowrap;
 }
 
 .expressive-code {

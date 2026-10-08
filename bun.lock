@@ -561,6 +561,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@astrojs/starlight": "^0.41.7",
+        "@lucasmarkes/hairline": "0.3.0",
         "astro": "^7.1.6",
         "cookie": "^2.0.1",
         "sharp": "^0.35.3",
@@ -1126,6 +1127,8 @@
     "@jridgewell/sourcemap-codec": ["@jridgewell/sourcemap-codec@1.5.5", "", {}, "sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og=="],
 
     "@jridgewell/trace-mapping": ["@jridgewell/trace-mapping@0.3.9", "", { "dependencies": { "@jridgewell/resolve-uri": "^3.0.3", "@jridgewell/sourcemap-codec": "^1.4.10" } }, "sha512-3Belt6tdc8bPgAtbcmdtNJlirVoTmEb5e2gC94PnkwEW9jI6CAHUeoG85tjWP5WquqfavoMtMwiG4P926ZKKuQ=="],
+
+    "@lucasmarkes/hairline": ["@lucasmarkes/hairline@0.3.0", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"] }, "sha512-BFaBv/T+0lhr9YudW/s/BTY1dVGPqXbWB3kt0zza6HplV/KMMoghejqb6q2njGBXFeyXgMZMuVtGYfJJAgDj0g=="],
 
     "@malept/cross-spawn-promise": ["@malept/cross-spawn-promise@2.0.0", "", { "dependencies": { "cross-spawn": "^7.0.1" } }, "sha512-1DpKU0Z5ThltBwjNySMC14g0CkbyhCaz9FkhxqNsZI6uAPJXFS8cMXlBKo26FJ8ZuW6S9GCMcR9IO5k2X5/9Fg=="],
 

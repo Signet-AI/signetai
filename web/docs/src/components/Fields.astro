@@ -1,0 +1,51 @@
+---
+// Styles a Markdown list as a field reference. Each item is a head paragraph
+// (`name` · type · default) followed by a description paragraph.
+---
+
+<div class="fields"><slot /></div>
+
+<style>
+	.fields {
+		margin-block: 1rem 2rem;
+	}
+	.fields :global(> ul) {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		border-top: 1px solid var(--signet-border);
+	}
+	.fields :global(> ul > li) {
+		margin: 0;
+		padding: 0.85rem 0;
+		border-bottom: 1px solid var(--signet-border);
+	}
+	.fields :global(> ul > li > p) {
+		margin: 0;
+	}
+	.fields :global(> ul > li > p:first-child) {
+		color: var(--sl-color-gray-3);
+		font-family: var(--sl-font-mono);
+		font-size: var(--sl-text-sm);
+		line-height: 1.5;
+	}
+	.fields :global(> ul > li > p:first-child > code) {
+		background: none;
+		padding: 0;
+		margin-inline-end: 0.2rem;
+		color: var(--sl-color-white);
+		font-size: 0.95rem;
+		font-weight: 600;
+	}
+	.fields :global(> ul > li > p:first-child strong) {
+		color: var(--signet-blue);
+		font-weight: 500;
+	}
+	.fields :global(> ul > li > p + p),
+	.fields :global(> ul > li > p + ul) {
+		margin-top: 0.3rem;
+	}
+	.fields :global(> ul > li > p + p) {
+		font-size: 0.95rem;
+	}
+</style>

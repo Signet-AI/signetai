@@ -18,7 +18,7 @@ Remove an element when spacing, order, plain text, or standard HTML can do the s
 ## Visual Language
 
 - Use near-black text and backgrounds with warm off-white text and backgrounds in the light theme, or the dark-mode equivalent.
-- Use IBM Plex Mono as the primary typeface. Use the Signet logo and wordmark as the main brand elements.
+- Use IBM Plex Sans for body text. Use IBM Plex Mono for headings, navigation, code, field names, and diagrams. Use the Signet logo and wordmark as the main brand elements.
 - Use whitespace and standard HTML elements to separate ideas.
 - Do not add cards, panels, badges, decorative rules, gradients, shadows, or ornamental backgrounds unless they show real structure or state.
 - Use thin borders and compact controls where the existing Starlight layout needs them.
@@ -55,6 +55,7 @@ Remove an element when spacing, order, plain text, or standard HTML can do the s
 
 - Use motion only to explain a layout or state change. Keep it fast, linear, and mechanical.
 - Do not add fades, scaling, bounce, blur, or decorative easing to documentation content.
+- Exception: a page may open with one interactive `HairlineFigure` from `@lucasmarkes/hairline`. Its rest pose must read as a still illustration, and it must honor `prefers-reduced-motion`.
 - Remove nonessential transitions for `prefers-reduced-motion`.
 - Support pointer and keyboard input. Keep keyboard focus visible.
 - Keep native browser behavior unless custom behavior gives clear value.
@@ -72,7 +73,7 @@ Remove an element when spacing, order, plain text, or standard HTML can do the s
 - Remove old styles when a shared rule replaces them.
 - Do not keep compatibility styles without a current consumer.
 - Preserve accessible names, focus order, contrast, and reduced-motion behavior during visual changes.
-- Do not rewrite the rendered DOM with scripts.
+- Do not rewrite the rendered DOM with scripts. `HairlineFigure` draws only inside its own mount element.
 
 ## Documentation Pages
 
@@ -88,7 +89,9 @@ Documentation can be dense, but it must use the same restrained design language.
 - Show the `On this page` outline beside the frame when Starlight provides space for it.
 - Preserve Starlight's responsive navigation and outline behavior instead of replacing it with custom disclosure systems.
 - End each page with previous and next links when the page belongs to a navigable section.
-- Prefer monospace box-drawing diagrams in code blocks to images. They inherit the typeface and both themes.
+- Draw request flows with `SequenceDiagram`. It renders static SVG at build time and inherits the typeface and both themes. For other structure, prefer monospace box-drawing diagrams in code blocks to images.
+- Show product UI with `Screenshot`, captured in both themes from a throwaway daemon.
+- Document request, response, and parameter fields with `Fields`, not wide tables. Keep tables for short, uniform rows such as error codes.
 - Keep generated pages generated. If a page says it is generated from a root document, edit the root document and run the existing sync script.
 
 ## Exceptions
