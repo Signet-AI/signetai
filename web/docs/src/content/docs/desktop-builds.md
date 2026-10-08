@@ -33,6 +33,8 @@ Setup, `signet workspace set`, and the workspace layout upgrade do not clone the
 
 To build from your own clone instead, pass `--repo <path>` or set `SIGNET_SOURCE_DIR`. Either one uses that checkout as it is, without managed synchronization.
 
+`--skip-build` also skips synchronization. It neither creates nor updates the managed checkout, so it needs an existing one: the managed path, `--repo`, `SIGNET_SOURCE_DIR`, or a Signet checkout containing the current directory.
+
 ## Install locations
 
 | Platform | Location |

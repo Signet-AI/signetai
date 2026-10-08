@@ -34,7 +34,7 @@ function listMarkdownFilesRecursive(dir: string): string[] {
 			const next = join(current, entry.name);
 			const relativePath = prefix ? `${prefix}/${entry.name}` : entry.name;
 			if (entry.isDirectory()) walk(next, relativePath);
-			else if (entry.name.endsWith(".md")) files.push(`${dir}/${relativePath}`);
+			else if (/\.mdx?$/.test(entry.name)) files.push(`${dir}/${relativePath}`);
 		}
 	}
 	walk(absolute, "");
@@ -166,7 +166,7 @@ interface DocRoute {
 function parseApiRoutes(content: string): DocRoute[] {
 	const routes: DocRoute[] = [];
 
-	const headingPattern = /^###\s+(GET|POST|PUT|PATCH|DELETE|ALL)\s+(`?)(\/[^\s`]+)\2\s*$/gm;
+	const headingPattern = /^#{2,3}\s+(GET|POST|PUT|PATCH|DELETE|ALL)\s+(`?)(\/[^\s`]+)\2\s*$/gm;
 	let match: RegExpExecArray | null = null;
 	while ((match = headingPattern.exec(content)) !== null) {
 		routes.push({ endpoint: match[3], methods: [match[1].toUpperCase()] });

@@ -18,6 +18,12 @@ interface Props {
 
 const { title, participants, steps, boundaries = [] } = Astro.props;
 
+// IDs must be unique per diagram so two diagrams on one page keep their own
+// label and arrowheads.
+let hash = 2166136261;
+for (const ch of JSON.stringify({ title, participants, steps })) hash = Math.imul(hash ^ ch.charCodeAt(0), 16777619);
+const uid = `seq-${(hash >>> 0).toString(36)}`;
+
 const COL = 150;
 const PAD_X = 24;
 const BOX_H = 44;
@@ -108,15 +114,15 @@ const height = bodyEnd + 8;
 			width={width}
 			height={height}
 			role="img"
-			aria-labelledby="seq-title"
+			aria-labelledby={`${uid}-title`}
 			style={`--seq-min:${width}px`}
 		>
 			<title>{title}</title>
 			<defs>
-				<marker id="seq-head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+				<marker id={`${uid}-head`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
 					<path d="M0 0 L10 5 L0 10 z" class="seq-head" />
 				</marker>
-				<marker id="seq-open" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+				<marker id={`${uid}-open`} viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
 					<path d="M0 0 L10 5 L0 10" class="seq-open" />
 				</marker>
 			</defs>
@@ -172,7 +178,7 @@ const height = bodyEnd + 8;
 				const x1 = x(from);
 				const x2 = x(to);
 				const cls = reply ? "seq-msg seq-reply" : "seq-msg";
-				const marker = reply ? "url(#seq-open)" : "url(#seq-head)";
+				const marker = reply ? `url(#${uid}-open)` : `url(#${uid}-head)`;
 				if (from === to) {
 					return (
 						<g class={cls}>
@@ -193,7 +199,7 @@ const height = bodyEnd + 8;
 			})}
 		</svg>
 	</div>
-	<figcaption id="seq-title">{title}</figcaption>
+	<figcaption id={`${uid}-title`}>{title}</figcaption>
 	<ol class="sr-only">
 		{text.map((t) => <li>{t}</li>)}
 	</ol>
