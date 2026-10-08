@@ -54,16 +54,10 @@ jobs:
             echo "Resume requested; signing preflight is not required"
             exit 0
           fi
-          CODE_CHANGES=$(git diff --name-only HEAD~1 HEAD -- \
-            'platform/**' 'surfaces/**' 'integrations/**' 'libs/**' 'dist/**' 'plugins/**' 'runtimes/**' 'scripts/**' \
-            'package.json' 'bunfig.toml' 'tsconfig*.json' \
-            '.github/workflows/**' \
-            | grep -v '\.md$' \
-            | grep -v '\.jpg$' \
-            | grep -v '\.jpeg$' \
-            | grep -v '\.png$' \
-            | grep -v '\.svg$' \
-            | head -1 || true)
+          # Match the release job's check: the release ships everything since
+          # the last tag, so signing must be verified whenever that is code.
+          git fetch --force --tags origin +refs/heads/main:refs/remotes/origin/main
+          CODE_CHANGES=$(scripts/release-code-changes.sh --since-release origin/main)
           if [ -z "$CODE_CHANGES" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "No code changes detected; skipping signing preflight"
@@ -112,9 +106,15 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    # Queue instead of cancel: this job pushes the version commit, tag, and draft
+    # release, so cancelling it mid-run orphans a tagged version that is never
+    # built or published. A newer pending job still replaces an older pending
+    # one, and the change check below makes the survivor cover its commits.
+    # Resume runs rebuild an existing tag without touching main, so each gets
+    # its own group rather than displacing (or being displaced by) a push run.
     concurrency:
-      group: nightly-release-pipeline
-      cancel-in-progress: true
+      group: ${{ inputs.resume_from_tag && format('nightly-release-resume-{0}', inputs.resume_from_tag) || 'nightly-release-pipeline' }}
+      cancel-in-progress: false
     if: >-
       always() &&
       !contains(github.event.head_commit.message, 'chore: release') &&
@@ -175,16 +175,12 @@ jobs:
             echo "Resume requested for $RESUME_INPUT"
             exit 0
           fi
-          CODE_CHANGES=$(git diff --name-only HEAD~1 HEAD -- \
-            'platform/**' 'surfaces/**' 'integrations/**' 'libs/**' 'dist/**' 'plugins/**' 'runtimes/**' 'scripts/**' \
-            'package.json' 'bunfig.toml' 'tsconfig*.json' \
-            '.github/workflows/**' \
-            | grep -v '\.md$' \
-            | grep -v '\.jpg$' \
-            | grep -v '\.jpeg$' \
-            | grep -v '\.png$' \
-            | grep -v '\.svg$' \
-            | head -1 || true)
+          set -euo pipefail
+          # Diff against the newest release tag on main, not the triggering
+          # commit's parent: a superseded queued run's code must still ship,
+          # and code an earlier release already included must not ship twice.
+          git fetch --force --tags origin +refs/heads/main:refs/remotes/origin/main
+          CODE_CHANGES=$(scripts/release-code-changes.sh --since-release origin/main)
           if [ -z "$CODE_CHANGES" ]; then
             echo "skip=true" >> $GITHUB_OUTPUT
             echo "No code changes detected, skipping release"
@@ -566,14 +562,13 @@ jobs:
             current=$(npm view "${package_name}@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")
             if [ "$current" = "$NEW_VERSION" ]; then
               echo "${package_name}@${NEW_VERSION} already published, refreshing next tag"
-              npm dist-tag add "${package_name}@${NEW_VERSION}" next
-              return
+            elif [ "$optional" = "true" ]; then
+              (cd "$package_dir" && npm publish --tag release-staging --access public) || return 0
+            else
+              (cd "$package_dir" && npm publish --tag release-staging --access public)
             fi
-            if [ "$optional" = "true" ]; then
-              (cd "$package_dir" && npm publish --tag next --access public) || true
-              return
-            fi
-            (cd "$package_dir" && npm publish --tag next --access public)
+            npm dist-tag rm "${package_name}" release-staging >/dev/null 2>&1 || true
+            scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" next
           }
 
           STAGED_NPM_ROOT="${RUNNER_TEMP}/signet-npm-publish"
@@ -619,7 +614,7 @@ jobs:
             "latest.yml"
           )
 
-          for attempt in $(seq 1 60); do
+          for attempt in $(seq 1 90); do
             assets=$(scripts/retry-github-release.sh gh release view "v${NEW_VERSION}" --json assets --jq '.assets[].name' --repo "${GITHUB_REPOSITORY}" 2>/dev/null || true)
             missing=()
             for asset in "${expected[@]}"; do
@@ -631,11 +626,11 @@ jobs:
               echo "All desktop release assets are present"
               break
             fi
-            if [ "${attempt}" -eq 60 ]; then
+            if [ "${attempt}" -eq 90 ]; then
               echo "::error::Timed out waiting for desktop release assets: ${missing[*]}"
               exit 1
             fi
-            echo "Waiting for desktop release assets (attempt ${attempt}/60): ${missing[*]}"
+            echo "Waiting for desktop release assets (attempt ${attempt}/90): ${missing[*]}"
             sleep 30
           done
 

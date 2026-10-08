@@ -219,9 +219,11 @@ describe("check-publish-manifests", () => {
 		expect(workflow).not.toContain("publish_npm_package dist/signetai-darwin-x64");
 		expect(workflow).not.toContain("publish_npm_package dist/signetai-darwin-arm64");
 		expect(workflow).not.toContain("publish_npm_package dist/signetai-win32-x64");
-		expect(workflow).toContain('npm dist-tag add "${package_name}@${NEW_VERSION}" next');
+		expect(workflow).toContain('scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" next');
+		expect(workflow).not.toContain('npm dist-tag add "${package_name}@${NEW_VERSION}" next');
 		expect(workflow).toContain("NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc");
-		expect(workflow).toContain("npm publish --tag next --access public");
+		expect(workflow).toContain("npm publish --tag release-staging --access public");
+		expect(workflow).not.toContain("npm publish --tag next");
 		expect(workflow).toContain('gh release edit "v${NEW_VERSION}" --draft=false');
 		expect(workflow).toContain('bun scripts/stage-npm-publish.ts "${RUNNER_TEMP}/signet-npm-publish"');
 		expect(workflow).toContain('STAGED_NPM_ROOT="${RUNNER_TEMP}/signet-npm-publish"');
