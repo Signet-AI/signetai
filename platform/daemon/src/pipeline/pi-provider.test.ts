@@ -7,6 +7,8 @@ import {
 	isPiAgentSessionProvider,
 	mapSessionStatsToUsage,
 	mapUsage,
+	piAgentFailureError,
+	piErrorHttpStatus,
 	resolvePiModel,
 	summarizeCacheRequests,
 	awaitWithAbort,
@@ -523,5 +525,37 @@ describe("pi provider catalog models", () => {
 			configureLlmConcurrency(originalLimit);
 			globalThis.fetch = originalFetch;
 		}
+	});
+});
+
+describe("Pi error HTTP status", () => {
+	test.each([
+		['429: {"code":"1302","message":"您的账户已达到速率限制，请您控制请求频率"}', 429],
+		["429 status code (no body)", 429],
+		['401 {"type":"error","error":{"type":"authentication_error"}}', 401],
+		['OpenAI API error (429): {"error":{"code":"rate_limit_exceeded"}}', 429],
+		["Mistral API error (402): Payment required", 402],
+		["429 Too Many Requests", 429],
+	] as const)("reads the status from %s", (message, status) => {
+		expect(piErrorHttpStatus(message)).toBe(status);
+	});
+
+	test.each([
+		"429items",
+		"429:{}",
+		"1302: account rate limited",
+		"200: ok",
+		"Provider finish_reason: content_filter",
+		'Validation failed for tool "read" (403): missing path',
+		"Request was aborted",
+	])("ignores %s", (message) => {
+		expect(piErrorHttpStatus(message)).toBeUndefined();
+	});
+
+	test("attaches the status to a Pi agent failure", () => {
+		const error = piAgentFailureError("429: {}") as Error & { status?: number };
+		expect(error.message).toBe("429: {}");
+		expect(error.status).toBe(429);
+		expect("status" in piAgentFailureError("Pi agent error")).toBe(false);
 	});
 });

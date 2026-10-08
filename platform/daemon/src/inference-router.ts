@@ -40,6 +40,7 @@ import {
 	PiProviderDeadlineError,
 	isPiAgentSessionProvider,
 	mapSessionStatsToUsage,
+	piAgentFailureError,
 } from "./pipeline/pi-provider";
 import {
 	type AcpxHooksMode,
@@ -311,11 +312,6 @@ function defaultAgentIdForConfig(config: RoutingConfig): string {
 
 function formatExecutionError(error: unknown): string {
 	return sanitizeErrorText(error instanceof Error ? error.message : String(error));
-}
-
-function httpStatusFromFailureMessage(message: string): number | undefined {
-	const match = message.match(/^(\d{3})[:\s]/) ?? message.match(/^[^\n]*?\((\d{3})\):\s/);
-	return match ? Number(match[1]) : undefined;
 }
 
 function sanitizeErrorText(value: string): string {
@@ -765,11 +761,7 @@ export class InferenceRouter {
 		if (!parsed.ok) return;
 		const target = loaded.config.targets[parsed.value.targetId];
 		if (!target) return;
-		const classified = this.classifyObservedFailure(
-			message,
-			Boolean(target.account),
-			pipelineErrorStatus(error) ?? httpStatusFromFailureMessage(message),
-		);
+		const classified = this.classifyObservedFailure(message, Boolean(target.account), pipelineErrorStatus(error));
 		if (!classified) return;
 		const expiresAt = Date.now() + classified.ttlMs;
 		if (classified.scope === "account" && target.account) {
@@ -1316,7 +1308,7 @@ export class InferenceRouter {
 							throw error;
 						}
 						const failure = session.getFailureMessage();
-						if (failure) throw new Error(failure);
+						if (failure) throw piAgentFailureError(failure);
 						sessionUsage = mapSessionStatsToUsage(
 							session.getStats(),
 							Date.now() - startedAt,

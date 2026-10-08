@@ -456,10 +456,18 @@ interface PiError extends Error {
 	status?: number;
 }
 
-function leadingHttpStatus(detail: string): number | undefined {
-	const match = /^(\d{3})\b/.exec(detail.trim());
+export function piErrorHttpStatus(detail: string): number | undefined {
+	const trimmed = detail.trim();
+	const match = /^(\d{3}):? /.exec(trimmed) ?? /^[^\n]*? error \((\d{3})\): /.exec(trimmed);
 	const status = match ? Number(match[1]) : Number.NaN;
 	return status >= 400 && status <= 599 ? status : undefined;
+}
+
+export function piAgentFailureError(failure: string): Error {
+	const err = new Error(failure) as PiError;
+	const status = piErrorHttpStatus(failure);
+	if (status !== undefined) err.status = status;
+	return err;
 }
 
 function toError(label: string, message: { stopReason: string; errorMessage?: string }): PiError {
@@ -467,7 +475,7 @@ function toError(label: string, message: { stopReason: string; errorMessage?: st
 	const detail = message.errorMessage ?? reason;
 	const err = new Error(`Pi provider ${label} failed (${reason}): ${detail}`) as PiError;
 	err.stopReason = reason;
-	const status = leadingHttpStatus(detail);
+	const status = piErrorHttpStatus(detail);
 	if (status !== undefined) err.status = status;
 	return err;
 }
