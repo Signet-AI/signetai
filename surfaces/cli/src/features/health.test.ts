@@ -1859,3 +1859,76 @@ describe("doctor unknown target", () => {
 		}
 	});
 });
+
+describe("doctor memory extraction privacy gate", () => {
+	const remoteRoute = (privacy: string) =>
+		[
+			"inference:",
+			"  defaultPolicy: background",
+			"  targets:",
+			"    background:",
+			"      executor: openai-compatible",
+			"      endpoint: https://open.bigmodel.cn/api/coding/paas/v4",
+			"      models:",
+			"        default:",
+			"          model: glm-5.3-flash",
+			"  policies:",
+			"    background:",
+			"      mode: automatic",
+			"      defaultTargets: [background/default]",
+			"      fallbackTargets: [background/default]",
+			"  taskClasses:",
+			"    memory_extraction:",
+			"      reasoning: medium",
+			"      toolsRequired: true",
+			`      privacy: ${privacy}`,
+			"  workloads:",
+			"    memoryExtraction:",
+			"      target: background/default",
+			"      taskClass: memory_extraction",
+			"",
+		].join("\n");
+
+	async function doctorFindings(agentYaml: string): Promise<Array<{ code?: string; message?: string; fix?: string }>> {
+		const root = mkdtempSync(join(tmpdir(), "health-extraction-privacy-"));
+		const lines: string[] = [];
+		const oldLog = console.log;
+		try {
+			writeFileSync(join(root, "agent.yaml"), agentYaml);
+			console.log = (...args: unknown[]) => {
+				lines.push(args.join(" "));
+			};
+			await showDoctor(
+				{ json: true },
+				{
+					...depsFor(root),
+					detectInstallations: () => ({
+						target: { kind: "unsupported", executablePath: "/tmp/signet", reason: "test fixture" },
+						installations: [],
+						inactive: [],
+					}),
+				},
+			);
+			return (JSON.parse(lines.join("\n")) as { findings: Array<{ code?: string; message?: string; fix?: string }> })
+				.findings;
+		} finally {
+			console.log = oldLog;
+			rmSync(root, { recursive: true, force: true });
+		}
+	}
+
+	it("warns when a remote extraction target can never satisfy the task class privacy tier", async () => {
+		expect(await doctorFindings(remoteRoute("restricted_remote"))).toContainEqual(
+			expect.objectContaining({
+				code: "memory_extraction_privacy_blocked",
+				message: expect.stringContaining("privacy gate (restricted_remote) for background/default"),
+				fix: expect.stringContaining("remote_ok"),
+			}),
+		);
+	});
+
+	it("stays quiet once remote extraction is allowed", async () => {
+		const findings = await doctorFindings(remoteRoute("remote_ok"));
+		expect(findings.map((finding) => finding.code)).not.toContain("memory_extraction_privacy_blocked");
+	});
+});
