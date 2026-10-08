@@ -1794,8 +1794,8 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 									!live.pipelineV2.mutationsFrozen
 								);
 							},
-							inferenceAvailable: async () =>
-								(await router.explain({ agentId: defaultAgentId, operation: "memory_extraction" })).ok,
+							inferenceAvailable: async (agentId) =>
+								(await router.explain({ agentId, operation: "memory_extraction" })).ok,
 							acpxMcp: {
 								daemonUrl: `http://${INTERNAL_SELF_HOST}:${PORT}`,
 								authorizationTokenForAgent: (agentId) =>

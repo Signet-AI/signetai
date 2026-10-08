@@ -735,6 +735,7 @@ describe("dreaming worker agent scope", () => {
 	it("waits for an inference provider and resumes once one is available", async () => {
 		let queueHealthChecks = 0;
 		let available = false;
+		const checkedAgents: string[] = [];
 		const ownerMaintenance = {
 			queueIsHealthy: async () => {
 				queueHealthChecks += 1;
@@ -743,7 +744,10 @@ describe("dreaming worker agent scope", () => {
 		} as unknown as DbOwnerMaintenance;
 		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: true }), agentsDir, "default", {
 			checkIntervalMs: 10,
-			inferenceAvailable: async () => available,
+			inferenceAvailable: async (agentId) => {
+				checkedAgents.push(agentId);
+				return available || agentId === "scoped";
+			},
 			ownerMaintenance,
 		});
 		try {
@@ -756,6 +760,9 @@ describe("dreaming worker agent scope", () => {
 			await new Promise<void>((resolve) => setTimeout(resolve, 50));
 			expect(queueHealthChecks).toBe(0);
 			expect(await worker.inferenceReady()).toBe(false);
+			expect(await worker.inferenceReady("scoped")).toBe(true);
+			expect(checkedAgents).toContain("scoped");
+			expect(worker.scheduler.reason).toBe("inference_unavailable");
 			available = true;
 			await waitFor(() => queueHealthChecks > 0, 2_000);
 			expect(worker.scheduler.reason).not.toBe("inference_unavailable");

@@ -54,7 +54,7 @@ function DreamingToggle({ store }: { store: AgentConfigStore }) {
 	return (
 		<SettingRow title="Dreaming" desc={desc}>
 			<Switch
-				checked={blockedBy === null && store.aBool(path, true)}
+				checked={blockedBy === null && store.aBool(path, false)}
 				disabled={!store.ready || blockedBy !== null}
 				onCheckedChange={(value: boolean) => {
 					store.aSetBool(path, value);

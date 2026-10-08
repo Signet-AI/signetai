@@ -58,7 +58,7 @@ export interface DreamingWorkerHandle {
 	readonly activePasses: readonly DreamingActivePass[];
 	readonly activePass: Promise<unknown> | null;
 	readonly scheduler: DreamingSchedulerStatus;
-	inferenceReady(): Promise<boolean>;
+	inferenceReady(agentId?: string): Promise<boolean>;
 }
 export interface DreamingActivePass {
 	readonly passId: string | null;
@@ -165,7 +165,7 @@ export interface DreamingWorkerOptions {
 	readonly historyCompleterFactory?: (agentId: string) => DreamingHistoryCompleter;
 	readonly checkIntervalMs?: number;
 	readonly enabled?: () => boolean;
-	readonly inferenceAvailable?: () => Promise<boolean>;
+	readonly inferenceAvailable?: (agentId: string) => Promise<boolean>;
 	readonly acpxMcp?: {
 		readonly daemonUrl: string;
 		readonly authorizationTokenForAgent?: (agentId: string) => string | undefined;
@@ -629,8 +629,9 @@ export function startDreamingWorker(
 		return first;
 	}
 
-	async function inferenceReady(): Promise<boolean> {
-		if (!options.inferenceAvailable || (await options.inferenceAvailable())) {
+	async function inferenceReady(agentId = defaultAgentId): Promise<boolean> {
+		if (agentId !== defaultAgentId) return !options.inferenceAvailable || (await options.inferenceAvailable(agentId));
+		if (!options.inferenceAvailable || (await options.inferenceAvailable(agentId))) {
 			if (scheduler.reason === "inference_unavailable") {
 				logger.info("dreaming-worker", "Inference provider available; Dreaming resumes");
 				scheduler = { status: "idle", reason: null, checkedAt: new Date().toISOString() };

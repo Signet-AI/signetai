@@ -1862,6 +1862,7 @@ describe("fresh interactive dashboard setup", () => {
 			expect(agentYaml.memory).toEqual({
 				database: "data/signet.db",
 				pipelineV2: { telemetryEnabled: false },
+				dreaming: { enabled: true },
 			});
 			expect(agentYaml.capabilities).toMatchObject({
 				memory: { enabled: true },

@@ -1005,9 +1005,6 @@ export function registerPipelineRoutes(app: Hono): void {
 		if (!worker) {
 			return c.json({ error: "Dreaming worker not running" }, 503);
 		}
-		if (!(await worker.inferenceReady())) {
-			return c.json({ error: "No inference provider is connected" }, 503);
-		}
 
 		const contentType = c.req.header("content-type") ?? "";
 		let mode: "compact" | "incremental" = "incremental";
@@ -1025,6 +1022,9 @@ export function registerPipelineRoutes(app: Hono): void {
 		const scopedAgent = resolveScopedDreamAgent(c, body);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const agentId = scopedAgent.agentId;
+		if (!(await worker.inferenceReady(agentId))) {
+			return c.json({ error: "No inference provider is connected" }, 503);
+		}
 
 		let userRequest: { sourceRef: string; content: string } | undefined;
 		if (body.instructionSourceRef !== undefined) {

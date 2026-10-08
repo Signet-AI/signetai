@@ -82,7 +82,7 @@ const DEFAULT_DREAMING_SURPRISAL = {
 } as const;
 
 export const DEFAULT_DREAMING: DreamingConfig = {
-	enabled: true,
+	enabled: false,
 	tokenThreshold: 100_000,
 	maxInterval: 6 * 60 * 60 * 1_000,
 	timeout: 20 * 60 * 1_000,
