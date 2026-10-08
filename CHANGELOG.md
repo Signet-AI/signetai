@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-08
-- Bug fixes: bound native embedding input; defer incomplete transcript backfill; stop blocking input on prompt-submit; keep transcript seq monotonic per key; keep identity in portable import; record ontology claim actor; cascade and audit agent removal; stop retention from deleting entities; check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
+- Bug fixes: count every purged mention; bind memory-head commits to the running pass; keep aliases and assertions on merge; reconcile contradictions on skill uninstall; stop reconciling contradictions on read; bound native embedding input; defer incomplete transcript backfill; stop blocking input on prompt-submit; keep transcript seq monotonic per key; keep identity in portable import; record ontology claim actor; cascade and audit agent removal; stop retention from deleting entities; check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
 - Docs: refresh for 1.0 and post-1.0 direction; note native updater cap in 1.0 post.
 
 ### 2026-10-07
@@ -42,6 +42,19 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: drop graph attribution entry; remove duplicate license note; clarify opening and use cases.
 
 ## Release Ledger
+
+## [0.237.5] - 2026-10-08
+
+Release summary: 5 bug fixes.
+Tag range: `v0.237.4..v0.237.5`.
+
+### Bug Fixes
+
+- **daemon**: count every purged mention
+- **dreaming**: bind memory-head commits to the running pass
+- **daemon**: keep aliases and assertions on merge
+- **daemon**: reconcile contradictions on skill uninstall
+- **daemon**: stop reconciling contradictions on read
 
 ## [0.237.4] - 2026-10-08
 
