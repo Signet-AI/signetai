@@ -4,7 +4,7 @@ import * as Type from "typebox";
 import { createPiModelProvider } from "./pi-provider";
 import { activePiAgentWorkers, piAgentWorkerLimit, stopPiAgentWorkers } from "./pi-agent-client";
 import { configureLlmConcurrency, getLlmConcurrencyLimit } from "./provider";
-import type { PiAgentTool } from "./pi-agent-protocol";
+import type { PiAgentEvent, PiAgentTool } from "./pi-agent-protocol";
 
 function completion(delta: unknown, finishReason: string | null = null): string {
 	return `data: ${JSON.stringify({ id: "test", object: "chat.completion.chunk", choices: [{ index: 0, delta, finish_reason: finishReason }] })}\n\n`;
@@ -533,6 +533,95 @@ test("a long streamed reply crosses the worker boundary as deltas, not repeated 
 			expect(session.getFailureMessage()).toBeUndefined();
 			expect(answer.length).toBe(chunk.length * chunks);
 			expect(largestDelta).toBeLessThan(chunk.length * 2);
+		} finally {
+			await session.dispose();
+		}
+	} finally {
+		server.stop(true);
+	}
+}, 30000);
+
+test("a run whose history outgrows the message limit still ends, with every tool result intact", async () => {
+	const calls = 4;
+	const resultText = "r".repeat(600 * 1024);
+	let requests = 0;
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		fetch() {
+			requests++;
+			const content =
+				requests <= calls
+					? completion({
+							role: "assistant",
+							tool_calls: [
+								{
+									index: 0,
+									id: `call-${requests}`,
+									type: "function",
+									function: { name: "read_memory", arguments: `{"query":"part ${requests}"}` },
+								},
+							],
+						}) + completion({}, "tool_calls")
+					: completion({ role: "assistant", content: "Done." }) + completion({}, "stop");
+			return new Response(`${content}data: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+		},
+	});
+	const tools: PiAgentTool[] = [
+		{
+			name: "read_memory",
+			label: "Read memory",
+			description: "Read scoped memory",
+			parameters: Type.Object({ query: Type.String() }),
+			async execute() {
+				return {
+					content: [
+						{ type: "text", text: resultText },
+						{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+					],
+					details: {},
+				};
+			},
+		},
+	];
+	try {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "test-model",
+			baseUrl: `http://127.0.0.1:${server.port}/v1`,
+			contextWindow: 1_000_000,
+		});
+		const session = await provider.createAgentSession(tools);
+		const events: PiAgentEvent[] = [];
+		session.subscribe?.((event) => events.push(event));
+		try {
+			await session.prompt("Read every part.");
+			expect(session.getFailureMessage()).toBeUndefined();
+			expect(requests).toBe(calls + 1);
+			const ends = events.filter((event) => event.type === "turn_end" || event.type === "agent_end");
+			expect(ends.length).toBe(calls + 2);
+			for (const event of ends) expect(JSON.stringify(event).length).toBeLessThan(1024);
+			const toolCalls = events.flatMap((event) =>
+				event.type === "message_update" && event.assistantMessageEvent.type === "toolcall_end"
+					? [event.assistantMessageEvent.toolCall.arguments]
+					: [],
+			);
+			expect(toolCalls).toEqual([1, 2, 3, 4].map((part) => ({ query: `part ${part}` })));
+			const results = events.flatMap((event) =>
+				event.type === "message_end" && event.message.role === "toolResult" ? [event.message.content] : [],
+			);
+			expect(results.length).toBe(calls);
+			for (const content of results)
+				expect(content).toEqual([
+					{ type: "text", text: resultText },
+					{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+				]);
+			const assistantText = events.flatMap((event) =>
+				event.type === "message_end" && event.message.role === "assistant"
+					? event.message.content.flatMap((block) => (block.type === "text" ? [block.text] : []))
+					: [],
+			);
+			expect(assistantText).toEqual(["Done."]);
 		} finally {
 			await session.dispose();
 		}

@@ -25,15 +25,27 @@ export interface PiAgentWorkerInput {
 }
 
 type MessageUpdateEvent = Extract<AgentSessionEvent, { type: "message_update" }>;
+type TurnEndEvent = Extract<AgentSessionEvent, { type: "turn_end" }>;
+type AgentEndEvent = Extract<AgentSessionEvent, { type: "agent_end" }>;
 type WithoutPartial<T> = T extends unknown ? Omit<T, "partial"> : never;
 
 export type PiAgentEvent =
-	| Exclude<AgentSessionEvent, { type: "message_update" }>
+	| Exclude<AgentSessionEvent, { type: "message_update" | "turn_end" | "agent_end" }>
 	| (Omit<MessageUpdateEvent, "message" | "assistantMessageEvent"> & {
 			readonly assistantMessageEvent: WithoutPartial<MessageUpdateEvent["assistantMessageEvent"]>;
-	  });
+	  })
+	| Omit<TurnEndEvent, "message" | "toolResults">
+	| Omit<AgentEndEvent, "messages">;
 
 export function toPiAgentEvent(event: AgentSessionEvent): PiAgentEvent {
+	if (event.type === "turn_end") {
+		const { message: _message, toolResults: _toolResults, ...rest } = event;
+		return rest;
+	}
+	if (event.type === "agent_end") {
+		const { messages: _messages, ...rest } = event;
+		return rest;
+	}
 	if (event.type !== "message_update") return event;
 	const { message: _message, assistantMessageEvent, ...rest } = event;
 	if (!("partial" in assistantMessageEvent)) return { ...rest, assistantMessageEvent };
