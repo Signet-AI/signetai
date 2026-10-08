@@ -1099,7 +1099,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - create_entity only for durable subjects clearly established by the source.
    - When the evidence supports a possible relationship, merge, or other ontology change but the relationship is ambiguous rather than settled, do not apply it immediately. Emit the normal ontology operation with risk: "review_required". Its reason must be a concise, human-readable explanation that names the entities and the proposed relationship; the exact evidence citation remains required. The daemon will place it in the user's review queue for confirmation, not treat the queue as a work-deferral mechanism.
    - Validate before writing (validate_proposal).
-5. Update MEMORY.md: call memory_head_read, then call memory_head_commit exactly once with the complete set of entries to retain, each with exact source/quote support. The pass cannot finish without this commit, even when nothing changed: resubmit the current entries unchanged, or submit an empty entry set if the head is empty and nothing durable qualifies yet.
+5. Update MEMORY.md: call memory_head_read; its committedEntries are the last published entries with their support, returned even when your own writes left the head stale. Then call memory_head_commit exactly once with the complete set of entries to retain, each with exact source/quote support. The pass cannot finish without this commit, even when nothing changed: resubmit the committedEntries whose support still holds, or submit an empty entry set if committedEntries is empty and nothing durable qualifies yet.
 6. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
@@ -1258,7 +1258,7 @@ export function selectDreamingPassMode(
 export interface DreamingPassLiveOptions {
 	readonly hub?: DreamingLiveEventHub;
 	readonly userRequest?: { readonly sourceRef: string; readonly content: string };
-	readonly memoryHeadReader?: (agentId: string) => Promise<Record<string, unknown>>;
+	readonly memoryHeadReader?: (agentId: string, passId?: string) => Promise<Record<string, unknown>>;
 }
 export function recordDreamingPassTelemetry(input: {
 	readonly mode: string;
@@ -1820,7 +1820,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 		let memoryHeadCommitInput: MemoryHeadCommitInput | null = null;
 		let memoryHeadCommitRejection = null as { readonly code: string; readonly error: string } | null;
 		const memoryHeadCommitter: MemoryHeadCommitter = {
-			read: liveOptions?.memoryHeadReader ?? readCuratedMemoryHead,
+			read: (scopeId) => (liveOptions?.memoryHeadReader ?? readCuratedMemoryHead)(scopeId, passId),
 			async commit(input) {
 				if (mode !== "incremental-content" || input.agentId !== agentId || input.passId !== passId) {
 					memoryHeadCommitRejection = {

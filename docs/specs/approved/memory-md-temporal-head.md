@@ -73,8 +73,18 @@ and its finalization's transcript nodes) advance its fence in the same owner
 transaction, because the pass already knows about them; publication still
 revalidates every cited quote against current, non-superseded evidence. An
 invalidation from anywhere else leaves the fence behind, and the commit fails
-with `STALE_HEAD`. Finalization writes the pass's transcript nodes before it
-commits the head, so a successful publication is current when it lands.
+with `STALE_HEAD`. Only the daemon's binding to its own running pass moves the
+fence; a pass ID supplied by an external tool caller labels provenance and
+never absorbs writes into a pass. Finalization writes the pass's transcript
+nodes before it commits the head, so a successful publication is current when it
+lands, and a head entry that cites a summary node that the same finalization
+replaces with its transcript fails with `INVALID_PROVENANCE`.
+
+During a content pass, the pass's own `memory_head_read` also returns
+`committedEntries`: the last published entries with their support, even when the
+head is stale, so the pass can revalidate and carry them forward instead of
+rebuilding the head from nothing. Every other reader still receives no text
+from a stale head.
 
 Corrections, supersession, deletion, source removal, and access revocation
 advance the affected head's revision and mark it stale in the same database
