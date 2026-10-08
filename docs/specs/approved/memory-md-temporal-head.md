@@ -83,12 +83,14 @@ replaces with its transcript fails with `INVALID_PROVENANCE`.
 During a content pass, the pass's own `memory_head_read` also returns
 `committedEntries`: the last published entries whose support still resolves to
 current scoped evidence, with that support, even when the head is stale. The
-pass carries them forward instead of rebuilding the head from nothing. An entry
-whose evidence was deleted, superseded, or purged is never returned. Every other
-reader still receives no text from a stale head.
+pass carries them forward instead of rebuilding the head from nothing. Support
+whose evidence was deleted, superseded, or purged is dropped, and an entry is
+returned only while at least one support survives. Every other reader still
+receives no text from a stale head.
 
 An empty entry set clears a head only when no committed entry still has valid
-support; otherwise it fails with `INVALID_HEAD`. A cleared head is current and
+support and every stored entry's provenance is readable; otherwise it fails with
+`INVALID_HEAD`. A cleared head is current and
 empty, and its projection replaces an existing generated `MEMORY.md` so removed
 text does not linger on disk.
 
@@ -125,7 +127,9 @@ The database remains authoritative if a process dies between file replacement
 and transaction completion. Delivery never trusts that file as committed state.
 
 Migration 150 marks pre-existing heads unverified without deleting their text,
-files, or audit history. Existing in-flight passes without a captured revision
+files, or audit history. Those heads have no structured entries to carry
+forward, so the next successful commit, including an empty one, replaces their
+unversioned text. Existing in-flight passes without a captured revision
 cannot publish. Deploy readers, writers, and the migration together; do not run
 older publishers against the migrated workspace. For rollback, stop the daemon
 and restore the pre-migration workspace/database backup together with the older

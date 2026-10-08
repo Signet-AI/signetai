@@ -147,12 +147,16 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 	const body = input.entries.map((entry) => `- ${entry.text.trim()}`).join("\n");
 	if (input.entries.length === 0 && (head?.content ?? "") === "")
 		return { ok: true, code: "NOOP", revision, hash: currentHash, changed: false, changedIds: [] };
-	if (input.entries.length === 0 && committedEntries(db, agentId, head?.revision_id ?? null).length > 0)
-		return {
-			ok: false,
-			code: "INVALID_HEAD",
-			error: "committed entries still have valid support; resubmit or replace them instead of clearing the head",
-		};
+	if (input.entries.length === 0) {
+		const carried = committedEntries(db, agentId, head?.revision_id ?? null);
+		if (carried.entries.length > 0 || carried.unverifiable)
+			return {
+				ok: false,
+				code: "INVALID_HEAD",
+				error:
+					"committed entries still have valid or unverifiable support; resubmit or replace them instead of clearing the head",
+			};
+	}
 	if (countTokens(body) > 1000) return { ok: false, code: "INVALID_HEAD", error: "head must be at most 1000 tokens" };
 	const contentHash = hash(body);
 	if (head?.is_current === 1 && currentHash === contentHash)
@@ -246,12 +250,19 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 						)
 						.all(agentId, head.revision)
 				: [],
-		...(pass == null ? {} : { committedEntries: committedEntries(db, agentId, head?.revision_id ?? null) }),
+		...(pass == null ? {} : { committedEntries: committedEntries(db, agentId, head?.revision_id ?? null).entries }),
 	};
 }
 
-function committedEntries(db: WriteDb, agentId: string, revisionId: string | null): MemoryHeadCommitInput["entries"] {
-	if (revisionId === null) return [];
+type Evidence = Map<string, string | null>;
+
+function committedEntries(
+	db: WriteDb,
+	agentId: string,
+	revisionId: string | null,
+	evidence: Evidence = new Map(),
+): { entries: MemoryHeadCommitInput["entries"]; unverifiable: boolean } {
+	if (revisionId === null) return { entries: [], unverifiable: false };
 	const rows = db
 		.prepare(
 			`SELECT e.entry_id AS entryId, h.canonical_text AS text, e.provenance_json AS support
@@ -261,46 +272,52 @@ function committedEntries(db: WriteDb, agentId: string, revisionId: string | nul
 			 WHERE r.id = ? AND r.agent_id = ? ORDER BY e.ordinal`,
 		)
 		.all(revisionId, agentId) as Array<{ entryId: string; text: string; support: string }>;
-	return rows.flatMap((row) => {
-		let support: unknown = [];
+	const entries: MemoryHeadCommitInput["entries"][number][] = [];
+	let unverifiable = false;
+	for (const row of rows) {
+		let parsed: unknown = null;
 		try {
-			support = JSON.parse(row.support);
+			parsed = JSON.parse(row.support);
 		} catch {}
-		const entry = {
-			entryId: row.entryId,
-			text: row.text,
-			support: Array.isArray(support)
-				? support.filter(
-						(item): item is Record<string, unknown> =>
-							typeof item === "object" && item !== null && !Array.isArray(item),
-					)
-				: [],
-		};
-		return invalidSupport(db, agentId, entry) === null ? [entry] : [];
-	});
+		if (
+			!Array.isArray(parsed) ||
+			!parsed.every((item) => typeof item === "object" && item !== null && !Array.isArray(item))
+		) {
+			unverifiable = true;
+			continue;
+		}
+		const support = (parsed as Record<string, unknown>[]).filter(
+			(item) => supportError(db, agentId, row.entryId, item, evidence) === null,
+		);
+		if (support.length > 0) entries.push({ entryId: row.entryId, text: row.text, support });
+	}
+	return { entries, unverifiable };
 }
 
-function invalidSupport(
+function supportError(
 	db: WriteDb,
 	agentId: string,
-	entry: { readonly entryId: string; readonly support: readonly Record<string, unknown>[] },
+	entryId: string,
+	support: Record<string, unknown>,
+	evidence: Evidence,
 ): { code: string; error: string } | null {
-	if (entry.support.length === 0)
-		return { code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` };
-	for (const support of entry.support) {
-		const sourceRef =
-			typeof support.source_ref === "string"
-				? support.source_ref
-				: typeof support.sourceRef === "string"
-					? support.sourceRef
-					: "";
-		const quote = typeof support.quote === "string" ? support.quote.trim() : "";
-		if (!quote || sourceRef.startsWith("attention:") || !/^(memory|artifact|transcript|summary):.+$/.test(sourceRef))
-			return { code: "INVALID_PROVENANCE", error: `entry ${entry.entryId} requires scoped exact evidence` };
+	const sourceRef =
+		typeof support.source_ref === "string"
+			? support.source_ref
+			: typeof support.sourceRef === "string"
+				? support.sourceRef
+				: "";
+	const quote = typeof support.quote === "string" ? support.quote.trim() : "";
+	if (!quote || sourceRef.startsWith("attention:") || !/^(memory|artifact|transcript|summary):.+$/.test(sourceRef))
+		return { code: "INVALID_PROVENANCE", error: `entry ${entryId} requires scoped exact evidence` };
+	let rendered = evidence.get(sourceRef);
+	if (rendered === undefined) {
 		const source = currentSource(db, agentId, sourceRef);
-		if (source === null || !renderDreamingEvidence(source).includes(quote))
-			return { code: "INVALID_PROVENANCE", error: `entry ${entry.entryId} quote is not exact scoped evidence` };
+		rendered = source === null ? null : renderDreamingEvidence(source);
+		evidence.set(sourceRef, rendered);
 	}
+	if (rendered === null || !rendered.includes(quote))
+		return { code: "INVALID_PROVENANCE", error: `entry ${entryId} quote is not exact scoped evidence` };
 	return null;
 }
 
@@ -312,9 +329,14 @@ function commitEntries(
 	revision: number,
 	currentHash: string,
 ): Record<string, unknown> {
+	const evidence: Evidence = new Map();
 	for (const entry of input.entries) {
-		const invalid = invalidSupport(db, input.agentId, entry);
-		if (invalid !== null) return { ok: false, ...invalid };
+		if (entry.support.length === 0)
+			return { ok: false, code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` };
+		for (const support of entry.support) {
+			const invalid = supportError(db, input.agentId, entry.entryId, support, evidence);
+			if (invalid !== null) return { ok: false, ...invalid };
+		}
 	}
 	const nextRevision = revision + 1;
 	const revisionId = randomUUID();
