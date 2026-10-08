@@ -1087,7 +1087,7 @@
     },
     {
       "path": "embedding-fetch.ts",
-      "line": 478,
+      "line": 492,
       "api": "withReadDbAsync",
       "source": ": await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {",
       "category": "hot-path"
@@ -1237,14 +1237,14 @@
     },
     {
       "path": "embedding-worker.ts",
-      "line": 119,
+      "line": 121,
       "api": "mkdirSync",
       "source": "mkdirSync(init.cacheDir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 132,
+      "line": 135,
       "api": "readFileSync",
       "source": "const wasmBytes = readFileSync(join(init.wasmDir, \"ort-wasm-simd-threaded.wasm\"));",
       "category": "hot-path"
@@ -1655,14 +1655,14 @@
     },
     {
       "path": "memory-config.ts",
-      "line": 358,
+      "line": 359,
       "api": "existsSync",
       "source": ".find((path) => existsSync(path));",
       "category": "hot-path"
     },
     {
       "path": "memory-config.ts",
-      "line": 360,
+      "line": 361,
       "api": "readFileSync",
       "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
       "category": "hot-path"
