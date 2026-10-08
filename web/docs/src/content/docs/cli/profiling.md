@@ -134,7 +134,7 @@ printf 'CPU profile: %s\n' "$profile"
 ```
 
 If the daemon is wedged and the CLI cannot stop it, send a graceful `SIGTERM`
-to the daemon PID from `.daemon/pid`. Do not use `SIGKILL` if you need Bun to
+to the daemon PID from `runtime/pid`. Do not use `SIGKILL` if you need Bun to
 write the profile. The resulting file can be opened in Chromium-based DevTools
 under the Performance panel, or imported into another CDP-compatible CPU
 profile viewer. Verify that the daemon exited after the profile was flushed:

@@ -14,7 +14,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
-import { closeDbAccessor, getDbAccessor, initDbAccessor, type DbAccessor } from "../db-accessor";
+import { configureLlmConcurrency, getLlmConcurrencyLimit } from "./provider";
+import { closeDbAccessor, getDbAccessor, initDbAccessor, type DbAccessor, type WriteDb } from "../db-accessor";
 import {
 	createDbOwnerClient,
 	DbOwnerDeadlineError,
@@ -42,8 +43,10 @@ import {
 } from "./dreaming";
 import {
 	AlreadyRunningError,
+	type DreamingWorkerOptions,
 	createAgentScopeSnapshot,
 	getDreamingWorkerAgentIds,
+	partitionDreamingScopes,
 	selectDreamingCheckMode,
 	shouldDeferDreamingSweep,
 	startDreamingWorker,
@@ -271,7 +274,12 @@ interface RealOwnerTriggerFixture {
 }
 
 async function createRealOwnerTriggerFixture(
-	options: { readonly commitPauseMs?: number; readonly commitResultPauseMs?: number } = {},
+	options: {
+		readonly commitPauseMs?: number;
+		readonly commitResultPauseMs?: number;
+		readonly seed?: (db: WriteDb) => void;
+		readonly executorFactory?: DreamingWorkerOptions["executorFactory"];
+	} = {},
 ): Promise<RealOwnerTriggerFixture> {
 	const agentsDir = mkdtempSync(join(tmpdir(), "dreaming-owner-trigger-"));
 	const dbPath = join(agentsDir, "memory", "memories.db");
@@ -299,6 +307,7 @@ async function createRealOwnerTriggerFixture(
 				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
 				 VALUES ('owner-recall-fixture', 'isolated recall control row', 'fact', 'default', ?, ?, 'fixture')`,
 			).run(now, now);
+			options.seed?.(db);
 		});
 		accessor.close();
 
@@ -322,6 +331,7 @@ async function createRealOwnerTriggerFixture(
 		worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", {
 			checkIntervalMs: 60_000,
 			ownerMaintenance: maintenance,
+			...(options.executorFactory ? { executorFactory: options.executorFactory } : {}),
 		});
 		return {
 			agentsDir,
@@ -698,6 +708,70 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
+	it("follows the live automatic Dreaming setting instead of its startup snapshot", async () => {
+		let queueHealthChecks = 0;
+		let enabled = false;
+		const ownerMaintenance = {
+			queueIsHealthy: async () => {
+				queueHealthChecks += 1;
+				return false;
+			},
+		} as unknown as DbOwnerMaintenance;
+		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: true }), agentsDir, "default", {
+			checkIntervalMs: 10,
+			enabled: () => enabled,
+			ownerMaintenance,
+		});
+		try {
+			await new Promise<void>((resolve) => setTimeout(resolve, 50));
+			expect(queueHealthChecks).toBe(0);
+			enabled = true;
+			await waitFor(() => queueHealthChecks > 0, 2_000);
+		} finally {
+			worker.stop();
+		}
+	});
+
+	it("waits for an inference provider and resumes once one is available", async () => {
+		let queueHealthChecks = 0;
+		let available = false;
+		const checkedAgents: string[] = [];
+		const ownerMaintenance = {
+			queueIsHealthy: async () => {
+				queueHealthChecks += 1;
+				return false;
+			},
+		} as unknown as DbOwnerMaintenance;
+		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: true }), agentsDir, "default", {
+			checkIntervalMs: 10,
+			inferenceAvailable: async (agentId) => {
+				checkedAgents.push(agentId);
+				return available || agentId === "scoped";
+			},
+			ownerMaintenance,
+		});
+		try {
+			await waitFor(() => worker.scheduler.reason === "inference_unavailable", 2_000);
+			expect(worker.scheduler).toEqual({
+				status: "blocked",
+				reason: "inference_unavailable",
+				checkedAt: expect.any(String),
+			});
+			await new Promise<void>((resolve) => setTimeout(resolve, 50));
+			expect(queueHealthChecks).toBe(0);
+			expect(await worker.inferenceReady()).toBe(false);
+			expect(await worker.inferenceReady("scoped")).toBe(true);
+			expect(checkedAgents).toContain("scoped");
+			expect(worker.scheduler.reason).toBe("inference_unavailable");
+			available = true;
+			await waitFor(() => queueHealthChecks > 0, 2_000);
+			expect(worker.scheduler.reason).not.toBe("inference_unavailable");
+			expect(await worker.inferenceReady()).toBe(true);
+		} finally {
+			worker.stop();
+		}
+	});
+
 	it("writes manual async trigger passes when automatic Dreaming is disabled", async () => {
 		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: false }), agentsDir, "default");
 		try {
@@ -886,6 +960,235 @@ describe("dreaming worker agent scope", () => {
 			}>;
 			expect(passes.length).toBeGreaterThanOrEqual(2);
 			expect(passes.every((pass) => pass.status === "failed" && pass.error?.includes("429"))).toBe(true);
+		} finally {
+			worker.stop();
+			process.off("unhandledRejection", onUnhandledRejection);
+		}
+	});
+
+	it("balances agent groups by backlog and leaves scopes with nothing to do out", () => {
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "alpha", tokens: 3_000 },
+					{ scope: "beta", tokens: 2_000 },
+					{ scope: "gamma", tokens: 1_500 },
+					{ scope: "default", tokens: 0 },
+				],
+				2,
+			),
+		).toEqual([["alpha"], ["beta", "gamma"]]);
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "alpha", tokens: 10 },
+					{ scope: "default", tokens: 0 },
+					{ scope: "idle", tokens: 0 },
+				],
+				4,
+			),
+		).toEqual([["alpha"]]);
+		expect(partitionDreamingScopes([{ scope: "default", tokens: 0 }], 3)).toEqual([]);
+	});
+
+	it("spreads scopes with only pending attention across free slots", () => {
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "alpha", tokens: 10 },
+					{ scope: "flagged-a", tokens: 0, attention: true },
+					{ scope: "flagged-b", tokens: 0, attention: true },
+					{ scope: "idle", tokens: 0 },
+				],
+				3,
+			),
+		).toEqual([["alpha"], ["flagged-a"], ["flagged-b"]]);
+		expect(
+			partitionDreamingScopes(
+				[
+					{ scope: "alpha", tokens: 10 },
+					{ scope: "flagged-a", tokens: 0, attention: true },
+				],
+				1,
+			),
+		).toEqual([["alpha"]]);
+	});
+
+	it("never piles attention-only scopes into one pass and serves the oldest attention first", () => {
+		const flagged = [
+			{ scope: "newer", tokens: 0, attention: true, oldestAttentionAt: "2026-10-05 12:00:00" },
+			{ scope: "older", tokens: 0, attention: true, oldestAttentionAt: "2026-10-05 09:00:00" },
+			{ scope: "oldest", tokens: 0, attention: true, oldestAttentionAt: "2026-10-04 23:00:00" },
+		];
+		expect(partitionDreamingScopes(flagged, 1)).toEqual([["oldest"]]);
+		expect(partitionDreamingScopes(flagged, 2)).toEqual([["oldest"], ["older"]]);
+		expect(partitionDreamingScopes([{ scope: "busy", tokens: 500 }, ...flagged], 2)).toEqual([["busy"], ["oldest"]]);
+	});
+
+	it("runs disjoint agent groups concurrently after the first pass reaches a tool", async () => {
+		const seed = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES (?, ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+		);
+		seed.run("alpha-session", "alpha", "Alpha evidence. ".repeat(400));
+		seed.run("beta-session", "beta", "Beta evidence. ".repeat(250));
+		seed.run("gamma-session", "gamma", "Gamma evidence. ".repeat(200));
+		const allowedOf = (tools: ReadonlyArray<{ parameters: unknown }>): string[] => {
+			const agentId = (tools[0]?.parameters as { properties?: { agentId?: { const?: string; enum?: string[] } } })
+				.properties?.agentId;
+			return agentId?.enum ?? (agentId?.const ? [agentId.const] : []);
+		};
+		const groups: string[][] = [];
+		const crossGroupErrors: string[] = [];
+		let running = 0;
+		let peak = 0;
+		let releaseBarrier: () => void = () => undefined;
+		const barrier = new Promise<void>((resolve) => {
+			releaseBarrier = resolve;
+		});
+		const worker = startDreamingWorker(accessor, defaultCfg({ maxConcurrentPasses: 2 }), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run(input) {
+					running++;
+					peak = Math.max(peak, running);
+					const allowed = allowedOf(input.tools);
+					groups.push(allowed);
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					await search.execute("own", { agentId: allowed[0] }, undefined, undefined, {} as never);
+					const outsider = ["alpha", "beta", "gamma"].find((agent) => !allowed.includes(agent));
+					if (outsider !== undefined) {
+						await search
+							.execute("cross", { agentId: outsider }, undefined, undefined, {} as never)
+							.catch((error: unknown) => crossGroupErrors.push(error instanceof Error ? error.message : String(error)));
+					}
+					await Promise.race([barrier, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+					running--;
+					return { summary: `Processed ${allowed.join(", ")}` };
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => groups.length === 2 && running === 2, 2_000);
+			await expect(worker.triggerAsync("incremental")).rejects.toBeInstanceOf(AlreadyRunningError);
+			releaseBarrier();
+			await waitFor(() => !worker.running, 5_000);
+			expect(peak).toBe(2);
+			const covered = groups.flat();
+			expect(new Set(covered).size).toBe(covered.length);
+			expect([...covered].sort()).toEqual(expect.arrayContaining(["alpha", "beta", "gamma"]));
+			expect(crossGroupErrors).toHaveLength(2);
+			expect(crossGroupErrors.every((message) => message.includes("one of this pass's agents"))).toBe(true);
+			expect(db.prepare("SELECT status, COUNT(*) AS n FROM dreaming_passes GROUP BY status").all()).toEqual([
+				{ status: "completed", n: 2 },
+			]);
+		} finally {
+			worker.stop();
+		}
+	});
+
+	it("admits no more concurrent passes than the shared LLM limit", async () => {
+		const seed = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES (?, ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+		);
+		seed.run("alpha-session", "alpha", "Alpha evidence. ".repeat(400));
+		seed.run("beta-session", "beta", "Beta evidence. ".repeat(250));
+		const previousLimit = getLlmConcurrencyLimit();
+		configureLlmConcurrency(1);
+		let runs = 0;
+		const worker = startDreamingWorker(accessor, defaultCfg({ maxConcurrentPasses: 4 }), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run(input) {
+					runs++;
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					await search?.execute("own", {}, undefined, undefined, {} as never);
+					return { summary: "Processed every agent" };
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => !worker.running, 2_000);
+			expect(runs).toBe(1);
+		} finally {
+			worker.stop();
+			configureLlmConcurrency(previousLimit);
+		}
+	});
+
+	it("does not fan out when the first pass fails before reaching a tool", async () => {
+		const seed = db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES (?, ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+		);
+		seed.run("alpha-session", "alpha", "Alpha evidence. ".repeat(400));
+		seed.run("beta-session", "beta", "Beta evidence. ".repeat(250));
+		let runs = 0;
+		const worker = startDreamingWorker(accessor, defaultCfg({ maxConcurrentPasses: 2 }), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run() {
+					runs++;
+					throw new Error("provider unavailable");
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			await waitFor(() => !worker.running, 2_000);
+			expect(runs).toBe(1);
+			expect(db.prepare("SELECT status, COUNT(*) AS n FROM dreaming_passes GROUP BY status").all()).toEqual([
+				{ status: "failed", n: 1 },
+			]);
+		} finally {
+			worker.stop();
+		}
+	});
+
+	it("keeps an unrecordable pass failure from becoming an unhandled rejection (#2023)", async () => {
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES ('unrecordable-failure', 'default', 'Evidence for a pass that will be interrupted.', 'pi',
+			         datetime('now'), datetime('now'), datetime('now'))`,
+		).run();
+		db.exec(
+			`CREATE TRIGGER reject_failure_insert BEFORE INSERT ON dreaming_state
+			 WHEN NEW.consecutive_failures > 0
+			 BEGIN SELECT RAISE(ABORT, 'owner draining'); END;
+			 CREATE TRIGGER reject_failure_update BEFORE UPDATE OF consecutive_failures ON dreaming_state
+			 WHEN NEW.consecutive_failures > OLD.consecutive_failures
+			 BEGIN SELECT RAISE(ABORT, 'owner draining'); END;`,
+		);
+		const unhandled: unknown[] = [];
+		const onUnhandledRejection = (reason: unknown) => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandledRejection);
+		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: false }), agentsDir, "default", {
+			executorFactory: () => ({
+				async run() {
+					throw new Error("pass interrupted");
+				},
+			}),
+		});
+		try {
+			await worker.triggerAsync("incremental");
+			const active = worker.activePass;
+			if (active !== null) await active.catch(() => undefined);
+			await waitFor(() => !worker.running, 2_000);
+			await new Promise((resolve) => setTimeout(resolve, 50));
+			expect(unhandled).toEqual([]);
+			expect(db.prepare("SELECT COUNT(*) AS n FROM dreaming_state WHERE consecutive_failures > 0").get()).toEqual({
+				n: 0,
+			});
 		} finally {
 			worker.stop();
 			process.off("unhandledRejection", onUnhandledRejection);
@@ -1169,6 +1472,57 @@ describe("dreaming worker async trigger with a real DB owner", () => {
 		expect(runningRows).toEqual([]);
 		expect(recoveryOutcome.kind).toBe("resolved");
 		expect(recoveryRows).toEqual([{ status: "completed" }]);
+	}, 30_000);
+
+	it("finalizes a pass that surfaced more transcripts than the owner admits at once", async () => {
+		const initial = fixture;
+		if (initial === null) throw new Error("real owner trigger fixture was not initialized");
+		await closeRealOwnerTriggerFixture(initial);
+		const surfaced: string[] = [];
+		fixture = await createRealOwnerTriggerFixture({
+			seed: (db) => {
+				const insert = db.prepare(
+					`INSERT INTO session_transcripts
+					 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+					 VALUES (?, 'default', ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+				);
+				for (let index = 0; index < 80; index++)
+					insert.run(`bulk-session-${index}`, `Bulk session ${index} settled its deployment owner.`);
+			},
+			executorFactory: () => ({
+				async run(input) {
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					for (let page = 0; page < 10; page++) {
+						const result = await search.execute(
+							"page",
+							{ agentId: "default", limit: 50 },
+							undefined,
+							undefined,
+							{} as never,
+						);
+						const payload = JSON.parse((result.content[0] as { text: string }).text) as {
+							items: Array<{ id: string }>;
+							hasMore: boolean;
+						};
+						surfaced.push(...payload.items.map((item) => item.id));
+						if (!payload.hasMore) break;
+					}
+					return { summary: "Reviewed the bulk sessions" };
+				},
+			}),
+		});
+		const { maintenance, worker } = fixture;
+		const passId = await worker.triggerAsync("incremental");
+		await worker.activePass;
+		expect(new Set(surfaced).size).toBe(80);
+		expect(
+			await recallThroughDbOwner<{ readonly status: string; readonly error: string | null }>(
+				maintenance.owner,
+				"SELECT status, error FROM dreaming_passes WHERE id = ?",
+				[passId],
+			),
+		).toEqual([{ status: "completed", error: null }]);
 	}, 30_000);
 
 	it("holds the trigger fence through a timed-out pass-create commit", async () => {

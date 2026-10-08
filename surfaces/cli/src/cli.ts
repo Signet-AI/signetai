@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSyncHidden as spawnSync } from "@signet/core";
+import { resolveWorkspaceLayout, spawnSyncHidden as spawnSync } from "@signet/core";
 import {
 	existsSync,
 	lstatSync,
@@ -20,6 +20,7 @@ import { ForgeConnector } from "@signet/connector-forge";
 import { GeminiConnector } from "@signet/connector-gemini";
 import { HermesAgentConnector } from "@signet/connector-hermes-agent";
 import { KimiConnector } from "@signet/connector-kimi";
+import { MuseCodeConnector } from "@signet/connector-muse-code";
 import { OhMyPiConnector } from "@signet/connector-oh-my-pi";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import { OpenCodeConnector } from "@signet/connector-opencode";
@@ -54,7 +55,6 @@ import { registerGraphiqCommands } from "./commands/graphiq.js";
 import { registerHookCommands } from "./commands/hook.js";
 import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMemoryCommands } from "./commands/memory.js";
-import { registerMigrationCommands } from "./commands/migration.js";
 import { registerOntologyCommands } from "./commands/ontology.js";
 import { registerPortableCommands } from "./commands/portable.js";
 import { registerRepairQueueCommands } from "./commands/repair-queue.js";
@@ -172,6 +172,18 @@ async function configureHarnessHooks(
 			}
 			for (const warning of result.warnings ?? []) {
 				console.warn(chalk.yellow(`  ${warning}`));
+			}
+			break;
+		}
+		case "muse-code": {
+			const connector = new MuseCodeConnector();
+			const result = await connector.install(basePath);
+			if (!result.success) {
+				throw new Error(`Muse Code integration setup failed: ${result.message}`);
+			}
+			console.log(chalk.green(`  ✓ ${result.message}`));
+			for (const w of result.warnings ?? []) {
+				console.warn(chalk.yellow(`  ${w}`));
 			}
 			break;
 		}
@@ -421,7 +433,7 @@ function normalizeAgentPath(pathValue: string): string {
 }
 
 function getOpenClawPluginSyncPath(basePath: string): string {
-	return join(basePath, ".daemon", OPENCLAW_PLUGIN_SYNC_FILENAME);
+	return join(resolveWorkspaceLayout(basePath).runtime, OPENCLAW_PLUGIN_SYNC_FILENAME);
 }
 
 function readOpenClawPluginSyncVersion(basePath: string): string | null {
@@ -444,7 +456,7 @@ function writeOpenClawPluginSyncVersion(basePath: string, version: string): void
 }
 
 function openClawPluginRetryPath(basePath: string): string {
-	return join(basePath, ".daemon", OPENCLAW_PLUGIN_RETRY_FILENAME);
+	return join(resolveWorkspaceLayout(basePath).runtime, OPENCLAW_PLUGIN_RETRY_FILENAME);
 }
 
 function readOpenClawPluginRetryAt(basePath: string): number | null {
@@ -894,6 +906,7 @@ const daemonDeps = {
 	},
 	stopDaemon,
 	syncTemplates: runSyncTemplates,
+	daemonTarget: (agentsDir: string) => createDaemonClient(DEFAULT_PORT, agentsDir),
 };
 
 const setupDeps: import("./features/setup-types.js").SetupDeps = {
@@ -1054,14 +1067,13 @@ registerContextCommands(program, {
 registerPortableCommands(program, {
 	AGENTS_DIR,
 	fetchDaemonStream,
+	daemonOwnsWorkspace: async (agentsDir) => (await isDaemonRunning()) || (await hasDaemonProcess(agentsDir)),
 });
 
-const workspaceLayoutCommand = registerWorkspaceCommands(program, {
+registerWorkspaceCommands(program, {
 	signetLogo,
 });
 
-registerMigrationCommands(program);
-registerMigrationCommands(workspaceLayoutCommand, {}, "migrate");
 registerHookCommands(program, {
 	AGENTS_DIR,
 	fetchDaemonResult,

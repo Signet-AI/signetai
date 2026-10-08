@@ -6,7 +6,7 @@ import { Window } from "happy-dom";
 import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { HomeSourcesPanel } from "./sources";
+import { HomeSourcesPanel, sourceIssue } from "./sources";
 
 const originalImportSources = api.importSources;
 const originalAddSource = api.addSource;
@@ -43,6 +43,11 @@ async function click(element: Element): Promise<void> {
 		await flush();
 	});
 }
+async function expandSources(container: HTMLElement): Promise<void> {
+	const toggle = container.querySelector('button[aria-expanded="false"][aria-labelledby="home-sources-title"]');
+	if (!toggle) throw new Error("Sources setup row not found");
+	await click(toggle);
+}
 
 function button(container: HTMLElement, label: string): HTMLButtonElement {
 	const match = [...container.querySelectorAll("button")].find((candidate) => candidate.textContent?.includes(label));
@@ -78,7 +83,7 @@ beforeEach(() => {
 						sourceId: "source-1",
 						format: "markdown",
 						duplicate: false,
-						extraction: { documentEntityId: "entity-1", aspectsCreated: 2, attributesCreated: 3 },
+						extraction: { documentEntityId: "entity-1" },
 					},
 				],
 			},
@@ -133,11 +138,7 @@ function sourceFixture(
 							total: 6,
 							documentEntityId: "entity-1",
 						},
-						importExtraction: {
-							documentEntityId: "entity-1",
-							aspectsCreated: 2,
-							attributesCreated: 3,
-						},
+						importExtraction: { documentEntityId: "entity-1" },
 					}
 				: {}),
 		},
@@ -187,8 +188,9 @@ describe("sources grouping", () => {
 				<HomeSourcesPanel sources={sourcesResponse.sources} loading={false} onRefresh={() => {}} />
 			</ViewProvider>,
 		);
+		await expandSources(mounted.container);
 
-		expect(mounted.container.textContent).toContain("extraction result unavailable");
+		expect(mounted.container.textContent).toContain("import result unavailable");
 		expect(mounted.container.textContent).not.toContain("undefined aspects");
 
 		await act(async () => mounted.root.unmount());
@@ -208,7 +210,7 @@ describe("sources grouping", () => {
 				total: 51,
 				documentEntityId: "later-dreaming-entity",
 			},
-			importExtraction: { documentEntityId: "entity-1", aspectsCreated: 2, attributesCreated: 3 },
+			importExtraction: { documentEntityId: "entity-1" },
 		};
 		sourcesResponse = { version: 1, sources: [source] };
 		const mounted = await mount(
@@ -216,9 +218,10 @@ describe("sources grouping", () => {
 				<HomeSourcesPanel sources={sourcesResponse.sources} loading={false} onRefresh={() => {}} />
 			</ViewProvider>,
 		);
+		await expandSources(mounted.container);
 
-		expect(mounted.container.textContent).toContain("2 aspects · 3 attributes · entity linked");
-		expect(mounted.container.textContent).not.toContain("7 aspects · 42 attributes");
+		expect(mounted.container.textContent).toContain("document indexed · read by Dreaming");
+		expect(mounted.container.textContent).not.toContain("42 attributes");
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();
@@ -230,11 +233,11 @@ describe("sources grouping", () => {
 				<HomeSourcesPanel sources={sourcesResponse.sources} loading={false} onRefresh={() => {}} />
 			</ViewProvider>,
 		);
+		await expandSources(mounted.container);
 		const entries = [...mounted.container.querySelectorAll("button")].filter((candidate) =>
 			candidate.textContent?.includes("Connect a source"),
 		);
 		expect(entries).toHaveLength(1);
-		expect(mounted.container.querySelector("button")?.textContent).toContain("Connect a source");
 
 		await click(entries[0]);
 		expect(mounted.container.querySelector("dialog.cs-panel")).not.toBeNull();
@@ -255,6 +258,8 @@ describe("sources grouping", () => {
 		);
 
 		expect(mounted.container.textContent).toContain("Vault");
+		expect(mounted.container.querySelector("details")).toBeNull();
+		await expandSources(mounted.container);
 		expect(mounted.container.querySelector("details")?.open).toBe(false);
 
 		const summary = mounted.container.querySelector("summary");
@@ -290,6 +295,7 @@ describe("sources grouping", () => {
 			</ViewProvider>,
 		);
 		try {
+			await expandSources(mounted.container);
 			const reindex = mounted.container.querySelector('[aria-label="Re-index"]');
 			if (!reindex) throw new Error("Re-index action is missing");
 			await click(reindex);
@@ -455,7 +461,7 @@ describe("sources grouping", () => {
 		expect(mounted.container.textContent).toContain("notes.md · desktop path");
 		await click(button(mounted.container, "Import & index"));
 		expect(importCall).toEqual({ files: [], duplicateMode: "skip", paths: ["/tmp/notes.md"] });
-		expect(mounted.container.textContent).toContain("2 aspects · 3 attributes · entity linked");
+		expect(mounted.container.textContent).toContain("indexed; document linked");
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();
@@ -483,5 +489,66 @@ describe("sources grouping", () => {
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();
+	});
+});
+
+describe("source health explanations", () => {
+	const withHealth = (kind: string, health: SignetSource["health"]): SignetSource => ({
+		...sourceFixture(`${kind}:case`, kind, "Case"),
+		health,
+	});
+
+	test("a failed diagnostics check is explained but never presented as the user's problem", () => {
+		const issue = sourceIssue(
+			withHealth("obsidian", { status: "unknown", error: "Source health diagnostics failed: result too large" }),
+		);
+		expect(issue).toMatchObject({ tone: "neutral", actionable: false, fix: "details" });
+		expect(issue?.detail).toContain("result too large");
+	});
+
+	test("retryable sync failures offer re-index only for kinds that support it", () => {
+		const failed = { status: "degraded", failures: { total: 3, recoverable: 2 } } as const;
+		expect(sourceIssue(withHealth("obsidian", failed))).toMatchObject({
+			title: "3 items failed to sync",
+			detail: "2 can be retried by re-indexing.",
+			fix: "reindex",
+			actionable: true,
+		});
+		expect(sourceIssue(withHealth("import", failed))?.fix).toBe("details");
+		expect(
+			sourceIssue(withHealth("obsidian", { status: "degraded", failures: { total: 1, recoverable: 0 } }))?.fix,
+		).toBe("details");
+	});
+
+	test("permission denial carries the daemon's guidance", () => {
+		const issue = sourceIssue(
+			withHealth("obsidian", {
+				status: "unhealthy",
+				permission: { status: "denied", issues: [{ path: "/vault", guidance: "Grant Full Disk Access." }] },
+			}),
+		);
+		expect(issue).toMatchObject({
+			tone: "error",
+			title: "Signet can't read this folder",
+			detail: "Grant Full Disk Access.",
+		});
+	});
+
+	test("stale sync and deleted residue name what was found", () => {
+		expect(
+			sourceIssue(withHealth("discord", { status: "degraded", checkpoints: { total: 4, partial: 1, stale: 2 } })),
+		).toMatchObject({ title: "Sync didn't finish", detail: "2 stale and 1 partial checkpoints.", fix: "reindex" });
+		expect(
+			sourceIssue(withHealth("discord", { status: "degraded", purge: { deletedArtifacts: 0, orphanChunks: 1 } })),
+		).toMatchObject({
+			title: "Index still holds data from deleted items",
+			detail: "1 orphaned chunk.",
+			fix: "details",
+		});
+	});
+
+	test("healthy and empty sources have nothing to explain", () => {
+		expect(sourceIssue(withHealth("obsidian", { status: "healthy" }))).toBeNull();
+		expect(sourceIssue(withHealth("obsidian", { status: "empty" }))).toBeNull();
 	});
 });

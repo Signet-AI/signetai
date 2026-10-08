@@ -30,7 +30,7 @@ docker compose exec signet \
   bun /app/deploy/docker/scripts/create-token.mjs --role admin --sub bootstrap
 ```
 
-The token is printed once. Store it in an approved secret manager, then create narrowly scoped keys or tokens for real clients. See [Authentication](/auth/) and [Remote Harness Connectors](/remote-connectors/).
+The token is printed once. Store it in an approved secret manager, then create narrowly scoped keys or tokens for real clients. To use the dashboard, open your domain and paste the token under **Use an API key instead**; the browser keeps a session, not the token. See [Teams](/teams/), [Authentication](/auth/), and [Remote Harness Connectors](/remote-connectors/).
 
 ## Configure the proxy
 
@@ -87,7 +87,7 @@ Use a service supervisor you already operate rather than copying an outdated uni
 - Bind to loopback by default. Use `network.mode: tailscale` or an explicit `SIGNET_BIND` only for a trusted network design.
 - Use `auth.mode: team` for shared, proxied, or public access.
 - Use one named API key per connector or automation client, then revoke it when the client is retired.
-- Keep the workspace volume, `.daemon/`, and `.secrets/` private and backed up.
+- Keep the workspace volume, `runtime/`, `data/`, and `.secrets/` private and backed up.
 - Do not put raw tokens, passwords, or provider keys in source control, issue trackers, or screenshots.
 
 Related: [Daemon](/daemon/), [Authentication](/auth/), [Remote Harness Connectors](/remote-connectors/), [Diagnostics](/diagnostics/).

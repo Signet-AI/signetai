@@ -6,6 +6,7 @@
 *
 !*/
 !.gitignore
+!.sigignore
 !*.md
 !**/*.md
 !*.json
@@ -27,7 +28,14 @@
 
 # Hard-deny generated/runtime state even if an older rule unignored memory/.
 .daemon/
+.secrets/
 .shadow/
+/cache/
+/data/
+/files/
+/runtime/
+workspace-layout.json
+.workspace-layout-upgrade.json
 node_modules/
 signetai/
 memory/memories.db*

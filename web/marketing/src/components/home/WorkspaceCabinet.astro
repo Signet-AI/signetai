@@ -1,0 +1,307 @@
+---
+const W = 540;
+const H = 650;
+const CX = 318;
+const CY = 446;
+const A = 180;
+const B = 104;
+
+interface Pt {
+	readonly x: number;
+	readonly y: number;
+}
+
+function at(u: number, v: number, z: number): Pt {
+	return { x: CX + (u - v) * A, y: CY + (u + v) * B - z };
+}
+
+function poly(...points: Pt[]): string {
+	return points.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ");
+}
+function faceZ(z: number, u0: number, u1: number, v0: number, v1: number): string {
+	return poly(at(u0, v0, z), at(u1, v0, z), at(u1, v1, z), at(u0, v1, z));
+}
+function faceV(v: number, u0: number, u1: number, z0: number, z1: number): string {
+	return poly(at(u0, v, z1), at(u1, v, z1), at(u1, v, z0), at(u0, v, z0));
+}
+function faceU(u: number, v0: number, v1: number, z0: number, z1: number): string {
+	return poly(at(u, v0, z1), at(u, v1, z1), at(u, v1, z0), at(u, v0, z0));
+}
+function box(u0: number, u1: number, v0: number, v1: number, z0: number, z1: number) {
+	return { top: faceZ(z1, u0, u1, v0, v1), front: faceV(v1, u0, u1, z0, z1), side: faceU(u1, v0, v1, z0, z1) };
+}
+function seg(a: Pt, b: Pt): string {
+	return `M${a.x.toFixed(1)} ${a.y.toFixed(1)}L${b.x.toFixed(1)} ${b.y.toFixed(1)}`;
+}
+function onFront(p: Pt): string {
+	return `matrix(0.866 0.5 0 1 ${p.x.toFixed(1)} ${p.y.toFixed(1)})`;
+}
+
+const VF = 0.42;
+const VB = -0.42;
+const PLINTH = 16;
+const DH = 58;
+const N = 5;
+const ZTOP = PLINTH + N * DH;
+const CAP = 10;
+const PULL = 0.78;
+
+const drawers = [
+	{ key: "authored", label: "AUTHORED" },
+	{ key: "evidence", label: "EVIDENCE" },
+	{ key: "data", label: "DATA", accent: true },
+	{ key: "secrets", label: "SECRETS" },
+	{ key: "runtime", label: "RUNTIME/CACHE", dashed: true },
+].map((d, k) => {
+	const zb = PLINTH + (N - 1 - k) * DH;
+	const zf = zb + 5;
+	const wall = zf + 22;
+	return {
+		...d,
+		index: k,
+		zb,
+		zf,
+		cavity: faceV(VF, -0.47, 0.47, zb + 3, zb + DH - 3),
+		posts: [faceV(VF, -0.5, -0.47, zb, zb + DH), faceV(VF, 0.47, 0.5, zb, zb + DH)],
+		rail: faceV(VF, -0.5, 0.5, zb + DH - 3, k === 0 ? ZTOP + CAP : zb + DH + 3),
+		shadow: faceZ(zb - 8, -0.48, 0.5, -0.36, VF + 0.06),
+		floor: faceZ(zf, -0.45, 0.45, -0.39, VF),
+		backWall: faceV(-0.39, -0.45, 0.45, zf, wall),
+		leftWall: faceU(-0.45, -0.39, VF, zf, wall),
+		rightWall: faceU(0.45, -0.39, VF, zb + 3, wall),
+		wallTop: faceZ(wall, 0.43, 0.45, -0.39, VF),
+		panel: faceV(VF + 0.01, -0.465, 0.465, zb + 3, zb + DH - 3),
+		panelInset: faceV(VF + 0.01, -0.43, 0.43, zb + 8, zb + DH - 8),
+		panelTop: faceZ(zb + DH - 3, -0.465, 0.465, VF, VF + 0.01),
+		plate: faceV(VF + 0.012, -0.38, 0.08, zb + 20, zb + DH - 20),
+		labelAt: onFront(at(-0.335, VF + 0.012, zb + 25.5)),
+		handle: seg(at(0.16, VF + 0.03, zb + DH / 2), at(0.34, VF + 0.03, zb + DH / 2)),
+		handleShadow: seg(at(0.16, VF + 0.012, zb + DH / 2 - 4), at(0.34, VF + 0.012, zb + DH / 2 - 4)),
+		pull: { x: -PULL * A, y: PULL * B },
+	};
+});
+
+const byKey = Object.fromEntries(drawers.map((d) => [d.key, d]));
+const zAuthored = byKey.authored?.zf ?? 0;
+const zEvidence = byKey.evidence?.zf ?? 0;
+const zData = byKey.data?.zf ?? 0;
+const zSecrets = byKey.secrets?.zf ?? 0;
+const zRuntime = byKey.runtime?.zf ?? 0;
+const stacks = [
+	{ u0: -0.4, u1: -0.08, v0: -0.32, v1: -0.04, h: 12 },
+	{ u0: -0.38, u1: -0.08, v0: 0.04, v1: 0.34, h: 7 },
+].map((s) => {
+	const b = box(s.u0, s.u1, s.v0, s.v1, zAuthored, zAuthored + s.h);
+	const t = zAuthored + s.h;
+	const lines = [0.2, 0.35, 0.5, 0.65].map((f) => {
+		const v = s.v0 + (s.v1 - s.v0) * f;
+		return seg(at(s.u0 + 0.05, v, t), at(s.u1 - 0.09, v, t));
+	});
+	const fold = poly(at(s.u1 - 0.06, s.v0, t), at(s.u1, s.v0, t), at(s.u1, s.v0 + 0.06, t));
+	const pages = [3, 6, 9]
+		.filter((z) => z < s.h)
+		.map((z) => seg(at(s.u0, s.v1, zAuthored + z), at(s.u1, s.v1, zAuthored + z)));
+	return { ...b, lines: lines.join(""), pages: pages.join(""), fold };
+});
+const skills = box(0.06, 0.38, -0.24, 0.22, zAuthored, zAuthored + 26);
+const sk = zAuthored + 26;
+const branch = {
+	trunk: seg(at(0.16, -0.14, sk), at(0.16, 0.12, sk)),
+	fork: `M${at(0.16, -0.02, sk).x.toFixed(1)} ${at(0.16, -0.02, sk).y.toFixed(1)}Q${at(0.28, -0.02, sk).x.toFixed(1)} ${at(0.28, -0.02, sk).y.toFixed(1)} ${at(0.28, 0.1, sk).x.toFixed(1)} ${at(0.28, 0.1, sk).y.toFixed(1)}`,
+	nodes: [at(0.16, -0.14, sk), at(0.16, 0.12, sk), at(0.28, 0.1, sk)],
+};
+const cards = [-0.3, -0.18, -0.06, 0.06, 0.18, 0.3].map((v, i) => {
+	const tab = -0.4 + (i % 3) * 0.13;
+	return {
+		face: faceV(v, -0.42, 0.02, zEvidence, zEvidence + 30),
+		top: faceZ(zEvidence + 30, -0.42, 0.02, v - 0.012, v),
+		tab: faceV(v, tab, tab + 0.12, zEvidence + 30, zEvidence + 37),
+		lines: [12, 18, 24]
+			.map((z, j) => seg(at(-0.38, v, zEvidence + z), at(-0.38 + [0.3, 0.22, 0.26][j], v, zEvidence + z)))
+			.join(""),
+		front: i === 5,
+	};
+});
+const inbox = box(0.12, 0.42, -0.06, 0.3, zEvidence, zEvidence + 9);
+const inboxFloor = faceZ(zEvidence + 3, 0.15, 0.39, -0.03, 0.27);
+const inboxSheet = faceZ(zEvidence + 5, 0.17, 0.35, 0.0, 0.22);
+const db = at(-0.18, 0.02, zData);
+const R = 36;
+const RY = R * 0.58;
+const DBH = 40;
+const dbBody = `M${db.x - R} ${db.y - DBH}L${db.x - R} ${db.y}A${R} ${RY} 0 0 0 ${db.x + R} ${db.y}L${db.x + R} ${db.y - DBH}Z`;
+const dbRings = [13, 26].map((z) => `M${db.x - R} ${db.y - z}A${R} ${RY} 0 0 0 ${db.x + R} ${db.y - z}`).join("");
+const snapshots = [0, 1, 2].map((i) => box(0.1, 0.38, -0.34, -0.1, zData + i * 8, zData + i * 8 + 6));
+const imports = box(0.12, 0.38, 0.06, 0.32, zData, zData + 20);
+const importsLid = seg(at(0.25, 0.06, zData + 20), at(0.25, 0.32, zData + 20));
+const safe = box(-0.22, 0.2, -0.18, 0.22, zSecrets, zSecrets + 32);
+const dial = at(-0.04, 0.22, zSecrets + 16);
+const latch = seg(at(0.08, 0.225, zSecrets + 16), at(0.15, 0.225, zSecrets + 16));
+const ghosts = [
+	box(-0.4, -0.16, -0.3, -0.06, zRuntime, zRuntime + 18),
+	box(-0.36, -0.12, 0.06, 0.3, zRuntime, zRuntime + 10),
+	box(0.04, 0.3, -0.24, 0.02, zRuntime, zRuntime + 24),
+	box(0.1, 0.34, 0.1, 0.32, zRuntime, zRuntime + 14),
+];
+
+const carcass = {
+	floorShadow: faceZ(0, -0.52, 0.62, -0.44, VF + 0.2),
+	front: faceV(VF, -0.5, 0.5, 0, ZTOP + CAP),
+	plinth: faceV(VF, -0.5, 0.5, 0, PLINTH),
+	side: faceU(0.5, VB, VF, 0, ZTOP + CAP),
+	top: faceZ(ZTOP + CAP, -0.5, 0.5, VB, VF),
+	capLine: seg(at(-0.5, VF, ZTOP + 2), at(0.5, VF, ZTOP + 2)),
+	sideLines: [PLINTH, ...drawers.map((d) => d.zb + DH)].map((z) => seg(at(0.5, VB, z), at(0.5, VF, z))).join(""),
+};
+---
+
+<svg class="cab" viewBox={`0 0 ${W} ${H}`} role="img" aria-labelledby="cab-title" data-cabinet>
+  <title id="cab-title">The Signet workspace drawn as a cabinet with five drawers: authored files, evidence, data, secrets, and runtime state with cache.</title>
+  <defs>
+    <linearGradient id="cab-db" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#1e2c86" />
+      <stop offset="0.38" stop-color="#4560e2" />
+      <stop offset="0.55" stop-color="#3a52d6" />
+      <stop offset="1" stop-color="#18236a" />
+    </linearGradient>
+    <linearGradient id="cab-cavity" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1a2433" />
+      <stop offset="1" stop-color="#2c394c" />
+    </linearGradient>
+    <linearGradient id="cab-side" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d3dae5" />
+      <stop offset="1" stop-color="#bcc6d4" />
+    </linearGradient>
+    <pattern id="cab-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(30)">
+      <line x1="0" y1="0" x2="0" y2="6" stroke="rgba(13,21,32,0.14)" stroke-width="1" />
+    </pattern>
+    <filter id="cab-blur" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="7" /></filter>
+    <filter id="cab-soft" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="3.5" /></filter>
+  </defs>
+
+  <g class="cab-scene">
+    <polygon class="cab-floor-shadow" points={carcass.floorShadow} filter="url(#cab-blur)" />
+    <polygon class="cab-front" points={carcass.front} />
+    <polygon class="cab-plinth" points={carcass.plinth} />
+
+    {[...drawers].reverse().map((d) => (
+      <g class:list={["cab-drawer", `cab-drawer--${d.key}`, { "cab-drawer--accent": d.accent, "cab-drawer--dashed": d.dashed }]}>
+        <polygon class="cab-cavity" points={d.cavity} />
+        {d.posts.map((post) => <polygon class="cab-frame" points={post} />)}
+        <g
+          class="cab-tray"
+          data-drawer={d.index}
+          role="button"
+          tabindex="0"
+          aria-label={`Open the ${d.label.toLowerCase()} drawer`}
+          aria-controls={`cab-row-${d.index}`}
+          style={`--pull-x: ${d.pull.x.toFixed(1)}px; --pull-y: ${d.pull.y.toFixed(1)}px`}
+        >
+          <polygon class="cab-tray-shadow" points={d.shadow} filter="url(#cab-soft)" />
+          <polygon class="cab-tray-floor" points={d.floor} />
+          {d.dashed ? <polygon points={d.floor} fill="url(#cab-hatch)" /> : null}
+          <polygon class="cab-tray-wall" points={d.backWall} />
+          <polygon class="cab-tray-wall cab-tray-wall--inner" points={d.leftWall} />
+
+          {d.key === "authored" && (
+            <g class="cab-items">
+              {stacks.map((s) => (
+                <g>
+                  <polygon class="cab-paper-side" points={s.front} />
+                  <polygon class="cab-paper-side cab-paper-side--dark" points={s.side} />
+                  <polygon class="cab-paper" points={s.top} />
+                  <path class="cab-pages" d={s.pages} />
+                  <path class="cab-text" d={s.lines} />
+                  <polygon class="cab-fold" points={s.fold} />
+                </g>
+              ))}
+              <polygon class="cab-box-front" points={skills.front} />
+              <polygon class="cab-box-side" points={skills.side} />
+              <polygon class="cab-box-top" points={skills.top} />
+              <path class="cab-branch" d={branch.trunk + branch.fork} />
+              {branch.nodes.map((n) => <ellipse cx={n.x} cy={n.y} rx="4.5" ry="2.6" class="cab-branch-node" />)}
+            </g>
+          )}
+
+          {d.key === "evidence" && (
+            <g class="cab-items">
+              {cards.map((c) => (
+                <g>
+                  <polygon class:list={["cab-tab", { "cab-tab--accent": c.front }]} points={c.tab} />
+                  <polygon class="cab-card" points={c.face} />
+                  <polygon class="cab-card-edge" points={c.top} />
+                  <path class="cab-text" d={c.lines} />
+                </g>
+              ))}
+              <polygon class="cab-box-front" points={inbox.front} />
+              <polygon class="cab-box-side" points={inbox.side} />
+              <polygon class="cab-box-top cab-inbox-rim" points={inbox.top} />
+              <polygon class="cab-inbox-floor" points={inboxFloor} />
+              <polygon class="cab-paper" points={inboxSheet} />
+            </g>
+          )}
+
+          {d.key === "data" && (
+            <g class="cab-items">
+              {snapshots.map((s) => (
+                <g>
+                  <polygon class="cab-box-front" points={s.front} />
+                  <polygon class="cab-box-side" points={s.side} />
+                  <polygon class="cab-box-top" points={s.top} />
+                </g>
+              ))}
+              <ellipse cx={db.x} cy={db.y + 3} rx={R + 10} ry={RY + 6} class="cab-db-shadow" />
+              <path d={dbBody} fill="url(#cab-db)" class="cab-db" />
+              <path class="cab-db-ring" d={dbRings} />
+              <ellipse cx={db.x} cy={db.y - DBH} rx={R} ry={RY} class="cab-db-top" />
+              <ellipse cx={db.x - 8} cy={db.y - DBH - 3} rx={R * 0.45} ry={RY * 0.35} class="cab-db-shine" />
+              <polygon class="cab-box-front" points={imports.front} />
+              <polygon class="cab-box-side" points={imports.side} />
+              <polygon class="cab-box-top" points={imports.top} />
+              <path class="cab-seam" d={importsLid} />
+            </g>
+          )}
+
+          {d.key === "secrets" && (
+            <g class="cab-items">
+              <polygon class="cab-safe-front" points={safe.front} />
+              <polygon class="cab-safe-side" points={safe.side} />
+              <polygon class="cab-safe-top" points={safe.top} />
+              <ellipse cx={dial.x} cy={dial.y} rx="10" ry="11" class="cab-dial" />
+              <ellipse cx={dial.x} cy={dial.y} rx="4" ry="4.5" class="cab-dial-center" />
+              <path class="cab-latch" d={latch} />
+            </g>
+          )}
+
+          {d.key === "runtime" && (
+            <g class="cab-items cab-ghosts">
+              {ghosts.map((g) => (
+                <g>
+                  <polygon points={g.front} />
+                  <polygon points={g.side} />
+                  <polygon points={g.top} />
+                </g>
+              ))}
+            </g>
+          )}
+
+          <polygon class="cab-tray-wall cab-tray-wall--outer" points={d.rightWall} />
+          <polygon class="cab-tray-rim" points={d.wallTop} />
+          <polygon class="cab-panel" points={d.panel} />
+          <polygon class="cab-panel-top" points={d.panelTop} />
+          <polygon class="cab-panel-inset" points={d.panelInset} />
+          <polygon class="cab-plate" points={d.plate} />
+          <text class="cab-label" transform={d.labelAt}>{`0${d.index + 1}  ${d.label}`}</text>
+          <path class="cab-handle-shadow" d={d.handleShadow} />
+          <path class="cab-handle" d={d.handle} />
+        </g>
+        <polygon class="cab-frame" points={d.rail} />
+      </g>
+    ))}
+
+    <polygon class="cab-side" points={carcass.side} />
+    <path class="cab-side-lines" d={carcass.sideLines} />
+    <polygon class="cab-top" points={carcass.top} />
+    <path class="cab-cap" d={carcass.capLine} />
+  </g>
+</svg>

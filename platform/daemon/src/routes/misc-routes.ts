@@ -1,13 +1,21 @@
 import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { parseSimpleYaml, resolveAgentMemoryPolicy } from "@signet/core";
+import { basename, join } from "node:path";
+import {
+	PIPELINE_CONFIG_FILES,
+	findPipelineConfigFile,
+	parseSimpleYaml,
+	readPipelinePauseState,
+	resolveAgentMemoryPolicy,
+} from "@signet/core";
 import type { Hono } from "hono";
 import { invalidateAgentScopeCache } from "../agent-id.js";
 import { requirePermission } from "../auth";
 import { checkPermission } from "../auth/policy";
-import { dbOwnerBatch, dbOwnerQuery } from "../db-owner-runtime.js";
+import type { AgentRemovalResult } from "../agent-removal.js";
+import { dbOwnerAgentRemove, dbOwnerQuery } from "../db-owner-runtime.js";
 import { type LogCategory, type LogEntry, logger } from "../logger.js";
 import { loadPipelineConfig } from "../memory-config.js";
+import { openBoundedSse } from "../sse-stream.js";
 import {
 	MAX_UPDATE_INTERVAL_SECONDS,
 	MIN_UPDATE_INTERVAL_SECONDS,
@@ -71,49 +79,20 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.get("/api/logs/stream", (c) => {
-		const encoder = new TextEncoder();
-
-		const stream = new ReadableStream({
-			start(controller) {
-				let dead = false;
-				const cleanup = () => {
-					if (dead) return;
-					dead = true;
-					logger.off("log", onLog);
-					try {
-						controller.close();
-					} catch {}
+		const sse = openBoundedSse({
+			requestSignal: c.req.raw.signal,
+			overflowPolicy: "drop",
+			onStart(producer) {
+				const onLog = (entry: LogEntry): void => {
+					producer.write(entry);
 				};
-
-				const onLog = (entry: LogEntry) => {
-					if (dead) return;
-					try {
-						const data = `data: ${JSON.stringify(entry)}\n\n`;
-						controller.enqueue(encoder.encode(data));
-					} catch {
-						cleanup();
-					}
-				};
-
+				producer.addDisposer(() => logger.off("log", onLog));
+				if (producer.signal.aborted) return;
 				logger.on("log", onLog);
-
-				try {
-					controller.enqueue(encoder.encode(`data: {"type":"connected"}\n\n`));
-				} catch {
-					cleanup();
-				}
-
-				c.req.raw.signal.addEventListener("abort", cleanup);
+				producer.write({ type: "connected" });
 			},
 		});
-
-		return new Response(stream, {
-			headers: {
-				"Content-Type": "text/event-stream",
-				"Cache-Control": "no-cache",
-				Connection: "keep-alive",
-			},
-		});
+		return sse.response;
 	});
 
 	app.get("/api/config", async (c) => {
@@ -180,10 +159,26 @@ export function registerMiscRoutes(app: Hono): void {
 						error: `${guardDecision.reason ?? "forbidden"} - guarded config files require admin permission`,
 					});
 				}
+				let paused: boolean;
 				try {
-					loadPipelineConfig(parseSimpleYaml(content));
+					paused = loadPipelineConfig(parseSimpleYaml(content)).paused;
 				} catch (error) {
 					return c.json({ error: error instanceof Error ? error.message : "Invalid memory pipeline config" }, 400);
+				}
+				const active = findPipelineConfigFile(AGENTS_DIR);
+				const rankOf = (name: string): number =>
+					PIPELINE_CONFIG_FILES.findIndex((candidate) => candidate.toLowerCase() === name.toLowerCase());
+				const rank = rankOf(file);
+				const activeRank = active === null ? -1 : rankOf(basename(active));
+				const selected = rank !== -1 && (activeRank === -1 || rank <= activeRank);
+				if (selected && paused !== readPipelinePauseState(AGENTS_DIR).paused) {
+					return c.json(
+						{
+							error:
+								"memory.pipelineV2.paused changes only through /api/pipeline/pause or /api/pipeline/resume. Reload the config and retry.",
+						},
+						409,
+					);
 				}
 			}
 
@@ -354,21 +349,28 @@ export function registerMiscRoutes(app: Hono): void {
 			{ operation: "agents.get_for_delete", lane: "read", deadlineMs: 2_000 },
 		);
 		if (!agent) return c.json({ error: "Agent not found" }, 404);
-		await dbOwnerBatch(
-			[
+		let result: AgentRemovalResult;
+		try {
+			result = await dbOwnerAgentRemove(
 				{
-					sql: purge
-						? "DELETE FROM memories WHERE agent_id = ?"
-						: "UPDATE memories SET visibility = 'archived' WHERE agent_id = ?",
-					params: [name],
-					result: "run",
+					agentId: agent.id,
+					mode: purge ? "purge" : "archive",
+					changedBy: "agents-api",
+					changedAt: new Date().toISOString(),
 				},
-				{ sql: "DELETE FROM agents WHERE id = ?", params: [agent.id], result: "run" },
-			],
-			{ operation: "agents.delete", lane: "write", deadlineMs: 10_000 },
-		);
-		invalidateAgentScopeCache(agent.id);
-		return c.json({ success: true, purged: purge });
+				{ operation: purge ? "agents.purge" : "agents.archive", lane: "write", deadlineMs: 60_000 },
+			);
+		} catch (error) {
+			logger.error("api", "Agent removal failed", error instanceof Error ? error : new Error(String(error)), {
+				agentId: agent.id,
+				purge,
+			});
+			return c.json({ error: error instanceof Error ? error.message : "Agent removal failed" }, 500);
+		} finally {
+			invalidateAgentScopeCache(agent.id);
+		}
+		if (result.status === "not_found") return c.json({ error: "Agent not found" }, 404);
+		return c.json({ success: true, purged: purge, mode: result.mode, rows: result.rows });
 	});
 
 	app.get("/api/update/check", async (c) => {

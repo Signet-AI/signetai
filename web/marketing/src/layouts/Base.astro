@@ -98,12 +98,11 @@ const imageUrl = new URL(image, Astro.site ?? "https://signetai.sh");
       }
 
       trackReddit('Custom', [
-        '.hero-install > .install-box > .copy-btn',
-        '.install-final-content > .install-box > .copy-btn',
+        '[data-install-os-selector] .copy-btn',
       ]);
 
       trackReddit('Custom', [
-        '.nav-links > :nth-child(1)',
+        '.nav-links .nav-external',
       ]);
 
       trackReddit('Custom', [
@@ -116,7 +115,7 @@ const imageUrl = new URL(image, Astro.site ?? "https://signetai.sh");
 
       trackReddit('AddToCart', [
         '.nav-github',
-        '.install-final-links > :nth-child(2)',
+        '.start-github',
         '.footer-links > :nth-child(2)',
       ]);
 

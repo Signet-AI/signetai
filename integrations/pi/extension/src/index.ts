@@ -9,20 +9,20 @@ import { createDaemonClient } from "./daemon-client.js";
 import {
 	type LifecycleDeps,
 	PI_LIFECYCLE_CONFIG,
+	beginPromptSubmit,
 	currentSessionRef,
 	endCurrentSession,
 	endPreviousSession,
 	ensureSessionContext,
 	refreshSessionStart,
 	requestNotifications,
-	requestRecallForPrompt,
+	settlePromptSubmit,
 } from "./lifecycle.js";
 import { type PiSessionState, createSessionState } from "./session-state.js";
 import {
 	DAEMON_URL_DEFAULT,
 	HARNESS,
 	type PiBeforeAgentStartEvent,
-	type PiBeforeAgentStartResult,
 	type PiContextEvent,
 	type PiContextEventResult,
 	type PiExtensionApi,
@@ -291,23 +291,17 @@ function registerSessionLifecycleHandlers(pi: PiExtensionApi, deps: LifecycleDep
 }
 
 function registerPromptHandlers(pi: PiExtensionApi, deps: LifecycleDeps): void {
-	pi.on("input", async (event: PiInputEvent, ctx) => {
-		const session = currentSessionRef(ctx);
-		deps.state.clearPendingRecall(session.sessionId);
-		deps.state.clearPendingClock(session.sessionId);
-		await requestRecallForPrompt(deps, ctx, event.text);
+	pi.on("input", (event: PiInputEvent, ctx) => {
+		beginPromptSubmit(deps, ctx, event.text);
 	});
 
-	pi.on(
-		"before_agent_start",
-		async (event: PiBeforeAgentStartEvent, ctx): Promise<PiBeforeAgentStartResult | undefined> => {
-			await ensureSessionContext(deps, ctx);
-			const session = currentSessionRef(ctx);
-			if (!session.sessionId) return;
-			if (deps.state.hasPendingRecall(session.sessionId)) return;
-			await requestRecallForPrompt(deps, ctx, event.prompt);
-		},
-	);
+	pi.on("before_agent_start", async (event: PiBeforeAgentStartEvent, ctx): Promise<undefined> => {
+		if (!deps.state.hasPendingPromptSubmit(currentSessionRef(ctx).sessionId)) {
+			beginPromptSubmit(deps, ctx, event.prompt);
+		}
+		await settlePromptSubmit(deps, ctx);
+		await ensureSessionContext(deps, ctx);
+	});
 }
 
 interface PiDeps extends LifecycleDeps {
@@ -316,6 +310,7 @@ interface PiDeps extends LifecycleDeps {
 
 function registerContextHandlers(pi: PiExtensionApi, deps: PiDeps): void {
 	pi.on("context", async (event: PiContextEvent, ctx): Promise<PiContextEventResult | undefined> => {
+		await settlePromptSubmit(deps, ctx);
 		const session = currentSessionRef(ctx);
 		if (!deps.state.hasPendingRecall(session.sessionId)) {
 			await requestNotifications(deps, ctx, "context");

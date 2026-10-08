@@ -196,6 +196,38 @@ export function materializeEmbeddedNativeAddon(name: string): string | null {
 	return path;
 }
 
+export function materializeEmbeddedNativeLibrary(name: string, fileName: string): string | null {
+	const asset = (nativeRuntimeAssets().nativeAddons ?? []).find((a) => a.name === name);
+	if (!asset) return null;
+
+	const content = Buffer.from(asset.contentBase64, "base64");
+	const hash = createHash("sha256").update(content).digest("hex").slice(0, 16);
+	const safeName = name.replace(/[^a-zA-Z0-9_.-]/g, "_");
+	const root = join(tmpdir(), "signet-native-addons");
+	const dir = join(root, `${safeName}-${hash}`);
+	const path = join(dir, fileName);
+	mkdirSync(dir, { recursive: true });
+	for (const entry of readdirSync(root)) {
+		if (!entry.startsWith(`${safeName}-`) || entry === `${safeName}-${hash}`) continue;
+		try {
+			rmSync(join(root, entry), { recursive: true, force: true });
+		} catch {}
+	}
+	const valid = () =>
+		existsSync(path) && createHash("sha256").update(readFileSync(path)).digest("hex").slice(0, 16) === hash;
+	if (!valid()) {
+		const tempPath = join(dir, `.${fileName}.${process.pid}.tmp`);
+		try {
+			writeFileSync(tempPath, content);
+			renameSync(tempPath, path);
+		} finally {
+			rmSync(tempPath, { force: true });
+		}
+		if (!valid()) throw new Error(`Unable to publish native library: ${path}`);
+	}
+	return path;
+}
+
 export function materializeEmbeddedWasmAssets(): string | null {
 	const assets = nativeRuntimeAssets().wasm ?? [];
 	if (assets.length === 0) return null;

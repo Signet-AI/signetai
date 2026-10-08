@@ -14,6 +14,13 @@ describe("entity-quality", () => {
 		}
 	});
 
+	it("allows an unnamed user only as a person", () => {
+		expect(classifyEntityQuality("User", "person")).toEqual({ ok: true });
+		expect(classifyEntityQuality("User")).toEqual({ ok: false, reason: "metadata_role" });
+		expect(classifyEntityQuality("Assistant", "person")).toEqual({ ok: false, reason: "metadata_role" });
+		expect(classifyEntityQuality("User: hello", "person")).toEqual({ ok: false, reason: "role_prefixed_scaffolding" });
+	});
+
 	it("allows short concrete tools and systems when the type is concrete", () => {
 		for (const [name, type] of [
 			["Bun", "tool"],

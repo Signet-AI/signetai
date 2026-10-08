@@ -11,7 +11,7 @@ import {
 	resolvePrimaryPackageManager,
 	runMigrations,
 	createFreshWorkspaceV2,
-	resolveWorkspaceLayout,
+	findExistingWorkspaceDatabase,
 } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
@@ -35,13 +35,7 @@ import { withSetupPrompt } from "./setup-terminal.js";
 import type { SetupDeps } from "./setup-types.js";
 
 function assertNoExistingWorkspaceDatabase(basePath: string): void {
-	const layout = resolveWorkspaceLayout(basePath);
-	const existingDatabase = [
-		layout.database,
-		...(layout.version === 1 ? [join(layout.data, "signet.db")] : []),
-		join(basePath, "data", "signet.db"),
-		join(basePath, "memory", "memories.db"),
-	].find((database) => existsSync(database));
+	const existingDatabase = findExistingWorkspaceDatabase(basePath);
 	if (existingDatabase) {
 		throw new Error(`Refusing to replace an existing database at ${existingDatabase}.`);
 	}
@@ -53,7 +47,7 @@ export async function runDashboardSetupBootstrap(
 	deps: SetupDeps,
 ): Promise<void> {
 	assertNoExistingWorkspaceDatabase(basePath);
-	if (options.createLocalBackup) mkdirSync(basePath, { recursive: true });
+	if (options.createLocalBackup) createFreshWorkspaceV2(basePath);
 	let protection = await enforceSetupProtection({
 		basePath,
 		nonInteractive: true,
@@ -82,7 +76,8 @@ export async function runDashboardSetupBootstrap(
 		embedding: { provider: "none" },
 		memory: {
 			database: relative(basePath, workspaceLayout.database),
-			pipelineV2: { enabled: false, paused: true, telemetryEnabled: false },
+			pipelineV2: { telemetryEnabled: false },
+			dreaming: { enabled: true },
 		},
 	};
 	writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));

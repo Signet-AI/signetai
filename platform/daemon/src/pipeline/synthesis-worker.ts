@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveDefaultBasePath } from "@signet/core";
+import { resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
 import { getDbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import { handleSynthesisRequest } from "../memory-synthesis";
@@ -21,8 +21,8 @@ const DEFAULT_DEPS: SynthesisDeps = {
 	activeSessionCount,
 };
 
-function getAgentsDir(): string {
-	return resolveDefaultBasePath();
+function getRuntimeDir(): string {
+	return resolveWorkspaceLayout(resolveDefaultBasePath()).runtime;
 }
 
 function normalizeAgentId(agentId?: string): string {
@@ -38,7 +38,7 @@ const DRAIN_TIMEOUT_BUFFER_MS = 1_000;
 function getLastSynthesisPath(agentId?: string): string {
 	const key = normalizeAgentId(agentId);
 	const file = key === "default" ? "last-synthesis.json" : `last-synthesis.${encodeURIComponent(key)}.json`;
-	return join(getAgentsDir(), ".daemon", file);
+	return join(getRuntimeDir(), file);
 }
 
 export function readLastSynthesisTime(agentId?: string): number {
@@ -55,7 +55,7 @@ export function readLastSynthesisTime(agentId?: string): number {
 function writeLastSynthesisTime(deps: SynthesisDeps, timestamp: number, agentId?: string): void {
 	try {
 		const path = getLastSynthesisPath(agentId);
-		mkdirSync(join(getAgentsDir(), ".daemon"), { recursive: true });
+		mkdirSync(getRuntimeDir(), { recursive: true });
 		writeFileSync(path, JSON.stringify({ lastRunAt: timestamp }));
 	} catch (e) {
 		deps.logger.warn("synthesis", "Failed to persist synthesis timestamp", {

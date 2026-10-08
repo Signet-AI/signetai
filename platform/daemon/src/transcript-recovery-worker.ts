@@ -578,6 +578,7 @@ export function startTranscriptRecoveryWorker(
 		activeChild = child;
 		return await new Promise<TranscriptRecoveryScanResult>((resolve, reject) => {
 			let output = "";
+			let errorOutput = "";
 			let settled = false;
 			const settle = (callback: () => void): void => {
 				if (settled) return;
@@ -588,6 +589,10 @@ export function startTranscriptRecoveryWorker(
 			child.stdout?.on("data", (chunk: string) => {
 				output += chunk;
 				activeTargetPid = parseTranscriptRecoveryChildPid(output) ?? activeTargetPid;
+			});
+			child.stderr?.setEncoding("utf8");
+			child.stderr?.on("data", (chunk: string) => {
+				errorOutput = `${errorOutput}${chunk}`.slice(-2_000);
 			});
 			child.on("error", (error) => settle(() => reject(error)));
 			child.on("close", (code, signal) => {
@@ -610,7 +615,8 @@ export function startTranscriptRecoveryWorker(
 					return;
 				}
 				const detail = signal === null ? `exit code ${code ?? "unknown"}` : `signal ${signal}`;
-				settle(() => reject(new Error(`Transcript recovery child exited with ${detail}`)));
+				const cause = errorOutput.trim().split("\n")[0]?.trim();
+				settle(() => reject(new Error(`Transcript recovery child exited with ${detail}${cause ? `: ${cause}` : ""}`)));
 			});
 		});
 	};

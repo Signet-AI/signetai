@@ -1,4 +1,10 @@
-import { ATTRIBUTE_KINDS, DEPENDENCY_TYPES, ENTITY_TYPES, ONTOLOGY_PROPOSAL_OPERATIONS } from "@signet/core";
+import {
+	ATTRIBUTE_KINDS,
+	CLAIM_TIME_PRECISIONS,
+	DEPENDENCY_TYPES,
+	ENTITY_TYPES,
+	ONTOLOGY_PROPOSAL_OPERATIONS,
+} from "@signet/core";
 import { z } from "zod";
 
 const text = z.string().min(1);
@@ -15,6 +21,24 @@ const claimKey = text.describe("A stable semantic slot key for versions of the s
 const reviewAfter = text
 	.describe("An ISO timestamp after which a future temporal claim must be reviewed. Omit for non-temporal claims.")
 	.optional();
+const claimTime = {
+	occurredAt: text
+		.describe(
+			"When the event in this claim happened, as an ISO date (2023-03-19) or timestamp, resolved against the source's capturedAt. Use for events.",
+		)
+		.optional(),
+	occurredUntil: text.describe("When a multi-day event ended (ISO date). Omit for single-day events.").optional(),
+	validFrom: text
+		.describe(
+			"When the state in this claim became true (ISO date), resolved against the source's capturedAt. Use for states.",
+		)
+		.optional(),
+	validUntil: text.describe("When the state stopped being true (ISO date). Omit while it still holds.").optional(),
+	timePrecision: z
+		.enum(CLAIM_TIME_PRECISIONS)
+		.describe("How precise the time is: day, week, month, year, or approximate.")
+		.optional(),
+};
 const linkType = z.enum(DEPENDENCY_TYPES).describe("The dependency type between the two entities.");
 
 function payload<T extends z.ZodRawShape>(shape: T) {
@@ -55,8 +79,8 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 		...reasonField,
 	}),
 	create_entity: payload({ name: entityName, type: entityType }),
-	add_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter }),
-	set_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter }),
+	add_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter, ...claimTime }),
+	set_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter, ...claimTime }),
 	supersede_claim_value: payload({
 		entityId,
 		aspectId,
@@ -65,6 +89,8 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 		attributeId: text
 			.describe("The stable id of the claim to supersede. Omit to supersede the current active claim for the key.")
 			.optional(),
+		reviewAfter,
+		...claimTime,
 	}),
 	rename_entity: payload({ entityId, newName: entityName }),
 	create_aspect: payload({ entityId, name: aspectName }),
@@ -84,6 +110,24 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 	create_interface: payload({ name: entityName }),
 } as const satisfies Record<string, z.ZodType>;
 
+export const DREAMING_HYGIENE_ARCHIVE_OPERATIONS: ReadonlySet<string> = new Set([
+	"archive_entity",
+	"archive_aspect",
+	"archive_claim_value",
+	"archive_link",
+	"merge_entities",
+	"merge_aspects",
+]);
+
+export const DREAMING_STRUCTURAL_OPERATIONS: ReadonlySet<string> = new Set(["merge_aspects", "rename_aspect"]);
+
+export const DREAMING_ATTENTION_OPERATIONS: ReadonlySet<string> = new Set([
+	"flag",
+	"decline_attention",
+	...DREAMING_HYGIENE_ARCHIVE_OPERATIONS,
+	...DREAMING_STRUCTURAL_OPERATIONS,
+]);
+
 export const DREAMING_OPERATION_IDS = [
 	...ONTOLOGY_PROPOSAL_OPERATIONS.filter((op) => op !== "restore_claim_version" && op !== "attach_interface"),
 	"flag",
@@ -102,7 +146,7 @@ const operationBase = {
 		.string()
 		.min(1)
 		.describe(
-			'Hygiene ops only: "attention:$<index>" referencing a flag op earlier in the same batch, or "attention:<uuid>" from a prior batch.',
+			'Hygiene ops only: "attention:$<index>" referencing a flag op earlier in the same batch, or "attention:<uuid>" from a prior batch. merge_aspects and rename_aspect need no attention or evidence: give a reason instead.',
 		)
 		.optional(),
 	confidence: z.number().finite().min(0).max(1).optional(),

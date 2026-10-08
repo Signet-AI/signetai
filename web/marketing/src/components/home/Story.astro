@@ -1,0 +1,92 @@
+---
+import LayerStack from "./LayerStack.astro";
+import SectionHead from "./SectionHead.astro";
+const steps = [
+	{
+		name: "Capture",
+		text: "Harness hooks save every session as evidence: transcripts, memories, and sources, kept exactly as received.",
+	},
+	{
+		name: "Index",
+		text: "Search indexes and embeddings are built from that evidence. They're derived, so they can always be rebuilt.",
+	},
+	{
+		name: "Dream",
+		text: "While you're away, Dreaming turns evidence into entities and claims. Every claim keeps a thread back to what it cites.",
+	},
+	{
+		name: "Recall",
+		text: "The next session starts with the context that matters, scoped to that agent and ready to inspect.",
+	},
+];
+---
+
+<section class="hs hw" id="how-it-works">
+  <SectionHead index="02" label="How it works" title="Remember like a person." accent="Cite like a librarian." align="center">
+    <p class="hs-lede">Signet sits under your agent. It keeps what happened, learns from it while you're away, and brings it back next time.</p>
+  </SectionHead>
+
+  <div class="hw-stage reveal">
+    <LayerStack />
+  </div>
+
+  <ol class="hw-steps" role="tablist" aria-label="How Signet works" data-hw-steps>
+    {steps.map((step, i) => (
+      <li role="presentation">
+        <button type="button" role="tab" class="hw-step" data-step={i} aria-selected={i === 0 ? "true" : "false"}>
+          <span class="hw-step-bar" aria-hidden="true"></span>
+          <span class="hw-step-name"><span>0{i + 1}</span>{step.name}</span>
+          <span class="hw-step-text">{step.text}</span>
+        </button>
+      </li>
+    ))}
+  </ol>
+</section>
+
+<script>
+  let cleanup: (() => void) | null = null;
+
+  function initHow() {
+    cleanup?.();
+    cleanup = null;
+    const list = document.querySelector<HTMLElement>("[data-hw-steps]");
+    const stack = document.querySelector<SVGSVGElement>("[data-ls]");
+    if (!list || !stack) return;
+    const buttons = Array.from(list.querySelectorAll<HTMLButtonElement>("[data-step]"));
+    let active = 0;
+    let timer = 0;
+    let auto = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const select = (k: number) => {
+      active = k;
+      list.toggleAttribute("data-auto", auto);
+      stack.setAttribute("data-step", String(k));
+      buttons.forEach((b, i) => b.setAttribute("aria-selected", String(i === k)));
+    };
+    const onClick = (event: Event) => {
+      const button = (event.target as Element | null)?.closest<HTMLElement>("[data-step]");
+      if (!button) return;
+      auto = false;
+      window.clearInterval(timer);
+      select(Number(button.dataset.step));
+    };
+    const observer = new IntersectionObserver(([entry]) => {
+      window.clearInterval(timer);
+      if (entry?.isIntersecting && auto) {
+        select(active);
+        timer = window.setInterval(() => select((active + 1) % buttons.length), 4200);
+      }
+    });
+
+    list.addEventListener("click", onClick);
+    observer.observe(stack);
+    select(0);
+    cleanup = () => {
+      observer.disconnect();
+      window.clearInterval(timer);
+      list.removeEventListener("click", onClick);
+    };
+  }
+
+  document.addEventListener("astro:page-load", initHow);
+</script>

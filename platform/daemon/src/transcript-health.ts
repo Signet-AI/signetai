@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { resolveWorkspaceLayout } from "@signet/core";
+import { type WorkspaceLayoutVersion, currentArtifactRelativePath, resolveWorkspaceLayout } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { type TranscriptCaptureStatusSummary, getTranscriptCaptureStatus } from "./transcript-capture-worker";
 
@@ -70,9 +70,9 @@ function scanAuditLogs(basePath: string): TranscriptHealthReport["audit"] {
 	return { latestLogs, finalLogs, newestAuditAt };
 }
 
-function pathExists(basePath: string, path: unknown): boolean {
+function pathExists(basePath: string, version: WorkspaceLayoutVersion, path: unknown): boolean {
 	const rel = asStringOrNull(path);
-	return rel ? existsSync(join(basePath, rel)) : false;
+	return rel ? existsSync(join(basePath, currentArtifactRelativePath(version, rel))) : false;
 }
 
 function readManifestValue(path: string, key: string): string | null {
@@ -125,6 +125,7 @@ export async function getTranscriptHealthReport(
 			const manifestRows = db
 				.prepare(`SELECT source_path FROM memory_artifacts WHERE source_kind = 'manifest' ${andAgent}`)
 				.all(...params) as Array<Record<string, unknown>>;
+			const layoutVersion = resolveWorkspaceLayout(basePath).version;
 			let pendingSummaries = 0;
 			let failedSummaries = 0;
 			let missingTranscriptArtifacts = 0;
@@ -132,17 +133,17 @@ export async function getTranscriptHealthReport(
 			for (const row of manifestRows) {
 				const sourcePath = asStringOrNull(row.source_path);
 				if (!sourcePath) continue;
-				const fullManifestPath = join(basePath, sourcePath);
+				const fullManifestPath = join(basePath, currentArtifactRelativePath(layoutVersion, sourcePath));
 				const summaryPath = readManifestValue(fullManifestPath, "summary_path");
 				const summaryStatus = readManifestValue(fullManifestPath, "summary_status");
 				const transcriptPath = readManifestValue(fullManifestPath, "transcript_path");
 				const transcriptStatus = readManifestValue(fullManifestPath, "transcript_status");
 				if (summaryStatus === "pending") pendingSummaries++;
 				if (summaryStatus === "failed") failedSummaries++;
-				if (summaryPath && !pathExists(basePath, summaryPath)) missingSummaryArtifacts++;
+				if (summaryPath && !pathExists(basePath, layoutVersion, summaryPath)) missingSummaryArtifacts++;
 				if (
 					(transcriptStatus === "completed" || (!transcriptStatus && transcriptPath)) &&
-					!pathExists(basePath, transcriptPath)
+					!pathExists(basePath, layoutVersion, transcriptPath)
 				) {
 					missingTranscriptArtifacts++;
 				}

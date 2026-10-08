@@ -5,10 +5,10 @@ import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/p
 import { basename, join } from "node:path";
 import {
 	type LlmProvider,
-	MEMORY_CONTENT_WITHHELD_NOTICE,
+	currentArtifactRelativePath,
+	redactCredentials,
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
-	scanMemoryContent,
 } from "@signet/core";
 import { getAgentScope } from "./agent-id";
 import { yieldEvery } from "./async-yield";
@@ -24,7 +24,6 @@ import {
 } from "./db-owner-runtime";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { logger } from "./logger";
-import { isMemoryContentContextEligible, upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 import { MEMORY_HEAD_MAX_TOKENS } from "./memory-head";
 import { buildAgentScopeClause } from "./memory-search";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
@@ -282,12 +281,7 @@ function relativeArtifactPath(capturedAt: string, sessionToken: string, kind: Ar
 }
 
 function storedArtifactRelativePath(path: string): string {
-	if (
-		memoryRelativePrefix() === "transcripts/" &&
-		/^memory\/[^/]+--(?:summary|transcript|compaction|manifest)\.md$/.test(path)
-	)
-		return `transcripts/${path.slice("memory/".length)}`;
-	return path;
+	return currentArtifactRelativePath(resolveWorkspaceLayout(getAgentsDir()).version, path);
 }
 
 function wikilink(path: string, label?: string): string {
@@ -409,16 +403,9 @@ export async function resolveMemorySentence(
 	provider?: LlmProvider | null,
 ): Promise<MemorySentence> {
 	const generatedAt = new Date().toISOString();
-	if (!scanMemoryContent(body).contextEligible) {
-		return {
-			text: MEMORY_CONTENT_WITHHELD_NOTICE,
-			quality: "fallback",
-			generatedAt,
-		};
-	}
 	if (provider) {
 		try {
-			const raw = await provider.generate(sentencePrompt(body, project, sourceKind), {
+			const raw = await provider.generate(sentencePrompt(redactCredentials(body), project, sourceKind), {
 				maxTokens: 120,
 				timeoutMs: 10_000,
 			});
@@ -627,12 +614,6 @@ export function upsertMemoryArtifactInTx(
 		fields.sourceParentPath,
 		fields.sourceMetaJson,
 	);
-	upsertMemoryContentSafetyInTx(db as unknown as WriteDb, {
-		agentId: fields.agentId,
-		sourceKind: "artifact",
-		sourceId: fields.sourcePath,
-		content: fields.content,
-	});
 }
 
 function artifactFieldsFromFrontmatter(
@@ -1118,7 +1099,7 @@ async function doReindex(agentId?: string): Promise<void> {
 		);
 	}
 
-	const baseYielder = yieldEvery(REINDEX_BATCH_SIZE);
+	const baseYielder = yieldEvery(1);
 	let itemsSinceYield = 0;
 	const yielder = async (): Promise<void> => {
 		itemsSinceYield += 1;
@@ -1745,7 +1726,7 @@ async function readThreadHeads(agentId: string): Promise<
 	try {
 		const rows = await getDbAccessor().withReadDbAsync(
 			async (db) => {
-				const queried = db
+				return db
 					.prepare(
 						`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
 				 FROM memory_thread_heads
@@ -1763,14 +1744,6 @@ async function readThreadHeads(agentId: string): Promise<
 					session_key: string | null;
 					harness: string | null;
 				}>;
-				return queried.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "summary",
-						sourceId: row.node_id,
-						content: row.sample,
-					}),
-				);
 			},
 			{ siteToken: "db:memory.projection.thread-heads" },
 		);
@@ -1801,7 +1774,7 @@ async function readTopMemories(agentId: string): Promise<
 		const clause = buildAgentScopeClause(agentId, scope.readPolicy, scope.policyGroup);
 		const rows = await getDbAccessor().withReadDbAsync(
 			async (db) => {
-				const queried = db
+				return db
 					.prepare(
 						`SELECT m.id, m.content, m.type, m.importance, m.project
 				 FROM memories m
@@ -1816,14 +1789,6 @@ async function readTopMemories(agentId: string): Promise<
 					importance: number;
 					project: string | null;
 				}>;
-				return queried.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "memory",
-						sourceId: row.id,
-						content: row.content,
-					}),
-				);
 			},
 			{ siteToken: "db:memory.projection.top-memories" },
 		);
@@ -1849,7 +1814,7 @@ async function readTemporalNodes(agentId: string): Promise<
 	try {
 		const rows = await getDbAccessor().withReadDbAsync(
 			async (db) => {
-				const queried = db
+				return db
 					.prepare(
 						`SELECT id, kind, COALESCE(source_type, kind) AS source_type, depth, latest_at,
 				        project, session_key, source_ref, content
@@ -1869,14 +1834,6 @@ async function readTemporalNodes(agentId: string): Promise<
 					source_ref: string | null;
 					content: string;
 				}>;
-				return queried.filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "summary",
-						sourceId: row.id,
-						content: row.content,
-					}),
-				);
 			},
 			{ siteToken: "db:memory.projection.temporal-nodes" },
 		);
@@ -1937,26 +1894,17 @@ async function buildLedger(agentId: string): Promise<ReadonlyArray<LedgerSession
 	try {
 		rows = await getDbAccessor().withReadDbAsync(
 			async (db) =>
-				(
-					db
-						.prepare(
-							`SELECT agent_id, source_path, source_sha256, source_kind, session_id, session_key,
+				db
+					.prepare(
+						`SELECT agent_id, source_path, source_sha256, source_kind, session_id, session_key,
 					        session_token, project, harness, captured_at, started_at, ended_at,
 					        manifest_path, source_node_id, memory_sentence, memory_sentence_quality, content
 					 FROM memory_artifacts
 					 WHERE agent_id = ?
 					   AND source_kind IN ('summary', 'transcript', 'compaction')
 					 ORDER BY COALESCE(ended_at, captured_at) DESC, captured_at DESC`,
-						)
-						.all(agentId) as ArtifactRow[]
-				).filter((row) =>
-					isMemoryContentContextEligible(db, {
-						agentId,
-						sourceKind: "artifact",
-						sourceId: row.source_path,
-						content: row.content,
-					}),
-				),
+					)
+					.all(agentId) as ArtifactRow[],
 			{ siteToken: "db:memory.projection.ledger" },
 		);
 	} catch {
@@ -2254,15 +2202,10 @@ export async function renderMemoryProjection(agentId = "default"): Promise<{
 		parts.push(trimmedIndex);
 	}
 
-	const content = joinParts(parts);
-	const safeIndexBlock = scanMemoryContent(trimmedIndex).contextEligible ? trimmedIndex : "";
-	const safeContent = scanMemoryContent(content).contextEligible
-		? content
-		: joinParts(["# Working Memory Summary", `- ${MEMORY_CONTENT_WITHHELD_NOTICE}`]);
 	return {
-		content: safeContent,
+		content: redactCredentials(joinParts(parts)),
 		fileCount: memories.length + threadHeads.length + ledgerBlock.count + nodes.length,
-		indexBlock: safeIndexBlock,
+		indexBlock: redactCredentials(trimmedIndex),
 	};
 }
 

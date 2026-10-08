@@ -88,7 +88,7 @@ export async function importFromGitHub(basePath: string, deps: Deps): Promise<vo
 
 		copyConfigFiles(tmpDir, basePath, found);
 		copySkillDirs(tmpDir, basePath, deps);
-		copyMemoryScripts(tmpDir, basePath, deps);
+		reportSkippedLegacyMemoryScripts(tmpDir);
 		cleanupTmpDir(tmpDir);
 		ensureOriginRemote(basePath, gitUrl, deps);
 
@@ -179,15 +179,11 @@ function copySkillDirs(tmpDir: string, basePath: string, deps: Deps): void {
 	}
 }
 
-function copyMemoryScripts(tmpDir: string, basePath: string, deps: Deps): void {
-	const dir = join(tmpDir, "memory", "scripts");
-	if (!existsSync(dir)) {
+function reportSkippedLegacyMemoryScripts(tmpDir: string): void {
+	if (!existsSync(join(tmpDir, "memory", "scripts"))) {
 		return;
 	}
-
-	mkdirSync(join(basePath, "memory", "scripts"), { recursive: true });
-	deps.copyDirRecursive(dir, join(basePath, "memory", "scripts"));
-	console.log(chalk.green("  ✓ memory/scripts/"));
+	console.log(chalk.yellow("  ! Skipped memory/scripts/: legacy memory scripts are retired and not imported"));
 }
 
 function ensureOriginRemote(basePath: string, gitUrl: string, deps: Deps): void {

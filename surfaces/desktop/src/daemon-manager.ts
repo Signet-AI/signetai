@@ -1,7 +1,7 @@
 import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type ChildProcess } from "@signet/core";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { LOOPBACK_HOST } from "@signet/core";
+import { LOOPBACK_HOST, resolveWorkspaceLayout } from "@signet/core";
 import { type WorkspaceMismatch, healthWorkspaceMismatch } from "./daemon-workspace.js";
 import { bunPath, daemonEntry, daemonRoot } from "./paths.js";
 
@@ -268,7 +268,7 @@ export class DaemonManager {
 			throw new Error(`Bundled daemon entry not found: ${entry}. Install the .dmg or run stage:runtime first.`);
 		}
 
-		const logDir = join(this.#workspacePath, ".daemon", "logs");
+		const logDir = join(resolveWorkspaceLayout(this.#workspacePath).runtime, "logs");
 		mkdirSync(logDir, { recursive: true });
 		this.#closeFds();
 		this.#stdoutFd = openSync(join(logDir, "daemon.out.log"), "a");

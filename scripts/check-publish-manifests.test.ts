@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { EXTERNAL_NODE } from "../platform/daemon/build-externals";
+import { NATIVE_BINARY_MAX_BYTES, NATIVE_DAEMON_JS_MAX_BYTES } from "../platform/daemon/src/native-release-limits";
 
 import {
 	collectManifestIssues,
@@ -76,7 +78,8 @@ describe("check-publish-manifests", () => {
 
 		expect(daemonBuild).toContain('const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";');
 		expect(daemonBuild).toContain('const isBun = typeof Bun !== "undefined" && !forceNodeBuild;');
-		expect(daemonBuild).toContain('"bun:ffi"');
+		expect(daemonBuild).toContain("external: EXTERNAL_NODE,");
+		expect(EXTERNAL_NODE).toContain("bun:ffi");
 	});
 
 	test("keeps daemon tokenizer assets stable and native keyring external in Node builds", () => {
@@ -85,7 +88,8 @@ describe("check-publish-manifests", () => {
 
 		expect(daemonBuild).toContain('asset: "dist/[name].[ext]"');
 		expect(daemonBuild).toContain('assetNames: "[name]"');
-		expect(daemonBuild).toContain('"@napi-rs/keyring"');
+		expect(daemonBuild).toContain("external: EXTERNAL_NODE,");
+		expect(EXTERNAL_NODE).toContain("@napi-rs/keyring");
 	});
 
 	test("keeps runtime split SQLite loader ESM-safe", () => {
@@ -225,6 +229,7 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-gemini"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-hermes-agent"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-kimi"');
+		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-muse-code"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-oh-my-pi"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-openclaw"');
 		expect(workflow).toContain('publish_npm_package "${STAGED_NPM_ROOT}/connector-opencode"');
@@ -247,6 +252,7 @@ describe("check-publish-manifests", () => {
 		expect(promoteWorkflow).toContain('"@signetai/connector-gemini"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-hermes-agent"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-kimi"');
+		expect(promoteWorkflow).toContain('"@signetai/connector-muse-code"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-oh-my-pi"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-openclaw"');
 		expect(promoteWorkflow).toContain('"@signetai/connector-opencode"');
@@ -319,6 +325,32 @@ describe("check-publish-manifests", () => {
 			reason:
 				"platforms must match npm wrapper support: expected darwin-arm64, darwin-x64, linux-arm64, linux-x64, win32-x64, got linux-x64",
 		});
+
+		expect(
+			collectNativeManifestIssues(
+				{
+					schemaVersion: 1,
+					version: "0.1.0",
+					assets: supportedPlatforms.map((platform) => ({
+						name: platform.startsWith("win32-") ? `signet-${platform}.exe` : `signet-${platform}`,
+						platform,
+						sha256: validSha,
+						size: platform === "linux-x64" ? NATIVE_BINARY_MAX_BYTES + 1 : 1,
+					})),
+					components: { daemonJs: { url: "x.tar.gz", sha256: validSha, size: NATIVE_DAEMON_JS_MAX_BYTES + 1 } },
+				},
+				supportedPlatforms,
+			),
+		).toEqual([
+			{
+				file: "dist/native/native-manifest.json",
+				reason: `asset linux-x64 is ${NATIVE_BINARY_MAX_BYTES + 1} bytes, above the ${NATIVE_BINARY_MAX_BYTES} byte updater limit`,
+			},
+			{
+				file: "dist/native/native-manifest.json",
+				reason: `component daemonJs is ${NATIVE_DAEMON_JS_MAX_BYTES + 1} bytes, above the ${NATIVE_DAEMON_JS_MAX_BYTES} byte updater limit`,
+			},
+		]);
 	});
 
 	test("validates native release package tarball wiring", () => {
@@ -358,7 +390,7 @@ describe("check-publish-manifests", () => {
 			});
 		} finally {
 			if (oldExpect === undefined) {
-				process.env.SIGNET_EXPECT_NATIVE_OPTIONAL_DEPS = undefined;
+				delete process.env.SIGNET_EXPECT_NATIVE_OPTIONAL_DEPS;
 			} else {
 				process.env.SIGNET_EXPECT_NATIVE_OPTIONAL_DEPS = oldExpect;
 			}
@@ -461,6 +493,7 @@ describe("check-publish-manifests", () => {
 			["integrations/codex/connector/package.json", "@signet/connector-codex", "signet-connector-codex"],
 			["integrations/gemini/connector/package.json", "@signet/connector-gemini", "signet-connector-gemini"],
 			["integrations/kimi/connector/package.json", "@signet/connector-kimi", "signet-connector-kimi"],
+			["integrations/muse-code/connector/package.json", "@signet/connector-muse-code", "signet-connector-muse-code"],
 			[
 				"integrations/hermes-agent/connector/package.json",
 				"@signet/connector-hermes-agent",

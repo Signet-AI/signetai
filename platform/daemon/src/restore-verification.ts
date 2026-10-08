@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { rm } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isAbsolute, join, relative, sep } from "node:path";

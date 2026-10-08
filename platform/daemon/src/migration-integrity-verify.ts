@@ -122,6 +122,7 @@ export async function runMigrationIntegrityVerify(options: MigrationVerifyOption
 			{
 				deadlineMs: attemptDeadlineMs,
 				estimatedWorkUnits: 64,
+				admission: "reject",
 				onOwnerJobSettled: options.onWorkerSettled,
 				onOwnerJobAdmissionFailure: (error): void => {
 					admitted = false;

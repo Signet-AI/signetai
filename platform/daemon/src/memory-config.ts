@@ -49,6 +49,7 @@ export interface MemorySearchConfig {
 	temporal_prior_enabled: boolean;
 	temporal_prior_weight: number;
 	temporal_prior_half_life_days: number;
+	transcript_evidence_limit: number;
 }
 
 export { PIPELINE_FLAGS };
@@ -86,7 +87,9 @@ export const DEFAULT_DREAMING: DreamingConfig = {
 	maxInterval: 6 * 60 * 60 * 1_000,
 	timeout: 20 * 60 * 1_000,
 	maxInputTokens: 128_000,
-	maxOutputTokens: 16_000,
+	maxOutputTokens: null,
+	maxConcurrentPasses: 2,
+	codemode: false,
 	backfillOnFirstRun: true,
 	surprisal: DEFAULT_DREAMING_SURPRISAL,
 };
@@ -149,6 +152,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 	reranker: {
 		enabled: true,
 		model: "",
+		crossEncoderModel: "mixedbread-ai/mxbai-rerank-xsmall-v1",
 		useExtractionModel: false,
 		topN: 20,
 		timeoutMs: 2000,
@@ -261,6 +265,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 export const DEFAULT_OLLAMA_BASE_URL = `http://${LOOPBACK_HOST}:11434`;
 export const DEFAULT_LLAMACPP_BASE_URL = `http://${LOOPBACK_HOST}:8080`;
 export const DEFAULT_LLAMACPP_MAX_INPUT_TOKENS = 1400;
+export const NATIVE_EMBEDDING_MAX_INPUT_TOKENS = 2048;
 export const MIN_LLAMACPP_MAX_INPUT_TOKENS = 128;
 export const MAX_LLAMACPP_MAX_INPUT_TOKENS = 131072;
 export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -335,6 +340,7 @@ const runtimeSchema = z.object({
 			temporal_prior_enabled: z.boolean().default(true),
 			temporal_prior_weight: fraction.default(0.15),
 			temporal_prior_half_life_days: z.number().min(1).max(365).default(14),
+			transcript_evidence_limit: z.number().int().min(0).max(5).default(2),
 		})
 		.prefault({}),
 	memory: z.record(z.string(), z.unknown()).optional(),
@@ -495,7 +501,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			"memory.synthesis is retired; MEMORY.md synthesis follows the canonical inference workload instead.",
 		);
 	}
-	if (!raw) return { ...DEFAULT_PIPELINE_V2 };
+	if (!raw) return structuredClone(DEFAULT_PIPELINE_V2);
 	const extractionRaw = raw.extraction as Record<string, unknown> | undefined;
 	const workerRaw = raw.worker as Record<string, unknown> | undefined;
 	const claudeCodeRaw = raw.claudeCode as Record<string, unknown> | undefined;
@@ -697,6 +703,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 					: typeof raw.rerankerModel === "string"
 						? (raw.rerankerModel as string)
 						: d.reranker.model,
+			crossEncoderModel:
+				typeof rerankerRaw?.crossEncoderModel === "string"
+					? rerankerRaw.crossEncoderModel.trim()
+					: d.reranker.crossEncoderModel,
 			useExtractionModel: resolveBool(
 				rerankerRaw?.useExtractionModel,
 				raw.rerankerUseExtractionModel,
@@ -968,7 +978,14 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 		maxInterval: clampWarn("maxInterval", raw.maxInterval, 5 * 60 * 1_000, 7 * 24 * 60 * 60 * 1_000, dd.maxInterval),
 		timeout: clampWarn("timeout", raw.timeout, 30_000, 1_800_000, dd.timeout),
 		maxInputTokens: clampWarn("maxInputTokens", raw.maxInputTokens, 8_000, 1_000_000, dd.maxInputTokens),
-		maxOutputTokens: clampWarn("maxOutputTokens", raw.maxOutputTokens, 1_000, 128_000, dd.maxOutputTokens),
+		maxOutputTokens:
+			typeof raw.maxOutputTokens === "number" && Number.isFinite(raw.maxOutputTokens)
+				? clampWarn("maxOutputTokens", raw.maxOutputTokens, 1_000, 1_000_000, 1_000)
+				: dd.maxOutputTokens,
+		maxConcurrentPasses: Math.floor(
+			clampWarn("maxConcurrentPasses", raw.maxConcurrentPasses, 1, 16, dd.maxConcurrentPasses),
+		),
+		codemode: typeof raw.codemode === "boolean" ? raw.codemode : dd.codemode,
 		backfillOnFirstRun: typeof raw.backfillOnFirstRun === "boolean" ? raw.backfillOnFirstRun : dd.backfillOnFirstRun,
 		surprisal: {
 			enabled: typeof surprisal?.enabled === "boolean" ? surprisal.enabled : defaultSurprisal.enabled,

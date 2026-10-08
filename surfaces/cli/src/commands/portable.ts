@@ -2,9 +2,9 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 
 import { dirname, join, resolve, sep } from "node:path";
 import {
 	collectExportData,
-	importEntities,
-	importMemories,
-	importRelations,
+	createFreshWorkspaceV2,
+	hasExistingWorkspaceState,
+	importBundle,
 	loadSqliteVec,
 	runMigrations,
 	resolveWorkspaceLayout,
@@ -16,7 +16,9 @@ import ora from "ora";
 import Database from "../sqlite.js";
 import { registerExportTranscriptsCommand, type ExportTranscriptsDeps } from "./export-transcripts.js";
 
-interface PortableDeps extends ExportTranscriptsDeps {}
+interface PortableDeps extends ExportTranscriptsDeps {
+	readonly daemonOwnsWorkspace: (agentsDir: string) => Promise<boolean>;
+}
 
 export function registerPortableCommands(program: Command, deps: PortableDeps): void {
 	const exportCmd = program.command("export").description("Export agent data (portable bundle or session transcripts)");
@@ -84,19 +86,57 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 	program
 		.command("import <path>")
 		.description("Import agent data from an export bundle")
-		.option("--conflict <strategy>", "Conflict resolution: skip, overwrite, merge", "skip")
+		.option("--agent <id>", "Target agent for every imported memory and entity")
 		.option("--json", "Input is a JSON file instead of a directory")
-		.action(async (importPath: string, options) => {
+		.action(async (importPath: string, options: { agent?: string; json?: boolean }) => {
 			const agentsDir = deps.AGENTS_DIR;
-			const dbPath = resolveWorkspaceLayout(agentsDir).database;
 
 			if (!existsSync(importPath)) {
 				console.error(chalk.red(`  Path not found: ${importPath}`));
 				process.exit(1);
 			}
+			if (await deps.daemonOwnsWorkspace(agentsDir)) {
+				console.error(chalk.red("  The Signet daemon is running and owns the workspace database."));
+				console.error(chalk.dim("  Stop it with `signet daemon stop`, run the import, then start it again."));
+				process.exitCode = 1;
+				return;
+			}
+			const layout = hasExistingWorkspaceState(agentsDir)
+				? resolveWorkspaceLayout(agentsDir)
+				: createFreshWorkspaceV2(agentsDir);
+			const dbPath = layout.database;
 
 			const spinner = ora("Importing agent data...").start();
 			const fileMap = options.json || importPath.endsWith(".json") ? loadJsonMap(importPath) : loadDirMap(importPath);
+
+			mkdirSync(dirname(dbPath), { recursive: true });
+			let db: ReturnType<typeof Database> | null = null;
+			let result: ReturnType<typeof importBundle>;
+			try {
+				db = Database(dbPath);
+				try {
+					loadSqliteVec(db);
+				} catch {}
+				runMigrations(db);
+				result = importBundle(
+					db,
+					{
+						memories: fileMap.get("memories.jsonl"),
+						entities: fileMap.get("entities.jsonl"),
+						relations: fileMap.get("relations.jsonl"),
+					},
+					{ agentId: options.agent },
+				);
+			} catch (error) {
+				spinner.fail("Import failed; nothing was written");
+				console.error(chalk.red(`  ${error instanceof Error ? error.message : String(error)}`));
+				process.exitCode = 1;
+				return;
+			} finally {
+				if (db) {
+					db.close();
+				}
+			}
 
 			let identityCount = 0;
 			for (const [path, content] of fileMap) {
@@ -113,30 +153,6 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 				writeFileSync(join(agentsDir, "agent.yaml"), agentYaml);
 			}
 
-			mkdirSync(join(agentsDir, "memory"), { recursive: true });
-			let db: ReturnType<typeof Database> | null = null;
-			const conflict = readConflict(options.conflict);
-			let memResult = { imported: 0, skipped: 0 };
-			let entityCount = 0;
-			let relationCount = 0;
-			try {
-				db = Database(dbPath);
-				try {
-					loadSqliteVec(db);
-				} catch {}
-				runMigrations(db);
-
-				memResult = fileMap.has("memories.jsonl")
-					? importMemories(db, fileMap.get("memories.jsonl") || "", { conflictStrategy: conflict })
-					: { imported: 0, skipped: 0 };
-				entityCount = fileMap.has("entities.jsonl") ? importEntities(db, fileMap.get("entities.jsonl") || "") : 0;
-				relationCount = fileMap.has("relations.jsonl") ? importRelations(db, fileMap.get("relations.jsonl") || "") : 0;
-			} finally {
-				if (db) {
-					db.close();
-				}
-			}
-
 			let skillCount = 0;
 			for (const [path, content] of fileMap) {
 				if (!path.startsWith("skills/")) continue;
@@ -148,12 +164,12 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 			}
 
 			spinner.succeed("Import complete");
-			console.log(chalk.dim(`  ${memResult.imported} memories imported`));
-			if (memResult.skipped > 0) {
-				console.log(chalk.dim(`  ${memResult.skipped} memories skipped (conflict: ${conflict})`));
+			console.log(chalk.dim(`  ${result.memoriesImported} memories imported`));
+			if (result.memoriesSkipped > 0) {
+				console.log(chalk.dim(`  ${result.memoriesSkipped} memories skipped (id already exists)`));
 			}
-			console.log(chalk.dim(`  ${entityCount} entities imported`));
-			console.log(chalk.dim(`  ${relationCount} relations imported`));
+			console.log(chalk.dim(`  ${result.entitiesImported} entities imported`));
+			console.log(chalk.dim(`  ${result.relationsImported} relations imported`));
 			console.log(chalk.dim(`  ${identityCount} identity files written`));
 			if (skillCount > 0) {
 				console.log(chalk.dim(`  ${skillCount} skill files written`));
@@ -187,11 +203,6 @@ function loadDirRecursive(dir: string, prefix: string, out: Map<string, string>)
 			out.set(relPath, readFileSync(fullPath, "utf-8"));
 		} catch {}
 	}
-}
-
-function readConflict(value: unknown): "skip" | "overwrite" | "merge" {
-	if (value === "overwrite" || value === "merge") return value;
-	return "skip";
 }
 
 function resolveImportPath(root: string, rel: string): string | null {

@@ -167,8 +167,8 @@ function seedMention(memoryId: string, entityId: string): void {
 describe("listKnowledgeEntities (issue #515)", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
@@ -523,19 +523,30 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(graph.entities[0]?.aspects[0]?.attributes[0]?.content).toBe("The report supports the current plan.");
 	});
 
-	test("includes source documents that carry source-backed ontology claims", async () => {
+	test("includes source documents that Dreaming claims cite", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
+		const notePath = "references/ai-stack/kimi-k3.md";
 		seedEntity("e-source", "Kimi K3 note", { entityType: "source_document", mentions: 0 });
-		seedAspect("asp-source", "e-source", "related");
-		seedAttribute("attr-source-claim", "asp-source", {
-			kind: "claim",
-			content: "The note describes frontier intelligence.",
+		seedEntity("e-uncited", "Uncited note", { entityType: "source_document", mentions: 0 });
+		seedEntity("e-folder", "AI stack", { entityType: "source_folder", mentions: 0 });
+		seedEntity("e-model", "Kimi K3", { entityType: "concept", mentions: 0 });
+		getDbAccessor().withWriteTx((db) => {
+			const stamp = db.prepare(
+				"UPDATE entities SET source_id = 'obsidian-source', source_kind = 'source_obsidian_markdown', source_path = ?, source_root = '/vault' WHERE id = ?",
+			);
+			stamp.run(notePath, "e-source");
+			stamp.run("references/ai-stack/uncited.md", "e-uncited");
+			stamp.run(notePath, "e-folder");
+		});
+		seedAspect("asp-model", "e-model", "capabilities");
+		seedAttribute("attr-model-claim", "asp-model", {
+			content: "Kimi K3 is described as a frontier model.",
 			sourceId: "obsidian-source",
 			sourceKind: "source_obsidian_markdown",
-			sourcePath: "references/ai-stack/kimi-k3.md",
-			sourceRoot: "/vault",
+			sourcePath: notePath,
+			sourceRoot: "dreaming",
 		});
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -546,8 +557,8 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			).run(
 				"assertion-source-claim",
 				"default",
-				"e-source",
-				"attr-source-claim",
+				"e-model",
+				"attr-model-claim",
 				"observed",
 				"The note observes frontier intelligence.",
 				"the note observes frontier intelligence",
@@ -557,27 +568,17 @@ describe("listKnowledgeEntities (issue #515)", () => {
 				JSON.stringify([{ kind: "source", id: "obsidian-source" }]),
 				"source_obsidian_markdown",
 				"obsidian-source",
-				"references/ai-stack/kimi-k3.md",
-				"/vault",
+				notePath,
+				"dreaming",
 			);
+			db.prepare(
+				`INSERT INTO entity_dependencies
+				 (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, reason,
+				  created_at, updated_at)
+				 VALUES ('dep-note', 'e-folder', 'e-source', 'default', 'contains', 1, 1, 'folder contains note',
+				  datetime('now'), datetime('now'))`,
+			).run();
 		});
-		seedEntity("e-source-kind", "Source-kind-only note", { entityType: "source_document", mentions: 0 });
-		seedAspect("asp-source-kind", "e-source-kind", "overview");
-		seedAttribute("attr-source-kind-claim", "asp-source-kind", {
-			kind: "claim",
-			content: "The claim has source-kind provenance.",
-			sourceKind: "source_obsidian_markdown",
-		});
-		seedAspect("asp-source-unrelated", "e-source", "aaa");
-		seedAttribute("aaa-source-ordinary", "asp-source-unrelated", {
-			content: "An ordinary source value.",
-		});
-		seedEntity("e-empty-source", "Empty source note", { entityType: "source_document", mentions: 0 });
-		seedAspect("asp-empty-source", "e-empty-source", "empty");
-		seedAttribute("attr-empty-source", "asp-empty-source", { sourcePath: "references/ai-stack/empty.md" });
-		seedEntity("e-folder", "AI stack", { entityType: "source_folder", mentions: 0 });
-		seedAspect("asp-folder", "e-folder", "contents");
-		seedAttribute("attr-folder-claim", "asp-folder", { kind: "claim", sourcePath: "references/ai-stack/folder.md" });
 
 		const graph = await getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
 			limit: 10,
@@ -585,28 +586,21 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			maxAttributesPerAspect: 1,
 		});
 
-		expect(graph.entities.map((entity) => entity.id)).toEqual(["e-source", "e-source-kind"]);
-		expect(graph.entities[0]?.aspects[0]?.id).toBe("asp-source");
-		expect(graph.entities[0]?.aspects[0]?.attributes[0]).toMatchObject({
-			id: "attr-source-claim",
-			kind: "claim",
+		expect(graph.entities.map((entity) => entity.id).sort()).toEqual(["e-model", "e-source"]);
+		expect(graph.entities.find((entity) => entity.id === "e-source")).toMatchObject({
+			sourceId: "obsidian-source",
 			sourceKind: "source_obsidian_markdown",
-			sourcePath: "references/ai-stack/kimi-k3.md",
-		});
-		expect(graph.entities[1]?.aspects[0]?.attributes[0]).toMatchObject({
-			id: "attr-source-kind-claim",
-			kind: "claim",
-			sourceKind: "source_obsidian_markdown",
-			sourcePath: null,
+			sourcePath: notePath,
+			aspects: [],
 		});
 		expect(graph.assertions).toMatchObject([
 			{
 				id: "assertion-source-claim",
-				subjectEntityId: "e-source",
-				claimAttributeId: "attr-source-claim",
+				subjectEntityId: "e-model",
+				claimAttributeId: "attr-model-claim",
 				predicate: "observed",
 				confidence: 0.91,
-				sourcePath: "references/ai-stack/kimi-k3.md",
+				sourcePath: notePath,
 				evidenceCount: 1,
 			},
 		]);
@@ -667,8 +661,8 @@ describe("listKnowledgeEntities (issue #515)", () => {
 describe("getKnowledgeEntityDetail (issue #515)", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
@@ -760,8 +754,8 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 describe("getKnowledgeStats (issue #515)", () => {
 	let dbPath = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (dbPath) {
 			const dir = join(dbPath, "..");
 			if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });

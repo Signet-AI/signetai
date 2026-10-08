@@ -65,9 +65,10 @@ temporal summaries. The search path preserves source references and returns
 bounded excerpts rather than handing the model an unbounded database view.
 
 A completed transcript and its related lineage remain one source of evidence,
-not several independent facts to merge blindly. Read-time content-safety rules
-can exclude tainted or blocked content from Dreaming context without deleting
-or rewriting the original source row.
+not several independent facts to merge blindly. When a captured session has
+both a transcript artifact and a transcript record, the transcript record is
+the one Dreaming input; the artifact is offered only when no record exists. Credentials in delivered evidence
+are redacted on the way to Dreaming; the original source row is not rewritten.
 
 The evidence search capability is `search_evidence`. Other read capabilities
 allow Dreaming to inspect entities, aspects, claims, links, contradictions,
@@ -79,15 +80,23 @@ Dreaming is an agentic pass, not a fixed per-fact classifier. Its capability
 registry defines the operations available to the agent, including:
 
 - `search_evidence` for immutable episodic memories, artifacts, and transcripts;
-  without a query it drains the delivery queue, and with a query it searches full
-  history, splitting it on whitespace into words that match independently
+  without a query it pages through the delivery queue, resuming each source
+  where the current pass last read it and reporting `hasMore` until the queue
+  is empty. A page holds one excerpt per source, and a partly read source
+  continues on a later page by itself. The agent files each page before asking
+  for the next, so a pass that runs out of time loses at most one page. Once a pass has used half its
+  timeout, the queue stops handing out new sources (`deliveryClosed`) so the
+  pass can file what it read and record its progress; the rest goes to the
+  next pass. With a query it searches full history, splitting it on whitespace
+  into words that match independently
   (ASCII case-insensitive) and ranking fuller matches first; unspaced text such
   as CJK matches as one phrase
 - `search_entities` and `get_entity` for scoped graph reads
-- `list_aspect_claims`, `get_evidence`, and `walk_links` for claim and lineage reads
-- `attention_list` for queued review and maintenance attention
-- `list_contradictions` and `validate_proposal` for deterministic checks
-- `runbook_read` and `runbook_write` for Dreaming's bounded operational notes
+- `list_aspect_claims` for claims with their evidence, and optionally the aspect's contradictions
+- `attention_list` for queued review and maintenance attention beyond what the pass prompt lists
+- `validate_proposal` for deterministic checks
+- `runbook_write` for Dreaming's per-pass operational note, and `zoom_history` to open a
+  line of the pass history back into the passes and records it was made from
 - `apply_ontology_ops` for daemon-owned semantic mutations
 
 The same scope-bound registry is used across the in-process agent path and the
@@ -96,6 +105,25 @@ and graph reads and writes remain bound to the requested agent scope.
 
 `runbook_write` accepts `reviewedExcludedEvidence` for source revisions that the
 pass inspected completely and intentionally found to contain no durable fact.
+A concrete deliverable the assistant produced for the user's own project, plan,
+or situation, such as a budget, schedule, or draft, counts as durable: Dreaming
+files its specifics on that project, worded as proposed rather than confirmed.
+Generic information not tied to the user's circumstances does not. Advice is
+not durable, but what the user discloses about themselves to get it (their
+situation, constraints, habits, and preferences) is, so a source holding such a
+disclosure is never excluded as empty. Those claims attach to a person entity
+named after the user when the source states a name, and otherwise to one
+entity named `User`; a bare `User` without the person type is still rejected
+as transcript scaffolding. When a source shows several named speakers, such as
+a group chat, each speaker's statements go on that speaker's own entity.
+Separating unnamed users who share one agent scope is best effort (#2037). A pass defers a source only while its transcript is
+still mid-stream or a tool error persists after the call is corrected; a
+missing entity or aspect is created in the same pass. Each claim holds one fact
+with every date, amount, count, and name the source gives for it, and work the
+user asks for on behalf of their own job, business, trip, or event counts as
+their own situation. The
+`memory_head_read` and `memory_head_commit` tools are offered only to content
+passes, which are the only passes that can publish the head.
 Each entry includes the owning `agentId` and `sourceRef`, so multi-scope passes
 cannot attribute a reviewed source to the primary scope. This terminal
 disposition is revision-scoped. A newer source revision becomes eligible again,
@@ -134,9 +162,21 @@ not hold a SQLite write lock.
 Dreaming records pass status, tool calls, applied/skipped/failed mutation
 counts, evidence progress, and summary information. The evidence watermark
 advances only when the pass actually consumes the relevant episodic backlog.
-An `incremental-content` pass stages `memory_head_commit`; the DB owner applies
-the staged head in the same transaction as pass completion and watermark
-updates. If validation or any finalization write fails, the transaction rolls
+A failed ontology operation withholds progress only for the sources it cites,
+unless a successful write in the same pass cited the same source with the same
+quote;
+a failure that cites no source, including one whose operations could not be
+parsed, withholds progress for the sources in its agent scope that no
+successful write in the pass cited, so filed sources and other scopes in the
+same pass still record what was read. Hygiene operations (flags, declines,
+and the archives and merges that cite attention records) carry no evidence, so
+their failures withhold nothing. A failed write whose trace cannot be read
+withholds every scope in the pass.
+An `incremental-content` pass must stage exactly one `memory_head_commit`, and
+fails if the agent ends without one. A pass with nothing to publish resubmits
+the current entries, or an empty entry set while the head is still empty. The
+DB owner applies the staged head in the same transaction as pass completion and
+watermark updates. If validation or any finalization write fails, the transaction rolls
 back the head, pass completion, and watermark together. The generated
 `MEMORY.md` file is a projection: a publication failure leaves a durable
 pending publication for a later read to recover and does not turn the
@@ -161,7 +201,7 @@ The daemon reports a Pipeline V2 mode derived from these controls:
 | `autonomous.frozen` | Prevents the scheduled maintenance interval while leaving on-demand inspection available. |
 | `autonomous.maintenanceMode` | Selects whether maintenance recommendations are observed or executed. |
 
-Fresh installs enable background Dreaming by default and ask about it during provider/model onboarding. If no working provider is connected, it remains enabled but unavailable until one is connected and tested; users can opt out in onboarding. This enables the Pipeline V2 runtime, knowledge graph, autonomous maintenance, update/delete operations, and executable maintenance mode. Rehearsal boosting and reranking also remain enabled by default. `signet setup --enable-dreaming` applies the Dreaming settings to an existing workspace while preserving unrelated configuration. Retired provider-routing and synthesis settings are not written to new configs; migrations remove retired fields from older configs when they can be migrated safely before strict loading.
+Fresh installs enable background Dreaming by default and ask about it during provider/model onboarding. If no provider is connected, it remains enabled but waits: the scheduler reports `blocked` with `reason: "inference_unavailable"`, runs no passes, rechecks every 30 seconds, and resumes on its own once the Dreaming route resolves. An explicit `memory.pipelineV2.enabled: false` turns Dreaming off as well. Users can opt out in onboarding. This enables the Pipeline V2 runtime, knowledge graph, autonomous maintenance, update/delete operations, and executable maintenance mode. Rehearsal boosting and reranking also remain enabled by default. `signet setup --enable-dreaming` applies the Dreaming settings to an existing workspace while preserving unrelated configuration. Retired provider-routing and synthesis settings are not written to new configs; migrations remove retired fields from older configs when they can be migrated safely before strict loading.
 
 `autonomous.allowUpdateDelete` is not the old extraction decision gate. The
 retired extraction, write-gate, and legacy provider-routing configuration keys

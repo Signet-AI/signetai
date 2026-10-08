@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -49,12 +49,12 @@ describe("temporal summary API auth", () => {
 		app = daemon.app;
 	});
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		reloadAuthState?.(dir);
-		closeDbAccessor();
-		rmSync(join(dir, "memory", "memories.db"), { force: true });
-		rmSync(join(dir, "memory", "memories.db-shm"), { force: true });
-		rmSync(join(dir, "memory", "memories.db-wal"), { force: true });
+		await closeDbAccessor();
+		for (const file of readdirSync(join(dir, "memory"))) {
+			if (file.startsWith("memories.db")) rmSync(join(dir, "memory", file), { force: true });
+		}
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		seedNode("node-a", "agent-a");
 		seedNode("node-b", "agent-b", "proj-a", "agent:agent-b:summary");
@@ -64,8 +64,8 @@ describe("temporal summary API auth", () => {
 		closeDbAccessor();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeDbAccessor();
 		if (prev === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {

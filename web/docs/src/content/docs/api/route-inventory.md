@@ -17,12 +17,6 @@ generated runtime route dump.
 
 | Method | Path | Source |
 |--------|------|--------|
-| GET | `/api/os/tray` | platform/daemon/src/routes/app-tray.ts |
-| GET | `/api/os/tray/:id` | platform/daemon/src/routes/app-tray.ts |
-| GET | `/api/os/tray/:id/probe` | platform/daemon/src/routes/app-tray.ts |
-| POST | `/api/os/tray/:id/reprobe` | platform/daemon/src/routes/app-tray.ts |
-| PATCH | `/api/os/tray/:id` | platform/daemon/src/routes/app-tray.ts |
-| POST | `/api/os/install` | platform/daemon/src/routes/app-tray.ts |
 | GET | `/api/changelog` | platform/daemon/src/routes/changelog.ts |
 | GET | `/api/roadmap` | platform/daemon/src/routes/changelog.ts |
 | GET | `/api/readme` | platform/daemon/src/routes/changelog.ts |
@@ -30,10 +24,6 @@ generated runtime route dump.
 | GET | `/health/ready` | platform/daemon/src/routes/health.ts |
 | GET | `/api/mode` | platform/daemon/src/routes/health.ts |
 | POST | `/api/connectors/resync` | platform/daemon/src/routes/connectors-routes.ts |
-| GET | `/api/os/events` | platform/daemon/src/routes/event-bus.ts |
-| GET | `/api/os/events/stream` | platform/daemon/src/routes/event-bus.ts |
-| GET | `/api/os/context` | platform/daemon/src/routes/event-bus.ts |
-| GET | `/api/os/events/stats` | platform/daemon/src/routes/event-bus.ts |
 | GET | `/api/graphiq/status` | platform/daemon/src/routes/graphiq-routes.ts |
 | POST | `/api/graphiq/install` | platform/daemon/src/routes/graphiq-routes.ts |
 | POST | `/api/graphiq/update` | platform/daemon/src/routes/graphiq-routes.ts |
@@ -90,33 +80,11 @@ generated runtime route dump.
 | DELETE | `/api/marketplace/reviews/:id` | platform/daemon/src/routes/marketplace-reviews.ts |
 | GET | `/api/marketplace/reviews/config` | platform/daemon/src/routes/marketplace-reviews.ts |
 | POST | `/api/marketplace/reviews/sync` | platform/daemon/src/routes/marketplace-reviews.ts |
-| GET | `/api/marketplace/mcp` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/policy` | platform/daemon/src/routes/marketplace.ts |
-| PATCH | `/api/marketplace/mcp/policy` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/browse` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/detail` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/test` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/install` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/register` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/tools` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/search` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/call` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/read-resource` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/:id` | platform/daemon/src/routes/marketplace.ts |
-| PATCH | `/api/marketplace/mcp/:id` | platform/daemon/src/routes/marketplace.ts |
-| DELETE | `/api/marketplace/mcp/:id` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/mcp/analytics` | platform/daemon/src/routes/mcp-analytics.ts |
-| GET | `/api/mcp/analytics/:server` | platform/daemon/src/routes/mcp-analytics.ts |
 | GET | `/api/memories/most-used` | platform/daemon/src/routes/memory-routes.ts |
 | GET | `/api/memory/timeline` | platform/daemon/src/routes/memory-routes.ts |
 | GET | `/api/memory/review-queue` | platform/daemon/src/routes/memory-routes.ts |
 | GET | `/api/memory/jobs/:id` | platform/daemon/src/routes/memory-routes.ts |
 | POST | `/api/memory/feedback` | platform/daemon/src/routes/memory-routes.ts |
-| POST | `/api/os/agent-execute` | platform/daemon/src/routes/os-agent.ts |
-| POST | `/api/os/agent-state` | platform/daemon/src/routes/os-agent.ts |
-| GET | `/api/os/agent-events` | platform/daemon/src/routes/os-agent.ts |
-| GET | `/api/os/agent-sessions` | platform/daemon/src/routes/os-agent.ts |
-| POST | `/api/os/chat` | platform/daemon/src/routes/os-chat.ts |
 | GET | `/api/home/greeting` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/reflections/today` | platform/daemon/src/routes/reflection-routes.ts |
 | GET | `/api/reflections` | platform/daemon/src/routes/reflection-routes.ts |
@@ -127,7 +95,6 @@ generated runtime route dump.
 | POST | `/api/diagnostics/openclaw/heartbeat` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/diagnostics/openclaw` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/diagnostics/transcripts` | platform/daemon/src/routes/pipeline-routes.ts |
-| GET | `/api/diagnostics/memory-content-safety` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/diagnostics/workloads` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/pipeline/models` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/pipeline/models/by-provider` | platform/daemon/src/routes/pipeline-routes.ts |
@@ -153,21 +120,11 @@ generated runtime route dump.
 | GET | `/api/telemetry/memory-search` | platform/daemon/src/routes/telemetry-routes.ts |
 | GET | `/api/telemetry/health` | platform/daemon/src/routes/telemetry-routes.ts |
 | GET | `/api/telemetry/memory-search/export` | platform/daemon/src/routes/telemetry-routes.ts |
-| POST | `/api/os/widget/generate` | platform/daemon/src/routes/widget.ts |
-| GET | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
-| DELETE | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
-
-`GET /api/marketplace/mcp` and the marketplace tools/search responses include a
-`runtime` object with `activeClients`, `activeProcesses`, `pending`, and
-`limit`. The counts cover marketplace discovery, probes, and user operations;
-the limit is the daemon-wide client/process budget.
 
 ## Workspace and harness lifecycle
 
 | Method | Path | Source |
 |--------|------|--------|
-| GET | `/api/workspace/migration-control` | platform/daemon/src/daemon.ts |
-| POST | `/api/workspace/migration-control/drain` | platform/daemon/src/daemon.ts |
 | GET | `/api/harnesses/:id/health` | platform/daemon/src/routes/connectors-routes.ts |
 | GET | `/api/hooks/transcript-capture/:jobId` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/hooks/skill-invocation` | platform/daemon/src/routes/hooks-routes.ts |
@@ -176,10 +133,8 @@ the limit is the daemon-wide client/process budget.
 | POST | `/api/memories/:id/supersede` | platform/daemon/src/routes/memory-routes.ts |
 | PATCH | `/api/agents/:name` | platform/daemon/src/routes/misc-routes.ts |
 | POST | `/api/harnesses/:id/connect` | platform/daemon/src/routes/harness-install.ts |
+| POST | `/api/harnesses/:id/disconnect` | platform/daemon/src/routes/harness-install.ts |
 
-Migration-control endpoints are used by the CLI's workspace layout migration
-writer-drain lifecycle; prefer `signet workspace layout migrate` (or its
-compatibility alias, `signet migration`) over calling them directly.
 `POST /api/sources/web` adds a public web source and queues indexing.
 
 ## Transcript import upload routes

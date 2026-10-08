@@ -94,7 +94,8 @@ beforeAll(async () => {
 	}) as typeof fetch;
 });
 
-afterAll(() => {
+afterAll(async () => {
+	await new Promise((resolve) => setTimeout(resolve, 10));
 	globalThis.fetch = originalFetch;
 	restoreDomGlobals();
 });
@@ -104,30 +105,31 @@ describe("dreaming summary layout", () => {
 		const container = document.createElement("div");
 		document.body.appendChild(container);
 		const root: Root = createRoot(container);
+		try {
+			await act(async () => {
+				root.render(<DreamsView />);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
 
-		await act(async () => {
-			root.render(<DreamsView />);
-			await new Promise((resolve) => setTimeout(resolve, 0));
-		});
-
-		const summary = container.querySelector(".dreams-summary");
-		expect(summary).not.toBeNull();
-		expect(summary?.textContent).toContain("A long dreaming summary must remain readable.");
-		expect(container.textContent).toContain("automatic Dreaming deferred: queue pressure");
-		expect(container.querySelector(".dream-section")).toBeNull();
-		expect(container.querySelector(".dreams-activity")?.textContent).toContain("attention_list");
-		const details = container.querySelector<HTMLButtonElement>(".dreams-pass-row");
-		expect(details).toBeDefined();
-		await act(async () => {
-			details?.click();
-			await new Promise((resolve) => setTimeout(resolve, 0));
-		});
-		expect(document.querySelector('[role="dialog"]')?.textContent).toContain("attention_list");
-
-		await act(async () => {
-			root.unmount();
-		});
-		container.remove();
+			const summary = container.querySelector(".dreams-summary");
+			expect(summary).not.toBeNull();
+			expect(summary?.textContent).toContain("A long dreaming summary must remain readable.");
+			expect(container.textContent).toContain("Automatic Dreaming deferred: queue pressure");
+			expect(container.querySelector(".dream-section")).toBeNull();
+			expect(container.querySelector(".dreams-activity")?.textContent).toContain("attention_list");
+			const details = container.querySelector<HTMLButtonElement>(".dreams-pass-row");
+			expect(details).toBeDefined();
+			await act(async () => {
+				details?.click();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
+			expect(document.querySelector('[role="dialog"]')?.textContent).toContain("attention_list");
+		} finally {
+			await act(async () => {
+				root.unmount();
+			});
+			container.remove();
+		}
 	});
 	test("shows the last pass failure when no tool calls were recorded", async () => {
 		fixtureStatus = {
@@ -161,5 +163,15 @@ describe("dreaming summary layout", () => {
 			container.remove();
 			fixtureStatus = DREAM_STATUS;
 		}
+	});
+});
+
+describe("dream pass timestamps", () => {
+	test("reads the daemon's SQLite UTC timestamps, with or without milliseconds, as UTC", async () => {
+		const { parseDate } = await import("./dreaming");
+		expect(parseDate("2026-10-05 20:41:40.564")?.toISOString()).toBe("2026-10-05T20:41:40.564Z");
+		expect(parseDate("2026-10-05 14:21:36")?.toISOString()).toBe("2026-10-05T14:21:36.000Z");
+		expect(parseDate("2026-08-10T14:00:00.000Z")?.toISOString()).toBe("2026-08-10T14:00:00.000Z");
+		expect(parseDate("not a date")).toBeNull();
 	});
 });

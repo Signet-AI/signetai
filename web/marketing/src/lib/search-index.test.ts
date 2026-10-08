@@ -11,7 +11,10 @@ describe("buildBlogSearchItems", () => {
 				description: "Example description",
 				date: new Date("2026-01-01T00:00:00Z"),
 				author: "Nicholai",
+				category: "essay",
 				tags: [],
+				imageAlt: "",
+				imageCover: false,
 				draft: false,
 			},
 		} satisfies Parameters<typeof buildBlogSearchItems>[0];

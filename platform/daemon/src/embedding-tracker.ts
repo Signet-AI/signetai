@@ -153,11 +153,11 @@ export function startEmbeddingTracker(
 	let lastQueueDepth = 0;
 	const failures = new Map<string, FailureState>();
 
-	async function tick(): Promise<void> {
-		if (!running) return;
+	async function tick(): Promise<boolean> {
+		if (!running) return false;
 		if (isSystemPressureHigh()) {
 			skippedCycles++;
-			return;
+			return false;
 		}
 
 		try {
@@ -187,7 +187,10 @@ export function startEmbeddingTracker(
 			});
 			lastQueueDepth = readyRows.length;
 			lastCycleAt = new Date(now).toISOString();
-			if (readyRows.length === 0) return;
+			if (readyRows.length === 0) return false;
+			const firstEmbeddings = readyRows.filter((row) => row.currentModel == null);
+			const budgeted = firstEmbeddings.length === 0;
+			const batch = budgeted ? readyRows : firstEmbeddings;
 			const gate = await awaitEmbeddingProviderAvailable(
 				`${embeddingCfg.provider}:${embeddingCfg.model}:${embeddingCfg.base_url ?? ""}`,
 				async () => (await checkProviderFn(embeddingCfg)).available,
@@ -196,22 +199,22 @@ export function startEmbeddingTracker(
 			);
 			if (!gate.available) {
 				skippedCycles++;
-				return;
+				return false;
 			}
 			const admission = await acquireEmbeddingRepairLease(
 				accessor,
-				repairCfg.reembedCooldownMs,
-				repairCfg.reembedHourlyBudget,
+				budgeted ? repairCfg.reembedCooldownMs : 0,
+				budgeted ? repairCfg.reembedHourlyBudget : Number.MAX_SAFE_INTEGER,
 				now,
 			);
 			if (!admission.allowed || admission.lease === undefined) {
 				skippedCycles++;
-				return;
+				return false;
 			}
 
 			try {
 				const cycle = await processEmbeddingCycle(
-					readyRows,
+					batch,
 					failures,
 					embeddingCfg,
 					trackerCfg.pollMs,
@@ -227,10 +230,11 @@ export function startEmbeddingTracker(
 						agentId,
 						model: embeddingCfg.model,
 						pollMs: trackerCfg.pollMs,
+						budgeted,
 						eligibility: (db) => isActiveEmbeddingConfig(db, embeddingCfg),
 						error: "system pressure became high before embedding persistence",
 					});
-					return;
+					return false;
 				}
 
 				let applied = false;
@@ -270,10 +274,12 @@ export function startEmbeddingTracker(
 					agentId,
 					model: embeddingCfg.model,
 					pollMs: trackerCfg.pollMs,
+					budgeted,
 					eligibility: applied || ((db) => isActiveEmbeddingConfig(db, embeddingCfg)),
 					...(applied || cycle.results.length === 0 ? {} : { error: "embedding profile changed before persistence" }),
 				});
 				logger.debug("embedding-tracker", `Refreshed ${applied ? cycle.results.length : 0} embeddings`);
+				return applied && !budgeted && staleRows.length >= trackerCfg.batchSize;
 			} catch (error) {
 				await finishEmbeddingRepairLease(accessor, admission.lease, {
 					successful: [],
@@ -281,6 +287,7 @@ export function startEmbeddingTracker(
 					agentId,
 					model: embeddingCfg.model,
 					pollMs: trackerCfg.pollMs,
+					budgeted,
 					eligibility: (db) => isActiveEmbeddingConfig(db, embeddingCfg),
 					error: error instanceof Error ? error.message : String(error),
 				});
@@ -288,20 +295,21 @@ export function startEmbeddingTracker(
 			}
 		} catch (err) {
 			logger.warn("embedding-tracker", "Cycle error", err instanceof Error ? err : new Error(String(err)));
+			return false;
 		}
 	}
 
-	function schedule(): void {
+	function schedule(delayMs: number): void {
 		if (!running) return;
 		timer = setTimeout(async () => {
 			const p = tick();
-			inFlightPromise = p;
-			await p;
+			inFlightPromise = p.then(() => undefined);
+			const drainMore = await p;
 			inFlightPromise = null;
-			schedule();
-		}, trackerCfg.pollMs);
+			schedule(drainMore ? 0 : trackerCfg.pollMs);
+		}, delayMs);
 	}
-	schedule();
+	schedule(trackerCfg.pollMs);
 
 	logger.info("embedding-tracker", `Started (poll=${trackerCfg.pollMs}ms, batch=${trackerCfg.batchSize})`);
 

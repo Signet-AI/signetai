@@ -62,7 +62,7 @@ Configuration lives under `continuity` in the pipeline config:
 ## Lossless Session Transcripts
 
 As hooks run, Signet stores the canonical retained conversation transcript as
-JSONL at `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl` and
+JSONL at `$SIGNET_WORKSPACE/transcripts/{harness}/transcript.jsonl` and
 keeps the session row lossless for later projection. The `session_transcripts`
 table (migration 040) is the canonical transcript index. Dreaming sanitizes a
 read-time projection: tool calls become markers, tool outputs are omitted, and
@@ -91,7 +91,7 @@ behind a recalled memory without a separate API call.
 Rolling history now has an explicit authority split.
 
 Canonical historical content lives as immutable markdown artifacts in
-`$SIGNET_WORKSPACE/memory/`:
+`$SIGNET_WORKSPACE/transcripts/`:
 
 - `--transcript.md`
 - `--summary.md`
@@ -112,11 +112,9 @@ The renderer is programmatic. LLM output in this lane is limited to the single
 deterministic fallback when the quality gate fails. The final `MEMORY.md`
 projection always includes:
 
-Before any retained memory or artifact content enters these sections, the
-versioned memory-content-safety policy must mark it `clean`. Tainted or blocked
-content remains in its immutable source row and can be inspected with
-provenance, but is omitted from `MEMORY.md` and Dreaming context. This is a
-projection decision, not a source rewrite or deletion.
+Retained memory and artifact content enters these sections with detected
+credentials replaced by `[redacted credential]`. This is a projection step,
+not a source rewrite or deletion.
 
 - `## Global Head (Tier 1)`
 - `## Thread Heads (Tier 2)`

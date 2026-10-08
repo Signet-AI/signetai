@@ -194,6 +194,12 @@ describe("repair action integration via the new dispatch path", () => {
 				withWriteTx: () => {
 					throw new Error("simulated degraded runtime: DbAccessor is closed");
 				},
+				withReadDbAsync: async () => {
+					throw new Error("simulated degraded runtime: DbAccessor is closed");
+				},
+				withWriteTxAsync: async () => {
+					throw new Error("simulated degraded runtime: DbAccessor is closed");
+				},
 				close(): void {},
 			};
 			const app = new Hono();

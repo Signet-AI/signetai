@@ -66,8 +66,8 @@ const emb: EmbeddingConfig = {
 let root = "";
 let db = "";
 
-afterEach(() => {
-	closeDbAccessor();
+afterEach(async () => {
+	await closeDbAccessor();
 	if (root) rmSync(root, { recursive: true, force: true });
 	root = "";
 	db = "";

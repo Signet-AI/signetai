@@ -3,22 +3,65 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { Switch } from "@/components/ui/switch";
 import {
 	type AgentConfigStore,
-	isDreamingEnabled,
+	dreamingBlockedBy,
 	pv2MaintenanceMode,
 	pv2ToggleValue,
 	pv2ToggleWriteForm,
+	setPipelinePaused,
 	useAgentConfig,
 } from "@/lib/agent-config";
 import { useState } from "react";
 
 import { ConfigFields } from "./config-fields";
 import { SettingRow, SettingSelect, SettingsGroup } from "./controls";
-function DreamingToggle({ store }: { store: AgentConfigStore }) {
-	const dreamingEnabled = isDreamingEnabled(store.agent);
+function PipelinePauseToggle({ store }: { store: AgentConfigStore }) {
+	const [busy, setBusy] = useState(false);
+	const [error, setError] = useState<string | null>(null);
 
 	return (
-		<SettingRow title="Dreaming" desc="Runs while the memory pipeline is not paused or frozen.">
-			<Switch checked={dreamingEnabled} disabled aria-label="Dreaming runtime status" />
+		<SettingRow
+			title="Paused"
+			desc={error ?? "Stops Dreaming and the rest of the memory pipeline until resumed. Applies immediately."}
+		>
+			<Switch
+				checked={dreamingBlockedBy(store.agent) === "paused"}
+				disabled={!store.ready || busy}
+				onCheckedChange={async (paused: boolean) => {
+					setBusy(true);
+					setError(null);
+					const result = await setPipelinePaused(store, paused);
+					if (!result.data?.success) setError(result.error ?? "Could not change the pipeline state. Retry.");
+					setBusy(false);
+				}}
+				aria-label="Pause memory pipeline"
+			/>
+		</SettingRow>
+	);
+}
+
+function DreamingToggle({ store }: { store: AgentConfigStore }) {
+	const path = ["memory", "dreaming", "enabled"] as const;
+	const blockedBy = dreamingBlockedBy(store.agent);
+	const desc =
+		blockedBy === "disabled"
+			? "The memory pipeline is turned off. Turn on Pipeline enabled to run Dreaming."
+			: blockedBy === "paused"
+				? "The memory pipeline is paused. Turn off Paused under Pipeline to run Dreaming."
+				: blockedBy === "frozen"
+					? "Mutations are frozen. Turn off Freeze mutations under Pipeline to run Dreaming."
+					: "Runs dreaming passes automatically as transcripts build up.";
+
+	return (
+		<SettingRow title="Dreaming" desc={desc}>
+			<Switch
+				checked={blockedBy === null && store.aBool(path, false)}
+				disabled={!store.ready || blockedBy !== null}
+				onCheckedChange={(value: boolean) => {
+					store.aSetBool(path, value);
+					void store.save();
+				}}
+				aria-label="Dreaming"
+			/>
 		</SettingRow>
 	);
 }
@@ -137,11 +180,17 @@ export function AdvancedSection() {
 
 	return (
 		<div className="flex flex-col gap-3">
+			{store.error && (
+				<p role="alert" className="text-sm text-destructive">
+					{store.error}
+				</p>
+			)}
 			<SettingsGroup title="Privacy">
 				<TelemetrySettings store={store} />
 			</SettingsGroup>
 
 			<SettingsGroup title="Pipeline">
+				<PipelinePauseToggle store={store} />
 				<ConfigFields
 					store={store}
 					fields={[
@@ -150,6 +199,7 @@ export function AdvancedSection() {
 							path: pv2("enabled"),
 							title: "Pipeline enabled",
 							desc: "Master switch. The memory pipeline does nothing when disabled.",
+							fallback: true,
 						},
 						{
 							kind: "toggle",
@@ -371,6 +421,24 @@ export function AdvancedSection() {
 							min: 10000,
 							max: 1000000,
 							step: 10000,
+						},
+						{
+							kind: "number",
+							path: drm("maxConcurrentPasses"),
+							title: "Concurrent passes",
+							desc: "Passes that may run at once for different agents. Default 2. Never more than the shared LLM concurrency limit.",
+							min: 1,
+							max: 16,
+							step: 1,
+						},
+						{
+							kind: "number",
+							path: drm("maxInputTokens"),
+							title: "Input budget (tokens)",
+							desc: "Sizes evidence reads: each page holds up to a sixteenth of this. Default 128,000. Lower it for small-context models.",
+							min: 8000,
+							max: 1000000,
+							step: 1000,
 						},
 						{
 							kind: "toggle",

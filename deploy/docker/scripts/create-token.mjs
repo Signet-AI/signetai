@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { createHmac } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 function readArg(name, fallback = "") {
 	const idx = process.argv.indexOf(name);
@@ -8,11 +9,22 @@ function readArg(name, fallback = "") {
 	return process.argv[idx + 1] ?? fallback;
 }
 
+function runtimeDir(root) {
+	try {
+		const layout = JSON.parse(readFileSync(`${root}/workspace-layout.json`, "utf8"));
+		if (layout?.version !== 2) return `${root}/.daemon`;
+		const custom = layout.overrides?.runtime;
+		return typeof custom === "string" ? resolve(root, custom) : `${root}/runtime`;
+	} catch {
+		return `${root}/.daemon`;
+	}
+}
+
 function base64url(input) {
 	return Buffer.from(input).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
-const path = readArg("--secret", `${process.env.SIGNET_PATH ?? "/data/agents"}/.daemon/auth-secret`);
+const path = readArg("--secret", `${runtimeDir(process.env.SIGNET_PATH ?? "/data/agents")}/auth-secret`);
 const role = readArg("--role", "admin");
 const sub = readArg("--sub", `docker:${role}`);
 const ttl = Number.parseInt(readArg("--ttl", "604800"), 10);

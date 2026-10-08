@@ -19,6 +19,7 @@ import {
 	isChildOf,
 	isJsonObject,
 	isSignetGeneratedFile,
+	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
 import { expandHome, hasValidIdentity, loadIdentityMode } from "@signet/core";
@@ -199,6 +200,8 @@ export class GeminiConnector extends BaseConnector {
 
 	private registerMcpServer(geminiHome: string): string | null {
 		const settingsPath = join(geminiHome, "settings.json");
+		const mcp = resolveSignetMcpCommand();
+		const signet = { command: mcp.command, args: [...mcp.args], ...(mcp.env ? { env: { ...mcp.env } } : {}) };
 
 		if (existsSync(settingsPath)) {
 			const settings = readGeminiSettings(settingsPath);
@@ -209,10 +212,7 @@ export class GeminiConnector extends BaseConnector {
 			const existingMcp = isJsonObject(settings.mcpServers) ? (settings.mcpServers as JsonObject) : {};
 			settings.mcpServers = {
 				...existingMcp,
-				signet: {
-					command: "signet-mcp",
-					args: [],
-				},
+				signet,
 			};
 
 			atomicWriteJson(settingsPath, settings);
@@ -221,10 +221,7 @@ export class GeminiConnector extends BaseConnector {
 
 		const settings: JsonObject = {
 			mcpServers: {
-				signet: {
-					command: "signet-mcp",
-					args: [],
-				},
+				signet,
 			},
 		};
 

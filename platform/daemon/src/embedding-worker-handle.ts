@@ -45,6 +45,7 @@ export interface EmbeddingHandleOptions {
 	readonly embeddingWorkerPath?: string | null;
 	readonly wasmAssetDir?: string | null;
 	readonly transformersRuntimeAssetPath?: string | null;
+	readonly task?: "embed" | "rerank";
 }
 
 interface PendingRpc {
@@ -68,6 +69,7 @@ export interface EmbeddingProviderSnapshot {
 
 export interface EmbeddingWorkerHandle {
 	embed(text: string): Promise<number[]>;
+	rerank(query: string, documents: readonly string[]): Promise<number[]>;
 	checkAvailable(): Promise<EmbeddingProviderStatus>;
 	getStatus(): EmbeddingProviderSnapshot;
 	getLastError(): string | null;
@@ -97,6 +99,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		modelId,
 		expectedDimensions: dimensions,
 		...(opts.remoteHostOverride ? { remoteHostOverride: opts.remoteHostOverride } : {}),
+		...(opts.task ? { task: opts.task } : {}),
 	};
 
 	const workerPath =
@@ -141,15 +144,22 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		pending.clear();
 	}
 
-	function sendRpc(kind: "embed" | "checkAvailable", extra?: { text: string }): number {
+	type RpcKind = "embed" | "checkAvailable" | "rerank";
+	type RpcExtra = { readonly text?: string; readonly query?: string; readonly documents?: readonly string[] };
+
+	function sendRpc(kind: RpcKind, extra?: RpcExtra): number {
 		const id = nextId++;
 		const msg: MainToWorkerMessage =
-			kind === "embed" ? { type: "embed", id, text: extra?.text ?? "" } : { type: "checkAvailable", id };
+			kind === "embed"
+				? { type: "embed", id, text: extra?.text ?? "" }
+				: kind === "rerank"
+					? { type: "rerank", id, query: extra?.query ?? "", documents: extra?.documents ?? [] }
+					: { type: "checkAvailable", id };
 		worker.postMessage(msg);
 		return id;
 	}
 
-	function rpc<T>(kind: "embed" | "checkAvailable", timeoutMs: number, extra?: { text: string }): Promise<T> {
+	function rpc<T>(kind: RpcKind, timeoutMs: number, extra?: RpcExtra): Promise<T> {
 		return ready.then(
 			() =>
 				new Promise<T>((resolve, reject) => {
@@ -158,15 +168,15 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 						if (pending.has(id)) {
 							clearPending(id);
 							const message =
-								kind === "embed"
-									? `embed timed out after ${timeoutMs}ms (worker isolated; provider disabled until daemon restart)`
-									: `checkAvailable timed out after ${timeoutMs}ms (worker isolated; provider marked unavailable)`;
+								kind === "checkAvailable"
+									? `checkAvailable timed out after ${timeoutMs}ms (worker isolated; provider marked unavailable)`
+									: `${kind} timed out after ${timeoutMs}ms (worker isolated; provider disabled until daemon restart)`;
 							lastError = message;
 							lastFailureAt = Date.now();
 							status = { ...status, initialized: false, initializing: false, error: message };
 							logger.warn("native-embedding", message);
 							reject(new Error(message));
-							if (kind === "embed") {
+							if (kind !== "checkAvailable") {
 								disabled = true;
 								try {
 									const result = worker.terminate();
@@ -196,12 +206,18 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 				entry?.resolve(msg.vector);
 				break;
 			}
-			case "embed_error": {
+			case "embed_error":
+			case "rerank_error": {
 				const entry = clearPending(msg.id);
 				if (entry) {
 					lastError = msg.error;
 					entry.reject(new Error(msg.error));
 				}
+				break;
+			}
+			case "rerank_result": {
+				const entry = clearPending(msg.id);
+				entry?.resolve(msg.scores);
 				break;
 			}
 			case "check_result": {
@@ -270,6 +286,20 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 				if (disabled) throw new Error(lastError ?? "Native embedding provider disabled until daemon restart");
 				if (inCooldown()) throw new Error(lastError ?? "Native embedding init on cooldown");
 				return rpc<number[]>("embed", embedTimeoutMs, { text });
+			});
+			embedQueue = run.then(
+				() => {},
+				() => {},
+			);
+			return run;
+		},
+
+		async rerank(query: string, documents: readonly string[]): Promise<number[]> {
+			const run = embedQueue.then(() => {
+				if (stopped) throw new Error("Cross-encoder provider shut down");
+				if (disabled) throw new Error(lastError ?? "Cross-encoder provider disabled until daemon restart");
+				if (inCooldown()) throw new Error(lastError ?? "Cross-encoder init on cooldown");
+				return rpc<number[]>("rerank", status.initialized ? embedTimeoutMs : initTimeoutMs, { query, documents });
 			});
 			embedQueue = run.then(
 				() => {},

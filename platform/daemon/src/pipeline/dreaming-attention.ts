@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { ownerQueryAll } from "../db-owner-maintenance";
+import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { timestampMillis } from "../episodic-sources";
 
 export const DREAMING_ATTENTION_KINDS = [
@@ -135,7 +137,7 @@ export function getDreamingAttention(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: import("../db-accessor").ReadDb) => getDreamingAttentionInDb(db, agentId, limit),
-		"pipeline/dreaming-attention.ts:136",
+		"pipeline/dreaming-attention.ts:138",
 	);
 }
 
@@ -161,9 +163,9 @@ export function getDreamingAttentionWorkloadDiagnostics(
 			pending: row.pending,
 			oldestAgeMs: oldestMs > 0 ? Math.max(0, nowMs - oldestMs) : null,
 		};
-	}, "pipeline/dreaming-attention.ts:148");
+	}, "pipeline/dreaming-attention.ts:150");
 }
-export function getDreamingAttentionScoped(
+export async function getDreamingAttentionScoped(
 	accessor: DbAccessor,
 	agentId: string,
 	options: {
@@ -171,36 +173,34 @@ export function getDreamingAttentionScoped(
 		readonly status?: "pending" | "resolved";
 		readonly limit?: number;
 	},
-): readonly DreamingAttention[] {
+): Promise<readonly DreamingAttention[]> {
 	const boundedLimit = Math.max(1, Math.min(Math.floor(options.limit ?? 20), 100));
 	const kindFilter = typeof options.kind === "string" && options.kind.length > 0 ? "AND kind = ?" : "";
 	const statusFilter = options.status === "resolved" ? "AND resolved_at IS NOT NULL" : "AND resolved_at IS NULL";
-	const params: unknown[] = [agentId];
-	if (kindFilter) params.push(options.kind);
-	params.push(boundedLimit);
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("../db-accessor").ReadDb) => {
-		const rows = db
-			.prepare(
-				`SELECT id, kind, subject_ref AS subjectRef, details_json AS detailsJson, priority, created_at AS createdAt
-				 FROM dreaming_attention
-				 WHERE agent_id = ? ${kindFilter} ${statusFilter}
-				 ORDER BY priority DESC, created_at ASC, id ASC
-				 LIMIT ?`,
-			)
-			.all(...params) as Array<{
-			id: string;
-			kind: DreamingAttentionKind;
-			subjectRef: string;
-			detailsJson: string;
-			priority: number;
-			createdAt: string;
-		}>;
-		return rows.map(({ detailsJson, ...attention }) => ({
-			...attention,
-			details: parseDetails(detailsJson),
-		}));
-	}, "pipeline/dreaming-attention.ts:182");
+	const params: string[] = [agentId];
+	if (kindFilter && options.kind !== undefined) params.push(options.kind);
+	const rows = await ownerQueryAll<{
+		id: string;
+		kind: DreamingAttentionKind;
+		subjectRef: string;
+		detailsJson: string;
+		priority: number;
+		createdAt: string;
+	}>(
+		await getDbOwnerForAccessor(accessor),
+		"dreaming.attention.scoped",
+		`SELECT id, kind, subject_ref AS subjectRef, details_json AS detailsJson, priority, created_at AS createdAt
+		 FROM dreaming_attention
+		 WHERE agent_id = ? ${kindFilter} ${statusFilter}
+		 ORDER BY priority DESC, created_at ASC, id ASC
+		 LIMIT ?`,
+		[...params, boundedLimit],
+		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+	);
+	return rows.map(({ detailsJson, ...attention }) => ({
+		...attention,
+		details: parseDetails(detailsJson),
+	}));
 }
 export function getDreamingAttentionAcrossScopes(
 	accessor: DbAccessor,

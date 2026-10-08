@@ -44,6 +44,7 @@ export interface LlmUsage {
 	readonly totalDurationMs: number | null;
 	readonly accountingProvenance?: AccountingProvenance;
 	readonly cacheRequests?: LlmCacheRequestAccounting | null;
+	readonly peakContextTokens?: number | null;
 }
 
 export interface LlmGenerateResult {
@@ -264,6 +265,7 @@ export interface PipelineTraversalConfig {
 export interface PipelineRerankerConfig {
 	readonly enabled: boolean;
 	readonly model: string;
+	readonly crossEncoderModel: string;
 	readonly useExtractionModel: boolean;
 	readonly topN: number;
 	readonly timeoutMs: number;
@@ -454,7 +456,9 @@ export interface DreamingConfig {
 	readonly maxInterval: number;
 	readonly timeout: number;
 	readonly maxInputTokens: number;
-	readonly maxOutputTokens: number;
+	readonly maxOutputTokens: number | null;
+	readonly maxConcurrentPasses: number;
+	readonly codemode: boolean;
 	readonly backfillOnFirstRun: boolean;
 	readonly surprisal?: DreamingSurprisalConfig;
 }
@@ -691,6 +695,9 @@ export type EntityType = (typeof ENTITY_TYPES)[number];
 export const ATTRIBUTE_KINDS = ["attribute", "constraint", "claim"] as const;
 export type AttributeKind = (typeof ATTRIBUTE_KINDS)[number];
 
+export const CLAIM_TIME_PRECISIONS = ["day", "week", "month", "year", "approximate"] as const;
+export type ClaimTimePrecision = (typeof CLAIM_TIME_PRECISIONS)[number];
+
 export const ATTRIBUTE_STATUSES = ["active", "superseded", "deleted"] as const;
 export type AttributeStatus = (typeof ATTRIBUTE_STATUSES)[number];
 export const ONTOLOGY_ROW_STATUSES = ["active", "archived"] as const;
@@ -881,6 +888,11 @@ export interface EntityAttribute {
 	readonly sourceRoot: string | null;
 	readonly proposalId: string | null;
 	readonly proposalEvidence: readonly unknown[];
+	readonly occurredStart?: string | null;
+	readonly occurredEnd?: string | null;
+	readonly validFrom?: string | null;
+	readonly validUntil?: string | null;
+	readonly timePrecision?: ClaimTimePrecision | null;
 	readonly createdAt: string;
 	readonly updatedAt: string;
 }

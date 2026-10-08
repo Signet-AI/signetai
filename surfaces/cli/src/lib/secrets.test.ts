@@ -52,16 +52,16 @@ async function waitForFileWithin(path: string, attempts: number): Promise<boolea
 	return existsSync(path);
 }
 
-function unavailableKeyring() {
+function headlessKeyring() {
 	return {
 		platform: "test",
 		service: "test",
 		account: "test",
 		async get() {
-			return { state: "unavailable" as const, message: "test keyring unavailable" };
+			return { state: "unavailable" as const, message: "no Secret Service on this host", backend: "absent" as const };
 		},
 		async set() {
-			return { state: "unavailable" as const, message: "test keyring unavailable" };
+			return { state: "unavailable" as const, message: "no Secret Service on this host", backend: "absent" as const };
 		},
 	};
 }
@@ -90,8 +90,8 @@ function writeMigrationRaceScript(path: string): void {
 			"if (process.env.SIGNET_MACHINE_ID) setMachineIdResolverForTests(() => process.env.SIGNET_MACHINE_ID);",
 			'const foundKeyring = { platform: "test", service: "test", account: "test", async get() { return { state: "found", value: nativeKey }; }, async set(value) { return { state: "found", value }; } };',
 			'const dynamicReadKeyring = { platform: "test", service: "test", account: "test", async get() { return existsSync(process.env.SIGNET_READ_LOCK_READY ?? "") ? { state: "found", value: nativeKey } : { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } };',
-			'const unavailableKeyring = { platform: "test", service: "test", account: "test", async get() { return { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } };',
-			'const keyring = process.env.SIGNET_KEYRING === "found" ? foundKeyring : process.env.SIGNET_READ_DYNAMIC ? dynamicReadKeyring : unavailableKeyring;',
+			'const headlessKeyring = { platform: "test", service: "test", account: "test", async get() { return { state: "unavailable", backend: "absent" }; }, async set() { return { state: "unavailable", backend: "absent" }; } };',
+			'const keyring = process.env.SIGNET_KEYRING === "found" ? foundKeyring : process.env.SIGNET_READ_DYNAMIC ? dynamicReadKeyring : headlessKeyring;',
 			"setSecretKeyringAdapterForTests(keyring);",
 			'if (process.env.SIGNET_MIGRATION_READY && process.env.SIGNET_MIGRATION_GO) __setSecretStoreWriteHookForTests((stage) => { if (stage !== "after-write") return; writeFileSync(process.env.SIGNET_MIGRATION_READY, "ready"); while (!existsSync(process.env.SIGNET_MIGRATION_GO)) {} });',
 			'if (process.env.SIGNET_WRITER_LOCK_READY && process.env.SIGNET_WRITER_LOCK_GO) __setSecretStoreLockHookForTests((stage) => { if (stage !== "after-acquire") return; writeFileSync(process.env.SIGNET_WRITER_LOCK_READY, "ready"); while (!existsSync(process.env.SIGNET_WRITER_LOCK_GO)) {} });',
@@ -121,7 +121,7 @@ describe("daemonless secret API", () => {
 	test("round-trips local secrets without a daemon", async () => {
 		workspace = mkdtempSync(join(tmpdir(), "signet-offline-secrets-"));
 		process.env.SIGNET_PATH = workspace;
-		setSecretKeyringAdapterForTests(unavailableKeyring());
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		const api = createOfflineSecretApiCall();
 
 		expect(await api("GET", "/api/secrets")).toEqual({ ok: true, data: { secrets: [], provider: "local" } });
@@ -143,7 +143,7 @@ describe("daemonless secret API", () => {
 	test("executes a local secret synchronously without a daemon", async () => {
 		workspace = mkdtempSync(join(tmpdir(), "signet-offline-secret-exec-"));
 		process.env.SIGNET_PATH = workspace;
-		setSecretKeyringAdapterForTests(unavailableKeyring());
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		const api = createOfflineSecretApiCall();
 		await api("POST", "/api/secrets/OFFLINE_KEY", { value: "offline-value" });
 		const script = join(workspace, "print-secret.mjs");
@@ -163,7 +163,7 @@ describe("daemonless secret API", () => {
 	test("does not leak short secrets from offline exec output", async () => {
 		workspace = mkdtempSync(join(tmpdir(), "signet-offline-short-secret-exec-"));
 		process.env.SIGNET_PATH = workspace;
-		setSecretKeyringAdapterForTests(unavailableKeyring());
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		const api = createOfflineSecretApiCall();
 		await api("POST", "/api/secrets/SHORT_KEY", { value: "x" });
 		const script = join(workspace, "print-short-secret.mjs");
@@ -183,6 +183,7 @@ describe("daemonless secret API", () => {
 		workspace = mkdtempSync(join(tmpdir(), "signet-headless-secret-exec-"));
 		process.env.SIGNET_PATH = workspace;
 		delete process.env.DBUS_SESSION_BUS_ADDRESS;
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		const offline = createOfflineSecretApiCall();
 		await offline("POST", "/api/secrets/HEADLESS_KEY", { value: "headless-value" });
 		const script = join(workspace, "print-headless-secret.mjs");
@@ -255,7 +256,7 @@ describe("daemonless secret API", () => {
 			[
 				'import { existsSync, writeFileSync } from "node:fs";',
 				'import { __setSecretStoreLockHookForTests, putLocalSecret, setSecretKeyringAdapterForTests } from "@signet/core";',
-				'setSecretKeyringAdapterForTests({ platform: "test", service: "test", account: "test", async get() { return { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } });',
+				'setSecretKeyringAdapterForTests({ platform: "test", service: "test", account: "test", async get() { return { state: "unavailable", backend: "absent" }; }, async set() { return { state: "unavailable", backend: "absent" }; } });',
 				'const pause = (stage, expected, ready, go) => { if (stage !== expected || !ready || !go) return; writeFileSync(ready, "ready"); while (!existsSync(go)) {} };',
 				'if (process.env.SIGNET_LOCK_READY || process.env.SIGNET_STALE_READY) __setSecretStoreLockHookForTests((stage) => { pause(stage, "after-acquire", process.env.SIGNET_LOCK_READY, process.env.SIGNET_LOCK_GO); pause(stage, "after-stale-check", process.env.SIGNET_STALE_READY, process.env.SIGNET_STALE_GO); });',
 				'if (process.env.SIGNET_WRITER_STARTED) writeFileSync(process.env.SIGNET_WRITER_STARTED, "started");',
@@ -273,7 +274,7 @@ describe("daemonless secret API", () => {
 		writeFileSync(ownerGo, "go");
 		expect(await Promise.all([owner, loser])).toEqual([0, 0]);
 		process.env.SIGNET_PATH = workspace;
-		setSecretKeyringAdapterForTests(unavailableKeyring());
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		expect(await createOfflineSecretApiCall()("GET", "/api/secrets")).toEqual({
 			ok: true,
 			data: { secrets: ["FIRST_KEY", "SECOND_KEY"], provider: "local" },
@@ -286,7 +287,7 @@ describe("daemonless secret API", () => {
 		const script = join(import.meta.dir, `.secret-migration-race-${process.pid}.mjs`);
 		writerScript = script;
 		writeMigrationRaceScript(script);
-		setSecretKeyringAdapterForTests(unavailableKeyring());
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		await createOfflineSecretApiCall()("POST", "/api/secrets/BASE", { value: "base-value" });
 
 		const nativeKey = Buffer.alloc(32, 7).toString("base64");
@@ -337,7 +338,7 @@ describe("daemonless secret API", () => {
 		const script = join(import.meta.dir, `.secret-migration-read-race-${process.pid}.mjs`);
 		writerScript = script;
 		writeMigrationRaceScript(script);
-		setSecretKeyringAdapterForTests(unavailableKeyring());
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		setMachineIdResolverForTests(() => "legacy-machine-id");
 		await createOfflineSecretApiCall()("POST", "/api/secrets/BASE", { value: "base-value" });
 		rmSync(join(workspace, ".secrets", ".machine-id"));
@@ -381,7 +382,7 @@ describe("daemonless secret API", () => {
 		const script = join(import.meta.dir, `.secret-migration-order-${process.pid}.mjs`);
 		writerScript = script;
 		writeMigrationRaceScript(script);
-		setSecretKeyringAdapterForTests(unavailableKeyring());
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		await createOfflineSecretApiCall()("POST", "/api/secrets/BASE", { value: "base-value" });
 
 		const nativeKey = Buffer.alloc(32, 9).toString("base64");
@@ -420,7 +421,7 @@ describe("daemonless secret API", () => {
 			[
 				'import { existsSync, writeFileSync } from "node:fs";',
 				'import { __setSecretStoreLockHookForTests, putLocalSecret, setSecretKeyringAdapterForTests } from "@signet/core";',
-				'setSecretKeyringAdapterForTests({ platform: "test", service: "test", account: "test", async get() { return { state: "unavailable" }; }, async set() { return { state: "unavailable" }; } });',
+				'setSecretKeyringAdapterForTests({ platform: "test", service: "test", account: "test", async get() { return { state: "unavailable", backend: "absent" }; }, async set() { return { state: "unavailable", backend: "absent" }; } });',
 				'const pause = (stage, expected, ready, go) => { if (stage !== expected || !ready || !go) return; writeFileSync(ready, "ready"); while (!existsSync(go)) {} };',
 				'__setSecretStoreLockHookForTests((stage) => { pause(stage, "after-acquire", process.env.SIGNET_LOCK_READY, process.env.SIGNET_LOCK_GO); pause(stage, "after-stale-check", process.env.SIGNET_STALE_READY, process.env.SIGNET_STALE_GO); });',
 				"await putLocalSecret(process.argv[2], process.argv[3]);",
@@ -447,7 +448,7 @@ describe("daemonless secret API", () => {
 		expect(await Promise.all([reaper, replacement])).toEqual([0, 0]);
 
 		process.env.SIGNET_PATH = workspace;
-		setSecretKeyringAdapterForTests(unavailableKeyring());
+		setSecretKeyringAdapterForTests(headlessKeyring());
 		expect(await getLocalSecretValue("FIRST_KEY")).toBe("first");
 		expect(await getLocalSecretValue("SECOND_KEY")).toBe("second");
 	});

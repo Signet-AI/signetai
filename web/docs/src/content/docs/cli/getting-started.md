@@ -92,7 +92,7 @@ A `--file` or `--json` plan is for fresh setup. It does not carry credentials fo
 | `--remote-url <url>` | Use a bare remote daemon origin instead of starting a local daemon. |
 | `--deployment-type local|vps|server` | Adjust non-interactive inferred defaults only. |
 
-Current setup accepts `claude-code`, `codex`, `kimi`, `opencode`, `forge`, `openclaw`, `oh-my-pi`, `pi`, `hermes-agent`, and `gemini` harness names. Kimi uses the ACPX agent name `kimi`. For OpenClaw, `--openclaw-runtime-path plugin|legacy` selects its integration path and `--configure-openclaw-workspace` opts into patching discovered configurations.
+Current setup accepts `claude-code`, `codex`, `kimi`, `opencode`, `forge`, `openclaw`, `oh-my-pi`, `pi`, `hermes-agent`, `gemini`, and `muse-code` harness names. Kimi uses the ACPX agent name `kimi`. For OpenClaw, `--openclaw-runtime-path plugin|legacy` selects its integration path and `--configure-openclaw-workspace` opts into patching discovered configurations.
 
 ### Inference and search flags
 

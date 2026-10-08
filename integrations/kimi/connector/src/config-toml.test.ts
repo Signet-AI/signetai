@@ -235,6 +235,22 @@ describe("KimiConnector.install — mcp.json registration", () => {
 		expect(json.mcpServers).toEqual({ signet: { command: "signet-mcp", args: [] } });
 	});
 
+	test("registers the running native Signet binary as the MCP worker", async () => {
+		const nativeBinary = join(tempHome, "signet");
+		writeFileSync(nativeBinary, "");
+		const originalExecPath = process.execPath;
+		process.execPath = nativeBinary;
+		try {
+			await connector().install(tempHome);
+		} finally {
+			process.execPath = originalExecPath;
+		}
+
+		expect(readMcpJson().mcpServers).toEqual({
+			signet: { command: nativeBinary, args: [], env: { SIGNET_MCP_STDIO_WORKER: "1" } },
+		});
+	});
+
 	test("merges signet server into existing mcp.json without clobbering other servers", async () => {
 		writeFileSync(
 			mcpPath,

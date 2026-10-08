@@ -1,50 +1,17 @@
 import { readFileSync, existsSync } from "fs"
-import { createOpenAI } from "@ai-sdk/openai"
-import { createAnthropic } from "@ai-sdk/anthropic"
-import { createGoogleGenerativeAI } from "@ai-sdk/google"
-import { generateText } from "ai"
-import type { Benchmark } from "../../types/benchmark"
-import type { RunCheckpoint } from "../../types/checkpoint"
+import type { AnswerPlan, Benchmark } from "../../types/benchmark"
+import type { DerivedOnlyAnswer, RunCheckpoint } from "../../types/checkpoint"
 import type { Provider } from "../../types/provider"
+import type { UnifiedQuestion } from "../../types/unified"
 import { CheckpointManager } from "../checkpoint"
-import { config, createConfiguredOpenAI } from "../../utils/config"
 import { logger } from "../../utils/logger"
-import { getModelConfig, ModelConfig, DEFAULT_ANSWERING_MODEL } from "../../utils/models"
+import { getModelConfig, DEFAULT_ANSWERING_MODEL } from "../../utils/models"
+import { assertModelCredentials, generateWithModel } from "../../utils/llm"
 import { buildDefaultAnswerPrompt } from "../../prompts/defaults"
 import { buildContextString } from "../../types/prompts"
 import { ConcurrentExecutor } from "../concurrent"
 import { resolveConcurrency } from "../../types/concurrency"
 import { countTokens } from "../../utils/tokens"
-
-type LanguageModel =
-  | ReturnType<typeof createOpenAI>
-  | ReturnType<typeof createAnthropic>
-  | ReturnType<typeof createGoogleGenerativeAI>
-
-function getAnsweringModel(modelAlias: string): {
-  client: LanguageModel
-  modelConfig: ModelConfig
-} {
-  const modelConfig = getModelConfig(modelAlias || DEFAULT_ANSWERING_MODEL)
-
-  switch (modelConfig.provider) {
-    case "openai":
-      return {
-        client: createConfiguredOpenAI(config.openaiApiKey),
-        modelConfig,
-      }
-    case "anthropic":
-      return {
-        client: createAnthropic({ apiKey: config.anthropicApiKey }),
-        modelConfig,
-      }
-    case "google":
-      return {
-        client: createGoogleGenerativeAI({ apiKey: config.googleApiKey }),
-        modelConfig,
-      }
-  }
-}
 
 function buildAnswerPrompt(
   question: string,
@@ -65,6 +32,37 @@ function buildAnswerPrompt(
   }
 
   return buildDefaultAnswerPrompt(question, context, questionDate)
+}
+
+export function planAnswer(
+  benchmark: Benchmark,
+  question: UnifiedQuestion,
+  context: unknown[],
+  questionDate?: string,
+  provider?: Provider
+): AnswerPlan {
+  if (benchmark.protocol) {
+    return benchmark.protocol.createAnswerPlan({
+      question,
+      sessions: benchmark.getHaystackSessions(question.questionId),
+      results: context,
+    })
+  }
+  return {
+    prompt: buildAnswerPrompt(question.question, context, questionDate, provider),
+    basePrompt: buildAnswerPrompt(question.question, [], questionDate, provider),
+    evidenceCount: context.length,
+  }
+}
+
+export function splitDerivedEvidence(
+  context: unknown[],
+  provider?: Provider
+): { derived: unknown[]; rawEvidenceCount: number } | undefined {
+  const classify = provider?.classifyResult?.bind(provider)
+  if (!classify) return undefined
+  const derived = context.filter((result) => classify(result) === "derived")
+  return { derived, rawEvidenceCount: context.length - derived.length }
 }
 
 export function normalizeGeneratedAnswer(text: string): string {
@@ -98,7 +96,8 @@ export async function runAnswerPhase(
     return
   }
 
-  const { client, modelConfig } = getAnsweringModel(checkpoint.answeringModel)
+  const modelConfig = getModelConfig(checkpoint.answeringModel || DEFAULT_ANSWERING_MODEL)
+  assertModelCredentials(modelConfig)
   const concurrency = resolveConcurrency("answer", checkpoint.concurrency, provider?.concurrency)
 
   logger.info(
@@ -124,29 +123,45 @@ export async function runAnswerPhase(
         const context: unknown[] = searchData.results || []
         const questionDate = checkpoint.questions[question.questionId]?.questionDate
 
-        const basePrompt = buildAnswerPrompt(question.question, [], questionDate, provider)
-        const prompt = buildAnswerPrompt(question.question, context, questionDate, provider)
+        const plan = planAnswer(benchmark, question, context, questionDate, provider)
 
-        const basePromptTokens = countTokens(basePrompt, modelConfig)
-        const promptTokens = countTokens(prompt, modelConfig)
+        const basePromptTokens = countTokens(plan.basePrompt, modelConfig)
+        const promptTokens = countTokens(plan.prompt, modelConfig)
         const contextTokens = Math.max(0, promptTokens - basePromptTokens)
 
-        const params: Record<string, unknown> = {
-          model: client(modelConfig.id),
-          prompt,
-          maxTokens: modelConfig.defaultMaxTokens,
-        }
-
-        if (modelConfig.supportsTemperature) {
-          params.temperature = modelConfig.defaultTemperature
-        }
-
-        const { text } = await generateText(params as Parameters<typeof generateText>[0])
+        const { text, usage } = await generateWithModel(modelConfig, plan.prompt)
         const hypothesis = normalizeGeneratedAnswer(text)
         if (hypothesis !== text.trim()) {
           logger.warn(
             `Answer model returned an empty response for ${question.questionId}; recording an explicit abstention so the question remains in the score denominator.`
           )
+        }
+
+        const split = splitDerivedEvidence(context, provider)
+        let derivedOnly: DerivedOnlyAnswer | undefined
+        if (split && split.rawEvidenceCount === 0) {
+          derivedOnly = {
+            reusedProductAnswer: true,
+            hypothesis,
+            promptTokens,
+            contextTokens,
+            evidenceCount: plan.evidenceCount,
+          }
+        } else if (split) {
+          const derivedPlan = planAnswer(benchmark, question, split.derived, questionDate, provider)
+          const derivedPromptTokens = countTokens(derivedPlan.prompt, modelConfig)
+          const derivedAnswer = await generateWithModel(modelConfig, derivedPlan.prompt)
+          derivedOnly = {
+            reusedProductAnswer: false,
+            hypothesis: normalizeGeneratedAnswer(derivedAnswer.text),
+            promptTokens: derivedPromptTokens,
+            contextTokens: Math.max(
+              0,
+              derivedPromptTokens - countTokens(derivedPlan.basePrompt, modelConfig)
+            ),
+            evidenceCount: derivedPlan.evidenceCount,
+            usage: derivedAnswer.usage,
+          }
         }
 
         const durationMs = Date.now() - startTime
@@ -156,6 +171,9 @@ export async function runAnswerPhase(
           promptTokens,
           basePromptTokens,
           contextTokens,
+          evidenceCount: plan.evidenceCount,
+          usage,
+          ...(split ? { rawEvidenceCount: split.rawEvidenceCount, derivedOnly } : {}),
           completedAt: new Date().toISOString(),
           durationMs,
         })

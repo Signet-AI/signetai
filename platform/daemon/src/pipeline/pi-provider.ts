@@ -1,5 +1,5 @@
 import { createWorkerAgentSession, leaseWorkerAgentSession } from "./pi-agent-client";
-import type { PiAgentWorkerInput, PiAgentTool } from "./pi-agent-protocol";
+import type { PiAgentRetryPolicy, PiAgentTool, PiAgentWorkerInput } from "./pi-agent-protocol";
 import {
 	type Api,
 	type Context,
@@ -95,6 +95,7 @@ export interface PiAgentSessionProvider {
 			readonly systemPrompt?: string;
 			readonly persistentSessionKey?: string;
 			readonly continuationPrompt?: string;
+			readonly retry?: PiAgentRetryPolicy;
 		},
 	): Promise<PiAgentSession>;
 }
@@ -370,6 +371,14 @@ function effectiveAccountingProvenance(
 	return hasUsage || accountingProvenance === "local_zero_cost" ? accountingProvenance : "unavailable";
 }
 
+function peakContextTokens(usages: readonly Usage[] | undefined): number | null {
+	if (usages === undefined || usages.length === 0) return null;
+	const peak = Math.max(
+		...usages.map((usage) => (usage.input ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0)),
+	);
+	return peak > 0 ? peak : null;
+}
+
 export function mapUsage(usage: Usage, accountingProvenance: AccountingProvenance): LlmUsage {
 	const effectiveProvenance = effectiveAccountingProvenance(usageHasAccounting(usage), accountingProvenance);
 	return {
@@ -382,6 +391,7 @@ export function mapUsage(usage: Usage, accountingProvenance: AccountingProvenanc
 		totalDurationMs: null,
 		accountingProvenance: effectiveProvenance,
 		cacheRequests: summarizeCacheRequests([usage]),
+		peakContextTokens: peakContextTokens([usage]),
 	};
 }
 export function mapSessionStatsToUsage(
@@ -401,6 +411,7 @@ export function mapSessionStatsToUsage(
 			totalDurationMs,
 			accountingProvenance,
 			cacheRequests: requestUsages === undefined ? null : summarizeCacheRequests(requestUsages),
+			peakContextTokens: peakContextTokens(requestUsages),
 		};
 	}
 	const effectiveProvenance = effectiveAccountingProvenance(
@@ -424,6 +435,7 @@ export function mapSessionStatsToUsage(
 		totalDurationMs,
 		accountingProvenance: effectiveProvenance,
 		cacheRequests: requestUsages === undefined ? null : summarizeCacheRequests(requestUsages),
+		peakContextTokens: peakContextTokens(requestUsages),
 	};
 }
 
@@ -441,6 +453,13 @@ function extractText(content: unknown): string {
 
 interface PiError extends Error {
 	stopReason?: string;
+	status?: number;
+}
+
+function leadingHttpStatus(detail: string): number | undefined {
+	const match = /^(\d{3})\b/.exec(detail.trim());
+	const status = match ? Number(match[1]) : Number.NaN;
+	return status >= 400 && status <= 599 ? status : undefined;
 }
 
 function toError(label: string, message: { stopReason: string; errorMessage?: string }): PiError {
@@ -448,6 +467,8 @@ function toError(label: string, message: { stopReason: string; errorMessage?: st
 	const detail = message.errorMessage ?? reason;
 	const err = new Error(`Pi provider ${label} failed (${reason}): ${detail}`) as PiError;
 	err.stopReason = reason;
+	const status = leadingHttpStatus(detail);
+	if (status !== undefined) err.status = status;
 	return err;
 }
 function callerAbort(
@@ -693,6 +714,7 @@ export function createPiModelProvider(
 				readonly systemPrompt?: string;
 				readonly persistentSessionKey?: string;
 				readonly continuationPrompt?: string;
+				readonly retry?: PiAgentRetryPolicy;
 			} = {},
 		) {
 			const create = options.persistentSessionKey
@@ -705,7 +727,14 @@ export function createPiModelProvider(
 					systemPrompt:
 						options.systemPrompt ??
 						"You are a bounded Signet maintenance agent. You may use only the supplied daemon tools.",
-					tools: tools.map(({ name, label, description, parameters }) => ({ name, label, description, parameters })),
+					tools: tools.map(({ name, label, description, parameters, exposure }) => ({
+						name,
+						label,
+						description,
+						parameters,
+						...(exposure ? { exposure } : {}),
+					})),
+					...(options.retry ? { retry: options.retry } : {}),
 				},
 				tools,
 				options.signal,

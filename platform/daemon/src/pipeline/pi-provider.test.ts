@@ -249,6 +249,32 @@ describe("pi provider catalog models", () => {
 		).toEqual({ requests: 3, hits: 1, misses: 1, unknown: 1, writes: 1 });
 	});
 
+	test("reports the largest single request's context as the peak", () => {
+		const stats: SessionStats = {
+			sessionFile: undefined,
+			sessionId: "session",
+			userMessages: 1,
+			assistantMessages: 3,
+			toolCalls: 2,
+			toolResults: 2,
+			totalMessages: 6,
+			tokens: { input: 9_000, output: 600, cacheRead: 150_000, cacheWrite: 4_000, total: 163_600 },
+			cost: 0,
+		};
+		const usage = (input: number, cacheRead: number, cacheWrite: number): Usage =>
+			({ input, cacheRead, cacheWrite }) as Usage;
+
+		expect(
+			mapSessionStatsToUsage(stats, 10, "provider_reported", [
+				usage(4_000, 0, 4_000),
+				usage(2_000, 60_000, 0),
+				usage(3_000, 90_000, 0),
+			]).peakContextTokens,
+		).toBe(93_000);
+		expect(mapSessionStatsToUsage(stats, 10, "provider_reported").peakContextTokens).toBeNull();
+		expect(mapUsage(usage(1_500, 20_000, 500), "provider_reported").peakContextTokens).toBe(22_000);
+	});
+
 	test("does not report request cache accounting when a provider omits cache fields", () => {
 		const mapped = mapUsage({} as Usage, "provider_reported");
 		expect(mapped).toMatchObject({

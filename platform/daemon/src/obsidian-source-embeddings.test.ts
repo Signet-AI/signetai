@@ -44,9 +44,9 @@ describe("Obsidian source embeddings", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		resetEmbeddingCircuitBreakers();
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (prevSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = prevSignetPath;
 		if (prevAgentId === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
@@ -382,15 +382,12 @@ describe("Obsidian source embeddings", () => {
 		});
 
 		const cfg = loadMemoryConfig(dir);
-		cfg.embedding.provider = embeddingConfig.provider;
-		cfg.embedding.model = embeddingConfig.model;
-		cfg.embedding.dimensions = embeddingConfig.dimensions;
-		cfg.embedding.base_url = embeddingConfig.base_url;
 		cfg.search.min_score = 0;
 		cfg.search.rehearsal_enabled = false;
 		cfg.pipelineV2.graph.enabled = false;
 		cfg.pipelineV2.hints.enabled = false;
 		cfg.pipelineV2.reranker.enabled = false;
+		cfg.pipelineV2.guardrails.recallTruncateChars = 8_000;
 		const response = await hybridRecall(
 			{ query: "canonical source_path heading provenance", limit: 3, agentId: "obsidian-embedding-agent" },
 			cfg,
@@ -429,15 +426,12 @@ describe("Obsidian source embeddings", () => {
 		});
 
 		const cfg = loadMemoryConfig(dir);
-		cfg.embedding.provider = embeddingConfig.provider;
-		cfg.embedding.model = embeddingConfig.model;
-		cfg.embedding.dimensions = embeddingConfig.dimensions;
-		cfg.embedding.base_url = embeddingConfig.base_url;
 		cfg.search.min_score = 0;
 		cfg.search.rehearsal_enabled = false;
 		cfg.pipelineV2.graph.enabled = false;
 		cfg.pipelineV2.hints.enabled = false;
 		cfg.pipelineV2.reranker.enabled = false;
+		cfg.pipelineV2.guardrails.recallTruncateChars = 8_000;
 
 		const agentARecall = await hybridRecall(
 			{ query: "scoped Obsidian chunks", limit: 3, agentId: "agent-a" },

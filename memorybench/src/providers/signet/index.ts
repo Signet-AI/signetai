@@ -1,5 +1,4 @@
-import { createOpenAI } from "@ai-sdk/openai"
-import { extractStructuredMemories } from "../../prompts/extraction"
+import { EXTRACTION_MODEL, extractStructuredMemories } from "../../prompts/extraction"
 import type {
   IndexingProgressCallback,
   IngestOptions,
@@ -7,18 +6,22 @@ import type {
   FinalizeIngestOptions,
   Provider,
   ProviderConfig,
+  RecallEvidenceKind,
   SearchOptions,
 } from "../../types/provider"
 import type { UnifiedSession } from "../../types/unified"
-import { createConfiguredOpenAI } from "../../utils/config"
+import type { DreamingPassUsage, IngestUsage } from "../../types/checkpoint"
+import { addUsage, assertModelCredentials, emptyUsage } from "../../utils/llm"
 import { logger } from "../../utils/logger"
 import { SIGNET_PROMPTS, SIGNET_SUPERMEMORY_PARITY_PROMPTS } from "./prompts"
 
 const DEFAULT_AGENT_ID = "memorybench"
 const DEFAULT_PROJECT = "memorybench"
 const DEFAULT_TIMEOUT_MS = 60_000
+const DREAM_STATUS_CONCURRENCY = 4
 const STRICT_SEARCH_LIMIT = 10
 const SUPERMEMORY_PARITY_SEARCH_LIMIT = 30
+const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"]
 const MONTH_NAMES = [
   "January",
   "February",
@@ -73,10 +76,68 @@ interface DreamingTriggerResponse {
   error?: string
 }
 
+interface DreamingStatusPass {
+  id?: string
+  status?: string
+  error?: string | null
+  tokensInput?: number | null
+  tokensOutput?: number | null
+  tokensCacheRead?: number | null
+  mutationsApplied?: number | null
+}
+
+interface EmbeddingHealthResponse {
+  checks?: Array<{ name?: string; detail?: { unembedded?: number } }>
+}
+
 interface DreamingStatusResponse {
-  worker?: { running?: boolean }
-  passes?: Array<{ id?: string; status?: string; error?: string | null }>
+  worker?: { running?: boolean; activePasses?: unknown[] }
+  config?: { maxConcurrentPasses?: number }
+  passes?: DreamingStatusPass[]
   episodicTokensPending?: number
+}
+
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null
+}
+
+export function observeDreamingPasses(
+  target: Record<string, DreamingPassUsage>,
+  passes: readonly DreamingStatusPass[] | undefined
+): void {
+  for (const pass of passes ?? []) {
+    if (!pass.id || pass.status === "running") continue
+    target[pass.id] = {
+      inputTokens: finiteOrNull(pass.tokensInput),
+      outputTokens: finiteOrNull(pass.tokensOutput),
+      cacheReadTokens: finiteOrNull(pass.tokensCacheRead),
+    }
+  }
+}
+
+function passHadNothingToDo(pass: DreamingStatusPass): boolean {
+  return pass.status === "completed" && (pass.mutationsApplied ?? 0) === 0 && !((pass.tokensInput ?? 0) > 0)
+}
+
+const MAX_IDLE_DREAMING_PASSES = 3
+const MAX_FAILED_DREAMING_PASSES = 3
+
+const RAW_EVIDENCE_ID_PREFIXES = ["source-chunk:", "native-artifact:", "transcript:"] as const
+
+export function classifySignetRecallResult(result: unknown): RecallEvidenceKind {
+  const id =
+    typeof result === "object" && result !== null && "id" in result ? result.id : undefined
+  return typeof id === "string" && RAW_EVIDENCE_ID_PREFIXES.some((prefix) => id.startsWith(prefix))
+    ? "raw-evidence"
+    : "derived"
+}
+
+export function haystackAgentId(containerTag: string): string {
+  const agentId = `memorybench-${containerTag}`
+  if (!/^[A-Za-z0-9._:-]+$/.test(agentId)) {
+    throw new Error(`Container tag ${containerTag} cannot form a Signet agent id`)
+  }
+  return agentId
 }
 
 function parseSessionDate(session: UnifiedSession): string | undefined {
@@ -134,6 +195,10 @@ export function buildSignetRecallQuery(query: string, questionDate?: string): st
     four: 4,
     five: 5,
     six: 6,
+    seven: 7,
+    eight: 8,
+    nine: 9,
+    ten: 10,
   }
   if (weekMatch) {
     const raw = (weekMatch[1] ?? "").toLowerCase()
@@ -143,6 +208,26 @@ export function buildSignetRecallQuery(query: string, questionDate?: string): st
       date.setUTCDate(date.getUTCDate() - weeks * 7)
       hints.push(`${weekMatch[0]} resolves near ${formatTemporalHintDate(date)}`)
     }
+  }
+
+  const dayMatch = query.match(/\b(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+days?\s+ago\b/i)
+  if (dayMatch) {
+    const raw = (dayMatch[1] ?? "").toLowerCase()
+    const days = wordNumbers[raw] ?? Number.parseInt(raw, 10)
+    if (Number.isFinite(days) && days > 0) {
+      const date = new Date(anchor)
+      date.setUTCDate(date.getUTCDate() - days)
+      hints.push(`${dayMatch[0]} resolves near ${formatTemporalHintDate(date)}`)
+    }
+  }
+
+  const weekdayMatch = query.match(/\blast\s+(sunday|monday|tuesday|wednesday|thursday|friday|saturday)\b/i)
+  if (weekdayMatch) {
+    const target = WEEKDAY_NAMES.indexOf((weekdayMatch[1] ?? "").toLowerCase())
+    const date = new Date(anchor)
+    const back = (date.getUTCDay() - target + 7) % 7 || 7
+    date.setUTCDate(date.getUTCDate() - back)
+    hints.push(`${weekdayMatch[0]} resolves near ${formatTemporalHintDate(date)}`)
   }
 
   const monthMatch = query.match(
@@ -242,7 +327,9 @@ export class SignetProvider implements Provider {
   concurrency = { default: 10, ingest: 5, search: 8 }
 
   private baseUrl = ""
-  private openai: ReturnType<typeof createOpenAI> | null = null
+  private readonly extractionUsage = emptyUsage()
+  private readonly dreamingPasses: Record<string, DreamingPassUsage> = {}
+  private readonly isolatedAgents = new Set<string>()
   private agentId = process.env.SIGNET_BENCH_AGENT_ID || DEFAULT_AGENT_ID
   private project = process.env.SIGNET_BENCH_PROJECT || DEFAULT_PROJECT
   private timeoutMs = readPositiveInt("SIGNET_BENCH_REQUEST_TIMEOUT_MS", DEFAULT_TIMEOUT_MS)
@@ -266,13 +353,9 @@ export class SignetProvider implements Provider {
         "Signet provider requires SIGNET_BENCH_DAEMON_URL or SIGNET_BASE_URL. Use `bun run bench` to start an isolated daemon automatically."
       )
     }
-    if (this.profile === "structured" && (!config.apiKey || config.apiKey === "none")) {
-      throw new Error("Signet provider requires OPENAI_API_KEY for structured extraction")
-    }
+    if (this.profile === "structured") assertModelCredentials(EXTRACTION_MODEL)
 
     this.baseUrl = trimTrailingSlash(baseUrl)
-    this.openai =
-      config.apiKey && config.apiKey !== "none" ? createConfiguredOpenAI(config.apiKey) : null
 
     const health = await this.request<{ status?: string; agentsDir?: string; version?: string }>(
       "/health",
@@ -290,12 +373,64 @@ export class SignetProvider implements Provider {
   protected async extractStructured(
     session: UnifiedSession
   ): Promise<Awaited<ReturnType<typeof extractStructuredMemories>>> {
-    if (!this.openai) throw new Error("Provider not initialized")
-    return extractStructuredMemories(this.openai, session)
+    const extracted = await extractStructuredMemories(session)
+    addUsage(this.extractionUsage, extracted.usage)
+    return extracted
+  }
+
+  classifyResult(result: unknown): RecallEvidenceKind {
+    return classifySignetRecallResult(result)
+  }
+
+  getIngestUsage(): IngestUsage {
+    return {
+      harness: addUsage(emptyUsage(), this.extractionUsage),
+      ...(Object.keys(this.dreamingPasses).length > 0
+        ? { dreamingPasses: { ...this.dreamingPasses } }
+        : {}),
+    }
+  }
+
+  private async ensureIsolatedAgent(agentId: string): Promise<void> {
+    if (this.isolatedAgents.has(agentId)) return
+    try {
+      await this.request(`/api/agents/${encodeURIComponent(agentId)}`, {
+        method: "PATCH",
+        body: JSON.stringify({ read_policy: "isolated" }),
+      })
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("failed (404)")) throw error
+      await this.request("/api/agents", {
+        method: "POST",
+        body: JSON.stringify({ name: agentId, read_policy: "isolated" }),
+      })
+    }
+    this.isolatedAgents.add(agentId)
+  }
+
+  private async readDreamStatuses(scopes: readonly string[], measure = false): Promise<DreamingStatusResponse[]> {
+    const statuses: DreamingStatusResponse[] = new Array(scopes.length)
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (next < scopes.length) {
+        const index = next++
+        statuses[index] = await this.readDreamStatus(scopes[index]!, measure)
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(DREAM_STATUS_CONCURRENCY, scopes.length) }, worker))
+    return statuses
+  }
+
+  private async readDreamStatus(agentId: string, measure = false): Promise<DreamingStatusResponse> {
+    const status = await this.request<DreamingStatusResponse>(
+      `/api/dream/status?agentId=${encodeURIComponent(agentId)}${measure ? "&measure=1" : ""}`,
+      { method: "GET" }
+    )
+    observeDreamingPasses(this.dreamingPasses, status.passes)
+    return status
   }
 
   async ingest(sessions: UnifiedSession[], options: IngestOptions): Promise<IngestResult> {
-    if (this.profile === "structured" && !this.openai) throw new Error("Provider not initialized")
 
     const ids: string[] = []
     const pending: string[] = []
@@ -303,7 +438,8 @@ export class SignetProvider implements Provider {
 
     for (const session of sessions) {
       if (this.profile === "dreaming") {
-        const agentId = this.agentIdForSession(session)
+        const agentId = this.agentIdForSession(session, options.containerTag)
+        await this.ensureIsolatedAgent(agentId)
         const capture = await this.captureDreamingSession(session, options, agentId)
         if (!capture.transcriptCaptureJobId) {
           throw new Error(
@@ -415,16 +551,20 @@ export class SignetProvider implements Provider {
 
   async search(query: string, options: SearchOptions): Promise<unknown[]> {
     const recallQuery = buildSignetRecallQuery(query, options.questionDate)
-    const agentId = options.agentId ?? this.agentId
+    const agentId =
+      options.agentId ??
+      (this.profile === "dreaming" ? haystackAgentId(options.containerTag) : this.agentId)
+    if (this.profile === "dreaming") await this.ensureIsolatedAgent(agentId)
     const response = await this.request<SignetRecallResponse>("/api/memory/recall", {
       method: "POST",
       body: JSON.stringify({
         query: recallQuery,
         limit: resolveSignetSearchLimit(this.profile, options.limit),
         threshold: options.threshold || 0.3,
-        scope: options.containerTag,
         agentId,
-        project: this.project,
+        ...(this.profile === "dreaming"
+          ? {}
+          : { scope: options.containerTag, project: this.project }),
         expand: true,
       }),
     })
@@ -441,17 +581,14 @@ export class SignetProvider implements Provider {
       `Signet provider clear skipped for ${containerTag}; isolated daemon workspace owns cleanup`
     )
   }
-  async finalizeIngest(_options: FinalizeIngestOptions): Promise<void> {
+  async finalizeIngest(options: FinalizeIngestOptions): Promise<void> {
     if (this.profile !== "dreaming") return
-    const scopes = this.dreamingAgentIds.size > 0 ? [...this.dreamingAgentIds] : [this.agentId]
-    const dreamStatusPath = (agentId: string): string =>
-      `/api/dream/status?agentId=${encodeURIComponent(agentId)}`
+    const ingested = new Set([...this.dreamingAgentIds, ...(options.agentIds ?? [])])
+    const scopes = ingested.size > 0 ? [...ingested] : [this.agentId]
     const readyDeadline = Date.now() + 60_000
     let workerReady = false
     while (Date.now() < readyDeadline) {
-      const statuses = await Promise.all(
-        scopes.map((agentId) => this.request<DreamingStatusResponse>(dreamStatusPath(agentId), { method: "GET" }))
-      )
+      const statuses = await this.readDreamStatuses(scopes)
       if (statuses.every((status) => status.worker?.running)) {
         workerReady = true
         break
@@ -462,56 +599,122 @@ export class SignetProvider implements Provider {
 
     const deadline = Date.now() + readPositiveInt("SIGNET_BENCH_DREAMING_WAIT_SECS", 720) * 1000
     const pollMs = Math.min(readPositiveInt("SIGNET_BENCH_DREAMING_POLL_SECS", 1), 5) * 1000
+    const settled = new Set(
+      ((await this.readDreamStatus(this.agentId)).passes ?? []).flatMap((pass) =>
+        pass.id && pass.status !== "running" ? [pass.id] : []
+      )
+    )
+    let idlePasses = 0
+    let failedPasses = 0
+    let emptyTriggers = 0
+    let measured = false
+    let holdTriggers = false
+    await this.triggerDreaming()
     while (Date.now() < deadline) {
-      let accepted: DreamingTriggerResponse
-      try {
-        accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
-          method: "POST",
-          body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
-        })
-      } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes("/api/dream/trigger failed (409)")) throw error
-        const status = await this.request<DreamingStatusResponse>(dreamStatusPath(this.agentId), { method: "GET" })
-        const running = status.passes?.find((pass) => pass.status === "running" && pass.id)
-        if (!running?.id) throw error
-        accepted = { passId: running.id }
-      }
-      if (!accepted.passId) {
-        throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
+      const primary = await this.readDreamStatus(this.agentId)
+      const slots = Math.max(1, Math.floor(primary.config?.maxConcurrentPasses ?? 1))
+      const finished = (primary.passes ?? []).filter(
+        (pass): pass is DreamingStatusPass & { id: string } =>
+          typeof pass.id === "string" && pass.status !== "running" && !settled.has(pass.id)
+      )
+      for (const pass of finished) {
+        settled.add(pass.id)
+        if (pass.status !== "completed") {
+          failedPasses++
+          const failure = `Dreaming pass ${pass.id} ${pass.status || "failed"}: ${pass.error || "no detail"}`
+          if (failedPasses >= MAX_FAILED_DREAMING_PASSES * slots) {
+            throw new Error(`${failure} (${failedPasses} consecutive failed passes)`)
+          }
+          logger.warn(`${failure}; retrying (${failedPasses}/${MAX_FAILED_DREAMING_PASSES * slots})`)
+          continue
+        }
+        failedPasses = 0
+        if (passHadNothingToDo(pass)) {
+          holdTriggers = true
+          continue
+        }
+        holdTriggers = false
+        idlePasses = (pass.mutationsApplied ?? 0) > 0 ? 0 : idlePasses + 1
       }
 
-      let completed = false
-      while (Date.now() < deadline) {
-        const primary = await this.request<DreamingStatusResponse>(dreamStatusPath(this.agentId), { method: "GET" })
-        const pass = primary.passes?.find((candidate) => candidate.id === accepted.passId)
-        if (pass && pass.status !== "running") {
-          if (pass.status !== "completed") {
-            throw new Error(`Dreaming pass ${accepted.passId} ${pass.status || "failed"}: ${pass.error || "no detail"}`)
+      const active = primary.worker?.activePasses?.length ?? 0
+      if (finished.length > 0 || active === 0 || !measured) {
+        measured = true
+        const statuses = await this.readDreamStatuses(scopes, true)
+        if (statuses.every((status) => status.episodicTokensPending === 0)) {
+          if (active === 0) {
+            await this.awaitDerivedEmbeddings(pollMs)
+            return
           }
-          const statuses = await Promise.all(
-            scopes.map((agentId) =>
-              agentId === this.agentId
-                ? Promise.resolve(primary)
-                : this.request<DreamingStatusResponse>(dreamStatusPath(agentId), { method: "GET" })
+        } else {
+          if (idlePasses >= MAX_IDLE_DREAMING_PASSES * slots) {
+            const backlog = statuses.map((status) => status.episodicTokensPending ?? "unmeasured").join(", ")
+            throw new Error(
+              `Dreaming applied no mutations in ${idlePasses} consecutive passes while the backlog was not drained (${backlog})`
             )
-          )
-          if (statuses.some((status) => typeof status.episodicTokensPending !== "number")) {
-            throw new Error("Dreaming status did not report the episodic backlog for every scenario scope")
           }
-          if (statuses.every((status) => status.episodicTokensPending === 0)) return
-          completed = true
-          break
+          if (active < slots && (active === 0 || !holdTriggers)) {
+            const started = await this.triggerDreaming()
+            const onlyEmpty = finished.length > 0 && finished.every(passHadNothingToDo)
+            if (active === 0 && (onlyEmpty || (!started && finished.length === 0))) {
+              emptyTriggers++
+              if (emptyTriggers >= MAX_IDLE_DREAMING_PASSES) {
+                throw new Error(`Dreaming started no new passes in ${emptyTriggers} consecutive triggers`)
+              }
+            } else {
+              emptyTriggers = 0
+            }
+          }
         }
-        await new Promise((resolve) => setTimeout(resolve, pollMs))
       }
-      if (!completed) break
+      await new Promise((resolve) => setTimeout(resolve, pollMs))
     }
     throw new Error("Timed out draining the Dreaming episodic backlog")
   }
 
-  private agentIdForSession(session: UnifiedSession): string {
+  private async triggerDreaming(): Promise<boolean> {
+    try {
+      const accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
+        method: "POST",
+        body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
+      })
+      if (!accepted.passId) throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
+      return true
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("/api/dream/trigger failed (409)")) return false
+      throw error
+    }
+  }
+
+  private async awaitDerivedEmbeddings(pollMs: number): Promise<void> {
+    const deadline = Date.now() + readPositiveInt("SIGNET_BENCH_EMBEDDING_WAIT_SECS", 1800) * 1000
+    const stallMs = 180_000
+    let best = Number.POSITIVE_INFINITY
+    let progressAt = Date.now()
+    while (Date.now() < deadline) {
+      const health = await this.request<EmbeddingHealthResponse>("/api/embeddings/health", { method: "GET" })
+      const coverage = health.checks?.find((check) => check.name === "coverage")?.detail
+      const unembedded = typeof coverage?.unembedded === "number" ? coverage.unembedded : null
+      if (unembedded === null) {
+        logger.warn("Signet embedding health did not report coverage; searching without waiting")
+        return
+      }
+      if (unembedded === 0) return
+      if (unembedded < best) {
+        best = unembedded
+        progressAt = Date.now()
+      } else if (Date.now() - progressAt > stallMs) {
+        logger.warn(`${unembedded} Signet memories are still unembedded and embedding has stalled; searching anyway`)
+        return
+      }
+      await new Promise((resolve) => setTimeout(resolve, Math.max(pollMs, 5_000)))
+    }
+    logger.warn("Timed out waiting for Signet memory embeddings; searching anyway")
+  }
+
+  private agentIdForSession(session: UnifiedSession, containerTag: string): string {
     const declared = session.metadata?.agentId
-    if (declared === undefined) return this.agentId
+    if (declared === undefined) return haystackAgentId(containerTag)
     if (typeof declared !== "string" || !/^[A-Za-z0-9._:-]+$/.test(declared)) {
       throw new Error(`Dreaming benchmark session ${session.sessionId} has an invalid agentId`)
     }
@@ -542,6 +745,7 @@ export class SignetProvider implements Provider {
         sessionKey: sessionId,
         agentId,
         cwd: this.project,
+        reason: "session_shutdown",
         transcript,
         capturedAt: parseSessionDate(session),
       }),
@@ -561,7 +765,8 @@ export class SignetProvider implements Provider {
     const pending = new Set(result.taskIds ?? [])
     const completed: string[] = []
     const failed: string[] = []
-    const deadline = Date.now() + this.timeoutMs
+    const waitSecs = readPositiveInt("SIGNET_BENCH_CAPTURE_WAIT_SECS", 1800)
+    const deadline = Date.now() + waitSecs * 1000
     let delay = 100
 
     while (pending.size > 0 && Date.now() < deadline) {
@@ -593,7 +798,9 @@ export class SignetProvider implements Provider {
     }
 
     if (pending.size > 0) {
-      throw new Error(`Timed out waiting for ${pending.size} canonical transcript capture job(s)`)
+      throw new Error(
+        `Timed out after ${waitSecs}s waiting for ${pending.size} canonical transcript capture job(s); raise SIGNET_BENCH_CAPTURE_WAIT_SECS if the capture queue is still draining`
+      )
     }
   }
 

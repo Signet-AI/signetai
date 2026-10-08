@@ -51,7 +51,6 @@ import { getInferenceRouterOrNull } from "../inference-router";
 import { fetchInternal } from "../internal-fetch.js";
 import { logger } from "../logger";
 import { type EmbeddingConfig, loadMemoryConfig } from "../memory-config";
-import { upsertMemoryContentSafetyInTx } from "../memory-content-safety";
 import { normalizeMarkdownBody, writeCompactionArtifact } from "../memory-lineage.js";
 import { type RecallParams, hybridRecall } from "../memory-search";
 import {
@@ -63,6 +62,7 @@ import {
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
 import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { DEFAULT_SYNTHESIS_WORKER_CONFIG } from "../pipeline/synthesis-worker";
+import { openBoundedSse } from "../sse-stream.js";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpochAsync } from "../session-recall-dedupe";
@@ -620,6 +620,9 @@ function registerSessionEnd(app: Hono): void {
 			if (!body.harness) {
 				return c.json({ error: "harness is required" }, 400);
 			}
+			if (body.lastAssistantMessage !== undefined && typeof body.lastAssistantMessage !== "string") {
+				return c.json({ error: "lastAssistantMessage must be a string" }, 400);
+			}
 			const capturedAt = parseIsoTimestamp(body.capturedAt, "capturedAt");
 			if (capturedAt.error) return c.json({ error: capturedAt.error }, 400);
 			body.capturedAt = capturedAt.value;
@@ -634,7 +637,7 @@ function registerSessionEnd(app: Hono): void {
 			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath, agentId);
 			if (conflict) return c.json(conflict);
 			const transcriptPath = parseOptionalString(body.transcriptPath);
-			if (transcriptPath) {
+			if (transcriptPath || parseOptionalString(body.lastAssistantMessage)) {
 				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 				if (denied) return denied;
 				const scopedAgent = resolveScopedAgentId(c, agentId);
@@ -1136,7 +1139,7 @@ function registerCompactionComplete(app: Hono): void {
 									 WHERE session_key = ? AND agent_id = ?`,
 								)
 								.get(body.sessionKey, agentId) as { project: string | null } | undefined,
-						"routes/hooks-routes.ts:1130",
+						"db:hooks.session-transcript.project.read",
 					)
 				: undefined;
 			const requestedProject = transcriptRow?.project ?? parseOptionalString(body.project);
@@ -1181,12 +1184,6 @@ function registerCompactionComplete(app: Hono): void {
 						"system",
 						null,
 					);
-					upsertMemoryContentSafetyInTx(db, {
-						agentId,
-						sourceKind: "memory",
-						sourceId: summaryId,
-						content: summary,
-					});
 
 					const table = db
 						.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
@@ -1215,12 +1212,6 @@ function registerCompactionComplete(app: Hono): void {
 						JSON.stringify({ source: "compaction-complete" }),
 						now,
 					);
-					upsertMemoryContentSafetyInTx(db, {
-						agentId,
-						sourceKind: "summary",
-						sourceId: nodeId,
-						content: summary,
-					});
 					upsertThreadHead(db as unknown as Database, {
 						agentId,
 						nodeId,
@@ -1232,7 +1223,7 @@ function registerCompactionComplete(app: Hono): void {
 						sourceRef: body.sessionKey ?? null,
 						harness: body.harness,
 					});
-				}, "routes/hooks-routes.ts:1160");
+				}, "db:hooks.session-summary.memory.write");
 
 				try {
 					await writeCompactionArtifact({
@@ -1301,7 +1292,7 @@ function registerCompactionComplete(app: Hono): void {
 								agentId,
 							);
 						}
-					}, "routes/hooks-routes.ts:1285");
+					}, "db:hooks.compaction.transcript-state.delete");
 				} catch (err) {
 					logger.warn("hooks", "Failed to reset checkpoint state after compaction (non-fatal)", {
 						error: err instanceof Error ? err.message : String(err),
@@ -1684,7 +1675,6 @@ function registerCrossAgentStream(app: Hono): void {
 		const project = parseOptionalString(c.req.query("project"));
 		const includeSelf = parseOptionalBoolean(c.req.query("include_self")) ?? false;
 		const includeSent = parseOptionalBoolean(c.req.query("include_sent")) ?? false;
-		const encoder = new TextEncoder();
 		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
@@ -1698,27 +1688,17 @@ function registerCrossAgentStream(app: Hono): void {
 		}
 		const agentId = scopedAgent.agentId;
 
-		const stream = new ReadableStream({
-			start(controller) {
-				let dead = false;
-				const cleanup = () => {
-					if (dead) return;
-					dead = true;
-					clearInterval(keepAlive);
-					unsubscribe();
-					try {
-						controller.close();
-					} catch {}
-				};
-
-				const writeEvent = (event: unknown) => {
-					if (dead) return;
-					try {
-						const data = `data: ${JSON.stringify(event)}\n\n`;
-						controller.enqueue(encoder.encode(data));
-					} catch {
-						cleanup();
-					}
+		const sse = openBoundedSse({
+			requestSignal: c.req.raw.signal,
+			highWaterMarkBytes: 1024 * 1024,
+			maxFrameBytes: 512 * 1024,
+			heartbeat: { intervalMs: 15_000, comment: "keepalive" },
+			onStart(producer) {
+				let unsubscribe = (): void => {};
+				producer.addDisposer(() => unsubscribe());
+				if (producer.signal.aborted) return;
+				const writeEvent = (event: unknown): void => {
+					producer.write(event);
 				};
 
 				writeEvent({
@@ -1728,6 +1708,7 @@ function registerCrossAgentStream(app: Hono): void {
 					project,
 					timestamp: new Date().toISOString(),
 				});
+				if (producer.isClosed) return;
 
 				writeEvent({
 					type: "snapshot",
@@ -1747,8 +1728,9 @@ function registerCrossAgentStream(app: Hono): void {
 					}),
 					timestamp: new Date().toISOString(),
 				});
+				if (producer.isClosed) return;
 
-				const unsubscribe = subscribeCrossAgentEvents((event) => {
+				const nextUnsubscribe = subscribeCrossAgentEvents((event) => {
 					if (event.type === "message") {
 						if (
 							!isMessageVisibleToAgent(event.message, {
@@ -1777,27 +1759,12 @@ function registerCrossAgentStream(app: Hono): void {
 
 					writeEvent(event);
 				});
-
-				const keepAlive = setInterval(() => {
-					if (dead) return;
-					try {
-						controller.enqueue(encoder.encode(": keepalive\n\n"));
-					} catch {
-						cleanup();
-					}
-				}, 15_000);
-
-				c.req.raw.signal.addEventListener("abort", cleanup);
+				unsubscribe = nextUnsubscribe;
+				if (producer.isClosed) unsubscribe();
 			},
 		});
 
-		return new Response(stream, {
-			headers: {
-				"Content-Type": "text/event-stream",
-				"Cache-Control": "no-cache",
-				Connection: "keep-alive",
-			},
-		});
+		return sse.response;
 	});
 }
 

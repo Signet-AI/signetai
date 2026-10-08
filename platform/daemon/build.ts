@@ -34,7 +34,7 @@ for (const name of new Set(sources.flatMap(runtimeReferences).filter((name) => /
 	const entrypoint = matches[0];
 	if (entrypoint) targets.push({ entrypoint, outfile: `./dist/${name}` });
 }
-for (const name of forceNodeBuild ? [] : ["workspace-migration-runner", "runtime-diagnostics"]) {
+for (const name of forceNodeBuild ? [] : ["runtime-diagnostics"]) {
 	targets.push({ entrypoint: join(root, "surfaces/desktop/scripts", `${name}.ts`), outfile: `./dist/${name}.js` });
 }
 const profileBuild = process.env.SIGNET_DAEMON_PROFILE === "1" || process.argv.includes("--profile");

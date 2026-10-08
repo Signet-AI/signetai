@@ -1,4 +1,10 @@
 import { OpenClawConnector } from "@signet/connector-openclaw";
+import {
+	hasExistingLegacyWorkspaceState,
+	hasExistingWorkspaceState,
+	resolveWorkspaceLayout,
+	WORKSPACE_LAYOUT_V2,
+} from "@signet/core";
 import type { SetupDetection } from "../lib/setup-detection.js";
 import chalk from "chalk";
 
@@ -11,6 +17,7 @@ export type HarnessChoice =
 	| "pi"
 	| "codex"
 	| "kimi"
+	| "muse-code"
 	| "hermes-agent"
 	| "gemini";
 export type EmbeddingProviderChoice = "native" | "ollama" | "openai" | "none";
@@ -45,6 +52,7 @@ export const SETUP_HARNESS_CHOICES: readonly HarnessChoice[] = [
 	"pi",
 	"codex",
 	"kimi",
+	"muse-code",
 	"hermes-agent",
 	"gemini",
 ];
@@ -109,6 +117,7 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	if (detection.harnesses.pi) harnesses.push("Pi");
 	if (detection.harnesses.codex) harnesses.push("Codex");
 	if (detection.harnesses.kimi) harnesses.push("Kimi");
+	if (detection.harnesses.museCode) harnesses.push("Muse Code");
 	if (detection.harnesses.hermesAgent) harnesses.push("Hermes Agent");
 	if (detection.harnesses.gemini) harnesses.push("Gemini");
 	if (harnesses.length > 0) {
@@ -118,7 +127,27 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 }
 
 export function hasExistingAgentState(detection: SetupDetection): boolean {
-	return detection.memoryDb || detection.agentYaml || detection.identityFiles.length > 0;
+	return (
+		detection.memoryDb ||
+		detection.agentYaml ||
+		detection.identityFiles.length > 0 ||
+		hasExistingWorkspaceState(detection.basePath)
+	);
+}
+
+export function hasExistingInteractiveSetupState(detection: SetupDetection): boolean {
+	const layout = resolveWorkspaceLayout(detection.basePath);
+	const hasWorkspaceState =
+		layout.version === WORKSPACE_LAYOUT_V2
+			? hasExistingWorkspaceState(detection.basePath)
+			: hasExistingLegacyWorkspaceState(detection.basePath);
+	return (
+		detection.memoryDb ||
+		detection.agentYaml ||
+		detection.configYaml ||
+		detection.identityFiles.length > 0 ||
+		hasWorkspaceState
+	);
 }
 
 export function detectPreferredOpenClawWorkspace(defaultPath: string, deps: PathDeps): string | null {

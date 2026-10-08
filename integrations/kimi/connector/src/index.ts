@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
+import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+	atomicWriteJson,
+	resolveSignetMcpCommand,
+} from "@signet/connector-base";
 import {
 	expandHome,
 	resolvePromptSubmitTimeoutMs,
@@ -19,13 +25,7 @@ function resolveSignetArgs(): string[] {
 export interface KimiMcpStdioConfig {
 	readonly command: string;
 	readonly args: readonly string[];
-}
-function resolveSignetMcp(): KimiMcpStdioConfig {
-	if (process.platform !== "win32") return { command: "signet-mcp", args: [] };
-	const entry = process.argv[1] || "";
-	const mcpJs = join(entry, "..", "..", "bin", "mcp-stdio.js");
-	if (existsSync(mcpJs)) return { command: process.execPath, args: [mcpJs] };
-	return { command: "signet-mcp", args: [] };
+	readonly env?: Readonly<Record<string, string>>;
 }
 
 function readEnv(name: string): string | undefined {
@@ -225,7 +225,7 @@ function patchMcpJson(path: string, mcp: KimiMcpStdioConfig): boolean {
 		typeof config.mcpServers === "object" && config.mcpServers !== null && !Array.isArray(config.mcpServers)
 			? config.mcpServers
 			: {};
-	const signetEntry = { command: mcp.command, args: [...mcp.args] };
+	const signetEntry = { command: mcp.command, args: [...mcp.args], ...(mcp.env ? { env: { ...mcp.env } } : {}) };
 	if (JSON.stringify(existingMcp.signet) === JSON.stringify(signetEntry)) return false;
 	config.mcpServers = { ...existingMcp, signet: signetEntry };
 	atomicWriteJson(path, config);
@@ -304,7 +304,7 @@ export class KimiConnector extends BaseConnector {
 			warnings.push("Failed to symlink skills directory");
 		}
 		const mcpPath = this.getMcpJsonPath();
-		if (patchMcpJson(mcpPath, resolveSignetMcp())) {
+		if (patchMcpJson(mcpPath, resolveSignetMcpCommand())) {
 			configsPatched.push(mcpPath);
 		} else if (readMcpJson(mcpPath) === null) {
 			warnings.push(`Skipped MCP registration — could not parse ${mcpPath}`);

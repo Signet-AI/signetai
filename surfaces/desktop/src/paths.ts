@@ -33,10 +33,6 @@ export function daemonEntry(): string {
 	return resolveRuntimeAsset(join(daemonRoot(), "dist", "daemon.js"), import.meta.url);
 }
 
-export function migrationRunnerEntry(): string {
-	return resolveRuntimeAsset(join(daemonRoot(), "dist", "workspace-migration-runner.js"), import.meta.url);
-}
-
 export function dashboardRoot(): string {
 	return join(daemonRoot(), "dashboard");
 }

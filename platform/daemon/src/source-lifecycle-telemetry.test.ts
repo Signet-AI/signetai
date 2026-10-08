@@ -41,6 +41,7 @@ describe("source lifecycle telemetry contract", () => {
 	it("maps providers into a fixed taxonomy instead of forwarding provider input", () => {
 		expect(sourceClassForKind("obsidian")).toBe("note_vault");
 		expect(sourceClassForKind("github")).toBe("repository");
+		expect(sourceClassForKind("notion")).toBe("note_vault");
 		expect(sourceClassForKind("user-defined-provider-with-a-path-/Users/alice/vault")).toBe("other");
 	});
 

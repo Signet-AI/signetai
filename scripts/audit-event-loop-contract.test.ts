@@ -304,7 +304,7 @@ test("the Obsidian embedding sync calls remain enumerated in the legacy ledger",
 	const result = runAudit({ sourceRoot: resolve("platform/daemon/src"), baselineSites: baseline });
 	const baselineSites = baseline.filter((site) => site.path === "obsidian-source-embeddings.ts");
 	const liveSites = result.sites.filter((site) => site.path === "obsidian-source-embeddings.ts");
-	expect(baselineSites).toHaveLength(7);
+	expect(baselineSites).toHaveLength(6);
 	expect(liveSites).toHaveLength(baselineSites.length);
 	expect(occurrenceKeys(liveSites)).toEqual(occurrenceKeys(baselineSites));
 	expect(result.violations.filter((violation) => violation.path === "obsidian-source-embeddings.ts")).toEqual([]);
@@ -378,15 +378,15 @@ test("the generated report describes the type boundary and transitional counts",
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const report = renderReport(baseline, { total: 152, withWriteTx: 59, withReadDb: 93 });
 	expect(report).toContain(`Exact ledger inventory: ${baseline.length} sites`);
-	expect(report).toContain("58 synchronous writes, 91 synchronous reads, and 169 async-named DB sites");
-	expect(report).toContain("Async-named ON-PARENT DB sites: 167");
+	expect(report).toContain("57 synchronous writes, 88 synchronous reads, and 168 async-named DB sites");
+	expect(report).toContain("Async-named ON-PARENT DB sites: 166");
 	expect(report).toContain("Async-named OFF-PARENT DB sites: 2");
 	expect(report).not.toContain("async-named parent DB sites");
 	expect(report).toContain(
-		"The async-named DB counts above separate the 167 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
+		"The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
 	);
-	expect(report).toContain("Database accessor sites classified: 318");
-	expect(report).toContain("ON-PARENT callback execution: 316");
+	expect(report).toContain("Database accessor sites classified: 313");
+	expect(report).toContain("ON-PARENT callback execution: 311");
 	expect(report).toContain("OFF-PARENT callback execution: 2");
 	expect(report).toContain("- `db:recall.embedding.config.read` (withReadDbAsync)");
 	expect(report).toContain("- `db:recall.vector.search.read` (withReadDbAsync)");

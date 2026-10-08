@@ -4,6 +4,7 @@ beforeDashboardFixture(() => dashboardQueryCache.clear(false, false));
 
 import { afterAll, beforeAll, test, expect } from "bun:test";
 import { Window } from "happy-dom";
+import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { api, type Agent } from "@/lib/api";
@@ -11,16 +12,14 @@ import { HomeAgentsPanel } from "./agents";
 
 const getAgents = api.getAgents;
 const getIdentity = api.getIdentity;
+let restoreDomGlobals = () => {};
+
 beforeAll(() => {
-	(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-	const window = new Window();
-	for (const key of Object.getOwnPropertyNames(window)) {
-		if (!(key in globalThis))
-			(globalThis as Record<string, unknown>)[key] = (window as unknown as Record<string, unknown>)[key];
-	}
+	restoreDomGlobals = installDashboardDomGlobals(new Window());
 	api.getIdentity = async () => null;
 });
 afterAll(() => {
+	restoreDomGlobals();
 	api.getAgents = getAgents;
 	api.getIdentity = getIdentity;
 });
@@ -42,6 +41,12 @@ test("Manage opens and focuses an editable agent, not every disclosure", async (
 		await act(async () => {
 			root.render(<HomeAgentsPanel />);
 		});
+		await act(async () => {
+			(container.querySelector('button[aria-labelledby="home-agents-title"]') as HTMLButtonElement | null)?.click();
+		});
+		expect(container.querySelector('button[aria-labelledby="home-agents-title"]')?.getAttribute("aria-expanded")).toBe(
+			"true",
+		);
 		const manage = [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("Manage"));
 		expect(manage).toBeDefined();
 		await act(async () => {
@@ -69,6 +74,12 @@ test("daemon-managed-only roster does not advertise an unavailable Manage action
 		await act(async () => {
 			root.render(<HomeAgentsPanel />);
 		});
+		await act(async () => {
+			(container.querySelector('button[aria-labelledby="home-agents-title"]') as HTMLButtonElement | null)?.click();
+		});
+		expect(container.querySelector('button[aria-labelledby="home-agents-title"]')?.getAttribute("aria-expanded")).toBe(
+			"true",
+		);
 		expect([...container.querySelectorAll("button")].some((button) => button.textContent?.includes("Manage"))).toBe(
 			false,
 		);

@@ -78,7 +78,21 @@ export interface TranscriptIdentity {
 const LOCK_DEAD_OWNER_STALE_MS = 30_000;
 const LOCK_POLL_MS = 10;
 const TAIL_SCAN_BYTES = 256 * 1024;
-const sessionSeqCache = new Map<string, number>();
+
+type SessionIdentityFields = Pick<CanonicalTranscriptRecord, "agent_id" | "harness" | "session_key" | "session_id">;
+
+interface SessionSeqEntry extends SessionIdentityFields {
+	readonly lastSeq: number;
+}
+
+interface SessionSeqIndex {
+	readonly ino: number;
+	readonly size: number;
+	readonly mtimeMs: number;
+	readonly entries: Map<string, SessionSeqEntry>;
+}
+
+const sessionSeqIndexes = new Map<string, SessionSeqIndex>();
 
 function resolveBasePath(basePath?: string): string {
 	return basePath ?? process.env.SIGNET_PATH ?? resolveDefaultBasePath();
@@ -321,7 +335,7 @@ export async function withTranscriptFileLock<T>(path: string, write: () => T | P
 	}
 }
 
-function sameSession(record: CanonicalTranscriptRecord, input: TranscriptIdentity): boolean {
+function sameSession(record: SessionIdentityFields, input: TranscriptIdentity): boolean {
 	const sessionKey = input.sessionKey?.trim() || null;
 	const sessionId = input.sessionId?.trim() || null;
 	if (sessionId !== null) {
@@ -349,13 +363,89 @@ export function sessionSeqCacheKey(input: TranscriptIdentity): string {
 	].join("\0");
 }
 
-function recordSeqCacheKey(record: CanonicalTranscriptRecord): string {
+function recordSeqCacheKey(record: SessionIdentityFields): string {
 	return [
 		record.agent_id.trim() || "default",
 		sanitizeHarnessPath(record.harness),
 		record.session_id?.trim() || record.session_key?.trim() || "",
 		record.session_key?.trim() || "",
 	].join("\0");
+}
+
+function fileSignature(path: string): { readonly ino: number; readonly size: number; readonly mtimeMs: number } | null {
+	if (!existsSync(path)) return null;
+	const stat = statSync(path);
+	return { ino: stat.ino, size: stat.size, mtimeMs: stat.mtimeMs };
+}
+
+function recordSessionSeq(entries: Map<string, SessionSeqEntry>, record: CanonicalTranscriptRecord): void {
+	const key = recordSeqCacheKey(record);
+	const previous = entries.get(key)?.lastSeq ?? 0;
+	entries.set(key, {
+		agent_id: record.agent_id,
+		harness: record.harness,
+		session_key: record.session_key,
+		session_id: record.session_id,
+		lastSeq: Math.max(previous, record.seq),
+	});
+}
+
+async function loadSessionSeqIndex(path: string): Promise<Map<string, SessionSeqEntry>> {
+	const signature = fileSignature(path);
+	if (signature === null) return new Map();
+	const cached = sessionSeqIndexes.get(path);
+	if (
+		cached &&
+		cached.ino === signature.ino &&
+		cached.size === signature.size &&
+		cached.mtimeMs === signature.mtimeMs
+	) {
+		return cached.entries;
+	}
+	const entries = new Map<string, SessionSeqEntry>();
+	const stream = createReadStream(path, { encoding: "utf8" });
+	const lines = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
+	try {
+		for await (const line of lines) {
+			const trimmed = line.trim();
+			if (trimmed.length === 0) continue;
+			try {
+				const parsed = JSON.parse(trimmed) as Partial<CanonicalTranscriptRecord>;
+				if (
+					parsed.schema === "signet.transcript.v1" &&
+					typeof parsed.agent_id === "string" &&
+					typeof parsed.harness === "string" &&
+					Number.isSafeInteger(parsed.seq)
+				) {
+					recordSessionSeq(entries, parsed as CanonicalTranscriptRecord);
+				}
+			} catch {}
+		}
+	} finally {
+		lines.close();
+		stream.destroy();
+	}
+	sessionSeqIndexes.set(path, { ...signature, entries });
+	return entries;
+}
+
+function appendIndexedRecords(
+	path: string,
+	entries: Map<string, SessionSeqEntry>,
+	records: readonly CanonicalTranscriptRecord[],
+): void {
+	appendRecords(path, records);
+	for (const record of records) recordSessionSeq(entries, record);
+	const signature = fileSignature(path);
+	if (signature) sessionSeqIndexes.set(path, { ...signature, entries });
+}
+
+function lastSessionSeq(entries: ReadonlyMap<string, SessionSeqEntry>, input: TranscriptIdentity): number {
+	let last = entries.get(sessionSeqCacheKey(input))?.lastSeq ?? 0;
+	for (const entry of entries.values()) {
+		if (sameSession(entry, input)) last = Math.max(last, entry.lastSeq);
+	}
+	return last;
 }
 
 function hasTrailingTurns(
@@ -435,35 +525,6 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 	};
 }
 
-async function hasSessionRecord(path: string, input: TranscriptIdentity): Promise<boolean> {
-	if (!existsSync(path)) return false;
-	const stream = createReadStream(path, { encoding: "utf8" });
-	const lines = createInterface({
-		input: stream,
-		crlfDelay: Number.POSITIVE_INFINITY,
-	});
-	try {
-		for await (const line of lines) {
-			const trimmed = line.trim();
-			if (trimmed.length === 0) continue;
-			try {
-				const parsed = JSON.parse(trimmed) as Partial<CanonicalTranscriptRecord>;
-				if (
-					parsed.schema === "signet.transcript.v1" &&
-					typeof parsed.content === "string" &&
-					sameSession(parsed as CanonicalTranscriptRecord, input)
-				) {
-					return true;
-				}
-			} catch {}
-		}
-	} finally {
-		lines.close();
-		stream.destroy();
-	}
-	return false;
-}
-
 export function writeCanonicalTranscriptSnapshot(
 	input: TranscriptIdentity & { readonly transcript: string },
 ): Promise<boolean> {
@@ -487,10 +548,7 @@ export function writeCanonicalTranscriptSnapshot(
 				closeSync(fd);
 			}
 			fsyncDirectory(path);
-			sessionSeqCache.set(
-				sessionSeqCacheKey(input),
-				next.reduce((max, record) => Math.max(max, record.seq), 0),
-			);
+			sessionSeqIndexes.delete(path);
 			return true;
 		}
 
@@ -563,10 +621,7 @@ export function writeCanonicalTranscriptSnapshot(
 			fd = null;
 			renameSync(tmpPath, path);
 			fsyncDirectory(path);
-			sessionSeqCache.set(
-				sessionSeqCacheKey(input),
-				next.reduce((max, record) => Math.max(max, record.seq), 0),
-			);
+			sessionSeqIndexes.delete(path);
 			return true;
 		} catch (error) {
 			if (fd !== null) closeSync(fd);
@@ -582,21 +637,15 @@ export function appendCanonicalTranscriptTurns(
 	const turns = input.turns.filter((turn) => cleanTurnContent(turn.content).length > 0);
 	if (turns.length === 0) return Promise.resolve(null);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
-	return withTranscriptFileLock(path, () => {
-		const recent = readTailRecords(path);
-		if (hasTrailingTurns(recent, input, turns)) return path;
-		const key = sessionSeqCacheKey(input);
-		const relevant = recent.filter((record) => sameSession(record, input));
-		let seq = Math.max(
-			sessionSeqCache.get(key) ?? 0,
-			relevant.reduce((max, record) => Math.max(max, record.seq), 0),
-		);
+	return withTranscriptFileLock(path, async () => {
+		if (hasTrailingTurns(readTailRecords(path), input, turns)) return path;
+		const entries = await loadSessionSeqIndex(path);
+		let seq = lastSessionSeq(entries, input);
 		const next = turns
 			.map((turn) => makeRecord(input, turn, ++seq))
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
 		if (next.length === 0) return null;
-		appendRecords(path, next);
-		sessionSeqCache.set(key, seq);
+		appendIndexedRecords(path, entries, next);
 		return path;
 	});
 }
@@ -611,16 +660,13 @@ export function appendCanonicalTranscriptSnapshotIfMissing(
 	const key = sessionSeqCacheKey(input);
 	if (knownSessionKeys?.has(key)) return Promise.resolve(path);
 	return withTranscriptFileLock(path, async () => {
-		if (knownSessionKeys === undefined && (await hasSessionRecord(path, input))) return path;
+		const entries = await loadSessionSeqIndex(path);
+		if (entries.has(key)) return path;
 		const next = turns
 			.map((turn, index) => makeRecord(input, turn, index + 1))
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
 		if (next.length === 0) return null;
-		appendRecords(path, next);
-		sessionSeqCache.set(
-			sessionSeqCacheKey(input),
-			next.reduce((max, record) => Math.max(max, record.seq), 0),
-		);
+		appendIndexedRecords(path, entries, next);
 		knownSessionKeys?.add(key);
 		return path;
 	});
@@ -715,15 +761,7 @@ export function rewriteReplacingLiveOnlySessions(
 			closeSync(fd);
 			fd = null;
 			renameSync(tmpPath, jsonlPath);
-			for (const key of rewritten) {
-				const entry = effectiveReplacements.get(key);
-				if (!entry) continue;
-				const seq = transcriptTextToTurns(entry.transcript).reduce((count, turn) => {
-					if (makeRecord(entry.identity, turn, count + 1) === null) return count;
-					return count + 1;
-				}, 0);
-				sessionSeqCache.set(sessionSeqCacheKey(entry.identity), seq);
-			}
+			sessionSeqIndexes.delete(jsonlPath);
 			return rewritten.size + healedKeys.size;
 		} catch (error) {
 			if (fd !== null) closeSync(fd);

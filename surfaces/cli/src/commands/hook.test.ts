@@ -64,14 +64,16 @@ describe("resolvePromptSubmitTimeout", () => {
 		const prev = process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
 		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = "9000";
 		expect(resolvePromptSubmitTimeout()).toBe(9000);
-		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = prev;
+		if (prev === undefined) delete process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
+		else process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = prev;
 	});
 
 	test("falls back to the default when env is invalid or too small", () => {
 		const prev = process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
 		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = "200";
 		expect(resolvePromptSubmitTimeout()).toBe(5000);
-		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = prev;
+		if (prev === undefined) delete process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
+		else process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = prev;
 	});
 });
 
@@ -80,14 +82,16 @@ describe("resolveSessionStartTimeout", () => {
 		const prev = process.env.SIGNET_SESSION_START_TIMEOUT;
 		process.env.SIGNET_SESSION_START_TIMEOUT = "18000";
 		expect(resolveSessionStartTimeout()).toBe(18000);
-		process.env.SIGNET_SESSION_START_TIMEOUT = prev;
+		if (prev === undefined) delete process.env.SIGNET_SESSION_START_TIMEOUT;
+		else process.env.SIGNET_SESSION_START_TIMEOUT = prev;
 	});
 
 	test("falls back to the default when env is invalid or too small", () => {
 		const prev = process.env.SIGNET_SESSION_START_TIMEOUT;
 		process.env.SIGNET_SESSION_START_TIMEOUT = "200";
 		expect(resolveSessionStartTimeout()).toBe(15000);
-		process.env.SIGNET_SESSION_START_TIMEOUT = prev;
+		if (prev === undefined) delete process.env.SIGNET_SESSION_START_TIMEOUT;
+		else process.env.SIGNET_SESSION_START_TIMEOUT = prev;
 	});
 });
 
@@ -166,6 +170,20 @@ describe("buildSessionEndBody", () => {
 			reason: "shutdown",
 			runtimePath: "legacy",
 		});
+	});
+
+	test("forwards the turn's final assistant reply from Stop payloads", () => {
+		const body = buildSessionEndBody(
+			{
+				session_id: "muse-sess",
+				hook_event_name: "Stop",
+				last_assistant_message: "Ultramarine noted.",
+				transcript_path: null,
+			},
+			"muse-code",
+		);
+		expect(body.lastAssistantMessage).toBe("Ultramarine noted.");
+		expect(body.transcriptPath).toBe("");
 	});
 
 	test("preserves a distinct legacy sessionId alongside canonical sessionKey", () => {
@@ -787,7 +805,8 @@ describe("postAction exit behavior", () => {
 			expect(code).toBe(0);
 		}
 
-		process.env.SIGNET_NO_HOOKS = prev;
+		if (prev === undefined) delete process.env.SIGNET_NO_HOOKS;
+		else process.env.SIGNET_NO_HOOKS = prev;
 	});
 
 	test("error path calls process.exit(1) before postAction fires", async () => {

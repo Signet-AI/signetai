@@ -9,10 +9,10 @@ interface HandlerMap {
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
-	process.env.SIGNET_ENABLED = undefined;
-	process.env.SIGNET_AGENT_ID = undefined;
-	process.env.SIGNET_DAEMON_URL = undefined;
-	process.env.SIGNET_BYPASS = undefined;
+	delete process.env.SIGNET_ENABLED;
+	delete process.env.SIGNET_AGENT_ID;
+	delete process.env.SIGNET_DAEMON_URL;
+	delete process.env.SIGNET_BYPASS;
 });
 
 describe("SignetOhMyPiExtension", () => {
@@ -70,6 +70,46 @@ describe("SignetOhMyPiExtension", () => {
 		expect((result as { message: { content: string } }).message.content).toContain("Favorite color is blue");
 		expect(requestedUrls.some((url) => url.endsWith("/api/hooks/notifications"))).toBe(true);
 		expect((result as { message: { content: string } }).message.content).toContain("peer notification");
+	});
+
+	it("submits the prompt once from input and settles it in before_agent_start", async () => {
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+		};
+
+		let promptSubmits = 0;
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL) => {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+				if (url.endsWith("/api/hooks/session-start")) return Response.json({});
+				if (url.endsWith("/api/hooks/user-prompt-submit")) {
+					promptSubmits += 1;
+					return new Response("daemon busy", { status: 503 });
+				}
+				if (url.endsWith("/api/hooks/notifications")) return Response.json({});
+				throw new Error(`Unexpected fetch: ${url}`);
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		SignetOhMyPiExtension(pi as never);
+		const ctx = {
+			cwd: "/tmp/project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-2", cwd: "/tmp/project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-2",
+			},
+		};
+
+		expect(handlers.input?.[0]?.({ text: "hello" }, ctx)).toBeUndefined();
+		await handlers.before_agent_start[0]?.({ prompt: "hello" }, ctx);
+		expect(promptSubmits).toBe(1);
 	});
 
 	it("bypass mode skips all handler registration", () => {

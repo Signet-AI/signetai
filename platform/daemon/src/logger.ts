@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { appendFileSync, existsSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export type LogCategory =
@@ -11,6 +12,7 @@ export type LogCategory =
 	| "sync"
 	| "git"
 	| "github-source"
+	| "notion-source"
 	| "watcher"
 	| "embedding"
 	| "harness"
@@ -91,8 +93,7 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 	warn: 2,
 	error: 3,
 };
-const DEFAULT_CONFIG: LoggerConfig = {
-	logDir: join(homedir(), ".agents", ".daemon", "logs"),
+const DEFAULT_CONFIG: Omit<LoggerConfig, "logDir"> = {
 	logFilePath: undefined,
 	level: "info",
 	maxFileSize: 10 * 1024 * 1024,
@@ -102,7 +103,10 @@ const DEFAULT_CONFIG: LoggerConfig = {
 	flushRetryBackoffMs: 30_000,
 };
 
-export function resolveLoggerConfig(env: NodeJS.ProcessEnv = process.env, homeDir = homedir()): Partial<LoggerConfig> {
+export function resolveLoggerConfig(
+	env: NodeJS.ProcessEnv = process.env,
+	homeDir = homedir(),
+): Partial<LoggerConfig> & { logDir: string } {
 	const envLogFile = env.SIGNET_LOG_FILE?.trim();
 	if (envLogFile) {
 		return { logFilePath: envLogFile, logDir: dirname(envLogFile) };
@@ -115,7 +119,7 @@ export function resolveLoggerConfig(env: NodeJS.ProcessEnv = process.env, homeDi
 
 	const signetPath = env.SIGNET_PATH?.trim();
 	return {
-		logDir: join(signetPath || join(homeDir, ".agents"), ".daemon", "logs"),
+		logDir: join(resolveWorkspaceLayout(signetPath || join(homeDir, ".agents")).runtime, "logs"),
 	};
 }
 
@@ -131,7 +135,7 @@ export class Logger extends EventEmitter {
 
 	constructor(config: Partial<LoggerConfig> = {}) {
 		super();
-		this.config = { ...DEFAULT_CONFIG, ...config };
+		this.config = { ...DEFAULT_CONFIG, ...config, logDir: config.logDir ?? resolveLoggerConfig().logDir };
 		this.currentLogFile = this.getLogFileName();
 		this.startFlushTimer();
 	}

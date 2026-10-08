@@ -175,7 +175,7 @@ export function ConnectorDetailsRow({
 							)}
 						>
 							{action && !unavailable && !needsAttention && (
-								<span className="size-1.5 shrink-0 rounded-full bg-emerald-500" aria-hidden="true" />
+								<span className="size-1.5 shrink-0 rounded-full bg-[var(--home-health-healthy)]" aria-hidden="true" />
 							)}
 							{label}
 						</span>

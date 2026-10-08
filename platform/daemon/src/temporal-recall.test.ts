@@ -53,8 +53,8 @@ describe("temporal recall", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 	});
 
@@ -120,5 +120,26 @@ describe("temporal recall", () => {
 
 		const isolated = resolveTemporalRecall({ query: "", time, limit: 10, agentId: "owner", readPolicy: "isolated" });
 		expect(isolated.response?.results.map((row) => row.subject_id)).toEqual(["owner-doc"]);
+	});
+
+	it("widens an empty day filter, then falls back to unfiltered ranking instead of returning nothing", () => {
+		const createdAt = new Date(2026, 2, 19, 15, 0, 0).toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)
+				 VALUES (?, ?, 'fact', 'default', 'test', ?, ?)`,
+			).run("walk", "The user completed the Walk for Hunger charity event.", createdAt, createdAt);
+		});
+
+		const widened = resolveTemporalRecall({ query: "which charity event did I join on 2026-03-18?", limit: 10 });
+		expect(widened.response).toBeUndefined();
+		expect(widened.candidateIds).toEqual(["walk"]);
+		expect(widened.meta?.window).toBe("widened");
+
+		const unfiltered = resolveTemporalRecall({ query: "which charity event did I join on 2026-01-02?", limit: 10 });
+		expect(unfiltered.response).toBeUndefined();
+		expect(unfiltered.candidateIds).toBeUndefined();
+		expect(unfiltered.adjustedQuery).toBe(unfiltered.meta?.contentQuery);
+		expect(unfiltered.meta?.window).toBe("unfiltered");
 	});
 });

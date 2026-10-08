@@ -18,6 +18,9 @@ const { DaemonManager } = await import("./daemon-manager.js");
 function makeDaemonManager(workspacePath: string): InstanceType<typeof DaemonManager> {
 	return new DaemonManager({ workspacePath, runtimePaths: testRuntimePaths });
 }
+function existsExceptLayoutFile(path: unknown): boolean {
+	return !String(path).endsWith("workspace-layout.json");
+}
 function makeFakeChild(): ChildProcess {
 	const emitter = new EventEmitter() as unknown as ChildProcess;
 	(emitter as unknown as Record<string, unknown>).exitCode = null;
@@ -70,7 +73,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 				return openSyncCallCount === 1 ? STDOUT_FD : STDERR_FD;
 			},
 		);
-		spyOn(fs, "existsSync").mockReturnValue(true);
+		spyOn(fs, "existsSync").mockImplementation(existsExceptLayoutFile);
 		spyOn(fs, "mkdirSync").mockReturnValue(undefined);
 		const cp = await import("node:child_process");
 		const fakeChild = makeFakeChild();
@@ -95,6 +98,39 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 
 		openSyncSpy.mockRestore();
 	});
+	test("spawnBundled writes daemon logs under runtime/ on a v2 workspace", async () => {
+		let fetchCallCount = 0;
+		globalThis.fetch = async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+			fetchCallCount += 1;
+			if (fetchCallCount <= 1) throw new Error("ECONNREFUSED");
+			return healthyFetchResponse();
+		};
+		const fs = await import("node:fs");
+		const realReadFileSync = fs.readFileSync;
+		const openedPaths: string[] = [];
+		const madeDirs: string[] = [];
+		spyOn(fs, "openSync").mockImplementation((path: fs.PathLike | number): number => {
+			openedPaths.push(String(path));
+			return 17;
+		});
+		spyOn(fs, "existsSync").mockReturnValue(true);
+		spyOn(fs, "readFileSync").mockImplementation(((path: fs.PathOrFileDescriptor, options?: unknown) =>
+			String(path).endsWith("workspace-layout.json")
+				? '{"version":2}\n'
+				: realReadFileSync(path, options as BufferEncoding)) as typeof fs.readFileSync);
+		spyOn(fs, "mkdirSync").mockImplementation(((path: fs.PathLike) => {
+			madeDirs.push(String(path));
+			return undefined;
+		}) as typeof fs.mkdirSync);
+		const cp = await import("node:child_process");
+		spyOn(cp, "spawn").mockReturnValue(makeFakeChild());
+		const manager = makeDaemonManager("/tmp/signet-workspace");
+		await manager.ensureStarted();
+
+		const runtimeLogs = join(resolve("/tmp/signet-workspace"), "runtime", "logs");
+		expect(madeDirs).toContain(runtimeLogs);
+		expect(openedPaths).toEqual([join(runtimeLogs, "daemon.out.log"), join(runtimeLogs, "daemon.err.log")]);
+	});
 	test("ensureStarted attaches when daemon healthy at :3850 (regression for #606 update-drift loop)", async () => {
 		globalThis.fetch = async (_input: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
 			healthyFetchResponse();
@@ -118,7 +154,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 
 		const fs = await import("node:fs");
 		spyOn(fs, "openSync").mockImplementation((_path: fs.PathLike | number, _flags: fs.OpenMode): number => 99);
-		spyOn(fs, "existsSync").mockReturnValue(true);
+		spyOn(fs, "existsSync").mockImplementation(existsExceptLayoutFile);
 		spyOn(fs, "mkdirSync").mockReturnValue(undefined);
 
 		const cp = await import("node:child_process");
@@ -138,7 +174,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 
 		const fs = await import("node:fs");
 		spyOn(fs, "openSync").mockImplementation((_path: fs.PathLike | number, _flags: fs.OpenMode): number => 99);
-		spyOn(fs, "existsSync").mockReturnValue(true);
+		spyOn(fs, "existsSync").mockImplementation(existsExceptLayoutFile);
 		spyOn(fs, "mkdirSync").mockReturnValue(undefined);
 
 		const cp = await import("node:child_process");

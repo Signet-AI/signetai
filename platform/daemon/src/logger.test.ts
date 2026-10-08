@@ -11,6 +11,18 @@ describe("logger config", () => {
 		});
 	});
 
+	it("uses the v2 runtime directory for the default log directory on v2 workspaces", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-logger-v2-"));
+		try {
+			writeFileSync(join(root, "workspace-layout.json"), `${JSON.stringify({ version: 2 })}\n`);
+			expect(resolveLoggerConfig({ SIGNET_PATH: root }, "/home/test")).toEqual({
+				logDir: join(root, "runtime", "logs"),
+			});
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps explicit log file and log directory overrides ahead of SIGNET_PATH", () => {
 		expect(
 			resolveLoggerConfig(

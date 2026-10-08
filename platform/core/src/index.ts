@@ -7,14 +7,6 @@ export {
 	restoreVerifiedRootGitArchive,
 } from "./git-archive-retirement";
 export type { RootGitArchive, RootGitArchivePlan, RootGitArchiveVerification } from "./git-archive-retirement";
-
-export {
-	DescriptorRoot,
-	openDescriptorRoot,
-	UnsafeDescriptorPathError,
-	UnsupportedDescriptorFilesystemError,
-} from "./descriptor-fs";
-export type { DescriptorEntry, DescriptorWriteOptions } from "./descriptor-fs";
 export type { ManagedGitignoreUpdate, RootGitInventory, RootGitMode } from "./git-transition";
 export { aggregateProtection, PROTECTION_COMPONENT_IDS, validateRestoreReceipt } from "./protection";
 export type {
@@ -89,6 +81,7 @@ export {
 	ENTITY_TYPES,
 	ATTRIBUTE_KINDS,
 	ATTRIBUTE_STATUSES,
+	CLAIM_TIME_PRECISIONS,
 	DEPENDENCY_DESCRIPTIONS,
 	DEPENDENCY_TYPES,
 	TASK_STATUSES,
@@ -156,6 +149,7 @@ export type {
 	DecisionResult,
 	EntityType,
 	AttributeKind,
+	ClaimTimePrecision,
 	AttributeStatus,
 	DependencyType,
 	TaskStatus,
@@ -201,19 +195,13 @@ export { parseManifest, generateManifest } from "./manifest";
 export { parseSoul, generateSoul } from "./soul";
 export { parseMemory, generateMemory, type ParsedMemory } from "./memory";
 export {
-	MEMORY_CONTENT_SAFETY_POLICY_VERSION,
-	MEMORY_CONTENT_SAFETY_REASONS,
-	MEMORY_CONTENT_SAFETY_STATUSES,
-	MEMORY_CONTENT_WITHHELD_NOTICE,
-	assessMemoryContent,
-	isMemoryContentContextEligible,
-	scanMemoryContent,
-} from "./memory-content-safety";
-export type {
-	MemoryContentSafetyAssessment,
-	MemoryContentSafetyReason,
-	MemoryContentSafetyStatus,
-} from "./memory-content-safety";
+	CREDENTIAL_KINDS,
+	REDACTED_CREDENTIAL,
+	findCredentialSpans,
+	redactCredentials,
+	redactCredentialsDeep,
+} from "./credential-detection";
+export type { CredentialKind, CredentialSpan } from "./credential-detection";
 export {
 	LOOPBACK_HOST,
 	NETWORK_MODES,
@@ -251,11 +239,18 @@ export {
 } from "./memory-context";
 export {
 	createFreshWorkspaceV2,
+	currentArtifactRelativePath,
+	findExistingWorkspaceDatabase,
+	hasExistingLegacyWorkspaceState,
+	hasExistingWorkspaceState,
 	persistWorkspaceLayout,
+	readWorkspaceLayoutOverrides,
 	resolveWorkspaceLayout,
+	resolveWorkspaceLayoutAs,
 	serializeWorkspaceLayout,
 	WORKSPACE_LAYOUT_V1,
 	WORKSPACE_LAYOUT_V2,
+	isWorkspacePrivatePath,
 	type WorkspaceLayout,
 	type WorkspaceLayoutOverrides,
 	type WorkspaceLayoutVersion,
@@ -284,6 +279,7 @@ export {
 	keywordSearch,
 	hybridSearch,
 	cosineSimilarity,
+	activeVectorProjectionTable,
 	buildFtsMatchQuery,
 	type SearchOptions,
 	type SearchResult,
@@ -322,6 +318,7 @@ export type {
 } from "./recall";
 export {
 	createMemoriesFts,
+	MEMORIES_FTS_TOKENIZER,
 	memoriesFtsIntegrityIsComplete,
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsIndexRowCount,
@@ -361,13 +358,13 @@ export type { PromptContextEnvelope } from "./prompt-context";
 
 export {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
-	SIGNET_PLUGIN_REGISTRY_DIR,
+	getPluginRegistryDir,
+	getPluginRegistryPath,
 	SIGNET_PLUGIN_REGISTRY_FILE,
 	SIGNET_PLUGIN_REGISTRY_VERSION,
 	SIGNET_SECRETS_PLUGIN_ID,
 } from "./plugins";
 export {
-	SIGNET_GRAPHIQ_STATE_FILE,
 	disableGraphiqState,
 	emptyGraphiqState,
 	enableGraphiqState,
@@ -411,6 +408,7 @@ export {
 	addDiscordSource,
 	addGitHubSource,
 	addImportedSource,
+	addNotionSource,
 	addObsidianSource,
 	addWebSource,
 	deterministicImportedSourceId,
@@ -425,14 +423,18 @@ export {
 	MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL,
 	MAX_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 	MAX_GITHUB_MAX_ITEMS_PER_REPO,
+	DEFAULT_NOTION_MAX_PAGES,
+	MAX_NOTION_MAX_PAGES,
 	getAgentsDir,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
 	parseDiscordSettings,
 	parseGitHubSettings,
+	parseNotionSettings,
 	parseWebSettings,
 	normalizePublicWebUrl,
+	notionSourceId,
 	removeSource,
 	removeSourceIfGeneration,
 	saveSourcesConfig,
@@ -442,6 +444,7 @@ export type {
 	AddGitHubSourceInput,
 	AddImportedSourceInput,
 	AddImportedSourceResult,
+	AddNotionSourceInput,
 	AddObsidianSourceInput,
 	AddWebSourceInput,
 	AddSourceResult,
@@ -451,6 +454,7 @@ export type {
 	GitHubSourceSettings,
 	GitHubSourceState,
 	ImportedSourceDuplicateMode,
+	NotionSourceSettings,
 	RemoveSourceResult,
 	SignetSourceEntry,
 	SignetSourceKind,
@@ -474,20 +478,14 @@ export type {
 	SourceSyncResult,
 	SourceSyncStatus,
 } from "./source-substrate";
-export {
-	collectExportData,
-	serializeExportData,
-	importMemories,
-	importEntities,
-	importRelations,
-} from "./export";
+export { collectExportData, serializeExportData, importBundle } from "./export";
 export type {
 	ExportOptions,
 	ExportManifest,
 	ExportData,
 	ImportOptions,
+	ImportInput,
 	ExportImportResult,
-	ImportConflictStrategy,
 } from "./export";
 export { runMigrations, hasPendingMigrations, MIGRATIONS, LATEST_SCHEMA_VERSION } from "./migrations/index";
 export type { MigrationDb, Migration } from "./migrations/index";

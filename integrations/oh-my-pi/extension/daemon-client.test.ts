@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createDaemonClient } from "./src/daemon-client.js";
-import { PROMPT_SUBMIT_TIMEOUT } from "./src/types.js";
+import { OMP_LIFECYCLE_CONFIG } from "./src/lifecycle.js";
 
 const servers: Array<{ stop: () => void }> = [];
 const originalWarn = console.warn;
@@ -27,7 +27,7 @@ describe("createDaemonClient", () => {
 		const result = await client.post<{ inject: string }>(
 			"/api/hooks/user-prompt-submit",
 			{ harness: "oh-my-pi" },
-			PROMPT_SUBMIT_TIMEOUT,
+			OMP_LIFECYCLE_CONFIG.promptSubmitTimeout,
 		);
 
 		expect(result).toEqual({ inject: "turn-memory" });

@@ -31,8 +31,11 @@ container:
 
 - `agent.yaml`
 - `MEMORY.md`
-- `memory/memories.db`
-- `.daemon/auth-secret`
+- `workspace-layout.json`
+- `data/signet.db`
+- `runtime/auth-secret` and `runtime/logs/`
+
+A volume created by an older image (`memory/memories.db`, `.daemon/`) is upgraded in place to this layout the first time the new image starts.
 
 ## Published image
 

@@ -1,13 +1,10 @@
-import { existsSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { extname, normalize, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { resolveWorkspaceLayout, spawnHidden } from "@signet/core";
 import {
 	net,
 	BrowserWindow,
 	Menu,
-	type IpcMainInvokeEvent,
 	type OpenDialogOptions,
 	app,
 	dialog,
@@ -19,16 +16,7 @@ import {
 import { DaemonManager } from "./daemon-manager.js";
 import { checkForDesktopUpdate, configureDesktopUpdates } from "./desktop-updates.js";
 import { validateExternalUrl } from "./external-url.js";
-import {
-	bunPath,
-	daemonEntry,
-	daemonRoot,
-	dashboardRoot,
-	iconPath,
-	migrationRunnerEntry,
-	preloadPath,
-} from "./paths.js";
-import { WorkspaceMigrationService, isTrustedMigrationDashboardUrl } from "./workspace-migration.js";
+import { dashboardRoot, iconPath, preloadPath } from "./paths.js";
 import { daemonRouteTarget, isDaemonRouteUrl } from "./protocol-routes.js";
 import { DesktopTray } from "./tray.js";
 import { applyDesktopWorkspaceEnv, resolveDesktopWorkspace } from "./workspace.js";
@@ -65,19 +53,6 @@ const hasSingleInstanceLock = installSingleInstanceLock(
 
 const workspace = applyDesktopWorkspaceEnv(resolveDesktopWorkspace());
 const daemon = new DaemonManager({ workspacePath: workspace.path });
-const workspaceMigration = new WorkspaceMigrationService({
-	workspace,
-	appVersion: app.getVersion(),
-	layoutVersion: (workspacePath) => resolveWorkspaceLayout(workspacePath).version,
-	daemonStatus: async () => {
-		const status = await daemon.status();
-		return { running: status.running, owned: status.owned, workspacePath: status.workspacePath };
-	},
-	ensureDaemon: () => daemon.ensureStarted(),
-	runWorker: runWorkspaceMigrationWorker,
-	configuredWorkspacePath,
-	relaunch: relaunchForWorkspace,
-});
 let mainWindow: BrowserWindow | null = null;
 let tray: DesktopTray | null = null;
 let quitting = false;
@@ -402,81 +377,6 @@ function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
 }
 
-function configuredWorkspacePath(): string {
-	const env = { ...process.env };
-	delete env.SIGNET_PATH;
-	delete env.SIGNET_WORKSPACE;
-	return resolveDesktopWorkspace(env).path;
-}
-
-function relaunchForWorkspace(workspacePath: string): void {
-	const target = resolve(workspacePath);
-	process.env.SIGNET_PATH = target;
-	process.env.SIGNET_WORKSPACE = target;
-	setTimeout(() => {
-		app.relaunch();
-		app.quit();
-	}, 1000);
-}
-
-async function runWorkspaceMigrationWorker(
-	action: "status" | "run" | "rollback",
-	workspacePath: string,
-): Promise<unknown> {
-	const runner = migrationRunnerEntry();
-	if (!existsSync(runner)) throw new Error("Workspace migration helper is not staged");
-	const root = daemonRoot();
-	const child = spawnHidden(bunPath(), [runner, action, "--source", workspacePath], {
-		cwd: root,
-		stdio: ["ignore", "pipe", "pipe"],
-		env: {
-			...process.env,
-			SIGNET_PATH: workspacePath,
-			SIGNET_WORKSPACE: workspacePath,
-			SIGNET_PORT: String(daemon.port),
-			SIGNET_DAEMON_URL: daemon.baseUrl,
-			SIGNET_DAEMON_RUNTIME: "bun-js",
-			SIGNET_DAEMON_JS_PATH: daemonEntry(),
-			SIGNET_DESKTOP: "1",
-			SIGNET_TELEMETRY_OPTOUT: "1",
-			SIGNET_ANALYTICS_DISABLED: "1",
-		},
-	});
-	let output = "";
-	let failureOutput = "";
-	child.stdout?.setEncoding("utf8");
-	child.stdout?.on("data", (chunk: string | Buffer) => {
-		output += String(chunk);
-	});
-	child.stderr?.setEncoding("utf8");
-	child.stderr?.on("data", (chunk: string | Buffer) => {
-		failureOutput = (failureOutput + String(chunk)).slice(-4096);
-	});
-	return await new Promise((resolveResult, rejectResult) => {
-		child.once("error", () => rejectResult(new Error("Workspace migration helper could not start")));
-		child.once("close", (code: number | null) => {
-			if (code !== 0) {
-				const reason = failureOutput.trim().split(/\r?\n/).at(-1)?.slice(0, 500);
-				rejectResult(
-					new Error(reason ? `Workspace migration helper failed: ${reason}` : "Workspace migration helper failed"),
-				);
-				return;
-			}
-			for (const line of output.split(/\r?\n/).reverse()) {
-				if (!line.trim()) continue;
-				try {
-					const result: unknown = JSON.parse(line);
-					if (result && typeof result === "object" && !Array.isArray(result)) {
-						resolveResult(result);
-						return;
-					}
-				} catch {}
-			}
-			rejectResult(new Error("Workspace migration helper returned invalid output"));
-		});
-	});
-}
-
 function configureApplicationMenu(): void {
 	const template = applicationMenuTemplate(process.platform);
 	Menu.setApplicationMenu(template === null ? null : Menu.buildFromTemplate(template));
@@ -527,24 +427,7 @@ async function pickFiles(options?: { title?: string }): Promise<readonly string[
 	return result.canceled ? null : result.filePaths;
 }
 
-function assertTrustedMigrationIpc(event: IpcMainInvokeEvent): void {
-	if (event.sender !== mainWindow?.webContents || !isTrustedMigrationDashboardUrl(event.senderFrame?.url))
-		throw new Error("Workspace migration is only available to the Signet desktop dashboard");
-}
-
 function registerIpc(): void {
-	ipcMain.handle("desktop:getWorkspaceMigrationStatus", async (event) => {
-		assertTrustedMigrationIpc(event);
-		return workspaceMigration.status();
-	});
-	ipcMain.handle("desktop:startWorkspaceMigration", async (event) => {
-		assertTrustedMigrationIpc(event);
-		return workspaceMigration.run();
-	});
-	ipcMain.handle("desktop:rollbackWorkspaceMigration", async (event) => {
-		assertTrustedMigrationIpc(event);
-		return workspaceMigration.rollback();
-	});
 	ipcMain.handle("desktop:startDaemon", async () => {
 		const status = await daemon.start();
 		daemonStartupError = null;
@@ -587,7 +470,7 @@ app.on("open-url", (event, value) => {
 app.whenReady().then(async () => {
 	if (!hasSingleInstanceLock) return;
 	configureApplicationMenu();
-	if (process.platform === "darwin" && app.dock) {
+	if (process.platform === "darwin" && app.dock && !app.isPackaged) {
 		app.dock.setIcon(iconPath("icon.png"));
 	}
 	configureDesktopUpdates();

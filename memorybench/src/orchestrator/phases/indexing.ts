@@ -106,18 +106,38 @@ export async function runIndexingPhase(
   }
 
   const concurrency = resolveConcurrency("indexing", checkpoint.concurrency, provider.concurrency)
+  const groups = new Map<string, QuestionCheckpoint[]>()
+  for (const question of toIndex) {
+    groups.set(question.containerTag, [...(groups.get(question.containerTag) ?? []), question])
+  }
+  const leaders = [...groups.values()].map(
+    (members) => members.find((member) => member.phases.ingest.ingestResult) ?? members[0]!
+  )
 
-  const tracker = new IndexingProgressTracker(toIndex)
+  const tracker = new IndexingProgressTracker(leaders)
   const totalEpisodes = tracker.getTotalEpisodes()
 
   logger.info(
-    `Awaiting indexing for ${toIndex.length} questions, ${totalEpisodes} episodes (concurrency: ${concurrency})...`
+    `Awaiting indexing for ${leaders.length} haystack(s) covering ${toIndex.length} questions, ${totalEpisodes} episodes (concurrency: ${concurrency})...`
   )
 
   tracker.display()
 
+  const completeMembers = (leader: QuestionCheckpoint, durationMs: number): void => {
+    for (const member of groups.get(leader.containerTag) ?? []) {
+      if (member.questionId === leader.questionId) continue
+      checkpointManager.updatePhase(checkpoint, member.questionId, "indexing", {
+        status: "completed",
+        completedIds: [],
+        failedIds: [],
+        completedAt: new Date().toISOString(),
+        durationMs,
+      })
+    }
+  }
+
   await ConcurrentExecutor.execute(
-    toIndex,
+    leaders,
     concurrency,
     checkpoint.runId,
     "indexing",
@@ -134,6 +154,7 @@ export async function runIndexingPhase(
           durationMs: 0,
         })
         tracker.markQuestionDone(question.questionId)
+        completeMembers(question, 0)
         return { questionId: question.questionId, durationMs: 0 }
       }
 
@@ -171,6 +192,7 @@ export async function runIndexingPhase(
           completedAt: new Date().toISOString(),
           durationMs,
         })
+        completeMembers(question, durationMs)
 
         return { questionId: question.questionId, durationMs }
       } catch (e) {

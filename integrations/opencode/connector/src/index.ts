@@ -338,7 +338,7 @@ export class OpenCodeConnector extends BaseConnector {
 
 		const resolvedMcp = resolveSignetMcpCommand();
 		const mcpCommand = [resolvedMcp.command, ...resolvedMcp.args];
-		const environment = buildSignetRuntimeEnv();
+		const environment: Record<string, string> = { ...buildSignetRuntimeEnv(), ...resolvedMcp.env };
 		if (apiKeyFile) environment.SIGNET_API_KEY = `{file:${apiKeyFile}}`;
 		writeConfigValue(configPath, ["mcp", "signet"], {
 			type: "local",

@@ -4,7 +4,6 @@ import { dirname, join, resolve } from "node:path";
 import { arch, platform } from "node:process";
 import { fileURLToPath } from "node:url";
 import { execFileSyncHidden } from "./child-process";
-import { MEMORY_CONTENT_SAFETY_POLICY_VERSION, scanMemoryContent } from "./memory-content-safety";
 import { isDaemonDerivedMemorySourceType } from "./memory-provenance";
 import { runMigrations } from "./migrations/index";
 import { resolveSqliteJournalConfig } from "./sqlite-journal";
@@ -260,7 +259,6 @@ export class Database {
 				memory.manualOverride ? 1 : 0,
 				isDaemonDerivedMemorySourceType(memory.sourceType) ? null : "episodic",
 			);
-		this.recordMemoryContentSafety(id, memory.content, "default");
 
 		return id;
 	}
@@ -279,135 +277,6 @@ export class Database {
 		const row = this.getDb().prepare("SELECT * FROM memories WHERE id = ?").get(id);
 		if (row === undefined) return null;
 		return rowToMemory(row);
-	}
-
-	updateMemory(id: string, updates: Partial<Memory>): void {
-		const sets: string[] = [];
-		const values: unknown[] = [];
-
-		const fieldMap: Record<string, string> = {
-			type: "type",
-			category: "category",
-			content: "content",
-			confidence: "confidence",
-			importance: "importance",
-			pinned: "pinned",
-			contentHash: "content_hash",
-			normalizedContent: "normalized_content",
-			extractionStatus: "extraction_status",
-			embeddingModel: "embedding_model",
-			extractionModel: "extraction_model",
-			sourceId: "source_id",
-			sourceType: "source_type",
-			sourcePath: "source_path",
-			runtimePath: "runtime_path",
-			idempotencyKey: "idempotency_key",
-			who: "who",
-		};
-
-		for (const [key, col] of Object.entries(fieldMap)) {
-			if (key in updates) {
-				sets.push(`${col} = ?`);
-				const val = updates[key as keyof Memory];
-				if (key === "pinned") {
-					values.push(val ? 1 : 0);
-				} else {
-					values.push(val ?? null);
-				}
-			}
-		}
-
-		if (updates.tags !== undefined) {
-			sets.push("tags = ?");
-			values.push(JSON.stringify(updates.tags));
-		}
-
-		if (sets.length === 0) return;
-		const owner = this.getDb().prepare("SELECT agent_id FROM memories WHERE id = ?").get(id) as
-			| { agent_id: string | null }
-			| undefined;
-
-		sets.push("updated_at = ?");
-		values.push(new Date().toISOString());
-
-		sets.push("update_count = COALESCE(update_count, 0) + 1");
-
-		values.push(id);
-
-		this.getDb()
-			.prepare(`UPDATE memories SET ${sets.join(", ")} WHERE id = ?`)
-			.run(...values);
-		if (typeof updates.content === "string") {
-			this.recordMemoryContentSafety(id, updates.content, owner?.agent_id?.trim() || "default");
-		}
-	}
-
-	private recordMemoryContentSafety(id: string, content: string, agentId: string): void {
-		const db = this.getDb();
-		const table = db
-			.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?")
-			.get("memory_content_safety");
-		if (table == null) return;
-		const assessment = scanMemoryContent(content);
-		db.prepare(
-			`INSERT INTO memory_content_safety
-			 (agent_id, source_kind, source_id, status, context_eligible, reasons_json, policy_version, scanned_at)
-			 VALUES (?, 'memory', ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(agent_id, source_kind, source_id) DO UPDATE SET
-			   status = excluded.status,
-			   context_eligible = excluded.context_eligible,
-			   reasons_json = excluded.reasons_json,
-			   policy_version = excluded.policy_version,
-			   scanned_at = excluded.scanned_at`,
-		).run(
-			agentId,
-			id,
-			assessment.status,
-			assessment.contextEligible ? 1 : 0,
-			JSON.stringify(assessment.reasons),
-			MEMORY_CONTENT_SAFETY_POLICY_VERSION,
-			new Date().toISOString(),
-		);
-	}
-
-	softDeleteMemory(id: string, deletedBy: string, reason?: string): void {
-		const now = new Date().toISOString();
-		const existing = this.getMemoryById(id);
-		if (existing === null) return;
-
-		this.getDb()
-			.prepare(
-				`UPDATE memories
-				 SET is_deleted = 1, deleted_at = ?, updated_at = ?
-				 WHERE id = ?`,
-			)
-			.run(now, now, id);
-
-		this.addHistoryEvent({
-			memoryId: id,
-			event: "deleted",
-			oldContent: existing.content,
-			changedBy: deletedBy,
-			reason,
-		});
-	}
-
-	recoverMemory(id: string, recoveredBy: string): void {
-		const now = new Date().toISOString();
-
-		this.getDb()
-			.prepare(
-				`UPDATE memories
-				 SET is_deleted = 0, deleted_at = NULL, updated_at = ?
-				 WHERE id = ?`,
-			)
-			.run(now, id);
-
-		this.addHistoryEvent({
-			memoryId: id,
-			event: "recovered",
-			changedBy: recoveredBy,
-		});
 	}
 
 	addHistoryEvent(event: Omit<MemoryHistory, "id" | "createdAt">): string {

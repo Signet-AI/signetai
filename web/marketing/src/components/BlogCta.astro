@@ -1,0 +1,30 @@
+---
+const command = "curl -fsSL https://signetai.sh/install.sh | bash";
+---
+
+<section class="blog-cta" aria-labelledby="blog-cta-title">
+  <p class="blog-eyebrow">Try Signet</p>
+  <h2 id="blog-cta-title" class="blog-cta-title">Memory your agents keep,<br /><span>and you can read.</span></h2>
+  <div class="blog-cta-command">
+    <code><span aria-hidden="true">$</span> {command}</code>
+    <button type="button" class="blog-cta-copy" data-copy={command} aria-label="Copy install command">Copy</button>
+  </div>
+  <div class="blog-cta-links">
+    <a class="btn" href="https://docs.signetai.sh/getting-started/install/" data-analytics-cta="install_docs" data-analytics-placement="blog">Install guide</a>
+    <a class="btn" href="https://discord.gg/pHa5scah9C" target="_blank" rel="noopener noreferrer" data-analytics-cta="join_discord" data-analytics-placement="blog">Join Discord <span aria-hidden="true">↗</span></a>
+  </div>
+</section>
+
+<script>
+  function initBlogCtaCopy() {
+    for (const button of document.querySelectorAll<HTMLButtonElement>(".blog-cta-copy")) {
+      button.addEventListener("click", async () => {
+        await navigator.clipboard.writeText(button.dataset.copy ?? "");
+        button.textContent = "Copied";
+        setTimeout(() => (button.textContent = "Copy"), 1500);
+      });
+    }
+  }
+
+  document.addEventListener("astro:page-load", initBlogCtaCopy);
+</script>

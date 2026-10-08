@@ -1,6 +1,5 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { MEMORY_CONTENT_SAFETY_POLICY_VERSION, scanMemoryContent } from "./memory-content-safety";
 
 export interface ExportOptions {
 	readonly includeEmbeddings?: boolean;
@@ -31,10 +30,14 @@ export interface ExportData {
 	}>;
 }
 
-export type ImportConflictStrategy = "skip" | "overwrite" | "merge";
-
 export interface ImportOptions {
-	readonly conflictStrategy?: ImportConflictStrategy;
+	readonly agentId?: string;
+}
+
+export interface ImportInput {
+	readonly memories?: string;
+	readonly entities?: string;
+	readonly relations?: string;
 }
 
 export interface ExportImportResult {
@@ -42,7 +45,6 @@ export interface ExportImportResult {
 	readonly memoriesSkipped: number;
 	readonly entitiesImported: number;
 	readonly relationsImported: number;
-	readonly identityFilesWritten: number;
 }
 
 interface ExportDb {
@@ -58,33 +60,6 @@ interface ImportDb {
 		get(...args: unknown[]): Record<string, unknown> | undefined;
 	};
 	exec(sql: string): void;
-}
-
-function recordImportedMemoryContentSafety(db: ImportDb, memoryId: string, content: string): void {
-	if (
-		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get("memory_content_safety") == null
-	) {
-		return;
-	}
-	const assessment = scanMemoryContent(content);
-	db.prepare(
-		`INSERT INTO memory_content_safety
-			 (agent_id, source_kind, source_id, status, context_eligible, reasons_json, policy_version, scanned_at)
-			 VALUES ('default', 'memory', ?, ?, ?, ?, ?, ?)
-			 ON CONFLICT(agent_id, source_kind, source_id) DO UPDATE SET
-			   status = excluded.status,
-			   context_eligible = excluded.context_eligible,
-			   reasons_json = excluded.reasons_json,
-			   policy_version = excluded.policy_version,
-			   scanned_at = excluded.scanned_at`,
-	).run(
-		memoryId,
-		assessment.status,
-		assessment.contextEligible ? 1 : 0,
-		JSON.stringify(assessment.reasons),
-		MEMORY_CONTENT_SAFETY_POLICY_VERSION,
-		new Date().toISOString(),
-	);
 }
 
 const IDENTITY_FILE_NAMES = [
@@ -113,7 +88,8 @@ export function collectExportData(agentsDir: string, db: ExportDb, options: Expo
 	const memories = db
 		.prepare(
 			`SELECT id, content, type, category, confidence, source_type,
-			        tags, importance, pinned, who, project, created_at, updated_at
+			        tags, importance, pinned, who, project, agent_id, scope,
+			        visibility, created_at, updated_at
 			 FROM memories
 			 WHERE is_deleted = 0
 			 ORDER BY created_at ASC`,
@@ -122,7 +98,7 @@ export function collectExportData(agentsDir: string, db: ExportDb, options: Expo
 	const entities = db
 		.prepare(
 			`SELECT id, name, canonical_name, entity_type, description,
-			        mentions, created_at, updated_at
+			        mentions, agent_id, created_at, updated_at
 			 FROM entities
 			 ORDER BY created_at ASC`,
 		)
@@ -221,144 +197,137 @@ export function serializeExportData(data: ExportData): ReadonlyMap<string, strin
 	return files;
 }
 
-export function importMemories(
-	db: ImportDb,
-	memoriesJsonl: string,
-	options: ImportOptions = {},
-): { imported: number; skipped: number; errors: number } {
-	const strategy = options.conflictStrategy ?? "skip";
-	const lines = memoriesJsonl.split("\n").filter(Boolean);
-	let imported = 0;
-	let skipped = 0;
-	let errors = 0;
-	db.exec("BEGIN");
-	try {
-		for (const line of lines) {
-			let mem: Record<string, unknown>;
-			try {
-				mem = JSON.parse(line) as Record<string, unknown>;
-			} catch {
-				errors++;
-				continue;
-			}
-			const id = mem.id as string;
-			const existing = db.prepare("SELECT id FROM memories WHERE id = ?").get(id);
+const VISIBILITIES = new Set(["global", "private", "archived"]);
 
-			if (existing) {
-				if (strategy === "skip") {
-					skipped++;
-					continue;
-				}
-				if (strategy === "overwrite") {
-					db.prepare(
-						`UPDATE memories
-						 SET content = ?, type = ?, importance = ?, tags = ?,
-						     who = ?, project = ?, updated_at = ?
-						 WHERE id = ?`,
-					).run(
-						mem.content,
-						mem.type,
-						mem.importance ?? 0.3,
-						mem.tags ?? null,
-						mem.who ?? null,
-						mem.project ?? null,
-						new Date().toISOString(),
-						id,
-					);
-					recordImportedMemoryContentSafety(db, id, String(mem.content ?? ""));
-					imported++;
-					continue;
-				}
-			}
-			db.prepare(
-				`INSERT OR IGNORE INTO memories
-				 (id, content, type, category, confidence, source_type,
-				  tags, importance, pinned, who, project, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run(
-				id,
-				mem.content,
-				mem.type ?? "fact",
-				mem.category ?? null,
-				mem.confidence ?? 0.8,
-				mem.source_type ?? "import",
-				mem.tags ?? null,
-				mem.importance ?? 0.3,
-				mem.pinned ?? 0,
-				mem.who ?? null,
-				mem.project ?? null,
-				mem.created_at ?? new Date().toISOString(),
-				mem.updated_at ?? new Date().toISOString(),
-			);
-			const stored = db.prepare("SELECT content FROM memories WHERE id = ?").get(id);
-			recordImportedMemoryContentSafety(db, id, String(stored?.content ?? ""));
-			imported++;
-		}
-		db.exec("COMMIT");
-	} catch (err) {
-		db.exec("ROLLBACK");
-		throw err;
-	}
-
-	return { imported, skipped, errors };
+interface Line {
+	readonly file: string;
+	readonly line: number;
+	readonly row: Record<string, unknown>;
 }
 
-export function importEntities(db: ImportDb, entitiesJsonl: string): { imported: number; errors: number } {
-	const lines = entitiesJsonl.split("\n").filter(Boolean);
-	let imported = 0;
-	let errors = 0;
+function parseLines(file: string, jsonl: string | undefined): Line[] {
+	return (jsonl ?? "").split("\n").flatMap((raw, index) => {
+		if (raw.trim().length === 0) return [];
+		let row: unknown;
+		try {
+			row = JSON.parse(raw);
+		} catch {
+			throw new Error(`${file} line ${index + 1} is not valid JSON`);
+		}
+		if (typeof row !== "object" || row === null || Array.isArray(row))
+			throw new Error(`${file} line ${index + 1} is not a JSON object`);
+		return [{ file, line: index + 1, row: Object.fromEntries(Object.entries(row)) }];
+	});
+}
 
+function text(item: Line, key: string): string {
+	const value = item.row[key];
+	if (typeof value === "string" && value.trim().length > 0) return value;
+	throw new Error(`${item.file} line ${item.line} is missing ${key}`);
+}
+
+function agent(item: Line, options: ImportOptions): string {
+	const value = options.agentId ?? item.row.agent_id;
+	if (typeof value === "string" && value.trim().length > 0) return value.trim();
+	throw new Error(`${item.file} line ${item.line} has no agent_id; pass an explicit target agent`);
+}
+
+function visibility(item: Line, options: ImportOptions): string {
+	const value = item.row.visibility;
+	if (value === undefined || value === null) {
+		if (options.agentId !== undefined) return "private";
+		throw new Error(`${item.file} line ${item.line} has no visibility; pass an explicit target agent`);
+	}
+	if (typeof value === "string" && VISIBILITIES.has(value)) return value;
+	throw new Error(`${item.file} line ${item.line} has unsupported visibility`);
+}
+
+function scope(item: Line): string | null {
+	const value = item.row.scope;
+	if (value === undefined || value === null) return null;
+	if (typeof value === "string") return value;
+	throw new Error(`${item.file} line ${item.line} has unsupported scope`);
+}
+
+export function importBundle(db: ImportDb, input: ImportInput, options: ImportOptions = {}): ExportImportResult {
+	if (options.agentId !== undefined && options.agentId.trim().length === 0)
+		throw new Error("Target agent must not be empty");
+	const now = new Date().toISOString();
+	const memories = parseLines("memories.jsonl", input.memories).map((item) => ({
+		row: item.row,
+		id: text(item, "id"),
+		content: text(item, "content"),
+		agentId: agent(item, options),
+		visibility: visibility(item, options),
+		scope: scope(item),
+	}));
+	const entities = parseLines("entities.jsonl", input.entities).map((item) => ({
+		row: item.row,
+		id: text(item, "id"),
+		name: text(item, "name"),
+		agentId: agent(item, options),
+	}));
+	const relations = parseLines("relations.jsonl", input.relations).map((item) => ({
+		row: item.row,
+		id: text(item, "id"),
+		source: text(item, "source_entity_id"),
+		target: text(item, "target_entity_id"),
+	}));
+
+	let memoriesImported = 0;
+	let memoriesSkipped = 0;
 	db.exec("BEGIN");
 	try {
-		for (const line of lines) {
-			let entity: Record<string, unknown>;
-			try {
-				entity = JSON.parse(line) as Record<string, unknown>;
-			} catch {
-				errors++;
+		for (const mem of memories) {
+			if (db.prepare("SELECT 1 FROM memories WHERE id = ?").get(mem.id)) {
+				memoriesSkipped++;
 				continue;
 			}
+			db.prepare(
+				`INSERT INTO memories
+				 (id, content, type, category, confidence, source_type,
+				  tags, importance, pinned, who, project, agent_id, scope,
+				  visibility, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				mem.id,
+				mem.content,
+				mem.row.type ?? "fact",
+				mem.row.category ?? null,
+				mem.row.confidence ?? 0.8,
+				mem.row.source_type ?? "import",
+				mem.row.tags ?? null,
+				mem.row.importance ?? 0.3,
+				mem.row.pinned ?? 0,
+				mem.row.who ?? null,
+				mem.row.project ?? null,
+				mem.agentId,
+				mem.scope,
+				mem.visibility,
+				mem.row.created_at ?? now,
+				mem.row.updated_at ?? now,
+			);
+			memoriesImported++;
+		}
+		for (const entity of entities) {
 			db.prepare(
 				`INSERT OR IGNORE INTO entities
 				 (id, name, canonical_name, entity_type, description,
-				  mentions, created_at, updated_at)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				  mentions, agent_id, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				entity.id,
 				entity.name,
-				entity.canonical_name ?? null,
-				entity.entity_type ?? "unknown",
-				entity.description ?? null,
-				entity.mentions ?? 1,
-				entity.created_at ?? new Date().toISOString(),
-				entity.updated_at ?? new Date().toISOString(),
+				entity.row.canonical_name ?? null,
+				entity.row.entity_type ?? "unknown",
+				entity.row.description ?? null,
+				entity.row.mentions ?? 1,
+				entity.agentId,
+				entity.row.created_at ?? now,
+				entity.row.updated_at ?? now,
 			);
-			imported++;
 		}
-		db.exec("COMMIT");
-	} catch (err) {
-		db.exec("ROLLBACK");
-		throw err;
-	}
-
-	return { imported, errors };
-}
-
-export function importRelations(db: ImportDb, relationsJsonl: string): { imported: number; errors: number } {
-	const lines = relationsJsonl.split("\n").filter(Boolean);
-	let imported = 0;
-	let errors = 0;
-
-	db.exec("BEGIN");
-	try {
-		for (const line of lines) {
-			let rel: Record<string, unknown>;
-			try {
-				rel = JSON.parse(line) as Record<string, unknown>;
-			} catch {
-				errors++;
-				continue;
-			}
+		for (const rel of relations) {
 			db.prepare(
 				`INSERT OR IGNORE INTO relations
 				 (id, source_entity_id, target_entity_id, relation_type,
@@ -366,16 +335,15 @@ export function importRelations(db: ImportDb, relationsJsonl: string): { importe
 				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			).run(
 				rel.id,
-				rel.source_entity_id,
-				rel.target_entity_id,
-				rel.relation_type ?? "related",
-				rel.strength ?? 1,
-				rel.mentions ?? 1,
-				rel.confidence ?? 0.8,
-				rel.metadata ?? null,
-				rel.created_at ?? new Date().toISOString(),
+				rel.source,
+				rel.target,
+				rel.row.relation_type ?? "related",
+				rel.row.strength ?? 1,
+				rel.row.mentions ?? 1,
+				rel.row.confidence ?? 0.8,
+				rel.row.metadata ?? null,
+				rel.row.created_at ?? now,
 			);
-			imported++;
 		}
 		db.exec("COMMIT");
 	} catch (err) {
@@ -383,5 +351,10 @@ export function importRelations(db: ImportDb, relationsJsonl: string): { importe
 		throw err;
 	}
 
-	return { imported, errors };
+	return {
+		memoriesImported,
+		memoriesSkipped,
+		entitiesImported: entities.length,
+		relationsImported: relations.length,
+	};
 }

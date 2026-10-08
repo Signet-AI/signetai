@@ -372,7 +372,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 				type: "stdio",
 				command: mcp.command,
 				args: mcp.args,
-				env: {},
+				env: { ...mcp.env },
 			},
 		};
 

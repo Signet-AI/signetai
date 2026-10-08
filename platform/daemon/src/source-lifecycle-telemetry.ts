@@ -135,6 +135,7 @@ export function sourceClassForKind(kind: string): SourceClass {
 		case "repository":
 			return "repository";
 		case "obsidian":
+		case "notion":
 		case "note_vault":
 			return "note_vault";
 		case "browser":
@@ -457,6 +458,7 @@ function recallClass(result: SourceRecallTelemetryResult): SourceClass | null {
 	const sourceId = result.source_id ?? "";
 	if (source === "source_obsidian" || sourceId.startsWith("obsidian:")) return "note_vault";
 	if (sourceId.startsWith("github:")) return "repository";
+	if (sourceId.startsWith("notion:")) return "note_vault";
 	if (sourceId.startsWith("discord:") || sourceId.startsWith("discord-cache:")) return "transcript";
 	if (source === "native_memory") return "transcript";
 	return null;

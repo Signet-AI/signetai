@@ -15,6 +15,7 @@ import {
 	resolveAcpxModelSelection,
 	resolveDefaultBasePath,
 	resolveLaunchdExecutable,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import { logger } from "../logger";
 import { getActiveTelemetry } from "../telemetry";
@@ -172,6 +173,10 @@ const llmSemaphore = new LlmConcurrencySemaphore(
 			})()
 		: DEFAULT_MAX_LLM_CONCURRENCY,
 );
+
+export function getLlmConcurrencyLimit(): number {
+	return llmSemaphore.limit;
+}
 
 export function configureLlmConcurrency(limit: number): void {
 	const normalized = Number.isSafeInteger(limit) ? Math.min(16, Math.max(1, limit)) : DEFAULT_MAX_LLM_CONCURRENCY;
@@ -831,14 +836,14 @@ function acpxEnv(config: AcpxProviderConfig, runId?: string): NodeJS.ProcessEnv 
 	return env;
 }
 
-function getAgentsDir(): string {
-	return resolveDefaultBasePath();
+function getRuntimeDir(): string {
+	return resolveWorkspaceLayout(resolveDefaultBasePath()).runtime;
 }
 
 function resolveAcpxCwd(cwd: string | undefined, hooks: AcpxHooksMode | undefined): string | undefined {
 	if (cwd) return isAbsolute(cwd) ? cwd : resolvePath(cwd);
 	if (hooks !== "disabled") return undefined;
-	const isolatedCwd = join(getAgentsDir(), ".daemon", "acpx-background");
+	const isolatedCwd = join(getRuntimeDir(), "acpx-background");
 	mkdirSync(isolatedCwd, { recursive: true });
 	return isolatedCwd;
 }

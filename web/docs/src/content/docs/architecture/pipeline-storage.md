@@ -7,8 +7,8 @@ Signet separates canonical evidence from the derived structures used for
 retrieval and maintenance.
 
 Conversation transcripts, memory rows, imported documents, and canonical JSONL
-transcripts are evidence. Embeddings, FTS indexes, graph projections,
-content-safety decisions, and `MEMORY.md` are derived or rebuildable surfaces.
+transcripts are evidence. Embeddings, FTS indexes, graph projections, and
+`MEMORY.md` are derived or rebuildable surfaces.
 Normal capture does not create Markdown transcript copies; Markdown is an
 explicit export or view. See [Workspace v2](/workspace-v2/) for storage
 ownership and migration.
@@ -113,9 +113,9 @@ performed outside write locks; the resulting index update is applied separately.
 ## Session transcripts and lineage
 
 As of workspace v2, canonical transcript files live under
-`$SIGNET_WORKSPACE/transcripts/{harness}/transcript.jsonl`. The resolver maps
-v1's `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl` during
-migration. The indexed `session_transcripts` table remains available to
+`$SIGNET_WORKSPACE/transcripts/{harness}/transcript.jsonl`. The daemon renames
+v1's `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl` there
+when it upgrades the workspace in place. The indexed `session_transcripts` table remains available to
 episodic evidence and Dreaming; it does not make Markdown a competing
 authority.
 
@@ -144,11 +144,11 @@ keys associated with recalled results are batch-looked up in
 response. This preserves context that may not have become a separate memory
 row without creating a second hidden recall path.
 
-Canonical Markdown artifacts under `$SIGNET_WORKSPACE/memory/` remain the
+Canonical Markdown artifacts under `$SIGNET_WORKSPACE/transcripts/` remain the
 lineage surface for transcript, summary, and compaction history. `MEMORY.md` is
 a rebuildable projection over durable memory rows, temporal state, and the
-canonical artifact ledger. Before retained content enters prompt-facing
-projections, the versioned content-safety policy must mark it eligible.
+canonical artifact ledger. Retained content enters prompt-facing projections
+with detected credentials replaced by `[redacted credential]`.
 
 ## Job queue
 
@@ -261,7 +261,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `160-import-admission-ledger.ts`.
+`schema_migrations_audit`. The latest migration is `168-retire-source-paragraph-claims.ts`.
 
 ### Evidence and semantic state
 
@@ -278,11 +278,6 @@ partial uniqueness rule prevents duplicate non-deleted content hashes. The
 including created, updated, deleted, recovered, and proposal/observation events.
 It stores old and new content where applicable, the actor, reason, metadata,
 session, and request identifiers.
-
-**`memory_content_safety`** is an agent-scoped derived ledger for content-safety
-decisions over memories, artifacts, transcripts, summaries, and source chunks.
-It stores the decision status, prompt eligibility, reasons, policy version, and
-scan time. It never replaces or rewrites the underlying evidence.
 
 **`session_transcripts`** stores the canonical retained conversation index. Its
 current lifecycle fields include completion and content-hash metadata, in
@@ -314,7 +309,10 @@ metadata. **`vec_embeddings`** is the sqlite-vec ANN mirror and is rebuildable.
 
 **`memories_fts`** is an FTS5 external-content index over memory text and
 prospective hints. Its triggers keep it synchronized with the canonical memory
-rows.
+rows. It uses the `porter unicode61` tokenizer, so a query word matches its
+inflections ("bake" matches "baked" and "baking"; "albums" matches "album").
+Stemming can also join unrelated words that share a stem ("celebrate" and
+"celebrity"); the vector lane and reranker carry meaning beyond that.
 
 **`memory_search_telemetry`** is an opt-in, local-only recall QA ledger. It may
 contain query text and result snapshots, so routes that expose it enforce
@@ -379,5 +377,10 @@ The ownership boundary is the important part of the schema:
   attribution, and deletion/tombstone state;
 - removing a source purges its source-owned projections without mutating the
   external source or silently deleting unrelated Dreaming-derived history;
+- source sync writes topology only (source, folder, and document entities and
+  their links), never aspects or claims. Re-indexing an edited source replaces
+  only those rows. Dreaming claims that cite the source stay, and the ones whose
+  cited quote is gone, or whose file was deleted, are flagged for review with a
+  `contested_claim` attention record;
 - every semantic mutation must be attributable to a scoped actor, an exact
   evidence citation, or a validated hygiene-attention record.

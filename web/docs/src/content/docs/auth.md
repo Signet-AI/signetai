@@ -5,6 +5,8 @@ description: "Configure daemon authentication for local, hybrid, and team deploy
 
 Authentication is optional for a single local machine. Use `team` mode for a daemon shared over a network or by multiple people. Do not expose a daemon that remains in `local` mode.
 
+Setting up a daemon for several people? [Teams](/teams/) walks through it end to end, from team mode to dashboard sign-in and handing out keys.
+
 ## Modes
 
 - **`local`**: no bearer credential is required. This is the default and should remain localhost-only.
@@ -33,7 +35,7 @@ SIGNET_ADMIN_PASSWORD='load-this-from-a-secret-manager' \
 signet daemon start
 ```
 
-The daemon creates its signing secret under `.daemon/auth-secret` for non-local modes. Do not copy, commit, or distribute that file. The password value is not written to `agent.yaml`; a persisted configuration may contain only a password hash.
+The daemon creates its signing secret under `runtime/auth-secret` for non-local modes. Do not copy, commit, or distribute that file. The password value is not written to `agent.yaml`; a persisted configuration may contain only a password hash.
 
 `signet daemon` by itself prints the command group help. The command that starts the service is `signet daemon start`.
 
@@ -42,7 +44,7 @@ The daemon creates its signing secret under `.daemon/auth-secret` for non-local 
 In team mode, token and API-key creation are admin-protected endpoints. A new server therefore needs an initial admin authentication path before it can issue API keys:
 
 1. Set `SIGNET_ADMIN_PASSWORD` or `SIGNET_ADMIN_PASSWORD_HASH` when starting the daemon, as above.
-2. Sign in to the dashboard with that admin credential, or authenticate against `POST /api/auth/login` from a secret-aware client.
+2. Sign in to the dashboard with that admin credential, or authenticate against `POST /api/auth/login` from a secret-aware client. The dashboard also accepts an API key, which it exchanges for a browser session, and `signet dashboard` opens it signed in when `SIGNET_API_KEY` is set. See [Dashboard](/dashboard/#signing-in).
 3. Use the resulting short-lived admin bearer session to create scoped API keys or tokens.
 4. Store each issued key only in the remote consumer's secret store. The raw API key is shown once.
 
@@ -50,7 +52,7 @@ Do not put the bootstrap password, admin bearer token, or issued key into shell 
 
 ## Create and use API keys
 
-Once an admin bearer credential is available to the CLI as `SIGNET_API_KEY`, create a named, scoped remote-client key:
+Admins signed in to the dashboard can create, list, and revoke keys under **Settings → API keys**. From the CLI, once an admin bearer credential is available as `SIGNET_API_KEY`, create a named, scoped remote-client key:
 
 ```bash
 signet api-key create \

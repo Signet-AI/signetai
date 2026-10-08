@@ -2,7 +2,7 @@ import { execFileHidden as execFile } from "@signet/core";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import {
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
@@ -10,21 +10,25 @@ import {
 	type SignetSourceEntry,
 	addDiscordSource,
 	addGitHubSource,
+	addNotionSource,
 	addObsidianSource,
 	addWebSource,
 	DEFAULT_DISCORD_DESKTOP_CACHE_PATH,
 	loadSourcesConfig,
 	markSourceIndexed,
 	normalizePublicWebUrl,
+	notionSourceId,
 	parseDiscordSettings,
 	parseGitHubSettings,
 	removeSourceIfGeneration,
 	resolveDefaultBasePath,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getPeerAddress } from "../auth/middleware";
 import { dbOwnerQuery, dbOwnerSourceEvidenceEligibility } from "../db-owner-runtime";
+import type { DbOwnerParameter } from "../db-owner-protocol";
 import { fetchEmbedding } from "../embedding-fetch";
 import { type ImportExtractionOutcome, readImportedSourceOutcome } from "../imported-source-outcome";
 import { logger } from "../logger";
@@ -507,6 +511,41 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		}
 	});
 
+	app.post("/api/sources/notion", async (c) => {
+		let parsed: unknown;
+		try {
+			parsed = await c.req.json();
+		} catch {
+			recordSourceConnectionFailure("notion", "invalid configuration");
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		const body = parseAddNotionSourceBody(parsed);
+		if ("error" in body) {
+			recordSourceConnectionFailure("notion", "invalid configuration");
+			return c.json({ error: body.error }, 400);
+		}
+		const releaseSourceMutation = beginSourceMutationLease(c, notionSourceId(body.tokenRef));
+		if (typeof releaseSourceMutation !== "function") return releaseSourceMutation;
+		try {
+			const result = addNotionSource(body, agentsDir);
+			if (result.ok === false) {
+				recordSourceConnectionFailure("notion", result.error);
+				return c.json({ error: result.error }, 400);
+			}
+			await recordSourceConnected(result.source, resolveDaemonAgentId());
+			const job = enqueueSourceIndexJob({
+				source: result.source,
+				agentsDir,
+				startBridge,
+				purgeNativeSource,
+				recordIndexOperation,
+			});
+			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+		} finally {
+			releaseSourceMutation();
+		}
+	});
+
 	app.post("/api/sources/web", async (c) => {
 		let body: AddWebSourceBody = {};
 		try {
@@ -640,6 +679,22 @@ function sourceIdForDiscord(body: AddDiscordSourceBody, guildIds: readonly strin
 	return settings.syncMode === "desktop-cache"
 		? `discord-cache:${createHash("sha256").update(root).digest("hex").slice(0, 16)}`
 		: `discord:${createHash("sha256").update(settings.guildIds.slice().sort().join(",")).digest("hex").slice(0, 16)}`;
+}
+
+function parseAddNotionSourceBody(
+	value: unknown,
+): { readonly tokenRef: string; readonly name?: string; readonly maxPages?: number } | { readonly error: string } {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return { error: "Request body must be an object" };
+	const body = value as Record<string, unknown>;
+	if (typeof body.tokenRef !== "string") return { error: "Notion tokenRef is required" };
+	if (body.name !== undefined && typeof body.name !== "string") return { error: "Notion name must be a string" };
+	if (body.maxPages !== undefined && typeof body.maxPages !== "number")
+		return { error: "Notion maxPages must be a number" };
+	return {
+		tokenRef: body.tokenRef,
+		...(typeof body.name === "string" ? { name: body.name } : {}),
+		...(typeof body.maxPages === "number" ? { maxPages: body.maxPages } : {}),
+	};
 }
 
 function sourceIdForGitHub(repos: readonly string[]): string {
@@ -1056,7 +1111,7 @@ function saveSourceDeletionTombstones(tombstones: readonly SourceDeletionTombsto
 }
 
 function sourceDeletionTombstonesPath(agentsDir: string): string {
-	return `${agentsDir.replace(/\/$/, "")}/.daemon/source-deletion-tombstones.json`;
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "source-deletion-tombstones.json");
 }
 
 function isSourceDeletionTombstone(value: unknown): value is SourceDeletionTombstone {
@@ -1081,7 +1136,7 @@ interface SourceStats {
 }
 
 interface SourceHealth {
-	readonly status: "healthy" | "degraded" | "unhealthy" | "empty";
+	readonly status: "healthy" | "degraded" | "unhealthy" | "empty" | "unknown";
 	readonly generatedAt: string;
 	readonly error?: string;
 	readonly latestArtifactAt: string | null;
@@ -1212,7 +1267,7 @@ async function sourceHealth(source: SignetSourceEntry, agentId: string, stats: S
 		};
 	} catch (err) {
 		return {
-			status: "unhealthy",
+			status: "unknown",
 			error: `Source health diagnostics failed: ${err instanceof Error ? err.message : String(err)}`,
 			generatedAt,
 			latestArtifactAt: null,
@@ -1234,63 +1289,92 @@ async function sourceHealth(source: SignetSourceEntry, agentId: string, stats: S
 		};
 	}
 }
+const SOURCE_HEALTH_PAGE_ROWS = 500;
+
+async function pagedSourceHealthRows<Row extends { readonly rowid: number }>(
+	sql: string,
+	params: readonly DbOwnerParameter[],
+	operation: string,
+	visit: (rows: readonly Row[]) => void,
+): Promise<void> {
+	let cursor = 0;
+	for (;;) {
+		const rows = await dbOwnerQuery<Row[]>(
+			{ sql, params: [...params, cursor, SOURCE_HEALTH_PAGE_ROWS], result: "all" },
+			{ operation, lane: "read", deadlineMs: 5_000 },
+		);
+		visit(rows);
+		const last = rows.at(-1);
+		if (!last || rows.length < SOURCE_HEALTH_PAGE_ROWS) return;
+		cursor = last.rowid;
+	}
+}
 
 async function sourceOrphanChunks(source: SignetSourceEntry, agentId: string): Promise<number> {
 	const chunkPrefix = `${source.id}:`;
-	const [livePaths, chunks] = await Promise.all([
-		liveSourceArtifactPaths(source, agentId),
-		dbOwnerQuery<SourceChunkHealthRow[]>(
-			{
-				sql: `SELECT source_id, chunk_text FROM embeddings
-				 WHERE agent_id = ? AND source_type IN (?, ?) AND source_id >= ? AND source_id < ?`,
-				params: [
-					agentId,
-					SOURCE_CHUNK_SOURCE_TYPE,
-					LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
-					chunkPrefix,
-					`${chunkPrefix}\uffff`,
-				],
-				result: "all",
-			},
-			{ operation: "sources.health_orphan_chunks", lane: "read", deadlineMs: 5_000 },
-		),
-	]);
-	return chunks.filter((chunk) => !sourceChunkMatchesLiveArtifact(source, chunk, livePaths)).length;
+	const livePaths = await liveSourceArtifactPaths(source, agentId);
+	let orphans = 0;
+	await pagedSourceHealthRows<SourceChunkHealthRow>(
+		`SELECT rowid, source_id,
+		        CASE WHEN instr(tail, char(10)) > 0 THEN substr(tail, 1, instr(tail, char(10)) - 1) ELSE tail END AS chunk_text
+		 FROM (
+		   SELECT rowid, source_id,
+		          CASE WHEN header_at > 0 THEN substr(framed, header_at + 1, 1024) END AS tail
+		   FROM (
+		     SELECT rowid, source_id, char(10) || chunk_text AS framed,
+		            instr(char(10) || lower(chunk_text), char(10) || 'source_path:') AS header_at
+		     FROM embeddings
+		     WHERE agent_id = ? AND source_type IN (?, ?) AND source_id >= ? AND source_id < ? AND rowid > ?
+		     ORDER BY rowid LIMIT ?
+		   )
+		 )`,
+		[agentId, SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkPrefix, `${chunkPrefix}\uffff`],
+		"sources.health_orphan_chunks",
+		(rows) => {
+			for (const chunk of rows) if (!sourceChunkMatchesLiveArtifact(source, chunk, livePaths)) orphans++;
+		},
+	);
+	return orphans;
 }
 
 async function liveSourceArtifactPaths(source: SignetSourceEntry, agentId: string): Promise<ReadonlySet<string>> {
+	const paths = new Set<string>();
+	const collect = (rows: readonly SourcePathHealthRow[]): void => {
+		for (const row of rows) paths.add(normalizeSourcePath(row.source_path));
+	};
 	if (source.kind === "obsidian") {
 		const rootPrefix = `${source.root.replace(/\\/g, "/").replace(/\/$/, "")}/`;
-		const rows = await dbOwnerQuery<SourcePathHealthRow[]>(
-			{
-				sql: `SELECT source_path FROM memory_artifacts
-				 WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0
-				   AND (source_id = ? OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))`,
-				params: [agentId, source.id, rootPrefix, `${rootPrefix}\uffff`],
-				result: "all",
-			},
-			{ operation: "sources.health_live_paths", lane: "read", deadlineMs: 5_000 },
+		await pagedSourceHealthRows<SourcePathHealthRow>(
+			`SELECT rowid, source_path FROM memory_artifacts
+			 WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0
+			   AND (source_id = ? OR (harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))
+			   AND rowid > ?
+			 ORDER BY rowid LIMIT ?`,
+			[agentId, source.id, rootPrefix, `${rootPrefix}\uffff`],
+			"sources.health_live_paths",
+			collect,
 		);
-		return new Set(rows.map((row) => normalizeSourcePath(row.source_path)));
+		return paths;
 	}
-	const rows = await dbOwnerQuery<SourcePathHealthRow[]>(
-		{
-			sql: `SELECT source_path FROM memory_artifacts
-			 WHERE agent_id = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0`,
-			params: [agentId, source.id],
-			result: "all",
-		},
-		{ operation: "sources.health_live_paths", lane: "read", deadlineMs: 5_000 },
+	await pagedSourceHealthRows<SourcePathHealthRow>(
+		`SELECT rowid, source_path FROM memory_artifacts
+		 WHERE agent_id = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0 AND rowid > ?
+		 ORDER BY rowid LIMIT ?`,
+		[agentId, source.id],
+		"sources.health_live_paths",
+		collect,
 	);
-	return new Set(rows.map((row) => normalizeSourcePath(row.source_path)));
+	return paths;
 }
 
 interface SourceChunkHealthRow {
+	readonly rowid: number;
 	readonly source_id: string;
 	readonly chunk_text: string | null;
 }
 
 interface SourcePathHealthRow {
+	readonly rowid: number;
 	readonly source_path: string;
 }
 

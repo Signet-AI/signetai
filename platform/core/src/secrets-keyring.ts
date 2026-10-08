@@ -17,6 +17,7 @@ export interface SecretKeyringResult {
 	readonly state: SecretKeyringState;
 	readonly value?: string;
 	readonly message?: string;
+	readonly backend?: "absent";
 }
 
 export interface SecretKeyringAccessOptions {
@@ -118,7 +119,15 @@ function helperCommand(): { readonly command: string; readonly args: readonly st
 function parseChildResponse(output: string, code: number | null): SecretKeyringResult {
 	try {
 		const parsed = JSON.parse(output) as SecretKeyringChildResponse;
-		if (parsed.ok && parsed.result !== undefined && STATES.has(parsed.result.state)) return parsed.result;
+		if (parsed.ok && parsed.result !== undefined && STATES.has(parsed.result.state)) {
+			const { state, value, message, backend } = parsed.result;
+			return {
+				state,
+				...(typeof value === "string" ? { value } : {}),
+				...(typeof message === "string" ? { message: message.slice(0, 500) } : {}),
+				...(backend === "absent" ? { backend } : {}),
+			};
+		}
 		if (parsed.state !== undefined && STATES.has(parsed.state)) {
 			return {
 				state: parsed.state,

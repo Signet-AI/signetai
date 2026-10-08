@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { resolveRuntimeAsset } from "@signet/core";
+import { workspaceLayoutStartup } from "./workspace-layout-startup";
 import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 import { requestMemoryHead } from "./memory-head";
 
@@ -31,8 +32,9 @@ import {
 	resolveDefaultBasePath,
 	resolveWorkspaceLayout,
 	routingTargetLocality,
-	scanMemoryContent,
+	redactCredentials,
 	stripSignetBlock,
+	activeVectorProjectionTable,
 } from "@signet/core";
 import { watch } from "chokidar";
 import { Hono } from "hono";
@@ -91,6 +93,7 @@ import {
 	type DbOwnerClientOptions,
 	DbOwnerError,
 } from "./db-owner-client";
+import type { DbOwnerParameter } from "./db-owner-protocol";
 import {
 	type DbOwnerMaintenance,
 	closeRegisteredDbOwnerMaintenance,
@@ -139,6 +142,7 @@ import {
 	classifyPreviousDaemonExit,
 	previousExitTelemetryProperties,
 	readDaemonLifecycle,
+	terminalLifecycleFields,
 	writeDaemonLifecycle,
 } from "./lifecycle";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
@@ -264,7 +268,7 @@ import {
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
-import { MigrationControlBoundary, migrationDrainTargetMatches } from "./workspace-writer-barrier";
+import { MigrationControlBoundary } from "./workspace-writer-barrier";
 import { createOwnerTranscriptImportStore } from "./transcript-import-store";
 import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
 import { admitImport } from "./import-inbox";
@@ -457,37 +461,39 @@ async function ownerQueuePressureSnapshot(owner: DbOwnerClient): Promise<QueuePr
 }
 
 async function ownerHasPendingVecBackfill(owner: DbOwnerClient, expectedDimensions: number): Promise<boolean> {
-	const rowidsHandle = owner.submit<{ readonly present?: number } | undefined>(
-		{
-			kind: "query",
-			statement: {
-				sql: "SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'vec_embeddings_rowids' LIMIT 1",
-				result: "get",
-				transactional: false,
-				readonly: true,
-			},
-		},
-		{ operation: "maintenance.vec-backfill-probe-schema", lane: "read", deadlineMs: 5_000 },
+	const read = async <Row>(
+		sql: string,
+		params: readonly DbOwnerParameter[],
+		operation: string,
+	): Promise<Row | undefined> =>
+		await owner.awaitResult(
+			owner.submit<Row | undefined>(
+				{ kind: "query", statement: { sql, params: [...params], result: "get", transactional: false, readonly: true } },
+				{ operation, lane: "read", deadlineMs: 5_000 },
+			),
+			5_000,
+		);
+	const indexState = await read<{ readonly active_profile_json?: unknown }>(
+		"SELECT active_profile_json FROM embedding_index_state WHERE id = 1",
+		[],
+		"maintenance.vec-backfill-probe-slot",
+	).catch(() => undefined);
+	const activeTable = activeVectorProjectionTable({ prepare: () => ({ get: () => indexState }) });
+	const rowids = await read<{ readonly present?: number }>(
+		"SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+		[`${activeTable}_rowids`],
+		"maintenance.vec-backfill-probe-schema",
 	);
-	const rowids = await owner.awaitResult(rowidsHandle, 5_000);
-	const targetTable = rowids === undefined ? "vec_embeddings" : "vec_embeddings_rowids";
-	const pendingHandle = owner.submit<{ readonly present?: number } | undefined>(
-		{
-			kind: "query",
-			statement: {
-				sql: `SELECT 1 AS present FROM embeddings e
-				LEFT JOIN ${targetTable} v ON v.id = e.id
-				LEFT JOIN vec_embeddings_quarantine q ON q.rowid = e.id
-				WHERE v.id IS NULL AND q.rowid IS NULL AND e.dimensions = ? LIMIT 1`,
-				params: [expectedDimensions],
-				result: "get",
-				transactional: false,
-				readonly: true,
-			},
-		},
-		{ operation: "maintenance.vec-backfill-probe", lane: "read", deadlineMs: 5_000 },
+	const targetTable = rowids === undefined ? activeTable : `${activeTable}_rowids`;
+	const pending = await read<{ readonly present?: number }>(
+		`SELECT 1 AS present FROM embeddings e
+		 LEFT JOIN ${targetTable} v ON v.id = e.id
+		 LEFT JOIN vec_embeddings_quarantine q ON q.rowid = e.id
+		 WHERE v.id IS NULL AND q.rowid IS NULL AND e.dimensions = ? LIMIT 1`,
+		[expectedDimensions],
+		"maintenance.vec-backfill-probe",
 	);
-	return (await owner.awaitResult(pendingHandle, 5_000)) !== undefined;
+	return pending !== undefined;
 }
 
 export function countConnectorsActive(connectors: readonly { readonly status: string }[]): number {
@@ -497,21 +503,6 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 export const app = new Hono();
 export const daemonMigrationControl = new MigrationControlBoundary(`daemon:${process.pid}:${randomUUID()}`);
 
-app.get("/api/workspace/migration-control", (c) =>
-	c.json({
-		generation: daemonMigrationControl.generation,
-		state: daemonMigrationControl.state,
-		blockers: daemonMigrationControl.blockers(),
-	}),
-);
-app.post("/api/workspace/migration-control/drain", async (c) => {
-	const target: unknown = await c.req.json().catch(() => null);
-	if (!migrationDrainTargetMatches(target, process.pid, AGENTS_DIR))
-		return c.json({ error: "migration drain target identity mismatch" }, 409);
-	const started = daemonMigrationControl.beginDrain();
-	const result = await daemonMigrationControl.close();
-	return c.json({ ...started, ...result, blockers: daemonMigrationControl.blockers() });
-});
 app.use("*", async (c, next) => {
 	if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return await next();
 	if (!migrationIntegrityWritesBlocked) return await next();
@@ -696,18 +687,17 @@ ${fileList}
 					if (!fileContent) return "";
 					if (
 						name === "MEMORY.md" &&
-						(!scanMemoryContent(fileContent).contextEligible ||
-							(
-								await requestMemoryHead<{ generated: boolean }>({
-									action: "inspect",
-									agentId: "default",
-									content: fileContent,
-								})
-							).generated)
+						(
+							await requestMemoryHead<{ generated: boolean }>({
+								action: "inspect",
+								agentId: "default",
+								content: fileContent,
+							})
+						).generated
 					)
 						return "";
 					const header = name.replace(".md", "");
-					return `\n## ${header}\n\n${fileContent}`;
+					return `\n## ${header}\n\n${name === "MEMORY.md" ? redactCredentials(fileContent) : fileContent}`;
 				} catch {
 					return "";
 				}
@@ -1788,7 +1778,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 
 	const activeEmbeddingCfg = await startDeferredRuntimeAfterDreaming(
 		() => {
-			if (!pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
+			if (!pipelinePaused) {
 				try {
 					dreamingWorkerHandle = startDreamingWorker(
 						getDbAccessor(),
@@ -1796,6 +1786,17 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 						AGENTS_DIR,
 						defaultAgentId,
 						{
+							enabled: () => {
+								const live = loadMemoryConfig(AGENTS_DIR);
+								return (
+									live.dreaming.enabled &&
+									live.pipelineV2.enabled &&
+									!live.pipelineV2.paused &&
+									!live.pipelineV2.mutationsFrozen
+								);
+							},
+							inferenceAvailable: async (agentId) =>
+								(await router.explain({ agentId, operation: "memory_extraction" })).ok,
 							acpxMcp: {
 								daemonUrl: `http://${INTERNAL_SELF_HOST}:${PORT}`,
 								authorizationTokenForAgent: (agentId) =>
@@ -2104,6 +2105,10 @@ async function cleanup() {
 		const { shutdownNativeProvider } = await import("./native-embedding");
 		await shutdownNativeProvider();
 	} catch {}
+	try {
+		const { shutdownNativeReranker } = await import("./native-rerank");
+		await shutdownNativeReranker();
+	} catch {}
 
 	const released = releaseAllSessions();
 	const cleared = clearAllPresence();
@@ -2188,12 +2193,8 @@ async function flushAndExit(exitCode: number): Promise<void> {
 }
 
 function buildTerminalLifecycleRecord(reason: string, exitCode: number, error?: unknown): DaemonLifecycle {
-	return buildLifecycleRecord(error === undefined ? "clean" : "error", {
-		exitedAt: new Date().toISOString(),
-		exitCode,
-		reason,
-		...(error !== undefined ? { error: error instanceof Error ? error.message : String(error) } : {}),
-	});
+	const { state, ...extra } = terminalLifecycleFields(reason, exitCode, error, new Date().toISOString());
+	return buildLifecycleRecord(state, extra);
 }
 function buildShutdownTerminalRecord(reason: string, exitCode: number, error?: unknown): DaemonLifecycle {
 	const fatalRequest = shutdownRequestGate.fatalRequest;
@@ -2284,6 +2285,12 @@ process.on("unhandledRejection", (reason) => {
 });
 
 async function main() {
+	if (workspaceLayoutStartup.status === "failed") {
+		console.error(`Signet cannot start: workspace layout upgrade failed: ${workspaceLayoutStartup.reason}`);
+		logger.shutdown(false);
+		process.exitCode = 1;
+		return;
+	}
 	const workspace = preflightWorkspace();
 	if (workspace.status === "missing" || workspace.status === "incomplete") {
 		console.error(formatWorkspacePreflightError(workspace));
@@ -2317,6 +2324,16 @@ async function main() {
 	logger.info("daemon", "Signet Daemon starting", { runtime: DAEMON_RUNTIME });
 	logger.info("daemon", `File logging to ${logger.logFilePath}`);
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
+	if (workspaceLayoutStartup.status === "upgraded" && workspaceLayoutStartup.cleanup)
+		logger.warn(
+			"daemon",
+			"Workspace upgraded to layout v2, but upgrade cleanup did not finish",
+			workspaceLayoutStartup,
+		);
+	else if (workspaceLayoutStartup.status === "upgraded")
+		logger.info("daemon", "Workspace upgraded in place to layout v2", workspaceLayoutStartup);
+	if (workspaceLayoutStartup.status === "blocked" || workspaceLayoutStartup.status === "skipped")
+		logger.warn("daemon", "Workspace layout upgrade did not run", workspaceLayoutStartup);
 	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
 	const lock = acquireSingleInstanceLock(join(DAEMON_DIR, "daemon.lock"));
 	if (lock === null) {

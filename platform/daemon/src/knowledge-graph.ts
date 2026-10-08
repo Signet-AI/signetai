@@ -1,6 +1,7 @@
 import type {
 	AttributeKind,
 	AttributeStatus,
+	ClaimTimePrecision,
 	DependencyType,
 	Entity,
 	EntityAlias,
@@ -10,7 +11,7 @@ import type {
 	TaskMeta,
 	TaskStatus,
 } from "@signet/core";
-import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
+import { CLAIM_TIME_PRECISIONS, SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import { getDbAccessorPath, type DbAccessor, type ReadDb } from "./db-accessor";
 import { dbOwnerQuery, getDbOwner } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
@@ -120,6 +121,13 @@ function rowToAttribute(r: Record<string, unknown>): EntityAttribute {
 		sourceRoot: (r.source_root as string) ?? null,
 		proposalId: (r.proposal_id as string) ?? null,
 		proposalEvidence,
+		occurredStart: typeof r.occurred_start === "string" ? r.occurred_start : null,
+		occurredEnd: typeof r.occurred_end === "string" ? r.occurred_end : null,
+		validFrom: typeof r.valid_from === "string" ? r.valid_from : null,
+		validUntil: typeof r.valid_until === "string" ? r.valid_until : null,
+		timePrecision: CLAIM_TIME_PRECISIONS.includes(r.time_precision as ClaimTimePrecision)
+			? (r.time_precision as ClaimTimePrecision)
+			: null,
 		createdAt: r.created_at as string,
 		updatedAt: r.updated_at as string,
 	};
@@ -1843,12 +1851,16 @@ export interface ConstellationAspect {
 
 export interface ConstellationEntity {
 	readonly id: string;
+	readonly agentId: string;
 	readonly name: string;
 	readonly entityType: string;
 	readonly mentions: number;
 	readonly pinned: boolean;
 	readonly status: "active" | "archived";
 	readonly proposalId: string | null;
+	readonly sourceId: string | null;
+	readonly sourceKind: string | null;
+	readonly sourcePath: string | null;
 	readonly aspects: readonly ConstellationAspect[];
 }
 
@@ -1923,6 +1935,7 @@ export interface ConstellationGraphOptions {
 	readonly dependencyLimit?: number;
 	readonly assertionLimit?: number;
 	readonly backlogProbe?: DreamingEpisodicBacklogProbe;
+	readonly allAgents?: boolean;
 }
 
 function boundedInteger(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -1931,6 +1944,15 @@ function boundedInteger(value: number | undefined, fallback: number, min: number
 
 function placeholders(count: number): string {
 	return Array.from({ length: count }, () => "?").join(", ");
+}
+
+function getConstellationAllAgentIds(db: ReadDb, agentId: string): readonly string[] {
+	const rows = db.prepare("SELECT id FROM agents UNION SELECT DISTINCT agent_id AS id FROM entities").all() as Array<
+		Record<string, unknown>
+	>;
+	const ids = new Set<string>([agentId]);
+	for (const row of rows) if (typeof row.id === "string" && row.id.trim().length > 0) ids.add(row.id);
+	return [...ids];
 }
 
 function getConstellationVisibleAgentIds(db: ReadDb, agentId: string): readonly string[] {
@@ -2098,13 +2120,16 @@ export async function getKnowledgeGraphForConstellation(
 
 	return await accessor.withReadDbAsync(
 		async (db) => {
-			const visibleAgentIds = getConstellationVisibleAgentIds(db, agentId);
+			const visibleAgentIds = options.allAgents
+				? getConstellationAllAgentIds(db, agentId)
+				: getConstellationVisibleAgentIds(db, agentId);
 			const agentPlaceholders = placeholders(visibleAgentIds.length);
 			const topologyPlaceholders = placeholders(SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.length);
 			const sourceClaimEntityTypePlaceholders = placeholders(SOURCE_CLAIM_ENTITY_TYPES.length);
 			const entityRows = db
 				.prepare(
-					`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id
+					`SELECT e.id, e.agent_id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id,
+				        e.source_id, e.source_kind, e.source_path
 				 FROM entities e
 				 WHERE e.agent_id IN (${agentPlaceholders})
 				   AND COALESCE(e.status, 'active') = 'active'
@@ -2117,19 +2142,12 @@ export async function getKnowledgeGraphForConstellation(
 							LOWER(TRIM(e.entity_type)) IN (${sourceClaimEntityTypePlaceholders})
 							AND EXISTS (
 								SELECT 1
-								FROM entity_aspects asp
-								JOIN entity_attributes attr
-								  ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
-								WHERE asp.entity_id = e.id
-								  AND asp.agent_id = e.agent_id
-								  AND COALESCE(asp.status, 'active') = 'active'
+								FROM entity_attributes attr
+								WHERE attr.agent_id = e.agent_id
+								  AND attr.source_id = e.source_id
+								  AND attr.source_path = e.source_path
+								  AND attr.source_root = 'dreaming'
 								  AND attr.status = 'active'
-								  AND attr.kind = 'claim'
-								  AND (
-									attr.source_id IS NOT NULL OR
-									attr.source_path IS NOT NULL OR
-									NULLIF(TRIM(attr.source_kind), '') IS NOT NULL
-								)
 							)
 						)
 				   )
@@ -2315,12 +2333,16 @@ export async function getKnowledgeGraphForConstellation(
 				}));
 				return {
 					id: eid,
+					agentId: row.agent_id as string,
 					name,
 					entityType: row.entity_type as string,
 					mentions: typeof row.mentions === "number" ? row.mentions : 0,
 					pinned: row.pinned === 1,
 					status: row.status === "archived" ? "archived" : "active",
 					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+					sourceId: typeof row.source_id === "string" ? row.source_id : null,
+					sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+					sourcePath: typeof row.source_path === "string" ? row.source_path : null,
 					aspects,
 				};
 			});

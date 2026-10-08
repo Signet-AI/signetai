@@ -1,10 +1,8 @@
-import type { MemoryContentSafetyAssessment } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
 import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
-import { upsertMemoryContentSafetyInTx } from "./memory-content-safety";
 
 export interface IngestEnvelope {
 	id: string;
@@ -34,7 +32,6 @@ export interface IngestEnvelope {
 	agentId?: string;
 	visibility?: "global" | "private" | "archived";
 	reviewAfter?: string | null;
-	contentSafety?: MemoryContentSafetyAssessment;
 	createdAt: string;
 }
 
@@ -278,14 +275,6 @@ export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
 		mem.evidenceMeta ?? null,
 		mem.reviewAfter ?? null,
 	);
-	upsertMemoryContentSafetyInTx(db, {
-		agentId: mem.agentId ?? "default",
-		sourceKind: "memory",
-		sourceId: mem.id,
-		content: mem.content,
-		assessment: mem.contentSafety,
-	});
-
 	return mem.id;
 }
 export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyMemoryTxResult {
@@ -452,15 +441,6 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 	args.push(input.memoryId);
 
 	db.prepare(`UPDATE memories SET ${updates.join(", ")} WHERE id = ?`).run(...args);
-	if (contentChanged) {
-		upsertMemoryContentSafetyInTx(db, {
-			agentId: existing.agent_id ?? "default",
-			sourceKind: "memory",
-			sourceId: input.memoryId,
-			content: finalContent,
-		});
-	}
-
 	if (contentChanged) {
 		invalidateDerivedMemoriesForMemoryInTx(db, input.memoryId, existing.agent_id ?? "default", input.changedAt);
 		const newHash = input.patch.contentHash ?? null;

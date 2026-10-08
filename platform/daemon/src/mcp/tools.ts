@@ -5,11 +5,11 @@ import {
 	buildRecallRequestBody,
 	buildRememberRequestBody,
 	formatRecallText,
+	redactCredentialsDeep,
 	resolveSignetDaemonUrl,
 } from "@signet/core";
 import { z } from "zod";
 import { getActiveGraphiqDbPath, runGraphiqCli } from "../graphiq.js";
-import { redactUnsafeMemoryProjection } from "../memory-content-safety.js";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "../pipeline/dreaming-operation-contract.js";
 import { createDefaultPluginHost } from "../plugins/index.js";
 
@@ -19,8 +19,6 @@ interface McpServerOptions {
 	readonly authorizationHeader?: string;
 	readonly pluginHost?: GraphiqPluginPolicyHost;
 }
-
-const redactUnsafeMemoryToolOutput = redactUnsafeMemoryProjection;
 
 type GraphiqPluginPolicyHostProvider = () => GraphiqPluginPolicyHost;
 
@@ -486,9 +484,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Search failed: ${result.error}`);
 			}
-			return textResult(
-				formatRecallText(redactUnsafeMemoryToolOutput(applyRecallScoreThreshold(result.data, score_min))),
-			);
+			return textResult(formatRecallText(redactCredentialsDeep(applyRecallScoreThreshold(result.data, score_min))));
 		},
 	);
 
@@ -576,9 +572,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			});
 
 			if (!result.ok) return errorResult(`Recall failed: ${result.error}`);
-			return textResult(
-				formatRecallText(redactUnsafeMemoryToolOutput(applyRecallScoreThreshold(result.data, score_min))),
-			);
+			return textResult(formatRecallText(redactCredentialsDeep(applyRecallScoreThreshold(result.data, score_min))));
 		},
 	);
 
@@ -615,7 +609,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			});
 
 			if (!result.ok) return errorResult(`Source search failed: ${result.error}`);
-			return textResult(formatRecallText(redactUnsafeMemoryToolOutput(result.data)));
+			return textResult(formatRecallText(redactCredentialsDeep(result.data)));
 		},
 	);
 	registerMcpTool(
@@ -762,7 +756,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Store failed: ${result.error}`);
 			}
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 
@@ -787,7 +781,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			});
 
 			if (!result.ok) return errorResult(`Save note failed: ${result.error}`);
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 	registerMcpTool(
@@ -806,7 +800,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Get failed: ${result.error}`);
 			}
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 	registerMcpTool(
@@ -834,7 +828,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`List failed: ${result.error}`);
 			}
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 	registerMcpTool(
@@ -870,7 +864,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Modify failed: ${result.error}`);
 			}
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 	registerMcpTool(
@@ -1311,7 +1305,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Expand failed: ${result.error}`);
 			}
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 
@@ -1386,7 +1380,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		const query = params.toString();
 		const result = await fetchDaemon<unknown>(baseUrl, query ? `${path}?${query}` : path);
 		if (!result.ok) return errorResult(`${label} failed: ${result.error}`);
-		return textResult(redactUnsafeMemoryToolOutput(result.data));
+		return textResult(redactCredentialsDeep(result.data));
 	};
 	const knowledgeTree = async ({
 		entity,
@@ -1639,7 +1633,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				body: { operations, ...(agent_id ? { agent_id } : {}) },
 			});
 			if (!result.ok) return errorResult(`Dreaming ontology operations failed: ${result.error}`);
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 
@@ -1744,7 +1738,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Session expansion failed: ${result.error}`);
 			}
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 
@@ -1776,7 +1770,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Temporal expansion failed: ${result.error}`);
 			}
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 
@@ -1816,7 +1810,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Session search failed: ${result.error}`);
 			}
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 
@@ -1855,7 +1849,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Session search failed: ${result.error}`);
 			}
-			return textResult(redactUnsafeMemoryToolOutput(result.data));
+			return textResult(redactCredentialsDeep(result.data));
 		},
 	);
 

@@ -11,6 +11,8 @@ Signet gives your AI agents a shared memory. You can use it to store, sync, and 
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [Harnesses](#harnesses) · [Docs](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7)
 
+[English](README.md) · [Deutsch](README.de.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+
 </div>
 
 ---
@@ -72,6 +74,7 @@ Read more: [Sources](https://docs.signetai.sh/sources/) · [Data portability](ht
 |---|---|
 |Obsidian|Real-time file watcher. Connect multiple vaults read-only; supports the LLM-Wiki format.|
 |GitHub|Real-time ingest of issues, pull requests, and discussions.|
+|Notion|Syncs the pages and database entries shared with a Notion integration; re-syncs fetch only what changed.|
 |Discord|Real-time crawler that contributes to memory and links into the existing knowledge graph.|
 |Webpages|One-time import of a public URL, extracted to readable Markdown with page metadata.|
 |Slack, email, Telegram, WhatsApp|_Coming soon_|
@@ -103,6 +106,7 @@ A "harness" is the app or environment your agent runs in. Signet connects throug
 |Oh My Pi|Extension|
 |[Gemini CLI](https://github.com/google-gemini/gemini-cli)|MCP + GEMINI.md sync|
 |[ForgeCode](https://forgecode.dev/)|Hooks + MCP|
+|[Muse Code](https://dev.meta.ai/docs/muse-code)|Hooks + MCP|
 
 Agents can also message each other through Signet. Messages survive restarts and arrive at the start of the recipient's next session or prompt.
 

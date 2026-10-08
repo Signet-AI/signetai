@@ -20,8 +20,8 @@ describe("imported source outcomes", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
 		rmSync(dir, { recursive: true, force: true });
@@ -58,11 +58,7 @@ describe("imported source outcomes", () => {
 					agentId,
 					sourceId,
 					sourcePath,
-					outcome: {
-						documentEntityId: extraction.documentEntityId,
-						aspectsCreated: extraction.aspectsCreated,
-						attributesCreated: extraction.attributesCreated,
-					},
+					outcome: { documentEntityId: extraction.documentEntityId },
 				});
 				throw new Error("fault injection: crash before import extraction transaction commit");
 			}),

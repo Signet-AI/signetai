@@ -977,6 +977,29 @@ describe("showStatus readiness labeling", () => {
 		return lines.join("\n");
 	}
 
+	it("reports a blocked workspace layout upgrade from the daemon", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-status-"));
+		try {
+			const base = runningDaemonDeps(root, {
+				status: "healthy",
+				detail: "/health responded",
+				url: "http://127.0.0.1:3850",
+				listenerPresent: true,
+				processPid: 42,
+				stalePid: null,
+			});
+			const daemon = await base.getDaemonStatus();
+			const output = await captureStatus({
+				...base,
+				getDaemonStatus: async () => ({ ...daemon, workspaceLayoutUpgrade: "data already exists and is not empty" }),
+			});
+			expect(output).toContain("Workspace layout upgrade blocked; still on layout v1");
+			expect(output).toContain("data already exists and is not empty. Fix it and restart the daemon.");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("labels liveness and shows degraded readiness reasons", async () => {
 		const root = mkdtempSync(join(tmpdir(), "health-status-"));
 		try {
@@ -1158,7 +1181,7 @@ describe("showStatus readiness labeling", () => {
 						blockedReason: null,
 						hasWorkloadState: true,
 					},
-					dreaming: { enabled: true, workerRunning: true },
+					dreaming: { enabled: true, workerRunning: true, blockedBy: null },
 					scheduler: { status: "idle" as const, reason: null, checkedAt: null },
 					transcripts: null,
 					queue: {
@@ -1223,6 +1246,26 @@ describe("showStatus readiness labeling", () => {
 			expect(output).toContain("counts unavailable");
 			expect(output).not.toContain("p=0");
 			expect(jsonOutput.daemon.queue.memory).toMatchObject({ pending: null, completeness: "unknown" });
+
+			const status = await deps.getDaemonStatus();
+			const waiting = await captureStatus({
+				...deps,
+				getDaemonStatus: async () => ({
+					...status,
+					dreaming: { enabled: true, workerRunning: true, blockedBy: "no_provider" as const },
+				}),
+			});
+			expect(waiting).toContain("Memory is paused until you connect a provider");
+			expect(waiting).not.toContain("Dreaming: enabled (worker running)");
+			const paused = await captureStatus({
+				...deps,
+				getDaemonStatus: async () => ({
+					...status,
+					dreaming: { enabled: true, workerRunning: true, blockedBy: "paused" as const },
+				}),
+			});
+			expect(paused).toContain("Dreaming: enabled (worker running) — pipeline paused");
+			expect(paused).not.toContain("connect a provider");
 		} finally {
 			if (previousOpenClawConfigPath === undefined) Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
 			else process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfigPath;
@@ -1490,7 +1533,8 @@ describe("dead-job backlog surfacing (#1048)", () => {
 			expect(jsonOut.findings.some((f) => f.code === "dead_jobs_backlog")).toBe(false);
 			expect(jsonOut.findings.some((f) => f.code === "daemon_unhealthy")).toBe(false);
 		} finally {
-			process.env.HOME = originalHome;
+			if (originalHome === undefined) delete process.env.HOME;
+			else process.env.HOME = originalHome;
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
@@ -1598,6 +1642,24 @@ describe("daemon lifecycle exit findings (#1148)", () => {
 			expect(finding?.message).toContain("pid 4242");
 			expect(finding?.message).toContain("No shutdown marker was written");
 			expect(finding?.fix).toContain("journalctl --user -u signet-daemon-1234");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("points daemon log hints at the v2 runtime log directory", async () => {
+		const root = mkdtempSync(join(tmpdir(), "doctor-lifecycle-v2-"));
+		try {
+			writeFileSync(join(root, "workspace-layout.json"), `${JSON.stringify({ version: 2 })}\n`);
+			const base = lifecycleDeps(root, null);
+			const status = await base.getDaemonStatus();
+			const jsonOut = await captureDoctorJson(
+				async () => ({ ...status, probe: { ...status.probe, status: "listener-unhealthy", listenerPresent: true } }),
+				root,
+			);
+			const finding = jsonOut.findings.find((f) => f.message.includes("/health is unreachable"));
+			expect(finding?.fix).toContain(join(root, "runtime", "logs", "daemon.err.log"));
+			expect(finding?.fix).not.toContain(".daemon");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

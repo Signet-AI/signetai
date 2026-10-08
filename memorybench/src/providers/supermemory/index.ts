@@ -42,6 +42,7 @@ export class SupermemoryProvider implements Provider {
   async initialize(config: ProviderConfig): Promise<void> {
     this.client = new Supermemory({
       apiKey: config.apiKey,
+      ...(config.baseUrl ? { baseURL: config.baseUrl } : {}),
     })
     logger.info(`Initialized Supermemory provider`)
   }
@@ -137,7 +138,7 @@ export class SupermemoryProvider implements Provider {
     const response = await this.client.search.memories({
       q: query,
       containerTag: options.containerTag,
-      limit: 30,
+      limit: options.limit ?? 30,
       threshold: options.threshold || 0.3,
       searchMode: "hybrid",
       include: {

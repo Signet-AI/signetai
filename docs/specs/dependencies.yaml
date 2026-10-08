@@ -1425,10 +1425,10 @@ specs:
     blocks: []
     informed_by: []
     success_criteria:
-      - "A versioned deterministic policy classifies hostile stored content without rewriting immutable evidence"
-      - "Remembered memories, native artifacts, source chunks, transcripts, summaries, reranking, recall, Dreaming, and MEMORY.md use one context-eligibility decision"
-      - "Blocked and tainted rows remain agent-scoped and inspectable through user-facing memory and diagnostics surfaces"
-      - "False-positive coverage protects ordinary technical prose, shell examples, security discussions, non-English text, and emoji"
+      - "One core credential detector redacts provider keys, tokens, private keys, JWTs, and secret assignments in every prompt-facing projection"
+      - "Nothing is withheld for content-safety reasons and stored evidence is never rewritten"
+      - "Checkpoint, subagent-context, and plugin-audit redaction use the same detector"
+      - "False-positive coverage keeps prose about secrets, variable names, placeholders, commit SHAs, hashes, and UUIDs unchanged"
     decision: null
   - id: cache-stable-memory-injection
     status: approved

@@ -48,14 +48,16 @@ function extractBlogLinks(content: string, slugs: ReadonlySet<string>): readonly
 
 export function buildContentIndex(blogDir: string): ContentIndex {
 	const index: ContentIndex = {};
-	const files = readdirSync(blogDir)
+	const posts = readdirSync(blogDir)
 		.filter((file) => file.endsWith(".mdx"))
-		.sort();
-	const slugs = new Set(files.map((file) => file.replace(/\.mdx$/, "")));
-	for (const file of files) {
-		const slug = file.replace(/\.mdx$/, "");
-		const content = readFileSync(join(blogDir, file), "utf8");
-		const frontmatter = extractFrontmatter(content);
+		.sort()
+		.map((file) => {
+			const content = readFileSync(join(blogDir, file), "utf8");
+			return { slug: file.replace(/\.mdx$/, ""), content, frontmatter: extractFrontmatter(content) };
+		})
+		.filter((post) => post.frontmatter.draft !== "true");
+	const slugs = new Set(posts.map((post) => post.slug));
+	for (const { slug, content, frontmatter } of posts) {
 		index[`blog/${slug}`] = {
 			title: typeof frontmatter.title === "string" ? frontmatter.title : slug,
 			url: `/blog/${slug}/`,

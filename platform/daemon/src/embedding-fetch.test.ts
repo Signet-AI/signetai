@@ -1,3 +1,4 @@
+import { LOOPBACK_HOST } from "@signet/core";
 import { afterEach, describe, expect, it, mock } from "bun:test";
 import {
 	fetchEmbedding,
@@ -258,7 +259,7 @@ describe("fetchEmbedding", () => {
 
 		expect(result).toEqual([0.5, 0.6, 0.7]);
 		expect(capturedUrl).toContain("/api/embeddings");
-		expect(capturedUrl).toContain("localhost");
+		expect(capturedUrl).toContain(`${LOOPBACK_HOST}:11434`);
 	});
 
 	it("does not record provider-down telemetry when native embeddings are disabled without a fallback", async () => {
@@ -285,9 +286,12 @@ describe("fetchEmbedding", () => {
 		globalThis.fetch = mock(() =>
 			Promise.resolve(new Response("unreachable", { status: 503 })),
 		) as unknown as typeof fetch;
-		setNativeEmbeddingProviderForTest(async () => {
-			throw new Error("native unavailable");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				throw new Error("native unavailable");
+			},
+			() => false,
+		);
 
 		await expect(
 			fetchEmbedding("test", {
@@ -324,7 +328,7 @@ describe("fetchEmbedding", () => {
 		});
 
 		expect(result).toEqual([0.8, 0.9, 1.0]);
-		expect(capturedUrl).toContain("localhost:8080");
+		expect(capturedUrl).toContain(`${LOOPBACK_HOST}:8080`);
 		expect(capturedUrl).toContain("/v1/embeddings");
 		expect(capturedBody).toContain("nomic-embed-text");
 	});
@@ -378,7 +382,7 @@ describe("fetchEmbedding", () => {
 		let capturedInput = "";
 		globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
 			const urlStr = url.toString();
-			if (urlStr.includes("localhost:8080")) {
+			if (urlStr.includes(`${LOOPBACK_HOST}:8080`)) {
 				if (urlStr.includes("/v1/models")) {
 					return Promise.resolve(Response.json({ data: [{ id: "nomic-embed-text" }] }));
 				}
@@ -390,9 +394,12 @@ describe("fetchEmbedding", () => {
 		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
-		setNativeEmbeddingProviderForTest(async () => {
-			throw new Error("native unavailable");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				throw new Error("native unavailable");
+			},
+			() => false,
+		);
 		const result = await fetchEmbedding("token ".repeat(1000), {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
@@ -402,7 +409,7 @@ describe("fetchEmbedding", () => {
 		});
 
 		expect(result).toEqual([0.1, 0.2]);
-		expect(capturedUrl).toContain("localhost:8080");
+		expect(capturedUrl).toContain(`${LOOPBACK_HOST}:8080`);
 		expect(countTokens(capturedInput)).toBeLessThanOrEqual(300);
 	});
 
@@ -431,10 +438,10 @@ describe("fetchEmbedding", () => {
 		let capturedUrl: string | undefined;
 		globalThis.fetch = mock((url: string | URL | Request) => {
 			const urlStr = url.toString();
-			if (urlStr.includes("localhost:8080")) {
+			if (urlStr.includes(`${LOOPBACK_HOST}:8080`)) {
 				return Promise.resolve(new Response("unreachable", { status: 503 }));
 			}
-			if (urlStr.includes("localhost:11434")) {
+			if (urlStr.includes(`${LOOPBACK_HOST}:11434`)) {
 				capturedUrl = urlStr;
 				return Promise.resolve(Response.json({ embedding: [0.5, 0.6] }));
 			}
@@ -442,9 +449,12 @@ describe("fetchEmbedding", () => {
 		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
-		setNativeEmbeddingProviderForTest(async () => {
-			throw new Error("native unavailable");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				throw new Error("native unavailable");
+			},
+			() => false,
+		);
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
@@ -453,7 +463,7 @@ describe("fetchEmbedding", () => {
 		});
 
 		expect(result).toEqual([0.5, 0.6]);
-		expect(capturedUrl).toContain("localhost:11434");
+		expect(capturedUrl).toContain(`${LOOPBACK_HOST}:11434`);
 	});
 
 	it("probes the configured llama.cpp base_url, not the compiled default (#1159)", async () => {
@@ -474,9 +484,12 @@ describe("fetchEmbedding", () => {
 		}) as unknown as typeof fetch;
 
 		setNativeFallbackProvider(null);
-		setNativeEmbeddingProviderForTest(async () => {
-			throw new Error("native unavailable");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				throw new Error("native unavailable");
+			},
+			() => false,
+		);
 		const result = await fetchEmbedding("test", {
 			provider: "native",
 			model: "nomic-embed-text-v1.5",
@@ -487,6 +500,48 @@ describe("fetchEmbedding", () => {
 		expect(result).toEqual([0.5, 0.6]);
 		expect(llamaUrls.some((u) => u.includes(":8081"))).toBe(true);
 		expect(llamaUrls.some((u) => u.includes(":8080"))).toBe(false);
+	});
+
+	it("bounds native inputs to the model attention budget", async () => {
+		const seen: string[] = [];
+		setNativeEmbeddingProviderForTest(
+			async (text) => {
+				seen.push(text);
+				return [0.1, 0.2, 0.3];
+			},
+			() => true,
+		);
+
+		const embedding = await fetchEmbedding("transcript turn ".repeat(4000), {
+			provider: "native",
+			model: "nomic-embed-text-v1.5",
+			dimensions: 3,
+			base_url: "",
+		});
+
+		expect(embedding).toEqual([0.1, 0.2, 0.3]);
+		expect(seen).toHaveLength(1);
+		expect(countTokens(seen[0] ?? "")).toBeLessThanOrEqual(2048);
+	});
+
+	it("fails one oversized input without disabling native embedding for the session", async () => {
+		let fallbackRequests = 0;
+		globalThis.fetch = mock(() => {
+			fallbackRequests++;
+			return Promise.resolve(new Response("unreachable", { status: 503 }));
+		}) as unknown as typeof fetch;
+		setNativeEmbeddingProviderForTest(
+			async (text) => {
+				if (text.startsWith("oversized")) throw new Error("failed to call OrtRun(). ERROR_CODE: 6, std::bad_alloc");
+				return [0.4, 0.5, 0.6];
+			},
+			() => true,
+		);
+		const cfg = { provider: "native" as const, model: "nomic-embed-text-v1.5", dimensions: 3, base_url: "" };
+
+		await expect(fetchEmbedding("oversized input", cfg)).resolves.toBeNull();
+		await expect(fetchEmbedding("next input", cfg)).resolves.toEqual([0.4, 0.5, 0.6]);
+		expect(fallbackRequests).toBe(0);
 	});
 
 	it("single-flights failed local fallback discovery and negative-caches the result", async () => {
@@ -500,10 +555,13 @@ describe("fetchEmbedding", () => {
 			return Promise.resolve(new Response("unreachable", { status: 503 }));
 		}) as unknown as typeof fetch;
 
-		setNativeEmbeddingProviderForTest(async () => {
-			nativeCalls++;
-			throw new Error("native worker timed out");
-		});
+		setNativeEmbeddingProviderForTest(
+			async () => {
+				nativeCalls++;
+				throw new Error("native worker timed out");
+			},
+			() => false,
+		);
 		const cfg = {
 			provider: "native" as const,
 			model: "nomic-embed-text-v1.5",
@@ -536,7 +594,7 @@ describe("fetchEmbedding", () => {
 	it("does not cross-contaminate: llama-cpp fallback does not route to ollama", async () => {
 		let ollamaCalled = false;
 		globalThis.fetch = mock((url: string | URL | Request) => {
-			if (url.toString().includes("localhost:11434")) {
+			if (url.toString().includes(`${LOOPBACK_HOST}:11434`)) {
 				ollamaCalled = true;
 				return Promise.resolve(Response.json({ embedding: [0.9, 0.9] }));
 			}

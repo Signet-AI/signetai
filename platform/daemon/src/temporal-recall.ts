@@ -1,7 +1,11 @@
-import type { AgentRosterReadPolicy, RecallTemporalMeta, TemporalFacet } from "@signet/core";
+import {
+	type AgentRosterReadPolicy,
+	type RecallTemporalMeta,
+	type TemporalFacet,
+	redactCredentials,
+} from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { tableExists } from "./db-helpers";
-import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { buildMemorySearchFilterClause, currentMemorySql, type MemorySearchFilterInput } from "./memory-search-filters";
 
 const DEFAULT_TEMPORAL_FACETS: readonly TemporalFacet[] = [
@@ -407,7 +411,7 @@ function shorten(content: string, maxChars: number): { content: string; truncate
 }
 
 function toRecallRow(row: RawTemporalRow): TemporalRecallRow {
-	const shortened = shorten(row.content, 900);
+	const shortened = shorten(redactCredentials(row.content), 900);
 	return {
 		id: `temporal:${row.subject_type}:${row.subject_id}:${row.facet}`,
 		content: shortened.content,
@@ -449,7 +453,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 			const project = projectSql(params.project, "project");
 			const sessionRows = db
 				.prepare(
-					`SELECT id, content, project, session_key, harness, agent_id, earliest_at, latest_at, created_at
+					`SELECT id, content, project, session_key, harness, earliest_at, latest_at, created_at
 					 FROM session_summaries
 					 WHERE 1 = 1${owner.sql}
 					   AND COALESCE(source_type, kind) != 'chunk'
@@ -463,21 +467,11 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				project: string | null;
 				session_key: string | null;
 				harness: string | null;
-				agent_id: string | null;
 				earliest_at: string;
 				latest_at: string;
 				created_at: string;
 			}>;
 			for (const row of sessionRows) {
-				if (
-					!isMemoryContentContextEligible(db, {
-						agentId: row.agent_id?.trim() || "default",
-						sourceKind: "summary",
-						sourceId: row.id,
-						content: row.content,
-					})
-				)
-					continue;
 				rows.push({
 					id: row.id,
 					content: row.content,
@@ -504,7 +498,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 			const memoryRows = db
 				.prepare(
 					`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project,
-						        m.created_at, m.visibility, m.scope, m.agent_id
+						        m.created_at, m.visibility, m.scope
 					 FROM memories m
 					 WHERE 1 = 1${currentMemorySql("m")}
 					   AND m.created_at >= ?
@@ -525,18 +519,8 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				created_at: string;
 				visibility: string | null;
 				scope: string | null;
-				agent_id: string | null;
 			}>;
 			for (const row of memoryRows) {
-				if (
-					!isMemoryContentContextEligible(db, {
-						agentId: row.agent_id?.trim() || "default",
-						sourceKind: "memory",
-						sourceId: row.id,
-						content: row.content,
-					})
-				)
-					continue;
 				rows.push({
 					id: row.id,
 					content: row.content,
@@ -566,7 +550,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 			if (temporalFacetAllowed(intent.facets, "captured")) {
 				const artifactRows = db
 					.prepare(
-						`SELECT rowid, source_path, source_kind, source_id, harness, project, content, captured_at, updated_at, agent_id
+						`SELECT rowid, source_path, source_kind, source_id, harness, project, content, captured_at, updated_at
 						 FROM memory_artifacts
 						 WHERE 1 = 1${owner.sql}
 						   AND COALESCE(is_deleted, 0) = 0
@@ -581,22 +565,12 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 					source_kind: string;
 					source_id: string | null;
 					harness: string | null;
-					agent_id: string | null;
 					project: string | null;
 					content: string;
 					captured_at: string;
 					updated_at: string;
 				}>;
 				for (const row of artifactRows) {
-					if (
-						!isMemoryContentContextEligible(db, {
-							agentId: row.agent_id?.trim() || "default",
-							sourceKind: "artifact",
-							sourceId: row.source_path,
-							content: `${row.source_path}\n${row.content}`,
-						})
-					)
-						continue;
 					rows.push({
 						id: String(row.rowid),
 						content: `[Source artifact: ${row.source_path}]\n${row.content}`,
@@ -624,7 +598,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				const sourceRows = db
 					.prepare(
 						`SELECT rowid, source_path, source_kind, source_id, harness, project, content,
-							        agent_id, ${sourceAtExpr} AS source_at
+							        ${sourceAtExpr} AS source_at
 						 FROM memory_artifacts
 						 WHERE 1 = 1${owner.sql}
 						   AND COALESCE(is_deleted, 0) = 0
@@ -642,19 +616,9 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 					harness: string | null;
 					project: string | null;
 					content: string;
-					agent_id: string | null;
 					source_at: string;
 				}>;
 				for (const row of sourceRows) {
-					if (
-						!isMemoryContentContextEligible(db, {
-							agentId: row.agent_id?.trim() || "default",
-							sourceKind: "artifact",
-							sourceId: row.source_path,
-							content: `${row.source_path}\n${row.content}`,
-						})
-					)
-						continue;
 					rows.push({
 						id: String(row.rowid),
 						content: `[Source artifact: ${row.source_path}]\n${row.content}`,
@@ -689,7 +653,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				.prepare(
 					`SELECT te.id, te.subject_type, te.subject_id, te.facet, te.start_at, te.end_at, te.confidence,
 					        m.content AS memory_content, m.source_id, m.type AS memory_type, m.tags, m.pinned,
-						        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope, m.agent_id
+						        m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
 					 FROM temporal_edges te
 					 LEFT JOIN memories m
 					   ON te.subject_type = 'memory'
@@ -727,21 +691,9 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 				created_at: string | null;
 				visibility: string | null;
 				scope: string | null;
-				agent_id: string | null;
 			}>;
 			for (const row of edgeRows) {
 				if (params.project && row.project !== params.project) continue;
-				if (
-					row.subject_type === "memory" &&
-					row.memory_content !== null &&
-					!isMemoryContentContextEligible(db, {
-						agentId: row.agent_id?.trim() || "default",
-						sourceKind: "memory",
-						sourceId: row.subject_id,
-						content: row.memory_content,
-					})
-				)
-					continue;
 				rows.push({
 					id: row.id,
 					content: row.memory_content ?? `[Temporal ${row.facet}: ${row.subject_type} ${row.subject_id}]`,
@@ -766,7 +718,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		return rows;
-	}, "temporal-recall.ts:442");
+	}, "temporal-recall.ts:446");
 }
 
 export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRecallResult {
@@ -783,6 +735,50 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 		facets: intent.facets,
 	};
 
+	if (intent.mode === "filter" && intent.contentQuery.length > 0) {
+		const exact = selectTemporalRows(intent, params, rowLimit);
+		const exactIds = memorySubjectIds(exact);
+		if (exactIds.length > 0) {
+			return { adjustedQuery: intent.contentQuery, meta: { ...meta, window: "exact" }, candidateIds: exactIds };
+		}
+		if (exact.length > 0) return temporalResponse(params, exact, { ...meta, window: "exact" });
+		const widened = widenTemporalIntent(intent);
+		const widenedRows = selectTemporalRows(widened, params, rowLimit);
+		const widenedMeta: RecallTemporalMeta = { ...meta, start: widened.start, end: widened.end, window: "widened" };
+		const widenedIds = memorySubjectIds(widenedRows);
+		if (widenedIds.length > 0) {
+			return { adjustedQuery: intent.contentQuery, meta: widenedMeta, candidateIds: widenedIds };
+		}
+		if (widenedRows.length > 0) return temporalResponse(params, widenedRows, widenedMeta);
+		return { adjustedQuery: intent.contentQuery, meta: { ...meta, window: "unfiltered" } };
+	}
+
+	return temporalResponse(params, selectTemporalRows(intent, params, rowLimit), meta);
+}
+
+const DAY_MS = 86_400_000;
+const MIN_WIDENED_PAD_MS = 3 * DAY_MS;
+
+function widenTemporalIntent(intent: ParsedTemporalIntent): ParsedTemporalIntent {
+	const startMs = Date.parse(intent.start);
+	const endMs = Date.parse(intent.end);
+	const pad = Math.max(MIN_WIDENED_PAD_MS, Math.round((endMs - startMs) / 4));
+	return {
+		...intent,
+		start: new Date(startMs - pad).toISOString(),
+		end: new Date(endMs + pad).toISOString(),
+	};
+}
+
+function memorySubjectIds(rows: readonly RawTemporalRow[]): string[] {
+	return rows.filter((row) => row.subject_type === "memory").map((row) => row.subject_id);
+}
+
+function selectTemporalRows(
+	intent: ParsedTemporalIntent,
+	params: TemporalRecallParams,
+	rowLimit: number,
+): RawTemporalRow[] {
 	const rows = collectTemporalRows(intent, { ...params, limit: rowLimit })
 		.filter(
 			(row) =>
@@ -794,7 +790,6 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 				b.start_at.localeCompare(a.start_at) ||
 				a.subject_type.localeCompare(b.subject_type),
 		);
-
 	const deduped: RawTemporalRow[] = [];
 	const seen = new Set<string>();
 	for (const row of rows) {
@@ -804,15 +799,15 @@ export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRec
 		deduped.push(row);
 		if (deduped.length >= rowLimit) break;
 	}
+	return deduped;
+}
 
-	if (intent.mode === "filter" && intent.contentQuery.length > 0) {
-		const memoryIds = deduped.filter((row) => row.subject_type === "memory").map((row) => row.subject_id);
-		if (memoryIds.length > 0) {
-			return { adjustedQuery: intent.contentQuery, meta, candidateIds: memoryIds };
-		}
-	}
-
-	const results = deduped.slice(0, params.limit).map(toRecallRow);
+function temporalResponse(
+	params: TemporalRecallParams,
+	rows: readonly RawTemporalRow[],
+	meta: RecallTemporalMeta,
+): TemporalRecallResult {
+	const results = rows.slice(0, params.limit).map(toRecallRow);
 	return {
 		response: {
 			results,

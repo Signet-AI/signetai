@@ -1,11 +1,10 @@
 import { retrievalEvent } from "../assistant-retrieval";
 import * as Type from "typebox";
 import { z } from "zod";
-import { type AssistantChatEvent, MEMORY_CONTENT_WITHHELD_NOTICE, buildRecallRequestBody } from "@signet/core";
+import { type AssistantChatEvent, buildRecallRequestBody, redactCredentialsDeep } from "@signet/core";
 import { resolveScopedAgent } from "../request-scope";
 import { resolveDaemonAgentId } from "../agent-id";
 import { getDbAccessor } from "../db-accessor";
-import { redactUnsafeMemoryProjection } from "../memory-content-safety";
 import { createDreamingAgentTools } from "../pipeline/dreaming-agent-tools";
 import { getDreamingCapability } from "../pipeline/dreaming-capabilities";
 import type { PiAgentTool } from "../pipeline/pi-agent-protocol";
@@ -35,6 +34,7 @@ import {
 } from "../inference-oauth.js";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import type { TelemetryCollector, TelemetryEvent, TelemetryProperties } from "../telemetry.js";
+import { openBoundedSse } from "../sse-stream.js";
 
 const MAX_EXPLAIN_BYTES = 128 * 1024;
 const MAX_EXECUTE_BYTES = 512 * 1024;
@@ -965,7 +965,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								accessor: getDbAccessor(),
 								agentId: scope.agentId,
 								actor: "dashboard-chat",
-								restrictToAgent: true,
+								allowedAgentIds: [scope.agentId],
 								onToolCall(trace) {
 									const retrieval = retrievalEvent(trace.tool, trace.output);
 									if (retrieval) {
@@ -974,11 +974,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 											for (const sourceRef of retrieval.evidenceRefs)
 												send({ type: "citation", sourceRef, excerpt: "" });
 									}
-									if (
-										!trace.output.ok ||
-										!["search_evidence", "get_evidence"].includes(trace.tool) ||
-										!Array.isArray(trace.output.items)
-									)
+									if (!trace.output.ok || trace.tool !== "search_evidence" || !Array.isArray(trace.output.items))
 										return;
 									for (const item of trace.output.items.slice(0, 20)) {
 										if (
@@ -997,8 +993,6 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									"search_entities",
 									"get_entity",
 									"list_aspect_claims",
-									"walk_links",
-									"get_evidence",
 									"search_evidence",
 								],
 							}),
@@ -1026,7 +1020,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 							async execute(_id, input) {
 								const { query, limit } = recallInputSchema.parse(input);
 								const recalled = recallResponseSchema.parse(
-									redactUnsafeMemoryProjection(
+									redactCredentialsDeep(
 										await internal(
 											"/api/memory/recall",
 											buildRecallRequestBody(query, { limit, agentId: scope.agentId, recallSurface: "dashboard" }),
@@ -1035,7 +1029,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								);
 								const rows = recalled.results.flatMap((value) => {
 									const row = recallRowSchema.safeParse(value);
-									return row.success && row.data.content !== MEMORY_CONTENT_WITHHELD_NOTICE ? [row.data] : [];
+									return row.success ? [row.data] : [];
 								});
 								const evidence = getDreamingCapability(
 									{ accessor: getDbAccessor(), agentId: scope.agentId, actor: "dashboard-chat" },
@@ -1256,7 +1250,12 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 
 	app.post("/api/inference/oauth/login/:id", (c) => {
 		try {
-			const login = startOAuthLogin(c.req.param("id"), () => getInferenceRouterOrNull()?.invalidateCredentialState());
+			if (c.req.raw.signal.aborted) return new Response(null, { status: 499 });
+			const login = startOAuthLogin(
+				c.req.param("id"),
+				() => getInferenceRouterOrNull()?.invalidateCredentialState(),
+				c.req.raw.signal,
+			);
 			return new Response(login.stream, {
 				headers: {
 					"Content-Type": "text/event-stream",
@@ -1488,51 +1487,68 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 		}
 
 		const requestId = crypto.randomUUID();
+		if (c.req.raw.signal.aborted) {
+			result.value.cancel("client disconnected");
+			slot.value();
+			return new Response(null, { status: 499 });
+		}
 		const release = registerActiveInferenceRequest(requestId, result.value.cancel);
-		const stream = new ReadableStream<Uint8Array>({
-			start(controller) {
-				let closed = false;
-				const reader = result.value.stream.getReader();
-				const close = () => {
-					if (closed) return;
-					closed = true;
+		const sse = openBoundedSse({
+			requestSignal: c.req.raw.signal,
+			highWaterMarkBytes: 1024 * 1024,
+			maxFrameBytes: 512 * 1024,
+			heartbeat: { intervalMs: SSE_KEEPALIVE_MS, event: "keepalive", data: { requestId, keepalive: true } },
+			headers: { "x-signet-request-id": requestId },
+			onStart(producer) {
+				if (producer.signal.aborted) {
+					try {
+						result.value.cancel("client disconnected");
+					} catch {}
 					release();
 					slot.value();
+					return;
+				}
+				const reader = result.value.stream.getReader();
+				let upstreamFinished = false;
+				let upstreamCancelled = false;
+				let resourcesReleased = false;
+				let removeCancel = (): void => {};
+				const releaseResources = (): void => {
+					if (resourcesReleased) return;
+					resourcesReleased = true;
+					release();
+					slot.value();
+				};
+				producer.addDisposer(releaseResources);
+				const cancelUpstream = (reason: string): void => {
+					if (upstreamFinished || upstreamCancelled) return;
+					upstreamCancelled = true;
 					try {
-						controller.close();
+						result.value.cancel(reason);
 					} catch {}
 				};
-
-				const write = (event: string, payload: unknown) => {
-					if (closed) return;
+				removeCancel = producer.addDisposer(() => cancelUpstream("native stream cancelled"));
+				const finishUpstream = (): void => {
+					if (upstreamFinished) return;
+					upstreamFinished = true;
+					removeCancel();
 					try {
-						controller.enqueue(sseFrame(JSON.stringify(payload), event));
-					} catch {
-						result.value.cancel("native stream write failure");
-						close();
-					}
+						reader.releaseLock();
+					} catch {}
+				};
+				const close = (): void => producer.close();
+				const cleanup = (): void => {
+					finishUpstream();
+					close();
+				};
+				const write = (event: string, payload: unknown): void => {
+					producer.write(payload, { event });
 				};
 
 				write("meta", {
 					requestId,
 					decision: result.value.decision,
 				});
-
-				const keepAlive = setInterval(() => {
-					if (closed) return;
-					try {
-						controller.enqueue(sseFrame(JSON.stringify({ requestId, keepalive: true }), "keepalive"));
-					} catch {
-						result.value.cancel("native stream keepalive failure");
-						close();
-					}
-				}, SSE_KEEPALIVE_MS);
-
-				const cleanup = () => {
-					clearInterval(keepAlive);
-					reader.releaseLock();
-					close();
-				};
 
 				const pump = async () => {
 					try {
@@ -1542,6 +1558,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								cleanup();
 								return;
 							}
+							if (producer.isClosed) continue;
 							const event = next.value;
 							switch (event.type) {
 								case "delta":
@@ -1618,35 +1635,16 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 							}
 						}
 					} catch {
-						result.value.cancel("native stream reader failure");
+						if (!producer.isClosed) result.value.cancel("native stream reader failure");
 						cleanup();
 					}
 				};
 
 				void pump();
-				c.req.raw.signal.addEventListener(
-					"abort",
-					() => {
-						result.value.cancel("client disconnected");
-						cleanup();
-					},
-					{ once: true },
-				);
-			},
-			cancel(reason) {
-				release();
-				result.value.cancel(typeof reason === "string" ? reason : "native stream cancelled");
 			},
 		});
 
-		return new Response(stream, {
-			headers: {
-				"Content-Type": "text/event-stream",
-				"Cache-Control": "no-cache",
-				Connection: "keep-alive",
-				"x-signet-request-id": requestId,
-			},
-		});
+		return sse.response;
 	});
 
 	app.delete("/api/inference/requests/:id", (c) => {
@@ -1750,34 +1748,63 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 
 			const requestId = `chatcmpl_${crypto.randomUUID()}`;
 			const created = Math.floor(Date.now() / 1000);
+			if (c.req.raw.signal.aborted) {
+				streaming.value.cancel("client disconnected");
+				slot.value();
+				return new Response(null, { status: 499 });
+			}
 			const release = registerActiveInferenceRequest(requestId, streaming.value.cancel);
-			const streamResponse = new ReadableStream<Uint8Array>({
-				start(controller) {
-					let closed = false;
-					let sentRole = false;
-					const reader = streaming.value.stream.getReader();
-
-					const writeChunk = (payload: Record<string, unknown>) => {
-						if (closed) return;
+			const sse = openBoundedSse({
+				requestSignal: c.req.raw.signal,
+				highWaterMarkBytes: 1024 * 1024,
+				maxFrameBytes: 512 * 1024,
+				headers: { "x-signet-request-id": requestId },
+				onStart(producer) {
+					if (producer.signal.aborted) {
 						try {
-							controller.enqueue(sseFrame(JSON.stringify(payload)));
-						} catch {
-							streaming.value.cancel("gateway stream write failure");
-							close();
-						}
-					};
-
-					const close = () => {
-						if (closed) return;
-						closed = true;
+							streaming.value.cancel("client disconnected");
+						} catch {}
 						release();
 						slot.value();
+						return;
+					}
+					let sentRole = false;
+					const reader = streaming.value.stream.getReader();
+					let upstreamFinished = false;
+					let upstreamCancelled = false;
+					let resourcesReleased = false;
+					let removeCancel = (): void => {};
+					const releaseResources = (): void => {
+						if (resourcesReleased) return;
+						resourcesReleased = true;
+						release();
+						slot.value();
+					};
+					producer.addDisposer(releaseResources);
+					const cancelUpstream = (reason: string): void => {
+						if (upstreamFinished || upstreamCancelled) return;
+						upstreamCancelled = true;
 						try {
-							controller.enqueue(sseFrame("[DONE]"));
+							streaming.value.cancel(reason);
 						} catch {}
+					};
+					removeCancel = producer.addDisposer(() => cancelUpstream("gateway stream cancelled"));
+					const finishUpstream = (): void => {
+						if (upstreamFinished) return;
+						upstreamFinished = true;
+						removeCancel();
 						try {
-							controller.close();
+							reader.releaseLock();
 						} catch {}
+					};
+					const writeChunk = (payload: Record<string, unknown>): void => {
+						producer.write(payload);
+					};
+					const close = (): void => {
+						finishUpstream();
+						if (producer.isClosed) return;
+						producer.writeFinal("[DONE]");
+						producer.close();
 					};
 
 					writeChunk({
@@ -1797,6 +1824,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 									close();
 									return;
 								}
+								if (producer.isClosed) continue;
 								const event = next.value;
 								switch (event.type) {
 									case "delta":
@@ -1903,35 +1931,16 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 								}
 							}
 						} catch {
-							streaming.value.cancel("gateway stream reader failure");
+							if (!producer.isClosed) streaming.value.cancel("gateway stream reader failure");
 							close();
 						}
 					};
 
 					void pump();
-					c.req.raw.signal.addEventListener(
-						"abort",
-						() => {
-							streaming.value.cancel("client disconnected");
-							close();
-						},
-						{ once: true },
-					);
-				},
-				cancel(reason) {
-					release();
-					streaming.value.cancel(typeof reason === "string" ? reason : "gateway stream cancelled");
 				},
 			});
 
-			return new Response(streamResponse, {
-				headers: {
-					"Content-Type": "text/event-stream",
-					"Cache-Control": "no-cache",
-					Connection: "keep-alive",
-					"x-signet-request-id": requestId,
-				},
-			});
+			return sse.response;
 		}
 
 		const slot = acquireConcurrencySlot("execute", opts);

@@ -1,15 +1,17 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { confirm } from "@inquirer/prompts";
 import {
 	Database as CoreDatabase,
 	type IdentityMode,
 	type ImportResult,
 	type SkillsResult,
+	createFreshWorkspaceV2,
 	disableGraphiqState,
 	ensureUnifiedSchema,
 	formatYaml,
+	hasExistingWorkspaceState,
 	importMemoryLogs,
 	resolvePrimaryPackageManager,
 	resolveWorkspaceLayout,
@@ -165,6 +167,7 @@ export function detectedHarnessesForExistingSetup(
 	if (detection.harnesses.opencode) detected.push("opencode");
 	if (detection.harnesses.forge || configuredHarnessList.includes("forge")) detected.push("forge");
 	if (detection.harnesses.codex) detected.push("codex");
+	if (detection.harnesses.museCode) detected.push("muse-code");
 	if (detection.harnesses.hermesAgent) detected.push("hermes-agent");
 	if (detection.harnesses.gemini) detected.push("gemini");
 	if (detection.harnesses.ohMyPi || configuredHarnessList.includes("oh-my-pi")) detected.push("oh-my-pi");
@@ -222,22 +225,8 @@ export async function runExistingSetupWizard(
 		if (!existsSync(basePath)) {
 			mkdirSync(basePath, { recursive: true });
 		}
-		if (!existsSync(join(basePath, "memory"))) {
-			mkdirSync(join(basePath, "memory"), { recursive: true });
-		}
-		if (!existsSync(join(basePath, "memory", "scripts"))) {
-			mkdirSync(join(basePath, "memory", "scripts"), { recursive: true });
-		}
-
-		spinner.text = "Installing memory system...";
-		const scriptsSource = join(templatesDir, "memory", "scripts");
-		if (existsSync(scriptsSource)) {
-			deps.copyDirRecursive(scriptsSource, join(basePath, "memory", "scripts"));
-		}
-
-		const requirementsSource = join(templatesDir, "memory", "requirements.txt");
-		if (existsSync(requirementsSource)) {
-			copyFileSync(requirementsSource, join(basePath, "memory", "requirements.txt"));
+		if (!hasExistingWorkspaceState(basePath)) {
+			createFreshWorkspaceV2(basePath);
 		}
 
 		spinner.text = "Syncing built-in skills...";
@@ -453,6 +442,7 @@ export async function runExistingSetupWizard(
 
 		spinner.text = "Initializing database...";
 		const dbPath = resolveWorkspaceLayout(basePath).database;
+		mkdirSync(dirname(dbPath), { recursive: true });
 		const db = Database(dbPath);
 		const migrationResult = ensureUnifiedSchema(db);
 		if (migrationResult.migrated) {

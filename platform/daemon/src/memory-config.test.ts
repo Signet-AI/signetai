@@ -42,6 +42,14 @@ describe("loadDreamingConfig", () => {
 		);
 	});
 
+	it("leaves the Dreaming output cap to the model unless one is configured", () => {
+		expect(loadDreamingConfig({}).maxOutputTokens).toBeNull();
+		expect(loadDreamingConfig({ memory: { dreaming: { enabled: true } } }).maxOutputTokens).toBeNull();
+		expect(loadDreamingConfig({ memory: { dreaming: { maxOutputTokens: 64_000 } } }).maxOutputTokens).toBe(64_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxOutputTokens: 200_000 } } }).maxOutputTokens).toBe(200_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxOutputTokens: 10 } } }).maxOutputTokens).toBe(1_000);
+	});
+
 	it("keeps surprisal attention opt-in and clamps its resource bounds", () => {
 		expect(loadDreamingConfig({}).surprisal).toEqual({
 			enabled: false,
@@ -1012,7 +1020,7 @@ describe("loadPipelineConfig", () => {
 	it("loads canonical worker maxLlmConcurrency with bounded defaults and env override", () => {
 		const previous = process.env.SIGNET_MAX_LLM_CONCURRENCY;
 		try {
-			process.env.SIGNET_MAX_LLM_CONCURRENCY = undefined;
+			delete process.env.SIGNET_MAX_LLM_CONCURRENCY;
 			expect(loadPipelineConfig({ memory: { pipelineV2: { enabled: true } } }).worker.maxLlmConcurrency).toBe(2);
 			expect(
 				loadPipelineConfig({ memory: { pipelineV2: { enabled: true, worker: { maxLlmConcurrency: 0 } } } }).worker
@@ -1028,7 +1036,7 @@ describe("loadPipelineConfig", () => {
 					.maxLlmConcurrency,
 			).toBe(7);
 		} finally {
-			if (previous === undefined) process.env.SIGNET_MAX_LLM_CONCURRENCY = undefined;
+			if (previous === undefined) delete process.env.SIGNET_MAX_LLM_CONCURRENCY;
 			else process.env.SIGNET_MAX_LLM_CONCURRENCY = previous;
 		}
 	});

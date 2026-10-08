@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawnHidden as spawn } from "@signet/core";
 import { join, resolve } from "node:path";
 import {
 	aggregateProtection,

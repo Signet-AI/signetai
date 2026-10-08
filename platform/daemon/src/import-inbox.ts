@@ -3,7 +3,6 @@ import { constants } from "node:fs";
 import { copyFile, lstat, mkdir, open, readdir, stat, unlink } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
-import { withMigrationAdmission, type MigrationAdmission } from "./workspace-writer-barrier";
 
 export type ImportStatus =
 	| "pending"
@@ -48,7 +47,6 @@ export interface InboxOptions {
 	ledger: ImportLedger;
 	maxFiles?: number;
 	maxFileBytes?: number;
-	migration?: MigrationAdmission;
 }
 export interface Admission {
 	root: string;
@@ -58,7 +56,6 @@ export interface Admission {
 	ledger: ImportLedger;
 	idempotencyKey?: string;
 	maxFileBytes?: number;
-	migration?: MigrationAdmission;
 }
 export interface DurableImportAdmission {
 	admit(input: {
@@ -105,10 +102,6 @@ function paths(root: string, key: string, layout = resolveWorkspaceLayout(root))
 	return { managed, original: join(managed, "original") };
 }
 export async function admitImport(input: Admission): Promise<ImportRow> {
-	return withMigrationAdmission(input.migration, "import-admission", () => admitImportInGeneration(input));
-}
-
-async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 	if (!input.fileName.trim() || input.fileName !== basename(input.fileName))
 		throw new Error("file name must be a leaf name");
 	const max = input.maxFileBytes ?? DEFAULT_MAX;
@@ -152,10 +145,6 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 	return committed;
 }
 export async function scanInbox(input: InboxOptions): Promise<ImportRow[]> {
-	return withMigrationAdmission(input.migration, "import-inbox", () => scanInboxInGeneration(input));
-}
-
-async function scanInboxInGeneration(input: InboxOptions): Promise<ImportRow[]> {
 	const layout = input.layout ?? resolveWorkspaceLayout(input.root);
 	const inbox = resolve(layout.files);
 	await mkdir(inbox, { recursive: true });

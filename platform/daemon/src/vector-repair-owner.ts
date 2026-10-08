@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { activeVectorProjectionTable } from "@signet/core";
 import type {
 	DbOwnerVectorRepairInput,
 	DbOwnerVectorRepairOperation,
@@ -85,14 +86,15 @@ function tableExists(db: VectorRepairDb, name: string): boolean {
 	return db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null;
 }
 
-function vectorLookupTable(db: VectorRepairDb): "vec_embeddings" | "vec_embeddings_rowids" {
-	return tableExists(db, "vec_embeddings_rowids") ? "vec_embeddings_rowids" : "vec_embeddings";
+function vectorLookupTable(db: VectorRepairDb): string {
+	const table = activeVectorProjectionTable(db);
+	return tableExists(db, `${table}_rowids`) ? `${table}_rowids` : table;
 }
 
 function vectorTableDimensions(db: VectorRepairDb): number | null {
-	const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vec_embeddings'").get() as
-		| { sql?: unknown }
-		| undefined;
+	const row = db
+		.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?")
+		.get(activeVectorProjectionTable(db)) as { sql?: unknown } | undefined;
 	if (typeof row?.sql !== "string") return null;
 	const match = row.sql.match(/\bembedding\s+FLOAT\s*\[\s*(\d+)\s*\]/i);
 	if (match === null) return null;
@@ -386,7 +388,7 @@ function processMissingVectors(
 	const dimensions = vectorTableDimensions(db);
 	let cursor = row.cursor;
 	let lastError: string | null = null;
-	const insert = db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)");
+	const insert = db.prepare(`INSERT INTO ${activeVectorProjectionTable(db)} (id, embedding) VALUES (?, ?)`);
 
 	for (const candidate of candidates) {
 		guard(options);
@@ -534,7 +536,8 @@ function processOrphanEmbeddings(
 	const counters = emptyCounters();
 	const candidates = listOrphanEmbeddings(db, row.agent_id, row.cursor, limit);
 	let cursor = row.cursor;
-	const removeVec = tableExists(db, "vec_embeddings") ? db.prepare("DELETE FROM vec_embeddings WHERE id = ?") : null;
+	const vecTable = activeVectorProjectionTable(db);
+	const removeVec = tableExists(db, vecTable) ? db.prepare(`DELETE FROM ${vecTable} WHERE id = ?`) : null;
 	const removeEmbedding = db.prepare("DELETE FROM embeddings WHERE id = ?");
 	for (const candidate of candidates) {
 		guard(options);
@@ -581,7 +584,7 @@ export function applyVectorRepairBatch(
 	const maxBytes = boundedVectorBytes(input.maxVectorBytes);
 	const noWork = emptyCounters();
 
-	if (input.operation === "resync" && !tableExists(db, "vec_embeddings")) {
+	if (input.operation === "resync" && !tableExists(db, activeVectorProjectionTable(db))) {
 		let row = readCheckpoint(db, input.operation, agentId);
 		if (row === null) row = ensureCheckpoint(db, { ...input, agentId });
 		const error = "vec_embeddings table not found; restart daemon to initialize vector index";

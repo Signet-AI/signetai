@@ -15,6 +15,10 @@ import {
 	parseSimpleYaml,
 	readNetworkMode,
 	resolveIdentityModeFromConfig,
+	resolveWorkspaceLayout,
+	resolveWorkspaceLayoutAs,
+	WORKSPACE_LAYOUT_V1,
+	WORKSPACE_LAYOUT_V2,
 } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
@@ -57,7 +61,7 @@ import {
 	formatDetectionSummary,
 	getEmbeddingDimensions,
 	hasExistingAgentState,
-	hasExistingIdentityFiles,
+	hasExistingInteractiveSetupState,
 	normalizeHarnessList,
 	readErr,
 	readHarnesses,
@@ -68,6 +72,17 @@ import {
 import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:1234/v1";
+
+function refuseIncompleteV2Workspace(basePath: string): void {
+	const layout = resolveWorkspaceLayout(basePath);
+	if (layout.version !== WORKSPACE_LAYOUT_V2) return;
+	const legacyDatabase = resolveWorkspaceLayoutAs(basePath, WORKSPACE_LAYOUT_V1).database;
+	if (legacyDatabase === layout.database || !existsSync(legacyDatabase) || existsSync(layout.database)) return;
+	failSetupValidation(
+		`Workspace ${basePath} is marked as layout v2, but its legacy database exists at ${legacyDatabase} while the configured v2 database is missing at ${layout.database}.`,
+		"Setup will not proceed. Preserve both paths and restore or migrate the database before retrying.",
+	);
+}
 
 function normalizeHttpEndpoint(value: string | null | undefined): string | undefined {
 	if (!value) return undefined;
@@ -293,7 +308,9 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	const basePath = deps.normalizeAgentPath(deps.normalizeStringValue(options.path) ?? deps.AGENTS_DIR);
 	const existing = deps.detectExistingSetup(basePath);
-	if (existing.agentYaml || existing.configYaml || existing.memoryDb) {
+	refuseIncompleteV2Workspace(basePath);
+	const hasExistingState = hasExistingInteractiveSetupState(existing);
+	if (hasExistingState) {
 		const changes = Object.entries(options).filter(
 			([key, value]) =>
 				key !== "path" &&
@@ -309,8 +326,8 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	console.log(deps.signetBanner());
 	console.log(chalk.dim(`  Workspace: ${basePath}`));
-	let shouldStartLocalDaemon = existing.agentYaml || existing.configYaml || existing.memoryDb;
-	if (!existing.agentYaml && !existing.configYaml && existing.memoryDb) {
+	let shouldStartLocalDaemon = hasExistingState;
+	if (!existing.agentYaml && !existing.configYaml && hasExistingState) {
 		await runExistingSetupWizard(basePath, existing, {}, deps, {
 			openDashboard: options.openDashboard === true,
 			skipGit: options.skipGit === true,
@@ -393,6 +410,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			return;
 		}
 		const existing = deps.detectExistingSetup(basePath);
+		refuseIncompleteV2Workspace(basePath);
 		if (hasExistingAgentState(existing)) {
 			failSetupValidation(
 				`An existing Signet installation was found at ${basePath}.`,
@@ -427,6 +445,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	}
 
 	const existing = deps.detectExistingSetup(basePath);
+	refuseIncompleteV2Workspace(basePath);
 
 	console.log(chalk.dim("  Running in non-interactive mode"));
 	if (!explicitPath && basePath !== deps.AGENTS_DIR) {
@@ -567,6 +586,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			if (h.forge) detectedIds.add("forge");
 			if (h.codex) detectedIds.add("codex");
 			if (h.kimi) detectedIds.add("kimi");
+			if (h.museCode) detectedIds.add("muse-code");
 			if (h.ohMyPi) detectedIds.add("oh-my-pi");
 			if (h.pi) detectedIds.add("pi");
 			if (h.hermesAgent) detectedIds.add("hermes-agent");
@@ -615,16 +635,20 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 
 		printSetupProtectionSummary(protection);
 		return;
-	} else if (hasExistingIdentityFiles(existing)) {
-		console.log(chalk.cyan("  Detected existing agent identity"));
+	} else if (hasExistingAgentState(existing)) {
+		console.log(
+			chalk.cyan(
+				existing.identityFiles.length > 0 ? "  Detected existing agent identity" : "  Detected existing workspace data",
+			),
+		);
 		console.log(chalk.dim(`    ${basePath}`));
 		console.log();
 		console.log(formatDetectionSummary(existing));
 		console.log();
 
 		console.log(chalk.bold("  Signet will:"));
-		console.log(chalk.dim("    1. Create agent.yaml manifest pointing to your existing files"));
-		console.log(chalk.dim("    2. Import memory logs to SQLite for search"));
+		console.log(chalk.dim("    1. Create agent.yaml while preserving existing workspace data"));
+		console.log(chalk.dim("    2. Preserve existing memory and transcript data for migration"));
 		console.log(chalk.dim("    3. Sync built-in skills + unify external skill sources"));
 		console.log(chalk.dim("    4. Install connectors for detected harnesses"));
 		console.log(chalk.dim("    5. Keep all existing files unchanged"));

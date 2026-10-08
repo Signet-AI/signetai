@@ -21,6 +21,7 @@ const previewHarnesses: HarnessSummary[] = [
 	["pi", "pi", "pi.svg"],
 	["oh-my-pi", "Oh My Pi", "oh-my-pi.svg"],
 	["kimi", "Kimi", "kimi.png"],
+	["muse-code", "Muse Code", "muse-code.png"],
 	["forge", "ForgeCode", "forge.svg"],
 ].map(([id, name, icon]) => ({ id, name, icon, path: "preview", exists: false, lastSeen: null }));
 
@@ -93,7 +94,8 @@ export async function onboardingPreviewFetch(path: string, init?: RequestInit): 
 		return Response.json({ success: true });
 	if (route === "/api/inference/execute")
 		return Response.json({ text: "OK", attempts: [{ ok: true }], decision: { targetRef: "background/default" } });
-	if (route === "/api/pipeline/resume") return Response.json({ success: true, mode: "controlled-write" });
+	if (route === "/api/pipeline/pause" || route === "/api/pipeline/resume")
+		return Response.json({ success: true, paused: route === "/api/pipeline/pause", mode: "controlled-write" });
 	if (route === "/api/memory/remember") {
 		memory = { ...body, id: "preview-memory", type: "fact", tags: "onboarding", created_at: new Date().toISOString() };
 		return Response.json({ id: "preview-memory" });

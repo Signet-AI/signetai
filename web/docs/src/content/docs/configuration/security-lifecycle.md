@@ -61,7 +61,7 @@ defaults, and a rejected reload keeps the previously accepted authentication
 state.
 
 In `"local"` mode the token secret is generated automatically and stored
-at `$SIGNET_WORKSPACE/.daemon/auth-secret`. In `"team"` and `"hybrid"` modes,
+at `$SIGNET_WORKSPACE/runtime/auth-secret`. In `"team"` and `"hybrid"` modes,
 the daemon validates HMAC-signed bearer tokens with role and scope
 claims.
 
@@ -111,8 +111,8 @@ when the pipeline is running.
 | `batchLimit` | `500` | Max rows purged per step per sweep (backpressure) |
 
 The retention worker also cleans up graph links and embeddings that
-belong to purged tombstones, and orphans entity nodes with no remaining
-mentions. The `batchLimit` prevents a single sweep from locking the
+belong to purged tombstones and decrements entity mention counts. It does
+not delete entities. The `batchLimit` prevents a single sweep from locking the
 database for too long under high load.
 
 Soft-deleted memories remain recoverable via `POST /api/memory/:id/recover`
@@ -232,12 +232,12 @@ editing the config file is impractical.
 | `SIGNET_HOST` | `127.0.0.1` | Daemon host for local calls |
 | `SIGNET_BIND` | network mode bind | Explicit bind address override (`0.0.0.0`, etc.); defaults to `127.0.0.1` in localhost mode and `0.0.0.0` in tailscale mode |
 | `SIGNET_LOG_FILE` | — | Optional explicit daemon log file path |
-| `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
+| `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/runtime/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
 | `SIGNET_DB_OWNER_START_TIMEOUT_MS` | `15000` | DB-owner protocol startup deadline in ms. Readiness is published before database initialization; this remains a bounded fallback for worker launch failures |
 | `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start daemon wait budget in ms for Signet-managed clients. Generated Claude Code hook config writes this value directly. Generated Codex hook config rounds up to seconds and adds 5 seconds of harness grace |
 | `SIGNET_FETCH_TIMEOUT` | `15000` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset |
-| `SIGNET_PROMPT_SUBMIT_TIMEOUT` | `5000` | Prompt-submit daemon wait budget in ms; OpenCode uses this value directly, generated Claude Code hook config writes this value + 2000 ms grace, and generated Codex hook config rounds up to seconds and adds 2 seconds of harness grace |
+| `SIGNET_PROMPT_SUBMIT_TIMEOUT` | `5000` | Prompt-submit daemon wait budget in ms; OpenCode and the pi and Oh My Pi extensions use this value directly, generated Claude Code hook config writes this value + 2000 ms grace, and generated Codex hook config rounds up to seconds and adds 2 seconds of harness grace |
 | `SIGNET_TRUSTED_PROVIDER_ENDPOINT_HOSTS` | — | Comma-separated host allowlist for Anthropic endpoint overrides used during credentialed startup preflight (supports entries like `proxy.example.com` and `*.example.com`) |
 | `OPENAI_API_KEY` | — | OpenAI key when embedding provider is `openai` |
 

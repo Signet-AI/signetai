@@ -151,6 +151,42 @@ describe("packaged Signet command resolution", () => {
 		expect(resolveSignetCliCommand()).toEqual({ command: process.execPath, args: [cliEntry] });
 	});
 
+	it("serves MCP from the running native Signet binary", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-command-resolution-"));
+		const nativeBinary = join(dir, "signet");
+		writeFileSync(nativeBinary, "", "utf8");
+		process.platform = "darwin";
+		process.execPath = nativeBinary;
+
+		expect(resolveSignetMcpCommand()).toEqual({
+			command: nativeBinary,
+			args: [],
+			env: { SIGNET_MCP_STDIO_WORKER: "1" },
+		});
+	});
+
+	it("serves MCP from the running native Signet binary on Windows", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-command-resolution-"));
+		const nativeBinary = join(dir, "signet.exe");
+		writeFileSync(nativeBinary, "", "utf8");
+		process.platform = "win32";
+		process.argv = [nativeBinary];
+		process.execPath = nativeBinary;
+
+		expect(resolveSignetMcpCommand()).toEqual({
+			command: nativeBinary,
+			args: [],
+			env: { SIGNET_MCP_STDIO_WORKER: "1" },
+		});
+	});
+
+	it("keeps the bare MCP command when the native binary path does not exist", () => {
+		process.platform = "linux";
+		process.execPath = join(tmpdir(), "missing-signet-native", "signet");
+
+		expect(resolveSignetMcpCommand()).toEqual({ command: "signet-mcp", args: [] });
+	});
+
 	it("warns once and returns the bare MCP command when the Windows entry point is missing", () => {
 		const warnings: string[] = [];
 		process.platform = "win32";
@@ -426,7 +462,8 @@ describe("shared connector helpers (#957)", () => {
 			process.env[name] = "   ";
 			expect(readTrimmedEnv(name)).toBeUndefined();
 		} finally {
-			process.env[name] = previous;
+			if (previous === undefined) delete process.env[name];
+			else process.env[name] = previous;
 		}
 	});
 

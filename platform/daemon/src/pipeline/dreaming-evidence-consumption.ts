@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import type { ReadDb, WriteDb } from "../db-accessor";
 import { type EpisodicSourceKind, type EpisodicSourceRecord, readEpisodicSource } from "../episodic-sources";
 import { renderDreamingEvidence } from "./dreaming-evidence";
+import { DREAMING_ATTENTION_OPERATIONS } from "./dreaming-operation-contract";
 
 export interface DreamingEvidenceDelivery {
 	readonly agentId: string;
@@ -12,7 +14,11 @@ export interface DreamingEvidenceDelivery {
 	readonly start: number;
 	readonly end: number;
 	readonly length: number;
-	readonly content: string;
+	readonly contentSha256: string;
+}
+
+export function evidenceContentSha256(content: string): string {
+	return createHash("sha256").update(content).digest("hex");
 }
 
 function tableExists(db: ReadDb, table: string): boolean {
@@ -85,6 +91,15 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 			const start =
 				typeof row?.contentOffset === "number" && Number.isSafeInteger(row.contentOffset) ? row.contentOffset : null;
 			const content = text(row?.content);
+			const compactChars =
+				typeof row?.contentChars === "number" && Number.isSafeInteger(row.contentChars) ? row.contentChars : null;
+			const compactSha256 = text(row?.contentSha256);
+			const delivered =
+				content !== null
+					? { chars: content.length, sha256: evidenceContentSha256(content) }
+					: compactChars !== null && compactChars > 0 && compactSha256 !== null
+						? { chars: compactChars, sha256: compactSha256 }
+						: null;
 			const length =
 				typeof row?.contentLength === "number" && Number.isSafeInteger(row.contentLength) ? row.contentLength : null;
 			if (
@@ -92,13 +107,13 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 				!capturedAt ||
 				!sourceRevision ||
 				start === null ||
-				!content ||
+				delivered === null ||
 				length === null ||
 				start < 0 ||
 				length < start
 			)
 				return [];
-			const end = start + content.length;
+			const end = start + delivered.chars;
 			if (end > length) return [];
 			return [
 				{
@@ -111,11 +126,134 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 					start,
 					end,
 					length,
-					content,
+					contentSha256: delivered.sha256,
 				},
 			];
 		});
 	});
+}
+
+export function passDeliveredRanges(
+	db: ReadDb,
+	passId: string,
+	agentId: string,
+): ReadonlyMap<string, ReadonlyArray<readonly [number, number]>> {
+	const ranges = new Map<string, Array<readonly [number, number]>>();
+	for (const delivery of persistedEvidenceDeliveries(db, passId)) {
+		if (delivery.agentId !== agentId) continue;
+		const ref = `${delivery.kind}:${delivery.id}`;
+		ranges.set(ref, [...(ranges.get(ref) ?? []), [delivery.start, delivery.end] as const]);
+	}
+	return ranges;
+}
+
+export function passFullyServedSourceRefs(db: ReadDb, passId: string, agentId: string): string[] {
+	const coverage = new Map<string, { ranges: Array<readonly [number, number]>; length: number }>();
+	for (const delivery of persistedEvidenceDeliveries(db, passId)) {
+		if (delivery.agentId !== agentId) continue;
+		const ref = `${delivery.kind}:${delivery.id}`;
+		const entry = coverage.get(ref) ?? { ranges: [], length: delivery.length };
+		entry.ranges.push([delivery.start, delivery.end]);
+		coverage.set(ref, entry);
+	}
+	return [...coverage].flatMap(([ref, { ranges, length }]) => {
+		const first = Math.min(...ranges.map(([start]) => start));
+		return extendDeliveredOffset(first, ranges) >= length ? [ref] : [];
+	});
+}
+
+export function extendDeliveredOffset(
+	baseline: number,
+	ranges: ReadonlyArray<readonly [number, number]> | undefined,
+): number {
+	let offset = baseline;
+	for (const [start, end] of [...(ranges ?? [])].sort((a, b) => a[0] - b[0])) {
+		if (start > offset) break;
+		offset = Math.max(offset, end);
+	}
+	return offset;
+}
+
+export interface FailedOperationEvidence {
+	readonly sources: ReadonlySet<string>;
+	readonly scopes: ReadonlySet<string>;
+	readonly filedSources: ReadonlySet<string>;
+}
+
+export function failedOperationEvidence(
+	db: ReadDb,
+	passId: string,
+	passAgentId: string,
+	passScopes: readonly string[],
+): FailedOperationEvidence {
+	const keys = new Set<string>();
+	const scopes = new Set<string>();
+	const filed = new Set<string>();
+	const filedQuotes = new Set<string>();
+	const failedQuotes: Array<{ readonly key: string; readonly quote: string }> = [];
+	if (!tableExists(db, "dreaming_tool_calls")) return { sources: keys, scopes, filedSources: filed };
+	const rows = db
+		.prepare(
+			`SELECT input_json AS inputJson, output_json AS outputJson
+			 FROM dreaming_tool_calls
+			 WHERE pass_id = ? AND tool_name = 'apply_ontology_ops' ORDER BY sequence ASC`,
+		)
+		.all(passId) as Array<{ inputJson: string; outputJson: string }>;
+	for (const { inputJson, outputJson } of rows) {
+		let input: Record<string, unknown> | null;
+		let output: Record<string, unknown> | null;
+		try {
+			input = record(JSON.parse(inputJson));
+			output = record(JSON.parse(outputJson));
+		} catch {
+			for (const scope of passScopes) scopes.add(scope);
+			continue;
+		}
+		const agentId = text(input?.agentId) ?? passAgentId;
+		const operations = Array.isArray(input?.operations) ? input.operations : [];
+		if (output?.ok !== true && operations.length === 0) {
+			scopes.add(agentId);
+			continue;
+		}
+		const citations = (index: number): Array<{ readonly key: string; readonly quote: string }> => {
+			const evidence = record(operations[index])?.evidence;
+			return (Array.isArray(evidence) ? evidence : []).flatMap((citation) => {
+				const cited = record(citation);
+				const ref = text(cited?.source_ref) ?? text(cited?.sourceRef);
+				const parsed = ref ? sourceRef(ref) : null;
+				return parsed
+					? [{ key: `${agentId}\u0000${parsed.kind}:${parsed.id}`, quote: text(cited?.quote)?.trim() ?? "" }]
+					: [];
+			});
+		};
+		if (output?.ok === true && Array.isArray(output.items)) {
+			for (const item of output.items) {
+				const row = record(item);
+				if (row?.ok !== true || typeof row.index !== "number") continue;
+				for (const cited of citations(row.index)) {
+					filed.add(cited.key);
+					filedQuotes.add(`${cited.key}\u0000${cited.quote}`);
+				}
+			}
+		}
+		const failedIndexes =
+			output?.ok === true && Array.isArray(output.items)
+				? output.items.flatMap((item) => {
+						const row = record(item);
+						return row?.ok === false && typeof row.index === "number" ? [row.index] : [];
+					})
+				: operations.map((_, index) => index);
+		for (const index of failedIndexes) {
+			if (DREAMING_ATTENTION_OPERATIONS.has(text(record(operations[index])?.operation) ?? "")) continue;
+			const cited = citations(index);
+			if (cited.length === 0) scopes.add(agentId);
+			failedQuotes.push(...cited);
+		}
+	}
+	for (const { key, quote } of failedQuotes) {
+		if (!filedQuotes.has(`${key}\u0000${quote}`)) keys.add(key);
+	}
+	return { sources: keys, scopes, filedSources: filed };
 }
 
 export function verifiedDreamingEvidenceDelivery(
@@ -136,7 +274,7 @@ export function verifiedDreamingEvidenceDelivery(
 	if (
 		rendered.length !== delivery.length ||
 		delivery.end > rendered.length ||
-		rendered.slice(delivery.start, delivery.end) !== delivery.content
+		evidenceContentSha256(rendered.slice(delivery.start, delivery.end)) !== delivery.contentSha256
 	) {
 		return null;
 	}
@@ -144,10 +282,20 @@ export function verifiedDreamingEvidenceDelivery(
 }
 export function recordDreamingEvidenceConsumptionInTx(
 	db: WriteDb,
-	params: { readonly passId: string; readonly deferredEvidence: ReadonlySet<string> },
+	params: {
+		readonly passId: string;
+		readonly deferredEvidence: ReadonlySet<string>;
+		readonly withheldScopes?: ReadonlySet<string>;
+		readonly filedSources?: ReadonlySet<string>;
+	},
 ): void {
 	if (!tableExists(db, "dreaming_evidence_consumption")) return;
 	const deliveries = persistedEvidenceDeliveries(db, params.passId)
+		.filter(
+			(delivery) =>
+				!params.withheldScopes?.has(delivery.agentId) ||
+				params.filedSources?.has(`${delivery.agentId}\u0000${delivery.kind}:${delivery.id}`) === true,
+		)
 		.filter((delivery) => !params.deferredEvidence.has(`${delivery.agentId}\u0000${delivery.kind}:${delivery.id}`))
 		.sort(
 			(a, b) =>
@@ -264,7 +412,7 @@ export function pendingDreamingEvidenceContinuations(
 			`SELECT dec.source_kind AS kind, dec.source_id AS id, dec.source_captured_at AS capturedAt,
 			        dec.source_entry_id AS sourceEntryId, dec.source_revision AS sourceRevision
 			 FROM dreaming_evidence_consumption dec
-			 INNER JOIN dreaming_passes pass ON pass.id = dec.pass_id AND pass.agent_id = dec.agent_id
+			 INNER JOIN dreaming_passes pass ON pass.id = dec.pass_id
 			 WHERE dec.agent_id = ?
 			   AND dec.delivered_offset > 0 AND dec.delivered_offset < dec.source_length
 			   ${reviewedPredicate}

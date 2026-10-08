@@ -1,3 +1,4 @@
+import type { AgentRemovalInput } from "./agent-removal";
 import type { MemoryHeadCommitInput } from "./memory-head";
 
 export type DbOwnerLane = "read" | "write" | "maintenance" | "verify";
@@ -240,6 +241,7 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_graph_file_purge"; readonly input: DbOwnerSourceGraphFilePurge }
 	| { readonly kind: "source_graph_purge"; readonly input: DbOwnerSourceGraphPurge }
 	| { readonly kind: "source_purge"; readonly input: DbOwnerSourcePurge }
+	| { readonly kind: "agent_remove"; readonly input: AgentRemovalInput }
 	| { readonly kind: "source_artifact_index"; readonly input: DbOwnerSourceArtifactIndex }
 	| { readonly kind: "source_native_memory_index"; readonly input: DbOwnerNativeMemoryIndex }
 	| { readonly kind: "source_artifact_purge"; readonly input: DbOwnerSourceArtifactPurge }
@@ -376,6 +378,8 @@ export interface DbOwnerDreamingEvidenceSearch {
 	readonly sourceRef?: string;
 	readonly offset?: number;
 	readonly chunkSize?: number;
+	readonly passId?: string;
+	readonly evidenceChars?: number;
 }
 
 export interface DbOwnerDreamingEvidenceSource {
@@ -394,6 +398,7 @@ export interface DbOwnerDreamingPassFinalize {
 	readonly outputTokens: number | null;
 	readonly cacheReadTokens: number | null;
 	readonly cacheCreationTokens: number | null;
+	readonly peakContextTokens: number | null;
 	readonly totalCost: number | null;
 	readonly applied: number;
 	readonly failed: number;

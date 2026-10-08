@@ -1,0 +1,21 @@
+---
+interface Props {
+	index: string;
+	label: string;
+	title: string;
+	accent?: string;
+	align?: "center" | "split";
+}
+
+const { index, label, title, accent, align = "split" } = Astro.props;
+---
+
+<header class="hs-head reveal" data-align={align}>
+  <div class="hs-heading">
+    <p class="hs-index"><span>{index}</span>{label}</p>
+    <h2 class="hs-title">{title}{accent ? <><br /><span>{accent}</span></> : null}</h2>
+  </div>
+  <div class="hs-aside">
+    <slot />
+  </div>
+</header>

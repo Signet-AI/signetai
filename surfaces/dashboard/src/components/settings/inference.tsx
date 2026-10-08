@@ -139,7 +139,7 @@ export function InferenceSection() {
 					))}
 				</div>
 				{Object.keys(catalog?.modelErrors ?? {}).length > 0 && (
-					<div className="flex flex-col gap-1 px-1.5 pb-1">
+					<div className="flex flex-col gap-1 pb-1">
 						{Object.entries(catalog?.modelErrors ?? {}).map(([providerId, message]) => (
 							<div
 								key={providerId}
@@ -248,7 +248,7 @@ function RouteHealthPanel({ refreshKey }: { refreshKey: number }) {
 
 	return (
 		<SettingsGroup>
-			<div className="flex items-center justify-between px-1.5">
+			<div className="flex items-center justify-between">
 				<GroupLabel
 					suffix={
 						report?.probeOk == null ? undefined : report.probeOk ? "· test response received" : "· test response failed"
@@ -308,7 +308,7 @@ function RouteHealthPanel({ refreshKey }: { refreshKey: number }) {
 					)}
 				</>
 			) : (
-				<div className="px-2.5 pb-1 text-[11px] text-muted-foreground">
+				<div className="settings-row-description pb-1">
 					{statusError ?? "Could not load inference details. Run check to try again."}
 				</div>
 			)}

@@ -1,33 +1,44 @@
 ---
-interface Props {
-	variant?: "floating" | "bar";
-	landing?: boolean;
-}
-
-const { variant = "floating", landing = false } = Astro.props;
+const path = Astro.url.pathname;
+const internal = [
+	{ label: "Blog", href: "/blog/", current: path.startsWith("/blog") },
+	{ label: "Install", href: "/#install", current: false },
+];
+const external = [
+	{ label: "Docs", href: "https://docs.signetai.sh/" },
+	{ label: "GitHub", href: "https://github.com/Signet-AI/signetai" },
+	{ label: "Discord", href: "https://discord.gg/pHa5scah9C" },
+];
+const arrow = "M7 17L17 7M17 7H7M17 7v10";
 ---
 
 <div id="nav-peek-zone" class="nav-peek-zone" aria-hidden="true"></div>
-<div
-  id="nav-wrapper"
-  class:list={["site-nav-wrapper", { "site-nav-wrapper--bar": variant === "bar", "site-nav-wrapper--landing": landing }]}
->
+<div id="nav-wrapper" class="site-nav-wrapper nav-at-top">
   <nav class="site-nav" aria-label="Primary navigation">
     <a href="/" class="nav-brand" aria-label="Signet home">
       <img src="/Signet-Logo-White.png" alt="" class="nav-brand-logo" width="20" height="20" aria-hidden="true" />
       <span class="nav-brand-text">Signet AI</span>
     </a>
 
-	<div class="nav-links">
-	  <a href="https://docs.signetai.sh/">Docs</a>
-	</div>
+    <div class="nav-links">
+      {internal.map((link) => (
+        <a href={link.href} aria-current={link.current ? "page" : undefined}>{link.label}</a>
+      ))}
+      <span class="nav-section-rule" aria-hidden="true"></span>
+      <a href="https://docs.signetai.sh/" target="_blank" rel="noopener noreferrer" class="nav-external">
+        Docs
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d={arrow} /></svg>
+        <span class="sr-only">(opens in a new tab)</span>
+      </a>
+    </div>
+
+    <a href="https://github.com/Signet-AI/signetai" target="_blank" rel="noopener noreferrer" class="nav-github">
+      GitHub
+      <svg class="nav-github-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d={arrow} /></svg>
+      <span class="sr-only">(opens in a new tab)</span>
+    </a>
 
     <a href="https://discord.gg/pHa5scah9C" target="_blank" rel="noopener noreferrer" class="nav-join" data-analytics-cta="join_discord" data-analytics-placement="nav">Join</a>
-
-    <a href="https://github.com/Signet-AI/signetai" class="nav-github">
-      GitHub
-      <svg class="nav-github-icon" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
-    </a>
 
     <button id="nav-mobile-toggle" class="nav-mobile-toggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="nav-mobile-menu">
       <span class="nav-line" id="nav-line-1"></span>
@@ -37,12 +48,19 @@ const { variant = "floating", landing = false } = Astro.props;
 
   <div id="nav-mobile-menu" class="nav-mobile-menu" aria-hidden="true">
     <div class="nav-mobile-links">
-      <a href="https://docs.signetai.sh/" class="nav-mobile-link">Docs</a>
-      <a href="https://discord.gg/pHa5scah9C" target="_blank" rel="noopener noreferrer" class="nav-mobile-link" data-analytics-cta="join_discord" data-analytics-placement="nav_mobile">Join Discord</a>
-      <a href="https://github.com/Signet-AI/signetai" class="nav-mobile-link">
-        GitHub
-        <svg class="nav-mobile-link-arrow" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 17L17 7M17 7H7M17 7v10"/></svg>
-      </a>
+      <p class="nav-mobile-label">Signet</p>
+      <a href="/" class="nav-mobile-link" aria-current={path === "/" ? "page" : undefined}>Home</a>
+      {internal.map((link) => (
+        <a href={link.href} class="nav-mobile-link" aria-current={link.current ? "page" : undefined}>{link.label}</a>
+      ))}
+      <p class="nav-mobile-label">Elsewhere</p>
+      {external.map((link) => (
+        <a href={link.href} target="_blank" rel="noopener noreferrer" class="nav-mobile-link" data-analytics-cta={link.label === "Discord" ? "join_discord" : undefined} data-analytics-placement={link.label === "Discord" ? "nav_mobile" : undefined}>
+          {link.label}
+          <svg class="nav-mobile-link-arrow" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d={arrow} /></svg>
+          <span class="sr-only">(opens in a new tab)</span>
+        </a>
+      ))}
     </div>
   </div>
 </div>
@@ -94,6 +112,8 @@ const { variant = "floating", landing = false } = Astro.props;
     let ticking = false;
 
     const applyByScrollDirection = (scrollY: number) => {
+      wrapper.classList.toggle('nav-at-top', scrollY < 24);
+
       if (document.documentElement.classList.contains(NAV_OPEN_CLASS)) {
         wrapper.classList.remove(NAV_HIDDEN_CLASS);
         return;

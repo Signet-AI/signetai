@@ -1,9 +1,21 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_DREAMING, DEFAULT_PIPELINE_V2, loadMemoryConfig } from "../platform/daemon/src/memory-config";
-import { writeIsolatedWorkspace } from "./bench-memory";
+import { parse as parseYaml } from "yaml";
+import {
+	BENCH_CREDENTIAL_ENV,
+	attachBenchCredential,
+	benchUsesSubscription,
+	benchDreamingCodemode,
+	benchDreamingConcurrency,
+	buildSetupArgs,
+	loadEnvFile,
+	pinnedBunMismatch,
+	resolveBenchModel,
+	setBenchDreamingCodemode,
+	setBenchDreamingConcurrency,
+} from "./bench-memory";
 
 const workspaces: string[] = [];
 
@@ -11,39 +23,147 @@ afterEach(async () => {
 	await Promise.all(workspaces.splice(0).map((workspace) => rm(workspace, { recursive: true, force: true })));
 });
 
-describe("MemoryBench dreaming profiles", () => {
-	test("dreaming-parity writes production dreaming and pipeline defaults", async () => {
-		const workspace = await mkdtemp(join(tmpdir(), "signet-memorybench-profile-"));
-		workspaces.push(workspace);
+async function workspace(): Promise<string> {
+	const path = await mkdtemp(join(tmpdir(), "signet-memorybench-launcher-"));
+	workspaces.push(path);
+	return path;
+}
 
-		writeIsolatedWorkspace(workspace, "dreaming-parity", "on", "fixture-model", "http://127.0.0.1:8000/v1");
+const setupAgentYaml = `memory:
+  dreaming:
+    enabled: true
+inference:
+  defaultPolicy: background
+  targets:
+    background:
+      executor: openai-compatible
+      models:
+        default:
+          model: glm-5.3-flash
+      endpoint: https://open.bigmodel.cn/api/coding/paas/v4
+`;
 
-		const config = loadMemoryConfig(workspace);
-		const yaml = await readFile(join(workspace, "agent.yaml"), "utf8");
+describe("MemoryBench launcher", () => {
+	test("sets the workspace up through real Signet setup without letting setup start a daemon", () => {
+		const args = buildSetupArgs("/tmp/bench/agents", 47123, resolveBenchModel({}));
 
-		expect(config.dreaming.tokenThreshold).toBe(DEFAULT_DREAMING.tokenThreshold);
-		expect(config.dreaming.maxInputTokens).toBe(DEFAULT_DREAMING.maxInputTokens);
-		expect(config.dreaming.maxOutputTokens).toBe(DEFAULT_DREAMING.maxOutputTokens);
-		expect(config.pipelineV2.enabled).toBe(DEFAULT_PIPELINE_V2.enabled);
-		expect(config.pipelineV2.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
-		expect(config.pipelineV2.traversal.enabled).toBe(DEFAULT_PIPELINE_V2.traversal.enabled);
-		expect(yaml).toContain("tokenThreshold: 100000");
-		expect(yaml).toContain("maxInputTokens: 128000");
-		expect(yaml).toContain("maxOutputTokens: 16000");
-		expect(yaml).toContain("  pipelineV2:\n    enabled: true");
+		expect(args.slice(0, 2)).toEqual(["surfaces/cli/src/cli.ts", "setup"]);
+		expect(args).toContain("--non-interactive");
+		expect(args.join(" ")).toContain("--path /tmp/bench/agents");
+		expect(args.join(" ")).toContain("--remote-url http://127.0.0.1:47123");
+		expect(args.join(" ")).toContain("--extraction-model glm-5.3-flash");
+		expect(args.join(" ")).toContain("--extraction-endpoint https://open.bigmodel.cn/api/coding/paas/v4");
 	});
 
-	test("the default dreaming profile retains the faster bench configuration", async () => {
-		const workspace = await mkdtemp(join(tmpdir(), "signet-memorybench-profile-"));
-		workspaces.push(workspace);
+	test("defaults to GLM-5.3-Flash on the Z.ai coding endpoint and honors overrides", () => {
+		expect(resolveBenchModel({})).toEqual({
+			model: "glm-5.3-flash",
+			endpoint: "https://open.bigmodel.cn/api/coding/paas/v4",
+			providerFamily: "zai-coding-cn",
+		});
+		expect(
+			resolveBenchModel({
+				SIGNET_BENCH_DREAMING_MODEL: "local-model",
+				SIGNET_BENCH_DREAMING_ENDPOINT: "http://127.0.0.1:8000/v1",
+				SIGNET_BENCH_DREAMING_PROVIDER_FAMILY: "openai-compatible",
+			}),
+		).toEqual({ model: "local-model", endpoint: "http://127.0.0.1:8000/v1", providerFamily: "openai-compatible" });
+	});
 
-		writeIsolatedWorkspace(workspace, "dreaming", "on", "fixture-model", "http://127.0.0.1:8000/v1");
+	test("adds only an API credential to the inference target setup wrote", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
 
-		const config = loadMemoryConfig(workspace);
+		attachBenchCredential(dir, "zai-coding-cn");
 
-		expect(config.dreaming.tokenThreshold).toBe(1_000_000);
-		expect(config.dreaming.maxInputTokens).toBe(64_000);
-		expect(config.dreaming.maxOutputTokens).toBe(32_000);
-		expect(config.pipelineV2.enabled).toBe(false);
+		const config = parseYaml(await readFile(join(dir, "agent.yaml"), "utf8"));
+		expect(config.inference.accounts.memorybench).toEqual({
+			kind: "api",
+			providerFamily: "zai-coding-cn",
+			credentialRef: BENCH_CREDENTIAL_ENV,
+		});
+		expect(config.inference.targets.background).toEqual({
+			executor: "zai-coding-cn",
+			models: { default: { model: "glm-5.3-flash" } },
+			account: "memorybench",
+			privacy: "restricted_remote",
+		});
+		expect(config.memory).toEqual({ dreaming: { enabled: true } });
+	});
+
+	test("keeps a generic OpenAI-compatible endpoint for a local model", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
+
+		attachBenchCredential(dir, "openai-compatible");
+
+		const target = parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).inference.targets.background;
+		expect(target.executor).toBe("openai-compatible");
+		expect(target.endpoint).toBe("https://open.bigmodel.cn/api/coding/paas/v4");
+	});
+
+	test("attaches a ChatGPT subscription account without an API key reference", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
+		attachBenchCredential(dir, "openai-codex");
+		const config = parseYaml(await readFile(join(dir, "agent.yaml"), "utf8"));
+		const account = Object.values(config.inference.accounts as Record<string, Record<string, unknown>>).find(
+			(entry) => entry.providerFamily === "openai-codex",
+		);
+		expect(account).toEqual({ kind: "subscription_session", providerFamily: "openai-codex" });
+		expect(config.inference.targets.background.executor).toBe("openai-codex");
+		expect(benchUsesSubscription("zai-coding-cn")).toBe(false);
+	});
+
+	test("refuses a workspace without the setup-written background target", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), "memory:\n  dreaming:\n    enabled: true\n");
+
+		expect(() => attachBenchCredential(dir, "zai-coding-cn")).toThrow("background inference target");
+	});
+
+	test("raises Dreaming concurrency for bulk ingest without touching other settings", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
+		setBenchDreamingConcurrency(dir, benchDreamingConcurrency({}));
+		const config = parseYaml(await readFile(join(dir, "agent.yaml"), "utf8"));
+		expect(config.memory.dreaming).toEqual({ enabled: true, maxConcurrentPasses: 6 });
+		expect(config.memory.pipelineV2.worker.maxLlmConcurrency).toBe(8);
+		expect(config.inference.targets.background.executor).toBe("openai-compatible");
+		expect(benchDreamingConcurrency({ SIGNET_BENCH_DREAMING_CONCURRENCY: "2" })).toBe(2);
+		expect(() => benchDreamingConcurrency({ SIGNET_BENCH_DREAMING_CONCURRENCY: "0" })).toThrow("from 1 to 16");
+	});
+
+	test("turns Dreaming codemode on only when the bench asks for it", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
+		setBenchDreamingCodemode(dir, benchDreamingCodemode({}));
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).memory.dreaming).toEqual({ enabled: true });
+		setBenchDreamingCodemode(dir, benchDreamingCodemode({ SIGNET_BENCH_DREAMING_CODEMODE: "1" }));
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).memory.dreaming).toEqual({
+			enabled: true,
+			codemode: true,
+		});
+		expect(() => benchDreamingCodemode({ SIGNET_BENCH_DREAMING_CODEMODE: "yes" })).toThrow("must be 1, 0");
+	});
+
+	test("refuses a Bun other than the one package.json pins", () => {
+		expect(pinnedBunMismatch("bun@1.4.2", "1.4.2", "/usr/bin/bun")).toBeNull();
+		expect(pinnedBunMismatch(undefined, "1.3.8", "/usr/bin/bun")).toBeNull();
+		const mismatch = pinnedBunMismatch("bun@1.4.2", "1.3.8", "/home/u/node_modules/bun/bin/bun.exe");
+		expect(mismatch).toContain("pinned Bun 1.4.2");
+		expect(mismatch).toContain("Bun 1.3.8 at /home/u/node_modules/bun/bin/bun.exe");
+	});
+
+	test("loads the bench env file without overriding values already set", async () => {
+		const dir = await workspace();
+		const path = join(dir, ".env");
+		await writeFile(path, 'ZAI_API_KEY="from-file"\nEXISTING=from-file\n# comment\nBARE=value\n');
+		const env: NodeJS.ProcessEnv = { EXISTING: "from-shell" };
+
+		loadEnvFile(path, env);
+		loadEnvFile(join(dir, "missing.env"), env);
+
+		expect(env).toEqual({ ZAI_API_KEY: "from-file", EXISTING: "from-shell", BARE: "value" });
 	});
 });

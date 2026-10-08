@@ -396,13 +396,13 @@ describe("MemoryBench Dreaming gate", () => {
 						searchEpisodicSources(database, {
 							agentId: session.agentId ?? scenario.agentId,
 							query: quote,
-							kind: "artifact",
 							limit: 10,
 						}),
 					);
-					const source = sources.find((candidate) => candidate.sourceId === sourceSessionId);
-					expect(source).toMatchObject({
-						kind: "artifact",
+					const matches = sources.filter((candidate) => candidate.sourceId === sourceSessionId);
+					expect(matches).toHaveLength(1);
+					expect(matches[0]).toMatchObject({
+						kind: "transcript",
 						sourceId: sourceSessionId,
 						content: expect.stringContaining(quote),
 						completed: true,

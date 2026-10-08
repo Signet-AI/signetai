@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { dashboardQueryCache, scopedQueryKey, type QueryResult } from "./query-cache";
+import { TOKEN_KEY } from "./session";
 
 export function useAsync<T>(
 	fetcher: () => Promise<T | null>,
@@ -79,7 +80,7 @@ export function useAsync<T>(
 		};
 		document.addEventListener("visibilitychange", visible);
 		const storage = (event: StorageEvent) => {
-			if (event.key === "signet-token") void run(true);
+			if (event.key === TOKEN_KEY) void run(true);
 		};
 		window.addEventListener("storage", storage);
 		return () => {

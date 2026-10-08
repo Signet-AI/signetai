@@ -40,9 +40,9 @@ describe("native memory sources", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		resetEmbeddingCircuitBreakers();
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (prevSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
@@ -677,7 +677,15 @@ describe("native memory sources", () => {
 		utimesSync(file, stamp, stamp);
 
 		await closeDbAccessor();
-		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(false);
+		const unreachable = join(dir, "unreachable-workspace");
+		mkdirSync(unreachable);
+		writeFileSync(join(unreachable, "memory"), "");
+		process.env.SIGNET_PATH = unreachable;
+		try {
+			expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(false);
+		} finally {
+			process.env.SIGNET_PATH = dir;
+		}
 
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(true);
@@ -1153,7 +1161,7 @@ describe("native memory sources", () => {
 			).count,
 		}));
 		expect(before.entities).toBeGreaterThan(0);
-		expect(before.attrs).toBeGreaterThan(0);
+		expect(before.attrs).toBe(0);
 
 		await removeNativeMemoryFile(source, file, "agent-native");
 
@@ -1685,8 +1693,10 @@ describe("native memory sources", () => {
 		expect(checkpoint?.complete).toBe(0);
 
 		failSecondChunk = false;
+		await closeDbAccessor();
 		resetEmbeddingCircuitBreakers();
 		resetObsidianSourceEmbeddingBackoff();
+		initDbAccessor(join(dir, "memory", "memories.db"));
 		const callsBeforeRecovery = calls.length;
 		const recovered = makeHandle();
 		try {

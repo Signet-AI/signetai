@@ -214,8 +214,9 @@ remember and ingest no longer author graph structure directly.
 The only retained write closure in
 `platform/daemon/src/pipeline/graph-transactions.ts` is
 `txDecrementEntityMentions`, used by the retention worker to decrement mention
-counts and delete orphaned entities (plus their dangling relations) after a
-memory purge.
+counts after a memory purge. Retention never deletes entities: an entity that
+reaches zero mentions keeps its pin, aspects, attributes, aliases,
+dependencies, relations, and epistemic assertions.
 
 ### Ontology Operation Handlers
 
@@ -437,10 +438,10 @@ Use `--json` on either command family for automation.
 `getKnowledgeGraphForConstellation` in `platform/daemon/src/knowledge-graph.ts`
 builds the dashboard graph. It fetches active entities, aspects, attributes,
 dependencies, epistemic assertions, proposal overlays, and dreaming summaries
-within bounded limits. Source-document entities are included when they own active
-`claim` attributes with non-empty source provenance in `source_id`, `source_path`,
-or `source_kind`; source folders, skills, and empty source topology remain
-excluded so the bounded view does not become a filesystem browser.
+within bounded limits. Source-document entities are included when an active
+Dreaming claim cites them (same `source_id` and `source_path`); source folders,
+skills, and uncited source topology remain excluded so the bounded view does not
+become a filesystem browser.
 
 The dashboard preserves the ontology instead of flattening it into unlabeled
 points. Its semantic path is:

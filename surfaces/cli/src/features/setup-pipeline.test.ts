@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { MODEL_DEFAULTS } from "@signet/core";
 import {
 	applyAggregateRecallRoute,
 	applySetupInferenceRoute,
@@ -11,7 +12,7 @@ import {
 
 describe("defaultExtractionModel", () => {
 	it("uses the checked Codex CLI model default", () => {
-		expect(defaultExtractionModel("codex")).toBe("gpt-5.4-mini");
+		expect(defaultExtractionModel("codex")).toBe(MODEL_DEFAULTS.codex);
 	});
 
 	it("uses qwen3:4b as the ollama floor", () => {
@@ -81,7 +82,7 @@ describe("buildSetupPipeline", () => {
 
 describe("buildSetupInference", () => {
 	it("defaults ACPX models from the selected harness, not the ACPX provider bucket", () => {
-		expect(defaultAcpxModel(["codex"], ["acpx"])).toBe("gpt-5.4-mini");
+		expect(defaultAcpxModel(["codex"], ["acpx"])).toBe(MODEL_DEFAULTS.codex);
 		expect(defaultAcpxModel(["opencode"], ["acpx"])).toBe("opencode/gemini-3-flash");
 		expect(defaultAcpxModel(["claude-code"], ["acpx"])).toBe("haiku");
 		expect(defaultAcpxModel(["kimi"], ["acpx"])).toBe("haiku");
@@ -90,7 +91,7 @@ describe("buildSetupInference", () => {
 			buildSetupInference("acpx", undefined, ["codex"], ["acpx"], "/usr/local/bin/bunx")?.targets["background-acpx"],
 		).toMatchObject({
 			acpx: { agent: "codex" },
-			models: { default: { model: "gpt-5.4-mini" } },
+			models: { default: { model: MODEL_DEFAULTS.codex } },
 		});
 		expect(
 			buildSetupInference("acpx", undefined, ["opencode"], ["acpx"], "/usr/local/bin/bunx")?.targets["background-acpx"],

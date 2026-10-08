@@ -70,6 +70,11 @@ export function isProviderConnected(accounts: AccountsMap, family: string): bool
 	}
 	return false;
 }
+function hasApiKeyAccount(accounts: AccountsMap, family: string): boolean {
+	return Object.values(accounts).some(
+		(account) => account.providerFamily === family && account.kind === "api" && Boolean(account.credentialRef),
+	);
+}
 export function accountForFamily(accounts: AccountsMap, family: string): string | null {
 	const names = Object.keys(accounts).filter((n) => accounts[n].providerFamily === family);
 	if (names.length === 0) return null;
@@ -92,7 +97,7 @@ export function connectableProviders(catalog: InferenceCatalog | null, accounts:
 		const supportsOAuth = oauthIds.has(id);
 		const supportsApiKey = catalog.providers.includes(id) && !OAUTH_ONLY_PROVIDERS.has(id);
 		const connected = supportsOAuth
-			? (oauthStatus.get(id)?.connected ?? false) || isProviderConnected(accounts, id)
+			? (oauthStatus.get(id)?.connected ?? false) || hasApiKeyAccount(accounts, id)
 			: isProviderConnected(accounts, id);
 		return {
 			id,

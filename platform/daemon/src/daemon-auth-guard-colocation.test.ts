@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { DbOwnerClient, DbOwnerJobHandle, DbOwnerSubmitOptions } from "./db-owner-client";
@@ -39,9 +39,11 @@ auth:
 `,
 );
 process.env.SIGNET_PATH = tmpDir;
-let closeAccessor: (() => void) | null = null;
+let closeAccessor: (() => Promise<void>) | null = null;
+let resetAuth: (() => void) | null = null;
 
 afterAll(async () => {
+	resetAuth?.();
 	await closeAccessor?.();
 	if (prevSignetPath === undefined) {
 		Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -55,11 +57,15 @@ describe("auth guard co-location", () => {
 	beforeAll(async () => {
 		await import("./daemon");
 		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
-		closeDbAccessor();
+		await closeDbAccessor();
 		initDbAccessor(join(tmpDir, "memory", "memories.db"));
 		closeAccessor = closeDbAccessor;
 		const state = await import("./routes/state.js");
 		state.reloadAuthState(tmpDir);
+		resetAuth = () => {
+			writeFileSync(join(tmpDir, "agent.yaml"), "auth:\n  mode: local\n");
+			state.reloadAuthState(tmpDir);
+		};
 	});
 
 	async function makeApp(): Promise<InstanceType<typeof import("hono").Hono>> {
@@ -69,9 +75,10 @@ describe("auth guard co-location", () => {
 
 	it("passes the resolved SQLite runtime to the shared owner", async () => {
 		const { createRecallDbOwnerOptions, daemonMigrationControl } = await import("./daemon");
+		const { MEMORY_DB } = await import("./routes/state.js");
 		const options = createRecallDbOwnerOptions("/tmp/custom-libsqlite3.dylib");
 		expect(options).toEqual({
-			dbPath: join(tmpDir, "memory", "memories.db"),
+			dbPath: MEMORY_DB,
 			sqlitePath: "/tmp/custom-libsqlite3.dylib",
 			migrationControl: daemonMigrationControl,
 		});
@@ -637,6 +644,52 @@ inference:
 				error: "memory.pipelineV2.extractionProvider is retired; configure the canonical inference workload instead.",
 			});
 			expect(readFileSync(join(tmpDir, "agent.yaml"), "utf-8")).toBe(original);
+		});
+
+		it("POST /api/config leaves pipeline pause changes to the pause and resume routes", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode config test");
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerMiscRoutes(app);
+			const agentPath = join(state.AGENTS_DIR, "agent.yaml");
+			const configPath = join(state.AGENTS_DIR, "config.yaml");
+			const original = existsSync(agentPath) ? readFileSync(agentPath, "utf-8") : null;
+			const originalConfig = existsSync(configPath) ? readFileSync(configPath, "utf-8") : null;
+			const fixture = readFileSync(join(tmpDir, "agent.yaml"), "utf-8");
+			const token = createToken(secret, { sub: "config-admin", role: "admin", scope: {} }, 60);
+			const save = (content: string) =>
+				app.request("/api/config", {
+					method: "POST",
+					headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+					body: JSON.stringify({ file: "agent.yaml", content }),
+				});
+			try {
+				mkdirSync(state.AGENTS_DIR, { recursive: true });
+				writeFileSync(agentPath, fixture);
+				expect(fixture).not.toContain("paused");
+				const paused = await save("memory:\n  pipelineV2:\n    paused: true\n");
+				expect(paused.status).toBe(409);
+				expect(readFileSync(agentPath, "utf-8")).toBe(fixture);
+
+				const unchanged = "memory:\n  pipelineV2:\n    paused: false\n";
+				expect((await save(unchanged)).status).toBe(200);
+				expect(readFileSync(agentPath, "utf-8")).toBe(unchanged);
+
+				rmSync(agentPath);
+				writeFileSync(configPath, "memory:\n  pipelineV2:\n    paused: true\n");
+				expect((await save(unchanged)).status).toBe(409);
+				expect(existsSync(agentPath)).toBe(false);
+				expect((await save("memory:\n  pipelineV2:\n    paused: true\n")).status).toBe(200);
+			} finally {
+				if (originalConfig === null) rmSync(configPath, { force: true });
+				else writeFileSync(configPath, originalConfig);
+				if (original === null) rmSync(agentPath, { force: true });
+				else writeFileSync(agentPath, original);
+			}
 		});
 		it("POST /api/agents distinguishes omitted, null, valid, and invalid policy_group", async () => {
 			const app = await makeApp();

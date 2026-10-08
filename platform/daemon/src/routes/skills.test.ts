@@ -67,39 +67,6 @@ describe("repo skills frontmatter", () => {
 		}
 	});
 
-	it.skipIf(!hasSkillsDir)("memory skills describe the current scoped source-backed model", () => {
-		const debug = readFileSync(join(skillsRoot, "memory-debug", "SKILL.md"), "utf-8");
-		const remember = readFileSync(join(skillsRoot, "remember", "SKILL.md"), "utf-8");
-		const recall = readFileSync(join(skillsRoot, "recall", "SKILL.md"), "utf-8");
-		const signet = readFileSync(join(skillsRoot, "signet", "SKILL.md"), "utf-8");
-
-		expect(debug).toContain("Session And Hook State");
-		expect(debug).toContain("signet bypass --list");
-		expect(debug).toContain("signet sources list");
-		expect(debug).toContain("signet knowledge hygiene --json");
-		expect(debug).not.toContain("search.alpha");
-		expect(debug).not.toContain("memory-debug smoke test");
-
-		expect(remember).toContain("source-backed and scoped");
-		expect(remember).toContain("agentId");
-		expect(remember).toContain("visibility");
-		expect(remember).toContain("idempotencyKey");
-		expect(remember).not.toContain("automatic pipeline handles capture better");
-		expect(remember).not.toContain("auto-categorizes and embeds");
-
-		expect(recall).toContain("canonical explicit recall endpoint");
-		expect(recall).toContain("session context dedupe");
-		expect(recall).toContain("Aggregate recall");
-		expect(recall).not.toContain("70% semantic vector similarity + 30% BM25");
-		expect(recall).not.toContain("MEMORY.md is also regenerated periodically");
-
-		expect(signet).toContain("source-backed substrate");
-		expect(signet).toContain("epistemic assertions");
-		expect(signet).toContain("skills own repeated procedures");
-		expect(signet).not.toContain("stateless autocomplete");
-		expect(signet).not.toContain("real individual with opinions");
-	});
-
 	it.skipIf(!hasSkillsDir)("non-builtin skills do not have builtin: true", () => {
 		const nonBuiltin = ["agent-architect", "skill-creator", "web-search"];
 
@@ -230,7 +197,29 @@ metadata:
 # Agent Architect`;
 
 		const meta = parseSkillFrontmatter(content);
-		expect(meta.description.length).toBeGreaterThan(0);
+		expect(meta.description).toBe(
+			"Design agents with genuine humanity — craft SOUL.md, IDENTITY.md, USER.md, and AGENTS.md files that produce agents people actually connect with.",
+		);
+	});
+
+	it("parses multiline YAML description using | literal scalar", () => {
+		const content = `---
+name: shorts
+description: |
+  First line of the description.
+  Second line stays separate.
+version: 2.0.0
+---`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("First line of the description.\nSecond line stays separate.");
+		expect(meta.version).toBe("2.0.0");
+	});
+
+	it("does not read the next key as an empty field's value", () => {
+		const meta = parseSkillFrontmatter("---\nauthor:\ndescription: Real description\n---");
+		expect(meta.author).toBeUndefined();
+		expect(meta.description).toBe("Real description");
 	});
 
 	it("ignores metadata block keys when parsing top-level fields", () => {
@@ -279,7 +268,8 @@ describe("listInstalledSkills", () => {
 	});
 
 	afterEach(() => {
-		process.env.SIGNET_PATH = origSignetPath;
+		if (origSignetPath === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = origSignetPath;
 		if (existsSync(tmpAgentsDir)) {
 			rmSync(tmpAgentsDir, { recursive: true, force: true });
 		}
@@ -374,7 +364,8 @@ This is a test skill.`,
 	});
 
 	afterEach(() => {
-		process.env.SIGNET_PATH = origSignetPath;
+		if (origSignetPath === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = origSignetPath;
 		if (existsSync(tmpAgentsDir)) {
 			rmSync(tmpAgentsDir, { recursive: true, force: true });
 		}

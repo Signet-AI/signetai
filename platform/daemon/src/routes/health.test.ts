@@ -13,7 +13,7 @@ import {
 	createDbOwnerMaintenance,
 	registerDbOwnerMaintenance,
 } from "../db-owner-maintenance";
-import { resetDbObservability } from "../db-observability";
+import { getEventLoopLiveness, resetDbObservability } from "../db-observability";
 import { startEventLoopMonitor, stopResourceMonitors } from "../resource-monitor";
 import { mountHealthRoutes } from "./health";
 
@@ -335,7 +335,9 @@ describe("GET /health/live", () => {
 			};
 			expect(["degraded", "wedged"]).toContain(body.eventLoop.status);
 			expect(body.eventLoop.stallMs).toBeGreaterThan(0);
-			expect(body.eventLoop.lagP95Ms).toBeGreaterThan(0);
+			const deadline = Date.now() + 2_000;
+			while ((getEventLoopLiveness().lagP95Ms ?? 0) <= 0 && Date.now() < deadline) await Bun.sleep(10);
+			expect(getEventLoopLiveness().lagP95Ms).toBeGreaterThan(0);
 		} finally {
 			if (!liveClient.killed) liveClient.kill();
 			server.stop(true);

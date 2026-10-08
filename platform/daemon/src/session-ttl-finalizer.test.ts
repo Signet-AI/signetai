@@ -10,8 +10,8 @@ import { createTtlEvictionHandler } from "./session-ttl-finalizer";
 describe("TTL eviction finalizer (#902)", () => {
 	let dir = "";
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		rmSync(dir, { recursive: true, force: true });
 	});
 

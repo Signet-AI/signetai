@@ -939,6 +939,120 @@ describe("SignetPiExtension", () => {
 		expect(peerMessage).toBeDefined();
 	});
 
+	it("input does not wait for prompt-submit and before_agent_start does not retry a failed submit", async () => {
+		let promptSubmits = 0;
+		let releasePromptSubmit: () => void = () => {};
+		const promptSubmitGate = new Promise<void>((resolve) => {
+			releasePromptSubmit = resolve;
+		});
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				if (path === "/api/hooks/session-start") return Response.json({});
+				if (path === "/api/hooks/user-prompt-submit") {
+					promptSubmits += 1;
+					await promptSubmitGate;
+					return new Response("daemon busy", { status: 503 });
+				}
+				if (path === "/api/hooks/notifications") return Response.json({});
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+		};
+		SignetPiExtension(pi as never);
+		const ctx = {
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-pi-slow", cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-pi-slow",
+			},
+			ui: {
+				notify: () => {},
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		};
+
+		try {
+			const input = Promise.resolve(handlers.input[0]?.({ text: "hello" }, ctx)).then(() => "accepted");
+			const outcome = await Promise.race([input, Bun.sleep(250).then(() => "blocked")]);
+			expect(outcome).toBe("accepted");
+		} finally {
+			releasePromptSubmit();
+		}
+
+		await handlers.before_agent_start[0]?.({ prompt: "hello" }, ctx);
+		const result = await handlers.context[0]?.({ messages: [] }, ctx);
+		expect(promptSubmits).toBe(1);
+		const messages = (result as { messages?: Array<{ customType?: string }> } | undefined)?.messages ?? [];
+		expect(messages.some((message) => message.customType === "signet-pi-hidden-recall")).toBe(false);
+	});
+
+	it("delivers recall for a prompt submitted on input through the next context event", async () => {
+		let promptSubmits = 0;
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				if (path === "/api/hooks/session-start") return Response.json({});
+				if (path === "/api/hooks/user-prompt-submit") {
+					promptSubmits += 1;
+					return Response.json({ dynamicContext: "[signet:recall]\n- Steered recall" });
+				}
+				if (path === "/api/hooks/notifications") return Response.json({});
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+		};
+		SignetPiExtension(pi as never);
+		const ctx = {
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-pi-steer", cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-pi-steer",
+			},
+			ui: {
+				notify: () => {},
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		};
+
+		await handlers.input[0]?.({ text: "steer toward the recalled fact" }, ctx);
+		const result = await handlers.context[0]?.({ messages: [] }, ctx);
+		const messages = (result as { messages: Array<{ customType?: string; content?: unknown }> }).messages;
+		const recall = messages.find((message) => message.customType === "signet-pi-hidden-recall");
+		expect(recall?.content as string).toContain("Steered recall");
+		expect(promptSubmits).toBe(1);
+	});
+
 	it("session_before_compact posts pre-compaction guidance with session metadata", async () => {
 		const requests: Array<{ path: string; body: unknown }> = [];
 		const server = Bun.serve({

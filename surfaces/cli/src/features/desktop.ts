@@ -26,6 +26,7 @@ import {
 	type WorkspaceSourceRepoSyncResult,
 } from "@signet/core";
 import { resolveAgentsDir } from "../lib/workspace.js";
+import { assertDesktopBunVersion, readDesktopBunVersion } from "./desktop-bun.js";
 
 export interface DesktopCommandOptions {
 	readonly repo?: string;
@@ -69,6 +70,7 @@ export interface DesktopWindowsInstallResult extends DesktopBuildResult {
 export type DesktopInstallResult = DesktopLinuxInstallResult | DesktopMacInstallResult | DesktopWindowsInstallResult;
 
 interface DesktopCommandContext {
+	readonly bunVersion?: () => string;
 	readonly cwd?: string;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly home?: string;
@@ -175,6 +177,7 @@ export function buildDesktopFromSource(
 	options: DesktopCommandOptions = {},
 	ctx: DesktopCommandContext = {},
 ): DesktopBuildResult {
+	assertDesktopBunVersion((ctx.bunVersion ?? (() => readDesktopBunVersion(ctx.env)))());
 	const prepared = prepareDesktopSourceCheckout(options, ctx);
 	try {
 		buildDesktopAtRepo(prepared.repo, ctx);
@@ -200,6 +203,9 @@ export function installDesktopFromSource(
 	options: DesktopInstallOptions = {},
 	ctx: DesktopCommandContext = {},
 ): DesktopInstallResult {
+	if (!options.skipBuild) {
+		assertDesktopBunVersion((ctx.bunVersion ?? (() => readDesktopBunVersion(ctx.env)))());
+	}
 	const prepared = options.skipBuild
 		? { repo: resolveDesktopSourceCheckout(options.repo, ctx) }
 		: prepareDesktopSourceCheckout(options, ctx);

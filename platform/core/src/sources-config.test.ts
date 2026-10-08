@@ -6,10 +6,12 @@ import {
 	DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
 	DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN,
+	DEFAULT_NOTION_MAX_PAGES,
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
 	addDiscordSource,
 	addGitHubSource,
 	addImportedSource,
+	addNotionSource,
 	addObsidianSource,
 	addWebSource,
 	deterministicImportedSourceId,
@@ -19,7 +21,9 @@ import {
 	normalizePublicWebUrl,
 	parseDiscordSettings,
 	parseGitHubSettings,
+	parseNotionSettings,
 	parseWebSettings,
+	notionSourceId,
 	removeSource,
 	removeSourceIfGeneration,
 } from "./sources-config";
@@ -492,6 +496,68 @@ describe("sources-config", () => {
 			maxItemsPerRepo: 12,
 		});
 		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("adds a Notion source keyed by its token reference", () => {
+		const agentsDir = tmp();
+
+		const result = addNotionSource(
+			{ tokenRef: " NOTION_TOKEN ", name: "Team Notion", maxPages: 50, now: "2026-01-02T00:00:00.000Z" },
+			agentsDir,
+		);
+
+		expect(result.ok).toBe(true);
+		if (result.ok === false) throw new Error(result.error);
+		expect(result.source.kind).toBe("notion");
+		expect(result.source.id).toBe(notionSourceId("NOTION_TOKEN"));
+		expect(result.source.root).toBe("notion://integrations/NOTION_TOKEN");
+		expect(result.source.name).toBe("Team Notion");
+		expect(result.source.providerSettings).toEqual({ tokenRef: "NOTION_TOKEN", maxPages: 50 });
+	});
+
+	it("preserves Notion settings on partial update", () => {
+		const agentsDir = tmp();
+		addNotionSource({ tokenRef: "NOTION_TOKEN", maxPages: 25, now: "2026-01-01T00:00:00.000Z" }, agentsDir);
+		const second = addNotionSource({ tokenRef: "NOTION_TOKEN", name: "Renamed" }, agentsDir);
+
+		expect(second.ok).toBe(true);
+		if (second.ok === false) throw new Error(second.error);
+		expect(second.created).toBe(false);
+		expect(second.source.name).toBe("Renamed");
+		expect(parseNotionSettings(second.source.providerSettings)).toEqual({ tokenRef: "NOTION_TOKEN", maxPages: 25 });
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("rejects invalid Notion source boundaries", () => {
+		const agentsDir = tmp();
+
+		expect(addNotionSource({ tokenRef: "  " }, agentsDir)).toEqual({ ok: false, error: "Notion tokenRef is required" });
+		for (const tokenRef of [
+			`ntn_${"a".repeat(46)}`,
+			`secret_${"b".repeat(43)}`,
+			`Bearer ntn_${"c".repeat(46)}`,
+			"Authorization: Bearer NOTION_TOKEN",
+		]) {
+			expect(addNotionSource({ tokenRef }, agentsDir)).toEqual({
+				ok: false,
+				error: "Notion tokenRef must be a secret reference, not a raw token",
+			});
+		}
+		for (const maxPages of [0, 1.5, 10_001]) {
+			expect(addNotionSource({ tokenRef: "NOTION_TOKEN", maxPages }, agentsDir)).toEqual({
+				ok: false,
+				error: "Notion maxPages must be an integer between 1 and 10000",
+			});
+		}
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(0);
+	});
+
+	it("parses persisted Notion settings with bounded defaults", () => {
+		expect(parseNotionSettings({ tokenRef: "NOTION_TOKEN", maxPages: 999_999 })).toEqual({
+			tokenRef: "NOTION_TOKEN",
+			maxPages: DEFAULT_NOTION_MAX_PAGES,
+		});
+		expect(() => parseNotionSettings({})).toThrow("Notion source has no tokenRef");
 	});
 
 	it("rejects invalid GitHub source boundaries", () => {

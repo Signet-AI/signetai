@@ -31,8 +31,8 @@ Use `SIGNET_PATH` for a one-off daemon, test, or service invocation. Do not poin
 | `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md` | Agent and user context. Preserve these as source material.                   |
 | `MEMORY.md`                                      | Generated working-memory projection. Do not hand-edit it.                    |
 | `DREAMING.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`    | Prompts for their named special flows, not ordinary startup context.         |
-| `memory/memories.db`                             | Daemon-owned SQLite state. Do not edit with SQL while the daemon is running. |
-| `.daemon/`                                       | Runtime state, logs, auth material, and telemetry audit data.                |
+| `data/signet.db`                                 | Daemon-owned SQLite state. Do not edit with SQL while the daemon is running. |
+| `runtime/`                                       | Runtime state, logs, auth material, and telemetry audit data.                |
 | `.secrets/`                                      | Encrypted secret storage. Keep it out of source control.                     |
 
 The configuration loader accepts the first present of `agent.yaml`, `AGENT.yaml`, or `config.yaml`, in that order. Prefer `agent.yaml` for new workspaces.
@@ -79,7 +79,7 @@ The embedding provider, model, dimensions, endpoint, and optional `api_key` belo
 
 Changing an embedding profile initiates an index migration. Confirm its progress from the daemon status and embedding status endpoints before retiring the old provider or model.
 
-`search.alpha` controls hybrid retrieval weighting. `top_k` and `min_score` bound candidate collection and returned results. Change search tuning deliberately and verify representative recall queries after restart.
+`search.alpha` controls hybrid retrieval weighting. `top_k` and `min_score` bound candidate collection and returned results. `transcript_evidence_limit` (default 2, 0–5) caps how many session transcript excerpts recall returns; `0` disables them. Change search tuning deliberately and verify representative recall queries after restart.
 
 ## Applying a change
 

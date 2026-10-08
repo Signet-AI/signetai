@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { closeSync, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readSync, readdirSync } from "node:fs";
-import { dirname, join, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
-import { preflightWorkspace } from "@signet/core";
+import { preflightWorkspace, resolveWorkspaceLayout } from "@signet/core";
 import { detectExistingSetup } from "../lib/setup-detection.js";
 import { normalizeWorkspacePath, resolveAgentsDir, writeConfiguredWorkspacePath } from "../lib/workspace.js";
 
@@ -37,15 +37,7 @@ interface CopyPlan {
 	readonly conflicts: string[];
 }
 
-const VERIFY_FILES = [
-	"agent.yaml",
-	"AGENTS.md",
-	"SOUL.md",
-	"IDENTITY.md",
-	"USER.md",
-	"MEMORY.md",
-	join("memory", "memories.db"),
-] as const;
+const VERIFY_IDENTITY_FILES = ["agent.yaml", "AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"] as const;
 
 const WORKSPACE_PRESETS = [
 	join("~", ".openclaw", "workspace"),
@@ -54,8 +46,29 @@ const WORKSPACE_PRESETS = [
 	join("~", ".moltbot", "workspace"),
 ] as const;
 
-const SKIP_PATHS = new Set([".daemon/pid"]);
-const SKIP_DIRS = new Set([".daemon/logs"]);
+interface SourceLayoutRules {
+	readonly verifyFiles: readonly string[];
+	readonly skipPaths: ReadonlySet<string>;
+	readonly skipDirs: ReadonlySet<string>;
+}
+
+function workspaceRelative(root: string, path: string): string | null {
+	const rel = relative(root, path);
+	return rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : null;
+}
+
+function sourceLayoutRules(srcRoot: string): SourceLayoutRules {
+	const layout = resolveWorkspaceLayout(srcRoot);
+	const database = workspaceRelative(layout.root, layout.database);
+	const runtimeDirs = new Set([".daemon"]);
+	const runtime = workspaceRelative(layout.root, layout.runtime);
+	if (runtime) runtimeDirs.add(runtime.replace(/\\/g, "/"));
+	return {
+		verifyFiles: database ? [...VERIFY_IDENTITY_FILES, database] : VERIFY_IDENTITY_FILES,
+		skipPaths: new Set([...runtimeDirs].map((dir) => `${dir}/pid`)),
+		skipDirs: new Set([...runtimeDirs].map((dir) => `${dir}/logs`)),
+	};
+}
 
 export function getWorkspaceStatus(env: NodeJS.ProcessEnv = process.env): ReturnType<typeof preflightWorkspace> {
 	return preflightWorkspace({ env });
@@ -161,11 +174,18 @@ function scoreWorkspace(path: string): number {
 
 function buildCopyPlan(srcRoot: string, dstRoot: string, force: boolean): CopyPlan {
 	const plan = emptyPlan();
-	scanDir(srcRoot, dstRoot, "", plan, force);
+	scanDir(srcRoot, dstRoot, "", plan, force, sourceLayoutRules(srcRoot));
 	return plan;
 }
 
-function scanDir(srcDir: string, dstDir: string, rel: string, plan: CopyPlan, force: boolean): void {
+function scanDir(
+	srcDir: string,
+	dstDir: string,
+	rel: string,
+	plan: CopyPlan,
+	force: boolean,
+	rules: SourceLayoutRules,
+): void {
 	const srcStat = lstatSync(srcDir);
 	if (!srcStat.isDirectory()) {
 		plan.conflicts.push(`${srcDir} is not a directory`);
@@ -192,11 +212,11 @@ function scanDir(srcDir: string, dstDir: string, rel: string, plan: CopyPlan, fo
 		if (entry.isSymbolicLink()) {
 			continue;
 		}
-		if (shouldSkip(nextRel, entry.isDirectory())) {
+		if (shouldSkip(nextRel, entry.isDirectory(), rules)) {
 			continue;
 		}
 		if (entry.isDirectory()) {
-			scanDir(src, dst, nextRel, plan, force);
+			scanDir(src, dst, nextRel, plan, force, rules);
 			continue;
 		}
 
@@ -251,7 +271,7 @@ function applyCopyPlan(plan: CopyPlan): void {
 }
 
 function verifyCoreFiles(srcRoot: string, dstRoot: string): void {
-	for (const rel of VERIFY_FILES) {
+	for (const rel of sourceLayoutRules(srcRoot).verifyFiles) {
 		const src = join(srcRoot, rel);
 		if (!existsSync(src)) {
 			continue;
@@ -302,13 +322,13 @@ function hashFile(path: string): string {
 	}
 }
 
-function shouldSkip(rel: string, isDir: boolean): boolean {
+function shouldSkip(rel: string, isDir: boolean, rules: SourceLayoutRules): boolean {
 	const key = rel.replace(/\\/g, "/");
-	if (SKIP_PATHS.has(key)) {
+	if (rules.skipPaths.has(key)) {
 		return true;
 	}
 
-	if (isDir && SKIP_DIRS.has(key)) {
+	if (isDir && rules.skipDirs.has(key)) {
 		return true;
 	}
 

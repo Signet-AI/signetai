@@ -10,6 +10,8 @@ import {
 	recordDreamingEpisodicTokenBacklog,
 } from "../pipeline/dreaming-token-cache";
 import { registerKnowledgeRoutes } from "./knowledge-routes";
+import { reloadAuthState } from "./state";
+import { writeFileSync } from "node:fs";
 
 async function seedKnowledgeNavigation(): Promise<void> {
 	await runWriteTxAsync(getDbAccessor(), (db) => {
@@ -70,9 +72,9 @@ describe("GET /api/knowledge/constellation backlog measurement", () => {
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		invalidateDreamingEpisodicTokenBacklog("default");
-		closeDbAccessor();
+		await closeDbAccessor();
 		if (dir) rmSync(dir, { recursive: true, force: true });
 		dir = "";
 	});
@@ -169,5 +171,76 @@ describe("GET /api/knowledge/constellation backlog measurement", () => {
 
 		expect(graph.metadata.dreaming.episodicTokensPending).toBe(42);
 		expect(graph.metadata.dreaming.episodicBacklogProbe?.kind).toBe("exact");
+	});
+});
+
+async function seedIsolatedAgentEntities(): Promise<void> {
+	await runWriteTxAsync(getDbAccessor(), (db) => {
+		const now = "2026-09-23T00:00:00.000Z";
+		for (const agent of ["haystack-a", "haystack-b"]) {
+			db.prepare(
+				"INSERT INTO agents (id, name, read_policy, created_at, updated_at) VALUES (?, ?, 'isolated', ?, ?)",
+			).run(agent, agent, now, now);
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'person', ?, 3, ?, ?)`,
+			).run(`entity-${agent}`, `User of ${agent}`, `user of ${agent}`, agent, now, now);
+			db.prepare(
+				`INSERT INTO entity_aspects
+				 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES (?, ?, ?, 'preferences', 'preferences', 1, ?, ?)`,
+			).run(`aspect-${agent}`, `entity-${agent}`, agent, now, now);
+		}
+	});
+}
+
+describe("GET /api/knowledge/constellation agent scope", () => {
+	let dir = "";
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "signet-constellation-scope-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+	});
+
+	afterEach(() => {
+		closeDbAccessor();
+		if (dir) rmSync(dir, { recursive: true, force: true });
+		dir = "";
+	});
+
+	test("shows every agent's entities with their owning agent only when all agents are requested", async () => {
+		await seedIsolatedAgentEntities();
+		const app = new Hono();
+		registerKnowledgeRoutes(app);
+		const entities = async (query: string) =>
+			(
+				(await (await app.request(`/api/knowledge/constellation?${query}`)).json()) as {
+					entities: Array<{ id: string; agentId: string }>;
+				}
+			).entities.map((entity) => `${entity.agentId}:${entity.id}`);
+
+		expect(await entities("agent_id=default")).toEqual([]);
+		expect(await entities("agent_id=haystack-a")).toEqual(["haystack-a:entity-haystack-a"]);
+		expect(await entities("agentId=haystack-b")).toEqual(["haystack-b:entity-haystack-b"]);
+		expect((await entities("agent_id=all")).sort()).toEqual([
+			"haystack-a:entity-haystack-a",
+			"haystack-b:entity-haystack-b",
+		]);
+	});
+
+	test("refuses an all-agents view without admin permission outside local mode", async () => {
+		await seedIsolatedAgentEntities();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		reloadAuthState(dir);
+		try {
+			const app = new Hono();
+			registerKnowledgeRoutes(app);
+			expect((await app.request("/api/knowledge/constellation?agent_id=all")).status).toBe(403);
+		} finally {
+			writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: local\n");
+			reloadAuthState(dir);
+		}
 	});
 });

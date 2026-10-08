@@ -48,7 +48,10 @@ POST /api/repair/clean-orphans
 Vector repair is scoped to one resolved agent. `resync-vec` fills canonical
 embeddings missing from the derived index and retains derived rows with no
 provable owner. Its `remaining` field is a bounded 0/1 presence marker; resume
-while `status` is `running`.
+while `status` is `running`. On startup the daemon also backfills embeddings
+missing from the active vector projection (the staging table after a model
+migration), so vectors an older daemon wrote to the inactive table become
+searchable again after a restart.
 
 The daemon's full-database integrity scan runs in a single-flight worker after
 HTTP readiness, with a 30-second wall-clock budget and periodic progress logs.

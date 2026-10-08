@@ -6,6 +6,7 @@ import {
 	getNativeTransformersBindings,
 	materializeEmbeddedAssetTree,
 	materializeEmbeddedNativeAddon,
+	materializeEmbeddedNativeLibrary,
 	materializeEmbeddedWasmAssets,
 	registerNativeAssets,
 	registerNativeTransformersBindings,
@@ -55,6 +56,26 @@ describe("native-runtime-assets", () => {
 		const wasmDir = materializeEmbeddedWasmAssets();
 		expect(wasmDir).toBeTruthy();
 		expect(wasmDir ? existsSync(`${wasmDir}/example.wasm`) : false).toBe(true);
+	});
+
+	test("materializes an embedded native library under its own file name and replaces stale versions", () => {
+		expect(materializeEmbeddedNativeLibrary("test-vec-library", "vec0.so")).toBeNull();
+
+		registerNativeAssets({
+			nativeAddons: [{ name: "test-vec-library", contentBase64: Buffer.from("vec-v1").toString("base64") }],
+		});
+		const first = materializeEmbeddedNativeLibrary("test-vec-library", "vec0.so");
+		expect(first?.endsWith("/vec0.so")).toBe(true);
+		expect(first ? readFileSync(first, "utf8") : "").toBe("vec-v1");
+		expect(materializeEmbeddedNativeLibrary("test-vec-library", "vec0.so")).toBe(first);
+
+		registerNativeAssets({
+			nativeAddons: [{ name: "test-vec-library", contentBase64: Buffer.from("vec-v2").toString("base64") }],
+		});
+		const second = materializeEmbeddedNativeLibrary("test-vec-library", "vec0.so");
+		expect(second).not.toBe(first);
+		expect(second ? readFileSync(second, "utf8") : "").toBe("vec-v2");
+		expect(first ? existsSync(first) : true).toBe(false);
 	});
 
 	test("materializes an embedded native addon to a real .node file, returning null when absent", async () => {

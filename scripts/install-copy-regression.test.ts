@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "..");
@@ -16,7 +16,7 @@ describe("install copy", () => {
 			"README.md",
 			"web/docs/src/content/docs/getting-started/install.md",
 			"web/docs/src/content/docs/cli/getting-started.md",
-			"web/marketing/src/components/landing/Quickstart.astro",
+			"web/marketing/src/components/OsInstallSelector.astro",
 			"web/marketing/public/skill.md",
 		];
 
@@ -24,21 +24,19 @@ describe("install copy", () => {
 			expect(read(path)).toContain(nativeInstallCommand);
 		}
 
-		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain(windowsInstallCommand);
-		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain(
-			"data-install-os={option.id}",
-		);
-		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain('id: "unix"');
-		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain("install-os-icon-pair");
-		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain("macOS and Linux");
-		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain(
+		expect(read("web/marketing/src/components/OsInstallSelector.astro")).toContain(windowsInstallCommand);
+		expect(read("web/marketing/src/components/OsInstallSelector.astro")).toContain("data-install-os={option.id}");
+		expect(read("web/marketing/src/components/OsInstallSelector.astro")).toContain('id: "unix"');
+		expect(read("web/marketing/src/components/OsInstallSelector.astro")).toContain("install-os-icon-pair");
+		expect(read("web/marketing/src/components/OsInstallSelector.astro")).toContain("macOS and Linux");
+		expect(read("web/marketing/src/components/OsInstallSelector.astro")).toContain(
 			'data-analytics-command={option.id === "windows" ? "native_install_windows" : "native_install"}',
 		);
-		expect(read("web/marketing/src/components/landing/OsInstallSelector.astro")).toContain(
+		expect(read("web/marketing/src/components/OsInstallSelector.astro")).toContain(
 			"data-analytics-placement={placement}",
 		);
-		expect(read("web/marketing/src/components/landing/Hero.astro")).toContain("OsInstallSelector");
-		expect(read("web/marketing/src/components/landing/InstallCta.astro")).toContain("OsInstallSelector");
+		expect(read("web/marketing/src/components/home/Hero.astro")).toContain("OsInstallSelector");
+		expect(read("web/marketing/src/components/home/Start.astro")).toContain("OsInstallSelector");
 		const interactions = read("web/marketing/src/scripts/interactions.ts");
 		expect(interactions).toContain("navigator.userAgent");
 		expect(interactions).toContain("windows nt|win32|win64");
@@ -171,9 +169,12 @@ describe("install copy", () => {
 	test("build-connector-assets stages runtime plugin assets into a tarball", () => {
 		const buildScript = read("scripts/build-connector-assets.ts");
 		expect(buildScript).toContain(`signet-connectors-\${version}.tar.gz`);
-		expect(buildScript).toContain("runtime/connectors");
+		expect(buildScript).toContain(`join(stagingRoot, "runtime", "connectors", entry.harness, entry.assetDir)`);
 		expect(buildScript).toContain("integrations");
-		expect(buildScript).toContain("hermes-plugin");
+		expect(buildScript).toContain('join(integrationsDir, name, "connector")');
+		expect(existsSync(join(import.meta.dir, "..", "integrations", "hermes-agent", "connector", "hermes-plugin"))).toBe(
+			true,
+		);
 		expect(buildScript).toContain('"dist"');
 		expect(buildScript).toContain('"node_modules"');
 		expect(buildScript).toContain('"src"');

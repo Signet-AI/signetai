@@ -1,6 +1,7 @@
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { spawnHidden, spawnSyncHidden, type SpawnSyncReturns } from "./child-process";
+import { resolveWorkspaceLayout } from "./workspace-layout";
 
 export const SIGNET_SOURCE_CHECKOUT_DIRNAME = "signetai";
 export const SIGNET_SOURCE_REMOTE_URL = "https://github.com/Signet-AI/signetai.git";
@@ -698,7 +699,7 @@ function readErrorCode(err: Error | undefined): string | null {
 }
 
 function sourceRepoSyncLockPath(workspaceDir: string): string {
-	return join(resolve(workspaceDir), ".daemon", SOURCE_REPO_SYNC_LOCK_FILENAME);
+	return join(resolveWorkspaceLayout(workspaceDir).runtime, SOURCE_REPO_SYNC_LOCK_FILENAME);
 }
 
 function clearStaleSourceRepoSyncLock(path: string): boolean {
@@ -826,9 +827,8 @@ function sourceRepoSyncLockErrorResult(repoPath: string, detail: string): Worksp
 }
 
 function ensureDaemonDir(workspaceDir: string): WorkspaceDirEnsureResult {
-	const daemonDir = join(resolve(workspaceDir), ".daemon");
 	try {
-		mkdirSync(daemonDir, { recursive: true });
+		mkdirSync(resolveWorkspaceLayout(workspaceDir).runtime, { recursive: true });
 		return { ok: true };
 	} catch (err) {
 		return {
