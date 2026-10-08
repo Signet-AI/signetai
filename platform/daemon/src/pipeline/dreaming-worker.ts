@@ -20,8 +20,11 @@ import {
 	enqueueDreamingHygieneAttention,
 	enqueueDreamingSurprisalAttention,
 	evaluateDreamingTrigger,
+	getDreamingState,
 	hasDreamingEpisodicBacklog,
 	isDreamingHaltActive,
+	isDreamingScopeBackedOff,
+	isDreamingScopeHalted,
 	probeDreamingEpisodicBacklog,
 	recordDreamingFailure,
 	runDreamingAgentPass,
@@ -115,7 +118,13 @@ export function partitionDreamingScopes(
 }
 export interface DreamingSchedulerStatus {
 	readonly status: "idle" | "deferred" | "blocked";
-	readonly reason: "queue_pressure" | "system_pressure" | "inference_unavailable" | null;
+	readonly reason:
+		| "queue_pressure"
+		| "system_pressure"
+		| "inference_unavailable"
+		| "failure_backoff"
+		| "failure_halt"
+		| null;
 	readonly checkedAt: string | null;
 }
 
@@ -668,6 +677,24 @@ export function startDreamingWorker(
 		if (await shouldDeferDreamingSweepAsync(accessor, options.ownerMaintenance)) {
 			scheduler = { status: "deferred", reason: "queue_pressure", checkedAt };
 			logger.info("dreaming-worker", "Deferring dreaming sweep while queues are under pressure");
+			return;
+		}
+		const runState = await getDreamingState(accessor, defaultAgentId);
+		const hold = isDreamingScopeHalted(runState)
+			? "failure_halt"
+			: isDreamingScopeBackedOff(runState)
+				? "failure_backoff"
+				: null;
+		if (hold !== null) {
+			if (scheduler.reason !== hold) {
+				logger.warn("dreaming-worker", "Holding scheduled Dreaming after repeated pass failures", {
+					agentId: defaultAgentId,
+					reason: hold,
+					consecutiveFailures: runState.consecutiveFailures,
+					lastFailureAt: runState.lastFailureAt,
+				});
+			}
+			scheduler = { status: hold === "failure_halt" ? "blocked" : "deferred", reason: hold, checkedAt };
 			return;
 		}
 		scheduler = { status: "idle", reason: null, checkedAt };
