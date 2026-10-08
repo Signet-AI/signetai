@@ -30,7 +30,7 @@ Use `SIGNET_PATH` for a one-off daemon, test, or service invocation. Do not poin
 | `agent.yaml`                                     | Operator configuration.                                                      |
 | `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md` | Agent and user context. Preserve these as source material.                   |
 | `MEMORY.md`                                      | Generated working-memory projection. Do not hand-edit it.                    |
-| `DREAMING.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`    | Prompts for their named special flows, not ordinary startup context.         |
+| `HEARTBEAT.md`, `BOOTSTRAP.md`                   | Prompts for their named special flows, not ordinary startup context.         |
 | `data/signet.db`                                 | Daemon-owned SQLite state. Do not edit with SQL while the daemon is running. |
 | `runtime/`                                       | Runtime state, logs, auth material, and telemetry audit data.                |
 | `.secrets/`                                      | Encrypted secret storage. Keep it out of source control.                     |

@@ -5,9 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAgentMemoryConfig, getAgentIdentityFiles, normalizeAgentRosterEntry, scaffoldAgent } from "../agents";
 import {
+	IDENTITY_FILES,
+	IDENTITY_PRESETS,
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	getMissingIdentityFiles,
 	hasValidIdentity,
+	listRetiredIdentityEntries,
+	loadIdentityFilesSync,
 	loadIdentityMode,
 	readStaticIdentity,
 	resolveHermesHomePath,
@@ -134,7 +138,7 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("## Working Memory");
 	});
 
-	test("minimal preset loads only AGENTS.md during startup and leaves DREAMING.md special-session only", () => {
+	test("existing workspace with a retired DREAMING.md entry still loads only AGENTS.md", () => {
 		writeFileSync(
 			join(TMP, "agent.yaml"),
 			"identity:\n  preset: minimal\n  startup:\n    load:\n      - path: AGENTS.md\n        role: operating_instructions\n        budget: 12000\n  special:\n    - path: DREAMING.md\n      kind: dreaming\n      role: dreaming_prompt\n      budget: 4000\n",
@@ -148,6 +152,8 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("agents");
 		expect(result).not.toContain("dreaming");
 		expect(result).not.toContain("soul");
+		expect(Object.values(loadIdentityFilesSync(TMP)).map((file) => file.path)).not.toContain("DREAMING.md");
+		expect(hasValidIdentity(TMP)).toBe(true);
 	});
 
 	test("identity mode off disables startup identity fallback", () => {
@@ -206,6 +212,36 @@ describe("managed identity health", () => {
 
 		expect(hasValidIdentity(TMP)).toBe(false);
 		expect(getMissingIdentityFiles(TMP)).toEqual(["USER.md"]);
+	});
+});
+
+describe("retired DREAMING.md identity file", () => {
+	test("no identity file or preset declares DREAMING.md", () => {
+		const paths = [
+			...Object.values(IDENTITY_FILES).map((spec) => spec.path),
+			...Object.values(IDENTITY_PRESETS)
+				.flatMap((preset) => [...preset.startup, ...preset.special])
+				.map((entry) => entry.path),
+		];
+		expect(paths).not.toContain("DREAMING.md");
+	});
+
+	test("lists retired identity.special dreaming entries for diagnostics", () => {
+		writeFileSync(
+			join(TMP, "agent.yaml"),
+			"identity:\n  preset: openclaw\n  special:\n    - path: HEARTBEAT.md\n      kind: heartbeat\n    - path: DREAMING.md\n      kind: dreaming\n      role: dreaming_prompt\n",
+		);
+
+		expect(listRetiredIdentityEntries(TMP)).toEqual(["DREAMING.md"]);
+	});
+
+	test("reports nothing when agent.yaml has no retired entries", () => {
+		expect(listRetiredIdentityEntries(TMP)).toEqual([]);
+		writeFileSync(
+			join(TMP, "agent.yaml"),
+			"identity:\n  preset: openclaw\n  special:\n    - path: HEARTBEAT.md\n      kind: heartbeat\n",
+		);
+		expect(listRetiredIdentityEntries(TMP)).toEqual([]);
 	});
 });
 
