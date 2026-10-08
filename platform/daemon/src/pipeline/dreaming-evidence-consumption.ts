@@ -719,6 +719,7 @@ export function pendingDreamingEvidenceContinuations(
 			 INNER JOIN dreaming_passes pass ON pass.id = dec.pass_id
 			 WHERE dec.agent_id = ?
 			   AND dec.delivered_offset > 0 AND dec.delivered_offset < dec.source_length
+			   AND dec.stalled_passes < ?
 			   ${reviewedPredicate}
 			   AND (? IS NULL OR dec.source_kind = ?)
 			   AND (
@@ -758,10 +759,10 @@ export function pendingDreamingEvidenceContinuations(
 			         AND dec.source_entry_id = '' AND dec.source_revision = ss.latest_at
 			     ))
 			   )
-			 ORDER BY (dec.stalled_passes >= ?) ASC, pass.rowid ASC, dec.source_kind ASC, dec.source_id ASC, dec.source_captured_at ASC
+			 ORDER BY pass.rowid ASC, dec.source_kind ASC, dec.source_id ASC, dec.source_captured_at ASC
 			 LIMIT ?`,
 		)
-		.all(agentId, kind ?? null, kind ?? null, DREAMING_EVIDENCE_STALL_PASSES, boundedLimit) as Array<{
+		.all(agentId, DREAMING_EVIDENCE_STALL_PASSES, kind ?? null, kind ?? null, boundedLimit) as Array<{
 		kind: EpisodicSourceKind;
 		id: string;
 		capturedAt: string;

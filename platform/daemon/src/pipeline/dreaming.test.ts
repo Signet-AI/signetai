@@ -1430,7 +1430,7 @@ describe("Dreaming", () => {
 		const first = pendingDreamingEvidenceContinuations(tracedDb, AGENT, 20);
 		expect(continuationQueries).toHaveLength(1);
 		expect(continuationQueries[0]).toContain("LIMIT ?");
-		expect(continuationArgs).toEqual([[AGENT, null, null, 3, 20]]);
+		expect(continuationArgs).toEqual([[AGENT, 3, null, null, 20]]);
 		expect(first.map((source) => source.id)).toEqual(
 			Array.from({ length: 20 }, (_, index) => `prior-partial-${index.toString().padStart(2, "0")}`),
 		);
@@ -3178,6 +3178,44 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 				.get("stuck-first"),
 		).toEqual({ stalled: 0 });
 	}, 15_000);
+
+	it("serves fresh sources before a stalled continuation (#2094)", async () => {
+		const capturedAt = "2026-08-11T00:00:00.000Z";
+		seedTranscript(db, "stalled-continuation", "x".repeat(10_000), capturedAt);
+		seedTranscript(db, "fresh-source", "Fresh evidence names a settled owner.", "2026-08-10T00:00:00.000Z");
+		accessor.withWriteTx((tx) => {
+			tx.prepare(
+				"INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES ('stalled-pass', ?, 'incremental', 'completed')",
+			).run(AGENT);
+			tx.prepare(
+				`INSERT INTO dreaming_evidence_consumption
+				 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
+				  delivered_offset, source_length, pass_id, updated_at, cursor_basis, stalled_passes)
+				 VALUES (?, 'transcript', 'stalled-continuation', ?, '', ?, 2000, 10000, 'stalled-pass', ?, 'review', 3)`,
+			).run(AGENT, capturedAt, capturedAt, capturedAt);
+		});
+		const pages: Array<Record<string, unknown>> = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT, limit: 1 }));
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT, limit: 1 }));
+					return { summary: "Read two queue pages" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const [first, second] = pages.map((page) => (page.items as Array<Record<string, unknown>>)[0]);
+		expect(first?.sourceRef).toBe("transcript:fresh-source");
+		expect(pages[0]?.hasMore).toBe(true);
+		expect(second?.sourceRef).toBe("transcript:stalled-continuation");
+		expect(second?.reviewedChars).toBe(2000 - Number(second?.contentOffset));
+	});
 
 	it("resolves imported-source attention only after every member transcript is reviewed (#2094)", async () => {
 		const importId = "import:batch-2094";
