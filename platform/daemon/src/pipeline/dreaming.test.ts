@@ -3265,6 +3265,72 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(stalled()?.resolvedAt).toEqual(expect.any(String));
 	});
 
+	it("does not count deferred or withheld passes toward an evidence stall (#2094)", async () => {
+		const capturedAt = "2026-08-11T00:00:00.000Z";
+		seedTranscript(db, "suppressed-stall", "x".repeat(10_000), capturedAt);
+		accessor.withWriteTx((tx) => {
+			tx.prepare(
+				"INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES ('suppressed-pass', ?, 'incremental', 'completed')",
+			).run(AGENT);
+			tx.prepare(
+				`INSERT INTO dreaming_evidence_consumption
+				 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
+				  delivered_offset, source_length, pass_id, updated_at, cursor_basis, stalled_passes)
+				 VALUES (?, 'transcript', 'suppressed-stall', ?, '', ?, 2000, 10000, 'suppressed-pass', ?, 'review', ?)`,
+			).run(AGENT, capturedAt, capturedAt, capturedAt, DREAMING_EVIDENCE_STALL_PASSES - 1);
+		});
+		const runPass = (run: (input: DreamingAgentInput) => Promise<void>) =>
+			runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						const page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT, limit: 1 });
+						expect((page.items as Array<{ sourceRef: string }>)[0]?.sourceRef).toBe("transcript:suppressed-stall");
+						await run(input);
+						return { summary: "Read the stalled continuation" };
+					},
+				},
+				defaultCfg(),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				"incremental",
+			);
+		const cursor = () =>
+			db
+				.prepare(
+					"SELECT delivered_offset AS offset, stalled_passes AS stalled FROM dreaming_evidence_consumption WHERE source_id = ?",
+				)
+				.get("suppressed-stall");
+		const stalledAttention = () =>
+			db
+				.prepare("SELECT COUNT(*) AS n FROM dreaming_attention WHERE kind = 'evidence_requeue' AND subject_ref = ?")
+				.get("transcript:suppressed-stall");
+		const unchanged = { offset: 2000, stalled: DREAMING_EVIDENCE_STALL_PASSES - 1 };
+
+		await runPass(async (input) => {
+			await invokeDreamingTool(input, "runbook_write", {
+				summary: "## Deferred\n- transcript:suppressed-stall awaits a decision.",
+				deferredEvidence: [{ agentId: AGENT, sourceRef: "transcript:suppressed-stall" }],
+			});
+		});
+		expect(cursor()).toEqual(unchanged);
+
+		await runPass(async (input) => {
+			const apply = await invokeDreamingTool(input, "apply_ontology_ops", {
+				agentId: AGENT,
+				operations: "invalid array",
+			});
+			expect(apply.ok).toBe(false);
+		});
+		expect(cursor()).toEqual(unchanged);
+		expect(stalledAttention()).toEqual({ n: 0 });
+
+		await runPass(async () => {});
+		expect(cursor()).toEqual({ offset: 2000, stalled: DREAMING_EVIDENCE_STALL_PASSES });
+		expect(stalledAttention()).toEqual({ n: 1 });
+	});
+
 	it("serves fresh sources before a stalled continuation (#2094)", async () => {
 		const capturedAt = "2026-08-11T00:00:00.000Z";
 		seedTranscript(db, "stalled-continuation", "x".repeat(10_000), capturedAt);

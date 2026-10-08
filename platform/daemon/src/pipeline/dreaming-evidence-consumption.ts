@@ -541,10 +541,13 @@ export function recordDreamingEvidenceConsumptionInTx(
 		...persistedEvidenceReviews(db, params.passId, deliveries),
 		...citationFloors(db, deliveries, params.filedCitations ?? []),
 	];
-	for (const { delivery, end } of reviewed) {
+	const progressSuppressed = (delivery: DreamingEvidenceDelivery): boolean => {
 		const sourceKey = `${delivery.agentId}\u0000${delivery.kind}:${delivery.id}`;
-		if (params.withheldScopes?.has(delivery.agentId) && params.filedSources?.has(sourceKey) !== true) continue;
-		if (params.deferredEvidence.has(sourceKey)) continue;
+		if (params.deferredEvidence.has(sourceKey)) return true;
+		return params.withheldScopes?.has(delivery.agentId) === true && params.filedSources?.has(sourceKey) !== true;
+	};
+	for (const { delivery, end } of reviewed) {
+		if (progressSuppressed(delivery)) continue;
 		if (verifiedDreamingEvidenceDelivery(db, delivery) === null) continue;
 		revisions.get(revisionKey(delivery))?.ranges.push([delivery.start, end] as const);
 	}
@@ -611,7 +614,7 @@ export function recordDreamingEvidenceConsumptionInTx(
 			if (attention) resolveStalledEvidenceAttentionInTx(db, params.passId, delivery.agentId, ref);
 			continue;
 		}
-		if (!queued || current >= delivery.length) continue;
+		if (!queued || current >= delivery.length || progressSuppressed(delivery)) continue;
 		stall.run(...identity, delivery.length, params.passId);
 		const stalledPasses = (row?.stalledPasses ?? 0) + 1;
 		if (!attention || stalledPasses < DREAMING_EVIDENCE_STALL_PASSES) continue;
