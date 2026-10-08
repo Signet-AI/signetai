@@ -9,16 +9,12 @@ fi
 package="$1"
 version="$2"
 tag="$3"
-
-# Release pipelines for consecutive versions can publish out of order, so a
-# dist-tag only moves forward: an older version never replaces a newer one.
 if ! current=$(npm view "${package}" "dist-tags.${tag}" 2>/dev/null); then
   echo "::warning::Could not read ${package}@${tag}; setting it to ${version} without an ordering check"
   current=""
 fi
 plain='^[0-9]+\.[0-9]+\.[0-9]+$'
 if [ -n "${current}" ] && { [[ ! "${current}" =~ ${plain} ]] || [[ ! "${version}" =~ ${plain} ]]; }; then
-  # sort -V ranks 1.0.0-rc.1 above 1.0.0, so only order plain versions.
   echo "::warning::Not ordering ${package}@${tag} (${current}) against ${version}; setting it to ${version}"
   current=""
 fi

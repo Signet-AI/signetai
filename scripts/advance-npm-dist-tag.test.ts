@@ -17,9 +17,6 @@ interface Run {
 	readonly result: ReturnType<typeof spawnSync>;
 	readonly added: string | null;
 }
-
-// A fake npm that answers `npm view <pkg> dist-tags.<tag>` from $CURRENT
-// (exit 1 when $VIEW_FAILS is set) and records `npm dist-tag add` arguments.
 function run(version: string, current: string, viewFails = false): Run {
 	const dir = mkdtempSync(join(tmpdir(), "signet-dist-tag-test-"));
 	tempDirs.push(dir);
