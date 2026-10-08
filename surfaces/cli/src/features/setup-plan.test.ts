@@ -99,9 +99,18 @@ describe("setupPlanSchema", () => {
 
 	it("rejects an invalid special-identity session kind", () => {
 		const bad = basePlan({
-			specialIdentityFiles: [{ path: "DREAMING.md", kind: "naptime" as never }],
+			specialIdentityFiles: [{ path: "HEARTBEAT.md", kind: "naptime" as never }],
 		});
 		expect(() => parseSetupPlan(bad)).toThrow("kind");
+	});
+
+	it("rejects the retired DREAMING.md special-identity file", () => {
+		const retired = basePlan({
+			specialIdentityFiles: [{ path: "DREAMING.md", kind: "dreaming" as never }],
+		});
+		expect(() => parseSetupPlan(retired)).toThrow(
+			"specialIdentityFiles.0.kind: the dreaming special file (DREAMING.md) is retired; remove this entry",
+		);
 	});
 
 	it("rejects openai-compatible extraction without an endpoint", () => {
@@ -251,7 +260,7 @@ describe("setupPlanSchema", () => {
 			specialIdentityFiles: [...IDENTITY_PRESETS.openclaw.special],
 		});
 		const parsed = parseSetupPlan(plan);
-		expect(parsed.specialIdentityFiles.some((entry) => entry.kind === "dreaming")).toBe(true);
+		expect(parsed.specialIdentityFiles.map((entry) => entry.kind)).toEqual(["heartbeat", "bootstrap"]);
 	});
 });
 
