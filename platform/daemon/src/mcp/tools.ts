@@ -1748,9 +1748,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		{
 			title: "Expand Temporal Node",
 			description:
-				"Expand a temporal MEMORY.md or session DAG node by id. " +
-				"Returns parent and child lineage, linked memories, and " +
-				"optionally transcript context for drill-down.",
+				"Read a temporal node by id: a session, compaction, or Dreaming transcript " +
+				"summary referenced from MEMORY.md. Returns the node and, by default, its " +
+				"source transcript excerpt. Nodes are standalone; parents, children, and " +
+				"linkedMemories are only populated for legacy nodes written by the retired " +
+				"summary worker. Use session_search to find related sessions.",
 			inputSchema: z.object({
 				id: z.string().describe("Temporal node id from MEMORY.md or /api/sessions/summaries"),
 				include_transcript: z.boolean().optional().describe("Include transcript context when available"),

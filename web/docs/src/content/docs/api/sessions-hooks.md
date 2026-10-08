@@ -630,9 +630,15 @@ summary nodes remain readable for provenance. Results are agent-scoped.
 
 ### POST /api/sessions/summaries/expand
 
-Expand a temporal node by id. Returns lineage, linked memories, and transcript
-context for `MEMORY.md` drill-down and LCM-style expansion. Expansion is
-agent-scoped.
+Read a temporal node by id, with its source transcript context, for
+`MEMORY.md` drill-down. This route powers the `lcm_expand` MCP tool. Expansion
+is agent-scoped.
+
+Current writers (compaction summaries and Dreaming's transcript manifest) store
+standalone depth-0 `session` nodes and write no edges or memory links, so
+`parents`, `children`, and `linkedMemories` are empty for them. Those fields are
+only populated for legacy nodes written by the retired summary worker and its
+arc/epoch condensation.
 
 **Request body**
 
