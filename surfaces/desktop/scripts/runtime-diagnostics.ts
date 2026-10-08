@@ -1,6 +1,8 @@
-import { join } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { AsyncEntry } from "@napi-rs/keyring";
+import { findSqliteVecExtension } from "../../../platform/core/src/database";
 import { getSecretKeyring } from "../../../platform/core/src/secrets-keyring";
 import { diagnoseHermesIntegration } from "../../../integrations/hermes-agent/connector/src/index";
 import { countTokens } from "../../../platform/daemon/src/pipeline/tokenizer";
@@ -9,7 +11,15 @@ import { DreamingBacklogTokenCache } from "../../../platform/daemon/src/pipeline
 async function main(): Promise<void> {
 	const workspace = process.env.SIGNET_PATH;
 	const daemonUrl = process.env.SIGNET_DAEMON_URL;
-	if (!workspace || !daemonUrl) throw new Error("Runtime diagnostics require an explicit workspace and daemon URL");
+	const daemonEntry = process.env.SIGNET_DAEMON_JS_PATH;
+	if (!workspace || !daemonUrl || !daemonEntry)
+		throw new Error("Runtime diagnostics require an explicit workspace, daemon URL, and daemon entry");
+	const vector = findSqliteVecExtension();
+	const vectorOrigin = vector
+		? relative(realpathSync(dirname(dirname(resolve(daemonEntry)))), realpathSync(vector))
+		: "..";
+	if (vectorOrigin.startsWith("..") || isAbsolute(vectorOrigin))
+		throw new Error(`Packaged sqlite-vec extension is missing: ${vector ?? "not found"}`);
 	const keyring = getSecretKeyring(workspace);
 	const before = await keyring.get();
 	if (before.state !== "missing")
@@ -55,6 +65,7 @@ async function main(): Promise<void> {
 	console.log(
 		JSON.stringify({
 			keyring: "round-trip-cleaned",
+			vector: vectorOrigin.split("\\").join("/"),
 			tokenizer: tokens,
 			worker: "exact",
 			connector: "packaged-assets-found",

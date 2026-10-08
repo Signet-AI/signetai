@@ -141,7 +141,7 @@ export function runtimeReferences(path: string): readonly string[] {
 	return [...references];
 }
 
-export function runtimePackages(path: string, bun = false): readonly string[] {
+function packageReferences(path: string, bun: boolean) {
 	const ast = ts.createSourceFile(path, readFileSync(path, "utf8"), ts.ScriptTarget.Latest, true);
 	const bunFlags = new Set<string>();
 	function findFlags(node: ts.Node): void {
@@ -165,36 +165,114 @@ export function runtimePackages(path: string, bun = false): readonly string[] {
 		ts.forEachChild(node, findFlags);
 	}
 	findFlags(ast);
+	function runsOnBun(expression: ts.Expression): boolean | null {
+		if (ts.isParenthesizedExpression(expression)) return runsOnBun(expression.expression);
+		if (ts.isIdentifier(expression)) return bunFlags.has(expression.text) ? true : null;
+		if (ts.isPrefixUnaryExpression(expression) && expression.operator === ts.SyntaxKind.ExclamationToken) {
+			const inner = runsOnBun(expression.operand);
+			return inner === null ? null : !inner;
+		}
+		if (
+			ts.isBinaryExpression(expression) &&
+			ts.isTypeOfExpression(expression.left) &&
+			ts.isStringLiteral(expression.right) &&
+			expression.right.text === "undefined"
+		) {
+			let value: ts.Expression = expression.left.expression;
+			while (ts.isParenthesizedExpression(value)) value = value.expression;
+			if (
+				!(ts.isPropertyAccessExpression(value) && value.name.text === "Bun") &&
+				!(ts.isIdentifier(value) && value.text === "Bun")
+			)
+				return null;
+			const operator = expression.operatorToken.kind;
+			if (operator === ts.SyntaxKind.ExclamationEqualsEqualsToken || operator === ts.SyntaxKind.ExclamationEqualsToken)
+				return true;
+			if (operator === ts.SyntaxKind.EqualsEqualsEqualsToken || operator === ts.SyntaxKind.EqualsEqualsToken)
+				return false;
+		}
+		return null;
+	}
+	function within(node: ts.Node, branch: ts.Node | undefined): boolean {
+		return branch !== undefined && node.pos >= branch.pos && node.end <= branch.end;
+	}
+	function exits(statement: ts.Statement): boolean {
+		if (ts.isReturnStatement(statement) || ts.isThrowStatement(statement)) return true;
+		const last = ts.isBlock(statement) ? statement.statements.at(-1) : undefined;
+		return last !== undefined && exits(last);
+	}
 	function inactive(node: ts.Node): boolean {
 		if (!bun) return false;
+		let child = node;
 		let parent: ts.Node | undefined = node.parent;
 		while (parent) {
-			if (
-				ts.isIfStatement(parent) &&
-				ts.isIdentifier(parent.expression) &&
-				bunFlags.has(parent.expression.text) &&
-				parent.elseStatement &&
-				node.pos >= parent.elseStatement.pos &&
-				node.end <= parent.elseStatement.end
-			)
-				return true;
+			if (ts.isIfStatement(parent) || ts.isConditionalExpression(parent)) {
+				const bunBranch = runsOnBun(ts.isIfStatement(parent) ? parent.expression : parent.condition);
+				const whenTrue = ts.isIfStatement(parent) ? parent.thenStatement : parent.whenTrue;
+				const whenFalse = ts.isIfStatement(parent) ? parent.elseStatement : parent.whenFalse;
+				if (bunBranch === true && within(node, whenFalse)) return true;
+				if (bunBranch === false && within(node, whenTrue)) return true;
+			}
+			if (ts.isBlock(parent) && !ts.isFunctionDeclaration(child)) {
+				const index = parent.statements.indexOf(child as ts.Statement);
+				if (
+					parent.statements
+						.slice(0, Math.max(index, 0))
+						.some(
+							(statement) =>
+								ts.isIfStatement(statement) &&
+								runsOnBun(statement.expression) === true &&
+								!statement.elseStatement &&
+								exits(statement.thenStatement),
+						)
+				)
+					return true;
+			}
+			child = parent;
 			parent = parent.parent;
 		}
 		return false;
 	}
-	const names = new Set<string>();
+	const requires = new Set<string>();
+	const active = new Set<string>();
+	const inactiveNames = new Set<string>();
 	function visit(node: ts.Node): void {
-		if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === "require") {
+		if (
+			(ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
+			node.moduleSpecifier &&
+			ts.isStringLiteralLike(node.moduleSpecifier)
+		) {
+			const name = packageName(node.moduleSpecifier.text);
+			if (name) active.add(name);
+		}
+		if (
+			ts.isCallExpression(node) &&
+			((ts.isIdentifier(node.expression) && node.expression.text === "require") ||
+				node.expression.kind === ts.SyntaxKind.ImportKeyword)
+		) {
 			const arg = node.arguments[0];
 			if (arg && ts.isStringLiteralLike(arg)) {
 				const name = packageName(arg.text);
-				if (name && !inactive(node)) names.add(name);
+				if (name && inactive(node)) inactiveNames.add(name);
+				else if (name) {
+					active.add(name);
+					if (node.expression.kind !== ts.SyntaxKind.ImportKeyword) requires.add(name);
+				}
 			}
 		}
 		ts.forEachChild(node, visit);
 	}
 	visit(ast);
-	return [...names];
+	return { requires, active, inactive: inactiveNames };
+}
+
+export function runtimePackages(path: string, bun = false): readonly string[] {
+	return [...packageReferences(path, bun).requires];
+}
+
+export function bunInactivePackages(path: string): ReadonlySet<string> {
+	const { active, inactive } = packageReferences(path, true);
+	return new Set([...inactive].filter((name) => !active.has(name)));
 }
 
 function guardedPackage(path: string, name: string): boolean {
@@ -225,9 +303,20 @@ export class RuntimeManifest {
 	readonly #assets = new Map<string, Asset>();
 	readonly #packages = new Map<string, string>();
 	readonly #optionalAbsent = new Set<string>();
+	readonly #bunInactive = new Map<string, ReadonlySet<string>>();
 
 	constructor(root: string) {
 		this.#root = realpathSync(root);
+	}
+
+	#inactiveUnderBun(path: string, name: string): boolean {
+		if (path.includes(`${sep}node_modules${sep}`) || !/\.[cm]?[jt]sx?$/.test(path)) return false;
+		let names = this.#bunInactive.get(path);
+		if (!names) {
+			names = statSync(path, { throwIfNoEntry: false })?.isFile() ? bunInactivePackages(path) : new Set<string>();
+			this.#bunInactive.set(path, names);
+		}
+		return names.has(name);
 	}
 
 	add(source: string, path: string): void {
@@ -351,6 +440,7 @@ export class RuntimeManifest {
 					if (!input.importer || Object.hasOwn(options.aliases, input.path)) return undefined;
 					const name = packageName(input.path);
 					if (!name) return undefined;
+					if (this.#inactiveUnderBun(input.importer, name)) return { path: input.path, external: true };
 					const allowAbsent =
 						options.external.some((external) => input.path === external || input.path.startsWith(`${external}/`)) ||
 						guardedPackage(input.importer, name);
@@ -406,6 +496,7 @@ export class RuntimeManifest {
 				if (!path.includes(`${sep}node_modules${sep}`)) for (const name of runtimePackages(path, true)) names.add(name);
 			}
 			for (const name of names) {
+				if (this.#inactiveUnderBun(path, name)) continue;
 				let directory = dirname(path);
 				while (!existsSync(join(directory, "package.json")) && dirname(directory) !== directory)
 					directory = dirname(directory);

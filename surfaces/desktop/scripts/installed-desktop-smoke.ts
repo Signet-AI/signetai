@@ -130,6 +130,7 @@ async function main(): Promise<void> {
 	await new Promise<void>((accept, reject) => reservation.close((error) => (error ? reject(error) : accept())));
 	env.SIGNET_PORT = String(address.port);
 	env.SIGNET_DAEMON_URL = `http://127.0.0.1:${address.port}`;
+	env.SIGNET_DAEMON_JS_PATH = daemon;
 	const config = {
 		configVersion: 9,
 		auth: { mode: "local" },

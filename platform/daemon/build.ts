@@ -129,6 +129,10 @@ if (!forceNodeBuild) {
 	for (const name of referenced) manifest.require(`dist/${name}`);
 	manifest.tree(join(root, "platform/daemon/dashboard"), "dashboard");
 	manifest.tree(join(root, "platform/daemon/skills"), "skills");
+	manifest.dependency(
+		`sqlite-vec-${process.platform === "win32" ? "windows" : process.platform}-${process.arch}`,
+		join(root, "platform/core/package.json"),
+	);
 	manifest.tree(
 		join(root, "integrations/hermes-agent/connector/hermes-plugin"),
 		"connectors/hermes-agent/hermes-plugin",

@@ -122,11 +122,6 @@ export function stageBunRuntime(source, destination, platform) {
 	if (platform !== "win32") chmodSync(destination, 0o755);
 }
 
-export function platformVecPackage(platform, arch) {
-	const os = platform === "win32" ? "windows" : platform;
-	return `sqlite-vec-${os}-${arch}`;
-}
-
 function resourceLockPath(target) {
 	return join(dirname(target), `.${basename(target)}.lock`);
 }

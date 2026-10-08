@@ -142,6 +142,37 @@ describe("daemon Bun build externals", () => {
 		);
 		await expect(buildFixture(directory, [...EXTERNAL_BUN])).rejects.toThrow();
 	});
+	test("omits a required dependency that only Bun-inactive code loads", async () => {
+		const entries = [
+			'const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";\nexport function load() {\n\tif (isBun) {\n\t\treturn require("bun:sqlite").Database;\n\t}\n\ttry {\n\t\treturn require("better-sqlite3");\n\t} catch (error) {\n\t\tthrow new Error("missing", { cause: error });\n\t}\n}\n',
+			'export const Database = typeof (globalThis as Record<string, unknown>).Bun !== "undefined" ? require("bun:sqlite").Database : require("better-sqlite3");\n',
+		];
+		for (const installed of [false, true])
+			for (const entry of entries) {
+				const directory = fixtureWithDroppedOptionalDependency();
+				writeFileSync(
+					join(directory, "package.json"),
+					JSON.stringify({ name: "bun-guarded-fixture", dependencies: { "better-sqlite3": "1.0.0" } }),
+				);
+				if (installed) {
+					const native = join(directory, "node_modules", "better-sqlite3");
+					rmSync(native);
+					mkdirSync(native);
+					writeFileSync(
+						join(native, "package.json"),
+						JSON.stringify({ name: "better-sqlite3", version: "1.0.0", main: "index.js" }),
+					);
+					writeFileSync(join(native, "index.js"), "module.exports = 42;");
+				}
+				writeFileSync(join(directory, "entry.ts"), entry);
+				const result = await buildFixture(directory, [...EXTERNAL_BUN]);
+				expect(result.success).toBe(true);
+				expect(JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8"))).toMatchObject({
+					optionalAbsent: [],
+					files: [],
+				});
+			}
+	});
 	test("the fixture reproduces a failed optional better-sqlite3 install", async () => {
 		const directory = fixtureWithDroppedOptionalDependency();
 		await expect(buildFixture(directory, [])).rejects.toThrow();
