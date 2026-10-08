@@ -199,6 +199,7 @@ export function AdvancedSection() {
 							path: pv2("enabled"),
 							title: "Pipeline enabled",
 							desc: "Master switch. The memory pipeline does nothing when disabled.",
+							fallback: true,
 						},
 						{
 							kind: "toggle",

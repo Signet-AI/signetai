@@ -109,6 +109,21 @@ test("a paused pipeline can be resumed from Settings and Dreaming then runs by d
 	}
 });
 
+test("an unset pipeline switch shows the daemon default and Dreaming runs", async () => {
+	config = "memory:\n  pipelineV2:\n    telemetryEnabled: false\n";
+	const view = await mount();
+	try {
+		const row = [...document.querySelectorAll('[role="switch"]')].find((element) =>
+			element.parentElement?.parentElement?.textContent?.includes("Pipeline enabled"),
+		);
+		expect(row?.getAttribute("aria-checked")).toBe("true");
+		expect(switchFor("Dreaming").disabled).toBe(false);
+		expect(switchFor("Dreaming").getAttribute("aria-checked")).toBe("true");
+	} finally {
+		await view.close();
+	}
+});
+
 test("a disabled pipeline blocks Dreaming and says how to turn it back on", async () => {
 	config = "memory:\n  pipelineV2:\n    enabled: false\n";
 	const view = await mount();
