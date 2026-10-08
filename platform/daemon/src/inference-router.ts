@@ -313,6 +313,11 @@ function formatExecutionError(error: unknown): string {
 	return sanitizeErrorText(error instanceof Error ? error.message : String(error));
 }
 
+function httpStatusFromFailureMessage(message: string): number | undefined {
+	const match = message.match(/^(\d{3})[:\s]/) ?? message.match(/^[^\n]*?\((\d{3})\):\s/);
+	return match ? Number(match[1]) : undefined;
+}
+
 function sanitizeErrorText(value: string): string {
 	let next = value.trim();
 	const httpDetail = next.match(/^(.*\bHTTP \d{3}:\s*)([\s\S]+)$/);
@@ -760,7 +765,11 @@ export class InferenceRouter {
 		if (!parsed.ok) return;
 		const target = loaded.config.targets[parsed.value.targetId];
 		if (!target) return;
-		const classified = this.classifyObservedFailure(message, Boolean(target.account), pipelineErrorStatus(error));
+		const classified = this.classifyObservedFailure(
+			message,
+			Boolean(target.account),
+			pipelineErrorStatus(error) ?? httpStatusFromFailureMessage(message),
+		);
 		if (!classified) return;
 		const expiresAt = Date.now() + classified.ttlMs;
 		if (classified.scope === "account" && target.account) {
