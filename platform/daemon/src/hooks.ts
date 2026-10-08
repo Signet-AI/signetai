@@ -377,6 +377,7 @@ export interface SessionEndRequest {
 
 export interface SessionEndResponse {
 	memoriesSaved: number;
+	sessionBoundary?: boolean;
 	queued?: boolean;
 	jobId?: string;
 	transcriptCaptureJobId?: string;
@@ -1913,7 +1914,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 			});
 			markSessionEndTelemetry({ agentId, harness: req.harness, sessionKey });
 		}
-		return { memoriesSaved: 0 };
+		return { memoriesSaved: 0, sessionBoundary: true };
 	}
 	const snap = consumeState(sessionKey);
 	if (boundaryReason !== null) {
@@ -1970,7 +1971,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 			agentId,
 			memoryCfg,
 		});
-		return { memoriesSaved: 0, queued: false };
+		return { memoriesSaved: 0, sessionBoundary: false, queued: false };
 	}
 	const rawTranscript = req.transcriptPath ? "" : (req.transcript ?? "");
 	const transcript = rawTranscript ? normalizeSessionTranscript(req.harness, rawTranscript) : "";
@@ -2007,6 +2008,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 
 	return {
 		memoriesSaved: 0,
+		sessionBoundary: true,
 		queued: Boolean(transcriptCaptureJobId),
 		...(transcriptCaptureJobId ? { transcriptCaptureJobId } : {}),
 	};
