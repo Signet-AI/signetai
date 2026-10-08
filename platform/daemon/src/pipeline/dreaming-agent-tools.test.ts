@@ -156,13 +156,10 @@ describe("dreaming-agent-tools", () => {
 						passId = input.passId;
 						const invoke = async (name: string, args: unknown) =>
 							readResult(await findTool(input.tools, name).execute(name, args, undefined, undefined, {} as never));
-						const base = await invoke("memory_head_read", { agentId: "owner" });
-						const head = base.head as { revision: number; hash: string };
+						await invoke("memory_head_read", { agentId: "owner" });
 						expect(
 							await invoke("memory_head_commit", {
 								agentId: "owner",
-								baseRevision: head.revision,
-								baseHash: head.hash,
 								entries,
 							}),
 						).toMatchObject({ ok: true, code: "STAGED_FOR_FINALIZATION" });
@@ -220,15 +217,10 @@ describe("dreaming-agent-tools", () => {
 					async run(input) {
 						const invoke = async (name: string, args: unknown) =>
 							readResult(await findTool(input.tools, name).execute(name, args, undefined, undefined, {} as never));
-						const head = (await invoke("memory_head_read", { agentId: "owner" })).head as {
-							revision: number;
-							hash: string;
-						};
+						await invoke("memory_head_read", { agentId: "owner" });
 						for (const extra of commits)
 							await invoke("memory_head_commit", {
 								agentId: "owner",
-								baseRevision: head.revision,
-								baseHash: head.hash,
 								entries: [],
 								...extra,
 							});
@@ -291,8 +283,6 @@ describe("dreaming-agent-tools", () => {
 						if (behavior !== "missing") {
 							const publication = await invoke("memory_head_commit", {
 								agentId: "owner",
-								baseRevision: head.revision,
-								baseHash: head.hash,
 								entries: [
 									{
 										entryId: "meeting",

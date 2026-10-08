@@ -58,7 +58,7 @@ import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics }
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
 import { DREAMING_CAPABILITY_IDS, dreamingEvidencePageChars, listDreamingAttention } from "./dreaming-capabilities";
 import { readCuratedMemoryHead, type MemoryHeadCommitInput, type MemoryHeadCommitter } from "../memory-head";
-import { commitCuratedMemoryHeadInDb } from "../memory-head-owner";
+import { commitCuratedMemoryHeadInDb, withContentPassWrites } from "../memory-head-owner";
 import { renderDreamingEvidence, sanitizeTranscriptForDreaming } from "./dreaming-evidence";
 import {
 	deliveredOffsetForSource,
@@ -1099,7 +1099,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - create_entity only for durable subjects clearly established by the source.
    - When the evidence supports a possible relationship, merge, or other ontology change but the relationship is ambiguous rather than settled, do not apply it immediately. Emit the normal ontology operation with risk: "review_required". Its reason must be a concise, human-readable explanation that names the entities and the proposed relationship; the exact evidence citation remains required. The daemon will place it in the user's review queue for confirmation, not treat the queue as a work-deferral mechanism.
    - Validate before writing (validate_proposal).
-5. Update MEMORY.md: call memory_head_read, then call memory_head_commit exactly once with its revision and hash and the complete set of entries to retain, each with exact source/quote support. The pass cannot finish without this commit, even when nothing changed: resubmit the current entries unchanged, or submit an empty entry set if the head is empty and nothing durable qualifies yet.
+5. Update MEMORY.md: call memory_head_read, then call memory_head_commit exactly once with the complete set of entries to retain, each with exact source/quote support. The pass cannot finish without this commit, even when nothing changed: resubmit the current entries unchanged, or submit an empty entry set if the head is empty and nothing durable qualifies yet.
 6. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
@@ -1838,12 +1838,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 					return { ok: false, ...memoryHeadCommitRejection };
 				}
 				memoryHeadCommitInput = input;
-				return {
-					ok: true,
-					code: "STAGED_FOR_FINALIZATION",
-					revision: input.baseRevision,
-					hash: input.baseHash,
-				};
+				return { ok: true, code: "STAGED_FOR_FINALIZATION" };
 			},
 		};
 		let retirementCandidates: DreamingRetirementCandidates = new Map();
@@ -2225,6 +2220,16 @@ function writeDreamingTranscriptManifestInTx(
 }
 export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPassFinalize): void {
 	let memoryHeadResult: Record<string, unknown> | null = null;
+	withContentPassWrites(db, input.passId, () =>
+		writeDreamingTranscriptManifestInTx(db, {
+			passId: input.passId,
+			entries: input.transcriptManifestEntries as Array<{
+				scope: string;
+				source: EpisodicSourceRecord;
+				content: string;
+			}>,
+		}),
+	);
 	if (input.mode === "incremental-content") {
 		const commitInput = input.memoryHeadCommitInput;
 		if (commitInput === null)
@@ -2243,14 +2248,6 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 	} else if (input.memoryHeadCommitInput !== null) {
 		throw new Error("Only an incremental-content pass may commit the memory head");
 	}
-	writeDreamingTranscriptManifestInTx(db, {
-		passId: input.passId,
-		entries: input.transcriptManifestEntries as Array<{
-			scope: string;
-			source: EpisodicSourceRecord;
-			content: string;
-		}>,
-	});
 	db.prepare(
 		`UPDATE dreaming_passes SET status = 'completed', completed_at = datetime('now'),
 		 tokens_consumed = ?, tokens_input = ?, tokens_output = ?,

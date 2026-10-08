@@ -14,8 +14,6 @@ export type MemoryHeadRequest =
 			readonly input: {
 				readonly agentId: string;
 				readonly passId: string;
-				readonly baseRevision: number;
-				readonly baseHash: string;
 				readonly entries: readonly {
 					readonly entryId: string;
 					readonly text: string;

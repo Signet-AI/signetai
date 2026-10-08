@@ -63,9 +63,18 @@ The rendered document has two layers:
 
 The daemon's bounded `memory_head` owner operation is the publication and
 freshness boundary for `memory_head_commit`, the sole Dreaming head publication tool. A content pass snapshots
-its agent's existing head revision when it starts. Publication requires that
-snapshot and the submitted revision/hash to still match. Reading a newer head
-cannot make an older pass eligible to publish.
+its agent's existing head revision when it starts, and publication requires the
+head to still be at that fence. The daemon owns the fence; callers do not submit
+a base revision or hash. Reading a newer head cannot make an older pass eligible
+to publish.
+
+Invalidations caused by the running pass's own writes (its ontology operations
+and its finalization's transcript nodes) advance its fence in the same owner
+transaction, because the pass already knows about them; publication still
+revalidates every cited quote against current, non-superseded evidence. An
+invalidation from anywhere else leaves the fence behind, and the commit fails
+with `STALE_HEAD`. Finalization writes the pass's transcript nodes before it
+commits the head, so a successful publication is current when it lands.
 
 Corrections, supersession, deletion, source removal, and access revocation
 advance the affected head's revision and mark it stale in the same database
@@ -110,7 +119,7 @@ introduced.
 
 `memory_head_commit` takes the complete ordered set of retained entries, each
 with an entry ID, text, and exact source/quote support. The daemon binds the
-commit to the running content pass; callers never supply a pass ID. The owner renders the
+commit to the running content pass; callers never supply a pass ID, base revision, or hash. The owner renders the
 body and records entry provenance and removals. Deferrals and reasons for no
 change belong in the existing pass log, not a second publication format.
 
