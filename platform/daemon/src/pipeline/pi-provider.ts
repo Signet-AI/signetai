@@ -215,12 +215,22 @@ function accountingProvenanceForConfig(config: PiModelProviderConfig, piModel: M
 	return hasModelRates ? "locally_estimated" : "unavailable";
 }
 
+const API_VERSION_SEGMENT = /^v\d+(?:(?:alpha|beta)\d*)?$/i;
+
+function hasApiVersion(url: string): boolean {
+	let path = url;
+	try {
+		path = new URL(url).pathname;
+	} catch {}
+	return path.split("/").some((segment) => API_VERSION_SEGMENT.test(segment));
+}
+
 function withVersionPath(baseUrl: string): string {
-	const trimmed = baseUrl.trim().replace(/\/+$/, "");
-	if (trimmed.endsWith("/v1/chat/completions")) return trimmed.slice(0, -"/chat/completions".length);
-	if (trimmed.endsWith("/v1/responses")) return trimmed.slice(0, -"/responses".length);
-	if (trimmed.endsWith("/v1")) return trimmed;
-	return `${trimmed}/v1`;
+	let trimmed = baseUrl.trim().replace(/\/+$/, "");
+	for (const endpoint of ["/chat/completions", "/responses"]) {
+		if (trimmed.endsWith(endpoint)) trimmed = trimmed.slice(0, -endpoint.length);
+	}
+	return hasApiVersion(trimmed) ? trimmed : `${trimmed}/v1`;
 }
 export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 	const timeoutMs = config.defaultTimeoutMs ?? 60_000;
