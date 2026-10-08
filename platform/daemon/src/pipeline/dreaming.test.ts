@@ -1207,7 +1207,7 @@ describe("Dreaming", () => {
 				`INSERT INTO dreaming_evidence_consumption
 				 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
 				  delivered_offset, source_length, pass_id, updated_at)
-				 VALUES (?, 'transcript', 'continuation-transcript', ?, '', ?, 2_000, 5_000, ?, ?)`,
+				 VALUES (?, 'transcript', 'continuation-transcript', ?, '', ?, 2000, 5000, ?, ?)`,
 			).run(AGENT, capturedAt, capturedAt, passId, capturedAt);
 		});
 		const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
@@ -1238,7 +1238,7 @@ describe("Dreaming", () => {
 		});
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
 		accessor.withWriteTx((tx) => {
-			tx.prepare("UPDATE dreaming_evidence_consumption SET delivered_offset = 2_000 WHERE pass_id = ?").run(passId);
+			tx.prepare("UPDATE dreaming_evidence_consumption SET delivered_offset = 2000 WHERE pass_id = ?").run(passId);
 		});
 		await recordDreamingFailure(accessor, AGENT);
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
@@ -3114,7 +3114,7 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 				`INSERT INTO dreaming_evidence_consumption
 				 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
 				  delivered_offset, source_length, pass_id, updated_at)
-				 VALUES (?, 'transcript', ?, ?, '', ?, 2_000, 10_000, ?, ?)`,
+				 VALUES (?, 'transcript', ?, ?, '', ?, 2000, 10000, ?, ?)`,
 			);
 			for (const id of ["stuck-first", "waiting-second"]) {
 				insertPass.run(`${id}-pass`, AGENT);
