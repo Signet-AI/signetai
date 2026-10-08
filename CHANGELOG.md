@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-08
-- Bug fixes: check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
+- Bug fixes: bound native embedding input; defer incomplete transcript backfill; stop blocking input on prompt-submit; keep transcript seq monotonic per key; keep identity in portable import; record ontology claim actor; cascade and audit agent removal; stop retention from deleting entities; check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
 - Docs: note native updater cap in 1.0 post.
 
 ### 2026-10-07
@@ -42,6 +42,22 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: drop graph attribution entry; remove duplicate license note; clarify opening and use cases.
 
 ## Release Ledger
+
+## [0.237.2] - 2026-10-08
+
+Release summary: 8 bug fixes.
+Tag range: `v0.237.1..v0.237.2`.
+
+### Bug Fixes
+
+- **daemon**: bound native embedding input
+- **daemon**: defer incomplete transcript backfill
+- **pi**: stop blocking input on prompt-submit
+- **daemon**: keep transcript seq monotonic per key
+- **cli**: keep identity in portable import
+- **daemon**: record ontology claim actor
+- **daemon**: cascade and audit agent removal
+- **daemon**: stop retention from deleting entities
 
 ## [0.237.1] - 2026-10-08
 
