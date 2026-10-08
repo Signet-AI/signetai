@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-10-08
+- Bug fixes: check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
+- Docs: note native updater cap in 1.0 post.
+
 ### 2026-10-07
 - Features: stem the memory keyword index; return bounded transcript evidence; rerank with a local cross-encoder fused with retrieval order; record each pass's peak context; tell each pass the current local date and time; list pending attention in the pass prompt and fold idle tools; let any pass merge and rename aspects at the aspect cap; carry pass history as a compacted view instead of runbook reads; give claims structured event time and validity; add a seeded proportional LongMemEval question sampler; support subscription providers for Dreaming; edit Dreaming concurrency and input budget in Advanced settings; run read-only lookups through Pi codemode behind a flag; pick the agent shown in the memory graph; run incremental passes for disjoint agent groups concurrently; add Muse Code connector.
 - Bug fixes: report the full queue when the admission wait outlasts the deadline; stop source sync from writing claims and deleting Dreaming's; resolve memory claim citations; declare root YAML dependency; flag Dreaming claims for review when a source is edited; isolate pipeline config fixture; synchronize benchmark dependencies; fill a date window's empty slots with its other memories; require a claim time when a claim names a date; run the Supermemory provider against a self-hosted server; place transcript excerpts by cross-encoder relevance; keep same-attribute updates in one claim slot, ordered by capture; drain new-memory embeddings back to back; find relative-time claims filed with approximate dates; let the transcript recovery child exit after its scan; embed sqlite-vec in the compiled binary; make the cross-encoder work in the compiled binary; say what each named thing is when filing a claim; give attention-only scopes their own pass or let them wait; leave scopes with nothing to do out of incremental passes; give history compaction more time and name provider failures; reject relative times per operation and file history by scopes used; keep pass history inside each pass's scopes; keep dates and states out of entity names; only reject relative times that have no absolute date; widen or drop an empty temporal filter instead of returning nothing; replace heuristic content safety with credential redaction; remove ranking rules tuned to LongMemEval questions; poll Dreaming status with bounded concurrency; wait for maintenance admission instead of failing Dreaming; wait for queued transcript captures past the request timeout; let commits that stage only Biome-ignored files pass; file one fact per claim and finish identified work; file each named speaker on their own entity; let instruction-following models file user disclosures; show sign-in for unauthenticated OAuth providers; drop the Pi tool-call budget and queue calls past eight in flight; keep evidence delivery durable when a tool trace is truncated; backfill missing vectors into the active projection slot; ride out provider throttling instead of failing the pass; count an entity as a recall hub only when it is generic; file what users disclose about themselves when asking for advice; record sources whose failed citation a retry filed; keep hygiene failures from withholding read evidence; name the citation whose quote is not verbatim; say why a hygiene op does not match its attention; say when a hygiene op cites an unknown attention id; say which operation and id failed to resolve; keep vector-only recall hits through shaping and dampening; write vectors to the active projection slot; embed new memories without the re-embed repair budget; bound status measure=1 to the backlog probe; keep filed sources when an uncited write fails; let the queue continue partly read sources; bound the backlog probe to sources still waiting; file each evidence page, keep user-specific deliverables; measure the exact backlog for status measure=1; let status measure the backlog on request; keep the graph rendering without entity agent IDs; close new evidence delivery halfway through a pass; withhold evidence when a failed write cannot be attributed; size the Pi agent worker pool from the shared LLM limit; admit no more passes than there are Pi agent workers; admit no more passes than the shared LLM limit; stop capping Dreaming replies below the model's limit; keep content passes and pass failures from stalling Dreaming; stop Dreaming from losing or re-reading queued evidence; close pause guard and unfreeze gaps; keep pipeline pause on one route; control pause and Dreaming; keep setup from re-pausing the pipeline after it resumes; scope session-end assistant writes; align hook and MCP runtime state.
@@ -37,11 +41,25 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: rebuild guided onboarding.
 - Docs: drop graph attribution entry; remove duplicate license note; clarify opening and use cases.
 
-### 2026-10-01
-- Bug fixes: default on in onboarding; refresh route DB site tokens; enforce trigger gates; allow manual triggers.
-- Refactoring: align controls with repository guardrails; refresh connector source inventory; consolidate UI and cache daemon reads.
-
 ## Release Ledger
+
+## [0.237.1] - 2026-10-08
+
+Release summary: 6 bug fixes and 1 docs update.
+Tag range: `v0.237.0..v0.237.1`.
+
+### Bug Fixes
+
+- **cli**: check pid hints and relative paths
+- **cli**: scope daemon stop to its workspace
+- **dreaming**: keep opt-in for existing workspaces
+- **dashboard**: list memory setup under Needs attention
+- **dashboard**: show the pipeline on when unset
+- **dreaming**: wait for a provider instead of pausing
+
+### Docs
+
+- **blog**: note native updater cap in 1.0 post
 
 ## [0.237.0] - 2026-10-07
 
