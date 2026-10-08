@@ -40,6 +40,7 @@ import {
 	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
 	getDreamingWorkloadDiagnostics,
+	recordDreamingFailure,
 } from "./dreaming";
 import {
 	AlreadyRunningError,
@@ -587,13 +588,14 @@ describe("dreaming worker agent scope", () => {
 			[1, "failure_backoff", "deferred"],
 			[5, "failure_halt", "blocked"],
 		] as const) {
-			db.prepare(
-				`INSERT INTO dreaming_state (agent_id, tokens_since_last_pass, consecutive_failures, last_failure_at)
-				 VALUES ('default', 0, ?, datetime('now'))
-				 ON CONFLICT(agent_id) DO UPDATE SET
-				   consecutive_failures = excluded.consecutive_failures,
-				   last_failure_at = excluded.last_failure_at`,
-			).run(failures);
+			const recorded = () =>
+				(
+					db.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'default'").get() as {
+						n: number;
+					} | null
+				)?.n ?? 0;
+			while (recorded() < failures) await recordDreamingFailure(accessor, "default");
+			expect(recorded()).toBe(failures);
 			const worker = startDreamingWorker(accessor, defaultCfg({ tokenThreshold: 1 }), agentsDir, "default", {
 				executorFactory,
 				checkIntervalMs: 20,
