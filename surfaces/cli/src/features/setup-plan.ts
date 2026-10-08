@@ -26,7 +26,12 @@ const openclawRuntimeSchema = z.enum(OPENCLAW_RUNTIME_CHOICES);
 
 const identityModeSchema = z.enum(IDENTITY_MODES);
 const identityPresetSchema = z.enum(Object.keys(IDENTITY_PRESETS) as [IdentityPresetName, ...IdentityPresetName[]]);
-const identitySessionKindSchema = z.enum(["heartbeat", "bootstrap"]);
+const identitySessionKindSchema = z.enum(["heartbeat", "bootstrap"], {
+	error: (issue) =>
+		issue.input === "dreaming"
+			? "the dreaming special file (DREAMING.md) is retired; remove this entry. Dreaming builds its own prompt"
+			: undefined,
+});
 
 const identityContextFileSchema = z.strictObject({
 	path: z.string(),

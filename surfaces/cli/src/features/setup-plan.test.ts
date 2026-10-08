@@ -108,7 +108,9 @@ describe("setupPlanSchema", () => {
 		const retired = basePlan({
 			specialIdentityFiles: [{ path: "DREAMING.md", kind: "dreaming" as never }],
 		});
-		expect(() => parseSetupPlan(retired)).toThrow("specialIdentityFiles.0.kind");
+		expect(() => parseSetupPlan(retired)).toThrow(
+			"specialIdentityFiles.0.kind: the dreaming special file (DREAMING.md) is retired; remove this entry",
+		);
 	});
 
 	it("rejects openai-compatible extraction without an endpoint", () => {
