@@ -2414,49 +2414,49 @@
     },
     {
       "path": "ontology-proposals.ts",
-      "line": 2486,
+      "line": 2529,
       "api": "withReadDbAsync",
       "source": "const items = await accessor.withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "ontology-proposals.ts",
-      "line": 2503,
+      "line": 2546,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "ontology-proposals.ts",
-      "line": 2535,
+      "line": 2578,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "ontology-proposals.ts",
-      "line": 2619,
+      "line": 2662,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "ontology-proposals.ts",
-      "line": 3099,
+      "line": 3142,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {",
       "category": "hot-path"
     },
     {
       "path": "ontology-proposals.ts",
-      "line": 3110,
+      "line": 3153,
       "api": "withReadDbAsync",
       "source": "const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {",
       "category": "hot-path"
     },
     {
       "path": "ontology-proposals.ts",
-      "line": 3160,
+      "line": 3203,
       "api": "withReadDbAsync",
       "source": "const plan = await accessor.withReadDbAsync(",
       "category": "hot-path"
