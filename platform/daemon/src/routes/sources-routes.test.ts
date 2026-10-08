@@ -36,7 +36,7 @@ import {
 } from "../source-index-progress";
 import { registerImportRoutes } from "./import-routes";
 import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./sources-routes";
-import { setWebDnsLookupForTest, setWebRequestForTest } from "../web-source-provider";
+import type { runSourceSyncInWorker } from "../source-sync-worker-handle";
 import { setActiveTelemetry, type TelemetryCollector } from "../telemetry";
 import { recordSourceConnected, type SourceIndexTelemetryInput } from "../source-lifecycle-telemetry";
 
@@ -65,8 +65,6 @@ describe("Sources routes", () => {
 
 	afterEach(async () => {
 		globalThis.fetch = originalFetch;
-		setWebDnsLookupForTest(null);
-		setWebRequestForTest(null);
 		setActiveTelemetry(undefined);
 		clearSourceIndexProgressForTests();
 		await closeDbAccessor();
@@ -89,6 +87,7 @@ describe("Sources routes", () => {
 			pausedBeforeScan?: boolean;
 			recordIndexOperation?: (input: SourceIndexTelemetryInput) => Promise<void>;
 			importSourceSnapshot?: typeof importSourceSnapshot;
+			runSourceSync?: typeof runSourceSyncInWorker;
 			onPurge?: () => void;
 			onSyncStart?: () => void;
 			pickerExecFile?: (
@@ -165,6 +164,7 @@ describe("Sources routes", () => {
 			platform: options.platform,
 			recordIndexOperation: options.recordIndexOperation,
 			importSourceSnapshot: options.importSourceSnapshot,
+			runSourceSync: options.runSourceSync ?? (async () => ({ indexed: 1, scanned: 1, total: 1, failures: [] })),
 		});
 		return app;
 	}
@@ -647,16 +647,6 @@ describe("Sources routes", () => {
 	});
 
 	it("connects a public Web page through the shared source index job", async () => {
-		setWebDnsLookupForTest((async () => [
-			{ address: "93.184.216.34", family: 4 },
-		]) as typeof import("node:dns/promises").lookup);
-		setWebRequestForTest(() =>
-			Promise.resolve(
-				new Response("<html><body><article><h1>Route Web</h1><p>Route content.</p></article></body></html>", {
-					headers: { "content-type": "text/html" },
-				}),
-			),
-		);
 		const res = await makeApp().request("/api/sources/web", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
@@ -667,6 +657,87 @@ describe("Sources routes", () => {
 		expect(body.queued).toBe(true);
 		expect(body.source).toMatchObject({ kind: "web", root: "https://example.com/route" });
 		expect(loadSourcesConfig(dir).sources[0]?.kind).toBe("web");
+	});
+
+	it("runs Web and Notion sync through the source sync worker, never inline (#2051)", async () => {
+		const syncs: Array<{ readonly kind: string; readonly agentId: string }> = [];
+		const app = makeApp({
+			runSourceSync: async (context) => {
+				syncs.push({ kind: context.source.kind, agentId: context.agentId });
+				context.onProgress?.({ scanned: 1, total: 1, indexed: 1, currentPath: context.source.root });
+				return { indexed: 1, scanned: 1, total: 1, failures: [] };
+			},
+		});
+		globalThis.fetch = mock(() => Promise.reject(new Error("provider ran inline on the daemon loop"))) as typeof fetch;
+		const web = (await (
+			await app.request("/api/sources/web", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ url: "https://example.com/worker" }),
+			})
+		).json()) as { source: { id: string } };
+		const notion = (await (
+			await app.request("/api/sources/notion", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ tokenRef: "NOTION_TOKEN" }),
+			})
+		).json()) as { source: { id: string } };
+
+		await waitFor(
+			() =>
+				getSourceIndexJob(web.source.id)?.status === "complete" &&
+				getSourceIndexJob(notion.source.id)?.status === "complete",
+		);
+		expect(syncs.map((sync) => sync.kind).sort()).toEqual(["notion", "web"]);
+		expect(syncs.every((sync) => sync.agentId === "default")).toBe(true);
+		expect(getSourceIndexJob(web.source.id)).toMatchObject({ indexed: 1, scanned: 1 });
+		expect(loadSourcesConfig(dir).sources.every((source) => source.lastIndexedAt !== undefined)).toBe(true);
+	});
+
+	it("fails the source job explicitly when the sync worker dies (#2051)", async () => {
+		const app = makeApp({
+			runSourceSync: async () => {
+				throw new Error("source sync worker exited with code 1");
+			},
+		});
+		const added = (await (
+			await app.request("/api/sources/web", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ url: "https://example.com/crash" }),
+			})
+		).json()) as { source: { id: string } };
+
+		await waitFor(() => getSourceIndexJob(added.source.id)?.status === "error");
+		expect(getSourceIndexJob(added.source.id)?.error).toContain("source sync worker exited with code 1");
+		expect(loadSourcesConfig(dir).sources[0]?.lastIndexedAt).toBeUndefined();
+	});
+
+	it("cancels the worker sync when its source is disconnected (#2051)", async () => {
+		let started = false;
+		let observedCancel = false;
+		const app = makeApp({
+			runSourceSync: async (context) => {
+				started = true;
+				while (context.shouldContinue()) await Bun.sleep(5);
+				observedCancel = true;
+				return { indexed: 0, scanned: 0, total: 1, failures: [] };
+			},
+		});
+		const added = (await (
+			await app.request("/api/sources/web", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ url: "https://example.com/cancel" }),
+			})
+		).json()) as { source: { id: string } };
+		await waitFor(() => started);
+
+		const res = await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, { method: "DELETE" });
+		expect(res.status).toBe(200);
+		await waitFor(() => observedCancel && !isSourceIndexInFlight(added.source.id));
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
 	});
 
 	it("connects a Notion source and queues the shared source index job", async () => {

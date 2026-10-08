@@ -266,6 +266,18 @@ Pages removed from
 the index are soft-deleted and their content is retained until the source
 itself is removed.
 
+## Sync execution
+
+Notion and Web syncs run in a dedicated source sync worker thread, one per
+job, so fetching, parsing, extraction, rendering, and hashing stay off the
+daemon's request-serving event loop. The worker never opens the workspace
+database or the secret store: its database operations go through the
+daemon's DB owner, and it can resolve only the source's configured `tokenRef`.
+Cancelling or removing the source signals the worker, which is terminated if
+it has not stopped within five seconds. A worker crash or exit fails the job;
+the sync is never retried inside the daemon process. GitHub and Discord syncs
+still run on the daemon runtime.
+
 ## Operations diagnostics
 
 The sources API and dashboard expose source health diagnostics for operational

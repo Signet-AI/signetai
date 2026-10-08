@@ -11,8 +11,9 @@ import {
 	setWebDnsLookupForTest,
 	setWebFetchTimeoutForTest,
 	setWebRequestForTest,
-	webSourceProvider,
+	syncWebSource,
 } from "./web-source-provider";
+import { getSecret } from "./secrets";
 
 describe("web-source-provider", () => {
 	let dir = "";
@@ -51,11 +52,12 @@ describe("web-source-provider", () => {
 		const added = addWebSource({ url: "https://example.com/article", name: "Example" }, dir);
 		expect(added.ok).toBe(true);
 		if (added.ok === false) throw new Error(added.error);
-		const result = await webSourceProvider.sync?.({
+		const result = await syncWebSource({
 			source: added.source,
 			agentsDir: dir,
 			agentId: "web-test-agent",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		expect(result?.failures).toEqual([]);
 		expect(result?.indexed).toBe(1);
@@ -89,11 +91,12 @@ describe("web-source-provider", () => {
 		const added = addWebSource({ url: "https://example.com/private" }, dir);
 		expect(added.ok).toBe(true);
 		if (added.ok === false) throw new Error(added.error);
-		const result = await webSourceProvider.sync?.({
+		const result = await syncWebSource({
 			source: added.source,
 			agentsDir: dir,
 			agentId: "web-test-agent",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		expect(result?.failures).toHaveLength(1);
 		expect(result?.indexed).toBe(1);
@@ -117,11 +120,12 @@ describe("web-source-provider", () => {
 		const added = addWebSource({ url: "https://example.com/large" }, dir);
 		expect(added.ok).toBe(true);
 		if (added.ok === false) throw new Error(added.error);
-		const result = await webSourceProvider.sync?.({
+		const result = await syncWebSource({
 			source: added.source,
 			agentsDir: dir,
 			agentId: "web-test-agent",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		expect(result?.failures[0]?.metadata).toMatchObject({ code: "response_size" });
 	});
@@ -236,10 +240,11 @@ describe("web-source-provider", () => {
 			agentsDir: dir,
 			agentId: "web-test-agent",
 			shouldContinue: () => true,
+			getSecret,
 		};
-		await webSourceProvider.sync?.(context);
+		await syncWebSource(context);
 		await Bun.sleep(5);
-		await webSourceProvider.sync?.(context);
+		await syncWebSource(context);
 		const failures = getDbAccessor().withReadDb(
 			(db) =>
 				db
@@ -264,11 +269,12 @@ describe("web-source-provider", () => {
 		expect(added.ok).toBe(true);
 		if (added.ok === false) throw new Error(added.error);
 
-		await webSourceProvider.sync?.({
+		await syncWebSource({
 			source: added.source,
 			agentsDir: dir,
 			agentId: "web-test-agent",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		const page = getDbAccessor().withReadDb(
 			(db) =>
@@ -305,10 +311,11 @@ describe("web-source-provider", () => {
 			agentsDir: dir,
 			agentId: "web-test-agent",
 			shouldContinue: () => true,
+			getSecret,
 		};
-		await webSourceProvider.sync?.(context);
+		await syncWebSource(context);
 		await Bun.sleep(5);
-		await webSourceProvider.sync?.(context);
+		await syncWebSource(context);
 
 		const references = getDbAccessor().withReadDb(
 			(db) =>
@@ -339,11 +346,12 @@ describe("web-source-provider", () => {
 		if (first.ok === false || second.ok === false) throw new Error("Expected both aliases to be added");
 
 		for (const source of [first.source, second.source]) {
-			const result = await webSourceProvider.sync?.({
+			const result = await syncWebSource({
 				source,
 				agentsDir: dir,
 				agentId: "web-test-agent",
 				shouldContinue: () => true,
+				getSecret,
 			});
 			expect(result?.failures).toEqual([]);
 		}
@@ -365,11 +373,12 @@ describe("web-source-provider", () => {
 		const added = addWebSource({ url: "https://example.com/data" }, dir);
 		expect(added.ok).toBe(true);
 		if (added.ok === false) throw new Error(added.error);
-		const result = await webSourceProvider.sync?.({
+		const result = await syncWebSource({
 			source: added.source,
 			agentsDir: dir,
 			agentId: "web-test-agent",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		expect(result?.failures[0]?.metadata).toMatchObject({ code: "content_type" });
 	});

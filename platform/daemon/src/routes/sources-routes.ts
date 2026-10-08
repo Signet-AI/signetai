@@ -75,6 +75,8 @@ import {
 	trackSourceLifecycleWrite,
 } from "../source-lifecycle-telemetry";
 import { getSourceProvider } from "../source-providers";
+import { closeSourceSyncWorkers, runSourceSyncInWorker } from "../source-sync-worker-handle";
+import { getSecret } from "../secrets";
 import {
 	beginSourceDeletion,
 	beginSourceMutation,
@@ -91,6 +93,7 @@ interface SourceIndexJobInput {
 	readonly startBridge: typeof startNativeMemoryBridge;
 	readonly purgeNativeSource: typeof purgeNativeMemorySourceArtifacts;
 	readonly recordIndexOperation: typeof recordSourceIndexOperation;
+	readonly runSourceSync: typeof runSourceSyncInWorker;
 }
 
 interface SourceDeletionTombstone {
@@ -170,6 +173,7 @@ export interface RegisterSourcesRoutesDeps {
 	readonly platform?: NodeJS.Platform;
 	readonly recordIndexOperation?: typeof recordSourceIndexOperation;
 	readonly importSourceSnapshot?: typeof importSourceSnapshot;
+	readonly runSourceSync?: typeof runSourceSyncInWorker;
 }
 
 const sourceIndexTimers = new Set<ReturnType<typeof setTimeout>>();
@@ -194,6 +198,7 @@ export async function stopSourceIndexJobs(): Promise<void> {
 		});
 		invalidateSourceIndexJob(sourceId);
 	}
+	await closeSourceSyncWorkers();
 	await waitForSourceIndexRuns("route");
 	routeSourceJobs.clear();
 }
@@ -204,6 +209,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const purgeNativeSource = deps.purgeNativeSource ?? purgeNativeMemorySourceArtifacts;
 	const recordIndexOperation = deps.recordIndexOperation ?? recordSourceIndexOperation;
 	const importSnapshot = deps.importSourceSnapshot ?? importSourceSnapshot;
+	const runSourceSync = deps.runSourceSync ?? runSourceSyncInWorker;
 	const pickerExecFile = deps.pickerExecFile ?? execFileAsync;
 	const pickerPlatform = deps.pickerPlatform ?? process.platform;
 	app.get("/api/sources", async (c) => {
@@ -289,6 +295,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				startBridge,
 				purgeNativeSource,
 				recordIndexOperation,
+				runSourceSync,
 			});
 
 			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
@@ -355,6 +362,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				startBridge,
 				purgeNativeSource,
 				recordIndexOperation,
+				runSourceSync,
 			});
 
 			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
@@ -503,6 +511,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				startBridge,
 				purgeNativeSource,
 				recordIndexOperation,
+				runSourceSync,
 			});
 
 			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
@@ -539,6 +548,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				startBridge,
 				purgeNativeSource,
 				recordIndexOperation,
+				runSourceSync,
 			});
 			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 		} finally {
@@ -576,6 +586,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 				startBridge,
 				purgeNativeSource,
 				recordIndexOperation,
+				runSourceSync,
 			});
 			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
 		} finally {
@@ -845,11 +856,13 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 	try {
 		const provider = getSourceProvider(input.source.kind);
 		if (!provider) throw new Error(`Unsupported source provider: ${input.source.kind}`);
-		if (provider.sync) {
-			const result = await provider.sync({
+		const sync = provider.syncInWorker === true ? input.runSourceSync : provider.sync;
+		if (sync) {
+			const result = await sync({
 				source: input.source,
 				agentsDir: input.agentsDir,
 				agentId,
+				getSecret,
 				shouldContinue: () => isCurrentSourceIndexJob(input.source.id, job.id),
 				onProgress: (event) => {
 					if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
