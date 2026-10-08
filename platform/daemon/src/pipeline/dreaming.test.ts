@@ -298,7 +298,6 @@ async function commitDreamingTestHead(input: DreamingAgentInput, support: Dreami
 	}
 	const result = await invokeDreamingTool(input, "memory_head_commit", {
 		agentId,
-		passId: input.passId,
 		baseRevision: head.revision,
 		baseHash: head.hash,
 		entries: [
@@ -2683,7 +2682,6 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 							const current = head.head as { revision: number; hash: string };
 							await invokeDreamingTool(input, "memory_head_commit", {
 								agentId: AGENT,
-								passId: input.passId,
 								baseRevision: current.revision,
 								baseHash: current.hash,
 								entries: [],

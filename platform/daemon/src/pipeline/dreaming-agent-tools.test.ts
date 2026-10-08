@@ -7,7 +7,7 @@ import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { runDreamingAgentPass, getDreamingToolCalls } from "./dreaming";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { ownerRun, ownerReadOne } from "../db-owner-sql";
-import { DREAMING_CAPABILITY_IDS } from "./dreaming-capabilities";
+import { DREAMING_CAPABILITY_IDS, getDreamingCapabilityManifest } from "./dreaming-capabilities";
 
 describe("dreaming-agent-tools", () => {
 	let dir = "";
@@ -161,7 +161,6 @@ describe("dreaming-agent-tools", () => {
 						expect(
 							await invoke("memory_head_commit", {
 								agentId: "owner",
-								passId: input.passId,
 								baseRevision: head.revision,
 								baseHash: head.hash,
 								entries,
@@ -193,6 +192,67 @@ describe("dreaming-agent-tools", () => {
 
 		await expect(runPass([])).rejects.toThrow("INVALID_HEAD");
 		expect(await status()).toEqual({ status: "failed" });
+	});
+
+	it("binds the memory-head commit to the running pass instead of asking the agent for its id", async () => {
+		const manifest = getDreamingCapabilityManifest().find((capability) => capability.id === "memory_head_commit");
+		const schema = manifest?.inputSchema as { properties?: Record<string, unknown>; required?: string[] } | undefined;
+		expect(schema?.properties).toBeDefined();
+		expect(schema?.properties).not.toHaveProperty("passId");
+		expect(schema?.required ?? []).not.toContain("passId");
+
+		insertEpisodicMemory("head-evidence", "Meeting is Tuesday.");
+		const accessor = getDbAccessor();
+		const owner = await getDbOwnerForAccessor(accessor);
+		const options = { operation: "head-binding-fixture", lane: "read" as const, deadlineMs: 10000 };
+		const cfg = {
+			tokenThreshold: 100000,
+			maxInterval: 3600000,
+			maxInputTokens: 32000,
+			maxOutputTokens: 16000,
+			timeout: 30000,
+			backfillOnFirstRun: true,
+		};
+		const runPass = (commits: readonly Record<string, unknown>[]) =>
+			runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						const invoke = async (name: string, args: unknown) =>
+							readResult(await findTool(input.tools, name).execute(name, args, undefined, undefined, {} as never));
+						const head = (await invoke("memory_head_read", { agentId: "owner" })).head as {
+							revision: number;
+							hash: string;
+						};
+						for (const extra of commits)
+							await invoke("memory_head_commit", {
+								agentId: "owner",
+								baseRevision: head.revision,
+								baseHash: head.hash,
+								entries: [],
+								...extra,
+							});
+						return { summary: "Nothing durable for MEMORY.md yet." };
+					},
+				},
+				cfg,
+				dir,
+				"owner",
+				["owner"],
+				"incremental-content",
+			);
+
+		const completed = await runPass([{}]);
+		expect(
+			await ownerReadOne(owner, "SELECT status FROM dreaming_passes WHERE id=?", [completed.passId], options),
+		).toEqual({ status: "completed" });
+		const staged = (await getDreamingToolCalls(accessor, "owner", completed.passId)).find(
+			(call) => call.toolName === "memory_head_commit",
+		);
+		expect(staged?.output).toMatchObject({ ok: true, code: "STAGED_FOR_FINALIZATION" });
+
+		await expect(runPass([{}, {}])).rejects.toThrow("memory_head_commit was rejected (MULTIPLE_COMMIT_ATTEMPTS)");
+		await expect(runPass([])).rejects.toThrow("the agent ended without calling memory_head_commit");
 	});
 
 	it("does not complete a content pass without a successful memory-head commit", async () => {
@@ -231,7 +291,6 @@ describe("dreaming-agent-tools", () => {
 						if (behavior !== "missing") {
 							const publication = await invoke("memory_head_commit", {
 								agentId: "owner",
-								passId: input.passId,
 								baseRevision: head.revision,
 								baseHash: head.hash,
 								entries: [
