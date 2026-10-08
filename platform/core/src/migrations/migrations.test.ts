@@ -415,7 +415,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(168);
+			expect(applied.version).toBe(169);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -2324,6 +2324,30 @@ describe("migration framework", () => {
 		expect(
 			(db.query("SELECT stale_at FROM memories WHERE id = 'aggregate'").get() as { stale_at: string | null }).stale_at,
 		).not.toBeNull();
+	});
+
+	test("migration 169 marks existing evidence cursors as delivery-based", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.exec(`
+			ALTER TABLE dreaming_evidence_consumption DROP COLUMN cursor_basis;
+			ALTER TABLE dreaming_evidence_consumption DROP COLUMN stalled_passes;
+			INSERT INTO dreaming_evidence_consumption
+			 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
+			  delivered_offset, source_length, pass_id, updated_at)
+			VALUES ('default', 'transcript', 'legacy', '2026-01-01 00:00:00', '', 'r1', 40, 40, 'pass-1', datetime('now'));
+		`);
+		db.prepare("DELETE FROM schema_migrations WHERE version = 169").run();
+		runMigrations(db);
+
+		expect(
+			db
+				.query("SELECT cursor_basis, stalled_passes FROM dreaming_evidence_consumption WHERE source_id = 'legacy'")
+				.get(),
+		).toEqual({ cursor_basis: "delivery", stalled_passes: 0 });
+		expect(() =>
+			db.exec("UPDATE dreaming_evidence_consumption SET cursor_basis = 'guess' WHERE source_id = 'legacy'"),
+		).toThrow();
 	});
 
 	test("migration 063 limits memories_fts updates to content changes", () => {

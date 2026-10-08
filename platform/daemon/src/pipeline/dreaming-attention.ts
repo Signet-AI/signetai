@@ -19,6 +19,8 @@ export const DREAMING_CONTENT_ATTENTION_KINDS = [
 	"surprisal",
 ] as const;
 
+const AGENT_FACING_ATTENTION_FILTER = "AND NOT (kind = 'evidence_requeue' AND subject_ref LIKE 'source:%')";
+
 export interface DreamingAttention {
 	readonly id: string;
 	readonly kind: DreamingAttentionKind;
@@ -137,7 +139,7 @@ export function getDreamingAttention(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: import("../db-accessor").ReadDb) => getDreamingAttentionInDb(db, agentId, limit),
-		"pipeline/dreaming-attention.ts:138",
+		"pipeline/dreaming-attention.ts:140",
 	);
 }
 
@@ -163,7 +165,7 @@ export function getDreamingAttentionWorkloadDiagnostics(
 			pending: row.pending,
 			oldestAgeMs: oldestMs > 0 ? Math.max(0, nowMs - oldestMs) : null,
 		};
-	}, "pipeline/dreaming-attention.ts:150");
+	}, "pipeline/dreaming-attention.ts:152");
 }
 export async function getDreamingAttentionScoped(
 	accessor: DbAccessor,
@@ -172,11 +174,13 @@ export async function getDreamingAttentionScoped(
 		readonly kind?: string;
 		readonly status?: "pending" | "resolved";
 		readonly limit?: number;
+		readonly agentFacing?: boolean;
 	},
 ): Promise<readonly DreamingAttention[]> {
 	const boundedLimit = Math.max(1, Math.min(Math.floor(options.limit ?? 20), 100));
 	const kindFilter = typeof options.kind === "string" && options.kind.length > 0 ? "AND kind = ?" : "";
 	const statusFilter = options.status === "resolved" ? "AND resolved_at IS NOT NULL" : "AND resolved_at IS NULL";
+	const audienceFilter = options.agentFacing === true ? AGENT_FACING_ATTENTION_FILTER : "";
 	const params: string[] = [agentId];
 	if (kindFilter && options.kind !== undefined) params.push(options.kind);
 	const rows = await ownerQueryAll<{
@@ -191,7 +195,7 @@ export async function getDreamingAttentionScoped(
 		"dreaming.attention.scoped",
 		`SELECT id, kind, subject_ref AS subjectRef, details_json AS detailsJson, priority, created_at AS createdAt
 		 FROM dreaming_attention
-		 WHERE agent_id = ? ${kindFilter} ${statusFilter}
+		 WHERE agent_id = ? ${kindFilter} ${statusFilter} ${audienceFilter}
 		 ORDER BY priority DESC, created_at ASC, id ASC
 		 LIMIT ?`,
 		[...params, boundedLimit],
@@ -208,11 +212,13 @@ export function getDreamingAttentionAcrossScopes(
 		readonly kind?: string;
 		readonly status?: "pending" | "resolved";
 		readonly limit?: number;
+		readonly agentFacing?: boolean;
 	},
 ): readonly (DreamingAttention & { readonly agentId: string })[] {
 	const boundedLimit = Math.max(1, Math.min(Math.floor(options.limit ?? 50), 200));
 	const kindFilter = typeof options.kind === "string" && options.kind.length > 0 ? "AND kind = ?" : "";
 	const statusFilter = options.status === "resolved" ? "AND resolved_at IS NOT NULL" : "AND resolved_at IS NULL";
+	const audienceFilter = options.agentFacing === true ? AGENT_FACING_ATTENTION_FILTER : "";
 	const params: unknown[] = [];
 	if (kindFilter) params.push(options.kind);
 	params.push(boundedLimit);
@@ -223,7 +229,7 @@ export function getDreamingAttentionAcrossScopes(
 				`SELECT agent_id AS agentId, id, kind, subject_ref AS subjectRef, details_json AS detailsJson,
 				        priority, created_at AS createdAt
 				 FROM dreaming_attention
-				 WHERE 1=1 ${kindFilter} ${statusFilter}
+				 WHERE 1=1 ${kindFilter} ${statusFilter} ${audienceFilter}
 				 ORDER BY priority DESC, created_at ASC, id ASC
 				 LIMIT ?`,
 			)
@@ -240,7 +246,7 @@ export function getDreamingAttentionAcrossScopes(
 			...attention,
 			details: parseDetails(detailsJson),
 		}));
-	}, "pipeline/dreaming-attention.ts:220");
+	}, "pipeline/dreaming-attention.ts:226");
 }
 
 export function getDreamingAttentionById(
@@ -273,7 +279,7 @@ export function getDreamingAttentionById(
 			priority: row.priority,
 			createdAt: row.createdAt,
 		};
-	}, "pipeline/dreaming-attention.ts:251");
+	}, "pipeline/dreaming-attention.ts:257");
 }
 
 export function getDreamingAttentionSnapshots(
@@ -284,7 +290,7 @@ export function getDreamingAttentionSnapshots(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: import("../db-accessor").ReadDb) => getDreamingAttentionSnapshotsInDb(db, agentId, limit),
-		"pipeline/dreaming-attention.ts:285",
+		"pipeline/dreaming-attention.ts:291",
 	);
 }
 
