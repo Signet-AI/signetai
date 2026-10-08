@@ -9,15 +9,18 @@ import {
 	createCodemodeExtension,
 } from "@earendil-works/pi-coding-agent";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { PI_AGENT_MAX_MESSAGE_BYTES } from "./pi-agent-protocol";
+import { PI_AGENT_MAX_MESSAGE_BYTES, toPiAgentEvent } from "./pi-agent-protocol";
 import type { PiAgentWorkerInput, PiAgentWorkerRequest, PiAgentWorkerResponse } from "./pi-agent-protocol";
 
 const port = parentPort;
 if (!port) throw new Error("Pi agent execution requires a worker thread");
 const input: PiAgentWorkerInput = workerData;
 const send = (message: PiAgentWorkerResponse) => {
-	if (Buffer.byteLength(JSON.stringify(message)) > PI_AGENT_MAX_MESSAGE_BYTES)
-		throw new Error("Pi agent message limit exceeded");
+	const bytes = Buffer.byteLength(JSON.stringify(message));
+	if (bytes > PI_AGENT_MAX_MESSAGE_BYTES)
+		throw new Error(
+			`Pi agent message limit exceeded (${message.type === "event" ? message.event.type : message.type}, ${bytes} bytes)`,
+		);
 	port.postMessage(message);
 };
 const runtime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null });
@@ -87,7 +90,7 @@ if (codemode) {
 		"codemode",
 	]);
 }
-session.subscribe((event) => send({ type: "event", event }));
+session.subscribe((event) => send({ type: "event", event: toPiAgentEvent(event) }));
 let running = false;
 port.on("message", async (request: PiAgentWorkerRequest) => {
 	try {
