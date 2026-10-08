@@ -7,8 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-08
-- Bug fixes: count every purged mention; bind memory-head commits to the running pass; keep aliases and assertions on merge; reconcile contradictions on skill uninstall; stop reconciling contradictions on read; bound native embedding input; defer incomplete transcript backfill; stop blocking input on prompt-submit; keep transcript seq monotonic per key; keep identity in portable import; record ontology claim actor; cascade and audit agent removal; stop retention from deleting entities; check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
-- Docs: refresh for 1.0 and post-1.0 direction; note native updater cap in 1.0 post.
+- Bug fixes: keep supported carried entries; revalidate carried head entries; bind head fence and carry entries; stop content passes staling their head; count every purged mention; bind memory-head commits to the running pass; keep aliases and assertions on merge; reconcile contradictions on skill uninstall; stop reconciling contradictions on read; bound native embedding input; defer incomplete transcript backfill; stop blocking input on prompt-submit; keep transcript seq monotonic per key; keep identity in portable import; record ontology claim actor; cascade and audit agent removal; stop retention from deleting entities; check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
+- Docs: address review on docs template; add screenshots for docs template PR; add page template and rewrite core pages; refresh for 1.0 and post-1.0 direction; note native updater cap in 1.0 post.
 
 ### 2026-10-07
 - Features: stem the memory keyword index; return bounded transcript evidence; rerank with a local cross-encoder fused with retrieval order; record each pass's peak context; tell each pass the current local date and time; list pending attention in the pass prompt and fold idle tools; let any pass merge and rename aspects at the aspect cap; carry pass history as a compacted view instead of runbook reads; give claims structured event time and validity; add a seeded proportional LongMemEval question sampler; support subscription providers for Dreaming; edit Dreaming concurrency and input budget in Advanced settings; run read-only lookups through Pi codemode behind a flag; pick the agent shown in the memory graph; run incremental passes for disjoint agent groups concurrently; add Muse Code connector.
@@ -42,6 +42,24 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: drop graph attribution entry; remove duplicate license note; clarify opening and use cases.
 
 ## Release Ledger
+
+## [0.237.8] - 2026-10-08
+
+Release summary: 4 bug fixes and 3 docs updates.
+Tag range: `v0.237.7..v0.237.8`.
+
+### Bug Fixes
+
+- **dreaming**: keep supported carried entries
+- **dreaming**: revalidate carried head entries
+- **dreaming**: bind head fence and carry entries
+- **dreaming**: stop content passes staling their head
+
+### Docs
+
+- **web**: address review on docs template
+- add screenshots for docs template PR
+- **web**: add page template and rewrite core pages
 
 ## [0.237.7] - 2026-10-08
 
