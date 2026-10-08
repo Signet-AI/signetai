@@ -312,6 +312,25 @@ export function scopeStructuredBenchmarkParticipants(
   }
 }
 
+const RETRYABLE_DREAMING_TRIGGER_CODES: ReadonlySet<string> = new Set([
+  "DB_OWNER_DEADLINE",
+  "DB_OWNER_QUEUE_FULL",
+  "DB_OWNER_DIED",
+  "DB_OWNER_START_TIMEOUT",
+])
+
+export class SignetRequestError extends Error {
+  constructor(
+    path: string,
+    readonly status: number,
+    error: string,
+    readonly code: string | undefined
+  ) {
+    super(`${path} failed (${status}): ${error}`)
+    this.name = "SignetRequestError"
+  }
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   const text = await response.text()
   if (!text.trim()) return {} as T
@@ -684,7 +703,12 @@ export class SignetProvider implements Provider {
       } catch (error) {
         if (!(error instanceof Error)) throw error
         if (error.message.includes("/api/dream/trigger failed (409)")) return false
-        if (!error.message.includes("/api/dream/trigger failed (503)") || Date.now() + retryMs >= deadline) throw error
+        const ownerUnavailable =
+          error instanceof SignetRequestError &&
+          error.status === 503 &&
+          error.code !== undefined &&
+          RETRYABLE_DREAMING_TRIGGER_CODES.has(error.code)
+        if (!ownerUnavailable || Date.now() + retryMs >= deadline) throw error
         logger.warn(`${error.message}; retrying Dreaming trigger (attempt ${attempt})`)
         await new Promise((resolve) => setTimeout(resolve, retryMs))
       }
@@ -878,11 +902,14 @@ export class SignetProvider implements Provider {
       })
       const data = await parseJson<T>(response)
       if (!response.ok) {
-        const error =
-          data && typeof data === "object" && "error" in data
-            ? String((data as { error?: unknown }).error)
-            : response.statusText
-        throw new Error(`${path} failed (${response.status}): ${error}`)
+        const body = data && typeof data === "object" ? (data as { error?: unknown; code?: unknown }) : {}
+        const error = "error" in body ? String(body.error) : response.statusText
+        throw new SignetRequestError(
+          path,
+          response.status,
+          error,
+          typeof body.code === "string" ? body.code : undefined
+        )
       }
       return data
     } finally {
