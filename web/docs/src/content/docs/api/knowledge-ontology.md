@@ -928,9 +928,12 @@ Each pass may read and write only its own group's agents, and by default an agen
 is in at most one running pass. `memory.dreaming.maxPassesPerScope` (default 1,
 up to 16) lets one agent take several incremental passes at once: when slots are
 left after every agent with work has a pass, an agent whose backlog reaches
-`tokenThreshold` gets up to that many passes, still within
-`maxConcurrentPasses`. These passes lease the evidence they draw from the
-delivery queue, so no source is handed to two running passes. A lease ends when
+`tokenThreshold`, or holds more pending sources than the 50 the backlog probe
+reads, gets up to that many passes, still within `maxConcurrentPasses`. These
+passes lease the evidence they draw from the delivery queue, so no source is
+handed to two running passes. A pass that loses a source to another pass reads
+the next unclaimed sources instead; when the other passes hold everything left,
+its queue page is empty with `hasMore: false` and `heldByOtherPasses: true`. A lease ends when
 its pass finishes, fails, or is cancelled, or after twice the pass timeout, and
 a source whose pass did not finish it is delivered again. One running pass on
 an agent works its pending attention and the passes that join it only read

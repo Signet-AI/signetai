@@ -314,6 +314,11 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 }
 
 const DELIVERY_QUEUE_SCAN_LIMIT = 51;
+const EVIDENCE_LEASE_ATTEMPTS = 4;
+const EVIDENCE_HELD_BY_OTHER_PASSES = {
+	heldByOtherPasses: true,
+	note: "Nothing unclaimed is left in the queue for this pass: other running Dreaming passes in this scope hold the rest of the queued evidence and will review it. Do not keep paging; file what you have read, write the runbook, and finish.",
+} as const;
 
 function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
 	const scopeId = input.agentId;
@@ -399,6 +404,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 			budgetExhausted ||
 			returned.some((item) => item.contentHasNext === true) ||
 			(items.length > 0 && fresh.length >= DELIVERY_QUEUE_SCAN_LIMIT),
+		...(returned.length === 0 && leasedElsewhere.length > 0 ? EVIDENCE_HELD_BY_OTHER_PASSES : {}),
 	};
 }
 
@@ -666,7 +672,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. When you look up a specific source and contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit source revisions not yet fully reviewed, regardless of time watermark. Each resumes where review_evidence acknowledgements ended, after fragments already served earlier in this pass; a source reviewed in an earlier pass resumes slightly before that point, and reviewedChars counts the leading characters already reviewed, which you need not file again. hasMore is true while more of the queue remains. A queued source that is only partly read continues on a later queue page, so do not page it yourself. File what each page establishes and acknowledge it with review_evidence before calling again without a query for the next one, and stop when hasMore is false. Partway through a pass the queue closes (deliveryClosed: true): stop reading new sources, file what you have read, and finish so your progress is recorded. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. When you look up a specific source and contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit source revisions not yet fully reviewed, regardless of time watermark. Each resumes where review_evidence acknowledgements ended, after fragments already served earlier in this pass; a source reviewed in an earlier pass resumes slightly before that point, and reviewedChars counts the leading characters already reviewed, which you need not file again. hasMore is true while more of the queue remains for this pass. When other Dreaming passes run in the same scope, each queued source is delivered to only one of them; a page with heldByOtherPasses: true means those passes hold the rest of the queue, so stop paging. A queued source that is only partly read continues on a later queue page, so do not page it yourself. File what each page establishes and acknowledge it with review_evidence before calling again without a query for the next one, and stop when hasMore is false. Partway through a pass the queue closes (deliveryClosed: true): stop reading new sources, file what you have read, and finish so your progress is recorded. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
@@ -709,44 +715,49 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					...(params.passId === undefined ? {} : { passId: params.passId }),
 					...(params.evidenceChars === undefined ? {} : { evidenceChars: params.evidenceChars }),
 				};
-				const result = await runDbOwnerDomainOperation(accessor, {
-					runWithOwner: async (owner) => {
-						const handle = owner.submit<DreamingCapabilityOutput>(
-							{
-								kind: "dreaming_evidence_search",
-								input,
-							},
-							{
-								operation: "dreaming.capabilities.search-evidence",
-								lane: "read",
-								workloadClass: "foreground",
-								deadlineMs: 30_000,
-								estimatedWorkUnits: 200,
-							},
-						);
-						return await handle.result;
-					},
-					runInline: ({ read }) => read((db) => searchDreamingEvidenceInDb(db, input)),
-				});
+				const search = () =>
+					runDbOwnerDomainOperation(accessor, {
+						runWithOwner: async (owner) => {
+							const handle = owner.submit<DreamingCapabilityOutput>(
+								{
+									kind: "dreaming_evidence_search",
+									input,
+								},
+								{
+									operation: "dreaming.capabilities.search-evidence",
+									lane: "read",
+									workloadClass: "foreground",
+									deadlineMs: 30_000,
+									estimatedWorkUnits: 200,
+								},
+							);
+							return await handle.result;
+						},
+						runInline: ({ read }) => read((db) => searchDreamingEvidenceInDb(db, input)),
+					});
 				const drainsQueue = sourceRef === undefined && !query?.trim() && since === undefined && before === undefined;
-				if (
-					!drainsQueue ||
-					params.evidenceLeaseMs === undefined ||
-					params.passId === undefined ||
-					result.ok !== true ||
-					!Array.isArray(result.items) ||
-					result.items.length === 0
-				)
-					return result;
-				const items = result.items as ReadonlyArray<Record<string, unknown>>;
-				const held = await leaseDreamingEvidence(accessor, {
-					agentId: scopeId,
-					passId: params.passId,
-					sourceRefs: items.flatMap((item) => (typeof item.sourceRef === "string" ? [item.sourceRef] : [])),
-					ttlMs: params.evidenceLeaseMs,
-				});
-				const leased = items.filter((item) => typeof item.sourceRef === "string" && held.has(item.sourceRef));
-				return leased.length === items.length ? result : { ...result, items: leased, hasMore: true };
+				const { evidenceLeaseMs, passId } = params;
+				if (!drainsQueue || evidenceLeaseMs === undefined || passId === undefined) return await search();
+				for (let attempt = 1; ; attempt++) {
+					const result = await search();
+					if (result.ok !== true || !Array.isArray(result.items) || result.items.length === 0) return result;
+					const items = result.items as ReadonlyArray<Record<string, unknown>>;
+					const held = await leaseDreamingEvidence(accessor, {
+						agentId: scopeId,
+						passId,
+						sourceRefs: items.flatMap((item) => (typeof item.sourceRef === "string" ? [item.sourceRef] : [])),
+						ttlMs: evidenceLeaseMs,
+					});
+					const leased = items.filter((item) => typeof item.sourceRef === "string" && held.has(item.sourceRef));
+					if (leased.length === items.length) return result;
+					if (attempt < EVIDENCE_LEASE_ATTEMPTS) continue;
+					return {
+						...result,
+						items: leased,
+						hasMore: true,
+						note: "Other passes in this scope claimed part of this page first. Call search_evidence again without a query for the next unclaimed page.",
+					};
+				}
 			},
 		),
 		capability(

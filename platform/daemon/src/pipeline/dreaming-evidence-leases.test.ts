@@ -167,10 +167,7 @@ describe("Dreaming evidence leases", () => {
 		).toEqual(a);
 	});
 
-	it("drops a source another pass leased between its read and its lease", async () => {
-		const refs = seedTranscripts(3);
-		startPassRow("pass-a");
-		startPassRow("pass-b");
+	async function drainWhileRacing(raced: readonly string[], limit: number): Promise<Record<string, unknown>> {
 		const tools = createDreamingAgentTools({
 			accessor,
 			agentId: AGENT,
@@ -179,31 +176,68 @@ describe("Dreaming evidence leases", () => {
 			passId: "pass-b",
 			evidenceLeaseMs: 60_000,
 		});
-		const search = tool(tools, "search_evidence");
-		const raced = refs[0] ?? "";
 		const prepare = db.prepare.bind(db);
 		let raceRun = false;
 		(db as unknown as { prepare: Database["prepare"] }).prepare = ((sql: string) => {
 			if (!raceRun && sql.includes("INSERT INTO dreaming_evidence_leases")) {
 				raceRun = true;
-				prepare(
-					`INSERT INTO dreaming_evidence_leases (agent_id, source_kind, source_id, pass_id, leased_at, expires_at)
-					 VALUES (?, 'transcript', ?, 'pass-a', datetime('now'), datetime('now', '+1 hour'))`,
-				).run(AGENT, raced.slice("transcript:".length));
+				for (const ref of raced) {
+					prepare(
+						`INSERT INTO dreaming_evidence_leases (agent_id, source_kind, source_id, pass_id, leased_at, expires_at)
+						 VALUES (?, 'transcript', ?, 'pass-a', datetime('now'), datetime('now', '+1 hour'))`,
+					).run(AGENT, ref.slice("transcript:".length));
+				}
 			}
 			return prepare(sql);
 		}) as Database["prepare"];
+		try {
+			return result(
+				await tool(tools, "search_evidence").execute(
+					"call",
+					{ agentId: AGENT, limit },
+					undefined,
+					undefined,
+					{} as never,
+				),
+			);
+		} finally {
+			Reflect.deleteProperty(db, "prepare");
+			expect(raceRun).toBe(true);
+		}
+	}
 
-		const output = result(
-			await search.execute("call", { agentId: AGENT, limit: 3 }, undefined, undefined, {} as never),
-		);
-		Reflect.deleteProperty(db, "prepare");
+	it("fills a page with unclaimed sources when another pass wins a lease race", async () => {
+		const refs = seedTranscripts(4);
+		startPassRow("pass-a");
+		startPassRow("pass-b");
+		const raced = refs.slice(-1);
 
-		expect(raceRun).toBe(true);
+		const output = await drainWhileRacing(raced, 3);
 
-		expect(refsOf(output)).not.toContain(raced);
-		expect(refsOf(output)).toHaveLength(2);
-		expect(output.hasMore).toBe(true);
+		expect(refsOf(output)).toHaveLength(3);
+		expect(refsOf(output).sort()).toEqual(refs.filter((ref) => !raced.includes(ref)).sort());
+		expect(output.hasMore).toBe(false);
+		expect(output.heldByOtherPasses).toBeUndefined();
+		expect(
+			db.prepare("SELECT pass_id AS passId, COUNT(*) AS n FROM dreaming_evidence_leases GROUP BY pass_id").all(),
+		).toEqual([
+			{ passId: "pass-a", n: 1 },
+			{ passId: "pass-b", n: 3 },
+		]);
+	});
+
+	it("ends the queue for a pass when other passes hold everything left", async () => {
+		const refs = seedTranscripts(2);
+		startPassRow("pass-a");
+		startPassRow("pass-b");
+
+		const output = await drainWhileRacing(refs, 2);
+
+		expect(refsOf(output)).toEqual([]);
+		expect(output.hasMore).toBe(false);
+		expect(output.heldByOtherPasses).toBe(true);
+		expect(String(output.note)).toContain("other running Dreaming passes");
+		expect(await drain("pass-c", 5)).toMatchObject({ items: [], hasMore: false, heldByOtherPasses: true });
 	});
 
 	it("redelivers the evidence of a pass that failed or whose lease expired", async () => {
