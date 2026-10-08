@@ -91,7 +91,9 @@ Dreaming attention nudge per committed source batch. Dreaming consumption is
 separate and uses its normal delivery/review path. The nudge's `source:` reference
 is daemon-owned and is not shown to the Dreaming agent, which reads the imported
 conversations through the delivery queue. A Dreaming pass resolves the nudge once
-every conversation in the batch has been reviewed or excluded as reviewed.
+every conversation in the batch has been reviewed or excluded as reviewed. Each
+pass checks a bounded, rotating slice of pending nudges, so resolution can trail
+the final review by a pass or two.
 
 In a desktop-local session, **Choose from desktop** can return local paths to a loopback daemon. Remote clients must upload file bytes; a remote daemon never treats a path string as permission to read the client’s filesystem.
 
