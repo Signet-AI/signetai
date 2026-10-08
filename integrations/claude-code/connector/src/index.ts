@@ -58,6 +58,7 @@ export interface SessionEndFireAndForgetPayload {
 	harness: "claude-code";
 	sessionId?: string;
 	transcriptPath?: string;
+	reason?: "session_shutdown";
 }
 
 type DetachedSpawn = typeof spawn;
@@ -234,6 +235,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			harness: "claude-code",
 			sessionId: ctx.sessionId,
 			transcriptPath: ctx.transcriptPath,
+			reason: "session_shutdown",
 		});
 
 		return { success: dispatched, memoriesExtracted: 0 };

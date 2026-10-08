@@ -113,8 +113,16 @@ These reasons emit one anonymous `session.end` telemetry event per session
 lifetime. Repeated end requests for the same session are deduplicated.
 
 Requests without a recognized boundary reason, including ordinary
-`session.idle` calls, emit `session.turn` telemetry instead. They still persist
-the transcript and queue normal session-end processing.
+`session.idle` calls, are turns. They emit `session.turn` telemetry and do not
+queue transcript capture. The response reports which one the daemon saw:
+`"sessionBoundary": true` for a boundary, `"sessionBoundary": false` for a
+turn.
+
+`signet hook session-end` translates native `SessionEnd` hook payloads, such as
+those from Claude Code and Kimi Code, into this vocabulary. A `clear` reason
+stays `clear`. Any other `SessionEnd` reason, such as `prompt_input_exit`,
+`logout`, or `exit`, becomes `session_shutdown`. Payloads from other hook
+events, such as `Stop`, keep their reason unchanged.
 
 An optional `lastAssistantMessage` string carries the turn's final assistant
 reply. The daemon appends it to the session's live transcript only when the

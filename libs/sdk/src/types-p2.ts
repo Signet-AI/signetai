@@ -38,6 +38,7 @@ export interface UserPromptSubmitResponse {
 
 export interface SessionEndResponse {
 	readonly memoriesSaved: number;
+	readonly sessionBoundary?: boolean;
 	readonly queued?: boolean;
 	readonly jobId?: string;
 	readonly transcriptCaptureJobId?: string;
