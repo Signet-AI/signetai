@@ -168,7 +168,7 @@ export interface DreamingWorkerOptions {
 	readonly inferenceAvailable?: (agentId: string) => Promise<boolean>;
 	readonly acpxMcp?: {
 		readonly daemonUrl: string;
-		readonly authorizationTokenForAgent?: (agentId: string) => string | undefined;
+		readonly authorizationTokenForPass?: (agentId: string, passId: string) => string | undefined;
 	};
 	readonly evidenceRetry?: DreamingEvidenceRetryPolicy;
 	readonly ownerMaintenance?: DbOwnerMaintenance;
@@ -379,7 +379,7 @@ export function startDreamingWorker(
 										agentId,
 										passId: input.passId,
 										daemonUrl: options.acpxMcp.daemonUrl,
-										authorizationToken: options.acpxMcp.authorizationTokenForAgent?.(agentId),
+										authorizationToken: options.acpxMcp.authorizationTokenForPass?.(agentId, input.passId),
 									},
 								}
 							: {}),

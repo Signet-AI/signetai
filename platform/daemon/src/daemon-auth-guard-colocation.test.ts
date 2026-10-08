@@ -856,6 +856,46 @@ inference:
 			expect(scopedToolRes.status).toBe(200);
 			expect(await scopedToolRes.json()).toMatchObject({ tool: "search_entities", ok: true, agentId: "agent-a" });
 		});
+
+		it("routes a running pass's tools only for the credential minted for that pass", async () => {
+			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
+			const { bindRunningDreamingPassTools, dreamingPassTokenSubject } = await import(
+				"./pipeline/dreaming-agent-tools"
+			);
+			const { registerPipelineRoutes } = await import("./routes/pipeline-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode Dreaming test");
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
+			registerPipelineRoutes(app);
+			const routed: string[] = [];
+			const unbind = bindRunningDreamingPassTools("pass-bound", "agent-a", async (tool, toolCallId) => {
+				routed.push(toolCallId);
+				return { tool, ok: true, items: [], routedToPass: true };
+			});
+			const call = (sub: string) =>
+				app.request("/api/dream/tools/search_entities", {
+					method: "POST",
+					headers: {
+						Authorization: `Bearer ${createToken(secret, { sub, role: "agent", scope: { agent: "agent-a" } }, 60)}`,
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify({ passId: "pass-bound", input: { query: "Atlas" } }),
+				});
+			try {
+				const otherCredential = await call("dreaming-agent-a");
+				expect(otherCredential.status).toBe(200);
+				expect(await otherCredential.json()).not.toHaveProperty("routedToPass");
+				expect(routed).toHaveLength(0);
+				const passCredential = await call(dreamingPassTokenSubject("agent-a", "pass-bound"));
+				expect(passCredential.status).toBe(200);
+				expect(await passCredential.json()).toMatchObject({ routedToPass: true, agentId: "agent-a" });
+				expect(routed).toHaveLength(1);
+			} finally {
+				unbind();
+			}
+		});
 	});
 
 	describe("connector routes need guards", () => {

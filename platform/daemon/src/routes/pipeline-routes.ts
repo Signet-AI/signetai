@@ -47,7 +47,7 @@ import {
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
 import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreaming-token-cache";
-import { callRunningDreamingPassTool } from "../pipeline/dreaming-agent-tools.js";
+import { callRunningDreamingPassTool, dreamingPassTokenSubject } from "../pipeline/dreaming-agent-tools.js";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
 import { AlreadyRunningError, type DreamingSchedulerStatus } from "../pipeline/dreaming-worker.js";
@@ -996,8 +996,9 @@ export function registerPipelineRoutes(app: Hono): void {
 			return c.json({ error: "Dreaming capability agent scope does not match the credential" }, 403);
 		}
 		const scopedInput = { ...input, agentId: scopedAgent.agentId };
+		const claims = c.get("auth")?.claims;
 		const result =
-			(passId === undefined
+			(passId === undefined || (claims != null && claims.sub !== dreamingPassTokenSubject(scopedAgent.agentId, passId))
 				? undefined
 				: await callRunningDreamingPassTool(passId, scopedAgent.agentId, capability.id, randomUUID(), scopedInput)) ??
 			(await capability.invoke(scopedInput));

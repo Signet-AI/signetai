@@ -46,6 +46,10 @@ export interface DreamingAgentToolset {
 	readonly call: DreamingPassToolCall;
 }
 
+export function dreamingPassTokenSubject(agentId: string, passId: string): string {
+	return `dreaming:${agentId}:${passId}`;
+}
+
 const runningPassTools = new Map<string, { readonly agentId: string; readonly call: DreamingPassToolCall }>();
 
 export function bindRunningDreamingPassTools(passId: string, agentId: string, call: DreamingPassToolCall): () => void {

@@ -892,9 +892,12 @@ and restricted ACPX bindings receive it from the daemon-owned pass context.
 A request that names a pass the daemon is running for the credential's agent
 executes through that pass's own tool binding, the same one a Pi session uses:
 `memory_head_commit` stages into that pass's finalization, and the call is
-recorded in the pass's tool trace. A request that names a pass that is not
-running, or one running for another agent, gets no pass binding, so
-`memory_head_commit` returns `PASS_NOT_AUTHORIZED`.
+recorded in the pass's tool trace. When auth is enforced, only the token the
+daemon minted for that pass's ACPX server gets the binding; other credentials
+for the same agent do not. A request that names a pass that is not running,
+one running for another agent, or one sent with another credential gets no
+pass binding, so `memory_head_commit` returns `PASS_NOT_AUTHORIZED`. A commit
+that reaches the pass after its executor ended is rejected the same way.
 
 **Pass history.** Each Dreaming pass starts with the scope's pass history in
 its prompt instead of reading recent pass logs: one line per earlier pass,
