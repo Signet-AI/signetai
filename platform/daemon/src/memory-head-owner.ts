@@ -209,6 +209,14 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 			content: generated ? (head?.is_current === 1 ? head.content : null) : request.content,
 		};
 	}
+	const pass =
+		request.passId === undefined
+			? null
+			: db
+					.prepare(
+						"SELECT 1 FROM dreaming_passes WHERE id=? AND agent_id=? AND status='running' AND mode='incremental-content'",
+					)
+					.get(request.passId, agentId);
 	let publicationError: string | undefined;
 	if (head?.is_current === 1) {
 		try {
@@ -233,7 +241,28 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 						)
 						.all(agentId, head.revision)
 				: [],
+		...(pass == null ? {} : { committedEntries: committedEntries(db, agentId, head?.revision_id ?? null) }),
 	};
+}
+
+function committedEntries(db: WriteDb, agentId: string, revisionId: string | null): Record<string, unknown>[] {
+	if (revisionId === null) return [];
+	const rows = db
+		.prepare(
+			`SELECT e.entry_id AS entryId, h.canonical_text AS text, e.provenance_json AS support
+			 FROM memory_head_revisions r
+			 JOIN memory_head_revision_entries e ON e.agent_id = r.agent_id AND e.revision = r.revision AND e.operation = 'add'
+			 JOIN memory_head_entries h ON h.agent_id = e.agent_id AND h.entry_id = e.entry_id
+			 WHERE r.id = ? AND r.agent_id = ? ORDER BY e.ordinal`,
+		)
+		.all(revisionId, agentId) as Array<{ entryId: string; text: string; support: string }>;
+	return rows.map((row) => {
+		let support: unknown = [];
+		try {
+			support = JSON.parse(row.support);
+		} catch {}
+		return { entryId: row.entryId, text: row.text, support: Array.isArray(support) ? support : [] };
+	});
 }
 
 function commitEntries(

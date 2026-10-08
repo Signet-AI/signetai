@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import type { DbOwnerDreamingPassFinalize } from "../db-owner-protocol";
-import { commitCuratedMemoryHeadInDb } from "../memory-head-owner";
-import type { MemoryHeadCommitInput } from "../memory-head";
+import { commitCuratedMemoryHeadInDb, executeMemoryHead } from "../memory-head-owner";
+import type { MemoryHeadCommitInput, MemoryHeadCommitter } from "../memory-head";
 import { finalizeDreamingPassInDb } from "./dreaming";
-import { applyDreamingOperations } from "./dreaming-operations";
+import { getDreamingCapability } from "./dreaming-capabilities";
 
 const quote = "Acme moved to edge runtime in Q2.";
 
@@ -70,17 +70,29 @@ describe("content pass memory-head fence", () => {
 
 	const acme = { entryId: "acme", text: quote, support: [{ source_ref: "memory:mem-1", quote }] };
 
-	async function supersede(passId: string): Promise<void> {
+	const committer: MemoryHeadCommitter = {
+		read: async () => ({}),
+		commit: async () => ({ ok: false }),
+	};
+
+	async function supersede(passId: string, inProcess = true): Promise<void> {
+		const capability = getDreamingCapability(
+			{
+				accessor: getDbAccessor(),
+				agentId: "agent-a",
+				actor: "dreaming",
+				passId,
+				...(inProcess ? { memoryHeadCommitter: committer } : {}),
+			},
+			"apply_ontology_ops",
+		);
 		const evidence = [{ source_ref: "memory:mem-1", source_kind: "manual", source_id: "mem-1", quote }];
 		for (const [operation, value] of [
 			["add_claim_value", "edge runtime"],
 			["supersede_claim_value", "edge runtime in Q2"],
 		] as const) {
-			const result = await applyDreamingOperations({
-				accessor: getDbAccessor(),
+			const result = await capability?.invoke({
 				agentId: "agent-a",
-				actor: "dreaming",
-				passId,
 				operations: [
 					{ operation, payload: { entityId: "e-acme", aspectId: "a-main", claimKey: "runtime", value }, evidence },
 				],
@@ -111,6 +123,53 @@ describe("content pass memory-head fence", () => {
 
 		expect(result).toMatchObject({ ok: false, code: "STALE_HEAD" });
 		expect(head().isCurrent).toBe(0);
+	});
+
+	it("does not let a caller-supplied pass id absorb writes made outside the pass", async () => {
+		start("pass-route");
+		await supersede("pass-route", false);
+
+		const result = getDbAccessor().withWriteTx((db) => commitCuratedMemoryHeadInDb(db, input("pass-route", [acme])));
+
+		expect(result).toMatchObject({ ok: false, code: "STALE_HEAD" });
+	});
+
+	it("shows the running pass its committed entries after its own writes stale the head", async () => {
+		const weekly = {
+			entryId: "weekly",
+			text: "Acme ships weekly.",
+			support: [{ source_ref: "memory:mem-2", quote: "Acme ships weekly." }],
+		};
+		start("pass-first");
+		getDbAccessor().withWriteTx((db) => commitCuratedMemoryHeadInDb(db, input("pass-first", [weekly, acme])));
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE dreaming_passes SET status = 'completed' WHERE id = 'pass-first'").run();
+		});
+		start("pass-second");
+		await supersede("pass-second");
+		const read = (passId?: string) =>
+			getDbAccessor().withWriteTx((db) =>
+				executeMemoryHead(
+					db,
+					dir,
+					passId === undefined
+						? { action: "read", agentId: "agent-a" }
+						: { action: "read", agentId: "agent-a", passId },
+				),
+			);
+
+		const general = read();
+		const own = read("pass-second");
+
+		expect(general).toMatchObject({ status: "stale", content: null, entries: [] });
+		expect(general).not.toHaveProperty("committedEntries");
+		expect(own.committedEntries).toEqual([weekly, acme]);
+		expect(
+			getDbAccessor().withWriteTx((db) =>
+				commitCuratedMemoryHeadInDb(db, input("pass-second", own.committedEntries as MemoryHeadCommitInput["entries"])),
+			),
+		).toMatchObject({ ok: true, code: "COMMITTED" });
+		expect(head()).toMatchObject({ isCurrent: 1, content: `- Acme ships weekly.\n- ${quote}` });
 	});
 
 	it("leaves the head current after finalization rewrites the pass's transcript nodes", () => {

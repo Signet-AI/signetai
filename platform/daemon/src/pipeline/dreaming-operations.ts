@@ -50,6 +50,7 @@ export interface ApplyDreamingOperationsParams {
 	readonly actor: string;
 	readonly operations: readonly DreamingOperationRequest[];
 	readonly passId?: string;
+	readonly contentPassId?: string;
 	readonly writeCaps?: GraphWriteCaps;
 }
 
@@ -1098,7 +1099,8 @@ export async function applyDreamingOperations(
 	const result = await runWriteBatches(
 		params.accessor,
 		validated,
-		(db, entry) => withContentPassWrites(db, params.passId, () => applyValidatedOperationInTx(db, entry, params)),
+		(db, entry) =>
+			withContentPassWrites(db, params.contentPassId, () => applyValidatedOperationInTx(db, entry, params)),
 		{
 			label: "dreaming ontology operations",
 			maxPerTx: DREAMING_WRITE_MAX_OPERATIONS_PER_TX,
