@@ -55,6 +55,7 @@ import {
 	DREAMING_EVIDENCE_STALL_PASSES,
 	IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET,
 	IMPORTED_SOURCE_ATTENTION_ROWS_PER_SCOPE,
+	importedSourceAttentionUpsert,
 	pendingDreamingEvidenceContinuations,
 	probeSourceEvidenceDrain,
 	resolveImportedSourceAttentionInTx,
@@ -3461,6 +3462,66 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 			"incremental",
 		);
 		expect(importAttention()).toEqual({ resolvedAt: expect.any(String), passId: second.passId });
+	});
+
+	it("schedules a pass for an import nudge only until a pass starts after it (#2094)", async () => {
+		const importId = "import:trigger-2094";
+		const capturedAt = "2026-10-08 00:00:00";
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, content, agent_id, created_at, updated_at, completed_at, source_id, content_hash)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			"imported-pending",
+			"Kira owns the import pipeline.",
+			AGENT,
+			capturedAt,
+			capturedAt,
+			capturedAt,
+			importId,
+			"hash",
+		);
+		const raise = async (): Promise<void> => {
+			await new Promise((resolve) => setTimeout(resolve, 5));
+			const nudge = importedSourceAttentionUpsert(AGENT, importId);
+			db.prepare(nudge.sql).run(...nudge.params);
+			await new Promise((resolve) => setTimeout(resolve, 5));
+		};
+		const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
+		const evaluate = () =>
+			evaluateDreamingTrigger(accessor, cfg, AGENT, {
+				kind: "indeterminate",
+				tokenLowerBound: 0,
+				hasBacklog: false,
+				sourcesScanned: 1,
+			});
+		const pending = () =>
+			db
+				.prepare("SELECT resolved_at AS resolvedAt FROM dreaming_attention WHERE subject_ref = ?")
+				.get(`source:${importId}`);
+
+		await raise();
+		expect(await evaluate()).toEqual({ trigger: true, reason: "attention" });
+
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read the import without reviewing it" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(pending()).toEqual({ resolvedAt: null });
+		expect(await evaluate()).toEqual({ trigger: false });
+
+		await raise();
+		expect(await evaluate()).toEqual({ trigger: true, reason: "attention" });
 	});
 
 	it("keeps fully reviewed imported transcripts out of the delivery queue (#2094)", async () => {

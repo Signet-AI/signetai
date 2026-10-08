@@ -67,6 +67,7 @@ import {
 	failedOperationEvidence,
 	recordDreamingEvidenceConsumptionInTx,
 	resolveImportedSourceAttentionInTx,
+	SEEN_IMPORTED_SOURCE_ATTENTION_SQL,
 	STALLED_EVIDENCE_ATTENTION_SQL,
 } from "./dreaming-evidence-consumption";
 import {
@@ -2606,7 +2607,8 @@ export async function evaluateDreamingTrigger(
 			await getDbOwnerForAccessor(accessor),
 			"dreaming.attention.present",
 			`SELECT 1 AS present FROM dreaming_attention
-			 WHERE agent_id = ? AND resolved_at IS NULL AND NOT ${STALLED_EVIDENCE_ATTENTION_SQL} LIMIT 1`,
+			 WHERE agent_id = ? AND resolved_at IS NULL
+			   AND NOT ${STALLED_EVIDENCE_ATTENTION_SQL} AND NOT ${SEEN_IMPORTED_SOURCE_ATTENTION_SQL} LIMIT 1`,
 			[agentId],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		)) !== undefined;

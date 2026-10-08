@@ -637,6 +637,36 @@ export function recordDreamingEvidenceConsumptionInTx(
 export const STALLED_EVIDENCE_ATTENTION_SQL =
 	"(kind = 'evidence_requeue' AND json_valid(details_json) AND json_extract(details_json, '$.reason') = 'evidence-stalled')";
 
+const IMPORTED_SOURCE_ATTENTION_RAISED_AT_SQL =
+	"COALESCE(CASE WHEN json_valid(details_json) THEN json_extract(details_json, '$.raisedAt') END, created_at)";
+
+export const SEEN_IMPORTED_SOURCE_ATTENTION_SQL = `(kind = 'evidence_requeue' AND subject_ref LIKE 'source:%' AND COALESCE(
+	julianday(${IMPORTED_SOURCE_ATTENTION_RAISED_AT_SQL}) < (
+		SELECT MAX(julianday(dp.started_at)) FROM dreaming_passes dp WHERE dp.agent_id = dreaming_attention.agent_id
+	), 0))`;
+
+export function importedSourceAttentionUpsert(
+	agentId: string,
+	sourceId: string,
+): { readonly sql: string; readonly params: readonly string[] } {
+	return {
+		sql: `INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
+			VALUES (?, ?, 'evidence_requeue', ?, json_set(?, '$.raisedAt', strftime('%Y-%m-%d %H:%M:%f', 'now')), 50)
+			ON CONFLICT(agent_id, kind, subject_ref) DO UPDATE SET
+			  details_json = excluded.details_json,
+			  priority = MAX(dreaming_attention.priority, excluded.priority),
+			  generation = dreaming_attention.generation + 1,
+			  resolved_at = NULL,
+			  resolved_by_pass_id = NULL`,
+		params: [
+			randomUUID(),
+			agentId,
+			`source:${sourceId}`,
+			JSON.stringify({ sourceId, reason: "transcript-import-committed" }),
+		],
+	};
+}
+
 export function resolveStalledEvidenceAttentionInTx(db: WriteDb, passId: string, agentId: string, ref: string): void {
 	db.prepare(
 		`UPDATE dreaming_attention SET resolved_at = datetime('now'), resolved_by_pass_id = ?
