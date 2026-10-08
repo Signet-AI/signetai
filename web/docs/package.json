@@ -14,9 +14,10 @@
 	},
 	"dependencies": {
 		"@astrojs/starlight": "^0.41.7",
+		"@lucasmarkes/hairline": "0.3.0",
 		"astro": "^7.1.6",
-		"sharp": "^0.35.3",
-		"cookie": "^2.0.1"
+		"cookie": "^2.0.1",
+		"sharp": "^0.35.3"
 	},
 	"devDependencies": {
 		"@astrojs/check": "^0.9.6",

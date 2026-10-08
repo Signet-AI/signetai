@@ -1,0 +1,625 @@
+---
+title: "Recall and search"
+description: "Recall, search, and find similar memories through the HTTP API."
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+import EndpointSpec from "~/components/EndpointSpec.astro";
+import SequenceDiagram from "~/components/SequenceDiagram.astro";
+import HairlineFigure from "~/components/HairlineFigure.astro";
+import Fields from "~/components/Fields.astro";
+
+<HairlineFigure figure="riffle" label="A tray of cards. The card under the pointer stands up.">
+
+Recall finds the memories that matter for a query and returns them ranked, with a record of how each one was found.
+
+Four endpoints read memories. Use `POST /api/memory/recall` unless one of the others fits better.
+
+</HairlineFigure>
+
+| Endpoint | Use it for | Engine |
+|---|---|---|
+| [`POST /api/memory/recall`](#post-apimemoryrecall) | Agent and application recall with every filter | Hybrid recall |
+| [`GET /api/memory/search`](#get-apimemorysearch) | The same recall from a query string | Hybrid recall |
+| [`GET /memory/search`](#get-memorysearch) | Dashboard keyword search and the author list | Direct FTS5 |
+| [`GET /memory/similar`](#get-memorysimilar) | Memories close to one you already have | Vector only |
+
+## How recall runs
+
+The daemon validates the request, then hands the search to the recall owner, a separate process that holds the database. The owner embeds the query, gathers candidates from every enabled lane, authorizes them, ranks them, and returns the result.
+
+<SequenceDiagram
+	title="POST /api/memory/recall, from request to response. Optional stages depend on configuration."
+	participants={[
+		{ id: "client", label: "Client", sub: "CLI · SDK · MCP" },
+		{ id: "daemon", label: "Daemon", sub: "request process" },
+		{ id: "owner", label: "Recall owner", sub: "holds memories.db" },
+		{ id: "models", label: "Models", sub: "embed · rerank" },
+	]}
+	boundaries={[{ label: "signet daemon", from: "daemon", to: "owner" }]}
+	steps={[
+		{ from: "client", to: "daemon", label: "POST /api/memory/recall" },
+		{ from: "daemon", to: "daemon", label: "auth · recall permission" },
+		{ from: "daemon", to: "daemon", label: "resolve agent + read policy" },
+		{ from: "daemon", to: "owner", label: "recall job · 30 s" },
+		{ from: "owner", to: "models", label: "embed query" },
+		{ from: "models", to: "owner", label: "query vector", reply: true },
+		{ from: "owner", to: "owner", label: "FTS5 · hints · vector" },
+		{ frame: "opt graph", steps: [{ from: "owner", to: "owner", label: "paths · traversal" }] },
+		{ note: "authorize every candidate before reading content", over: ["owner"] },
+		{ frame: "opt reranker", steps: [
+			{ from: "owner", to: "models", label: "rerank (redacted)" },
+			{ from: "models", to: "owner", label: "scores", reply: true },
+		] },
+		{ from: "owner", to: "owner", label: "rank · hydrate · redact" },
+		{ frame: "opt sessionKey", steps: [{ from: "owner", to: "owner", label: "record in dedupe ledger" }] },
+		{ from: "owner", to: "daemon", label: "results + meta", reply: true },
+		{ from: "daemon", to: "daemon", label: "apply minScore" },
+		{ from: "daemon", to: "client", label: "200 results, meta", reply: true },
+	]}
+/>
+
+The request process never opens the database. If the recall owner is unavailable or misses its deadline, the request fails; nothing runs the search elsewhere.
+
+## POST /api/memory/recall
+
+Runs hybrid recall for one query and returns ranked memories.
+
+<EndpointSpec
+	rows={{
+		Permission: "`recall`",
+		Body: "JSON, up to 10 MiB",
+		Deadline: "30 s in the recall owner",
+		"Rate limit": "`auth.rateLimits.recallLlm`, 60 per minute per token, when the LLM reranker or `aggregate` is on and auth mode is not `local`",
+		Clients: "`signet recall` · `SignetClient.recall()` · MCP `memory_search`, `signet_recall`",
+	}}
+/>
+
+### Example
+
+<Tabs syncKey="client">
+<TabItem label="curl">
+
+```bash
+curl -s http://localhost:3850/api/memory/recall \
+  -H 'Content-Type: application/json' \
+  -d '{"query": "editor preferences", "limit": 5, "sessionKey": "sess-1"}'
+```
+
+Outside `local` auth mode, add `-H "Authorization: Bearer $SIGNET_TOKEN"`.
+
+</TabItem>
+<TabItem label="CLI">
+
+```bash
+signet recall "editor preferences" --limit 5 --session-key sess-1 --json
+```
+
+</TabItem>
+<TabItem label="SDK">
+
+```ts
+import { SignetClient } from "@signet/sdk";
+
+const signet = new SignetClient();
+const { results } = await signet.recall("editor preferences", {
+	limit: 5,
+	sessionKey: "sess-1",
+});
+```
+
+</TabItem>
+</Tabs>
+
+```json title="200 OK"
+{
+  "results": [
+    {
+      "id": "6f1c2a9e-0d4b-4e7a-9a51-3c8f2b7d1e40",
+      "content": "User prefers vim keybindings in every editor",
+      "content_length": 44,
+      "truncated": false,
+      "score": 0.92,
+      "source": "hybrid",
+      "type": "preference",
+      "tags": "editor,ui",
+      "pinned": false,
+      "importance": 0.9,
+      "who": "claude-code",
+      "project": null,
+      "created_at": "2026-02-21T10:00:00.000Z"
+    }
+  ],
+  "query": "editor preferences",
+  "method": "hybrid",
+  "meta": {
+    "totalReturned": 1,
+    "hasSupplementary": false,
+    "noHits": false,
+    "vectorCompleteness": "complete",
+    "timings": {
+      "totalMs": 14.25,
+      "stages": [
+        { "name": "memory_fts", "durationMs": 1.12 },
+        { "name": "query_embedding_wait", "durationMs": 8.4 },
+        { "name": "final_rank", "durationMs": 0.08 }
+      ]
+    },
+    "dedupe": { "enabled": true, "contextEpoch": 0, "suppressed": 0, "repeatedReturned": 0 }
+  }
+}
+```
+
+### Request
+
+<Fields>
+
+- `query` string · **required**
+
+  Search text. Trimmed; empty is rejected. Exact dates in the text start [temporal recall](#dates-in-a-query).
+
+- `limit` number · default 10
+
+  Results to return. The daemon clamps it to `1..50`.
+
+- `type` string
+
+  Memory type, such as `preference`.
+
+- `tags` string
+
+  Comma-separated tags. A memory must contain every tag, by substring match.
+
+- `who` string
+
+  Author, such as `claude-code`.
+
+- `pinned` boolean
+
+  Only pinned memories.
+
+- `importance_min` number
+
+  Lowest importance to include.
+
+- `since`, `until` ISO 8601
+
+  Bounds on `created_at`.
+
+- `project` string
+
+  Project filter. A project-scoped token overrides it.
+
+- `scope` string
+
+  Exact memory scope, such as `world:alpha`. [Omitting it excludes scoped memories.](#scope)
+
+- `time` object
+
+  Explicit temporal window: `start`, `end`, `facets`, `mode`. See [Dates in a query](#dates-in-a-query).
+
+- `minScore` number
+
+  Drop results below this score. Applied after ranking.
+
+- `keywordQuery` string
+
+  Text for the keyword lane only, when it should differ from `query`.
+
+- `agentId` string · default parsed from sessionKey, then $SIGNET_AGENT_ID
+
+  Agent whose read policy applies.
+
+- `sessionKey` string · or header x-signet-session-key
+
+  Enables [session dedupe](#session-dedupe).
+
+- `includeRecalled` boolean · default false
+
+  Return rows already recalled in this session.
+
+- `sourceOnly` boolean · default false
+
+  Search source chunks and native artifacts only.
+
+- `aggregate` boolean · default false
+
+  Return one synthesized answer. See [Aggregate recall](#aggregate-recall).
+
+- `aggregateBudget` small, medium, large · default small
+
+  Recall queries an aggregate may run: 3, 5, or 8.
+
+- `saveAggregate` boolean · default true
+
+  Save the aggregate answer as a memory. Needs `remember` permission.
+
+- `recallSurface` string
+
+  Telemetry label: `explicit_api`, `tool_call`, `prompt_injection`, `dashboard`, or `other`.
+
+</Fields>
+
+The daemon reads camelCase fields. It also accepts `aggregate_budget` and `save_aggregate`. The SDK and the other canonical clients translate snake_case options before sending; see [client compatibility](#client-compatibility).
+
+### Response
+
+<Fields>
+
+- `results` array
+
+  Ranked results. Fields below.
+
+- `query` string
+
+  The query as received.
+
+- `method` hybrid or keyword
+
+  `hybrid` when vector search contributed. Timeline responses are always `keyword`.
+
+- `meta` object
+
+  Counts, coverage, and timings. Fields below.
+
+- `aggregate` object
+
+  Present for [aggregate recall](#aggregate-recall).
+
+- `entities` array
+
+  Entity context, when graph traversal produced it.
+
+</Fields>
+
+Each result has:
+
+<Fields>
+
+- `id`
+
+  Memory id. Results that are not stored memories use a prefix: `source-chunk:`, `native-artifact:`, `summary:`, `constructed:`, `transcript:`, or `temporal:`.
+
+- `content`
+
+  Text with detected credentials replaced by `[redacted credential]`. Stored memories are unchanged.
+
+- `content_length`, `truncated`
+
+  Original length and whether `content` was shortened.
+
+- `score`
+
+  Final score, two decimal places.
+
+- `source`
+
+  Lane that produced the result. See [result sources](#result-sources).
+
+- `type`, `tags`, `pinned`, `importance`, `who`, `project`, `created_at`
+
+  Stored memory fields. `tags` is a comma-separated string.
+
+- `source_id`, `session_id`, `source_path`, `visibility`, `scope`
+
+  Present when known.
+
+- `supplementary`
+
+  `true` for supporting context, such as a summary card.
+
+- `already_recalled`
+
+  `true` when returned again because of `includeRecalled`.
+
+</Fields>
+
+`meta` has:
+
+<Fields>
+
+- `totalReturned`
+
+  Number of results.
+
+- `hasSupplementary`
+
+  `true` when any result is supplementary.
+
+- `noHits`
+
+  `true` when recall finished and found nothing.
+
+- `vectorCompleteness`
+
+  `complete`, `recent-window`, or `unavailable`.
+
+- `partial`, `degradation`
+
+  Set when coverage was incomplete. See [Partial results](#partial-results).
+
+- `reranker`
+
+  `{ kind, model?, fallback? }`; `kind` is `llm`, `cross-encoder`, `embedding`, or `none`.
+
+- `timings`
+
+  `totalMs` and per-stage `durationMs`.
+
+- `dedupe`
+
+  Session dedupe counts. See [Session dedupe](#session-dedupe).
+
+- `temporal`
+
+  The resolved window, facets, and content query.
+
+- `transcriptEvidence`
+
+  `{ returned, ranking?, failed? }` for the transcript lane.
+
+</Fields>
+
+### Errors
+
+Every error body has an `error` string. Recall failures also return `results: []`.
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `Invalid JSON body` | The body is not JSON. |
+| 400 | `query is required` | `query` is missing or blank. |
+| 400 | `Invalid aggregateBudget...` | `aggregateBudget` is not `small`, `medium`, or `large`. |
+| 400 | `time.start is required...` and similar | `time` is malformed. The message names the field. |
+| 401 | `authentication required` | No bearer token outside `local` mode. |
+| 403 | `...lacks 'recall' permission` | The token's role cannot recall. |
+| 403 | `...lacks 'remember' permission` | An aggregate save without `remember`. Send `saveAggregate: false`. |
+| 413 | `payload too large` | The body is over 10 MiB. |
+| 429 | `rate limit exceeded` | The `recallLlm` bucket is empty. Wait for `Retry-After`. |
+| 503 | `Recall unavailable while database integrity is unresolved` | The database is blocked pending repair. See `repairGuidance`. |
+| 503 | `Recall failed` | A required provider is down, such as the LLM reranker. |
+| 500 | `Recall failed` | Any other failure, including a missed 30 s deadline. |
+
+### Behavior
+
+#### Scope
+
+`scope` matches one exact scope string. When you omit it, recall returns only memories with no scope. Scope does not select agent or session isolation; use `agentId` and `sessionKey` for that.
+
+#### Session dedupe
+
+With a `sessionKey`, recall skips memories it already returned in the current context epoch for that session and agent. The same ledger covers direct recall, hook recall, and prompt injection.
+
+- `meta.dedupe.suppressed` counts skipped rows.
+- `includeRecalled: true` returns them again, marked `already_recalled: true`.
+- `meta.dedupe.failedOpen: true` means the ledger was unavailable and nothing was skipped.
+- Rows that `minScore` removes still count as recalled.
+
+#### Dates in a query
+
+An exact date in `query`, such as `2026-05-13`, `2026/05/13`, or `May 13 2026`, starts temporal recall. Ranges such as `2026-05-13/2026-05-15` and `2026-05-13/15` also work.
+
+- A date alone returns a timeline of what happened in that window.
+- A date plus words filters by the date and searches the words. Empty slots fill with other memories from the window, marked `source: "temporal_window"`.
+
+Pass `time` to set the window directly. `end` defaults to 24 hours after `start`. `facets` accepts `session`, `source`, `captured`, `observed`, `occurred`, and `valid`. `mode` is `auto`, `timeline`, or `filter`.
+
+#### Partial results
+
+Recall can return `200` with incomplete coverage. Treat the results as useful but not exhaustive.
+
+| `meta.degradation` | Cause |
+|---|---|
+| `fts_incomplete` | The keyword index is rebuilding. A bounded scan filled in. |
+| `graph_traversal_timeout` | Traversal hit the owner deadline. `meta.graphPartial` is `true`. |
+| `graph_traversal_failed` | Traversal failed. `meta.graphError` explains it. |
+
+#### Aggregate recall
+
+`aggregate: true` runs normal recall, may plan follow-up queries, and returns one synthesized answer built from unique evidence.
+
+- `aggregate.stoppedReason` is `complete`, `no_evidence`, `router_unavailable`, or `synthesis_failed`.
+- With evidence but no synthesis, the evidence returns with `aggregate.partial: true`.
+- Saved answers are memories with `source_type: "aggregate-recall"`. Repeating the same request returns the same saved memory.
+- `aggregate.usage` reports tokens, cost, and duration per stage when the provider reports them, and `null` otherwise.
+
+#### Summary card
+
+With `memory.pipelineV2.reranker.useExtractionModel` on and `limit` of at least 2, recall may prepend a synthesized summary: `source: "llm_summary"`, `supplementary: true`, id `summary:<sha1-12>`. It is not stored.
+
+#### Result sources
+
+| Group | `source` values |
+|---|---|
+| Search lanes | `hybrid`, `vector`, `keyword`, `hint` |
+| Graph | `structured`, `sec`, `traversal`, `ka_traversal`, `graph`, `constructed` |
+| Temporal | `temporal`, `temporal_candidate`, `temporal_hybrid`, `temporal_topic`, `temporal_window`, `temporal_<facet>` |
+| Sources | `source`, `source_obsidian`, `source_import`, `native_memory`, `transcript` |
+| Synthesized | `llm_summary` |
+
+#### Client compatibility
+
+Clients default `limit` to 10, and the daemon clamps every request to 50.
+
+| Client | Scope | Score threshold | Differences |
+|---|---|---|---|
+| Core, SDK | Any scope string | `minScore` | None |
+| OpenClaw | Not exposed | `min_score` | Exposes a subset of fields |
+| OpenCode | Exact scope string | `min_score` | None |
+| Hermes Agent | Through `agent_scoped` | `score_min` | Exposes a subset of fields |
+| Unreal | World or player namespace | Not exposed | NPC default `6`, max `20`; always sets `includeRecalled` |
+
+Request vectors shared by every runtime live in `platform/core/contracts/recall-request-v1.json`.
+
+## GET /api/memory/search
+
+Runs the same hybrid recall as `POST /api/memory/recall`, with parameters in the query string.
+
+<EndpointSpec
+	rows={{
+		Permission: "`recall`",
+		Deadline: "30 s in the recall owner",
+		Response: "Same as [`POST /api/memory/recall`](#response)",
+	}}
+/>
+
+```bash
+curl -s 'http://localhost:3850/api/memory/search?q=editor+preferences&limit=5'
+```
+
+<Fields>
+
+- `q` **required**
+
+  Search text.
+
+- `limit` default 10
+
+  Clamped to `1..50`.
+
+- `type`, `tags`, `who`
+
+  Same as the POST body.
+
+- `pinned`
+
+  `1` or `true`.
+
+- `importance_min`, `since`, `until`
+
+  Same as the POST body.
+
+- `project`
+
+  A project-scoped token overrides it.
+
+- `agentId`, `agent_id`
+
+  Also read from `x-signet-agent-id`.
+
+- `sessionKey`, `session_key`
+
+  Also read from `x-signet-session-key`.
+
+- `includeRecalled`, `include_recalled`
+
+  `1` or `true`.
+
+</Fields>
+
+This route has no `scope`, so it returns only unscoped memories. It does not accept `time`, `aggregate`, `minScore`, or `keywordQuery`, and it has no `recallLlm` rate limit.
+
+Errors match the POST route, except that 400 is only `query is required`.
+
+## GET /memory/search
+
+Legacy keyword search used by the dashboard. It queries FTS5 directly and does not use the recall pipeline. New clients should use [`POST /api/memory/recall`](#post-apimemoryrecall).
+
+<EndpointSpec rows={{ Permission: "`recall`" }} />
+
+<Fields>
+
+- `q`
+
+  FTS5 query. Without it, filters alone select rows.
+
+- `limit` default 20 with q, 50 without
+
+  Clamped to `1..50`.
+
+- `type`, `tags`, `who`, `importance_min`, `since`
+
+  Filters.
+
+- `pinned`
+
+  `1` or `true`.
+
+- `distinct`
+
+  `who` returns the list of authors instead. Other parameters are ignored.
+
+</Fields>
+
+```json title="200 OK"
+{
+  "results": [
+    {
+      "id": "6f1c2a9e-0d4b-4e7a-9a51-3c8f2b7d1e40",
+      "content": "User prefers vim keybindings in every editor",
+      "created_at": "2026-02-21T10:00:00.000Z",
+      "who": "claude-code",
+      "importance": 0.9,
+      "tags": "editor,ui",
+      "type": "preference",
+      "pinned": 0,
+      "score": -4.2
+    }
+  ]
+}
+```
+
+- With `q`, `score` is the raw FTS5 BM25 value. Lower is better.
+- If `q` is not valid FTS5 syntax, the route falls back to a substring match ordered by newest, with no `score`.
+- With filters only, `score` is `1.0` for pinned rows and decayed importance otherwise.
+- With `distinct=who`, the response is `{ "values": ["alice", "bob"] }`.
+
+| Status | `error` | When |
+|---|---|---|
+| 401, 403 | | Same as recall. |
+| 500 | `Search failed` | The query failed. |
+
+## GET /memory/similar
+
+Returns memories whose embeddings are closest to an existing memory.
+
+<EndpointSpec
+	rows={{
+		Permission: "`recall`",
+		Clients: "`SignetClient` generated `getMemorySimilar`",
+	}}
+/>
+
+```bash
+curl -s 'http://localhost:3850/memory/similar?id=6f1c2a9e-0d4b-4e7a-9a51-3c8f2b7d1e40&k=5'
+```
+
+<Fields>
+
+- `id` **required**
+
+  The anchor memory.
+
+- `k` default 10
+
+  Results to return.
+
+- `type`
+
+  Only this memory type.
+
+</Fields>
+
+```json title="200 OK"
+{
+  "results": [
+    {
+      "id": "9b0e4d1a-7c2f-4f3e-8d6a-1e5b2c9f7a03",
+      "content": "User uses vim mode in VS Code",
+      "type": "preference",
+      "tags": ["editor"],
+      "score": 0.87,
+      "confidence": null,
+      "created_at": "2026-02-22T09:30:00.000Z"
+    }
+  ],
+  "completeness": "complete"
+}
+```
+
+The anchor is never in its own results. `completeness` and `searchedWindow` report how much of the vector index was scanned, as in `meta.vectorCompleteness`.
+
+| Status | `error` | When |
+|---|---|---|
+| 400 | `id is required` | `id` is missing. |
+| 404 | `No embedding found for this memory` | The anchor has no embedding, or is deleted or superseded. |
+| 500 | `Similarity search failed` | The search failed. |

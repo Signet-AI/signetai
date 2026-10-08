@@ -1,0 +1,228 @@
+---
+title: "Quickstart"
+description: "Install Signet, connect an agent, and see it remember something."
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+import HairlineFigure from "~/components/HairlineFigure.astro";
+import SequenceDiagram from "~/components/SequenceDiagram.astro";
+
+<HairlineFigure figure="terminal" label="A terminal window drawn in thin lines.">
+
+This guide takes you from nothing to an agent that remembers you across sessions. It takes about five minutes.
+
+You need macOS, Linux, or Windows x64, and an agent harness such as Claude Code, Codex, or OpenCode.
+
+</HairlineFigure>
+
+## 1. Install
+
+<Tabs syncKey="os">
+<TabItem label="macOS, Linux">
+
+```bash
+curl -fsSL https://signetai.sh/install.sh | bash
+```
+
+The installer downloads a native binary for your platform, checks its SHA-256, and places it at `~/.local/bin/signet`. It does not need Node or Bun.
+
+</TabItem>
+<TabItem label="Windows">
+
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
+```
+
+The installer places `signet.exe` in `%LOCALAPPDATA%\Programs\Signet` and adds it to your user `PATH`. Open a new PowerShell window afterward.
+
+</TabItem>
+<TabItem label="npm">
+
+```bash
+npm install -g signetai
+```
+
+The package is a small launcher that runs the native binary for your platform.
+
+</TabItem>
+</Tabs>
+
+### Nightly builds
+
+Nightly builds come from `main` automatically. They get fixes and features first and can break. Install one instead of stable with:
+
+<Tabs syncKey="os">
+<TabItem label="macOS, Linux">
+
+```bash
+curl -fsSL https://signetai.sh/install.sh | SIGNET_CHANNEL=nightly bash
+```
+
+</TabItem>
+<TabItem label="Windows">
+
+```powershell
+$env:SIGNET_CHANNEL = "nightly"; iwr -useb https://signetai.sh/install.ps1 | iex
+```
+
+</TabItem>
+<TabItem label="npm">
+
+```bash
+npm install -g signetai@next
+```
+
+</TabItem>
+</Tabs>
+
+The installer does not change where updates come from. After [step 2](#2-create-a-workspace), keep updates on nightly with:
+
+```bash
+signet update channel nightly
+```
+
+Run `signet update channel stable` to go back.
+
+### Check the install
+
+Check that your shell can find it:
+
+```bash
+signet --version
+```
+
+If you see `signet: command not found`, add `~/.local/bin` to your `PATH`. When the installer runs through a pipe, it cannot edit your shell profile for you.
+
+```bash
+# zsh; use ~/.bash_profile for bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+Your agent's hooks call `signet` from `PATH` too, so fix this now rather than later.
+
+## 2. Create a workspace
+
+```bash
+signet setup
+```
+
+```text
+  Workspace: /Users/you/.agents
+  Continue setup: http://127.0.0.1:3850/#setup
+  Connect your provider, select a memory model, and test the connection.
+```
+
+Setup creates a workspace at `~/.agents`, starts the Signet daemon on `127.0.0.1:3850`, and opens onboarding. If you installed the desktop app, onboarding opens there; otherwise it opens in your browser. If nothing opens, paste the URL yourself.
+
+## 3. Finish onboarding
+
+Onboarding is nine short screens. Three of them decide how Signet works for you.
+
+| Screen | What to do |
+|---|---|
+| Identity | Name your agent. This is required. |
+| Harnesses | Select the agents you use, such as Claude Code. Signet installs their hooks. |
+| Connection | Sign in to a model provider, or point at a local model, then **Test and enable memory**. |
+
+The other screens are optional. **Sources** imports an Obsidian vault, transcripts, or files. **Search** keeps keyword search by default; pick an embedding provider for semantic recall. **First memory** saves one memory to prove the loop works.
+
+No provider yet? Choose **Set up later**. Saving and recalling memories still works. Memory processing pauses until you connect a provider under **Settings → Inference**, and Dreaming starts on its own once you do.
+
+## 4. Check that it is running
+
+```bash
+signet status
+```
+
+```text
+  Status
+  ● Daemon running v0.237.1
+    Dashboard: http://127.0.0.1:3850
+  ✓ agent.yaml
+  ✓ database
+  Memories: 1
+  Path: /Users/you/.agents
+```
+
+A `○ Daemon stopped` line means the daemon is not running; start it with `signet daemon start`.
+
+## 5. Save and recall a memory
+
+```bash
+signet remember "Use Bun for this project" --tags project,tooling
+```
+
+```text
+✔ Saved memory: 3f9c1e0a-6b2d-4c8e-9f71-2a5d8b0e4c13 (no embedding)
+  Tags: project,tooling
+```
+
+`(no embedding)` is expected with keyword search. Add `--critical` to pin a memory.
+
+```bash
+signet recall "which package manager should this project use"
+```
+
+```text wrap
+Found 1 memory (keyword).
+
+Primary matches:
+- [64%] id: 3f9c1e0a-6b2d-4c8e-9f71-2a5d8b0e4c13; Use Bun for this project (fact, keyword, 2026-10-08, by user)
+```
+
+## 6. See it in your agent
+
+Start a new session in the agent you connected and ask what it knows about the project. Sessions that were already open do not have the hooks.
+
+Skipped the Harnesses screen? Connect one from the terminal:
+
+```bash
+signet connect claude-code
+```
+
+Here is what the connector does on each session:
+
+<SequenceDiagram
+	title="An agent session with Signet connected. The hooks run the signet CLI, which asks the daemon."
+	participants={[
+		{ id: "agent", label: "Agent", sub: "Claude Code" },
+		{ id: "hook", label: "signet hook", sub: "from PATH" },
+		{ id: "daemon", label: "Daemon", sub: "127.0.0.1:3850" },
+	]}
+	steps={[
+		{ from: "agent", to: "hook", label: "SessionStart" },
+		{ from: "hook", to: "daemon", label: "session-start" },
+		{ from: "daemon", to: "hook", label: "working memory", reply: true },
+		{ from: "hook", to: "agent", label: "inject context", reply: true },
+		{ frame: "each prompt", steps: [
+			{ from: "agent", to: "hook", label: "UserPromptSubmit" },
+			{ from: "hook", to: "daemon", label: "user-prompt-submit" },
+			{ from: "daemon", to: "hook", label: "related context", reply: true },
+			{ from: "hook", to: "agent", label: "inject context", reply: true },
+		] },
+		{ from: "agent", to: "hook", label: "SessionEnd" },
+		{ from: "hook", to: "daemon", label: "session-end" },
+		{ note: "store transcript · queue summary", over: ["daemon"] },
+	]}
+/>
+
+## If something goes wrong
+
+| Symptom | Fix |
+|---|---|
+| `signet: command not found` | Add `~/.local/bin` to `PATH`, as in [step 1](#1-install). |
+| Onboarding did not open | Open `http://127.0.0.1:3850/#setup`. |
+| `Daemon is not running` | Run `signet daemon start`. |
+| `Memory is paused until you connect a provider` | Connect a provider under **Settings → Inference** in the dashboard. |
+| `Another workspace is running at this address` | Stop the other daemon, or run setup against its workspace. |
+| `Could not start Signet` | Run `signet doctor`. |
+| The agent remembers nothing | Start a new session, confirm `signet status` shows the daemon running, and check that `signet` is on `PATH`. |
+
+## Next steps
+
+- [Set up Signet](/getting-started/setup/): scripted setup, identity presets, and remote daemons.
+- [Your first session](/getting-started/first-session/): memory, secrets, and skills in daily use.
+- [Connect a harness](/harnesses/): every supported agent and what its connector installs.
+- [Memory and recall](/memory/): how recall ranks and what it returns.
+- [CLI reference](/cli/): every command and flag.

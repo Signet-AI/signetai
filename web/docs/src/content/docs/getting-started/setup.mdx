@@ -1,0 +1,298 @@
+---
+title: "Set up Signet"
+description: "Create a workspace and walk through onboarding: identity, agents, model, sources, and search."
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+import HairlineFigure from "~/components/HairlineFigure.astro";
+import Screenshot from "~/components/Screenshot.astro";
+import Fields from "~/components/Fields.astro";
+import identityLight from "~/assets/screenshots/setup/identity-light.png";
+import identityDark from "~/assets/screenshots/setup/identity-dark.png";
+import harnessesLight from "~/assets/screenshots/setup/harnesses-light.png";
+import harnessesDark from "~/assets/screenshots/setup/harnesses-dark.png";
+import connectionLight from "~/assets/screenshots/setup/connection-light.png";
+import connectionDark from "~/assets/screenshots/setup/connection-dark.png";
+import sourcesLight from "~/assets/screenshots/setup/sources-light.png";
+import sourcesDark from "~/assets/screenshots/setup/sources-dark.png";
+import searchLight from "~/assets/screenshots/setup/search-light.png";
+import searchDark from "~/assets/screenshots/setup/search-dark.png";
+import memoryLight from "~/assets/screenshots/setup/first-memory-light.png";
+import memoryDark from "~/assets/screenshots/setup/first-memory-dark.png";
+import summaryLight from "~/assets/screenshots/setup/summary-light.png";
+import summaryDark from "~/assets/screenshots/setup/summary-dark.png";
+
+<HairlineFigure figure="exploded" label="An app window taken apart into four stacked layers.">
+
+`signet setup` creates your workspace, starts the daemon, and opens onboarding: nine screens that name your agent, connect the tools you use, and choose how memory runs.
+
+Run it again whenever you want to change those choices. It picks up your current settings and resets nothing.
+
+</HairlineFigure>
+
+## Run setup
+
+```bash
+signet setup
+```
+
+```text
+  Workspace: /Users/you/.agents
+  Continue setup: http://127.0.0.1:3850/#setup
+  Connect your provider, select a memory model, and test the connection.
+```
+
+Setup needs an interactive terminal. On a new workspace it creates:
+
+- `agent.yaml`, the workspace configuration
+- `data/signet.db`, the memory database
+- folders for files, transcripts, skills, and secrets, plus a `.gitignore`
+
+Then it starts the daemon on `127.0.0.1:3850` and opens onboarding in the desktop app if it is installed, otherwise in your browser. If nothing opens, paste the printed URL. `signet configure` opens the same flow.
+
+A new workspace starts with these defaults. Onboarding changes them.
+
+| Setting | Default |
+|---|---|
+| Identity files | Off. Your harnesses keep their own instructions. |
+| Search | Keyword only. No embedding model. |
+| Dreaming | On. It waits until a model provider is connected. |
+| Telemetry | Off. |
+
+## Onboarding
+
+Onboarding is a full-page view in the dashboard. Three screens shape how Signet works: **Identity**, **Harnesses**, and **Connection**. The rest are optional or informational, except **First memory**, which proves the loop works.
+
+| | Screen | You |
+|---|---|---|
+| 1 | Welcome | Read and continue. |
+| 2 | How it works | Read and continue. |
+| 3 | [Identity](#identity) | Name your agent. Required. |
+| 4 | [Harnesses](#harnesses) | Pick the agents you use. |
+| 5 | [Connection](#connection) | Connect a model, or set it up later. |
+| 6 | [Sources](#sources) | Import notes or files. Optional. |
+| 7 | [Search](#search) | Choose keyword or semantic search. |
+| 8 | [First memory](#first-memory) | Save one memory and recall it. Required. |
+| 9 | [Summary](#summary) | Review and open Signet. |
+
+### Identity
+
+<Screenshot light={identityLight} dark={identityDark} alt="The Identity screen with Agent name, Your name, and Identity preset fields." />
+
+<Fields>
+
+- `Agent name` **required**
+
+  Your agent's display name, up to 80 characters. It appears in the dashboard and in identity file templates.
+
+- `Your name` optional
+
+  Fills the name lines in `USER.md` and `AGENTS.md` when Signet manages identity files.
+
+- `Identity preset` default: Keep identity in my existing tools
+
+  Whether Signet writes and injects identity files, and which ones.
+
+</Fields>
+
+Keep the default if your harness already has the instructions you want. Choose a preset to let Signet manage identity files across every connected agent. Each file opens in an editor before you save.
+
+| Preset | Files Signet writes |
+|---|---|
+| Keep identity in my existing tools | None |
+| Minimal · instructions only | `AGENTS.md`, `DREAMING.md` |
+| Hermes · personality + instructions | `SOUL.md`, `AGENTS.md`, `DREAMING.md` |
+| OpenClaw · full identity | `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `DREAMING.md`, `BOOTSTRAP.md` |
+| Custom · choose your files | The files you check |
+
+`DREAMING.md` is loaded only by Dreaming sessions. Identity files never change the memory database or recall.
+
+### Harnesses
+
+<Screenshot light={harnessesLight} dark={harnessesDark} alt="The Harnesses screen with Claude Code selected among eleven agents." />
+
+Select every agent you use: Claude Code, Codex, Hermes Agent, OpenCode, OpenClaw, Gemini, pi, Oh My Pi, Kimi, Muse Code, or ForgeCode. **Connect agents** installs each agent's Signet integration on the machine running the daemon. You can skip this screen and run [`signet connect`](/harnesses/) later.
+
+- Agents only pick up the hooks in sessions started after connecting.
+- Deselecting an agent here does not disconnect it.
+- OpenClaw needs its plugin package first. If it is missing, run `signet setup --non-interactive --harness openclaw`, then retry.
+- Hermes profiles other than the default connect from the terminal: `signet connect hermes --profile <name>`.
+
+### Connection
+
+<Screenshot light={connectionLight} dark={connectionDark} alt="The Connection screen with ChatGPT, Anthropic, and Local model options, a provider list, and the Dreaming switch." />
+
+Signet uses a model to extract memories from your sessions and to run Dreaming. Choose one:
+
+- **ChatGPT / Codex** or **Anthropic (Claude)**: sign in with your subscription.
+- **Local model**: an OpenAI-compatible server on this machine, such as Ollama or LM Studio. The address must be a loopback address; the default is `http://127.0.0.1:1234/v1`.
+- **Use another provider**: any provider in the catalog. Providers that support sign-in use it; the rest take an API key, which Signet stores as a secret.
+
+Then pick a memory model and select **Test and enable memory**. Signet saves the configuration, sends the model a short test prompt, and starts automatic memory processing. If memory processing is frozen or in shadow mode in Settings, enabling stops and tells you to review those controls.
+
+**Dreaming** is on by default and saves as soon as you toggle it.
+
+**Set up later** skips the connection. Saving and recalling memories still work, but `signet status` and Home show **Memory is paused until you connect a provider**. Connect one later under **Settings → Inference**. Dreaming stops waiting within about 30 seconds and runs once there is enough to process.
+
+### Sources
+
+<Screenshot light={sourcesLight} dark={sourcesDark} alt="The Sources screen with Obsidian, Agent transcripts, and Files and documents options." />
+
+Bring in context you already have. Each option is optional and you can add more than one.
+
+- **Obsidian** connects a vault by its absolute path and indexes it.
+- **Agent transcripts** imports conversation exports into an agent. See [transcript imports](/sources/#agent-transcript-imports).
+- **Files and documents** imports reference material.
+
+Imports keep running after you continue. Follow their progress, errors, and retries under **Sources**.
+
+### Search
+
+<Screenshot light={searchLight} dark={searchDark} alt="The Search screen with Keyword search only selected." />
+
+Keyword search finds memories that share words with your query. An embedding model also finds memories by meaning.
+
+| Option | Model | Runs |
+|---|---|---|
+| Built-in | `nomic-embed-text-v1.5` | On this machine. Recommended. The first use is slower while the model loads. |
+| Ollama | `nomic-embed-text` | Your Ollama server, `http://localhost:11434` |
+| llama.cpp | `nomic-embed-text-v1.5` | Your llama.cpp server, `http://localhost:8080` |
+| OpenAI | `text-embedding-3-small` | OpenAI, with an API key stored as a secret |
+| Keyword search only | None | Default |
+
+**Keep current settings** continues without changes. Change this later under **Settings → Inference → Embeddings**; switching models rebuilds the search index and leaves your memories intact.
+
+### First memory
+
+<Screenshot light={memoryLight} dark={memoryDark} alt="The First memory screen after saving and recalling a memory about answer style." />
+
+Write one thing your agents should know, up to 240 characters. **Remember this** saves it as a private memory for your agent, and **Recall it** searches for it. You continue once recall finds it. Retrying never saves it twice.
+
+### Summary
+
+<Screenshot light={summaryLight} dark={summaryDark} alt="The Summary screen listing the agent, connected tools, background memory, search, sources, and first memory." />
+
+The summary shows what onboarding configured and which checks ran. **Open Signet** goes to Home. Start a new session in a connected agent and ask what it knows about you.
+
+## Run setup again
+
+`signet setup` on an existing workspace starts the daemon and reopens onboarding with your current settings filled in. It does not reset anything.
+
+- Onboarding remembers your place in this browser, up to the Connection screen. The connection test always runs again.
+- The saved place includes your draft first memory but never credentials.
+- Leaving before the summary asks for confirmation. Settings you already saved stay saved.
+- Passing configuration flags to an existing workspace requires `--non-interactive`.
+
+## Headless setup
+
+For servers and scripts, run setup without prompts. These flags apply to a new workspace.
+
+```bash
+signet setup --non-interactive \
+  --name "My Agent" \
+  --harness claude-code \
+  --embedding-provider native \
+  --extraction-provider none
+```
+
+`--extraction-provider none` leaves the model connection for later under **Settings → Inference**. Headless setup also starts the daemon and, with built-in embeddings, loads the model.
+
+<Fields>
+
+- `--non-interactive`
+
+  Apply flags without prompts. Also works without a terminal.
+
+- `-p, --path` path
+
+  Workspace directory. Defaults to `~/.agents`.
+
+- `--name`, `--description` text · default My Agent, Personal AI assistant
+
+  The agent's display name and description.
+
+- `--harness` id · repeatable
+
+  `claude-code`, `codex`, `hermes-agent`, `opencode`, `openclaw`, `gemini`, `pi`, `oh-my-pi`, `kimi`, `muse-code`, or `forge`.
+
+- `--identity-mode` managed, off · default managed
+
+  Headless setup manages identity files by default. Pass `off` to match interactive setup.
+
+- `--identity-preset` minimal, hermes, openclaw, custom · default minimal
+
+  Which identity files to write when managed.
+
+- `--embedding-provider` native, ollama, openai, none · default native
+
+  Search model. `--embedding-model` overrides the model where the provider allows it.
+
+- `--extraction-provider` provider · default detected
+
+  Model for memory extraction: `claude-code`, `codex`, `opencode`, `ollama`, `llama-cpp`, `openrouter`, `openai-compatible`, `acpx`, or `none`. `--extraction-model` and `--extraction-endpoint` refine it.
+
+- `--obsidian-source` path[::name] · repeatable
+
+  Connect an Obsidian vault.
+
+- `--agent` name:policy[:group] · repeatable
+
+  Create additional agents. Policy is `isolated`, `shared`, or `group`.
+
+- `--remote-url` origin
+
+  Use a daemon on another machine. See [Remote daemon](#remote-daemon).
+
+- `--network-mode` localhost, tailscale · default localhost
+
+  Where the daemon listens.
+
+- `--enable-dreaming`
+
+  Turn Dreaming on. New workspaces have it on already.
+
+- `--skip-git`
+
+  Skip initializing Git and committing the new workspace.
+
+- `--open-dashboard`
+
+  Open the dashboard when setup finishes.
+
+</Fields>
+
+The [CLI reference](/cli/getting-started/#signet-setup) lists every flag.
+
+### Setup plans
+
+A plan is the full set of setup choices as JSON. It suits provisioning tools that already know every answer.
+
+```bash
+signet setup --non-interactive --name "My Agent" --harness claude-code --dry-run > plan.json
+signet setup --file plan.json
+```
+
+- `--dry-run` prints the resolved plan for a new workspace without applying it.
+- `--file` and `--json` apply a plan, and only to a new workspace.
+- `--schema` prints the plan's JSON Schema.
+
+## Remote daemon
+
+`--remote-url https://signet.example.com` points the workspace at a daemon on another machine instead of starting one locally. The value is a bare origin, with no path or credentials.
+
+- Interactive setup requires the remote daemon to respond before it opens onboarding.
+- Headless setup records the URL without checking it.
+- Harnesses connected from onboarding and Obsidian paths refer to the daemon's machine. To connect an agent on your own machine, run `signet connect` there.
+
+## If something goes wrong
+
+| Symptom | Fix |
+|---|---|
+| `signet setup is interactive and requires a TTY` | Run it in a terminal, or use [headless setup](#headless-setup). |
+| `Use --non-interactive to apply configuration flags to an existing workspace` | Add `--non-interactive`, or run `signet setup` alone and change settings in onboarding. |
+| `Another workspace is running at this address` | Stop the other daemon, or select its workspace. |
+| `Signet is not ready` | Run `signet doctor`, then retry setup. |
+| Onboarding did not open | Open `http://127.0.0.1:3850/#setup`. |
+| `Could not load the daemon or provider catalog` | Check `signet status`, then select **Retry**. |
+| `OpenClaw needs its Signet plugin package` | Run `signet setup --non-interactive --harness openclaw`, then retry. |
+| `Memory is still paused, frozen, or in shadow mode` | Review memory controls in **Settings**, then test again. |
