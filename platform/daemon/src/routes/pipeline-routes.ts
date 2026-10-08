@@ -48,7 +48,7 @@ import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreaming-token-cache";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
-import { AlreadyRunningError } from "../pipeline/dreaming-worker.js";
+import { AlreadyRunningError, type DreamingSchedulerStatus } from "../pipeline/dreaming-worker.js";
 import { getSseDiagnosticsSnapshot, openBoundedSse } from "../sse-stream.js";
 import { getTraversalStatus } from "../pipeline/graph-traversal.js";
 import {
@@ -250,12 +250,25 @@ const DREAMING_LIVE_STREAM_HIGH_WATER_MARK_BYTES = 1024 * 1024;
 
 export function getDreamingTriggerBlockReason(
 	transitioning: boolean,
-	paused: boolean,
-	mutationsFrozen: boolean,
+	pipeline: { readonly enabled: boolean; readonly paused: boolean; readonly mutationsFrozen: boolean },
 ): { readonly status: 409 | 503; readonly error: string } | null {
 	if (transitioning) return { status: 409, error: "Pipeline transition already in progress" };
-	if (paused) return { status: 503, error: "Pipeline is paused" };
-	if (mutationsFrozen) return { status: 503, error: "Mutations are frozen (kill switch active)" };
+	if (!pipeline.enabled) return { status: 503, error: "Pipeline is disabled" };
+	if (pipeline.paused) return { status: 503, error: "Pipeline is paused" };
+	if (pipeline.mutationsFrozen) return { status: 503, error: "Mutations are frozen (kill switch active)" };
+	return null;
+}
+
+export type DreamingBlockedBy = "disabled" | "paused" | "frozen" | "no_provider";
+
+export function getDreamingBlockedBy(
+	pipeline: { readonly enabled: boolean; readonly paused: boolean; readonly mutationsFrozen: boolean },
+	scheduler: DreamingSchedulerStatus | null,
+): DreamingBlockedBy | null {
+	if (!pipeline.enabled) return "disabled";
+	if (pipeline.paused) return "paused";
+	if (pipeline.mutationsFrozen) return "frozen";
+	if (scheduler?.reason === "inference_unavailable") return "no_provider";
 	return null;
 }
 
@@ -401,6 +414,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			dreaming: {
 				enabled: config.dreaming.enabled,
 				workerRunning: dreamingWorker?.running ?? false,
+				blockedBy: getDreamingBlockedBy(config.pipelineV2, dreamingWorker?.scheduler ?? null),
 			},
 			providerResolution: { ...providerRuntimeResolution, extraction: extractionWorkload },
 			logging: {
@@ -562,7 +576,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:565",
+				"routes/pipeline-routes.ts:579",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -878,7 +892,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:881",
+						"routes/pipeline-routes.ts:895",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
@@ -984,16 +998,15 @@ export function registerPipelineRoutes(app: Hono): void {
 
 	app.post("/api/dream/trigger", async (c) => {
 		const config = loadMemoryConfig(AGENTS_DIR);
-		const blocked = getDreamingTriggerBlockReason(
-			pipelineTransition,
-			config.pipelineV2.paused,
-			config.pipelineV2.mutationsFrozen,
-		);
+		const blocked = getDreamingTriggerBlockReason(pipelineTransition, config.pipelineV2);
 		if (blocked) return c.json({ error: blocked.error }, blocked.status);
 
 		const worker = getDreamingWorker();
 		if (!worker) {
 			return c.json({ error: "Dreaming worker not running" }, 503);
+		}
+		if (!(await worker.inferenceReady())) {
+			return c.json({ error: "No inference provider is connected" }, 503);
 		}
 
 		const contentType = c.req.header("content-type") ?? "";

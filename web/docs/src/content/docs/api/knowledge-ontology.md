@@ -912,9 +912,10 @@ Manually trigger a dreaming pass. Requires `admin` permission.
 Returns `202 Accepted` immediately and runs the pass in the background
 (passes can take up to several minutes on large graphs).
 The daemon keeps the worker available for manual triggers when automatic
-Dreaming is disabled; scheduled sweeps remain idle. The pipeline must not be
-paused and mutations must not be frozen. Returns 409 when no pass can start
-and 503 if the pipeline prevents worker startup.
+Dreaming is disabled; scheduled sweeps remain idle. The pipeline must be
+enabled, must not be paused, and mutations must not be frozen. Returns 409 when
+no pass can start, 503 if the pipeline prevents worker startup, and 503 with
+`"No inference provider is connected"` when no inference route resolves.
 
 An incremental trigger may start several passes. The daemon splits the agents
 that are not already in a running pass into up to `memory.dreaming.maxConcurrentPasses`

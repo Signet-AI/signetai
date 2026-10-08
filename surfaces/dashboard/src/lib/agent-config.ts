@@ -67,7 +67,8 @@ function delPath(obj: YamlObject, path: readonly string[]): void {
 	if (path.length > 0) del(obj, 0);
 }
 
-export function dreamingBlockedBy(agent: Record<string, unknown>): "paused" | "frozen" | null {
+export function dreamingBlockedBy(agent: Record<string, unknown>): "disabled" | "paused" | "frozen" | null {
+	if (getPath(agent, ["memory", "pipelineV2", "enabled"]) === false) return "disabled";
 	if (getPath(agent, ["memory", "pipelineV2", "paused"]) === true) return "paused";
 	if (getPath(agent, ["memory", "pipelineV2", "mutationsFrozen"]) === true) return "frozen";
 	return null;

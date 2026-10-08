@@ -58,6 +58,7 @@ export interface DreamingWorkerHandle {
 	readonly activePasses: readonly DreamingActivePass[];
 	readonly activePass: Promise<unknown> | null;
 	readonly scheduler: DreamingSchedulerStatus;
+	inferenceReady(): Promise<boolean>;
 }
 export interface DreamingActivePass {
 	readonly passId: string | null;
@@ -113,8 +114,8 @@ export function partitionDreamingScopes(
 	return groups.map((group) => [...group.scopes].sort()).filter((scopes) => scopes.length > 0);
 }
 export interface DreamingSchedulerStatus {
-	readonly status: "idle" | "deferred";
-	readonly reason: "queue_pressure" | "system_pressure" | null;
+	readonly status: "idle" | "deferred" | "blocked";
+	readonly reason: "queue_pressure" | "system_pressure" | "inference_unavailable" | null;
 	readonly checkedAt: string | null;
 }
 
@@ -164,6 +165,7 @@ export interface DreamingWorkerOptions {
 	readonly historyCompleterFactory?: (agentId: string) => DreamingHistoryCompleter;
 	readonly checkIntervalMs?: number;
 	readonly enabled?: () => boolean;
+	readonly inferenceAvailable?: () => Promise<boolean>;
 	readonly acpxMcp?: {
 		readonly daemonUrl: string;
 		readonly authorizationTokenForAgent?: (agentId: string) => string | undefined;
@@ -173,6 +175,7 @@ export interface DreamingWorkerOptions {
 }
 
 const CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const INFERENCE_RECHECK_MS = 30 * 1000;
 const AGENT_SCOPE_SNAPSHOT_REFRESH_MS = 30 * 60 * 1000;
 export async function shouldDeferDreamingSweep(
 	accessor: DbAccessor,
@@ -626,6 +629,26 @@ export function startDreamingWorker(
 		return first;
 	}
 
+	async function inferenceReady(): Promise<boolean> {
+		if (!options.inferenceAvailable || (await options.inferenceAvailable())) {
+			if (scheduler.reason === "inference_unavailable") {
+				logger.info("dreaming-worker", "Inference provider available; Dreaming resumes");
+				scheduler = { status: "idle", reason: null, checkedAt: new Date().toISOString() };
+			}
+			return true;
+		}
+		const entering = scheduler.reason !== "inference_unavailable";
+		if (entering) {
+			logger.info("dreaming-worker", "No inference provider is available; Dreaming waits for one");
+		}
+		scheduler = { status: "blocked", reason: "inference_unavailable", checkedAt: new Date().toISOString() };
+		if (entering && timer) {
+			clearTimeout(timer);
+			schedule();
+		}
+		return false;
+	}
+
 	async function check(): Promise<void> {
 		if (
 			stopped ||
@@ -635,6 +658,7 @@ export function startDreamingWorker(
 			!(options.enabled ? options.enabled() : cfg.enabled)
 		)
 			return;
+		if (!(await inferenceReady())) return;
 		const checkedAt = new Date().toISOString();
 		if (isSystemPressureHigh()) {
 			scheduler = { status: "deferred", reason: "system_pressure", checkedAt };
@@ -711,6 +735,7 @@ export function startDreamingWorker(
 	function schedule(): void {
 		if (stopped) return;
 		timer = setTimeout(async () => {
+			timer = null;
 			try {
 				await check();
 			} catch (e) {
@@ -722,9 +747,20 @@ export function startDreamingWorker(
 				);
 			}
 			schedule();
-		}, options.checkIntervalMs ?? CHECK_INTERVAL_MS);
+		}, nextCheckDelay());
+	}
+	function nextCheckDelay(): number {
+		const interval = options.checkIntervalMs ?? CHECK_INTERVAL_MS;
+		return scheduler.reason === "inference_unavailable" ? Math.min(interval, INFERENCE_RECHECK_MS) : interval;
 	}
 	schedule();
+	if (options.enabled ? options.enabled() : cfg.enabled) {
+		void inferenceReady().catch((e: unknown) => {
+			logger.warn("dreaming-worker", "Initial inference availability check failed", {
+				error: e instanceof Error ? e.message : String(e),
+			});
+		});
+	}
 
 	logger.info("dreaming-worker", "Dreaming worker started", {
 		threshold: cfg.tokenThreshold,
@@ -810,5 +846,6 @@ export function startDreamingWorker(
 		get scheduler() {
 			return scheduler;
 		},
+		inferenceReady,
 	};
 }

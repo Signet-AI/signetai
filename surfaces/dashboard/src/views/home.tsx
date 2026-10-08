@@ -74,6 +74,9 @@ export function HomeView() {
 						description="Your knowledge, agents, and connections."
 					/>
 					<NeedsAttention
+						waitingForProvider={
+							status.data?.dreaming?.enabled === true && status.data.dreaming.blockedBy === "no_provider"
+						}
 						sources={sources}
 						connectors={harnessesQuery.data?.error ? undefined : harnessesQuery.data?.data?.connectors}
 						onShowSource={(id) => setSourceFocus({ id, at: Date.now() })}
@@ -98,11 +101,13 @@ export function HomeView() {
 	);
 }
 function NeedsAttention({
+	waitingForProvider,
 	sources,
 	connectors,
 	onShowSource,
 	onSourcesChanged,
 }: {
+	waitingForProvider: boolean;
 	sources?: readonly SignetSource[];
 	connectors?: readonly HarnessConnector[];
 	onShowSource: (id: string) => void;
@@ -123,7 +128,12 @@ function NeedsAttention({
 		return issue ? [{ connector, issue }] : [];
 	});
 	const proposalsFailed = !proposals.loading && proposals.data === null;
-	const count = sourceIssues.length + connectorIssues.length + suggestions.length + (proposalsFailed ? 1 : 0);
+	const count =
+		(waitingForProvider ? 1 : 0) +
+		sourceIssues.length +
+		connectorIssues.length +
+		suggestions.length +
+		(proposalsFailed ? 1 : 0);
 	if (count === 0) return null;
 
 	return (
@@ -134,6 +144,15 @@ function NeedsAttention({
 				meta={<span className="text-meta tabular-nums text-muted-foreground">{count}</span>}
 			/>
 			<ul className="home-attention-list">
+				{waitingForProvider && (
+					<AttentionItem
+						tone="warn"
+						title="Memory is paused until you connect a provider"
+						detail="Dreaming needs a model to organize what Signet captures. It starts on its own once one is connected."
+						action="Connect"
+						onAction={() => openSettings("inference")}
+					/>
+				)}
 				{sourceIssues.map(({ source, issue }) =>
 					issue.fix === "reindex" ? (
 						<AttentionItem

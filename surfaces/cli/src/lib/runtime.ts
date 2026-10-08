@@ -165,6 +165,7 @@ interface DaemonInstance {
 	readonly dreaming: {
 		readonly enabled: boolean;
 		readonly workerRunning: boolean;
+		readonly blockedBy: DreamingBlockedBy | null;
 	} | null;
 	readonly workspaceStats: WorkspaceStatusSummaryFromStatus | null;
 	readonly workspaceLayoutUpgrade: string | null;
@@ -186,9 +187,11 @@ interface DaemonInstance {
 	readonly openclaw: DaemonOpenClawHealthSummary | null;
 }
 
+type DreamingBlockedBy = "disabled" | "paused" | "frozen" | "no_provider";
+
 interface DreamingSchedulerStatusFromStatus {
-	readonly status: "idle" | "deferred";
-	readonly reason: "queue_pressure" | "system_pressure" | null;
+	readonly status: "idle" | "deferred" | "blocked";
+	readonly reason: "queue_pressure" | "system_pressure" | "inference_unavailable" | null;
 	readonly checkedAt: string | null;
 }
 
@@ -710,7 +713,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						networkMode?: string;
 						agentsDir?: string;
 						workspaceLayout?: { upgrade?: { state?: unknown; reason?: unknown } | null };
-						dreaming?: { enabled?: boolean; workerRunning?: boolean };
+						dreaming?: { enabled?: boolean; workerRunning?: boolean; blockedBy?: unknown };
 						health?: {
 							score?: number;
 							status?: string;
@@ -1022,19 +1025,28 @@ function normalizeWorkspaceStatusSummaryFromStatus(value: unknown): WorkspaceSta
 function normalizeDreamingStatusFromStatus(value: unknown): DaemonInstance["dreaming"] {
 	if (!isStatusRecord(value)) return null;
 	if (typeof value.enabled !== "boolean" || typeof value.workerRunning !== "boolean") return null;
-	return { enabled: value.enabled, workerRunning: value.workerRunning };
+	const blockedBy = value.blockedBy;
+	return {
+		enabled: value.enabled,
+		workerRunning: value.workerRunning,
+		blockedBy:
+			blockedBy === "disabled" || blockedBy === "paused" || blockedBy === "frozen" || blockedBy === "no_provider"
+				? blockedBy
+				: null,
+	};
 }
 
 function normalizeDreamingSchedulerFromStatus(value: unknown): DreamingSchedulerStatusFromStatus | null {
 	if (typeof value !== "object" || value === null) return null;
 	const record = value as Record<string, unknown>;
 	const status = record.status;
-	if (status !== "idle" && status !== "deferred") return null;
+	if (status !== "idle" && status !== "deferred" && status !== "blocked") return null;
 	const reason = record.reason;
 	const checkedAt = record.checkedAt;
 	return {
 		status,
-		reason: reason === "queue_pressure" || reason === "system_pressure" ? reason : null,
+		reason:
+			reason === "queue_pressure" || reason === "system_pressure" || reason === "inference_unavailable" ? reason : null,
 		checkedAt: typeof checkedAt === "string" && checkedAt.trim().length > 0 ? checkedAt : null,
 	};
 }

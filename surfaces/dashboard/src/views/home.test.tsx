@@ -10,6 +10,7 @@ const originalFetch = globalThis.fetch;
 let restoreDomGlobals = () => {};
 
 let harnessPayload: unknown;
+let statusPayload: unknown = { agentId: null };
 
 function flush(): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, 0));
@@ -23,7 +24,7 @@ beforeAll(() => {
 			return Response.json(harnessPayload);
 		}
 		if (path.endsWith("/api/status")) {
-			return Response.json({ agentId: null });
+			return Response.json(statusPayload);
 		}
 		if (path.endsWith("/api/knowledge/stats")) {
 			return Response.json({ entityCount: 0 });
@@ -130,6 +131,54 @@ test("hides the setup link once a harness connection is configured", async () =>
 		await unmountHome(root);
 		container.remove();
 	}
+});
+
+test("asks for a provider while Dreaming waits for inference", async () => {
+	harnessPayload = { harnesses: [], configuredHarnesses: ["codex"] };
+	statusPayload = { agentId: null, dreaming: { enabled: true, workerRunning: true, blockedBy: "no_provider" } };
+	const [container, root] = await renderHome();
+	try {
+		for (let attempt = 0; attempt < 50 && !container.textContent?.includes("connect a provider"); attempt += 1) {
+			await act(async () => {
+				await flush();
+			});
+		}
+		expect(container.textContent).toContain("Memory is paused until you connect a provider");
+		const connect = [...container.querySelectorAll("button")].find((button) => button.textContent === "Connect");
+		expect(connect).toBeDefined();
+		await act(async () => {
+			connect?.click();
+			await flush();
+		});
+		expect(window.location.hash).toContain("inference");
+	} finally {
+		statusPayload = { agentId: null };
+		await unmountHome(root);
+		container.remove();
+	}
+});
+
+test("does not ask for a provider when Dreaming is blocked by the pipeline or turned off", async () => {
+	harnessPayload = { harnesses: [], configuredHarnesses: ["codex"] };
+	for (const dreaming of [
+		{ enabled: true, workerRunning: true, blockedBy: "paused" },
+		{ enabled: false, workerRunning: true, blockedBy: "no_provider" },
+	]) {
+		statusPayload = { agentId: null, dreaming };
+		const [container, root] = await renderHome();
+		try {
+			for (let attempt = 0; attempt < 20; attempt += 1) {
+				await act(async () => {
+					await flush();
+				});
+			}
+			expect(container.textContent).not.toContain("connect a provider");
+		} finally {
+			await unmountHome(root);
+			container.remove();
+		}
+	}
+	statusPayload = { agentId: null };
 });
 
 test("a failed connector refresh does not invite repair of an existing connection", async () => {

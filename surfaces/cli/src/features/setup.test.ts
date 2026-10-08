@@ -1859,9 +1859,9 @@ describe("fresh interactive dashboard setup", () => {
 			const agentYaml = parseSimpleYaml(readFileSync(join(basePath, "agent.yaml"), "utf8"));
 			expect(Object.keys(agentYaml).sort()).toEqual(["capabilities", "embedding", "memory", "schema", "version"]);
 			expect(agentYaml.embedding).toEqual({ provider: "none" });
-			expect(agentYaml.memory).toMatchObject({
+			expect(agentYaml.memory).toEqual({
 				database: "data/signet.db",
-				pipelineV2: { enabled: false, paused: true, telemetryEnabled: false },
+				pipelineV2: { telemetryEnabled: false },
 			});
 			expect(agentYaml.capabilities).toMatchObject({
 				memory: { enabled: true },

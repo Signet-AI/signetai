@@ -76,7 +76,7 @@ export async function runDashboardSetupBootstrap(
 		embedding: { provider: "none" },
 		memory: {
 			database: relative(basePath, workspaceLayout.database),
-			pipelineV2: { enabled: false, paused: true, telemetryEnabled: false },
+			pipelineV2: { telemetryEnabled: false },
 		},
 	};
 	writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));

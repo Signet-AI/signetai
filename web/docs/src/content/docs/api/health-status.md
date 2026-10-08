@@ -467,11 +467,17 @@ order. The array is empty for non-blocked states.
 `GET /api/diagnostics/queue` for bounded queue counts. `dreaming.enabled`
 reports configuration and `dreaming.workerRunning` reports the live worker
 state; they are separate from the most recent scheduler decision in
-`pipeline.dreaming`.
+`pipeline.dreaming`. `dreaming.blockedBy` names what keeps automatic Dreaming
+from running: `"disabled"` (`memory.pipelineV2.enabled` is `false`),
+`"paused"`, `"frozen"`, or `"no_provider"` (no inference route resolves for
+Dreaming). It is `null` when nothing blocks it.
 `pipeline.dreaming` records the latest periodic Dreaming scheduler decision.
 It is `null` before the worker starts. A `deferred` result with
 `reason: "queue_pressure"` means the scheduler itself yielded that sweep to
 queue health. It does not infer a queue deferral from another readiness gate.
+A `blocked` result with `reason: "inference_unavailable"` means no inference
+route resolved; the worker rechecks every 30 seconds and returns to `idle` once
+a provider is connected.
 The retired worker's load/overload telemetry is no longer reported.
 `transcripts.capture` exposes compact durable transcript-capture queue counts;
 use `GET /api/diagnostics/transcripts` for detailed artifact/audit diagnostics.
