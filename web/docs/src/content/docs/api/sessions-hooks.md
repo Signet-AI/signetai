@@ -155,9 +155,9 @@ Releases the session's runtime path claim.
 
 `harness` is required.
 `reason` decides whether the request is a session boundary or a turn. Only a
-[boundary reason](/hooks/#session-end-boundary-reasons) queues transcript
-capture. A request without one is a turn and returns `"sessionBoundary": false`
-with `"queued": false`.
+[boundary reason](/hooks/#session-end-boundary-reasons) other than `clear`
+queues transcript capture. A request without one is a turn and returns
+`"sessionBoundary": false` with `"queued": false`.
 `transcriptPath` or inline `transcript` may be provided for transcript
 capture. `capturedAt` is optional for live hooks; importers should supply the
 original ISO-8601 event time so temporal reasoning retains source chronology.

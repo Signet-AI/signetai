@@ -105,7 +105,7 @@ session boundary:
 | `session.deleted` | OpenCode deleted the session |
 | `session_branch` | Oh My Pi forked the current session |
 | `session_fork` | pi forked the current session |
-| `session_shutdown` | pi shut down the current session |
+| `session_shutdown` | The harness shut down the current session (pi, or a native `SessionEnd` mapped by the CLI) |
 | `session_switch` | pi switched to another session |
 | `stale-session-sweep` | The daemon finalized an abandoned live-retained session after the stale-session TTL |
 
@@ -116,7 +116,10 @@ Requests without a recognized boundary reason, including ordinary
 `session.idle` calls, are turns. They emit `session.turn` telemetry and do not
 queue transcript capture. The response reports which one the daemon saw:
 `"sessionBoundary": true` for a boundary, `"sessionBoundary": false` for a
-turn.
+turn. `clear` is a boundary that discards context without queueing capture, so
+its response has no `queued` field. Requests skipped before classification,
+such as duplicate or bypassed sessions (`"skipped": true` or
+`"bypassed": true`), omit `sessionBoundary`.
 
 `signet hook session-end` translates native `SessionEnd` hook payloads, such as
 those from Claude Code and Kimi Code, into this vocabulary. A `clear` reason
