@@ -25,7 +25,7 @@ Remove an element when spacing, order, plain text, or standard HTML can do the s
 - Use the Signet blue accent for selection and active navigation. Do not introduce unrelated colors.
 - Use monochrome syntax highlighting. Keep code readable in both themes.
 - Set code blocks in the primary typeface, one step smaller than prose.
-- Mark inline code with a faint background and thin border. Do not add hue or heavy rounding.
+- Mark inline code with a faint background and full-contrast text. Do not add a border, hue, or heavy rounding.
 - Keep article heading sizes distinct from bold body text.
 - Use an opaque navigation header. Do not add backdrop blur or translucent navigation treatment without changing the site design deliberately.
 

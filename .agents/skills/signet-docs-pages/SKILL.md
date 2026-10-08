@@ -31,7 +31,7 @@ The primitives live in `web/docs/src/components/`: `Fields.astro`, `SequenceDiag
 ## Prerequisites
 
 - Read `web/docs/AGENTS.md`. It holds the visual rules this template depends on.
-- Start the dev server: `cd web/docs && bun run dev -- --port 4400 --host 127.0.0.1`. It runs detached; stop it with `bunx astro dev stop`.
+- Start the dev server: `cd web/docs && bun run dev -- --background --port 4400 --host 127.0.0.1`. Stop it with `bunx astro dev stop`.
 - Have a headless browser for screenshots (`agent-browser`, Playwright, or Chrome).
 
 ## How to Run

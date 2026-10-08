@@ -514,6 +514,8 @@ Errors match the POST route, except that 400 is only `query is required`.
 
 Legacy keyword search used by the dashboard. It queries FTS5 directly and does not use the recall pipeline. New clients should use [`POST /api/memory/recall`](#post-apimemoryrecall).
 
+This route does not resolve an agent or apply agent read policy. It searches every memory in the workspace, and `distinct=who` lists authors across all agents. Use recall when results must respect an agent's scope.
+
 <EndpointSpec rows={{ Permission: "`recall`" }} />
 
 <Fields>
@@ -570,7 +572,7 @@ Legacy keyword search used by the dashboard. It queries FTS5 directly and does n
 
 ## GET /memory/similar
 
-Returns memories whose embeddings are closest to an existing memory.
+Returns memories whose embeddings are closest to an existing memory. It does not apply agent read policy; results can come from any agent in the workspace.
 
 <EndpointSpec
 	rows={{
