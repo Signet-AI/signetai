@@ -45,6 +45,7 @@ import {
 	readRecentEpisodicSources,
 	searchEpisodicSources,
 	timestampMillis,
+	utcTimestampMs,
 } from "../episodic-sources";
 import { type GraphHygieneCaps, getDreamingHygieneCandidatesInDb } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
@@ -2332,7 +2333,7 @@ export const DREAMING_HALT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 export const DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES = 50;
 export function isDreamingScopeHalted(state: DreamingState, nowMs = Date.now()): boolean {
 	if (state.consecutiveFailures < DREAMING_FAILURE_HALT_THRESHOLD) return false;
-	const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
+	const failedAt = state.lastFailureAt === null ? Number.NaN : utcTimestampMs(state.lastFailureAt);
 	return Number.isFinite(failedAt) && nowMs - failedAt < DREAMING_HALT_COOLDOWN_MS;
 }
 export async function isDreamingHaltActive(
@@ -2606,7 +2607,7 @@ export async function evaluateDreamingTrigger(
 	if (isDreamingScopeHalted(state, nowMs)) return { trigger: false };
 	if (state.consecutiveFailures > 0) {
 		const exp = Math.min(state.consecutiveFailures, MAX_FAILURE_BACKOFF_MULTIPLIER);
-		const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
+		const failedAt = state.lastFailureAt === null ? Number.NaN : utcTimestampMs(state.lastFailureAt);
 		if (!Number.isFinite(failedAt) || nowMs - failedAt < FAILURE_BACKOFF_BASE_MS * 2 ** exp) return { trigger: false };
 	}
 
@@ -2659,7 +2660,7 @@ export async function evaluateDreamingTrigger(
 			)) !== undefined;
 		if (hasContinuation) return { trigger: true, reason: "continuation" };
 	}
-	const lastPassMs = state.lastPassAt === null ? Number.NaN : Date.parse(state.lastPassAt);
+	const lastPassMs = state.lastPassAt === null ? Number.NaN : utcTimestampMs(state.lastPassAt);
 	if (backlog.hasBacklog !== false && Number.isFinite(lastPassMs) && nowMs - lastPassMs >= cfg.maxInterval) {
 		return { trigger: true, reason: "max-interval" };
 	}

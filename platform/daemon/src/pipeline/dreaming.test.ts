@@ -53,7 +53,7 @@ import {
 } from "./dreaming-attention";
 import { pendingDreamingEvidenceContinuations } from "./dreaming-evidence-consumption";
 import { renderDreamingEvidence } from "./dreaming-evidence";
-import { readEpisodicMemory, searchEpisodicSources } from "../episodic-sources";
+import { readEpisodicMemory, searchEpisodicSources, utcTimestampMs } from "../episodic-sources";
 import {
 	autoRequeueRepairedDreamingEvidence,
 	collectRejectedDreamingEvidence,
@@ -1037,7 +1037,7 @@ describe("Dreaming", () => {
 	it("uses wall-clock backoff independently of later evidence volume", async () => {
 		seedSummary(db, "first", "episodic source", 10);
 		await recordDreamingFailure(accessor, AGENT);
-		const failedAt = Date.parse((await getDreamingState(accessor, AGENT)).lastFailureAt ?? "");
+		const failedAt = utcTimestampMs((await getDreamingState(accessor, AGENT)).lastFailureAt ?? "");
 		const cfg = defaultCfg({ tokenThreshold: 1, backfillOnFirstRun: false });
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 10 * 60 * 1000 - 1)).toBe(false);
 		seedSummary(db, "later", "episodic source ".repeat(3_000), 3_000);
@@ -1049,7 +1049,7 @@ describe("Dreaming", () => {
 		for (let i = 0; i < DREAMING_FAILURE_HALT_THRESHOLD; i += 1) {
 			await recordDreamingFailure(accessor, AGENT);
 		}
-		const failedAt = Date.parse((await getDreamingState(accessor, AGENT)).lastFailureAt ?? "");
+		const failedAt = utcTimestampMs((await getDreamingState(accessor, AGENT)).lastFailureAt ?? "");
 		const cfg = defaultCfg({ tokenThreshold: 1, backfillOnFirstRun: false });
 		seedSummary(db, "later", "episodic source ".repeat(3_000), 3_000);
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 60 * 1000)).toBe(false);
@@ -1070,25 +1070,82 @@ describe("Dreaming", () => {
 		expect(
 			isDreamingScopeHalted(
 				base({ ...fresh, consecutiveFailures: DREAMING_FAILURE_HALT_THRESHOLD - 1 }),
-				Date.parse("2026-08-05 12:30:00"),
+				Date.parse("2026-08-05T12:30:00Z"),
 			),
 		).toBe(false);
 		expect(
 			isDreamingScopeHalted(
 				base({ ...fresh, consecutiveFailures: DREAMING_FAILURE_HALT_THRESHOLD }),
-				Date.parse("2026-08-05 12:30:00"),
+				Date.parse("2026-08-05T12:30:00Z"),
 			),
 		).toBe(true);
 		expect(
 			isDreamingScopeHalted(
 				base({ ...fresh, consecutiveFailures: DREAMING_FAILURE_HALT_THRESHOLD }),
-				Date.parse("2026-08-05 12:00:00") + DREAMING_HALT_COOLDOWN_MS + 1_000,
+				Date.parse("2026-08-05T12:00:00Z") + DREAMING_HALT_COOLDOWN_MS + 1_000,
 			),
 		).toBe(false);
 		expect(
-			isDreamingScopeHalted(base({ lastFailureAt: null, consecutiveFailures: 99 }), Date.parse("2026-08-05 12:30:00")),
+			isDreamingScopeHalted(base({ lastFailureAt: null, consecutiveFailures: 99 }), Date.parse("2026-08-05T12:30:00Z")),
 		).toBe(false);
 	});
+
+	for (const timeZone of ["America/Denver", "Asia/Tokyo"]) {
+		it(`reads stored SQLite failure and pass times as UTC under TZ=${timeZone}`, async () => {
+			const previous = process.env.TZ;
+			process.env.TZ = timeZone;
+			try {
+				const stored = "2026-10-08 04:43:35";
+				const storedMs = Date.UTC(2026, 9, 8, 4, 43, 35);
+				const backoffMs = 10 * 60 * 1_000;
+				const maxInterval = 6 * 60 * 60 * 1_000;
+				accessor.withWriteTx((tx) => {
+					const insert = tx.prepare(
+						"INSERT INTO dreaming_state (agent_id, consecutive_failures, last_failure_at, last_pass_at) VALUES (?, ?, ?, ?)",
+					);
+					insert.run("backoff", 1, stored, null);
+					insert.run("halted", DREAMING_FAILURE_HALT_THRESHOLD, stored, null);
+					insert.run("interval", 0, null, stored);
+				});
+				const backlog: DreamingEpisodicBacklogProbe = { kind: "exact", tokens: 3, hasBacklog: true, sourcesScanned: 1 };
+				const cfg = defaultCfg({ tokenThreshold: 1, maxInterval, backfillOnFirstRun: false });
+				const quiet = defaultCfg({ tokenThreshold: 100_000, maxInterval, backfillOnFirstRun: false });
+
+				expect(await evaluateDreamingTrigger(accessor, cfg, "backoff", backlog, storedMs + backoffMs - 1)).toEqual({
+					trigger: false,
+				});
+				expect(await evaluateDreamingTrigger(accessor, cfg, "backoff", backlog, storedMs + backoffMs)).toEqual({
+					trigger: true,
+					reason: "token-threshold",
+				});
+
+				expect(await isDreamingHaltActive(accessor, "halted", storedMs + DREAMING_HALT_COOLDOWN_MS - 1)).toBe(true);
+				expect(
+					await evaluateDreamingTrigger(accessor, cfg, "halted", backlog, storedMs + DREAMING_HALT_COOLDOWN_MS - 1),
+				).toEqual({ trigger: false });
+				expect(await isDreamingHaltActive(accessor, "halted", storedMs + DREAMING_HALT_COOLDOWN_MS)).toBe(false);
+				expect(
+					await evaluateDreamingTrigger(accessor, cfg, "halted", backlog, storedMs + DREAMING_HALT_COOLDOWN_MS),
+				).toEqual({
+					trigger: true,
+					reason: "token-threshold",
+				});
+
+				expect(await evaluateDreamingTrigger(accessor, quiet, "interval", backlog, storedMs + maxInterval - 1)).toEqual(
+					{
+						trigger: false,
+					},
+				);
+				expect(await evaluateDreamingTrigger(accessor, quiet, "interval", backlog, storedMs + maxInterval)).toEqual({
+					trigger: true,
+					reason: "max-interval",
+				});
+			} finally {
+				if (previous === undefined) delete process.env.TZ;
+				else process.env.TZ = previous;
+			}
+		});
+	}
 
 	it("isDreamingHaltActive reads the halt state through the accessor", async () => {
 		for (let i = 0; i < DREAMING_FAILURE_HALT_THRESHOLD - 1; i += 1) {

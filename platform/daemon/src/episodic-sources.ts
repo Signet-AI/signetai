@@ -1,11 +1,14 @@
 import type { ReadDb } from "./db-accessor";
 export type EpisodicSourceKind = "memory" | "artifact" | "transcript" | "summary";
 export const EPISODIC_CAPTURED_AT_FLOOR = "2000-01-01T00:00:00.000Z";
-export function timestampMillis(value: string): number {
+export function utcTimestampMs(value: string): number {
 	const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
 		? `${value.replace(" ", "T")}Z`
 		: value;
-	const parsed = Date.parse(normalized);
+	return Date.parse(normalized);
+}
+export function timestampMillis(value: string): number {
+	const parsed = utcTimestampMs(value);
 	return Number.isFinite(parsed) ? parsed : 0;
 }
 export interface EpisodicCursor {
