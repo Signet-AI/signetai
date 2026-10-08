@@ -4,18 +4,18 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 809 sites
+- Exact ledger inventory: 810 sites
 - Synchronous `withWriteTx()` sites: 56
 - Synchronous `withReadDb()` sites: 88
 - Async-named DB sites: 168
 - Async-named ON-PARENT DB sites: 166
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 497
+- Synchronous filesystem/process sites: 498
 - Compile-visible legacy DB sites remaining: 144
   - `withWriteTx`: 56
   - `withReadDb`: 88
 
-The 809-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 56 synchronous writes, 88 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 144 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 810-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 56 synchronous writes, 88 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 144 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
@@ -141,13 +141,13 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `ontology-extraction.ts:751` (withWriteTx)
 - `ontology-link-evidence.ts:92` (withReadDbAsync)
 - `ontology-proposals.ts:594` (withReadDbAsync)
-- `ontology-proposals.ts:2486` (withReadDbAsync)
-- `ontology-proposals.ts:2503` (withReadDbAsync)
-- `ontology-proposals.ts:2535` (withReadDbAsync)
-- `ontology-proposals.ts:2619` (withReadDbAsync)
-- `ontology-proposals.ts:3099` (withReadDbAsync)
-- `ontology-proposals.ts:3110` (withReadDbAsync)
-- `ontology-proposals.ts:3160` (withReadDbAsync)
+- `ontology-proposals.ts:2529` (withReadDbAsync)
+- `ontology-proposals.ts:2546` (withReadDbAsync)
+- `ontology-proposals.ts:2578` (withReadDbAsync)
+- `ontology-proposals.ts:2662` (withReadDbAsync)
+- `ontology-proposals.ts:3142` (withReadDbAsync)
+- `ontology-proposals.ts:3153` (withReadDbAsync)
+- `ontology-proposals.ts:3203` (withReadDbAsync)
 - `path-feedback.ts:609` (withWriteTx)
 - `pipeline/aspect-feedback.ts:79` (withWriteTx)
 - `pipeline/aspect-feedback.ts:165` (withWriteTx)
@@ -292,20 +292,20 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `session-recall-dedupe.ts:255` (withWriteTxAsync)
 - `session-recall-dedupe.ts:288` (withWriteTxAsync)
 - `session-recall-dedupe.ts:336` (withWriteTx)
-- `session-transcripts.ts:128` (withReadDb)
-- `session-transcripts.ts:140` (withReadDb)
-- `session-transcripts.ts:281` (withReadDb)
-- `session-transcripts.ts:429` (withReadDb)
-- `session-transcripts.ts:483` (withWriteTx)
-- `session-transcripts.ts:565` (withWriteTxAsync)
-- `session-transcripts.ts:668` (withWriteTx)
-- `session-transcripts.ts:700` (withReadDb)
-- `session-transcripts.ts:797` (withReadDbAsync)
-- `session-transcripts.ts:816` (withReadDb)
-- `session-transcripts.ts:847` (withReadDb)
-- `session-transcripts.ts:902` (withReadDb)
-- `session-transcripts.ts:947` (withReadDb)
-- `session-transcripts.ts:1011` (withReadDb)
+- `session-transcripts.ts:145` (withReadDb)
+- `session-transcripts.ts:157` (withReadDb)
+- `session-transcripts.ts:298` (withReadDb)
+- `session-transcripts.ts:479` (withReadDb)
+- `session-transcripts.ts:533` (withWriteTx)
+- `session-transcripts.ts:615` (withWriteTxAsync)
+- `session-transcripts.ts:718` (withWriteTx)
+- `session-transcripts.ts:750` (withReadDb)
+- `session-transcripts.ts:847` (withReadDbAsync)
+- `session-transcripts.ts:866` (withReadDb)
+- `session-transcripts.ts:897` (withReadDb)
+- `session-transcripts.ts:952` (withReadDb)
+- `session-transcripts.ts:997` (withReadDb)
+- `session-transcripts.ts:1061` (withReadDb)
 - `session-ttl-finalizer.ts:56` (withReadDbAsync)
 - `session-ttl-finalizer.ts:71` (withWriteTxAsync)
 - `skill-invocations.ts:48` (withWriteTx)

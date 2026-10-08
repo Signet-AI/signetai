@@ -8,8 +8,9 @@ import {
 	endCurrentSession,
 	endPreviousSession,
 	flushPendingSessionEnds,
+	beginPromptSubmit,
 	refreshSessionStart,
-	requestRecallForPrompt,
+	settlePromptSubmit,
 } from "./src/lifecycle.js";
 import {
 	assertLifecycleObservationInvariants,
@@ -71,7 +72,8 @@ describe("pi lifecycle session-end handling", () => {
 		deps.state.setActiveSession("old-session", sessionFile);
 		await endPreviousSession(deps, { previousSessionFile: sessionFile }, "session_switch");
 		await refreshSessionStart(deps, createTestContext("new-session") as never);
-		await requestRecallForPrompt(deps, createTestContext("new-session") as never, "hello");
+		beginPromptSubmit(deps, createTestContext("new-session") as never, "hello");
+		await settlePromptSubmit(deps, createTestContext("new-session") as never);
 		const promptCall = calls.find((call) => call.path.endsWith("user-prompt-submit"));
 		expect(promptCall?.body.sessionKey).toBe("new-session");
 		const proof = assertLifecycleObservationInvariants(recorder.observations);
@@ -332,5 +334,18 @@ describe("pi lifecycle session-end handling", () => {
 
 		await endCurrentSession(deps, createTestContext("current-session") as never, "session_shutdown");
 		expect(deps.state.sessionAlreadyEnded("current-session")).toBe(false);
+	});
+
+	it("reads the prompt-submit wait budget from SIGNET_PROMPT_SUBMIT_TIMEOUT", () => {
+		const lifecyclePath = join(import.meta.dir, "src", "lifecycle.ts");
+		const proc = Bun.spawnSync(
+			[
+				process.execPath,
+				"-e",
+				`const { PI_LIFECYCLE_CONFIG } = await import(${JSON.stringify(lifecyclePath)}); console.log(PI_LIFECYCLE_CONFIG.promptSubmitTimeout);`,
+			],
+			{ env: { ...process.env, SIGNET_PROMPT_SUBMIT_TIMEOUT: "12000" } },
+		);
+		expect(proc.stdout.toString().trim()).toBe("12000");
 	});
 });

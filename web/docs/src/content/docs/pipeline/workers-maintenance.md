@@ -109,8 +109,8 @@ Purges follow a strict ordering to maintain referential safety:
 
 1. **Graph links** — `memory_entity_mentions` rows for memories that are
    soft-deleted and past the tombstone retention window are deleted. Entity
-   mention counts are decremented; entities that reach zero mentions are
-   orphaned and deleted along with their dangling relation rows.
+   mention counts are decremented. Entities are kept even when they reach
+   zero mentions, along with their relations and ontology content.
 
 2. **Embeddings** — Embedding rows for the same expired memories are
    deleted.

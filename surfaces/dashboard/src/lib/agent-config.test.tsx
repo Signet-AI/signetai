@@ -122,6 +122,7 @@ describe("agent config store", () => {
 		expect(dreamingBlockedBy({ memory: { pipelineV2: { paused: false, mutationsFrozen: false } } })).toBeNull();
 		expect(dreamingBlockedBy({ memory: { pipelineV2: { paused: true } } })).toBe("paused");
 		expect(dreamingBlockedBy({ memory: { pipelineV2: { mutationsFrozen: true } } })).toBe("frozen");
+		expect(dreamingBlockedBy({ memory: { pipelineV2: { enabled: false, paused: true } } })).toBe("disabled");
 		expect(dreamingBlockedBy({ memory: { pipelineV2: { paused: true, mutationsFrozen: true } } })).toBe("paused");
 		expect(dreamingBlockedBy({ memory: { dreaming: {} } })).toBeNull();
 	});

@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { createServer, connect } from "node:net";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join, normalize } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import {
@@ -33,12 +33,13 @@ import {
 	resolveDaemonRuntime,
 	resolveLaunchdExecutable,
 	resolveSignetDaemonUrl,
+	WORKSPACE_ENV_KEYS,
 	type DaemonRuntime,
 	type SchemaType,
 } from "@signet/core";
 import { formatInspectorEndpoint, parseInspectorEndpoint } from "./inspector-proxy.js";
 import { resolveDaemonNetwork } from "./network.js";
-import { resolveAgentsDir } from "./workspace.js";
+import { normalizeWorkspacePath, resolveAgentsDir } from "./workspace.js";
 
 export const AGENTS_DIR = resolveAgentsDir().path;
 export const DEFAULT_PORT = 3850;
@@ -165,6 +166,7 @@ interface DaemonInstance {
 	readonly dreaming: {
 		readonly enabled: boolean;
 		readonly workerRunning: boolean;
+		readonly blockedBy: DreamingBlockedBy | null;
 	} | null;
 	readonly workspaceStats: WorkspaceStatusSummaryFromStatus | null;
 	readonly workspaceLayoutUpgrade: string | null;
@@ -186,9 +188,11 @@ interface DaemonInstance {
 	readonly openclaw: DaemonOpenClawHealthSummary | null;
 }
 
+type DreamingBlockedBy = "disabled" | "paused" | "frozen" | "no_provider";
+
 interface DreamingSchedulerStatusFromStatus {
-	readonly status: "idle" | "deferred";
-	readonly reason: "queue_pressure" | "system_pressure" | null;
+	readonly status: "idle" | "deferred" | "blocked";
+	readonly reason: "queue_pressure" | "system_pressure" | "inference_unavailable" | null;
 	readonly checkedAt: string | null;
 }
 
@@ -606,7 +610,7 @@ function readPidArtifact(agentsDir: string): { pid: number | null; stale: boolea
 async function buildUnreachableDaemonProbe(agentsDir: string): Promise<DaemonHealthProbe> {
 	const artifact = readPidArtifact(agentsDir);
 	const managedPid = readManagedDaemonPid(agentsDir);
-	const processPid = managedPid ?? findMarkedDaemonProcessPids()[0] ?? null;
+	const processPid = managedPid ?? findMarkedDaemonProcessPids(agentsDir)[0] ?? null;
 	const url = resolveDaemonProbeUrls(agentsDir)[0] ?? `http://127.0.0.1:${DEFAULT_PORT}`;
 	const parsedUrl = new URL(url);
 	const listenerPort = parsedUrl.port
@@ -710,7 +714,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						networkMode?: string;
 						agentsDir?: string;
 						workspaceLayout?: { upgrade?: { state?: unknown; reason?: unknown } | null };
-						dreaming?: { enabled?: boolean; workerRunning?: boolean };
+						dreaming?: { enabled?: boolean; workerRunning?: boolean; blockedBy?: unknown };
 						health?: {
 							score?: number;
 							status?: string;
@@ -1022,19 +1026,28 @@ function normalizeWorkspaceStatusSummaryFromStatus(value: unknown): WorkspaceSta
 function normalizeDreamingStatusFromStatus(value: unknown): DaemonInstance["dreaming"] {
 	if (!isStatusRecord(value)) return null;
 	if (typeof value.enabled !== "boolean" || typeof value.workerRunning !== "boolean") return null;
-	return { enabled: value.enabled, workerRunning: value.workerRunning };
+	const blockedBy = value.blockedBy;
+	return {
+		enabled: value.enabled,
+		workerRunning: value.workerRunning,
+		blockedBy:
+			blockedBy === "disabled" || blockedBy === "paused" || blockedBy === "frozen" || blockedBy === "no_provider"
+				? blockedBy
+				: null,
+	};
 }
 
 function normalizeDreamingSchedulerFromStatus(value: unknown): DreamingSchedulerStatusFromStatus | null {
 	if (typeof value !== "object" || value === null) return null;
 	const record = value as Record<string, unknown>;
 	const status = record.status;
-	if (status !== "idle" && status !== "deferred") return null;
+	if (status !== "idle" && status !== "deferred" && status !== "blocked") return null;
 	const reason = record.reason;
 	const checkedAt = record.checkedAt;
 	return {
 		status,
-		reason: reason === "queue_pressure" || reason === "system_pressure" ? reason : null,
+		reason:
+			reason === "queue_pressure" || reason === "system_pressure" || reason === "inference_unavailable" ? reason : null,
 		checkedAt: typeof checkedAt === "string" && checkedAt.trim().length > 0 ? checkedAt : null,
 	};
 }
@@ -1082,15 +1095,37 @@ function readDaemonEntrypoint(pid: number): boolean | null {
 	}
 }
 
-function findMarkedDaemonProcessPids(): number[] {
+function daemonWorkspaceFromEnvironment(value: string): string | null {
+	const env: Record<string, string> = {};
+	for (const entry of value.split("\u0000")) {
+		const index = entry.indexOf("=");
+		if (index > 0) env[entry.slice(0, index)] = entry.slice(index + 1);
+	}
+	const raw = WORKSPACE_ENV_KEYS.map((key) => env[key]?.trim() ?? "").find((entry) => entry.length > 0);
+	if (raw === undefined || !(isAbsolute(raw) || raw === "~" || raw.startsWith("~/"))) return null;
+	const resolution = resolveAgentsDir(env);
+	return resolution.source === "env" ? resolution.path : null;
+}
+
+function readDaemonWorkspace(pid: number): string | null {
+	if (process.platform !== "linux") return null;
+	try {
+		return daemonWorkspaceFromEnvironment(readFileSync(`/proc/${pid}/environ`, "utf-8"));
+	} catch {
+		return null;
+	}
+}
+
+function findMarkedDaemonProcessPids(agentsDir: string): number[] {
 	if (process.platform !== "linux") return [];
+	const workspace = normalizeWorkspacePath(agentsDir);
 	try {
 		return readdirSync("/proc", { withFileTypes: true })
 			.flatMap((entry) => {
 				if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) return [];
 				const pid = Number.parseInt(entry.name, 10);
 				if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return [];
-				return readDaemonEntrypoint(pid) === true ? [pid] : [];
+				return readDaemonEntrypoint(pid) === true && readDaemonWorkspace(pid) === workspace ? [pid] : [];
 			})
 			.filter((pid, index, items) => items.indexOf(pid) === index);
 	} catch {
@@ -1214,7 +1249,14 @@ export function readManagedDaemonPid(agentsDir: string = AGENTS_DIR, deps: Daemo
 		}
 
 		const marker = deps.readEnv ? isDaemonEntrypointEnvironment(deps.readEnv(pid) ?? "") : readDaemonEntrypoint(pid);
-		if (marker === true) return pid;
+		if (marker === true) {
+			const workspace = deps.readEnv
+				? daemonWorkspaceFromEnvironment(deps.readEnv(pid) ?? "")
+				: readDaemonWorkspace(pid);
+			if (workspace === null || workspace === normalizeWorkspacePath(agentsDir)) return pid;
+			rmSync(path, { force: true });
+			return null;
+		}
 		if (marker === false) return null;
 		const cmd = (deps.readCmd ?? readCmd)(pid);
 		if (!cmd) return null;
@@ -1226,7 +1268,7 @@ export function readManagedDaemonPid(agentsDir: string = AGENTS_DIR, deps: Daemo
 }
 
 export async function hasDaemonProcess(agentsDir: string = AGENTS_DIR): Promise<boolean> {
-	return readManagedDaemonPid(agentsDir) !== null || findMarkedDaemonProcessPids().length > 0;
+	return readManagedDaemonPid(agentsDir) !== null || findMarkedDaemonProcessPids(agentsDir).length > 0;
 }
 
 async function readDaemonStatus(): Promise<{
@@ -1254,7 +1296,10 @@ async function readDaemonStatus(): Promise<{
 	const instances = await getDaemonInstances();
 	if (instances.length > 0) {
 		const preferred = instances.find((instance) => typeof instance.uptime === "number") ?? instances[0];
-		const fallbackPid = typeof preferred.pid === "number" ? null : (findMarkedDaemonProcessPids()[0] ?? null);
+		const fallbackPid =
+			typeof preferred.pid === "number"
+				? null
+				: (findMarkedDaemonProcessPids(preferred.workspacePath ?? AGENTS_DIR)[0] ?? null);
 		return {
 			running: true,
 			workspacePath: preferred.workspacePath,
@@ -2189,7 +2234,7 @@ export async function startDaemon(
 	return false;
 }
 
-export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: number): Promise<boolean> {
+export async function stopDaemon(agentsDir: string = AGENTS_DIR): Promise<boolean> {
 	if (process.platform === "darwin") {
 		const migration = resolveLaunchdDaemonMigration(agentsDir);
 		if (migration.action === "migrate") {
@@ -2206,20 +2251,19 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: 
 	}
 
 	const pids = new Set<number>();
-	if (preferredPid !== undefined && readManagedDaemonProcess(preferredPid)) {
-		pids.add(preferredPid);
-	}
 	const managed = readManagedDaemonPid(agentsDir);
 	if (managed !== null) {
 		pids.add(managed);
 	}
 
+	const workspace = normalizeWorkspacePath(agentsDir);
 	for (const instance of await getDaemonInstances()) {
+		if (instance.workspacePath === null || normalizeWorkspacePath(instance.workspacePath) !== workspace) continue;
 		if (typeof instance.pid === "number" && readManagedDaemonProcess(instance.pid)) {
 			pids.add(instance.pid);
 		}
 	}
-	for (const pid of findMarkedDaemonProcessPids()) {
+	for (const pid of findMarkedDaemonProcessPids(agentsDir)) {
 		pids.add(pid);
 	}
 
@@ -2232,7 +2276,14 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: 
 		} catch {}
 	}
 
-	return !(await isDaemonRunning());
+	if (!(await isDaemonRunning())) return true;
+	const remaining = await getDaemonInstances();
+	return (
+		remaining.length > 0 &&
+		remaining.every(
+			(instance) => instance.workspacePath !== null && normalizeWorkspacePath(instance.workspacePath) !== workspace,
+		)
+	);
 }
 
 export function formatUptime(seconds: number): string {

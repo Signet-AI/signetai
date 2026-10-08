@@ -194,20 +194,34 @@ Only `name` is required. `read_policy` defaults to `"isolated"`.
 
 ### DELETE /api/agents/:name
 
-Remove an agent from the roster. Memories owned by the agent are marked
-`visibility='archived'` (not deleted). Requires `admin` permission.
+Remove an agent from the roster in one database transaction. By default the
+agent is archived: its memories are marked `visibility='archived'`, its active
+entities, aspects, attributes, and dependencies move to `status='archived'`,
+and each newly archived memory gets an `archived` event in `memory_history`.
+Requires `admin` permission. The `default` agent cannot be removed.
 
 **Query parameters**
 
 | Parameter | Description |
 |-----------|-------------|
-| `purge`   | Set to `true` to permanently delete all memories where `agent_id = name`. |
+| `purge`   | Set to `true` to permanently delete every row whose `agent_id` is the agent, plus rows in tables without an `agent_id` column that reference its memories, entities, session summaries, or documents (mentions, relations, jobs, links, vectors). Each purged memory keeps one content-free `purged` event in `memory_history`. |
 
 **Response**
 
+`rows` reports the number of rows changed per table. Keys such as
+`memory_history.purged` count the audit events written.
+
 ```json
-{ "success": true, "purged": false }
+{
+  "success": true,
+  "purged": true,
+  "mode": "purge",
+  "rows": { "memories": 12, "embeddings": 12, "entities": 4, "memory_history.purged": 12, "agents": 1 }
+}
 ```
+
+If any step fails, nothing is committed and the route returns `500` with an
+`error` message.
 
 
 ## Skills

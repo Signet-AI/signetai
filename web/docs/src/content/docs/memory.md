@@ -504,7 +504,7 @@ having removed their referencing rows first:
 
 1. **Graph links** (`memory_entity_mentions`) for tombstoned memories
    past the retention window. Entity mention counts are decremented;
-   entities with zero mentions are orphaned (removed).
+   entities themselves are kept, even at zero mentions.
 2. **Embeddings** for the same tombstoned memories (from the
    `embeddings` table).
 3. **Tombstones** — the memories are copied to `memories_cold`, then the

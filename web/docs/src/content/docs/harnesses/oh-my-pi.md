@@ -34,6 +34,7 @@ next setup or sync run.
 - Signet refuses to overwrite a colliding unmanaged `signet-oh-my-pi.js`.
 - Daemon or network failures are fail-open, so prompt handling, compaction, session switches, and shutdown continue even if Signet is unavailable.
 - The extension persists hidden session-context and recall injections through `before_agent_start`, marks them with `attribution: "agent"`, and keeps them out of transcript reconstruction so memory-backed answers remain attributable without consuming user-attributed Copilot requests.
+- Prompt-submit starts on input without delaying input acceptance and is awaited once in `before_agent_start`; a failed or timed-out request is not retried for the same prompt. `SIGNET_PROMPT_SUBMIT_TIMEOUT` sets its wait budget in ms (default `5000`).
 - It does not currently add `/remember` or `/recall` tools, and it does not sync `AGENTS.md` into Oh My Pi.
 
 ### Supported hooks

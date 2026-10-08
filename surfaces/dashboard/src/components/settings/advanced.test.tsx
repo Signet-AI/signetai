@@ -96,6 +96,7 @@ test("a paused pipeline can be resumed from Settings and Dreaming then turns on"
 		expect(calls).toContain("POST /api/pipeline/resume");
 		expect(switchFor("Pause memory pipeline").getAttribute("aria-checked")).toBe("false");
 		expect(switchFor("Dreaming").disabled).toBe(false);
+		expect(switchFor("Dreaming").getAttribute("aria-checked")).toBe("false");
 
 		await act(async () => switchFor("Dreaming").click());
 		await settle();
@@ -103,6 +104,33 @@ test("a paused pipeline can be resumed from Settings and Dreaming then turns on"
 		expect(config).toContain("paused: false");
 		expect(config).toMatch(/dreaming:\s*\n\s+enabled: true/);
 		expect(switchFor("Dreaming").getAttribute("aria-checked")).toBe("true");
+	} finally {
+		await view.close();
+	}
+});
+
+test("a fresh bootstrap shows the pipeline and Dreaming on", async () => {
+	config = "memory:\n  pipelineV2:\n    telemetryEnabled: false\n  dreaming:\n    enabled: true\n";
+	const view = await mount();
+	try {
+		const row = [...document.querySelectorAll('[role="switch"]')].find((element) =>
+			element.parentElement?.parentElement?.textContent?.includes("Pipeline enabled"),
+		);
+		expect(row?.getAttribute("aria-checked")).toBe("true");
+		expect(switchFor("Dreaming").disabled).toBe(false);
+		expect(switchFor("Dreaming").getAttribute("aria-checked")).toBe("true");
+	} finally {
+		await view.close();
+	}
+});
+
+test("a disabled pipeline blocks Dreaming and says how to turn it back on", async () => {
+	config = "memory:\n  pipelineV2:\n    enabled: false\n";
+	const view = await mount();
+	try {
+		expect(switchFor("Dreaming").disabled).toBe(true);
+		expect(switchFor("Dreaming").getAttribute("aria-checked")).toBe("false");
+		expect(document.body.textContent).toContain("The memory pipeline is turned off");
 	} finally {
 		await view.close();
 	}

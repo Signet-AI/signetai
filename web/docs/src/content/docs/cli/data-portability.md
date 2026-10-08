@@ -10,16 +10,16 @@ signet export
 signet export --json
 signet export bundle
 signet import ./signet-export
-signet import ./signet-export.json --json --conflict merge
+signet import ./signet-export.json --json --agent alice
 ```
 
-`signet export` is equivalent to `signet export bundle`. Bundles carry the workspace identity files, `agent.yaml`, memory and ontology data, and installed skills. Import restores a bundle into the selected workspace.
+`signet export` is equivalent to `signet export bundle`. Bundles carry the workspace identity files, `agent.yaml`, memory and ontology data, and installed skills. Each memory carries its `agent_id`, `scope`, and `visibility`, and each entity carries its `agent_id`. Import restores a bundle into the selected workspace and keeps that identity.
 
-Choose a conflict policy deliberately:
+Import writes the workspace database directly, so it refuses to run while the daemon is running. Stop the daemon with `signet daemon stop`, import, then start it again.
 
-- `skip`: keep existing memories and skip duplicates.
-- `overwrite`: replace matching records.
-- `merge`: merge compatible records when supported.
+`--agent <id>` imports every memory and entity into that agent instead. Bundles from older releases carry no agent identity and require `--agent`; their memories are imported as `private` to that agent. Import validates the whole bundle first and writes nothing when any row lacks identity or is malformed.
+
+Import never rewrites existing memories. A memory whose ID already exists is skipped. Edit existing memories through the daemon so each change is versioned.
 
 Treat an export as sensitive: it can include private identity and memory data. Encrypt it at rest and do not upload it to an untrusted service.
 

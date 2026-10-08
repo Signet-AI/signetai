@@ -154,7 +154,6 @@ export function registerRepairRoutes(
 		const details = await runRetentionSweepOnce(getDbAccessor(), DEFAULT_RETENTION);
 		const affected =
 			details.graphLinksPurged +
-			details.entitiesOrphaned +
 			details.embeddingsPurged +
 			details.tombstonesPurged +
 			details.historyPurged +

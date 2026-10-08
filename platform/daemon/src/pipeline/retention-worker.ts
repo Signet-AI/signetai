@@ -33,7 +33,6 @@ import { countChanges, syncVecDeleteByEmbeddingIds } from "../db-helpers";
 import { logger } from "../logger";
 import { isSystemPressureHigh } from "../system-pressure";
 import { txDecrementEntityMentions } from "./graph-transactions";
-import { invalidateTraversalCache } from "./graph-traversal";
 import { runWriteBatches } from "../yielding-writes";
 import { txDeleteMemoryTemporalEdges } from "../temporal-edges";
 
@@ -63,7 +62,6 @@ export interface RetentionHandle {
 
 export interface RetentionSweepResult {
 	graphLinksPurged: number;
-	entitiesOrphaned: number;
 	embeddingsPurged: number;
 	tombstonesPurged: number;
 	historyPurged: number;
@@ -75,7 +73,6 @@ export interface RetentionSweepResult {
 
 const EMPTY_RETENTION_RESULT: RetentionSweepResult = {
 	graphLinksPurged: 0,
-	entitiesOrphaned: 0,
 	embeddingsPurged: 0,
 	tombstonesPurged: 0,
 	historyPurged: 0,
@@ -85,11 +82,7 @@ const EMPTY_RETENTION_RESULT: RetentionSweepResult = {
 	deadTranscriptCaptureJobsPurged: 0,
 };
 
-function purgeGraphLinks(
-	db: WriteDb,
-	cutoff: string,
-	limit: number,
-): { mentionsPurged: number; entitiesOrphaned: number } {
+function purgeGraphLinks(db: WriteDb, cutoff: string, limit: number): number {
 	const expiredIds = db
 		.prepare(
 			`SELECT id FROM memories
@@ -98,7 +91,7 @@ function purgeGraphLinks(
 		)
 		.all(cutoff, limit) as Array<{ id: string }>;
 
-	if (expiredIds.length === 0) return { mentionsPurged: 0, entitiesOrphaned: 0 };
+	if (expiredIds.length === 0) return 0;
 
 	const placeholders = expiredIds.map(() => "?").join(", ");
 	const ids = expiredIds.map((r) => r.id);
@@ -115,11 +108,8 @@ function purgeGraphLinks(
 			 WHERE memory_id IN (${placeholders})`,
 		)
 		.run(...ids);
-	const mentionsPurged = countChanges(result);
-	const entityIds = affectedEntities.map((r) => r.entity_id);
-	const { entitiesOrphaned } = txDecrementEntityMentions(db, { entityIds });
-
-	return { mentionsPurged, entitiesOrphaned };
+	txDecrementEntityMentions(db, { entityIds: affectedEntities.map((r) => r.entity_id) });
+	return countChanges(result);
 }
 
 function purgeEmbeddings(db: WriteDb, cutoff: string, limit: number): number {
@@ -310,18 +300,12 @@ export async function runRetentionSweepOnce(
 	const historyCutoff = new Date(now - normalizedCfg.historyRetentionMs).toISOString();
 	const completedJobCutoff = new Date(now - normalizedCfg.completedJobRetentionMs).toISOString();
 	const deadJobCutoff = new Date(now - normalizedCfg.deadJobRetentionMs).toISOString();
-	const retentionResult = await writeTx(accessor, (db) => {
-		const graph = purgeGraphLinks(db, tombstoneCutoff, normalizedCfg.batchLimit);
-		const embeddingsPurged = purgeEmbeddings(db, tombstoneCutoff, normalizedCfg.batchLimit);
-		const tombstonesPurged = purgeTombstones(db, tombstoneCutoff, normalizedCfg.batchLimit);
-		return { ...graph, embeddingsPurged, tombstonesPurged };
+	const { graphLinksPurged, embeddingsPurged, tombstonesPurged } = await writeTx(accessor, (db) => {
+		const graphLinks = purgeGraphLinks(db, tombstoneCutoff, normalizedCfg.batchLimit);
+		const embeddings = purgeEmbeddings(db, tombstoneCutoff, normalizedCfg.batchLimit);
+		const tombstones = purgeTombstones(db, tombstoneCutoff, normalizedCfg.batchLimit);
+		return { graphLinksPurged: graphLinks, embeddingsPurged: embeddings, tombstonesPurged: tombstones };
 	});
-	const graphLinksPurged = retentionResult.mentionsPurged;
-	const entitiesOrphaned = retentionResult.entitiesOrphaned;
-	const embeddingsPurged = retentionResult.embeddingsPurged;
-	const tombstonesPurged = retentionResult.tombstonesPurged;
-
-	if (entitiesOrphaned > 0) invalidateTraversalCache();
 	const steps = [
 		{ table: "memory_history", where: "created_at < ?", cutoff: historyCutoff, allowMissingTable: false },
 		{
@@ -367,7 +351,6 @@ export async function runRetentionSweepOnce(
 
 	return {
 		graphLinksPurged,
-		entitiesOrphaned,
 		embeddingsPurged,
 		tombstonesPurged,
 		historyPurged,
@@ -391,7 +374,6 @@ export function startRetentionWorker(
 		const result = await runRetentionSweepOnce(accessor, normalizedCfg, ownerMaintenance);
 		const total =
 			result.graphLinksPurged +
-			result.entitiesOrphaned +
 			result.embeddingsPurged +
 			result.tombstonesPurged +
 			result.historyPurged +

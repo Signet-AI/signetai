@@ -1,22 +1,25 @@
+import { resolvePromptSubmitTimeoutMs } from "@signet/core";
 import {
 	type LifecycleConfig,
 	type LifecycleDeps,
+	beginPromptSubmit,
 	currentSessionRef,
 	defaultStaticFallback,
 	endCurrentSession,
 	endPreviousSession,
 	ensureSessionContext,
 	flushPendingSessionEnds,
+	readTrimmedRuntimeEnv,
 	refreshSessionStart,
 	requestNotifications,
-	requestRecallForPrompt,
+	settlePromptSubmit,
 } from "@signet/pi-extension-base";
 import {
 	HARNESS,
 	HIDDEN_CLOCK_CUSTOM_TYPE,
 	HIDDEN_RECALL_CUSTOM_TYPE,
 	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
-	PROMPT_SUBMIT_TIMEOUT,
+	PROMPT_SUBMIT_TIMEOUT_ENV,
 	READ_TIMEOUT,
 	RUNTIME_PATH,
 	WRITE_TIMEOUT,
@@ -24,6 +27,7 @@ import {
 
 export type { LifecycleDeps };
 export {
+	beginPromptSubmit,
 	currentSessionRef,
 	endCurrentSession,
 	endPreviousSession,
@@ -31,7 +35,7 @@ export {
 	flushPendingSessionEnds,
 	refreshSessionStart,
 	requestNotifications,
-	requestRecallForPrompt,
+	settlePromptSubmit,
 };
 
 const EXCLUDED_CUSTOM_TYPES: ReadonlySet<string> = new Set([
@@ -44,7 +48,7 @@ export const PI_LIFECYCLE_CONFIG: LifecycleConfig = {
 	harness: HARNESS,
 	runtimePath: RUNTIME_PATH,
 	writeTimeout: WRITE_TIMEOUT,
-	promptSubmitTimeout: PROMPT_SUBMIT_TIMEOUT,
+	promptSubmitTimeout: resolvePromptSubmitTimeoutMs(readTrimmedRuntimeEnv(PROMPT_SUBMIT_TIMEOUT_ENV)),
 	excludedCustomTypes: EXCLUDED_CUSTOM_TYPES,
 	sessionStartTimeout: () => READ_TIMEOUT,
 	staticFallback: defaultStaticFallback,

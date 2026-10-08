@@ -214,8 +214,9 @@ remember and ingest no longer author graph structure directly.
 The only retained write closure in
 `platform/daemon/src/pipeline/graph-transactions.ts` is
 `txDecrementEntityMentions`, used by the retention worker to decrement mention
-counts and delete orphaned entities (plus their dangling relations) after a
-memory purge.
+counts after a memory purge. Retention never deletes entities: an entity that
+reaches zero mentions keeps its pin, aspects, attributes, aliases,
+dependencies, relations, and epistemic assertions.
 
 ### Ontology Operation Handlers
 

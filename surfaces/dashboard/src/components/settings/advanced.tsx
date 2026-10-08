@@ -43,11 +43,13 @@ function DreamingToggle({ store }: { store: AgentConfigStore }) {
 	const path = ["memory", "dreaming", "enabled"] as const;
 	const blockedBy = dreamingBlockedBy(store.agent);
 	const desc =
-		blockedBy === "paused"
-			? "The memory pipeline is paused. Turn off Paused under Pipeline to run Dreaming."
-			: blockedBy === "frozen"
-				? "Mutations are frozen. Turn off Freeze mutations under Pipeline to run Dreaming."
-				: "Runs dreaming passes automatically as transcripts build up.";
+		blockedBy === "disabled"
+			? "The memory pipeline is turned off. Turn on Pipeline enabled to run Dreaming."
+			: blockedBy === "paused"
+				? "The memory pipeline is paused. Turn off Paused under Pipeline to run Dreaming."
+				: blockedBy === "frozen"
+					? "Mutations are frozen. Turn off Freeze mutations under Pipeline to run Dreaming."
+					: "Runs dreaming passes automatically as transcripts build up.";
 
 	return (
 		<SettingRow title="Dreaming" desc={desc}>
@@ -197,6 +199,7 @@ export function AdvancedSection() {
 							path: pv2("enabled"),
 							title: "Pipeline enabled",
 							desc: "Master switch. The memory pipeline does nothing when disabled.",
+							fallback: true,
 						},
 						{
 							kind: "toggle",
