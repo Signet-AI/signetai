@@ -1,5 +1,6 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { DbOwnerAdmissionError, DbOwnerDeadlineError } from "./db-owner-client";
 import { logger } from "./logger";
 import { registerGlobalMiddleware } from "./middleware";
@@ -47,4 +48,17 @@ test("other unhandled request errors are logged and stay 500", async () => {
 		method: "POST",
 		path: "/api/dream/trigger",
 	});
+});
+
+test("an HTTPException keeps its own response", async () => {
+	const failure = spyOn(logger, "error").mockImplementation(() => {});
+	spies.push(failure);
+	const response = await appThrowing(new HTTPException(401, { message: "token expired" })).request(
+		"/api/dream/trigger",
+		{ method: "POST", headers: { origin: "http://localhost:3850" } },
+	);
+	expect(response.status).toBe(401);
+	expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:3850");
+	expect(await response.text()).toBe("token expired");
+	expect(failure).not.toHaveBeenCalled();
 });
