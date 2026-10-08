@@ -207,6 +207,38 @@ describe("content pass memory-head fence", () => {
 		expect(head()).toMatchObject({ isCurrent: 1, content: "" });
 	});
 
+	it("keeps an entry with its surviving support and refuses to clear over it or over unreadable provenance", async () => {
+		const both = {
+			entryId: "both",
+			text: "Acme ships weekly.",
+			support: [
+				{ source_ref: "memory:mem-2", quote: "Acme ships weekly." },
+				{ source_ref: "memory:mem-1", quote },
+			],
+		};
+		start("pass-first");
+		getDbAccessor().withWriteTx((db) => commitCuratedMemoryHeadInDb(db, input("pass-first", [both])));
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE dreaming_passes SET status = 'completed' WHERE id = 'pass-first'").run();
+			db.prepare("DELETE FROM memories WHERE id = 'mem-2'").run();
+		});
+		start("pass-partial");
+
+		const own = getDbAccessor().withWriteTx((db) =>
+			executeMemoryHead(db, dir, { action: "read", agentId: "agent-a", passId: "pass-partial" }),
+		);
+		const empty = getDbAccessor().withWriteTx((db) => commitCuratedMemoryHeadInDb(db, input("pass-partial", [])));
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memory_head_revision_entries SET provenance_json = '{\"x\":1}'").run();
+		});
+		const unreadable = getDbAccessor().withWriteTx((db) => commitCuratedMemoryHeadInDb(db, input("pass-partial", [])));
+
+		expect(own.committedEntries).toEqual([{ ...both, support: [{ source_ref: "memory:mem-1", quote }] }]);
+		expect(empty).toMatchObject({ ok: false, code: "INVALID_HEAD" });
+		expect(unreadable).toMatchObject({ ok: false, code: "INVALID_HEAD" });
+		expect(head().content).toBe("- Acme ships weekly.");
+	});
+
 	it("leaves the head current after finalization rewrites the pass's transcript nodes", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
