@@ -40,6 +40,7 @@ import {
 	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
 	getDreamingWorkloadDiagnostics,
+	recordDreamingFailure,
 } from "./dreaming";
 import {
 	AlreadyRunningError,
@@ -569,6 +570,48 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
+	it("holds scheduled passes while the agent that runs them is backed off or halted (#2098)", async () => {
+		db.prepare(
+			`INSERT INTO session_transcripts
+		 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+		 VALUES ('held-scope-evidence', 'alpha', 'Evidence that makes the alpha scope due.', 'pi',
+		         datetime('now'), datetime('now'), datetime('now'))`,
+		).run();
+		let runs = 0;
+		const executorFactory = () => ({
+			async run(_input: { prompt: string; tools: ReadonlyArray<{ name: string }> }) {
+				runs += 1;
+				throw new Error("pass should not start while the run agent is held");
+			},
+		});
+		for (const [failures, reason, status] of [
+			[1, "failure_backoff", "deferred"],
+			[5, "failure_halt", "blocked"],
+		] as const) {
+			const recorded = () =>
+				(
+					db.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'default'").get() as {
+						n: number;
+					} | null
+				)?.n ?? 0;
+			while (recorded() < failures) await recordDreamingFailure(accessor, "default");
+			expect(recorded()).toBe(failures);
+			const worker = startDreamingWorker(accessor, defaultCfg({ tokenThreshold: 1 }), agentsDir, "default", {
+				executorFactory,
+				checkIntervalMs: 20,
+			});
+			try {
+				await waitFor(() => worker.scheduler.reason === reason, 2_000);
+				await Bun.sleep(100);
+				expect(worker.scheduler).toEqual({ status, reason, checkedAt: expect.any(String) });
+				expect(runs).toBe(0);
+				expect(db.prepare("SELECT COUNT(*) AS n FROM dreaming_passes").get()).toEqual({ n: 0 });
+			} finally {
+				worker.stop();
+			}
+		}
+	});
+
 	it("defers a sweep while the shared queue health watermark is exceeded", async () => {
 		const now = new Date().toISOString();
 		for (let index = 0; index <= 50; index += 1) {
@@ -941,25 +984,21 @@ describe("dreaming worker agent scope", () => {
 			checkIntervalMs: 20,
 		});
 		try {
-			await waitFor(() => {
-				const state = db
-					.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'default'")
-					.get() as { n: number } | null;
-				return state != null && state.n >= 2;
-			}, 2_000);
+			await waitFor(() => worker.scheduler.reason === "failure_backoff", 2_000);
 			expect(unhandled).toEqual([]);
 
 			const state = db
 				.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'default'")
 				.get() as { n: number };
-			expect(state.n).toBeGreaterThanOrEqual(2);
+			expect(state.n).toBe(1);
 
 			const passes = db.prepare("SELECT status, error FROM dreaming_passes ORDER BY created_at").all() as Array<{
 				status: string;
 				error: string | null;
 			}>;
-			expect(passes.length).toBeGreaterThanOrEqual(2);
-			expect(passes.every((pass) => pass.status === "failed" && pass.error?.includes("429"))).toBe(true);
+			expect(passes).toHaveLength(1);
+			expect(passes[0]).toMatchObject({ status: "failed" });
+			expect(passes[0]?.error).toContain("429");
 		} finally {
 			worker.stop();
 			process.off("unhandledRejection", onUnhandledRejection);

@@ -2336,6 +2336,12 @@ export function isDreamingScopeHalted(state: DreamingState, nowMs = Date.now()):
 	const failedAt = state.lastFailureAt === null ? Number.NaN : utcTimestampMs(state.lastFailureAt);
 	return Number.isFinite(failedAt) && nowMs - failedAt < DREAMING_HALT_COOLDOWN_MS;
 }
+export function isDreamingScopeBackedOff(state: DreamingState, nowMs = Date.now()): boolean {
+	if (state.consecutiveFailures <= 0) return false;
+	const exp = Math.min(state.consecutiveFailures, MAX_FAILURE_BACKOFF_MULTIPLIER);
+	const failedAt = state.lastFailureAt === null ? Number.NaN : utcTimestampMs(state.lastFailureAt);
+	return !Number.isFinite(failedAt) || nowMs - failedAt < FAILURE_BACKOFF_BASE_MS * 2 ** exp;
+}
 export async function isDreamingHaltActive(
 	accessor: DbAccessor,
 	agentId: string,
@@ -2604,12 +2610,7 @@ export async function evaluateDreamingTrigger(
 			[agentId],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		)) !== undefined;
-	if (isDreamingScopeHalted(state, nowMs)) return { trigger: false };
-	if (state.consecutiveFailures > 0) {
-		const exp = Math.min(state.consecutiveFailures, MAX_FAILURE_BACKOFF_MULTIPLIER);
-		const failedAt = state.lastFailureAt === null ? Number.NaN : utcTimestampMs(state.lastFailureAt);
-		if (!Number.isFinite(failedAt) || nowMs - failedAt < FAILURE_BACKOFF_BASE_MS * 2 ** exp) return { trigger: false };
-	}
+	if (isDreamingScopeHalted(state, nowMs) || isDreamingScopeBackedOff(state, nowMs)) return { trigger: false };
 
 	if (hasAttention) return { trigger: true, reason: "attention" };
 	if (cfg.backfillOnFirstRun && state.lastPassAt === null) {
