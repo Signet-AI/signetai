@@ -150,6 +150,47 @@ describe("Signet benchmark profiles", () => {
     }
   })
 
+  it("retries a Dreaming trigger the daemon reports as unavailable", async () => {
+    class UnavailableTriggerProvider extends SignetDreamingProvider {
+      triggers = 0
+      constructor(private readonly failure: string, private readonly failures: number) {
+        super()
+      }
+      protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+        if (path.startsWith("/api/dream/status")) {
+          return {
+            worker: { running: true, activePasses: [] },
+            passes: this.triggers > this.failures ? [{ id: "pass-1", status: "completed", mutationsApplied: 1 }] : [],
+            episodicTokensPending: this.triggers > this.failures ? 0 : 1,
+          } as T
+        }
+        if (path === "/api/dream/trigger") {
+          this.triggers += 1
+          if (this.triggers <= this.failures) throw new Error(`/api/dream/trigger failed ${this.failure}`)
+          return { passId: "pass-1" } as T
+        }
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const previousPoll = process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+    process.env.SIGNET_BENCH_DREAMING_POLL_SECS = "1"
+    try {
+      const unavailable = new UnavailableTriggerProvider("(503): DB owner job db-owner-1-2 exceeded its deadline", 2)
+      await unavailable.finalizeIngest({ runId: "run", dataSourceRunId: "source" })
+      expect(unavailable.triggers).toBe(3)
+
+      const broken = new UnavailableTriggerProvider("(500): Internal server error", 1)
+      await expect(broken.finalizeIngest({ runId: "run", dataSourceRunId: "source" })).rejects.toThrow(
+        "/api/dream/trigger failed (500)"
+      )
+      expect(broken.triggers).toBe(1)
+    } finally {
+      if (previousPoll === undefined) delete process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+      else process.env.SIGNET_BENCH_DREAMING_POLL_SECS = previousPoll
+    }
+  })
+
   it("waits for queued transcript captures beyond the HTTP request timeout", async () => {
     class QueuedCaptureProvider extends SignetDreamingProvider {
       polls = 0

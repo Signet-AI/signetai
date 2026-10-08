@@ -91,6 +91,8 @@ import {
 	type DbOwnerClient,
 	type DbOwnerClientOptions,
 	DbOwnerError,
+	type DbOwnerJobOverrun,
+	isDbOwnerUnavailableError,
 } from "./db-owner-client";
 import type { DbOwnerParameter } from "./db-owner-protocol";
 import {
@@ -495,6 +497,14 @@ async function ownerHasPendingVecBackfill(owner: DbOwnerClient, expectedDimensio
 	return pending !== undefined;
 }
 
+const VEC_BACKFILL_PROBE_MAX_OWNER_RETRIES = 10;
+const VEC_BACKFILL_PROBE_MAX_RETRY_DELAY_MS = 30_000;
+
+export function vecBackfillProbeRetryDelayMs(attempt: number, ownerUnavailable: boolean): number | null {
+	if (attempt >= (ownerUnavailable ? VEC_BACKFILL_PROBE_MAX_OWNER_RETRIES : 1)) return null;
+	return Math.min(VEC_BACKFILL_PROBE_MAX_RETRY_DELAY_MS, 1_000 * 2 ** attempt);
+}
+
 export function countConnectorsActive(connectors: readonly { readonly status: string }[]): number {
 	return connectors.filter((cn) => cn.status !== "error").length;
 }
@@ -523,7 +533,17 @@ export function createRecallDbOwnerOptions(
 	sqlitePath: string | undefined,
 	migrationControl: MigrationControlBoundary = daemonMigrationControl,
 ): DbOwnerClientOptions {
-	return { dbPath: MEMORY_DB, sqlitePath, migrationControl };
+	return { dbPath: MEMORY_DB, sqlitePath, migrationControl, onJobOverrun: logDbOwnerJobOverrun };
+}
+
+function logDbOwnerJobOverrun(overrun: DbOwnerJobOverrun): void {
+	logger.warn(
+		"daemon",
+		overrun.finished
+			? "DB owner job finished after overrunning its deadline"
+			: "DB owner job is still running past its deadline",
+		{ ...overrun },
+	);
 }
 const recallOwner = createDbOwnerClient(createRecallDbOwnerOptions(sqliteRuntime.choice?.path, daemonMigrationControl));
 recallDbOwner = recallOwner;
@@ -2721,20 +2741,25 @@ async function main() {
 		return await ownerHasPendingVecBackfill(owner, activeEmbedding.dimensions);
 	};
 	const probePendingVecBackfillWithRetry = async (): Promise<boolean> => {
-		for (let attempt = 0; attempt < 2; attempt++) {
-			if (migrationIntegrityWritesBlocked) return false;
+		for (let attempt = 0; ; attempt++) {
+			if (migrationIntegrityWritesBlocked || shuttingDown) return false;
 			try {
 				return await probePendingVecBackfill();
 			} catch (error) {
+				const ownerUnavailable = isDbOwnerUnavailableError(error);
 				logger.warn("startup-recovery", "Vector backfill probe failed", {
 					attempt: attempt + 1,
+					ownerUnavailable,
 					error: error instanceof Error ? error.message : String(error),
 				});
-				if (attempt === 0) await new Promise<void>((resolve) => setTimeout(resolve, 1_000));
+				const retryDelayMs = vecBackfillProbeRetryDelayMs(attempt, ownerUnavailable);
+				if (retryDelayMs === null) {
+					logger.error("startup-recovery", "Vector backfill probe gave up", undefined, { attempts: attempt + 1 });
+					return false;
+				}
+				await new Promise<void>((resolve) => setTimeout(resolve, retryDelayMs));
 			}
 		}
-		logger.error("startup-recovery", "Vector backfill probe gave up after one retry");
-		return false;
 	};
 	const schedulePendingVecBackfill = (): void => {
 		if (migrationIntegrityWritesBlocked || vecBackfillScheduled) return;
@@ -3330,6 +3355,7 @@ async function main() {
 							retryDelayMs: integrityRetryDelayMs,
 							ownerState: ownerHealth.state,
 							activeJobId: ownerHealth.activeJobId,
+							activeOperation: ownerHealth.activeOperation ?? null,
 							activeWorkloadClass: ownerHealth.activeWorkloadClass,
 							maintenanceQueuedJobs: ownerHealth.lanes?.maintenance.queuedJobs ?? ownerHealth.maintenanceQueuedJobs,
 							foregroundQueuedJobs: ownerHealth.foregroundQueuedJobs,

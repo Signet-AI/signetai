@@ -63,6 +63,7 @@ export interface DbOwnerHealth {
 	readonly maintenanceQueuedJobs: number;
 	readonly activeJobId: string | null;
 	readonly activeWorkloadClass: DbOwnerWorkloadClass | null;
+	readonly activeOperation?: string | null;
 	readonly foregroundOldestAgeMs: number | null;
 	readonly maintenanceOldestAgeMs: number | null;
 	readonly lanes?: {
@@ -122,8 +123,11 @@ export class DbOwnerError extends Error {
 }
 
 export class DbOwnerDeadlineError extends DbOwnerError {
-	constructor(jobId: string) {
-		super("DB_OWNER_DEADLINE", `DB owner job ${jobId} exceeded its deadline`);
+	constructor(jobId: string, detail?: string) {
+		super(
+			"DB_OWNER_DEADLINE",
+			`DB owner job ${jobId} exceeded its deadline${detail === undefined ? "" : `; ${detail}`}`,
+		);
 		this.name = "DbOwnerDeadlineError";
 	}
 }
@@ -167,6 +171,30 @@ export const DB_OWNER_SURVIVABLE_CODES: ReadonlySet<string> = new Set([
 	"DB_OWNER_WORK_BUDGET",
 ] as const);
 
+const DB_OWNER_UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
+	"DB_OWNER_DEADLINE",
+	"DB_OWNER_QUEUE_FULL",
+	"DB_OWNER_DIED",
+	"DB_OWNER_CLOSED",
+	"DB_OWNER_START_TIMEOUT",
+	"DB_OWNER_WRITES_BLOCKED",
+] as const);
+
+export function isDbOwnerUnavailableError(error: unknown): error is DbOwnerError {
+	return error instanceof DbOwnerError && DB_OWNER_UNAVAILABLE_CODES.has(String(error.code));
+}
+
+export interface DbOwnerJobOverrun {
+	readonly jobId: string;
+	readonly operation: string;
+	readonly lane: DbOwnerLane;
+	readonly workloadClass: DbOwnerWorkloadClass;
+	readonly deadlineMs: number;
+	readonly elapsedMs: number;
+	readonly finished: boolean;
+	readonly queuedJobs: number;
+}
+
 interface PendingJob<Result> {
 	readonly job: DbOwnerJob;
 	readonly resolve: (value: Result | PromiseLike<Result>) => void;
@@ -185,6 +213,7 @@ export interface DbOwnerClientOptions {
 	readonly startupTimeoutMs?: number;
 	readonly workerRole?: "generic" | "recall";
 	readonly migrationControl?: MigrationControlBoundary;
+	readonly onJobOverrun?: (overrun: DbOwnerJobOverrun) => void;
 }
 
 const DEFAULT_DB_OWNER_START_TIMEOUT_MS = 15_000;
@@ -258,6 +287,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let state: DbOwnerHealthState = "dead";
 	let pid: number | null = null;
 	let activeJobId: string | null = null;
+	let running: { readonly job: DbOwnerJob; readonly startedAt: number; overran: boolean } | null = null;
 	let lastError: string | null = null;
 	let initialization: DbOwnerInitializationState = "not_started";
 	let sequence = 0;
@@ -284,6 +314,22 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	function recordCancellation(jobId: string): void {
 		try {
 			appendFileSync(cancellationRegistryPath, `${jobId}\n`);
+		} catch {}
+	}
+
+	function reportOverrun(job: DbOwnerJob, startedAt: number, finished: boolean): void {
+		const now = dbOwnerWallClockNow();
+		try {
+			options.onJobOverrun?.({
+				jobId: job.id,
+				operation: job.operation,
+				lane: job.lane,
+				workloadClass: job.workloadClass,
+				deadlineMs: job.deadlineAt - job.enqueuedAt,
+				elapsedMs: Math.max(0, now - startedAt),
+				finished,
+				queuedJobs: [...pending.keys()].filter((jobId) => jobId !== job.id).length,
+			});
 		} catch {}
 	}
 
@@ -315,7 +361,8 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			foregroundQueuedJobs: count("foreground"),
 			maintenanceQueuedJobs: count("maintenance"),
 			activeJobId,
-			activeWorkloadClass: activeJobId === null ? null : (pending.get(activeJobId)?.job.workloadClass ?? null),
+			activeWorkloadClass: activeJobId === null ? null : (running?.job.workloadClass ?? null),
+			activeOperation: activeJobId === null ? null : (running?.job.operation ?? null),
 			foregroundOldestAgeMs: oldestAge("foreground"),
 			maintenanceOldestAgeMs: oldestAge("maintenance"),
 			lastError,
@@ -351,7 +398,6 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		if (job === undefined) return;
 		pending.delete(jobId);
 		clearTimeout(job.timer);
-		if (activeJobId === jobId) activeJobId = null;
 		callback(job);
 	}
 
@@ -383,6 +429,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		if (retiredClose !== null) retiredChildClose = retiredClose;
 		pid = null;
 		activeJobId = null;
+		running = null;
 		input = "";
 		startPromise = null;
 		state = closed ? "closed" : nextState;
@@ -419,7 +466,11 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			return;
 		}
 		if (event.type === "started") {
-			if (pending.has(event.jobId)) activeJobId = event.jobId;
+			const startedJob = pending.get(event.jobId);
+			if (startedJob !== undefined) {
+				activeJobId = event.jobId;
+				running = { job: startedJob.job, startedAt: dbOwnerWallClockNow(), overran: false };
+			}
 			return;
 		}
 		if (event.type === "fatal") {
@@ -431,6 +482,11 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				true,
 			);
 			return;
+		}
+		if (activeJobId === event.jobId) activeJobId = null;
+		if (running?.job.id === event.jobId) {
+			if (running.overran) reportOverrun(running.job, running.startedAt, true);
+			running = null;
 		}
 		const pendingJob = pending.get(event.jobId);
 		pendingJob?.resolveMetrics(event.metrics);
@@ -491,6 +547,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			child = null;
 			pid = null;
 			activeJobId = null;
+			running = null;
 			input = "";
 			startPromise = null;
 			state = "closed";
@@ -728,6 +785,14 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				const owner = child;
 				const dispatched = entry.dispatched || entry.dispatching;
 				if (dispatched) recordCancellation(job.id);
+				const blocker = running;
+				let detail: string | undefined;
+				if (blocker?.job.id === job.id) {
+					blocker.overran = true;
+					reportOverrun(blocker.job, blocker.startedAt, false);
+				} else if (blocker !== null) {
+					detail = `${job.operation} was queued behind ${blocker.job.operation}, running for ${Math.max(0, dbOwnerWallClockNow() - blocker.startedAt)}ms`;
+				}
 				settle(job.id, (settledJob) => {
 					if (dispatched) {
 						abandonedMetrics.set(job.id, settledJob.resolveMetrics);
@@ -737,7 +802,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 					}
 					if (!settledJob.settled) {
 						settledJob.settled = true;
-						settledJob.reject(new DbOwnerDeadlineError(job.id));
+						settledJob.reject(new DbOwnerDeadlineError(job.id, detail));
 					}
 				});
 				if (dispatched && owner !== null && state === "ready") {

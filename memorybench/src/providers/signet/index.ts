@@ -609,7 +609,7 @@ export class SignetProvider implements Provider {
     let emptyTriggers = 0
     let measured = false
     let holdTriggers = false
-    await this.triggerDreaming()
+    await this.triggerDreaming(deadline, pollMs)
     while (Date.now() < deadline) {
       const primary = await this.readDreamStatus(this.agentId)
       const slots = Math.max(1, Math.floor(primary.config?.maxConcurrentPasses ?? 1))
@@ -654,7 +654,7 @@ export class SignetProvider implements Provider {
             )
           }
           if (active < slots && (active === 0 || !holdTriggers)) {
-            const started = await this.triggerDreaming()
+            const started = await this.triggerDreaming(deadline, pollMs)
             const onlyEmpty = finished.length > 0 && finished.every(passHadNothingToDo)
             if (active === 0 && (onlyEmpty || (!started && finished.length === 0))) {
               emptyTriggers++
@@ -672,17 +672,22 @@ export class SignetProvider implements Provider {
     throw new Error("Timed out draining the Dreaming episodic backlog")
   }
 
-  private async triggerDreaming(): Promise<boolean> {
-    try {
-      const accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
-        method: "POST",
-        body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
-      })
-      if (!accepted.passId) throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
-      return true
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("/api/dream/trigger failed (409)")) return false
-      throw error
+  private async triggerDreaming(deadline: number, retryMs: number): Promise<boolean> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
+          method: "POST",
+          body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
+        })
+        if (!accepted.passId) throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
+        return true
+      } catch (error) {
+        if (!(error instanceof Error)) throw error
+        if (error.message.includes("/api/dream/trigger failed (409)")) return false
+        if (!error.message.includes("/api/dream/trigger failed (503)") || Date.now() + retryMs >= deadline) throw error
+        logger.warn(`${error.message}; retrying Dreaming trigger (attempt ${attempt})`)
+        await new Promise((resolve) => setTimeout(resolve, retryMs))
+      }
     }
   }
 
