@@ -7,8 +7,8 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-08
-- Bug fixes: check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
-- Docs: note native updater cap in 1.0 post.
+- Bug fixes: bound native embedding input; defer incomplete transcript backfill; stop blocking input on prompt-submit; keep transcript seq monotonic per key; keep identity in portable import; record ontology claim actor; cascade and audit agent removal; stop retention from deleting entities; check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
+- Docs: refresh for 1.0 and post-1.0 direction; note native updater cap in 1.0 post.
 
 ### 2026-10-07
 - Features: stem the memory keyword index; return bounded transcript evidence; rerank with a local cross-encoder fused with retrieval order; record each pass's peak context; tell each pass the current local date and time; list pending attention in the pass prompt and fold idle tools; let any pass merge and rename aspects at the aspect cap; carry pass history as a compacted view instead of runbook reads; give claims structured event time and validity; add a seeded proportional LongMemEval question sampler; support subscription providers for Dreaming; edit Dreaming concurrency and input budget in Advanced settings; run read-only lookups through Pi codemode behind a flag; pick the agent shown in the memory graph; run incremental passes for disjoint agent groups concurrently; add Muse Code connector.
@@ -42,6 +42,31 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: drop graph attribution entry; remove duplicate license note; clarify opening and use cases.
 
 ## Release Ledger
+
+## [0.237.3] - 2026-10-08
+
+Release summary: 1 docs update.
+Tag range: `v0.237.2..v0.237.3`.
+
+### Docs
+
+- **roadmap**: refresh for 1.0 and post-1.0 direction
+
+## [0.237.2] - 2026-10-08
+
+Release summary: 8 bug fixes.
+Tag range: `v0.237.1..v0.237.2`.
+
+### Bug Fixes
+
+- **daemon**: bound native embedding input
+- **daemon**: defer incomplete transcript backfill
+- **pi**: stop blocking input on prompt-submit
+- **daemon**: keep transcript seq monotonic per key
+- **cli**: keep identity in portable import
+- **daemon**: record ontology claim actor
+- **daemon**: cascade and audit agent removal
+- **daemon**: stop retention from deleting entities
 
 ## [0.237.1] - 2026-10-08
 
