@@ -246,6 +246,27 @@ web.setWebRequestForTest(() => Promise.resolve(new Response(
 		expect(await pending).toEqual({ indexed: 0, scanned: 0, total: 1, failures: [] });
 	});
 
+	it("rejects owner writes the worker submits after cancellation", async () => {
+		const source = notionSource();
+		let active = true;
+		const pending = runSourceSyncInWorker(context(source, { shouldContinue: () => active }), {
+			workerPath: protocolEntry(
+				"post-cancel-write",
+				"",
+				`post({ type: "owner_submit", id: "late-write", request: { kind: "transaction", transaction: { statements: [{ sql: "CREATE TABLE post_cancel_write (id INTEGER)", params: [], result: "run" }] } }, options: { operation: "sources.test.post-cancel", lane: "write", deadlineMs: 1000 } });`,
+			),
+			cancelPollMs: 5,
+			cancelGraceMs: 10_000,
+		});
+		await Bun.sleep(20);
+		active = false;
+		await expect(pending).rejects.toThrow("DB owner job late-write was cancelled");
+		const table = getDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'post_cancel_write'").get(),
+		);
+		expect(table).toBeNull();
+	});
+
 	it("relays worker log entries to the daemon logger", async () => {
 		const source = notionSource();
 		const entries: LogEntry[] = [];
