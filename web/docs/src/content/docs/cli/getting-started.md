@@ -109,7 +109,7 @@ When an explicitly selected Ollama service or model is unavailable during non-in
 
 Validated extraction providers are `acpx`, `claude-code`, `codex`, `llama-cpp`, `ollama`, `opencode`, `openrouter`, `openai-compatible`, and `none`. Explicit provider flags override defaults inferred from `--deployment-type`.
 
-Choosing `openrouter`, or `openai-compatible` with a non-loopback `--extraction-endpoint`, sends memory and transcript text to that provider. Setup records that choice as `privacy: remote_ok` on the `memory_extraction` task class. Local providers and ACPX keep `restricted_remote`, so the dashboard asks before memory extraction is moved to a remote provider. `signet doctor` warns when the configured extraction target can never pass that privacy tier.
+Choosing `openrouter`, or `openai-compatible` with a non-loopback `--extraction-endpoint`, sends memory and transcript text to that provider. Setup records that choice as `privacy: remote_ok` on the `memory_extraction` task class. Local providers and ACPX keep `restricted_remote`, so Settings → Inference in the dashboard asks before memory extraction is moved to a remote provider. It also asks for an existing ACPX target, because the dashboard treats an ACPX harness as a remote executor. `signet doctor` warns when the configured extraction target can never pass that privacy tier.
 
 Current `signet setup --help` lists `llama-cpp` as an embedding provider, but setup validation rejects it. Use the validated embedding values above until that discrepancy is fixed.
 
