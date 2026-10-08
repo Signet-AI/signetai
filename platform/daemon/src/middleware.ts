@@ -1,12 +1,28 @@
 import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
+import { HTTPException } from "hono/http-exception";
 import { createAuthMiddleware, verifyApiKey } from "./auth";
 import { getDbAccessor } from "./db-accessor";
+import { isDbOwnerUnavailableError } from "./db-owner-client";
 import { logger } from "./logger";
 import { analyticsCollector, authConfig, authSecret, isAllowedOrigin, shuttingDown } from "./routes/state.js";
 
 export function registerGlobalMiddleware(app: Hono): void {
+	app.onError((error, c) => {
+		if (error instanceof HTTPException) return error.getResponse();
+		if (isDbOwnerUnavailableError(error)) {
+			logger.warn("api", "Request failed because the DB owner could not serve it", {
+				method: c.req.method,
+				path: c.req.path,
+				code: error.code,
+				error: error.message,
+			});
+			return c.json({ error: error.message, code: error.code }, 503);
+		}
+		logger.error("api", "Unhandled request error", error, { method: c.req.method, path: c.req.path });
+		return c.json({ error: "Internal server error" }, 500);
+	});
 	app.use(
 		"*",
 		cors({

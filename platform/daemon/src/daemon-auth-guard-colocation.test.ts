@@ -81,6 +81,7 @@ describe("auth guard co-location", () => {
 			dbPath: MEMORY_DB,
 			sqlitePath: "/tmp/custom-libsqlite3.dylib",
 			migrationControl: daemonMigrationControl,
+			onJobOverrun: expect.any(Function),
 		});
 	});
 

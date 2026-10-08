@@ -312,6 +312,25 @@ export function scopeStructuredBenchmarkParticipants(
   }
 }
 
+const RETRYABLE_DREAMING_TRIGGER_CODES: ReadonlySet<string> = new Set([
+  "DB_OWNER_DEADLINE",
+  "DB_OWNER_QUEUE_FULL",
+  "DB_OWNER_DIED",
+  "DB_OWNER_START_TIMEOUT",
+])
+
+export class SignetRequestError extends Error {
+  constructor(
+    path: string,
+    readonly status: number,
+    error: string,
+    readonly code: string | undefined
+  ) {
+    super(`${path} failed (${status}): ${error}`)
+    this.name = "SignetRequestError"
+  }
+}
+
 async function parseJson<T>(response: Response): Promise<T> {
   const text = await response.text()
   if (!text.trim()) return {} as T
@@ -609,7 +628,7 @@ export class SignetProvider implements Provider {
     let emptyTriggers = 0
     let measured = false
     let holdTriggers = false
-    await this.triggerDreaming()
+    await this.triggerDreaming(deadline, pollMs)
     while (Date.now() < deadline) {
       const primary = await this.readDreamStatus(this.agentId)
       const slots = Math.max(1, Math.floor(primary.config?.maxConcurrentPasses ?? 1))
@@ -654,7 +673,7 @@ export class SignetProvider implements Provider {
             )
           }
           if (active < slots && (active === 0 || !holdTriggers)) {
-            const started = await this.triggerDreaming()
+            const started = await this.triggerDreaming(deadline, pollMs)
             const onlyEmpty = finished.length > 0 && finished.every(passHadNothingToDo)
             if (active === 0 && (onlyEmpty || (!started && finished.length === 0))) {
               emptyTriggers++
@@ -672,17 +691,27 @@ export class SignetProvider implements Provider {
     throw new Error("Timed out draining the Dreaming episodic backlog")
   }
 
-  private async triggerDreaming(): Promise<boolean> {
-    try {
-      const accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
-        method: "POST",
-        body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
-      })
-      if (!accepted.passId) throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
-      return true
-    } catch (error) {
-      if (error instanceof Error && error.message.includes("/api/dream/trigger failed (409)")) return false
-      throw error
+  private async triggerDreaming(deadline: number, retryMs: number): Promise<boolean> {
+    for (let attempt = 1; ; attempt++) {
+      try {
+        const accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
+          method: "POST",
+          body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
+        })
+        if (!accepted.passId) throw new Error(`Dreaming trigger failed: ${accepted.error || "missing pass id"}`)
+        return true
+      } catch (error) {
+        if (!(error instanceof Error)) throw error
+        if (error.message.includes("/api/dream/trigger failed (409)")) return false
+        const ownerUnavailable =
+          error instanceof SignetRequestError &&
+          error.status === 503 &&
+          error.code !== undefined &&
+          RETRYABLE_DREAMING_TRIGGER_CODES.has(error.code)
+        if (!ownerUnavailable || Date.now() + retryMs >= deadline) throw error
+        logger.warn(`${error.message}; retrying Dreaming trigger (attempt ${attempt})`)
+        await new Promise((resolve) => setTimeout(resolve, retryMs))
+      }
     }
   }
 
@@ -873,11 +902,14 @@ export class SignetProvider implements Provider {
       })
       const data = await parseJson<T>(response)
       if (!response.ok) {
-        const error =
-          data && typeof data === "object" && "error" in data
-            ? String((data as { error?: unknown }).error)
-            : response.statusText
-        throw new Error(`${path} failed (${response.status}): ${error}`)
+        const body = data && typeof data === "object" ? (data as { error?: unknown; code?: unknown }) : {}
+        const error = "error" in body ? String(body.error) : response.statusText
+        throw new SignetRequestError(
+          path,
+          response.status,
+          error,
+          typeof body.code === "string" ? body.code : undefined
+        )
       }
       return data
     } finally {

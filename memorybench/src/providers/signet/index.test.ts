@@ -5,6 +5,7 @@ import {
   hasUsableMemoryContent,
   resolveSignetSearchLimit,
   SignetDreamingProvider,
+  SignetRequestError,
   scopeStructuredBenchmarkParticipants,
 } from "./index"
 import type { UnifiedSession } from "../../types/unified"
@@ -147,6 +148,91 @@ describe("Signet benchmark profiles", () => {
     } finally {
       if (previousPoll === undefined) delete process.env.SIGNET_BENCH_DREAMING_POLL_SECS
       else process.env.SIGNET_BENCH_DREAMING_POLL_SECS = previousPoll
+    }
+  })
+
+  it("retries only a Dreaming trigger the DB owner could not serve", async () => {
+    class UnavailableTriggerProvider extends SignetDreamingProvider {
+      triggers = 0
+      constructor(private readonly failure: SignetRequestError, private readonly failures: number) {
+        super()
+      }
+      protected override async request<T>(path: string, _init: RequestInit): Promise<T> {
+        if (path.startsWith("/api/dream/status")) {
+          return {
+            worker: { running: true, activePasses: [] },
+            passes: this.triggers > this.failures ? [{ id: "pass-1", status: "completed", mutationsApplied: 1 }] : [],
+            episodicTokensPending: this.triggers > this.failures ? 0 : 1,
+          } as T
+        }
+        if (path === "/api/dream/trigger") {
+          this.triggers += 1
+          if (this.triggers <= this.failures) throw this.failure
+          return { passId: "pass-1" } as T
+        }
+        if (path === "/api/embeddings/health") return { checks: [{ name: "coverage", detail: { unembedded: 0 } }] } as T
+        throw new Error(`Unexpected path ${path}`)
+      }
+    }
+    const previousPoll = process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+    process.env.SIGNET_BENCH_DREAMING_POLL_SECS = "1"
+    try {
+      const unavailable = new UnavailableTriggerProvider(
+        new SignetRequestError(
+          "/api/dream/trigger",
+          503,
+          "DB owner job db-owner-1-2 exceeded its deadline",
+          "DB_OWNER_DEADLINE"
+        ),
+        2
+      )
+      await unavailable.finalizeIngest({ runId: "run", dataSourceRunId: "source" })
+      expect(unavailable.triggers).toBe(3)
+
+      const fatal = [
+        new SignetRequestError("/api/dream/trigger", 500, "Internal server error", undefined),
+        new SignetRequestError("/api/dream/trigger", 503, "Pipeline is paused", undefined),
+        new SignetRequestError(
+          "/api/dream/trigger",
+          503,
+          "DB owner writes are blocked while database integrity is unresolved",
+          "DB_OWNER_WRITES_BLOCKED"
+        ),
+      ]
+      for (const failure of fatal) {
+        const broken = new UnavailableTriggerProvider(failure, 1)
+        await expect(broken.finalizeIngest({ runId: "run", dataSourceRunId: "source" })).rejects.toThrow(
+          failure.message
+        )
+        expect(broken.triggers).toBe(1)
+      }
+    } finally {
+      if (previousPoll === undefined) delete process.env.SIGNET_BENCH_DREAMING_POLL_SECS
+      else process.env.SIGNET_BENCH_DREAMING_POLL_SECS = previousPoll
+    }
+  })
+
+  it("carries the daemon error code on a failed request", async () => {
+    class RawRequestProvider extends SignetDreamingProvider {
+      send(path: string): Promise<unknown> {
+        return this.request(path, { method: "POST" })
+      }
+    }
+    const originalFetch = globalThis.fetch
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: "owner busy", code: "DB_OWNER_QUEUE_FULL" }), {
+        status: 503,
+      })) as unknown as typeof fetch
+    try {
+      const failure = await new RawRequestProvider().send("/api/dream/trigger").catch((error: unknown) => error)
+      expect(failure).toBeInstanceOf(SignetRequestError)
+      expect(failure).toMatchObject({
+        status: 503,
+        code: "DB_OWNER_QUEUE_FULL",
+        message: "/api/dream/trigger failed (503): owner busy",
+      })
+    } finally {
+      globalThis.fetch = originalFetch
     }
   })
 

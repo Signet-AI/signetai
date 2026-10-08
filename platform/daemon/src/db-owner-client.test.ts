@@ -20,6 +20,7 @@ import {
 	DbOwnerCancelledError,
 	DbOwnerDeadlineError,
 	DbOwnerDiedError,
+	type DbOwnerJobOverrun,
 	DbOwnerWritesBlockedError,
 	MAX_DB_OWNER_PENDING_JOBS,
 	MAX_DB_OWNER_WORK_UNITS,
@@ -911,6 +912,56 @@ describe("DB owner client", () => {
 		if (queuedMetrics === undefined) throw new Error("queued job did not expose a metrics fence");
 		expect(await queuedMetrics).toBeUndefined();
 		expect(await slow.result).toEqual({ sleptMs: 250 });
+	});
+
+	test("names a job that holds the owner past its deadline", async () => {
+		const database = makeDb();
+		directory = database.directory;
+		const overruns: DbOwnerJobOverrun[] = [];
+		client = createDbOwnerClient({ dbPath: database.path, onJobOverrun: (overrun) => overruns.push(overrun) });
+		await client.start();
+		await client.submit(
+			{ kind: "query", statement: { sql: "SELECT 1", result: "all" } },
+			{
+				operation: "test.warm-owner",
+				lane: "read",
+				deadlineMs: 5_000,
+			},
+		).result;
+		const slow = client.submit(
+			{ kind: "sleep", durationMs: 600 },
+			{ operation: "maintenance.stalled-owner-job", lane: "maintenance", deadlineMs: 200 },
+		);
+		const slowFailure = rejected(slow.result);
+		await waitFor(() => client?.health().activeJobId === slow.job.id);
+		const queued = client.submit(
+			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
+			{ operation: "hints.tick", lane: "read", deadlineMs: 40 },
+		);
+		const queuedError = await rejected(queued.result);
+		expect(queuedError).toBeInstanceOf(DbOwnerDeadlineError);
+		expect((queuedError as Error).message).toContain("hints.tick was queued behind maintenance.stalled-owner-job");
+		expect(await slowFailure).toBeInstanceOf(DbOwnerDeadlineError);
+		expect(client.health().activeJobId).toBe(slow.job.id);
+		expect(client.health().activeOperation).toBe("maintenance.stalled-owner-job");
+		expect(overruns).toEqual([
+			expect.objectContaining({
+				jobId: slow.job.id,
+				operation: "maintenance.stalled-owner-job",
+				lane: "maintenance",
+				deadlineMs: 200,
+				finished: false,
+			}),
+		]);
+		await waitFor(() => overruns.length === 2);
+		expect(overruns[1]).toMatchObject({
+			jobId: slow.job.id,
+			operation: "maintenance.stalled-owner-job",
+			finished: true,
+		});
+		expect(overruns[1]?.elapsedMs).toBeGreaterThanOrEqual(500);
+		expect(client.health().activeJobId).toBeNull();
+		expect(client.health().activeOperation).toBeNull();
 	});
 
 	test("recovers immediately after a maintenance deadline is abandoned", async () => {
