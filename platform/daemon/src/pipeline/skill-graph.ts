@@ -6,6 +6,7 @@ import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "../embedd
 import type { EmbeddingRole } from "../embedding-profile";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
+import { reconcileOntologyContradictionsInTx } from "../ontology-contradictions";
 
 export interface SkillFrontmatter {
 	readonly name: string;
@@ -70,7 +71,7 @@ async function findSkillEntityId(input: SkillUninstallInput, accessor: DbAccesso
 				.get(input.skillName, agentId) as { id: string } | undefined;
 			return adopted?.id ?? null;
 		},
-		{ siteToken: "pipeline/skill-graph.ts:54", operation: "pipeline.skill-graph.find" },
+		{ siteToken: "pipeline/skill-graph.ts:55", operation: "pipeline.skill-graph.find" },
 	);
 }
 
@@ -243,13 +244,13 @@ export async function installSkillNode(
 				);
 			}
 		},
-		{ siteToken: "pipeline/skill-graph.ts:144", operation: "pipeline.skill-graph.install-metadata" },
+		{ siteToken: "pipeline/skill-graph.ts:145", operation: "pipeline.skill-graph.install-metadata" },
 	);
 	let embeddingCreated = false;
 	const embeddingText = buildEmbeddingText(fm);
 	const writeConfig = await accessor.withReadDbAsync(
 		(db: import("../db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, embeddingCfg),
-		{ siteToken: "pipeline/skill-graph.ts:250", operation: "pipeline.skill-graph.install-embedding-config" },
+		{ siteToken: "pipeline/skill-graph.ts:251", operation: "pipeline.skill-graph.install-embedding-config" },
 	);
 	const embVec = await fetchEmbedding(embeddingText, writeConfig, "document", {
 		usage: { source: "artifact-index", agentId },
@@ -292,7 +293,7 @@ export async function installSkillNode(
 				syncVecInsert(db, actualRow.id, embVec);
 				return true;
 			},
-			{ siteToken: "pipeline/skill-graph.ts:263", operation: "pipeline.skill-graph.install-embedding" },
+			{ siteToken: "pipeline/skill-graph.ts:264", operation: "pipeline.skill-graph.install-embedding" },
 		);
 	}
 
@@ -323,7 +324,7 @@ export async function uninstallSkillNode(
 					).run(now, now, metaId, agentId);
 				}
 			},
-			{ siteToken: "pipeline/skill-graph.ts:318", operation: "pipeline.skill-graph.uninstall-metadata" },
+			{ siteToken: "pipeline/skill-graph.ts:319", operation: "pipeline.skill-graph.uninstall-metadata" },
 		);
 		return { removed: false, entityId: null };
 	}
@@ -354,8 +355,9 @@ export async function uninstallSkillNode(
 				db.prepare("DELETE FROM skill_meta WHERE entity_id = ? AND agent_id = ?").run(metaId, agentId);
 			}
 			db.prepare("DELETE FROM entities WHERE id = ?").run(entityId);
+			reconcileOntologyContradictionsInTx(db, { agentId, entityId });
 		},
-		{ siteToken: "pipeline/skill-graph.ts:331", operation: "pipeline.skill-graph.uninstall" },
+		{ siteToken: "pipeline/skill-graph.ts:332", operation: "pipeline.skill-graph.uninstall" },
 	);
 
 	logger.info("pipeline", "Skill node uninstalled", {

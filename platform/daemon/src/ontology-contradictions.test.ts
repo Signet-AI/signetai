@@ -10,6 +10,7 @@ import { DEFAULT_PIPELINE_V2 } from "./memory-config";
 import { getOntologyContradiction, listOntologyContradictions } from "./ontology-contradictions";
 import { applyOntologyOperation } from "./ontology-proposals";
 import { createDreamingCapabilities } from "./pipeline/dreaming-capabilities";
+import { uninstallSkillNode } from "./pipeline/skill-graph";
 import { registerOntologyRoutes } from "./routes/ontology-routes";
 import { createRateLimiter, pruneGenericEntities } from "./repair-actions";
 import { purgeSourceOwnedRows } from "./source-purge";
@@ -171,6 +172,22 @@ describe("persisted ontology contradictions", () => {
 		);
 		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
+		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
+	});
+
+	it("reconciles when skill uninstall deletes the contested entity", async () => {
+		await seedContradiction();
+		const entityId = getDbAccessor().withReadDb(
+			(db) =>
+				(
+					db.prepare("SELECT id FROM entities WHERE agent_id = ? AND name = ?").get("owner", "Runtime") as {
+						id: string;
+					} | null
+				)?.id,
+		);
+		if (entityId === undefined) throw new Error("expected contested entity fixture");
+		const result = await uninstallSkillNode({ skillName: "runtime", agentId: "owner", entityId }, getDbAccessor());
+		expect(result.removed).toBe(true);
 		expect(storedStatuses("owner").map((row) => row.status)).toEqual(["resolved"]);
 	});
 

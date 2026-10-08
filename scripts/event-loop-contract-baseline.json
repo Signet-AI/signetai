@@ -2777,42 +2777,42 @@
     },
     {
       "path": "pipeline/skill-graph.ts",
-      "line": 54,
+      "line": 55,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/skill-graph.ts",
-      "line": 144,
+      "line": 145,
       "api": "withWriteTxAsync",
       "source": "await accessor.withWriteTxAsync(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/skill-graph.ts",
-      "line": 250,
+      "line": 251,
       "api": "withReadDbAsync",
       "source": "const writeConfig = await accessor.withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/skill-graph.ts",
-      "line": 263,
+      "line": 264,
       "api": "withWriteTxAsync",
       "source": "embeddingCreated = await accessor.withWriteTxAsync(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/skill-graph.ts",
-      "line": 318,
+      "line": 319,
       "api": "withWriteTxAsync",
       "source": "await accessor.withWriteTxAsync(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/skill-graph.ts",
-      "line": 331,
+      "line": 332,
       "api": "withWriteTxAsync",
       "source": "await accessor.withWriteTxAsync(",
       "category": "hot-path"
