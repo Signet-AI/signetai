@@ -14,8 +14,13 @@ There is no LTS channel yet. Stable/nightly gives Signet room to move quickly wi
 ### Nightly
 
 - Built automatically from `main` by `.github/workflows/release.yml`.
-- Published to npm with the `next` dist-tag.
+- Published to npm with the `next` dist-tag. The tag only moves forward: when
+  two release pipelines overlap and an older version finishes publishing last,
+  `next` stays on the newer version.
 - Created as a GitHub prerelease.
+- Release runs queue rather than cancel each other. A run releases every
+  release-relevant change on `main` since the newest release tag, so a
+  superseded queued run's commits ship with the run that replaces it.
 - May include experimental defaults, unstable behavior, and day-to-day development churn.
 - Must remain opt-in; Signet should not silently move a stable user to nightly.
 
