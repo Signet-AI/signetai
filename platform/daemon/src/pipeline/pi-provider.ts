@@ -216,21 +216,35 @@ function accountingProvenanceForConfig(config: PiModelProviderConfig, piModel: M
 }
 
 const API_VERSION_SEGMENT = /^v\d+(?:(?:alpha|beta)\d*)?$/i;
+const VERSIONED_PREFIX_TAILS = new Set(["openai", "compat"]);
 
 function hasApiVersion(url: string): boolean {
 	let path = url;
 	try {
 		path = new URL(url).pathname;
 	} catch {}
-	return path.split("/").some((segment) => API_VERSION_SEGMENT.test(segment));
+	const segments = path.split("/").filter((segment) => segment.length > 0);
+	const last = segments.at(-1);
+	if (!last) return false;
+	if (API_VERSION_SEGMENT.test(last)) return true;
+	if (!VERSIONED_PREFIX_TAILS.has(last.toLowerCase())) return false;
+	return segments.slice(0, -1).some((segment) => API_VERSION_SEGMENT.test(segment));
 }
 
-function withVersionPath(baseUrl: string): string {
-	let trimmed = baseUrl.trim().replace(/\/+$/, "");
+function withVersionPathOnly(path: string): string {
+	let trimmed = path.replace(/\/+$/, "");
 	for (const endpoint of ["/chat/completions", "/responses"]) {
 		if (trimmed.endsWith(endpoint)) trimmed = trimmed.slice(0, -endpoint.length);
 	}
 	return hasApiVersion(trimmed) ? trimmed : `${trimmed}/v1`;
+}
+
+function withVersionPath(baseUrl: string): string {
+	const raw = baseUrl.trim();
+	const cut = raw.search(/[?#]/);
+	if (cut < 0) return withVersionPathOnly(raw);
+	const query = raw.slice(cut).split("#")[0] ?? "";
+	return `${withVersionPathOnly(raw.slice(0, cut))}${query.length > 1 ? query : ""}`;
 }
 export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 	const timeoutMs = config.defaultTimeoutMs ?? 60_000;
