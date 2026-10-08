@@ -155,6 +155,94 @@ describe("temporal summary API auth", () => {
 		expect(res.status).toBe(404);
 	});
 
+	it("expands a compaction node standalone, without the transcript compaction cleared", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, 'codex', 'proj-a', ?, ?, ?)`,
+			).run("compaction-sess", "User: ship the expand fix\nAssistant: shipped", "agent-a", now, now);
+		});
+		const write = await app.request("http://localhost/api/hooks/compaction-complete", {
+			method: "POST",
+			headers: jsonHeader(),
+			body: JSON.stringify({
+				harness: "codex",
+				summary: "expand fix shipped",
+				sessionKey: "compaction-sess",
+				project: "proj-a",
+				agentId: "agent-a",
+			}),
+		});
+		expect(write.status).toBe(200);
+		const node = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare("SELECT id FROM session_summaries WHERE source_type = 'compaction' AND session_key = ?")
+				.get("compaction-sess"),
+		) as { id: string } | undefined;
+		expect(node?.id).toBeDefined();
+
+		const res = await app.request("http://localhost/api/sessions/summaries/expand", {
+			method: "POST",
+			headers: jsonHeader(),
+			body: JSON.stringify({ id: node?.id, agentId: "agent-a" }),
+		});
+		const json = (await res.json()) as Record<string, unknown>;
+
+		expect(res.status).toBe(200);
+		expect(json.node).toMatchObject({ kind: "session", depth: 0, sourceType: "compaction" });
+		expect(json.parents).toEqual([]);
+		expect(json.children).toEqual([]);
+		expect(json.linkedMemories).toEqual([]);
+		expect(json).not.toHaveProperty("transcript");
+	});
+
+	it("expands a Dreaming transcript node standalone, with its transcript", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at)
+				 VALUES (?, ?, 'codex', 'proj-a', ?, ?, ?)`,
+			).run("dream-sess", "User: ship the expand fix\nAssistant: shipped", "agent-a", now, now);
+			db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, token_count,
+					earliest_at, latest_at, session_key, harness,
+					agent_id, source_type, source_ref, meta_json, created_at
+				) VALUES (?, 'proj-a', 0, 'session', ?, 10, ?, ?, ?, 'codex', ?, 'transcript', ?, ?, ?)`,
+			).run(
+				"transcript:agent-a:dream-sess",
+				"User: ship the expand fix",
+				now,
+				now,
+				"dream-sess",
+				"agent-a",
+				"dream-sess",
+				JSON.stringify({ source: "dreaming-content-pass" }),
+				now,
+			);
+		});
+
+		const res = await app.request("http://localhost/api/sessions/summaries/expand", {
+			method: "POST",
+			headers: jsonHeader(),
+			body: JSON.stringify({ id: "transcript:agent-a:dream-sess", agentId: "agent-a" }),
+		});
+		const json = (await res.json()) as {
+			parents?: unknown[];
+			children?: unknown[];
+			linkedMemories?: unknown[];
+			transcript?: { sessionKey: string; excerpt: string };
+		};
+
+		expect(res.status).toBe(200);
+		expect(json.parents).toEqual([]);
+		expect(json.children).toEqual([]);
+		expect(json.linkedMemories).toEqual([]);
+		expect(json.transcript?.sessionKey).toBe("dream-sess");
+		expect(json.transcript?.excerpt).toContain("ship the expand fix");
+	});
+
 	it("stores compaction summary tags as comma-delimited text", async () => {
 		const res = await app.request("http://localhost/api/hooks/compaction-complete", {
 			method: "POST",
