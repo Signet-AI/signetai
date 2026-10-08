@@ -165,6 +165,7 @@ import {
 } from "./pipeline";
 import { randomUUID } from "node:crypto";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
+import { dreamingPassTokenSubject } from "./pipeline/dreaming-agent-tools";
 import { dbOwnerTransaction } from "./db-owner-runtime";
 import { startDeferredRuntimeAfterDreaming } from "./dreaming-startup";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
@@ -1798,11 +1799,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 								(await router.explain({ agentId, operation: "memory_extraction" })).ok,
 							acpxMcp: {
 								daemonUrl: `http://${INTERNAL_SELF_HOST}:${PORT}`,
-								authorizationTokenForAgent: (agentId) =>
+								authorizationTokenForPass: (agentId, passId) =>
 									authSecret
 										? createToken(
 												authSecret,
-												{ sub: `dreaming:${agentId}`, role: "agent", scope: { agent: agentId } },
+												{ sub: dreamingPassTokenSubject(agentId, passId), role: "agent", scope: { agent: agentId } },
 												Math.max(900, Math.ceil(memoryCfg.dreaming.timeout / 1000) + 60),
 											)
 										: undefined,
