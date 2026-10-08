@@ -61,16 +61,18 @@ function seedMemory(
 		readonly type?: string;
 		readonly importance?: number;
 		readonly embedded?: boolean;
+		readonly contentHash?: string;
 	} = {},
 ): void {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
-			`INSERT INTO memories (id, type, content, importance, created_at, updated_at, updated_by, agent_id, visibility)
-			 VALUES (?, ?, ?, ?, ?, ?, 'test', ?, ?)`,
+			`INSERT INTO memories (id, type, content, content_hash, importance, created_at, updated_at, updated_by, agent_id, visibility)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 'test', ?, ?)`,
 		).run(
 			id,
 			options.type ?? "fact",
 			`content for ${id}`,
+			options.contentHash ?? null,
 			options.importance ?? 0.5,
 			NOW,
 			NOW,
@@ -163,6 +165,18 @@ describe("GET /api/memories agent scope", () => {
 		const group = await list(app, "?agentId=team-a");
 		expect(ids(group.body)).toEqual(["team-b-global"]);
 		expect(group.body.memories[0]?.agent_id).toBe("team-b");
+	});
+
+	it("counts a memory that shares a same-agent embedding by content hash as embedded", async () => {
+		seedMemory("alpha-copy", "alpha", { contentHash: "alpha-global-hash" });
+		seedMemory("beta-copy", "beta", { contentHash: "alpha-global-hash" });
+		const app = await makeApp("local");
+
+		const alpha = await list(app, "?agentId=alpha");
+		expect(alpha.body.stats).toMatchObject({ total: 3, withEmbeddings: 2 });
+
+		const beta = await list(app, "?agentId=beta");
+		expect(beta.body.stats).toMatchObject({ total: 3, withEmbeddings: 1 });
 	});
 
 	it("resolves the agent from the agent header", async () => {
