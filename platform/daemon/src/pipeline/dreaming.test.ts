@@ -3065,6 +3065,40 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		).toEqual({ n: 0 });
 	});
 
+	it("rejects acknowledgements of an excerpt whose source changed after delivery (#2094)", async () => {
+		seedTranscript(db, "edited-source", "Iris owns the deploy checklist.");
+		let rejected: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					const page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					db.prepare("UPDATE session_transcripts SET content = ? WHERE session_key = ?").run(
+						"Iris owns the release calendar.",
+						"edited-source",
+					);
+					rejected = await invokeDreamingTool(input, "review_evidence", {
+						agentId: AGENT,
+						items: (page.items as Array<{ sourceRef: string; contentOffset: number }>).map((item) => ({
+							sourceRef: item.sourceRef,
+							contentOffset: item.contentOffset,
+						})),
+					});
+					return { summary: "The source changed before review" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(rejected).toMatchObject({ ok: false, code: "SOURCE_CHANGED" });
+		expect(
+			db.prepare("SELECT COUNT(*) AS n FROM dreaming_evidence_consumption WHERE delivered_offset > 0").get(),
+		).toEqual({ n: 0 });
+	});
+
 	it("floors the evidence cursor at a successfully cited quote (#2094)", async () => {
 		seedTranscript(
 			db,
