@@ -144,9 +144,9 @@ describe("pi provider catalog models", () => {
 		["openai-compatible", "https://gw.example.com/users/V1/llm", "https://gw.example.com/users/V1/llm/v1"],
 		["openai-compatible", "https://api.perplexity.ai/chat/completions", "https://api.perplexity.ai/v1"],
 		["openai-compatible", "  https://api.example.test/v1/chat/completions/  ", "https://api.example.test/v1"],
-		["openai-compatible", "https://api.example.test/v1/responses?tier=a", "https://api.example.test/v1?tier=a"],
+		["openai-compatible", "https://api.example.test/v1/responses?tier=a", "https://api.example.test/v1"],
 		["openai-compatible", "https://api.example.test/v4/chat/completions#docs", "https://api.example.test/v4"],
-		["openai-compatible", "https://api.example.test/api?key=x#frag", "https://api.example.test/api/v1?key=x"],
+		["openai-compatible", "https://api.example.test/api?key=x#frag", "https://api.example.test/api/v1"],
 		["openai-compatible", "https://api.example.test/v1/?", "https://api.example.test/v1"],
 		["ollama", "http://localhost:11434", "http://localhost:11434/v1"],
 		["llama-cpp", "http://127.0.0.1:8080/", "http://127.0.0.1:8080/v1"],
@@ -171,7 +171,10 @@ describe("pi provider catalog models", () => {
 		expect(resolved.piModel.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
 	});
 
-	test("sends generic executor calls to a versioned endpoint without adding /v1 (#2016)", async () => {
+	test.each([
+		["https://open.bigmodel.cn/api/coding/paas/v4", "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"],
+		["https://api.example.test/v1/responses?tier=a", "https://api.example.test/v1/chat/completions"],
+	] as const)("sends generic executor calls for %s to %s (#2016)", async (baseUrl, expected) => {
 		const originalFetch = globalThis.fetch;
 		const requestUrls: string[] = [];
 		globalThis.fetch = mock((input: RequestInfo | URL) => {
@@ -192,12 +195,12 @@ describe("pi provider catalog models", () => {
 				executor: "openai-compatible",
 				model: "glm-5.3-flash",
 				apiKey: "test-key",
-				baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+				baseUrl,
 				skipAvailabilityProbe: true,
 			});
 
 			await expect(provider.generate("extract")).resolves.toBe("done");
-			expect(requestUrls).toEqual(["https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"]);
+			expect(requestUrls).toEqual([expected]);
 		} finally {
 			globalThis.fetch = originalFetch;
 		}

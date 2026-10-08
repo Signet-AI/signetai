@@ -243,8 +243,14 @@ function withVersionPath(baseUrl: string): string {
 	const raw = baseUrl.trim();
 	const cut = raw.search(/[?#]/);
 	if (cut < 0) return withVersionPathOnly(raw);
+	const base = withVersionPathOnly(raw.slice(0, cut));
 	const query = raw.slice(cut).split("#")[0] ?? "";
-	return `${withVersionPathOnly(raw.slice(0, cut))}${query.length > 1 ? query : ""}`;
+	if (query.length > 1) {
+		logger.warn("pipeline", "Dropped query string from Pi provider base URL; requests cannot carry it", {
+			baseUrl: base,
+		});
+	}
+	return base;
 }
 export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 	const timeoutMs = config.defaultTimeoutMs ?? 60_000;
