@@ -14,17 +14,25 @@ enabled, writes return `503`. For a typed client wrapper, see the [Sdk](/sdk/).
 
 ### GET /api/memories
 
-List memories with basic stats. Simple pagination only; for filtered search
-use `POST /api/memory/recall` or `GET /memory/search`.
+List memories with basic stats. Simple pagination and a type filter only; for
+filtered search use `POST /api/memory/recall` or `GET /memory/search`.
 
 Requires `recall` permission.
 
+The list and its stats are scoped to the requesting agent's read policy, the
+same scope recall uses. The agent comes from `agentId`, the
+`x-signet-agent-id` header, or an `agent:<id>:...` session key, and falls back
+to the credential's scoped agent, then `default`. A scoped credential that asks
+for another agent gets `403`.
+
 **Query parameters**
 
-| Parameter | Type    | Default | Description                  |
-|-----------|---------|---------|------------------------------|
-| `limit`   | integer | 100     | Max records to return        |
-| `offset`  | integer | 0       | Pagination offset            |
+| Parameter | Type    | Default   | Description                       |
+|-----------|---------|-----------|-----------------------------------|
+| `limit`   | integer | 100       | Max records to return             |
+| `offset`  | integer | 0         | Pagination offset                 |
+| `type`    | string  | —         | Only memories of this type        |
+| `agentId` | string  | `default` | Agent whose read scope to apply   |
 
 ### Credential redaction
 
@@ -54,7 +62,8 @@ Dreaming projections.
       "tags": "preference,ui",
       "source_type": "manual",
       "pinned": 0,
-      "type": "preference"
+      "type": "preference",
+      "agent_id": "default"
     }
   ],
   "stats": {
