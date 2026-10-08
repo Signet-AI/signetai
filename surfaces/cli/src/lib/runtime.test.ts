@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -16,6 +16,7 @@ import {
 	daemonStartupLogPath,
 	getDaemonStatus,
 	getLaunchdDaemonLoadState,
+	hasDaemonProcess,
 	inspectDaemonJsBundle,
 	resolveBunJsDaemonBundle,
 	isDaemonEntrypointEnvironment,
@@ -36,6 +37,7 @@ import {
 	resolveDaemonPaths,
 	resolveDaemonPathForRuntime,
 	resolveDaemonRuntimeCommand,
+	stopDaemon,
 	stopManagedDaemonProcess,
 	startDaemon,
 	waitForDaemonLiveness,
@@ -1012,6 +1014,72 @@ describe("stopManagedDaemonProcess", () => {
 			});
 		} finally {
 			if (child.exitCode === null) child.kill("SIGKILL");
+		}
+	});
+});
+
+describe("stopDaemon", () => {
+	it("stops only marked daemon processes that belong to the requested workspace", async () => {
+		if (process.platform !== "linux") return;
+		const previousUrl = process.env.SIGNET_DAEMON_URL;
+		const root = mkdtempSync(join(tmpdir(), "signet-stop-scope-"));
+		const own = join(root, "own");
+		const foreign = join(root, "foreign");
+		mkdirSync(own);
+		mkdirSync(foreign);
+		const server = createServer();
+		const port = await new Promise<number>((resolve, reject) => {
+			server.once("error", reject);
+			server.listen(0, "127.0.0.1", () => {
+				const address = server.address();
+				const selected = address !== null && typeof address === "object" ? address.port : 0;
+				server.close((error) => (error ? reject(error) : resolve(selected)));
+			});
+		});
+		const launch = (workspace: string) =>
+			spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+				detached: true,
+				stdio: "ignore",
+				env: { ...process.env, SIGNET_DAEMON_ENTRYPOINT: "1", SIGNET_PATH: workspace },
+			});
+		const marked = async (pid: number): Promise<void> => {
+			for (let i = 0; i < 200; i += 1) {
+				try {
+					if (isDaemonEntrypointEnvironment(readFileSync(`/proc/${pid}/environ`, "utf-8"))) return;
+				} catch {}
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+			throw new Error(`process ${pid} never exposed the daemon marker`);
+		};
+		const alive = (pid: number): boolean => {
+			try {
+				return !readFileSync(`/proc/${pid}/stat`, "utf-8").split(") ")[1]?.startsWith("Z");
+			} catch {
+				return false;
+			}
+		};
+		const ownChild = launch(own);
+		const foreignChild = launch(foreign);
+		try {
+			if (typeof ownChild.pid !== "number" || typeof foreignChild.pid !== "number") {
+				throw new Error("marked children did not expose a pid");
+			}
+			await marked(ownChild.pid);
+			await marked(foreignChild.pid);
+			process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${port}`;
+
+			expect(await hasDaemonProcess(own)).toBe(true);
+			expect(await stopDaemon(own)).toBe(true);
+
+			expect(alive(ownChild.pid)).toBe(false);
+			expect(alive(foreignChild.pid)).toBe(true);
+			expect(await hasDaemonProcess(foreign)).toBe(true);
+		} finally {
+			if (previousUrl === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+			if (previousUrl !== undefined) process.env.SIGNET_DAEMON_URL = previousUrl;
+			if (ownChild.exitCode === null) ownChild.kill("SIGKILL");
+			if (foreignChild.exitCode === null) foreignChild.kill("SIGKILL");
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 });
