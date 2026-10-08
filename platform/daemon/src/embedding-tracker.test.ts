@@ -166,6 +166,66 @@ describe("startEmbeddingTracker admission", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+	it("backs off instead of embedding every poll while the profile does not match the active index", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-embedding-tracker-mismatch-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		const accessor = getDbAccessor();
+		const trackerCfg = { enabled: true, pollMs: 20, batchSize: 8 };
+		const repairCfg = {
+			reembedCooldownMs: 0,
+			reembedHourlyBudget: 100,
+			requeueCooldownMs: 0,
+			requeueHourlyBudget: 1,
+			dedupCooldownMs: 0,
+			dedupHourlyBudget: 1,
+			dedupSemanticThreshold: 0.9,
+			dedupBatchSize: 1,
+		};
+		const now = new Date().toISOString();
+		accessor.withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, agent_id, created_at, updated_at, embedding_model)
+				 VALUES (?, ?, ?, 'fact', 'default', ?, ?, NULL)`,
+			).run("fresh-a", "A fresh derived memory.", "hash-fresh-a", now, now);
+		});
+		let fetches = 0;
+		let probes = 0;
+		const tracker = startEmbeddingTracker(
+			accessor,
+			cfg,
+			trackerCfg,
+			repairCfg,
+			async () => {
+				fetches++;
+				return Array.from({ length: cfg.dimensions }, () => 0.01);
+			},
+			async () => {
+				probes++;
+				return { available: true };
+			},
+		);
+		try {
+			const deadline = Date.now() + 2_000;
+			while (tracker.getStats().skippedCycles < 5 && Date.now() < deadline)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(fetches).toBe(0);
+			expect(probes).toBe(0);
+			expect(tracker.getStats().skippedCycles).toBeGreaterThanOrEqual(5);
+			expect(
+				accessor.withReadDb(
+					(db) =>
+						db.prepare("SELECT embedding_model FROM memories WHERE id = 'fresh-a'").get() as {
+							embedding_model: string | null;
+						},
+				),
+			).toEqual({ embedding_model: null });
+		} finally {
+			await tracker.stop();
+			closeDbAccessor();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	it("drains a backlog of first-time embeddings without waiting a poll interval between full batches", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-embedding-tracker-drain-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
