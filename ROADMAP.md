@@ -2,24 +2,46 @@
 
 This page describes direction, not a release contract. Current behavior belongs in the product and reference documentation; an item here is not shipped merely because it is named.
 
+Open roadmap items are tracked with the [`roadmap` label](https://github.com/Signet-AI/signetai/issues?q=is%3Aissue+is%3Aopen+label%3Aroadmap).
+
+1.0
+---
+
+1.0 is the first stable release since `v0.157.3`. It establishes the foundation later work builds on:
+
+- Dreaming is the only automatic writer of semantic knowledge. It maintains claims with citations, and leaves the original evidence intact.
+- Sources bring notes, documents, and conversations into Signet with their provenance preserved.
+- Workspace v2 separates authored files, durable data, transcripts, runtime state, and caches.
+- Database work runs behind a single database-owner service, with bounded startup, shutdown, and background work.
+- Guided setup, the desktop app, and the redesigned dashboard make memory inspectable without the terminal.
+
+See the [changelog](CHANGELOG.md) for details.
+
 Current priorities
 ------------------
 
 - Reliability and operability: keep the daemon, retention, diagnostics, repair, and lifecycle boundaries observable and safe.
 - Product clarity: improve the dashboard, desktop workflows, onboarding, and source inspection without turning the dashboard into a second runtime.
-- One evidence-to-ontology path: keep episodic evidence distinct from derived indexes and current structured knowledge; Dreaming remains the only automatic semantic writer.
-- Retrieval quality: continue measuring bounded recall, provenance, authorization, and context selection against reproducible evaluations.
+- Retrieval quality and speed: continue measuring bounded recall, provenance, authorization, and context selection against reproducible evaluations. Reduce recall latency and the cost of Dreaming passes.
+
+After 1.0
+---------
+
+- **Long-term support.** A supported stable line that receives backported fixes, separate from the faster-moving development channel.
+- **Signet SDK ([#2099](https://github.com/Signet-AI/signetai/issues/2099)).** An SDK for developers who want to build memory into their own applications while keeping it self-hosted, attributable, and portable. Every result carries its provenance, and the knowledge graph and sources sit behind the same client. Developers coming from Mem0 or Supermemory should find familiar operations and a migration path. The same SDK becomes the single client Signet's own connectors, CLI, dashboard, and desktop app use to talk to the daemon.
+- **Organization mode ([#2061](https://github.com/Signet-AI/signetai/issues/2061)).** One Signet instance shared by an organization, with a distinct identity for each person, personal, team and organization agents, connector keys issued per person and device, and hidden classifications for material only some people may see.
+
+The SDK and organization mode are connected. The credential handling organization mode requires of every client is planned to live in the SDK, so connectors adopt it by moving onto the SDK.
 
 Longer-term directions
 ----------------------
 
-- Better cross-device and team workflows while preserving local ownership and explicit access control.
-- More source connectors and better inspection of evidence lineage.
+- Portability: a complete workspace export that restores to an equivalent workspace, without broadening any scope.
+- More source connectors, including cloud storage and email, and better inspection of evidence lineage.
+- Multilingual recall.
+- Entity profiles that Dreaming maintains and agents can load as skills ([#1903](https://github.com/Signet-AI/signetai/issues/1903)).
+- Configurable Dreaming passes per source and data type, built on the existing single writer of semantic knowledge.
+- Optional hosted services, such as inference for Dreaming and embeddings, and sync across devices. Local and self-hosted Signet remain complete without them.
 - Stronger workflow support around current knowledge, reviewable ontology maintenance, and agent continuity.
 
 These directions may change. They should not be cited as evidence that an interface, source type, policy, or automation is available today.
-
-Recently established architecture
----------------------------------
-
-The current daemon has one canonical state layer: user-owned workspace artifacts plus agent-scoped SQLite rows. Derived indexes and projections support that state but do not replace it. Dreaming owns automatic semantic writes; document ingestion, retention, maintenance, synthesis/projection, and optional hints remain separate non-semantic services.
