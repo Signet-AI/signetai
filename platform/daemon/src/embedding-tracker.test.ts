@@ -1,8 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, setSystemTime } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { embeddingProfileFingerprint } from "./embedding-profile";
 import { acquireEmbeddingRepairLease, finishEmbeddingRepairLease } from "./embedding-repair-state";
 import { computeEmbeddingRetryBackoffMs, processEmbeddingCycle, startEmbeddingTracker } from "./embedding-tracker";
 
@@ -166,7 +167,7 @@ describe("startEmbeddingTracker admission", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	it("backs off instead of embedding every poll while the profile does not match the active index", async () => {
+	it("backs off while the profile does not match the active index, then resumes", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-embedding-tracker-mismatch-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"));
@@ -220,7 +221,26 @@ describe("startEmbeddingTracker admission", () => {
 						},
 				),
 			).toEqual({ embedding_model: null });
+
+			accessor.withWriteTx((db) => {
+				db.prepare("UPDATE embedding_index_state SET active_profile_json = ? WHERE id = 1").run(
+					JSON.stringify({
+						fingerprint: embeddingProfileFingerprint(cfg),
+						provider: cfg.provider,
+						model: cfg.model,
+						dimensions: cfg.dimensions,
+						baseUrl: cfg.base_url,
+					}),
+				);
+			});
+			setSystemTime(new Date(Date.now() + 61_000));
+			const resumeDeadline = performance.now() + 2_000;
+			while (fetches === 0 && performance.now() < resumeDeadline)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(fetches).toBeGreaterThan(0);
+			expect(probes).toBeGreaterThan(0);
 		} finally {
+			setSystemTime();
 			await tracker.stop();
 			closeDbAccessor();
 			rmSync(dir, { recursive: true, force: true });
