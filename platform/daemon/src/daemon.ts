@@ -2834,6 +2834,7 @@ async function main() {
 				getDbAccessor(),
 				AGENTS_DIR,
 				resolveDaemonAgentId(),
+				{ harnesses: memoryCfg.nativeSources },
 			);
 		}
 		if (!transcriptImportWorkerHandle) {

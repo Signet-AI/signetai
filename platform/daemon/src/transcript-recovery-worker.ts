@@ -6,6 +6,7 @@ import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
+import type { NativeMemoryHarness } from "./memory-config";
 import { deriveSessionEndFallbackId } from "./session-end-recovery";
 import { enqueueTranscriptCaptureJob } from "./transcript-capture-worker";
 
@@ -38,6 +39,7 @@ export interface TranscriptRecoveryRoots {
 
 export interface TranscriptRecoveryScanOptions {
 	readonly roots?: Partial<TranscriptRecoveryRoots>;
+	readonly harnesses?: readonly NativeMemoryHarness[];
 	readonly nowMs?: number;
 	readonly settleMs?: number;
 	readonly maxBytes?: number;
@@ -359,20 +361,13 @@ export async function runTranscriptRecoveryScan(
 	const maxDiscoveredFiles = options.maxDiscoveredFiles ?? TRANSCRIPT_RECOVERY_MAX_DISCOVERED_FILES;
 	const discoveredCandidates: RecoveryCandidate[] = [];
 	const claudeDiscoveryLimit = Math.max(1, Math.floor(maxDiscoveredFiles / 2));
-	const claudeDiscoveryComplete = await discoverFiles(
-		roots.claudeCode,
-		"claude-code",
-		claudeDiscoveryLimit,
-		discoveredCandidates,
-		options.signal,
-	);
-	const codexDiscoveryComplete = await discoverFiles(
-		roots.codex,
-		"codex",
-		maxDiscoveredFiles,
-		discoveredCandidates,
-		options.signal,
-	);
+	const selected = (harness: RecoveryCandidate["harness"]): boolean => options.harnesses?.includes(harness) ?? true;
+	const claudeDiscoveryComplete =
+		!selected("claude-code") ||
+		(await discoverFiles(roots.claudeCode, "claude-code", claudeDiscoveryLimit, discoveredCandidates, options.signal));
+	const codexDiscoveryComplete =
+		!selected("codex") ||
+		(await discoverFiles(roots.codex, "codex", maxDiscoveredFiles, discoveredCandidates, options.signal));
 	const discoveryComplete = claudeDiscoveryComplete && codexDiscoveryComplete;
 	const candidates = Array.from(
 		new Map(discoveredCandidates.map((candidate) => [`${candidate.harness}\0${candidate.path}`, candidate])).values(),
