@@ -172,6 +172,41 @@ describe("content pass memory-head fence", () => {
 		expect(head()).toMatchObject({ isCurrent: 1, content: `- Acme ships weekly.\n- ${quote}` });
 	});
 
+	it("never returns committed entries whose evidence is gone, and clears the head only when none survive", async () => {
+		const weekly = {
+			entryId: "weekly",
+			text: "Acme ships weekly.",
+			support: [{ source_ref: "memory:mem-2", quote: "Acme ships weekly." }],
+		};
+		start("pass-first");
+		getDbAccessor().withWriteTx((db) => commitCuratedMemoryHeadInDb(db, input("pass-first", [weekly])));
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE dreaming_passes SET status = 'completed' WHERE id = 'pass-first'").run();
+		});
+		start("pass-lazy");
+		expect(getDbAccessor().withWriteTx((db) => commitCuratedMemoryHeadInDb(db, input("pass-lazy", [])))).toMatchObject({
+			ok: false,
+			code: "INVALID_HEAD",
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE dreaming_passes SET status = 'failed' WHERE id = 'pass-lazy'").run();
+			db.prepare("DELETE FROM memories WHERE id = 'mem-2'").run();
+		});
+		start("pass-after-delete");
+
+		const own = getDbAccessor().withWriteTx((db) =>
+			executeMemoryHead(db, dir, { action: "read", agentId: "agent-a", passId: "pass-after-delete" }),
+		);
+		const cleared = getDbAccessor().withWriteTx((db) =>
+			commitCuratedMemoryHeadInDb(db, input("pass-after-delete", [])),
+		);
+
+		expect(own.committedEntries).toEqual([]);
+		expect(JSON.stringify(own)).not.toContain("Acme ships weekly.");
+		expect(cleared).toMatchObject({ ok: true, code: "COMMITTED" });
+		expect(head()).toMatchObject({ isCurrent: 1, content: "" });
+	});
+
 	it("leaves the head current after finalization rewrites the pass's transcript nodes", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(

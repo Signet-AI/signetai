@@ -81,10 +81,16 @@ lands, and a head entry that cites a summary node that the same finalization
 replaces with its transcript fails with `INVALID_PROVENANCE`.
 
 During a content pass, the pass's own `memory_head_read` also returns
-`committedEntries`: the last published entries with their support, even when the
-head is stale, so the pass can revalidate and carry them forward instead of
-rebuilding the head from nothing. Every other reader still receives no text
-from a stale head.
+`committedEntries`: the last published entries whose support still resolves to
+current scoped evidence, with that support, even when the head is stale. The
+pass carries them forward instead of rebuilding the head from nothing. An entry
+whose evidence was deleted, superseded, or purged is never returned. Every other
+reader still receives no text from a stale head.
+
+An empty entry set clears a head only when no committed entry still has valid
+support; otherwise it fails with `INVALID_HEAD`. A cleared head is current and
+empty, and its projection replaces an existing generated `MEMORY.md` so removed
+text does not linger on disk.
 
 Corrections, supersession, deletion, source removal, and access revocation
 advance the affected head's revision and mark it stale in the same database

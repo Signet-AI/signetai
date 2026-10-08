@@ -185,6 +185,19 @@ describe("memory head owner runtime", () => {
 		expect(await commit("missing")).toMatchObject({ ok: false, code: "INVALID_PROVENANCE" });
 	});
 
+	it("clears the head and its projection once no committed entry keeps its evidence", async () => {
+		expect(await commit("first")).toMatchObject({ ok: true, revision: 1 });
+		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).toContain("Tuesday");
+		await sql("DELETE FROM memories WHERE id='meeting'");
+		await pass("clear");
+
+		const result = await head({ action: "commit", input: { passId: "clear", agentId: "default", entries: [] } });
+
+		expect(result).toMatchObject({ ok: true, code: "COMMITTED" });
+		expect(await snapshot()).toMatchObject({ status: "current", content: "" });
+		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).not.toContain("Tuesday");
+	});
+
 	it("rolls back database changes and leaves the projection intact when audit insertion fails", async () => {
 		expect(await commit("first")).toMatchObject({ ok: true });
 		const previous = readFileSync(join(root, "MEMORY.md"), "utf8");

@@ -469,7 +469,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"memory_head_read",
 			"Read curated memory head",
-			"Read the scoped Dreaming-curated MEMORY.md head. During a content pass, committedEntries lists the last published entries with their support, even when the head is stale.",
+			"Read the scoped Dreaming-curated MEMORY.md head. During a content pass, committedEntries lists the last published entries whose support still holds, with that support, even when the head is stale.",
 			true,
 			z.object({ agentId: z.string().min(1) }),
 			async ({ agentId: scopeId }) =>
@@ -485,7 +485,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"memory_head_commit",
 			"Commit curated memory head",
-			"Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Start from the committedEntries memory_head_read returns (the last published entries with their support) and give exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. Every content pass must stage exactly one commit, even when nothing changed: resubmit the committedEntries whose support still holds, or an empty entry set when there are none. Record deferrals and no-change reasons with runbook_write.",
+			"Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Start from the committedEntries memory_head_read returns (the last published entries whose support still holds) and give exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. Every content pass must stage exactly one commit, even when nothing changed: resubmit the committedEntries, or an empty entry set when there are none; an empty set clears the head only when no committed entry still has valid support. Record deferrals and no-change reasons with runbook_write.",
 			false,
 			z.object({
 				agentId: z.string().min(1),
