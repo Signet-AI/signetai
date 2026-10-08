@@ -913,7 +913,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
       ORDER BY m.created_at DESC
 						LIMIT ? OFFSET ?
 	    `)
-						.all(...whereArgs, limit, offset);
+						.all(...whereArgs, limit, offset) as Array<{ content: string }>;
 
 					const totalResult = db.prepare(`SELECT COUNT(*) as count FROM memories m ${whereSql}`).get(...whereArgs) as {
 						count: number;
@@ -944,7 +944,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					};
 
 					return {
-						memories,
+						memories: memories.map((row) => ({ ...row, content: redactCredentials(row.content) })),
 						stats: {
 							total: totalResult?.count ?? 0,
 							withEmbeddings: embeddingsCount,

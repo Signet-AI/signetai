@@ -18,7 +18,7 @@ let createToken: typeof import("../auth").createToken;
 let state: typeof import("./state.js");
 
 interface MemoryListBody {
-	readonly memories: ReadonlyArray<{ readonly id: string; readonly agent_id: string }>;
+	readonly memories: ReadonlyArray<{ readonly id: string; readonly agent_id: string; readonly content: string }>;
 	readonly stats: { readonly total: number; readonly withEmbeddings: number; readonly critical: number };
 	readonly error?: string;
 }
@@ -62,6 +62,7 @@ function seedMemory(
 		readonly importance?: number;
 		readonly embedded?: boolean;
 		readonly contentHash?: string;
+		readonly content?: string;
 	} = {},
 ): void {
 	getDbAccessor().withWriteTx((db) => {
@@ -71,7 +72,7 @@ function seedMemory(
 		).run(
 			id,
 			options.type ?? "fact",
-			`content for ${id}`,
+			options.content ?? `content for ${id}`,
 			options.contentHash ?? null,
 			options.importance ?? 0.5,
 			NOW,
@@ -177,6 +178,20 @@ describe("GET /api/memories agent scope", () => {
 
 		const beta = await list(app, "?agentId=beta");
 		expect(beta.body.stats).toMatchObject({ total: 3, withEmbeddings: 1 });
+	});
+
+	it("redacts stored credentials in listed content without rewriting the row", async () => {
+		const stored = "Deploy with sk-proj-Abcdefghijklmnopqrstuvwxyz0123456789 before noon.";
+		seedMemory("alpha-credential", "alpha", { content: stored });
+		const app = await makeApp("local");
+
+		const { body } = await list(app, "?agentId=alpha");
+		const listed = body.memories.find((memory) => memory.id === "alpha-credential");
+		expect(listed?.content).toBe("Deploy with [redacted credential] before noon.");
+		const row = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT content FROM memories WHERE id = ?").get("alpha-credential") as { content: string },
+		);
+		expect(row.content).toBe(stored);
 	});
 
 	it("resolves the agent from the agent header", async () => {
