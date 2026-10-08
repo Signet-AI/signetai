@@ -418,3 +418,35 @@ describe("legacy memory search", () => {
 		expect(body.results.map((row) => row.id)).toEqual(["mem-first"]);
 	});
 });
+
+describe("agents registered by memory writes", () => {
+	async function remember(app: Hono, agentId: string, content: string): Promise<string> {
+		const res = await app.request("/api/memory/remember", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ content, agentId }),
+		});
+		expect(res.status).toBe(200);
+		return ((await res.json()) as { id: string }).id;
+	}
+
+	async function recall(app: Hono, agentId: string): Promise<readonly string[]> {
+		const res = await app.request("/api/memory/recall", {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ query: "lighthouse", agentId, limit: 10 }),
+		});
+		expect(res.status).toBe(200);
+		return ((await res.json()) as { results: Array<{ id: string }> }).results.map((row) => row.id);
+	}
+
+	it("keeps each agent's recall to its own memories", async () => {
+		const app = makeApp();
+		const fromA = await remember(app, "writer-a", "The lighthouse keeper is named Ada.");
+		const fromB = await remember(app, "writer-b", "The lighthouse lamp switched to LED.");
+
+		expect(await recall(app, "writer-b")).toEqual([fromB]);
+		expect(await recall(app, "writer-a")).toEqual([fromA]);
+		expect([...(await recall(app, "default"))].sort()).toEqual([fromA, fromB].sort());
+	});
+});
