@@ -9,6 +9,11 @@ import { type LogEntry, logger } from "./logger";
 import { getSecret, putSecret, setSecretKeyringAdapterForTests } from "./secrets";
 import type { SourceProviderProgressEvent, SourceProviderSyncContext } from "./source-providers";
 import { closeSourceSyncWorkers, runSourceSyncInWorker } from "./source-sync-worker-handle";
+import {
+	SOURCE_SYNC_WORKER_MAX_MESSAGE_BYTES,
+	fitSourceSyncResult,
+	sourceSyncFrameBytes,
+} from "./source-sync-worker-protocol";
 
 const TOKEN = "notion-worker-token-value";
 const WORKER_MODULE = join(import.meta.dir, "source-sync-worker.ts");
@@ -265,6 +270,30 @@ web.setWebRequestForTest(() => Promise.resolve(new Response(
 			db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'post_cancel_write'").get(),
 		);
 		expect(table).toBeNull();
+	});
+
+	it("keeps every failure in a result frame that would exceed the IPC cap", () => {
+		const failures = Array.from({ length: 10_000 }, (_, index) => ({
+			sourceId: "notion:0123456789abcdef",
+			providerKind: "notion" as const,
+			failedAt: "2026-10-08T00:00:00.000Z",
+			recoverable: true,
+			message: `Notion page fetch failed for "${index}-${"t".repeat(600)}": Could not find page.`,
+			metadata: { phase: "markdown", pageId: `page-${index}` },
+		}));
+		const result = { indexed: 10_000, scanned: 10_000, total: 10_000, failures };
+		expect(sourceSyncFrameBytes({ type: "result", result })).toBeGreaterThan(SOURCE_SYNC_WORKER_MAX_MESSAGE_BYTES);
+
+		const fitted = fitSourceSyncResult(result);
+		expect(sourceSyncFrameBytes({ type: "result", result: fitted })).toBeLessThanOrEqual(
+			SOURCE_SYNC_WORKER_MAX_MESSAGE_BYTES,
+		);
+		expect(fitted).toMatchObject({ indexed: 10_000, scanned: 10_000, total: 10_000 });
+		expect(fitted.failures).toHaveLength(10_000);
+		expect(fitted.failures[0]).toEqual(failures[0]);
+		expect(fitted.failures.at(-1)?.message).toBe(failures.at(-1)?.message.slice(0, 256));
+		const small = { indexed: 1, scanned: 1, total: 1, failures: failures.slice(0, 3) };
+		expect(fitSourceSyncResult(small)).toBe(small);
 	});
 
 	it("relays worker log entries to the daemon logger", async () => {

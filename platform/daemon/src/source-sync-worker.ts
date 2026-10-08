@@ -21,6 +21,7 @@ import {
 	SOURCE_SYNC_WORKER_MAX_MESSAGE_BYTES,
 	boundedErrorMessage,
 	decodeSourceSyncFrame,
+	fitSourceSyncResult,
 	postSourceSyncFrame,
 	sourceSyncFrameBytes,
 } from "./source-sync-worker-protocol";
@@ -166,7 +167,7 @@ export function runSourceSyncWorker(): void {
 			void run(message.job).then(
 				(result) => {
 					try {
-						send({ type: "result", result });
+						send({ type: "result", result: fitSourceSyncResult(result) });
 					} catch (error) {
 						send({ type: "error", message: boundedErrorMessage(error) });
 					}

@@ -1,4 +1,4 @@
-import type { SignetSourceEntry } from "@signet/core";
+import type { SignetSourceEntry, SourceFailureState } from "@signet/core";
 import type { DbOwnerSubmitOptions } from "./db-owner-client";
 import type { DbOwnerRequest, DbOwnerSerializedError } from "./db-owner-protocol";
 import type { LogEntry } from "./logger";
@@ -8,6 +8,7 @@ export const SOURCE_SYNC_WORKER_PROTOCOL_VERSION = 1;
 export const SOURCE_SYNC_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 export const SOURCE_SYNC_WORKER_MAX_ERROR_CHARS = 16 * 1024;
 export const SOURCE_SYNC_WORKER_MAX_OWNER_JOBS = 8;
+const SOURCE_SYNC_WORKER_TRIMMED_FAILURE_CHARS = [1024, 256, 0] as const;
 export const SOURCE_SYNC_WORKER_OWNER_REQUESTS: ReadonlySet<DbOwnerRequest["kind"]> = new Set<DbOwnerRequest["kind"]>([
 	"query",
 	"batch",
@@ -58,6 +59,32 @@ export function boundedErrorMessage(error: unknown): string {
 
 export function sourceSyncFrameBytes(message: SourceSyncHostMessage | SourceSyncWorkerMessage): number {
 	return Buffer.byteLength(JSON.stringify({ version: SOURCE_SYNC_WORKER_PROTOCOL_VERSION, ...message }), "utf8");
+}
+
+function trimmedFailure(failure: SourceFailureState, maxChars: number): SourceFailureState {
+	return {
+		sourceId: failure.sourceId,
+		providerKind: failure.providerKind,
+		failedAt: failure.failedAt,
+		recoverable: failure.recoverable,
+		message: failure.message.slice(0, maxChars),
+		...(failure.externalId === undefined ? {} : { externalId: failure.externalId }),
+	};
+}
+
+export function fitSourceSyncResult(result: SourceProviderSyncResult): SourceProviderSyncResult {
+	const fits = (candidate: SourceProviderSyncResult): boolean =>
+		sourceSyncFrameBytes({ type: "result", result: candidate }) <= SOURCE_SYNC_WORKER_MAX_MESSAGE_BYTES;
+	if (fits(result)) return result;
+	const [first, ...rest] = result.failures;
+	let fitted = result;
+	for (const maxChars of SOURCE_SYNC_WORKER_TRIMMED_FAILURE_CHARS) {
+		const head =
+			first === undefined ? [] : [maxChars === 0 ? trimmedFailure(first, SOURCE_SYNC_WORKER_MAX_ERROR_CHARS) : first];
+		fitted = { ...result, failures: [...head, ...rest.map((failure) => trimmedFailure(failure, maxChars))] };
+		if (fits(fitted)) return fitted;
+	}
+	return fitted;
 }
 
 export function postSourceSyncFrame(

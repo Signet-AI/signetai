@@ -36,7 +36,7 @@ import {
 } from "../source-index-progress";
 import { registerImportRoutes } from "./import-routes";
 import { cleanupSourceDeletionTombstones, registerSourcesRoutes } from "./sources-routes";
-import type { runSourceSyncInWorker } from "../source-sync-worker-handle";
+import { runSourceSyncInWorker } from "../source-sync-worker-handle";
 import { setActiveTelemetry, type TelemetryCollector } from "../telemetry";
 import { recordSourceConnected, type SourceIndexTelemetryInput } from "../source-lifecycle-telemetry";
 
@@ -694,6 +694,67 @@ describe("Sources routes", () => {
 		expect(getSourceIndexJob(web.source.id)).toMatchObject({ indexed: 1, scanned: 1 });
 		expect(loadSourcesConfig(dir).sources.every((source) => source.lastIndexedAt !== undefined)).toBe(true);
 	});
+
+	it("reports every failure when the worker result exceeds the IPC cap untrimmed (#2051)", async () => {
+		const pages = 100;
+		const titleChars = 48 * 1024;
+		const entry = join(dir, "oversized-failures-worker.ts");
+		writeFileSync(
+			entry,
+			`const pages = Array.from({ length: ${pages} }, (_, index) => ({
+	object: "page",
+	id: "page-" + index,
+	url: "https://www.notion.so/page-" + index,
+	created_time: "2026-01-01T00:00:00.000Z",
+	last_edited_time: "2026-02-01T00:00:00.000Z",
+	in_trash: false,
+	parent: { type: "workspace", workspace: true },
+	properties: { Name: { type: "title", title: [{ plain_text: index + "-" + "t".repeat(${titleChars}) }] } },
+}));
+globalThis.fetch = async (input) => {
+	if (new URL(String(input)).pathname.endsWith("/search")) {
+		return Response.json({ object: "list", has_more: false, next_cursor: null, results: pages });
+	}
+	return Response.json({ object: "error", code: "object_not_found", message: "Could not find page." }, { status: 404 });
+};
+await import(${JSON.stringify(join(import.meta.dir, "..", "source-sync-worker.ts"))});
+`,
+		);
+		const telemetry: SourceIndexTelemetryInput[] = [];
+		const app = makeApp({
+			runSourceSync: async (context) =>
+				await runSourceSyncInWorker({ ...context, getSecret: async () => "notion-token" }, { workerPath: entry }),
+			recordIndexOperation: async (input) => {
+				telemetry.push(input);
+			},
+		});
+		const added = (await (
+			await app.request("/api/sources/notion", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ tokenRef: "NOTION_TOKEN" }),
+			})
+		).json()) as { source: { id: string } };
+
+		for (let attempt = 0; attempt < 600 && getSourceIndexJob(added.source.id)?.status !== "error"; attempt++)
+			await Bun.sleep(50);
+		expect(getSourceIndexJob(added.source.id)).toMatchObject({
+			status: "error",
+			error: `notion source sync completed with ${pages} failure(s)`,
+		});
+		expect(telemetry.at(-1)).toMatchObject({ failed: pages, outcome: "failed", failureClass: "network" });
+		const artifacts = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT content FROM memory_artifacts WHERE source_id = ? AND source_kind = 'source_notion_failure' AND COALESCE(is_deleted, 0) = 0",
+					)
+					.all(added.source.id) as Array<{ content: string }>,
+		);
+		expect(artifacts).toHaveLength(pages);
+		expect(artifacts.every((artifact) => artifact.content.length > titleChars)).toBe(true);
+		expect(artifacts.reduce((bytes, artifact) => bytes + artifact.content.length, 0)).toBeGreaterThan(4 * 1024 * 1024);
+	}, 60_000);
 
 	it("fails the source job explicitly when the sync worker dies (#2051)", async () => {
 		const app = makeApp({
