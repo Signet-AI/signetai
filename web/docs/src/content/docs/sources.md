@@ -88,7 +88,14 @@ canonical writes are verified and replayed without duplicate session, record, or
 turn IDs. Reconciliation exposes the equation `total = imported + duplicate +
 rejected + pending`; terminal jobs have zero pending. Import completion adds one
 Dreaming attention nudge per committed source batch. Dreaming consumption is
-separate and uses its normal delivery/review path.
+separate and uses its normal delivery/review path. The nudge's `source:` reference
+is daemon-owned and is not shown to the Dreaming agent, which reads the imported
+conversations through the delivery queue. The nudge schedules a Dreaming pass
+only until a pass starts after the batch commits; the next committed batch from
+that source re-arms it. A Dreaming pass resolves the nudge once
+every conversation in the batch has been reviewed or excluded as reviewed. Each
+pass checks a bounded, rotating slice of pending nudges, so resolution can trail
+the final review by a pass or two.
 
 In a desktop-local session, **Choose from desktop** can return local paths to a loopback daemon. Remote clients must upload file bytes; a remote daemon never treats a path string as permission to read the client’s filesystem.
 

@@ -15,6 +15,20 @@ export interface DreamingEvidenceFragment {
 	readonly end: number;
 	readonly sourceLength: number;
 }
+function boundaryEndAt(content: string, index: number): number | null {
+	const character = content[index];
+	const previous = content[index - 1];
+	if (character === undefined || previous === undefined) return null;
+	if (!((character === "\n" && previous === "\n") || (/\s/.test(character) && /[.!?]/.test(previous)))) return null;
+	let boundaryEnd = index + 1;
+	while (boundaryEnd < content.length) {
+		const next = content[boundaryEnd];
+		if (next === undefined || !/\s/.test(next)) break;
+		boundaryEnd += 1;
+	}
+	return boundaryEnd;
+}
+
 export function nextDreamingEvidenceFragment(
 	source: EpisodicSourceRecord,
 	start: number,
@@ -26,24 +40,28 @@ export function nextDreamingEvidenceFragment(
 	let end = cappedEnd;
 	if (cappedEnd < content.length) {
 		for (let index = cappedEnd - 1; index > start; index -= 1) {
-			const character = content[index];
-			const previous = content[index - 1];
-			if (character === undefined || previous === undefined) continue;
-			if ((character === "\n" && previous === "\n") || (/\s/.test(character) && /[.!?]/.test(previous))) {
-				let boundaryEnd = index + 1;
-				while (boundaryEnd < content.length) {
-					const next = content[boundaryEnd];
-					if (next === undefined || !/\s/.test(next)) break;
-					boundaryEnd += 1;
-				}
-				if (boundaryEnd <= cappedEnd && content.slice(start, boundaryEnd).trim().length > 0) {
-					end = boundaryEnd;
-					break;
-				}
+			const boundaryEnd = boundaryEndAt(content, index);
+			if (boundaryEnd !== null && boundaryEnd <= cappedEnd && content.slice(start, boundaryEnd).trim().length > 0) {
+				end = boundaryEnd;
+				break;
 			}
 		}
 	}
 	return { source, content: content.slice(start, end), start, end, sourceLength: content.length };
+}
+
+export function dreamingEvidenceResumeStart(
+	source: EpisodicSourceRecord,
+	reviewedEnd: number,
+	overlapChars: number,
+): number {
+	const content = renderDreamingEvidence(source);
+	const start = Math.max(0, Math.min(reviewedEnd, content.length) - Math.max(0, Math.floor(overlapChars)));
+	for (let index = start - 1; index > Math.max(0, start - overlapChars); index -= 1) {
+		const boundaryEnd = boundaryEndAt(content, index);
+		if (boundaryEnd !== null && boundaryEnd <= start) return boundaryEnd;
+	}
+	return start;
 }
 
 export function completeDreamingEvidenceFragment(source: EpisodicSourceRecord): DreamingEvidenceFragment {

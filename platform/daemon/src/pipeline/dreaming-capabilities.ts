@@ -24,13 +24,17 @@ import { getOntologyLinkEvidence } from "../ontology-link-evidence";
 import { type GraphWriteCaps, findDuplicateEntityMerges } from "../ontology-proposals";
 import { detectProspectiveContradictionRisk } from "./antonyms";
 import { getDreamingAttentionAcrossScopes, getDreamingAttentionScoped } from "./dreaming-attention";
-import { nextDreamingEvidenceFragment, renderDreamingEvidence } from "./dreaming-evidence";
+import { dreamingEvidenceResumeStart, nextDreamingEvidenceFragment, renderDreamingEvidence } from "./dreaming-evidence";
 import {
-	deliveredOffsetForSource,
+	DREAMING_EVIDENCE_STALL_PASSES,
+	type DreamingEvidenceCursor,
+	type DreamingEvidenceReviewRequest,
+	evidenceCursorForSource,
 	extendDeliveredOffset,
 	passDeliveredRanges,
 	passFullyServedSourceRefs,
 	pendingDreamingEvidenceContinuations,
+	reviewDreamingEvidenceInDb,
 } from "./dreaming-evidence-consumption";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "./dreaming-operation-contract";
 import {
@@ -48,6 +52,7 @@ const bounded = (value: number | undefined, fallback: number, max: number): numb
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
 
 const MAX_EVIDENCE_EXCERPT_CHARS = 2_000;
+const EVIDENCE_RESUME_OVERLAP_CHARS = Math.floor(MAX_EVIDENCE_EXCERPT_CHARS / 10);
 const MAX_EVIDENCE_RESULT_CHARS = 16_000;
 const MAX_EVIDENCE_PAGE_CHARS = 250_000;
 
@@ -161,6 +166,7 @@ export const DREAMING_CAPABILITY_IDS = [
 	"get_entity",
 	"list_aspect_claims",
 	"search_evidence",
+	"review_evidence",
 	"validate_proposal",
 	"zoom_history",
 	"runbook_write",
@@ -313,7 +319,16 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 	const servedInPass = input.passId ? passDeliveredRanges(db, input.passId, scopeId) : new Map();
 	const pageChars = evidencePageChars(input.evidenceChars);
 	let budgetExhausted = false;
-	const fresh = searchEpisodicSources(db, {
+	const cursors = new Map<string, DreamingEvidenceCursor>();
+	const cursorFor = (source: EpisodicSourceRecord): DreamingEvidenceCursor => {
+		const ref = `${source.kind}:${source.id}`;
+		const cursor = cursors.get(ref) ?? evidenceCursorForSource(db, scopeId, source);
+		cursors.set(ref, cursor);
+		return cursor;
+	};
+	const stalled = (source: EpisodicSourceRecord): boolean =>
+		cursorFor(source).stalledPasses >= DREAMING_EVIDENCE_STALL_PASSES;
+	const scanned = searchEpisodicSources(db, {
 		agentId: scopeId,
 		query: "",
 		kind: input.kind,
@@ -321,6 +336,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		excludeSourceRefs: input.passId ? passFullyServedSourceRefs(db, input.passId, scopeId) : [],
 		limit: DELIVERY_QUEUE_SCAN_LIMIT,
 	});
+	const fresh = [...scanned.filter((source) => !stalled(source)), ...scanned.filter(stalled)];
 	const page = (sources: readonly EpisodicSourceRecord[], max: number, skip = new Set<string>()) => {
 		const items: Record<string, unknown>[] = [];
 		let remaining = pageChars;
@@ -332,10 +348,17 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 				break;
 			}
 			skip.add(ref);
-			const offset = extendDeliveredOffset(deliveredOffsetForSource(db, scopeId, source), servedInPass.get(ref));
+			const reviewed = cursorFor(source).offset;
+			const served = extendDeliveredOffset(reviewed, servedInPass.get(ref));
+			const offset =
+				served > reviewed ? served : dreamingEvidenceResumeStart(source, reviewed, EVIDENCE_RESUME_OVERLAP_CHARS);
 			const fragment = projectEvidenceFragment(source, offset, Math.max(remaining, MAX_EVIDENCE_EXCERPT_CHARS));
 			if (fragment !== null) {
-				items.push(fragment);
+				items.push(
+					reviewed > offset
+						? { ...fragment, reviewedChars: Math.min(reviewed - offset, String(fragment.content).length) }
+						: fragment,
+				);
 				remaining -= typeof fragment.content === "string" ? fragment.content.length : 0;
 			}
 			if (items.length >= max) break;
@@ -398,9 +421,10 @@ export async function listDreamingAttention(
 		readonly kind?: string;
 		readonly status?: "pending" | "resolved";
 		readonly limit?: number;
+		readonly agentFacing?: boolean;
 	},
 ): Promise<readonly unknown[]> {
-	const { agentId: scopeId, kind, status, limit } = params;
+	const { agentId: scopeId, kind, status, limit, agentFacing } = params;
 	if (kind === "review_due") {
 		if (status === "resolved") return [];
 		const input: DbOwnerDreamingReviewDue = {
@@ -455,11 +479,13 @@ export async function listDreamingAttention(
 				kind,
 				status: status ?? "pending",
 				limit: bounded(limit, 20, 100),
+				agentFacing,
 			})
 		: getDreamingAttentionAcrossScopes(accessor, {
 				kind,
 				status: status ?? "pending",
 				limit: bounded(limit, 50, 200),
+				agentFacing,
 			});
 }
 
@@ -634,7 +660,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. When you look up a specific source and contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit incomplete source revisions, each resuming at its delivered offset (including fragments already served earlier in this pass), regardless of time watermark. hasMore is true while more of the queue remains. A queued source that is only partly read continues on a later queue page, so do not page it yourself. File what each page establishes before calling again without a query for the next one, and stop when hasMore is false. Partway through a pass the queue closes (deliveryClosed: true): stop reading new sources, file what you have read, and finish so your progress is recorded. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. When you look up a specific source and contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit source revisions not yet fully reviewed, regardless of time watermark. Each resumes where review_evidence acknowledgements ended, after fragments already served earlier in this pass; a source reviewed in an earlier pass resumes slightly before that point, and reviewedChars counts the leading characters already reviewed, which you need not file again. hasMore is true while more of the queue remains. A queued source that is only partly read continues on a later queue page, so do not page it yourself. File what each page establishes and acknowledge it with review_evidence before calling again without a query for the next one, and stop when hasMore is false. Partway through a pass the queue closes (deliveryClosed: true): stop reading new sources, file what you have read, and finish so your progress is recorded. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
@@ -695,6 +721,46 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						return await handle.result;
 					},
 					runInline: ({ read }) => read((db) => searchDreamingEvidenceInDb(db, input)),
+				});
+			},
+		),
+		capability(
+			"review_evidence",
+			"Acknowledge reviewed evidence",
+			"Record which evidence excerpts this pass has reviewed. A source's evidence cursor moves forward only through text acknowledged here or cited by a successful apply_ontology_ops operation; delivered text that is never acknowledged stays queued and is delivered again to a later pass. For each item, copy sourceRef and contentOffset from a search_evidence result delivered in this pass and scope. Omit through when you reviewed the whole excerpt; otherwise set through to an exact quote from the excerpt, and review ends where its first occurrence ends. A call with any invalid item is rejected as a whole with a code (EXCERPT_NOT_DELIVERED, SCOPE_MISMATCH, QUOTE_NOT_IN_EXCERPT, SOURCE_CHANGED); correct it and call again.",
+			false,
+			z.object({
+				agentId: z.string().min(1),
+				items: z
+					.array(
+						z.object({
+							sourceRef: z.string().min(1),
+							contentOffset: z.number().int().min(0),
+							through: z.string().trim().min(1).optional(),
+						}),
+					)
+					.min(1)
+					.max(50),
+			}),
+			async ({ agentId: scopeId, items }) => {
+				if (!params.passId)
+					return { ok: false, code: "PASS_REQUIRED", error: "Evidence review requires a live Dreaming pass" };
+				const input: DreamingEvidenceReviewRequest = { agentId: scopeId, passId: params.passId, items };
+				return await runDbOwnerDomainOperation(accessor, {
+					runWithOwner: async (owner) => {
+						const handle = owner.submit<DreamingCapabilityOutput>(
+							{ kind: "dreaming_evidence_review", input },
+							{
+								operation: "dreaming.capabilities.review-evidence",
+								lane: "read",
+								workloadClass: "foreground",
+								deadlineMs: 30_000,
+								estimatedWorkUnits: 200,
+							},
+						);
+						return await handle.result;
+					},
+					runInline: ({ read }) => read((db) => reviewDreamingEvidenceInDb(db, input)),
 				});
 			},
 		),
@@ -816,7 +882,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 			async ({ agentId: scopeId, kind, status, limit }) => ({
 				ok: true,
-				items: await listDreamingAttention(accessor, { agentId: scopeId, kind, status, limit }),
+				items: await listDreamingAttention(accessor, { agentId: scopeId, kind, status, limit, agentFacing: true }),
 			}),
 		),
 		capability(
