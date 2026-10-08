@@ -118,10 +118,7 @@ export async function getAgentScope(agentId: string): Promise<AgentScope> {
 	}
 }
 
-export async function ensureAgentRegistered(
-	agentId: string,
-	readPolicy: AgentRosterReadPolicy = "shared",
-): Promise<void> {
+export async function ensureAgentRegistered(agentId: string): Promise<void> {
 	const id = normalizedAgentId(agentId);
 	const now = new Date().toISOString();
 	try {
@@ -129,9 +126,9 @@ export async function ensureAgentRegistered(
 		await ownerRun(
 			owner,
 			`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
-			 VALUES (?, ?, ?, NULL, ?, ?)
+			 VALUES (?, ?, 'isolated', NULL, ?, ?)
 			 ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`,
-			[id, id, readPolicy, now, now],
+			[id, id, now, now],
 			{
 				operation: "agent-scope.register",
 				lane: "write",
