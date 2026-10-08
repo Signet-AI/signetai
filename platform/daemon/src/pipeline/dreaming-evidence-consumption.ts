@@ -780,53 +780,152 @@ export function pendingDreamingEvidenceContinuations(
 		return [source];
 	});
 }
-export function countEligibleUnconsumedEvidenceForSource(
+function candidateHasUnconsumedEvidence(db: ReadDb, agentId: string, kind: EpisodicSourceKind, id: string): boolean {
+	const source = readEpisodicSource(db, { agentId, from: `${kind}:${id}` });
+	if (source === null) return false;
+	const reviewed =
+		tableExists(db, "dreaming_evidence_reviews") &&
+		db
+			.prepare(
+				`SELECT 1 FROM dreaming_evidence_reviews WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
+			)
+			.get(agentId, source.kind, source.id, source.capturedAt, sourceIdentity(source), sourceRevision(source)) != null;
+	return !reviewed && deliveredOffsetForSource(db, agentId, source) < renderDreamingEvidence(source).length;
+}
+
+interface SourceCandidateBranch {
+	readonly kind: "artifact" | "transcript";
+	readonly select: string;
+	readonly args: readonly unknown[];
+	readonly id: string;
+	readonly identity: string;
+}
+
+function sourceCandidateBranches(
 	db: ReadDb,
 	agentId: string,
 	sourceEntryId: string,
-	_legacyObsidianRoot?: string,
-): number {
-	if (!tableExists(db, "dreaming_evidence_consumption")) return 1;
-	const legacyRootPrefix = _legacyObsidianRoot?.replace(/\\/g, "/").replace(/\/$/, "") ?? null;
-	const candidates: Array<{ kind: EpisodicSourceKind; id: string }> = [
-		...(
-			db
-				.prepare(
-					`SELECT source_path AS id FROM memory_artifacts
-					 WHERE agent_id = ? AND COALESCE(is_deleted, 0) = 0 AND length(content) > 0
-					   AND (source_id = ? OR (? IS NOT NULL AND harness = 'obsidian' AND source_id IS NULL AND source_path >= ? AND source_path < ?))`,
-				)
-				.all(
-					agentId,
-					sourceEntryId,
-					legacyRootPrefix,
-					legacyRootPrefix ?? "",
-					`${legacyRootPrefix ?? ""}/\uffff`,
-				) as Array<{ id: string }>
-		).map((row) => ({ kind: "artifact" as const, id: row.id })),
-		...(
-			db
-				.prepare(
-					"SELECT session_key AS id FROM session_transcripts WHERE agent_id = ? AND source_id = ? AND completed_at IS NOT NULL",
-				)
-				.all(agentId, sourceEntryId) as Array<{ id: string }>
-		).map((row) => ({ kind: "transcript" as const, id: row.id })),
+	legacyObsidianRoot: string | undefined,
+): readonly SourceCandidateBranch[] {
+	const legacyRootPrefix = legacyObsidianRoot?.replace(/\\/g, "/").replace(/\/$/, "") ?? null;
+	const identity = (
+		kind: string,
+		alias: string,
+		id: string,
+		capturedAt: string,
+		entryId: string,
+		revision: string,
+	): string =>
+		`e.agent_id = ${alias}.agent_id AND e.source_kind = '${kind}' AND e.source_id = ${id}
+		 AND e.source_captured_at = ${capturedAt} AND e.source_entry_id = ${entryId} AND e.source_revision = ${revision}`;
+	const branches: SourceCandidateBranch[] = [
+		{
+			kind: "artifact",
+			select: `SELECT ma.source_path AS id FROM memory_artifacts ma
+			 WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0 AND length(ma.content) > 0
+			   AND (ma.source_id = ? OR (? IS NOT NULL AND ma.harness = 'obsidian' AND ma.source_id IS NULL AND ma.source_path >= ? AND ma.source_path < ?))`,
+			args: [agentId, sourceEntryId, legacyRootPrefix, legacyRootPrefix ?? "", `${legacyRootPrefix ?? ""}/\uffff`],
+			id: "ma.source_path",
+			identity: identity(
+				"artifact",
+				"ma",
+				"ma.source_path",
+				"ma.captured_at",
+				"COALESCE(ma.source_id, '')",
+				"CASE WHEN ma.source_sha256 IS NULL OR ma.source_sha256 = '' THEN ma.captured_at ELSE ma.source_sha256 END",
+			),
+		},
 	];
-	return candidates.reduce((count, candidate) => {
-		const source = readEpisodicSource(db, { agentId, from: `${candidate.kind}:${candidate.id}` });
-		if (source === null) return count;
-		const reviewed =
-			tableExists(db, "dreaming_evidence_reviews") &&
-			db
-				.prepare(
-					`SELECT 1 FROM dreaming_evidence_reviews WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
-				)
-				.get(agentId, source.kind, source.id, source.capturedAt, sourceIdentity(source), sourceRevision(source)) !=
-				null;
-		return reviewed || deliveredOffsetForSource(db, agentId, source) >= renderDreamingEvidence(source).length
-			? count
-			: count + 1;
-	}, 0);
+	if (
+		tableHasColumn(db, "session_transcripts", "source_id") &&
+		tableHasColumn(db, "session_transcripts", "completed_at")
+	) {
+		const updatedAt = tableHasColumn(db, "session_transcripts", "updated_at") ? "st.updated_at" : "NULL";
+		const contentHash = tableHasColumn(db, "session_transcripts", "content_hash") ? "st.content_hash" : "NULL";
+		const capturedAt = `COALESCE(st.completed_at, ${updatedAt}, st.created_at)`;
+		branches.push({
+			kind: "transcript",
+			select: `SELECT st.session_key AS id FROM session_transcripts st
+			 WHERE st.agent_id = ? AND st.source_id = ? AND st.completed_at IS NOT NULL`,
+			args: [agentId, sourceEntryId],
+			id: "st.session_key",
+			identity: identity(
+				"transcript",
+				"st",
+				"st.session_key",
+				capturedAt,
+				"COALESCE(st.source_id, '')",
+				`CASE WHEN st.source_id IS NULL OR st.source_id = '' THEN ${capturedAt} ELSE COALESCE(${contentHash}, ${capturedAt}) END`,
+			),
+		});
+	}
+	return branches;
+}
+
+export interface SourceEvidenceDrainProbe {
+	readonly status: "pending" | "drained" | "undetermined";
+	readonly resumeAfter: string | null;
+	readonly rendered: number;
+}
+
+const SOURCE_DRAIN_PAGE_ROWS = 32;
+
+export function probeSourceEvidenceDrain(
+	db: ReadDb,
+	agentId: string,
+	sourceEntryId: string,
+	options: {
+		readonly legacyObsidianRoot?: string;
+		readonly maxRenders: number;
+		readonly resumeAfter?: string | null;
+	},
+): SourceEvidenceDrainProbe {
+	let resumeAfter = options.resumeAfter ?? null;
+	if (!tableExists(db, "dreaming_evidence_consumption")) return { status: "pending", resumeAfter, rendered: 0 };
+	const branches = sourceCandidateBranches(db, agentId, sourceEntryId, options.legacyObsidianRoot);
+	const notReviewed = (branch: SourceCandidateBranch): string =>
+		tableExists(db, "dreaming_evidence_reviews")
+			? `AND NOT EXISTS (SELECT 1 FROM dreaming_evidence_reviews e WHERE ${branch.identity})`
+			: "";
+	for (const branch of branches) {
+		const partial = db
+			.prepare(
+				`${branch.select} ${notReviewed(branch)}
+				 AND EXISTS (SELECT 1 FROM dreaming_evidence_consumption e WHERE ${branch.identity} AND e.delivered_offset < e.source_length)
+				 LIMIT 1`,
+			)
+			.get(...branch.args);
+		if (partial != null) return { status: "pending", resumeAfter, rendered: 0 };
+	}
+	const separator = resumeAfter?.indexOf(":") ?? -1;
+	const resumeKind = resumeAfter !== null && separator > 0 ? resumeAfter.slice(0, separator) : null;
+	const resumeId = resumeAfter !== null && separator > 0 ? resumeAfter.slice(separator + 1) : "";
+	let rendered = 0;
+	for (const branch of branches) {
+		if (resumeKind === "transcript" && branch.kind === "artifact") continue;
+		let after = resumeKind === branch.kind ? resumeId : "";
+		const undelivered = db.prepare(
+			`${branch.select} AND ${branch.id} > ? ${notReviewed(branch)}
+			 AND NOT EXISTS (SELECT 1 FROM dreaming_evidence_consumption e WHERE ${branch.identity})
+			 ORDER BY ${branch.id} ASC
+			 LIMIT ?`,
+		);
+		for (;;) {
+			const pageRows = Math.max(1, Math.min(SOURCE_DRAIN_PAGE_ROWS, options.maxRenders - rendered + 1));
+			const rows = undelivered.all(...branch.args, after, pageRows) as Array<{ id: string }>;
+			for (const row of rows) {
+				if (rendered >= options.maxRenders) return { status: "undetermined", resumeAfter, rendered };
+				rendered += 1;
+				if (candidateHasUnconsumedEvidence(db, agentId, branch.kind, row.id)) {
+					return { status: "pending", resumeAfter, rendered };
+				}
+				after = row.id;
+				resumeAfter = `${branch.kind}:${row.id}`;
+			}
+			if (rows.length < pageRows) break;
+		}
+	}
+	return { status: "drained", resumeAfter, rendered };
 }
 
 export function sourceHasEligibleUnconsumedEvidence(
@@ -835,28 +934,67 @@ export function sourceHasEligibleUnconsumedEvidence(
 	sourceEntryId: string,
 	legacyObsidianRoot?: string,
 ): boolean {
-	return countEligibleUnconsumedEvidenceForSource(db, agentId, sourceEntryId, legacyObsidianRoot) > 0;
+	return (
+		probeSourceEvidenceDrain(db, agentId, sourceEntryId, {
+			legacyObsidianRoot,
+			maxRenders: Number.POSITIVE_INFINITY,
+		}).status !== "drained"
+	);
 }
+
+export const IMPORTED_SOURCE_ATTENTION_ROWS_PER_SCOPE = 20;
+export const IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET = 8;
 
 export function resolveImportedSourceAttentionInTx(db: WriteDb, passId: string, scopes: readonly string[]): number {
 	if (!tableExists(db, "dreaming_attention")) return 0;
+	const checkSeq = "(CASE WHEN json_valid(details_json) THEN json_extract(details_json, '$.drainCheckSeq') END)";
+	const pendingSource =
+		"agent_id = ? AND kind = 'evidence_requeue' AND resolved_at IS NULL AND subject_ref LIKE 'source:%'";
 	const pending = db.prepare(
-		`SELECT id, subject_ref AS subjectRef FROM dreaming_attention
-		 WHERE agent_id = ? AND kind = 'evidence_requeue' AND resolved_at IS NULL AND subject_ref LIKE 'source:%'
-		 ORDER BY created_at ASC, id ASC
-		 LIMIT 20`,
+		`SELECT id, subject_ref AS subjectRef,
+		        CASE WHEN json_valid(details_json) THEN json_extract(details_json, '$.drainResumeAfter') END AS resumeAfter
+		 FROM dreaming_attention
+		 WHERE ${pendingSource}
+		 ORDER BY COALESCE(${checkSeq}, 0) ASC, created_at ASC, id ASC
+		 LIMIT ?`,
+	);
+	const nextCheckSeq = db.prepare(
+		`SELECT COALESCE(MAX(${checkSeq}), 0) + 1 AS seq FROM dreaming_attention WHERE ${pendingSource}`,
+	);
+	const stamp = db.prepare(
+		`UPDATE dreaming_attention
+		 SET details_json = json_set(CASE WHEN json_valid(details_json) THEN details_json ELSE '{}' END,
+		                             '$.drainCheckSeq', ?, '$.drainResumeAfter', ?)
+		 WHERE id = ?`,
 	);
 	const resolve = db.prepare(
 		`UPDATE dreaming_attention SET resolved_at = datetime('now'), resolved_by_pass_id = ?
 		 WHERE id = ? AND resolved_at IS NULL`,
 	);
 	let resolved = 0;
+	let renderBudget = IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET;
 	for (const agentId of new Set(scopes)) {
-		for (const row of pending.all(agentId) as Array<{ id: string; subjectRef: string }>) {
+		const rows = pending.all(agentId, IMPORTED_SOURCE_ATTENTION_ROWS_PER_SCOPE) as Array<{
+			id: string;
+			subjectRef: string;
+			resumeAfter: unknown;
+		}>;
+		const seq = (nextCheckSeq.get(agentId) as { seq: number }).seq;
+		for (const row of rows) {
 			const sourceEntryId = row.subjectRef.slice("source:".length);
-			if (!sourceEntryId || sourceHasEligibleUnconsumedEvidence(db, agentId, sourceEntryId)) continue;
-			resolve.run(passId, row.id);
-			resolved += 1;
+			const probe = sourceEntryId
+				? probeSourceEvidenceDrain(db, agentId, sourceEntryId, {
+						maxRenders: renderBudget,
+						resumeAfter: typeof row.resumeAfter === "string" ? row.resumeAfter : null,
+					})
+				: null;
+			renderBudget -= probe?.rendered ?? 0;
+			if (probe?.status === "drained") {
+				resolve.run(passId, row.id);
+				resolved += 1;
+				continue;
+			}
+			stamp.run(seq, probe?.resumeAfter ?? null, row.id);
 		}
 	}
 	return resolved;

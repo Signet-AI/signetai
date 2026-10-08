@@ -51,7 +51,13 @@ import {
 	getDreamingAttentionSnapshots,
 	resolveDreamingAttentionInTx,
 } from "./dreaming-attention";
-import { pendingDreamingEvidenceContinuations } from "./dreaming-evidence-consumption";
+import {
+	IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET,
+	IMPORTED_SOURCE_ATTENTION_ROWS_PER_SCOPE,
+	pendingDreamingEvidenceContinuations,
+	probeSourceEvidenceDrain,
+	resolveImportedSourceAttentionInTx,
+} from "./dreaming-evidence-consumption";
 import { renderDreamingEvidence } from "./dreaming-evidence";
 import { readEpisodicMemory, searchEpisodicSources, utcTimestampMs } from "../episodic-sources";
 import {
@@ -3265,6 +3271,111 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 			"incremental",
 		);
 		expect(importAttention()).toEqual({ resolvedAt: expect.any(String), passId: second.passId });
+	});
+
+	describe("imported-source attention drain checks (#2094)", () => {
+		const capturedAt = "2026-10-08 00:00:00";
+		const seedImported = (sourceId: string, sessionKey: string, content: string): void => {
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, agent_id, created_at, updated_at, completed_at, source_id, content_hash)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(sessionKey, content, AGENT, capturedAt, capturedAt, capturedAt, sourceId, `hash-${sessionKey}`);
+		};
+		const recordConsumption = (sourceId: string, sessionKey: string, offset: number, length: number): void => {
+			db.prepare(
+				`INSERT INTO dreaming_evidence_consumption
+				 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
+				  delivered_offset, source_length, pass_id, updated_at)
+				 VALUES (?, 'transcript', ?, ?, ?, ?, ?, ?, 'seed-pass', ?)`,
+			).run(AGENT, sessionKey, capturedAt, sourceId, `hash-${sessionKey}`, offset, length, capturedAt);
+		};
+		const raise = (sourceId: string, createdAt: string): void => {
+			db.prepare(
+				`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority, created_at)
+				 VALUES (?, ?, 'evidence_requeue', ?, ?, 50, ?)`,
+			).run(
+				`attention-${sourceId}`,
+				AGENT,
+				`source:${sourceId}`,
+				JSON.stringify({ sourceId, reason: "transcript-import-committed" }),
+				createdAt,
+			);
+		};
+		const resolvedAt = (sourceId: string): string | null =>
+			(
+				db
+					.prepare("SELECT resolved_at AS resolvedAt FROM dreaming_attention WHERE subject_ref = ?")
+					.get(`source:${sourceId}`) as { resolvedAt: string | null }
+			).resolvedAt;
+		const finalize = (passId: string): number =>
+			accessor.withWriteTx((tx) => resolveImportedSourceAttentionInTx(tx, passId, [AGENT]));
+
+		it("stops at the first unconsumed member instead of rendering the whole source", () => {
+			for (let index = 0; index < 40; index += 1) {
+				seedImported("import:wide", `wide-${String(index).padStart(2, "0")}`, "Kira owns the import pipeline.");
+			}
+			const read = db as unknown as ReadDb;
+			expect(probeSourceEvidenceDrain(read, AGENT, "import:wide", { maxRenders: Number.POSITIVE_INFINITY })).toEqual({
+				status: "pending",
+				resumeAfter: null,
+				rendered: 1,
+			});
+
+			recordConsumption("import:wide", "wide-39", 5, 30);
+			expect(probeSourceEvidenceDrain(read, AGENT, "import:wide", { maxRenders: Number.POSITIVE_INFINITY })).toEqual({
+				status: "pending",
+				resumeAfter: null,
+				rendered: 0,
+			});
+		});
+
+		it("resolves drained rows queued behind sources that still have evidence", () => {
+			const busy = Array.from(
+				{ length: IMPORTED_SOURCE_ATTENTION_ROWS_PER_SCOPE },
+				(_, index) => `import:busy-${index}`,
+			);
+			busy.forEach((sourceId, index) => {
+				seedImported(sourceId, `${sourceId}-a`, "Kira owns the import pipeline.");
+				recordConsumption(sourceId, `${sourceId}-a`, 5, 30);
+				raise(sourceId, `2026-10-08 00:00:${String(index).padStart(2, "0")}`);
+			});
+			seedImported("import:drained", "drained-a", "Kira owns the import pipeline.");
+			recordConsumption("import:drained", "drained-a", 30, 30);
+			raise("import:drained", "2026-10-08 00:01:00");
+
+			expect(finalize("pass-1")).toBe(0);
+			expect(resolvedAt("import:drained")).toBeNull();
+			expect(finalize("pass-2")).toBe(1);
+			expect(resolvedAt("import:drained")).not.toBeNull();
+			expect(busy.every((sourceId) => resolvedAt(sourceId) === null)).toBe(true);
+		});
+
+		it("bounds renders per finalization and resumes where the last one stopped", () => {
+			const members = IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET * 3 + 2;
+			for (let index = 0; index < members; index += 1) {
+				seedImported("import:blank", `blank-${String(index).padStart(2, "0")}`, "   ");
+			}
+			raise("import:blank", capturedAt);
+			const resumeAfter = (): unknown =>
+				JSON.parse(
+					(
+						db
+							.prepare("SELECT details_json AS details FROM dreaming_attention WHERE subject_ref = ?")
+							.get("source:import:blank") as { details: string }
+					).details,
+				).drainResumeAfter;
+
+			expect(finalize("pass-1")).toBe(0);
+			expect(resumeAfter()).toBe(
+				`transcript:blank-${String(IMPORTED_SOURCE_ATTENTION_RENDER_BUDGET - 1).padStart(2, "0")}`,
+			);
+			expect(finalize("pass-2")).toBe(0);
+			expect(finalize("pass-3")).toBe(0);
+			expect(resolvedAt("import:blank")).toBeNull();
+			expect(finalize("pass-4")).toBe(1);
+			expect(resolvedAt("import:blank")).not.toBeNull();
+		});
 	});
 
 	it("closes new evidence delivery halfway through the pass timeout", async () => {
