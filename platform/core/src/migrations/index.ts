@@ -169,6 +169,7 @@ import { up as dreamingHistory } from "./165-dreaming-history";
 import { up as dreamingPassPeakContext } from "./166-dreaming-pass-peak-context";
 import { up as memoriesFtsPorter } from "./167-memories-fts-porter";
 import { up as retireSourceParagraphClaims } from "./168-retire-source-paragraph-claims";
+import { up as dreamingEvidenceReviewCursor } from "./169-dreaming-evidence-review-cursor";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1526,6 +1527,17 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 168,
 		name: "retire-source-paragraph-claims",
 		up: retireSourceParagraphClaims,
+	},
+	{
+		version: 169,
+		name: "dreaming-evidence-review-cursor",
+		up: dreamingEvidenceReviewCursor,
+		artifacts: {
+			columns: [
+				{ table: "dreaming_evidence_consumption", column: "cursor_basis" },
+				{ table: "dreaming_evidence_consumption", column: "stalled_passes" },
+			],
+		},
 	},
 ];
 function checksum(m: Migration): string {

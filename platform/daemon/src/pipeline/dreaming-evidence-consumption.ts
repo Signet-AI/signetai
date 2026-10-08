@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ReadDb, WriteDb } from "../db-accessor";
 import { type EpisodicSourceKind, type EpisodicSourceRecord, readEpisodicSource } from "../episodic-sources";
 import { renderDreamingEvidence } from "./dreaming-evidence";
@@ -15,7 +15,10 @@ export interface DreamingEvidenceDelivery {
 	readonly end: number;
 	readonly length: number;
 	readonly contentSha256: string;
+	readonly queue: boolean;
 }
+
+export const DREAMING_EVIDENCE_STALL_PASSES = 3;
 
 export function evidenceContentSha256(content: string): string {
 	return createHash("sha256").update(content).digest("hex");
@@ -78,9 +81,15 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 		} catch {
 			return [];
 		}
-		const agentId = text(record(input)?.agentId);
+		const request = record(input);
+		const agentId = text(request?.agentId);
 		const data = record(output);
 		if (!agentId || data?.ok !== true || !Array.isArray(data.items)) return [];
+		const queue =
+			(typeof request?.query !== "string" || request.query.trim() === "") &&
+			request?.since === undefined &&
+			request?.before === undefined &&
+			request?.sourceRef === undefined;
 		return data.items.flatMap((item) => {
 			const row = record(item);
 			const ref = text(row?.sourceRef);
@@ -127,6 +136,7 @@ export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonl
 					end,
 					length,
 					contentSha256: delivered.sha256,
+					queue,
 				},
 			];
 		});
@@ -174,10 +184,16 @@ export function extendDeliveredOffset(
 	return offset;
 }
 
+export interface FiledEvidenceCitation {
+	readonly key: string;
+	readonly quote: string;
+}
+
 export interface FailedOperationEvidence {
 	readonly sources: ReadonlySet<string>;
 	readonly scopes: ReadonlySet<string>;
 	readonly filedSources: ReadonlySet<string>;
+	readonly filedCitations: readonly FiledEvidenceCitation[];
 }
 
 export function failedOperationEvidence(
@@ -190,8 +206,9 @@ export function failedOperationEvidence(
 	const scopes = new Set<string>();
 	const filed = new Set<string>();
 	const filedQuotes = new Set<string>();
+	const filedCitations: FiledEvidenceCitation[] = [];
 	const failedQuotes: Array<{ readonly key: string; readonly quote: string }> = [];
-	if (!tableExists(db, "dreaming_tool_calls")) return { sources: keys, scopes, filedSources: filed };
+	if (!tableExists(db, "dreaming_tool_calls")) return { sources: keys, scopes, filedSources: filed, filedCitations };
 	const rows = db
 		.prepare(
 			`SELECT input_json AS inputJson, output_json AS outputJson
@@ -233,6 +250,7 @@ export function failedOperationEvidence(
 				for (const cited of citations(row.index)) {
 					filed.add(cited.key);
 					filedQuotes.add(`${cited.key}\u0000${cited.quote}`);
+					if (cited.quote) filedCitations.push(cited);
 				}
 			}
 		}
@@ -253,7 +271,7 @@ export function failedOperationEvidence(
 	for (const { key, quote } of failedQuotes) {
 		if (!filedQuotes.has(`${key}\u0000${quote}`)) keys.add(key);
 	}
-	return { sources: keys, scopes, filedSources: filed };
+	return { sources: keys, scopes, filedSources: filed, filedCitations };
 }
 
 export function verifiedDreamingEvidenceDelivery(
@@ -280,6 +298,223 @@ export function verifiedDreamingEvidenceDelivery(
 	}
 	return source;
 }
+function deliveredExcerpt(db: ReadDb, delivery: DreamingEvidenceDelivery): string | null {
+	const source = verifiedDreamingEvidenceDelivery(db, delivery);
+	return source === null ? null : renderDreamingEvidence(source).slice(delivery.start, delivery.end);
+}
+
+function sameDelivery(a: DreamingEvidenceDelivery, b: DreamingEvidenceDelivery): boolean {
+	return (
+		a.agentId === b.agentId &&
+		a.kind === b.kind &&
+		a.id === b.id &&
+		a.capturedAt === b.capturedAt &&
+		a.sourceEntryId === b.sourceEntryId &&
+		a.sourceRevision === b.sourceRevision &&
+		a.start === b.start &&
+		a.end === b.end &&
+		a.length === b.length &&
+		a.contentSha256 === b.contentSha256
+	);
+}
+
+export interface DreamingEvidenceReviewRequest {
+	readonly agentId: string;
+	readonly passId: string;
+	readonly items: ReadonlyArray<{
+		readonly sourceRef: string;
+		readonly contentOffset: number;
+		readonly through?: string;
+	}>;
+}
+
+export type DreamingEvidenceReviewRejection =
+	| "EXCERPT_NOT_DELIVERED"
+	| "SCOPE_MISMATCH"
+	| "QUOTE_NOT_IN_EXCERPT"
+	| "SOURCE_CHANGED";
+
+const REVIEW_REJECTION_ERRORS: Readonly<Record<DreamingEvidenceReviewRejection, string>> = {
+	EXCERPT_NOT_DELIVERED:
+		"No excerpt with this sourceRef and contentOffset was delivered by search_evidence in this pass; copy both from a search_evidence result",
+	SCOPE_MISMATCH:
+		"This excerpt was delivered in a different agent scope; acknowledge it with the agentId used for search_evidence",
+	QUOTE_NOT_IN_EXCERPT: "through is not an exact quote from this excerpt; copy it character for character",
+	SOURCE_CHANGED: "The source changed after this excerpt was delivered; read it again with search_evidence",
+};
+
+export function reviewDreamingEvidenceInDb(
+	db: ReadDb,
+	input: DreamingEvidenceReviewRequest,
+): { readonly ok: boolean; readonly [key: string]: unknown } {
+	const deliveries = persistedEvidenceDeliveries(db, input.passId);
+	const accepted: Record<string, unknown>[] = [];
+	const rejected: Array<Record<string, unknown> & { readonly code: DreamingEvidenceReviewRejection }> = [];
+	input.items.forEach((item, index) => {
+		const parsed = sourceRef(item.sourceRef);
+		const sameExcerpt =
+			parsed === null
+				? []
+				: deliveries.filter(
+						(delivery) =>
+							delivery.kind === parsed.kind && delivery.id === parsed.id && delivery.start === item.contentOffset,
+					);
+		const inScope = sameExcerpt.filter((delivery) => delivery.agentId === input.agentId).reverse();
+		const reject = (code: DreamingEvidenceReviewRejection): void => {
+			rejected.push({
+				index,
+				sourceRef: item.sourceRef,
+				contentOffset: item.contentOffset,
+				code,
+				error: REVIEW_REJECTION_ERRORS[code],
+			});
+		};
+		if (sameExcerpt.length === 0) {
+			reject("EXCERPT_NOT_DELIVERED");
+			return;
+		}
+		if (inScope.length === 0) {
+			reject("SCOPE_MISMATCH");
+			return;
+		}
+		const quote = item.through?.trim();
+		let verified = false;
+		for (const delivery of inScope) {
+			const excerpt = deliveredExcerpt(db, delivery);
+			if (excerpt === null) continue;
+			verified = true;
+			const at = quote === undefined ? 0 : excerpt.indexOf(quote);
+			if (quote !== undefined && (quote.length === 0 || at < 0)) continue;
+			accepted.push({
+				sourceRef: item.sourceRef,
+				contentOffset: delivery.start,
+				reviewedThrough: quote === undefined ? delivery.end : delivery.start + at + quote.length,
+				excerptEnd: delivery.end,
+				contentLength: delivery.length,
+				capturedAt: delivery.capturedAt,
+				sourceEntryId: delivery.sourceEntryId,
+				sourceRevision: delivery.sourceRevision,
+				contentSha256: delivery.contentSha256,
+			});
+			return;
+		}
+		reject(verified ? "QUOTE_NOT_IN_EXCERPT" : "SOURCE_CHANGED");
+	});
+	if (rejected.length > 0) {
+		return {
+			ok: false,
+			code: rejected[0]?.code,
+			error: `${rejected.length} of ${input.items.length} acknowledgements were rejected and none were recorded; correct them and call review_evidence again`,
+			items: rejected,
+		};
+	}
+	return { ok: true, items: accepted };
+}
+
+interface ReviewedRange {
+	readonly delivery: DreamingEvidenceDelivery;
+	readonly end: number;
+}
+
+function persistedEvidenceReviews(
+	db: ReadDb,
+	passId: string,
+	deliveries: readonly DreamingEvidenceDelivery[],
+): readonly ReviewedRange[] {
+	if (!tableExists(db, "dreaming_tool_calls")) return [];
+	const rows = db
+		.prepare(
+			`SELECT input_json AS inputJson, output_json AS outputJson
+			 FROM dreaming_tool_calls
+			 WHERE pass_id = ? AND tool_name = 'review_evidence' ORDER BY sequence ASC`,
+		)
+		.all(passId) as Array<{ inputJson: string; outputJson: string }>;
+	const integer = (value: unknown): number | null =>
+		typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+	return rows.flatMap(({ inputJson, outputJson }) => {
+		let input: unknown;
+		let output: unknown;
+		try {
+			input = JSON.parse(inputJson);
+			output = JSON.parse(outputJson);
+		} catch {
+			return [];
+		}
+		const agentId = text(record(input)?.agentId);
+		const data = record(output);
+		if (!agentId || data?.ok !== true || !Array.isArray(data.items)) return [];
+		return data.items.flatMap((item): ReviewedRange[] => {
+			const row = record(item);
+			const ref = text(row?.sourceRef);
+			const parsed = ref ? sourceRef(ref) : null;
+			const capturedAt = text(row?.capturedAt);
+			const revision = text(row?.sourceRevision);
+			const contentSha256 = text(row?.contentSha256);
+			const start = integer(row?.contentOffset);
+			const end = integer(row?.reviewedThrough);
+			const excerptEnd = integer(row?.excerptEnd);
+			const length = integer(row?.contentLength);
+			if (
+				!parsed ||
+				!capturedAt ||
+				!revision ||
+				!contentSha256 ||
+				typeof row?.sourceEntryId !== "string" ||
+				start === null ||
+				end === null ||
+				excerptEnd === null ||
+				length === null ||
+				start > end ||
+				end > excerptEnd ||
+				excerptEnd > length
+			)
+				return [];
+			const reviewed: DreamingEvidenceDelivery = {
+				agentId,
+				kind: parsed.kind,
+				id: parsed.id,
+				capturedAt,
+				sourceEntryId: row.sourceEntryId,
+				sourceRevision: revision,
+				start,
+				end: excerptEnd,
+				length,
+				contentSha256,
+				queue: false,
+			};
+			const delivery = deliveries.find((candidate) => sameDelivery(candidate, reviewed));
+			return delivery === undefined ? [] : [{ delivery, end }];
+		});
+	});
+}
+
+function citationFloors(
+	db: ReadDb,
+	deliveries: readonly DreamingEvidenceDelivery[],
+	citations: readonly FiledEvidenceCitation[],
+): readonly ReviewedRange[] {
+	const excerpts = new Map<DreamingEvidenceDelivery, string | null>();
+	return citations.flatMap(({ key, quote }) =>
+		deliveries.flatMap((delivery) => {
+			if (`${delivery.agentId}\u0000${delivery.kind}:${delivery.id}` !== key) return [];
+			if (!excerpts.has(delivery)) excerpts.set(delivery, deliveredExcerpt(db, delivery));
+			const at = excerpts.get(delivery)?.indexOf(quote) ?? -1;
+			return at < 0 ? [] : [{ delivery, end: delivery.start + at + quote.length }];
+		}),
+	);
+}
+
+function revisionKey(delivery: DreamingEvidenceDelivery): string {
+	return [
+		delivery.agentId,
+		delivery.kind,
+		delivery.id,
+		delivery.capturedAt,
+		delivery.sourceEntryId,
+		delivery.sourceRevision,
+	].join("\u0000");
+}
+
 export function recordDreamingEvidenceConsumptionInTx(
 	db: WriteDb,
 	params: {
@@ -287,76 +522,145 @@ export function recordDreamingEvidenceConsumptionInTx(
 		readonly deferredEvidence: ReadonlySet<string>;
 		readonly withheldScopes?: ReadonlySet<string>;
 		readonly filedSources?: ReadonlySet<string>;
+		readonly filedCitations?: readonly FiledEvidenceCitation[];
 	},
 ): void {
 	if (!tableExists(db, "dreaming_evidence_consumption")) return;
-	const deliveries = persistedEvidenceDeliveries(db, params.passId)
-		.filter(
-			(delivery) =>
-				!params.withheldScopes?.has(delivery.agentId) ||
-				params.filedSources?.has(`${delivery.agentId}\u0000${delivery.kind}:${delivery.id}`) === true,
-		)
-		.filter((delivery) => !params.deferredEvidence.has(`${delivery.agentId}\u0000${delivery.kind}:${delivery.id}`))
-		.sort(
-			(a, b) =>
-				a.agentId.localeCompare(b.agentId) ||
-				a.kind.localeCompare(b.kind) ||
-				a.id.localeCompare(b.id) ||
-				a.capturedAt.localeCompare(b.capturedAt) ||
-				a.start - b.start ||
-				a.end - b.end,
-		);
+	const deliveries = persistedEvidenceDeliveries(db, params.passId);
+	const revisions = new Map<
+		string,
+		{ readonly delivery: DreamingEvidenceDelivery; readonly ranges: Array<readonly [number, number]>; queued: boolean }
+	>();
+	for (const delivery of deliveries) {
+		const key = revisionKey(delivery);
+		const entry = revisions.get(key) ?? { delivery, ranges: [], queued: false };
+		entry.queued ||= delivery.queue;
+		revisions.set(key, entry);
+	}
+	const reviewed = [
+		...persistedEvidenceReviews(db, params.passId, deliveries),
+		...citationFloors(db, deliveries, params.filedCitations ?? []),
+	];
+	for (const { delivery, end } of reviewed) {
+		const sourceKey = `${delivery.agentId}\u0000${delivery.kind}:${delivery.id}`;
+		if (params.withheldScopes?.has(delivery.agentId) && params.filedSources?.has(sourceKey) !== true) continue;
+		if (params.deferredEvidence.has(sourceKey)) continue;
+		if (verifiedDreamingEvidenceDelivery(db, delivery) === null) continue;
+		revisions.get(revisionKey(delivery))?.ranges.push([delivery.start, end] as const);
+	}
 	const select = db.prepare(
-		`SELECT delivered_offset AS deliveredOffset FROM dreaming_evidence_consumption
+		`SELECT delivered_offset AS deliveredOffset, stalled_passes AS stalledPasses FROM dreaming_evidence_consumption
 		 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
 	);
-	const upsert = db.prepare(
+	const advance = db.prepare(
 		`INSERT INTO dreaming_evidence_consumption
-		 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, delivered_offset, source_length, pass_id, updated_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+		 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, delivered_offset, source_length, pass_id, updated_at, cursor_basis, stalled_passes)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), 'review', 0)
 		 ON CONFLICT(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision) DO UPDATE SET
 		   delivered_offset = excluded.delivered_offset,
 		   source_length = excluded.source_length,
 		   pass_id = excluded.pass_id,
-		   updated_at = excluded.updated_at`,
+		   updated_at = excluded.updated_at,
+		   cursor_basis = 'review',
+		   stalled_passes = 0`,
 	);
-	for (const delivery of deliveries) {
+	const stall = db.prepare(
+		`INSERT INTO dreaming_evidence_consumption
+		 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, delivered_offset, source_length, pass_id, updated_at, cursor_basis, stalled_passes)
+		 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, datetime('now'), 'review', 1)
+		 ON CONFLICT(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision) DO UPDATE SET
+		   stalled_passes = dreaming_evidence_consumption.stalled_passes + 1`,
+	);
+	const attention = tableExists(db, "dreaming_attention");
+	const raiseStall = db.prepare(
+		`INSERT INTO dreaming_attention (id, agent_id, kind, subject_ref, details_json, priority)
+		 VALUES (?, ?, 'evidence_requeue', ?, ?, 60)
+		 ON CONFLICT(agent_id, kind, subject_ref) DO UPDATE SET
+		   details_json = excluded.details_json,
+		   priority = MAX(dreaming_attention.priority, excluded.priority),
+		   generation = dreaming_attention.generation + 1,
+		   resolved_at = NULL,
+		   resolved_by_pass_id = NULL
+		 WHERE dreaming_attention.resolved_at IS NOT NULL
+		    OR json_extract(dreaming_attention.details_json, '$.reason') = 'evidence-stalled'`,
+	);
+	const clearStall = db.prepare(
+		`UPDATE dreaming_attention SET resolved_at = datetime('now'), resolved_by_pass_id = ?
+		 WHERE agent_id = ? AND kind = 'evidence_requeue' AND subject_ref = ? AND resolved_at IS NULL
+		   AND json_extract(details_json, '$.reason') = 'evidence-stalled'`,
+	);
+	const ordered = [...revisions.values()].sort(
+		(a, b) =>
+			a.delivery.agentId.localeCompare(b.delivery.agentId) ||
+			a.delivery.kind.localeCompare(b.delivery.kind) ||
+			a.delivery.id.localeCompare(b.delivery.id) ||
+			a.delivery.capturedAt.localeCompare(b.delivery.capturedAt),
+	);
+	for (const { delivery, ranges, queued } of ordered) {
 		const source = verifiedDreamingEvidenceDelivery(db, delivery);
 		if (source === null) continue;
-		const identity = sourceIdentity(source);
-		const revision = sourceRevision(source);
-		const row = select.get(delivery.agentId, delivery.kind, delivery.id, delivery.capturedAt, identity, revision) as {
-			deliveredOffset: number;
-		} | null;
-		const current = row?.deliveredOffset ?? 0;
-		if (delivery.start > current) continue;
-		const next = Math.max(current, delivery.end);
-		if (next <= current && row != null) continue;
-		upsert.run(
+		const identity = [
 			delivery.agentId,
 			delivery.kind,
 			delivery.id,
 			delivery.capturedAt,
-			identity,
-			revision,
-			Math.min(next, delivery.length),
-			delivery.length,
-			params.passId,
+			sourceIdentity(source),
+			sourceRevision(source),
+		] as const;
+		const row = select.get(...identity) as { deliveredOffset: number; stalledPasses: number } | null;
+		const current = Math.max(0, row?.deliveredOffset ?? 0);
+		const next = Math.min(extendDeliveredOffset(current, ranges), delivery.length);
+		const ref = `${delivery.kind}:${delivery.id}`;
+		if (next > current) {
+			advance.run(...identity, next, delivery.length, params.passId);
+			if (attention) clearStall.run(params.passId, delivery.agentId, ref);
+			continue;
+		}
+		if (!queued || current >= delivery.length) continue;
+		stall.run(...identity, delivery.length, params.passId);
+		const stalledPasses = (row?.stalledPasses ?? 0) + 1;
+		if (!attention || stalledPasses < DREAMING_EVIDENCE_STALL_PASSES) continue;
+		raiseStall.run(
+			randomUUID(),
+			delivery.agentId,
+			ref,
+			JSON.stringify({
+				reason: "evidence-stalled",
+				sourceRef: ref,
+				sourceRevision: delivery.sourceRevision,
+				reviewedChars: String(current),
+				sourceLength: String(delivery.length),
+				stalledPasses: String(stalledPasses),
+			}),
 		);
 	}
 }
 
-export function deliveredOffsetForSource(db: ReadDb, agentId: string, source: EpisodicSourceRecord): number {
-	if (!tableExists(db, "dreaming_evidence_consumption")) return 0;
+export interface DreamingEvidenceCursor {
+	readonly offset: number;
+	readonly stalledPasses: number;
+}
+
+export function evidenceCursorForSource(
+	db: ReadDb,
+	agentId: string,
+	source: EpisodicSourceRecord,
+): DreamingEvidenceCursor {
+	if (!tableExists(db, "dreaming_evidence_consumption")) return { offset: 0, stalledPasses: 0 };
 	const row = db
 		.prepare(
-			`SELECT delivered_offset AS deliveredOffset FROM dreaming_evidence_consumption
+			`SELECT delivered_offset AS deliveredOffset, stalled_passes AS stalledPasses FROM dreaming_evidence_consumption
 		 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
 		)
 		.get(agentId, source.kind, source.id, source.capturedAt, sourceIdentity(source), sourceRevision(source)) as {
 		deliveredOffset: number;
+		stalledPasses: number;
 	} | null;
-	return Math.max(0, row?.deliveredOffset ?? 0);
+	return { offset: Math.max(0, row?.deliveredOffset ?? 0), stalledPasses: row?.stalledPasses ?? 0 };
+}
+
+export function deliveredOffsetForSource(db: ReadDb, agentId: string, source: EpisodicSourceRecord): number {
+	return evidenceCursorForSource(db, agentId, source).offset;
 }
 export function hasDreamingEvidenceContinuation(db: ReadDb, agentId: string, passId: string | null): boolean {
 	if (!passId || !tableExists(db, "dreaming_evidence_consumption")) return false;
@@ -454,10 +758,10 @@ export function pendingDreamingEvidenceContinuations(
 			         AND dec.source_entry_id = '' AND dec.source_revision = ss.latest_at
 			     ))
 			   )
-			 ORDER BY pass.rowid ASC, dec.source_kind ASC, dec.source_id ASC, dec.source_captured_at ASC
+			 ORDER BY (dec.stalled_passes >= ?) ASC, pass.rowid ASC, dec.source_kind ASC, dec.source_id ASC, dec.source_captured_at ASC
 			 LIMIT ?`,
 		)
-		.all(agentId, kind ?? null, kind ?? null, boundedLimit) as Array<{
+		.all(agentId, kind ?? null, kind ?? null, DREAMING_EVIDENCE_STALL_PASSES, boundedLimit) as Array<{
 		kind: EpisodicSourceKind;
 		id: string;
 		capturedAt: string;
@@ -532,4 +836,28 @@ export function sourceHasEligibleUnconsumedEvidence(
 	legacyObsidianRoot?: string,
 ): boolean {
 	return countEligibleUnconsumedEvidenceForSource(db, agentId, sourceEntryId, legacyObsidianRoot) > 0;
+}
+
+export function resolveImportedSourceAttentionInTx(db: WriteDb, passId: string, scopes: readonly string[]): number {
+	if (!tableExists(db, "dreaming_attention")) return 0;
+	const pending = db.prepare(
+		`SELECT id, subject_ref AS subjectRef FROM dreaming_attention
+		 WHERE agent_id = ? AND kind = 'evidence_requeue' AND resolved_at IS NULL AND subject_ref LIKE 'source:%'
+		 ORDER BY created_at ASC, id ASC
+		 LIMIT 20`,
+	);
+	const resolve = db.prepare(
+		`UPDATE dreaming_attention SET resolved_at = datetime('now'), resolved_by_pass_id = ?
+		 WHERE id = ? AND resolved_at IS NULL`,
+	);
+	let resolved = 0;
+	for (const agentId of new Set(scopes)) {
+		for (const row of pending.all(agentId) as Array<{ id: string; subjectRef: string }>) {
+			const sourceEntryId = row.subjectRef.slice("source:".length);
+			if (!sourceEntryId || sourceHasEligibleUnconsumedEvidence(db, agentId, sourceEntryId)) continue;
+			resolve.run(passId, row.id);
+			resolved += 1;
+		}
+	}
+	return resolved;
 }
