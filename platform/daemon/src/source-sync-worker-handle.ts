@@ -64,14 +64,6 @@ function relayLog(entry: LogEntry): void {
 	if (entry.level === "error" || entry.level === "warn" || entry.level === "info" || entry.level === "debug")
 		logger.log(entry.level, category, entry.message, data);
 }
-
-/**
- * Runs one provider sync in a dedicated worker thread. The worker never opens
- * the workspace database or the secret store: owner operations and the
- * source's configured token ref are relayed through this thread to the daemon's
- * DB owner and secret store. A worker crash or exit fails the sync; there is no
- * in-process fallback.
- */
 export function runSourceSyncInWorker(
 	context: SourceProviderSyncContext,
 	options: SourceSyncWorkerOptions = {},
