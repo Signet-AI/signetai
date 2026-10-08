@@ -8,7 +8,7 @@ const workspace = join(tmpdir(), `signet-agent-removal-${Date.now()}`);
 mkdirSync(join(workspace, "memory"), { recursive: true });
 process.env.SIGNET_PATH = workspace;
 
-let closeDb: (() => void) | undefined;
+let closeDb: (() => Promise<void>) | undefined;
 let app: InstanceType<typeof import("hono").Hono>;
 let write: <T>(fn: (db: WriteDb) => T) => Promise<T>;
 
@@ -17,7 +17,7 @@ const NOW = "2026-10-01T00:00:00.000Z";
 beforeAll(async () => {
 	const { Hono } = await import("hono");
 	const db = await import("./db-accessor");
-	db.closeDbAccessor();
+	await db.closeDbAccessor();
 	db.initDbAccessor(join(workspace, "memory", "memories.db"));
 	closeDb = db.closeDbAccessor;
 	write = (fn) => db.runWriteTxAsync(db.getDbAccessor(), fn);
@@ -26,8 +26,8 @@ beforeAll(async () => {
 	registerMiscRoutes(app);
 });
 
-afterAll(() => {
-	closeDb?.();
+afterAll(async () => {
+	await closeDb?.();
 	rmSync(workspace, { recursive: true, force: true });
 });
 
@@ -126,6 +126,12 @@ describe("DELETE /api/agents/:name", () => {
 	});
 
 	it("purges every agent-scoped row and records the purge", async () => {
+		await write((db) => {
+			for (const memory of ["doomed-mem-1", "keeper-mem-1", "keeper-mem-2"]) {
+				db.prepare("INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES (?, 'keeper-beta')").run(memory);
+			}
+			db.prepare("UPDATE entities SET mentions = 4 WHERE id = 'keeper-beta'").run();
+		});
 		const response = await app.request("/api/agents/doomed?purge=true", { method: "DELETE" });
 		expect(response.status).toBe(200);
 		const body = (await response.json()) as { success: boolean; purged: boolean; rows: Record<string, number> };
@@ -169,7 +175,12 @@ describe("DELETE /api/agents/:name", () => {
 				{ memory_id: "doomed-mem-1", event: "purged", old_content: null, new_content: null },
 				{ memory_id: "doomed-mem-2", event: "purged", old_content: null, new_content: null },
 			]);
-			expect(db.prepare("SELECT mentions FROM entities WHERE id = 'keeper-beta'").get()).toEqual({ mentions: 1 });
+			expect(db.prepare("SELECT mentions FROM entities WHERE id = 'keeper-beta'").get()).toEqual({ mentions: 2 });
+			expect(
+				db
+					.prepare("SELECT memory_id FROM memory_entity_mentions WHERE entity_id = 'keeper-beta' ORDER BY memory_id")
+					.all(),
+			).toEqual([{ memory_id: "keeper-mem-1" }, { memory_id: "keeper-mem-2" }]);
 			expect(db.prepare("SELECT COUNT(*) AS n FROM memories WHERE agent_id = 'keeper'").get()).toEqual({ n: 2 });
 			expect(db.prepare("SELECT COUNT(*) AS n FROM embeddings WHERE agent_id = 'keeper'").get()).toEqual({ n: 2 });
 			expect(db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = 'keeper'").get()).toEqual({ n: 2 });

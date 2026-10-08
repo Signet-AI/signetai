@@ -125,7 +125,7 @@ function purgeAgentRowsInTx(db: WriteDb, input: AgentRemovalInput, rows: Rows): 
 	const foreignEntityIds = (
 		db
 			.prepare(
-				`SELECT DISTINCT entity_id FROM memory_entity_mentions
+				`SELECT entity_id FROM memory_entity_mentions
 				 WHERE memory_id IN (${AGENT_MEMORIES}) AND entity_id NOT IN (${AGENT_ENTITIES})`,
 			)
 			.all(agentId, agentId) as Array<{ entity_id: string }>
