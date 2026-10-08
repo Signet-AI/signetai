@@ -228,6 +228,39 @@ describe("POST /api/dream/tools through the ACPX Dreaming MCP server", () => {
 		});
 	}, 60_000);
 
+	it("rejects a head commit that reaches the pass after its executor ended", async () => {
+		let lateCommit: (() => Promise<unknown>) | undefined;
+		await expect(
+			runDreamingAgentPass(
+				getDbAccessor(),
+				{
+					run: async (input) => {
+						const tool = input.tools.find((candidate) => candidate.name === "memory_head_commit");
+						if (!tool) throw new Error("memory_head_commit is not registered");
+						lateCommit = async () => {
+							const result = await tool.execute(
+								"late-commit",
+								{ agentId: "owner", entries },
+								undefined,
+								undefined,
+								{} as never,
+							);
+							const first = result.content[0] as { text?: string } | undefined;
+							return JSON.parse(first?.text ?? "{}");
+						};
+						return { summary: "Ended before the commit landed." };
+					},
+				},
+				cfg,
+				agentsDir,
+				"owner",
+				["owner"],
+				"incremental-content",
+			),
+		).rejects.toThrow("the agent ended without calling memory_head_commit");
+		expect(await lateCommit?.()).toMatchObject({ ok: false, code: "PASS_NOT_AUTHORIZED" });
+	}, 60_000);
+
 	it("rejects a head commit for the running pass from another agent scope", async () => {
 		await expect(
 			runDreamingAgentPass(

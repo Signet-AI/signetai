@@ -1824,9 +1824,17 @@ ${JSON.stringify(liveOptions.userRequest)}
 		let applyCallbackReported = false;
 		let memoryHeadCommitInput: MemoryHeadCommitInput | null = null;
 		let memoryHeadCommitRejection = null as { readonly code: string; readonly error: string } | null;
+		let memoryHeadCommitClosed = false;
 		const memoryHeadCommitter: MemoryHeadCommitter = {
 			read: (scopeId) => (liveOptions?.memoryHeadReader ?? readCuratedMemoryHead)(scopeId, passId),
 			async commit(input) {
+				if (memoryHeadCommitClosed) {
+					return {
+						ok: false,
+						code: "PASS_NOT_AUTHORIZED",
+						error: "the content pass executor has ended; it no longer accepts a memory-head commit",
+					};
+				}
 				if (mode !== "incremental-content" || input.agentId !== agentId || input.passId !== passId) {
 					memoryHeadCommitRejection = {
 						code: "PASS_NOT_AUTHORIZED",
@@ -1959,8 +1967,9 @@ ${JSON.stringify(liveOptions.userRequest)}
 			promptChars: passPrompt.length,
 		});
 		const unbindPassTools = bindRunningDreamingPassTools(passId, agentId, callPassTool);
-		const executorResult = await executor
-			.run({
+		let executorResult: Awaited<ReturnType<DreamingAgentExecutor["run"]>>;
+		try {
+			executorResult = await executor.run({
 				passId,
 				prompt: passPrompt,
 				tools,
@@ -1968,8 +1977,11 @@ ${JSON.stringify(liveOptions.userRequest)}
 				maxTokens: cfg.maxOutputTokens ?? undefined,
 				onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
 				onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
-			})
-			.finally(unbindPassTools);
+			});
+		} finally {
+			unbindPassTools();
+			memoryHeadCommitClosed = true;
+		}
 		if (mode === "incremental-content" && memoryHeadCommitInput === null) {
 			const rejection = memoryHeadCommitRejection;
 			throw new Error(
