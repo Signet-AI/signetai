@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 import type { Context, Hono } from "hono";
-import { DbOwnerCancelledError } from "../db-owner-client";
+import { DbOwnerCancelledError, isDbOwnerUnavailableError } from "../db-owner-client";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
@@ -1061,7 +1061,13 @@ export function registerPipelineRoutes(app: Hono): void {
 			passId = await worker.triggerAsync(mode, agentId, userRequest);
 		} catch (e) {
 			if (e instanceof AlreadyRunningError) return c.json({ error: e.message }, 409);
-			throw e;
+			if (isDbOwnerUnavailableError(e)) throw e;
+			const { logger } = await import("../logger.js");
+			logger.error("pipeline", "Dreaming trigger failed", e instanceof Error ? e : new Error(String(e)), {
+				agentId,
+				mode,
+			});
+			return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
 		}
 		return c.json({ accepted: true, passId, status: "running", mode, agentId }, 202);
 	});

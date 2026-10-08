@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
-import { DbOwnerDeadlineError } from "../db-owner-client";
+import { DbOwnerAdmissionError, DbOwnerDeadlineError } from "../db-owner-client";
 import { logger } from "../logger";
 import { registerGlobalMiddleware } from "../middleware";
 import { setDreamingWorker } from "../pipeline";
@@ -21,24 +21,28 @@ afterAll(() => {
 	else process.env.SIGNET_PATH = previousSignetPath;
 });
 
+async function triggerFailingWith(error: Error): Promise<Response> {
+	setDreamingWorker({
+		inferenceReady: async () => true,
+		triggerAsync: async () => {
+			throw error;
+		},
+	} as unknown as DreamingWorkerHandle);
+	const app = new Hono();
+	registerGlobalMiddleware(app);
+	registerPipelineRoutes(app);
+	return await app.request("/api/dream/trigger", {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ mode: "incremental" }),
+	});
+}
+
 test("a trigger the DB owner cannot serve returns a logged 503", async () => {
 	const warn = spyOn(logger, "warn").mockImplementation(() => {});
 	try {
 		const error = new DbOwnerDeadlineError("db-owner-1-9", "dreaming.scopes was queued behind maintenance.slow");
-		setDreamingWorker({
-			inferenceReady: async () => true,
-			triggerAsync: async () => {
-				throw error;
-			},
-		} as unknown as DreamingWorkerHandle);
-		const app = new Hono();
-		registerGlobalMiddleware(app);
-		registerPipelineRoutes(app);
-		const response = await app.request("/api/dream/trigger", {
-			method: "POST",
-			headers: { "content-type": "application/json" },
-			body: JSON.stringify({ mode: "incremental" }),
-		});
+		const response = await triggerFailingWith(error);
 		expect(response.status).toBe(503);
 		expect(await response.json()).toEqual({ error: error.message, code: "DB_OWNER_DEADLINE" });
 		expect(warn).toHaveBeenCalledWith(
@@ -48,5 +52,25 @@ test("a trigger the DB owner cannot serve returns a logged 503", async () => {
 		);
 	} finally {
 		warn.mockRestore();
+	}
+});
+
+test("any other trigger failure stays a logged 500 with its message", async () => {
+	const failure = spyOn(logger, "error").mockImplementation(() => {});
+	try {
+		for (const error of [
+			new Error("Dreaming pass row could not be created"),
+			new DbOwnerAdmissionError("DB_OWNER_WORK_BUDGET", "DB owner deadlineMs exceeds the admission limit"),
+		]) {
+			const response = await triggerFailingWith(error);
+			expect(response.status).toBe(500);
+			expect(await response.json()).toEqual({ error: error.message });
+			expect(failure).toHaveBeenLastCalledWith("pipeline", "Dreaming trigger failed", error, {
+				agentId: "default",
+				mode: "incremental",
+			});
+		}
+	} finally {
+		failure.mockRestore();
 	}
 });
