@@ -473,6 +473,36 @@ describe("transcript recovery worker", () => {
 		expect(result.enqueued).toBe(0);
 	});
 
+	it("skips transcript roots for harnesses the workspace excludes (#1991)", async () => {
+		writeSettled(
+			join(claudeRoot, "-repo", "claude-excluded.jsonl"),
+			JSON.stringify({ sessionId: "claude-excluded", message: { role: "user", content: "ambient claude" } }),
+		);
+		writeSettled(
+			join(codexRoot, "rollout-2026-07-20T10-00-00-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee.jsonl"),
+			JSON.stringify({ type: "session_meta", payload: { id: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", cwd: "/repo" } }),
+		);
+		const roots = { claudeCode: claudeRoot, codex: codexRoot };
+
+		const none = await runTranscriptRecoveryScan(getDbAccessor(), dir, "agent-a", { roots, harnesses: [] });
+		expect(none.discovered).toBe(0);
+		expect(none.enqueued).toBe(0);
+
+		const codexOnly = await runTranscriptRecoveryScan(getDbAccessor(), dir, "agent-a", {
+			roots,
+			harnesses: ["codex", "hermes-agent"],
+		});
+		expect(codexOnly.discovered).toBe(1);
+		expect(codexOnly.enqueued).toBe(1);
+		const harnesses = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT harness FROM transcript_capture_jobs WHERE agent_id = ?").all("agent-a") as Array<{
+					harness: string;
+				}>,
+		);
+		expect(harnesses.map((row) => row.harness)).toEqual(["codex"]);
+	});
+
 	it("fingerprints settled empty logs so they do not starve later batches", async () => {
 		const path = join(claudeRoot, "-repo", "empty.jsonl");
 		writeSettled(path, "");

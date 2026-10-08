@@ -30,7 +30,7 @@ import {
 	readNativeSourceSyncState,
 	clearNativeSourceSyncCheckpoint,
 } from "./native-source-sync-state";
-import type { EmbeddingConfig } from "./memory-config";
+import { type EmbeddingConfig, NATIVE_MEMORY_HARNESSES, type NativeMemoryHarness } from "./memory-config";
 import { hashNormalizedBody, softDeleteArtifactRowsForPath } from "./memory-lineage";
 import {
 	type SourceEmbeddingFetch,
@@ -384,11 +384,20 @@ export function obsidianNativeMemorySource(
 	};
 }
 
-export function configuredNativeMemorySources(agentsDir?: string): NativeMemorySource[] {
+const harnessNativeMemorySources: Readonly<Record<NativeMemoryHarness, () => NativeMemorySource>> = {
+	codex: () => codexNativeMemorySource(),
+	"claude-code": () => claudeCodeNativeMemorySource(),
+	"hermes-agent": () => hermesNativeMemorySource(),
+};
+
+export function configuredNativeMemorySources(
+	agentsDir?: string,
+	harnesses: readonly NativeMemoryHarness[] = NATIVE_MEMORY_HARNESSES,
+): NativeMemorySource[] {
 	const configured = loadSourcesConfig(agentsDir)
 		.sources.filter((source) => source.enabled && source.kind === "obsidian")
 		.map((source) => obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs));
-	return [codexNativeMemorySource(), claudeCodeNativeMemorySource(), hermesNativeMemorySource(), ...configured];
+	return [...harnesses.map((harness) => harnessNativeMemorySources[harness]()), ...configured];
 }
 
 function matchesPattern(source: NativeMemorySource, filePath: string): NativeMemoryFilePattern | null {

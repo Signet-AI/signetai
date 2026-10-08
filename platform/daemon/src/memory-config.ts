@@ -276,12 +276,16 @@ export const DEFAULT_NATIVE_EMBEDDING_IDLE_TTL_MS = 10 * 60 * 1000;
 export const MIN_NATIVE_EMBEDDING_IDLE_TTL_MS = 1000;
 export const MAX_NATIVE_EMBEDDING_IDLE_TTL_MS = 24 * 60 * 60 * 1000;
 
+export const NATIVE_MEMORY_HARNESSES = ["codex", "claude-code", "hermes-agent"] as const;
+export type NativeMemoryHarness = (typeof NATIVE_MEMORY_HARNESSES)[number];
+
 export interface ResolvedMemoryConfig {
 	embedding: EmbeddingConfig;
 	search: MemorySearchConfig;
 	pipelineV2: ResolvedPipelineV2Config;
 	dreaming: DreamingConfig;
 	auth: AuthConfig;
+	nativeSources: readonly NativeMemoryHarness[];
 }
 
 class MemoryConfigValidationError extends Error {}
@@ -1027,6 +1031,16 @@ export function graphWriteCaps(cfg: ResolvedMemoryConfig): {
 	};
 }
 
+export function loadNativeMemorySources(yaml: Record<string, unknown>): readonly NativeMemoryHarness[] {
+	const mem = yaml.memory as Record<string, unknown> | undefined;
+	if (mem === undefined || !Object.hasOwn(mem, "nativeSources")) return NATIVE_MEMORY_HARNESSES;
+	const result = z.array(z.enum(NATIVE_MEMORY_HARNESSES)).safeParse(mem.nativeSources);
+	if (!result.success) {
+		throw new Error(`memory.nativeSources must be a list of ${NATIVE_MEMORY_HARNESSES.join(", ")}`);
+	}
+	return [...new Set(result.data)];
+}
+
 export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 	const config = readRuntimeConfig(agentsDir);
 	try {
@@ -1038,6 +1052,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			auth: config.auth,
 			pipelineV2: loadPipelineConfig(config.yaml),
 			dreaming: loadDreamingConfig(config.yaml),
+			nativeSources: loadNativeMemorySources(config.yaml),
 		};
 	} catch (error) {
 		throw new MemoryConfigValidationError(
