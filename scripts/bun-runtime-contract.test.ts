@@ -41,6 +41,23 @@ describe("Bun runtime contract", () => {
 		expect(setupWithoutPinnedPackage).toEqual([]);
 	});
 
+	test("pins bun-types to the qualified Bun version in every workspace", () => {
+		const pkg = JSON.parse(text("package.json")) as { readonly workspaces: readonly string[] };
+		const divergent: string[] = [];
+		for (const pattern of pkg.workspaces) {
+			for (const manifest of new Bun.Glob(`${pattern}/package.json`).scanSync({ cwd: root })) {
+				const workspace = JSON.parse(text(manifest)) as Readonly<
+					Record<string, Readonly<Record<string, string>> | undefined>
+				>;
+				for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+					const version = workspace[field]?.["bun-types"];
+					if (version !== undefined && version !== requiredVersion) divergent.push(`${manifest}: ${version}`);
+				}
+			}
+		}
+		expect(divergent).toEqual([]);
+	});
+
 	test("the compiled executable exposes and release CI verifies its embedded runtime", () => {
 		const buildScript = text("scripts/build-native-bun.ts");
 		expect(buildScript).toContain("SIGNET_RUNTIME_VERSION_SMOKE");
