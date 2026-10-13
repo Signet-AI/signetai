@@ -72,6 +72,8 @@ interface RunningDreamingPass {
 	readonly mode: DreamingMode;
 	readonly scopes: readonly string[];
 	readonly exclusive: boolean;
+	readonly shared: boolean;
+	readonly attentionScopes: readonly string[];
 	readonly slots: number;
 	readonly settled: Promise<void>;
 }
@@ -83,14 +85,16 @@ interface StartedDreamingPass {
 type DreamingPassResult = { passId: string; applied: number; skipped: number; failed: number; summary: string };
 
 export function partitionDreamingScopes(
-	backlogs: ReadonlyArray<{
+	work: ReadonlyArray<{
 		readonly scope: string;
 		readonly tokens: number;
 		readonly attention?: boolean;
 		readonly oldestAttentionAt?: string | null;
+		readonly passes?: number;
 	}>,
 	slots: number,
 ): string[][] {
+	const backlogs = work.filter((item) => (item.passes ?? 1) > 0);
 	const withBacklog = backlogs
 		.filter((item) => item.tokens > 0)
 		.sort((a, b) => b.tokens - a.tokens || a.scope.localeCompare(b.scope));
@@ -111,6 +115,15 @@ export function partitionDreamingScopes(
 		target.tokens += item.tokens;
 	}
 	for (const scope of attentionOnly.slice(0, free - groups.length)) groups.push({ scopes: [scope], tokens: 0 });
+	const extra = new Map(withBacklog.map((item) => [item.scope, Math.max(0, Math.floor(item.passes ?? 1) - 1)]));
+	while (groups.length < free && [...extra.values()].some((count) => count > 0)) {
+		for (const item of withBacklog) {
+			const count = extra.get(item.scope) ?? 0;
+			if (count <= 0 || groups.length >= free) continue;
+			extra.set(item.scope, count - 1);
+			groups.push({ scopes: [item.scope], tokens: item.tokens });
+		}
+	}
 	return groups.map((group) => [...group.scopes].sort()).filter((scopes) => scopes.length > 0);
 }
 export interface DreamingSchedulerStatus {
@@ -343,6 +356,9 @@ export function startDreamingWorker(
 	const runningPasses = new Set<RunningDreamingPass>();
 	const configuredConcurrentPasses = Math.max(1, Math.floor(cfg.maxConcurrentPasses ?? 1));
 	const maxPasses = (): number => Math.max(1, Math.min(configuredConcurrentPasses, getLlmConcurrencyLimit()));
+	const passesPerScope = Math.max(1, Math.floor(cfg.maxPassesPerScope ?? 1));
+	const sharesScopes = passesPerScope > 1;
+	const evidenceLeaseMs = 2 * cfg.timeout;
 	let scheduler: DreamingSchedulerStatus = { status: "idle", reason: null, checkedAt: null };
 	let nextScheduledFocus: DreamingPassFocus | null = null;
 	const getAgentScopes = createAgentScopeSnapshot(AGENT_SCOPE_SNAPSHOT_REFRESH_MS, () =>
@@ -446,6 +462,19 @@ export function startDreamingWorker(
 
 	const usedSlots = (): number => [...runningPasses].reduce((sum, pass) => sum + pass.slots, 0);
 	const leasedScopes = (): ReadonlySet<string> => new Set([...runningPasses].flatMap((pass) => pass.scopes));
+	const scopePassCounts = (): ReadonlyMap<string, number> => {
+		const counts = new Map<string, number>();
+		for (const scope of [...runningPasses].flatMap((pass) => pass.scopes))
+			counts.set(scope, (counts.get(scope) ?? 0) + 1);
+		return counts;
+	};
+	const closedScopes = (): ReadonlySet<string> => {
+		if (!sharesScopes) return leasedScopes();
+		const counts = scopePassCounts();
+		const closed = new Set([...runningPasses].filter((pass) => !pass.shared).flatMap((pass) => pass.scopes));
+		for (const [scope, count] of counts) if (count >= passesPerScope) closed.add(scope);
+		return closed;
+	};
 	const exclusiveRunning = (): boolean => [...runningPasses].some((pass) => pass.exclusive);
 	const listScopes = async (): Promise<readonly string[]> => {
 		knownScopes = await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance);
@@ -454,8 +483,8 @@ export function startDreamingWorker(
 	const knownScopesLeased = (): boolean => {
 		if (runningPasses.size === 0) return false;
 		if (exclusiveRunning() || usedSlots() >= maxPasses()) return true;
-		const leased = leasedScopes();
-		return knownScopes.length > 0 && knownScopes.every((scope) => leased.has(scope));
+		const closed = closedScopes();
+		return knownScopes.length > 0 && knownScopes.every((scope) => closed.has(scope));
 	};
 
 	async function admit<T>(fn: () => Promise<T>): Promise<T> {
@@ -500,12 +529,20 @@ export function startDreamingWorker(
 			resolveToolCall = resolve;
 		});
 		let release: () => void = () => undefined;
+		const shared = sharesScopes && !exclusive && live?.userRequest === undefined;
+		const attentionHeld = new Set([...runningPasses].flatMap((pass) => pass.attentionScopes));
+		const attentionScopes = shared ? scopes.filter((scope) => !attentionHeld.has(scope)) : scopes;
+		const passLive: DreamingPassLiveOptions | undefined = shared
+			? { ...live, sharedScope: { evidenceLeaseMs, attentionScopes } }
+			: live;
 		const entry: RunningDreamingPass = {
 			passId: null,
 			agentId: runAgentId,
 			mode,
 			scopes,
 			exclusive,
+			shared,
+			attentionScopes,
 			slots: 1,
 			settled: new Promise<void>((resolve) => {
 				release = resolve;
@@ -530,7 +567,7 @@ export function startDreamingWorker(
 				mode,
 				id,
 				caps,
-				live,
+				passLive,
 				options.ownerMaintenance,
 			).catch((error: unknown) => {
 				recordDreamingFailureOrLog(runAgentId);
@@ -564,8 +601,10 @@ export function startDreamingWorker(
 			readonly tokens: number;
 			readonly attention: boolean;
 			readonly oldestAttentionAt: string | null;
+			readonly passes: number;
 		}>
 	> {
+		const running = scopePassCounts();
 		const owner = await getDbOwnerForAccessor(accessor);
 		const attention = new Map(
 			(
@@ -585,7 +624,16 @@ export function startDreamingWorker(
 				const probe = await probeDreamingEpisodicBacklog(accessor, scope, cfg.tokenThreshold, options.ownerMaintenance);
 				const tokens =
 					probe.hasBacklog === false ? 0 : Math.max(1, probe.kind === "exact" ? probe.tokens : probe.tokenLowerBound);
-				return { scope, tokens, attention: attention.has(scope), oldestAttentionAt: attention.get(scope) ?? null };
+				const held = running.get(scope) ?? 0;
+				const deep = tokens >= cfg.tokenThreshold || (probe.kind === "indeterminate" && probe.hasBacklog === true);
+				const wanted = sharesScopes && deep ? passesPerScope : 1;
+				return {
+					scope,
+					tokens,
+					attention: attention.has(scope),
+					oldestAttentionAt: attention.get(scope) ?? null,
+					passes: Math.max(0, wanted - held),
+				};
 			}),
 		);
 	}
@@ -594,8 +642,13 @@ export function startDreamingWorker(
 		const slots = maxPasses() - usedSlots();
 		if (scopes.length === 0 || slots <= 0) throw new AlreadyRunningError();
 		const measured =
-			scopes.length === 1 ? [[...scopes]] : partitionDreamingScopes(await measureScopeWork(scopes), slots);
-		const groups = measured.length > 0 ? measured : [[...scopes]];
+			scopes.length === 1 && !sharesScopes
+				? [[...scopes]]
+				: partitionDreamingScopes(await measureScopeWork(scopes), slots);
+		const held = leasedScopes();
+		const idle = scopes.filter((scope) => !held.has(scope));
+		if (measured.length === 0 && idle.length === 0) throw new AlreadyRunningError();
+		const groups = measured.length > 0 ? measured : [idle];
 		const [firstGroup, ...rest] = groups;
 		const first = startPass(runAgentId, "incremental", firstGroup ?? [...scopes], false);
 		if (rest.length === 0) return first;
@@ -606,6 +659,8 @@ export function startDreamingWorker(
 			mode: "incremental",
 			scopes: rest.flat(),
 			exclusive: false,
+			shared: sharesScopes,
+			attentionScopes: [],
 			slots: rest.length,
 			settled: new Promise<void>((resolve) => {
 				releaseReservation = resolve;
@@ -671,8 +726,8 @@ export function startDreamingWorker(
 			return;
 		}
 		scheduler = { status: "idle", reason: null, checkedAt };
-		const leased = leasedScopes();
-		const scopes = (await getAgentScopes()).filter((scope) => !leased.has(scope));
+		const closed = closedScopes();
+		const scopes = (await getAgentScopes()).filter((scope) => !closed.has(scope));
 		if (scopes.length === 0) return;
 		const autoRequeued = await autoRequeueRepairedDreamingEvidence(accessor, evidenceRetry);
 		if (autoRequeued > 0) {
@@ -802,10 +857,10 @@ export function startDreamingWorker(
 					if (runningPasses.size > 0) throw new AlreadyRunningError();
 					return startPass(runAgentId, mode, scopes, true);
 				}
-				const leased = leasedScopes();
+				const closed = closedScopes();
 				return await startIncrementalPasses(
 					runAgentId,
-					scopes.filter((scope) => !leased.has(scope)),
+					scopes.filter((scope) => !closed.has(scope)),
 				);
 			});
 			return await started.passId;

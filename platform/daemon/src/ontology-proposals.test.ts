@@ -3565,6 +3565,48 @@ describe("ontology proposals", () => {
 			expect(attributeTime(morningId)).toMatchObject({ status: "superseded", superseded_by: laterId });
 		});
 
+		it("orders by capture when only one of two contradicting claims carries an event time", async () => {
+			getDbAccessor().withWriteTx((db) => {
+				const source = db.prepare(
+					`INSERT INTO memories
+					 (id, content, type, agent_id, visibility, memory_kind, created_at, updated_at)
+					 VALUES (?, ?, 'fact', 'default', 'global', 'episodic', ?, ?)`,
+				);
+				source.run("austin-source", "I live in Austin.", "2024-02-01T10:00:00.000Z", "2024-02-01T10:00:00.000Z");
+				source.run(
+					"denver-source",
+					"I moved to Denver in May.",
+					"2024-06-01T10:00:00.000Z",
+					"2024-06-01T10:00:00.000Z",
+				);
+			});
+			const residence = { ...slot, aspect: "home", claim_key: "city" };
+			const file = async (sourceId: string, payload: Record<string, unknown>) =>
+				await applyOntologyOperation(getDbAccessor(), {
+					agentId: "default",
+					actor: "dreaming",
+					operation: "set_claim_value",
+					payload: { ...residence, ...payload },
+					evidence: [{ source_ref: `memory:${sourceId}`, source_kind: "manual", source_id: sourceId }],
+					sourceKind: "memory",
+					sourceId,
+				});
+			const denver = await file("denver-source", {
+				value: "The user moved to Denver in May 2024.",
+				valid_from: "2024-05-01",
+				time_precision: "month",
+			});
+			const austin = await file("austin-source", { value: "The user lives in Austin." });
+			const denverId = denver.result?.attributeId;
+			const austinId = austin.result?.attributeId;
+			if (typeof denverId !== "string" || typeof austinId !== "string")
+				throw new Error("attribute ids were not returned");
+
+			expect(austin.result?.supersededByNewerEvidence).toBe(denverId);
+			expect(attributeTime(denverId)?.status).toBe("active");
+			expect(attributeTime(austinId)).toMatchObject({ status: "superseded", superseded_by: denverId });
+		});
+
 		it("keeps the newer claim current when an older claim arrives later", async () => {
 			const residence = { ...slot, aspect: "home", claim_key: "city" };
 			const newer = await applyOntologyOperation(getDbAccessor(), {

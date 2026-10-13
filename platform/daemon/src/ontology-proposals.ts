@@ -1356,7 +1356,7 @@ function applySetClaimValue(
 	const newerActive = active
 		.filter((row) => {
 			const activeTime = claimEvidenceTime(row);
-			if (activeTime !== incomingTime) return activeTime !== null && incomingTime !== null && activeTime > incomingTime;
+			if (activeTime !== null && incomingTime !== null && activeTime !== incomingTime) return activeTime > incomingTime;
 			const activeCapturedAt = claimSourceCapturedAt(db, agentId, row.source_kind, row.source_id);
 			return activeCapturedAt !== null && incomingCapturedAt !== null && activeCapturedAt > incomingCapturedAt;
 		})

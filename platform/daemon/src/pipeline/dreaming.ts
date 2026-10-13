@@ -70,6 +70,7 @@ import {
 	SEEN_IMPORTED_SOURCE_ATTENTION_SQL,
 	STALLED_EVIDENCE_ATTENTION_SQL,
 } from "./dreaming-evidence-consumption";
+import { evidenceLeasedByOtherPassesInScopes, releaseDreamingEvidenceLeasesInTx } from "./dreaming-evidence-leases";
 import {
 	parseDreamingReviewedExcludedEvidence,
 	recordDreamingReviewedExcludedEvidenceInTx,
@@ -489,13 +490,24 @@ function resetDreamingTokens(
 			`UPDATE dreaming_state
 			 SET consecutive_failures = 0,
 			     last_failure_at = NULL,
-			     last_pass_at = ?,
+			     last_pass_at = CASE
+			       WHEN last_pass_at IS NOT NULL AND (? IS NULL OR julianday(?) < julianday(last_pass_at)) THEN last_pass_at
+			       ELSE ?
+			     END,
 			     evidence_cursor = ?,
 			     last_pass_id = ?,
 			     last_pass_mode = ?,
 			     updated_at = datetime('now')
 			 WHERE agent_id = ?`,
-		).run(lastPassAt, evidenceCursor === null ? null : JSON.stringify(evidenceCursor), passId, mode, agentId);
+		).run(
+			lastPassAt,
+			lastPassAt,
+			lastPassAt,
+			evidenceCursor === null ? null : JSON.stringify(evidenceCursor),
+			passId,
+			mode,
+			agentId,
+		);
 	} else {
 		db.prepare(
 			`INSERT INTO dreaming_state
@@ -1262,6 +1274,7 @@ export function selectDreamingPassMode(
 
 export interface DreamingPassLiveOptions {
 	readonly hub?: DreamingLiveEventHub;
+	readonly sharedScope?: { readonly evidenceLeaseMs: number; readonly attentionScopes: readonly string[] };
 	readonly userRequest?: { readonly sourceRef: string; readonly content: string };
 	readonly memoryHeadReader?: (agentId: string, passId?: string) => Promise<Record<string, unknown>>;
 }
@@ -1715,9 +1728,10 @@ ${JSON.stringify(liveOptions.userRequest)}
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		);
 		const cutoff = cutoffRow?.now ?? new Date().toISOString();
+		const attentionScopes = liveOptions?.sharedScope?.attentionScopes ?? scopes;
 		const [hasPendingHygieneAttention, hasPendingContentAttention, hasPendingAttention] = await Promise.all([
 			Promise.all(
-				scopes.map(
+				attentionScopes.map(
 					async (scope) =>
 						(await ownerQueryOne<{ present: number }>(
 							await getDbOwnerForAccessor(accessor),
@@ -1729,7 +1743,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 				),
 			).then((values) => values.some(Boolean)),
 			Promise.all(
-				scopes.map(
+				attentionScopes.map(
 					async (scope) =>
 						(await ownerQueryOne<{ present: number }>(
 							await getDbOwnerForAccessor(accessor),
@@ -1741,7 +1755,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 				),
 			).then((values) => values.some(Boolean)),
 			Promise.all(
-				scopes.map(
+				attentionScopes.map(
 					async (scope) =>
 						(await ownerQueryOne<{ present: number }>(
 							await getDbOwnerForAccessor(accessor),
@@ -1862,6 +1876,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 					}),
 			evidenceDeliveryDeadline: Date.now() + Math.floor(cfg.timeout / 2),
 			evidenceChars: dreamingEvidencePageChars(cfg.maxInputTokens),
+			...(liveOptions?.sharedScope ? { evidenceLeaseMs: liveOptions.sharedScope.evidenceLeaseMs } : {}),
 			accessor,
 			agentId,
 			memoryHeadCommitter,
@@ -1952,7 +1967,11 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const passPrompt = dreamingPassPrompt(
 			prompt,
 			await renderDreamingHistoryForPass(accessor, agentId, historyScopes),
-			await renderPendingDreamingAttention(accessor, historyScopes, mode),
+			await renderPendingDreamingAttention(
+				accessor,
+				historyScopes.filter((scope) => attentionScopes.includes(scope)),
+				mode,
+			),
 		).concat("\n\n", dreamingPassClock(new Date(), detectLocalTimeZone()));
 		logger.info("dreaming", "Starting agentic dreaming pass", {
 			mode,
@@ -2301,7 +2320,9 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		}
 		const runbookDeferred = parsedRunbook === null ? null : deferredEvidenceKeys(parsedRunbook, input.agentId);
 		const failedEvidence = failedOperationEvidence(db, input.passId, input.agentId, input.scopes);
-		const deferredEvidence = runbookDeferred === null ? null : new Set([...runbookDeferred, ...failedEvidence.sources]);
+		const heldElsewhere = evidenceLeasedByOtherPassesInScopes(db, input.passId, input.scopes);
+		const deferredEvidence =
+			runbookDeferred === null ? null : new Set([...runbookDeferred, ...failedEvidence.sources, ...heldElsewhere]);
 		const reviewedExcludedEvidence =
 			parsedRunbook === null ? null : parseDreamingReviewedExcludedEvidence(parsedRunbook);
 		if (deferredEvidence !== null && reviewedExcludedEvidence !== null) {
@@ -2321,6 +2342,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		}
 		resolveImportedSourceAttentionInTx(db, input.passId, input.scopes);
 	}
+	releaseDreamingEvidenceLeasesInTx(db, input.passId);
 	if (
 		dreamingModeAdvancesEvidence(
 			input.mode as DreamingMode,

@@ -520,6 +520,7 @@ an exact count when at most 50 sources are waiting, `null` when more are.
     "maxInputTokens": 128000,
     "maxOutputTokens": null,
     "maxConcurrentPasses": 2,
+    "maxPassesPerScope": 1,
     "codemode": false,
     "timeout": 300000
   },
@@ -770,7 +771,7 @@ When a claim arrives for a slot whose active claim has a later evidence time
 (`validFrom`, else `occurredAt`), the incoming claim is recorded as already
 superseded by the active one and the result names it in
 `supersededByNewerEvidence`. When the evidence times are equal (two updates on
-the same day) or neither claim has one, the claim whose cited source was
+the same day) or either claim lacks one, the claim whose cited source was
 captured later stays current, so the order Dreaming happens to file sources in
 does not decide the current value. A claim whose source has no capture time
 falls back to the newest write.
@@ -923,8 +924,23 @@ groups (default 2), balanced by evidence backlog, and runs one pass per group.
 It never starts more passes than `worker.maxLlmConcurrency` allows, because a
 pass waiting for a shared LLM permit would spend its own timeout waiting. The
 daemon allows that many Pi agent workers plus three for retained dashboard chats.
-Each pass may read and write only its own group's agents, and an agent is in at
-most one running pass. The first pass starts immediately; the other groups start
+Each pass may read and write only its own group's agents, and by default an agent
+is in at most one running pass. `memory.dreaming.maxPassesPerScope` (default 1,
+up to 16) lets one agent take several incremental passes at once: when slots are
+left after every agent with work has a pass, an agent whose backlog reaches
+`tokenThreshold`, or holds more pending sources than the 50 the backlog probe
+reads, gets up to that many passes, still within `maxConcurrentPasses`. These
+passes lease the evidence they draw from the delivery queue, so no source is
+handed to two running passes. A pass that loses a source to another pass reads
+the next unclaimed sources instead; when the other passes hold everything left,
+its queue page is empty with `hasMore: false` and `heldByOtherPasses: true`. A lease ends when
+its pass finishes, fails, or is cancelled, or after twice the pass timeout, and
+a source whose pass did not finish it is delivered again. One running pass on
+an agent works its pending attention and the passes that join it only read
+evidence; the next pass to start after it finishes takes the attention over. A claim
+written from older evidence after a newer contradicting claim lands as
+superseded, so the current value follows the evidence rather than which pass
+wrote last. The first pass starts immediately; the other groups start
 only after it completes a tool call, so an unavailable provider is not called once
 per group. The response's `passId` is the first pass. `worker.activePasses` in
 `GET /api/dream/status` lists every running pass; the trigger is complete when it

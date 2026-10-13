@@ -1655,14 +1655,14 @@
     },
     {
       "path": "memory-config.ts",
-      "line": 359,
+      "line": 360,
       "api": "existsSync",
       "source": ".find((path) => existsSync(path));",
       "category": "hot-path"
     },
     {
       "path": "memory-config.ts",
-      "line": 361,
+      "line": 362,
       "api": "readFileSync",
       "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
       "category": "hot-path"
@@ -2631,7 +2631,7 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 185,
+      "line": 198,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync((db) => getQueueHealth(db).status !== \"healthy\", {",
       "category": "hot-path",
@@ -2639,7 +2639,7 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 235,
+      "line": 248,
       "api": "withReadDbAsync",
       "source": ": await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2647,7 +2647,7 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 293,
+      "line": 306,
       "api": "withReadDbAsync",
       "source": ": accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, [\"hygiene\"]), {",
       "category": "hot-path",
@@ -2655,7 +2655,7 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 313,
+      "line": 326,
       "api": "withReadDbAsync",
       "source": ": accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2663,14 +2663,14 @@
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 922,
+      "line": 934,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return { content: \"\", unreadable: false };",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 924,
+      "line": 936,
       "api": "readFileSync",
       "source": "const raw = readFileSync(path, \"utf-8\").trim();",
       "category": "hot-path"
