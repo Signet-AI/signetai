@@ -3146,6 +3146,69 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(row.offset).toBeLessThan(row.length);
 	});
 
+	it("consumes a whitespace-only tail after reviewed text unless the source is deferred (#2094)", async () => {
+		const quote = "Aster is the durable release project.";
+		const capturedAt = "2026-08-11T00:00:00.000Z";
+		seedArtifact(db, "daily/blank-tail.md", `${quote}\n\n  \n`, "sha-blank-tail", capturedAt);
+		seedArtifact(db, "daily/deferred-blank-tail.md", `${quote}\n\n  \n`, "sha-deferred-blank-tail", capturedAt);
+		const tails: string[] = [];
+		const runPass = (run: (input: DreamingAgentInput, page: Record<string, unknown>) => Promise<void>) =>
+			runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						const page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+						await run(input, page);
+						return { summary: "Filed the cited quote" };
+					},
+				},
+				defaultCfg(),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				"incremental",
+			);
+		await runPass(async (input, page) => {
+			for (const item of page.items as Array<{ content: string }>) {
+				tails.push(item.content.slice(item.content.indexOf(quote) + quote.length));
+			}
+			const filed = await invokeDreamingTool(input, "apply_ontology_ops", {
+				agentId: AGENT,
+				operations: ["daily/blank-tail.md", "daily/deferred-blank-tail.md"].map((path) => ({
+					operation: "create_entity",
+					payload: { name: "Aster", type: "project" },
+					reason: "The evidence names a durable project.",
+					evidence: [{ source_ref: `artifact:${path}`, quote }],
+				})),
+			});
+			expect(filed.ok).toBe(true);
+			await invokeDreamingTool(input, "runbook_write", {
+				summary: "## Deferred\n- artifact:daily/deferred-blank-tail.md awaits a decision.",
+				deferredEvidence: [{ agentId: AGENT, sourceRef: "artifact:daily/deferred-blank-tail.md" }],
+			});
+		});
+		expect(tails).toHaveLength(2);
+		for (const tail of tails) {
+			expect(tail.length).toBeGreaterThan(0);
+			expect(tail.trim()).toBe("");
+		}
+		const cursor = (id: string) =>
+			db
+				.prepare(
+					"SELECT delivered_offset AS offset, source_length AS length FROM dreaming_evidence_consumption WHERE source_id = ?",
+				)
+				.get(id) as { offset: number; length: number } | null;
+		const done = cursor("daily/blank-tail.md");
+		expect(done?.offset).toBe(done?.length);
+		expect(cursor("daily/deferred-blank-tail.md")?.offset ?? 0).toBe(0);
+
+		let redelivered: string[] = [];
+		await runPass(async (_input, page) => {
+			redelivered = (page.items as Array<{ sourceRef: string }>).map((item) => item.sourceRef);
+		});
+		expect(redelivered).toEqual(["artifact:daily/deferred-blank-tail.md"]);
+	});
+
 	it("surfaces a stalled source and stops it leading the continuation queue (#2094)", async () => {
 		const capturedAt = "2026-08-11T00:00:00.000Z";
 		accessor.withWriteTx((tx) => {

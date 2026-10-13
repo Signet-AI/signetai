@@ -607,7 +607,13 @@ export function recordDreamingEvidenceConsumptionInTx(
 		] as const;
 		const row = select.get(...identity) as { deliveredOffset: number; stalledPasses: number } | null;
 		const current = Math.max(0, row?.deliveredOffset ?? 0);
-		const next = Math.min(extendDeliveredOffset(current, ranges), delivery.length);
+		const reviewedEnd = Math.min(extendDeliveredOffset(current, ranges), delivery.length);
+		const next =
+			reviewedEnd < delivery.length &&
+			!progressSuppressed(delivery) &&
+			renderDreamingEvidence(source).slice(reviewedEnd).trim() === ""
+				? delivery.length
+				: reviewedEnd;
 		const ref = `${delivery.kind}:${delivery.id}`;
 		if (next > current) {
 			advance.run(...identity, next, delivery.length, params.passId);

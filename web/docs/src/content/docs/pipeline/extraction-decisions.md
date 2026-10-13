@@ -104,8 +104,9 @@ registry defines the operations available to the agent, including:
   contain the quote, or has changed since delivery. A source's evidence cursor
   advances only by text acknowledged this way or cited by a successful
   `apply_ontology_ops` operation, extended contiguously from the stored cursor
-  when the pass finalizes. Delivered text that is never acknowledged stays
-  queued. A source revision delivered in three successful passes without
+  when the pass finalizes. If only whitespace remains after that point, the
+  source counts as fully reviewed, unless the pass deferred it. Delivered text
+  that is never acknowledged stays queued. A source revision delivered in three successful passes without
   progress gets a visible `evidence_requeue` attention record and leaves the
   continuation queue, so fresh sources are served before it. A pass that
   defers the source, or withholds its progress after a failed write, does not
