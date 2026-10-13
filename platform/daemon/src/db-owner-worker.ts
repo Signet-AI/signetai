@@ -877,9 +877,21 @@ export function runDbOwnerWorker(): void {
 				"SELECT source_sha256 FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
 			)
 			.get(input.agentId, sourcePath) as { source_sha256: string } | null | undefined;
+		const artifactChanged = existing?.source_sha256 !== input.sourceHash;
+		const graphCurrent =
+			input.graph !== undefined &&
+			!artifactChanged &&
+			db
+				.prepare(
+					`SELECT 1 FROM entities
+					 WHERE agent_id = ? AND source_id = ? AND source_path = ? AND entity_type = 'source_document'
+					 LIMIT 1`,
+				)
+				.get(input.agentId, input.graph.sourceId, sourcePath) != null;
+		const graphIndexed = input.graph !== undefined && !graphCurrent;
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			upsertMemoryArtifactInTx(db as unknown as BunDatabase, nativeMemoryArtifactFields(input));
+			if (artifactChanged) upsertMemoryArtifactInTx(db as unknown as BunDatabase, nativeMemoryArtifactFields(input));
 			if (checkpoint !== undefined) {
 				db.prepare(
 					`UPDATE source_sync_failures
@@ -888,7 +900,7 @@ export function runDbOwnerWorker(): void {
 					   AND item_path = ? AND resolved_at IS NULL`,
 				).run(input.agentId, checkpoint.sourceKey, sourcePath);
 			}
-			if (input.graph !== undefined) {
+			if (graphIndexed && input.graph !== undefined) {
 				applyObsidianSourceStructureInTx(db as unknown as import("./db-accessor").WriteDb, {
 					agentId: input.agentId,
 					sourceId: input.graph.sourceId,
@@ -920,8 +932,8 @@ export function runDbOwnerWorker(): void {
 			}
 			commit(context);
 			return {
-				artifactChanged: existing?.source_sha256 !== input.sourceHash,
-				graphIndexed: input.graph !== undefined,
+				artifactChanged,
+				graphIndexed,
 				embeddingProviderUnavailable: embeddingResult.providerUnavailable,
 			};
 		} catch (error) {
