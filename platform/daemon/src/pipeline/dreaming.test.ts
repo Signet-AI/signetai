@@ -3587,6 +3587,25 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(await evaluate()).toEqual({ trigger: true, reason: "attention" });
 	});
 
+	it("does not let a hygiene pass mark an import nudge as seen (#2094)", async () => {
+		const importId = "import:hygiene-2094";
+		const nudge = importedSourceAttentionUpsert(AGENT, importId);
+		db.prepare(nudge.sql).run(...nudge.params);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		db.prepare(
+			"INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at) VALUES ('hygiene-after-nudge', ?, 'incremental-hygiene', 'completed', ?)",
+		).run(AGENT, new Date().toISOString());
+		const cfg = defaultCfg({ tokenThreshold: 100_000, backfillOnFirstRun: false });
+		expect(
+			await evaluateDreamingTrigger(accessor, cfg, AGENT, {
+				kind: "indeterminate",
+				tokenLowerBound: 0,
+				hasBacklog: false,
+				sourcesScanned: 1,
+			}),
+		).toEqual({ trigger: true, reason: "attention" });
+	});
+
 	it("keeps fully reviewed imported transcripts out of the delivery queue (#2094)", async () => {
 		const insertImported = db.prepare(
 			`INSERT INTO session_transcripts
