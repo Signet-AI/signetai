@@ -91,7 +91,8 @@ Dreaming attention nudge per committed source batch. Dreaming consumption is
 separate and uses its normal delivery/review path. The nudge's `source:` reference
 is daemon-owned and is not shown to the Dreaming agent, which reads the imported
 conversations through the delivery queue. The nudge schedules a Dreaming pass
-only until a pass starts after the batch commits; the next committed batch from
+only until a pass that reads evidence starts after the batch commits. Hygiene
+passes don't count, because they never read evidence. The next committed batch from
 that source re-arms it. A Dreaming pass resolves the nudge once
 every conversation in the batch has been reviewed or excluded as reviewed. Each
 pass checks a bounded, rotating slice of pending nudges, so resolution can trail

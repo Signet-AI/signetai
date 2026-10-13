@@ -648,7 +648,8 @@ const IMPORTED_SOURCE_ATTENTION_RAISED_AT_SQL =
 
 export const SEEN_IMPORTED_SOURCE_ATTENTION_SQL = `(kind = 'evidence_requeue' AND subject_ref LIKE 'source:%' AND COALESCE(
 	julianday(${IMPORTED_SOURCE_ATTENTION_RAISED_AT_SQL}) < (
-		SELECT MAX(julianday(dp.started_at)) FROM dreaming_passes dp WHERE dp.agent_id = dreaming_attention.agent_id
+		SELECT MAX(julianday(dp.started_at)) FROM dreaming_passes dp
+		WHERE dp.agent_id = dreaming_attention.agent_id AND dp.mode <> 'incremental-hygiene'
 	), 0))`;
 
 export function importedSourceAttentionUpsert(
