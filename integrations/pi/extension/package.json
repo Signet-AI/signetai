@@ -24,7 +24,7 @@
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
-		"bun-types": "latest",
+		"bun-types": "1.4.2",
 		"typescript": "^5.7.0"
 	},
 	"keywords": [
