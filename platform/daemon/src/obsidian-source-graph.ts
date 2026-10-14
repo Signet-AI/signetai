@@ -395,6 +395,25 @@ export function purgeObsidianSourceFileStructureInTx(
 	return removed;
 }
 
+export function hasObsidianSourceDocumentInTx(
+	db: WriteDb,
+	input: { readonly agentId: string; readonly sourceId: string; readonly filePath: string },
+): boolean {
+	return (
+		db
+			.prepare(
+				`SELECT 1 FROM entities
+				  WHERE agent_id = ?
+				    AND source_id = ?
+				    AND source_kind = ?
+				    AND source_path = ?
+				    AND entity_type = 'source_document'
+				  LIMIT 1`,
+			)
+			.get(input.agentId, input.sourceId, OBSIDIAN_SOURCE_KIND, normalizedPath(input.filePath)) != null
+	);
+}
+
 function removeObsidianSourceFileStructureInTx(
 	db: WriteDb,
 	input: PurgeObsidianSourceFileStructureInput,

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	buildObsidianMarkdownPathIndex,
+	hasObsidianSourceDocumentInTx,
 	indexObsidianSourceStructure,
 	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
@@ -249,6 +250,28 @@ describe("Obsidian source graph structure", () => {
 		expect(rows.attrs).toEqual([]);
 		expect(rows.deps.some((row) => row.reason.includes("New Target"))).toBe(true);
 		expect(rows.deps.some((row) => row.reason.includes("Old Target"))).toBe(false);
+	});
+
+	it("finds an indexed document by the same canonical path the graph writer stores", () => {
+		const doc = join(vault, "literature", "Arch-Linux", "indexed.md");
+		writeFileSync(doc, "# Indexed\n\nAn indexed note.\n");
+		indexObsidianSourceStructure({
+			agentId: "obsidian-graph-agent",
+			sourceId: "obsidian:test-vault",
+			sourceName: "Test Vault",
+			root: vault,
+			filePath: doc,
+			content: readFileSync(doc, "utf-8"),
+		});
+		const has = (sourceId: string, filePath: string): boolean =>
+			getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
+				hasObsidianSourceDocumentInTx(db, { agentId: "obsidian-graph-agent", sourceId, filePath }),
+			);
+
+		expect(has("obsidian:test-vault", doc)).toBe(true);
+		expect(has("obsidian:test-vault", `${vault}/literature/./Arch-Linux/../Arch-Linux//indexed.md`)).toBe(true);
+		expect(has("obsidian:other-vault", doc)).toBe(false);
+		expect(has("obsidian:test-vault", join(vault, "literature", "Arch-Linux", "missing.md"))).toBe(false);
 	});
 
 	it("removes a deleted file's structure, keeps sibling notes, and flags Dreaming claims citing it", () => {
