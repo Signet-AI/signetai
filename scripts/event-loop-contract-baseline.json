@@ -1669,49 +1669,49 @@
     },
     {
       "path": "memory-head-owner.ts",
-      "line": 65,
+      "line": 91,
       "api": "existsSync",
       "source": "if (existsSync(target)) {",
       "category": "hot-path"
     },
     {
       "path": "memory-head-owner.ts",
-      "line": 66,
+      "line": 92,
       "api": "statSync",
       "source": "if (statSync(target).size > 262144)",
       "category": "hot-path"
     },
     {
       "path": "memory-head-owner.ts",
-      "line": 68,
+      "line": 94,
       "api": "readFileSync",
       "source": "existing = readFileSync(target, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "memory-head-owner.ts",
-      "line": 74,
+      "line": 100,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(target), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "memory-head-owner.ts",
-      "line": 77,
+      "line": 103,
       "api": "writeFileSync",
       "source": "writeFileSync(temporary, projection, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "memory-head-owner.ts",
-      "line": 78,
+      "line": 104,
       "api": "renameSync",
       "source": "renameSync(temporary, target);",
       "category": "hot-path"
     },
     {
       "path": "memory-head-owner.ts",
-      "line": 80,
+      "line": 106,
       "api": "rmSync",
       "source": "rmSync(temporary, { force: true });",
       "category": "hot-path"
@@ -2663,14 +2663,14 @@
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 922,
+      "line": 927,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return { content: \"\", unreadable: false };",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 924,
+      "line": 929,
       "api": "readFileSync",
       "source": "const raw = readFileSync(path, \"utf-8\").trim();",
       "category": "hot-path"

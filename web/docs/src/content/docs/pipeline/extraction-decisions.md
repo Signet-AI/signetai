@@ -196,7 +196,9 @@ and the archives and merges that cite attention records) carry no evidence, so
 their failures withhold nothing. A failed write whose trace cannot be read
 withholds every scope in the pass.
 An `incremental-content` pass must stage exactly one `memory_head_commit`, and
-fails if the agent ends without one. A pass with nothing to publish resubmits
+fails if the agent ends without one. A commit over the 1000-token head budget
+is rejected when staged and does not count, so the agent can shorten it and
+commit again in the same pass. A pass with nothing to publish resubmits
 the current entries, or an empty entry set while the head is still empty. The
 DB owner applies the staged head in the same transaction as pass completion and
 watermark updates. If validation or any finalization write fails, the transaction rolls

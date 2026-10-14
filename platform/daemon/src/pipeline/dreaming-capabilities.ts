@@ -46,7 +46,7 @@ import {
 import { dreamingScopeKey, zoomDreamingHistory } from "./dreaming-history";
 import { writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
-import { readCuratedMemoryHead, type MemoryHeadCommitter } from "../memory-head";
+import { MEMORY_HEAD_MAX_TOKENS, readCuratedMemoryHead, type MemoryHeadCommitter } from "../memory-head";
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
@@ -495,7 +495,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"memory_head_read",
 			"Read curated memory head",
-			"Read the scoped Dreaming-curated MEMORY.md head. During a content pass, committedEntries lists the last published entries whose support still holds, with that support, even when the head is stale.",
+			`Read the scoped Dreaming-curated MEMORY.md head. tokens is the current head's size and maxTokens its budget (${MEMORY_HEAD_MAX_TOKENS}). During a content pass, committedEntries lists the last published entries whose support still holds, with that support, even when the head is stale, and committedTokens is their size.`,
 			true,
 			z.object({ agentId: z.string().min(1) }),
 			async ({ agentId: scopeId }) =>
@@ -511,7 +511,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"memory_head_commit",
 			"Commit curated memory head",
-			"Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Start from the committedEntries memory_head_read returns (the last published entries whose support still holds) and give exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. Every content pass must stage exactly one commit, even when nothing changed: resubmit the committedEntries, or an empty entry set when there are none; an empty set clears the head only when no committed entry still has valid support. Record deferrals and no-change reasons with runbook_write.",
+			`Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Start from the committedEntries memory_head_read returns (the last published entries whose support still holds) and give exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. The rendered head, one "- text" line per entry, must be at most ${MEMORY_HEAD_MAX_TOKENS} tokens; an over-budget set is rejected with its token count and is not staged, so shorten or drop entries and resubmit. Every content pass must stage exactly one commit, even when nothing changed: resubmit the committedEntries, or an empty entry set when there are none; an empty set clears the head only when no committed entry still has valid support. Record deferrals and no-change reasons with runbook_write.`,
 			false,
 			z.object({
 				agentId: z.string().min(1),

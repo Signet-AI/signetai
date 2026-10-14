@@ -58,8 +58,13 @@ import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
 import { DREAMING_CAPABILITY_IDS, dreamingEvidencePageChars, listDreamingAttention } from "./dreaming-capabilities";
-import { readCuratedMemoryHead, type MemoryHeadCommitInput, type MemoryHeadCommitter } from "../memory-head";
-import { commitCuratedMemoryHeadInDb, withContentPassWrites } from "../memory-head-owner";
+import {
+	MEMORY_HEAD_MAX_TOKENS,
+	readCuratedMemoryHead,
+	type MemoryHeadCommitInput,
+	type MemoryHeadCommitter,
+} from "../memory-head";
+import { commitCuratedMemoryHeadInDb, memoryHeadInputError, withContentPassWrites } from "../memory-head-owner";
 import { renderDreamingEvidence, sanitizeTranscriptForDreaming } from "./dreaming-evidence";
 import {
 	deliveredOffsetForSource,
@@ -1103,7 +1108,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - create_entity only for durable subjects clearly established by the source.
    - When the evidence supports a possible relationship, merge, or other ontology change but the relationship is ambiguous rather than settled, do not apply it immediately. Emit the normal ontology operation with risk: "review_required". Its reason must be a concise, human-readable explanation that names the entities and the proposed relationship; the exact evidence citation remains required. The daemon will place it in the user's review queue for confirmation, not treat the queue as a work-deferral mechanism.
    - Validate before writing (validate_proposal).
-5. Update MEMORY.md: call memory_head_read; its committedEntries are the last published entries whose support still holds, with that support, returned even when your own writes left the head stale. Then call memory_head_commit exactly once with the complete set of entries to retain, each with exact source/quote support. The pass cannot finish without this commit, even when nothing changed: resubmit the committedEntries, or submit an empty entry set only if committedEntries is empty and nothing durable qualifies yet, which clears the head.
+5. Update MEMORY.md: call memory_head_read; its committedEntries are the last published entries whose support still holds, with that support, returned even when your own writes left the head stale. Then call memory_head_commit exactly once with the complete set of entries to retain, each with exact source/quote support. The rendered head, one "- text" line per entry, must be at most ${MEMORY_HEAD_MAX_TOKENS} tokens; memory_head_read reports committedTokens. Keep entries terse, and when the retained set would exceed the budget, condense or drop the least durable entries. An over-budget commit is rejected with its token count and is not staged; shorten it and call memory_head_commit again. The pass cannot finish without this commit, even when nothing changed: resubmit the committedEntries, or submit an empty entry set only if committedEntries is empty and nothing durable qualifies yet, which clears the head.
 6. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
@@ -1841,6 +1846,11 @@ ${JSON.stringify(liveOptions.userRequest)}
 						error: "a content pass may stage only one memory-head commit",
 					};
 					return { ok: false, ...memoryHeadCommitRejection };
+				}
+				const invalid = memoryHeadInputError(input);
+				if (invalid !== null) {
+					memoryHeadCommitRejection = invalid;
+					return { ok: false, ...invalid };
 				}
 				memoryHeadCommitInput = input;
 				return { ok: true, code: "STAGED_FOR_FINALIZATION" };
