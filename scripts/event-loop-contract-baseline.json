@@ -2285,7 +2285,7 @@
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 652,
+      "line": 656,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -2293,7 +2293,7 @@
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 662,
+      "line": 666,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -2301,7 +2301,7 @@
     },
     {
       "path": "obsidian-source-graph.ts",
-      "line": 740,
+      "line": 744,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path",

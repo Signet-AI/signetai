@@ -7,7 +7,7 @@ import { activeVectorProjectionTable, findSqliteVecExtension, vectorSearchWithMe
 import {
 	applyObsidianSourceStructureInTx,
 	applyObsidianSourceStructurePurgeInTx,
-	hasObsidianSourceDocumentInTx,
+	isObsidianSourceFileIndexedInTx,
 	purgeObsidianSourceFileStructureInTx,
 } from "./obsidian-source-graph";
 import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
@@ -882,7 +882,7 @@ export function runDbOwnerWorker(): void {
 		const graphCurrent =
 			input.graph !== undefined &&
 			!artifactChanged &&
-			hasObsidianSourceDocumentInTx(db as unknown as import("./db-accessor").WriteDb, {
+			isObsidianSourceFileIndexedInTx(db as unknown as import("./db-accessor").WriteDb, {
 				agentId: input.agentId,
 				sourceId: input.graph.sourceId,
 				filePath: sourcePath,
