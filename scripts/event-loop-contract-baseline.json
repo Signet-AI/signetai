@@ -529,14 +529,14 @@
     },
     {
       "path": "database-integrity.ts",
-      "line": 564,
+      "line": 573,
       "api": "existsSync",
       "source": "if (existsSync(bundled)) return bundled;",
       "category": "hot-path"
     },
     {
       "path": "database-integrity.ts",
-      "line": 615,
+      "line": 624,
       "api": "withWriteTxAsync",
       "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"db:database.integrity.write\" });",
       "category": "hot-path",
@@ -544,7 +544,7 @@
     },
     {
       "path": "database-integrity.ts",
-      "line": 758,
+      "line": 767,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -552,7 +552,7 @@
     },
     {
       "path": "database-integrity.ts",
-      "line": 873,
+      "line": 882,
       "api": "withReadDbAsync",
       "source": "? await accessor.withReadDbAsync(async (db) => check(db, \"integrity_check\", \"telemetry_events\"), {",
       "category": "hot-path",
