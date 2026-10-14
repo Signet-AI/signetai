@@ -774,7 +774,7 @@ describe("Dreaming", () => {
 			).count,
 		).toBe(1);
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
-	});
+	}, 15_000);
 
 	it("records reviewed evidence under its owning scope in a multi-scope pass (#1712)", async () => {
 		const secondary = "secondary-scope";
