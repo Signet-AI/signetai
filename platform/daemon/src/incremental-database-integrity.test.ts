@@ -467,6 +467,108 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		});
 	});
 
+	it("moves a table whose size probe hits the owner deadline onto the chunked scan in the next slice", async () => {
+		resetGlobalIntegrityLatch();
+		const database = makeDatabase();
+		const db = new Database(database.path);
+		db.exec("CREATE TABLE history (payload TEXT)");
+		db.exec(`
+			WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50)
+			INSERT INTO history SELECT printf('payload-%d', i) FROM n
+		`);
+		db.close();
+		await database.owner.start();
+		let probes = 0;
+		const owner = new Proxy(database.owner, {
+			get(target, property) {
+				if (property === "submit") {
+					return (request: Parameters<DbOwnerClient["submit"]>[0], options: Parameters<DbOwnerClient["submit"]>[1]) => {
+						if (
+							options.operation === "integrity.table.size" &&
+							request.kind === "query" &&
+							request.statement.sql.includes('"history"')
+						) {
+							probes += 1;
+							return {
+								job: { enqueuedAt: Date.now() } as never,
+								result: Promise.reject(new DbOwnerDeadlineError(options.operation)),
+								metrics: Promise.resolve(undefined),
+								cancel: (): void => {},
+							};
+						}
+						return target.submit(request, options);
+					};
+				}
+				const value = Reflect.get(target, property, target);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+
+		const phases: string[] = [];
+		let result: Awaited<ReturnType<typeof runIncrementalDatabaseIntegrityCheck>> | undefined;
+		for (let run = 0; run < 10; run += 1) {
+			result = await runIncrementalDatabaseIntegrityCheck({
+				owner,
+				checkpointKey: "test.integrity.probe-deadline",
+				tablesPerRun: 64,
+				maxWorkUnits: 64,
+				runBudgetMs: 60_000,
+				ownerDeadlineMs: 5_000,
+				scanChunkRows: 20,
+			});
+			phases.push(result.phase);
+			if (result.phase === "complete") break;
+		}
+
+		expect(phases[0]).toBe("timed_out");
+		expect(result).toMatchObject({ phase: "complete", failedObjects: 0, scannedObjects: 1 });
+		expect(probes).toBe(1);
+	});
+
+	it("scans by an unshadowed rowid alias and skips a large table that declares all of them", async () => {
+		resetGlobalIntegrityLatch();
+		const database = makeDatabase();
+		const db = new Database(database.path);
+		db.exec("CREATE TABLE shadowed (rowid TEXT, payload TEXT)");
+		db.exec("CREATE TABLE unaddressable (rowid TEXT, _rowid_ TEXT, oid TEXT)");
+		db.exec(`
+			WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50)
+			INSERT INTO shadowed SELECT printf('r-%03d', i), printf('payload-%d', i) FROM n
+		`);
+		db.exec(`
+			WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50)
+			INSERT INTO unaddressable SELECT 'a', 'b', 'c' FROM n
+		`);
+		db.close();
+		await database.owner.start();
+		const statements: Array<{ readonly sql: string; readonly params: readonly unknown[] }> = [];
+		const owner = recordingOwner(database.owner, statements);
+
+		let result: Awaited<ReturnType<typeof runIncrementalDatabaseIntegrityCheck>> | undefined;
+		for (let run = 0; run < 10; run += 1) {
+			result = await runIncrementalDatabaseIntegrityCheck({
+				owner,
+				checkpointKey: "test.integrity.shadowed-rowid",
+				tablesPerRun: 64,
+				maxWorkUnits: 64,
+				runBudgetMs: 60_000,
+				ownerDeadlineMs: 5_000,
+				largeTableRows: 10,
+				scanChunkRows: 20,
+			});
+			expect(result.phase === "running" || result.phase === "complete").toBe(true);
+			if (result.phase === "complete") break;
+		}
+
+		expect(result).toMatchObject({ phase: "complete", failedObjects: 0, scannedObjects: 1, skippedObjects: 1 });
+		const scans = statements.filter((statement) => /FROM "shadowed"\s.*ORDER BY/s.test(statement.sql));
+		expect(scans).toHaveLength(Math.ceil(50 / 20));
+		expect(scans.every((statement) => /ORDER BY _rowid_ LIMIT/.test(statement.sql))).toBe(true);
+		expect(statements.some((statement) => /(quick|integrity)_check\("unaddressable"\)/.test(statement.sql))).toBe(
+			false,
+		);
+	});
+
 	it("records an unreadable chunk of a large table as a failed object and finishes the sweep", async () => {
 		resetGlobalIntegrityLatch();
 		const database = makeDatabase();

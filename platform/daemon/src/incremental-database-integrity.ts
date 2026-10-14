@@ -23,6 +23,7 @@ const DEFAULT_LARGE_TABLE_ROWS = 100_000;
 const MAX_LARGE_TABLE_ROWS = 1_000_000;
 const DEFAULT_SCAN_CHUNK_ROWS = 20_000;
 const MAX_SCAN_CHUNK_ROWS = 100_000;
+const ROWID_ALIASES = ["rowid", "_rowid_", "oid"] as const;
 const LEGACY_FTS_UNVERIFIABLE_STATUS = "degraded:fts-unverifiable" as const;
 export const MIGRATION_VERIFY_PARKED_STATUS = "degraded:integrity-unverified" as const;
 export const MIGRATION_VERIFY_FAILED_STATUS = "failed:integrity-unverified" as const;
@@ -80,7 +81,7 @@ interface Checkpoint {
 	readonly failedTables: number;
 	readonly scannedTables: number;
 	readonly objectCursor: string;
-	readonly objectRowid: string;
+	readonly objectRowid: string | null;
 	readonly pagesChecked: number;
 	readonly bytesChecked: number;
 	readonly attemptCount: number;
@@ -222,7 +223,7 @@ async function ensureCheckpoint(
 					skipped_objects INTEGER NOT NULL DEFAULT 0,
 					scanned_objects INTEGER NOT NULL DEFAULT 0,
 					object_cursor TEXT NOT NULL DEFAULT '',
-					object_rowid INTEGER NOT NULL DEFAULT 0,
+					object_rowid INTEGER,
 					schema_version INTEGER NOT NULL DEFAULT -1,
 					status TEXT NOT NULL DEFAULT 'running',
 					updated_at TEXT NOT NULL
@@ -242,7 +243,7 @@ async function ensureCheckpoint(
 		["skipped_objects", "INTEGER NOT NULL DEFAULT 0"],
 		["scanned_objects", "INTEGER NOT NULL DEFAULT 0"],
 		["object_cursor", "TEXT NOT NULL DEFAULT ''"],
-		["object_rowid", "INTEGER NOT NULL DEFAULT 0"],
+		["object_rowid", "INTEGER"],
 		["schema_version", "INTEGER NOT NULL DEFAULT -1"],
 	] as const) {
 		if (columns.some((column) => column.name === name)) continue;
@@ -309,7 +310,7 @@ async function readCheckpoint(
 		typeof row.skippedTables !== "number" ||
 		typeof row.scannedTables !== "number" ||
 		typeof row.objectCursor !== "string" ||
-		typeof row.objectRowid !== "string" ||
+		(row.objectRowid !== null && typeof row.objectRowid !== "string") ||
 		typeof row.schemaVersion !== "number" ||
 		typeof row.cursor !== "string"
 	) {
@@ -333,7 +334,7 @@ async function resetCheckpoint(
 				`UPDATE ${CHECKPOINT_TABLE}
 				 SET cursor = '', checked_tables = 0, failed_tables = 0,
 				     pages_checked = 0, bytes_checked = 0, attempt_count = 0,
-				     skipped_objects = 0, scanned_objects = 0, object_cursor = '', object_rowid = 0,
+				     skipped_objects = 0, scanned_objects = 0, object_cursor = '', object_rowid = NULL,
 				     schema_version = ?, status = 'running', updated_at = ?
 				 WHERE checkpoint_key = ?`,
 				[schemaVersion, new Date().toISOString(), key],
@@ -451,7 +452,7 @@ async function persistTable(
 		failedTables: checkpoint.failedTables + (failed ? 1 : 0),
 		scannedTables: checkpoint.scannedTables + (scanned && !failed ? 1 : 0),
 		objectCursor: "",
-		objectRowid: "0",
+		objectRowid: null,
 		pagesChecked: metrics?.pages ?? checkpoint.pagesChecked,
 		bytesChecked: metrics?.bytes ?? checkpoint.bytesChecked,
 		attemptCount: checkpoint.attemptCount,
@@ -465,7 +466,7 @@ async function persistTable(
 			ownerRunStatement(
 				`UPDATE ${CHECKPOINT_TABLE}
 				 SET cursor = ?, checked_tables = ?, skipped_objects = ?, failed_tables = ?, scanned_objects = ?,
-				     object_cursor = '', object_rowid = 0,
+				     object_cursor = '', object_rowid = NULL,
 				     pages_checked = ?, bytes_checked = ?, attempt_count = ?, status = 'running', updated_at = ?
 				 WHERE checkpoint_key = ? AND cursor = ?`,
 				[
@@ -493,7 +494,7 @@ async function persistScanProgress(
 	key: string,
 	checkpoint: Checkpoint,
 	objectCursor: string,
-	objectRowid: string,
+	objectRowid: string | null,
 	deadlineMs: number,
 	onOwnerMetrics?: OwnerMetricsCallback,
 ): Promise<Checkpoint> {
@@ -606,7 +607,7 @@ export async function runIncrementalDatabaseIntegrityCheck(
 		failedTables: 0,
 		scannedTables: 0,
 		objectCursor: "",
-		objectRowid: "0",
+		objectRowid: null,
 		pagesChecked: 0,
 		bytesChecked: 0,
 		attemptCount: 0,
@@ -740,8 +741,20 @@ export async function runIncrementalDatabaseIntegrityCheck(
 			}
 			if (isOrdinaryTable(table)) {
 				const resuming = checkpoint.objectCursor === table.cursor;
-				if (!resuming) await options.onObjectScan?.(table);
+				if (!resuming) {
+					await options.onObjectScan?.(table);
+					checkpoint = await persistScanProgress(
+						options.owner,
+						key,
+						checkpoint,
+						table.cursor,
+						null,
+						remainingBudget(),
+						recordOwnerMetrics,
+					);
+				}
 				let large = resuming;
+				let rowidAlias: string | undefined;
 				let chunk: ScanChunkRow | undefined;
 				let unreadable: string | null = null;
 				try {
@@ -759,29 +772,35 @@ export async function runIncrementalDatabaseIntegrityCheck(
 						const columns = await ownerQueryAll<{ readonly name?: unknown }>(
 							options.owner,
 							"integrity.table.columns",
-							`PRAGMA table_info(${escapeIdentifier(table.name)})`,
+							`PRAGMA table_xinfo(${escapeIdentifier(table.name)})`,
 							[],
 							integrityOwnerOptions(remainingBudget(), recordOwnerMetrics),
 						);
-						const width =
-							columns
-								.map((column) => `coalesce(length(CAST(${escapeIdentifier(text(column.name))} AS BLOB)), 0)`)
-								.join(" + ") || "0";
-						chunk = await ownerQueryOne<ScanChunkRow>(
-							options.owner,
-							"integrity.table.scan",
-							`SELECT count(*) AS scanned, CAST(max(r) AS TEXT) AS last, total(w) AS bytes
-							 FROM (SELECT rowid AS r, ${width} AS w FROM ${escapeIdentifier(table.name)}
-							       ${resuming ? "WHERE rowid > CAST(? AS INTEGER)" : ""} ORDER BY rowid LIMIT ?)`,
-							resuming ? [checkpoint.objectRowid, scanChunkRows] : [scanChunkRows],
-							integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
-						);
+						const declared = new Set(columns.map((column) => text(column.name).toLowerCase()));
+						rowidAlias = ROWID_ALIASES.find((alias) => !declared.has(alias));
+						if (rowidAlias !== undefined) {
+							const width =
+								columns
+									.map((column) => `coalesce(length(CAST(${escapeIdentifier(text(column.name))} AS BLOB)), 0)`)
+									.join(" + ") || "0";
+							const after = resuming ? checkpoint.objectRowid : null;
+							chunk = await ownerQueryOne<ScanChunkRow>(
+								options.owner,
+								"integrity.table.scan",
+								`SELECT count(*) AS scanned, CAST(max(r) AS TEXT) AS last, total(w) AS bytes
+								 FROM (SELECT ${rowidAlias} AS r, ${width} AS w FROM ${escapeIdentifier(table.name)}
+								       ${after === null ? "" : `WHERE ${rowidAlias} > CAST(? AS INTEGER)`}
+								       ORDER BY ${rowidAlias} LIMIT ?)`,
+								after === null ? [scanChunkRows] : [after, scanChunkRows],
+								integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
+							);
+						}
 					}
 				} catch (error) {
 					if (isDeadline(error) || error instanceof IntegrityRunBudgetError) throw error;
 					unreadable = error instanceof Error ? error.message : String(error);
 				}
-				if (unreadable !== null || (large && isWithoutRowid(table))) {
+				if (unreadable !== null || (large && rowidAlias === undefined)) {
 					if (unreadable !== null) errors.push(`${table.name}: ${unreadable}`);
 					await options.onBeforeCheckpointCommit?.();
 					checkpoint = await persistTable(
