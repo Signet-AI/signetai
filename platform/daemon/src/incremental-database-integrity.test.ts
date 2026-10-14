@@ -13,6 +13,7 @@ import {
 import {
 	getDatabaseIntegrityStatus,
 	publishDatabaseIntegrityStatus,
+	resetGlobalIntegrityLatch,
 	updateDatabaseIntegrityStatus,
 } from "./database-integrity";
 
@@ -407,6 +408,7 @@ describe("incremental database integrity maintenance (#1683)", () => {
 	});
 
 	it("checks a table too large for one owner job in bounded rowid chunks that resume across runs (#2126)", async () => {
+		resetGlobalIntegrityLatch();
 		const database = makeDatabase();
 		const db = new Database(database.path);
 		db.exec("CREATE TABLE history (id TEXT PRIMARY KEY, payload TEXT NOT NULL)");
@@ -430,7 +432,8 @@ describe("incremental database integrity maintenance (#1683)", () => {
 			checkpointKey: "test.integrity.large-table",
 			tablesPerRun: 4,
 			maxWorkUnits: 4,
-			runBudgetMs: 5_000,
+			runBudgetMs: 60_000,
+			ownerDeadlineMs: 5_000,
 			largeTableRows: 1_000,
 			scanChunkRows: 400,
 		};
@@ -465,6 +468,7 @@ describe("incremental database integrity maintenance (#1683)", () => {
 	});
 
 	it("records an unreadable chunk of a large table as a failed object and finishes the sweep", async () => {
+		resetGlobalIntegrityLatch();
 		const database = makeDatabase();
 		const db = new Database(database.path);
 		db.exec("CREATE TABLE history (payload TEXT)");
@@ -486,25 +490,33 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		await database.owner.start();
 		const scans: string[] = [];
 
-		const result = await runIncrementalDatabaseIntegrityCheck({
-			owner: database.owner,
-			checkpointKey: "test.integrity.large-table-corrupt",
-			tablesPerRun: 64,
-			maxWorkUnits: 64,
-			runBudgetMs: 5_000,
-			largeTableRows: 10,
-			scanChunkRows: 100,
-			onObjectScan: (object) => {
-				scans.push(`${object.type}:${object.name}`);
-			},
-		});
+		const errors: string[] = [];
+		let result: Awaited<ReturnType<typeof runIncrementalDatabaseIntegrityCheck>> | undefined;
+		for (let run = 0; run < 40; run += 1) {
+			result = await runIncrementalDatabaseIntegrityCheck({
+				owner: database.owner,
+				checkpointKey: "test.integrity.large-table-corrupt",
+				tablesPerRun: 64,
+				maxWorkUnits: 64,
+				runBudgetMs: 60_000,
+				ownerDeadlineMs: 5_000,
+				largeTableRows: 10,
+				scanChunkRows: 100,
+				onObjectScan: (object) => {
+					scans.push(`${object.type}:${object.name}`);
+				},
+			});
+			errors.push(...result.errors);
+			expect(result.phase === "running" || result.phase === "complete").toBe(true);
+			if (result.phase === "complete") break;
+		}
 
-		expect(result.phase).toBe("complete");
-		expect(result.failedObjects).toBe(1);
-		expect(result.errors.join(" ")).toContain("history");
+		expect(result?.phase).toBe("complete");
+		expect(result?.failedObjects).toBe(1);
+		expect(errors.join(" ")).toContain("history");
 		expect(scans).toContain("table:z_after");
 		expect(getDatabaseIntegrityStatus().state).toBe("corrupt");
-		publishDatabaseIntegrityStatus("healthy");
+		resetGlobalIntegrityLatch();
 	});
 
 	it("does not let an incremental healthy publication mask global corruption", () => {
