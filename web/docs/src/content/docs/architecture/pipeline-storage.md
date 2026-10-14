@@ -235,7 +235,10 @@ The graph-related storage includes:
 Semantic graph writes do not come from an unconstrained LLM extraction trigger.
 Structured remember payloads, explicit mutations, Dreaming's audited apply seam,
 and reviewed repair paths are the writers. Retention removes orphaned mention
-and graph rows when a tombstoned memory is permanently purged.
+and graph rows when a tombstoned memory is permanently purged. It also compacts
+`entity_dependency_history` in bounded, resumable batches through the DB owner,
+removing only trigger-written delete/create pairs that rebuilt a dependency
+without changing any recorded field.
 
 When graph traversal is enabled, `hybridRecall` resolves focal entities from the
 query, traverses aspects, attributes, and dependency hops, and blends that
@@ -261,7 +264,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `169-dreaming-evidence-review-cursor.ts`.
+`schema_migrations_audit`. The latest migration is `170-dependency-history-compaction-state.ts`.
 
 ### Evidence and semantic state
 

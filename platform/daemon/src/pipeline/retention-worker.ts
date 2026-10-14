@@ -1,5 +1,6 @@
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
+import { startDependencyHistoryCompaction } from "../dependency-history-compaction";
 
 async function writeTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
 	const writer = accessor.withWriteTxAsync;
@@ -399,6 +400,12 @@ export function startRetentionWorker(
 		if (running) timer = setTimeout(runScheduledSweep, normalizedCfg.intervalMs);
 	}
 	timer = setTimeout(runScheduledSweep, 60_000);
+	const dependencyHistoryCompaction = ownerMaintenance
+		? startDependencyHistoryCompaction(ownerMaintenance.owner, {
+				idleIntervalMs: normalizedCfg.intervalMs,
+				queueIsHealthy: ownerMaintenance.queueIsHealthy,
+			})
+		: null;
 
 	logger.info("retention", "Worker started", {
 		intervalMs: normalizedCfg.intervalMs,
@@ -416,6 +423,7 @@ export function startRetentionWorker(
 				clearTimeout(timer);
 				timer = null;
 			}
+			void dependencyHistoryCompaction?.stop();
 			logger.info("retention", "Worker stopped");
 		},
 		sweep: doSweep,

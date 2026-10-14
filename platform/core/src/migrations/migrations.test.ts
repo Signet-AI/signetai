@@ -415,7 +415,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(169);
+			expect(applied.version).toBe(170);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -2348,6 +2348,21 @@ describe("migration framework", () => {
 		expect(() =>
 			db.exec("UPDATE dreaming_evidence_consumption SET cursor_basis = 'guess' WHERE source_id = 'legacy'"),
 		).toThrow();
+	});
+
+	test("migration 170 seeds one dependency history compaction cursor", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.exec("DROP TABLE dependency_history_compaction_state");
+		db.prepare("DELETE FROM schema_migrations WHERE version = 170").run();
+		runMigrations(db);
+		runMigrations(db);
+
+		expect(db.query("SELECT id, cursor_rowid, pruned_rows FROM dependency_history_compaction_state").all()).toEqual([
+			{ id: 1, cursor_rowid: 0, pruned_rows: 0 },
+		]);
+		expect(() => db.exec("INSERT INTO dependency_history_compaction_state (id) VALUES (2)")).toThrow();
+		expect(() => db.exec("UPDATE dependency_history_compaction_state SET cursor_rowid = -1")).toThrow();
 	});
 
 	test("migration 063 limits memories_fts updates to content changes", () => {
