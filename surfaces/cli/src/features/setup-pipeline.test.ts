@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { MODEL_DEFAULTS } from "@signet/core";
+import { MODEL_DEFAULTS, allTargetRefs, parseRoutingConfig, resolveRoutingDecision } from "@signet/core";
 import {
 	applyAggregateRecallRoute,
 	applySetupInferenceRoute,
@@ -8,7 +8,20 @@ import {
 	buildSetupPipeline,
 	defaultAcpxModel,
 	defaultExtractionModel,
+	type SetupInferenceConfig,
 } from "./setup-pipeline";
+
+function routeMemoryExtraction(inference: SetupInferenceConfig | undefined) {
+	const config = parseRoutingConfig({ inference });
+	if (!config.ok) throw new Error(config.error.message);
+	const targets = Object.fromEntries(
+		allTargetRefs(config.value).map((ref) => [
+			ref,
+			{ available: true, health: "healthy" as const, circuitOpen: false, accountState: "ready" as const },
+		]),
+	);
+	return resolveRoutingDecision(config.value, { operation: "memory_extraction" }, { targets });
+}
 
 describe("defaultExtractionModel", () => {
 	it("uses the checked Codex CLI model default", () => {
@@ -67,6 +80,40 @@ describe("buildSetupPipeline", () => {
 			providerFamily: "openrouter",
 			credentialRef: "OPENROUTER_API_KEY",
 		});
+	});
+
+	it("records remote extraction consent on the task class for remote targets", () => {
+		expect(buildSetupInference("openrouter", "anthropic/claude-haiku")?.taskClasses.memory_extraction).toMatchObject({
+			privacy: "remote_ok",
+		});
+		expect(
+			buildSetupInference("openai-compatible", "glm-5.3-flash", [], [], undefined, "https://open.bigmodel.cn/api/v4")
+				?.taskClasses.memory_extraction,
+		).toMatchObject({ privacy: "remote_ok" });
+		expect(
+			buildSetupInference("openai-compatible", "local-model", [], [], undefined, "http://127.0.0.1:1234/v1")
+				?.taskClasses.memory_extraction,
+		).toMatchObject({ privacy: "restricted_remote" });
+		expect(buildSetupInference("ollama", "qwen3:4b")?.taskClasses.memory_extraction).toMatchObject({
+			privacy: "restricted_remote",
+		});
+	});
+
+	it("writes a memory extraction route the router can resolve for every provider", () => {
+		const routes = [
+			buildSetupInference("openrouter", "anthropic/claude-haiku"),
+			buildSetupInference("openai-compatible", "glm-5.3-flash", [], [], undefined, "https://open.bigmodel.cn/api/v4"),
+			buildSetupInference("openai-compatible", "local-model", [], [], undefined, "http://localhost:1234/v1"),
+			buildSetupInference("ollama", "qwen3:4b"),
+			buildSetupInference("llama-cpp", "qwen3:4b"),
+			buildSetupInference("acpx", "haiku", ["claude-code"], ["acpx"], "/usr/local/bin/bunx"),
+		];
+		for (const route of routes) {
+			const decision = routeMemoryExtraction(route);
+			expect(decision.ok ? decision.value.targetRef : decision.error.details?.trace).toBe(
+				route?.defaultPolicy === "background-acpx" ? "background-acpx/default" : "background/default",
+			);
+		}
 	});
 
 	it("preserves the configured endpoint for OpenAI-compatible extraction", () => {
@@ -173,6 +220,17 @@ describe("buildSetupInference", () => {
 		applySetupInferenceRoute(config, undefined);
 
 		expect(config).not.toHaveProperty("inference");
+	});
+
+	it("removes the generated remote task class when setup switches extraction off", () => {
+		const config: Record<string, unknown> = {
+			inference: buildSetupInference("openrouter", "anthropic/claude-haiku"),
+		};
+
+		applySetupInferenceRoute(config, undefined);
+
+		expect(config.inference).not.toHaveProperty("taskClasses");
+		expect(config.inference).not.toHaveProperty("workloads");
 	});
 
 	it("preserves aggregate recall when removing generated direct routing", () => {
