@@ -215,12 +215,42 @@ function accountingProvenanceForConfig(config: PiModelProviderConfig, piModel: M
 	return hasModelRates ? "locally_estimated" : "unavailable";
 }
 
+const API_VERSION_SEGMENT = /^v\d+(?:(?:alpha|beta)\d*)?$/i;
+const VERSIONED_PREFIX_TAILS = new Set(["openai", "compat"]);
+
+function hasApiVersion(url: string): boolean {
+	let path = url;
+	try {
+		path = new URL(url).pathname;
+	} catch {}
+	const segments = path.split("/").filter((segment) => segment.length > 0);
+	const last = segments.at(-1);
+	if (!last) return false;
+	if (API_VERSION_SEGMENT.test(last)) return true;
+	if (!VERSIONED_PREFIX_TAILS.has(last.toLowerCase())) return false;
+	return segments.slice(0, -1).some((segment) => API_VERSION_SEGMENT.test(segment));
+}
+
+function withVersionPathOnly(path: string): string {
+	let trimmed = path.replace(/\/+$/, "");
+	for (const endpoint of ["/chat/completions", "/responses"]) {
+		if (trimmed.endsWith(endpoint)) trimmed = trimmed.slice(0, -endpoint.length);
+	}
+	return hasApiVersion(trimmed) ? trimmed : `${trimmed}/v1`;
+}
+
 function withVersionPath(baseUrl: string): string {
-	const trimmed = baseUrl.trim().replace(/\/+$/, "");
-	if (trimmed.endsWith("/v1/chat/completions")) return trimmed.slice(0, -"/chat/completions".length);
-	if (trimmed.endsWith("/v1/responses")) return trimmed.slice(0, -"/responses".length);
-	if (trimmed.endsWith("/v1")) return trimmed;
-	return `${trimmed}/v1`;
+	const raw = baseUrl.trim();
+	const cut = raw.search(/[?#]/);
+	if (cut < 0) return withVersionPathOnly(raw);
+	const base = withVersionPathOnly(raw.slice(0, cut));
+	const query = raw.slice(cut).split("#")[0] ?? "";
+	if (query.length > 1) {
+		logger.warn("pipeline", "Dropped query string from Pi provider base URL; requests cannot carry it", {
+			baseUrl: base,
+		});
+	}
+	return base;
 }
 export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 	const timeoutMs = config.defaultTimeoutMs ?? 60_000;
