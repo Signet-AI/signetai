@@ -1621,6 +1621,7 @@ describe("direct transcript regressions", () => {
 			sessionId: "ordinary-stop-session",
 			cwd: "/home/user/signetai",
 		});
+		expect(result.sessionBoundary).toBe(false);
 		expect(result.queued).toBe(false);
 		const db = openTestDb();
 		try {
@@ -1970,6 +1971,7 @@ describe("handleSessionEnd", () => {
 		});
 
 		expect(result.memoriesSaved).toBe(0);
+		expect(result.sessionBoundary).toBe(true);
 	});
 
 	test.serial("skips on short transcript", async () => {
@@ -2036,6 +2038,7 @@ describe("handleSessionEnd", () => {
 			reason: "session_shutdown",
 		});
 
+		expect(result.sessionBoundary).toBe(true);
 		expect(result.queued).toBe(true);
 		await flushSessionEndDeferredWork();
 

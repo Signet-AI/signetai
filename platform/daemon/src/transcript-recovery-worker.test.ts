@@ -239,6 +239,54 @@ describe("transcript recovery worker", () => {
 		).toEqual({ count: 1 });
 	});
 
+	it("converges a completed session-end capture with a later recovery scan", async () => {
+		const path = join(claudeRoot, "-repo", "ended-session.jsonl");
+		writeSettled(
+			path,
+			[
+				JSON.stringify({
+					sessionId: "ended-session",
+					timestamp: "2026-07-20T10:00:00.000Z",
+					cwd: "/repo",
+					message: { role: "user", content: "ended at the hook" },
+				}),
+				JSON.stringify({ sessionId: "ended-session", message: { role: "assistant", content: "captured once" } }),
+			].join("\n"),
+		);
+		const hookJob = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "claude-code",
+			sessionKey: "ended-session",
+			sessionId: deriveSessionEndFallbackId("ended-session", path, ""),
+			project: "/repo",
+			transcript: "",
+			transcriptPath: path,
+			basePath: dir,
+			capturedAt: "2026-07-20T12:00:00.000Z",
+			endedAt: "2026-07-20T12:00:00.000Z",
+		});
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		const canonicalPath = join(dir, "memory", "claude-code", "transcripts", "transcript.jsonl");
+		const canonicalAfterHook = readFileSync(canonicalPath, "utf8");
+
+		const result = await scan();
+		expect(result.deduplicated).toBe(1);
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(false);
+
+		expect(readFileSync(canonicalPath, "utf8")).toBe(canonicalAfterHook);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT id, status FROM transcript_capture_jobs").all()),
+		).toEqual([{ id: hookJob, status: "completed" }]);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db
+					.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ? AND source_kind = 'transcript'")
+					.get("agent-a"),
+			),
+		).toEqual({ count: 1 });
+	});
+
 	it("canonicalizes symlinked recovery paths before generation deduplication", async () => {
 		const actualPath = join(dir, "external", "session.jsonl");
 		const symlinkPath = join(claudeRoot, "-repo", "session.jsonl");

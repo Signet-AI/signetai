@@ -128,6 +128,7 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 			harness: "claude-code",
 			sessionId: "session-failed-dispatch",
 			transcriptPath: "/tmp/failed-dispatch.jsonl",
+			reason: "session_shutdown",
 		});
 	});
 

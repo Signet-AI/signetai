@@ -148,19 +148,24 @@ Releases the session's runtime path claim.
   "sessionId": "session-uuid",
   "transcriptPath": "/tmp/signet/session-transcript.txt",
   "capturedAt": "2026-08-03T20:00:00.000Z",
+  "reason": "session_shutdown",
   "runtimePath": "plugin"
 }
 ```
 
 `harness` is required.
+`reason` decides whether the request is a session boundary or a turn. Only a
+[boundary reason](/hooks/#session-end-boundary-reasons) other than `clear`
+queues transcript capture. A request without one is a turn and returns
+`"sessionBoundary": false` with `"queued": false`.
 `transcriptPath` or inline `transcript` may be provided for transcript
 capture. `capturedAt` is optional for live hooks; importers should supply the
 original ISO-8601 event time so temporal reasoning retains source chronology.
 Signet stores a cleaned conversation-only transcript as episodic evidence and
 may retain raw auditable traces separately in daemon logs.
 
-When transcript text is available, the daemon queues a capture receipt and
-then writes the canonical conversation transcript as JSONL at
+When a boundary request carries a transcript source, the daemon queues a
+capture receipt and then writes the canonical conversation transcript as JSONL at
 `$SIGNET_WORKSPACE/transcripts/{harness}/transcript.jsonl` and records
 lineage through the session manifest. Existing markdown transcript artifacts
 remain readable for backward compatibility and are backfilled into the JSONL
