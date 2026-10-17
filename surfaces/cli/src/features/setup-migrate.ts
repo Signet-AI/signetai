@@ -301,7 +301,6 @@ export async function runExistingSetupWizard(
 				},
 				special: [
 					{ path: "HEARTBEAT.md", kind: "heartbeat", role: "heartbeat_prompt", budget: 4000 },
-					{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4000 },
 					{ path: "BOOTSTRAP.md", kind: "bootstrap", role: "bootstrap_prompt", budget: 4000 },
 				],
 			};
@@ -422,7 +421,6 @@ export async function runExistingSetupWizard(
 						{ name: "IDENTITY.md", template: "IDENTITY.md.template" },
 						{ name: "USER.md", template: "USER.md.template" },
 						{ name: "HEARTBEAT.md", template: "HEARTBEAT.md.template" },
-						{ name: "DREAMING.md", template: "DREAMING.md.template" },
 						{ name: "BOOTSTRAP.md", template: "BOOTSTRAP.md.template" },
 					]
 				: [];

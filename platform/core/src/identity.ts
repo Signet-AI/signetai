@@ -16,10 +16,9 @@ import {
 	type IdentityPresetName,
 	type IdentityMode,
 	type ResolvedIdentityMode,
-	type IdentitySessionKind,
 	type IdentityContextFileEntry,
-	type IdentitySpecialFileEntry,
 	type IdentityMap,
+	isRetiredIdentitySpecialEntry,
 } from "./identity-spec";
 
 function userHome(): string {
@@ -296,20 +295,6 @@ function readIdentityEntryList(value: unknown): IdentityContextFileEntry[] {
 	return value.map(readIdentityEntry).filter((entry): entry is IdentityContextFileEntry => entry !== null);
 }
 
-function readSpecialIdentityEntry(value: unknown): IdentitySpecialFileEntry | null {
-	const record = readRecord(value);
-	const kind = typeof record.kind === "string" ? record.kind : "";
-	if (kind !== "dreaming" && kind !== "heartbeat" && kind !== "bootstrap") return null;
-	const entry = readIdentityEntry(value);
-	if (!entry) return null;
-	return { ...entry, kind };
-}
-
-function readSpecialIdentityEntryList(value: unknown): IdentitySpecialFileEntry[] {
-	if (!Array.isArray(value)) return [];
-	return value.map(readSpecialIdentityEntry).filter((entry): entry is IdentitySpecialFileEntry => entry !== null);
-}
-
 function identityHeaderFor(path: string, role?: string): string {
 	const filename = path.split(/[\\/]/).pop() ?? path;
 	return STATIC_HEADER_BY_FILE[filename] ?? role ?? filename.replace(/\.md$/i, "");
@@ -332,22 +317,19 @@ export function resolveStartupIdentityFiles(agentsDir: string): IdentityContextF
 	return STATIC_BUDGETS.map(({ file, budget }) => ({ path: file, budget }));
 }
 
-export function resolveSpecialIdentityFiles(agentsDir: string, kind: IdentitySessionKind): IdentitySpecialFileEntry[] {
+export function listRetiredIdentityEntries(agentsDir: string): string[] {
 	const agentYaml = join(agentsDir, "agent.yaml");
-	if (!existsSync(agentYaml)) {
-		return IDENTITY_PRESETS.minimal.special.filter((entry) => entry.kind === kind);
-	}
+	if (!existsSync(agentYaml)) return [];
 	try {
-		const config = parseSimpleYaml(readFileSync(agentYaml, "utf-8"));
-		if (!identityModeReadsFiles(resolveIdentityModeFromConfig(config))) return [];
-		const identity = readRecord(config.identity);
-		const configured = readSpecialIdentityEntryList(identity.special).filter((entry) => entry.kind === kind);
-		if (configured.length > 0) return configured;
-		const presetName = typeof identity.preset === "string" ? identity.preset : "";
-		const preset = IDENTITY_PRESETS[presetName as IdentityPresetName];
-		if (preset) return preset.special.filter((entry) => entry.kind === kind);
-	} catch {}
-	return IDENTITY_PRESETS.minimal.special.filter((entry) => entry.kind === kind);
+		const identity = readRecord(readRecord(parseSimpleYaml(readFileSync(agentYaml, "utf-8"))).identity);
+		if (!Array.isArray(identity.special)) return [];
+		return identity.special.filter(isRetiredIdentitySpecialEntry).flatMap((entry) => {
+			const path = readRecord(entry).path;
+			return typeof path === "string" && path.trim() ? [path.trim()] : [];
+		});
+	} catch {
+		return [];
+	}
 }
 
 export const STATIC_IDENTITY_OFFLINE_STATUS = "[signet: daemon offline — running with static identity]";

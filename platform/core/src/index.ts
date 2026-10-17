@@ -505,7 +505,7 @@ export {
 	loadIdentityMode,
 	identityModeManagesFiles,
 	identityModeReadsFiles,
-	resolveSpecialIdentityFiles,
+	listRetiredIdentityEntries,
 	resolveStartupIdentityFiles,
 	resolveSessionStartTimeoutMs,
 	resolvePromptSubmitTimeoutMs,
