@@ -112,7 +112,7 @@ Only `content` is required. Multi-agent fields:
 | `visibility` | `"global"` (any permitted agent can read), `"private"` (owner only). Defaults to `"global"`. |
 
 First-seen named `agentId` values are registered in the `agents` table with
-`read_policy` set to `shared`; existing agent policy rows are preserved.
+`read_policy` set to `isolated`; existing agent policy rows are preserved.
 
 `createdAt` is optional and must be a valid ISO timestamp. Use it when the
 memory is sourced from an older conversation or imported artifact so structured
