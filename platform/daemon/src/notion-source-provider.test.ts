@@ -13,11 +13,11 @@ import {
 } from "./notion-source-fetch";
 import {
 	NOTION_MAX_PAGE_CHARS,
-	notionSourceProvider,
 	propertiesHash,
 	setNotionSyncDeadlineForTest,
+	syncNotionSource,
 } from "./notion-source-provider";
-import { putSecret, setSecretKeyringAdapterForTests } from "./secrets";
+import { getSecret, putSecret, setSecretKeyringAdapterForTests } from "./secrets";
 
 const originalFetch = globalThis.fetch;
 const TOKEN = "notion-test-token-value";
@@ -137,11 +137,12 @@ describe("notion-source-provider", () => {
 	}
 
 	async function sync(source: SignetSourceEntry) {
-		const result = await notionSourceProvider.sync?.({
+		const result = await syncNotionSource({
 			source,
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		if (!result) throw new Error("Notion provider has no sync");
 		return result;
@@ -1084,10 +1085,10 @@ describe("notion-source-provider", () => {
 			return markdownResponse("body");
 		});
 		await sync(source);
-		await notionSourceProvider.sync?.({ source, agentsDir: dir, agentId: "other", shouldContinue: () => true });
+		await syncNotionSource({ source, agentsDir: dir, agentId: "other", shouldContinue: () => true, getSecret });
 
 		results = [page("a", "A", "2026-02-01T00:00:00.000Z")];
-		await notionSourceProvider.sync?.({ source, agentsDir: dir, agentId: "other", shouldContinue: () => true });
+		await syncNotionSource({ source, agentsDir: dir, agentId: "other", shouldContinue: () => true, getSecret });
 
 		const rows = agentRows(source.id);
 		expect(rows.filter((row) => row.agent_id === "default" && row.is_deleted === 0)).toHaveLength(2);
@@ -1153,11 +1154,12 @@ describe("notion-source-provider", () => {
 		results = [page("a", "A", "2026-02-05T00:00:00.000Z")];
 		requests.length = 0;
 		let active = true;
-		const result = await notionSourceProvider.sync?.({
+		const result = await syncNotionSource({
 			source,
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => active,
+			getSecret,
 			onProgress: (event) => {
 				if (event.currentPath.endsWith("/pages/a")) active = false;
 			},

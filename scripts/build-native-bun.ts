@@ -141,6 +141,7 @@ const workerEntries = [
 	["database-integrity-worker", "platform/daemon/src/database-integrity-worker.ts"],
 	["db-owner-worker", "platform/daemon/src/db-owner-worker.ts"],
 	["native-memory-source-worker", "platform/daemon/src/native-memory-source-worker.ts"],
+	["source-sync-worker", "platform/daemon/src/source-sync-worker.ts"],
 	["harness-install-worker", "platform/daemon/src/harness-install-worker.ts"],
 	["harness-health-worker", "platform/daemon/src/harness-health-worker.ts"],
 	["embedding-worker", "platform/daemon/src/embedding-worker.ts"],

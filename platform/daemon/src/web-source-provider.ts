@@ -87,11 +87,11 @@ export class WebSourceFetchError extends Error {
 
 export const webSourceProvider: SourceProviderAdapter = {
 	kind: WEB_PROVIDER_KIND,
-	sync: syncWebSource,
+	syncInWorker: true,
 	purge: async (source, agentId) => await purgeSourceOwnedRows({ sourceId: source.id, agentId }),
 };
 
-async function syncWebSource(context: SourceProviderSyncContext): Promise<SourceProviderSyncResult> {
+export async function syncWebSource(context: SourceProviderSyncContext): Promise<SourceProviderSyncResult> {
 	const settings = parseWebSourceSettings(context.source.providerSettings);
 	const requestedUrl = settings.url;
 	const syncStartedAt = new Date().toISOString();
