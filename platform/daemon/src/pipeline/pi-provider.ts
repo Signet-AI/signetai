@@ -1,5 +1,5 @@
 import { createWorkerAgentSession, leaseWorkerAgentSession } from "./pi-agent-client";
-import type { PiAgentRetryPolicy, PiAgentTool, PiAgentWorkerInput } from "./pi-agent-protocol";
+import type { PiAgentEvent, PiAgentRetryPolicy, PiAgentTool, PiAgentWorkerInput } from "./pi-agent-protocol";
 import {
 	type Api,
 	type Context,
@@ -10,7 +10,7 @@ import {
 	type ThinkingLevel,
 	type Usage,
 } from "@earendil-works/pi-ai";
-import { ModelRuntime, type AgentSessionEvent, type SessionStats } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, type SessionStats } from "@earendil-works/pi-coding-agent";
 import type {
 	AccountingProvenance,
 	LlmCacheRequestAccounting,
@@ -73,7 +73,7 @@ export interface PiAgentSession {
 	updateModel?(input: Pick<PiAgentWorkerInput, "model" | "apiKey">): Promise<void>;
 	abort(): Promise<void>;
 	dispose(): void | Promise<void>;
-	subscribe?(listener: (event: AgentSessionEvent) => void): () => void;
+	subscribe?(listener: (event: PiAgentEvent) => void): () => void;
 	getSystemPrompt?(): string;
 	getSessionId?(): string;
 	getModelName?(): string | undefined;
