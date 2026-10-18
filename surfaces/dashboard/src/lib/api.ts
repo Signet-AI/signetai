@@ -2,7 +2,7 @@ import { dashboardQueryCache } from "./query-cache";
 import { installDemoApi } from "./demo";
 import { getDesktopBridge } from "./desktop";
 import { onboardingPreviewFetch, installOnboardingPreview } from "./onboarding-preview";
-import { authHeaders, noteUnauthorized } from "./session";
+import { authHeaders, can, currentSession, noteUnauthorized } from "./session";
 
 export const onboardingPreview = import.meta.env.DEV && import.meta.env.VITE_ONBOARDING_PREVIEW === true;
 
@@ -865,6 +865,10 @@ export interface DreamStatus {
 	exclusions: ReadonlyArray<{ sourceKind: string; sourceId: string; reason: string }>;
 }
 
+function memoryViewAgent(requested: string | undefined): string | undefined {
+	return requested ?? (can(currentSession(), "admin") ? "all" : undefined);
+}
+
 export const api = {
 	getStatus: () => getJSON<DaemonStatus>("/api/status"),
 	getIdentity: () => getJSON<DashboardIdentity>("/api/identity"),
@@ -926,7 +930,9 @@ export const api = {
 		}
 	},
 	getMemories: (opts: { limit?: number; offset?: number; type?: string; agentId?: string } = {}) => {
-		const p = new URLSearchParams({ agentId: opts.agentId ?? "all" });
+		const p = new URLSearchParams();
+		const agentId = memoryViewAgent(opts.agentId);
+		if (agentId) p.set("agentId", agentId);
 		if (opts.limit) p.set("limit", String(opts.limit));
 		if (opts.offset) p.set("offset", String(opts.offset));
 		if (opts.type) p.set("type", opts.type);
@@ -948,15 +954,21 @@ export const api = {
 		const content = result.data?.content;
 		return skill && typeof content === "string" ? { ...skill, content } : null;
 	},
-	getMemoryTimeline: (tzOffset = 0, agentId = "all") =>
-		getJSON<MemoryTimeline>(`/api/memory/timeline?tzOffset=${tzOffset}&agentId=${encodeURIComponent(agentId)}`),
+	getMemoryTimeline: (tzOffset = 0, requestedAgentId?: string) => {
+		const p = new URLSearchParams({ tzOffset: String(tzOffset) });
+		const agentId = memoryViewAgent(requestedAgentId);
+		if (agentId) p.set("agentId", agentId);
+		return getJSON<MemoryTimeline>(`/api/memory/timeline?${p}`);
+	},
 	getEmbeddingHealth: () => getJSON<EmbeddingHealthReport>("/api/embeddings/health"),
 	searchMemories: async (
 		q: string,
 		limit = 20,
 		filters: { type?: string; tags?: string[]; agentId?: string } = {},
 	): Promise<{ memories: Memory[] } | null> => {
-		const params = new URLSearchParams({ q, limit: String(limit), agentId: filters.agentId ?? "all" });
+		const params = new URLSearchParams({ q, limit: String(limit) });
+		const agentId = memoryViewAgent(filters.agentId);
+		if (agentId) params.set("agentId", agentId);
 		if (filters.type) params.set("type", filters.type);
 		if (filters.tags?.length) params.set("tags", filters.tags.join(","));
 		const result = await getJSON<{ results?: Memory[] }>(`/memory/search?${params}`);
