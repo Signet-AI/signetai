@@ -2,7 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../core/src/migrations";
 import type { ReadDb } from "./db-accessor";
+import { buildAgentScopeClause } from "./memory-access-scope";
 import { buildMemoryTimeline } from "./memory-timeline";
+
+const defaultScope = buildAgentScopeClause("default", "shared", null);
 
 function makeDb(): Database {
 	const db = new Database(":memory:");
@@ -108,6 +111,7 @@ describe("buildMemoryTimeline", () => {
 
 			const timeline = buildMemoryTimeline(db as unknown as ReadDb, {
 				now: new Date("2026-03-04T16:00:00.000Z"),
+				scope: defaultScope,
 			});
 
 			expect(timeline.buckets).toHaveLength(3);
@@ -163,6 +167,7 @@ describe("buildMemoryTimeline", () => {
 
 			const timeline = buildMemoryTimeline(db as unknown as ReadDb, {
 				now: new Date("2026-03-04T16:00:00.000Z"),
+				scope: defaultScope,
 			});
 
 			expect(timeline.invalidMemoryTimestamps).toBe(1);
@@ -201,6 +206,7 @@ describe("buildMemoryTimeline", () => {
 
 			const timeline = buildMemoryTimeline(db as unknown as ReadDb, {
 				now: new Date("2026-03-04T16:00:00.000Z"),
+				scope: defaultScope,
 			});
 
 			expect(timeline.totalMemories).toBe(1);

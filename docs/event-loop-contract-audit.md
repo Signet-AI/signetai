@@ -4,23 +4,23 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 810 sites
+- Exact ledger inventory: 802 sites
 - Synchronous `withWriteTx()` sites: 56
 - Synchronous `withReadDb()` sites: 88
-- Async-named DB sites: 168
-- Async-named ON-PARENT DB sites: 166
+- Async-named DB sites: 160
+- Async-named ON-PARENT DB sites: 158
 - Async-named OFF-PARENT DB sites: 2
 - Synchronous filesystem/process sites: 498
 - Compile-visible legacy DB sites remaining: 144
   - `withWriteTx`: 56
   - `withReadDb`: 88
 
-The 810-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 56 synchronous writes, 88 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 144 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 802-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 56 synchronous writes, 88 synchronous reads, and 160 async-named DB sites are the complete database-call inventory; 144 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 158 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 312
-- ON-PARENT callback execution: 310
+- Database accessor sites classified: 304
+- ON-PARENT callback execution: 302
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -221,29 +221,21 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/knowledge-routes.ts:494` (withReadDbAsync)
 - `routes/knowledge-routes.ts:511` (withReadDbAsync)
 - `routes/knowledge-routes.ts:607` (withReadDbAsync)
-- `routes/memory-routes.ts:117` (withReadDbAsync)
-- `routes/memory-routes.ts:906` (withReadDbAsync)
-- `routes/memory-routes.ts:972` (withReadDbAsync)
-- `routes/memory-routes.ts:1014` (withReadDbAsync)
-- `routes/memory-routes.ts:1101` (withReadDbAsync)
-- `routes/memory-routes.ts:1201` (withReadDbAsync)
-- `routes/memory-routes.ts:1466` (withReadDbAsync)
-- `routes/memory-routes.ts:1474` (withReadDbAsync)
-- `routes/memory-routes.ts:1507` (withReadDbAsync)
-- `routes/memory-routes.ts:1710` (withReadDbAsync)
-- `routes/memory-routes.ts:1821` (withReadDbAsync)
-- `routes/memory-routes.ts:2000` (withReadDbAsync)
-- `routes/memory-routes.ts:2157` (withReadDbAsync)
-- `routes/memory-routes.ts:3296` (withReadDbAsync)
-- `routes/memory-routes.ts:3330` (withReadDbAsync)
-- `routes/memory-routes.ts:3348` (withReadDbAsync)
-- `routes/memory-routes.ts:3415` (withReadDbAsync)
-- `routes/memory-routes.ts:3496` (withReadDbAsync)
-- `routes/memory-routes.ts:3510` (withReadDbAsync)
-- `routes/memory-routes.ts:3569` (withReadDbAsync)
-- `routes/memory-routes.ts:3609` (withReadDbAsync)
-- `routes/memory-routes.ts:3650` (withReadDbAsync)
-- `routes/memory-routes.ts:3653` (withReadDbAsync)
+- `routes/memory-routes.ts:126` (withReadDbAsync)
+- `routes/memory-routes.ts:1106` (withReadDbAsync)
+- `routes/memory-routes.ts:1454` (withReadDbAsync)
+- `routes/memory-routes.ts:1462` (withReadDbAsync)
+- `routes/memory-routes.ts:1495` (withReadDbAsync)
+- `routes/memory-routes.ts:1698` (withReadDbAsync)
+- `routes/memory-routes.ts:1809` (withReadDbAsync)
+- `routes/memory-routes.ts:3298` (withReadDbAsync)
+- `routes/memory-routes.ts:3386` (withReadDbAsync)
+- `routes/memory-routes.ts:3467` (withReadDbAsync)
+- `routes/memory-routes.ts:3481` (withReadDbAsync)
+- `routes/memory-routes.ts:3542` (withReadDbAsync)
+- `routes/memory-routes.ts:3582` (withReadDbAsync)
+- `routes/memory-routes.ts:3623` (withReadDbAsync)
+- `routes/memory-routes.ts:3626` (withReadDbAsync)
 - `db:pipeline.queue-diagnostics.snapshot.read` (withReadDb)
 - `routes/queue-diagnostics.ts:156` (withReadDb)
 - `routes/reflection-routes.ts:96` (withReadDb)

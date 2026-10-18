@@ -2,14 +2,19 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { applyRecallScoreThreshold, redactCredentials, vectorSearchWithMetadata } from "@signet/core";
+import {
+	type AgentRosterReadPolicy,
+	applyRecallScoreThreshold,
+	redactCredentials,
+	vectorSearchWithMetadata,
+} from "@signet/core";
 import type { Context, Hono, MiddlewareHandler } from "hono";
-import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "../agent-id";
+import { ensureAgentRegistered, getAgentScope, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
 import type { DbOwnerClient } from "../db-owner-client";
-import { DB_OWNER_MAX_WORK_UNITS } from "../db-owner-protocol";
+import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../db-owner-protocol";
 import { dbOwnerQuery } from "../db-owner-runtime";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
 import { normalizeAndHashContent } from "../content-normalization";
@@ -61,7 +66,13 @@ import {
 	txRecoverMemory,
 	txSupersedeMemory,
 } from "../transactions";
-import { cacheProjection, computeProjection, computeProjectionForQuery, getCachedProjection } from "../umap-projection";
+import {
+	type ProjectionNode,
+	cacheProjection,
+	computeProjection,
+	computeProjectionForQuery,
+	getCachedProjection,
+} from "../umap-projection";
 import {
 	AGENTS_DIR,
 	INTERNAL_SELF_HOST,
@@ -73,7 +84,6 @@ import {
 	authModifyLimiter,
 	authRecallLlmLimiter,
 	embeddingTrackerHandle,
-	hasMemoriesSessionIdColumnCache,
 	projectionErrors,
 	projectionInFlight,
 } from "./state";
@@ -84,7 +94,6 @@ import {
 	blobToVector,
 	buildForgetConfirmToken,
 	buildWhere,
-	buildWhereRaw,
 	checkEmbeddingProvider,
 	chunkBySentence,
 	inferType,
@@ -115,12 +124,15 @@ async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<Res
 	return {
 		...cfg,
 		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
-			siteToken: "routes/memory-routes.ts:117",
+			siteToken: "routes/memory-routes.ts:126",
 		}),
 	};
 }
 
 const MAX_MUTATION_BATCH = 200;
+const MEMORY_LIST_MAX_LIMIT = 500;
+const SIMILAR_CANDIDATE_FACTOR = 4;
+const SIMILAR_MAX_CANDIDATES = 200;
 export const MEMORY_CAPTURE_MAX_IN_FLIGHT = 8;
 const FORGET_CONFIRM_THRESHOLD = 25;
 const SOFT_DELETE_RETENTION_DAYS = 30;
@@ -473,19 +485,6 @@ function getScopedChunkIdempotencyRows(
 		});
 }
 
-function hasMemoriesSessionIdColumn(db: ReadDb | WriteDb): boolean {
-	if (hasMemoriesSessionIdColumnCache !== null) {
-		return hasMemoriesSessionIdColumnCache;
-	}
-
-	const result = (
-		db.prepare("PRAGMA table_info(memories)").all() as Array<{
-			name?: unknown;
-		}>
-	).some((column) => column.name === "session_id");
-	return result;
-}
-
 function recordRecallQaTelemetry(input: {
 	readonly route: string;
 	readonly agentId: string;
@@ -531,7 +530,7 @@ function resolveMemoryScopedAgentId(
 ): { agentId: string; error?: string } {
 	const sessionKey = parseOptionalString(input.sessionKey);
 	const requestedAgentId = resolveAgentIdHint(input);
-	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
 	if (scopedAgent.error) return scopedAgent;
 
 	const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
@@ -541,6 +540,64 @@ function resolveMemoryScopedAgentId(
 	if (sessionError) return { agentId: scopedAgent.agentId, error: sessionError };
 
 	return scopedAgent;
+}
+
+interface MemoryReadScope {
+	readonly agentId: string;
+	readonly readPolicy: AgentRosterReadPolicy;
+	readonly policyGroup: string | null;
+	readonly project: string | undefined;
+	readonly sql: string;
+	readonly args: readonly DbOwnerParameter[];
+}
+
+const ALL_AGENTS = "all";
+
+function redactProjectionNodes(nodes: readonly ProjectionNode[]): ProjectionNode[] {
+	return nodes.map((node) => ({ ...node, content: redactCredentials(node.content) }));
+}
+
+function isFtsQuerySyntaxError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /fts5: syntax error|no such column|malformed MATCH|unknown special query|unterminated string/i.test(message);
+}
+
+async function resolveMemoryReadScope(
+	c: Context,
+	options: { readonly allowAllAgents?: boolean } = {},
+): Promise<MemoryReadScope | Response> {
+	const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
+	const project = parseOptionalString(c.get("auth")?.claims?.scope?.project);
+	const projectSql = project ? " AND m.project = ?" : "";
+	const projectArgs = project ? [project] : [];
+	if (requestedAgentId?.trim() === ALL_AGENTS) {
+		if (!options.allowAllAgents) return c.json({ error: "this route does not support an all-agents view" }, 400);
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+		return {
+			agentId: ALL_AGENTS,
+			readPolicy: "shared",
+			policyGroup: null,
+			project,
+			sql: ` AND m.visibility != 'archived'${projectSql}`,
+			args: projectArgs,
+		};
+	}
+	const scopedAgent = resolveMemoryScopedAgentId(c, {
+		agentId: requestedAgentId,
+		sessionKey: c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key"),
+	});
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+	const agentScope = await getAgentScope(scopedAgent.agentId);
+	const access = buildAgentScopeClause(scopedAgent.agentId, agentScope.readPolicy, agentScope.policyGroup);
+	return {
+		agentId: scopedAgent.agentId,
+		readPolicy: agentScope.readPolicy,
+		policyGroup: agentScope.policyGroup,
+		project,
+		sql: `${access.sql}${projectSql}`,
+		args: [...(access.args as DbOwnerParameter[]), ...projectArgs],
+	};
 }
 
 async function authorizeMemoryMutationScope(c: Context, memoryIds: readonly string[]): Promise<{ error?: string }> {
@@ -887,75 +944,56 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	});
 	app.get("/api/memories", async (c) => {
 		try {
-			const limit = Number.parseInt(c.req.query("limit") || "100", 10);
-			const offset = Number.parseInt(c.req.query("offset") || "0", 10);
+			const limit = parseBoundedInt(c.req.query("limit"), 100, 1, MEMORY_LIST_MAX_LIMIT);
+			const offset = parseBoundedInt(c.req.query("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
 			const type = parseOptionalString(c.req.query("type"));
-			const scopedAgent = resolveMemoryScopedAgentId(c, {
-				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: c.req.header("x-signet-session-key"),
-			});
-			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-			const agentScope = await getAgentScope(scopedAgent.agentId);
-			const access = buildAgentScopeClause(scopedAgent.agentId, agentScope.readPolicy, agentScope.policyGroup);
-			const scopeProject = c.get("auth")?.claims?.scope?.project;
-			const projectSql = scopeProject ? " AND m.project = ?" : "";
-			const typeSql = type ? " AND m.type = ?" : "";
-			const whereSql = `WHERE COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${access.sql}${projectSql}${typeSql}`;
-			const whereArgs = [...access.args, ...(scopeProject ? [scopeProject] : []), ...(type ? [type] : [])];
+			const scope = await resolveMemoryReadScope(c, { allowAllAgents: true });
+			if (scope instanceof Response) return scope;
+			const whereSql = `WHERE COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}${type ? " AND m.type = ?" : ""}`;
+			const whereArgs = [...scope.args, ...(type ? [type] : [])];
 
-			const result = await getDbAccessor().withReadDbAsync(
-				async (db) => {
-					const memories = db
-						.prepare(`
-	      SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type, m.agent_id
-	      FROM memories m
-      ${whereSql}
-      ORDER BY m.created_at DESC
-						LIMIT ? OFFSET ?
-	    `)
-						.all(...whereArgs, limit, offset) as Array<{ content: string }>;
-
-					const totalResult = db.prepare(`SELECT COUNT(*) as count FROM memories m ${whereSql}`).get(...whereArgs) as {
-						count: number;
-					};
-					let embeddingsCount = 0;
-					try {
-						const embResult = db
-							.prepare(
-								`SELECT COUNT(*) as count FROM memories m ${whereSql}
-								 AND (
-								   EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id)
-								   OR (m.content_hash IS NOT NULL AND EXISTS (
-								     SELECT 1 FROM embeddings e
-								     JOIN memories owner ON owner.id = e.source_id
-								     WHERE e.source_type = 'memory'
-								       AND e.content_hash = m.content_hash
-								       AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
-								   ))
-								 )`,
-							)
-							.get(...whereArgs) as { count: number };
-						embeddingsCount = embResult?.count ?? 0;
-					} catch {}
-					const critResult = db
-						.prepare(`SELECT COUNT(*) as count FROM memories m ${whereSql} AND m.importance >= 0.9`)
-						.get(...whereArgs) as {
-						count: number;
-					};
-
-					return {
-						memories: memories.map((row) => ({ ...row, content: redactCredentials(row.content) })),
-						stats: {
-							total: totalResult?.count ?? 0,
-							withEmbeddings: embeddingsCount,
-							critical: critResult?.count ?? 0,
-						},
-					};
+			const memories = await dbOwnerQuery<Array<{ content: string }>>(
+				{
+					sql: `SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type, m.agent_id
+					 FROM memories m
+					 ${whereSql}
+					 ORDER BY m.created_at DESC
+					 LIMIT ? OFFSET ?`,
+					params: [...whereArgs, limit, offset],
+					result: "all",
 				},
-				{ siteToken: "routes/memory-routes.ts:906" },
+				{ operation: "memory.list", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
+			);
+			const stats = await dbOwnerQuery<{ total: number; critical: number; with_embeddings: number } | undefined>(
+				{
+					sql: `SELECT COUNT(*) AS total,
+					        COALESCE(SUM(CASE WHEN m.importance >= 0.9 THEN 1 ELSE 0 END), 0) AS critical,
+					        COALESCE(SUM(CASE WHEN
+					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id)
+					          OR (m.content_hash IS NOT NULL AND EXISTS (
+					            SELECT 1 FROM embeddings e
+					            JOIN memories owner ON owner.id = e.source_id
+					            WHERE e.source_type = 'memory'
+					              AND e.content_hash = m.content_hash
+					              AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
+					          ))
+					        THEN 1 ELSE 0 END), 0) AS with_embeddings
+					 FROM memories m
+					 ${whereSql}`,
+					params: whereArgs,
+					result: "get",
+				},
+				{ operation: "memory.list_stats", lane: "read", deadlineMs: 5_000 },
 			);
 
-			return c.json(result);
+			return c.json({
+				memories: memories.map((row) => ({ ...row, content: redactCredentials(row.content) })),
+				stats: {
+					total: stats?.total ?? 0,
+					withEmbeddings: stats?.with_embeddings ?? 0,
+					critical: stats?.critical ?? 0,
+				},
+			});
 		} catch (e) {
 			logger.error("memory", "Error loading memories", e as Error);
 			return c.json({
@@ -969,24 +1007,23 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		try {
 			const raw = Number.parseInt(c.req.query("limit") || "6", 10);
 			const limit = Number.isNaN(raw) || raw < 1 ? 6 : Math.min(raw, 200);
-			const memories = await getDbAccessor().withReadDbAsync(
-				async (db) => {
-					const rows = db
-						.prepare(`
-					SELECT id, content, access_count, importance, type, tags
-					FROM memories
-					WHERE access_count > 0
-					  AND COALESCE(is_deleted, 0) = 0
-					  AND superseded_by IS NULL
-					ORDER BY access_count DESC, importance DESC
-					LIMIT ?
-				`)
-						.all(limit) as Array<{ id: string; content: string }>;
-					return rows.map((row) => ({ ...row, content: redactCredentials(row.content) }));
+			const scope = await resolveMemoryReadScope(c);
+			if (scope instanceof Response) return scope;
+			const rows = await dbOwnerQuery<Array<{ id: string; content: string }>>(
+				{
+					sql: `SELECT m.id, m.content, m.access_count, m.importance, m.type, m.tags, m.agent_id
+					 FROM memories m
+					 WHERE m.access_count > 0
+					   AND COALESCE(m.is_deleted, 0) = 0
+					   AND m.superseded_by IS NULL${scope.sql}
+					 ORDER BY m.access_count DESC, m.importance DESC
+					 LIMIT ?`,
+					params: [...scope.args, limit],
+					result: "all",
 				},
-				{ siteToken: "routes/memory-routes.ts:972" },
+				{ operation: "memory.most_used", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
 			);
-			return c.json({ memories });
+			return c.json({ memories: rows.map((row) => ({ ...row, content: redactCredentials(row.content) })) });
 		} catch (e) {
 			logger.error("memory", "Error loading most-used memories", e as Error);
 			return c.json({ memories: [] });
@@ -996,93 +1033,65 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		try {
 			const minSessions = Math.max(1, Math.min(100, Number.parseInt(c.req.query("minSessions") || "3", 10) || 3));
 			const limit = Math.max(1, Math.min(500, Number.parseInt(c.req.query("limit") || "100", 10) || 100));
-			const sessionKeyRaw = c.req.header("x-signet-session-key");
-			const scopedAgent = resolveMemoryScopedAgentId(c, {
-				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: sessionKeyRaw,
-			});
-			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-			const agentId = scopedAgent.agentId;
-			const agentScope = await getAgentScope(agentId);
-			const access = buildAgentScopeClause(agentId, agentScope.readPolicy, agentScope.policyGroup ?? null);
-			const claims = c.get("auth")?.claims;
-			const scopeProject = claims?.role === "admin" ? undefined : claims?.scope?.project;
-			const scopePredicate = shouldEnforceAuthScope(c)
-				? `${access.sql}${scopeProject ? " AND m.project = ?" : ""}`
-				: "";
-			const scopeArgs = shouldEnforceAuthScope(c) ? (scopeProject ? [...access.args, scopeProject] : access.args) : [];
-			const slices = await getDbAccessor().withReadDbAsync(
-				async (db) => {
-					const redact = <T extends { content: string }>(rows: T[]): T[] =>
-						rows.map((row) => ({ ...row, content: redactCredentials(row.content) }));
-					const injectedNeverUsed = db
-						.prepare(
-							`SELECT m.id, m.content, COUNT(DISTINCT sm.session_key) AS sessions
-						 FROM session_memories sm
-						 JOIN memories m ON m.id = sm.memory_id
-						 WHERE sm.agent_id = ?
-						   AND sm.was_injected = 1
-						   AND COALESCE(m.is_deleted, 0) = 0
-						   AND m.superseded_by IS NULL
-						   ${scopePredicate}
-						 GROUP BY m.id, m.content
-						 HAVING sessions >= ?
-						    AND SUM(CASE WHEN sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5 THEN 1 ELSE 0 END) = 0
-						 ORDER BY sessions DESC
-						 LIMIT ?`,
-						)
-						.all(agentId, ...scopeArgs, minSessions, limit) as Array<{
-						id: string;
-						content: string;
-						sessions: number;
-					}>;
-					const contradicted = db
-						.prepare(
-							`SELECT m.id, m.content, COUNT(*) AS contradicted_count
-						 FROM session_memories sm
-						 JOIN memories m ON m.id = sm.memory_id
-						 WHERE sm.agent_id = ?
-						   AND COALESCE(m.is_deleted, 0) = 0
-						   AND m.superseded_by IS NULL
-						   ${scopePredicate}
-						   AND (sm.agent_preference = 'CONTRADICTED' OR sm.agent_relevance_score < 0)
-						 GROUP BY m.id, m.content
-						 ORDER BY contradicted_count DESC
-						 LIMIT ?`,
-						)
-						.all(agentId, ...scopeArgs, limit) as Array<{
-						id: string;
-						content: string;
-						contradicted_count: number;
-					}>;
-					const highUsed = db
-						.prepare(
-							`SELECT m.id, m.content, COUNT(*) AS used_count
-						 FROM session_memories sm
-						 JOIN memories m ON m.id = sm.memory_id
-						 WHERE sm.agent_id = ?
-						   AND COALESCE(m.is_deleted, 0) = 0
-						   AND m.superseded_by IS NULL
-						   ${scopePredicate}
-						   AND (sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5)
-						 GROUP BY m.id, m.content
-						 ORDER BY used_count DESC
-						 LIMIT ?`,
-						)
-						.all(agentId, ...scopeArgs, limit) as Array<{
-						id: string;
-						content: string;
-						used_count: number;
-					}>;
-					return {
-						injectedNeverUsed: redact(injectedNeverUsed),
-						contradicted: redact(contradicted),
-						highUsed: redact(highUsed),
-					};
-				},
-				{ siteToken: "routes/memory-routes.ts:1014" },
+			const scope = await resolveMemoryReadScope(c);
+			if (scope instanceof Response) return scope;
+			const agentId = scope.agentId;
+			const slice = async <Row extends { content: string }>(
+				operation: string,
+				sql: string,
+				params: readonly DbOwnerParameter[],
+			): Promise<Row[]> => {
+				const rows = await dbOwnerQuery<Row[]>(
+					{ sql, params, result: "all" },
+					{ operation, lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
+				);
+				return rows.map((row) => ({ ...row, content: redactCredentials(row.content) }));
+			};
+			const injectedNeverUsed = await slice<{ id: string; content: string; sessions: number }>(
+				"memory.curator_injected_never_used",
+				`SELECT m.id, m.content, COUNT(DISTINCT sm.session_key) AS sessions
+				 FROM session_memories sm
+				 JOIN memories m ON m.id = sm.memory_id
+				 WHERE sm.agent_id = ?
+				   AND sm.was_injected = 1
+				   AND COALESCE(m.is_deleted, 0) = 0
+				   AND m.superseded_by IS NULL${scope.sql}
+				 GROUP BY m.id, m.content
+				 HAVING sessions >= ?
+				    AND SUM(CASE WHEN sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5 THEN 1 ELSE 0 END) = 0
+				 ORDER BY sessions DESC
+				 LIMIT ?`,
+				[agentId, ...scope.args, minSessions, limit],
 			);
-			return c.json({ agentId, minSessions, limit, ...slices });
+			const contradicted = await slice<{ id: string; content: string; contradicted_count: number }>(
+				"memory.curator_contradicted",
+				`SELECT m.id, m.content, COUNT(*) AS contradicted_count
+				 FROM session_memories sm
+				 JOIN memories m ON m.id = sm.memory_id
+				 WHERE sm.agent_id = ?
+				   AND COALESCE(m.is_deleted, 0) = 0
+				   AND m.superseded_by IS NULL${scope.sql}
+				   AND (sm.agent_preference = 'CONTRADICTED' OR sm.agent_relevance_score < 0)
+				 GROUP BY m.id, m.content
+				 ORDER BY contradicted_count DESC
+				 LIMIT ?`,
+				[agentId, ...scope.args, limit],
+			);
+			const highUsed = await slice<{ id: string; content: string; used_count: number }>(
+				"memory.curator_high_used",
+				`SELECT m.id, m.content, COUNT(*) AS used_count
+				 FROM session_memories sm
+				 JOIN memories m ON m.id = sm.memory_id
+				 WHERE sm.agent_id = ?
+				   AND COALESCE(m.is_deleted, 0) = 0
+				   AND m.superseded_by IS NULL${scope.sql}
+				   AND (sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5)
+				 GROUP BY m.id, m.content
+				 ORDER BY used_count DESC
+				 LIMIT ?`,
+				[agentId, ...scope.args, limit],
+			);
+			return c.json({ agentId, minSessions, limit, injectedNeverUsed, contradicted, highUsed });
 		} catch (e) {
 			logger.error("memory", "Error loading curator slices", e as Error);
 			return c.json({ error: "Failed to load curator slices" }, 500);
@@ -1092,21 +1101,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		try {
 			const raw = Number.parseInt(c.req.query("tzOffset") || "0", 10);
 			const tzOffsetMin = Number.isNaN(raw) ? 0 : Math.max(-840, Math.min(840, raw));
-			const scopedAgent = resolveMemoryScopedAgentId(c, {
-				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: c.req.header("x-signet-session-key"),
-			});
-			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-			const agentScope = await getAgentScope(scopedAgent.agentId);
+			const scope = await resolveMemoryReadScope(c, { allowAllAgents: true });
+			if (scope instanceof Response) return scope;
 			const timeline = await getDbAccessor().withReadDbAsync(
-				async (db) =>
-					buildMemoryTimeline(db, {
-						tzOffsetMin,
-						agentId: shouldEnforceAuthScope(c) ? scopedAgent.agentId : undefined,
-						readPolicy: agentScope.readPolicy,
-						policyGroup: agentScope.policyGroup ?? undefined,
-					}),
-				{ siteToken: "routes/memory-routes.ts:1101" },
+				async (db) => buildMemoryTimeline(db, { tzOffsetMin, scope }),
+				{ siteToken: "routes/memory-routes.ts:1106" },
 			);
 			return c.json(timeline);
 		} catch (e) {
@@ -1130,17 +1129,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	});
 	app.get("/api/memory/review-queue", async (c) => {
 		try {
-			const scopedAgent = resolveMemoryScopedAgentId(c, {
-				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: c.req.header("x-signet-session-key"),
-			});
-			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-			const agentScope = await getAgentScope(scopedAgent.agentId);
-			const access = buildAgentScopeClause(scopedAgent.agentId, agentScope.readPolicy, agentScope.policyGroup);
-			const scopeProject = c.get("auth")?.claims?.scope?.project;
-			const projectSql = scopeProject ? " AND m.project = ?" : "";
-			const scopeArgs = scopeProject ? [...access.args, scopeProject] : access.args;
-			const scopePredicate = shouldEnforceAuthScope(c) ? `${access.sql}${projectSql}` : "";
+			const scope = await resolveMemoryReadScope(c);
+			if (scope instanceof Response) return scope;
 			const rows = await dbOwnerQuery<unknown[]>(
 				{
 					sql: `SELECT h.id, h.memory_id, h.event, h.old_content, h.new_content,
@@ -1148,13 +1138,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						        m.content AS current_content, m.type AS memory_type,
 						        m.importance
 					 FROM memory_history h
-					 LEFT JOIN memories m ON m.id = h.memory_id
+					 JOIN memories m ON m.id = h.memory_id
 					 WHERE h.event IN ('DEDUP', 'REVIEW_NEEDED', 'BLOCKED_DESTRUCTIVE')
-					   AND h.created_at > datetime('now', '-30 days')
-					   ${scopePredicate}
+					   AND h.created_at > datetime('now', '-30 days')${scope.sql}
 					 ORDER BY h.created_at DESC
 					 LIMIT 200`,
-					params: shouldEnforceAuthScope(c) ? (scopeArgs as Array<string | number | boolean | null>) : [],
+					params: scope.args,
 					result: "all",
 				},
 				{ operation: "memory.review_queue", lane: "read", deadlineMs: 5_000 },
@@ -1169,10 +1158,17 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const query = (c.req.query("q") ?? "").trim();
 		const distinct = c.req.query("distinct");
 		const limitParam = c.req.query("limit");
+		const scope = await resolveMemoryReadScope(c, { allowAllAgents: true });
+		if (scope instanceof Response) return scope;
+		const liveSql = ` AND COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}`;
 		if (distinct === "who") {
 			try {
 				const rows = await dbOwnerQuery<{ who: string }[]>(
-					{ sql: "SELECT DISTINCT who FROM memories WHERE who IS NOT NULL ORDER BY who", result: "all" },
+					{
+						sql: `SELECT DISTINCT m.who FROM memories m WHERE m.who IS NOT NULL${liveSql} ORDER BY m.who`,
+						params: scope.args,
+						result: "all",
+					},
 					{ operation: "memory.search_distinct_who", lane: "read", deadlineMs: 2_000 },
 				);
 				const values = rows.map((r) => r.who);
@@ -1198,64 +1194,56 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		recordRecallAttempt(recallSurface);
 
 		try {
-			const results = await getDbAccessor().withReadDbAsync(
-				async (db) => {
-					let rows: unknown[] = [];
-
-					if (query) {
-						const { clause, args } = buildWhere(filterParams);
-						try {
-							rows = prepareTypedStatement<Record<string, unknown>>(
-								db,
-								`
-							SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags,
-							       m.type, m.pinned, bm25(memories_fts) as score
-            FROM memories_fts
-            JOIN memories m ON memories_fts.rowid = m.rowid
-            WHERE memories_fts MATCH ?${clause}
-            ORDER BY score
-            LIMIT ${limit ?? 20}
-          `,
-							).all(query, ...args);
-						} catch {
-							const { clause: rc, args: rargs } = buildWhereRaw(filterParams);
-							rows = prepareTypedStatement<Record<string, unknown>>(
-								db,
-								`
-							SELECT id, content, created_at, who, importance, tags, type, pinned
-            FROM memories
-            WHERE (content LIKE ? OR tags LIKE ?)${rc}
-            ORDER BY created_at DESC
-            LIMIT ${limit ?? 20}
-          `,
-							).all(`%${query}%`, `%${query}%`, ...rargs);
-						}
-					} else if (hasFilters) {
-						const { clause, args } = buildWhereRaw(filterParams);
-						rows = prepareTypedStatement<Record<string, unknown>>(
-							db,
-							`
-						SELECT id, content, created_at, who, importance, tags, type, pinned,
-                 CASE WHEN pinned = 1 THEN 1.0
-                      ELSE importance * MAX(0.1, POWER(0.95,
-                        CAST(JulianDay('now') - JulianDay(created_at) AS INTEGER)))
-                 END AS score
-          FROM memories
-          WHERE 1=1${clause}
-          ORDER BY score DESC
-          LIMIT ${limit ?? 50}
-        `,
-						).all(...args);
-					}
-
-					return rows.map((row) => {
-						const record = row as Record<string, unknown>;
-						return typeof record.content === "string"
-							? { ...record, content: redactCredentials(record.content) }
-							: record;
-					});
-				},
-				{ siteToken: "routes/memory-routes.ts:1201" },
+			const { clause, args } = buildWhere(filterParams);
+			const filterArgs = [...(args as DbOwnerParameter[]), ...scope.args];
+			const search = (operation: string, sql: string, params: readonly DbOwnerParameter[]) =>
+				dbOwnerQuery<Array<Record<string, unknown>>>(
+					{ sql, params, result: "all" },
+					{ operation, lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
+				);
+			let rows: Array<Record<string, unknown>> = [];
+			if (query) {
+				try {
+					rows = await search(
+						"memory.search_fts",
+						`SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags,
+						        m.type, m.pinned, m.agent_id, bm25(memories_fts) as score
+						 FROM memories_fts
+						 JOIN memories m ON memories_fts.rowid = m.rowid
+						 WHERE memories_fts MATCH ?${clause}${liveSql}
+						 ORDER BY score
+						 LIMIT ?`,
+						[query, ...filterArgs, limit],
+					);
+				} catch (error) {
+					if (!isFtsQuerySyntaxError(error)) throw error;
+					rows = await search(
+						"memory.search_like",
+						`SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.type, m.pinned, m.agent_id
+						 FROM memories m
+						 WHERE (m.content LIKE ? OR m.tags LIKE ?)${clause}${liveSql}
+						 ORDER BY m.created_at DESC
+						 LIMIT ?`,
+						[`%${query}%`, `%${query}%`, ...filterArgs, limit],
+					);
+				}
+			} else {
+				rows = await search(
+					"memory.search_filters",
+					`SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.type, m.pinned, m.agent_id,
+					        CASE WHEN m.pinned = 1 THEN 1.0
+					             ELSE m.importance * MAX(0.1, POWER(0.95,
+					               CAST(JulianDay('now') - JulianDay(m.created_at) AS INTEGER)))
+					        END AS score
+					 FROM memories m
+					 WHERE 1=1${clause}${liveSql}
+					 ORDER BY score DESC
+					 LIMIT ?`,
+					[...filterArgs, limit],
+				);
+			}
+			const results = rows.map((record) =>
+				typeof record.content === "string" ? { ...record, content: redactCredentials(record.content) } : record,
 			);
 
 			recordRecallOutcome({
@@ -1465,7 +1453,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1466" },
+				{ siteToken: "routes/memory-routes.ts:1454" },
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
@@ -1473,7 +1461,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const existingChunks = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1474" },
+				{ siteToken: "routes/memory-routes.ts:1462" },
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1506,7 +1494,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				contentHashes.add(plan.normalized.contentHash);
 				const byHash = await getDbAccessor().withReadDbAsync(
 					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "routes/memory-routes.ts:1507" },
+					{ siteToken: "routes/memory-routes.ts:1495" },
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1709,7 +1697,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1710" },
+						{ siteToken: "routes/memory-routes.ts:1698" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -1824,7 +1812,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:1821" },
+					{ siteToken: "routes/memory-routes.ts:1809" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -1982,44 +1970,121 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			body: JSON.stringify(body),
 		});
 	});
+	app.get("/api/memory/search", async (c) => {
+		const q = (c.req.query("q") ?? "").trim();
+		if (!q) return c.json({ error: "query is required" }, 400);
+
+		const limit = effectiveRecallLimit(Number.parseInt(c.req.query("limit") ?? "10", 10));
+		const type = c.req.query("type");
+		const tags = c.req.query("tags");
+		const who = c.req.query("who");
+		const pinned = c.req.query("pinned");
+		const importanceMin = c.req.query("importance_min");
+		const since = c.req.query("since");
+		const until = c.req.query("until");
+		const expand = c.req.query("expand");
+		const project = c.req.query("project");
+		const includeRecalled = c.req.query("includeRecalled") ?? c.req.query("include_recalled");
+
+		const configuredCfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = recallOwner !== undefined ? configuredCfg : await withActiveEmbeddingConfig(configuredCfg);
+		const recallSurface = "explicit_api" as const;
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
+		const scopeProject = scope.project;
+		try {
+			const sessionKeyRaw =
+				c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key");
+			const sessionKey = sessionKeyRaw ?? null;
+			const agentId = scope.agentId;
+			recordRecallAttempt(recallSurface);
+			const agentScope = { readPolicy: scope.readPolicy, policyGroup: scope.policyGroup };
+			const params = {
+				query: q,
+				limit,
+				type,
+				tags,
+				who,
+				pinned: pinned === "1" || pinned === "true",
+				importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
+				since,
+				until,
+				expand: expand === "1" || expand === "true",
+				project,
+				agentId,
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup ?? undefined,
+				sessionKey: sessionKeyRaw,
+				includeRecalled: includeRecalled === "1" || includeRecalled === "true",
+				telemetrySurface: recallSurface,
+				recallSurface: "api.memory.search",
+				recallMode: "direct",
+				...(scopeProject ? { project: scopeProject } : {}),
+			};
+			const result = await routeRecall(
+				params,
+				cfg,
+				recallAttributedEmbedFn(fetchEmbedding, agentId, recordRouteOperationFailure(c)),
+			);
+			recordRecallQaTelemetry({
+				route: "GET /api/memory/search",
+				agentId,
+				sessionKey,
+				project: resolveMemorySearchTelemetryProject(params),
+				params,
+				result,
+				cfg,
+			});
+			recordRecallOutcome({
+				surface: recallSurface,
+				resultCount: result.results.length,
+				truncated: result.results.length >= limit,
+				delivery: "returned",
+			});
+			if (result.meta.partial === true) {
+				c.header("x-signet-operation-degraded", "1");
+				c.header("x-signet-operation-cause", result.meta.degradation ?? "fts_index_incomplete");
+			}
+			return c.json(result);
+		} catch (e) {
+			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
+			logger.error("memory", "Search (recall alias) failed", e as Error);
+			if ((e as { readonly code?: unknown })?.code === "DB_OWNER_WRITES_BLOCKED") {
+				return c.json(
+					{
+						error: "Recall unavailable while database integrity is unresolved",
+						results: [],
+						repairGuidance: getDatabaseIntegrityStatus().repairGuidance,
+					},
+					503,
+				);
+			}
+			return c.json({ error: "Recall failed", results: [] }, recallFailureStatus(e));
+		}
+	});
 	app.get("/api/memory/:id", async (c) => {
 		const memoryId = c.req.param("id")?.trim();
 		if (!memoryId) {
 			return c.json({ error: "memory id is required" }, 400);
 		}
 
-		const sessionKeyRaw = c.req.header("x-signet-session-key");
-		const agentId = resolveAgentId({
-			agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-			sessionKey: sessionKeyRaw,
-		});
-		const agentScope = await getAgentScope(agentId);
-		const access = buildAgentScopeClause(agentId, agentScope.readPolicy, agentScope.policyGroup);
-		const scopeProject = c.get("auth")?.claims?.scope?.project;
-		const projectSql = scopeProject ? " AND m.project = ?" : "";
-		const row = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				const sessionSelect = hasMemoriesSessionIdColumn(db) ? "m.session_id," : "NULL AS session_id,";
-
-				return db
-					.prepare(
-						`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.who,
-					        m.source_id, m.source_type, m.source_path, m.runtime_path,
-					        m.idempotency_key, m.project, ${sessionSelect} m.confidence,
-					        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
-					        m.extraction_status, m.embedding_model, m.version,
-					        m.memory_kind, m.created_at, m.updated_at, m.updated_by
-					 FROM memories m
-					 WHERE m.id = ?
-					   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)
-					   ${access.sql}
-					   ${projectSql}`,
-					)
-					.get(memoryId, ...access.args, ...(scopeProject ? [scopeProject] : [])) as
-					| Record<string, unknown>
-					| undefined;
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
+		const row = await dbOwnerQuery<Record<string, unknown> | undefined>(
+			{
+				sql: `SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.who, m.agent_id,
+				        m.source_id, m.source_type, m.source_path, m.runtime_path,
+				        m.idempotency_key, m.project, NULL AS session_id, m.confidence,
+				        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
+				        m.extraction_status, m.embedding_model, m.version,
+				        m.memory_kind, m.created_at, m.updated_at, m.updated_by
+				 FROM memories m
+				 WHERE m.id = ?
+				   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)${scope.sql}`,
+				params: [memoryId, ...scope.args],
+				result: "get",
 			},
-			{ siteToken: "routes/memory-routes.ts:2000" },
+			{ operation: "memory.get", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: 1 },
 		);
 
 		if (!row) {
@@ -2027,13 +2092,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 
 		const sessionId =
-			typeof row.session_id === "string"
-				? row.session_id
-				: typeof row.source_id === "string" &&
-						typeof row.source_type === "string" &&
-						row.source_type.startsWith("session")
-					? row.source_id
-					: undefined;
+			typeof row.source_id === "string" && typeof row.source_type === "string" && row.source_type.startsWith("session")
+				? row.source_id
+				: undefined;
 
 		return c.json({
 			...row,
@@ -2050,9 +2111,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 
 		const limit = Math.min(parseOptionalInt(c.req.query("limit")) ?? 200, 1000);
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
 
 		const exists = await dbOwnerQuery<{ id: string } | undefined>(
-			{ sql: "SELECT id FROM memories WHERE id = ?", params: [memoryId], result: "get" },
+			{
+				sql: `SELECT m.id FROM memories m WHERE m.id = ?${scope.sql}`,
+				params: [memoryId, ...scope.args],
+				result: "get",
+			},
 			{ operation: "memory.history_exists", lane: "read", deadlineMs: 2_000 },
 		);
 		if (!exists) {
@@ -2119,13 +2186,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const memoryId = c.req.param("id")?.trim();
 		if (!memoryId) return c.json({ error: "memory id is required" }, 400);
 		const limit = Math.min(parseOptionalInt(c.req.query("limit")) ?? 50, 500);
-		const sessionKeyRaw = c.req.header("x-signet-session-key");
-		const agentId = resolveAgentId({
-			agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-			sessionKey: sessionKeyRaw,
-		});
-		const agentScope = await getAgentScope(agentId);
-		const access = buildAgentScopeClause(agentId, agentScope.readPolicy, agentScope.policyGroup);
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
 
 		type LineageRow = {
 			id: string;
@@ -2139,65 +2201,66 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			superseded_at: string | null;
 			superseded_reason: string | null;
 		};
-		const selectLineage = (
-			db: { prepare(sql: string): { get(...args: unknown[]): unknown } },
-			id: string,
-		): LineageRow | undefined =>
-			db
-				.prepare(
-					`SELECT m.id, m.content, m.type, m.importance, m.version, m.created_at, m.updated_at,
-					        m.superseded_by, m.superseded_at, m.superseded_reason
-					 FROM memories m
-					 WHERE m.id = ?
-					   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)
-					   ${access.sql}`,
-				)
-				.get(id, ...access.args) as LineageRow | undefined;
+		const lineageColumns = `m.id, m.content, m.type, m.importance, m.version, m.created_at, m.updated_at,
+		        m.superseded_by, m.superseded_at, m.superseded_reason`;
+		const lineageQuery = (operation: string, sql: string, id: string) =>
+			dbOwnerQuery<LineageRow | undefined>(
+				{ sql, params: [id, ...scope.args], result: "get" },
+				{ operation, lane: "read", deadlineMs: 2_000, estimatedWorkUnits: 1 },
+			);
+		const selectLineage = (id: string) =>
+			lineageQuery(
+				"memory.lineage_node",
+				`SELECT ${lineageColumns}
+				 FROM memories m
+				 WHERE m.id = ?
+				   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)${scope.sql}`,
+				id,
+			);
+		const selectPredecessor = (id: string) =>
+			lineageQuery(
+				"memory.lineage_predecessor",
+				`SELECT ${lineageColumns}
+				 FROM memories m
+				 WHERE m.superseded_by = ?
+				   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)${scope.sql}
+				 ORDER BY m.created_at ASC
+				 LIMIT 1`,
+				id,
+			);
 
-		const rows = await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				const head = selectLineage(db, memoryId);
-				if (!head) return [];
-				const seen = new Set<string>([head.id]);
-				const byId = new Map<string, LineageRow>([[head.id, head]]);
-				let current = head;
-				while (current.superseded_by && !seen.has(current.superseded_by) && byId.size < limit) {
-					seen.add(current.superseded_by);
-					const next = selectLineage(db, current.superseded_by);
-					if (!next) break;
-					byId.set(next.id, next);
-					current = next;
-				}
-				let cursor = head;
-				while (byId.size < limit) {
-					const predecessor = db
-						.prepare(
-							`SELECT m.id, m.content, m.type, m.importance, m.version, m.created_at, m.updated_at,
-						        m.superseded_by, m.superseded_at, m.superseded_reason
-						 FROM memories m
-						 WHERE m.superseded_by = ?
-						   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)
-						   ${access.sql}
-						 ORDER BY m.created_at ASC
-						 LIMIT 1`,
-						)
-						.get(cursor.id, ...access.args) as LineageRow | undefined;
-					if (!predecessor || seen.has(predecessor.id)) break;
-					seen.add(predecessor.id);
-					byId.set(predecessor.id, predecessor);
-					cursor = predecessor;
-				}
-				return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version);
-			},
-			{ siteToken: "routes/memory-routes.ts:2157" },
-		);
+		const rows: LineageRow[] = [];
+		const head = await selectLineage(memoryId);
+		if (head) {
+			const seen = new Set<string>([head.id]);
+			const byId = new Map<string, LineageRow>([[head.id, head]]);
+			let current = head;
+			while (current.superseded_by && !seen.has(current.superseded_by) && byId.size < limit) {
+				seen.add(current.superseded_by);
+				const next = await selectLineage(current.superseded_by);
+				if (!next) break;
+				byId.set(next.id, next);
+				current = next;
+			}
+			let cursor = head;
+			while (byId.size < limit) {
+				const predecessor = await selectPredecessor(cursor.id);
+				if (!predecessor || seen.has(predecessor.id)) break;
+				seen.add(predecessor.id);
+				byId.set(predecessor.id, predecessor);
+				cursor = predecessor;
+			}
+			rows.push(
+				...[...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version),
+			);
+		}
 
 		return c.json({
 			memoryId,
 			count: rows.length,
 			lineage: rows.map((row) => ({
 				id: row.id,
-				content: row.content,
+				content: redactCredentials(row.content),
 				type: row.type,
 				importance: row.importance,
 				version: row.version,
@@ -3190,137 +3253,42 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Recall failed", results: [] }, recallFailureStatus(e));
 		}
 	});
-	app.get("/api/memory/search", async (c) => {
-		const q = (c.req.query("q") ?? "").trim();
-		if (!q) return c.json({ error: "query is required" }, 400);
-
-		const limit = effectiveRecallLimit(Number.parseInt(c.req.query("limit") ?? "10", 10));
-		const type = c.req.query("type");
-		const tags = c.req.query("tags");
-		const who = c.req.query("who");
-		const pinned = c.req.query("pinned");
-		const importanceMin = c.req.query("importance_min");
-		const since = c.req.query("since");
-		const until = c.req.query("until");
-		const expand = c.req.query("expand");
-		const project = c.req.query("project");
-		const includeRecalled = c.req.query("includeRecalled") ?? c.req.query("include_recalled");
-
-		const configuredCfg = loadMemoryConfig(AGENTS_DIR);
-		const cfg = recallOwner !== undefined ? configuredCfg : await withActiveEmbeddingConfig(configuredCfg);
-		const scopeProject = c.get("auth")?.claims?.scope?.project;
-		const recallSurface = "explicit_api" as const;
-		try {
-			const sessionKeyRaw =
-				c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key");
-			const sessionKey = sessionKeyRaw ?? null;
-			const agentId = resolveAgentId({
-				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
-				sessionKey: sessionKeyRaw,
-			});
-			recordRecallAttempt(recallSurface);
-			const agentScope = await getAgentScope(agentId);
-			const params = {
-				query: q,
-				limit,
-				type,
-				tags,
-				who,
-				pinned: pinned === "1" || pinned === "true",
-				importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
-				since,
-				until,
-				expand: expand === "1" || expand === "true",
-				project,
-				agentId,
-				readPolicy: agentScope.readPolicy,
-				policyGroup: agentScope.policyGroup ?? undefined,
-				sessionKey: sessionKeyRaw,
-				includeRecalled: includeRecalled === "1" || includeRecalled === "true",
-				telemetrySurface: recallSurface,
-				recallSurface: "api.memory.search",
-				recallMode: "direct",
-				...(scopeProject ? { project: scopeProject } : {}),
-			};
-			const result = await routeRecall(
-				params,
-				cfg,
-				recallAttributedEmbedFn(fetchEmbedding, agentId, recordRouteOperationFailure(c)),
-			);
-			recordRecallQaTelemetry({
-				route: "GET /api/memory/search",
-				agentId,
-				sessionKey,
-				project: resolveMemorySearchTelemetryProject(params),
-				params,
-				result,
-				cfg,
-			});
-			recordRecallOutcome({
-				surface: recallSurface,
-				resultCount: result.results.length,
-				truncated: result.results.length >= limit,
-				delivery: "returned",
-			});
-			if (result.meta.partial === true) {
-				c.header("x-signet-operation-degraded", "1");
-				c.header("x-signet-operation-cause", result.meta.degradation ?? "fts_index_incomplete");
-			}
-			return c.json(result);
-		} catch (e) {
-			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
-			logger.error("memory", "Search (recall alias) failed", e as Error);
-			if ((e as { readonly code?: unknown })?.code === "DB_OWNER_WRITES_BLOCKED") {
-				return c.json(
-					{
-						error: "Recall unavailable while database integrity is unresolved",
-						results: [],
-						repairGuidance: getDatabaseIntegrityStatus().repairGuidance,
-					},
-					503,
-				);
-			}
-			return c.json({ error: "Recall failed", results: [] }, recallFailureStatus(e));
-		}
-	});
 	app.get("/memory/similar", async (c) => {
 		const id = c.req.query("id");
 		if (!id) {
 			return c.json({ error: "id is required", results: [] }, 400);
 		}
 
-		const k = Number.parseInt(c.req.query("k") ?? "10", 10);
+		const k = parseBoundedInt(c.req.query("k"), 10, 1, 50);
 		const type = c.req.query("type");
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
 
 		try {
-			const embeddingRow = await getDbAccessor().withReadDbAsync(
-				async (db) =>
-					db
-						.prepare(`
-        SELECT e.vector
-        FROM embeddings e
-        INNER JOIN memories m ON m.id = e.source_id
-        WHERE e.source_type = 'memory' AND e.source_id = ?
-        AND COALESCE(m.source_type, '') != 'aggregate-recall'
-        ${currentMemorySql("m")}
-        LIMIT 1
-      `)
-						.get(id) as { vector: Buffer } | undefined,
-				{ siteToken: "routes/memory-routes.ts:3296" },
+			const embeddingRow = await dbOwnerQuery<{ vector_hex: string } | undefined>(
+				{
+					sql: `SELECT hex(e.vector) AS vector_hex
+					 FROM embeddings e
+					 INNER JOIN memories m ON m.id = e.source_id
+					 WHERE e.source_type = 'memory' AND e.source_id = ?
+					   AND COALESCE(m.source_type, '') != 'aggregate-recall'${currentMemorySql("m")}${scope.sql}
+					 LIMIT 1`,
+					params: [id, ...scope.args],
+					result: "get",
+				},
+				{ operation: "memory.similar_seed", lane: "read", deadlineMs: 2_000, estimatedWorkUnits: 1 },
 			);
 
 			if (!embeddingRow) {
 				return c.json({ error: "No embedding found for this memory", results: [] }, 404);
 			}
 
+			const vectorBytes = Buffer.from(embeddingRow.vector_hex, "hex");
 			const queryVector = new Float32Array(
-				embeddingRow.vector.buffer.slice(
-					embeddingRow.vector.byteOffset,
-					embeddingRow.vector.byteOffset + embeddingRow.vector.byteLength,
-				),
+				vectorBytes.buffer.slice(vectorBytes.byteOffset, vectorBytes.byteOffset + vectorBytes.byteLength),
 			);
 			const searchOptions = {
-				limit: k + 1,
+				limit: Math.min((k + 1) * SIMILAR_CANDIDATE_FACTOR, SIMILAR_MAX_CANDIDATES),
 				type,
 				excludeAggregateRecall: true,
 				maxScanRows: DB_OWNER_MAX_WORK_UNITS,
@@ -3328,13 +3296,13 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3330",
+							siteToken: "routes/memory-routes.ts:3298",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
-			const filteredResults = searchData.results.filter((r) => r.id !== id).slice(0, k);
+			const candidates = searchData.results.filter((r) => r.id !== id);
 
-			if (filteredResults.length === 0) {
+			if (candidates.length === 0) {
 				return c.json({
 					results: [],
 					completeness: searchData.completeness,
@@ -3342,31 +3310,30 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				});
 			}
 
-			const ids = filteredResults.map((r) => r.id);
-			const placeholders = ids.map(() => "?").join(", ");
-
-			const rows = await getDbAccessor().withReadDbAsync(
-				async (db) =>
-					db
-						.prepare(`
-	        SELECT id, content, type, tags, confidence, created_at
-	        FROM memories m
-        WHERE id IN (${placeholders})${currentMemorySql("m")}
-	      `)
-						.all(...ids) as Array<{
-						id: string;
-						content: string;
-						type: string;
-						tags: string | null;
-						confidence: number;
-						created_at: string;
-					}>,
-				{ siteToken: "routes/memory-routes.ts:3348" },
+			const ids = candidates.map((r) => r.id);
+			const rows = await dbOwnerQuery<
+				Array<{
+					id: string;
+					content: string;
+					type: string;
+					tags: string | null;
+					confidence: number;
+					created_at: string;
+				}>
+			>(
+				{
+					sql: `SELECT m.id, m.content, m.type, m.tags, m.confidence, m.created_at
+					 FROM memories m
+					 WHERE m.id IN (${ids.map(() => "?").join(", ")})${currentMemorySql("m")}${scope.sql}`,
+					params: [...ids, ...scope.args],
+					result: "all",
+				},
+				{ operation: "memory.similar_rows", lane: "read", deadlineMs: 2_000, estimatedWorkUnits: ids.length },
 			);
-
 			const rowMap = new Map(rows.map((r) => [r.id, r]));
-			const results = filteredResults
+			const results = candidates
 				.filter((r) => rowMap.has(r.id))
+				.slice(0, k)
 				.map((r) => {
 					const row = rowMap.get(r.id);
 					if (!row) return null;
@@ -3411,6 +3378,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			dimensions?: number | null;
 		};
 
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
+		const liveSql = ` AND COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}`;
+
 		try {
 			const { total, rows } = await getDbAccessor().withReadDbAsync(
 				async (db) => {
@@ -3419,9 +3390,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				SELECT COUNT(*) AS count
 				FROM embeddings e
 				INNER JOIN memories m ON m.id = e.source_id
-				WHERE e.source_type = 'memory'
+				WHERE e.source_type = 'memory'${liveSql}
 			`)
-						.get() as { count: number } | undefined;
+						.get(...scope.args) as { count: number } | undefined;
 
 					const rowData = withVectors
 						? (db
@@ -3432,11 +3403,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						e.vector, e.dimensions
 					FROM embeddings e
 					INNER JOIN memories m ON m.id = e.source_id
-					WHERE e.source_type = 'memory'
+					WHERE e.source_type = 'memory'${liveSql}
 					ORDER BY m.created_at DESC
 					LIMIT ? OFFSET ?
 				`)
-								.all(limit, offset) as EmbeddingRow[])
+								.all(...scope.args, limit, offset) as EmbeddingRow[])
 						: (db
 								.prepare(`
 					SELECT
@@ -3444,21 +3415,21 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						m.source_type, m.source_id, m.created_at
 					FROM embeddings e
 					INNER JOIN memories m ON m.id = e.source_id
-					WHERE e.source_type = 'memory'
+					WHERE e.source_type = 'memory'${liveSql}
 					ORDER BY m.created_at DESC
 					LIMIT ? OFFSET ?
 				`)
-								.all(limit, offset) as EmbeddingRow[]);
+								.all(...scope.args, limit, offset) as EmbeddingRow[]);
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3415" },
+				{ siteToken: "routes/memory-routes.ts:3386" },
 			);
 
 			const embeddings = rows.map((row) => ({
 				id: row.id,
-				content: row.content,
-				text: row.content,
+				content: redactCredentials(row.content),
+				text: redactCredentials(row.content),
 				who: row.who ?? "unknown",
 				importance: typeof row.importance === "number" ? row.importance : 0.5,
 				type: row.type,
@@ -3500,7 +3471,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3496" },
+			{ siteToken: "routes/memory-routes.ts:3467" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3509,11 +3480,13 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3510" },
+			{ siteToken: "routes/memory-routes.ts:3481" },
 		);
 		return c.json(report);
 	});
 	app.get("/api/embeddings/projection", async (c) => {
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
 		const dimParam = c.req.query("dimensions");
 		const nComponents: 2 | 3 = dimParam === "3" ? 3 : 2;
 		const limit = parseOptionalBoundedInt(c.req.query("limit"), 1, 5000);
@@ -3586,7 +3559,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									}
 								: undefined,
 						}),
-					{ siteToken: "routes/memory-routes.ts:3569" },
+					{ siteToken: "routes/memory-routes.ts:3542" },
 				);
 
 				return c.json({
@@ -3597,7 +3570,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					limit: projection.limit,
 					offset: projection.offset,
 					hasMore: projection.hasMore,
-					nodes: projection.result.nodes,
+					nodes: redactProjectionNodes(projection.result.nodes),
 					edges: projection.result.edges,
 				});
 			} catch (err) {
@@ -3616,7 +3589,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: 0;
 				return { cached: cachedResult, total: count };
 			},
-			{ siteToken: "routes/memory-routes.ts:3609" },
+			{ siteToken: "routes/memory-routes.ts:3582" },
 		);
 
 		if (cached !== null && cached.embeddingCount === total) {
@@ -3628,7 +3601,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				limit: total,
 				offset: 0,
 				hasMore: false,
-				nodes: cached.result.nodes,
+				nodes: redactProjectionNodes(cached.result.nodes),
 				edges: cached.result.edges,
 				cachedAt: cached.cachedAt,
 			});
@@ -3648,7 +3621,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const computation = (async () => {
 				try {
 					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:3650",
+						siteToken: "routes/memory-routes.ts:3623",
 					});
 					const count = await getDbAccessor().withReadDbAsync(
 						async (db) => {
@@ -3657,7 +3630,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								? row.count
 								: 0;
 						},
-						{ siteToken: "routes/memory-routes.ts:3653" },
+						{ siteToken: "routes/memory-routes.ts:3626" },
 					);
 					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {

@@ -494,7 +494,7 @@ curl -s 'http://localhost:3850/api/memory/search?q=editor+preferences&limit=5'
 
 - `agentId`, `agent_id`
 
-  Also read from `x-signet-agent-id`.
+  Also read from `x-signet-agent-id`. A scoped credential that names another agent gets 403.
 
 - `sessionKey`, `session_key`
 
@@ -514,7 +514,7 @@ Errors match the POST route, except that 400 is only `query is required`.
 
 Legacy keyword search used by the dashboard. It queries FTS5 directly and does not use the recall pipeline. New clients should use [`POST /api/memory/recall`](#post-apimemoryrecall).
 
-This route does not resolve an agent or apply agent read policy. It searches every memory in the workspace, and `distinct=who` lists authors across all agents. Use recall when results must respect an agent's scope.
+Results follow the requesting agent's read policy, the same scope recall uses. The agent comes from `agentId` or `agent_id`, the `x-signet-agent-id` header, an `agent:<id>:` session key, or the credential's scoped agent. Without any of these it is the daemon's configured agent (`$SIGNET_AGENT_ID`, otherwise `default`). `agentId=all` searches every agent's memories and requires `admin` permission, which local mode grants; the dashboard uses it. Deleted and superseded memories are excluded, and `distinct=who` lists only the authors that agent can read.
 
 <EndpointSpec rows={{ Permission: "`recall`" }} />
 
@@ -538,7 +538,11 @@ This route does not resolve an agent or apply agent read policy. It searches eve
 
 - `distinct`
 
-  `who` returns the list of authors instead. Other parameters are ignored.
+  `who` returns the list of authors instead. Other parameters except the agent are ignored.
+
+- `agentId`, `agent_id`
+
+  Agent whose read scope applies, or `all`. Also read from `x-signet-agent-id`.
 
 </Fields>
 
@@ -567,12 +571,12 @@ This route does not resolve an agent or apply agent read policy. It searches eve
 
 | Status | `error` | When |
 |---|---|---|
-| 401, 403 | | Same as recall. |
+| 401, 403 | | Same as recall. Also 403 for `agentId=all` without `admin` permission. |
 | 500 | `Search failed` | The query failed. |
 
 ## GET /memory/similar
 
-Returns memories whose embeddings are closest to an existing memory. It does not apply agent read policy; results can come from any agent in the workspace.
+Returns memories whose embeddings are closest to an existing memory. The anchor and the results follow the requesting agent's read policy, resolved as for `GET /memory/search` (without `all`). Neighbors are taken from the nearest `4 × (k + 1)` candidates, at most 200, and then filtered to that scope, so fewer than `k` can come back.
 
 <EndpointSpec
 	rows={{
@@ -593,7 +597,11 @@ curl -s 'http://localhost:3850/memory/similar?id=6f1c2a9e-0d4b-4e7a-9a51-3c8f2b7
 
 - `k` default 10
 
-  Results to return.
+  Results to return, clamped to `1..50`.
+
+- `agentId`, `agent_id`
+
+  Agent whose read scope applies. Also read from `x-signet-agent-id`.
 
 - `type`
 
@@ -623,5 +631,6 @@ The anchor is never in its own results. `completeness` and `searchedWindow` repo
 | Status | `error` | When |
 |---|---|---|
 | 400 | `id is required` | `id` is missing. |
-| 404 | `No embedding found for this memory` | The anchor has no embedding, or is deleted or superseded. |
+| 403 | | A scoped credential names another agent. |
+| 404 | `No embedding found for this memory` | The anchor has no embedding, is deleted or superseded, or is outside the agent's read scope. |
 | 500 | `Similarity search failed` | The search failed. |

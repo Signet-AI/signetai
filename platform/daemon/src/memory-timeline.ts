@@ -1,4 +1,3 @@
-import type { AgentRosterReadPolicy } from "@signet/core";
 import { type ReadDb, prepareTypedStatement } from "./db-accessor";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -229,19 +228,16 @@ function sortMetrics(map: Map<string, number>, limit = 5): TimelineMetric[] {
 
 export function buildMemoryTimeline(
 	db: ReadDb,
-	options?: {
+	options: {
 		readonly now?: Date;
 		readonly tzOffsetMin?: number;
-		readonly agentId?: string;
-		readonly readPolicy?: AgentRosterReadPolicy;
-		readonly policyGroup?: string;
+		readonly scope: { readonly sql: string; readonly args: readonly unknown[] };
 	},
 ): MemoryTimelineResponse {
-	const now = options?.now ?? new Date();
-	const tzOffsetMin = options?.tzOffsetMin ?? 0;
-	const scopeAgentId = options?.agentId;
-	const scopeReadPolicy = options?.readPolicy;
-	const scopePolicyGroup = options?.policyGroup;
+	const now = options.now ?? new Date();
+	const tzOffsetMin = options.tzOffsetMin ?? 0;
+	const scopeSql = options.scope.sql;
+	const scopeParams = options.scope.args;
 	const nowStartMs = startOfLocalDay(now.getTime(), tzOffsetMin);
 	const buckets = createBuckets(nowStartMs);
 	const activityStartMs = nowStartMs - (ACTIVITY_DAY_COUNT - 1) * MS_PER_DAY;
@@ -249,40 +245,23 @@ export function buildMemoryTimeline(
 	const cutoffMs = nowStartMs - 29 * MS_PER_DAY;
 	const cutoffIso = new Date(cutoffMs).toISOString();
 
-	const scopePredicates: string[] = [];
-	const scopeParams: unknown[] = [];
-	if (scopeAgentId) {
-		if (scopeReadPolicy === "shared") {
-			scopePredicates.push("(visibility = 'global' OR agent_id = ?) AND visibility != 'archived'");
-			scopeParams.push(scopeAgentId);
-		} else if (scopeReadPolicy === "group" && scopePolicyGroup) {
-			scopePredicates.push(
-				"((visibility = 'global' AND agent_id IN (SELECT id FROM agents WHERE policy_group = ?)) OR agent_id = ?) AND visibility != 'archived'",
-			);
-			scopeParams.push(scopePolicyGroup, scopeAgentId);
-		} else {
-			scopePredicates.push("agent_id = ? AND visibility != 'archived'");
-			scopeParams.push(scopeAgentId);
-		}
-	}
-	const scopeSql = scopePredicates.length > 0 ? ` AND ${scopePredicates.join(" AND ")}` : "";
 	const localTimeModifier = `${-tzOffsetMin} minutes`;
 	const activityRows = prepareTypedStatement<ActivityRow>(
 		db,
-		`SELECT strftime('%Y-%m-%d', datetime(created_at, ?)) AS date, COUNT(*) AS count
-			 FROM memories
-			 WHERE is_deleted = 0
-			   AND created_at >= ?${scopeSql}
+		`SELECT strftime('%Y-%m-%d', datetime(m.created_at, ?)) AS date, COUNT(*) AS count
+			 FROM memories m
+			 WHERE m.is_deleted = 0
+			   AND m.created_at >= ?${scopeSql}
 			 GROUP BY date`,
 	).all(localTimeModifier, activityCutoffIso, ...scopeParams);
 
 	const memoryRows = prepareTypedStatement<MemoryRow>(
 		db,
-		`SELECT id, created_at, type, who, tags, importance, pinned
-			 FROM memories
-			 WHERE is_deleted = 0
-			   AND created_at >= ?${scopeSql}
-			 ORDER BY created_at DESC`,
+		`SELECT m.id, m.created_at, m.type, m.who, m.tags, m.importance, m.pinned
+			 FROM memories m
+			 WHERE m.is_deleted = 0
+			   AND m.created_at >= ?${scopeSql}
+			 ORDER BY m.created_at DESC`,
 	).all(cutoffIso, ...scopeParams);
 
 	const historyRows = prepareTypedStatement<HistoryRow>(
@@ -291,7 +270,7 @@ export function buildMemoryTimeline(
 			 FROM memory_history h
 			 INNER JOIN memories m ON m.id = h.memory_id
 			 WHERE m.is_deleted = 0
-			   AND h.created_at >= ?${scopeSql.replace(/(?<!\.)agent_id/g, "m.agent_id").replace(/(?<=AND |\()visibility/g, "m.visibility")}
+			   AND h.created_at >= ?${scopeSql}
 			 ORDER BY h.created_at DESC`,
 	).all(cutoffIso, ...scopeParams);
 
