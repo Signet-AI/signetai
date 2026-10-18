@@ -5,8 +5,11 @@ description: "Inspect embedding status, health, vectors, and projection data."
 
 ### GET /api/embeddings
 
-Export all stored embeddings with their parent memory metadata.
-Requires `recall` permission.
+Export the embeddings of the memories the requesting agent can read, with
+their parent memory metadata. Requires `recall` permission. The agent is
+resolved and authorized as for `GET /api/memories`; deleted and superseded
+memories are excluded, and `content` and `text` have stored credentials
+redacted.
 
 **Query parameters**
 
@@ -15,6 +18,7 @@ Requires `recall` permission.
 | `limit`   | integer | 600     | 50–5000      | Page size                |
 | `offset`  | integer | 0       | 0–100000     | Page offset              |
 | `vectors` | boolean | false   | —            | Include raw float arrays |
+| `agentId` | string  | daemon agent | —       | Agent whose read scope applies |
 
 **Response**
 
@@ -97,9 +101,11 @@ count, and provider status.
 
 ### GET /api/embeddings/projection
 
-Returns a server-computed UMAP projection of all stored embeddings.
-Results are cached in the `umap_cache` table; cache is invalidated when
-the embedding count changes. Requires `recall` permission.
+Returns a server-computed UMAP projection of all stored embeddings, across
+every agent. Results are cached in the `umap_cache` table; cache is
+invalidated when the embedding count changes. Because it is a workspace-wide
+view, it requires `admin` permission, which local mode grants. Node `content`
+has stored credentials redacted.
 
 **Query parameters**
 

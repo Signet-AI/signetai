@@ -119,6 +119,7 @@ beforeAll(async () => {
 beforeEach(() => {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare("DELETE FROM embeddings").run();
+		db.prepare("DELETE FROM memory_history").run();
 		db.prepare("DELETE FROM memories").run();
 		db.prepare("DELETE FROM agents").run();
 	});
@@ -234,5 +235,184 @@ describe("GET /api/memories agent scope", () => {
 		const own = await list(app, "", headers);
 		expect(own.status).toBe(200);
 		expect(ids(own.body)).toEqual(["alpha-global", "alpha-private"]);
+	});
+});
+
+async function get(app: Hono, path: string, headers: Record<string, string> = {}) {
+	const res = await app.request(`http://localhost${path}`, { headers });
+	return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+function rowIds(rows: unknown): string[] {
+	return (rows as ReadonlyArray<{ readonly id: string }>).map((row) => row.id).sort();
+}
+
+function touchRecent(ids: readonly string[]): void {
+	const now = new Date().toISOString();
+	getDbAccessor().withWriteTx((db) => {
+		for (const id of ids) {
+			db.prepare("UPDATE memories SET created_at = ?, access_count = 3 WHERE id = ?").run(now, id);
+			db.prepare(
+				`INSERT INTO memory_history (id, memory_id, event, old_content, new_content, changed_by, reason, created_at)
+				 VALUES (?, ?, 'REVIEW_NEEDED', 'old secret text', 'new text', 'test', 'check', ?)`,
+			).run(`history-${id}`, id, now);
+		}
+	});
+}
+
+describe("GET /api/memories all-agents view", () => {
+	it("lists every agent's live memories in local mode when asked explicitly", async () => {
+		const app = await makeApp("local");
+		const { status, body } = await list(app, "?agentId=all");
+
+		expect(status).toBe(200);
+		expect(ids(body)).toEqual(["alpha-global", "alpha-private", "beta-global", "beta-private", "team-b-global"]);
+	});
+
+	it("refuses an all-agents view without admin permission", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+
+		expect((await list(app, "?agentId=all", headers)).status).toBe(403);
+	});
+
+	it("falls back to the daemon's configured agent like memory writes do", async () => {
+		const previous = process.env.SIGNET_AGENT_ID;
+		process.env.SIGNET_AGENT_ID = "beta";
+		try {
+			const app = await makeApp("local");
+			expect(ids((await list(app, "")).body)).toEqual(["beta-global", "beta-private"]);
+		} finally {
+			if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			else process.env.SIGNET_AGENT_ID = previous;
+		}
+	});
+});
+
+describe("GET /memory/search agent scope", () => {
+	it("searches only what the agent can read and skips deleted rows", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = 'beta-global'").run();
+		});
+		const app = await makeApp("local");
+
+		const alpha = await get(app, "/memory/search?q=content&agentId=alpha");
+		expect(alpha.status).toBe(200);
+		expect(rowIds(alpha.body.results)).toEqual(["alpha-global", "alpha-private"]);
+
+		const gamma = await get(app, "/memory/search?q=content&agentId=gamma");
+		expect(rowIds(gamma.body.results)).toEqual(["alpha-global", "team-b-global"]);
+
+		const all = await get(app, "/memory/search?q=content&agentId=all");
+		expect(rowIds(all.body.results)).toEqual(["alpha-global", "alpha-private", "beta-private", "team-b-global"]);
+	});
+
+	it("scopes filter-only searches, the LIKE fallback, and distinct authors", async () => {
+		const app = await makeApp("local");
+
+		const filtered = await get(app, "/memory/search?type=fact&agentId=beta");
+		expect(rowIds(filtered.body.results)).toEqual(["beta-global", "beta-private"]);
+
+		const fallback = await get(app, `/memory/search?q=${encodeURIComponent("for beta-")}&agentId=beta`);
+		expect(fallback.status).toBe(200);
+		expect(rowIds(fallback.body.results)).toEqual(["beta-global", "beta-private"]);
+
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE memories SET who = agent_id").run();
+		});
+		const authors = await get(app, "/memory/search?distinct=who&agentId=alpha");
+		expect(authors.body.values).toEqual(["alpha"]);
+	});
+});
+
+describe("memory read routes apply agent scope in local mode", () => {
+	it("scopes most-used, timeline, and review-queue to the requesting agent", async () => {
+		touchRecent(["alpha-global", "alpha-private", "beta-global", "beta-private"]);
+		const app = await makeApp("local");
+
+		const mostUsed = await get(app, "/api/memories/most-used?agentId=alpha");
+		expect(rowIds(mostUsed.body.memories)).toEqual(["alpha-global", "alpha-private"]);
+
+		const timeline = await get(app, "/api/memory/timeline?agentId=alpha");
+		expect(timeline.status).toBe(200);
+		expect(timeline.body.totalMemories).toBe(2);
+		expect(timeline.body.totalHistoryEvents).toBe(2);
+
+		const reviewQueue = await get(app, "/api/memory/review-queue?agentId=beta");
+		expect(
+			(reviewQueue.body.items as ReadonlyArray<{ readonly memory_id: string }>).map((item) => item.memory_id).sort(),
+		).toEqual(["beta-global", "beta-private"]);
+	});
+
+	it("hides another agent's memory, history, and lineage by id", async () => {
+		touchRecent(["beta-private"]);
+		const app = await makeApp("local");
+
+		expect((await get(app, "/api/memory/beta-private?agentId=alpha")).status).toBe(404);
+		expect((await get(app, "/api/memory/beta-private/history?agentId=alpha")).status).toBe(404);
+		expect((await get(app, "/api/memory/beta-private/lineage?agentId=alpha")).body.count).toBe(0);
+
+		expect((await get(app, "/api/memory/beta-private?agentId=beta")).body.id).toBe("beta-private");
+		expect((await get(app, "/api/memory/beta-private/history?agentId=beta")).body.count).toBe(1);
+		expect((await get(app, "/api/memory/beta-private/lineage?agentId=beta")).body.count).toBe(1);
+	});
+
+	it("scopes and redacts the embeddings list", async () => {
+		seedMemory("alpha-key", "alpha", {
+			embedded: true,
+			content: "Use sk-proj-Abcdefghijklmnopqrstuvwxyz0123456789 for staging.",
+		});
+		const app = await makeApp("local");
+
+		const { body } = await get(app, "/api/embeddings?agentId=alpha");
+		const embeddings = body.embeddings as ReadonlyArray<{ readonly id: string; readonly content: string }>;
+		expect(embeddings.map((row) => row.id).sort()).toEqual(["alpha-global", "alpha-key"]);
+		expect(body.total).toBe(2);
+		expect(embeddings.find((row) => row.id === "alpha-key")?.content).toBe("Use [redacted credential] for staging.");
+	});
+
+	it("refuses a similarity seed the agent cannot read", async () => {
+		const app = await makeApp("local");
+
+		const res = await get(app, "/memory/similar?id=beta-global&agentId=alpha");
+		expect(res.status).toBe(404);
+	});
+});
+
+describe("memory read routes enforce token agent scope", () => {
+	it("rejects a scoped credential asking for another agent on every read route", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+		const paths = [
+			"/memory/search?q=content&agentId=beta",
+			"/api/memories/most-used?agentId=beta",
+			"/api/memories/curator-slices?agentId=beta",
+			"/api/memory/timeline?agentId=beta",
+			"/api/memory/review-queue?agentId=beta",
+			"/api/memory/beta-private?agentId=beta",
+			"/api/memory/beta-private/history?agentId=beta",
+			"/api/memory/beta-private/lineage?agentId=beta",
+			"/api/memory/search?q=content&agentId=beta",
+			"/memory/similar?id=beta-global&agentId=beta",
+			"/api/embeddings?agentId=beta",
+		];
+		for (const path of paths) {
+			expect({ path, status: (await get(app, path, headers)).status }).toEqual({ path, status: 403 });
+		}
+	});
+
+	it("serves the explicit search route instead of treating it as a memory id", async () => {
+		const app = await makeApp("local");
+		const res = await get(app, "/api/memory/search?q=content&agentId=alpha");
+
+		expect(res.status).not.toBe(404);
+		expect(Array.isArray(res.body.results)).toBe(true);
+	});
+
+	it("limits the workspace embedding projection to admin credentials", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+
+		expect((await get(app, "/api/embeddings/projection", headers)).status).toBe(403);
 	});
 });
