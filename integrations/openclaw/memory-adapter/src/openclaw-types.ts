@@ -76,7 +76,7 @@ export interface OpenClawPluginApi {
 		error(msg: string): void;
 	};
 	registerTool(
-		definition: OpenClawToolDefinition,
+		definition: OpenClawToolDefinition | ((ctx: OpenClawToolContext) => OpenClawToolDefinition),
 		metadata?: {
 			name?: string;
 			names?: string[];
@@ -125,6 +125,11 @@ export interface OpenClawPluginApi {
 
 	resolvePath?(p: string): string;
 }
+
+export type OpenClawToolContext = {
+	readonly agentId?: string;
+	readonly sessionKey?: string;
+} & Record<string, unknown>;
 
 export interface OpenClawToolDefinition {
 	readonly name: string;
