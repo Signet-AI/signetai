@@ -133,7 +133,7 @@ Only `content` is required. Multi-agent fields:
 
 | Field        | Description |
 |--------------|-------------|
-| `agentId`    | Agent that owns this memory. Defaults to `"default"`. |
+| `agentId`    | Agent that owns this memory. Defaults to the credential's scoped agent, then the daemon's configured agent (`$SIGNET_AGENT_ID`, otherwise `"default"`). A scoped credential that names another agent gets `403`. |
 | `visibility` | `"global"` (any permitted agent can read), `"private"` (owner only). Defaults to `"global"`. |
 
 First-seen named `agentId` values are registered in the `agents` table with
