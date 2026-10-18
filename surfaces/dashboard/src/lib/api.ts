@@ -925,8 +925,8 @@ export const api = {
 			return { ok: false, status: 0, passId: null, error: "daemon unreachable" };
 		}
 	},
-	getMemories: (opts: { limit?: number; offset?: number; type?: string } = {}) => {
-		const p = new URLSearchParams();
+	getMemories: (opts: { limit?: number; offset?: number; type?: string; agentId?: string } = {}) => {
+		const p = new URLSearchParams({ agentId: opts.agentId ?? "all" });
 		if (opts.limit) p.set("limit", String(opts.limit));
 		if (opts.offset) p.set("offset", String(opts.offset));
 		if (opts.type) p.set("type", opts.type);
@@ -948,14 +948,15 @@ export const api = {
 		const content = result.data?.content;
 		return skill && typeof content === "string" ? { ...skill, content } : null;
 	},
-	getMemoryTimeline: (tzOffset = 0) => getJSON<MemoryTimeline>(`/api/memory/timeline?tzOffset=${tzOffset}`),
+	getMemoryTimeline: (tzOffset = 0, agentId = "all") =>
+		getJSON<MemoryTimeline>(`/api/memory/timeline?tzOffset=${tzOffset}&agentId=${encodeURIComponent(agentId)}`),
 	getEmbeddingHealth: () => getJSON<EmbeddingHealthReport>("/api/embeddings/health"),
 	searchMemories: async (
 		q: string,
 		limit = 20,
-		filters: { type?: string; tags?: string[] } = {},
+		filters: { type?: string; tags?: string[]; agentId?: string } = {},
 	): Promise<{ memories: Memory[] } | null> => {
-		const params = new URLSearchParams({ q, limit: String(limit) });
+		const params = new URLSearchParams({ q, limit: String(limit), agentId: filters.agentId ?? "all" });
 		if (filters.type) params.set("type", filters.type);
 		if (filters.tags?.length) params.set("tags", filters.tags.join(","));
 		const result = await getJSON<{ results?: Memory[] }>(`/memory/search?${params}`);
