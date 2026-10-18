@@ -120,6 +120,8 @@ beforeEach(() => {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare("DELETE FROM embeddings").run();
 		db.prepare("DELETE FROM memory_history").run();
+		db.prepare("DELETE FROM document_memories").run();
+		db.prepare("DELETE FROM documents").run();
 		db.prepare("DELETE FROM memories").run();
 		db.prepare("DELETE FROM agents").run();
 	});
@@ -395,6 +397,7 @@ describe("memory read routes enforce token agent scope", () => {
 			"/api/memory/search?q=content&agentId=beta",
 			"/memory/similar?id=beta-global&agentId=beta",
 			"/api/embeddings?agentId=beta",
+			"/api/documents/doc-b/chunks?agentId=beta",
 		];
 		for (const path of paths) {
 			expect({ path, status: (await get(app, path, headers)).status }).toEqual({ path, status: 403 });
@@ -414,5 +417,89 @@ describe("memory read routes enforce token agent scope", () => {
 		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
 
 		expect((await get(app, "/api/embeddings/projection", headers)).status).toBe(403);
+	});
+});
+
+async function recall(app: Hono, body: Record<string, unknown>, headers: Record<string, string> = {}) {
+	const res = await app.request("http://localhost/api/memory/recall", {
+		method: "POST",
+		headers: { "content-type": "application/json", ...headers },
+		body: JSON.stringify({ query: "content", limit: 10, ...body }),
+	});
+	return { status: res.status, body: (await res.json()) as { results?: ReadonlyArray<{ id: string }> } };
+}
+
+describe("POST /api/memory/recall token agent scope", () => {
+	it("rejects a scoped credential recalling another agent", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+
+		expect((await recall(app, { agentId: "beta" }, headers)).status).toBe(403);
+	});
+
+	it("recalls as the credential's agent when the body names none", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+
+		const own = await recall(app, {}, headers);
+		expect(own.status).toBe(200);
+		expect(rowIds(own.body.results)).toEqual(["alpha-global", "alpha-private"]);
+	});
+});
+
+describe("GET /api/documents/:id/chunks memory scope", () => {
+	it("returns only chunk memories the reading agent can see, redacted", async () => {
+		seedMemory("beta-chunk", "beta", {
+			visibility: "private",
+			content: "Rotate sk-proj-Abcdefghijklmnopqrstuvwxyz0123456789 monthly.",
+		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO documents (id, source_type, status, created_at, updated_at, agent_id)
+				 VALUES ('doc-b', 'text', 'done', ?, ?, 'beta')`,
+			).run(NOW, NOW);
+			db.prepare(
+				"INSERT INTO document_memories (document_id, memory_id, chunk_index) VALUES ('doc-b', 'beta-chunk', 0)",
+			).run();
+		});
+		const app = await makeApp("local");
+
+		const alpha = await get(app, "/api/documents/doc-b/chunks?agentId=alpha");
+		expect(alpha.body.count).toBe(0);
+
+		const beta = await get(app, "/api/documents/doc-b/chunks?agentId=beta");
+		expect(beta.body.chunks).toEqual([
+			expect.objectContaining({ id: "beta-chunk", content: "Rotate [redacted credential] monthly." }),
+		]);
+	});
+});
+
+describe("POST /api/memory/remember token agent", () => {
+	it("writes as the credential's agent when the body names none, and refuses another agent", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}`, "content-type": "application/json" };
+		const remember = (body: Record<string, unknown>) =>
+			app.request("http://localhost/api/memory/remember", { method: "POST", headers, body: JSON.stringify(body) });
+
+		const own = await remember({ content: "Alpha prefers tabs over spaces." });
+		expect(own.status).toBe(200);
+		const { id } = (await own.json()) as { id: string };
+		const row = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT agent_id FROM memories WHERE id = ?").get(id) as { agent_id: string },
+		);
+		expect(row.agent_id).toBe("alpha");
+
+		expect((await remember({ content: "Beta note", agentId: "beta" })).status).toBe(403);
+	});
+});
+
+describe("memory list result size", () => {
+	it("reports a page larger than the owner result limit instead of an empty success", async () => {
+		seedMemory("alpha-huge", "alpha", { content: "x".repeat(1_200_000), type: "transcript-dump" });
+		const app = await makeApp("local");
+
+		const { status, body } = await list(app, "?agentId=alpha&type=transcript-dump&limit=1");
+		expect(status).toBe(413);
+		expect(body.error).toBe("Result is too large; request a smaller limit");
 	});
 });
