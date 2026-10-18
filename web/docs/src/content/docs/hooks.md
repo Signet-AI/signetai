@@ -206,10 +206,7 @@ Called when a new agent session begins. Returns memories and context formatted f
 
 `harness` is required. Everything else is optional. `agentId` is the Signet
 persistence scope. Harness-native sub-agent identifiers should be sent as
-`harnessAgentId`; they are used only for parent-session inference. The
-`signet hook` commands fill `agentId` from `SIGNET_AGENT_ID` in the harness
-environment when the harness input names no Signet agent, so hooks and the
-`signet mcp` server in the same environment act as the same agent. When a
+`harnessAgentId`; they are used only for parent-session inference. When a
 session has a `sessionKey`, `project` identifies its durable recall namespace;
 `cwd` is used as the fallback when `project` is omitted.
 

@@ -106,6 +106,32 @@ describe("MCP route", () => {
 		expect(list?.searchParams.get("agentId")).toBe("hermes-a");
 	});
 
+	it("refuses an all-agents memory_list from a tool call", async () => {
+		const requested: string[] = [];
+		globalThis.fetch = mock(async (input: string | URL | Request) => {
+			requested.push(typeof input === "string" ? input : input.toString());
+			return new Response(JSON.stringify({ memories: [], stats: {} }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+
+		const res = await makeApp().request("/mcp", {
+			method: "POST",
+			headers: streamableHeaders,
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 3,
+				method: "tools/call",
+				params: { name: "memory_list", arguments: { agent_id: "all" } },
+			}),
+		});
+
+		const body = (await res.json()) as { result?: { isError?: boolean }; error?: unknown };
+		expect(body.error !== undefined || body.result?.isError === true).toBe(true);
+		expect(requested.some((url) => new URL(url).pathname === "/api/memories")).toBe(false);
+	});
+
 	it("reports scoped in-flight MCP count and oldest age", async () => {
 		let releaseGate: (() => void) | undefined;
 		const gateReached = new Promise<void>((resolve) => {

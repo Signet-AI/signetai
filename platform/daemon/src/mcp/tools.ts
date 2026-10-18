@@ -820,7 +820,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				limit: z.number().optional().describe("Max results (default 100)"),
 				offset: z.number().optional().describe("Pagination offset"),
 				type: z.string().optional().describe("Filter by memory type"),
-				agent_id: z.string().optional().describe("Agent ID whose read scope applies"),
+				agent_id: z
+					.string()
+					.refine((value) => value.trim() !== "all", "agent_id must name one agent")
+					.optional()
+					.describe("Agent ID whose read scope applies"),
 			}),
 		},
 		async ({ limit, offset, type, agent_id }) => {
