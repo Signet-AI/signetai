@@ -1448,7 +1448,7 @@ const signetPlugin = {
 			);
 
 			api.registerTool(
-				{
+				(toolCtx) => ({
 					name: "session_search",
 					label: "Session Search",
 					description: "Search active or completed session transcripts",
@@ -1496,7 +1496,7 @@ const signetPlugin = {
 								...opts,
 								sessionKey: session_key,
 								currentSessionKey: current_session_key,
-								agentId: agent_id,
+								agentId: agent_id ?? readString(toolCtx.agentId),
 								project,
 								limit,
 							});
@@ -1508,7 +1508,7 @@ const signetPlugin = {
 							return textResult(`Session search failed: ${String(err)}`, { error: String(err) });
 						}
 					},
-				},
+				}),
 				{ name: "session_search" },
 			);
 
