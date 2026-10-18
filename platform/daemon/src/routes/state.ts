@@ -311,7 +311,6 @@ export const OPENCLAW_STALE_MS = 10 * 60 * 1000;
 export const projectionInFlight = new Map<number, Promise<void>>();
 export const projectionErrors = new Map<number, { message: string; expires: number }>();
 export const PROJECTION_ERROR_TTL_MS = 30_000;
-export const hasMemoriesSessionIdColumnCache: boolean | null = null;
 export let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
 export let authSecret: Buffer | null = null;
 export let authForgetLimiter = new AuthRateLimiter(60_000, 30);

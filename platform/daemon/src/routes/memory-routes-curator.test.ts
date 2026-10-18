@@ -234,9 +234,11 @@ describe("memory curator routes", () => {
 	});
 
 	it("returns curator slices from session feedback", async () => {
-		seedMemory("mem-stale", "injected repeatedly but never used");
-		seedMemory("mem-contradicted", "contradicted memory");
-		seedMemory("mem-used", "useful memory");
+		seedMemory("mem-stale", "injected repeatedly but never used", { agentId: "curator" });
+		seedMemory("mem-contradicted", "contradicted memory", { agentId: "curator" });
+		seedMemory("mem-used", "useful memory", { agentId: "curator" });
+		seedMemory("mem-other-agent", "another agent's private note", { agentId: "other", visibility: "private" });
+		seedSessionMemory({ id: "sm-other", sessionKey: "session-e", memoryId: "mem-other-agent", preference: "USED" });
 		seedSessionMemory({ id: "sm-stale-1", sessionKey: "session-a", memoryId: "mem-stale" });
 		seedSessionMemory({ id: "sm-stale-2", sessionKey: "session-b", memoryId: "mem-stale", relevanceScore: 0.2 });
 		seedSessionMemory({
