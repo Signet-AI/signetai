@@ -891,6 +891,69 @@ describe("native memory sources", () => {
 		expect(target).toEqual({ entity_type: "source_document", source_path: targetFile });
 	});
 
+	it("does not rewrite artifacts, graph edges, or dependency history for unchanged Obsidian notes", async () => {
+		const root = join(dir, "vault");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(root, "Source.md"), "# Source\n\nLinks to [[Target]].\n");
+		writeFileSync(join(root, "Target.md"), "# Target\n\nThe target note stays unchanged.\n");
+		const source = obsidianNativeMemorySource(root, "Unchanged Vault", "obsidian:unchanged-vault");
+		const snapshot = () =>
+			getDbAccessor().withReadDb((db) => ({
+				artifacts: db
+					.prepare("SELECT source_path, updated_at FROM memory_artifacts WHERE agent_id = ? ORDER BY source_path")
+					.all("agent-native"),
+				dependencies: db
+					.prepare("SELECT id, updated_at FROM entity_dependencies WHERE agent_id = ? ORDER BY id")
+					.all("agent-native"),
+				history: db
+					.prepare("SELECT COUNT(*) AS n FROM entity_dependency_history WHERE agent_id = ?")
+					.get("agent-native"),
+			}));
+		const sync = async (): Promise<number> => {
+			const handle = startNativeMemoryBridge([source], {
+				agentId: "agent-native",
+				pollIntervalMs: 0,
+				sourceGraphEnabled: true,
+			});
+			try {
+				return await handle.syncExisting();
+			} finally {
+				await handle.close();
+			}
+		};
+
+		expect(await sync()).toBe(2);
+		const first = snapshot();
+		expect(first.dependencies.length).toBeGreaterThan(0);
+		await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+		expect(await sync()).toBe(0);
+		expect(snapshot()).toEqual(first);
+
+		writeFileSync(join(root, "Source.md"), "# Source\n\nStill links to [[Target]], with new prose.\n");
+		expect(await sync()).toBe(1);
+		expect(snapshot().artifacts).not.toEqual(first.artifacts);
+
+		const targetDocument = () =>
+			getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT COUNT(*) AS n FROM entities WHERE agent_id = ? AND entity_type = 'source_document' AND source_path = ?",
+						)
+						.get("agent-native", join(root, "Target.md")) as { n: number },
+			);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("DELETE FROM entities WHERE agent_id = ? AND entity_type = 'source_document' AND source_path = ?").run(
+				"agent-native",
+				join(root, "Target.md"),
+			);
+		});
+		expect(targetDocument()).toEqual({ n: 0 });
+		expect(await sync()).toBe(1);
+		expect(targetDocument()).toEqual({ n: 1 });
+	});
+
 	it("can defer stale source cleanup during bridge sync", async () => {
 		const root = join(dir, "vault");
 		const file = join(root, "permanent", "Old.md");

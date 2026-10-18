@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { ensureAgentRegistered } from "../agent-id";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, runWriteTxAsync } from "../db-accessor";
 import { getKnowledgeGraphForConstellation } from "../knowledge-graph";
 import {
@@ -228,6 +229,25 @@ describe("GET /api/knowledge/constellation agent scope", () => {
 			"haystack-a:entity-haystack-a",
 			"haystack-b:entity-haystack-b",
 		]);
+	});
+
+	test("keeps agents registered implicitly out of each other's view", async () => {
+		await ensureAgentRegistered("hook-a");
+		await ensureAgentRegistered("hook-b");
+		await runWriteTxAsync(getDbAccessor(), (db) => {
+			const now = "2026-09-23T00:00:00.000Z";
+			for (const agent of ["hook-a", "hook-b"]) {
+				db.prepare(
+					`INSERT INTO entities
+					 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+					 VALUES (?, ?, ?, 'person', ?, 3, ?, ?)`,
+				).run(`entity-${agent}`, `User of ${agent}`, `user of ${agent}`, agent, now, now);
+			}
+		});
+
+		const graph = await getKnowledgeGraphForConstellation(getDbAccessor(), "hook-a");
+
+		expect(graph.entities.map((entity) => `${entity.agentId}:${entity.id}`)).toEqual(["hook-a:entity-hook-a"]);
 	});
 
 	test("refuses an all-agents view without admin permission outside local mode", async () => {

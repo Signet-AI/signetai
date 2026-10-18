@@ -256,6 +256,7 @@ export type DbOwnerRequest =
 	| { readonly kind: "dreaming_episodic_backlog_exists"; readonly input: DbOwnerDreamingEpisodicBacklogExists }
 	| { readonly kind: "dreaming_evidence_search"; readonly input: DbOwnerDreamingEvidenceSearch }
 	| { readonly kind: "dreaming_evidence_source"; readonly input: DbOwnerDreamingEvidenceSource }
+	| { readonly kind: "dreaming_evidence_review"; readonly input: DbOwnerDreamingEvidenceReview }
 	| { readonly kind: "dreaming_pass_finalize"; readonly input: DbOwnerDreamingPassFinalize }
 	| { readonly kind: "dreaming_review_due"; readonly input: DbOwnerDreamingReviewDue }
 	| { readonly kind: "dreaming_evidence_classify"; readonly input: DbOwnerDreamingEvidenceClassify }
@@ -385,6 +386,16 @@ export interface DbOwnerDreamingEvidenceSearch {
 export interface DbOwnerDreamingEvidenceSource {
 	readonly agentId: string;
 	readonly sourceRef: string;
+}
+
+export interface DbOwnerDreamingEvidenceReview {
+	readonly agentId: string;
+	readonly passId: string;
+	readonly items: ReadonlyArray<{
+		readonly sourceRef: string;
+		readonly contentOffset: number;
+		readonly through?: string;
+	}>;
 }
 
 export interface DbOwnerDreamingPassFinalize {

@@ -20,6 +20,7 @@ export interface DatabaseIntegrityProgress {
 	readonly checkedObjects: number;
 	readonly skippedObjects: number;
 	readonly failedObjects: number;
+	readonly scannedObjects?: number;
 	readonly remainingObjects: number;
 	readonly lastObject: string | null;
 	readonly databasePagesObserved: number;
@@ -207,6 +208,14 @@ function statusWith(
 		incrementalProgress: null,
 	};
 }
+function boundedScanCoverage(scannedObjects: number): string[] {
+	if (scannedObjects === 0) return [];
+	const tables = scannedObjects === 1 ? "1 large table was" : `${scannedObjects} large tables were`;
+	return [
+		`${tables} read in bounded rowid chunks instead of quick_check; their b-tree structure and indexes were not verified`,
+	];
+}
+
 export function updateDatabaseIntegrityStatus(
 	progress: DatabaseIntegrityProgress,
 	errors: readonly string[] = [],
@@ -264,7 +273,7 @@ export function updateDatabaseIntegrityStatus(
 			: globalStateWins
 				? latestStatus.quickCheck
 				: progress.phase === "complete"
-					? { ok: true, messages: [] }
+					? { ok: true, messages: boundedScanCoverage(progress.scannedObjects ?? 0) }
 					: latestStatus.quickCheck,
 		durationMs: progress.elapsedMs,
 		repairGuidance: publishedState === "corrupt" || publishedState === "unavailable" ? REPAIR_GUIDANCE : null,

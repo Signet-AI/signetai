@@ -17,22 +17,22 @@ describe("agent-scope cache lifecycle", () => {
 		const pathB = makeDbPath("b");
 		try {
 			initDbAccessor(pathA);
-			await ensureAgentRegistered("reinit-agent", "shared");
-			expect((await getAgentScope("reinit-agent")).readPolicy).toBe("shared");
+			await ensureAgentRegistered("reinit-agent");
+			expect((await getAgentScope("reinit-agent")).readPolicy).toBe("isolated");
 			await closeDbAccessor();
 			initDbAccessor(pathB);
 			await getDbAccessor().withWriteTxAsync(
 				(db) => {
 					db.prepare(
 						`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
-						 VALUES ('reinit-agent', 'reinit-agent', 'isolated', NULL, ?, ?)`,
+						 VALUES ('reinit-agent', 'reinit-agent', 'shared', NULL, ?, ?)`,
 					).run(new Date().toISOString(), new Date().toISOString());
 				},
 				{ siteToken: "agent-scope-cache-lifecycle.test.ts:24", operation: "test.seed-agents" },
 			);
 
 			const scope = await getAgentScope("reinit-agent");
-			expect(scope.readPolicy).toBe("isolated");
+			expect(scope.readPolicy).toBe("shared");
 		} finally {
 			invalidateAgentScopeCache();
 			await closeDbAccessor();

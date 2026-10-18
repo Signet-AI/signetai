@@ -165,6 +165,7 @@ import {
 } from "./pipeline";
 import { randomUUID } from "node:crypto";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
+import { importedSourceAttentionUpsert } from "./pipeline/dreaming-evidence-consumption";
 import { dbOwnerTransaction } from "./db-owner-runtime";
 import { startDeferredRuntimeAfterDreaming } from "./dreaming-startup";
 import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
@@ -2842,27 +2843,11 @@ async function main() {
 				agentId: resolveDaemonAgentId(),
 				workspaceRoot: AGENTS_DIR,
 				onBatch: async (_jobId, sourceId) => {
-					const agentId = resolveDaemonAgentId();
-					const subjectRef = `source:${sourceId}`;
-					const details = JSON.stringify({ sourceId, reason: "transcript-import-committed" });
-					await dbOwnerTransaction(
-						[
-							{
-								sql: `INSERT INTO dreaming_attention
-									(id, agent_id, kind, subject_ref, details_json, priority)
-									VALUES (?, ?, 'evidence_requeue', ?, ?, 50)
-									ON CONFLICT(agent_id, kind, subject_ref) DO UPDATE SET
-									  details_json = excluded.details_json,
-									  priority = MAX(dreaming_attention.priority, excluded.priority),
-									  generation = dreaming_attention.generation + 1,
-									  resolved_at = NULL,
-									  resolved_by_pass_id = NULL`,
-								params: [randomUUID(), agentId, subjectRef, details],
-								result: "run",
-							},
-						],
-						{ operation: "sources.import.dreaming-attention", lane: "write" },
-					);
+					const nudge = importedSourceAttentionUpsert(resolveDaemonAgentId(), sourceId);
+					await dbOwnerTransaction([{ sql: nudge.sql, params: nudge.params, result: "run" }], {
+						operation: "sources.import.dreaming-attention",
+						lane: "write",
+					});
 				},
 			});
 		}

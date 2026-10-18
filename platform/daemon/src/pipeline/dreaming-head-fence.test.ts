@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import type { DbOwnerDreamingPassFinalize } from "../db-owner-protocol";
 import { commitCuratedMemoryHeadInDb, executeMemoryHead } from "../memory-head-owner";
-import type { MemoryHeadCommitInput, MemoryHeadCommitter } from "../memory-head";
+import { MEMORY_HEAD_MAX_TOKENS, type MemoryHeadCommitInput, type MemoryHeadCommitter } from "../memory-head";
+import { countTokens } from "./tokenizer";
 import { finalizeDreamingPassInDb } from "./dreaming";
 import { getDreamingCapability } from "./dreaming-capabilities";
 
@@ -132,6 +133,43 @@ describe("content pass memory-head fence", () => {
 		const result = getDbAccessor().withWriteTx((db) => commitCuratedMemoryHeadInDb(db, input("pass-route", [acme])));
 
 		expect(result).toMatchObject({ ok: false, code: "STALE_HEAD" });
+	});
+
+	it("reports head token use against its budget and rejects an over-budget head with its count", () => {
+		const read = (passId?: string) =>
+			getDbAccessor().withWriteTx((db) =>
+				executeMemoryHead(
+					db,
+					dir,
+					passId === undefined
+						? { action: "read", agentId: "agent-a" }
+						: { action: "read", agentId: "agent-a", passId },
+				),
+			);
+		const acmeTokens = countTokens(`- ${quote}`);
+		start("pass-first");
+		expect(
+			getDbAccessor().withWriteTx((db) => commitCuratedMemoryHeadInDb(db, input("pass-first", [acme]))),
+		).toMatchObject({ ok: true, code: "COMMITTED" });
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE dreaming_passes SET status = 'completed' WHERE id = 'pass-first'").run();
+		});
+		start("pass-second");
+
+		expect(read()).toMatchObject({ maxTokens: MEMORY_HEAD_MAX_TOKENS, tokens: acmeTokens });
+		expect(read("pass-second")).toMatchObject({ committedEntries: [acme], committedTokens: acmeTokens });
+
+		const oversized = getDbAccessor().withWriteTx((db) =>
+			commitCuratedMemoryHeadInDb(
+				db,
+				input("pass-second", [{ ...acme, text: `${quote} ${"Acme ships weekly. ".repeat(250)}` }]),
+			),
+		) as { ok: boolean; code: string; error: string; tokens: number; maxTokens: number };
+
+		expect(oversized).toMatchObject({ ok: false, code: "INVALID_HEAD", maxTokens: MEMORY_HEAD_MAX_TOKENS });
+		expect(oversized.tokens).toBeGreaterThan(MEMORY_HEAD_MAX_TOKENS);
+		expect(oversized.error).toContain(`head is ${oversized.tokens} tokens`);
+		expect(head()).toMatchObject({ isCurrent: 1, content: `- ${quote}` });
 	});
 
 	it("shows the running pass its committed entries after its own writes stale the head", async () => {

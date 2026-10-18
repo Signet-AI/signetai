@@ -7,6 +7,7 @@ import { activeVectorProjectionTable, findSqliteVecExtension, vectorSearchWithMe
 import {
 	applyObsidianSourceStructureInTx,
 	applyObsidianSourceStructurePurgeInTx,
+	isObsidianSourceFileIndexedInTx,
 	purgeObsidianSourceFileStructureInTx,
 } from "./obsidian-source-graph";
 import { indexSourceArtifactStructureInTx, purgeSourceArtifactStructureInTx } from "./source-artifact-graph";
@@ -560,6 +561,13 @@ export function runDbOwnerWorker(): void {
 		return readDreamingEvidenceSourceInDb(db as never, request.input);
 	}
 
+	async function executeDreamingEvidenceReview(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_evidence_review" }>,
+	): Promise<unknown> {
+		const { reviewDreamingEvidenceInDb } = await import("./pipeline/dreaming-evidence-consumption");
+		return reviewDreamingEvidenceInDb(db as never, request.input);
+	}
+
 	async function executeDreamingPassFinalize(
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_pass_finalize" }>,
 		context: JobExecutionContext,
@@ -870,9 +878,19 @@ export function runDbOwnerWorker(): void {
 				"SELECT source_sha256 FROM memory_artifacts WHERE agent_id = ? AND source_path = ? AND COALESCE(is_deleted, 0) = 0 LIMIT 1",
 			)
 			.get(input.agentId, sourcePath) as { source_sha256: string } | null | undefined;
+		const artifactChanged = existing?.source_sha256 !== input.sourceHash;
+		const graphCurrent =
+			input.graph !== undefined &&
+			!artifactChanged &&
+			isObsidianSourceFileIndexedInTx(db as unknown as import("./db-accessor").WriteDb, {
+				agentId: input.agentId,
+				sourceId: input.graph.sourceId,
+				filePath: sourcePath,
+			});
+		const graphIndexed = input.graph !== undefined && !graphCurrent;
 		db.exec("BEGIN IMMEDIATE");
 		try {
-			upsertMemoryArtifactInTx(db as unknown as BunDatabase, nativeMemoryArtifactFields(input));
+			if (artifactChanged) upsertMemoryArtifactInTx(db as unknown as BunDatabase, nativeMemoryArtifactFields(input));
 			if (checkpoint !== undefined) {
 				db.prepare(
 					`UPDATE source_sync_failures
@@ -881,7 +899,7 @@ export function runDbOwnerWorker(): void {
 					   AND item_path = ? AND resolved_at IS NULL`,
 				).run(input.agentId, checkpoint.sourceKey, sourcePath);
 			}
-			if (input.graph !== undefined) {
+			if (graphIndexed && input.graph !== undefined) {
 				applyObsidianSourceStructureInTx(db as unknown as import("./db-accessor").WriteDb, {
 					agentId: input.agentId,
 					sourceId: input.graph.sourceId,
@@ -913,8 +931,8 @@ export function runDbOwnerWorker(): void {
 			}
 			commit(context);
 			return {
-				artifactChanged: existing?.source_sha256 !== input.sourceHash,
-				graphIndexed: input.graph !== undefined,
+				artifactChanged,
+				graphIndexed,
 				embeddingProviderUnavailable: embeddingResult.providerUnavailable,
 			};
 		} catch (error) {
@@ -1082,6 +1100,7 @@ export function runDbOwnerWorker(): void {
 			return await executeDreamingEpisodicBacklogExists(job.request);
 		if (job.request.kind === "dreaming_evidence_search") return await executeDreamingEvidenceSearch(job.request);
 		if (job.request.kind === "dreaming_evidence_source") return await executeDreamingEvidenceSource(job.request);
+		if (job.request.kind === "dreaming_evidence_review") return await executeDreamingEvidenceReview(job.request);
 		if (job.request.kind === "dreaming_pass_finalize") return executeDreamingPassFinalize(job.request, context);
 		if (job.request.kind === "dreaming_review_due") return await executeDreamingReviewDue(job.request);
 		if (job.request.kind === "dreaming_evidence_classify") return await executeDreamingEvidenceClassify(job.request);

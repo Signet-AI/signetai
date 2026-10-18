@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	buildObsidianMarkdownPathIndex,
+	isObsidianSourceFileIndexedInTx,
 	indexObsidianSourceStructure,
 	purgeObsidianSourceFileStructure,
 	purgeObsidianSourceStructure,
@@ -249,6 +250,43 @@ describe("Obsidian source graph structure", () => {
 		expect(rows.attrs).toEqual([]);
 		expect(rows.deps.some((row) => row.reason.includes("New Target"))).toBe(true);
 		expect(rows.deps.some((row) => row.reason.includes("Old Target"))).toBe(false);
+	});
+
+	it("treats a note as indexed only after its own structure is built, not when another note links to it", () => {
+		const doc = join(vault, "literature", "Arch-Linux", "indexed.md");
+		const target = join(vault, "literature", "Arch-Linux", "target.md");
+		writeFileSync(doc, "# Indexed\n\nSee [[target]].\n");
+		writeFileSync(target, "# Target\n\nA note another note links to.\n");
+		const index = (filePath: string) =>
+			indexObsidianSourceStructure({
+				agentId: "obsidian-graph-agent",
+				sourceId: "obsidian:test-vault",
+				sourceName: "Test Vault",
+				root: vault,
+				filePath,
+				content: readFileSync(filePath, "utf-8"),
+				markdownPathIndex: buildObsidianMarkdownPathIndex(vault, [doc, target]),
+			});
+		const indexed = (sourceId: string, filePath: string): boolean =>
+			getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
+				isObsidianSourceFileIndexedInTx(db, { agentId: "obsidian-graph-agent", sourceId, filePath }),
+			);
+
+		index(doc);
+		const linkedTarget = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT entity_type FROM entities WHERE agent_id = ? AND source_path = ?")
+					.get("obsidian-graph-agent", target) as { entity_type: string } | undefined,
+		);
+		expect(linkedTarget?.entity_type).toBe("source_document");
+		expect(indexed("obsidian:test-vault", target)).toBe(false);
+		expect(indexed("obsidian:test-vault", doc)).toBe(true);
+		expect(indexed("obsidian:test-vault", `${vault}/literature/./Arch-Linux/../Arch-Linux//indexed.md`)).toBe(true);
+		expect(indexed("obsidian:other-vault", doc)).toBe(false);
+
+		index(target);
+		expect(indexed("obsidian:test-vault", target)).toBe(true);
 	});
 
 	it("removes a deleted file's structure, keeps sibling notes, and flags Dreaming claims citing it", () => {
