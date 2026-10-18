@@ -85,6 +85,7 @@ export function mountMcpRoute(app: Hono): void {
 			});
 			server = await createMcpServer({
 				authorizationHeader: c.req.header("authorization"),
+				agentId: c.req.query("agentId") ?? c.req.header("x-signet-agent-id"),
 			});
 			await server.connect(transport);
 			const response = await transport.handleRequest(c.req.raw, parsedBody === undefined ? undefined : { parsedBody });
