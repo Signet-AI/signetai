@@ -727,16 +727,10 @@ describe("buildCompactionCompleteBody", () => {
 	});
 
 	test("does not scope compaction by a Claude Code native sub-agent id", () => {
-		const previous = process.env.SIGNET_AGENT_ID;
-		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
-		try {
-			expect(
-				buildCompactionCompleteBody({ agent_id: "claude-subagent", sessionKey: "sess-5" }, "claude-code", "summary")
-					.agentId,
-			).toBeFalsy();
-		} finally {
-			if (previous !== undefined) process.env.SIGNET_AGENT_ID = previous;
-		}
+		expect(
+			buildCompactionCompleteBody({ agent_id: "claude-subagent", sessionKey: "sess-5" }, "claude-code", "summary")
+				.agentId,
+		).toBeFalsy();
 	});
 });
 
@@ -986,27 +980,5 @@ describe("hook wake", () => {
 		const j = setup([]);
 		await j.run(["-H", "codex", "--hook-json"], {});
 		expect(j.lines).toEqual(["{}"]);
-describe("hook agent identity from the harness environment", () => {
-	const previous = process.env.SIGNET_AGENT_ID;
-	afterEach(() => {
-		if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
-		else process.env.SIGNET_AGENT_ID = previous;
-	});
-
-	test("uses SIGNET_AGENT_ID when the harness sends no Signet agent", () => {
-		process.env.SIGNET_AGENT_ID = "env-agent";
-		const native = { session_id: "sess-1", agent_id: "claude-subagent" };
-
-		expect(buildSessionStartBody(native, { harness: "claude-code" }).agentId).toBe("env-agent");
-		expect(buildUserPromptSubmitBody(native, "claude-code", "/tmp/p").agentId).toBe("env-agent");
-		expect(buildCompactionCompleteBody(native, "claude-code", "summary").agentId).toBe("env-agent");
-		expect(buildSessionEndBody(native, "claude-code").agentId).toBe("env-agent");
-		expect(buildSessionStartBody({ signet_agent_id: "explicit" }, { harness: "codex" }).agentId).toBe("explicit");
-	});
-
-	test("leaves the agent unset when neither the harness nor the environment names one", () => {
-		Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
-
-		expect(buildSessionEndBody({ session_id: "sess-1" }, "claude-code").agentId).toBeFalsy();
 	});
 });

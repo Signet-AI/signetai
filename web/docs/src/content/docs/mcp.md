@@ -58,15 +58,16 @@ for agent-initiated, on-demand operations.
 
 ### Agent identity
 
-The memory tools act as one Signet agent, so their reads match what the
-harness's hooks write and recall. Over stdio (`signet mcp`) that agent is
-`SIGNET_AGENT_ID` from the server's environment. Over HTTP (`/mcp`) it is the
-request's `agentId` query parameter or `x-signet-agent-id` header. When
-neither is set, the daemon resolves the agent from the credential's scope or
-its own configured agent. An `agent_id` argument on `memory_search`,
-`signet_recall`, `memory_get`, or `memory_list` overrides it for that call,
-and a scoped credential still rejects any other agent.
-
+The memory tools act as whichever agent the request identifies. The daemon
+resolves it the same way for reads and writes: an `agent_id` argument on
+`memory_search`, `signet_recall`, `memory_get`, or `memory_list`, then the
+credential's scoped agent, then the daemon's configured agent
+(`SIGNET_AGENT_ID` in the daemon's environment, otherwise `default`). A scoped
+credential rejects any other agent. Over HTTP (`/mcp`), a request's `agentId`
+query parameter or `x-signet-agent-id` header sets the agent for every memory
+tool in that request. The stdio server (`signet mcp`) does not read
+`SIGNET_AGENT_ID` from its own environment. `memory_list` does not accept
+`all`; the all-agents view is for operator surfaces such as the dashboard.
 
 ## Tool Reference
 

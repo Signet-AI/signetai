@@ -651,7 +651,6 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				input?.signetAgentId,
 				input?.agentId,
 				nativeAgentId ? "" : input?.agent_id,
-				process.env.SIGNET_AGENT_ID,
 			);
 			const data = await fetchHookData<{ summaryPrompt?: string; guidelines?: string; error?: string }>(
 				deps,
@@ -861,7 +860,6 @@ export function buildSessionStartBody(
 		body?.signetAgentId,
 		body?.agentId,
 		nativeAgentId ? "" : body?.agent_id,
-		process.env.SIGNET_AGENT_ID,
 	);
 	const harnessAgentId = pickString(body?.harness_agent_id, body?.harnessAgentId, nativeAgentId);
 	const parentSessionKey = pickString(
@@ -913,7 +911,6 @@ export function buildUserPromptSubmitBody(
 		body?.signetAgentId,
 		body?.agentId,
 		nativeAgentId ? "" : body?.agent_id,
-		process.env.SIGNET_AGENT_ID,
 	);
 	const harnessAgentId = pickString(body?.harness_agent_id, body?.harnessAgentId, nativeAgentId);
 	return {
@@ -956,7 +953,6 @@ export function buildCompactionCompleteBody(
 		body?.signetAgentId,
 		body?.agentId,
 		nativeAgentId ? "" : body?.agent_id,
-		process.env.SIGNET_AGENT_ID,
 	);
 	const sessionKey = pickString(overrides.sessionKey, pickSessionKey(body));
 	const project = pickString(overrides.project, body?.project, body?.cwd);
@@ -995,7 +991,6 @@ export function buildSessionEndBody(
 		body.signetAgentId,
 		body.agentId,
 		nativeAgentId ? "" : body.agent_id,
-		process.env.SIGNET_AGENT_ID,
 	);
 	return {
 		harness,
