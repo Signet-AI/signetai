@@ -13,6 +13,7 @@ const DAEMON_OFFLINE_MSG = "Signet daemon not running. Start with: signet daemon
 
 async function searchMemory(
 	client: DaemonClient,
+	agentId: string | undefined,
 	args: {
 		readonly query: string;
 		readonly limit?: number;
@@ -36,7 +37,7 @@ async function searchMemory(
 			aggregate_budget: args.aggregate_budget,
 			save_aggregate: args.save_aggregate,
 			sessionKey: args.session_key,
-			agentId: args.agent_id,
+			agentId: args.agent_id || agentId,
 			includeRecalled: args.include_recalled,
 			scope: args.scope,
 			minScore: args.min_score,
@@ -51,6 +52,7 @@ async function searchMemory(
 
 async function searchSessions(
 	client: DaemonClient,
+	agentId: string | undefined,
 	args: {
 		readonly query: string;
 		readonly session_key?: string;
@@ -66,7 +68,7 @@ async function searchSessions(
 			query: args.query,
 			sessionKey: args.session_key,
 			currentSessionKey: args.current_session_key,
-			agentId: args.agent_id,
+			agentId: args.agent_id || agentId,
 			project: args.project,
 			limit: args.limit,
 		},
@@ -79,6 +81,7 @@ async function searchSessions(
 
 async function storeMemory(
 	client: DaemonClient,
+	agentId: string | undefined,
 	args: {
 		readonly content: string;
 		readonly type?: string;
@@ -97,6 +100,7 @@ async function storeMemory(
 			pinned: args.pinned,
 			reviewAfter: args.review_after,
 			who: HARNESS,
+			agentId,
 		}),
 		WRITE_TIMEOUT,
 	);
@@ -104,7 +108,7 @@ async function storeMemory(
 	return result === null ? { offline: true } : { offline: false, ...result };
 }
 
-export function createTools(client: DaemonClient): Record<string, ReturnType<typeof tool>> {
+export function createTools(client: DaemonClient, agentId?: string): Record<string, ReturnType<typeof tool>> {
 	return {
 		memory_search: tool({
 			description: "Search memories using hybrid vector + keyword search",
@@ -122,7 +126,7 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				scope: tool.schema.string().optional().describe("Exact daemon memory scope to recall"),
 			},
 			async execute(args): Promise<string> {
-				return searchMemory(client, args);
+				return searchMemory(client, agentId, args);
 			},
 		}),
 		memory_store: tool({
@@ -139,7 +143,7 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 					.describe("ISO timestamp after which this memory should be reviewed"),
 			},
 			async execute(args): Promise<string> {
-				const result = await storeMemory(client, args);
+				const result = await storeMemory(client, agentId, args);
 				if (result.offline) return DAEMON_OFFLINE_MSG;
 				const id = result.id ?? result.memoryId;
 				return id ? `Memory saved${args.pinned ? " (pinned)" : ""} (id: ${id})` : "Memory saved.";
@@ -160,7 +164,7 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				limit: tool.schema.number().optional().describe("Max results to return (default 10, max 20)"),
 			},
 			async execute(args): Promise<string> {
-				return searchSessions(client, args);
+				return searchSessions(client, agentId, args);
 			},
 		}),
 
@@ -170,7 +174,8 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				id: tool.schema.string().describe("Memory ID to retrieve"),
 			},
 			async execute(args): Promise<string> {
-				const record = await client.get<MemoryRecord>(`/api/memory/${encodeURIComponent(args.id)}`, READ_TIMEOUT);
+				const qs = agentId ? `?${new URLSearchParams({ agentId })}` : "";
+				const record = await client.get<MemoryRecord>(`/api/memory/${encodeURIComponent(args.id)}${qs}`, READ_TIMEOUT);
 
 				if (record === null) return DAEMON_OFFLINE_MSG;
 				return JSON.stringify(record, null, 2);
@@ -189,6 +194,7 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				if (args.limit !== undefined) params.set("limit", String(args.limit));
 				if (args.offset !== undefined) params.set("offset", String(args.offset));
 				if (args.type !== undefined) params.set("type", args.type);
+				if (agentId) params.set("agentId", agentId);
 
 				const qs = params.toString();
 				const path = `/api/memories${qs ? `?${qs}` : ""}`;
@@ -268,7 +274,7 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 					.describe("ISO timestamp after which this memory should be reviewed"),
 			},
 			async execute(args): Promise<string> {
-				const result = await storeMemory(client, args);
+				const result = await storeMemory(client, agentId, args);
 				if (result.offline) return DAEMON_OFFLINE_MSG;
 				const id = result.id ?? result.memoryId;
 				return id ? `Saved${args.pinned ? " (pinned)" : ""}: ${args.content.slice(0, 50)}` : "Saved.";
@@ -282,7 +288,7 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				limit: tool.schema.number().optional().describe("Max results"),
 			},
 			async execute(args): Promise<string> {
-				return searchMemory(client, args);
+				return searchMemory(client, agentId, args);
 			},
 		}),
 	};
