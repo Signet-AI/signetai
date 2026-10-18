@@ -215,6 +215,44 @@ describe("createMcpServer", () => {
 		expect(capture.headers?.get("Authorization")).toBe("Bearer sig_sk_mcp_test_secret");
 	});
 
+	it("carries the configured agent on memory reads and writes", async () => {
+		await server.close();
+		server = await createMcpServer({
+			daemonUrl: "http://localhost:3850",
+			version: "0.0.1-test",
+			agentId: "opencode-a",
+		});
+		const capture: { url?: string; body?: string } = {};
+
+		mockFetch(200, { results: [] }, capture);
+		await callTool(server, "memory_search", { query: "ports" });
+		expect(JSON.parse(capture.body ?? "{}").agentId).toBe("opencode-a");
+		await callTool(server, "memory_search", { query: "ports", agent_id: "explicit" });
+		expect(JSON.parse(capture.body ?? "{}").agentId).toBe("explicit");
+
+		mockFetch(200, { id: "mem-1" }, capture);
+		await callTool(server, "memory_store", { content: "VLAN 20 carries voice" });
+		expect(JSON.parse(capture.body ?? "{}").agentId).toBe("opencode-a");
+
+		mockFetch(200, { id: "mem-1" }, capture);
+		await callTool(server, "memory_get", { id: "mem-1" });
+		expect(new URL(capture.url ?? "").searchParams.get("agentId")).toBe("opencode-a");
+
+		mockFetch(200, { memories: [], stats: {} }, capture);
+		await callTool(server, "memory_list", { limit: 5 });
+		expect(new URL(capture.url ?? "").searchParams.get("agentId")).toBe("opencode-a");
+	});
+
+	it("leaves the agent to the daemon when none is configured", async () => {
+		const capture: { url?: string; body?: string } = {};
+		mockFetch(200, { id: "mem-1" }, capture);
+
+		await callTool(server, "memory_get", { id: "mem-1" });
+		expect(new URL(capture.url ?? "").search).toBe("");
+		await callTool(server, "memory_store", { content: "no identity" });
+		expect(JSON.parse(capture.body ?? "{}")).not.toHaveProperty("agentId");
+	});
+
 	it("registers all MCP tools", () => {
 		const names = getToolNames(server);
 		expect(names).toContain("memory_search");

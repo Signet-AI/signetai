@@ -18,6 +18,7 @@ interface McpServerOptions {
 	readonly daemonUrl?: string;
 	readonly version?: string;
 	readonly authorizationHeader?: string;
+	readonly agentId?: string;
 	readonly pluginHost?: GraphiqPluginPolicyHost;
 }
 
@@ -376,6 +377,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	const baseUrl = opts?.daemonUrl ?? resolveSignetDaemonUrl({ env: {} });
 	const version = opts?.version ?? "0.1.0";
 	const authorizationHeader = normalizeAuthorizationHeader(opts?.authorizationHeader);
+	const configuredAgentId = opts?.agentId?.trim() || undefined;
+	const agentFor = (requested: string | undefined): string | undefined => requested?.trim() || configuredAgentId;
 	const fetchDaemon = <T>(
 		requestBaseUrl: string,
 		path: string,
@@ -480,7 +483,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					aggregate_budget,
 					save_aggregate,
 					sessionKey: session_key,
-					agentId: agent_id,
+					agentId: agentFor(agent_id),
 					includeRecalled: include_recalled,
 					scope,
 					minScore: score_min,
@@ -576,7 +579,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					aggregate_budget,
 					save_aggregate,
 					sessionKey: session_key,
-					agentId: agent_id,
+					agentId: agentFor(agent_id),
 					includeRecalled: include_recalled,
 					scope,
 					minScore: score_min,
@@ -613,7 +616,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 						limit,
 						project,
 						sessionKey: session_key,
-						agentId: agent_id,
+						agentId: agentFor(agent_id),
 						includeRecalled: include_recalled,
 						recallSurface: "tool_call",
 					}),
@@ -763,6 +766,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					validUntil,
 					reviewAfter,
 					supersedes,
+					agentId: configuredAgentId,
 				}),
 			});
 
@@ -805,10 +809,13 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			description: "Get a single memory by its ID",
 			inputSchema: z.object({
 				id: z.string().describe("Memory ID to retrieve"),
+				agent_id: z.string().optional().describe("Agent ID whose read scope applies"),
 			}),
 		},
-		async ({ id }) => {
-			const result = await fetchDaemon<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`);
+		async ({ id, agent_id }) => {
+			const agentId = agentFor(agent_id);
+			const qs = agentId ? `?${new URLSearchParams({ agentId })}` : "";
+			const result = await fetchDaemon<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}${qs}`);
 
 			if (!result.ok) {
 				return errorResult(`Get failed: ${result.error}`);
@@ -826,13 +833,16 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				limit: z.number().optional().describe("Max results (default 100)"),
 				offset: z.number().optional().describe("Pagination offset"),
 				type: z.string().optional().describe("Filter by memory type"),
+				agent_id: z.string().optional().describe("Agent ID whose read scope applies"),
 			}),
 		},
-		async ({ limit, offset, type }) => {
+		async ({ limit, offset, type, agent_id }) => {
 			const params = new URLSearchParams();
 			if (limit !== undefined) params.set("limit", String(limit));
 			if (offset !== undefined) params.set("offset", String(offset));
 			if (type !== undefined) params.set("type", type);
+			const agentId = agentFor(agent_id);
+			if (agentId) params.set("agentId", agentId);
 
 			const qs = params.toString();
 			const path = `/api/memories${qs ? `?${qs}` : ""}`;
@@ -947,7 +957,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				method: "POST",
 				body: {
 					sessionKey: session_key,
-					agentId: agent_id,
+					agentId: agentFor(agent_id),
 					feedback: ratings,
 					paths,
 					rewards,
@@ -2072,7 +2082,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					query,
 					sessionKey: session_key,
 					currentSessionKey: current_session_key,
-					agentId: agent_id,
+					agentId: agentFor(agent_id),
 					project,
 					limit,
 				},
@@ -2111,7 +2121,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 					query,
 					sessionKey: session_key,
 					currentSessionKey: current_session_key,
-					agentId: agent_id,
+					agentId: agentFor(agent_id),
 					project,
 					limit,
 				},
