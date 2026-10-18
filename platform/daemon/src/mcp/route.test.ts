@@ -80,6 +80,32 @@ describe("MCP route", () => {
 		expect(body.result.serverInfo.name).toBe("signet");
 	});
 
+	it("forwards the caller's agent header to memory tools", async () => {
+		const requested: string[] = [];
+		globalThis.fetch = mock(async (input: string | URL | Request) => {
+			requested.push(typeof input === "string" ? input : input.toString());
+			return new Response(JSON.stringify({ memories: [], stats: {} }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as unknown as typeof fetch;
+
+		const res = await makeApp().request("/mcp", {
+			method: "POST",
+			headers: { ...streamableHeaders, "x-signet-agent-id": "hermes-a" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				id: 2,
+				method: "tools/call",
+				params: { name: "memory_list", arguments: { limit: 3 } },
+			}),
+		});
+
+		expect(res.status).toBe(200);
+		const list = requested.map((url) => new URL(url)).find((url) => url.pathname === "/api/memories");
+		expect(list?.searchParams.get("agentId")).toBe("hermes-a");
+	});
+
 	it("reports scoped in-flight MCP count and oldest age", async () => {
 		let releaseGate: (() => void) | undefined;
 		const gateReached = new Promise<void>((resolve) => {

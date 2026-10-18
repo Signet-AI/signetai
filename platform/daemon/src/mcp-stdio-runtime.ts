@@ -57,6 +57,7 @@ export async function runMcpStdio(): Promise<void> {
 		: await createMcpServer({
 				daemonUrl,
 				version: "0.1.0",
+				agentId: process.env.SIGNET_AGENT_ID,
 			});
 
 	const transport = new StdioServerTransport();
