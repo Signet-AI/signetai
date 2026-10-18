@@ -238,7 +238,7 @@ export class DesktopTray {
 		}
 
 		const [memories, diagnostics, embeddings] = await Promise.all([
-			json<MemoryResponse>(`${this.#daemon.baseUrl}/api/memories?limit=10`, 5000),
+			json<MemoryResponse>(`${this.#daemon.baseUrl}/api/memories?limit=10&agentId=all`, 5000),
 			json<DiagnosticsResponse>(`${this.#daemon.baseUrl}/api/diagnostics`, 5000),
 			json<EmbeddingResponse>(`${this.#daemon.baseUrl}/api/embeddings/status`, 5000),
 		]);
