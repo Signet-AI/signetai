@@ -139,6 +139,28 @@
 	outline-offset: 3px;
 }
 
+.scam-notice {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	width: min(720px, 100%);
+	margin: 0 auto 28px;
+	padding: 16px 20px;
+	border: 2px solid #ef4444;
+	border-radius: 14px;
+	background: rgba(127, 29, 29, 0.88);
+	box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35), 0 0 0 4px rgba(239, 68, 68, 0.18);
+	color: #fee2e2;
+	text-align: left;
+	font-size: 0.95rem;
+	line-height: 1.5;
+}
+.scam-notice-title {
+	color: #ffffff;
+	font-size: 1.05rem;
+	font-weight: 700;
+}
+
 .hero-announce {
 	display: inline-flex;
 	align-items: center;
