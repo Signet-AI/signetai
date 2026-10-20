@@ -35,6 +35,38 @@ describe("createTools", () => {
 		]);
 	});
 
+	test("memory tools act as the configured OpenCode agent", async () => {
+		const posted: unknown[] = [];
+		const fetched: string[] = [];
+		const client = {
+			post: async (_path: string, body: unknown) => {
+				posted.push(body);
+				return { id: "mem-1", results: [], meta: { totalReturned: 0, hasSupplementary: false, noHits: true } };
+			},
+			get: async (path: string) => {
+				fetched.push(path);
+				return path.startsWith("/api/memories") ? { memories: [], stats: {} } : { id: "mem-1" };
+			},
+		} as unknown as DaemonClient;
+		const tools = createTools(client, "opencode-agent");
+
+		await tools.memory_search?.execute({ query: "ports" }, {} as never);
+		await tools.memory_search?.execute({ query: "ports", agent_id: "explicit" }, {} as never);
+		await tools.memory_store?.execute({ content: "VLAN 20 carries voice" }, {} as never);
+		await tools.memory_get?.execute({ id: "mem-1" }, {} as never);
+		await tools.memory_list?.execute({ limit: 5 }, {} as never);
+
+		expect(posted.map((body) => (body as { agentId?: string }).agentId)).toEqual([
+			"opencode-agent",
+			"explicit",
+			"opencode-agent",
+		]);
+		expect(fetched).toEqual([
+			"/api/memory/mem-1?agentId=opencode-agent",
+			"/api/memories?limit=5&agentId=opencode-agent",
+		]);
+	});
+
 	test("session_search posts to the transcript search endpoint", async () => {
 		let capturedPath = "";
 		let capturedBody: unknown;

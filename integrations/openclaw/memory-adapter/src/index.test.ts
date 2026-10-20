@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OpenClawMemoryCapability, OpenClawPluginApi, OpenClawToolDefinition } from "./openclaw-types";
+import type {
+	OpenClawMemoryCapability,
+	OpenClawPluginApi,
+	OpenClawToolContext,
+	OpenClawToolDefinition,
+} from "./openclaw-types";
 const signet = await import("./index");
 const signetPlugin = signet.default;
 const { memoryRecall, memoryStore, sessionSearch, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
@@ -27,6 +32,7 @@ let delayPromptSubmitMs = 0;
 let checkpointResponse: Record<string, unknown> | null = null;
 let notificationInject: string | null = null;
 let lastRememberBody: unknown = null;
+let requestedUrls: string[] = [];
 let lastPreCompactionBody: unknown = null;
 let lastCompactionBody: unknown = null;
 let lastSessionEndBody: unknown = null;
@@ -66,7 +72,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 	});
 }
 
-function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
+function createMockApi(
+	overrides?: Partial<OpenClawPluginApi>,
+	toolContext: OpenClawToolContext = {},
+): {
 	api: OpenClawPluginApi;
 	hooks: Map<string, HookHandler>;
 	hookOptions: Map<string, unknown>;
@@ -92,7 +101,7 @@ function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
 			error() {},
 		},
 		registerTool(tool) {
-			tools.push(tool);
+			tools.push(typeof tool === "function" ? tool(toolContext) : tool);
 		},
 		registerMemoryCapability(capability) {
 			memoryCapabilities.push(capability);
@@ -125,6 +134,7 @@ beforeEach(() => {
 	delaySessionStartMs = 0;
 	delayPromptSubmitMs = 0;
 	lastRememberBody = null;
+	requestedUrls = [];
 	lastPreCompactionBody = null;
 	lastCompactionBody = null;
 	lastSessionEndBody = null;
@@ -145,6 +155,7 @@ beforeEach(() => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			const path = new URL(url).pathname;
 			hit(path);
+			requestedUrls.push(url);
 
 			switch (path) {
 				case "/health":
@@ -317,6 +328,34 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			limit: 3,
 		});
 		expect(result).toMatchObject({ count: 1 });
+	});
+
+	it("reads and writes through tools as the OpenClaw agent that owns the tool", async () => {
+		const { api, tools } = createMockApi(undefined, { agentId: "main", sessionKey: "agent:main:chat" });
+		signetPlugin.register(api);
+		const tool = (name: string) => tools.find((item) => item.name === name);
+
+		await tool("memory_search")?.execute("call-search", { query: "Juniper trunk ports" });
+		expect(lastMemoryRecallBody).toMatchObject({ agentId: "main" });
+
+		await tool("memory_search")?.execute("call-search-explicit", { query: "Juniper", agent_id: "other" });
+		expect(lastMemoryRecallBody).toMatchObject({ agentId: "other" });
+
+		await tool("memory_store")?.execute("call-store", { content: "Trunk ports use VLAN 20" });
+		expect(lastRememberBody).toMatchObject({ agentId: "main" });
+
+		await tool("session_search")?.execute("call-sessions", { query: "Juniper trunk ports" });
+		expect(lastSessionSearchBody).toMatchObject({ agentId: "main" });
+
+		await tool("memory_get")?.execute("call-get", { id: "mem-1" });
+		await tool("memory_list")?.execute("call-list", {});
+		const reads = requestedUrls
+			.map((url) => new URL(url))
+			.filter((url) => /^\/api\/memor(y\/mem-1|ies)$/.test(url.pathname));
+		expect(reads.map((url) => [url.pathname, url.searchParams.get("agentId")])).toEqual([
+			["/api/memory/mem-1", "main"],
+			["/api/memories", "main"],
+		]);
 	});
 
 	it("forwards recall dedupe options from the memory_search tool", async () => {

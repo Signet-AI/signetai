@@ -489,6 +489,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 							summary: event.summary,
 							project: directory,
 							sessionKey: sid || undefined,
+							agentId,
 							runtimePath: RUNTIME_PATH,
 						},
 						WRITE_TIMEOUT,
@@ -496,7 +497,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				}
 			} catch {}
 		},
-		tool: createTools(client),
+		tool: createTools(client, agentId),
 	};
 };
 

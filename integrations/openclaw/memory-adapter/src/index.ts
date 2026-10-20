@@ -622,6 +622,7 @@ export async function memoryStore(
 		tags?: string | readonly string[];
 		who?: string;
 		reviewAfter?: string;
+		agentId?: string;
 	} = {},
 ): Promise<string | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
@@ -633,25 +634,31 @@ export async function memoryStore(
 			tags: options.tags,
 			who: options.who || "openclaw",
 			reviewAfter: options.reviewAfter,
+			agentId: options.agentId,
 		}),
 		timeout: WRITE_TIMEOUT,
 	});
 	return result?.id || result?.memoryId || null;
 }
 
-export async function memoryGet(id: string, options: { daemonUrl?: string } = {}): Promise<MemoryRecord | null> {
+export async function memoryGet(
+	id: string,
+	options: { daemonUrl?: string; agentId?: string } = {},
+): Promise<MemoryRecord | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	return daemonFetch<MemoryRecord>(daemonUrl, `/api/memory/${encodeURIComponent(id)}`, { timeout: READ_TIMEOUT });
+	const qs = options.agentId ? `?${new URLSearchParams({ agentId: options.agentId })}` : "";
+	return daemonFetch<MemoryRecord>(daemonUrl, `/api/memory/${encodeURIComponent(id)}${qs}`, { timeout: READ_TIMEOUT });
 }
 
 export async function memoryList(
-	options: { daemonUrl?: string; limit?: number; offset?: number; type?: string } = {},
+	options: { daemonUrl?: string; limit?: number; offset?: number; type?: string; agentId?: string } = {},
 ): Promise<{ memories: MemoryRecord[]; stats: Record<string, number> }> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
 	const params = new URLSearchParams();
 	if (options.limit) params.set("limit", String(options.limit));
 	if (options.offset) params.set("offset", String(options.offset));
 	if (options.type) params.set("type", options.type);
+	if (options.agentId) params.set("agentId", options.agentId);
 
 	const qs = params.toString();
 	const path = `/api/memories${qs ? `?${qs}` : ""}`;
@@ -718,6 +725,7 @@ export async function remember(
 		tags?: string | readonly string[];
 		who?: string;
 		reviewAfter?: string;
+		agentId?: string;
 	} = {},
 ): Promise<string | null> {
 	return memoryStore(content, options);
@@ -1279,7 +1287,7 @@ const signetPlugin = {
 			}
 
 			api.registerTool(
-				{
+				(toolCtx) => ({
 					name: "memory_search",
 					label: "Memory Search",
 					description: "Search memories using hybrid vector + keyword search",
@@ -1363,7 +1371,7 @@ const signetPlugin = {
 								aggregateBudget: aggregate_budget,
 								saveAggregate: save_aggregate,
 								sessionKey: session_key,
-								agentId: agent_id,
+								agentId: agent_id ?? readString(toolCtx.agentId),
 								includeRecalled: include_recalled,
 							});
 							const parsed = parseRecallPayload(recall);
@@ -1381,12 +1389,12 @@ const signetPlugin = {
 							return textResult(`Memory search failed: ${String(err)}`, { error: String(err) });
 						}
 					},
-				},
+				}),
 				{ name: "memory_search" },
 			);
 
 			api.registerTool(
-				{
+				(toolCtx) => ({
 					name: "memory_store",
 					label: "Memory Store",
 					description: "Save a new memory",
@@ -1423,6 +1431,7 @@ const signetPlugin = {
 								type,
 								importance,
 								tags,
+								agentId: readString(toolCtx.agentId),
 							});
 							if (id) {
 								return textResult(`Memory saved successfully (id: ${id})`, { id });
@@ -1434,12 +1443,12 @@ const signetPlugin = {
 							return textResult(`Memory store failed: ${String(err)}`, { error: String(err) });
 						}
 					},
-				},
+				}),
 				{ name: "memory_store" },
 			);
 
 			api.registerTool(
-				{
+				(toolCtx) => ({
 					name: "session_search",
 					label: "Session Search",
 					description: "Search active or completed session transcripts",
@@ -1487,7 +1496,7 @@ const signetPlugin = {
 								...opts,
 								sessionKey: session_key,
 								currentSessionKey: current_session_key,
-								agentId: agent_id,
+								agentId: agent_id ?? readString(toolCtx.agentId),
 								project,
 								limit,
 							});
@@ -1499,12 +1508,12 @@ const signetPlugin = {
 							return textResult(`Session search failed: ${String(err)}`, { error: String(err) });
 						}
 					},
-				},
+				}),
 				{ name: "session_search" },
 			);
 
 			api.registerTool(
-				{
+				(toolCtx) => ({
 					name: "memory_get",
 					label: "Memory Get",
 					description: "Get a single memory by its ID",
@@ -1516,7 +1525,7 @@ const signetPlugin = {
 					async execute(_toolCallId, params) {
 						const { id } = params as { id: string };
 						try {
-							const memory = await memoryGet(id, opts);
+							const memory = await memoryGet(id, { ...opts, agentId: readString(toolCtx.agentId) });
 							if (memory) {
 								return textResult(JSON.stringify(memory, null, 2), {
 									memory,
@@ -1529,12 +1538,12 @@ const signetPlugin = {
 							return textResult(`Memory get failed: ${String(err)}`, { error: String(err) });
 						}
 					},
-				},
+				}),
 				{ name: "memory_get" },
 			);
 
 			api.registerTool(
-				{
+				(toolCtx) => ({
 					name: "memory_list",
 					label: "Memory List",
 					description: "List memories with optional filters",
@@ -1565,6 +1574,7 @@ const signetPlugin = {
 								limit: Math.min(limit ?? 50, 50),
 								offset,
 								type,
+								agentId: readString(toolCtx.agentId),
 							});
 							const lines: string[] = [];
 							let totalChars = 0;
@@ -1585,7 +1595,7 @@ const signetPlugin = {
 							return textResult(`Memory list failed: ${String(err)}`, { error: String(err) });
 						}
 					},
-				},
+				}),
 				{ name: "memory_list" },
 			);
 
