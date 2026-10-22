@@ -160,6 +160,141 @@ memory:
 		}
 	});
 
+	it("POST /api/memory/remember stores the requested type instead of inferring one", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Team prefers squash merges for release branches",
+				type: "decision",
+			}),
+		});
+		const json = (await res.json()) as { id?: string; type?: string };
+
+		expect(res.status).toBe(200);
+		expect(json.type).toBe("decision");
+		const row = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT type FROM memories WHERE id = ?").get(json.id) as { type: string } | undefined,
+		);
+		expect(row?.type).toBe("decision");
+	});
+
+	it("POST /api/memory/remember infers the type when none is requested", async () => {
+		for (const type of [undefined, null]) {
+			const res = await app.request("http://localhost/api/memory/remember", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					content: `Team prefers rebase merges for feature branches ${String(type)}`,
+					type,
+				}),
+			});
+			const json = (await res.json()) as { type?: string };
+
+			expect(res.status).toBe(200);
+			expect(json.type).toBe("preference");
+		}
+	});
+
+	it("POST /api/memory/remember trims the requested type", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content: "Deploys run from the release checklist", type: "  procedural  " }),
+		});
+		const json = (await res.json()) as { type?: string };
+
+		expect(res.status).toBe(200);
+		expect(json.type).toBe("procedural");
+	});
+
+	it("POST /api/memory/remember stores the requested type with structured data", async () => {
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				content: "Release owners prefer the blue deployment slot",
+				type: "decision",
+				structured: { entities: [], aspects: [] },
+			}),
+		});
+		const json = (await res.json()) as { id?: string; type?: string };
+
+		expect(res.status).toBe(200);
+		expect(json.type).toBe("decision");
+		const row = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT type FROM memories WHERE id = ?").get(json.id) as { type: string } | undefined,
+		);
+		expect(row?.type).toBe("decision");
+	});
+
+	it("POST /api/memory/remember keeps the stored type on a dedupe hit", async () => {
+		const content = "The staging database is refreshed every Monday";
+		const first = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content, type: "procedural" }),
+		});
+		const firstJson = (await first.json()) as { id?: string };
+		const retry = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content, type: "decision" }),
+		});
+		const retryJson = (await retry.json()) as { id?: string; type?: string; deduped?: boolean };
+
+		expect(retry.status).toBe(200);
+		expect(retryJson.deduped).toBe(true);
+		expect(retryJson.id).toBe(firstJson.id);
+		expect(retryJson.type).toBe("procedural");
+	});
+
+	it("POST /api/memory/remember rejects an invalid type without writing a row", async () => {
+		for (const type of [42, true, {}, [], "", "   "]) {
+			const res = await app.request("http://localhost/api/memory/remember", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					content: "Memory with an invalid type",
+					type,
+				}),
+			});
+			const json = (await res.json()) as { error?: string };
+
+			expect(res.status).toBe(400);
+			expect(json.error).toBe("type must be a non-empty string");
+		}
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM memories WHERE content = ?").get("Memory with an invalid type") as
+					| { count: number }
+					| undefined,
+		);
+		expect(row?.count).toBe(0);
+	});
+
+	it("POST /api/memory/remember applies the requested type to every chunk", async () => {
+		const content = Array.from(
+			{ length: 90 },
+			(_, index) => `Procedure step ${index} always runs the migration before the deploy script.`,
+		).join(" ");
+		const res = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content, type: "procedural" }),
+		});
+		const json = (await res.json()) as { chunked?: boolean; ids?: string[] };
+
+		expect(res.status).toBe(200);
+		expect(json.chunked).toBe(true);
+		const ids = json.ids ?? [];
+		expect(ids.length).toBeGreaterThan(1);
+		const types = getDbAccessor().withReadDb((db) =>
+			ids.map((id) => (db.prepare("SELECT type FROM memories WHERE id = ?").get(id) as { type: string }).type),
+		);
+		expect(new Set(types)).toEqual(new Set(["procedural"]));
+	});
+
 	it("POST /api/memory/remember persists row-level provenance from metadata", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",
