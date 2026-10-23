@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
@@ -223,6 +223,39 @@ describe("native source worker", () => {
 			);
 		} finally {
 			await worker.close();
+		}
+	});
+
+	it("does not descend into directories that no pattern can match", async () => {
+		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-prune-"));
+		const unrelated = join(root, "plugins", "cache");
+		await mkdir(unrelated, { recursive: true });
+		await mkdir(join(root, "projects", "repo", "memory", "notes"), { recursive: true });
+		await mkdir(join(root, "projects", "repo", "subagents"), { recursive: true });
+		await writeFile(join(root, "projects", "repo", "memory", "MEMORY.md"), "index");
+		await writeFile(join(root, "projects", "repo", "memory", "notes", "deep.md"), "deep");
+		await writeFile(join(root, "projects", "repo", "subagents", "other.md"), "other");
+		await writeFile(join(unrelated, "noise.md"), "noise");
+		await chmod(unrelated, 0o000);
+		const source = {
+			root: `${root}/`,
+			files: [
+				{ glob: "projects/*/memory/MEMORY.md", kind: "index" },
+				{ glob: "projects/*/memory/**/*.md", kind: "memory", excludeBasenames: ["MEMORY.md"] },
+			],
+		};
+		const worker = createNativeSourceWorker();
+		try {
+			const page = await worker.scan({ source, cursor: null, pageSize: 100 });
+			expect(page.files.map((file) => [file.kind, file.content]).sort()).toEqual([
+				["index", "index"],
+				["memory", "deep"],
+			]);
+			expect(page.permissionDeniedPaths).toEqual([]);
+			expect(page.complete).toBe(true);
+		} finally {
+			await worker.close();
+			await chmod(unrelated, 0o700);
 		}
 	});
 });

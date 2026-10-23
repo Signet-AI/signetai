@@ -161,10 +161,29 @@ function matchesGlob(glob: string, value: string): boolean {
 	return matchParts(glob.replace(/\\/g, "/").split("/"), value.replace(/\\/g, "/").split("/"));
 }
 
-function matchesPattern(source: NativeSourceWorkerSource, filePath: string): string | null {
+function relativeToRoot(source: NativeSourceWorkerSource, filePath: string): string {
 	const normalized = filePath.replace(/\\/g, "/");
 	const root = source.root.replace(/\\/g, "/").replace(/\/$/, "");
-	const rel = normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized;
+	if (normalized.replace(/\/$/, "") === root) return "";
+	return normalized.startsWith(`${root}/`) ? normalized.slice(root.length + 1) : normalized;
+}
+
+function globCanMatchBelow(glob: readonly string[], directory: readonly string[]): boolean {
+	const head = glob[0];
+	if (head === undefined) return false;
+	if (head === "**") return true;
+	if (directory.length === 0) return true;
+	return matchSegment(head, directory[0] ?? "") && globCanMatchBelow(glob.slice(1), directory.slice(1));
+}
+
+function directoryMayMatch(source: NativeSourceWorkerSource, directoryPath: string): boolean {
+	const rel = relativeToRoot(source, directoryPath);
+	const directory = rel === "" ? [] : rel.split("/");
+	return source.files.some((pattern) => globCanMatchBelow(pattern.glob.replace(/\\/g, "/").split("/"), directory));
+}
+
+function matchesPattern(source: NativeSourceWorkerSource, filePath: string): string | null {
+	const rel = relativeToRoot(source, filePath);
 	for (const pattern of source.files) {
 		if (pattern.excludeBasenames?.includes(rel.split("/").slice(-1)[0] ?? "")) continue;
 		if (pattern.excludeGlobs?.some((glob) => matchesGlob(glob.includes("/") ? glob : `**/${glob}`, rel))) continue;
@@ -205,6 +224,7 @@ async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
 		try {
 			const info = await lstat(path);
 			if (info.isDirectory()) {
+				if (!directoryMayMatch(command.source, path)) continue;
 				const directory = await opendir(path);
 				const entries: string[] = [];
 				for await (const entry of directory) {
