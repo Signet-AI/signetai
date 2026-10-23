@@ -96,7 +96,7 @@ function profileContainsPath(contents: string, binDir: string, home: string, pla
 		const assignment = trimmed.replace(/^(?:export\s+)?PATH\s*=\s*/, "").replace(/^["']|["']$/g, "");
 		const containsRequestedDir = assignment
 			.split(":")
-			.some((entry) => normalizePathEntry(entry.trim(), platform) === normalizedDir);
+			.some((entry) => normalizePathEntry(entry.trim().replace(/\\([\\"$`])/g, "$1"), platform) === normalizedDir);
 		if (containsRequestedDir) return true;
 		const homeBinDirAliases = ["$HOME/.local/bin", "$" + "{HOME}/.local/bin", "~/.local/bin"];
 		return (
@@ -144,6 +144,14 @@ export function persistNativeInstallPath(
 	}
 }
 
+function profileHasPath(profilePath: string, binDir: string, home: string, platform: NodeJS.Platform): boolean {
+	try {
+		return existsSync(profilePath) && profileContainsPath(readFileSync(profilePath, "utf8"), binDir, home, platform);
+	} catch {
+		return false;
+	}
+}
+
 function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -171,6 +179,7 @@ export function nativeInstallPathFix(
 	const exportLine = `export PATH="${shellPathEntry(binDir, home, platform)}:$PATH"`;
 	const profilePath = shellProfilePath(home, shell, platform);
 	if (profilePath === null) return { commands: [exportLine], persistent: false };
+	if (profileHasPath(profilePath, binDir, home, platform)) return { commands: [exportLine], persistent: true };
 	const append = exportLine.includes("\\") ? "printf '%s\\n'" : "echo";
 	return {
 		commands: [`${append} ${shellQuote(exportLine)} >> ${displayProfilePath(profilePath, home)}`, exportLine],

@@ -308,6 +308,21 @@ describe("nativeInstallPathFix", () => {
 		expect(nativeInstallPathFix("C:\\Signet", { ...options, platform: "win32", pathValue: "C:\\Windows" })).toBeNull();
 	});
 
+	test("prints only the session export when the profile already has the entry", () => {
+		const home = makeHome();
+		homes.push(home);
+		writeFileSync(join(home, ".zprofile"), 'export PATH="$HOME/.local/bin:$PATH"\n', "utf8");
+
+		expect(
+			nativeInstallPathFix(join(home, ".local", "bin"), {
+				home,
+				platform: "darwin",
+				shell: "/bin/zsh",
+				pathValue: "/usr/bin:/bin",
+			}),
+		).toEqual({ commands: ['export PATH="$HOME/.local/bin:$PATH"'], persistent: true });
+	});
+
 	test("printed commands add the exact directory in bash and zsh", () => {
 		const home = makeHome();
 		homes.push(home);
@@ -336,6 +351,9 @@ describe("nativeInstallPathFix", () => {
 
 				persistNativeInstallPath(binDir, options);
 				expect(viaCommand).toBe(readFileSync(join(home, ".zprofile"), "utf8"));
+				persistNativeInstallPath(binDir, options);
+				expect(readFileSync(join(home, ".zprofile"), "utf8")).toBe(viaCommand);
+				expect(nativeInstallPathFix(binDir, options)?.commands).toEqual(commands.slice(1));
 				rmSync(join(home, ".zprofile"));
 			}
 		}
