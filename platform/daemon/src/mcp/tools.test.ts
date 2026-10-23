@@ -937,6 +937,38 @@ describe("createMcpServer", () => {
 		});
 	});
 
+	describe("lcm_expand", () => {
+		it("does not advertise session DAG lineage", () => {
+			const description = getRegisteredTools(server).lcm_expand?.description ?? "";
+			expect(description).not.toContain("session DAG");
+			expect(description).not.toContain("parent and child lineage");
+			expect(description).toContain("legacy");
+		});
+
+		it("reads the node through the summary expand endpoint", async () => {
+			const cap: { url?: string; method?: string; body?: string } = {};
+			mockFetch(
+				200,
+				{
+					node: { id: "sess-1", kind: "session", depth: 0, sourceType: "transcript" },
+					parents: [],
+					children: [],
+					linkedMemories: [],
+					transcript: { sessionKey: "session-a", excerpt: "temporal leaf excerpt" },
+				},
+				cap,
+			);
+
+			const result = await callTool(server, "lcm_expand", { id: "sess-1" });
+
+			expect(cap.url).toBe("http://localhost:3850/api/sessions/summaries/expand");
+			expect(cap.method).toBe("POST");
+			expect(JSON.parse(cap.body ?? "{}")).toEqual({ id: "sess-1", includeTranscript: true });
+			expect(result.isError).toBeUndefined();
+			expect(result.content[0]?.text).toContain("temporal leaf excerpt");
+		});
+	});
+
 	describe("signet_session_search", () => {
 		it("keeps transcript search on the session endpoint", async () => {
 			const cap: { url?: string; body?: string } = {};
