@@ -1111,6 +1111,46 @@ describe("hybridRecall", () => {
 		expect(result.meta.noHits).toBe(true);
 	});
 
+	it("keeps the memory vector searchedWindow when the source chunk supplement is complete", async () => {
+		await markActiveEmbeddingProfileKnown();
+		const now = new Date().toISOString();
+		const vec = unitVector();
+		getDbAccessor().withWriteTx((db) => {
+			for (const id of ["window-a", "window-b", "window-c"]) {
+				db.prepare(
+					`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+					 VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+				).run(id, `searched window marker ${id}`, now, now);
+				seedSourceChunkVectorFixture(db, {
+					id: `emb-${id}`,
+					hash: `hash-${id}`,
+					vector: vectorBlob(vec),
+					sourceId: id,
+					sourceType: "memory",
+					chunkText: `searched window marker ${id}`,
+					now,
+				});
+			}
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "searched window marker",
+				keywordQuery: "searched window marker",
+				limit: 10,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			testCfg(),
+			async () => vec,
+		);
+
+		expect(result.results.map((row) => row.id).sort()).toEqual(["window-a", "window-b", "window-c"]);
+		expect(result.meta.sourceVectorSearch).toBeDefined();
+		expect(result.meta.vectorCompleteness).toBe("complete");
+		expect(result.meta.searchedWindow).toBe(3);
+	});
+
 	it("returns a timeline for date-only recall from session summaries", async () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
