@@ -23,6 +23,7 @@ export interface SourceProviderSyncContext {
 	readonly agentId: string;
 	readonly shouldContinue: () => boolean;
 	readonly onProgress?: (event: SourceProviderProgressEvent) => void;
+	readonly getSecret: (name: string) => Promise<string>;
 }
 
 export interface SourceProviderSyncResult {
@@ -36,6 +37,7 @@ export interface SourceProviderAdapter {
 	readonly kind: SignetSourceKind;
 	readonly toNativeSource?: (source: SignetSourceEntry) => NativeMemorySource;
 	readonly sync?: (context: SourceProviderSyncContext) => Promise<SourceProviderSyncResult>;
+	readonly syncInWorker?: true;
 	readonly purge: (source: SignetSourceEntry, agentId: string | undefined) => number | Promise<number>;
 }
 
