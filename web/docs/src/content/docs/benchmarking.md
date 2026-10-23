@@ -263,9 +263,9 @@ a fresh non-interactive install cannot reach a remote model otherwise:
 
 - `account`: a reference to `SIGNET_BENCH_DREAMING_API_KEY`, which the wrapper
   fills from `ZAI_API_KEY`. Setup writes no credential for a remote endpoint.
-- `privacy: restricted_remote`: setup's `memory_extraction` task class requires
-  it, and a remote target is otherwise inferred as `remote_ok`, which the
-  router blocks.
+- `privacy: restricted_remote`: setup keeps the `memory_extraction` task class
+  at `restricted_remote` when it is given a local endpoint, and the replaced
+  executor is otherwise inferred as `remote_ok`, which the router blocks.
 - `executor`: set to the catalog provider family (default `zai-coding-cn`)
   with no endpoint, matching how an installed Z.ai target is configured. The
   generic OpenAI-compatible executor appends `/v1` to the Z.ai `/v4` base URL.
