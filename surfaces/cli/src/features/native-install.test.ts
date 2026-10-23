@@ -308,20 +308,36 @@ describe("nativeInstallPathFix", () => {
 		expect(nativeInstallPathFix("C:\\Signet", { ...options, platform: "win32", pathValue: "C:\\Windows" })).toBeNull();
 	});
 
-	test("printed profile command writes the same line the interactive installer writes", () => {
+	test("printed commands add the exact directory in bash and zsh", () => {
 		const home = makeHome();
 		homes.push(home);
-		for (const binDir of [join(home, ".local", "bin"), join(home, "it's a dir", "bin")]) {
-			const options = { home, platform: "darwin", shell: "/bin/zsh", pathValue: "/usr/bin:/bin" } as const;
-			const fix = nativeInstallPathFix(binDir, options);
-			const printed = spawnSync("sh", ["-c", fix?.commands[0] ?? "exit 1"], { env: { HOME: home } });
-			expect(printed.status).toBe(0);
-			const viaCommand = readFileSync(join(home, ".zprofile"), "utf8");
-			rmSync(join(home, ".zprofile"));
+		const dirs = [
+			join(home, ".local", "bin"),
+			join(home, "it's a dir", "bin"),
+			join(home, 'quo"ted', "bin"),
+			join(home, "$HOME `id` \\x", "bin"),
+		];
+		for (const shell of ["bash", "zsh"]) {
+			if (spawnSync("sh", ["-c", `command -v ${shell}`]).status !== 0) continue;
+			for (const binDir of dirs) {
+				const options = { home, platform: "darwin", shell: "/bin/zsh", pathValue: "/usr/bin:/bin" } as const;
+				const commands = nativeInstallPathFix(binDir, options)?.commands ?? [];
+				const script = `${commands.join("\n")}\nprintf '%s' "\${PATH%%:*}"`;
+				const session = spawnSync(shell, ["-c", script], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+				expect(session.status).toBe(0);
+				expect(session.stdout.toString()).toBe(binDir);
 
-			persistNativeInstallPath(binDir, options);
-			expect(viaCommand).toBe(readFileSync(join(home, ".zprofile"), "utf8"));
-			rmSync(join(home, ".zprofile"));
+				const sourced = spawnSync(shell, ["-c", `. ~/.zprofile\nprintf '%s' "\${PATH%%:*}"`], {
+					env: { HOME: home, PATH: "/usr/bin:/bin" },
+				});
+				expect(sourced.stdout.toString()).toBe(binDir);
+				const viaCommand = readFileSync(join(home, ".zprofile"), "utf8");
+				rmSync(join(home, ".zprofile"));
+
+				persistNativeInstallPath(binDir, options);
+				expect(viaCommand).toBe(readFileSync(join(home, ".zprofile"), "utf8"));
+				rmSync(join(home, ".zprofile"));
+			}
 		}
 	});
 });

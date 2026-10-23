@@ -84,7 +84,7 @@ function shellProfilePath(home: string, shell: string | undefined, platform: Nod
 function shellPathEntry(binDir: string, home: string, platform: NodeJS.Platform): string {
 	const homeBinDir = join(home, ".local", "bin");
 	if (normalizePathEntry(binDir, platform) === normalizePathEntry(homeBinDir, platform)) return "$HOME/.local/bin";
-	return binDir.replaceAll('"', '\\"');
+	return binDir.replace(/[\\"$`]/g, "\\$&");
 }
 
 function profileContainsPath(contents: string, binDir: string, home: string, platform: NodeJS.Platform): boolean {
@@ -171,8 +171,9 @@ export function nativeInstallPathFix(
 	const exportLine = `export PATH="${shellPathEntry(binDir, home, platform)}:$PATH"`;
 	const profilePath = shellProfilePath(home, shell, platform);
 	if (profilePath === null) return { commands: [exportLine], persistent: false };
+	const append = exportLine.includes("\\") ? "printf '%s\\n'" : "echo";
 	return {
-		commands: [`echo ${shellQuote(exportLine)} >> ${displayProfilePath(profilePath, home)}`, exportLine],
+		commands: [`${append} ${shellQuote(exportLine)} >> ${displayProfilePath(profilePath, home)}`, exportLine],
 		persistent: true,
 	};
 }
