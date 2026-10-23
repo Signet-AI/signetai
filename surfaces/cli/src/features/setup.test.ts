@@ -683,7 +683,7 @@ memory:
 		expect(detectedHarnessesForExistingSetup(detection, [])).toContain("forge");
 	});
 
-	it("writes minimal identity preset with DREAMING.md as special-session file", async () => {
+	it("writes minimal identity preset without the retired DREAMING.md file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-minimal-identity-"));
 		const basePath = join(root, "agents");
 		const templatesPath = join(root, "templates");
@@ -706,10 +706,10 @@ memory:
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("preset: minimal");
 		expect(agentYaml).toContain("path: AGENTS.md");
-		expect(agentYaml).toContain("path: DREAMING.md");
-		expect(agentYaml).toContain("kind: dreaming");
+		expect(agentYaml).not.toContain("DREAMING.md");
+		expect(agentYaml).not.toContain("kind: dreaming");
 		expect(existsSync(join(basePath, "AGENTS.md"))).toBe(true);
-		expect(existsSync(join(basePath, "DREAMING.md"))).toBe(true);
+		expect(existsSync(join(basePath, "DREAMING.md"))).toBe(false);
 		expect(existsSync(join(basePath, "SOUL.md"))).toBe(false);
 	});
 
@@ -782,10 +782,10 @@ memory:
 
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("preset: custom");
-		for (const name of ["AGENTS.md", "DREAMING.md"]) {
-			expect(agentYaml).toContain(`path: ${name}`);
-			expect(existsSync(join(basePath, name))).toBe(true);
-		}
+		expect(agentYaml).toContain("path: AGENTS.md");
+		expect(existsSync(join(basePath, "AGENTS.md"))).toBe(true);
+		expect(agentYaml).not.toContain("DREAMING.md");
+		expect(existsSync(join(basePath, "DREAMING.md"))).toBe(false);
 		expect(existsSync(join(basePath, "SOUL.md"))).toBe(false);
 	});
 
@@ -850,12 +850,13 @@ memory:
 			"USER.md",
 			"MEMORY.md",
 			"HEARTBEAT.md",
-			"DREAMING.md",
 			"BOOTSTRAP.md",
 		]) {
 			expect(agentYaml).toContain(`path: ${name}`);
 			expect(existsSync(join(basePath, name))).toBe(true);
 		}
+		expect(agentYaml).not.toContain("DREAMING.md");
+		expect(existsSync(join(basePath, "DREAMING.md"))).toBe(false);
 	});
 
 	it("fails fast on unknown non-interactive identity modes", async () => {
@@ -1033,7 +1034,7 @@ describe("setupWizard headless plan path", () => {
 			identityMode: "managed",
 			identityPreset: "minimal",
 			startupIdentityFiles: [{ path: "AGENTS.md" }],
-			specialIdentityFiles: [{ path: "DREAMING.md", kind: "dreaming" }],
+			specialIdentityFiles: [],
 			...overrides,
 		};
 		writeFileSync(planPath, JSON.stringify(plan));
