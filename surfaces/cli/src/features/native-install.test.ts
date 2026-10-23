@@ -315,7 +315,7 @@ describe("nativeInstallPathFix", () => {
 			join(home, ".local", "bin"),
 			join(home, "it's a dir", "bin"),
 			join(home, 'quo"ted', "bin"),
-			join(home, "$HOME `id` \\x", "bin"),
+			join(home, "$HOME `id` $(id) \\x", "bin"),
 		];
 		for (const shell of ["bash", "zsh"]) {
 			if (spawnSync("sh", ["-c", `command -v ${shell}`]).status !== 0) continue;
