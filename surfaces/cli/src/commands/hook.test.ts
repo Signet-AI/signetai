@@ -172,6 +172,28 @@ describe("buildSessionEndBody", () => {
 		});
 	});
 
+	test("maps native SessionEnd exit reasons to a session boundary", () => {
+		for (const reason of ["prompt_input_exit", "logout", "other", "resume", ""]) {
+			expect(
+				buildSessionEndBody({ session_id: "cc-sess", hook_event_name: "SessionEnd", reason }, "claude-code").reason,
+			).toBe("session_shutdown");
+		}
+		expect(
+			buildSessionEndBody({ session_id: "kimi-sess", hook_event_name: "SessionEnd", reason: "exit" }, "kimi").reason,
+		).toBe("session_shutdown");
+		expect(
+			buildSessionEndBody({ session_id: "cc-sess", hook_event_name: "SessionEnd", reason: "clear" }, "claude-code")
+				.reason,
+		).toBe("clear");
+	});
+
+	test("keeps the reason of non-SessionEnd hook payloads as a turn", () => {
+		expect(buildSessionEndBody({ session_id: "codex-sess", hook_event_name: "Stop" }, "codex").reason).toBe("");
+		expect(buildSessionEndBody({ sessionKey: "sdk-sess", reason: "session_switch" }, "custom-harness").reason).toBe(
+			"session_switch",
+		);
+	});
+
 	test("forwards the turn's final assistant reply from Stop payloads", () => {
 		const body = buildSessionEndBody(
 			{
