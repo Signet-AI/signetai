@@ -81,6 +81,131 @@ describe("pi provider catalog models", () => {
 		expect(resolved.piModel.baseUrl).toBe("https://opencode.ai/zen/go/v1");
 	});
 
+	test.each([
+		["openai-compatible", "https://open.bigmodel.cn/api/coding/paas/v4", "https://open.bigmodel.cn/api/coding/paas/v4"],
+		[
+			"openai-compatible",
+			"https://open.bigmodel.cn/api/coding/paas/v4/chat/completions",
+			"https://open.bigmodel.cn/api/coding/paas/v4",
+		],
+		[
+			"openai-compatible",
+			"https://generativelanguage.googleapis.com/v1beta/openai/",
+			"https://generativelanguage.googleapis.com/v1beta/openai",
+		],
+		["openai-compatible", "https://api.example.test/v1/", "https://api.example.test/v1"],
+		["openai-compatible", "https://api.example.test/v1/chat/completions", "https://api.example.test/v1"],
+		["openai-compatible", "https://api.example.test/v1/responses", "https://api.example.test/v1"],
+		["openai-compatible", "https://api.openai.com", "https://api.openai.com/v1"],
+		["openai-compatible", "http://127.0.0.1:1234", "http://127.0.0.1:1234/v1"],
+		["openai-compatible", "https://openrouter.ai/api", "https://openrouter.ai/api/v1"],
+		["openai-compatible", "https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"],
+		["openai-compatible", "https://qianfan.baidubce.com/v2", "https://qianfan.baidubce.com/v2"],
+		["openai-compatible", "https://ark.cn-beijing.volces.com/api/v3/", "https://ark.cn-beijing.volces.com/api/v3"],
+		[
+			"openai-compatible",
+			"https://gateway.ai.cloudflare.com/v1/acct/gw/compat",
+			"https://gateway.ai.cloudflare.com/v1/acct/gw/compat",
+		],
+		[
+			"openai-compatible",
+			"https://gateway.ai.cloudflare.com/v1/acct/gw/openai",
+			"https://gateway.ai.cloudflare.com/v1/acct/gw/openai",
+		],
+		[
+			"openai-compatible",
+			"https://gateway.ai.cloudflare.com/v1/acct/gw/workers-ai",
+			"https://gateway.ai.cloudflare.com/v1/acct/gw/workers-ai/v1",
+		],
+		[
+			"openai-compatible",
+			"https://gateway.ai.cloudflare.com/v1/acct/gw/workers-ai/v1",
+			"https://gateway.ai.cloudflare.com/v1/acct/gw/workers-ai/v1",
+		],
+		[
+			"openai-compatible",
+			"https://api.cloudflare.com/client/v4/accounts/abc/ai",
+			"https://api.cloudflare.com/client/v4/accounts/abc/ai/v1",
+		],
+		[
+			"openai-compatible",
+			"https://api.cloudflare.com/client/v4/accounts/abc/ai/v1",
+			"https://api.cloudflare.com/client/v4/accounts/abc/ai/v1",
+		],
+		["openai-compatible", "https://api.groq.com/openai", "https://api.groq.com/openai/v1"],
+		["openai-compatible", "https://res.openai.azure.com/openai/v1", "https://res.openai.azure.com/openai/v1"],
+		[
+			"openai-compatible",
+			"https://res.openai.azure.com/openai/deployments/gpt4o",
+			"https://res.openai.azure.com/openai/deployments/gpt4o/v1",
+		],
+		["openai-compatible", "http://localhost:4000", "http://localhost:4000/v1"],
+		["openai-compatible", "https://gw.example.com/v2-proxy", "https://gw.example.com/v2-proxy/v1"],
+		["openai-compatible", "https://gw.example.com/users/V1/llm", "https://gw.example.com/users/V1/llm/v1"],
+		["openai-compatible", "https://api.perplexity.ai/chat/completions", "https://api.perplexity.ai/v1"],
+		["openai-compatible", "  https://api.example.test/v1/chat/completions/  ", "https://api.example.test/v1"],
+		["openai-compatible", "https://api.example.test/v1/responses?tier=a", "https://api.example.test/v1"],
+		["openai-compatible", "https://api.example.test/v4/chat/completions#docs", "https://api.example.test/v4"],
+		["openai-compatible", "https://api.example.test/api?key=x#frag", "https://api.example.test/api/v1"],
+		["openai-compatible", "https://api.example.test/v1/?", "https://api.example.test/v1"],
+		["ollama", "http://localhost:11434", "http://localhost:11434/v1"],
+		["llama-cpp", "http://127.0.0.1:8080/", "http://127.0.0.1:8080/v1"],
+	] as const)("normalizes %s base URL %s to %s (#2016)", (executor, baseUrl, expected) => {
+		const resolved = resolvePiModel({ executor, model: "test-model", baseUrl });
+
+		expect(resolved.piModel.baseUrl).toBe(expected);
+	});
+
+	test("keeps a catalog model's versioned base URL override intact (#2016)", () => {
+		const model = getModels("zai-coding-cn").find((candidate) => candidate.id === "glm-5.3-flash");
+		expect(model).toBeDefined();
+		const resolved = resolvePiModel({
+			executor: "openai-compatible",
+			providerFamily: "zai-coding-cn",
+			model: "glm-5.3-flash",
+			piModel: model as Model<Api>,
+			apiKey: "test-key",
+			baseUrl: "https://api.z.ai/api/coding/paas/v4",
+		});
+
+		expect(resolved.piModel.baseUrl).toBe("https://api.z.ai/api/coding/paas/v4");
+	});
+
+	test.each([
+		["https://open.bigmodel.cn/api/coding/paas/v4", "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions"],
+		["https://api.example.test/v1/responses?tier=a", "https://api.example.test/v1/chat/completions"],
+	] as const)("sends generic executor calls for %s to %s (#2016)", async (baseUrl, expected) => {
+		const originalFetch = globalThis.fetch;
+		const requestUrls: string[] = [];
+		globalThis.fetch = mock((input: RequestInfo | URL) => {
+			requestUrls.push(input instanceof Request ? input.url : String(input));
+			return Promise.resolve(
+				new Response(
+					[
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\n`,
+						`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+						"data: [DONE]\n\n",
+					].join(""),
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				),
+			);
+		}) as unknown as typeof fetch;
+		try {
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "glm-5.3-flash",
+				apiKey: "test-key",
+				baseUrl,
+				skipAvailabilityProbe: true,
+			});
+
+			await expect(provider.generate("extract")).resolves.toBe("done");
+			expect(requestUrls).toEqual([expected]);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	test("routes supplied OpenCode session affinity through non-interactive Pi calls (#1887)", async () => {
 		const originalFetch = globalThis.fetch;
 		const requestHeaders: Headers[] = [];
