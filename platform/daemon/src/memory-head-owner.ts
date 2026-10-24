@@ -61,10 +61,9 @@ function knownProjection(db: WriteDb, content: string): boolean {
 	if (marker) {
 		const revision = db
 			.prepare("SELECT content, content_hash FROM memory_head_revisions WHERE agent_id=? AND revision=? LIMIT 1")
-			.get(marker[1], Number(marker[2])) as { content: string; content_hash: string } | undefined;
+			.get(marker[1], Number(marker[2])) as { content: string; content_hash: string } | null | undefined;
 		return (
-			revision !== undefined &&
-			(revision.content_hash === digest || hash(redactCredentials(revision.content)) === digest)
+			revision != null && (revision.content_hash === digest || hash(redactCredentials(revision.content)) === digest)
 		);
 	}
 	return (
