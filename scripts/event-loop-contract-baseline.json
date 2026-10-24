@@ -3603,119 +3603,119 @@
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1452,
+      "line": 1445,
       "api": "withReadDbAsync",
       "source": "const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1460,
+      "line": 1453,
       "api": "withReadDbAsync",
       "source": "const existingChunks = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1493,
+      "line": 1486,
       "api": "withReadDbAsync",
       "source": "const byHash = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1696,
+      "line": 1689,
       "api": "withReadDbAsync",
       "source": ": await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1807,
+      "line": 1800,
       "api": "withReadDbAsync",
       "source": "const existing = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 1986,
+      "line": 1979,
       "api": "withReadDbAsync",
       "source": "const row = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 2143,
+      "line": 2136,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3282,
+      "line": 3275,
       "api": "withReadDbAsync",
       "source": "const embeddingRow = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3316,
+      "line": 3309,
       "api": "withReadDbAsync",
       "source": "? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3334,
+      "line": 3327,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3401,
+      "line": 3394,
       "api": "withReadDbAsync",
       "source": "const { total, rows } = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3482,
+      "line": 3475,
       "api": "withReadDbAsync",
       "source": "const index = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3496,
+      "line": 3489,
       "api": "withReadDbAsync",
       "source": "const report = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3555,
+      "line": 3548,
       "api": "withReadDbAsync",
       "source": "const projection = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3595,
+      "line": 3588,
       "api": "withReadDbAsync",
       "source": "const { cached, total } = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3636,
+      "line": 3629,
       "api": "withReadDbAsync",
       "source": "const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {",
       "category": "hot-path"
     },
     {
       "path": "routes/memory-routes.ts",
-      "line": 3639,
+      "line": 3632,
       "api": "withReadDbAsync",
       "source": "const count = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"

@@ -273,6 +273,47 @@ memory:
 		expect(row?.count).toBe(0);
 	});
 
+	it("POST /api/memory/remember bounds the type length", async () => {
+		const longest = "t".repeat(64);
+		const accepted = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content: "Memory with the longest allowed type", type: longest }),
+		});
+		expect(accepted.status).toBe(200);
+		const rejected = await app.request("http://localhost/api/memory/remember", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ content: "Memory with a type that is too long", type: `${longest}t` }),
+		});
+		const json = (await rejected.json()) as { error?: string };
+
+		expect(rejected.status).toBe(400);
+		expect(json.error).toBe("type must be at most 64 characters");
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare("SELECT content, type FROM memories WHERE content IN (?, ?)")
+					.all("Memory with the longest allowed type", "Memory with a type that is too long") as Array<{
+					content: string;
+					type: string;
+				}>,
+		);
+		expect(rows).toEqual([{ content: "Memory with the longest allowed type", type: longest }]);
+	});
+
+	it("PATCH /api/memory/:id bounds the type length", async () => {
+		const res = await app.request("http://localhost/api/memory/mem-type-bound", {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ type: "t".repeat(65), reason: "retype" }),
+		});
+		const json = (await res.json()) as { error?: string };
+
+		expect(res.status).toBe(400);
+		expect(json.error).toBe("type must be at most 64 characters");
+	});
+
 	it("POST /api/memory/remember applies the requested type to every chunk", async () => {
 		const content = Array.from(
 			{ length: 90 },
