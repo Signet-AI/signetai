@@ -11,13 +11,20 @@ import {
 	occurrenceKeys,
 	runAudit,
 	renderReport,
+	type AuditSite,
 	type LegacyDbCountBaseline,
 } from "./audit-event-loop-contract";
 
-test("the event-loop ledger exactly equals the current source inventory", () => {
+function ledgerEntries(sites: readonly AuditSite[]): Omit<AuditSite, "line">[] {
+	return sites
+		.map(({ line: _line, ...site }) => site)
+		.sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+test("the event-loop ledger equals the current source inventory, apart from line numbers", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const result = runAudit({ sourceRoot: resolve("platform/daemon/src"), baselineSites: baseline });
-	expect(result.sites).toEqual(baseline);
+	expect(ledgerEntries(result.sites)).toEqual(ledgerEntries(baseline));
 });
 
 test("classifies database callbacks by execution home rather than async API spelling", () => {

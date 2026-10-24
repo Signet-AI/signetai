@@ -210,6 +210,17 @@ call to `withReadDbAsync`/`withWriteTxAsync` (thread an async wrapper up to the
 nearest await boundary), delete the marker, and when the count drops, re-run
 `bun scripts/legacy-sync-db-baseline.ts` in the same PR.
 
+**Event-loop ledger:** `scripts/event-loop-contract-baseline.json` lists every
+synchronous filesystem, process and database call in `platform/daemon/src`,
+identified by file, API, statement text and site token. CI
+(`bun scripts/audit-event-loop-contract.ts` and
+`bun test scripts/audit-event-loop-contract.test.ts`) fails when the source and
+the ledger disagree. Line numbers are kept for diagnostics only, so moving code
+does not fail the check. When you add, remove or change one of those calls, run
+`bun scripts/audit-event-loop-contract.ts --write-baseline`, update the expected
+counts in `scripts/audit-event-loop-contract.test.ts` if they changed, and
+commit the ledger and `docs/event-loop-contract-audit.md` with the change.
+
 **Database ownership:** Runtime packages may import SQLite implementations only
 from the exact owner modules listed by `bun run audit:database-ownership`.
 Type-only SQLite imports remain valid. New runtime owners require an explicit
