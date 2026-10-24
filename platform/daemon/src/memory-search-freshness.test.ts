@@ -159,6 +159,26 @@ describe("hybridRecall freshness-aware rehearsal", () => {
 		}
 	});
 
+	it("bounds the rehearsal boost for heavily accessed memories", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, visibility, created_at, updated_at, updated_by, access_count, last_accessed
+				) VALUES (?, ?, 'fact', 'agent-a', 'global', ?, ?, 'test', ?, ?)`,
+			).run("hot-fact", "heron status level is red", OLDER_CREATED, OLDER_CREATED, 1000, new Date().toISOString());
+		});
+
+		const flags = { temporal_prior_enabled: false, rehearsal_weight: 0.5 };
+		const plain = await recall("heron status level", testCfg({ ...flags, rehearsal_enabled: false }));
+		const boosted = await recall("heron status level", testCfg({ ...flags, rehearsal_enabled: true }));
+		const plainScore = plain.results.find((row) => row.id === "hot-fact")?.score ?? 0;
+		const boostedScore = boosted.results.find((row) => row.id === "hot-fact")?.score ?? 0;
+
+		expect(plainScore).toBeGreaterThan(0);
+		expect(boostedScore).toBeGreaterThan(plainScore);
+		expect(boostedScore / plainScore).toBeLessThanOrEqual(1.25 + 1e-9);
+	});
+
 	it("does not add a second scoring path for month-range queries", async () => {
 		seedFacts();
 		const enabled = await recall("What did we plan for heron in March?", testCfg());

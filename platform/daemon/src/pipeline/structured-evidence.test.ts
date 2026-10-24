@@ -1,5 +1,41 @@
 import { describe, expect, it } from "bun:test";
-import { shapeByFacetCoverage, shapeStructuredEvidence } from "./structured-evidence";
+import {
+	HINT_ONLY_SCORE_CAP,
+	hintQueryCoverage,
+	shapeByFacetCoverage,
+	shapeStructuredEvidence,
+} from "./structured-evidence";
+
+describe("hintQueryCoverage", () => {
+	it("scores a query that restates the hint close to 1", () => {
+		const coverage = hintQueryCoverage(
+			"What music streaming service have I been using lately?",
+			"What music streaming service has the user been using lately?",
+		);
+		expect(coverage).toBeGreaterThan(0.8);
+	});
+
+	it("scores a single shared generic word low", () => {
+		const coverage = hintQueryCoverage("undoing a completion event lost its guard check", "check data before summary");
+		expect(coverage).toBeCloseTo(1 / Math.sqrt(18), 5);
+	});
+
+	it("returns 1 when the overlap cannot be measured", () => {
+		expect(hintQueryCoverage("", "check data before summary")).toBe(1);
+		expect(hintQueryCoverage("the and or", "check data before summary")).toBe(1);
+	});
+
+	it("returns 0 when both sides have tokens and share none", () => {
+		expect(hintQueryCoverage("check", "日本語のヒント")).toBe(0);
+		expect(hintQueryCoverage("alpha beta gamma", "delta epsilon")).toBe(0);
+	});
+
+	it("counts non-ASCII tokens that FTS can match", () => {
+		expect(hintQueryCoverage("alpha beta gamma тест", "тест delta")).toBeCloseTo(1 / Math.sqrt(8), 5);
+		expect(hintQueryCoverage("日本語のヒント", "日本語のヒント")).toBe(1);
+		expect(hintQueryCoverage("Café menu", "cafe opening")).toBeCloseTo(1 / 2, 5);
+	});
+});
 
 describe("structured evidence shaping", () => {
 	it("caps traversal-only candidates below anchored evidence", () => {
@@ -33,6 +69,26 @@ describe("structured evidence shaping", () => {
 
 		expect(shaped[0]?.id).toBe("spotify");
 		expect(shaped[0]?.source).toBe("hint");
+	});
+
+	it("keeps the hint-only cap when traversal relabels a hint row as sec", () => {
+		const shaped = shapeStructuredEvidence([
+			{ id: "hint-and-graph", source: "hint", hint: 1, traversal: 0.9 },
+			{ id: "hint-and-text", source: "hybrid", lexical: 0.4, hint: 1 },
+		]);
+
+		const capped = shaped.find((row) => row.id === "hint-and-graph");
+		expect(capped?.source).toBe("sec");
+		expect(capped?.score).toBe(HINT_ONLY_SCORE_CAP);
+		expect(shaped.find((row) => row.id === "hint-and-text")?.score).toBe(1);
+	});
+
+	it("keeps the hint-only cap when custom weights favor hints", () => {
+		const shaped = shapeStructuredEvidence([{ id: "hint-and-graph", source: "hint", hint: 1, traversal: 0.9 }], {
+			weights: { lexical: 0.25, semantic: 0.3, hint: 1, traversal: 0.15, structured: 0.15 },
+		});
+
+		expect(shaped[0]?.score).toBe(HINT_ONLY_SCORE_CAP);
 	});
 
 	it("lets structured path evidence preserve SEC ranking gains", () => {

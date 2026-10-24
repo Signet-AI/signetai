@@ -30,6 +30,7 @@ import {
 } from "./memory-search";
 import { ownerBytesFromHex, ownerReadAll } from "./db-owner-sql";
 import type { RecallResult } from "./memory-search";
+import { HINT_ONLY_SCORE_CAP } from "./pipeline/structured-evidence";
 import { setActiveTelemetry } from "./telemetry";
 
 describe("hybridRecall", () => {
@@ -2993,6 +2994,90 @@ describe("hybridRecall", () => {
 		expect(result.results[0]?.id).toBe("mem-spotify");
 		expect(result.results[0]?.source).toBe("hint");
 		expect(result.results[0]?.score).toBeLessThan(0.8);
+	});
+
+	it("scales a hint by how much of it the query shares", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test')`,
+			).run("mem-report-rule", "Verify every number before presenting a report.", now, now);
+
+			db.prepare(
+				`INSERT INTO memory_hints (id, memory_id, agent_id, hint, created_at)
+				 VALUES (?, ?, 'default', ?, ?)`,
+			).run("hint-report-rule", "mem-report-rule", "check data before summary", now);
+		});
+
+		const cfg = loadMemoryConfig(dir);
+		cfg.search.rehearsal_enabled = false;
+		cfg.search.min_score = 0;
+		cfg.pipelineV2.graph.enabled = false;
+		cfg.pipelineV2.traversal.enabled = false;
+		cfg.pipelineV2.reranker.enabled = false;
+		cfg.pipelineV2.hints.enabled = true;
+
+		const result = await hybridRecall(
+			{
+				query: "undoing a completion event lost its guard check",
+				keywordQuery: "undoing a completion event lost its guard check",
+				limit: 5,
+				agentId: "default",
+				readPolicy: "isolated",
+			},
+			cfg,
+			async () => null,
+		);
+
+		const hit = result.results.find((row) => row.id === "mem-report-rule");
+		expect(hit?.source).toBe("hint");
+		expect(hit?.score).toBeLessThan(0.3);
+	});
+
+	it("does not let rehearsal lift a hint-only row past the hint cap", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (
+					id, content, type, agent_id, created_at, updated_at, updated_by, access_count, last_accessed
+				) VALUES (?, ?, 'fact', 'default', ?, ?, 'test', 1000, ?)`,
+			).run("mem-hot-hint", "favorite food is swordfish at the corner restaurant", now, now, now);
+
+			db.prepare(
+				`INSERT INTO memory_hints (id, memory_id, agent_id, hint, created_at)
+				 VALUES (?, ?, 'default', ?, ?)`,
+			).run("hint-hot-hint", "mem-hot-hint", "commute to work", now);
+		});
+
+		const recallHint = async (rehearsal: boolean) => {
+			const cfg = loadMemoryConfig(dir);
+			cfg.search.rehearsal_enabled = rehearsal;
+			cfg.search.rehearsal_weight = 0.5;
+			cfg.search.min_score = 0;
+			cfg.pipelineV2.graph.enabled = false;
+			cfg.pipelineV2.traversal.enabled = false;
+			cfg.pipelineV2.reranker.enabled = false;
+			cfg.pipelineV2.hints.enabled = true;
+			const result = await hybridRecall(
+				{
+					query: "commute to work",
+					keywordQuery: "commute to work",
+					limit: 5,
+					agentId: "default",
+					readPolicy: "isolated",
+				},
+				cfg,
+				async () => null,
+			);
+			return result.results.find((row) => row.id === "mem-hot-hint");
+		};
+
+		const plain = await recallHint(false);
+		const boosted = await recallHint(true);
+		expect(plain?.score).toBe(HINT_ONLY_SCORE_CAP);
+		expect(boosted?.score).toBe(HINT_ONLY_SCORE_CAP);
 	});
 
 	it("uses structured path candidates when lexical recall misses a music platform", async () => {

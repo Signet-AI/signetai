@@ -44,6 +44,7 @@ export const DEFAULT_STRUCTURED_EVIDENCE_OPTIONS: StructuredEvidenceOptions = {
 		structured: 0.15,
 	},
 };
+export const HINT_ONLY_SCORE_CAP = 0.75;
 
 const PUNCT = /[^a-z0-9\s]/g;
 
@@ -59,6 +60,27 @@ function tokenize(text: string): Set<string> {
 		tokens.add(raw);
 	}
 	return tokens;
+}
+
+function tokenizeUnicode(text: string): Set<string> {
+	const tokens = new Set<string>();
+	const folded = text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+	for (const raw of folded.split(/[^\p{L}\p{N}]+/u)) {
+		if (raw.length < 2 || FTS_STOP.has(raw)) continue;
+		tokens.add(raw);
+	}
+	return tokens;
+}
+
+export function hintQueryCoverage(query: string, hint: string): number {
+	const queryTokens = tokenizeUnicode(query);
+	const hintTokens = tokenizeUnicode(hint);
+	if (queryTokens.size === 0 || hintTokens.size === 0) return 1;
+	let shared = 0;
+	for (const token of hintTokens) {
+		if (queryTokens.has(token)) shared += 1;
+	}
+	return shared / Math.sqrt(queryTokens.size * hintTokens.size);
 }
 
 function weightedScore(channels: EvidenceChannels, weights: EvidenceChannels): number {
@@ -117,7 +139,9 @@ export function shapeStructuredEvidence(
 
 		const lexicalFloor =
 			evidence.lexical > 0 ? (hasSecondaryEvidence ? 0.4 + evidence.lexical * 0.02 : evidence.lexical) : 0;
+		const hasDirectEvidence = evidence.lexical > 0 || evidence.semantic > 0 || evidence.structured > 0;
 		let score = Math.max(weightedScore(evidence, cfg.weights), lexicalFloor, evidence.hint);
+		if (!hasDirectEvidence) score = Math.min(score, HINT_ONLY_SCORE_CAP);
 		if (evidence.structured >= 0.25) {
 			score += (evidence.structured - 0.25) * 0.8;
 		}
