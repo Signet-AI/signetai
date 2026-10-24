@@ -246,6 +246,16 @@ describe("memory head owner runtime", () => {
 		).toEqual({ operation: "remove" });
 	});
 
+	it("replaces a generated file whose revision this database never recorded", async () => {
+		const target = join(root, "MEMORY.md");
+		writeFileSync(
+			target,
+			"<!-- signet-generated-memory agent=default revision=97; inspect only, use Signet for current context -->\n\n- Old head.\n",
+		);
+		expect(await commit("unrecorded")).toMatchObject({ ok: true, code: "COMMITTED", revision: 1 });
+		expect(readFileSync(target, "utf8")).toContain("- Meeting is Tuesday.");
+	});
+
 	it("recovers a pending projection without generation and preserves edits to a generated file", async () => {
 		const target = join(root, "MEMORY.md");
 		mkdirSync(target);
