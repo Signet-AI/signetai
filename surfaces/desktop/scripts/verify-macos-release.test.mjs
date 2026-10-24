@@ -1,6 +1,15 @@
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -59,6 +68,15 @@ fi
 		join(bin, "xcrun"),
 		`#!/bin/bash
 printf '%s\n' 'stapler fixture' >> "$VERIFICATION_LOG"
+calls="$(grep -c '^stapler fixture$' "$VERIFICATION_LOG")"
+if [[ "\${VERIFICATION_STAPLER_REJECT:-0}" == 1 ]]; then
+  printf 'fixture does not have a ticket stapled to it.\nThe validate action failed! Error 65.\n' >&2
+  exit 65
+fi
+if (( calls <= \${VERIFICATION_STAPLER_NETWORK_FAILURES:-0} )); then
+  printf 'error is Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."\nThe validate action failed! Error 68.\n' >&2
+  exit 68
+fi
 `,
 		{ mode: 0o755 },
 	);
@@ -119,6 +137,62 @@ macosTest("Gatekeeper rejection remains fatal and removes the temporary copy", (
 		expect(result.stdout).not.toContain("macOS release verification passed");
 		expect(existsSync(value.app)).toBe(true);
 		expect(readdirSync(value.scratch)).toEqual([]);
+	} finally {
+		rmSync(value.directory, { recursive: true, force: true });
+	}
+});
+
+function stapler(value, env) {
+	const result = spawnSync("node", [script, value.release], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			PATH: `${value.bin}:${process.env.PATH}`,
+			TMPDIR: value.scratch,
+			VERIFICATION_LOG: value.log,
+			SIGNET_STAPLER_RETRY_DELAY_MS: "0",
+			...env,
+		},
+	});
+	const calls = readFileSync(value.log, "utf8")
+		.split("\n")
+		.filter((line) => line === "stapler fixture").length;
+	return { result, calls };
+}
+
+macosTest("stapler validation retries a lost connection to Apple", () => {
+	const value = fixture();
+	try {
+		const { result, calls } = stapler(value, { VERIFICATION_STAPLER_NETWORK_FAILURES: "2" });
+		expect(result.stdout).toContain("macOS release verification passed");
+		expect(result.status).toBe(0);
+		expect(calls).toBe(3);
+	} finally {
+		rmSync(value.directory, { recursive: true, force: true });
+	}
+});
+
+macosTest("stapler validation fails after persistent network loss", () => {
+	const value = fixture();
+	try {
+		const { result, calls } = stapler(value, { VERIFICATION_STAPLER_NETWORK_FAILURES: "99" });
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("NSURLErrorDomain");
+		expect(result.stdout).not.toContain("macOS release verification passed");
+		expect(calls).toBe(4);
+	} finally {
+		rmSync(value.directory, { recursive: true, force: true });
+	}
+});
+
+macosTest("stapler rejection of a missing ticket is fatal without retry", () => {
+	const value = fixture();
+	try {
+		const { result, calls } = stapler(value, { VERIFICATION_STAPLER_REJECT: "1" });
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("does not have a ticket stapled");
+		expect(result.stdout).not.toContain("macOS release verification passed");
+		expect(calls).toBe(1);
 	} finally {
 		rmSync(value.directory, { recursive: true, force: true });
 	}

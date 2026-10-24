@@ -10,14 +10,42 @@ function fail(message) {
 	throw new Error(`[macOS release verification] ${message}`);
 }
 
-function run(command, args) {
+function attempt(command, args) {
 	const result = spawnSync(command, args, { encoding: "utf8" });
 	const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
 	if (result.error) fail(`${command} could not be executed: ${result.error.message}`);
-	if (result.status !== 0) {
-		fail(`${command} ${args.join(" ")} failed with exit ${result.status ?? "unknown"}\n${output.trim()}`);
+	return { status: result.status, output };
+}
+
+function failure(command, args, result) {
+	return `${command} ${args.join(" ")} failed with exit ${result.status ?? "unknown"}\n${result.output.trim()}`;
+}
+
+function run(command, args) {
+	const result = attempt(command, args);
+	if (result.status !== 0) fail(failure(command, args, result));
+	return result.output;
+}
+
+function sleep(milliseconds) {
+	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+const staplerRetryDelay = Number(process.env.SIGNET_STAPLER_RETRY_DELAY_MS ?? 30_000);
+const staplerAttempts = 4;
+
+function validateStapledTicket(appPath) {
+	const args = ["stapler", "validate", appPath];
+	for (let index = 1; ; index++) {
+		const result = attempt("xcrun", args);
+		if (result.status === 0) return;
+		const transient = result.output.includes("NSURLErrorDomain");
+		if (!transient || index === staplerAttempts) fail(failure("xcrun", args, result));
+		console.warn(
+			`stapler validate lost its network connection to Apple (attempt ${index}/${staplerAttempts}); retrying`,
+		);
+		sleep(staplerRetryDelay * index);
 	}
-	return output;
 }
 
 function findApp(directory) {
@@ -49,7 +77,7 @@ if (!signature.includes("Authority=Developer ID Application:")) {
 }
 if (!signature.includes("TeamIdentifier=")) fail("signed app is missing a TeamIdentifier");
 
-run("xcrun", ["stapler", "validate", appPath]);
+validateStapledTicket(appPath);
 
 const quarantineDirectory = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "signet-macos-quarantine-"));
 const quarantinedAppPath = join(quarantineDirectory, "Signet.app");
