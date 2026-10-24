@@ -185,7 +185,8 @@ describe("desktop update packaging", () => {
 		expect(workflow).toContain("if: startsWith(matrix.runner, 'macos-') && steps.signing.outputs.mode == 'official'");
 		expect(workflow).toContain("bun run verify:macos");
 		const verifier = readFileSync(join(desktopRoot, "scripts", "verify-macos-release.mjs"), "utf8");
-		expect(verifier).toContain('run("xcrun", ["stapler", "validate"');
+		expect(verifier).toContain('const args = ["stapler", "validate", appPath];');
+		expect(verifier).toContain("validateStapledTicket(appPath);");
 		expect(verifier).toContain('run("spctl", ["--assess", "--type", "execute"');
 	});
 
