@@ -344,7 +344,7 @@ async function doInit(): Promise<void> {
 						? nativeInputs(query, documents)
 						: tokenizer(new Array<string>(documents.length).fill(query), {
 								text_pair: [...documents],
-								padding: true,
+								padding: cuda || metal,
 								truncation: true,
 								max_length: 512,
 							});
