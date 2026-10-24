@@ -80,6 +80,7 @@ Body-level fields override prefix-parsed values.
 ```json
 {
   "content": "User prefers vim keybindings",
+  "type": "preference",
   "who": "claude-code",
   "project": "my-project",
   "importance": 0.9,
@@ -104,7 +105,17 @@ Body-level fields override prefix-parsed values.
 }
 ```
 
-Only `content` is required. Multi-agent fields:
+Only `content` is required.
+
+`type` is optional. When it is present, the memory is stored with that type,
+trimmed of surrounding whitespace. When it is missing or `null`, the daemon
+infers the type from the content (see [Memory Types](/memory/#memory-types)).
+Any other value returns 400: a value that is not a string, a blank string, or a
+type longer than 64 characters. The type is free text; there is no fixed list
+of allowed values.
+For oversized content split into chunks, every chunk gets the same type.
+
+Multi-agent fields:
 
 | Field        | Description |
 |--------------|-------------|
@@ -417,6 +428,8 @@ one.
 ```
 
 `reason` is required. `if_version` is optional optimistic concurrency guard.
+`type` follows the same rules as on remember: a non-blank string of at most 64
+characters, otherwise 400.
 `tags` may be a string (comma-separated), an array of strings, or `null` to
 clear tags.
 

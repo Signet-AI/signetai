@@ -594,7 +594,9 @@ immutable and provenance-bearing.
 | `procedural` | How-to knowledge, steps, workflows | "Run bun install before building" |
 | `semantic` | Concepts, definitions, and relationships | "BM25 is a term-frequency ranking function" |
 
-Type inference for explicit saves uses keyword matching:
+An explicit save stores the `type` given in the request (see
+[`POST /api/memory/remember`](/api/memory/write-lifecycle/#post-api-memory-remember)).
+When the request gives no `type`, the daemon infers one with keyword matching:
 
 - `preference` — triggers on: prefers, likes, wants
 - `decision` — triggers on: decided, agreed, will use
