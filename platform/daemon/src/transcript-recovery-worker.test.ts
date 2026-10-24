@@ -188,6 +188,46 @@ describe("transcript recovery worker", () => {
 		).toEqual({ count: 2 });
 	});
 
+	it("skips Claude Code subagent transcripts, which carry their parent's session id", async () => {
+		const sessionDir = join(claudeRoot, "-repo", "parent-session");
+		const parentPath = join(claudeRoot, "-repo", "parent-session.jsonl");
+		writeSettled(
+			parentPath,
+			JSON.stringify({ sessionId: "parent-session", message: { role: "user", content: "parent question" } }),
+		);
+		writeSettled(
+			join(sessionDir, "subagents", "agent-a1.jsonl"),
+			JSON.stringify({
+				sessionId: "parent-session",
+				agentId: "a1",
+				isSidechain: true,
+				message: { role: "user", content: "subagent prompt" },
+			}),
+		);
+		writeSettled(
+			join(sessionDir, "subagents", "workflows", "wf_1", "journal.jsonl"),
+			JSON.stringify({ type: "workflow", step: 1 }),
+		);
+		writeSettled(
+			join(claudeRoot, "-repo", "sidechain-elsewhere.jsonl"),
+			JSON.stringify({
+				sessionId: "parent-session",
+				isSidechain: true,
+				message: { role: "user", content: "sidechain outside a subagents directory" },
+			}),
+		);
+
+		const result = await scan();
+		expect(result.discovered).toBe(2);
+		expect(result.enqueued).toBe(1);
+		expect(result.skippedInvalid).toBe(1);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT session_key, transcript_path FROM transcript_capture_jobs").all(),
+			),
+		).toEqual([{ session_key: "parent-session", transcript_path: parentPath }]);
+	});
+
 	it("deduplicates the same snapshot when hook and recovery timestamps differ", async () => {
 		const path = join(claudeRoot, "-repo", "same-session.jsonl");
 		const raw = [

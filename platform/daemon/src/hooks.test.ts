@@ -1435,6 +1435,35 @@ memory:
 		expect(result.memories.some((memory) => memory.content === "Shared release checklist")).toBe(true);
 		expect(result.memories.some((memory) => memory.content === "Hidden private note")).toBe(false);
 	});
+
+	test.serial("isolates agents first registered by session-end", async () => {
+		createMemoryDb([
+			{ content: "Agent A release note", importance: 0.9, agent_id: "agent-a", visibility: "global" },
+			{ content: "Agent B dreaming note", importance: 0.9, agent_id: "agent-b", visibility: "global" },
+		]);
+		await handleSessionEnd({ harness: "test", agentId: "agent-a", reason: "clear" });
+		await handleSessionEnd({ harness: "test", agentId: "agent-b", reason: "clear" });
+
+		const db = openTestDb();
+		const policies = db
+			.prepare("SELECT id, read_policy FROM agents WHERE id IN ('agent-a', 'agent-b') ORDER BY id")
+			.all();
+		db.close();
+		expect(policies).toEqual([
+			{ id: "agent-a", read_policy: "isolated" },
+			{ id: "agent-b", read_policy: "isolated" },
+		]);
+
+		const agentA = (await handleSessionStart({ harness: "test", agentId: "agent-a" })).memories.map(
+			(memory) => memory.content,
+		);
+		expect(agentA).toContain("Agent A release note");
+		expect(agentA).not.toContain("Agent B dreaming note");
+
+		const fallback = (await handleSessionStart({ harness: "test" })).memories.map((memory) => memory.content);
+		expect(fallback).toContain("Agent A release note");
+		expect(fallback).toContain("Agent B dreaming note");
+	});
 });
 
 describe("handlePreCompaction", () => {
@@ -1556,6 +1585,7 @@ describe("direct transcript regressions", () => {
 			project,
 		});
 		db.close();
+		upsertAgent("agent-shared", "shared");
 
 		const result = await handleSessionStart({ harness: "test", agentId: "agent-shared", project });
 		expect(result.memories.some((memory) => memory.content === "Shared shardaware rollout memory")).toBe(true);

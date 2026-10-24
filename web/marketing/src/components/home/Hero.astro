@@ -15,6 +15,11 @@ const thumb = announcement
   <div class="home-hero-bg" aria-hidden="true"></div>
 
   <div class="home-hero-copy reveal">
+    <aside class="scam-notice" aria-label="Scam warning">
+      <strong class="scam-notice-title">Scam warning: Signet has no token or coin.</strong>
+      <span class="scam-notice-body">Any token or coin using the Signet name has nothing to do with this project. Do not buy it thinking it supports Signet.</span>
+    </aside>
+
     {announcement ? (
       <a class="hero-announce" href={postUrl(announcement)} data-analytics-cta="announcement" data-analytics-placement="hero">
         {thumb ? <img class="hero-announce-thumb" src={thumb} alt="" width="120" height="68" /> : null}

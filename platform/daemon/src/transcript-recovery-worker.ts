@@ -16,6 +16,7 @@ export const TRANSCRIPT_RECOVERY_MAX_FILES_PER_SCAN = 50;
 export const TRANSCRIPT_RECOVERY_MAX_DISCOVERED_FILES = 50_000;
 export const TRANSCRIPT_RECOVERY_MAX_RETRY_DELAY_MS = 30 * 60_000;
 export const TRANSCRIPT_RECOVERY_STOP_GRACE_MS = 5_000;
+const CLAUDE_CODE_SUBAGENT_DIRECTORY = "subagents";
 
 interface RecoveryCandidate {
 	readonly harness: "claude-code" | "codex";
@@ -127,6 +128,7 @@ async function discoverFiles(
 			if (output.length >= maxFiles) return false;
 			const path = join(directory, entry.name);
 			if (entry.isDirectory()) {
+				if (harness === "claude-code" && entry.name === CLAUDE_CODE_SUBAGENT_DIRECTORY) continue;
 				pending.push(path);
 				continue;
 			}
@@ -172,6 +174,7 @@ function readMetadata(candidate: RecoveryCandidate, raw: string): TranscriptMeta
 				? nonEmptyString(payload?.session_id, payload?.id, parsed.session_id, parsed.sessionId)
 				: nonEmptyString(parsed.sessionId, parsed.session_id, payload?.session_id, payload?.id);
 		if (!sessionKey) continue;
+		if (candidate.harness === "claude-code" && parsed.isSidechain === true) return null;
 		const project = nonEmptyString(payload?.cwd, parsed.cwd);
 		return { sessionKey, project, capturedAt: new Date(candidate.mtimeMs).toISOString() };
 	}

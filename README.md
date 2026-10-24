@@ -1,3 +1,6 @@
+> [!CAUTION]
+> **Scam warning: Signet has no token or coin.** Any token or coin using the Signet name has nothing to do with this project. Do not buy it thinking it supports Signet.
+
 <div align="center">
 
 <a href="https://signetai.sh/"><img src="public/banner-typography.png" alt="Signet AI"></a>

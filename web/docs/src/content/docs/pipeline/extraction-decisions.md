@@ -80,17 +80,40 @@ Dreaming is an agentic pass, not a fixed per-fact classifier. Its capability
 registry defines the operations available to the agent, including:
 
 - `search_evidence` for immutable episodic memories, artifacts, and transcripts;
-  without a query it pages through the delivery queue, resuming each source
-  where the current pass last read it and reporting `hasMore` until the queue
-  is empty. A page holds one excerpt per source, and a partly read source
-  continues on a later page by itself. The agent files each page before asking
-  for the next, so a pass that runs out of time loses at most one page. Once a pass has used half its
+  without a query it pages through the delivery queue and reports `hasMore`
+  until the queue is empty. A page holds one excerpt per source, and a partly
+  reviewed source continues on a later page by itself. Within a pass a source
+  resumes where the pass last read it; a source reviewed partway in an earlier
+  pass resumes 200 characters before its reviewed end, snapped back to a
+  sentence or paragraph start, and the excerpt's `reviewedChars` counts the
+  leading characters that were already reviewed. The agent files each page and
+  acknowledges it before asking for the next, so a pass that runs out of time
+  loses at most one page. Once a pass has used half its
   timeout, the queue stops handing out new sources (`deliveryClosed`) so the
   pass can file what it read and record its progress; the rest goes to the
   next pass. With a query it searches full history, splitting it on whitespace
   into words that match independently
   (ASCII case-insensitive) and ranking fuller matches first; unspaced text such
   as CJK matches as one phrase
+- `review_evidence` to acknowledge the excerpts a pass has reviewed. The agent
+  copies `sourceRef` and `contentOffset` from an excerpt delivered in the same
+  pass and scope, and either acknowledges the whole excerpt or names an exact
+  `through` quote where its review stopped. The daemon converts that to a
+  character offset and rejects the whole call with a specific code when the
+  excerpt was not delivered in this pass, belongs to another scope, does not
+  contain the quote, or has changed since delivery. A source's evidence cursor
+  advances only by text acknowledged this way or cited by a successful
+  `apply_ontology_ops` operation, extended contiguously from the stored cursor
+  when the pass finalizes. If only whitespace remains after that point, the
+  source counts as fully reviewed, unless the pass deferred it. Delivered text
+  that is never acknowledged stays queued. A source revision delivered in three successful passes without
+  progress gets a visible `evidence_requeue` attention record and leaves the
+  continuation queue, so fresh sources are served before it. A pass that
+  defers the source, or withholds its progress after a failed write, does not
+  count toward those three. That record does
+  not schedule a pass by itself, and it resolves when the source makes progress
+  or is excluded as reviewed. Cursors written before this rule are marked
+  with `cursor_basis = 'delivery'`; new writes use `'review'`.
 - `search_entities` and `get_entity` for scoped graph reads
 - `list_aspect_claims` for claims with their evidence, and optionally the aspect's contradictions
 - `attention_list` for queued review and maintenance attention beyond what the pass prompt lists
@@ -173,7 +196,9 @@ and the archives and merges that cite attention records) carry no evidence, so
 their failures withhold nothing. A failed write whose trace cannot be read
 withholds every scope in the pass.
 An `incremental-content` pass must stage exactly one `memory_head_commit`, and
-fails if the agent ends without one. A pass with nothing to publish resubmits
+fails if the agent ends without one. A commit over the 1000-token head budget
+is rejected when staged and does not count, so the agent can shorten it and
+commit again in the same pass. A pass with nothing to publish resubmits
 the current entries, or an empty entry set while the head is still empty. The
 DB owner applies the staged head in the same transaction as pass completion and
 watermark updates. If validation or any finalization write fails, the transaction rolls

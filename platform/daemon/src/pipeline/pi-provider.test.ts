@@ -461,6 +461,36 @@ describe("pi provider catalog models", () => {
 		}
 	});
 
+	test.each([
+		["API key", "sk-ant-api03-test", { "x-api-key": "sk-ant-api03-test" }],
+		["OAuth token", "sk-ant-oat01-test", { authorization: "Bearer sk-ant-oat01-test" }],
+	] as const)("probes an uncataloged Anthropic model with %s auth headers", async (_kind, apiKey, expectedAuth) => {
+		const originalFetch = globalThis.fetch;
+		const requests: { url: string; headers: Record<string, string> }[] = [];
+		globalThis.fetch = mock((url: string, init?: RequestInit) => {
+			const headers = { ...(init?.headers as Record<string, string>) };
+			requests.push({ url, headers });
+			const authorized = Object.entries(expectedAuth).every(([name, value]) => headers[name] === value);
+			const versioned = headers["anthropic-version"] === "2023-06-01";
+			return Promise.resolve(new Response("{}", { status: authorized && versioned ? 200 : 400 }));
+		}) as unknown as typeof fetch;
+		try {
+			const provider = createPiModelProvider({
+				executor: "anthropic",
+				model: "claude-uncataloged-test",
+				apiKey,
+			});
+			await expect(provider.available()).resolves.toBe(true);
+			expect(requests).toHaveLength(1);
+			expect(requests[0]?.url).toBe("https://api.anthropic.com/v1/models");
+			expect(Object.keys(requests[0]?.headers ?? {}).sort()).toEqual(
+				[...Object.keys(expectedAuth), "anthropic-version"].sort(),
+			);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	test("settles a successful silent-overflow response without continuing from an assistant message", async () => {
 		const originalFetch = globalThis.fetch;
 		globalThis.fetch = mock(() =>

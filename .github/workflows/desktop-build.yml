@@ -249,20 +249,21 @@ jobs:
         run: |
           set -euo pipefail
           cd surfaces/desktop
-
-          for attempt in 1 2 3; do
+          delays=(120 300 600)
+          for attempt in 1 2 3 4; do
             if bun run build:desktop -- --${{ matrix.arch }}; then
               exit 0
             fi
-            if [ "${attempt}" -eq 3 ]; then
+            if [ "${attempt}" -eq 4 ]; then
               break
             fi
-            echo "::warning::Electron desktop build failed on attempt ${attempt}; retrying after cleanup"
+            delay="${delays[$((attempt - 1))]}"
+            echo "::warning::Electron desktop build failed on attempt ${attempt}; retrying in ${delay}s after cleanup"
             rm -rf release dist resources/daemon resources/runtime
-            sleep "$((attempt * 15))"
+            sleep "${delay}"
           done
 
-          echo "::error::Electron desktop build failed after 3 attempts"
+          echo "::error::Electron desktop build failed after 4 attempts"
           exit 1
 
       - name: Verify macOS signing, notarization, and Gatekeeper state

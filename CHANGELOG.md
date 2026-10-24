@@ -6,8 +6,26 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-10-24
+- Bug fixes: dedupe escaped PATH profile entries; escape shell metachars in PATH line; print PATH commands after piped install.
+
+### 2026-10-23
+- Bug fixes: skip subagent transcripts in recovery scan; forward home overrides to service daemon; send Anthropic auth headers on probe.
+- Docs: sync translations.
+
+### 2026-10-18
+- Bug fixes: register implicit agents as isolated.
+
+### 2026-10-14
+- Bug fixes: guarantee integrity progress past slow probes and shadowed rowids; check large tables in bounded chunks during integrity sweeps; compact no-op dependency history rebuild pairs; say a rejected memory head commit may be retried; enforce the memory head token budget when it is staged; require a note's own graph structure before skipping it; look up indexed Obsidian documents by canonical path; skip unchanged native source files in the owner.
+
+### 2026-10-13
+- Bug fixes: ignore hygiene passes when marking import nudges seen; consume whitespace-only evidence tails; stop re-arming seen import nudges; keep suppressed passes off stalls; match imported transcript cursors; stop stall attention driving passes; demote stalled continuations; advance evidence by reviewed text; pin bun-types in extension workspaces.
+- Performance: bound import attention drain check.
+- Docs: name migration 169 as latest.
+
 ### 2026-10-08
-- Bug fixes: keep supported carried entries; revalidate carried head entries; bind head fence and carry entries; stop content passes staling their head; count every purged mention; bind memory-head commits to the running pass; keep aliases and assertions on merge; reconcile contradictions on skill uninstall; stop reconciling contradictions on read; bound native embedding input; defer incomplete transcript backfill; stop blocking input on prompt-submit; keep transcript seq monotonic per key; keep identity in portable import; record ontology claim actor; cascade and audit agent removal; stop retention from deleting entities; check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
+- Bug fixes: stop orphaning nightly releases; read failure and pass times as UTC; keep supported carried entries; revalidate carried head entries; bind head fence and carry entries; stop content passes staling their head; count every purged mention; bind memory-head commits to the running pass; keep aliases and assertions on merge; reconcile contradictions on skill uninstall; stop reconciling contradictions on read; bound native embedding input; defer incomplete transcript backfill; stop blocking input on prompt-submit; keep transcript seq monotonic per key; keep identity in portable import; record ontology claim actor; cascade and audit agent removal; stop retention from deleting entities; check pid hints and relative paths; scope daemon stop to its workspace; keep opt-in for existing workspaces; list memory setup under Needs attention; show the pipeline on when unset; wait for a provider instead of pausing.
 - Docs: address review on docs template; add screenshots for docs template PR; add page template and rewrite core pages; refresh for 1.0 and post-1.0 direction; note native updater cap in 1.0 post.
 
 ### 2026-10-07
@@ -16,32 +34,101 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Performance: size evidence pages from the Dreaming input budget.
 - Docs: note that pass history is scoped; correct the cost model's per-token rate and cache share; add a Dreaming cost model to the benchmarking skill; advise against gpt-6-luna as a Dreaming model for now; add a benchmarking skill with run tooling and a results ledger; sync translations; list Muse Code in README and site.
 
-### 2026-10-06
-- Features: show what a credential may do, manage keys; warn before sessions end, count down retries; report effective permissions in whoami; sign in when the daemon requires auth; show sample skills in demo mode; add the Skills library; make the memory graph readable and navigable; scale the memory chat and calm the graph; bring Dreams up to Home's polish; pin the sidebar toggle in the header; put the sidebar toggle in the content corner; move the sidebar toggle to the window corner; let the sidebar expand to show page names; anchor the brand where header and sidebar meet; explain source problems where they appear; compact the home System column; scroll recent memories in place; raise the daily brief and quiet the lists; unify home section headers and status; responsive home layout and type scale.
-- Bug fixes: check Bun before desktop source installation; accept native binaries above 256 MiB; count key management against the admin limit once; count only usable keys as active; address review of permission gating; list a new API key once; spend fewer admin calls on API keys; return 403 and 429 from combined auth guards; say why the auth mode check failed; skip handoff in local mode, flag dead targets; bound session rechecks, follow other tabs; keep open paths off the key database; redeem handoff links in an open tab; open the resolved daemon in signet dashboard; verify API keys on whoami, add session exchange; read multiline skill descriptions from frontmatter; restore graph layout and keep the inspector clear of chat; smooth the chat dock to sidebar transition; calmer Dreams and correct pass times; page health reads and report failed checks as unknown.
-- Docs: cover dashboard key management and permission states; add a Teams guide for shared daemons; document dashboard sign-in and session routes.
-
-### 2026-10-05
-- Features: redesign homepage and blog; add Notion source provider; report blocked layout upgrades in status; create new workspaces on layout v2; upgrade v1 workspaces to v2 in place; Liquid Glass macOS app icon via Icon Composer.
-- Bug fixes: refresh changed Notion properties; bound Notion syncs and block passes; use the canonical Notion logo; harden Notion block and purge logic; anchor v2 storage roots in gitignore; defer to an interrupted layout upgrade; verify v1 data before finishing upgrades; keep legacy volumes on layout v1; keep same-millisecond snapshots apart; report v2 storage in status and diagnostics; recognize older template test dirs; harden layout upgrade recovery; reject incomplete v2 databases; validate upgrade record paths; preserve legacy workspace state; preserve legacy state; preserve transcript-only workspaces; harden recovery checks; verify interrupted move identity; reject missing upgrade moves; keep original transcript provenance; resolve workspace paths through layout; resume upgrades from the daemon entry; scope upgrade rollback and resume; harden in-place layout upgrade; resolve runtime paths through layout; use shared MCP resolver; register native Signet binary as MCP stdio server; create macOS descriptor files with a mode openat actually reads; require exact manifest zip names; verify published macOS manifest; publish one macOS update manifest for both architectures; ship precompiled Assets.car instead of compiling .icon in CI; select Xcode 26 for deep-link package CI; drop comments; gate mac updates on release team; stop offering updates unsigned macOS builds cannot install.
-- Refactoring: remove relocation migration.
-- Docs: sync translations; list Notion as a supported source; add German, Korean, Simplified Chinese, and Japanese translations; narrow the transcript upgrade row; describe v2 paths and memory/ rule.
-
-### 2026-10-04
-- Bug fixes: close search before client navigation; fail closed on keyring probe errors; persist and deliver first-use events in recorded order; release the store lock without exposing an empty lock directory; decode source-chunk fallback vectors from the DB owner; record a clean shutdown when no cleanup error occurred; yield every reindex batch instead of every 2,500 files; stop sharing default pipeline config by reference; allow machine-id encryption only when the host has no keyring; launch git and protection subprocesses through the shared adapter; mark routed targets unavailable on any HTTP auth failure; flush final SSE drop summaries; retain SSE fallback framing; preserve bounded SSE delivery; bound SSE buffering and teardown.
-- Docs: sync the route reference with the daemon.
-
-### 2026-10-03
-- Bug fixes: share in-flight connector inspections; let connector rows pass wheel scroll; keep better-sqlite3 external in bun build; stage the real bun binary; verify native updates atomically; clarify retired Windows app; preserve retryable Windows migration; migrate legacy Windows install; preserve installed bundles and restore runtime connectivity; fold ASCII only in evidence search; tighten evidence search and recall cites; let memory chat find saved memories; guard prune resume generation; fence bounded prune scans; bound generic entity pruning scans.
-- Docs: add dashboard screenshot; refresh overview, install, and trust sections; clarify legacy cleanup.
-
-### 2026-10-02
-- Features: add 2D memory graph and persistent Pi chat.
-- Bug fixes: update native Dreaming smoke payload; authorize macOS keychain access for API-key saves; remove false graph attribution; commit memory head with pass finalization; scope model catalog and gate dreaming completion; compare live credentials without password hashing; retry GitHub asset upload timeouts; classify absent default macOS keychain as unavailable; recover macOS OAuth keychain authorization; stop macOS keychain prompt loops; preserve macOS verification copy; use keychain search list; parse signing keychain lists; harden signing probe recovery; add codesign key access; use matched signing identity; support Bash 3.2 signing; harden macOS signing lookup; sign by certificate fingerprint; guard fallback signing identity; report macOS keychain lookup details; match signing team suffix; skip identity policy filter; bypass trust-only identity scan; preflight macOS signing.
-- Refactoring: rebuild guided onboarding.
-- Docs: drop graph attribution entry; remove duplicate license note; clarify opening and use cases.
-
 ## Release Ledger
+
+## [0.237.16] - 2026-10-24
+
+Release summary: 3 bug fixes.
+Tag range: `v0.237.15..v0.237.16`.
+
+### Bug Fixes
+
+- **cli**: dedupe escaped PATH profile entries
+- **cli**: escape shell metachars in PATH line
+- **cli**: print PATH commands after piped install
+
+## [0.237.15] - 2026-10-23
+
+Release summary: 3 bug fixes and 1 docs update.
+Tag range: `v0.237.14..v0.237.15`.
+
+### Bug Fixes
+
+- **daemon**: skip subagent transcripts in recovery scan
+- **cli**: forward home overrides to service daemon
+- **daemon**: send Anthropic auth headers on probe
+
+### Docs
+
+- **readme**: sync translations
+
+## [0.237.14] - 2026-10-18
+
+Release summary: 1 bug fix.
+Tag range: `v0.237.13..v0.237.14`.
+
+### Bug Fixes
+
+- **daemon**: register implicit agents as isolated
+
+## [0.237.13] - 2026-10-14
+
+Release summary: 5 bug fixes.
+Tag range: `v0.237.12..v0.237.13`.
+
+### Bug Fixes
+
+- **daemon**: guarantee integrity progress past slow probes and shadowed rowids
+- **daemon**: check large tables in bounded chunks during integrity sweeps
+- **daemon**: compact no-op dependency history rebuild pairs
+- **dreaming**: say a rejected memory head commit may be retried
+- **dreaming**: enforce the memory head token budget when it is staged
+
+## [0.237.12] - 2026-10-14
+
+Release summary: 3 bug fixes.
+Tag range: `v0.237.11..v0.237.12`.
+
+### Bug Fixes
+
+- **daemon**: require a note's own graph structure before skipping it
+- **daemon**: look up indexed Obsidian documents by canonical path
+- **daemon**: skip unchanged native source files in the owner
+
+## [0.237.11] - 2026-10-13
+
+Release summary: 9 bug fixes, 1 performance improvement, and 1 docs update.
+Tag range: `v0.237.10..v0.237.11`.
+
+### Bug Fixes
+
+- **dreaming**: ignore hygiene passes when marking import nudges seen
+- **dreaming**: consume whitespace-only evidence tails
+- **dreaming**: stop re-arming seen import nudges
+- **dreaming**: keep suppressed passes off stalls
+- **dreaming**: match imported transcript cursors
+- **dreaming**: stop stall attention driving passes
+- **dreaming**: demote stalled continuations
+- **dreaming**: advance evidence by reviewed text
+- **ci**: pin bun-types in extension workspaces
+
+### Performance
+
+- **dreaming**: bound import attention drain check
+
+### Docs
+
+- **storage**: name migration 169 as latest
+
+## [0.237.10] - 2026-10-08
+
+Release summary: 2 bug fixes.
+Tag range: `v0.237.9..v0.237.10`.
+
+### Bug Fixes
+
+- **ci**: stop orphaning nightly releases
+- **dreaming**: read failure and pass times as UTC
 
 ## [0.237.9] - 2026-10-08
 

@@ -1,4 +1,7 @@
-<!-- readme-sync source=README.md blob=b536a907a7fa5c3940a4a56389dda03a13460096 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=9b1392b1d2e92186c981c96663a99987b6e3a7f0 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+> [!CAUTION]
+> **사기 경고: Signet에는 토큰이나 코인이 없습니다.** Signet이라는 이름을 사용하는 모든 토큰과 코인은 이 프로젝트와 아무런 관련이 없습니다. Signet을 지원한다고 여기고 구매하지 마세요.
+
 <div align="center">
 
 <a href="https://signetai.sh/"><img src="public/banner-typography.png" alt="Signet AI"></a>

@@ -45,6 +45,7 @@ import {
 	readRecentEpisodicSources,
 	searchEpisodicSources,
 	timestampMillis,
+	utcTimestampMs,
 } from "../episodic-sources";
 import { type GraphHygieneCaps, getDreamingHygieneCandidatesInDb } from "../knowledge-graph-hygiene";
 import { logger } from "../logger";
@@ -57,14 +58,22 @@ import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
 import { DREAMING_CAPABILITY_IDS, dreamingEvidencePageChars, listDreamingAttention } from "./dreaming-capabilities";
-import { readCuratedMemoryHead, type MemoryHeadCommitInput, type MemoryHeadCommitter } from "../memory-head";
-import { commitCuratedMemoryHeadInDb, withContentPassWrites } from "../memory-head-owner";
+import {
+	MEMORY_HEAD_MAX_TOKENS,
+	readCuratedMemoryHead,
+	type MemoryHeadCommitInput,
+	type MemoryHeadCommitter,
+} from "../memory-head";
+import { commitCuratedMemoryHeadInDb, memoryHeadInputError, withContentPassWrites } from "../memory-head-owner";
 import { renderDreamingEvidence, sanitizeTranscriptForDreaming } from "./dreaming-evidence";
 import {
 	deliveredOffsetForSource,
 	evidenceContentSha256,
 	failedOperationEvidence,
 	recordDreamingEvidenceConsumptionInTx,
+	resolveImportedSourceAttentionInTx,
+	SEEN_IMPORTED_SOURCE_ATTENTION_SQL,
+	STALLED_EVIDENCE_ATTENTION_SQL,
 } from "./dreaming-evidence-consumption";
 import {
 	parseDreamingReviewedExcludedEvidence,
@@ -711,7 +720,7 @@ export async function getActiveDreamingPasses(
 }
 
 const DREAMING_CODEMODE_PROMPT =
-	"Lookups (search_entities, get_entity, list_aspect_claims, validate_proposal, attention_list, zoom_history) are available only inside the codemode tool. Batch the lookups a page needs into one script: call them through tools.<name>(args), parse each JSON result, and print only what you need, carrying ids from results instead of retyping them. Reading evidence (search_evidence) and every write (apply_ontology_ops, runbook_write, memory_head_commit) stay direct tool calls; a script cannot call them.";
+	"Lookups (search_entities, get_entity, list_aspect_claims, validate_proposal, attention_list, zoom_history) are available only inside the codemode tool. Batch the lookups a page needs into one script: call them through tools.<name>(args), parse each JSON result, and print only what you need, carrying ids from results instead of retyping them. Reading and acknowledging evidence (search_evidence, review_evidence) and every write (apply_ontology_ops, runbook_write, memory_head_commit) stay direct tool calls; a script cannot call them.";
 
 const MAX_DREAMING_TOOL_TRACE_JSON_CHARS = 128_000;
 
@@ -956,7 +965,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - If you inspect a flagged target and judge it should stay as it is (a deliberate keep — e.g. a live entity with a non-concrete type, or an over-cap aspect you chose not to consolidate), close the record with decline_attention citing its attention id. Declining is an affirmative judgment: only decline records you actually inspected, and never decline records you could not complete this pass — defer those with a named blocker instead.
 3. Take the surprisal hints listed in <pending_attention>. These are bounded exploration hints, not evidence and not hygiene provenance. For each hint, inspect its memory:<id> subjectRef with search_evidence in the owning scope. Treat the score only as a priority signal: if the source establishes a useful, settled fact, use a normal content operation with an exact quote; if it is valid but not useful or is noise, use decline_attention after inspecting it. Never create a claim or entity from the score alone, and never cite attention:<id> for a content operation. A surprisal hint must not bypass the evidence cursor or audited apply path.
 4. Take the review_due records listed in <pending_attention>. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp. Then take the contested_claim records with reason source_changed: the claim's source was edited after the claim was filed. Read the source's current text with search_evidence using details.sourceRef. If it still states the claim, close the record with decline_attention. If it states a different value, supersede the claim with supersede_claim_value citing an exact quote from the current text, then close the record with decline_attention. If it no longer states the claim, archive it with archive_claim_value and provenance attention:<id>. For reason source_removed the source no longer exists: archive the claim the same way unless search_evidence finds other evidence that still states it, in which case close the record with decline_attention.
-5. Only when the hygiene queue is clear: find new evidence since the cutoff. Read unprocessed evidence one page at a time with search_evidence — omit the query, since, and before to take the next page of the durable delivery queue. A page holds one excerpt per source; a source with contentHasNext continues by itself on a later page, so do not page through queued sources with sourceRef and offset. File what each page establishes (or mark a source you have read in full as reviewed or deferred) before asking for the next page, so the work is kept if the pass runs out of time; stop when hasMore is false or the queue reports deliveryClosed. Use a query or sourceRef only to look up specific history or verify a citation. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+5. Only when the hygiene queue is clear: find new evidence since the cutoff. Read unprocessed evidence one page at a time with search_evidence — omit the query, since, and before to take the next page of the durable delivery queue. A page holds one excerpt per source; a source with contentHasNext continues by itself on a later page, so do not page through queued sources with sourceRef and offset. File what each page establishes (or mark a source you have read in full as reviewed or deferred), then call review_evidence for that page, before asking for the next page, so the work is kept if the pass runs out of time. Acknowledge each excerpt with the sourceRef and contentOffset from the page, and omit through when you reviewed all of it; set through to an exact quote only when you stopped partway, so the rest is delivered again. Text you never acknowledge or cite stays queued for a later pass. When an excerpt reports reviewedChars, its first reviewedChars characters were reviewed by an earlier pass: do not file them again; stop when hasMore is false or the queue reports deliveryClosed. Use a query or sourceRef only to look up specific history or verify a citation. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - A concrete deliverable the assistant produced for the user's own project, plan, or situation (a budget, schedule, draft, plan, or specific recommendation the user asked for) is a durable fact about that project: file its specifics as a claim on the project, worded as proposed or drafted rather than confirmed. Generic information not tied to the user's own circumstances is not. Work the user asks for on behalf of their own job, business, employer, trip, or event is their own situation.
@@ -1076,7 +1085,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
 1. Read the pass history below. Establish cutoff: sources viewed, changes applied, deferred items. Zoom (zoom_history) into any line that mentions work you are about to repeat, resume, or re-defer before acting on it.
 2. Take the review_due records listed in <pending_attention>. For expired records, inspect the cited memory with search_evidence using its subjectRef, then supersede the matching active claim with supersede_claim_value. Use the supplied entityId, aspectId, attributeId, and claimKey when present. The replacement must state that the planned event remains unconfirmed; never rewrite it as if the event happened. Cite an exact quote from the original memory. Do not supersede approaching records. When creating or setting a future temporal claim, set payload.reviewAfter to the referenced ISO timestamp. Then take the contested_claim records with reason source_changed: the claim's source was edited after the claim was filed. Read the source's current text with search_evidence using details.sourceRef. If it still states the claim, close the record with decline_attention. If it states a different value, supersede the claim with supersede_claim_value citing an exact quote from the current text, then close the record with decline_attention. If it no longer states the claim, archive it with archive_claim_value and provenance attention:<id>. For reason source_removed the source no longer exists: archive the claim the same way unless search_evidence finds other evidence that still states it, in which case close the record with decline_attention.
 3. Take the surprisal hints listed in <pending_attention>. These are bounded exploration hints, not evidence and not hygiene provenance. Inspect each hint's memory:<id> subjectRef with search_evidence in the owning scope. If the source establishes a useful settled fact, use a normal content operation with an exact quote; otherwise decline_attention after inspection. Never create a claim or entity from the score alone, and never cite attention:<id> for a content operation.
-4. Find new evidence since the cutoff. Read unprocessed evidence one page at a time with search_evidence — omit the query, since, and before to take the next page of the durable delivery queue. A page holds one excerpt per source; a source with contentHasNext continues by itself on a later page, so do not page through queued sources with sourceRef and offset. File what each page establishes (or mark a source you have read in full as reviewed or deferred) before asking for the next page, so the work is kept if the pass runs out of time; stop when hasMore is false or the queue reports deliveryClosed. Use a query or sourceRef only to look up specific history or verify a citation. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
+4. Find new evidence since the cutoff. Read unprocessed evidence one page at a time with search_evidence — omit the query, since, and before to take the next page of the durable delivery queue. A page holds one excerpt per source; a source with contentHasNext continues by itself on a later page, so do not page through queued sources with sourceRef and offset. File what each page establishes (or mark a source you have read in full as reviewed or deferred), then call review_evidence for that page, before asking for the next page, so the work is kept if the pass runs out of time. Acknowledge each excerpt with the sourceRef and contentOffset from the page, and omit through when you reviewed all of it; set through to an exact quote only when you stopped partway, so the rest is delivered again. Text you never acknowledge or cite stays queued for a later pass. When an excerpt reports reviewedChars, its first reviewedChars characters were reviewed by an earlier pass: do not file them again; stop when hasMore is false or the queue reports deliveryClosed. Use a query or sourceRef only to look up specific history or verify a citation. Prefer evidence from completed transcript sessions; historical summary rows are not part of the default delivery path. A transcript with completed: false is mid-stream — defer filing from it with the named blocker "transcript still mid-stream" (re-check completed each pass: a session still active when re-checked is a re-verified blocker, not a repeated one), and note the deferral in the pass log, because its states may be contradicted by the session's end. For each new source:
    - search_entities for subjects it establishes.
    - File claims only for what the source establishes as settled fact: outcomes, decisions, shipped changes, stable behavior. Do not file instructions that were merely suggested, hypotheses or diagnoses, open questions, or intermediate states of an ongoing investigation. When a source shows an attempt and its outcome, file the outcome.
    - A concrete deliverable the assistant produced for the user's own project, plan, or situation (a budget, schedule, draft, plan, or specific recommendation the user asked for) is a durable fact about that project: file its specifics as a claim on the project, worded as proposed or drafted rather than confirmed. Generic information not tied to the user's own circumstances is not. Work the user asks for on behalf of their own job, business, employer, trip, or event is their own situation.
@@ -1099,7 +1108,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - create_entity only for durable subjects clearly established by the source.
    - When the evidence supports a possible relationship, merge, or other ontology change but the relationship is ambiguous rather than settled, do not apply it immediately. Emit the normal ontology operation with risk: "review_required". Its reason must be a concise, human-readable explanation that names the entities and the proposed relationship; the exact evidence citation remains required. The daemon will place it in the user's review queue for confirmation, not treat the queue as a work-deferral mechanism.
    - Validate before writing (validate_proposal).
-5. Update MEMORY.md: call memory_head_read; its committedEntries are the last published entries whose support still holds, with that support, returned even when your own writes left the head stale. Then call memory_head_commit exactly once with the complete set of entries to retain, each with exact source/quote support. The pass cannot finish without this commit, even when nothing changed: resubmit the committedEntries, or submit an empty entry set only if committedEntries is empty and nothing durable qualifies yet, which clears the head.
+5. Update MEMORY.md: call memory_head_read; its committedEntries are the last published entries whose support still holds, with that support, returned even when your own writes left the head stale. Then call memory_head_commit with the complete set of entries to retain, each with exact source/quote support. The rendered head, one "- text" line per entry, must be at most ${MEMORY_HEAD_MAX_TOKENS} tokens; memory_head_read reports committedTokens. Keep entries terse, and when the retained set would exceed the budget, condense or drop the least durable entries. A rejected commit, such as one over budget, is not staged; fix it and commit again. The pass needs exactly one accepted commit, and must not commit again after one is accepted. It cannot finish without that commit, even when nothing changed: resubmit the committedEntries, or submit an empty entry set only if committedEntries is empty and nothing durable qualifies yet, which clears the head.
 6. Write the pass log (runbook_write) last. Its summary is read back by a human who did not watch the pass: write a specific entity-named change manifest, not process narration. Use Markdown, max 2000 chars, with these sections when applicable: ## Updated, ## Created, ## Deferred, ## No-op. Under every section, each line must name the entity or entity id, state the exact change (claim filed or superseded, aspect touched, entity/aspect/link archived or merged, or why no change was needed), and cite the source or provenance reference (memory, artifact, or transcript as kind:id; hygiene attention:<id>). Deferred and No-op lines must state the specific blocker or reason; never use generic categories such as "content-related" or "ongoing structural process". Omit empty sections. Put the same deferred items and open questions in the runbook's deferred and openQuestions fields.
 
 ### What counts as durable
@@ -1193,6 +1202,7 @@ export async function renderPendingDreamingAttention(
 				kind,
 				status: "pending",
 				limit: ATTENTION_ITEMS_PER_KIND + 1,
+				agentFacing: true,
 			});
 			if (items.length === 0) continue;
 			lines.push(
@@ -1837,6 +1847,11 @@ ${JSON.stringify(liveOptions.userRequest)}
 					};
 					return { ok: false, ...memoryHeadCommitRejection };
 				}
+				const invalid = memoryHeadInputError(input);
+				if (invalid !== null) {
+					memoryHeadCommitRejection = invalid;
+					return { ok: false, ...invalid };
+				}
 				memoryHeadCommitInput = input;
 				return { ok: true, code: "STAGED_FOR_FINALIZATION" };
 			},
@@ -2305,6 +2320,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 				deferredEvidence,
 				withheldScopes: failedEvidence.scopes,
 				filedSources: failedEvidence.filedSources,
+				filedCitations: failedEvidence.filedCitations,
 			});
 			recordDreamingReviewedExcludedEvidenceInTx(db, {
 				passId: input.passId,
@@ -2313,6 +2329,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 				deferredEvidence,
 			});
 		}
+		resolveImportedSourceAttentionInTx(db, input.passId, input.scopes);
 	}
 	if (
 		dreamingModeAdvancesEvidence(
@@ -2332,7 +2349,7 @@ export const DREAMING_HALT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 export const DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES = 50;
 export function isDreamingScopeHalted(state: DreamingState, nowMs = Date.now()): boolean {
 	if (state.consecutiveFailures < DREAMING_FAILURE_HALT_THRESHOLD) return false;
-	const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
+	const failedAt = state.lastFailureAt === null ? Number.NaN : utcTimestampMs(state.lastFailureAt);
 	return Number.isFinite(failedAt) && nowMs - failedAt < DREAMING_HALT_COOLDOWN_MS;
 }
 export async function isDreamingHaltActive(
@@ -2599,14 +2616,16 @@ export async function evaluateDreamingTrigger(
 		(await ownerQueryOne<{ present: number }>(
 			await getDbOwnerForAccessor(accessor),
 			"dreaming.attention.present",
-			"SELECT 1 AS present FROM dreaming_attention WHERE agent_id = ? AND resolved_at IS NULL LIMIT 1",
+			`SELECT 1 AS present FROM dreaming_attention
+			 WHERE agent_id = ? AND resolved_at IS NULL
+			   AND NOT ${STALLED_EVIDENCE_ATTENTION_SQL} AND NOT ${SEEN_IMPORTED_SOURCE_ATTENTION_SQL} LIMIT 1`,
 			[agentId],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		)) !== undefined;
 	if (isDreamingScopeHalted(state, nowMs)) return { trigger: false };
 	if (state.consecutiveFailures > 0) {
 		const exp = Math.min(state.consecutiveFailures, MAX_FAILURE_BACKOFF_MULTIPLIER);
-		const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
+		const failedAt = state.lastFailureAt === null ? Number.NaN : utcTimestampMs(state.lastFailureAt);
 		if (!Number.isFinite(failedAt) || nowMs - failedAt < FAILURE_BACKOFF_BASE_MS * 2 ** exp) return { trigger: false };
 	}
 
@@ -2659,7 +2678,7 @@ export async function evaluateDreamingTrigger(
 			)) !== undefined;
 		if (hasContinuation) return { trigger: true, reason: "continuation" };
 	}
-	const lastPassMs = state.lastPassAt === null ? Number.NaN : Date.parse(state.lastPassAt);
+	const lastPassMs = state.lastPassAt === null ? Number.NaN : utcTimestampMs(state.lastPassAt);
 	if (backlog.hasBacklog !== false && Number.isFinite(lastPassMs) && nowMs - lastPassMs >= cfg.maxInterval) {
 		return { trigger: true, reason: "max-interval" };
 	}

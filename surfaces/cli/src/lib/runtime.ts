@@ -1459,6 +1459,26 @@ function resolveTelemetryEnvironment(env: NodeJS.ProcessEnv): Partial<Record<Tel
 	return resolved;
 }
 
+const LOCATION_ENVIRONMENT_KEYS = [
+	"HOME",
+	"XDG_CONFIG_HOME",
+	"CODEX_HOME",
+	"HERMES_HOME",
+	"KIMI_SHARE_DIR",
+	"KIMI_CODE_HOME",
+] as const;
+
+type LocationEnvironmentKey = (typeof LOCATION_ENVIRONMENT_KEYS)[number];
+
+function resolveLocationEnvironment(env: NodeJS.ProcessEnv): Partial<Record<LocationEnvironmentKey, string>> {
+	const resolved: Partial<Record<LocationEnvironmentKey, string>> = {};
+	for (const key of LOCATION_ENVIRONMENT_KEYS) {
+		const value = env[key]?.trim();
+		if (value) resolved[key] = value;
+	}
+	return resolved;
+}
+
 export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput): string[] {
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
 	const runtime = input.runtime ?? resolveDaemonRuntime(undefined, sourceEnvironment);
@@ -1484,6 +1504,7 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		`--setenv=BUN_INSPECT=${input.bunInspect ?? ""}`,
 		`--setenv=BUN_OPTIONS=${input.bunOptions ?? ""}`,
 		...Object.entries(resolveTelemetryEnvironment(sourceEnvironment)).map(([key, value]) => `--setenv=${key}=${value}`),
+		...Object.entries(resolveLocationEnvironment(sourceEnvironment)).map(([key, value]) => `--setenv=${key}=${value}`),
 		...(input.unitName ? [`--setenv=SIGNET_DAEMON_UNIT=${input.unitName}`] : []),
 		...resolveDaemonLaunchCommand(input.daemonPath, sourceEnvironment, runtime),
 	];
@@ -1869,6 +1890,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 			...(connectorAssetsDir ? { SIGNET_CONNECTOR_ASSETS_DIR: connectorAssetsDir } : {}),
 			SIGNET_DAEMON_SERVICE: "launchd",
 			...resolveTelemetryEnvironment(sourceEnvironment),
+			...resolveLocationEnvironment(sourceEnvironment),
 			BUN_INSPECT: input.bunInspect ?? "",
 			...(sourceEnvironment.SIGNET_DIR ? { SIGNET_DIR: sourceEnvironment.SIGNET_DIR } : {}),
 			...(sourceEnvironment.SIGNET_DASHBOARD_DIR

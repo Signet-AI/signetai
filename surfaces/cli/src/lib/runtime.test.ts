@@ -291,6 +291,42 @@ describe("buildSystemdDaemonStartArgs", () => {
 		expect(args.slice(-2)).toEqual([process.execPath, "/opt/signet/dist/daemon.js"]);
 	});
 
+	it("propagates harness location overrides through systemd and launchd", () => {
+		const input = {
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/sandbox/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/sandbox/.agents/.daemon/logs/startup.log",
+			telemetryEnv: {
+				HOME: "/sandbox",
+				XDG_CONFIG_HOME: "/sandbox/.config",
+				CODEX_HOME: "/sandbox/codex",
+				HERMES_HOME: "/sandbox/hermes",
+				KIMI_SHARE_DIR: "/sandbox/kimi",
+				KIMI_CODE_HOME: " ",
+			},
+		};
+
+		const args = buildSystemdDaemonStartArgs(input);
+		const plist = buildLaunchdDaemonPlist(input);
+		const compactPlist = plist.replace(/>\s+</g, "><");
+
+		for (const [key, value] of [
+			["HOME", "/sandbox"],
+			["XDG_CONFIG_HOME", "/sandbox/.config"],
+			["CODEX_HOME", "/sandbox/codex"],
+			["HERMES_HOME", "/sandbox/hermes"],
+			["KIMI_SHARE_DIR", "/sandbox/kimi"],
+		]) {
+			expect(args).toContain(`--setenv=${key}=${value}`);
+			expect(compactPlist).toContain(`<key>${key}</key><string>${value}</string>`);
+		}
+		expect(args.some((arg) => arg.startsWith("--setenv=KIMI_CODE_HOME="))).toBe(false);
+		expect(plist).not.toContain("<key>KIMI_CODE_HOME</key>");
+	});
+
 	it("propagates the selected runtime through systemd and launchd", () => {
 		const input = {
 			daemonPath: "/opt/signet/runtime/daemon-js/daemon.js",

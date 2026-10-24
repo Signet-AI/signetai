@@ -128,6 +128,19 @@ native integrity check cannot be split into bounded work. Skipped objects do not
 make an otherwise healthy database unhealthy; their count is available in
 `databaseIntegrity.incrementalProgress.skippedObjects`.
 
+A table with more than 100,000 rows is too large to `quick_check` within one
+bounded owner job. The incremental check instead reads its records in rowid
+chunks, saving its position between slices so the sweep keeps moving. A read
+error marks the table failed. This scan does not verify the table's b-tree
+structure or indexes, so a completed sweep that used it reports their count in
+`databaseIntegrity.incrementalProgress.scannedObjects` and says so in
+`databaseIntegrity.quickCheck.messages`. If a table's size probe or whole-table
+check does not finish, for example because it hits the owner deadline, the next
+slice reads that table in chunks instead of retrying the same work. A table over
+the limit that cannot be addressed by rowid (a `WITHOUT ROWID` table, or one
+that declares columns named `rowid`, `_rowid_`, and `oid`) is counted in
+`skippedObjects`.
+
 `dbOwner.generation` identifies the owner lifecycle generation and changes when
 the owner is replaced or restarted. If no maintenance authority is registered,
 `dbOwner` is `null` and the integrity owner fields are also `null`; they do not

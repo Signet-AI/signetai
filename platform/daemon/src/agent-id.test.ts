@@ -49,7 +49,7 @@ describe("agent id registration", () => {
 		expect(resolveAgentId({ sessionKey: "agent:agent-b:session-1" })).toBe("agent-b");
 	});
 
-	test("registers first-seen named agents with shared read policy", async () => {
+	test("registers first-seen named agents with isolated read policy", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 
@@ -59,7 +59,33 @@ describe("agent id registration", () => {
 			db.prepare("SELECT id, name, read_policy FROM agents WHERE id = 'noam'").get(),
 		)) as { id: string; name: string; read_policy: string } | undefined;
 
-		expect(row).toEqual({ id: "noam", name: "noam", read_policy: "shared" });
+		expect(row).toEqual({ id: "noam", name: "noam", read_policy: "isolated" });
+		expect(await getAgentScope("noam")).toEqual({ readPolicy: "isolated", policyGroup: null });
+	});
+
+	test("keeps the seeded default agent shared", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		await ensureAgentRegistered("default");
+
+		expect(await getAgentScope("default")).toEqual({ readPolicy: "shared", policyGroup: null });
+	});
+
+	test("does not narrow agents already registered as shared", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		const now = new Date().toISOString();
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				`INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES ('legacy', 'legacy', 'shared', NULL, ?, ?)`,
+			).run(now, now);
+		});
+
+		await ensureAgentRegistered("legacy");
+
+		expect(await getAgentScope("legacy")).toEqual({ readPolicy: "shared", policyGroup: null });
 	});
 
 	test("does not overwrite existing agent policies", async () => {
@@ -87,13 +113,13 @@ describe("agent id registration", () => {
 		initDbAccessor(dbPath);
 		await ensureAgentRegistered("cache-agent");
 
-		expect(await getAgentScope("cache-agent")).toEqual({ readPolicy: "shared", policyGroup: null });
+		expect(await getAgentScope("cache-agent")).toEqual({ readPolicy: "isolated", policyGroup: null });
 		await getDbAccessor().withWriteTxAsync((db) => {
-			db.prepare("UPDATE agents SET read_policy = 'isolated' WHERE id = 'cache-agent'").run();
+			db.prepare("UPDATE agents SET read_policy = 'shared' WHERE id = 'cache-agent'").run();
 		});
-		expect(await getAgentScope("cache-agent")).toEqual({ readPolicy: "shared", policyGroup: null });
+		expect(await getAgentScope("cache-agent")).toEqual({ readPolicy: "isolated", policyGroup: null });
 
 		invalidateAgentScopeCache("cache-agent");
-		expect(await getAgentScope("cache-agent")).toEqual({ readPolicy: "isolated", policyGroup: null });
+		expect(await getAgentScope("cache-agent")).toEqual({ readPolicy: "shared", policyGroup: null });
 	});
 });

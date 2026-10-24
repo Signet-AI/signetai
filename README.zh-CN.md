@@ -1,4 +1,7 @@
-<!-- readme-sync source=README.md blob=b536a907a7fa5c3940a4a56389dda03a13460096 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=9b1392b1d2e92186c981c96663a99987b6e3a7f0 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+> [!CAUTION]
+> **防骗警示：Signet 没有任何代币或加密货币。** 任何使用 Signet 之名的代币或加密货币都与本项目无关。请不要以为购买它们就是在支持 Signet。
+
 <div align="center">
 
 <a href="https://signetai.sh/"><img src="public/banner-typography.png" alt="Signet AI"></a>

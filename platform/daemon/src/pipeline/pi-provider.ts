@@ -252,6 +252,16 @@ function withVersionPath(baseUrl: string): string {
 	}
 	return base;
 }
+
+function availabilityProbeHeaders(api: Api, apiKey: string | undefined): Record<string, string> {
+	if (!apiKey) return {};
+	if (api !== "anthropic-messages") return { authorization: `Bearer ${apiKey}` };
+	const auth: Record<string, string> = apiKey.includes("sk-ant-oat")
+		? { authorization: `Bearer ${apiKey}` }
+		: { "x-api-key": apiKey };
+	return { ...auth, "anthropic-version": "2023-06-01" };
+}
+
 export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 	const timeoutMs = config.defaultTimeoutMs ?? 60_000;
 	void timeoutMs;
@@ -645,7 +655,7 @@ export function createPiModelProvider(
 			try {
 				const res = await fetch(probeUrl, {
 					method: "GET",
-					headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+					headers: availabilityProbeHeaders(piModel.api, apiKey),
 					signal: AbortSignal.timeout(8_000),
 				});
 				return res.ok || res.status === 401 || res.status === 404;

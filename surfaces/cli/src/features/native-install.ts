@@ -29,8 +29,14 @@ export interface NativeInstallResult {
 	readonly pathHint: string | null;
 	readonly pathProfile: string | null;
 	readonly pathPersisted: boolean;
+	readonly pathFix: NativeInstallPathFix | null;
 	readonly connectorAssetsDir: string | null;
 	readonly daemonJsAssetsDir: string | null;
+}
+
+export interface NativeInstallPathFix {
+	readonly commands: readonly string[];
+	readonly persistent: boolean;
 }
 
 function isRuntimeExecutable(path: string): boolean {
@@ -78,7 +84,7 @@ function shellProfilePath(home: string, shell: string | undefined, platform: Nod
 function shellPathEntry(binDir: string, home: string, platform: NodeJS.Platform): string {
 	const homeBinDir = join(home, ".local", "bin");
 	if (normalizePathEntry(binDir, platform) === normalizePathEntry(homeBinDir, platform)) return "$HOME/.local/bin";
-	return binDir.replaceAll('"', '\\"');
+	return binDir.replace(/[\\"$`]/g, "\\$&");
 }
 
 function profileContainsPath(contents: string, binDir: string, home: string, platform: NodeJS.Platform): boolean {
@@ -90,7 +96,7 @@ function profileContainsPath(contents: string, binDir: string, home: string, pla
 		const assignment = trimmed.replace(/^(?:export\s+)?PATH\s*=\s*/, "").replace(/^["']|["']$/g, "");
 		const containsRequestedDir = assignment
 			.split(":")
-			.some((entry) => normalizePathEntry(entry.trim(), platform) === normalizedDir);
+			.some((entry) => normalizePathEntry(entry.trim().replace(/\\([\\"$`])/g, "$1"), platform) === normalizedDir);
 		if (containsRequestedDir) return true;
 		const homeBinDirAliases = ["$HOME/.local/bin", "$" + "{HOME}/.local/bin", "~/.local/bin"];
 		return (
@@ -136,6 +142,64 @@ export function persistNativeInstallPath(
 	} catch {
 		return { profilePath, persisted: false };
 	}
+}
+
+function profileHasPath(profilePath: string, binDir: string, home: string, platform: NodeJS.Platform): boolean {
+	try {
+		return existsSync(profilePath) && profileContainsPath(readFileSync(profilePath, "utf8"), binDir, home, platform);
+	} catch {
+		return false;
+	}
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function shellWord(value: string): string {
+	return /^[\w./-]+$/.test(value) ? value : shellQuote(value);
+}
+
+function displayProfilePath(profilePath: string, home: string): string {
+	const prefix = `${home.replace(/\/+$/, "")}/`;
+	return profilePath.startsWith(prefix) ? `~/${shellWord(profilePath.slice(prefix.length))}` : shellWord(profilePath);
+}
+
+export function nativeInstallPathFix(
+	binDir: string,
+	options: NativeInstallPathOptions = {},
+): NativeInstallPathFix | null {
+	const home = options.home ?? homedir();
+	const platform = options.platform ?? process.platform;
+	const shell = options.shell ?? process.env.SHELL;
+	if (platform === "win32" || pathContains(binDir, options.pathValue, platform)) return null;
+	if (shell && basename(shell).toLowerCase() === "fish") {
+		return { commands: [`fish_add_path ${shellWord(binDir)}`], persistent: true };
+	}
+	const exportLine = `export PATH="${shellPathEntry(binDir, home, platform)}:$PATH"`;
+	const profilePath = shellProfilePath(home, shell, platform);
+	if (profilePath === null) return { commands: [exportLine], persistent: false };
+	if (profileHasPath(profilePath, binDir, home, platform)) return { commands: [exportLine], persistent: true };
+	const append = exportLine.includes("\\") ? "printf '%s\\n'" : "echo";
+	return {
+		commands: [`${append} ${shellQuote(exportLine)} >> ${displayProfilePath(profilePath, home)}`, exportLine],
+		persistent: true,
+	};
+}
+
+function resolveInstallPath(
+	binDir: string,
+): Pick<NativeInstallResult, "pathHint" | "pathProfile" | "pathPersisted" | "pathFix"> {
+	const pathPersistence = persistNativeInstallPath(binDir, {
+		interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
+	});
+	const pathHint = pathPersistence.persisted || pathContains(binDir) ? null : binDir;
+	return {
+		pathHint,
+		pathProfile: pathPersistence.profilePath,
+		pathPersisted: pathPersistence.persisted,
+		pathFix: pathHint === null ? null : nativeInstallPathFix(binDir),
+	};
 }
 
 function verifySha256(path: string, expected: string): void {
@@ -219,17 +283,11 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		const daemonJsAssetsDir = options.daemonJsAssets
 			? installDaemonJsAssetsFromManifest(options.daemonJsAssets, binDir)
 			: null;
-		const pathPersistence = persistNativeInstallPath(binDir, {
-			interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
-		});
-		const pathHint = pathPersistence.persisted || pathContains(binDir) ? null : binDir;
 		return {
 			source,
 			target,
 			installed: false,
-			pathHint,
-			pathProfile: pathPersistence.profilePath,
-			pathPersisted: pathPersistence.persisted,
+			...resolveInstallPath(binDir),
 			connectorAssetsDir,
 			daemonJsAssetsDir,
 		};
@@ -266,17 +324,11 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		rmSync(tmp, { force: true });
 	}
 
-	const pathPersistence = persistNativeInstallPath(binDir, {
-		interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
-	});
-	const pathHint = pathPersistence.persisted || pathContains(binDir) ? null : binDir;
 	return {
 		source,
 		target,
 		installed: true,
-		pathHint,
-		pathProfile: pathPersistence.profilePath,
-		pathPersisted: pathPersistence.persisted,
+		...resolveInstallPath(binDir),
 		connectorAssetsDir,
 		daemonJsAssetsDir,
 	};
@@ -312,10 +364,19 @@ export function printNativeInstallResult(result: NativeInstallResult, json = fal
 	}
 
 	if (result.pathHint) {
-		if (result.pathProfile) {
-			console.log(chalk.yellow(`Could not update ${result.pathProfile}. Add ${result.pathHint} to PATH manually.`));
-		} else {
-			console.log(chalk.yellow(`Add ${result.pathHint} to PATH if \`signet\` is not found.`));
+		const subject = result.pathProfile
+			? `Could not update ${result.pathProfile}.`
+			: `${result.pathHint} is not on PATH.`;
+		if (result.pathFix === null) {
+			console.log(chalk.yellow(`${subject} Add ${result.pathHint} to PATH manually.`));
+			return;
 		}
+		const action = result.pathFix.persistent
+			? "Run this so your shell and agent hooks can find `signet`:"
+			: "Run this now, then add the same line to your shell profile:";
+		console.log(chalk.yellow(`${subject} ${action}`));
+		console.log("");
+		for (const command of result.pathFix.commands) console.log(`  ${command}`);
+		console.log("");
 	}
 }

@@ -846,7 +846,12 @@ evidence still states it. Removing a whole source still purges its Dreaming rows
 `memory_head_commit` is the sole working-memory publication capability. Submit
 its complete retained entry set with exact source/quote support and the revision
 and hash from `memory_head_read`, under the active content pass. The owner renders
-the body and records removals for omitted entries. `curate_memory_head` is retired
+the body and records removals for omitted entries. The rendered body, one
+`- text` line per entry, must be at most 1000 tokens. `memory_head_read` reports
+the head's `tokens` and `maxTokens`, plus `committedTokens` for the committed
+entries during a content pass. An over-budget commit returns `INVALID_HEAD`
+with its `tokens` and `maxTokens` and is not staged, so the pass can shorten the
+entries and commit again. `curate_memory_head` is retired
 and returns 404; historical freeform audit rows remain intact. Every content
 pass stages exactly one commit, even when nothing changes: resubmit the current
 entries, or an empty entry set while the head is still empty. An empty set never

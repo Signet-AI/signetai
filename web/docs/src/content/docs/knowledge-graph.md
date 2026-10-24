@@ -130,8 +130,14 @@ confidence >= minConfidence
 ```
 
 `related_to` edges require a non-empty reason. Migration 050 adds
-`entity_dependency_history`, an append-only audit table populated by triggers
-for dependency insert, update, and delete events.
+`entity_dependency_history`, an audit table populated by triggers for
+dependency insert, update, and delete events. Rows are never edited. The
+retention worker removes one kind of row: a trigger-written `deleted` event
+whose next event for the same dependency is a `created` event in the same
+second with identical source, target, agent, type, and reason. Such a pair
+records a rebuild that changed nothing the history stores. Every other event,
+including `updated` rows, reason changes, real deletes, and the first
+`created` or `backfill` row, is kept.
 
 ### `task_meta`
 

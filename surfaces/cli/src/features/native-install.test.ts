@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { persistNativeInstallPath, printNativeInstallResult } from "./native-install.js";
+import { nativeInstallPathFix, persistNativeInstallPath, printNativeInstallResult } from "./native-install.js";
 
 function makeHome(): string {
 	return mkdtempSync(join(tmpdir(), "signet-native-install-"));
@@ -202,6 +203,7 @@ describe("persistNativeInstallPath", () => {
 				pathHint: null,
 				pathProfile: "/home/test/.zprofile",
 				pathPersisted: true,
+				pathFix: null,
 				connectorAssetsDir: null,
 				daemonJsAssetsDir: null,
 			});
@@ -210,5 +212,150 @@ describe("persistNativeInstallPath", () => {
 		}
 
 		expect(lines.join("\n")).toContain("Open a new shell or run `source /home/test/.zprofile`");
+	});
+
+	test("prints copy-pastable PATH commands when the installer cannot edit the profile", () => {
+		const lines: string[] = [];
+		const originalLog = console.log;
+		console.log = (...args: unknown[]) => lines.push(args.map(String).join(" "));
+		try {
+			printNativeInstallResult({
+				source: "/tmp/signet",
+				target: "/Users/test/.local/bin/signet",
+				installed: true,
+				pathHint: "/Users/test/.local/bin",
+				pathProfile: null,
+				pathPersisted: false,
+				pathFix: nativeInstallPathFix("/Users/test/.local/bin", {
+					home: "/Users/test",
+					platform: "darwin",
+					shell: "/bin/zsh",
+					pathValue: "/usr/bin:/bin",
+				}),
+				connectorAssetsDir: null,
+				daemonJsAssetsDir: null,
+			});
+		} finally {
+			console.log = originalLog;
+		}
+
+		expect(lines).toContain(`  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile`);
+		expect(lines).toContain('  export PATH="$HOME/.local/bin:$PATH"');
+	});
+});
+
+describe("nativeInstallPathFix", () => {
+	test("returns the zsh profile commands on macOS", () => {
+		expect(
+			nativeInstallPathFix("/Users/test/.local/bin", {
+				home: "/Users/test",
+				platform: "darwin",
+				shell: "/bin/zsh",
+				pathValue: "/usr/bin:/bin",
+			}),
+		).toEqual({
+			commands: [`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zprofile`, 'export PATH="$HOME/.local/bin:$PATH"'],
+			persistent: true,
+		});
+	});
+
+	test("targets the existing bash startup file", () => {
+		const home = makeHome();
+		homes.push(home);
+		writeFileSync(join(home, ".profile"), "# existing profile\n", "utf8");
+
+		const fix = nativeInstallPathFix(join(home, ".local", "bin"), {
+			home,
+			platform: "linux",
+			shell: "/bin/bash",
+			pathValue: "/usr/bin:/bin",
+		});
+
+		expect(fix?.commands[0]).toBe(`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.profile`);
+	});
+
+	test("uses fish_add_path for fish", () => {
+		expect(
+			nativeInstallPathFix("/home/test/.local/bin", {
+				home: "/home/test",
+				platform: "linux",
+				shell: "/usr/bin/fish",
+				pathValue: "/usr/bin",
+			}),
+		).toEqual({ commands: ["fish_add_path /home/test/.local/bin"], persistent: true });
+	});
+
+	test("returns a session-only export for an unknown shell profile", () => {
+		expect(
+			nativeInstallPathFix("/home/test/.local/bin", {
+				home: "/home/test",
+				platform: "linux",
+				shell: "/bin/sh",
+				pathValue: "/usr/bin",
+			}),
+		).toEqual({ commands: ['export PATH="$HOME/.local/bin:$PATH"'], persistent: false });
+	});
+
+	test("returns null when PATH already has the directory or on Windows", () => {
+		const options = { home: "/home/test", shell: "/bin/zsh" } as const;
+		expect(
+			nativeInstallPathFix("/home/test/.local/bin", {
+				...options,
+				platform: "linux",
+				pathValue: "/home/test/.local/bin:/usr/bin",
+			}),
+		).toBeNull();
+		expect(nativeInstallPathFix("C:\\Signet", { ...options, platform: "win32", pathValue: "C:\\Windows" })).toBeNull();
+	});
+
+	test("prints only the session export when the profile already has the entry", () => {
+		const home = makeHome();
+		homes.push(home);
+		writeFileSync(join(home, ".zprofile"), 'export PATH="$HOME/.local/bin:$PATH"\n', "utf8");
+
+		expect(
+			nativeInstallPathFix(join(home, ".local", "bin"), {
+				home,
+				platform: "darwin",
+				shell: "/bin/zsh",
+				pathValue: "/usr/bin:/bin",
+			}),
+		).toEqual({ commands: ['export PATH="$HOME/.local/bin:$PATH"'], persistent: true });
+	});
+
+	test("printed commands add the exact directory in bash and zsh", () => {
+		const home = makeHome();
+		homes.push(home);
+		const dirs = [
+			join(home, ".local", "bin"),
+			join(home, "it's a dir", "bin"),
+			join(home, 'quo"ted', "bin"),
+			join(home, "$HOME `id` $(id) \\x", "bin"),
+		];
+		for (const shell of ["bash", "zsh"]) {
+			if (spawnSync("sh", ["-c", `command -v ${shell}`]).status !== 0) continue;
+			for (const binDir of dirs) {
+				const options = { home, platform: "darwin", shell: "/bin/zsh", pathValue: "/usr/bin:/bin" } as const;
+				const commands = nativeInstallPathFix(binDir, options)?.commands ?? [];
+				const script = `${commands.join("\n")}\nprintf '%s' "\${PATH%%:*}"`;
+				const session = spawnSync(shell, ["-c", script], { env: { HOME: home, PATH: "/usr/bin:/bin" } });
+				expect(session.status).toBe(0);
+				expect(session.stdout.toString()).toBe(binDir);
+
+				const sourced = spawnSync(shell, ["-c", `. ~/.zprofile\nprintf '%s' "\${PATH%%:*}"`], {
+					env: { HOME: home, PATH: "/usr/bin:/bin" },
+				});
+				expect(sourced.stdout.toString()).toBe(binDir);
+				const viaCommand = readFileSync(join(home, ".zprofile"), "utf8");
+				rmSync(join(home, ".zprofile"));
+
+				persistNativeInstallPath(binDir, options);
+				expect(viaCommand).toBe(readFileSync(join(home, ".zprofile"), "utf8"));
+				persistNativeInstallPath(binDir, options);
+				expect(readFileSync(join(home, ".zprofile"), "utf8")).toBe(viaCommand);
+				expect(nativeInstallPathFix(binDir, options)?.commands).toEqual(commands.slice(1));
+				rmSync(join(home, ".zprofile"));
+			}
+		}
 	});
 });

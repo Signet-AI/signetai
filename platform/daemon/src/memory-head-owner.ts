@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { dirname, join } from "node:path";
 import { redactCredentials } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
-import type { MemoryHeadCommitInput, MemoryHeadRequest } from "./memory-head";
+import { MEMORY_HEAD_MAX_TOKENS, type MemoryHeadCommitInput, type MemoryHeadRequest } from "./memory-head";
 import { readEpisodicSource } from "./episodic-sources";
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
 import { countTokens } from "./pipeline/tokenizer";
@@ -12,6 +12,32 @@ const hash = (text: string): string => createHash("sha256").update(text).digest(
 const generatedMarker = /^<!-- (?:signet-generated-memory\b[^>]*|generated \d{4}-\d{2}-\d{2}[^>]*) -->\s*/;
 const revisionMarker = /^<!-- signet-generated-memory agent=([a-z0-9-]+) revision=(\d+);/;
 type Head = { revision: number; content: string; content_hash: string; revision_id: string | null; is_current: number };
+
+export function renderMemoryHeadBody(entries: MemoryHeadCommitInput["entries"]): string {
+	return entries.map((entry) => `- ${entry.text.trim()}`).join("\n");
+}
+
+export function memoryHeadInputError(input: MemoryHeadCommitInput): {
+	readonly code: "INVALID_HEAD";
+	readonly error: string;
+	readonly tokens?: number;
+	readonly maxTokens?: number;
+} | null {
+	if (
+		input.entries.length > 200 ||
+		Buffer.byteLength(JSON.stringify(input)) > 262144 ||
+		input.entries.some((entry) => entry.support.length > 8)
+	)
+		return { code: "INVALID_HEAD", error: "head input exceeds its bounded budget" };
+	const tokens = countTokens(renderMemoryHeadBody(input.entries));
+	if (tokens <= MEMORY_HEAD_MAX_TOKENS) return null;
+	return {
+		code: "INVALID_HEAD",
+		error: `head is ${tokens} tokens; it must be at most ${MEMORY_HEAD_MAX_TOKENS}. Shorten or drop entries and resubmit.`,
+		tokens,
+		maxTokens: MEMORY_HEAD_MAX_TOKENS,
+	};
+}
 
 function currentSource(db: WriteDb, agentId: string, from: string) {
 	from = from.replace(/^source:/, "artifact:").replace(/^session:/, "transcript:");
@@ -138,13 +164,9 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 			revision,
 			hash: currentHash,
 		};
-	if (
-		input.entries.length > 200 ||
-		Buffer.byteLength(JSON.stringify(input)) > 262144 ||
-		input.entries.some((entry) => entry.support.length > 8)
-	)
-		return { ok: false, code: "INVALID_HEAD", error: "head input exceeds its bounded budget" };
-	const body = input.entries.map((entry) => `- ${entry.text.trim()}`).join("\n");
+	const invalid = memoryHeadInputError(input);
+	if (invalid !== null) return { ok: false, ...invalid };
+	const body = renderMemoryHeadBody(input.entries);
 	if (input.entries.length === 0 && (head?.content ?? "") === "")
 		return { ok: true, code: "NOOP", revision, hash: currentHash, changed: false, changedIds: [] };
 	if (input.entries.length === 0) {
@@ -157,7 +179,6 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 					"committed entries still have valid or unverifiable support; resubmit or replace them instead of clearing the head",
 			};
 	}
-	if (countTokens(body) > 1000) return { ok: false, code: "INVALID_HEAD", error: "head must be at most 1000 tokens" };
 	const contentHash = hash(body);
 	if (head?.is_current === 1 && currentHash === contentHash)
 		return { ok: true, code: "NOOP", revision, hash: contentHash, changed: false, changedIds: [] };
@@ -234,6 +255,7 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 			publicationError = String(error);
 		}
 	}
+	const committed = pass == null ? null : committedEntries(db, agentId, head?.revision_id ?? null).entries;
 	return {
 		agentId,
 		...(publicationError ? { publication: "pending", publicationError } : {}),
@@ -250,7 +272,11 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 						)
 						.all(agentId, head.revision)
 				: [],
-		...(pass == null ? {} : { committedEntries: committedEntries(db, agentId, head?.revision_id ?? null).entries }),
+		maxTokens: MEMORY_HEAD_MAX_TOKENS,
+		tokens: head?.is_current === 1 ? countTokens(head.content) : 0,
+		...(committed === null
+			? {}
+			: { committedEntries: committed, committedTokens: countTokens(renderMemoryHeadBody(committed)) }),
 	};
 }
 
