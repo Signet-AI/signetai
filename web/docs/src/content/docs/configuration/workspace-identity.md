@@ -52,7 +52,6 @@ embedding:
   base_url: http://127.0.0.1:11434
 
 search:
-  alpha: 0.7
   top_k: 20
   min_score: 0.3
 
@@ -79,7 +78,7 @@ The embedding provider, model, dimensions, endpoint, and optional `api_key` belo
 
 Changing an embedding profile initiates an index migration. Confirm its progress from the daemon status and embedding status endpoints before retiring the old provider or model.
 
-`search.alpha` controls hybrid retrieval weighting. `top_k` and `min_score` bound candidate collection and returned results. `transcript_evidence_limit` (default 2, 0–5) caps how many session transcript excerpts recall returns; `0` disables them. Change search tuning deliberately and verify representative recall queries after restart.
+`top_k` and `min_score` bound candidate collection and returned results. `transcript_evidence_limit` (default 2, 0–5) caps how many session transcript excerpts recall returns; `0` disables them. Change search tuning deliberately and verify representative recall queries after restart.
 
 ## Applying a change
 

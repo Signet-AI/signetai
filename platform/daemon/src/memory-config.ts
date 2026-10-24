@@ -40,7 +40,6 @@ export interface EmbeddingConfig {
 }
 
 export interface MemorySearchConfig {
-	alpha: number;
 	top_k: number;
 	min_score: number;
 	rehearsal_enabled: boolean;
@@ -331,8 +330,8 @@ const runtimeSchema = z.object({
 		.prefault({}),
 	search: z
 		.object({
-			alpha: fraction.optional(),
-			top_k: z.number().int().positive().default(20),
+			alpha: z.unknown().optional(),
+			top_k: z.number().int().positive().optional(),
 			min_score: fraction.optional(),
 			rehearsal_enabled: z.boolean().default(true),
 			rehearsal_weight: fraction.default(0.1),
@@ -400,18 +399,24 @@ export function readRuntimeConfig(agentsDir: string): {
 				),
 				...(rates && Object.keys(rates).length ? { costRates: rates } : {}),
 			},
-			search: {
-				...search,
-				alpha: search.alpha ?? 0.7,
-				top_k: search.alpha === undefined ? 20 : search.top_k,
-				min_score: search.alpha === undefined ? 0.1 : (search.min_score ?? 0.3),
-			},
+			search: runtimeSearchConfig(search),
 		};
 	} catch (error) {
 		throw new MemoryConfigValidationError(
 			`${path ?? join(agentsDir, "agent.yaml")}: ${error instanceof Error ? error.message : "invalid runtime configuration"}`,
 		);
 	}
+}
+
+let retiredAlphaWarned = false;
+
+function runtimeSearchConfig(search: z.infer<typeof runtimeSchema>["search"]): MemorySearchConfig {
+	const { alpha, top_k, min_score, ...rest } = search;
+	if (alpha !== undefined && !retiredAlphaWarned) {
+		retiredAlphaWarned = true;
+		logger.warn("config", "search.alpha is retired and ignored; remove it from agent.yaml");
+	}
+	return { ...rest, top_k: top_k ?? 20, min_score: min_score ?? (alpha === undefined ? 0.1 : 0.3) };
 }
 
 function clampFraction(raw: unknown, fallback: number): number {

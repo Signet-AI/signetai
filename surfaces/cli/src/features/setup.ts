@@ -276,7 +276,6 @@ function hasInteractiveSetupConfiguration(options: SetupWizardOptions): boolean 
 		options.aggregateRecallProvider,
 		options.aggregateRecallModel,
 		options.aggregateRecallEndpoint,
-		options.searchBalance,
 		options.openclawRuntimePath,
 		options.identityPreset,
 		options.identityMode,
@@ -788,10 +787,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		embeddingDimensions = getEmbeddingDimensions(configuredModel);
 	}
 
-	const existingSearchBalance = deps.parseSearchBalanceValue(existingSearch.alpha);
-	const requestedSearchBalance = deps.parseSearchBalanceValue(options.searchBalance);
-	const searchBalance = requestedSearchBalance ?? existingSearchBalance ?? 0.7;
-
 	const existingSetupExtractionProvider =
 		deps.normalizeChoice(existingPipeline.extractionProvider, EXTRACTION_PROVIDER_CHOICES) ||
 		deps.normalizeChoice(existingExtraction.provider, EXTRACTION_PROVIDER_CHOICES);
@@ -929,7 +924,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		aggregateRecallProvider,
 		aggregateRecallModel,
 		aggregateRecallEndpoint,
-		searchBalance,
 		searchTopK,
 		searchMinScore,
 		memorySessionBudget,

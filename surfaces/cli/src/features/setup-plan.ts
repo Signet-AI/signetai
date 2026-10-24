@@ -79,7 +79,6 @@ export const setupPlanSchema = z
 		aggregateRecallProvider: aggregateRecallProviderSchema.optional(),
 		aggregateRecallModel: z.string().optional(),
 		aggregateRecallEndpoint: httpEndpointSchema,
-		searchBalance: z.number().min(0).max(1),
 		searchTopK: z.number().int().positive(),
 		searchMinScore: z.number().min(0).max(1),
 		memorySessionBudget: z.number().int().positive(),

@@ -64,6 +64,7 @@ import {
 	findStructuredPathCandidatesViaOwner,
 	scoreStructuredPathEvidenceViaOwner,
 } from "./pipeline/structured-path-evidence";
+import { rankPositions, reciprocalRankScore, selectPrimaryCandidates } from "./recall-rank-fusion";
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
 import { escapeLike } from "./sql-utils";
@@ -1709,7 +1710,6 @@ export async function hybridRecall(
 	checkRecallCancellation(execution);
 	let query = params.query;
 	const limit = normalizeRecallLimit(params.limit);
-	const alpha = cfg.search.alpha;
 	const minScore = cfg.search.min_score;
 	const filter = buildFilterClause(params);
 	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
@@ -2179,6 +2179,8 @@ export async function hybridRecall(
 		...temporalCandidateMap.keys(),
 	]);
 	const flatScored: Array<{ id: string; score: number; source: string }> = [];
+	const lexicalRank = rankPositions(bm25Map, minScore);
+	const semanticRank = rankPositions(vectorMap, minScore);
 
 	timings.time("flat_score_merge", () => {
 		for (const id of allIds) {
@@ -2189,18 +2191,20 @@ export async function hybridRecall(
 			const temporalCandidate = temporalCandidateMap.get(id) ?? 0;
 			const topicEvidence = bm25 > 0 || hint > 0 || vec > 0 || structured > 0;
 			const temporalScore = temporalCandidateSet.has(id) && topicEvidence ? 0.85 : 0;
+			const lexicalPosition = lexicalRank.get(id);
+			const semanticPosition = semanticRank.get(id);
+			const ranked = lexicalPosition !== undefined || semanticPosition !== undefined;
 			let score: number;
 			let source: string;
 
-			if (bm25 > 0 && vec > 0) {
-				score = alpha * vec + (1 - alpha) * bm25;
-				source = "hybrid";
-			} else if (vec > 0) {
-				score = vec;
-				source = "vector";
-			} else if (bm25 > 0) {
-				score = bm25;
-				source = "keyword";
+			if (ranked) {
+				score = reciprocalRankScore([lexicalPosition, semanticPosition]);
+				source =
+					lexicalPosition !== undefined && semanticPosition !== undefined
+						? "hybrid"
+						: semanticPosition !== undefined
+							? "vector"
+							: "keyword";
 			} else if (temporalScore > 0) {
 				score = temporalScore;
 				source = "temporal";
@@ -2225,7 +2229,7 @@ export async function hybridRecall(
 				source = bm25 > 0 || vec > 0 || hint > 0 || structured > 0 ? "temporal_hybrid" : "temporal";
 			}
 
-			if (score >= minScore) flatScored.push({ id, score, source });
+			if (ranked || score >= minScore) flatScored.push({ id, score, source });
 		}
 
 		flatScored.sort((a, b) => b.score - a.score);
@@ -2330,22 +2334,15 @@ export async function hybridRecall(
 			const candidateBudget = Math.max(limit, Math.min(cfg.search.top_k, limit * 4));
 			const flatIds = new Set(flatScored.map((row) => row.id));
 			const minFlat = Math.ceil(candidateBudget * 0.4);
+			const reservedSemantic = Math.ceil(candidateBudget * 0.25);
 			const byId = new Map<string, { id: string; score: number; source: string }>();
 			for (const row of flatScored) mergeCandidate(byId, row);
 			for (const row of traversalScored) mergeCandidate(byId, row);
 			const fused = [...byId.values()].sort((a, b) => b.score - a.score);
-			const selected: Array<{ id: string; score: number; source: string }> = [];
-			let flatCount = 0;
-			for (const row of fused) {
-				if (selected.length >= candidateBudget) break;
-				const isFlat = flatIds.has(row.id);
-				const remaining = candidateBudget - selected.length;
-				const neededFlat = Math.max(0, Math.min(minFlat, flatScored.length) - flatCount);
-				if (!isFlat && neededFlat >= remaining) continue;
-				selected.push(row);
-				if (isFlat) flatCount++;
-			}
-			scored = selected;
+			const reservedIds = new Set(
+				[...semanticRank].filter(([, position]) => position <= reservedSemantic).map(([id]) => id),
+			);
+			scored = selectPrimaryCandidates(fused, candidateBudget, flatIds, minFlat, reservedIds);
 		});
 	} else {
 		scored = flatScored;

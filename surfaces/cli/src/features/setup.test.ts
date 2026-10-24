@@ -1022,7 +1022,6 @@ describe("setupWizard headless plan path", () => {
 			embeddingDimensions: 768,
 			extractionProvider: "none",
 			extractionModel: "",
-			searchBalance: 0.7,
 			searchTopK: 20,
 			searchMinScore: 0.3,
 			memorySessionBudget: 2000,
@@ -1334,7 +1333,6 @@ describe("setupWizard headless plan path", () => {
 			embeddingDimensions: 768,
 			extractionProvider: "none",
 			extractionModel: "",
-			searchBalance: 0.7,
 			searchTopK: 20,
 			searchMinScore: 0.3,
 			memorySessionBudget: 2000,
@@ -1483,7 +1481,7 @@ describe("setupWizard headless plan path", () => {
 	it("rejects a plan that fails validation", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-headless-invalid-"));
 		const basePath = join(root, "agents");
-		const planPath = writePlanFile(root, { searchBalance: 5 });
+		const planPath = writePlanFile(root, { searchMinScore: 5 });
 		const deps = freshDeps(basePath, root);
 
 		const exitSpy = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
@@ -1492,7 +1490,7 @@ describe("setupWizard headless plan path", () => {
 		const errorSpy = spyOn(console, "error").mockImplementation(() => {});
 		try {
 			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
-			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("searchBalance");
+			expect(errorSpy.mock.calls.map((call) => String(call[0] ?? "")).join("\n")).toContain("searchMinScore");
 		} finally {
 			exitSpy.mockRestore();
 			errorSpy.mockRestore();

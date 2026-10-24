@@ -179,7 +179,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 				decay_rate: plan.memoryDecayRate,
 			},
 			search: {
-				alpha: plan.searchBalance,
 				top_k: plan.searchTopK,
 				min_score: plan.searchMinScore,
 				rehearsal_enabled: true,

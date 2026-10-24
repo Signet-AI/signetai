@@ -17,7 +17,6 @@ export interface SetupWizardOptions {
 	aggregateRecallProvider?: string;
 	aggregateRecallModel?: string;
 	aggregateRecallEndpoint?: string;
-	searchBalance?: string;
 	skipGit?: boolean;
 	openDashboard?: boolean;
 	openclawRuntimePath?: string;

@@ -334,15 +334,6 @@ export function AdvancedSection() {
 					fields={[
 						{
 							kind: "number",
-							path: srch("alpha"),
-							title: "Alpha",
-							desc: "Vector weight (0–1). 0.9 is heavily semantic; 0.3 skews toward keyword matching. Default 0.7.",
-							min: 0,
-							max: 1,
-							step: 0.05,
-						},
-						{
-							kind: "number",
 							path: srch("top_k"),
 							title: "Top K",
 							desc: "Candidates fetched from each source (BM25 and vector) before blending. Default 20.",

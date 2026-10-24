@@ -18,7 +18,6 @@ interface SetupOptions {
 	aggregateRecallProvider?: string;
 	aggregateRecallModel?: string;
 	aggregateRecallEndpoint?: string;
-	searchBalance?: string;
 	openclawRuntimePath?: string;
 	configureOpenclawWorkspace?: boolean;
 	openDashboard?: boolean;
@@ -116,7 +115,6 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 		.option("--aggregate-recall-provider <provider>", "Distinct provider for aggregate recall (non-interactive mode)")
 		.option("--aggregate-recall-model <model>", "Model for aggregate recall (non-interactive mode)")
 		.option("--aggregate-recall-endpoint <url>", "OpenAI-compatible aggregate-recall endpoint (non-interactive mode)")
-		.option("--search-balance <alpha>", "Search balance alpha in non-interactive mode (0-1)")
 		.option("--openclaw-runtime-path <mode>", "OpenClaw runtime path in non-interactive mode (plugin, legacy)")
 		.option(
 			"--configure-openclaw-workspace",

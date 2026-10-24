@@ -280,7 +280,6 @@ export async function runExistingSetupWizard(
 				decay_rate: 0.95,
 			},
 			search: {
-				alpha: 0.7,
 				top_k: 20,
 				min_score: 0.3,
 				rehearsal_enabled: true,

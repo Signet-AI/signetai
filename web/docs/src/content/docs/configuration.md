@@ -37,5 +37,10 @@ before the resolved configuration is checked.
 
 Embedding providers are `local` (the native alias), `native`, `llama-cpp`,
 `ollama`, `openai`, or `none`. Embedding dimensions must be a positive integer.
-Search `alpha` and `min_score` must be within 0–1, and `top_k` must be a
-positive integer. Authentication modes are `local`, `team`, and `hybrid`.
+Search `min_score` must be within 0–1, and `top_k` must be a positive
+integer. `search.alpha` is retired: hybrid recall fuses keyword and vector
+hits by rank, so a configured value is ignored and the daemon logs one
+warning. Its presence still keeps the older `min_score` default: a config
+that sets `search.alpha` but not `min_score` uses 0.3, and any other config
+without `min_score` uses 0.1. Explicit `top_k` and `min_score` values always
+apply. Authentication modes are `local`, `team`, and `hybrid`.

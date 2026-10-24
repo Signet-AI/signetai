@@ -118,7 +118,6 @@ describe("loadMemoryConfig", () => {
 			["embedding.dimensions", "banana"],
 			["embedding.costRates.native", "nope"],
 			["embedding.cost_rates.native", "nope"],
-			["search.alpha", "8"],
 			["search.top_k", "-20"],
 			["network.mode", "public"],
 		] as const) {
@@ -129,7 +128,6 @@ describe("loadMemoryConfig", () => {
   ${field === "embedding.costRates.native" ? "costRates" : field === "embedding.cost_rates.native" ? "cost_rates" : "costRates"}:
     native: ${field.includes("cost") ? value : "0"}
 search:
-  alpha: ${field === "search.alpha" ? value : "0.7"}
   top_k: ${field === "search.top_k" ? value : "20"}
 network:
   mode: ${field === "network.mode" ? value : "localhost"}
@@ -155,8 +153,23 @@ network:
 
 		const config = loadMemoryConfig(agentsDir);
 		expect(config.embedding.provider).toBe("native");
-		expect(config.search.alpha).toBe(0.7);
+		expect(config.search.top_k).toBe(20);
+		expect(config.search.min_score).toBe(0.1);
 		expect(config.auth.mode).toBe("local");
+	});
+
+	it("ignores the retired search.alpha while keeping the min_score default of configs that carry it", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "search:\n  alpha: 8\n");
+		const legacy = loadMemoryConfig(agentsDir).search;
+		expect(legacy).not.toHaveProperty("alpha");
+		expect(legacy.top_k).toBe(20);
+		expect(legacy.min_score).toBe(0.3);
+
+		writeFileSync(join(agentsDir, "agent.yaml"), "search:\n  top_k: 12\n  min_score: 0.25\n");
+		const explicit = loadMemoryConfig(agentsDir).search;
+		expect(explicit.top_k).toBe(12);
+		expect(explicit.min_score).toBe(0.25);
 	});
 
 	it("preserves the supported local embedding provider alias", () => {

@@ -16,7 +16,6 @@ function basePlan(overrides: Partial<SetupPlan> = {}): SetupPlan {
 		extractionProvider: "claude-code",
 		extractionModel: "haiku",
 		extractionEndpoint: undefined,
-		searchBalance: 0.7,
 		searchTopK: 20,
 		searchMinScore: 0.3,
 		memorySessionBudget: 2000,
@@ -60,8 +59,8 @@ describe("setupPlanSchema", () => {
 		expect(parseSetupPlan(plan).identityMode).toBe("off");
 	});
 
-	it("rejects an out-of-range search balance", () => {
-		expect(() => parseSetupPlan(basePlan({ searchBalance: 1.5 }))).toThrow("searchBalance");
+	it("rejects the retired search balance", () => {
+		expect(() => parseSetupPlan({ ...basePlan(), searchBalance: 0.7 })).toThrow("searchBalance");
 	});
 
 	it("rejects a non-positive top_k", () => {
@@ -232,13 +231,13 @@ describe("setupPlanSchema", () => {
 	});
 
 	it("lists every invalid field when multiple are wrong", () => {
-		const bad = basePlan({ searchBalance: 5, memoryDecayRate: -1, identityMode: "ghost" as never });
+		const bad = basePlan({ searchMinScore: 5, memoryDecayRate: -1, identityMode: "ghost" as never });
 		try {
 			parseSetupPlan(bad);
 			throw new Error("should have thrown");
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
-			expect(message).toContain("searchBalance");
+			expect(message).toContain("searchMinScore");
 			expect(message).toContain("memoryDecayRate");
 			expect(message).toContain("identityMode");
 		}
@@ -259,14 +258,7 @@ describe("setupPlanJsonSchema", () => {
 	it("emits a JSON Schema document with the plan properties", () => {
 		const schema = setupPlanJsonSchema() as { properties: Record<string, unknown> };
 		expect(schema.properties).toBeDefined();
-		for (const key of [
-			"agentName",
-			"networkMode",
-			"harnesses",
-			"embeddingProvider",
-			"searchBalance",
-			"identityPreset",
-		]) {
+		for (const key of ["agentName", "networkMode", "harnesses", "embeddingProvider", "searchTopK", "identityPreset"]) {
 			expect(schema.properties[key]).toBeDefined();
 		}
 		expect(schema.properties.dreamingEnabled).toEqual({ default: true, type: "boolean" });

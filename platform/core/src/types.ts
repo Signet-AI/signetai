@@ -109,7 +109,6 @@ export interface AgentManifest {
 		api_key?: string;
 	};
 	search?: {
-		alpha: number;
 		top_k: number;
 		min_score: number;
 	};
