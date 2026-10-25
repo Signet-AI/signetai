@@ -40,6 +40,7 @@ import {
 	PiProviderDeadlineError,
 	isPiAgentSessionProvider,
 	mapSessionStatsToUsage,
+	piAgentFailureError,
 } from "./pipeline/pi-provider";
 import {
 	type AcpxHooksMode,
@@ -1307,7 +1308,7 @@ export class InferenceRouter {
 							throw error;
 						}
 						const failure = session.getFailureMessage();
-						if (failure) throw new Error(failure);
+						if (failure) throw piAgentFailureError(failure);
 						sessionUsage = mapSessionStatsToUsage(
 							session.getStats(),
 							Date.now() - startedAt,

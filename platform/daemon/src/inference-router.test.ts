@@ -719,6 +719,142 @@ printf 'never reached\\n'
 		}
 	});
 
+	it("marks a Pi target throttled by a 429 rate limited and routes later passes to its fallback (#2032)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-pi-throttle-"));
+		const requests = { throttled: 0, fallback: 0 };
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			async fetch(request) {
+				if (request.url.endsWith("/models")) return new Response("not found", { status: 404 });
+				const body = (await request.json()) as { readonly model?: string };
+				if (body.model === "throttled-model") {
+					requests.throttled++;
+					return Response.json({ code: "1302", message: "您的账户已达到速率限制，请您控制请求频率" }, { status: 429 });
+				}
+				requests.fallback++;
+				return openAiSseResponse("agent completed", { prompt_tokens: 3, completion_tokens: 1 });
+			},
+		});
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`inference:
+  defaultPolicy: pi-test
+  targets:
+    zai:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:${server.port}/v1
+      models:
+        default:
+          model: throttled-model
+    fallback:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:${server.port}/v1
+      models:
+        default:
+          model: fallback-model
+  policies:
+    pi-test:
+      mode: automatic
+      defaultTargets:
+        - zai/default
+      fallbackTargets:
+        - fallback/default
+  workloads:
+    memoryExtraction:
+      policy: pi-test
+`,
+		);
+		try {
+			const router = getOrCreateInferenceRouter(dir);
+			const run = () =>
+				router.runAgent({ operation: "memory_extraction", promptPreview: "throttled" }, "Run the pass.", [], {
+					timeoutMs: 10_000,
+					retry: { maxRetries: 1, baseDelayMs: 1, maxAgentDelayMs: 1 },
+				});
+			const first = await run();
+			expect(first.ok).toBe(true);
+			if (!first.ok) return;
+			expect(first.value.attempts.map((attempt) => [attempt.targetRef, attempt.ok])).toEqual([
+				["zai/default", false],
+				["fallback/default", true],
+			]);
+			expect(first.value.attempts[0]?.error).toStartWith("429: ");
+			expect(requests).toEqual({ throttled: 2, fallback: 1 });
+			const status = await router.status();
+			expect(status.ok).toBe(true);
+			if (!status.ok) return;
+			expect(status.value.runtimeSnapshot.targets["zai/default"]?.accountState).toBe("rate_limited");
+
+			const second = await run();
+			expect(second.ok).toBe(true);
+			if (!second.ok) return;
+			expect(second.value.attempts.map((attempt) => attempt.targetRef)).toEqual(["fallback/default"]);
+			expect(requests).toEqual({ throttled: 2, fallback: 2 });
+		} finally {
+			server.stop(true);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 20_000);
+
+	it("stops retrying a throttled Pi session at the pass deadline (#2032)", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-router-pi-throttle-deadline-"));
+		let requests = 0;
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch(request) {
+				if (request.url.endsWith("/models")) return new Response("not found", { status: 404 });
+				requests++;
+				return Response.json({ error: { message: "Too many requests" } }, { status: 429 });
+			},
+		});
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`inference:
+  defaultPolicy: pi-test
+  targets:
+    pi-test:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:${server.port}/v1
+      models:
+        default:
+          model: pi-test-model
+  policies:
+    pi-test:
+      mode: strict
+      defaultTargets:
+        - pi-test/default
+  workloads:
+    memoryExtraction:
+      policy: pi-test
+`,
+		);
+		try {
+			const router = getOrCreateInferenceRouter(dir);
+			const startedAt = Date.now();
+			const result = await router.runAgent(
+				{ operation: "memory_extraction", promptPreview: "throttled past deadline" },
+				"Run the pass.",
+				[],
+				{ timeoutMs: 1_000, retry: { maxRetries: 1_000, baseDelayMs: 100, maxAgentDelayMs: 100 } },
+			);
+			expect(Date.now() - startedAt).toBeLessThan(3_000);
+			expect(result.ok).toBe(false);
+			if (!result.ok) expect(JSON.stringify(result.error)).toMatch(/deadline/);
+			expect(getLlmConcurrencyStatus().running).toBe(0);
+			const requestsAtDeadline = requests;
+			expect(requestsAtDeadline).toBeGreaterThan(1);
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect(requests).toBe(requestsAtDeadline);
+		} finally {
+			server.stop(true);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 20_000);
+
 	it("keeps the Pi agent permit until timeout abort cleanup settles (#1333)", async () => {
 		const originalLimit = getLlmConcurrencyStatus().limit;
 		let settleAbort: (() => void) | undefined;
