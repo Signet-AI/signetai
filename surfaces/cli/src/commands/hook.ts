@@ -619,12 +619,13 @@ export function buildCompactionCompleteBody(
 	runtimePath: typeof LEGACY_RUNTIME_PATH;
 } {
 	const body = input;
+	const nativeAgentId = harness === "claude-code" ? pickString(body?.agent_id) : "";
 	const agentId = pickString(
 		overrides.agentId,
 		body?.signet_agent_id,
 		body?.signetAgentId,
 		body?.agentId,
-		body?.agent_id,
+		nativeAgentId ? "" : body?.agent_id,
 	);
 	const sessionKey = pickString(overrides.sessionKey, pickSessionKey(body));
 	const project = pickString(overrides.project, body?.project, body?.cwd);

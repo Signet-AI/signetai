@@ -820,44 +820,6 @@ export interface FilterParams {
 	since: string;
 }
 
-export function buildWhereRaw(p: FilterParams): { clause: string; args: unknown[] } {
-	const parts: string[] = [];
-	const args: unknown[] = [];
-
-	if (p.type) {
-		parts.push("type = ?");
-		args.push(p.type);
-	}
-	if (p.tags) {
-		const tagList = p.tags
-			.split(",")
-			.map((t) => t.trim())
-			.filter(Boolean);
-		for (const tag of tagList) {
-			parts.push("tags LIKE ?");
-			args.push(`%${tag}%`);
-		}
-	}
-	if (p.who) {
-		parts.push("who = ?");
-		args.push(p.who);
-	}
-	if (p.pinned) {
-		parts.push("pinned = 1");
-	}
-	if (p.importance_min !== null) {
-		parts.push("importance >= ?");
-		args.push(p.importance_min);
-	}
-	if (p.since) {
-		parts.push("created_at >= ?");
-		args.push(p.since);
-	}
-
-	const clause = parts.length ? ` AND ${parts.join(" AND ")}` : "";
-	return { clause, args };
-}
-
 export function buildWhere(p: FilterParams): { clause: string; args: unknown[] } {
 	const parts: string[] = [];
 	const args: unknown[] = [];

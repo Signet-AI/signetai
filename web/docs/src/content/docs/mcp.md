@@ -56,6 +56,18 @@ unsafe shell syntax into generated lifecycle hooks.
 **Rule of thumb:** hooks are for automatic, lifecycle-driven events. MCP is
 for agent-initiated, on-demand operations.
 
+### Agent identity
+
+The memory tools act as whichever agent the request identifies. The daemon
+resolves it the same way for reads and writes: an `agent_id` argument on
+`memory_search`, `signet_recall`, `memory_get`, or `memory_list`, then the
+credential's scoped agent, then the daemon's configured agent
+(`SIGNET_AGENT_ID` in the daemon's environment, otherwise `default`). A scoped
+credential rejects any other agent. Over HTTP (`/mcp`), a request's `agentId`
+query parameter or `x-signet-agent-id` header sets the agent for every memory
+tool in that request. The stdio server (`signet mcp`) does not read
+`SIGNET_AGENT_ID` from its own environment. `memory_list` does not accept
+`all`; the all-agents view is for operator surfaces such as the dashboard.
 
 ## Tool Reference
 
@@ -183,6 +195,7 @@ Retrieve a single memory by its ID.
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `id` | string | yes | Memory ID to retrieve |
+| `agent_id` | string | no | Agent whose read scope applies (default: the server's agent) |
 
 **Returns:** Full memory object including content, type, importance, tags,
 created/updated timestamps, and version history.
@@ -208,6 +221,7 @@ List memories with optional pagination and type filtering.
 | `limit` | number | no | Max results (default 100) |
 | `offset` | number | no | Pagination offset |
 | `type` | string | no | Filter by memory type |
+| `agent_id` | string | no | Agent whose read scope applies (default: the server's agent) |
 
 **Returns:** Array of memory objects.
 

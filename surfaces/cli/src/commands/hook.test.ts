@@ -707,23 +707,30 @@ describe("buildCompactionCompleteBody", () => {
 		});
 	});
 
-	test("uses legacy agent_id values for compaction Signet scope", () => {
+	test("uses legacy agent_id values for compaction Signet scope outside Claude Code", () => {
 		expect(
 			buildCompactionCompleteBody(
 				{
 					agent_id: "research-agent",
 					sessionKey: "sess-4",
 				},
-				"claude-code",
+				"custom-harness",
 				"summary text",
 			),
 		).toEqual({
-			harness: "claude-code",
+			harness: "custom-harness",
 			summary: "summary text",
 			agentId: "research-agent",
 			sessionKey: "sess-4",
 			runtimePath: "legacy",
 		});
+	});
+
+	test("does not scope compaction by a Claude Code native sub-agent id", () => {
+		expect(
+			buildCompactionCompleteBody({ agent_id: "claude-subagent", sessionKey: "sess-5" }, "claude-code", "summary")
+				.agentId,
+		).toBeFalsy();
 	});
 });
 

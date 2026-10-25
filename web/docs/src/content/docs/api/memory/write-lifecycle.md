@@ -14,24 +14,48 @@ enabled, writes return `503`. For a typed client wrapper, see the [Sdk](/sdk/).
 
 ### GET /api/memories
 
-List memories with basic stats. Simple pagination only; for filtered search
-use `POST /api/memory/recall` or `GET /memory/search`.
+List memories with basic stats. Simple pagination and a type filter only; for
+filtered search use `POST /api/memory/recall` or `GET /memory/search`.
 
 Requires `recall` permission.
 
+The list and its stats are scoped to the requesting agent's read policy, the
+same scope recall uses. The agent comes from `agentId`, the
+`x-signet-agent-id` header, or an `agent:<id>:...` session key, and falls back
+to the credential's scoped agent, then the daemon's configured agent
+(`$SIGNET_AGENT_ID`, otherwise `default`), the same fallback memory writes use.
+A scoped credential that asks for another agent gets `403`.
+
+`agentId=all` lists every agent's live memories. It requires `admin`
+permission, which local mode grants. The dashboard and desktop tray use it;
+agent-facing clients should send their own agent instead.
+
+Every memory read route resolves the agent the same way and applies the same
+read scope in every auth mode: this list, `GET /memory/search`,
+`GET /api/memories/most-used`, `GET /api/memories/curator-slices`,
+`GET /api/memory/timeline`, `GET /api/memory/review-queue`,
+`GET /api/memory/:id` with its `history` and `lineage`, `GET /api/memory/search`,
+`GET /memory/similar`, and `GET /api/embeddings`. Only the list, the timeline,
+and `GET /memory/search` accept `all`.
+
+Listed `content` goes through [credential redaction](#credential-redaction).
+`GET /api/memory/:id` returns the stored content.
+
 **Query parameters**
 
-| Parameter | Type    | Default | Description                  |
-|-----------|---------|---------|------------------------------|
-| `limit`   | integer | 100     | Max records to return        |
-| `offset`  | integer | 0       | Pagination offset            |
+| Parameter | Type    | Default   | Description                       |
+|-----------|---------|-----------|-----------------------------------|
+| `limit`   | integer | 100       | Max records to return, 1–500      |
+| `offset`  | integer | 0         | Pagination offset                 |
+| `type`    | string  | —         | Only memories of this type        |
+| `agentId` | string  | daemon agent | Agent whose read scope to apply, or `all` |
 
 ### Credential redaction
 
 Remembered content is stored as written. When it is projected into a prompt,
-recall result, Dreaming evidence, `MEMORY.md`, or an MCP tool response, any
-detected credential (provider API keys and tokens, private keys, JWTs, bearer
-tokens, and values assigned to secret-named keys) is replaced with
+recall result, memory list, Dreaming evidence, `MEMORY.md`, or an MCP tool
+response, any detected credential (provider API keys and tokens, private keys,
+JWTs, bearer tokens, and values assigned to secret-named keys) is replaced with
 `[redacted credential]`. Nothing is withheld for safety reasons, and the
 original content and provenance stay unchanged.
 
@@ -54,7 +78,8 @@ Dreaming projections.
       "tags": "preference,ui",
       "source_type": "manual",
       "pinned": 0,
-      "type": "preference"
+      "type": "preference",
+      "agent_id": "default"
     }
   ],
   "stats": {
@@ -108,7 +133,7 @@ Only `content` is required. Multi-agent fields:
 
 | Field        | Description |
 |--------------|-------------|
-| `agentId`    | Agent that owns this memory. Defaults to `"default"`. |
+| `agentId`    | Agent that owns this memory. Defaults to the credential's scoped agent, then the daemon's configured agent (`$SIGNET_AGENT_ID`, otherwise `"default"`). A scoped credential that names another agent gets `403`. |
 | `visibility` | `"global"` (any permitted agent can read), `"private"` (owner only). Defaults to `"global"`. |
 
 First-seen named `agentId` values are registered in the `agents` table with
@@ -240,7 +265,9 @@ Direct reads are filtered through the same resolved agent read policy used by
 recall/search. Pass `agentId`/`agent_id`, `x-signet-agent-id`, or an
 `x-signet-session-key` that resolves to an agent when reading non-default
 agent memories; cross-agent or private memories outside that read scope return
-`404` without provenance fields.
+`404` without provenance fields. A scoped credential that names another agent
+gets `403`. `history` and `lineage` apply the same scope: history for a memory
+outside it returns `404`, and lineage stops at the first node outside it.
 
 Requires `recall` permission.
 
