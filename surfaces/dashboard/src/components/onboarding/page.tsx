@@ -6,6 +6,7 @@ import {
 	IDENTITY_FILES,
 	IDENTITY_PRESETS,
 	type IdentityPresetName,
+	isRetiredIdentitySpecialEntry,
 } from "../../../../../platform/core/src/identity-spec";
 import { Monitor, FileText as Files, MessageCircle as MessagesSquare } from "@/components/mingcute-icons";
 import { SignetMark, sourceLogo } from "@/components/icons";
@@ -129,7 +130,10 @@ export function OnboardingPage({
 			| { startup?: { load?: { path: string }[] }; special?: { path: string }[] }
 			| undefined;
 		if (configured?.startup?.load)
-			draft.selected = [...configured.startup.load, ...(configured.special ?? [])].map((entry) => entry.path);
+			draft.selected = [
+				...configured.startup.load,
+				...(configured.special ?? []).filter((entry) => !isRetiredIdentitySpecialEntry(entry)),
+			].map((entry) => entry.path);
 		setIdentity(draft);
 	}, [store.ready, identityFiles.data, identity, store.aStr, store.agent]);
 	const navigation = useRef(
@@ -393,7 +397,12 @@ export function OnboardingPage({
 						| { startup?: { load?: { path: string }[] }; special?: { path: string }[] }
 						| undefined;
 					const prior =
-						identity.preset === "custom" ? [...(existing?.startup?.load ?? []), ...(existing?.special ?? [])] : [];
+						identity.preset === "custom"
+							? [
+									...(existing?.startup?.load ?? []),
+									...(existing?.special ?? []).filter((entry) => !isRetiredIdentitySpecialEntry(entry)),
+								]
+							: [];
 					const specs = identity.selected.map((path) =>
 						structuredClone(
 							[...prior, ...preset.startup, ...preset.special, ...known].find((entry) => entry.path === path) ?? {

@@ -138,13 +138,17 @@ This means:
 The dreaming agent is not an anonymous data processor. It is the same
 agent taking time to reflect on its own experiences. It receives the
 startup identity/context selected by the active identity preset, then
-receives `DREAMING.md` as the dreaming task prompt. For example:
+receives the dreaming task prompt that the daemon builds. For example:
 
 - Minimal startup: `AGENTS.md`
 - Hermes startup: `SOUL.md`, then `AGENTS.md` / Hermes project context
 - OpenClaw startup: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
   and `MEMORY.md`
-- Special dreaming prompt: `DREAMING.md` appended only for dreaming sessions
+
+An earlier draft let a workspace `DREAMING.md` file supply the task
+prompt. Nothing ever read it, and it was retired in #2038. Existing
+copies of the file and `identity.special` entries with
+`kind: dreaming` are ignored.
 
 This matters because memory consolidation requires judgment about
 *what matters to this agent and this user*. An isolated worker can't
@@ -205,10 +209,10 @@ The dreaming agent receives (via normal session-start hook):
 3. **Current entity graph snapshot** — all entities with their aspects
    and attributes, plus relationship edges. This is the agent's view
    of existing long-term memory.
-4. **`DREAMING.md` task prompt** — the special-session prompt telling
-   the agent to reflect on the sessions and update the graph. It is not
-   loaded in normal startup context; it is appended only for dreaming
-   sessions.
+4. **Dreaming task prompt** — the daemon-built prompt telling the
+   agent to reflect on the sessions and update the graph. It is not
+   loaded in normal startup context and is not read from a workspace
+   file.
 
 ### Self-Improvement Loop
 

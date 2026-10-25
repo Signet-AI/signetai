@@ -100,12 +100,12 @@ Keep the default if your harness already has the instructions you want. Choose a
 | Preset | Files Signet writes |
 |---|---|
 | Keep identity in my existing tools | None |
-| Minimal · instructions only | `AGENTS.md`, `DREAMING.md` |
-| Hermes · personality + instructions | `SOUL.md`, `AGENTS.md`, `DREAMING.md` |
-| OpenClaw · full identity | `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `DREAMING.md`, `BOOTSTRAP.md` |
+| Minimal · instructions only | `AGENTS.md` |
+| Hermes · personality + instructions | `SOUL.md`, `AGENTS.md` |
+| OpenClaw · full identity | `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` |
 | Custom · choose your files | The files you check |
 
-`DREAMING.md` is loaded only by Dreaming sessions. Identity files never change the memory database or recall.
+Dreaming builds its own prompt and does not read identity files. Older workspaces may still have a `DREAMING.md`; Signet ignores it, and you can delete it. Identity files never change the memory database or recall.
 
 ### Harnesses
 

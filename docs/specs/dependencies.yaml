@@ -1359,7 +1359,7 @@ specs:
       - "Stale or junk attributes are pruned without manual intervention"
       - "Dreaming uses the daemon workload resolver and scoped capability registry without a parallel extraction writer"
       - "Token spend per dreaming pass is bounded and configurable"
-      - "Dreaming uses DREAMING.md as its special-session prompt file instead of loading that prompt during ordinary startup context"
+      - "Dreaming builds its task prompt in the daemon; no identity file such as the retired DREAMING.md feeds it"
       - "Dreaming passes run as full sessions with transcript capture and self-improvement loop (Phase 2)"
       - "Pipeline V2 extraction is gated off when dreaming is enabled (Phase 2)"
     decision: null
