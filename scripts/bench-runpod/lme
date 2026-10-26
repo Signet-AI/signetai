@@ -86,7 +86,7 @@ print(f\"created {p['id']} {m.get('gpuDisplayName')} \${p['costPerHr']}/h ($clou
 
 cmd_push() {  # copy kit/pod and the effective config onto the pod
   local name=${1:?name} f cost; f=$(pod_file "$name"); cost=$(jget "$f" "['cost_per_hr']")
-  local cfg; cfg=$(for v in SIGNET_REF MODEL_REPO MAX_LEN DREAM_CONC DREAM_THINK QA_THINK DREAM_TIMEOUT_MS GRACE_MIN HOLD_AFTER_PULL_MIN IDLE_MAX_MIN SM_VERSION; do printf '%s=%q\n' "$v" "${!v}"; done; echo "COST_PER_HR=$cost")
+  local cfg; cfg=$(for v in SIGNET_REF MODEL_REPO MAX_LEN DREAM_CONC DREAM_THINK DREAM_MAX_OUT QA_THINK DREAM_TIMEOUT_MS GRACE_MIN HOLD_AFTER_PULL_MIN IDLE_MAX_MIN SM_VERSION; do printf '%s=%q\n' "$v" "${!v}"; done; echo "COST_PER_HR=$cost")
   local tgz; tgz=$(tar czf - -C "$KIT" pod | base64 -w 0)
   { echo "mkdir -p /workspace/kit/state && cd /workspace/kit && echo '$tgz' | base64 -d | tar xzf - && chmod +x pod/*.sh pod/*.py"
     echo "cat > /workspace/kit/state/config.env <<'__CFG__'"; echo "$cfg"; echo "__CFG__"
@@ -185,7 +185,7 @@ cmd_rm() {
 }
 cmd_ls() { for f in "$STATE"/*.json; do [ -e "$f" ] && [[ "$f" != *.terminated.json ]] && python3 -c "import json;d=json.load(open('$f'));print(f\"{d['name']:12s} {d['id']} {d['gpu']} \${d['cost_per_hr']}/h host {d['host']}\")"; done; true; }
 cmd_exec() { local name=${1:?name}; shift; if [ $# -gt 0 ]; then cat "$1" | on_pod "$name" 1800; else on_pod "$name" 1800; fi; }
-cmd_config() { for v in SIGNET_REF GPU_TYPE CLOUD DATACENTERS IMAGE CUDA_VERSIONS BOOT_MIN VOLUME_GB CONTAINER_GB MODEL_REPO MAX_LEN DREAM_CONC DREAM_THINK QA_THINK DREAM_TIMEOUT_MS GRACE_MIN HOLD_AFTER_PULL_MIN IDLE_MAX_MIN SM_VERSION; do printf '%-20s %s\n' "$v" "${!v}"; done; }
+cmd_config() { for v in SIGNET_REF GPU_TYPE CLOUD DATACENTERS IMAGE CUDA_VERSIONS BOOT_MIN VOLUME_GB CONTAINER_GB MODEL_REPO MAX_LEN DREAM_CONC DREAM_THINK DREAM_MAX_OUT QA_THINK DREAM_TIMEOUT_MS GRACE_MIN HOLD_AFTER_PULL_MIN IDLE_MAX_MIN SM_VERSION; do printf '%-20s %s\n' "$v" "${!v}"; done; }
 cmd_merge() { LME_HOME=$LME_HOME python3 "$KIT/merge_reports.py" "$@"; }
 
 case ${1:-help} in
