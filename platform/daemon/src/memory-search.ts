@@ -1807,7 +1807,9 @@ export async function hybridRecall(
 				const placed = await timings.timeAsync("transcript_evidence", async () =>
 					placeTranscriptEvidence(
 						response.results,
-						await buildTranscriptEvidenceResults(agentId, params.project, textQuery, maxExcerpts * 2, response.results),
+						await timings.timeAsync("transcript_evidence_fetch", () =>
+							buildTranscriptEvidenceResults(agentId, params.project, textQuery, maxExcerpts * 2, response.results),
+						),
 						maxExcerpts,
 						limit,
 						textQuery,
@@ -2109,47 +2111,6 @@ export async function hybridRecall(
 			});
 		}
 	}
-	let queryVecF32: Float32Array | null = null;
-	try {
-		const queryVec = await timings.timeAsync("query_embedding_wait", () => queryVecPromise);
-		if (queryVec) queryVecF32 = new Float32Array(queryVec);
-	} catch (e) {
-		logger.warn("memory", "Embedding failed", { error: String(e) });
-	}
-	const vectorMap = new Map<string, number>();
-	let vectorCompleteness: VectorSearchCompleteness | undefined;
-	let searchedWindow: number | undefined;
-	let comparableQueryVector = null as Float32Array | null;
-	if (queryVecF32) {
-		const queryVector = queryVecF32;
-		if (!recallQueryVectorIsValid(queryVector, cfg.embedding.dimensions)) {
-			vectorCompleteness = "unavailable";
-		} else {
-			try {
-				await timings.timeAsync("vector_search", async () => {
-					if (!(await activeEmbeddingProfileIsKnown(cfg.embedding))) {
-						vectorCompleteness = "unavailable";
-						logger.warn(
-							"memory",
-							"Vector recall skipped because the active embedding profile is unknown or incompatible",
-						);
-						return;
-					}
-					comparableQueryVector = queryVector;
-					const vectorResult = await findAuthorizedVectorCandidates(queryVector, params, cfg, filter, execution);
-					vectorCompleteness = vectorResult.completeness;
-					searchedWindow = vectorResult.searchedWindow;
-					for (const candidate of vectorResult.results) vectorMap.set(candidate.id, candidate.score);
-				});
-			} catch (e) {
-				vectorCompleteness = "unavailable";
-				logger.warn("memory", "Vector search failed, using keyword only", {
-					error: String(e),
-				});
-			}
-		}
-	}
-	const semanticEvidenceMap = new Map(vectorMap);
 	const structuredCandidateMap = new Map<string, number>();
 	let ontologyClaimCandidates: StructuredClaimCandidate[] = [];
 	if (cfg.pipelineV2.graph.enabled) {
@@ -2185,6 +2146,74 @@ export async function hybridRecall(
 			}
 		}
 	}
+	const traversalPrimary =
+		cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled && cfg.pipelineV2.traversal?.primary !== false;
+	const primaryTraversalFetch = timings.timeAsync("traversal_fetch", async () => {
+		const traversalCfg = cfg.pipelineV2.traversal;
+		if (!traversalPrimary || !traversalCfg || getGraphQueryTokens().length === 0) return null;
+		const agentId = params.agentId ?? "default";
+		const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
+		const owner = await getGraphOwner();
+		const focal = await getFocalEntities(owner, agentId, traversalDeadlineAt);
+		if (focal.entityIds.length === 0) return { focal, traversal: null };
+		const traversal = await traverseKnowledgeGraphViaOwner(focal.entityIds, owner, agentId, {
+			maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
+			maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
+			maxDependencyHops: traversalCfg.maxDependencyHops,
+			minDependencyStrength: traversalCfg.minDependencyStrength,
+			maxBranching: traversalCfg.maxBranching,
+			maxTraversalPaths: traversalCfg.maxTraversalPaths,
+			minConfidence: traversalCfg.minConfidence,
+			timeoutMs: traversalCfg.timeoutMs,
+			deadlineAt: traversalDeadlineAt,
+			scope: params.scope,
+		});
+		return { focal, traversal };
+	});
+	primaryTraversalFetch.catch(() => undefined);
+	const embeddingProfileKnown = activeEmbeddingProfileIsKnown(cfg.embedding);
+	embeddingProfileKnown.catch(() => undefined);
+	let queryVecF32: Float32Array | null = null;
+	try {
+		const queryVec = await timings.timeAsync("query_embedding_wait", () => queryVecPromise);
+		if (queryVec) queryVecF32 = new Float32Array(queryVec);
+	} catch (e) {
+		logger.warn("memory", "Embedding failed", { error: String(e) });
+	}
+	const vectorMap = new Map<string, number>();
+	let vectorCompleteness: VectorSearchCompleteness | undefined;
+	let searchedWindow: number | undefined;
+	let comparableQueryVector = null as Float32Array | null;
+	if (queryVecF32) {
+		const queryVector = queryVecF32;
+		if (!recallQueryVectorIsValid(queryVector, cfg.embedding.dimensions)) {
+			vectorCompleteness = "unavailable";
+		} else {
+			try {
+				await timings.timeAsync("vector_search", async () => {
+					if (!(await embeddingProfileKnown)) {
+						vectorCompleteness = "unavailable";
+						logger.warn(
+							"memory",
+							"Vector recall skipped because the active embedding profile is unknown or incompatible",
+						);
+						return;
+					}
+					comparableQueryVector = queryVector;
+					const vectorResult = await findAuthorizedVectorCandidates(queryVector, params, cfg, filter, execution);
+					vectorCompleteness = vectorResult.completeness;
+					searchedWindow = vectorResult.searchedWindow;
+					for (const candidate of vectorResult.results) vectorMap.set(candidate.id, candidate.score);
+				});
+			} catch (e) {
+				vectorCompleteness = "unavailable";
+				logger.warn("memory", "Vector search failed, using keyword only", {
+					error: String(e),
+				});
+			}
+		}
+	}
+	const semanticEvidenceMap = new Map(vectorMap);
 	const allIds = new Set([
 		...bm25Map.keys(),
 		...hintMap.keys(),
@@ -2248,9 +2277,6 @@ export async function hybridRecall(
 
 		flatScored.sort((a, b) => b.score - a.score);
 	});
-	const traversalPrimary =
-		cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled && cfg.pipelineV2.traversal?.primary !== false;
-
 	let scored: Array<{ id: string; score: number; source: string }> = [];
 
 	if (traversalPrimary) {
@@ -2259,28 +2285,12 @@ export async function hybridRecall(
 
 			if (cfg.pipelineV2.traversal) {
 				try {
-					const traversalCfg = cfg.pipelineV2.traversal;
-					const queryTokens = getGraphQueryTokens();
-					if (queryTokens.length > 0) {
-						const agentId = params.agentId ?? "default";
-						const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
-						const owner = await getGraphOwner();
-						const focal = await getFocalEntities(owner, agentId, traversalDeadlineAt);
+					const fetched = await primaryTraversalFetch;
+					if (fetched !== null) {
+						const { focal, traversal } = fetched;
 						if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });
 
-						if (focal.entityIds.length > 0) {
-							const traversal = await traverseKnowledgeGraphViaOwner(focal.entityIds, owner, agentId, {
-								maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
-								maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
-								maxDependencyHops: traversalCfg.maxDependencyHops,
-								minDependencyStrength: traversalCfg.minDependencyStrength,
-								maxBranching: traversalCfg.maxBranching,
-								maxTraversalPaths: traversalCfg.maxTraversalPaths,
-								minConfidence: traversalCfg.minConfidence,
-								timeoutMs: traversalCfg.timeoutMs,
-								deadlineAt: traversalDeadlineAt,
-								scope: params.scope,
-							});
+						if (traversal !== null) {
 							recordGraphResult(traversal);
 							const cosineMap = new Map<string, number>();
 							if (comparableQueryVector && traversal.memoryScores.size > 0) {
