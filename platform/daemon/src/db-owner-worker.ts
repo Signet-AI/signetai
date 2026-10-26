@@ -1066,6 +1066,14 @@ export function runDbOwnerWorker(): void {
 		const { initDbAccessorAsync } = await import("./db-accessor");
 		const initialization = await initDbAccessorAsync(ownerDbPath, { agentsDir, deadlineAt: context?.deadlineAt });
 		recallAccessorReady = true;
+		try {
+			const { refreshQueryPlannerStatisticsOnOpen } = await import("./query-planner-statistics");
+			refreshQueryPlannerStatisticsOnOpen(db);
+		} catch (error) {
+			writeDiagnostic(
+				`[db-owner] query planner statistics refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 		if (context !== undefined) context.committed = true;
 		return {
 			initialized: true,

@@ -270,6 +270,7 @@ export function findStructuredPathCandidates(
 			   AND m.is_deleted = 0
 			   ${filterSql}
 			   AND (${like})
+			 ORDER BY ea.version_root_id, ea.version DESC, ea.rowid
 			 LIMIT ?`,
 		)
 		.all(
@@ -428,6 +429,7 @@ export async function findStructuredPathCandidatesViaOwner(
 		   AND m.is_deleted = 0
 		   ${options.filterSql ?? ""}
 		   AND (${like})
+		 ORDER BY ea.version_root_id, ea.version DESC, ea.rowid
 		 LIMIT ?`,
 		[
 			agentId,
