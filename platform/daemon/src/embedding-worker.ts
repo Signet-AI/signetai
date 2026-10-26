@@ -49,6 +49,8 @@ interface TransformersBindings {
 		model: string,
 		opts: {
 			dtype: "q8";
+			device?: "cpu";
+			session_options?: { intraOpNumThreads: number; interOpNumThreads: number };
 			progress_callback?: (progress: { status: string; progress?: number; file?: string }) => void;
 		},
 	) => Promise<unknown>;
@@ -143,12 +145,12 @@ async function preloadCudaLibraries(dirs: readonly string[]): Promise<number> {
 	return loaded;
 }
 
-async function prepareCudaRuntime(): Promise<void> {
+async function prepareNativeOnnxRuntime(purpose: string): Promise<void> {
 	const preloaded = await preloadCudaLibraries(init.cudaLibraryPaths ?? []);
 	if (init.transformersRuntimePath) {
 		if (!init.onnxRuntimeModulePath) throw new Error("This Signet build does not include the native ONNX runtime");
 		if (!init.onnxRuntimePath) {
-			throw new Error("memory.pipelineV2.reranker.onnxRuntimePath is required for the CUDA cross-encoder");
+			throw new Error(`onnxRuntimePath is required for the ${purpose}`);
 		}
 		const manifest = JSON.parse(readFileSync(join(init.onnxRuntimePath, "package.json"), "utf8")) as {
 			version?: unknown;
@@ -172,7 +174,7 @@ async function prepareCudaRuntime(): Promise<void> {
 		const runtime = (await import(init.onnxRuntimeModulePath)) as { default?: unknown };
 		(globalThis as Record<symbol, unknown>)[Symbol.for("onnxruntime")] = runtime.default ?? runtime;
 	}
-	log("info", "Prepared native ONNX runtime for CUDA cross-encoder", {
+	log("info", `Prepared native ONNX runtime for the ${purpose}`, {
 		preloadedLibraries: preloaded,
 		nativeRuntime: init.onnxRuntimePath ?? null,
 	});
@@ -231,7 +233,9 @@ async function doInit(): Promise<void> {
 
 		mkdirSync(init.cacheDir, { recursive: true });
 		const cuda = init.task === "rerank" && init.device === "cuda";
-		if (cuda) await prepareCudaRuntime();
+		const nativeEmbedding = init.task !== "rerank" && init.runtime === "onnxruntime";
+		if (cuda) await prepareNativeOnnxRuntime("CUDA cross-encoder");
+		if (nativeEmbedding) await prepareNativeOnnxRuntime("native ONNX runtime embedding");
 		transformers = await loadTransformers();
 		transformers.env.logLevel = TRANSFORMERS_LOG_LEVEL_NONE;
 		transformers.env.cacheDir = init.cacheDir;
@@ -316,13 +320,29 @@ async function doInit(): Promise<void> {
 			return;
 		}
 
-		log("info", `Initializing ${init.modelId} (q8 quantization)`, {
-			cachePath: init.cacheDir,
-			wasmPath: init.wasmDir ?? "node_modules",
-			remoteHost: transformers.env.remoteHost,
-		});
+		log(
+			"info",
+			`Initializing ${init.modelId} (q8 quantization, ${nativeEmbedding ? "native ONNX runtime" : "default runtime"})`,
+			{
+				cachePath: init.cacheDir,
+				wasmPath: init.wasmDir ?? "node_modules",
+				remoteHost: transformers.env.remoteHost,
+			},
+		);
 
-		const pipe = await transformers.pipeline("feature-extraction", init.modelId, { dtype: "q8", progress_callback });
+		const pipe = await transformers.pipeline("feature-extraction", init.modelId, {
+			dtype: "q8",
+			progress_callback,
+			...(nativeEmbedding
+				? {
+						device: "cpu" as const,
+						session_options: {
+							intraOpNumThreads: Math.max(1, Math.min(4, availableParallelism() - 1)),
+							interOpNumThreads: 1,
+						},
+					}
+				: {}),
+		});
 
 		const embed = toEmbedCallable(pipe);
 		const warmup = await embed("test", { pooling: "mean", normalize: true });

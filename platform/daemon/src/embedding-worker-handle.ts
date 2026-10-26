@@ -52,6 +52,7 @@ export interface EmbeddingHandleOptions {
 	readonly transformersRuntimeAssetPath?: string | null;
 	readonly task?: "embed" | "rerank";
 	readonly device?: "cuda";
+	readonly runtime?: "onnxruntime";
 	readonly onnxRuntimePath?: string;
 	readonly cudaLibraryPaths?: readonly string[];
 }
@@ -109,9 +110,10 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		...(opts.remoteHostOverride ? { remoteHostOverride: opts.remoteHostOverride } : {}),
 		...(opts.task ? { task: opts.task } : {}),
 		...(opts.device ? { device: opts.device } : {}),
+		...(opts.runtime ? { runtime: opts.runtime } : {}),
 		...(opts.onnxRuntimePath ? { onnxRuntimePath: opts.onnxRuntimePath } : {}),
 		...(() => {
-			if (opts.device !== "cuda") return {};
+			if (opts.device !== "cuda" && opts.runtime !== "onnxruntime") return {};
 			const modulePath = resolveEmbeddedWorkerPath("onnxruntime-node-runtime");
 			return modulePath ? { onnxRuntimeModulePath: modulePath } : {};
 		})(),

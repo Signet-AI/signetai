@@ -7,6 +7,7 @@ export interface EmbeddingWorkerInit {
 	readonly remoteHostOverride?: string;
 	readonly task?: "embed" | "rerank";
 	readonly device?: "cuda";
+	readonly runtime?: "onnxruntime";
 	readonly onnxRuntimePath?: string;
 	readonly onnxRuntimeModulePath?: string;
 	readonly cudaLibraryPaths?: readonly string[];

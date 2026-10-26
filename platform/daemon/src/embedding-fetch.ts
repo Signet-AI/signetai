@@ -49,7 +49,12 @@ export async function findLlamaCppEmbeddingModel(
 	return null;
 }
 
-let cachedNativeEmbed: ((text: string) => Promise<number[]>) | null = null;
+let cachedNativeEmbed:
+	| ((
+			text: string,
+			runtime?: { readonly runtime: "onnxruntime"; readonly onnxRuntimePath?: string },
+	  ) => Promise<number[]>)
+	| null = null;
 let nativeProviderInitializedOverride: (() => boolean) | null = null;
 type NativeFallbackProvider = "llama-cpp" | "ollama";
 type NativeFallbackState = NativeFallbackProvider | "unavailable" | null;
@@ -490,7 +495,7 @@ export async function fetchEmbedding(
 		cfg.indexGeneration === "staging" || !hasDbAccessor()
 			? cfg
 			: await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
-					siteToken: "embedding-fetch.ts:492",
+					siteToken: "db:embedding.fetch.resolve-active-config",
 					operation: "embedding.resolve-active-config",
 				});
 	if (effectiveCfg.provider === "none") return null;
@@ -542,10 +547,12 @@ async function serveEmbedding(
 				"native embedding disabled (embedding.warmNative: false)",
 			);
 		}
-		if (nativeFallbackProvider === "unavailable") {
+		const nativeRuntimePinned = effectiveCfg.runtime === "onnxruntime";
+		if (!nativeRuntimePinned && nativeFallbackProvider === "unavailable") {
 			return { embedding: null, provider: null, tokenCount: 0, failureCause: "provider_unavailable" };
 		}
-		if (nativeFallbackProvider) return fetchNativeFallback(nativeFallbackProvider, formattedText, effectiveCfg, opts);
+		if (!nativeRuntimePinned && nativeFallbackProvider && nativeFallbackProvider !== "unavailable")
+			return fetchNativeFallback(nativeFallbackProvider, formattedText, effectiveCfg, opts);
 		const bounded = boundEmbeddingInput(
 			formattedText,
 			NATIVE_EMBEDDING_MAX_INPUT_TOKENS,
@@ -558,10 +565,17 @@ async function serveEmbedding(
 			if (!cachedNativeEmbed) {
 				cachedNativeEmbed = mod.nativeEmbed;
 			}
+			const runtime =
+				effectiveCfg.runtime === "onnxruntime"
+					? {
+							runtime: "onnxruntime" as const,
+							...(effectiveCfg.onnxRuntimePath ? { onnxRuntimePath: effectiveCfg.onnxRuntimePath } : {}),
+						}
+					: undefined;
 			if (!nativeProviderInitializedOverride) {
-				nativeProviderInitialized = () => mod.getNativeProviderStatus().initialized;
+				nativeProviderInitialized = () => mod.getNativeProviderStatus(runtime).initialized;
 			}
-			const embedding = await cachedNativeEmbed(bounded.text);
+			const embedding = await cachedNativeEmbed(bounded.text, runtime);
 			return {
 				embedding: isEmbeddingVector(embedding) ? embedding : null,
 				provider: "native",
@@ -572,6 +586,17 @@ async function serveEmbedding(
 			if (nativeProviderInitialized()) {
 				logger.warn("embedding", "Native embedding failed for one input; native embedding stays enabled", {
 					inputTokens: bounded.tokenCount,
+					error: nativeErr instanceof Error ? nativeErr.message : String(nativeErr),
+				});
+				return {
+					embedding: null,
+					provider: "native",
+					tokenCount: bounded.tokenCount,
+					failureCause: normalizePipelineCause(nativeErr),
+				};
+			}
+			if (nativeRuntimePinned) {
+				logger.warn("embedding", "Native ONNX runtime embedding failed", {
 					error: nativeErr instanceof Error ? nativeErr.message : String(nativeErr),
 				});
 				return {

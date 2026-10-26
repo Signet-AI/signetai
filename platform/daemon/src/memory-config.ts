@@ -39,7 +39,11 @@ export interface EmbeddingConfig {
 	idleTtlMs?: number;
 	preloadNative?: boolean;
 	warmNative?: boolean;
+	runtime?: NativeEmbeddingRuntime;
+	onnxRuntimePath?: string;
 }
+
+export type NativeEmbeddingRuntime = "wasm" | "onnxruntime";
 
 export interface MemorySearchConfig {
 	top_k: number;
@@ -336,6 +340,8 @@ const runtimeSchema = z.object({
 			api_key: z.string().optional(),
 			warmNative: z.boolean().default(true),
 			preloadNative: z.boolean().default(false),
+			runtime: z.enum(["wasm", "onnxruntime"]).default("wasm"),
+			onnxRuntimePath: z.string().optional(),
 			promptSubmitTimeoutMs: z.number().default(DEFAULT_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS),
 			llamaCppMaxInputTokens: z.number().default(DEFAULT_LLAMACPP_MAX_INPUT_TOKENS),
 			idleTtlMs: z.number().int().default(DEFAULT_NATIVE_EMBEDDING_IDLE_TTL_MS),
@@ -400,6 +406,10 @@ export function readRuntimeConfig(agentsDir: string): {
 				api_key: active ? embedding.api_key : undefined,
 				warmNative: embedding.warmNative,
 				preloadNative: embedding.preloadNative,
+				...(provider === "native" && embedding.runtime === "onnxruntime" ? { runtime: "onnxruntime" as const } : {}),
+				...(embedding.onnxRuntimePath?.trim()
+					? { onnxRuntimePath: absoluteConfigPath(embedding.onnxRuntimePath, "embedding.onnxRuntimePath") }
+					: {}),
 				promptSubmitTimeoutMs: Math.max(
 					MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
 					Math.min(MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS, embedding.promptSubmitTimeoutMs),

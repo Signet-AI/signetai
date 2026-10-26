@@ -3,6 +3,7 @@ import type { ReadDb, WriteDb } from "./db-accessor";
 import {
 	embeddingProfileFingerprint,
 	embeddingProfileFingerprintsEqual,
+	nativeEmbeddingRuntimeId,
 	recommendedEmbeddingProfileId,
 } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
@@ -36,6 +37,7 @@ export interface PersistedEmbeddingProfile {
 	readonly dimensions: number;
 	readonly baseUrl: string;
 	readonly profile?: string;
+	readonly runtime?: "onnxruntime";
 	readonly projectionSlot?: EmbeddingProjectionSlot;
 	readonly projectionRebuild?: boolean;
 }
@@ -95,6 +97,7 @@ function profileForStorage(cfg: EmbeddingConfig): PersistedEmbeddingProfile {
 		dimensions,
 		baseUrl: normalized.base_url,
 		...(normalized.profile ? { profile: normalized.profile } : {}),
+		...(nativeEmbeddingRuntimeId(normalized) ? { runtime: "onnxruntime" as const } : {}),
 	};
 }
 
@@ -112,6 +115,7 @@ export function resolveActiveEmbeddingConfigFromState(
 		dimensions: active.dimensions,
 		base_url: configured.base_url,
 		...(active.profile ? { profile: active.profile } : { profile: undefined }),
+		runtime: active.provider === "native" && active.runtime === "onnxruntime" ? "onnxruntime" : "wasm",
 	};
 }
 
@@ -245,6 +249,7 @@ function parseProfile(value: string): PersistedEmbeddingProfile | null {
 				? { projectionSlot: parsed.projectionSlot }
 				: {}),
 			...(typeof parsed.profile === "string" ? { profile: parsed.profile } : {}),
+			...(parsed.runtime === "onnxruntime" ? { runtime: "onnxruntime" as const } : {}),
 			...(parsed.projectionRebuild === true ? { projectionRebuild: true } : {}),
 		};
 	} catch {

@@ -1087,52 +1087,59 @@
     },
     {
       "path": "embedding-fetch.ts",
-      "line": 492,
+      "line": 497,
       "api": "withReadDbAsync",
       "source": ": await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:embedding.fetch.resolve-active-config"
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 267,
+      "line": 269,
       "api": "withReadDbAsync",
       "source": "return accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:embedding.index.projection-cursor"
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 417,
+      "line": 419,
       "api": "withReadDbAsync",
       "source": "const rows = await accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:embedding.index.rebuild-vector-batch"
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 895,
+      "line": 897,
       "api": "withReadDbAsync",
       "source": "const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db), {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:embedding.index.stage-read-state"
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 903,
+      "line": 905,
       "api": "withReadDbAsync",
       "source": "const rows = await input.accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:embedding.index.stage-read-batch"
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 986,
+      "line": 988,
       "api": "withReadDbAsync",
       "source": "const coverage = await input.accessor.withReadDbAsync(",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:embedding.index.stage-coverage"
     },
     {
       "path": "embedding-index-migration.ts",
-      "line": 1210,
+      "line": 1213,
       "api": "incrementalVacuumAsync",
-      "source": "await accessor.incrementalVacuumAsync({ siteToken: \"embedding-index-migration.ts:1210\" });",
-      "category": "hot-path"
+      "source": "await accessor.incrementalVacuumAsync({ siteToken: \"db:embedding.index.promote-incremental-vacuum\" });",
+      "category": "hot-path",
+      "siteToken": "db:embedding.index.promote-incremental-vacuum"
     },
     {
       "path": "embedding-repair-state.ts",
@@ -1230,49 +1237,49 @@
     },
     {
       "path": "embedding-worker-handle.ts",
-      "line": 133,
+      "line": 135,
       "api": "existsSync",
       "source": ": existsSync(bundled)",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 119,
+      "line": 121,
       "api": "readdirSync",
       "source": "readdirSync(dir)",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 153,
+      "line": 155,
       "api": "readFileSync",
       "source": "const manifest = JSON.parse(readFileSync(join(init.onnxRuntimePath, \"package.json\"), \"utf8\")) as {",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 156,
+      "line": 158,
       "api": "readFileSync",
       "source": "const expectedVersion = readFileSync(init.onnxRuntimeModulePath, \"utf8\").match(",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 198,
+      "line": 200,
       "api": "existsSync",
       "source": "if (!existsSync(tokenizerPath)) return null;",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 232,
+      "line": 234,
       "api": "mkdirSync",
       "source": "mkdirSync(init.cacheDir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 248,
+      "line": 252,
       "api": "readFileSync",
       "source": "const wasmBytes = readFileSync(join(init.wasmDir, \"ort-wasm-simd-threaded.wasm\"));",
       "category": "hot-path"
@@ -1683,14 +1690,14 @@
     },
     {
       "path": "memory-config.ts",
-      "line": 373,
+      "line": 379,
       "api": "existsSync",
       "source": ".find((path) => existsSync(path));",
       "category": "hot-path"
     },
     {
       "path": "memory-config.ts",
-      "line": 375,
+      "line": 381,
       "api": "readFileSync",
       "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
       "category": "hot-path"
@@ -4259,17 +4266,19 @@
     },
     {
       "path": "routes/utils.ts",
-      "line": 435,
+      "line": 436,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:forget.candidates.read"
     },
     {
       "path": "routes/utils.ts",
-      "line": 521,
+      "line": 522,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:forget.candidates-by-id.read"
     },
     {
       "path": "service.ts",
