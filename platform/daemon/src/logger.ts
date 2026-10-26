@@ -130,6 +130,7 @@ export class Logger extends EventEmitter {
 	private flushTimer: ReturnType<typeof setInterval> | null = null;
 	private fileOutputEnabled = true;
 	private lastFlushFailureAt = 0;
+	private forwardSink: ((entry: LogEntry) => void) | null = null;
 	private static readonly MAX_BUFFERED_ENTRIES = 2000;
 	private static readonly LOG_FILE_PATTERN = /^signet-(\d{4}-\d{2}-\d{2})(?:-(.+))?\.log$/;
 
@@ -244,6 +245,10 @@ export class Logger extends EventEmitter {
 	}
 
 	private write(entry: LogEntry) {
+		if (this.forwardSink !== null) {
+			this.forwardSink(entry);
+			return;
+		}
 		if (this.config.consoleOutput) {
 			const message = this.formatConsole(entry);
 			if (process.env.SIGNET_DB_OWNER_WORKER === "1") console.error(message);
@@ -486,6 +491,11 @@ export class Logger extends EventEmitter {
 
 		return results.slice(-limit);
 	}
+	forwardTo(sink: (entry: LogEntry) => void): void {
+		this.forwardSink = sink;
+		this.shutdown(false);
+	}
+
 	shutdown(flush = true) {
 		if (flush) this.flush(true);
 		if (this.flushTimer) {

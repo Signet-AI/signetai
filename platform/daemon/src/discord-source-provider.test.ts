@@ -20,7 +20,7 @@ import { nativeMemorySourcePermissionHealth, resetNativeMemoryIndexCache } from 
 import { syncDiscordDesktopCacheSource } from "./discord-desktop-cache-source";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import { logger } from "./logger";
-import { putSecret, setSecretKeyringAdapterForTests } from "./secrets";
+import { getSecret, putSecret, setSecretKeyringAdapterForTests } from "./secrets";
 import { indexSourceArtifactStructure } from "./source-artifact-graph";
 
 const originalFetch = globalThis.fetch;
@@ -91,6 +91,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 			onProgress: (event) => progress.push(event.currentPath),
 		});
 
@@ -211,6 +212,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -252,6 +254,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => shouldContinue,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -356,6 +359,7 @@ describe("discord-source-provider", () => {
 				agentsDir: dir,
 				agentId: "default",
 				shouldContinue: () => shouldContinue,
+				getSecret,
 			});
 
 			expect(result?.failures).toEqual([]);
@@ -505,6 +509,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures[0]?.message).toContain("Channels fetch failed");
@@ -554,6 +559,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -590,6 +596,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -680,6 +687,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -743,6 +751,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -856,6 +865,7 @@ describe("discord-source-provider", () => {
 				agentsDir: dir,
 				agentId: "default",
 				shouldContinue: () => true,
+				getSecret,
 			});
 		} finally {
 			chmodSync(unreadablePath, 0o600);
@@ -899,6 +909,7 @@ describe("discord-source-provider", () => {
 				agentsDir: dir,
 				agentId: "default",
 				shouldContinue: () => true,
+				getSecret,
 			});
 		} finally {
 			chmodSync(unreadableDir, 0o700);
@@ -941,6 +952,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures[0]?.message).toContain("Discord guild fetch failed");
@@ -1010,6 +1022,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -1114,6 +1127,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -1182,6 +1196,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(result?.failures).toEqual([]);
@@ -1276,6 +1291,7 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		await indexExternalMemoryArtifact({
 			agentId: "default",
@@ -1329,12 +1345,14 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		const third = await discordSourceProvider.sync?.({
 			source: added.source,
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(first?.failures).toEqual([]);
@@ -1447,18 +1465,21 @@ describe("discord-source-provider", () => {
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		const second = await discordSourceProvider.sync?.({
 			source: added.source,
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 		const third = await discordSourceProvider.sync?.({
 			source: added.source,
 			agentsDir: dir,
 			agentId: "default",
 			shouldContinue: () => true,
+			getSecret,
 		});
 
 		expect(first?.failures).toEqual([]);

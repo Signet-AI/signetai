@@ -34,6 +34,16 @@ const inProcessHelpers = [
 		required: [/\bnew Worker\s*\(/, /\bparentPort\b/],
 	},
 	{
+		name: "source sync provider host",
+		path: "source-sync-worker-handle.ts",
+		required: [/\bnew Worker\s*\(/, /\bworker\.terminate\s*\(/],
+	},
+	{
+		name: "source sync provider worker",
+		path: "source-sync-worker.ts",
+		required: [/\bparentPort\b/, /\bregisterDbOwnerRelay\b/],
+	},
+	{
 		name: "synthesis renderer",
 		path: "synthesis-render-worker.ts",
 		required: [/\bparentPort\b/],

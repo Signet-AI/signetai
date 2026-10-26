@@ -28,7 +28,6 @@ import {
 } from "./github-source-fetch";
 import { logger } from "./logger";
 import { indexExternalMemoryArtifact } from "./memory-lineage";
-import { getSecret } from "./secrets";
 import { indexSourceArtifactStructureAsync, purgeSourceArtifactStructureAsync } from "./source-artifact-graph";
 import type { SourceProviderAdapter, SourceProviderSyncContext, SourceProviderSyncResult } from "./source-providers";
 import { purgeSourceOwnedRows } from "./source-purge";
@@ -61,7 +60,7 @@ async function syncGitHubSource(context: SourceProviderSyncContext): Promise<Sou
 	const failures: SourceFailureState[] = [];
 	const syncStartedAt = new Date().toISOString();
 	const agentId = context.agentId || resolveDaemonAgentId();
-	const token = settings.tokenRef ? await resolveToken(settings.tokenRef) : undefined;
+	const token = settings.tokenRef ? await resolveToken(context.getSecret, settings.tokenRef) : undefined;
 	const repos = await resolveRepos(context.source, settings, failures, token);
 	let indexed = 0;
 	let scanned = 0;
@@ -426,7 +425,7 @@ async function resolveRepos(
 	return withDefaultBranches;
 }
 
-async function resolveToken(tokenRef: string): Promise<string> {
+async function resolveToken(getSecret: SourceProviderSyncContext["getSecret"], tokenRef: string): Promise<string> {
 	try {
 		return await getSecret(tokenRef);
 	} catch (err) {
@@ -473,7 +472,7 @@ async function purgeStaleGitHubArtifacts(
 				rowid: number;
 				source_path: string;
 			}>,
-		{ siteToken: "github-source-provider.ts:460" },
+		{ siteToken: "github-source-provider.ts:459" },
 	);
 	for (const row of rows) {
 		if (seenPaths.has(row.source_path)) continue;
@@ -490,7 +489,7 @@ async function purgeStaleGitHubArtifacts(
 				);
 			}
 		},
-		{ siteToken: "github-source-provider.ts:482" },
+		{ siteToken: "github-source-provider.ts:481" },
 	);
 }
 
@@ -522,7 +521,7 @@ async function purgeStaleGitHubFailureArtifacts(
 					),
 			);
 		},
-		{ siteToken: "github-source-provider.ts:502" },
+		{ siteToken: "github-source-provider.ts:501" },
 	);
 }
 
