@@ -10,7 +10,11 @@ import type {
 	WorkerToMainMessage,
 } from "./embedding-worker-protocol";
 import { logger } from "./logger";
-import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./native-runtime-assets";
+import {
+	materializeEmbeddedNativeAddon,
+	materializeEmbeddedWasmAssets,
+	resolveEmbeddedWorkerPath,
+} from "./native-runtime-assets";
 
 const DEFAULT_MODEL_ID = "nomic-ai/nomic-embed-text-v1.5";
 const DEFAULT_DIMENSIONS = 768;
@@ -110,6 +114,11 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 			if (opts.device !== "cuda") return {};
 			const modulePath = resolveEmbeddedWorkerPath("onnxruntime-node-runtime");
 			return modulePath ? { onnxRuntimeModulePath: modulePath } : {};
+		})(),
+		...(() => {
+			if (opts.task !== "rerank") return {};
+			const addonPath = materializeEmbeddedNativeAddon("signet-native");
+			return addonPath ? { nativeAddonPath: addonPath } : {};
 		})(),
 		...(opts.cudaLibraryPaths && opts.cudaLibraryPaths.length > 0
 			? { cudaLibraryPaths: [...opts.cudaLibraryPaths] }

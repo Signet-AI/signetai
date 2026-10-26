@@ -163,13 +163,26 @@ const nativeAddonAssets = (() => {
 		if (!existsSync(nodeFile)) {
 			throw new Error(`Required @napi-rs/keyring native asset is missing for ${platformKey}: ${nodeFile}`);
 		}
-		return [{ name: "napi-rs-keyring", contentBase64: readFileSync(nodeFile).toString("base64") }, sqliteVecAsset()];
+		return [
+			{ name: "napi-rs-keyring", contentBase64: readFileSync(nodeFile).toString("base64") },
+			sqliteVecAsset(),
+			...signetNativeAsset(packageSuffix),
+		];
 	} catch (error) {
 		throw new Error(
 			`Required native asset is not resolvable for ${platformKey}: ${platformPackageName} (${(error as Error).message})`,
 		);
 	}
 })();
+
+function signetNativeAsset(packageSuffix: string): { name: string; contentBase64: string }[] {
+	const nodeFile = join(root, "platform", "native", `signet-native.${packageSuffix}.node`);
+	if (!existsSync(nodeFile)) {
+		console.warn(`signet-native addon not built for ${packageSuffix}; the compiled binary will use the JS tokenizer`);
+		return [];
+	}
+	return [{ name: "signet-native", contentBase64: readFileSync(nodeFile).toString("base64") }];
+}
 
 function sqliteVecFileName(): string {
 	return platformKey.startsWith("win32-") ? "vec0.dll" : platformKey.startsWith("darwin-") ? "vec0.dylib" : "vec0.so";
@@ -303,7 +316,7 @@ const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]
 }));
 writeFileSync(
 	join(buildDir, "embedding-worker-transformers-runtime.ts"),
-	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] ??= onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;\n`,
+	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] ??= onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { AutoModelForSequenceClassification, AutoTokenizer, Tensor, env, pipeline } = transformers;\n`,
 );
 runBunBuild([
 	"--target=bun",
@@ -360,7 +373,7 @@ writeFileSync(
 	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};
 globalThis[Symbol.for("onnxruntime")] ??= onnxRuntime.default ?? onnxRuntime;
 const transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});
-export const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;
+export const { AutoModelForSequenceClassification, AutoTokenizer, Tensor, env, pipeline } = transformers;
 `,
 );
 

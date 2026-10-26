@@ -10,6 +10,7 @@ export interface EmbeddingWorkerInit {
 	readonly onnxRuntimePath?: string;
 	readonly onnxRuntimeModulePath?: string;
 	readonly cudaLibraryPaths?: readonly string[];
+	readonly nativeAddonPath?: string;
 }
 
 export type MainToWorkerMessage =

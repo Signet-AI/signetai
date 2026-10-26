@@ -1230,42 +1230,49 @@
     },
     {
       "path": "embedding-worker-handle.ts",
-      "line": 124,
+      "line": 133,
       "api": "existsSync",
       "source": ": existsSync(bundled)",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 117,
+      "line": 119,
       "api": "readdirSync",
       "source": "readdirSync(dir)",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 151,
+      "line": 153,
       "api": "readFileSync",
       "source": "const manifest = JSON.parse(readFileSync(join(init.onnxRuntimePath, \"package.json\"), \"utf8\")) as {",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 154,
+      "line": 156,
       "api": "readFileSync",
       "source": "const expectedVersion = readFileSync(init.onnxRuntimeModulePath, \"utf8\").match(",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 197,
+      "line": 198,
+      "api": "existsSync",
+      "source": "if (!existsSync(tokenizerPath)) return null;",
+      "category": "hot-path"
+    },
+    {
+      "path": "embedding-worker.ts",
+      "line": 232,
       "api": "mkdirSync",
       "source": "mkdirSync(init.cacheDir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "embedding-worker.ts",
-      "line": 213,
+      "line": 248,
       "api": "readFileSync",
       "source": "const wasmBytes = readFileSync(join(init.wasmDir, \"ort-wasm-simd-threaded.wasm\"));",
       "category": "hot-path"

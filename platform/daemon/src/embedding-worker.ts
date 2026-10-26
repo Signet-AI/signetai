@@ -1,4 +1,5 @@
-import { mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
@@ -42,6 +43,7 @@ interface TransformersBindings {
 	readonly env: TransformersEnv;
 	readonly AutoTokenizer: PretrainedLoader<RerankTokenizer>;
 	readonly AutoModelForSequenceClassification: PretrainedLoader<RerankModel>;
+	readonly Tensor?: new (type: "int64", data: BigInt64Array, dims: readonly number[]) => unknown;
 	readonly pipeline: (
 		task: string,
 		model: string,
@@ -176,6 +178,39 @@ async function prepareCudaRuntime(): Promise<void> {
 	});
 }
 
+const CROSS_ENCODER_MAX_TOKENS = 512;
+
+interface NativePairTokenizer {
+	encodePairs(
+		query: string,
+		documents: string[],
+	): {
+		readonly inputIds: readonly number[];
+		readonly attentionMask: readonly number[];
+		readonly tokenTypeIds: readonly number[];
+		readonly batchSize: number;
+		readonly sequenceLength: number;
+	};
+}
+
+function loadNativePairTokenizer(modelId: string): NativePairTokenizer | null {
+	const tokenizerPath = join(init.cacheDir, modelId, "tokenizer.json");
+	if (!existsSync(tokenizerPath)) return null;
+	try {
+		const requireNative = createRequire(import.meta.url);
+		const addon = requireNative(init.nativeAddonPath ?? "@signet/native") as {
+			PairTokenizer?: new (path: string, maxLength: number) => NativePairTokenizer;
+		};
+		if (typeof addon.PairTokenizer !== "function") return null;
+		return new addon.PairTokenizer(tokenizerPath, CROSS_ENCODER_MAX_TOKENS);
+	} catch (error) {
+		log("warn", "Native cross-encoder tokenizer unavailable; using transformers.js", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return null;
+	}
+}
+
 async function ensureInitialized(): Promise<void> {
 	if (embedFn || rerankFn) return;
 	if (initPromise) return initPromise;
@@ -235,14 +270,38 @@ async function doInit(): Promise<void> {
 				...(cuda ? { device: "cuda" as const } : {}),
 				progress_callback,
 			});
+			const pairTokenizer = loadNativePairTokenizer(init.modelId);
+			const tensorClass = transformers.Tensor;
+			const nativeInputs =
+				pairTokenizer !== null && tensorClass !== undefined
+					? (query: string, documents: readonly string[]): RerankInputs => {
+							const batch = pairTokenizer.encodePairs(query, [...documents]);
+							const dims = [batch.batchSize, batch.sequenceLength];
+							const tensor = (values: readonly number[]) =>
+								new tensorClass(
+									"int64",
+									BigInt64Array.from(values, (value) => BigInt(value)),
+									dims,
+								);
+							return {
+								input_ids: tensor(batch.inputIds),
+								attention_mask: tensor(batch.attentionMask),
+								token_type_ids: tensor(batch.tokenTypeIds),
+							};
+						}
+					: null;
+			log("info", `Cross-encoder tokenizer: ${nativeInputs === null ? "transformers.js" : "native"}`);
 			const score = async (query: string, documents: readonly string[]): Promise<number[]> => {
 				if (documents.length === 0) return [];
-				const inputs = tokenizer(new Array<string>(documents.length).fill(query), {
-					text_pair: [...documents],
-					padding: true,
-					truncation: true,
-					max_length: 512,
-				});
+				const inputs =
+					nativeInputs !== null
+						? nativeInputs(query, documents)
+						: tokenizer(new Array<string>(documents.length).fill(query), {
+								text_pair: [...documents],
+								padding: true,
+								truncation: true,
+								max_length: 512,
+							});
 				const { logits } = await model(inputs);
 				const width = logits.dims.at(-1) ?? 1;
 				return documents.map((_, index) => Number(logits.data[index * width + width - 1]));
