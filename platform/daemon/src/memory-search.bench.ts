@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -41,15 +41,23 @@ function copyIfExists(from: string, to: string): void {
 function setupWorkspace(): void {
 	mkdirSync(join(TEST_DIR, "memory"), { recursive: true });
 	if (SOURCE_PATH) {
-		const dbPath = join(SOURCE_PATH, "memory", "memories.db");
+		const dbPath = [join(SOURCE_PATH, "data", "signet.db"), join(SOURCE_PATH, "memory", "memories.db")].find((path) =>
+			existsSync(path),
+		);
 		const cfgPath = join(SOURCE_PATH, "agent.yaml");
-		if (!existsSync(dbPath)) throw new Error(`Source memory DB not found: ${dbPath}`);
+		if (!dbPath)
+			throw new Error(`Source memory DB not found under ${SOURCE_PATH} (data/signet.db or memory/memories.db)`);
 		if (!existsSync(cfgPath)) throw new Error(`Source agent.yaml not found: ${cfgPath}`);
+		const targetDir = join(TEST_DIR, dbPath.endsWith("signet.db") ? "data" : "memory");
+		const targetPath = join(targetDir, dbPath.endsWith("signet.db") ? "signet.db" : "memories.db");
+		mkdirSync(targetDir, { recursive: true });
 		copyFileSync(cfgPath, join(TEST_DIR, "agent.yaml"));
-		copyFileSync(dbPath, join(TEST_DIR, "memory", "memories.db"));
-		copyIfExists(`${dbPath}-wal`, join(TEST_DIR, "memory", "memories.db-wal"));
-		copyIfExists(`${dbPath}-shm`, join(TEST_DIR, "memory", "memories.db-shm"));
-		initDbAccessor(join(TEST_DIR, "memory", "memories.db"));
+		copyFileSync(dbPath, targetPath);
+		copyIfExists(`${dbPath}-wal`, `${targetPath}-wal`);
+		copyIfExists(`${dbPath}-shm`, `${targetPath}-shm`);
+		const models = join(SOURCE_PATH, ".models");
+		if (existsSync(models)) symlinkSync(models, join(TEST_DIR, ".models"));
+		initDbAccessor(targetPath);
 		return;
 	}
 
