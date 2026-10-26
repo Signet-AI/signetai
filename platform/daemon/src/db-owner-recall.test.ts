@@ -72,6 +72,60 @@ afterEach(async () => {
 });
 
 describe("DB owner recall lane", () => {
+	test("computes the query embedding inside the recall ledger instead of before it starts", async () => {
+		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-recall-embedding-"));
+		previousSignetPath = process.env.SIGNET_PATH;
+		mkdirSync(join(directory, "memory"), { recursive: true });
+		writeFileSync(join(directory, "agent.yaml"), "name: DbOwnerRecallEmbeddingTest\n");
+		process.env.SIGNET_PATH = directory;
+		const databasePath = join(directory, "memory", "memories.db");
+		initDbAccessor(databasePath);
+		seedFacts();
+		const embedDelayMs = 250;
+		const server = Bun.serve({
+			port: 0,
+			fetch: async () => {
+				await Bun.sleep(embedDelayMs);
+				return Response.json({ embedding: [1, 0, 0] });
+			},
+		});
+		stopInferenceServer = () => server.stop();
+		const raw = testConfig(directory);
+		const cfg: ResolvedMemoryConfig = {
+			...raw,
+			embedding: {
+				...raw.embedding,
+				provider: "ollama",
+				model: "fake",
+				dimensions: 3,
+				base_url: `http://127.0.0.1:${server.port}`,
+			},
+		};
+		await closeDbAccessor();
+
+		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
+		try {
+			const routed = await hybridRecallThroughDbOwner(
+				client,
+				{
+					query: "owner recall fixture",
+					keywordQuery: "owner recall fixture",
+					limit: 5,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					trackRecallAccess: false,
+					claimRecallResults: false,
+				},
+				cfg,
+			);
+			const stages = new Map(routed.meta.timings.stages.map((stage) => [stage.name, stage.durationMs]));
+			expect(stages.get("query_embedding_total") ?? 0).toBeGreaterThanOrEqual(embedDelayMs * 0.75);
+			expect(routed.meta.timings.totalMs).toBeGreaterThanOrEqual(embedDelayMs * 0.75);
+			expect(routed.results.map((row) => row.id)).toContain("owner-fact-a");
+		} finally {
+			await client.close();
+		}
+	}, 30_000);
 	test("returns the same scoped recall result as the direct pipeline", async () => {
 		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-recall-"));
 		previousSignetPath = process.env.SIGNET_PATH;
