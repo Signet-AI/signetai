@@ -207,34 +207,49 @@ post-processing:
   (`cross-encoder`, `embedding`, `llm`, or `none`), the device it ran on, and
   why a fallback happened. Set `crossEncoderModel: ""` to use the embedding
   blend only, or `useExtractionModel: true` for the LLM reranker.
-- **CUDA cross-encoder (optional).** On a machine with an NVIDIA GPU, set
-  `reranker.device: cuda` to run the cross-encoder with full-precision
-  weights on the GPU (about 280 MB, downloaded on first use):
+- **Acceleration (optional).** `signet accelerate` installs and configures a
+  faster runtime, then `signet restart` applies it and
+  `signet accelerate verify` checks it:
+
+  - `signet accelerate cpu` downloads the native ONNX runtime for this
+    platform (about 35 MB, checked against a pinned sha512) and uses it for
+    embeddings and the cross-encoder.
+  - `signet accelerate cuda` (Linux x64, NVIDIA driver 525 or newer) also
+    installs the ONNX Runtime CUDA provider and the CUDA 12 libraries it
+    links against (about 1.6 GB, fetched member by member from NuGet and
+    PyPI and checked against pinned SHA-256 hashes), and runs the
+    cross-encoder on the GPU in full precision.
+  - `signet accelerate off` returns to WebAssembly; `signet accelerate`
+    alone shows the detected GPU and the active runtimes.
+
+  Native embeddings produce slightly different vectors from WebAssembly, so
+  switching re-embeds stored memories in the background; recall keeps using
+  the current vectors until the new index is ready. Files live in
+  `runtime/accelerators` inside the Signet workspace. The command writes these keys,
+  which can also be set by hand:
 
   ```yaml
+  embedding:
+    runtime: onnxruntime
+    onnxRuntimePath: /path/to/onnxruntime-node
   memory:
     pipelineV2:
       reranker:
-        device: cuda
-        onnxRuntimePath: /opt/signet/onnxruntime/node_modules/onnxruntime-node
+        device: cuda            # or cpu
+        onnxRuntimePath: /path/to/onnxruntime-node
         cudaLibraryPaths:
-          - /opt/signet/cuda12/nvidia/cuda_runtime/lib
-          - /opt/signet/cuda12/nvidia/cublas/lib
-          - /opt/signet/cuda12/nvidia/cudnn/lib
-          - /opt/signet/cuda12/nvidia/cufft/lib
-          - /opt/signet/cuda12/nvidia/curand/lib
+          - /path/to/cuda12/lib
   ```
 
-  `onnxRuntimePath` is an `onnxruntime-node` package directory installed with
-  its CUDA provider (`ONNXRUNTIME_NODE_INSTALL=cuda12`) at the version the
-  Signet build reports; the compiled binary refuses a different version.
-  `cudaLibraryPaths` lists directories of CUDA 12 and cuDNN 9 shared
-  libraries to load before the CUDA provider (for example the
-  `nvidia-*-cu12` Python wheels), so no system-wide CUDA 12 install or
-  `LD_LIBRARY_PATH` is needed. If the CUDA worker cannot start, recall falls
-  back to the default runtime and logs why. When the `@signet/native` addon is
-  present, the cross-encoder tokenizes query and candidate pairs natively and
-  caches each candidate's tokens.
+  `onnxRuntimePath` is an `onnxruntime-node` package directory (with its CUDA
+  provider for `device: cuda`) at the version the Signet build reports; the
+  compiled binary refuses a different version. `cudaLibraryPaths` lists
+  directories of CUDA 12 shared libraries to load before the CUDA provider,
+  so no system-wide CUDA 12 install or `LD_LIBRARY_PATH` is needed. If the
+  CUDA or native CPU worker cannot start, recall falls back to the default
+  runtime and logs why. When the `@signet/native` addon is present, the
+  cross-encoder tokenizes query and candidate pairs natively and caches each
+  candidate's tokens.
 - **Dampening** penalizes low-overlap semantic hits, hub-like entity
   dominance, and other noisy retrieval shapes. The low-overlap penalty never
   drops a hit below the scores it leaves untouched, and an entity counts as a
