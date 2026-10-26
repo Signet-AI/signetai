@@ -1,3 +1,4 @@
+import { copyFileSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import YAML from "yaml";
 export function parseSimpleYaml(text: string): Record<string, unknown> {
 	try {
@@ -38,4 +39,42 @@ export function formatYaml(obj: Record<string, unknown>, _indent = 0): string {
 		indent: 2,
 		simpleKeys: true,
 	});
+}
+
+export interface YamlConfigEditor {
+	get(path: readonly string[]): unknown;
+	set(path: readonly string[], value: unknown): void;
+	delete(path: readonly string[]): void;
+}
+
+export function editYamlConfigFile(file: string, edit: (editor: YamlConfigEditor) => void): void {
+	const text = readFileSync(file, "utf8");
+	const document = YAML.parseDocument(text, { prettyErrors: false });
+	if (document.errors.length > 0) {
+		throw new Error(`${file} is not valid YAML (${document.errors[0]?.message ?? "parse error"}); fix it first`);
+	}
+	if (document.contents !== null && !YAML.isMap(document.contents)) {
+		throw new Error(`${file} must contain a mapping at the top level`);
+	}
+	edit({
+		get: (path) => {
+			const value = document.getIn(path);
+			return YAML.isNode(value) ? value.toJSON() : value;
+		},
+		set: (path, value) => document.setIn(path, value),
+		delete: (path) => {
+			document.deleteIn(path);
+		},
+	});
+	const next = document.toString();
+	if (next === text) return;
+	copyFileSync(file, `${file}.bak`);
+	const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+	try {
+		writeFileSync(temporary, next);
+		renameSync(temporary, file);
+	} catch (error) {
+		rmSync(temporary, { force: true });
+		throw error;
+	}
 }

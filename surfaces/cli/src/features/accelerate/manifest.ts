@@ -21,12 +21,89 @@ export const ONNXRUNTIME_NODE_TARBALL = {
 	integrity: "sha512-JH7+czbc8ALA819vlTgcV+Q214/+VjGeBHDjX81+ZCD0PCVCIFGFNtT0V4sXG/1JXypKPgScQcB3ij/hk3YnTg==",
 } as const;
 
-export const ONNXRUNTIME_PLATFORM_FILES: Readonly<Record<string, readonly string[]>> = {
-	"linux-x64": ["onnxruntime_binding.node", "libonnxruntime.so.1"],
-	"linux-arm64": ["onnxruntime_binding.node", "libonnxruntime.so.1"],
-	"darwin-arm64": ["onnxruntime_binding.node", `libonnxruntime.${ONNXRUNTIME_NODE_VERSION}.dylib`],
-	"win32-x64": ["onnxruntime_binding.node", "onnxruntime.dll", "DirectML.dll", "dxcompiler.dll", "dxil.dll"],
-	"win32-arm64": ["onnxruntime_binding.node", "onnxruntime.dll", "DirectML.dll", "dxcompiler.dll", "dxil.dll"],
+export const ONNXRUNTIME_PLATFORM_FILES: Readonly<Record<string, readonly PinnedFile[]>> = {
+	"linux-x64": [
+		{
+			name: "onnxruntime_binding.node",
+			size: 384040,
+			sha256: "a7191fbfe8045d4d5d312e5ecd8f5dd6970e804dd340c98be8a0af8daf7908cc",
+		},
+		{
+			name: "libonnxruntime.so.1",
+			size: 35164376,
+			sha256: "92ba8e44d31b80a34f5e805076a044122c3be1fffe0d88ed790de7267b0b2682",
+		},
+	],
+	"linux-arm64": [
+		{
+			name: "onnxruntime_binding.node",
+			size: 394600,
+			sha256: "39c8f903505611115a62d8527b2c2df4bb5e27a35cfd81d1f2082eeb59518a4e",
+		},
+		{
+			name: "libonnxruntime.so.1",
+			size: 18625376,
+			sha256: "33032cb5b91c12edbf028d7c69fa40a31848d66c0095448758af237d5e0b07db",
+		},
+	],
+	"darwin-arm64": [
+		{
+			name: "onnxruntime_binding.node",
+			size: 266152,
+			sha256: "ffa33e57e56799a89ff4986ae579ca0de0be81867c5e3219ac9fdb0f7d1bbd89",
+		},
+		{
+			name: "libonnxruntime.1.24.3.dylib",
+			size: 35937208,
+			sha256: "76831409ce6eded92b4cb343cf422c458a60c1ea1d5f3cfa69692ab7fcc67f0f",
+		},
+	],
+	"win32-x64": [
+		{
+			name: "onnxruntime_binding.node",
+			size: 298016,
+			sha256: "32a61411861578b3e0988e669e9d9a474cc1436369269df0a4e23765cbe9e75a",
+		},
+		{
+			name: "DirectML.dll",
+			size: 18527776,
+			sha256: "aba1999d6f7af246fc032105a6498722eb4af8a70f04c7441b7608e17deec72f",
+		},
+		{
+			name: "dxcompiler.dll",
+			size: 17986624,
+			sha256: "2ba00fb846bf7be9df3fbe38cfadbf2d9556a7f505ec68daad522056b97fcae0",
+		},
+		{ name: "dxil.dll", size: 1508888, sha256: "75fdc30995155ba5ea8383fee0d7d3d39577f27da61f53bf4eb9aa4e3e212640" },
+		{
+			name: "onnxruntime.dll",
+			size: 23850016,
+			sha256: "4bc168111012971ae1ffef36c1f29c06b026d17e9063bd17f6390359fbe32a84",
+		},
+	],
+	"win32-arm64": [
+		{
+			name: "onnxruntime_binding.node",
+			size: 420384,
+			sha256: "be69cf9fd7ffe90da4543bd2078ef2f2d4ba7f62273948095fbf5b98ba4b240b",
+		},
+		{
+			name: "DirectML.dll",
+			size: 18444824,
+			sha256: "0faa19e9cfa7cbbf2bb679ba5313d81ebbcd4c96d1c78200efd7752c7d01503e",
+		},
+		{
+			name: "dxcompiler.dll",
+			size: 22285856,
+			sha256: "8a45654cd1314c5f98c3657f567088ee77dc9cc89e402147843885028fde3748",
+		},
+		{ name: "dxil.dll", size: 1770056, sha256: "cc8a8b8b87e3bbdeaa3a04148e83447df5f4750749261c4566fab34a63333f40" },
+		{
+			name: "onnxruntime.dll",
+			size: 24420896,
+			sha256: "65dd5f706f8dd42ce96f6358ef3180c3c30f390022de00b75ada6f498ba4cce1",
+		},
+	],
 };
 
 export const CUDA_MIN_DRIVER_MAJOR = 525;

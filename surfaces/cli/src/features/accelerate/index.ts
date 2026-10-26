@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createReadStream, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { formatYaml, readPipelineConfigData } from "@signet/core";
+import { editYamlConfigFile, readPipelineConfigData } from "@signet/core";
 import {
 	type Fetcher,
 	type ProgressSink,
@@ -51,18 +51,30 @@ export interface InstallEvents {
 	readonly onProgress?: ProgressSink;
 }
 
-function cpuRuntimeInstalled(paths: AcceleratorPaths, platform: string): boolean {
-	const files = ONNXRUNTIME_PLATFORM_FILES[platform];
-	if (!files) return false;
+function packageVersionMatches(paths: AcceleratorPaths): boolean {
 	try {
 		const manifest = JSON.parse(readFileSync(join(paths.ortPackageDir, "package.json"), "utf8")) as {
 			version?: string;
 		};
-		if (manifest.version !== ONNXRUNTIME_NODE_VERSION) return false;
+		return manifest.version === ONNXRUNTIME_NODE_VERSION;
 	} catch {
 		return false;
 	}
-	return files.every((file) => existsSync(join(paths.ortBinDir, file)));
+}
+
+function cpuRuntimeFilesPresent(paths: AcceleratorPaths, platform: string): boolean {
+	const files = ONNXRUNTIME_PLATFORM_FILES[platform];
+	if (!files || !packageVersionMatches(paths)) return false;
+	return files.every((file) => fileMatchesSize(join(paths.ortBinDir, file.name), file.size));
+}
+
+async function cpuRuntimeVerified(paths: AcceleratorPaths, platform: string): Promise<boolean> {
+	const files = ONNXRUNTIME_PLATFORM_FILES[platform];
+	if (!files || !packageVersionMatches(paths)) return false;
+	for (const file of files) {
+		if (!(await memberPresent(join(paths.ortBinDir, file.name), file.sha256, file.size))) return false;
+	}
+	return true;
 }
 
 export async function installCpuRuntime(
@@ -72,25 +84,33 @@ export async function installCpuRuntime(
 ): Promise<"installed" | "present"> {
 	const files = ONNXRUNTIME_PLATFORM_FILES[platform];
 	if (!files) throw new Error(`no ONNX runtime build is pinned for ${platform}`);
-	if (cpuRuntimeInstalled(paths, platform)) return "present";
+	if (await cpuRuntimeVerified(paths, platform)) return "present";
 	const fetcher = events.fetcher ?? fetch;
 	const archive = join(paths.root, "downloads", `onnxruntime-node-${ONNXRUNTIME_NODE_VERSION}.tgz`);
 	events.onStep?.(`Downloading onnxruntime-node ${ONNXRUNTIME_NODE_VERSION}`);
-	await downloadVerified(
-		fetcher,
-		ONNXRUNTIME_NODE_TARBALL.url,
-		ONNXRUNTIME_NODE_TARBALL.integrity,
-		archive,
-		events.onProgress,
-	);
-	const [os, arch] = platform.split("-");
-	const wanted = new Map<string, string>([["package/package.json", join(paths.ortPackageDir, "package.json")]]);
-	for (const file of files) wanted.set(`package/bin/napi-v6/${os}/${arch}/${file}`, join(paths.ortBinDir, file));
-	events.onStep?.("Extracting the native runtime for this platform");
-	const written = await extractTarGzEntries(archive, wanted);
-	rmSync(archive, { force: true });
-	const missing = [...wanted.values()].filter((target) => !written.has(target));
-	if (missing.length > 0) throw new Error(`the onnxruntime-node archive is missing ${missing.join(", ")}`);
+	try {
+		await downloadVerified(
+			fetcher,
+			ONNXRUNTIME_NODE_TARBALL.url,
+			ONNXRUNTIME_NODE_TARBALL.integrity,
+			archive,
+			events.onProgress,
+		);
+		const [os, arch] = platform.split("-");
+		const wanted = new Map<string, string>([["package/package.json", join(paths.ortPackageDir, "package.json")]]);
+		for (const file of files) {
+			wanted.set(`package/bin/napi-v6/${os}/${arch}/${file.name}`, join(paths.ortBinDir, file.name));
+		}
+		events.onStep?.("Extracting the native runtime for this platform");
+		const written = await extractTarGzEntries(archive, wanted);
+		const missing = [...wanted.values()].filter((target) => !written.has(target));
+		if (missing.length > 0) throw new Error(`the onnxruntime-node archive is missing ${missing.join(", ")}`);
+	} finally {
+		rmSync(archive, { force: true });
+	}
+	if (!(await cpuRuntimeVerified(paths, platform))) {
+		throw new Error("the extracted onnxruntime-node files do not match the pinned hashes");
+	}
 	return "installed";
 }
 
@@ -147,52 +167,52 @@ function asRecord(value: unknown): Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+function ownedByAccelerator(value: unknown, paths: AcceleratorPaths): boolean {
+	const values = Array.isArray(value) ? value : [value];
+	return values.length > 0 && values.every((entry) => typeof entry === "string" && entry.startsWith(paths.root));
+}
+
 export function applyAccelerationConfig(
 	agentsDir: string,
 	mode: AccelerationMode,
 	paths: AcceleratorPaths,
 ): AccelerationConfigChange {
-	const { file, root, memory, pipeline } = readPipelineConfigData(agentsDir);
-	if (file === null || root === null) throw new Error("No Signet config file found. Run `signet setup` first.");
-	const embedding = asRecord(root.embedding);
-	const provider = typeof embedding.provider === "string" ? embedding.provider : "native";
-	const nativeEmbedding = provider === "native" || provider === "local";
-	const previousRuntime = embedding.runtime === "onnxruntime" ? "onnxruntime" : "wasm";
-	const nextEmbedding: Record<string, unknown> = { ...embedding };
-	if (nativeEmbedding) {
-		if (mode === "off") {
-			delete nextEmbedding.runtime;
-			delete nextEmbedding.onnxRuntimePath;
+	const { file } = readPipelineConfigData(agentsDir);
+	if (file === null) throw new Error("No Signet config file found. Run `signet setup` first.");
+	let embeddingRuntimeChanged = false;
+	let embeddingSkipped: string | null = null;
+	const reranker = ["memory", "pipelineV2", "reranker"];
+	editYamlConfigFile(file, (config) => {
+		const providerValue = config.get(["embedding", "provider"]);
+		const provider = typeof providerValue === "string" ? providerValue : "native";
+		const nativeEmbedding = provider === "native" || provider === "local";
+		const previousRuntime = config.get(["embedding", "runtime"]) === "onnxruntime" ? "onnxruntime" : "wasm";
+		const removeOwned = (path: readonly string[]): void => {
+			if (ownedByAccelerator(config.get(path), paths)) config.delete(path);
+		};
+		if (!nativeEmbedding) {
+			embeddingSkipped = `embedding.provider is ${provider}; only native embeddings use this runtime`;
+		} else if (mode === "off") {
+			if (config.get(["embedding", "runtime"]) === "onnxruntime") config.delete(["embedding", "runtime"]);
+			removeOwned(["embedding", "onnxRuntimePath"]);
 		} else {
-			nextEmbedding.runtime = "onnxruntime";
-			nextEmbedding.onnxRuntimePath = paths.ortPackageDir;
+			config.set(["embedding", "runtime"], "onnxruntime");
+			config.set(["embedding", "onnxRuntimePath"], paths.ortPackageDir);
 		}
-	}
-	const nextRuntime = nextEmbedding.runtime === "onnxruntime" ? "onnxruntime" : "wasm";
-	const reranker: Record<string, unknown> = { ...asRecord(asRecord(pipeline).reranker) };
-	delete reranker.cudaLibraryPaths;
-	if (mode === "off") {
-		reranker.device = "default";
-		delete reranker.onnxRuntimePath;
-	} else {
-		reranker.device = mode;
-		reranker.onnxRuntimePath = paths.ortPackageDir;
-		if (mode === "cuda") reranker.cudaLibraryPaths = [paths.cudaLibDir];
-	}
-	const next = {
-		...root,
-		...(Object.keys(nextEmbedding).length > 0 ? { embedding: nextEmbedding } : {}),
-		memory: { ...(memory ?? {}), pipelineV2: { ...(pipeline ?? {}), reranker } },
-	};
-	writeFileSync(file, formatYaml(next));
-	return {
-		file,
-		embeddingRuntimeChanged: nativeEmbedding && previousRuntime !== nextRuntime,
-		embeddingSkipped: nativeEmbedding
-			? null
-			: `embedding.provider is ${provider}; only native embeddings use this runtime`,
-		rerankerDevice: String(reranker.device),
-	};
+		const nextRuntime = config.get(["embedding", "runtime"]) === "onnxruntime" ? "onnxruntime" : "wasm";
+		embeddingRuntimeChanged = nativeEmbedding && previousRuntime !== nextRuntime;
+		if (mode === "off") {
+			config.set([...reranker, "device"], "default");
+			removeOwned([...reranker, "onnxRuntimePath"]);
+			removeOwned([...reranker, "cudaLibraryPaths"]);
+			return;
+		}
+		config.set([...reranker, "device"], mode);
+		config.set([...reranker, "onnxRuntimePath"], paths.ortPackageDir);
+		if (mode === "cuda") config.set([...reranker, "cudaLibraryPaths"], [paths.cudaLibDir]);
+		else removeOwned([...reranker, "cudaLibraryPaths"]);
+	});
+	return { file, embeddingRuntimeChanged, embeddingSkipped, rerankerDevice: mode === "off" ? "default" : mode };
 }
 
 export interface AccelerationStatus {
@@ -213,7 +233,7 @@ export function readAccelerationStatus(agentsDir: string, platform: string = pla
 	const provider = CUDA_PROVIDER[platform];
 	return {
 		platform,
-		cpuRuntimeInstalled: cpuRuntimeInstalled(paths, platform),
+		cpuRuntimeInstalled: cpuRuntimeFilesPresent(paths, platform),
 		cudaFilesPresent:
 			(provider?.members.every((member) => fileMatchesSize(join(paths.ortBinDir, member.name), member.size)) ??
 				false) &&

@@ -117,4 +117,24 @@ describe("acceleration config", () => {
 		expect(change.embeddingSkipped).toMatch(/ollama/);
 		expect(change.embeddingRuntimeChanged).toBe(false);
 	});
+
+	it("refuses to rewrite an agent.yaml it cannot parse", () => {
+		const broken = "embedding:\n  provider: native\nmemory: [unclosed\n";
+		const dir = workspace(broken);
+		expect(() => applyAccelerationConfig(dir, "cpu", acceleratorPaths(dir))).toThrow(/not valid YAML/);
+		expect(readFileSync(join(dir, "agent.yaml"), "utf8")).toBe(broken);
+	});
+
+	it("turning acceleration off keeps runtime paths the user set themselves", () => {
+		const dir = workspace(
+			"# tuned by hand\nembedding:\n  provider: native\n  runtime: onnxruntime\n  onnxRuntimePath: /opt/ort\nmemory:\n  pipelineV2:\n    reranker:\n      device: cpu\n      onnxRuntimePath: /opt/ort\n",
+		);
+		applyAccelerationConfig(dir, "off", acceleratorPaths(dir));
+		const text = readFileSync(join(dir, "agent.yaml"), "utf8");
+		const yaml = readYaml(dir);
+		expect(text).toContain("# tuned by hand");
+		expect(yaml.memory.pipelineV2.reranker).toMatchObject({ device: "default", onnxRuntimePath: "/opt/ort" });
+		expect(yaml.embedding.onnxRuntimePath).toBe("/opt/ort");
+		expect(yaml.embedding.runtime).toBeUndefined();
+	});
 });

@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deflateRawSync, gzipSync } from "node:zlib";
@@ -201,7 +201,7 @@ describe("remote zip member extraction", () => {
 			),
 		).rejects.toThrow(/sha256/);
 		expect(existsSync(target)).toBe(false);
-		expect(existsSync(`${target}.partial`)).toBe(false);
+		expect(readdirSync(join(dir, "bad")).filter((name) => name.endsWith(".partial"))).toEqual([]);
 	});
 });
 

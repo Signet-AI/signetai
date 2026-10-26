@@ -1,10 +1,14 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream, mkdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createGunzip, createInflateRaw } from "node:zlib";
 import type { PinnedZipMember } from "./manifest.js";
+
+function partialPath(destination: string): string {
+	return `${destination}.${process.pid}.${randomBytes(4).toString("hex")}.partial`;
+}
 
 export type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -136,8 +140,12 @@ function digestCheck(expected: { readonly sha256: string; readonly size: number 
 	let size = 0;
 	const meter = new Transform({
 		transform(chunk: Buffer, _encoding, callback) {
-			hash.update(chunk);
 			size += chunk.length;
+			if (size > expected.size) {
+				callback(new Error(`${label}: more than the expected ${expected.size} bytes`));
+				return;
+			}
+			hash.update(chunk);
 			callback(null, chunk);
 		},
 	});
@@ -175,7 +183,7 @@ export async function extractRemoteZipMember(
 		throw new Error(`${url} did not honor the byte range for ${member.path} (HTTP ${response.status})`);
 	}
 	mkdirSync(dirname(destination), { recursive: true });
-	const partial = `${destination}.partial`;
+	const partial = partialPath(destination);
 	const check = digestCheck(member, member.name);
 	const counter = new Transform({
 		transform(chunk: Buffer, _encoding, callback) {
@@ -210,7 +218,7 @@ export async function downloadVerified(
 	const response = await fetcher(url, { redirect: "follow" });
 	if (!response.ok || !response.body) throw new Error(`${url} returned HTTP ${response.status}`);
 	mkdirSync(dirname(destination), { recursive: true });
-	const partial = `${destination}.partial`;
+	const partial = partialPath(destination);
 	const hash = createHash("sha512");
 	const meter = new Transform({
 		transform(chunk: Buffer, _encoding, callback) {
@@ -254,7 +262,7 @@ export async function extractTarGzEntries(
 		}
 		if (done.kind !== "file" || done.target === null) return;
 		mkdirSync(dirname(done.target), { recursive: true });
-		const partial = `${done.target}.partial`;
+		const partial = partialPath(done.target);
 		writeFileSync(partial, Buffer.concat(done.chunks));
 		renameSync(partial, done.target);
 		written.add(done.target);
