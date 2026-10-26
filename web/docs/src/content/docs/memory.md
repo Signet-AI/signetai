@@ -194,14 +194,42 @@ post-processing:
   use), and fuses its order with the retrieval order by reciprocal rank so it
   can lift a relevant memory that shares no words with the question without
   overturning order retrieval already got right. It runs in its own worker
-  thread, one rerank at a time, and adds roughly 150 to 250 ms per recall on
-  the source runtime and 350 to 450 ms in the compiled binary, which runs it
-  on WebAssembly. The model loads in the background on first use; while it is
+  thread, one rerank at a time. The compiled binary runs it on WebAssembly by
+  default, where 20 candidates can take longer than the deadline on a busy
+  machine. The model loads in the background on first use; while it is
   loading, busy, or slower than three quarters of `reranker.timeoutMs`,
   recall falls back to an embedding blend for that request. `meta.reranker` reports which reranker ran
-  (`cross-encoder`, `embedding`, `llm`, or `none`) and why a fallback
-  happened. Set `crossEncoderModel: ""` to use the embedding blend only, or
-  `useExtractionModel: true` for the LLM reranker.
+  (`cross-encoder`, `embedding`, `llm`, or `none`), the device it ran on, and
+  why a fallback happened. Set `crossEncoderModel: ""` to use the embedding
+  blend only, or `useExtractionModel: true` for the LLM reranker.
+- **CUDA cross-encoder (optional).** On a machine with an NVIDIA GPU, set
+  `reranker.device: cuda` to run the cross-encoder with full-precision
+  weights on the GPU (about 280 MB, downloaded on first use):
+
+  ```yaml
+  memory:
+    pipelineV2:
+      reranker:
+        device: cuda
+        onnxRuntimePath: /opt/signet/onnxruntime/node_modules/onnxruntime-node
+        cudaLibraryPaths:
+          - /opt/signet/cuda12/nvidia/cuda_runtime/lib
+          - /opt/signet/cuda12/nvidia/cublas/lib
+          - /opt/signet/cuda12/nvidia/cudnn/lib
+          - /opt/signet/cuda12/nvidia/cufft/lib
+          - /opt/signet/cuda12/nvidia/curand/lib
+  ```
+
+  `onnxRuntimePath` is an `onnxruntime-node` package directory installed with
+  its CUDA provider (`ONNXRUNTIME_NODE_INSTALL=cuda12`) at the version the
+  Signet build reports; the compiled binary refuses a different version.
+  `cudaLibraryPaths` lists directories of CUDA 12 and cuDNN 9 shared
+  libraries to load before the CUDA provider (for example the
+  `nvidia-*-cu12` Python wheels), so no system-wide CUDA 12 install or
+  `LD_LIBRARY_PATH` is needed. If the CUDA worker cannot start, recall falls
+  back to the default runtime and logs why. When the `@signet/native` addon is
+  present, the cross-encoder tokenizes query and candidate pairs natively and
+  caches each candidate's tokens.
 - **Dampening** penalizes low-overlap semantic hits, hub-like entity
   dominance, and other noisy retrieval shapes. The low-overlap penalty never
   drops a hit below the scores it leaves untouched, and an entity counts as a
