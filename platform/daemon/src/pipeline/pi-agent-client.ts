@@ -243,7 +243,6 @@ export async function createWorkerAgentSession(
 		getSystemPrompt: () => input.systemPrompt,
 		getSessionId: () => sessionId,
 		getModelName: () => activeModel.id,
-		getContextWindow: () => activeModel.contextWindow,
 		getActiveToolNames: () => activeTools.map((tool) => tool.name),
 		getExecutionThreadId: () => executionThreadId,
 		getStats: () => stats,

@@ -641,6 +641,49 @@ describe("local thinking control", () => {
 			} finally {
 				await session.dispose();
 			}
+			const unknown = await createPiModelProvider({
+				executor: "openai-compatible",
+				model: "unknown-window-test",
+				baseUrl: server.url,
+			}).createAgentSession([]);
+			try {
+				expect(unknown.getContextWindow?.()).toBeUndefined();
+			} finally {
+				await unknown.dispose();
+			}
+			const configured = await createPiModelProvider({
+				executor: "openai-compatible",
+				model: "configured-window-test",
+				baseUrl: server.url,
+				contextWindow: 1_000_000,
+			}).createAgentSession([]);
+			try {
+				expect(configured.getContextWindow?.()).toBe(1_000_000);
+			} finally {
+				await configured.dispose();
+			}
+			const catalog = await createPiModelProvider({
+				executor: "openai-compatible",
+				model: "catalog-window-test",
+				baseUrl: server.url,
+				piModel: {
+					id: "catalog-window-test",
+					name: "catalog-window-test",
+					api: "openai-completions",
+					provider: "openai-compatible",
+					baseUrl: server.url,
+					reasoning: false,
+					input: ["text"],
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					contextWindow: 400_000,
+					maxTokens: 4096,
+				},
+			}).createAgentSession([]);
+			try {
+				expect(catalog.getContextWindow?.()).toBe(400_000);
+			} finally {
+				await catalog.dispose();
+			}
 		} finally {
 			server.stop();
 		}

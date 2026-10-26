@@ -2852,6 +2852,80 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(dreamingEvidencePageCharsForWindow(16_000)).toBe(16_000);
 	});
 
+	it("falls back to the input budget when a later session reports no window", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `haystack-${i}`, `Session ${i} line.\n`.repeat(500));
+		let page: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "large-window", contextWindow: 262_144 });
+					input.onSessionInfo?.({ model: "fallback-target" });
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const items = page.items as Array<{ content: string }>;
+		expect(items.reduce((sum, item) => sum + item.content.length, 0)).toBeLessThanOrEqual(32_000);
+		expect(page.hasMore).toBe(true);
+	});
+
+	it("counts non-ASCII evidence as denser than four characters per token", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `kanji-${i}`, `記憶の断片${i}。`.repeat(800));
+		let page: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "local-model", contextWindow: 262_144 });
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const items = page.items as Array<{ content: string }>;
+		const estimatedTokens = items.reduce(
+			(sum, item) => sum + [...item.content].reduce((n, char) => n + (char.charCodeAt(0) > 0x7f ? 1 : 0.25), 0),
+			0,
+		);
+		expect(estimatedTokens).toBeLessThanOrEqual(565_144 / 4 + 500);
+		expect(page.hasMore).toBe(true);
+	});
+
+	it("never delivers a page larger than the pass's remaining evidence budget", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `haystack-${i}`, `Session ${i} line.\n`.repeat(500));
+		let page: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "local-model", contextWindow: 262_144 });
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000, maxPassTokens: 20_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const items = page.items as Array<{ content: string }>;
+		expect(items.reduce((sum, item) => sum + item.content.length, 0)).toBeLessThanOrEqual(80_000);
+		expect(page.hasMore).toBe(true);
+	});
+
 	it("sizes evidence pages from the Dreaming input budget", async () => {
 		expect(dreamingEvidencePageChars(128_000)).toBe(32_000);
 		expect(dreamingEvidencePageChars(8_000)).toBe(16_000);

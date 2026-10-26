@@ -330,6 +330,19 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 }
 
 const DELIVERY_QUEUE_SCAN_LIMIT = MAX_EPISODIC_SOURCE_SCAN;
+const DENSITY_SAMPLE_CHARS = 200_000;
+
+function evidenceTokenDensity(sources: readonly EpisodicSourceRecord[]): number {
+	let sampled = 0;
+	let weighted = 0;
+	for (const source of sources) {
+		const end = Math.min(source.content.length, DENSITY_SAMPLE_CHARS - sampled);
+		for (let index = 0; index < end; index++) weighted += source.content.charCodeAt(index) > 0x7f ? 4 : 1;
+		sampled += end;
+		if (sampled >= DENSITY_SAMPLE_CHARS) break;
+	}
+	return sampled === 0 ? 1 : Math.max(1, weighted / sampled);
+}
 const DELIVERY_QUEUE_MAX_SOURCES = DELIVERY_QUEUE_SCAN_LIMIT - 1;
 
 function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
@@ -339,7 +352,6 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		Math.min(Math.floor(input.limit ?? DELIVERY_QUEUE_MAX_SOURCES), DELIVERY_QUEUE_MAX_SOURCES),
 	);
 	const servedInPass = input.passId ? passDeliveredRanges(db, input.passId, scopeId) : new Map();
-	const pageChars = evidencePageChars(input.evidenceChars);
 	let budgetExhausted = false;
 	const cursors = new Map<string, DreamingEvidenceCursor>();
 	const cursorFor = (source: EpisodicSourceRecord): DreamingEvidenceCursor => {
@@ -359,6 +371,11 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		limit: DELIVERY_QUEUE_SCAN_LIMIT,
 	});
 	const fresh = [...scanned.filter((source) => !stalled(source)), ...scanned.filter(stalled)];
+	const continuationSources = pendingDreamingEvidenceContinuations(db, scopeId, DELIVERY_QUEUE_MAX_SOURCES, input.kind);
+	const pageChars = Math.max(
+		MAX_EVIDENCE_RESULT_CHARS,
+		Math.floor(evidencePageChars(input.evidenceChars) / evidenceTokenDensity([...continuationSources, ...fresh])),
+	);
 	const page = (sources: readonly EpisodicSourceRecord[], max: number, skip = new Set<string>()) => {
 		const items: Record<string, unknown>[] = [];
 		let remaining = pageChars;
@@ -388,11 +405,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		return items;
 	};
 	const continuationRefs = new Set<string>();
-	const continuations = page(
-		pendingDreamingEvidenceContinuations(db, scopeId, DELIVERY_QUEUE_MAX_SOURCES, input.kind),
-		limit + 1,
-		continuationRefs,
-	);
+	const continuations = page(continuationSources, limit + 1, continuationRefs);
 	if (continuations.length > 0) {
 		const returned = continuations.slice(0, limit);
 		return {
@@ -732,6 +745,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						note: "This pass has used its time or evidence budget for new evidence. File what you have read, write the runbook, and finish; the rest of the queue is delivered to the next pass.",
 					};
 				}
+				const pageChars = typeof params.evidenceChars === "function" ? params.evidenceChars() : params.evidenceChars;
+				const remainingBudgetChars =
+					drainsQueue && params.evidenceTokenBudget !== undefined
+						? Math.max(0, params.evidenceTokenBudget * EVIDENCE_CHARS_PER_TOKEN - deliveredQueueChars)
+						: undefined;
+				const evidenceChars =
+					remainingBudgetChars === undefined
+						? pageChars
+						: Math.min(pageChars ?? remainingBudgetChars, remainingBudgetChars);
 				const input: DbOwnerDreamingEvidenceSearch = {
 					agentId: scopeId,
 					...(query === undefined ? {} : { query }),
@@ -743,12 +765,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					...(offset === undefined ? {} : { offset }),
 					...(chunkSize === undefined ? {} : { chunkSize }),
 					...(params.passId === undefined ? {} : { passId: params.passId }),
-					...(params.evidenceChars === undefined
-						? {}
-						: {
-								evidenceChars:
-									typeof params.evidenceChars === "function" ? params.evidenceChars() : params.evidenceChars,
-							}),
+					...(evidenceChars === undefined ? {} : { evidenceChars }),
 				};
 				const result = await runDbOwnerDomainOperation(accessor, {
 					runWithOwner: async (owner) => {

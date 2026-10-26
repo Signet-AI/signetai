@@ -1997,9 +1997,10 @@ ${JSON.stringify(liveOptions.userRequest)}
 				publishDreamingAgentEvent(passId, event, live);
 			},
 			onSessionInfo: (info) => {
-				if (info.contextWindow !== undefined && info.contextWindow > 0) {
-					evidencePageChars = dreamingEvidencePageCharsForWindow(info.contextWindow);
-				}
+				evidencePageChars =
+					info.contextWindow !== undefined && info.contextWindow > 0
+						? dreamingEvidencePageCharsForWindow(info.contextWindow)
+						: dreamingEvidencePageChars(cfg.maxInputTokens);
 				publishDreamingSessionInfo(passId, info, live);
 			},
 		});

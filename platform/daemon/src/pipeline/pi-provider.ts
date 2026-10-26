@@ -763,7 +763,8 @@ export function createPiModelProvider(
 				config.contextWindow === undefined && config.resolveContextWindow
 					? await config.resolveContextWindow()
 					: undefined;
-			return create(
+			const knownWindow = config.contextWindow ?? discoveredWindow ?? config.piModel?.contextWindow;
+			const session = await create(
 				{
 					model: {
 						...piModel,
@@ -788,6 +789,7 @@ export function createPiModelProvider(
 				tools,
 				options.signal,
 			);
+			return Object.assign(session, { getContextWindow: () => knownWindow });
 		},
 	};
 }
