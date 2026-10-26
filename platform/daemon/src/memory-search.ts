@@ -220,6 +220,7 @@ export type EmbedFn = (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole)
 export interface RecallStageTiming {
 	name: string;
 	durationMs: number;
+	startMs?: number;
 }
 
 export interface RecallTimings {
@@ -246,7 +247,11 @@ function createRecallTimingCollector(): {
 	const start = performance.now();
 	const stages: RecallStageTiming[] = [];
 	const record = (name: string, stageStart: number): void => {
-		stages.push({ name, durationMs: roundDuration(performance.now() - stageStart) });
+		stages.push({
+			name,
+			durationMs: roundDuration(performance.now() - stageStart),
+			startMs: roundDuration(stageStart - start),
+		});
 	};
 	return {
 		record,
