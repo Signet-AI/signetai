@@ -1438,30 +1438,33 @@ async function readTranscriptContent(
 	return { text: Buffer.concat(pages).toString("utf8"), complete: readBytes === bytes };
 }
 
-async function buildTranscriptEvidenceResults(
+interface TranscriptEvidenceRow {
+	readonly session_id: string | null;
+	readonly source_id: string | null;
+	readonly source_path: string;
+	readonly harness: string | null;
+	readonly project: string | null;
+	readonly captured_at: string;
+	readonly artifact_rowid: number;
+	readonly content_bytes: number;
+	readonly rank: number;
+}
+
+export interface TranscriptEvidencePrefetch {
+	readonly query: string;
+	readonly fetchLimit: number;
+	readonly rows: readonly TranscriptEvidenceRow[];
+	readonly results: ReadonlyMap<number, RecallResult | null>;
+}
+
+async function readTranscriptEvidenceRows(
+	owner: DbOwnerClient,
 	agentId: string,
 	project: string | undefined,
-	query: string,
-	maxResults: number,
-	existing: readonly RecallResult[],
-): Promise<RecallResult[]> {
-	const fts = sanitizeFtsQuery(query);
-	if (fts.length === 0 || maxResults <= 0) return [];
-	const represented = new Set(
-		existing.flatMap((row) => [row.session_id, row.source_id]).filter((id): id is string => !!id),
-	);
-	const owner = await getDbOwner(getDbAccessorPath());
-	const rows = await ownerReadAll<{
-		readonly session_id: string | null;
-		readonly source_id: string | null;
-		readonly source_path: string;
-		readonly harness: string | null;
-		readonly project: string | null;
-		readonly captured_at: string;
-		readonly artifact_rowid: number;
-		readonly content_bytes: number;
-		readonly rank: number;
-	}>(
+	fts: string,
+	fetchLimit: number,
+): Promise<ReadonlyArray<TranscriptEvidenceRow>> {
+	return await ownerReadAll<TranscriptEvidenceRow>(
 		owner,
 		`SELECT ma.session_id, ma.source_id, ma.source_path, ma.harness, ma.project,
 			COALESCE(ma.started_at, ma.captured_at) AS captured_at, ma.rowid AS artifact_rowid,
@@ -1474,14 +1477,87 @@ async function buildTranscriptEvidenceResults(
 		   AND COALESCE(ma.is_deleted, 0) = 0
 		   ${project ? "AND (ma.project = ? OR ma.project IS NULL)" : ""}
 		 ORDER BY rank ASC LIMIT ?`,
-		[fts, agentId, ...(project ? [project] : []), maxResults + represented.size],
+		[fts, agentId, ...(project ? [project] : []), fetchLimit],
 		{
 			operation: "memory-search.transcript-evidence",
 			workloadClass: "foreground",
-			estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, maxResults + represented.size),
+			estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, fetchLimit),
 			deadlineMs: 30_000,
 		},
 	);
+}
+
+async function readTranscriptEvidenceResult(
+	owner: DbOwnerClient,
+	agentId: string,
+	query: string,
+	row: TranscriptEvidenceRow,
+	deadlineAt: number,
+): Promise<RecallResult | null> {
+	const transcript = await readTranscriptContent(owner, agentId, row.artifact_rowid, row.content_bytes, deadlineAt);
+	if (transcript === null) return null;
+	const sessionId = row.session_id ?? row.source_path;
+	const content = transcriptExcerpt(redactCredentials(transcript.text), query, 900);
+	return {
+		id: `transcript:${sessionId}`,
+		content,
+		content_length: content.length,
+		truncated: !transcript.complete || content.length < transcript.text.length,
+		score: Math.round((1 / (1 + Math.abs(row.rank))) * 100) / 100,
+		source: "transcript",
+		source_id: row.source_id ?? sessionId,
+		session_id: sessionId,
+		source_path: row.source_path,
+		type: "transcript",
+		tags: null,
+		pinned: false,
+		importance: 0.5,
+		who: row.harness ?? "transcript",
+		project: row.project,
+		created_at: row.captured_at,
+		supplementary: true,
+	};
+}
+
+export async function prefetchTranscriptEvidence(
+	agentId: string,
+	project: string | undefined,
+	query: string,
+	maxResults: number,
+	resultLimit: number,
+): Promise<TranscriptEvidencePrefetch | null> {
+	const fts = sanitizeFtsQuery(query);
+	if (fts.length === 0 || maxResults <= 0) return null;
+	const owner = await getDbOwner(getDbAccessorPath());
+	const fetchLimit = maxResults + 2 * Math.max(0, resultLimit);
+	const rows = await readTranscriptEvidenceRows(owner, agentId, project, fts, fetchLimit);
+	const deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS;
+	const results = new Map<number, RecallResult | null>();
+	for (const row of rows.slice(0, maxResults)) {
+		results.set(row.artifact_rowid, await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt));
+	}
+	return { query, fetchLimit, rows, results };
+}
+
+async function buildTranscriptEvidenceResults(
+	agentId: string,
+	project: string | undefined,
+	query: string,
+	maxResults: number,
+	existing: readonly RecallResult[],
+	prefetch: TranscriptEvidencePrefetch | null = null,
+): Promise<RecallResult[]> {
+	const fts = sanitizeFtsQuery(query);
+	if (fts.length === 0 || maxResults <= 0) return [];
+	const represented = new Set(
+		existing.flatMap((row) => [row.session_id, row.source_id]).filter((id): id is string => !!id),
+	);
+	const owner = await getDbOwner(getDbAccessorPath());
+	const fetchLimit = maxResults + represented.size;
+	const usablePrefetch = prefetch !== null && prefetch.query === query && fetchLimit <= prefetch.fetchLimit;
+	const rows = usablePrefetch
+		? prefetch.rows.slice(0, fetchLimit)
+		: await readTranscriptEvidenceRows(owner, agentId, project, fts, fetchLimit);
 	const selected = rows
 		.filter((row) => {
 			const sessionId = row.session_id ?? row.source_path;
@@ -1489,38 +1565,14 @@ async function buildTranscriptEvidenceResults(
 		})
 		.slice(0, maxResults);
 	const deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS;
-	const transcripts = await Promise.all(
-		selected.map(async (row) => ({
-			row,
-			transcript: await readTranscriptContent(owner, agentId, row.artifact_rowid, row.content_bytes, deadlineAt),
-		})),
+	const results = await Promise.all(
+		selected.map(async (row) =>
+			usablePrefetch && prefetch.results.has(row.artifact_rowid)
+				? (prefetch.results.get(row.artifact_rowid) ?? null)
+				: await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt),
+		),
 	);
-	return transcripts.flatMap(({ row, transcript }): RecallResult[] => {
-		if (transcript === null) return [];
-		const sessionId = row.session_id ?? row.source_path;
-		const content = transcriptExcerpt(redactCredentials(transcript.text), query, 900);
-		return [
-			{
-				id: `transcript:${sessionId}`,
-				content,
-				content_length: content.length,
-				truncated: !transcript.complete || content.length < transcript.text.length,
-				score: Math.round((1 / (1 + Math.abs(row.rank))) * 100) / 100,
-				source: "transcript",
-				source_id: row.source_id ?? sessionId,
-				session_id: sessionId,
-				source_path: row.source_path,
-				type: "transcript",
-				tags: null,
-				pinned: false,
-				importance: 0.5,
-				who: row.harness ?? "transcript",
-				project: row.project,
-				created_at: row.captured_at,
-				supplementary: true,
-			},
-		];
-	});
+	return results.filter((row): row is RecallResult => row !== null);
 }
 
 async function buildNativeArtifactRecallHits(
@@ -1797,6 +1849,36 @@ export async function hybridRecall(
 		return deduped.items;
 	};
 	let transcriptEvidenceAllowed = false;
+	let transcriptPrefetch: Promise<TranscriptEvidencePrefetch | null> | null = null;
+	let transcriptPrefetchReady: TranscriptEvidencePrefetch | null = null;
+	const crossEncoderScores = new Map<string, number>();
+	let crossEncoderScoresQuery: string | null = null;
+	const scoreWithCrossEncoder = async (
+		model: string,
+		rerankQuery: string,
+		documents: readonly string[],
+		extraDocuments: readonly string[] = [],
+	): Promise<number[]> => {
+		const runtime = nativeRerankRuntime(cfg.pipelineV2.reranker);
+		const memoize = runtime.device === "cuda" && (crossEncoderScoresQuery ?? rerankQuery) === rerankQuery;
+		if (!memoize) return await nativeRerank(model, rerankQuery, documents, runtime);
+		const batch = [...new Set([...documents, ...extraDocuments])].filter(
+			(document) => !crossEncoderScores.has(document),
+		);
+		if (batch.length > 0) {
+			const scores = await nativeRerank(model, rerankQuery, batch, runtime);
+			if (nativeRerankActiveDevice() !== "cuda") {
+				crossEncoderScores.clear();
+				return await nativeRerank(model, rerankQuery, documents, runtime);
+			}
+			crossEncoderScoresQuery = rerankQuery;
+			batch.forEach((document, index) => {
+				const score = scores[index];
+				if (typeof score === "number" && Number.isFinite(score)) crossEncoderScores.set(document, score);
+			});
+		}
+		return documents.map((document) => crossEncoderScores.get(document) ?? Number.NEGATIVE_INFINITY);
+	};
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
 		let transcriptEvidence: RecallTranscriptEvidenceMeta | undefined;
 		if (transcriptEvidenceAllowed && params.agentId) {
@@ -1812,16 +1894,22 @@ export async function hybridRecall(
 				const placed = await timings.timeAsync("transcript_evidence", async () =>
 					placeTranscriptEvidence(
 						response.results,
-						await timings.timeAsync("transcript_evidence_fetch", () =>
-							buildTranscriptEvidenceResults(agentId, params.project, textQuery, maxExcerpts * 2, response.results),
+						await timings.timeAsync("transcript_evidence_fetch", async () =>
+							buildTranscriptEvidenceResults(
+								agentId,
+								params.project,
+								textQuery,
+								maxExcerpts * 2,
+								response.results,
+								transcriptPrefetch ? await transcriptPrefetch : null,
+							),
 						),
 						maxExcerpts,
 						limit,
 						textQuery,
 						crossEncoderModel === null
 							? null
-							: (rerankQuery, documents) =>
-									nativeRerank(crossEncoderModel, rerankQuery, documents, nativeRerankRuntime(reranker)),
+							: (rerankQuery, documents) => scoreWithCrossEncoder(crossEncoderModel, rerankQuery, documents),
 					),
 				);
 				response.results = placed.results;
@@ -1955,6 +2043,26 @@ export async function hybridRecall(
 		params.sourceOnly !== true &&
 		!hasMemoryMetadataFilters(params) &&
 		cfg.search.transcript_evidence_limit > 0;
+	if (transcriptEvidenceAllowed && params.agentId) {
+		transcriptPrefetch = prefetchTranscriptEvidence(
+			params.agentId,
+			params.project,
+			params.keywordQuery ?? query,
+			Math.min(cfg.search.transcript_evidence_limit, limit) * 2,
+			limit,
+		).then(
+			(prefetched) => {
+				transcriptPrefetchReady = prefetched;
+				return prefetched;
+			},
+			(error) => {
+				logger.warn("memory", "Transcript evidence prefetch failed; placement will query directly", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				return null;
+			},
+		);
+	}
 	const temporalCandidateSet = new Set(temporal.candidateIds ?? []);
 	const temporalCandidateMap = new Map<string, number>(
 		[...temporalCandidateSet].map((id) => [id, Math.max(minScore, 0.05)]),
@@ -2665,7 +2773,14 @@ export async function hybridRecall(
 					? createCrossEncoderReranker({
 							model: crossEncoderModel,
 							score: (rerankQuery, documents) =>
-								nativeRerank(crossEncoderModel, rerankQuery, documents, nativeRerankRuntime(cfg.pipelineV2.reranker)),
+								scoreWithCrossEncoder(
+									crossEncoderModel,
+									rerankQuery,
+									documents,
+									rerankQuery === (params.keywordQuery ?? query) && transcriptPrefetchReady !== null
+										? [...transcriptPrefetchReady.results.values()].flatMap((row) => (row ? [row.content] : []))
+										: [],
+								),
 							fallback: blend,
 							outcome,
 						})

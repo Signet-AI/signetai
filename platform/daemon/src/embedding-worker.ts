@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
+import { pairLengths, planLengthBuckets } from "./cross-encoder-buckets";
 import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
 const TRANSFORMERS_LOG_LEVEL_NONE = 50;
@@ -295,7 +296,7 @@ async function doInit(): Promise<void> {
 						}
 					: null;
 			log("info", `Cross-encoder tokenizer: ${nativeInputs === null ? "transformers.js" : "native"}`);
-			const score = async (query: string, documents: readonly string[]): Promise<number[]> => {
+			const scoreBatch = async (query: string, documents: readonly string[]): Promise<number[]> => {
 				if (documents.length === 0) return [];
 				const inputs =
 					nativeInputs !== null
@@ -310,6 +311,24 @@ async function doInit(): Promise<void> {
 				const width = logits.dims.at(-1) ?? 1;
 				return documents.map((_, index) => Number(logits.data[index * width + width - 1]));
 			};
+			const score =
+				cuda && pairTokenizer !== null && nativeInputs !== null
+					? async (query: string, documents: readonly string[]): Promise<number[]> => {
+							if (documents.length <= 1) return await scoreBatch(query, documents);
+							const groups = planLengthBuckets(pairLengths(pairTokenizer.encodePairs(query, [...documents])));
+							const scores = new Array<number>(documents.length);
+							for (const group of groups) {
+								const groupScores = await scoreBatch(
+									query,
+									group.map((index) => documents[index] ?? ""),
+								);
+								group.forEach((index, position) => {
+									scores[index] = groupScores[position] ?? Number.NaN;
+								});
+							}
+							return scores;
+						}
+					: scoreBatch;
 			const warmup = await score("test", ["test"]);
 			if (warmup.length !== 1 || !Number.isFinite(warmup[0])) throw new Error("Cross-encoder warmup returned no score");
 			rerankModel = model;
