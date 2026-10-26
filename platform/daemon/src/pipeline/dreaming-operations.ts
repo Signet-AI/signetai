@@ -129,12 +129,15 @@ type DreamingOperationProvenance = {
 	readonly sourceRoot: string;
 };
 
+type SameRequestDependency = { readonly index: number; readonly kind: "entity" | "aspect" };
+
 type ValidatedDreamingOperation = {
 	readonly index: number;
 	readonly input: OntologyOperationInput | null;
 	readonly attentionId: string | null;
 	readonly decline?: boolean;
 	readonly reviewOnly?: boolean;
+	readonly dependsOn?: readonly SameRequestDependency[];
 };
 
 function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalName: string): ReadonlySet<string> {
@@ -554,7 +557,33 @@ function stringArrayField(payload: Readonly<Record<string, unknown>>, key: strin
 		.map((s) => s.trim());
 	return items.length > 0 ? items : null;
 }
-type ApplicatorPayload = { readonly payload: Readonly<Record<string, unknown>> } | { readonly error: string };
+type ApplicatorPayload =
+	| { readonly payload: Readonly<Record<string, unknown>>; readonly dependsOn?: readonly SameRequestDependency[] }
+	| { readonly error: string };
+
+const SAME_REQUEST_REFERENCE = /^\$(\d+)$/;
+
+type SameRequestCreate =
+	| { readonly index: number; readonly operation: DreamingOperationRequest }
+	| { readonly error: string }
+	| null;
+
+function sameRequestCreate(
+	operations: readonly DreamingOperationRequest[],
+	index: number,
+	reference: string,
+	kind: SameRequestDependency["kind"],
+): SameRequestCreate {
+	const match = reference.match(SAME_REQUEST_REFERENCE);
+	if (match === null) return null;
+	const target = Number(match[1]);
+	const expected = kind === "entity" ? "create_entity" : "create_aspect";
+	const operation = operations[target];
+	if (target >= index || operation?.operation !== expected) {
+		return { error: `${reference} must name a ${expected} earlier in this request` };
+	}
+	return { index: target, operation };
+}
 
 function missingFields(
 	payload: Readonly<Record<string, unknown>>,
@@ -600,6 +629,10 @@ function toApplicatorPayload(
 	agentId: string,
 	operation: string,
 	payload: Readonly<Record<string, unknown>>,
+	request: { readonly operations: readonly DreamingOperationRequest[]; readonly index: number } = {
+		operations: [],
+		index: -1,
+	},
 ): ApplicatorPayload {
 	const target = stringField(payload, "target");
 	const reason = stringField(payload, "reason") ?? undefined;
@@ -658,6 +691,42 @@ function toApplicatorPayload(
 			const aspectId = stringField(payload, "aspectId") ?? "";
 			const claimKey = stringField(payload, "claimKey") ?? "";
 			const value = stringField(payload, "value") ?? "";
+			const createdEntity = sameRequestCreate(request.operations, request.index, entityId, "entity");
+			const createdAspect = sameRequestCreate(request.operations, request.index, aspectId, "aspect");
+			if (createdEntity !== null && "error" in createdEntity) return createdEntity;
+			if (createdAspect !== null && "error" in createdAspect) return createdAspect;
+			if (createdEntity !== null || createdAspect !== null) {
+				if (operation === "supersede_claim_value") {
+					return { error: "supersede_claim_value needs an existing claim, not one created in this request" };
+				}
+				if (createdAspect === null) {
+					return {
+						error: `entity ${entityId} is created in this request, so aspectId must reference its create_aspect`,
+					};
+				}
+				const aspectEntityId = stringField(createdAspect.operation.payload, "entityId");
+				if (aspectEntityId !== entityId) {
+					return { error: `aspect ${aspectId} belongs to entity ${aspectEntityId}, not ${entityId}` };
+				}
+				const entityName =
+					createdEntity === null
+						? lookupEntityName(accessor, agentId, entityId)
+						: stringField(createdEntity.operation.payload, "name");
+				if (entityName === null) return notFound("entity", entityId, inAgent);
+				return {
+					payload: {
+						entity: entityName,
+						aspect: stringField(createdAspect.operation.payload, "name"),
+						claim_key: claimKey,
+						value,
+						...claimTimingPayload(payload),
+					},
+					dependsOn: [
+						...(createdEntity === null ? [] : [{ index: createdEntity.index, kind: "entity" as const }]),
+						{ index: createdAspect.index, kind: "aspect" as const },
+					],
+				};
+			}
 			const name = lookupEntityName(accessor, agentId, entityId);
 			if (name === null) return notFound("entity", entityId, inAgent);
 			const aspect = lookupAspectName(accessor, agentId, entityId, aspectId);
@@ -689,7 +758,14 @@ function toApplicatorPayload(
 		case "create_aspect": {
 			const missing = missingFields(payload, ["entityId", "name"]);
 			if (missing !== null) return missing;
-			return { payload: { entity_id: stringField(payload, "entityId"), name: stringField(payload, "name") } };
+			const entityId = stringField(payload, "entityId") ?? "";
+			const createdEntity = sameRequestCreate(request.operations, request.index, entityId, "entity");
+			if (createdEntity === null) return { payload: { entity_id: entityId, name: stringField(payload, "name") } };
+			if ("error" in createdEntity) return createdEntity;
+			return {
+				payload: { entity: stringField(createdEntity.operation.payload, "name"), name: stringField(payload, "name") },
+				dependsOn: [{ index: createdEntity.index, kind: "entity" }],
+			};
 		}
 		case "rename_aspect": {
 			const missing = missingFields(payload, ["entityId", "aspectId", "newName"]);
@@ -789,7 +865,10 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 			continue;
 		}
 
-		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload, {
+			operations: params.operations,
+			index,
+		});
 		if ("error" in applicator) return unresolvedTarget(index, operation.operation, applicator.error);
 		if (isStructuralWithoutCitation(operation)) {
 			const structuralError = structuralProvenanceError(index, operation);
@@ -995,6 +1074,34 @@ function applyValidatedOperationInTx(
 		};
 	}
 }
+function createdId(item: DreamingOperationItem | undefined, kind: SameRequestDependency["kind"]): string | null {
+	if (item?.ok !== true || typeof item.result !== "object" || item.result === null) return null;
+	if ((item.result as { readonly reviewRequired?: unknown }).reviewRequired === true) return null;
+	const id = (item.result as Readonly<Record<string, unknown>>)[kind === "entity" ? "entityId" : "aspectId"];
+	return typeof id === "string" && id.length > 0 ? id : null;
+}
+
+function withSameRequestIds(
+	entry: ValidatedDreamingOperation,
+	outcomes: ReadonlyMap<number, DreamingOperationItem>,
+): { readonly entry: ValidatedDreamingOperation } | { readonly error: string } {
+	if (entry.dependsOn === undefined || entry.input === null) return { entry };
+	let entityId: string | null = null;
+	for (const dependency of entry.dependsOn) {
+		const id = createdId(outcomes.get(dependency.index), dependency.kind);
+		if (id === null) {
+			return {
+				error: `operation ${dependency.index}, which this operation references, did not create its ${dependency.kind}`,
+			};
+		}
+		if (dependency.kind === "entity") entityId = id;
+	}
+	if (entry.input.operation !== "create_aspect" || entityId === null) return { entry };
+	return {
+		entry: { ...entry, input: { ...entry.input, payload: { entity_id: entityId, name: entry.input.payload.name } } },
+	};
+}
+
 export async function applyDreamingOperations(
 	params: ApplyDreamingOperationsParams,
 ): Promise<ApplyDreamingOperationsResult> {
@@ -1072,7 +1179,10 @@ export async function applyDreamingOperations(
 				};
 			}
 		}
-		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload);
+		const applicator = toApplicatorPayload(params.accessor, params.agentId, operation.operation, operation.payload, {
+			operations: params.operations,
+			index,
+		});
 		if ("error" in applicator) {
 			return { ok: false, items: [], error: unresolvedTarget(index, operation.operation, applicator.error) };
 		}
@@ -1093,14 +1203,25 @@ export async function applyDreamingOperations(
 			},
 			attentionId,
 			reviewOnly: operation.risk === "review_required" && !DREAMING_HYGIENE_ARCHIVE_OPERATIONS.has(operation.operation),
+			...(applicator.dependsOn === undefined ? {} : { dependsOn: applicator.dependsOn }),
 		});
 	}
 
+	const outcomes = new Map<number, DreamingOperationItem>();
 	const result = await runWriteBatches(
 		params.accessor,
 		validated,
-		(db, entry) =>
-			withContentPassWrites(db, params.contentPassId, () => applyValidatedOperationInTx(db, entry, params)),
+		(db, entry) => {
+			const resolved = withSameRequestIds(entry, outcomes);
+			const item =
+				"error" in resolved
+					? { index: entry.index, ok: false, error: resolved.error }
+					: withContentPassWrites(db, params.contentPassId, () =>
+							applyValidatedOperationInTx(db, resolved.entry, params),
+						);
+			outcomes.set(entry.index, item);
+			return item;
+		},
 		{
 			label: "dreaming ontology operations",
 			maxPerTx: DREAMING_WRITE_MAX_OPERATIONS_PER_TX,

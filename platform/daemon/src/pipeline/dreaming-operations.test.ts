@@ -1132,6 +1132,139 @@ describe("dreaming operations", () => {
 		expect(timed.ok).toBe(true);
 	});
 
+	it("files a new subject in one request by referencing ids created earlier in it", async () => {
+		insertEpisodicMemory("mem-kayak", "I bought a sea kayak in Portland and I paddle it every Sunday.");
+		const evidence = [{ source_ref: "memory:mem-kayak", quote: "I bought a sea kayak in Portland" }];
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{ operation: "create_entity", payload: { name: "Sea Kayak", type: "object" }, evidence },
+				{ operation: "create_aspect", payload: { entityId: "$0", name: "ownership" }, evidence },
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "$0",
+						aspectId: "$1",
+						claimKey: "purchase",
+						value: "The user bought a sea kayak in Portland.",
+					},
+					evidence,
+				},
+				{
+					operation: "add_claim_value",
+					payload: {
+						entityId: "$0",
+						aspectId: "$1",
+						claimKey: "routine",
+						value: "The user paddles the sea kayak every Sunday.",
+					},
+					evidence: [{ source_ref: "memory:mem-kayak", quote: "I paddle it every Sunday" }],
+				},
+			],
+		});
+		expect(result.items.map((item) => [item.index, item.ok, item.error ?? null])).toEqual([
+			[0, true, null],
+			[1, true, null],
+			[2, true, null],
+			[3, true, null],
+		]);
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT e.name AS entity, a.name AS aspect, ea.claim_key AS claimKey
+						 FROM entity_attributes ea
+						 JOIN entity_aspects a ON a.id = ea.aspect_id
+						 JOIN entities e ON e.id = a.entity_id
+						 WHERE ea.agent_id = ? AND ea.status = 'active'
+						 ORDER BY ea.claim_key`,
+					)
+					.all("agent-a") as Array<{ entity: string; aspect: string; claimKey: string }>,
+		);
+		expect(rows).toEqual([
+			{ entity: "Sea Kayak", aspect: "ownership", claimKey: "purchase" },
+			{ entity: "Sea Kayak", aspect: "ownership", claimKey: "routine" },
+		]);
+		const entities = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ?").get("agent-a") as { n: number },
+		);
+		expect(entities.n).toBe(1);
+	});
+
+	it("rejects a same-request reference that points forward or at the wrong kind of operation", async () => {
+		insertEpisodicMemory("mem-kayak", "I bought a sea kayak in Portland.");
+		const evidence = [{ source_ref: "memory:mem-kayak", quote: "I bought a sea kayak in Portland" }];
+		const apply = (operations: DreamingOperationRequest[]) =>
+			applyDreamingOperations({ accessor: getDbAccessor(), agentId: "agent-a", actor: "dreaming", operations });
+		const forward = await apply([
+			{ operation: "create_aspect", payload: { entityId: "$1", name: "ownership" }, evidence },
+			{ operation: "create_entity", payload: { name: "Sea Kayak", type: "object" }, evidence },
+		]);
+		expect(forward.ok).toBe(false);
+		expect(forward.error).toContain("operation 0 target (create_aspect)");
+		expect(forward.error).toContain("$1 must name a create_entity earlier in this request");
+		const wrongKind = await apply([
+			{ operation: "create_entity", payload: { name: "Sea Kayak", type: "object" }, evidence },
+			{
+				operation: "add_claim_value",
+				payload: { entityId: "$0", aspectId: "$0", claimKey: "purchase", value: "The user bought a sea kayak." },
+				evidence,
+			},
+		]);
+		expect(wrongKind.ok).toBe(false);
+		expect(wrongKind.error).toContain("$0 must name a create_aspect earlier in this request");
+		const otherEntity = await apply([
+			{ operation: "create_entity", payload: { name: "Sea Kayak", type: "object" }, evidence },
+			{ operation: "create_entity", payload: { name: "Portland", type: "place" }, evidence },
+			{ operation: "create_aspect", payload: { entityId: "$0", name: "ownership" }, evidence },
+			{
+				operation: "add_claim_value",
+				payload: { entityId: "$1", aspectId: "$2", claimKey: "purchase", value: "The user bought a sea kayak." },
+				evidence,
+			},
+		]);
+		expect(otherEntity.ok).toBe(false);
+		expect(otherEntity.error).toContain("aspect $2 belongs to entity $0, not $1");
+		const count = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ?").get("agent-a") as { n: number },
+		);
+		expect(count.n).toBe(0);
+	});
+
+	it("fails an operation whose same-request reference did not apply", async () => {
+		insertEpisodicMemory("mem-kayak", "I bought a sea kayak in Portland.");
+		const evidence = [{ source_ref: "memory:mem-kayak", quote: "I bought a sea kayak in Portland" }];
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{
+					operation: "create_entity",
+					payload: { name: "Sea Kayak", type: "object" },
+					evidence,
+					risk: "review_required",
+				},
+				{ operation: "create_aspect", payload: { entityId: "$0", name: "ownership" }, evidence },
+				{
+					operation: "add_claim_value",
+					payload: { entityId: "$0", aspectId: "$1", claimKey: "purchase", value: "The user bought a sea kayak." },
+					evidence,
+				},
+			],
+		});
+		expect(result.items[1]?.ok).toBe(false);
+		expect(result.items[1]?.error).toContain("operation 0, which this operation references, did not create its entity");
+		expect(result.items[2]?.ok).toBe(false);
+		expect(result.items[2]?.error).toContain("did not create its");
+		const count = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS n FROM entities WHERE agent_id = ?").get("agent-a") as { n: number },
+		);
+		expect(count.n).toBe(0);
+	});
+
 	it("carries claim event time from a Dreaming operation onto the claim", async () => {
 		insertEntity("e-user", "User", "user");
 		insertAspect("a-events", "e-user", "events");

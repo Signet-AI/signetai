@@ -43,7 +43,11 @@ import {
 	selectDreamingPassMode,
 	shouldTriggerDreaming,
 } from "./dreaming";
-import { dreamingEvidencePageChars, searchDreamingEvidenceInDb } from "./dreaming-capabilities";
+import {
+	dreamingEvidencePageChars,
+	dreamingEvidencePageCharsForWindow,
+	searchDreamingEvidenceInDb,
+} from "./dreaming-capabilities";
 import { selectDreamingCheckMode } from "./dreaming-worker";
 import {
 	enqueueDreamingAttentionInTx,
@@ -2811,6 +2815,41 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(await toolsFor("incremental-content")).toEqual(
 			expect.arrayContaining(["memory_head_read", "memory_head_commit"]),
 		);
+	});
+
+	it("delivers a whole backlog in one page when the agent's context window holds it", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `haystack-${i}`, `Session ${i} line.\n`.repeat(500));
+		const backlogChars = Number(
+			(db.prepare("SELECT SUM(LENGTH(content)) AS n FROM session_transcripts").get() as { n: number }).n,
+		);
+		expect(backlogChars).toBeGreaterThan(400_000);
+		const pageFor = async (contextWindow: number): Promise<Record<string, unknown>> => {
+			let page: Record<string, unknown> = {};
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						input.onSessionInfo?.({ model: "local-model", contextWindow });
+						page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+						return { summary: "Read one page" };
+					},
+				},
+				defaultCfg({ maxInputTokens: 128_000 }),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				"incremental",
+			);
+			return page;
+		};
+		const whole = await pageFor(262_144);
+		const wholeItems = whole.items as Array<{ content: string; contentHasNext: boolean }>;
+		expect(wholeItems).toHaveLength(48);
+		expect(wholeItems.every((item) => item.contentHasNext === false)).toBe(true);
+		expect(whole.hasMore).toBe(false);
+		expect(dreamingEvidencePageCharsForWindow(262_144)).toBe(565_144);
+		expect(dreamingEvidencePageCharsForWindow(128_000)).toBe(243_200);
+		expect(dreamingEvidencePageCharsForWindow(16_000)).toBe(16_000);
 	});
 
 	it("sizes evidence pages from the Dreaming input budget", async () => {

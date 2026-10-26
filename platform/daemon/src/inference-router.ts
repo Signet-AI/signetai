@@ -1090,6 +1090,7 @@ export class InferenceRouter {
 				readonly sessionId?: string;
 				readonly model?: string;
 				readonly systemPrompt?: string;
+				readonly contextWindow?: number;
 			}) => void;
 			readonly acpxMcp?: {
 				readonly agentId: string;
@@ -1279,6 +1280,7 @@ export class InferenceRouter {
 									sessionId: session.getSessionId?.(),
 									model: session.getModelName?.(),
 									systemPrompt: session.getSystemPrompt?.(),
+									contextWindow: session.getContextWindow?.(),
 								});
 							} catch {}
 						}

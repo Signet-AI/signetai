@@ -106,6 +106,7 @@ export interface PiAgentSession {
 	getSystemPrompt?(): string;
 	getSessionId?(): string;
 	getModelName?(): string | undefined;
+	getContextWindow?(): number | undefined;
 	getActiveToolNames(): readonly string[];
 	getExecutionThreadId?(): number;
 	getFailureMessage(): string | undefined;

@@ -57,7 +57,12 @@ import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
-import { DREAMING_CAPABILITY_IDS, dreamingEvidencePageChars, listDreamingAttention } from "./dreaming-capabilities";
+import {
+	DREAMING_CAPABILITY_IDS,
+	dreamingEvidencePageChars,
+	dreamingEvidencePageCharsForWindow,
+	listDreamingAttention,
+} from "./dreaming-capabilities";
 import {
 	MEMORY_HEAD_MAX_TOKENS,
 	readCuratedMemoryHead,
@@ -366,6 +371,7 @@ export interface DreamingAgentExecutor {
 			readonly sessionId?: string;
 			readonly model?: string;
 			readonly systemPrompt?: string;
+			readonly contextWindow?: number;
 		}) => void;
 	}): Promise<{
 		readonly summary?: string;
@@ -973,7 +979,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - For every source, do this before deciding it has nothing to file: list each statement the user makes about themselves — something they own, bought, did, attended, plan, like or dislike, a person or pet in their life, a place, a date, an amount, or a count. Each one is a claim to file about the user, quoted exactly. A conversation that is mostly generic advice still has these statements; file them and skip only the advice. A source with even one such statement is never excluded.
    - The user is a person entity. Use the user's name when the source states it; otherwise use the entity named "User". Search for it first and reuse it. When a source shows several named speakers, such as a group chat or messages with authors, file each speaker's statements on that speaker's own person entity, and never file a named speaker's statements on "User".
    - An excerpt that continues on a later page (contentHasNext) is not a reason to defer: file what this excerpt establishes now, and the rest arrives on a later page.
-   - Filing about a subject that does not exist yet takes three apply_ontology_ops calls in order: create_entity, then create_aspect with the returned entity id, then add_claim_value with the entity and aspect ids, putting every claim for that aspect in the one call. Do all three in this pass. A missing entity or aspect, or a claim you have not checked yet, is work to do now, never a blocker.
+   - Filing about a subject that does not exist yet takes one apply_ontology_ops call: create_entity, then create_aspect with entityId "$<index of that create_entity in the request>", then each add_claim_value with that entityId and aspectId "$<index of the create_aspect>". File everything a page establishes, across all its subjects, in as few calls as possible; one call takes up to 100 operations. A missing entity or aspect, or a claim you have not checked yet, is work to do now, never a blocker.
    - Copy each sourceRef character for character from the search_evidence result.
    - The only valid reasons to defer a source are a transcript that is still mid-stream and a tool error you could not fix after correcting the call.
    - Bias toward action and carry each source to completion within this pass: filed claims, a reviewed exclusion, or one of those deferrals. Never end a pass with work you could have done, and never stop at describing what should be filed. If your pass log would say a fact was found but not filed, file it before writing the log.
@@ -1093,7 +1099,7 @@ An install may have several agent scopes (listed in <agent_scopes> when there is
    - For every source, do this before deciding it has nothing to file: list each statement the user makes about themselves — something they own, bought, did, attended, plan, like or dislike, a person or pet in their life, a place, a date, an amount, or a count. Each one is a claim to file about the user, quoted exactly. A conversation that is mostly generic advice still has these statements; file them and skip only the advice. A source with even one such statement is never excluded.
    - The user is a person entity. Use the user's name when the source states it; otherwise use the entity named "User". Search for it first and reuse it. When a source shows several named speakers, such as a group chat or messages with authors, file each speaker's statements on that speaker's own person entity, and never file a named speaker's statements on "User".
    - An excerpt that continues on a later page (contentHasNext) is not a reason to defer: file what this excerpt establishes now, and the rest arrives on a later page.
-   - Filing about a subject that does not exist yet takes three apply_ontology_ops calls in order: create_entity, then create_aspect with the returned entity id, then add_claim_value with the entity and aspect ids, putting every claim for that aspect in the one call. Do all three in this pass. A missing entity or aspect, or a claim you have not checked yet, is work to do now, never a blocker.
+   - Filing about a subject that does not exist yet takes one apply_ontology_ops call: create_entity, then create_aspect with entityId "$<index of that create_entity in the request>", then each add_claim_value with that entityId and aspectId "$<index of the create_aspect>". File everything a page establishes, across all its subjects, in as few calls as possible; one call takes up to 100 operations. A missing entity or aspect, or a claim you have not checked yet, is work to do now, never a blocker.
    - Copy each sourceRef character for character from the search_evidence result.
    - The only valid reasons to defer a source are a transcript that is still mid-stream and a tool error you could not fix after correcting the call.
    - Bias toward action and carry each source to completion within this pass: filed claims, a reviewed exclusion, or one of those deferrals. Never end a pass with work you could have done, and never stop at describing what should be filed. If your pass log would say a fact was found but not filed, file it before writing the log.
@@ -1864,6 +1870,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const rejectedEvidence: RejectedDreamingEvidence[] = [];
 		const surfacedWatermarkByScope = new Map<string, string>();
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
+		let evidencePageChars = dreamingEvidencePageChars(cfg.maxInputTokens);
 		const tools = createDreamingAgentTools({
 			allowedAgentIds: liveOptions?.userRequest !== undefined ? [agentId] : scopes,
 			codemode: cfg.codemode,
@@ -1877,7 +1884,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 			evidenceDeliveryDeadline: Date.now() + Math.floor(cfg.timeout / 2),
 			passDeadline: Date.now() + cfg.timeout,
 			...(cfg.maxPassTokens === undefined ? {} : { evidenceTokenBudget: cfg.maxPassTokens }),
-			evidenceChars: dreamingEvidencePageChars(cfg.maxInputTokens),
+			evidenceChars: () => evidencePageChars,
 			accessor,
 			agentId,
 			memoryHeadCommitter,
@@ -1989,7 +1996,12 @@ ${JSON.stringify(liveOptions.userRequest)}
 				}
 				publishDreamingAgentEvent(passId, event, live);
 			},
-			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
+			onSessionInfo: (info) => {
+				if (info.contextWindow !== undefined && info.contextWindow > 0) {
+					evidencePageChars = dreamingEvidencePageCharsForWindow(info.contextWindow);
+				}
+				publishDreamingSessionInfo(passId, info, live);
+			},
 		});
 		if (mode === "incremental-content" && memoryHeadCommitInput === null) {
 			const rejection = memoryHeadCommitRejection;

@@ -637,6 +637,7 @@ describe("local thinking control", () => {
 			const session = await provider.createAgentSession([]);
 			try {
 				expect(resolved).toBe(1);
+				expect(session.getContextWindow?.()).toBe(262_144);
 			} finally {
 				await session.dispose();
 			}

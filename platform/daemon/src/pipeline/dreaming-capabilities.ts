@@ -9,7 +9,13 @@ import type {
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { classifyEntityQuality } from "../entity-quality";
 import type { EpisodicSourceRecord } from "../episodic-sources";
-import { episodicQueryTerms, foldAsciiCase, readEpisodicSource, searchEpisodicSources } from "../episodic-sources";
+import {
+	MAX_EPISODIC_SOURCE_SCAN,
+	episodicQueryTerms,
+	foldAsciiCase,
+	readEpisodicSource,
+	searchEpisodicSources,
+} from "../episodic-sources";
 import {
 	getAttributesForAspectFiltered,
 	getEntityAspectsWithCounts,
@@ -52,12 +58,21 @@ const bounded = (value: number | undefined, fallback: number, max: number): numb
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
 
 const MAX_EVIDENCE_EXCERPT_CHARS = 2_000;
+const EVIDENCE_CHARS_PER_TOKEN = 4;
 const EVIDENCE_RESUME_OVERLAP_CHARS = Math.floor(MAX_EVIDENCE_EXCERPT_CHARS / 10);
 const MAX_EVIDENCE_RESULT_CHARS = 16_000;
-const MAX_EVIDENCE_PAGE_CHARS = 250_000;
+const MAX_BUDGET_EVIDENCE_PAGE_CHARS = 250_000;
+const MAX_EVIDENCE_PAGE_CHARS = 2_000_000;
+const EVIDENCE_PAGE_WINDOW_SHARE = 0.6;
+const EVIDENCE_PAGE_PROMPT_RESERVE_TOKENS = 16_000;
 
 export function dreamingEvidencePageChars(maxInputTokens: number): number {
-	return evidencePageChars(Math.floor(maxInputTokens / 4));
+	return evidencePageChars(Math.min(MAX_BUDGET_EVIDENCE_PAGE_CHARS, Math.floor(maxInputTokens / 4)));
+}
+
+export function dreamingEvidencePageCharsForWindow(contextWindow: number): number {
+	const tokens = Math.floor(contextWindow * EVIDENCE_PAGE_WINDOW_SHARE) - EVIDENCE_PAGE_PROMPT_RESERVE_TOKENS;
+	return evidencePageChars(tokens * EVIDENCE_CHARS_PER_TOKEN);
 }
 
 function evidencePageChars(requested: number | undefined): number {
@@ -223,7 +238,7 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly passDeadline?: number;
 	readonly evidenceTokenBudget?: number;
 	readonly now?: () => number;
-	readonly evidenceChars?: number;
+	readonly evidenceChars?: number | (() => number);
 	readonly mode?: DreamingCapabilityMode;
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
@@ -314,11 +329,15 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 	return { ok: true, items: projectEvidence(sources, query ?? "") };
 }
 
-const DELIVERY_QUEUE_SCAN_LIMIT = 51;
+const DELIVERY_QUEUE_SCAN_LIMIT = MAX_EPISODIC_SOURCE_SCAN;
+const DELIVERY_QUEUE_MAX_SOURCES = DELIVERY_QUEUE_SCAN_LIMIT - 1;
 
 function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
 	const scopeId = input.agentId;
-	const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 20), 50));
+	const limit = Math.max(
+		1,
+		Math.min(Math.floor(input.limit ?? DELIVERY_QUEUE_MAX_SOURCES), DELIVERY_QUEUE_MAX_SOURCES),
+	);
 	const servedInPass = input.passId ? passDeliveredRanges(db, input.passId, scopeId) : new Map();
 	const pageChars = evidencePageChars(input.evidenceChars);
 	let budgetExhausted = false;
@@ -370,7 +389,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 	};
 	const continuationRefs = new Set<string>();
 	const continuations = page(
-		pendingDreamingEvidenceContinuations(db, scopeId, 50, input.kind),
+		pendingDreamingEvidenceContinuations(db, scopeId, DELIVERY_QUEUE_MAX_SOURCES, input.kind),
 		limit + 1,
 		continuationRefs,
 	);
@@ -491,8 +510,6 @@ export async function listDreamingAttention(
 				agentFacing,
 			});
 }
-
-const EVIDENCE_CHARS_PER_TOKEN = 4;
 
 function deliveredEvidenceChars(items: readonly unknown[]): number {
 	let chars = 0;
@@ -726,7 +743,12 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					...(offset === undefined ? {} : { offset }),
 					...(chunkSize === undefined ? {} : { chunkSize }),
 					...(params.passId === undefined ? {} : { passId: params.passId }),
-					...(params.evidenceChars === undefined ? {} : { evidenceChars: params.evidenceChars }),
+					...(params.evidenceChars === undefined
+						? {}
+						: {
+								evidenceChars:
+									typeof params.evidenceChars === "function" ? params.evidenceChars() : params.evidenceChars,
+							}),
 				};
 				const result = await runDbOwnerDomainOperation(accessor, {
 					runWithOwner: async (owner) => {
@@ -770,7 +792,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						}),
 					)
 					.min(1)
-					.max(50),
+					.max(DELIVERY_QUEUE_MAX_SOURCES),
 			}),
 			async ({ agentId: scopeId, items }) => {
 				if (!params.passId)
@@ -918,7 +940,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"apply_ontology_ops",
 			"Apply ontology operations",
-			'Apply every semantic write through the daemon audit seam in one ordered request, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). The daemon validates every input, citation, and resolvable target before creating flags or applying bounded, yielding writer transactions; each operation and its provenance resolution remains atomic, while an individual operation failure does not block later operations. If a writer transaction fails after earlier transactions committed, the result has `retryable: true` and `retryFrom`; retry only the uncommitted suffix. Do not replay returned items, and replace any earlier `attention:$<index>` references with `attention:<uuid>` built from the flag result `result.attentionId` before retrying. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the request, or "attention:<uuid>" from a prior request. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
+			'Apply every semantic write through the daemon audit seam in one ordered request, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). The daemon validates every input, citation, and resolvable target before creating flags or applying bounded, yielding writer transactions; each operation and its provenance resolution remains atomic, while an individual operation failure does not block later operations. If a writer transaction fails after earlier transactions committed, the result has `retryable: true` and `retryFrom`; retry only the uncommitted suffix. Do not replay returned items, and replace any earlier `attention:$<index>` references with `attention:<uuid>` built from the flag result `result.attentionId`, and any `$<index>` entityId or aspectId with the `result.entityId` or `result.aspectId` that operation returned, before retrying. A new subject needs no separate calls: create_aspect and claim operations may set entityId to "$<index>" of a create_entity earlier in the same request, and claim operations may set aspectId to "$<index>" of a create_aspect earlier in it. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the request, or "attention:<uuid>" from a prior request. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
 			false,
 			z.object({
 				agentId: z.string().min(1),
