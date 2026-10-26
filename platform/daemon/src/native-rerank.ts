@@ -21,6 +21,7 @@ let current: {
 	readonly requestedKey: string;
 	readonly device: "default" | "cuda";
 	readonly handle: Promise<EmbeddingWorkerHandle>;
+	initializedOnce: boolean;
 } | null = null;
 let failedAt = 0;
 let cudaFailedKey: string | null = null;
@@ -44,10 +45,11 @@ function createHandle(modelId: string, runtime: NativeRerankRuntime): Promise<Em
 	});
 }
 
-function cudaInitFailed(handle: EmbeddingWorkerHandle): boolean {
-	if (handle.isPermanentlyDisabled()) return true;
+function cudaInitFailed(handle: EmbeddingWorkerHandle, initializedOnce: boolean): boolean {
+	if (initializedOnce) return false;
 	const status = handle.getStatus();
-	return !status.initialized && !status.initializing && handle.getLastError() !== null;
+	if (status.initialized || status.initializing) return false;
+	return handle.isPermanentlyDisabled() || handle.getLastError() !== null;
 }
 
 async function handleFor(modelId: string, requested: NativeRerankRuntime): Promise<EmbeddingWorkerHandle> {
@@ -58,7 +60,7 @@ async function handleFor(modelId: string, requested: NativeRerankRuntime): Promi
 		await shutdownNativeReranker();
 	if (current !== null) {
 		const handle = await current.handle;
-		if (current.device === "cuda" && cudaInitFailed(handle)) {
+		if (current.device === "cuda" && cudaInitFailed(handle, current.initializedOnce)) {
 			cudaFailedKey = requestedKey;
 			logger.warn("memory", "CUDA cross-encoder unavailable; using the default ONNX runtime", {
 				model: modelId,
@@ -73,7 +75,13 @@ async function handleFor(modelId: string, requested: NativeRerankRuntime): Promi
 		}
 		await shutdownNativeReranker();
 	}
-	current = { key, requestedKey, device: runtime.device, handle: createHandle(modelId, runtime) };
+	current = {
+		key,
+		requestedKey,
+		device: runtime.device,
+		handle: createHandle(modelId, runtime),
+		initializedOnce: false,
+	};
 	return await current.handle;
 }
 
@@ -95,6 +103,7 @@ export async function nativeRerank(
 			if (!handle.getStatus().initializing) void handle.checkAvailable();
 			throw new Error("cross-encoder loading");
 		}
+		if (current !== null) current.initializedOnce = true;
 		try {
 			return await handle.rerank(query, documents);
 		} catch (error) {

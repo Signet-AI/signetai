@@ -151,6 +151,14 @@ async function prepareCudaRuntime(): Promise<void> {
 		const manifest = JSON.parse(readFileSync(join(init.onnxRuntimePath, "package.json"), "utf8")) as {
 			version?: unknown;
 		};
+		const expectedVersion = readFileSync(init.onnxRuntimeModulePath, "utf8").match(
+			/export const signetOnnxRuntimeNodeVersion = "([^"]+)";/,
+		)?.[1];
+		if (manifest.version !== expectedVersion) {
+			throw new Error(
+				`onnxruntime-node at ${init.onnxRuntimePath} is ${String(manifest.version)}; this Signet build needs ${String(expectedVersion)}`,
+			);
+		}
 		(globalThis as Record<symbol, unknown>)[Symbol.for("signet.onnxruntimeNodeBinding")] = join(
 			init.onnxRuntimePath,
 			"bin",
@@ -159,15 +167,7 @@ async function prepareCudaRuntime(): Promise<void> {
 			process.arch,
 			"onnxruntime_binding.node",
 		);
-		const runtime = (await import(init.onnxRuntimeModulePath)) as {
-			default?: unknown;
-			signetOnnxRuntimeNodeVersion?: string;
-		};
-		if (manifest.version !== runtime.signetOnnxRuntimeNodeVersion) {
-			throw new Error(
-				`onnxruntime-node at ${init.onnxRuntimePath} is ${String(manifest.version)}; this Signet build needs ${String(runtime.signetOnnxRuntimeNodeVersion)}`,
-			);
-		}
+		const runtime = (await import(init.onnxRuntimeModulePath)) as { default?: unknown };
 		(globalThis as Record<symbol, unknown>)[Symbol.for("onnxruntime")] = runtime.default ?? runtime;
 	}
 	log("info", "Prepared native ONNX runtime for CUDA cross-encoder", {

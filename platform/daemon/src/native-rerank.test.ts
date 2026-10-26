@@ -4,6 +4,8 @@ import type { EmbeddingHandleOptions, EmbeddingWorkerHandle } from "./embedding-
 interface FakeHandleState {
 	initialized: boolean;
 	lastError: string | null;
+	disabled: boolean;
+	reranks: number;
 }
 
 const created: EmbeddingHandleOptions[] = [];
@@ -11,17 +13,33 @@ const stopped: string[] = [];
 
 function fakeHandle(options: EmbeddingHandleOptions): EmbeddingWorkerHandle {
 	const cuda = options.device === "cuda";
-	const state: FakeHandleState = { initialized: !cuda, lastError: null };
+	const cudaWorks = cuda && options.onnxRuntimePath?.includes("working") === true;
+	const state: FakeHandleState = { initialized: !cuda || cudaWorks, lastError: null, disabled: false, reranks: 0 };
 	return {
 		embed: async () => [],
-		rerank: async (_query, documents) => documents.map((_, index) => (cuda ? 100 + index : index)),
+		rerank: async (_query, documents) => {
+			state.reranks++;
+			if (cudaWorks && state.reranks === 2) {
+				state.disabled = true;
+				state.initialized = false;
+				state.lastError = "rerank timed out after 30000ms (worker isolated; provider disabled until daemon restart)";
+				throw new Error(state.lastError);
+			}
+			return documents.map((_, index) => (cuda ? 100 + index : index));
+		},
 		checkAvailable: async () => {
-			if (cuda) state.lastError = "OrtSessionOptionsAppendExecutionProvider_Cuda: Failed to load shared library";
-			return { available: !cuda, dimensions: 0, modelCached: !cuda, error: state.lastError ?? undefined };
+			if (cuda && !cudaWorks)
+				state.lastError = "OrtSessionOptionsAppendExecutionProvider_Cuda: Failed to load shared library";
+			return {
+				available: state.initialized,
+				dimensions: 0,
+				modelCached: state.initialized,
+				error: state.lastError ?? undefined,
+			};
 		},
 		getStatus: () => ({ initialized: state.initialized, initializing: false, modelCached: state.initialized }),
 		getLastError: () => state.lastError,
-		isPermanentlyDisabled: () => false,
+		isPermanentlyDisabled: () => state.disabled,
 		stop: async () => {
 			stopped.push(cuda ? "cuda" : "default");
 		},
@@ -70,6 +88,17 @@ describe("nativeRerank runtime selection", () => {
 
 		await nativeRerank("model", "q", ["a"], cudaRuntime);
 		expect(created).toHaveLength(2);
+	});
+
+	it("keeps CUDA after a rerank timeout on a worker that initialized, instead of downgrading for the daemon's lifetime", async () => {
+		const runtime = { ...cudaRuntime, onnxRuntimePath: "/opt/ort-working/node_modules/onnxruntime-node" };
+		expect(await nativeRerank("model", "q", ["a", "b"], runtime)).toEqual([100, 101]);
+		expect(nativeRerankActiveDevice()).toBe("cuda");
+		await expect(nativeRerank("model", "q", ["a"], runtime)).rejects.toThrow(/timed out/);
+		await expect(nativeRerank("model", "q", ["a"], runtime)).rejects.toThrow(/timed out/);
+
+		expect(created.map((options) => options.device ?? "default")).toEqual(["cuda"]);
+		expect(nativeRerankActiveDevice()).toBe("cuda");
 	});
 
 	it("uses the default runtime without CUDA settings when the device is default", async () => {
