@@ -239,6 +239,7 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly evidenceTokenBudget?: number;
 	readonly now?: () => number;
 	readonly evidenceChars?: number | (() => number);
+	readonly evidenceWindowChars?: () => number | undefined;
 	readonly mode?: DreamingCapabilityMode;
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
@@ -540,6 +541,8 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 	let deliveredQueueChars = 0;
 	const queueDeliveryClosed = (at: number): boolean => {
 		if (params.evidenceDeliveryDeadline !== undefined && at >= params.evidenceDeliveryDeadline) return true;
+		const windowChars = params.evidenceWindowChars?.();
+		if (windowChars !== undefined && deliveredQueueChars >= windowChars - MAX_EVIDENCE_EXCERPT_CHARS) return true;
 		if (
 			params.evidenceTokenBudget !== undefined &&
 			deliveredQueueChars >= params.evidenceTokenBudget * EVIDENCE_CHARS_PER_TOKEN
@@ -746,14 +749,15 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					};
 				}
 				const pageChars = typeof params.evidenceChars === "function" ? params.evidenceChars() : params.evidenceChars;
-				const remainingBudgetChars =
+				const windowChars = drainsQueue ? params.evidenceWindowChars?.() : undefined;
+				const caps = [
+					pageChars,
+					windowChars === undefined ? undefined : Math.max(0, windowChars - deliveredQueueChars),
 					drainsQueue && params.evidenceTokenBudget !== undefined
 						? Math.max(0, params.evidenceTokenBudget * EVIDENCE_CHARS_PER_TOKEN - deliveredQueueChars)
-						: undefined;
-				const evidenceChars =
-					remainingBudgetChars === undefined
-						? pageChars
-						: Math.min(pageChars ?? remainingBudgetChars, remainingBudgetChars);
+						: undefined,
+				].filter((cap): cap is number => cap !== undefined);
+				const evidenceChars = caps.length === 0 ? undefined : Math.min(...caps);
 				const input: DbOwnerDreamingEvidenceSearch = {
 					agentId: scopeId,
 					...(query === undefined ? {} : { query }),

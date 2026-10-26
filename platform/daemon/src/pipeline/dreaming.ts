@@ -1871,6 +1871,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const surfacedWatermarkByScope = new Map<string, string>();
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
 		let evidencePageChars = dreamingEvidencePageChars(cfg.maxInputTokens);
+		let evidenceWindowChars: number | undefined;
 		const tools = createDreamingAgentTools({
 			allowedAgentIds: liveOptions?.userRequest !== undefined ? [agentId] : scopes,
 			codemode: cfg.codemode,
@@ -1885,6 +1886,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 			passDeadline: Date.now() + cfg.timeout,
 			...(cfg.maxPassTokens === undefined ? {} : { evidenceTokenBudget: cfg.maxPassTokens }),
 			evidenceChars: () => evidencePageChars,
+			evidenceWindowChars: () => evidenceWindowChars,
 			accessor,
 			agentId,
 			memoryHeadCommitter,
@@ -1997,10 +1999,11 @@ ${JSON.stringify(liveOptions.userRequest)}
 				publishDreamingAgentEvent(passId, event, live);
 			},
 			onSessionInfo: (info) => {
-				evidencePageChars =
+				evidenceWindowChars =
 					info.contextWindow !== undefined && info.contextWindow > 0
 						? dreamingEvidencePageCharsForWindow(info.contextWindow)
-						: dreamingEvidencePageChars(cfg.maxInputTokens);
+						: undefined;
+				evidencePageChars = evidenceWindowChars ?? dreamingEvidencePageChars(cfg.maxInputTokens);
 				publishDreamingSessionInfo(passId, info, live);
 			},
 		});

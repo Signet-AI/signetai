@@ -2852,6 +2852,36 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(dreamingEvidencePageCharsForWindow(16_000)).toBe(16_000);
 	});
 
+	it("bounds everything one pass drains by its context window, across scopes", async () => {
+		const other = "second-haystack";
+		for (let i = 0; i < 48; i++) {
+			seedTranscript(db, `first-${i}`, `First ${i} line.\n`.repeat(500));
+			seedTranscript(db, `second-${i}`, `Second ${i} line.\n`.repeat(500), undefined, other);
+		}
+		const pages: Array<Record<string, unknown>> = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "local-model", contextWindow: 262_144 });
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: other }));
+					return { summary: "Read two scopes" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT, other],
+			"incremental",
+		);
+		const delivered = pages
+			.flatMap((page) => (page.items ?? []) as Array<{ content: string }>)
+			.reduce((sum, item) => sum + item.content.length, 0);
+		expect((pages[0]?.items as unknown[]).length).toBe(48);
+		expect(delivered).toBeLessThanOrEqual(565_144);
+	});
+
 	it("falls back to the input budget when a later session reports no window", async () => {
 		for (let i = 0; i < 48; i++) seedTranscript(db, `haystack-${i}`, `Session ${i} line.\n`.repeat(500));
 		let page: Record<string, unknown> = {};
