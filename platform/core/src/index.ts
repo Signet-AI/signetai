@@ -130,6 +130,7 @@ export type {
 	PipelineGraphConfig,
 	PipelineTraversalConfig,
 	PipelineRerankerConfig,
+	PipelineRerankerDevice,
 	PipelineReflectionsConfig,
 	PipelineAutonomousConfig,
 	PipelineRepairConfig,

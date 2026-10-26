@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
@@ -32,7 +32,8 @@ interface PretrainedLoader<T> {
 	from_pretrained(
 		model: string,
 		opts?: {
-			dtype?: "q8";
+			dtype?: "q8" | "fp32";
+			device?: "cuda";
 			progress_callback?: (progress: { status: string; progress?: number; file?: string }) => void;
 		},
 	): Promise<T>;
@@ -101,6 +102,80 @@ async function loadTransformers(): Promise<TransformersBindings> {
 	return (await import("./transformers-runtime")) as unknown as TransformersBindings;
 }
 
+const RTLD_NOW = 0x2;
+const RTLD_GLOBAL = 0x100;
+const SHARED_LIBRARY_FILE = /\.so(?:\.\d+)+$/;
+
+async function preloadCudaLibraries(dirs: readonly string[]): Promise<number> {
+	if (dirs.length === 0) return 0;
+	const { FFIType, dlopen, ptr } = await import("bun:ffi");
+	const libc = dlopen("libc.so.6", {
+		dlopen: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.ptr },
+		dlerror: { args: [], returns: FFIType.cstring },
+	});
+	let pending = dirs.flatMap((dir) =>
+		readdirSync(dir)
+			.filter((name) => SHARED_LIBRARY_FILE.test(name))
+			.sort()
+			.map((name) => join(dir, name)),
+	);
+	let loaded = 0;
+	let lastError = "";
+	while (pending.length > 0) {
+		const failed: string[] = [];
+		for (const path of pending) {
+			const handle = libc.symbols.dlopen(ptr(Buffer.from(`${path}\0`)), RTLD_NOW | RTLD_GLOBAL);
+			if (handle) loaded++;
+			else {
+				failed.push(path);
+				lastError = String(libc.symbols.dlerror() ?? "");
+			}
+		}
+		if (failed.length === pending.length) {
+			log("warn", "Some CUDA libraries could not be preloaded", { count: failed.length, lastError });
+			break;
+		}
+		pending = failed;
+	}
+	libc.close();
+	return loaded;
+}
+
+async function prepareCudaRuntime(): Promise<void> {
+	const preloaded = await preloadCudaLibraries(init.cudaLibraryPaths ?? []);
+	if (init.transformersRuntimePath) {
+		if (!init.onnxRuntimeModulePath) throw new Error("This Signet build does not include the native ONNX runtime");
+		if (!init.onnxRuntimePath) {
+			throw new Error("memory.pipelineV2.reranker.onnxRuntimePath is required for the CUDA cross-encoder");
+		}
+		const manifest = JSON.parse(readFileSync(join(init.onnxRuntimePath, "package.json"), "utf8")) as {
+			version?: unknown;
+		};
+		(globalThis as Record<symbol, unknown>)[Symbol.for("signet.onnxruntimeNodeBinding")] = join(
+			init.onnxRuntimePath,
+			"bin",
+			"napi-v6",
+			process.platform,
+			process.arch,
+			"onnxruntime_binding.node",
+		);
+		const runtime = (await import(init.onnxRuntimeModulePath)) as {
+			default?: unknown;
+			signetOnnxRuntimeNodeVersion?: string;
+		};
+		if (manifest.version !== runtime.signetOnnxRuntimeNodeVersion) {
+			throw new Error(
+				`onnxruntime-node at ${init.onnxRuntimePath} is ${String(manifest.version)}; this Signet build needs ${String(runtime.signetOnnxRuntimeNodeVersion)}`,
+			);
+		}
+		(globalThis as Record<symbol, unknown>)[Symbol.for("onnxruntime")] = runtime.default ?? runtime;
+	}
+	log("info", "Prepared native ONNX runtime for CUDA cross-encoder", {
+		preloadedLibraries: preloaded,
+		nativeRuntime: init.onnxRuntimePath ?? null,
+	});
+}
+
 async function ensureInitialized(): Promise<void> {
 	if (embedFn || rerankFn) return;
 	if (initPromise) return initPromise;
@@ -120,6 +195,8 @@ async function doInit(): Promise<void> {
 		pushStatus();
 
 		mkdirSync(init.cacheDir, { recursive: true });
+		const cuda = init.task === "rerank" && init.device === "cuda";
+		if (cuda) await prepareCudaRuntime();
 		transformers = await loadTransformers();
 		transformers.env.logLevel = TRANSFORMERS_LOG_LEVEL_NONE;
 		transformers.env.cacheDir = init.cacheDir;
@@ -148,10 +225,14 @@ async function doInit(): Promise<void> {
 			}
 		};
 		if (init.task === "rerank") {
-			log("info", `Initializing cross-encoder ${init.modelId} (q8 quantization)`, { cachePath: init.cacheDir });
+			const precision = cuda ? "fp32" : "q8";
+			log("info", `Initializing cross-encoder ${init.modelId} (${precision}${cuda ? ", CUDA" : ""})`, {
+				cachePath: init.cacheDir,
+			});
 			const tokenizer = await transformers.AutoTokenizer.from_pretrained(init.modelId, { progress_callback });
 			const model = await transformers.AutoModelForSequenceClassification.from_pretrained(init.modelId, {
-				dtype: "q8",
+				dtype: precision,
+				...(cuda ? { device: "cuda" as const } : {}),
 				progress_callback,
 			});
 			const score = async (query: string, documents: readonly string[]): Promise<number[]> => {
@@ -171,7 +252,7 @@ async function doInit(): Promise<void> {
 			rerankModel = model;
 			rerankFn = score;
 			modelCached = true;
-			log("info", "Cross-encoder ready");
+			log("info", "Cross-encoder ready", { device: cuda ? "cuda" : "default" });
 			pushStatus();
 			return;
 		}

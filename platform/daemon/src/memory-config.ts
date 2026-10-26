@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import {
 	DEFAULT_PIPELINE_TIMEOUT_MS,
@@ -157,6 +158,9 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		useExtractionModel: false,
 		topN: 20,
 		timeoutMs: 2000,
+		device: "default",
+		onnxRuntimePath: "",
+		cudaLibraryPaths: [],
 	},
 	autonomous: {
 		enabled: true,
@@ -286,6 +290,15 @@ export interface ResolvedMemoryConfig {
 }
 
 class MemoryConfigValidationError extends Error {}
+
+function absoluteConfigPath(raw: unknown, key: string): string {
+	if (raw === undefined || raw === null || raw === "") return "";
+	if (typeof raw !== "string") throw new PipelineConfigValidationError(`${key} must be a path string`);
+	const trimmed = raw.trim();
+	const expanded = trimmed === "~" || trimmed.startsWith("~/") ? join(homedir(), trimmed.slice(1)) : trimmed;
+	if (!isAbsolute(expanded)) throw new PipelineConfigValidationError(`${key} must be an absolute path`);
+	return expanded;
+}
 
 function clampPositive(raw: unknown, min: number, max: number, fallback: number): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
@@ -721,6 +734,23 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			),
 			topN: clampPositive(rerankerRaw?.topN ?? raw.rerankerTopN, 1, 100, d.reranker.topN),
 			timeoutMs: clampPositive(rerankerRaw?.timeoutMs ?? raw.rerankerTimeoutMs, 100, 30000, d.reranker.timeoutMs),
+			device: (() => {
+				const v = rerankerRaw?.device;
+				if (v === undefined) return d.reranker.device;
+				if (v === "default" || v === "cuda") return v;
+				throw new PipelineConfigValidationError('memory.pipelineV2.reranker.device must be "default" or "cuda"');
+			})(),
+			onnxRuntimePath: absoluteConfigPath(rerankerRaw?.onnxRuntimePath, "memory.pipelineV2.reranker.onnxRuntimePath"),
+			cudaLibraryPaths: (() => {
+				const v = rerankerRaw?.cudaLibraryPaths;
+				if (v === undefined) return d.reranker.cudaLibraryPaths;
+				if (!Array.isArray(v)) {
+					throw new PipelineConfigValidationError(
+						"memory.pipelineV2.reranker.cudaLibraryPaths must be a list of paths",
+					);
+				}
+				return v.map((entry) => absoluteConfigPath(entry, "memory.pipelineV2.reranker.cudaLibraryPaths"));
+			})(),
 		},
 
 		autonomous: {

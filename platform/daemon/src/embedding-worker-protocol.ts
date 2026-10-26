@@ -6,6 +6,10 @@ export interface EmbeddingWorkerInit {
 	readonly expectedDimensions: number;
 	readonly remoteHostOverride?: string;
 	readonly task?: "embed" | "rerank";
+	readonly device?: "cuda";
+	readonly onnxRuntimePath?: string;
+	readonly onnxRuntimeModulePath?: string;
+	readonly cudaLibraryPaths?: readonly string[];
 }
 
 export type MainToWorkerMessage =

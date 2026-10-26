@@ -255,7 +255,7 @@ if (patchedTransformersWebRuntimeSource.split(customRuntimeAnchor).length !== 2)
 }
 patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
 	customRuntimeAnchor,
-	`${customRuntimeAnchor}  // The custom-runtime branch does not populate device defaults; pin the\n  // WASM device like the web branch so inference defaults to 'wasm'.\n  supportedDevices.push('wasm');\n  defaultDevices = ['wasm'];\n`,
+	`${customRuntimeAnchor}  // The custom-runtime branch does not populate device defaults. A native\n  // onnxruntime-node runtime installed by the embedding worker reports its\n  // backends; otherwise pin the WASM device like the web branch.\n  if (typeof ONNX.listSupportedBackends === 'function') {\n    for (const backend of ONNX.listSupportedBackends()) supportedDevices.push(backend.name);\n    defaultDevices = ['cpu'];\n  } else {\n    supportedDevices.push('wasm');\n    defaultDevices = ['wasm'];\n  }\n`,
 );
 const nodeDeviceDefault = /defaultDevices = \["cpu"\];/g;
 if ((patchedTransformersWebRuntimeSource.match(nodeDeviceDefault) ?? []).length !== 1) {
@@ -303,7 +303,7 @@ const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]
 }));
 writeFileSync(
 	join(buildDir, "embedding-worker-transformers-runtime.ts"),
-	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;\n`,
+	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] ??= onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;\n`,
 );
 runBunBuild([
 	"--target=bun",
@@ -316,6 +316,31 @@ runBunBuild([
 workerAssets.push({
 	name: "embedding-worker-transformers-runtime",
 	contentBase64: readFileSync(join(workerDir, "embedding-worker-transformers-runtime.mjs")).toString("base64"),
+});
+const onnxRuntimeNodePackageJson = transformersRequire.resolve("onnxruntime-node/package.json");
+const onnxRuntimeNodeVersion = (JSON.parse(readFileSync(onnxRuntimeNodePackageJson, "utf8")) as { version: string })
+	.version;
+const onnxRuntimeNodeRuntimePath = join(workerDir, "onnxruntime-node-runtime.mjs");
+runBunBuild([
+	"--target=bun",
+	"--format=esm",
+	"--outfile",
+	onnxRuntimeNodeRuntimePath,
+	join(dirname(onnxRuntimeNodePackageJson), "dist", "index.js"),
+]);
+const onnxRuntimeNodeBindingRequire =
+	"require(`../bin/napi-v6/${process.platform}/${process.arch}/onnxruntime_binding.node`)";
+let onnxRuntimeNodeRuntimeSource = readFileSync(onnxRuntimeNodeRuntimePath, "utf8");
+if (onnxRuntimeNodeRuntimeSource.split(onnxRuntimeNodeBindingRequire).length !== 2) {
+	throw new Error("Unsupported onnxruntime-node runtime: native binding require changed");
+}
+onnxRuntimeNodeRuntimeSource = `${onnxRuntimeNodeRuntimeSource.replace(
+	onnxRuntimeNodeBindingRequire,
+	'require(globalThis[Symbol.for("signet.onnxruntimeNodeBinding")])',
+)}\nexport const signetOnnxRuntimeNodeVersion = ${JSON.stringify(onnxRuntimeNodeVersion)};\n`;
+workerAssets.push({
+	name: "onnxruntime-node-runtime",
+	contentBase64: Buffer.from(onnxRuntimeNodeRuntimeSource).toString("base64"),
 });
 
 writeFileSync(
@@ -333,7 +358,7 @@ writeFileSync(
 writeFileSync(
 	join(buildDir, "transformers-web-runtime.ts"),
 	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};
-globalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;
+globalThis[Symbol.for("onnxruntime")] ??= onnxRuntime.default ?? onnxRuntime;
 const transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});
 export const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;
 `,

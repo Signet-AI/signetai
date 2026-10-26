@@ -51,7 +51,7 @@ import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker"
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
 import { type RerankOutcome, createCrossEncoderReranker } from "./pipeline/reranker-cross-encoder";
-import { nativeRerank } from "./native-rerank";
+import { type NativeRerankRuntime, nativeRerank, nativeRerankActiveDevice } from "./native-rerank";
 import { FTS_STOP } from "./pipeline/stop-words";
 import {
 	type EvidenceCandidateInput,
@@ -1705,6 +1705,14 @@ function scoreTemporalTopicEvidence(query: string, content: string): number {
 	const density = matched.length / Math.max(8, contentTokens.size);
 	return Math.min(TEMPORAL_TOPIC_SCORE_CAP, 0.35 + coverage * 0.4 + density * 0.1);
 }
+function nativeRerankRuntime(reranker: ResolvedMemoryConfig["pipelineV2"]["reranker"]): NativeRerankRuntime {
+	if (reranker.device !== "cuda") return { device: "default" };
+	return {
+		device: "cuda",
+		...(reranker.onnxRuntimePath ? { onnxRuntimePath: reranker.onnxRuntimePath } : {}),
+		...(reranker.cudaLibraryPaths.length > 0 ? { cudaLibraryPaths: reranker.cudaLibraryPaths } : {}),
+	};
+}
 export async function hybridRecall(
 	params: RecallParams,
 	cfg: ResolvedMemoryConfig,
@@ -1805,7 +1813,8 @@ export async function hybridRecall(
 						textQuery,
 						crossEncoderModel === null
 							? null
-							: (rerankQuery, documents) => nativeRerank(crossEncoderModel, rerankQuery, documents),
+							: (rerankQuery, documents) =>
+									nativeRerank(crossEncoderModel, rerankQuery, documents, nativeRerankRuntime(reranker)),
 					),
 				);
 				response.results = placed.results;
@@ -2640,7 +2649,8 @@ export async function hybridRecall(
 				: crossEncoderModel.length > 0
 					? createCrossEncoderReranker({
 							model: crossEncoderModel,
-							score: (rerankQuery, documents) => nativeRerank(crossEncoderModel, rerankQuery, documents),
+							score: (rerankQuery, documents) =>
+								nativeRerank(crossEncoderModel, rerankQuery, documents, nativeRerankRuntime(cfg.pipelineV2.reranker)),
 							fallback: blend,
 							outcome,
 						})
@@ -2652,6 +2662,10 @@ export async function hybridRecall(
 				throwOnError: cfg.pipelineV2.reranker.useExtractionModel,
 			});
 			const rerankedMap = new Map(reranked.map((row) => [row.id, row.score]));
+			if (outcome.kind === "cross-encoder") {
+				const device = nativeRerankActiveDevice();
+				if (device !== null) outcome.device = device;
+			}
 			for (const s of scored) {
 				const score = rerankedMap.get(s.id);
 				if (typeof score === "number" && Number.isFinite(score)) {

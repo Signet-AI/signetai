@@ -983,6 +983,43 @@ describe("loadPipelineConfig", () => {
 		expect(result.reranker.useExtractionModel).toBe(DEFAULT_PIPELINE_V2.reranker.useExtractionModel);
 		expect(result.reranker.topN).toBe(DEFAULT_PIPELINE_V2.reranker.topN);
 		expect(result.reranker.timeoutMs).toBe(DEFAULT_PIPELINE_V2.reranker.timeoutMs);
+		expect(result.reranker.device).toBe("default");
+		expect(result.reranker.onnxRuntimePath).toBe("");
+		expect(result.reranker.cudaLibraryPaths).toEqual([]);
+	});
+
+	it("loads the CUDA cross-encoder runtime settings", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					reranker: {
+						device: "cuda",
+						onnxRuntimePath: "/opt/ort/node_modules/onnxruntime-node",
+						cudaLibraryPaths: ["/opt/cuda12/lib", "~/cudnn/lib"],
+					},
+				},
+			},
+		});
+
+		expect(result.reranker.device).toBe("cuda");
+		expect(result.reranker.onnxRuntimePath).toBe("/opt/ort/node_modules/onnxruntime-node");
+		expect(result.reranker.cudaLibraryPaths[0]).toBe("/opt/cuda12/lib");
+		expect(result.reranker.cudaLibraryPaths[1]?.endsWith("/cudnn/lib")).toBe(true);
+		expect(result.reranker.cudaLibraryPaths[1]?.startsWith("~")).toBe(false);
+	});
+
+	it("rejects unknown reranker devices and relative runtime paths instead of ignoring them", () => {
+		expect(() => loadPipelineConfig({ memory: { pipelineV2: { reranker: { device: "gpu" } } } })).toThrow(
+			/reranker\.device/,
+		);
+		expect(() =>
+			loadPipelineConfig({
+				memory: { pipelineV2: { reranker: { onnxRuntimePath: "node_modules/onnxruntime-node" } } },
+			}),
+		).toThrow(/absolute path/);
+		expect(() =>
+			loadPipelineConfig({ memory: { pipelineV2: { reranker: { cudaLibraryPaths: "/opt/cuda" } } } }),
+		).toThrow(/list of paths/);
 	});
 
 	it("loads maintenance and repair config fields (flat keys)", () => {

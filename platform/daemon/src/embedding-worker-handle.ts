@@ -47,6 +47,9 @@ export interface EmbeddingHandleOptions {
 	readonly wasmAssetDir?: string | null;
 	readonly transformersRuntimeAssetPath?: string | null;
 	readonly task?: "embed" | "rerank";
+	readonly device?: "cuda";
+	readonly onnxRuntimePath?: string;
+	readonly cudaLibraryPaths?: readonly string[];
 }
 
 interface PendingRpc {
@@ -101,6 +104,16 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		expectedDimensions: dimensions,
 		...(opts.remoteHostOverride ? { remoteHostOverride: opts.remoteHostOverride } : {}),
 		...(opts.task ? { task: opts.task } : {}),
+		...(opts.device ? { device: opts.device } : {}),
+		...(opts.onnxRuntimePath ? { onnxRuntimePath: opts.onnxRuntimePath } : {}),
+		...(() => {
+			if (opts.device !== "cuda") return {};
+			const modulePath = resolveEmbeddedWorkerPath("onnxruntime-node-runtime");
+			return modulePath ? { onnxRuntimeModulePath: modulePath } : {};
+		})(),
+		...(opts.cudaLibraryPaths && opts.cudaLibraryPaths.length > 0
+			? { cudaLibraryPaths: [...opts.cudaLibraryPaths] }
+			: {}),
 	};
 
 	const __dirname = dirname(fileURLToPath(import.meta.url));

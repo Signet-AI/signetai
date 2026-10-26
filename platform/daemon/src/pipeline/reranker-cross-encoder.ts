@@ -5,6 +5,7 @@ export const RERANK_FUSION_K = 10;
 export interface RerankOutcome {
 	kind: "cross-encoder" | "embedding" | "llm" | "none";
 	model?: string;
+	device?: "default" | "cuda";
 	fallback?: string;
 }
 
