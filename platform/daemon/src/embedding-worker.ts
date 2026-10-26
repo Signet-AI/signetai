@@ -109,6 +109,7 @@ async function ensureInitialized(): Promise<void> {
 		await initPromise;
 	} finally {
 		initPromise = null;
+		pushStatus();
 	}
 	return;
 }
