@@ -51,6 +51,7 @@ import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker"
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
 import { type RerankOutcome, createCrossEncoderReranker } from "./pipeline/reranker-cross-encoder";
+import { createCrossEncoderScoreMemo } from "./cross-encoder-memo";
 import { type NativeRerankRuntime, nativeRerank, nativeRerankActiveDevice } from "./native-rerank";
 import { FTS_STOP } from "./pipeline/stop-words";
 import {
@@ -1854,34 +1855,14 @@ export async function hybridRecall(
 	let transcriptEvidenceAllowed = false;
 	let transcriptPrefetch: Promise<TranscriptEvidencePrefetch | null> | null = null;
 	let transcriptPrefetchReady: TranscriptEvidencePrefetch | null = null;
-	const crossEncoderScores = new Map<string, number>();
-	let crossEncoderScoresQuery: string | null = null;
-	const scoreWithCrossEncoder = async (
-		model: string,
-		rerankQuery: string,
-		documents: readonly string[],
-		extraDocuments: readonly string[] = [],
-		deadlineAt?: number,
-	): Promise<number[]> => {
-		const runtime = nativeRerankRuntime(cfg.pipelineV2.reranker);
-		const memoize = (crossEncoderScoresQuery ?? rerankQuery) === rerankQuery;
-		if (!memoize) return await nativeRerank(model, rerankQuery, documents, runtime, deadlineAt);
-		const piggyback = runtime.device === "cuda" ? extraDocuments : [];
-		const batch = [...new Set([...documents, ...piggyback])].filter((document) => !crossEncoderScores.has(document));
-		if (batch.length > 0) {
-			const scores = await nativeRerank(model, rerankQuery, batch, runtime, deadlineAt);
-			if (nativeRerankActiveDevice() !== runtime.device) {
-				crossEncoderScores.clear();
-				return await nativeRerank(model, rerankQuery, documents, runtime, deadlineAt);
-			}
-			crossEncoderScoresQuery = rerankQuery;
-			batch.forEach((document, index) => {
-				const score = scores[index];
-				if (typeof score === "number" && Number.isFinite(score)) crossEncoderScores.set(document, score);
-			});
-		}
-		return documents.map((document) => crossEncoderScores.get(document) ?? Number.NEGATIVE_INFINITY);
-	};
+	const crossEncoderModelId = cfg.pipelineV2.reranker.crossEncoderModel;
+	const crossEncoderRuntime = nativeRerankRuntime(cfg.pipelineV2.reranker);
+	const scoreWithCrossEncoder = createCrossEncoderScoreMemo({
+		score: (rerankQuery, documents, deadlineAt) =>
+			nativeRerank(crossEncoderModelId, rerankQuery, documents, crossEncoderRuntime, deadlineAt),
+		activeDevice: nativeRerankActiveDevice,
+		requestedDevice: crossEncoderRuntime.device,
+	});
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
 		let transcriptEvidence: RecallTranscriptEvidenceMeta | undefined;
 		if (transcriptEvidenceAllowed && params.agentId) {
@@ -1912,7 +1893,8 @@ export async function hybridRecall(
 						textQuery,
 						crossEncoderModel === null
 							? null
-							: (rerankQuery, documents) => scoreWithCrossEncoder(crossEncoderModel, rerankQuery, documents),
+							: (rerankQuery, documents) =>
+									scoreWithCrossEncoder(rerankQuery, documents, [], Date.now() + Math.floor(reranker.timeoutMs * 0.75)),
 					),
 				);
 				response.results = placed.results;
@@ -2777,7 +2759,6 @@ export async function hybridRecall(
 							model: crossEncoderModel,
 							score: (rerankQuery, documents, deadlineAt) =>
 								scoreWithCrossEncoder(
-									crossEncoderModel,
 									rerankQuery,
 									documents,
 									rerankQuery === (params.keywordQuery ?? query) && transcriptPrefetchReady !== null
