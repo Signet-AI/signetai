@@ -4,8 +4,10 @@ import { nativeEmbeddingAssetPaths } from "./native-embedding";
 
 const RECREATE_AFTER_FAILURE_MS = 300_000;
 
+export type NativeRerankDevice = "default" | "cuda" | "cpu";
+
 export interface NativeRerankRuntime {
-	readonly device: "default" | "cuda";
+	readonly device: NativeRerankDevice;
 	readonly onnxRuntimePath?: string;
 	readonly cudaLibraryPaths?: readonly string[];
 }
@@ -19,12 +21,12 @@ function runtimeKey(modelId: string, runtime: NativeRerankRuntime): string {
 let current: {
 	readonly key: string;
 	readonly requestedKey: string;
-	readonly device: "default" | "cuda";
+	readonly device: NativeRerankDevice;
 	readonly handle: Promise<EmbeddingWorkerHandle>;
 	initializedOnce: boolean;
 } | null = null;
 let failedAt = 0;
-let cudaFailedKey: string | null = null;
+let acceleratedFailedKey: string | null = null;
 let inFlight = false;
 
 function createHandle(modelId: string, runtime: NativeRerankRuntime): Promise<EmbeddingWorkerHandle> {
@@ -41,11 +43,16 @@ function createHandle(modelId: string, runtime: NativeRerankRuntime): Promise<Em
 					...(runtime.onnxRuntimePath ? { onnxRuntimePath: runtime.onnxRuntimePath } : {}),
 					...(runtime.cudaLibraryPaths?.length ? { cudaLibraryPaths: runtime.cudaLibraryPaths } : {}),
 				}
-			: {}),
+			: runtime.device === "cpu"
+				? {
+						runtime: "onnxruntime" as const,
+						...(runtime.onnxRuntimePath ? { onnxRuntimePath: runtime.onnxRuntimePath } : {}),
+					}
+				: {}),
 	});
 }
 
-function cudaInitFailed(handle: EmbeddingWorkerHandle, initializedOnce: boolean): boolean {
+function acceleratedInitFailed(handle: EmbeddingWorkerHandle, initializedOnce: boolean): boolean {
 	if (initializedOnce) return false;
 	const status = handle.getStatus();
 	if (status.initialized || status.initializing) return false;
@@ -54,18 +61,22 @@ function cudaInitFailed(handle: EmbeddingWorkerHandle, initializedOnce: boolean)
 
 async function handleFor(modelId: string, requested: NativeRerankRuntime): Promise<EmbeddingWorkerHandle> {
 	const requestedKey = runtimeKey(modelId, requested);
-	const runtime = requested.device === "cuda" && cudaFailedKey === requestedKey ? DEFAULT_RUNTIME : requested;
+	const runtime = requested.device !== "default" && acceleratedFailedKey === requestedKey ? DEFAULT_RUNTIME : requested;
 	const key = runtimeKey(modelId, runtime);
 	if (current !== null && (current.key !== key || current.requestedKey !== requestedKey))
 		await shutdownNativeReranker();
 	if (current !== null) {
 		const handle = await current.handle;
-		if (current.device === "cuda" && cudaInitFailed(handle, current.initializedOnce)) {
-			cudaFailedKey = requestedKey;
-			logger.warn("memory", "CUDA cross-encoder unavailable; using the default ONNX runtime", {
-				model: modelId,
-				error: handle.getLastError(),
-			});
+		if (current.device !== "default" && acceleratedInitFailed(handle, current.initializedOnce)) {
+			acceleratedFailedKey = requestedKey;
+			logger.warn(
+				"memory",
+				`${current.device.toUpperCase()} cross-encoder unavailable; using the default ONNX runtime`,
+				{
+					model: modelId,
+					error: handle.getLastError(),
+				},
+			);
 			await shutdownNativeReranker();
 			return await handleFor(modelId, requested);
 		}
@@ -85,7 +96,7 @@ async function handleFor(modelId: string, requested: NativeRerankRuntime): Promi
 	return await current.handle;
 }
 
-export function nativeRerankActiveDevice(): "default" | "cuda" | null {
+export function nativeRerankActiveDevice(): NativeRerankDevice | null {
 	return current?.device ?? null;
 }
 
@@ -94,6 +105,7 @@ export async function nativeRerank(
 	query: string,
 	documents: readonly string[],
 	runtime: NativeRerankRuntime = DEFAULT_RUNTIME,
+	deadlineAt?: number,
 ): Promise<number[]> {
 	if (inFlight) throw new Error("cross-encoder busy with another recall");
 	inFlight = true;
@@ -105,7 +117,7 @@ export async function nativeRerank(
 		}
 		if (current !== null) current.initializedOnce = true;
 		try {
-			return await handle.rerank(query, documents);
+			return await handle.rerank(query, documents, deadlineAt !== undefined ? { deadlineAt } : undefined);
 		} catch (error) {
 			if (handle.isPermanentlyDisabled()) failedAt = Date.now();
 			throw error;

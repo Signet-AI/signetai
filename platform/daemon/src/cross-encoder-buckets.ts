@@ -40,3 +40,25 @@ export function planLengthBuckets(lengths: readonly number[]): number[][] {
 	}
 	return groups;
 }
+
+export class RerankDeadlineError extends Error {}
+
+export async function scoreInGroups(
+	groups: readonly (readonly number[])[],
+	documentCount: number,
+	scoreGroup: (group: readonly number[]) => Promise<readonly number[]>,
+	deadlineAt?: number,
+	now: () => number = Date.now,
+): Promise<number[]> {
+	const scores = new Array<number>(documentCount).fill(Number.NaN);
+	for (const group of groups) {
+		if (deadlineAt !== undefined && now() >= deadlineAt) {
+			throw new RerankDeadlineError("cross-encoder deadline reached; abandoned remaining documents");
+		}
+		const groupScores = await scoreGroup(group);
+		group.forEach((index, position) => {
+			scores[index] = groupScores[position] ?? Number.NaN;
+		});
+	}
+	return scores;
+}

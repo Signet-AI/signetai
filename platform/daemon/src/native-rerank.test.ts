@@ -10,6 +10,7 @@ interface FakeHandleState {
 
 const created: EmbeddingHandleOptions[] = [];
 const stopped: string[] = [];
+const seenDeadlines: number[] = [];
 
 function fakeHandle(options: EmbeddingHandleOptions): EmbeddingWorkerHandle {
 	const cuda = options.device === "cuda";
@@ -17,8 +18,9 @@ function fakeHandle(options: EmbeddingHandleOptions): EmbeddingWorkerHandle {
 	const state: FakeHandleState = { initialized: !cuda || cudaWorks, lastError: null, disabled: false, reranks: 0 };
 	return {
 		embed: async () => [],
-		rerank: async (_query, documents) => {
+		rerank: async (_query, documents, options) => {
 			state.reranks++;
+			if (options?.deadlineAt !== undefined) seenDeadlines.push(options.deadlineAt);
 			if (cudaWorks && state.reranks === 2) {
 				state.disabled = true;
 				state.initialized = false;
@@ -65,6 +67,7 @@ afterEach(async () => {
 	await shutdownNativeReranker();
 	created.length = 0;
 	stopped.length = 0;
+	seenDeadlines.length = 0;
 });
 
 describe("nativeRerank runtime selection", () => {
@@ -106,5 +109,24 @@ describe("nativeRerank runtime selection", () => {
 		expect(scores).toEqual([0, 1, 2]);
 		expect(created[0]?.device).toBeUndefined();
 		expect(nativeRerankActiveDevice()).toBe("default");
+	});
+
+	it("runs the cross-encoder on the native CPU runtime when the device is cpu", async () => {
+		await nativeRerank("model", "q", ["a"], {
+			device: "cpu",
+			onnxRuntimePath: "/opt/ort/node_modules/onnxruntime-node",
+		});
+		expect(created[0]).toMatchObject({
+			task: "rerank",
+			runtime: "onnxruntime",
+			onnxRuntimePath: "/opt/ort/node_modules/onnxruntime-node",
+		});
+		expect(created[0]?.device).toBeUndefined();
+		expect(nativeRerankActiveDevice()).toBe("cpu");
+	});
+
+	it("passes the caller's deadline to the worker", async () => {
+		await nativeRerank("model", "q", ["a"], undefined, 4242);
+		expect(seenDeadlines).toEqual([4242]);
 	});
 });

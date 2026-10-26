@@ -1763,6 +1763,9 @@ function scoreTemporalTopicEvidence(query: string, content: string): number {
 	return Math.min(TEMPORAL_TOPIC_SCORE_CAP, 0.35 + coverage * 0.4 + density * 0.1);
 }
 function nativeRerankRuntime(reranker: ResolvedMemoryConfig["pipelineV2"]["reranker"]): NativeRerankRuntime {
+	if (reranker.device === "cpu") {
+		return { device: "cpu", ...(reranker.onnxRuntimePath ? { onnxRuntimePath: reranker.onnxRuntimePath } : {}) };
+	}
 	if (reranker.device !== "cuda") return { device: "default" };
 	return {
 		device: "cuda",
@@ -1858,18 +1861,18 @@ export async function hybridRecall(
 		rerankQuery: string,
 		documents: readonly string[],
 		extraDocuments: readonly string[] = [],
+		deadlineAt?: number,
 	): Promise<number[]> => {
 		const runtime = nativeRerankRuntime(cfg.pipelineV2.reranker);
-		const memoize = runtime.device === "cuda" && (crossEncoderScoresQuery ?? rerankQuery) === rerankQuery;
-		if (!memoize) return await nativeRerank(model, rerankQuery, documents, runtime);
-		const batch = [...new Set([...documents, ...extraDocuments])].filter(
-			(document) => !crossEncoderScores.has(document),
-		);
+		const memoize = (crossEncoderScoresQuery ?? rerankQuery) === rerankQuery;
+		if (!memoize) return await nativeRerank(model, rerankQuery, documents, runtime, deadlineAt);
+		const piggyback = runtime.device === "cuda" ? extraDocuments : [];
+		const batch = [...new Set([...documents, ...piggyback])].filter((document) => !crossEncoderScores.has(document));
 		if (batch.length > 0) {
-			const scores = await nativeRerank(model, rerankQuery, batch, runtime);
-			if (nativeRerankActiveDevice() !== "cuda") {
+			const scores = await nativeRerank(model, rerankQuery, batch, runtime, deadlineAt);
+			if (nativeRerankActiveDevice() !== runtime.device) {
 				crossEncoderScores.clear();
-				return await nativeRerank(model, rerankQuery, documents, runtime);
+				return await nativeRerank(model, rerankQuery, documents, runtime, deadlineAt);
 			}
 			crossEncoderScoresQuery = rerankQuery;
 			batch.forEach((document, index) => {
@@ -2772,7 +2775,7 @@ export async function hybridRecall(
 				: crossEncoderModel.length > 0
 					? createCrossEncoderReranker({
 							model: crossEncoderModel,
-							score: (rerankQuery, documents) =>
+							score: (rerankQuery, documents, deadlineAt) =>
 								scoreWithCrossEncoder(
 									crossEncoderModel,
 									rerankQuery,
@@ -2780,6 +2783,7 @@ export async function hybridRecall(
 									rerankQuery === (params.keywordQuery ?? query) && transcriptPrefetchReady !== null
 										? [...transcriptPrefetchReady.results.values()].flatMap((row) => (row ? [row.content] : []))
 										: [],
+									deadlineAt,
 								),
 							fallback: blend,
 							outcome,

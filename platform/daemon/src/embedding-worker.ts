@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
-import { pairLengths, planLengthBuckets } from "./cross-encoder-buckets";
+import { RerankDeadlineError, pairLengths, planLengthBuckets, scoreInGroups } from "./cross-encoder-buckets";
 import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
 const TRANSFORMERS_LOG_LEVEL_NONE = 50;
@@ -35,7 +35,8 @@ interface PretrainedLoader<T> {
 		model: string,
 		opts?: {
 			dtype?: "q8" | "fp32";
-			device?: "cuda";
+			device?: "cuda" | "cpu";
+			session_options?: { intraOpNumThreads: number; interOpNumThreads: number };
 			progress_callback?: (progress: { status: string; progress?: number; file?: string }) => void;
 		},
 	): Promise<T>;
@@ -81,7 +82,7 @@ function log(level: string, message: string, data?: Record<string, unknown>): vo
 
 let transformers: TransformersBindings | null = null;
 let embedFn: EmbedCallable | null = null;
-let rerankFn: ((query: string, documents: readonly string[]) => Promise<number[]>) | null = null;
+let rerankFn: ((query: string, documents: readonly string[], deadlineAt?: number) => Promise<number[]>) | null = null;
 let rerankModel: RerankModel | null = null;
 let initPromise: Promise<void> | null = null;
 let initError: string | null = null;
@@ -235,7 +236,9 @@ async function doInit(): Promise<void> {
 		mkdirSync(init.cacheDir, { recursive: true });
 		const cuda = init.task === "rerank" && init.device === "cuda";
 		const nativeEmbedding = init.task !== "rerank" && init.runtime === "onnxruntime";
+		const nativeCpuRerank = init.task === "rerank" && !cuda && init.runtime === "onnxruntime";
 		if (cuda) await prepareNativeOnnxRuntime("CUDA cross-encoder");
+		if (nativeCpuRerank) await prepareNativeOnnxRuntime("native ONNX runtime cross-encoder");
 		if (nativeEmbedding) await prepareNativeOnnxRuntime("native ONNX runtime embedding");
 		transformers = await loadTransformers();
 		transformers.env.logLevel = TRANSFORMERS_LOG_LEVEL_NONE;
@@ -266,13 +269,23 @@ async function doInit(): Promise<void> {
 		};
 		if (init.task === "rerank") {
 			const precision = cuda ? "fp32" : "q8";
-			log("info", `Initializing cross-encoder ${init.modelId} (${precision}${cuda ? ", CUDA" : ""})`, {
+			const deviceLabel = cuda ? ", CUDA" : nativeCpuRerank ? ", native CPU" : "";
+			log("info", `Initializing cross-encoder ${init.modelId} (${precision}${deviceLabel})`, {
 				cachePath: init.cacheDir,
 			});
 			const tokenizer = await transformers.AutoTokenizer.from_pretrained(init.modelId, { progress_callback });
 			const model = await transformers.AutoModelForSequenceClassification.from_pretrained(init.modelId, {
 				dtype: precision,
 				...(cuda ? { device: "cuda" as const } : {}),
+				...(nativeCpuRerank
+					? {
+							device: "cpu" as const,
+							session_options: {
+								intraOpNumThreads: Math.max(1, Math.min(4, availableParallelism() - 1)),
+								interOpNumThreads: 1,
+							},
+						}
+					: {}),
 				progress_callback,
 			});
 			const pairTokenizer = loadNativePairTokenizer(init.modelId);
@@ -311,30 +324,27 @@ async function doInit(): Promise<void> {
 				const width = logits.dims.at(-1) ?? 1;
 				return documents.map((_, index) => Number(logits.data[index * width + width - 1]));
 			};
-			const score =
+			const planGroups = (query: string, documents: readonly string[]): number[][] =>
 				cuda && pairTokenizer !== null && nativeInputs !== null
-					? async (query: string, documents: readonly string[]): Promise<number[]> => {
-							if (documents.length <= 1) return await scoreBatch(query, documents);
-							const groups = planLengthBuckets(pairLengths(pairTokenizer.encodePairs(query, [...documents])));
-							const scores = new Array<number>(documents.length);
-							for (const group of groups) {
-								const groupScores = await scoreBatch(
-									query,
-									group.map((index) => documents[index] ?? ""),
-								);
-								group.forEach((index, position) => {
-									scores[index] = groupScores[position] ?? Number.NaN;
-								});
-							}
-							return scores;
-						}
-					: scoreBatch;
+					? planLengthBuckets(pairLengths(pairTokenizer.encodePairs(query, [...documents])))
+					: documents.map((_, index) => [index]);
+			const score = (query: string, documents: readonly string[], deadlineAt?: number): Promise<number[]> =>
+				scoreInGroups(
+					documents.length <= 1 ? documents.map((_, index) => [index]) : planGroups(query, documents),
+					documents.length,
+					(group) =>
+						scoreBatch(
+							query,
+							group.map((index) => documents[index] ?? ""),
+						),
+					deadlineAt,
+				);
 			const warmup = await score("test", ["test"]);
 			if (warmup.length !== 1 || !Number.isFinite(warmup[0])) throw new Error("Cross-encoder warmup returned no score");
 			rerankModel = model;
 			rerankFn = score;
 			modelCached = true;
-			log("info", "Cross-encoder ready", { device: cuda ? "cuda" : "default" });
+			log("info", "Cross-encoder ready", { device: cuda ? "cuda" : nativeCpuRerank ? "cpu" : "default" });
 			pushStatus();
 			return;
 		}
@@ -415,13 +425,23 @@ async function handleEmbed(id: number, text: string): Promise<void> {
 	}
 }
 
-async function handleRerank(id: number, query: string, documents: readonly string[]): Promise<void> {
+async function handleRerank(
+	id: number,
+	query: string,
+	documents: readonly string[],
+	deadlineAt: number | undefined,
+): Promise<void> {
 	try {
 		await ensureInitialized();
 		if (!rerankFn) throw new Error(initError ?? "Cross-encoder not initialized");
-		post({ type: "rerank_result", id, scores: await rerankFn(query, documents) });
+		post({ type: "rerank_result", id, scores: await rerankFn(query, documents, deadlineAt) });
 	} catch (err) {
-		post({ type: "rerank_error", id, error: err instanceof Error ? err.message : String(err) });
+		post({
+			type: "rerank_error",
+			id,
+			error: err instanceof Error ? err.message : String(err),
+			...(err instanceof RerankDeadlineError ? { cancelled: true } : {}),
+		});
 	}
 }
 
@@ -463,7 +483,7 @@ port.on("message", (msg: MainToWorkerMessage) => {
 			void handleCheckAvailable(msg.id);
 			break;
 		case "rerank":
-			void handleRerank(msg.id, msg.query, msg.documents);
+			void handleRerank(msg.id, msg.query, msg.documents, msg.deadlineAt);
 			break;
 		case "shutdown":
 			void handleShutdown();

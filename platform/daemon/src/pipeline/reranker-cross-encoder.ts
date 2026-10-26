@@ -5,7 +5,7 @@ export const RERANK_FUSION_K = 10;
 export interface RerankOutcome {
 	kind: "cross-encoder" | "embedding" | "llm" | "none";
 	model?: string;
-	device?: "default" | "cuda";
+	device?: "default" | "cuda" | "cpu";
 	fallback?: string;
 }
 
@@ -36,24 +36,23 @@ export function fuseCrossEncoderScores(
 
 export function createCrossEncoderReranker(params: {
 	readonly model: string;
-	readonly score: (query: string, documents: readonly string[]) => Promise<number[]>;
+	readonly score: (query: string, documents: readonly string[], deadlineAt?: number) => Promise<number[]>;
 	readonly fallback: RerankProvider;
 	readonly outcome: RerankOutcome;
 }): RerankProvider {
 	return async (query: string, candidates: RerankCandidate[], cfg: RerankConfig): Promise<RerankCandidate[]> => {
 		if (candidates.length === 0) return candidates;
 		let timer: ReturnType<typeof setTimeout> | undefined;
+		const budgetMs = Math.floor(cfg.timeoutMs * 0.75);
 		try {
 			const deadline = new Promise<never>((_, reject) => {
-				timer = setTimeout(
-					() => reject(new Error(`cross-encoder exceeded ${Math.floor(cfg.timeoutMs * 0.75)}ms`)),
-					Math.floor(cfg.timeoutMs * 0.75),
-				);
+				timer = setTimeout(() => reject(new Error(`cross-encoder exceeded ${budgetMs}ms`)), budgetMs);
 			});
 			const scores = await Promise.race([
 				params.score(
 					query,
 					candidates.map((candidate) => candidate.content),
+					Date.now() + budgetMs,
 				),
 				deadline,
 			]);

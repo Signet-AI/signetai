@@ -261,7 +261,7 @@ export interface PipelineTraversalConfig {
 	readonly constraintBudgetChars: number;
 }
 
-export type PipelineRerankerDevice = "default" | "cuda";
+export type PipelineRerankerDevice = "default" | "cuda" | "cpu";
 
 export interface PipelineRerankerConfig {
 	readonly enabled: boolean;

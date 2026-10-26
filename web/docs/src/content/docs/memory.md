@@ -194,9 +194,14 @@ post-processing:
   use), and fuses its order with the retrieval order by reciprocal rank so it
   can lift a relevant memory that shares no words with the question without
   overturning order retrieval already got right. It runs in its own worker
-  thread, one rerank at a time. The compiled binary runs it on WebAssembly by
-  default, where 20 candidates can take longer than the deadline on a busy
-  machine. The model loads in the background on first use; while it is
+  thread, one rerank at a time. On CPU it scores each query and memory pair
+  separately and stops between pairs once the deadline has passed, so a slow
+  rerank gives up quickly instead of holding the worker for the next recall.
+  The compiled binary runs it on WebAssembly by default, where 20 candidates
+  can take longer than the deadline on a busy machine; set
+  `reranker.device: cpu` with `reranker.onnxRuntimePath` to run it on the
+  native ONNX runtime instead (several times faster). The model loads in the
+  background on first use; while it is
   loading, busy, or slower than three quarters of `reranker.timeoutMs`,
   recall falls back to an embedding blend for that request. `meta.reranker` reports which reranker ran
   (`cross-encoder`, `embedding`, `llm`, or `none`), the device it ran on, and
