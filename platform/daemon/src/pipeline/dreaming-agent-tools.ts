@@ -1,5 +1,5 @@
 import * as Type from "typebox";
-import type { PiAgentTool } from "./pi-agent-protocol";
+import { PI_AGENT_PLANNING_TURN_DETAIL, type PiAgentTool } from "./pi-agent-protocol";
 import { z } from "zod";
 import type {
 	CreateDreamingCapabilitiesParams,
@@ -35,6 +35,19 @@ function scopedInput(value: unknown, allowed: ReadonlySet<string>): void {
 function textResult(payload: DreamingCapabilityResult): { readonly type: "text"; readonly text: string } {
 	return { type: "text", text: JSON.stringify(payload) };
 }
+const DREAMING_PLANNING_PAGE_CHARS = 64_000;
+
+function evidenceChars(result: unknown): number {
+	const items = (result as { readonly items?: unknown } | null)?.items;
+	if (!Array.isArray(items)) return 0;
+	let chars = 0;
+	for (const item of items) {
+		const content = (item as { readonly content?: unknown } | null)?.content;
+		if (typeof content === "string") chars += content.length;
+	}
+	return chars;
+}
+
 export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams): readonly PiAgentTool[] {
 	return createDreamingCapabilities({ ...params, allowedScopes: params.allowedAgentIds })
 		.filter((capability) => !params.capabilityIds || params.capabilityIds.includes(capability.id))
@@ -84,7 +97,15 @@ export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams)
 						output: result,
 						latencyMs: Date.now() - startedAt,
 					});
-					return { content: [textResult(result)], details: { tool: capability.id } };
+					return {
+						content: [textResult(result)],
+						details: {
+							tool: capability.id,
+							...(capability.id === "search_evidence" && evidenceChars(result) >= DREAMING_PLANNING_PAGE_CHARS
+								? { [PI_AGENT_PLANNING_TURN_DETAIL]: "planning" }
+								: {}),
+						},
+					};
 				},
 			};
 		});

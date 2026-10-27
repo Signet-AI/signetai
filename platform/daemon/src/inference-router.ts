@@ -989,6 +989,21 @@ export class InferenceRouter {
 		);
 	}
 
+	async agentContextWindow(request: RouteRequest): Promise<number | undefined> {
+		try {
+			const loaded = await this.loadConfig(false);
+			if (!loaded.ok) return undefined;
+			const decision = await this.explain(request);
+			if (!decision.ok) return undefined;
+			const parsed = parseRoutingTargetRef(decision.value.targetRef);
+			if (!parsed.ok || loaded.value.config.targets[parsed.value.targetId]?.executor === "acpx") return undefined;
+			const provider = await this.createProvider(loaded.value, parsed.value.targetId, parsed.value.modelId);
+			return isPiAgentSessionProvider(provider) ? await provider.contextWindow?.() : undefined;
+		} catch {
+			return undefined;
+		}
+	}
+
 	async execute(
 		request: RouteRequest,
 		prompt: string,

@@ -24,7 +24,10 @@ export interface PiAgentWorkerInput {
 	readonly retry?: PiAgentRetryPolicy;
 	readonly thinkingLevel?: ThinkingLevel;
 	readonly thinkingBudgets?: ThinkingBudgets;
+	readonly planningThinkingLevel?: ThinkingLevel;
 }
+
+export const PI_AGENT_PLANNING_TURN_DETAIL = "nextTurnThinking";
 
 export type PiAgentWorkerRequest =
 	| { readonly type: "prompt"; readonly text: string }

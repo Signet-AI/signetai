@@ -2852,6 +2852,31 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(dreamingEvidencePageCharsForWindow(16_000)).toBe(16_000);
 	});
 
+	it("asks for a planning turn after a large evidence page, not after a small one", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `haystack-${i}`, `Session ${i} line.\n`.repeat(500));
+		const details: unknown[] = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "local-model", contextWindow: 262_144 });
+					const tool = input.tools.find((candidate) => candidate.name === "search_evidence");
+					if (!tool) throw new Error("Missing search_evidence");
+					details.push((await tool.execute("page", { agentId: AGENT })).details);
+					details.push((await tool.execute("lookup", { agentId: AGENT, query: "Session 3" })).details);
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(details[0]).toMatchObject({ nextTurnThinking: "planning" });
+		expect(details[1]).not.toHaveProperty("nextTurnThinking");
+	});
+
 	it("bounds everything one pass drains by its context window, across scopes", async () => {
 		const other = "second-haystack";
 		for (let i = 0; i < 48; i++) {
