@@ -49,7 +49,23 @@ d=json.load(open('$STATE/$name.json'));d.update(host=m['podHostId'],gpu=m.get('g
   return 1
 }
 
-cmd_up() {  # lme up NAME: first GPU type x cloud x datacenter that has capacity and actually boots
+ssh_wait() {
+  for i in $(seq 1 60); do
+    if echo 'echo up' | on_pod "$1" 30 2>/dev/null | grep -q '^up$'; then return 0; fi; sleep 10
+  done
+  return 1
+}
+
+pod_healthy() {  # CUDA usable from the image's torch, and the vLLM wheel downloads at >= 10 MB/s
+  local wheel out speed; wheel=$(sed -n 's/^vllm @ //p' "$KIT/pod/freeze.txt")
+  out=$({ echo "timeout 120 python3 -c 'import torch; torch.cuda.mem_get_info(); print(\"CUDA_OK\")' 2>&1 | tail -1"
+          echo "curl -sL -o /dev/null -m 20 -w 'NET %{speed_download}\\n' '$wheel'"; } | on_pod "$1" 200 2>&1 || true)
+  printf '%s' "$out" | grep -q CUDA_OK || { echo "  CUDA unusable: $(printf '%s' "$out" | grep -v '^NET' | tail -1 | cut -c1-100)"; return 1; }
+  speed=$(printf '%s' "$out" | awk '/^NET/{print int($2)}')
+  [ "${speed:-0}" -ge 10000000 ] || { echo "  downloads too slow: ${speed:-0} B/s for the vLLM wheel"; return 1; }
+}
+
+cmd_up() {  # lme up NAME: first GPU type x cloud x datacenter that has capacity, boots, and passes pod_healthy
   local name=${1:?name}; [ -f "$STATE/$name.json" ] && die "$name exists (lme start $name to resume it)"
   local out gpu cloud dc booted=0
   IFS='|' read -ra gpus <<< "$GPU_TYPE"; IFS='|' read -ra clouds <<< "$CLOUD"
@@ -70,15 +86,12 @@ json.dump({'name':'$name','id':p['id'],'host':m.get('podHostId'),'gpu':m.get('gp
            'cost_per_hr':p['costPerHr'],'created':int(time.time())},open('$STATE/$name.json','w'),indent=1)
 print(f\"created {p['id']} {m.get('gpuDisplayName')} \${p['costPerHr']}/h ($cloud $dc); waiting for boot\")"
     local id; id=$(jget "$STATE/$name.json" "['id']")
-    if boot_wait "$name" "$id"; then booted=1; break 3; fi
-    echo "  $id did not boot in ${BOOT_MIN:-10} min (image/driver mismatch or slow host); terminating, trying next"
+    if boot_wait "$name" "$id" && ssh_wait "$name" && pod_healthy "$name"; then booted=1; break 3; fi
+    echo "  $id did not boot in ${BOOT_MIN:-10} min, has no usable GPU, or downloads too slowly; terminating, trying next"
     rpx terminate "$id" >/dev/null || true; rm -f "$STATE/$name.json"
   done; done; done
-  [ $booted = 1 ] || die "no bootable capacity for: $GPU_TYPE ($CLOUD) in $DATACENTERS"
-  echo "booted; waiting for ssh..."
-  for i in $(seq 1 60); do
-    if echo 'echo up' | on_pod "$name" 30 2>/dev/null | grep -q '^up$'; then break; fi; sleep 10
-  done
+  [ $booted = 1 ] || die "no healthy capacity for: $GPU_TYPE ($CLOUD) in $DATACENTERS"
+  echo "booted, CUDA works, downloads are fast"
   cmd_push "$name"
   echo 'setsid bash /workspace/kit/pod/bootstrap.sh < /dev/null > /dev/null 2>&1 & echo bootstrap started' | on_pod "$name"
   echo "next: lme ready $name   (model download + vLLM install + Signet build, ~20-30 min)"
