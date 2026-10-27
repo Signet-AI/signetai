@@ -154,16 +154,18 @@ async function doInit(): Promise<void> {
 				progress_callback,
 			});
 			const score = async (query: string, documents: readonly string[]): Promise<number[]> => {
-				if (documents.length === 0) return [];
-				const inputs = tokenizer(new Array<string>(documents.length).fill(query), {
-					text_pair: [...documents],
-					padding: true,
-					truncation: true,
-					max_length: 512,
-				});
-				const { logits } = await model(inputs);
-				const width = logits.dims.at(-1) ?? 1;
-				return documents.map((_, index) => Number(logits.data[index * width + width - 1]));
+				const scores: number[] = [];
+				for (const document of documents) {
+					const inputs = tokenizer([query], {
+						text_pair: [document],
+						padding: false,
+						truncation: true,
+						max_length: 512,
+					});
+					const { logits } = await model(inputs);
+					scores.push(Number(logits.data[(logits.dims.at(-1) ?? 1) - 1]));
+				}
+				return scores;
 			};
 			const warmup = await score("test", ["test"]);
 			if (warmup.length !== 1 || !Number.isFinite(warmup[0])) throw new Error("Cross-encoder warmup returned no score");
