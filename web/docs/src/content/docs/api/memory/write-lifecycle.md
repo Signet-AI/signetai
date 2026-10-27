@@ -113,7 +113,9 @@ infers the type from the content (see [Memory Types](/memory/#memory-types)).
 Any other value returns 400: a value that is not a string, a blank string, or a
 type longer than 64 characters. The type is free text; there is no fixed list
 of allowed values.
-For oversized content split into chunks, every chunk gets the same type.
+For oversized content split into chunks, every chunk gets the requested type.
+When no type is given, the type is inferred for each chunk separately, so
+chunks of the same request can end up with different types.
 
 Multi-agent fields:
 
