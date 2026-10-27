@@ -46,6 +46,7 @@ EOF
 date +%s > /workspace/kit/state/last_activity
 if [ -n "$hours" ]; then echo $(( $(date +%s) + $(python3 -c "print(int(float('$hours')*3600))") )) > /workspace/kit/state/deadline.$run; echo "deadline: ${hours}h"
 else rm -f /workspace/kit/state/deadline.$run; fi
+plan=""; [ -n "$DREAM_PLAN_THINK" ] && plan=",\"planningBudgetTokens\":$DREAM_PLAN_THINK"
 cat > /workspace/runs/$run.cmd.sh <<EOF
 touch /workspace/runs/$run.active
 source /workspace/kit/pod/env.sh
@@ -56,7 +57,7 @@ export SIGNET_BENCH_DREAMING_PROVIDER_FAMILY=openai-compatible
 export SIGNET_BENCH_DREAMING_CONCURRENCY=$conc
 export SIGNET_BENCH_DREAMING_TIMEOUT_MS=$DREAM_TIMEOUT_MS
 export SIGNET_BENCH_DREAMING_MAX_OUTPUT_TOKENS=$DREAM_MAX_OUT
-export SIGNET_BENCH_DREAMING_THINKING='{"format":"chat-template","budgetTokens":$DREAM_THINK,"budgetField":"thinking_token_budget","chatTemplateKwargs":{"enable_thinking":{"\$var":"thinking.enabled"},"preserve_thinking":false}}'
+export SIGNET_BENCH_DREAMING_THINKING='{"format":"chat-template","budgetTokens":$DREAM_THINK$plan,"budgetField":"thinking_token_budget","chatTemplateKwargs":{"enable_thinking":{"\$var":"thinking.enabled"},"preserve_thinking":false}}'
 export SIGNET_BENCH_ANSWERING_MODEL=local:$SERVED_NAME
 export SIGNET_BENCH_JUDGE=local:$SERVED_NAME
 export LOCAL_LLM_BASE_URL=http://127.0.0.1:$PORT_SIGNET_QA/v1
