@@ -262,6 +262,27 @@ describe("fetchEmbedding", () => {
 		expect(capturedUrl).toContain(`${LOOPBACK_HOST}:11434`);
 	});
 
+	it("never falls back to another provider for the pinned native ONNX runtime, even with warmNative off", async () => {
+		let fetched = 0;
+		globalThis.fetch = mock(() => {
+			fetched++;
+			return Promise.resolve(new Response(JSON.stringify({ embedding: [0.5, 0.6, 0.7] })));
+		}) as unknown as typeof fetch;
+		setNativeFallbackProvider("ollama");
+
+		await expect(
+			fetchEmbedding("test", {
+				provider: "native",
+				model: "nomic-embed-text",
+				dimensions: 3,
+				base_url: "",
+				warmNative: false,
+				runtime: "onnxruntime",
+			}),
+		).resolves.toBeNull();
+		expect(fetched).toBe(0);
+	});
+
 	it("does not record provider-down telemetry when native embeddings are disabled without a fallback", async () => {
 		const telemetry = captureTelemetry();
 		setActiveTelemetry(telemetry.collector);

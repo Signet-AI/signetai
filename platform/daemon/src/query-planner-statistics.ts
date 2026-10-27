@@ -18,7 +18,7 @@ export async function refreshQueryPlannerStatisticsThroughOwner(owner: DbOwnerCl
 		lane: "maintenance",
 		deadlineMs: 60_000,
 	});
-	await ownerRun(owner, "PRAGMA optimize", [], {
+	await ownerRun(owner, "PRAGMA optimize = 0x10002", [], {
 		operation: "maintenance.query-planner.optimize",
 		lane: "maintenance",
 		deadlineMs: 60_000,

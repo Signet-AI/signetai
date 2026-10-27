@@ -539,6 +539,10 @@ async function serveEmbedding(
 	opts: EmbeddingFetchOptions,
 ): Promise<EmbeddingServeResult> {
 	if (effectiveCfg.provider === "native") {
+		const nativeRuntimePinned = effectiveCfg.runtime === "onnxruntime";
+		if (effectiveCfg.warmNative === false && nativeRuntimePinned) {
+			return { embedding: null, provider: null, tokenCount: 0, failureCause: "provider_unavailable" };
+		}
 		if (effectiveCfg.warmNative === false) {
 			return resolveNativeFallback(
 				formattedText,
@@ -547,7 +551,6 @@ async function serveEmbedding(
 				"native embedding disabled (embedding.warmNative: false)",
 			);
 		}
-		const nativeRuntimePinned = effectiveCfg.runtime === "onnxruntime";
 		if (!nativeRuntimePinned && nativeFallbackProvider === "unavailable") {
 			return { embedding: null, provider: null, tokenCount: 0, failureCause: "provider_unavailable" };
 		}

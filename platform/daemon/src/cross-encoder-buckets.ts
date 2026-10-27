@@ -1,6 +1,7 @@
 const CUDA_RUN_OVERHEAD_MS = 5.3;
 const CUDA_MS_PER_TOKEN = 0.00249;
 const CUDA_MS_PER_TOKEN_SQUARED = 0.0000128;
+export const CUDA_MAX_GROUP_TOKENS = 16_384;
 
 export function pairLengths(batch: {
 	readonly attentionMask: readonly number[];
@@ -27,6 +28,7 @@ export function planLengthBuckets(lengths: readonly number[]): number[][] {
 		const padded = order[end - 1]?.length ?? 0;
 		const perDocument = CUDA_MS_PER_TOKEN * padded + CUDA_MS_PER_TOKEN_SQUARED * padded * padded;
 		for (let start = 0; start < end; start++) {
+			if (end - start > 1 && (end - start) * padded > CUDA_MAX_GROUP_TOKENS) continue;
 			const cost = (best[start] ?? 0) + CUDA_RUN_OVERHEAD_MS + (end - start) * perDocument;
 			if (cost < (best[end] ?? Number.POSITIVE_INFINITY)) {
 				best[end] = cost;

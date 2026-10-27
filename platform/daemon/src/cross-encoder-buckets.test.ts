@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { RerankDeadlineError, pairLengths, planLengthBuckets, scoreInGroups } from "./cross-encoder-buckets";
+import {
+	CUDA_MAX_GROUP_TOKENS,
+	RerankDeadlineError,
+	pairLengths,
+	planLengthBuckets,
+	scoreInGroups,
+} from "./cross-encoder-buckets";
 
 describe("cross-encoder length buckets", () => {
 	it("keeps a batch of similar lengths in one run", () => {
@@ -11,6 +17,13 @@ describe("cross-encoder length buckets", () => {
 		expect(groups).toHaveLength(2);
 		expect(groups[0]).toHaveLength(20);
 		expect([...(groups[1] ?? [])].sort((a, b) => a - b)).toEqual([20, 21, 22, 23]);
+	});
+
+	it("caps the padded tokens in one CUDA run", () => {
+		const groups = planLengthBuckets(new Array<number>(200).fill(500));
+		expect(groups.flat()).toHaveLength(200);
+		for (const group of groups) expect(group.length * 500).toBeLessThanOrEqual(CUDA_MAX_GROUP_TOKENS);
+		expect(planLengthBuckets([CUDA_MAX_GROUP_TOKENS + 1])).toEqual([[0]]);
 	});
 
 	it("covers every document exactly once", () => {

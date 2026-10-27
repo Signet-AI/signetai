@@ -253,6 +253,25 @@ mod tests {
     }
 
     #[test]
+    fn caches_documents_truncated_to_the_model_limit() {
+        let path = fixture_tokenizer();
+        let tokenizer = PairTokenizer::new(path.to_string_lossy().to_string(), 8, None).unwrap();
+        let document = "beta beta beta beta beta beta beta beta beta beta".to_string();
+        let first = tokenizer
+            .encode_pairs("alpha".to_string(), vec![document.clone()])
+            .unwrap();
+        let cached = tokenizer.documents.lock().unwrap().get(&document).unwrap();
+        assert_eq!(cached.len(), 8);
+        assert!(cached.get_overflowing().is_empty());
+        let second = tokenizer
+            .encode_pairs("alpha".to_string(), vec![document])
+            .unwrap();
+        assert_eq!(second.cached_documents, 1);
+        assert_eq!(second.input_ids, first.input_ids);
+        assert_eq!(first.input_ids, vec![1, 4, 2, 5, 5, 5, 5, 2]);
+    }
+
+    #[test]
     fn document_cache_evicts_oldest_entry_at_the_limit() {
         let mut cache = DocumentCache {
             limit: 2,

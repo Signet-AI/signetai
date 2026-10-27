@@ -160,7 +160,7 @@ async function prepareNativeOnnxRuntime(purpose: string): Promise<void> {
 		const expectedVersion = readFileSync(init.onnxRuntimeModulePath, "utf8").match(
 			/export const signetOnnxRuntimeNodeVersion = "([^"]+)";/,
 		)?.[1];
-		if (manifest.version !== expectedVersion) {
+		if (typeof manifest.version !== "string" || !expectedVersion || manifest.version !== expectedVersion) {
 			throw new Error(
 				`onnxruntime-node at ${init.onnxRuntimePath} is ${String(manifest.version)}; this Signet build needs ${String(expectedVersion)}`,
 			);

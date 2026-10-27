@@ -654,7 +654,7 @@ function nativeRuntimeOptions(cfg: EmbeddingConfig): NativeEmbeddingRuntimeOptio
 }
 
 function embeddingStatusCacheKey(cfg: EmbeddingConfig): string {
-	return `${cfg.provider}\u0000${cfg.model}\u0000${resolveEmbeddingBaseUrl(cfg)}\u0000${cfg.warmNative === false ? "no-native" : "native"}\u0000${nativeRuntimeOptions(cfg).runtime}`;
+	return `${cfg.provider}\u0000${cfg.model}\u0000${resolveEmbeddingBaseUrl(cfg)}\u0000${cfg.warmNative === false ? "no-native" : "native"}\u0000${nativeRuntimeOptions(cfg).runtime}\u0000${cfg.onnxRuntimePath ?? ""}`;
 }
 
 function cacheEmbeddingStatus(key: string, status: EmbeddingStatus, now: number): void {
