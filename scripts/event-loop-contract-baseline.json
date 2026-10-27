@@ -1991,7 +1991,7 @@
     },
     {
       "path": "native-memory-source-worker.ts",
-      "line": 331,
+      "line": 351,
       "api": "existsSync",
       "source": "return existsSync(bundled) ? bundled : join(directory, \"native-memory-source-worker.ts\");",
       "category": "hot-path"
