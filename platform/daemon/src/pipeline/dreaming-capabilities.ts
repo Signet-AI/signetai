@@ -9,7 +9,13 @@ import type {
 import type { DbAccessor, ReadDb } from "../db-accessor";
 import { classifyEntityQuality } from "../entity-quality";
 import type { EpisodicSourceRecord } from "../episodic-sources";
-import { episodicQueryTerms, foldAsciiCase, readEpisodicSource, searchEpisodicSources } from "../episodic-sources";
+import {
+	MAX_EPISODIC_SOURCE_SCAN,
+	episodicQueryTerms,
+	foldAsciiCase,
+	readEpisodicSource,
+	searchEpisodicSources,
+} from "../episodic-sources";
 import {
 	getAttributesForAspectFiltered,
 	getEntityAspectsWithCounts,
@@ -52,12 +58,21 @@ const bounded = (value: number | undefined, fallback: number, max: number): numb
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
 
 const MAX_EVIDENCE_EXCERPT_CHARS = 2_000;
+const EVIDENCE_CHARS_PER_TOKEN = 4;
 const EVIDENCE_RESUME_OVERLAP_CHARS = Math.floor(MAX_EVIDENCE_EXCERPT_CHARS / 10);
 const MAX_EVIDENCE_RESULT_CHARS = 16_000;
-const MAX_EVIDENCE_PAGE_CHARS = 250_000;
+const MAX_BUDGET_EVIDENCE_PAGE_CHARS = 250_000;
+const MAX_EVIDENCE_PAGE_CHARS = 2_000_000;
+const EVIDENCE_PAGE_WINDOW_SHARE = 0.6;
+const EVIDENCE_PAGE_PROMPT_RESERVE_TOKENS = 16_000;
 
 export function dreamingEvidencePageChars(maxInputTokens: number): number {
-	return evidencePageChars(Math.floor(maxInputTokens / 4));
+	return evidencePageChars(Math.min(MAX_BUDGET_EVIDENCE_PAGE_CHARS, Math.floor(maxInputTokens / 4)));
+}
+
+export function dreamingEvidencePageCharsForWindow(contextWindow: number): number {
+	const tokens = Math.floor(contextWindow * EVIDENCE_PAGE_WINDOW_SHARE) - EVIDENCE_PAGE_PROMPT_RESERVE_TOKENS;
+	return evidencePageChars(tokens * EVIDENCE_CHARS_PER_TOKEN);
 }
 
 function evidencePageChars(requested: number | undefined): number {
@@ -223,7 +238,8 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly passDeadline?: number;
 	readonly evidenceTokenBudget?: number;
 	readonly now?: () => number;
-	readonly evidenceChars?: number;
+	readonly evidenceChars?: number | (() => number);
+	readonly evidenceWindowChars?: () => number | undefined;
 	readonly mode?: DreamingCapabilityMode;
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
@@ -314,13 +330,29 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 	return { ok: true, items: projectEvidence(sources, query ?? "") };
 }
 
-const DELIVERY_QUEUE_SCAN_LIMIT = 51;
+const DELIVERY_QUEUE_SCAN_LIMIT = MAX_EPISODIC_SOURCE_SCAN;
+const DENSITY_SAMPLE_CHARS = 200_000;
+
+function evidenceTokenDensity(sources: readonly EpisodicSourceRecord[]): number {
+	let sampled = 0;
+	let weighted = 0;
+	for (const source of sources) {
+		const end = Math.min(source.content.length, DENSITY_SAMPLE_CHARS - sampled);
+		for (let index = 0; index < end; index++) weighted += source.content.charCodeAt(index) > 0x7f ? 4 : 1;
+		sampled += end;
+		if (sampled >= DENSITY_SAMPLE_CHARS) break;
+	}
+	return sampled === 0 ? 1 : Math.max(1, weighted / sampled);
+}
+const DELIVERY_QUEUE_MAX_SOURCES = DELIVERY_QUEUE_SCAN_LIMIT - 1;
 
 function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
 	const scopeId = input.agentId;
-	const limit = Math.max(1, Math.min(Math.floor(input.limit ?? 20), 50));
+	const limit = Math.max(
+		1,
+		Math.min(Math.floor(input.limit ?? DELIVERY_QUEUE_MAX_SOURCES), DELIVERY_QUEUE_MAX_SOURCES),
+	);
 	const servedInPass = input.passId ? passDeliveredRanges(db, input.passId, scopeId) : new Map();
-	const pageChars = evidencePageChars(input.evidenceChars);
 	let budgetExhausted = false;
 	const cursors = new Map<string, DreamingEvidenceCursor>();
 	const cursorFor = (source: EpisodicSourceRecord): DreamingEvidenceCursor => {
@@ -340,6 +372,11 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		limit: DELIVERY_QUEUE_SCAN_LIMIT,
 	});
 	const fresh = [...scanned.filter((source) => !stalled(source)), ...scanned.filter(stalled)];
+	const continuationSources = pendingDreamingEvidenceContinuations(db, scopeId, DELIVERY_QUEUE_MAX_SOURCES, input.kind);
+	const pageChars = Math.max(
+		MAX_EVIDENCE_RESULT_CHARS,
+		Math.floor(evidencePageChars(input.evidenceChars) / evidenceTokenDensity([...continuationSources, ...fresh])),
+	);
 	const page = (sources: readonly EpisodicSourceRecord[], max: number, skip = new Set<string>()) => {
 		const items: Record<string, unknown>[] = [];
 		let remaining = pageChars;
@@ -369,11 +406,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 		return items;
 	};
 	const continuationRefs = new Set<string>();
-	const continuations = page(
-		pendingDreamingEvidenceContinuations(db, scopeId, 50, input.kind),
-		limit + 1,
-		continuationRefs,
-	);
+	const continuations = page(continuationSources, limit + 1, continuationRefs);
 	if (continuations.length > 0) {
 		const returned = continuations.slice(0, limit);
 		return {
@@ -492,8 +525,6 @@ export async function listDreamingAttention(
 			});
 }
 
-const EVIDENCE_CHARS_PER_TOKEN = 4;
-
 function deliveredEvidenceChars(items: readonly unknown[]): number {
 	let chars = 0;
 	for (const item of items) {
@@ -510,6 +541,8 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 	let deliveredQueueChars = 0;
 	const queueDeliveryClosed = (at: number): boolean => {
 		if (params.evidenceDeliveryDeadline !== undefined && at >= params.evidenceDeliveryDeadline) return true;
+		const windowChars = params.evidenceWindowChars?.();
+		if (windowChars !== undefined && deliveredQueueChars >= windowChars - MAX_EVIDENCE_EXCERPT_CHARS) return true;
 		if (
 			params.evidenceTokenBudget !== undefined &&
 			deliveredQueueChars >= params.evidenceTokenBudget * EVIDENCE_CHARS_PER_TOKEN
@@ -687,7 +720,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"search_evidence",
 			"Search episodic evidence",
-			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. When you look up a specific source and contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns up to limit source revisions not yet fully reviewed, regardless of time watermark. Each resumes where review_evidence acknowledgements ended, after fragments already served earlier in this pass; a source reviewed in an earlier pass resumes slightly before that point, and reviewedChars counts the leading characters already reviewed, which you need not file again. hasMore is true while more of the queue remains. A queued source that is only partly read continues on a later queue page, so do not page it yourself. File what each page establishes and acknowledge it with review_evidence before calling again without a query for the next one, and stop when hasMore is false. Partway through a pass the queue closes (deliveryClosed: true): stop reading new sources, file what you have read, and finish so your progress is recorded. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
+			"Search immutable episodic memories, artifacts, and transcripts in one agent scope across their full history. A query is split on whitespace into words that match independently as substrings (ASCII case-insensitive; unspaced text such as CJK matches as one phrase); sources matching more words rank first, then newer sources. since and before are optional explicit time bounds. Historical summary records can be requested explicitly with kind=summary, but are not part of the default Dreaming delivery path. Results contain exact bounded excerpts of the rendered evidence with contentOffset/contentLength; use sourceRef for citations, which are validated against the complete canonical source. Each record carries completed: memory, artifact, and summary records are settled captures (true); a transcript is true only after the session-end machinery writes its completion marker, and false while the session is still running — do not file claims from a still-growing transcript, since its states may be contradicted by the session's end. When you look up a specific source and contentTruncated is true, page exact fragments with the same sourceRef and chunkSize: start at offset=0 when contentHasPrevious is true, then use offset=contentOffset+content.length from the fragment just returned until contentHasNext is false. Omit query, since, and before to drain the durable delivery queue: it returns the source revisions not yet fully reviewed, regardless of time watermark, as many as fit the page the daemon sizes from your context window. Omit limit too when draining: a small limit only splits the queue into more pages and more passes. Each resumes where review_evidence acknowledgements ended, after fragments already served earlier in this pass; a source reviewed in an earlier pass resumes slightly before that point, and reviewedChars counts the leading characters already reviewed, which you need not file again. hasMore is true while more of the queue remains. A queued source that is only partly read continues on a later queue page, so do not page it yourself. File what each page establishes and acknowledge it with review_evidence before calling again without a query for the next one, and stop when hasMore is false. Partway through a pass the queue closes (deliveryClosed: true): stop reading new sources, file what you have read, and finish so your progress is recorded. Narrow with a query if the list is large; pass an explicit earlier since only when you need older history. Artifacts are deduped by content hash: content-identical files across vault paths collapse to one canonical entry.",
 			true,
 			z.object({
 				agentId: z.string().min(1),
@@ -715,6 +748,16 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						note: "This pass has used its time or evidence budget for new evidence. File what you have read, write the runbook, and finish; the rest of the queue is delivered to the next pass.",
 					};
 				}
+				const pageChars = typeof params.evidenceChars === "function" ? params.evidenceChars() : params.evidenceChars;
+				const windowChars = drainsQueue ? params.evidenceWindowChars?.() : undefined;
+				const caps = [
+					pageChars,
+					windowChars === undefined ? undefined : Math.max(0, windowChars - deliveredQueueChars),
+					drainsQueue && params.evidenceTokenBudget !== undefined
+						? Math.max(0, params.evidenceTokenBudget * EVIDENCE_CHARS_PER_TOKEN - deliveredQueueChars)
+						: undefined,
+				].filter((cap): cap is number => cap !== undefined);
+				const evidenceChars = caps.length === 0 ? undefined : Math.min(...caps);
 				const input: DbOwnerDreamingEvidenceSearch = {
 					agentId: scopeId,
 					...(query === undefined ? {} : { query }),
@@ -726,7 +769,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					...(offset === undefined ? {} : { offset }),
 					...(chunkSize === undefined ? {} : { chunkSize }),
 					...(params.passId === undefined ? {} : { passId: params.passId }),
-					...(params.evidenceChars === undefined ? {} : { evidenceChars: params.evidenceChars }),
+					...(evidenceChars === undefined ? {} : { evidenceChars }),
 				};
 				const result = await runDbOwnerDomainOperation(accessor, {
 					runWithOwner: async (owner) => {
@@ -770,7 +813,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 						}),
 					)
 					.min(1)
-					.max(50),
+					.max(DELIVERY_QUEUE_MAX_SOURCES),
 			}),
 			async ({ agentId: scopeId, items }) => {
 				if (!params.passId)
@@ -918,7 +961,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"apply_ontology_ops",
 			"Apply ontology operations",
-			'Apply every semantic write through the daemon audit seam in one ordered request, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). The daemon validates every input, citation, and resolvable target before creating flags or applying bounded, yielding writer transactions; each operation and its provenance resolution remains atomic, while an individual operation failure does not block later operations. If a writer transaction fails after earlier transactions committed, the result has `retryable: true` and `retryFrom`; retry only the uncommitted suffix. Do not replay returned items, and replace any earlier `attention:$<index>` references with `attention:<uuid>` built from the flag result `result.attentionId` before retrying. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the request, or "attention:<uuid>" from a prior request. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
+			'Apply every semantic write through the daemon audit seam in one ordered request, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). The daemon validates every input, citation, and resolvable target before creating flags or applying bounded, yielding writer transactions; each operation and its provenance resolution remains atomic, while an individual operation failure does not block later operations. If a writer transaction fails after earlier transactions committed, the result has `retryable: true` and `retryFrom`; retry only the uncommitted suffix. Do not replay returned items, and replace any earlier `attention:$<index>` references with `attention:<uuid>` built from the flag result `result.attentionId`, and any `$<index>` entityId or aspectId with the `result.entityId` or `result.aspectId` that operation returned, before retrying. A new subject needs no separate calls: create_aspect and claim operations may set entityId to "$<index>" of a create_entity earlier in the same request, and claim operations may set aspectId to "$<index>" of a create_aspect earlier in it. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the request, or "attention:<uuid>" from a prior request. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
 			false,
 			z.object({
 				agentId: z.string().min(1),

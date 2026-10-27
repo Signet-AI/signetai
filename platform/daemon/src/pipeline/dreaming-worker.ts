@@ -32,6 +32,7 @@ import {
 import { DREAMING_CONTENT_ATTENTION_KINDS, hasDreamingAttentionKindInDb } from "./dreaming-attention";
 import { type DreamingEvidenceRetryPolicy, autoRequeueRepairedDreamingEvidence } from "./dreaming-evidence-retry";
 import type { PiAgentRetryPolicy } from "./pi-agent-protocol";
+import { dreamingEvidencePageCharsForWindow } from "./dreaming-capabilities";
 import { compactDreamingHistory, type DreamingHistoryCompleter, narrowDreamingPassScopeKey } from "./dreaming-history";
 
 const DREAMING_PROVIDER_RETRY: PiAgentRetryPolicy = { maxRetries: 8, baseDelayMs: 2_000, maxAgentDelayMs: 60_000 };
@@ -180,6 +181,8 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000;
 const INFERENCE_RECHECK_MS = 30 * 1000;
 const PASS_SETTLED_CHECK_DELAY_MS = 1_000;
 const DEFAULT_MAX_PASS_TOKENS = 200_000;
+const PARTITION_CHARS_PER_TOKEN = 5;
+const CONTEXT_WINDOW_CACHE_MS = 5 * 60_000;
 const AGENT_SCOPE_SNAPSHOT_REFRESH_MS = 30 * 60 * 1000;
 export async function shouldDeferDreamingSweep(
 	accessor: DbAccessor,
@@ -363,6 +366,7 @@ export function startDreamingWorker(
 		if (factory) return factory(agentId);
 		const router = getOrCreateInferenceRouter(agentsDir);
 		return {
+			contextWindow: () => router.agentContextWindow({ agentId, operation: "memory_extraction" }),
 			async run(input) {
 				const result = await router.runAgent(
 					{
@@ -602,15 +606,32 @@ export function startDreamingWorker(
 		);
 	}
 
-	function passTokenBudget(): number {
-		return cfg.maxPassTokens ?? DEFAULT_MAX_PASS_TOKENS;
+	const contextWindows = new Map<string, { readonly value: number | undefined; readonly at: number }>();
+	async function agentContextWindow(agentId: string): Promise<number | undefined> {
+		const cached = contextWindows.get(agentId);
+		if (cached && Date.now() - cached.at < CONTEXT_WINDOW_CACHE_MS) return cached.value;
+		let value: number | undefined;
+		try {
+			value = await executorForAgent(agentId).contextWindow?.();
+		} catch {
+			value = undefined;
+		}
+		contextWindows.set(agentId, { value, at: Date.now() });
+		return value;
+	}
+
+	async function passTokenBudget(agentId: string): Promise<number> {
+		const configured = cfg.maxPassTokens ?? DEFAULT_MAX_PASS_TOKENS;
+		const window = await agentContextWindow(agentId);
+		if (window === undefined || window <= 0) return configured;
+		return Math.min(configured, Math.floor(dreamingEvidencePageCharsForWindow(window) / PARTITION_CHARS_PER_TOKEN));
 	}
 
 	async function contentSweepScopes(scopes: readonly string[], triggeredScope: string): Promise<string[]> {
 		const measured = await measureScopeWork(scopes);
 		const trigger = measured.find((item) => item.scope === triggeredScope);
 		if (!trigger || (trigger.tokens <= 0 && !trigger.attention)) return [];
-		let remaining = passTokenBudget() - trigger.tokens;
+		let remaining = (await passTokenBudget(defaultAgentId)) - trigger.tokens;
 		const group = [triggeredScope];
 		const candidates = measured
 			.filter((item) => item.scope !== triggeredScope && item.tokens > 0)
@@ -629,7 +650,7 @@ export function startDreamingWorker(
 		const measured =
 			scopes.length === 1
 				? [[...scopes]]
-				: partitionDreamingScopes(await measureScopeWork(scopes), slots, passTokenBudget());
+				: partitionDreamingScopes(await measureScopeWork(scopes), slots, await passTokenBudget(runAgentId));
 		const groups = measured.length > 0 ? measured : [[...scopes]];
 		const [firstGroup, ...rest] = groups;
 		const first = startPass(runAgentId, "incremental", firstGroup ?? [...scopes], false);

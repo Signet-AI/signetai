@@ -16,6 +16,12 @@ const entityName = text.describe("A stable, human-readable entity name.");
 const entityId = text.describe("The stable id of an existing entity.");
 const aspectName = text.describe("The specific domain of knowledge this claim belongs to.");
 const aspectId = text.describe("The stable id of an existing aspect.");
+const newEntityRef = text.describe(
+	'The stable id of an existing entity, or "$<index>" of a create_entity earlier in this request.',
+);
+const newAspectRef = text.describe(
+	'The stable id of an existing aspect, or "$<index>" of a create_aspect earlier in this request.',
+);
 const claimValue = text.describe("A complete atomic assertion that is understandable on its own.");
 const claimKey = text.describe("A stable semantic slot key for versions of the same claim.");
 const reviewAfter = text
@@ -79,8 +85,22 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 		...reasonField,
 	}),
 	create_entity: payload({ name: entityName, type: entityType }),
-	add_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter, ...claimTime }),
-	set_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter, ...claimTime }),
+	add_claim_value: payload({
+		entityId: newEntityRef,
+		aspectId: newAspectRef,
+		claimKey,
+		value: claimValue,
+		reviewAfter,
+		...claimTime,
+	}),
+	set_claim_value: payload({
+		entityId: newEntityRef,
+		aspectId: newAspectRef,
+		claimKey,
+		value: claimValue,
+		reviewAfter,
+		...claimTime,
+	}),
 	supersede_claim_value: payload({
 		entityId,
 		aspectId,
@@ -93,7 +113,7 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 		...claimTime,
 	}),
 	rename_entity: payload({ entityId, newName: entityName }),
-	create_aspect: payload({ entityId, name: aspectName }),
+	create_aspect: payload({ entityId: newEntityRef, name: aspectName }),
 	rename_aspect: payload({ entityId, aspectId, newName: aspectName }),
 	create_link: payload({ fromEntityId: entityId, toEntityId: entityId, linkType }),
 	update_link: payload({

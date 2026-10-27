@@ -26,6 +26,117 @@ test("allows a Pi agent worker per shared LLM permit plus the retained chat sess
 	}
 });
 
+test("a tool result can give only the next turn the planning thinking budget", async () => {
+	let requests = 0;
+	const budgets: unknown[] = [];
+	const call = (name: string) =>
+		completion({
+			role: "assistant",
+			tool_calls: [{ index: 0, id: `call-${name}`, type: "function", function: { name, arguments: "{}" } }],
+		}) + completion({}, "tool_calls");
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		async fetch(request) {
+			const body = await request.json();
+			budgets.push(body.thinking_token_budget);
+			requests++;
+			const content =
+				requests === 1
+					? call("read_page")
+					: requests === 2
+						? call("file_page")
+						: completion({ role: "assistant", content: "Filed." }) + completion({}, "stop");
+			return new Response(`${content}data: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+		},
+	});
+	const tool = (name: string, details: Record<string, unknown>): PiAgentTool => ({
+		name,
+		label: name,
+		description: name,
+		parameters: Type.Object({}),
+		async execute() {
+			return { content: [{ type: "text", text: `${name} done` }], details };
+		},
+	});
+	try {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "planning-test-model",
+			baseUrl: `http://127.0.0.1:${server.port}/v1`,
+			reasoning: "medium",
+			maxTokens: 32_768,
+			thinking: { format: "chat-template", budgetTokens: 2_000, planningBudgetTokens: 8_000 },
+		});
+		const session = await provider.createAgentSession([
+			tool("read_page", { nextTurnThinking: "planning" }),
+			tool("file_page", {}),
+		]);
+		try {
+			await session.prompt("Dream.");
+		} finally {
+			await session.dispose();
+		}
+		expect(budgets).toEqual([2_000, 8_000, 2_000]);
+	} finally {
+		server.stop();
+	}
+});
+
+test("a planning turn that ends the prompt does not carry into the next prompt", async () => {
+	let requests = 0;
+	const budgets: unknown[] = [];
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		async fetch(request) {
+			const body = await request.json();
+			budgets.push(body.thinking_token_budget);
+			requests++;
+			const content =
+				requests === 1
+					? completion({
+							role: "assistant",
+							tool_calls: [
+								{ index: 0, id: "call-read", type: "function", function: { name: "read_page", arguments: "{}" } },
+							],
+						}) + completion({}, "tool_calls")
+					: completion({ role: "assistant", content: "Done." }) + completion({}, "stop");
+			return new Response(`${content}data: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+		},
+	});
+	try {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "planning-leak-model",
+			baseUrl: `http://127.0.0.1:${server.port}/v1`,
+			reasoning: "medium",
+			maxTokens: 32_768,
+			thinking: { format: "chat-template", budgetTokens: 2_000, planningBudgetTokens: 8_000 },
+		});
+		const session = await provider.createAgentSession([
+			{
+				name: "read_page",
+				label: "read_page",
+				description: "read_page",
+				parameters: Type.Object({}),
+				async execute() {
+					return { content: [{ type: "text", text: "page" }], details: { nextTurnThinking: "planning" } };
+				},
+			},
+		]);
+		try {
+			await session.prompt("Dream.");
+			await session.prompt("Again.");
+		} finally {
+			await session.dispose();
+		}
+		expect(budgets).toEqual([2_000, 8_000, 2_000]);
+	} finally {
+		server.stop();
+	}
+});
+
 test("the real Pi loop runs in a worker and invokes only supplied tools in the daemon", async () => {
 	let requests = 0;
 	let toolRanInDaemon = false;

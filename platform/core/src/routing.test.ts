@@ -709,6 +709,7 @@ describe("inference config + decision engine", () => {
 						thinking: {
 							format: "chat-template",
 							budget_tokens: 2000,
+							planning_budget_tokens: 8000,
 							budgetField: "thinking_token_budget",
 							chat_template_kwargs: { enable_thinking: { $var: "thinking.enabled" }, preserve_thinking: false },
 						},
@@ -734,6 +735,7 @@ describe("inference config + decision engine", () => {
 		expect(parsed.value.targets.local?.thinking).toEqual({
 			format: "chat-template",
 			budgetTokens: 2000,
+			planningBudgetTokens: 8000,
 			budgetField: "thinking_token_budget",
 			chatTemplateKwargs: { enable_thinking: { $var: "thinking.enabled" }, preserve_thinking: false },
 		});
