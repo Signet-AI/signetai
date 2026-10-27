@@ -163,21 +163,29 @@ const nativeAddonAssets = (() => {
 		if (!existsSync(nodeFile)) {
 			throw new Error(`Required @napi-rs/keyring native asset is missing for ${platformKey}: ${nodeFile}`);
 		}
-		return [
-			{ name: "napi-rs-keyring", contentBase64: readFileSync(nodeFile).toString("base64") },
-			sqliteVecAsset(),
-			...signetNativeAsset(packageSuffix),
-		];
+		return [{ name: "napi-rs-keyring", contentBase64: readFileSync(nodeFile).toString("base64") }, sqliteVecAsset()];
 	} catch (error) {
 		throw new Error(
 			`Required native asset is not resolvable for ${platformKey}: ${platformPackageName} (${(error as Error).message})`,
 		);
 	}
 })();
+nativeAddonAssets.push(
+	...signetNativeAsset(
+		platformKey === "win32-x64"
+			? "win32-x64-msvc"
+			: platformKey.startsWith("linux-")
+				? `${platformKey}-gnu`
+				: platformKey,
+	),
+);
 
 function signetNativeAsset(packageSuffix: string): { name: string; contentBase64: string }[] {
 	const nodeFile = join(root, "platform", "native", `signet-native.${packageSuffix}.node`);
 	if (!existsSync(nodeFile)) {
+		if (process.env.SIGNET_REQUIRE_NATIVE_ADDON === "1") {
+			throw new Error(`Required signet-native addon is missing for ${packageSuffix}: ${nodeFile}`);
+		}
 		console.warn(`signet-native addon not built for ${packageSuffix}; the compiled binary will use the JS tokenizer`);
 		return [];
 	}
@@ -534,6 +542,12 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 	} finally {
 		cache.stop();
 	}
+} else if (process.env.SIGNET_NATIVE_TOKENIZER_SMOKE) {
+	const addonPath = materializeEmbeddedNativeAddon("signet-native");
+	if (addonPath === null) throw new Error("native tokenizer smoke requires an embedded signet-native addon");
+	const { createRequire } = await import("node:module");
+	const addon = createRequire(import.meta.url)(addonPath);
+	process.stdout.write(JSON.stringify({ type: "native-tokenizer", pairTokenizer: typeof addon.PairTokenizer === "function" }) + "\\n");
 } else if (process.env.SIGNET_RUNTIME_VERSION_SMOKE) {
 	process.stdout.write(JSON.stringify({ type: "runtime-version", bun: Bun.version }) + "\\n");
 } else if (process.env.SIGNET_NATIVE_WORKER_THREAD_SMOKE) {
