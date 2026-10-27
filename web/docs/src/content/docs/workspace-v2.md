@@ -35,6 +35,13 @@ JSONL is the canonical transcript file representation. Normal capture does not c
 
 On historical backfill, completed JSONL turns are the authority for the same session. Signet compares ordered roles and content from legacy Markdown and DB rows, retains divergent sources unchanged, logs the disagreement, and withholds the completion marker until reconciled. Identical turns do not duplicate the JSONL record. Live-only turns can still be replaced by a fuller completed snapshot; later disagreements do not silently complete the backfill. Malformed JSONL rows and non-increasing session sequence numbers encountered during comparison also prevent the marker from being written until repaired. The daemon runs one backfill pass at a time per workspace and agent. After an incomplete pass, it skips the backfill on later writes and retries after a backoff that starts at one minute and doubles up to one hour. Restarting the daemon retries immediately.
 
+Releases before v0.228.0 wrote every non-empty source line as its own turn, with whitespace collapsed to single spaces. Signet still reads that legacy representation. Records carry no layout marker, so Signet identifies a legacy session by its structure. A completed session counts as legacy only when both conditions hold:
+
+- every one of its completed records is a single line with whitespace already collapsed;
+- at least one `unknown` record follows a `user` or `assistant` record.
+
+The old writer produced such an `unknown` record for every continuation line of a multi-line message. The current parser keeps continuation lines inside their turn, so it never does. A legacy session that never had a multi-line message cannot be told apart from a current one, and Signet keeps the exact comparison for it. A legacy session matches a source when the source, split and collapsed the same way, yields the same roles and content in order. On backfill, a match counts as reconciled. On source-backed capture, a source that matches and extends a legacy session replaces the legacy records with the full-fidelity turns from the source. Signet logs both cases. Sessions in the current representation are never compared this way, so a source with less whitespace cannot replace their turns.
+
 ## Upgrade a v1 workspace
 
 New workspaces are created on the v2 layout. `workspace-layout.json` is written when the workspace is created.
