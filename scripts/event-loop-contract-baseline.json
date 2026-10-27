@@ -1965,7 +1965,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2617,
+      "line": 2597,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1973,7 +1973,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2690,
+      "line": 2670,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1981,7 +1981,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2731,
+      "line": 2711,
       "api": "withReadDbAsync",
       "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1989,7 +1989,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2820,
+      "line": 2800,
       "api": "withReadDbAsync",
       "source": "const dampenRows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1997,7 +1997,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 3141,
+      "line": 3121,
       "api": "withReadDbAsync",
       "source": "await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",

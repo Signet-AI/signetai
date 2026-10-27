@@ -8,6 +8,7 @@ import { vectorSearchThroughDbOwner, hybridRecallThroughDbOwner } from "./db-own
 import { getDbRecallOwner } from "./db-owner-runtime";
 import { type ResolvedMemoryConfig, loadMemoryConfig } from "./memory-config";
 import { hybridRecall, type RecallResponse } from "./memory-search";
+import { setActiveTelemetry } from "./telemetry";
 
 let directory: string | null = null;
 let previousSignetPath: string | undefined;
@@ -154,6 +155,54 @@ describe("DB owner recall lane", () => {
 			expect(comparable(routed)).toEqual(comparable(direct));
 			expect(routed.results.map((result) => result.id)).not.toContain("owner-fact-other-agent");
 		} finally {
+			await client.close();
+		}
+	});
+
+	test("records recall.performed in the daemon for recalls that ran in the recall owner", async () => {
+		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-recall-telemetry-"));
+		previousSignetPath = process.env.SIGNET_PATH;
+		mkdirSync(join(directory, "memory"), { recursive: true });
+		writeFileSync(join(directory, "agent.yaml"), "name: DbOwnerRecallTest\n");
+		process.env.SIGNET_PATH = directory;
+		const databasePath = join(directory, "memory", "memories.db");
+		initDbAccessor(databasePath);
+		seedFacts();
+		const cfg = testConfig(directory);
+		await closeDbAccessor();
+		const events: Array<{ event: string; properties: Record<string, unknown> }> = [];
+		setActiveTelemetry({
+			record: (event: string, properties: Readonly<Record<string, string | number | boolean | null>>) =>
+				events.push({ event, properties: { ...properties } }),
+		} as never);
+		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
+		try {
+			const routed = await hybridRecallThroughDbOwner(
+				client,
+				{
+					query: "owner recall fixture",
+					keywordQuery: "owner recall fixture",
+					limit: 5,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					trackRecallAccess: false,
+					claimRecallResults: false,
+					telemetrySurface: "explicit_api",
+				},
+				cfg,
+				{ queryEmbedding: null },
+			);
+			const performed = events.filter((entry) => entry.event === "recall.performed");
+			expect(performed).toHaveLength(1);
+			expect(performed[0]?.properties).toMatchObject({
+				surface: "explicit_api",
+				results: routed.results.length,
+				latencyMs: routed.meta.timings.totalMs,
+				partial: routed.meta.partial === true,
+			});
+			expect(routed.meta.timings.totalMs).toBeGreaterThan(0);
+		} finally {
+			setActiveTelemetry(undefined);
 			await client.close();
 		}
 	});

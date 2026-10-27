@@ -72,7 +72,7 @@ import { rankPositions, reciprocalRankScore, selectPrimaryCandidates } from "./r
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
 import { escapeLike } from "./sql-utils";
-import { getActiveTelemetry } from "./telemetry";
+import { recordRecallPerformed } from "./recall-telemetry";
 import { type TemporalTimeOptions, hasFreshnessIntent, resolveTemporalRecall } from "./temporal-recall";
 
 export { buildAgentScopeClause } from "./memory-access-scope";
@@ -188,20 +188,7 @@ export interface RecallResponse {
 	}>;
 }
 
-type RecallTelemetryType = "semantic" | "keyword" | "temporal" | "graph";
-
-export function classifyRecallTelemetry(
-	response: Pick<RecallResponse, "results" | "method"> & {
-		readonly meta: Pick<RecallResponse["meta"], "temporal">;
-	},
-): RecallTelemetryType | undefined {
-	const sources = new Set(response.results.map((result) => result.source));
-	if (response.meta.temporal || [...sources].some((source) => source.startsWith("temporal"))) return "temporal";
-	if (["traversal", "ka_traversal", "structured", "sec", "graph"].some((source) => sources.has(source))) return "graph";
-	if (response.method === "hybrid") return "semantic";
-	if (response.method === "keyword") return "keyword";
-	return undefined;
-}
+export { classifyRecallTelemetry } from "./recall-telemetry";
 
 export interface AggregateRecallUsage extends Omit<LlmUsage, "accountingProvenance"> {
 	readonly accountingProvenance: AccountingSummaryProvenance;
@@ -1962,18 +1949,11 @@ export async function hybridRecall(
 			logger.warn("memory", "Failed to update access tracking", e as Error);
 		}
 		const recallTimings = timings.finish();
-		const telemetryType = classifyRecallTelemetry(response);
-		getActiveTelemetry()?.record("recall.performed", {
-			...(telemetryType ? { type: telemetryType } : {}),
-			surface: params.telemetrySurface ?? "other",
-			results: response.results.length,
-			latencyMs: recallTimings.totalMs,
-			truncated: response.results.length >= limit,
-			partial: lexicalSearchPartial || graphPartial,
-			...(lexicalSearchPartial || graphPartial
-				? { degradation: graphDegradation ?? (lexicalSearchPartial ? "fts_incomplete" : "graph_traversal_failed") }
-				: {}),
-		});
+		recordRecallPerformed(
+			{ ...response, meta: { ...response.meta, timings: recallTimings } },
+			params.telemetrySurface ?? "other",
+			limit,
+		);
 		const selectedLifecycleSources = response.results.flatMap((row) => {
 			const source = lifecycleSourceResults.get(row.id);
 			return source ? [source] : [];
