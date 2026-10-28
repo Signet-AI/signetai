@@ -194,14 +194,62 @@ post-processing:
   use), and fuses its order with the retrieval order by reciprocal rank so it
   can lift a relevant memory that shares no words with the question without
   overturning order retrieval already got right. It runs in its own worker
-  thread, one rerank at a time, and adds roughly 150 to 250 ms per recall on
-  the source runtime and 350 to 450 ms in the compiled binary, which runs it
-  on WebAssembly. The model loads in the background on first use; while it is
+  thread, one rerank at a time. On CPU it scores each query and memory pair
+  separately and stops between pairs once the deadline has passed, so a slow
+  rerank gives up quickly instead of holding the worker for the next recall.
+  The compiled binary runs it on WebAssembly by default, where 20 candidates
+  can take longer than the deadline on a busy machine; set
+  `reranker.device: cpu` with `reranker.onnxRuntimePath` to run it on the
+  native ONNX runtime instead (several times faster). The model loads in the
+  background on first use; while it is
   loading, busy, or slower than three quarters of `reranker.timeoutMs`,
   recall falls back to an embedding blend for that request. `meta.reranker` reports which reranker ran
-  (`cross-encoder`, `embedding`, `llm`, or `none`) and why a fallback
-  happened. Set `crossEncoderModel: ""` to use the embedding blend only, or
-  `useExtractionModel: true` for the LLM reranker.
+  (`cross-encoder`, `embedding`, `llm`, or `none`), the device it ran on, and
+  why a fallback happened. Set `crossEncoderModel: ""` to use the embedding
+  blend only, or `useExtractionModel: true` for the LLM reranker.
+- **Acceleration (optional).** `signet accelerate` installs and configures a
+  faster runtime, then `signet restart` applies it and
+  `signet accelerate verify` checks it:
+
+  - `signet accelerate cpu` downloads the native ONNX runtime for this
+    platform (about 35 MB, checked against a pinned sha512) and uses it for
+    embeddings and the cross-encoder.
+  - `signet accelerate cuda` (Linux x64, NVIDIA driver 525 or newer) also
+    installs the ONNX Runtime CUDA provider and the CUDA 12 libraries it
+    links against (about 1.6 GB, fetched member by member from NuGet and
+    PyPI and checked against pinned SHA-256 hashes), and runs the
+    cross-encoder on the GPU in full precision.
+  - `signet accelerate off` returns to WebAssembly; `signet accelerate`
+    alone shows the detected GPU and the active runtimes.
+
+  Native embeddings produce slightly different vectors from WebAssembly, so
+  switching re-embeds stored memories in the background; recall keeps using
+  the current vectors until the new index is ready. Files live in
+  `runtime/accelerators` inside the Signet workspace. The command writes these keys,
+  which can also be set by hand:
+
+  ```yaml
+  embedding:
+    runtime: onnxruntime
+    onnxRuntimePath: /path/to/onnxruntime-node
+  memory:
+    pipelineV2:
+      reranker:
+        device: cuda            # or cpu
+        onnxRuntimePath: /path/to/onnxruntime-node
+        cudaLibraryPaths:
+          - /path/to/cuda12/lib
+  ```
+
+  `onnxRuntimePath` is an `onnxruntime-node` package directory (with its CUDA
+  provider for `device: cuda`) at the version the Signet build reports; the
+  compiled binary refuses a different version. `cudaLibraryPaths` lists
+  directories of CUDA 12 shared libraries to load before the CUDA provider,
+  so no system-wide CUDA 12 install or `LD_LIBRARY_PATH` is needed. If the
+  CUDA or native CPU worker cannot start, recall falls back to the default
+  runtime and logs why. When the `@signet/native` addon is present, the
+  cross-encoder tokenizes query and candidate pairs natively and caches each
+  candidate's tokens.
 - **Dampening** penalizes low-overlap semantic hits, hub-like entity
   dominance, and other noisy retrieval shapes. The low-overlap penalty never
   drops a hit below the scores it leaves untouched, and an entity counts as a

@@ -261,6 +261,8 @@ export interface PipelineTraversalConfig {
 	readonly constraintBudgetChars: number;
 }
 
+export type PipelineRerankerDevice = "default" | "cuda" | "cpu";
+
 export interface PipelineRerankerConfig {
 	readonly enabled: boolean;
 	readonly model: string;
@@ -268,6 +270,9 @@ export interface PipelineRerankerConfig {
 	readonly useExtractionModel: boolean;
 	readonly topN: number;
 	readonly timeoutMs: number;
+	readonly device: PipelineRerankerDevice;
+	readonly onnxRuntimePath: string;
+	readonly cudaLibraryPaths: readonly string[];
 }
 
 export interface PipelineAutonomousConfig {

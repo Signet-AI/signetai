@@ -52,3 +52,45 @@ export function recordRecallOutcome(input: {
 		...(input.reason ? { reason: input.reason } : {}),
 	});
 }
+
+export type RecallTelemetryType = "semantic" | "keyword" | "temporal" | "graph";
+
+interface RecallPerformedResponse {
+	readonly results: readonly { readonly source?: string | null }[];
+	readonly method?: string;
+	readonly meta: {
+		readonly temporal?: unknown;
+		readonly partial?: boolean;
+		readonly degradation?: string;
+		readonly timings?: { readonly totalMs?: number };
+	};
+}
+
+export function classifyRecallTelemetry(
+	response: Pick<RecallPerformedResponse, "results" | "method"> & {
+		readonly meta: Pick<RecallPerformedResponse["meta"], "temporal">;
+	},
+): RecallTelemetryType | undefined {
+	const sources = new Set(response.results.map((result) => result.source ?? ""));
+	if (response.meta.temporal || [...sources].some((source) => source.startsWith("temporal"))) return "temporal";
+	if (["traversal", "ka_traversal", "structured", "sec", "graph"].some((source) => sources.has(source))) return "graph";
+	if (response.method === "hybrid") return "semantic";
+	if (response.method === "keyword") return "keyword";
+	return undefined;
+}
+
+export function recordRecallPerformed(response: RecallPerformedResponse, surface: string, limit: number): void {
+	const telemetry = getActiveTelemetry();
+	if (!telemetry) return;
+	const type = classifyRecallTelemetry(response);
+	const partial = response.meta.partial === true;
+	telemetry.record("recall.performed", {
+		...(type ? { type } : {}),
+		surface,
+		results: response.results.length,
+		latencyMs: response.meta.timings?.totalMs ?? 0,
+		truncated: response.results.length >= limit,
+		partial,
+		...(partial && response.meta.degradation ? { degradation: response.meta.degradation } : {}),
+	});
+}

@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 napi = { version = "2", default-features = false, features = ["napi4"] }
 napi-derive = "2"
 sha2 = "0.10"
+tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
 
 [build-dependencies]
 napi-build = "2"

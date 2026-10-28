@@ -83,6 +83,8 @@ jobs:
 
       - name: Build native Signet binary
         if: steps.changes.outputs.skip != 'true'
+        env:
+          SIGNET_REQUIRE_NATIVE_ADDON: "1"
         run: bun run build:native-bun
 
       - name: Sign and verify macOS native binary with Developer ID
@@ -361,6 +363,8 @@ jobs:
         run: bun run build:dashboard
 
       - name: Build native Signet binary
+        env:
+          SIGNET_REQUIRE_NATIVE_ADDON: "1"
         run: bun run build:native-bun
 
       - name: Sign and verify macOS native binary with Developer ID
@@ -388,6 +392,14 @@ jobs:
           actual="$(./dist/native/"$RELEASE_ASSET" | bun -e 'const value = JSON.parse(await Bun.stdin.text()); process.stdout.write(value.bun)')"
           expected="$(bun -e 'const value = JSON.parse(await Bun.file("package.json").text()); process.stdout.write(value.packageManager.replace(/^bun@/, ""))')"
           test "$actual" = "$expected"
+
+      - name: Verify embedded native tokenizer
+        shell: bash
+        env:
+          SIGNET_NATIVE_TOKENIZER_SMOKE: "1"
+        run: |
+          actual="$(./dist/native/"$RELEASE_ASSET" | bun -e 'const value = JSON.parse(await Bun.stdin.text()); process.stdout.write(String(value.pairTokenizer))')"
+          test "$actual" = "true"
 
       - name: Native release runtime smoke
         shell: bash

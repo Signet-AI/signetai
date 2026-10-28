@@ -6,12 +6,24 @@ export interface EmbeddingWorkerInit {
 	readonly expectedDimensions: number;
 	readonly remoteHostOverride?: string;
 	readonly task?: "embed" | "rerank";
+	readonly device?: "cuda";
+	readonly runtime?: "onnxruntime";
+	readonly onnxRuntimePath?: string;
+	readonly onnxRuntimeModulePath?: string;
+	readonly cudaLibraryPaths?: readonly string[];
+	readonly nativeAddonPath?: string;
 }
 
 export type MainToWorkerMessage =
 	| { readonly type: "embed"; readonly id: number; readonly text: string }
 	| { readonly type: "checkAvailable"; readonly id: number }
-	| { readonly type: "rerank"; readonly id: number; readonly query: string; readonly documents: readonly string[] }
+	| {
+			readonly type: "rerank";
+			readonly id: number;
+			readonly query: string;
+			readonly documents: readonly string[];
+			readonly deadlineAt?: number;
+	  }
 	| { readonly type: "shutdown" };
 export interface EmbeddingWorkerStatus {
 	readonly initialized: boolean;
@@ -26,7 +38,7 @@ export type WorkerToMainMessage =
 	| { readonly type: "embed_result"; readonly id: number; readonly vector: number[] }
 	| { readonly type: "embed_error"; readonly id: number; readonly error: string }
 	| { readonly type: "rerank_result"; readonly id: number; readonly scores: number[] }
-	| { readonly type: "rerank_error"; readonly id: number; readonly error: string }
+	| { readonly type: "rerank_error"; readonly id: number; readonly error: string; readonly cancelled?: boolean }
 	| { readonly type: "check_result"; readonly id: number; readonly available: boolean; readonly error: string | null }
 	| { readonly type: "log"; readonly level: string; readonly message: string; readonly data?: Record<string, unknown> }
 	| { readonly type: "error"; readonly error: string; readonly stack?: string };

@@ -10,7 +10,11 @@ import type {
 	WorkerToMainMessage,
 } from "./embedding-worker-protocol";
 import { logger } from "./logger";
-import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./native-runtime-assets";
+import {
+	materializeEmbeddedNativeAddon,
+	materializeEmbeddedWasmAssets,
+	resolveEmbeddedWorkerPath,
+} from "./native-runtime-assets";
 
 const DEFAULT_MODEL_ID = "nomic-ai/nomic-embed-text-v1.5";
 const DEFAULT_DIMENSIONS = 768;
@@ -47,6 +51,10 @@ export interface EmbeddingHandleOptions {
 	readonly wasmAssetDir?: string | null;
 	readonly transformersRuntimeAssetPath?: string | null;
 	readonly task?: "embed" | "rerank";
+	readonly device?: "cuda";
+	readonly runtime?: "onnxruntime";
+	readonly onnxRuntimePath?: string;
+	readonly cudaLibraryPaths?: readonly string[];
 }
 
 interface PendingRpc {
@@ -70,7 +78,7 @@ export interface EmbeddingProviderSnapshot {
 
 export interface EmbeddingWorkerHandle {
 	embed(text: string): Promise<number[]>;
-	rerank(query: string, documents: readonly string[]): Promise<number[]>;
+	rerank(query: string, documents: readonly string[], options?: { readonly deadlineAt?: number }): Promise<number[]>;
 	checkAvailable(): Promise<EmbeddingProviderStatus>;
 	getStatus(): EmbeddingProviderSnapshot;
 	getLastError(): string | null;
@@ -101,6 +109,22 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		expectedDimensions: dimensions,
 		...(opts.remoteHostOverride ? { remoteHostOverride: opts.remoteHostOverride } : {}),
 		...(opts.task ? { task: opts.task } : {}),
+		...(opts.device ? { device: opts.device } : {}),
+		...(opts.runtime ? { runtime: opts.runtime } : {}),
+		...(opts.onnxRuntimePath ? { onnxRuntimePath: opts.onnxRuntimePath } : {}),
+		...(() => {
+			if (opts.device !== "cuda" && opts.runtime !== "onnxruntime") return {};
+			const modulePath = resolveEmbeddedWorkerPath("onnxruntime-node-runtime");
+			return modulePath ? { onnxRuntimeModulePath: modulePath } : {};
+		})(),
+		...(() => {
+			if (opts.task !== "rerank") return {};
+			const addonPath = materializeEmbeddedNativeAddon("signet-native");
+			return addonPath ? { nativeAddonPath: addonPath } : {};
+		})(),
+		...(opts.cudaLibraryPaths && opts.cudaLibraryPaths.length > 0
+			? { cudaLibraryPaths: [...opts.cudaLibraryPaths] }
+			: {}),
 	};
 
 	const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -150,7 +174,12 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 	}
 
 	type RpcKind = "embed" | "checkAvailable" | "rerank";
-	type RpcExtra = { readonly text?: string; readonly query?: string; readonly documents?: readonly string[] };
+	type RpcExtra = {
+		readonly text?: string;
+		readonly query?: string;
+		readonly documents?: readonly string[];
+		readonly deadlineAt?: number;
+	};
 
 	function sendRpc(kind: RpcKind, extra?: RpcExtra): number {
 		const id = nextId++;
@@ -158,7 +187,13 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 			kind === "embed"
 				? { type: "embed", id, text: extra?.text ?? "" }
 				: kind === "rerank"
-					? { type: "rerank", id, query: extra?.query ?? "", documents: extra?.documents ?? [] }
+					? {
+							type: "rerank",
+							id,
+							query: extra?.query ?? "",
+							documents: extra?.documents ?? [],
+							...(extra?.deadlineAt !== undefined ? { deadlineAt: extra.deadlineAt } : {}),
+						}
 					: { type: "checkAvailable", id };
 		worker.postMessage(msg);
 		return id;
@@ -215,7 +250,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 			case "rerank_error": {
 				const entry = clearPending(msg.id);
 				if (entry) {
-					lastError = msg.error;
+					if (!("cancelled" in msg && msg.cancelled === true)) lastError = msg.error;
 					entry.reject(new Error(msg.error));
 				}
 				break;
@@ -299,12 +334,20 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 			return run;
 		},
 
-		async rerank(query: string, documents: readonly string[]): Promise<number[]> {
+		async rerank(
+			query: string,
+			documents: readonly string[],
+			options?: { readonly deadlineAt?: number },
+		): Promise<number[]> {
 			const run = embedQueue.then(() => {
 				if (stopped) throw new Error("Cross-encoder provider shut down");
 				if (disabled) throw new Error(lastError ?? "Cross-encoder provider disabled until daemon restart");
 				if (inCooldown()) throw new Error(lastError ?? "Cross-encoder init on cooldown");
-				return rpc<number[]>("rerank", status.initialized ? embedTimeoutMs : initTimeoutMs, { query, documents });
+				return rpc<number[]>("rerank", status.initialized ? embedTimeoutMs : initTimeoutMs, {
+					query,
+					documents,
+					...(options?.deadlineAt !== undefined ? { deadlineAt: options.deadlineAt } : {}),
+				});
 			});
 			embedQueue = run.then(
 				() => {},

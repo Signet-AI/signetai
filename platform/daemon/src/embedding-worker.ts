@@ -1,7 +1,9 @@
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
+import { RerankDeadlineError, pairLengths, planLengthBuckets, scoreInGroups } from "./cross-encoder-buckets";
 import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
 const TRANSFORMERS_LOG_LEVEL_NONE = 50;
@@ -32,7 +34,9 @@ interface PretrainedLoader<T> {
 	from_pretrained(
 		model: string,
 		opts?: {
-			dtype?: "q8";
+			dtype?: "q8" | "fp32";
+			device?: "cuda" | "cpu";
+			session_options?: { intraOpNumThreads: number; interOpNumThreads: number };
 			progress_callback?: (progress: { status: string; progress?: number; file?: string }) => void;
 		},
 	): Promise<T>;
@@ -41,11 +45,14 @@ interface TransformersBindings {
 	readonly env: TransformersEnv;
 	readonly AutoTokenizer: PretrainedLoader<RerankTokenizer>;
 	readonly AutoModelForSequenceClassification: PretrainedLoader<RerankModel>;
+	readonly Tensor?: new (type: "int64", data: BigInt64Array, dims: readonly number[]) => unknown;
 	readonly pipeline: (
 		task: string,
 		model: string,
 		opts: {
 			dtype: "q8";
+			device?: "cpu";
+			session_options?: { intraOpNumThreads: number; interOpNumThreads: number };
 			progress_callback?: (progress: { status: string; progress?: number; file?: string }) => void;
 		},
 	) => Promise<unknown>;
@@ -75,7 +82,7 @@ function log(level: string, message: string, data?: Record<string, unknown>): vo
 
 let transformers: TransformersBindings | null = null;
 let embedFn: EmbedCallable | null = null;
-let rerankFn: ((query: string, documents: readonly string[]) => Promise<number[]>) | null = null;
+let rerankFn: ((query: string, documents: readonly string[], deadlineAt?: number) => Promise<number[]>) | null = null;
 let rerankModel: RerankModel | null = null;
 let initPromise: Promise<void> | null = null;
 let initError: string | null = null;
@@ -101,6 +108,113 @@ async function loadTransformers(): Promise<TransformersBindings> {
 	return (await import("./transformers-runtime")) as unknown as TransformersBindings;
 }
 
+const RTLD_NOW = 0x2;
+const RTLD_GLOBAL = 0x100;
+const SHARED_LIBRARY_FILE = /\.so(?:\.\d+)+$/;
+
+async function preloadCudaLibraries(dirs: readonly string[]): Promise<number> {
+	if (dirs.length === 0) return 0;
+	const { FFIType, dlopen, ptr } = await import("bun:ffi");
+	const libc = dlopen("libc.so.6", {
+		dlopen: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.ptr },
+		dlerror: { args: [], returns: FFIType.cstring },
+	});
+	let pending = dirs.flatMap((dir) =>
+		readdirSync(dir)
+			.filter((name) => SHARED_LIBRARY_FILE.test(name))
+			.sort()
+			.map((name) => join(dir, name)),
+	);
+	let loaded = 0;
+	let lastError = "";
+	while (pending.length > 0) {
+		const failed: string[] = [];
+		for (const path of pending) {
+			const handle = libc.symbols.dlopen(ptr(Buffer.from(`${path}\0`)), RTLD_NOW | RTLD_GLOBAL);
+			if (handle) loaded++;
+			else {
+				failed.push(path);
+				lastError = String(libc.symbols.dlerror() ?? "");
+			}
+		}
+		if (failed.length === pending.length) {
+			log("warn", "Some CUDA libraries could not be preloaded", { count: failed.length, lastError });
+			break;
+		}
+		pending = failed;
+	}
+	libc.close();
+	return loaded;
+}
+
+async function prepareNativeOnnxRuntime(purpose: string): Promise<void> {
+	const preloaded = await preloadCudaLibraries(init.cudaLibraryPaths ?? []);
+	if (init.transformersRuntimePath) {
+		if (!init.onnxRuntimeModulePath) throw new Error("This Signet build does not include the native ONNX runtime");
+		if (!init.onnxRuntimePath) {
+			throw new Error(`onnxRuntimePath is required for the ${purpose}`);
+		}
+		const manifest = JSON.parse(readFileSync(join(init.onnxRuntimePath, "package.json"), "utf8")) as {
+			version?: unknown;
+		};
+		const expectedVersion = readFileSync(init.onnxRuntimeModulePath, "utf8").match(
+			/export const signetOnnxRuntimeNodeVersion = "([^"]+)";/,
+		)?.[1];
+		if (typeof manifest.version !== "string" || !expectedVersion || manifest.version !== expectedVersion) {
+			throw new Error(
+				`onnxruntime-node at ${init.onnxRuntimePath} is ${String(manifest.version)}; this Signet build needs ${String(expectedVersion)}`,
+			);
+		}
+		(globalThis as Record<symbol, unknown>)[Symbol.for("signet.onnxruntimeNodeBinding")] = join(
+			init.onnxRuntimePath,
+			"bin",
+			"napi-v6",
+			process.platform,
+			process.arch,
+			"onnxruntime_binding.node",
+		);
+		const runtime = (await import(init.onnxRuntimeModulePath)) as { default?: unknown };
+		(globalThis as Record<symbol, unknown>)[Symbol.for("onnxruntime")] = runtime.default ?? runtime;
+	}
+	log("info", `Prepared native ONNX runtime for the ${purpose}`, {
+		preloadedLibraries: preloaded,
+		nativeRuntime: init.onnxRuntimePath ?? null,
+	});
+}
+
+const CROSS_ENCODER_MAX_TOKENS = 512;
+
+interface NativePairTokenizer {
+	encodePairs(
+		query: string,
+		documents: string[],
+	): {
+		readonly inputIds: readonly number[];
+		readonly attentionMask: readonly number[];
+		readonly tokenTypeIds: readonly number[];
+		readonly batchSize: number;
+		readonly sequenceLength: number;
+	};
+}
+
+function loadNativePairTokenizer(modelId: string): NativePairTokenizer | null {
+	const tokenizerPath = join(init.cacheDir, modelId, "tokenizer.json");
+	if (!existsSync(tokenizerPath)) return null;
+	try {
+		const requireNative = createRequire(import.meta.url);
+		const addon = requireNative(init.nativeAddonPath ?? "@signet/native") as {
+			PairTokenizer?: new (path: string, maxLength: number) => NativePairTokenizer;
+		};
+		if (typeof addon.PairTokenizer !== "function") return null;
+		return new addon.PairTokenizer(tokenizerPath, CROSS_ENCODER_MAX_TOKENS);
+	} catch (error) {
+		log("warn", "Native cross-encoder tokenizer unavailable; using transformers.js", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return null;
+	}
+}
+
 async function ensureInitialized(): Promise<void> {
 	if (embedFn || rerankFn) return;
 	if (initPromise) return initPromise;
@@ -109,6 +223,7 @@ async function ensureInitialized(): Promise<void> {
 		await initPromise;
 	} finally {
 		initPromise = null;
+		pushStatus();
 	}
 	return;
 }
@@ -119,6 +234,12 @@ async function doInit(): Promise<void> {
 		pushStatus();
 
 		mkdirSync(init.cacheDir, { recursive: true });
+		const cuda = init.task === "rerank" && init.device === "cuda";
+		const nativeEmbedding = init.task !== "rerank" && init.runtime === "onnxruntime";
+		const nativeCpuRerank = init.task === "rerank" && !cuda && init.runtime === "onnxruntime";
+		if (cuda) await prepareNativeOnnxRuntime("CUDA cross-encoder");
+		if (nativeCpuRerank) await prepareNativeOnnxRuntime("native ONNX runtime cross-encoder");
+		if (nativeEmbedding) await prepareNativeOnnxRuntime("native ONNX runtime embedding");
 		transformers = await loadTransformers();
 		transformers.env.logLevel = TRANSFORMERS_LOG_LEVEL_NONE;
 		transformers.env.cacheDir = init.cacheDir;
@@ -147,41 +268,110 @@ async function doInit(): Promise<void> {
 			}
 		};
 		if (init.task === "rerank") {
-			log("info", `Initializing cross-encoder ${init.modelId} (q8 quantization)`, { cachePath: init.cacheDir });
+			const precision = cuda ? "fp32" : "q8";
+			const deviceLabel = cuda ? ", CUDA" : nativeCpuRerank ? ", native CPU" : "";
+			log("info", `Initializing cross-encoder ${init.modelId} (${precision}${deviceLabel})`, {
+				cachePath: init.cacheDir,
+			});
 			const tokenizer = await transformers.AutoTokenizer.from_pretrained(init.modelId, { progress_callback });
 			const model = await transformers.AutoModelForSequenceClassification.from_pretrained(init.modelId, {
-				dtype: "q8",
+				dtype: precision,
+				...(cuda ? { device: "cuda" as const } : {}),
+				...(nativeCpuRerank
+					? {
+							device: "cpu" as const,
+							session_options: {
+								intraOpNumThreads: Math.max(1, Math.min(4, availableParallelism() - 1)),
+								interOpNumThreads: 1,
+							},
+						}
+					: {}),
 				progress_callback,
 			});
-			const score = async (query: string, documents: readonly string[]): Promise<number[]> => {
+			const pairTokenizer = loadNativePairTokenizer(init.modelId);
+			const tensorClass = transformers.Tensor;
+			const nativeInputs =
+				pairTokenizer !== null && tensorClass !== undefined
+					? (query: string, documents: readonly string[]): RerankInputs => {
+							const batch = pairTokenizer.encodePairs(query, [...documents]);
+							const dims = [batch.batchSize, batch.sequenceLength];
+							const tensor = (values: readonly number[]) =>
+								new tensorClass(
+									"int64",
+									BigInt64Array.from(values, (value) => BigInt(value)),
+									dims,
+								);
+							return {
+								input_ids: tensor(batch.inputIds),
+								attention_mask: tensor(batch.attentionMask),
+								token_type_ids: tensor(batch.tokenTypeIds),
+							};
+						}
+					: null;
+			log("info", `Cross-encoder tokenizer: ${nativeInputs === null ? "transformers.js" : "native"}`);
+			const scoreBatch = async (query: string, documents: readonly string[]): Promise<number[]> => {
 				if (documents.length === 0) return [];
-				const inputs = tokenizer(new Array<string>(documents.length).fill(query), {
-					text_pair: [...documents],
-					padding: true,
-					truncation: true,
-					max_length: 512,
-				});
+				const inputs =
+					nativeInputs !== null
+						? nativeInputs(query, documents)
+						: tokenizer(new Array<string>(documents.length).fill(query), {
+								text_pair: [...documents],
+								padding: true,
+								truncation: true,
+								max_length: 512,
+							});
 				const { logits } = await model(inputs);
 				const width = logits.dims.at(-1) ?? 1;
 				return documents.map((_, index) => Number(logits.data[index * width + width - 1]));
 			};
+			const planGroups = (query: string, documents: readonly string[]): number[][] =>
+				cuda && pairTokenizer !== null && nativeInputs !== null
+					? planLengthBuckets(pairLengths(pairTokenizer.encodePairs(query, [...documents])))
+					: documents.map((_, index) => [index]);
+			const score = (query: string, documents: readonly string[], deadlineAt?: number): Promise<number[]> =>
+				scoreInGroups(
+					documents.length <= 1 ? documents.map((_, index) => [index]) : planGroups(query, documents),
+					documents.length,
+					(group) =>
+						scoreBatch(
+							query,
+							group.map((index) => documents[index] ?? ""),
+						),
+					deadlineAt,
+				);
 			const warmup = await score("test", ["test"]);
 			if (warmup.length !== 1 || !Number.isFinite(warmup[0])) throw new Error("Cross-encoder warmup returned no score");
 			rerankModel = model;
 			rerankFn = score;
 			modelCached = true;
-			log("info", "Cross-encoder ready");
+			log("info", "Cross-encoder ready", { device: cuda ? "cuda" : nativeCpuRerank ? "cpu" : "default" });
 			pushStatus();
 			return;
 		}
 
-		log("info", `Initializing ${init.modelId} (q8 quantization)`, {
-			cachePath: init.cacheDir,
-			wasmPath: init.wasmDir ?? "node_modules",
-			remoteHost: transformers.env.remoteHost,
-		});
+		log(
+			"info",
+			`Initializing ${init.modelId} (q8 quantization, ${nativeEmbedding ? "native ONNX runtime" : "default runtime"})`,
+			{
+				cachePath: init.cacheDir,
+				wasmPath: init.wasmDir ?? "node_modules",
+				remoteHost: transformers.env.remoteHost,
+			},
+		);
 
-		const pipe = await transformers.pipeline("feature-extraction", init.modelId, { dtype: "q8", progress_callback });
+		const pipe = await transformers.pipeline("feature-extraction", init.modelId, {
+			dtype: "q8",
+			progress_callback,
+			...(nativeEmbedding
+				? {
+						device: "cpu" as const,
+						session_options: {
+							intraOpNumThreads: Math.max(1, Math.min(4, availableParallelism() - 1)),
+							interOpNumThreads: 1,
+						},
+					}
+				: {}),
+		});
 
 		const embed = toEmbedCallable(pipe);
 		const warmup = await embed("test", { pooling: "mean", normalize: true });
@@ -235,13 +425,23 @@ async function handleEmbed(id: number, text: string): Promise<void> {
 	}
 }
 
-async function handleRerank(id: number, query: string, documents: readonly string[]): Promise<void> {
+async function handleRerank(
+	id: number,
+	query: string,
+	documents: readonly string[],
+	deadlineAt: number | undefined,
+): Promise<void> {
 	try {
 		await ensureInitialized();
 		if (!rerankFn) throw new Error(initError ?? "Cross-encoder not initialized");
-		post({ type: "rerank_result", id, scores: await rerankFn(query, documents) });
+		post({ type: "rerank_result", id, scores: await rerankFn(query, documents, deadlineAt) });
 	} catch (err) {
-		post({ type: "rerank_error", id, error: err instanceof Error ? err.message : String(err) });
+		post({
+			type: "rerank_error",
+			id,
+			error: err instanceof Error ? err.message : String(err),
+			...(err instanceof RerankDeadlineError ? { cancelled: true } : {}),
+		});
 	}
 }
 
@@ -283,7 +483,7 @@ port.on("message", (msg: MainToWorkerMessage) => {
 			void handleCheckAvailable(msg.id);
 			break;
 		case "rerank":
-			void handleRerank(msg.id, msg.query, msg.documents);
+			void handleRerank(msg.id, msg.query, msg.documents, msg.deadlineAt);
 			break;
 		case "shutdown":
 			void handleShutdown();

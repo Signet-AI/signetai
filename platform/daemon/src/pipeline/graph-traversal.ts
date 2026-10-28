@@ -727,7 +727,7 @@ async function batchCollectForEntities(
 				 JOIN memories m ON m.id = mem.memory_id
 				 WHERE mem.entity_id IN (${entityPh})
 				   AND m.is_deleted = 0 ${scopeClause}
-				 ORDER BY mem.confidence DESC, m.importance DESC
+				 ORDER BY mem.confidence DESC, m.importance DESC, m.rowid, mem.entity_id
 				 LIMIT ?`,
 					[...entityIds, ...scopeArgs, mentionBudget],
 					"session-start.graph-traversal.mentions",
@@ -747,7 +747,7 @@ async function batchCollectForEntities(
 				 JOIN memories m ON m.id = mem.memory_id
 				 WHERE mem.entity_id IN (${entityPh})
 				   AND m.is_deleted = 0
-				 ORDER BY mem.confidence DESC, m.importance DESC
+				 ORDER BY mem.confidence DESC, m.importance DESC, m.rowid, mem.entity_id
 				 LIMIT ?`,
 					[...entityIds, mentionBudget],
 					"session-start.graph-traversal.mentions",

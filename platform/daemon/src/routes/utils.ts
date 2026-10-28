@@ -14,6 +14,7 @@ import {
 } from "../embedding-fetch";
 import { logger } from "../logger";
 import type { EmbeddingConfig } from "../memory-config";
+import type { NativeEmbeddingRuntimeOptions } from "../native-embedding";
 import {
 	resolveScopedAgent,
 	resolveScopedProject as resolveScopedProjectForClaims,
@@ -503,7 +504,7 @@ export function loadForgetCandidates(
 			version: row.version,
 			score: 0,
 		}));
-	}, "routes/utils.ts:435");
+	}, "db:forget.candidates.read");
 }
 
 export function loadForgetCandidatesByIds(
@@ -543,7 +544,7 @@ export function loadForgetCandidatesByIds(
 				version: row.version,
 				score: 0,
 			}));
-	}, "routes/utils.ts:521");
+	}, "db:forget.candidates-by-id.read");
 }
 
 export function buildForgetConfirmToken(memoryIds: readonly string[]): string {
@@ -646,8 +647,14 @@ export let statusCacheTime = 0;
 export const STATUS_CACHE_TTL = 30000;
 const embeddingStatusCache = new Map<string, { readonly status: EmbeddingStatus; readonly checkedAt: number }>();
 
+function nativeRuntimeOptions(cfg: EmbeddingConfig): NativeEmbeddingRuntimeOptions {
+	return cfg.runtime === "onnxruntime"
+		? { runtime: "onnxruntime", ...(cfg.onnxRuntimePath ? { onnxRuntimePath: cfg.onnxRuntimePath } : {}) }
+		: { runtime: "wasm" };
+}
+
 function embeddingStatusCacheKey(cfg: EmbeddingConfig): string {
-	return `${cfg.provider}\u0000${cfg.model}\u0000${resolveEmbeddingBaseUrl(cfg)}\u0000${cfg.warmNative === false ? "no-native" : "native"}`;
+	return `${cfg.provider}\u0000${cfg.model}\u0000${resolveEmbeddingBaseUrl(cfg)}\u0000${cfg.warmNative === false ? "no-native" : "native"}\u0000${nativeRuntimeOptions(cfg).runtime}\u0000${cfg.onnxRuntimePath ?? ""}`;
 }
 
 function cacheEmbeddingStatus(key: string, status: EmbeddingStatus, now: number): void {
@@ -703,12 +710,16 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 				return status;
 			}
 			const mod = nativeEmbedding ?? (await import("../native-embedding"));
-			const nativeStatus = await mod.checkNativeProvider();
+			const runtime = nativeRuntimeOptions(cfg);
+			const nativeStatus = await mod.checkNativeProvider(runtime);
 			status.modelCached = nativeStatus.modelCached;
 			if (nativeStatus.available) {
 				status.available = true;
 				status.dimensions = nativeStatus.dimensions;
-				setNativeFallbackProvider(null);
+				if (runtime.runtime !== "onnxruntime") setNativeFallbackProvider(null);
+			} else if (runtime.runtime === "onnxruntime") {
+				status.error = `Native ONNX runtime embedding unavailable: ${nativeStatus.error ?? "unknown"}`;
+				logger.warn("embedding", status.error);
 			} else {
 				logger.warn("embedding", `Native provider unavailable: ${nativeStatus.error ?? "unknown"}`);
 				try {

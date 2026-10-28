@@ -42,6 +42,7 @@ import chalk from "chalk";
 import { Command } from "commander";
 
 import { registerBrowseCommand } from "./browse.js";
+import { registerAccelerateCommands } from "./commands/accelerate.js";
 import { registerAgentCommands } from "./commands/agent.js";
 import { registerApiKeyCommands } from "./commands/api-key.js";
 import { registerAppCommands, registerDefaultAction } from "./commands/app.js";
@@ -1139,6 +1140,11 @@ registerGitCommands(program, {
 registerVectorCommands(program, {
 	AGENTS_DIR,
 	signetLogo,
+});
+
+registerAccelerateCommands(program, {
+	AGENTS_DIR,
+	fetchFromDaemon,
 });
 
 registerSessionCommands(program, {
