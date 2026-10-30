@@ -672,10 +672,16 @@ export function buildSessionEndBody(
 		sessionKey,
 		...(agentId ? { agentId } : {}),
 		cwd: pickString(body.cwd),
-		reason: pickString(body.reason),
+		reason: readSessionEndReason(body),
 		...(lastAssistantMessage ? { lastAssistantMessage } : {}),
 		runtimePath: LEGACY_RUNTIME_PATH,
 	};
+}
+
+function readSessionEndReason(input: Record<string, unknown>): string {
+	const reason = pickString(input.reason);
+	if (pickString(input.hook_event_name, input.hookEventName) !== "SessionEnd") return reason;
+	return reason.trim().toLowerCase() === "clear" ? "clear" : "session_shutdown";
 }
 
 function readLastAssistantMessage(input: Record<string, unknown> | null): string {
