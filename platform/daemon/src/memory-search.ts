@@ -3098,8 +3098,10 @@ export async function hybridRecall(
 			: undefined;
 		if (sourceChunkOutcome) {
 			sourceChunkSearchDiagnostics = sourceChunkOutcome.diagnostics;
-			if (sourceChunkOutcome.completeness !== "complete") vectorCompleteness = sourceChunkOutcome.completeness;
-			searchedWindow = sourceChunkOutcome.searchedWindow ?? searchedWindow;
+			if (sourceChunkOutcome.completeness !== "complete") {
+				vectorCompleteness = sourceChunkOutcome.completeness;
+				searchedWindow = sourceChunkOutcome.searchedWindow ?? searchedWindow;
+			}
 		}
 		const candidates = (sourceChunkOutcome?.hits ?? []).map((hit): RecallResult => {
 			const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
