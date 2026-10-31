@@ -185,6 +185,39 @@ describe("memory head owner runtime", () => {
 		expect(await commit("missing")).toMatchObject({ ok: false, code: "INVALID_PROVENANCE" });
 	});
 
+	it("validates a commit with the commit's verdict and without writing the head", async () => {
+		await pass("checked");
+		await snapshot();
+		const input = (quote: string) => ({
+			passId: "checked",
+			agentId: "default",
+			entries: [
+				{ entryId: "meeting", text: "Meeting is Tuesday.", support: [{ source_ref: "memory:meeting", quote }] },
+			],
+		});
+		expect(await head({ action: "validate", input: input("The meeting is on Tuesday.") })).toEqual({
+			ok: false,
+			code: "INVALID_PROVENANCE",
+			error: "entry meeting quote is not exact scoped evidence",
+		});
+		expect(await head({ action: "validate", input: input("Meeting is Tuesday.") })).toEqual({
+			ok: true,
+			code: "VALID",
+		});
+		expect(
+			await head({ action: "validate", input: { ...input("Meeting is Tuesday."), passId: "absent" } }),
+		).toMatchObject({ ok: false, code: "PASS_NOT_AUTHORIZED" });
+		expect(await snapshot()).toMatchObject({ revision: 0, content: null });
+		expect(await ownerReadOne(client, "SELECT COUNT(*) AS revisions FROM memory_head_revisions", [], options)).toEqual({
+			revisions: 0,
+		});
+		expect(existsSync(join(root, "MEMORY.md"))).toBe(false);
+		expect(await head({ action: "commit", input: input("Meeting is Tuesday.") })).toMatchObject({
+			ok: true,
+			code: "COMMITTED",
+		});
+	});
+
 	it("clears the head and its projection once no committed entry keeps its evidence", async () => {
 		expect(await commit("first")).toMatchObject({ ok: true, revision: 1 });
 		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).toContain("Tuesday");

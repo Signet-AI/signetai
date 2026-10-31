@@ -6,21 +6,20 @@ export type MemoryHeadWriteResult =
 	| { readonly ok: true; readonly revision: number }
 	| { readonly ok: false; readonly error: string; readonly code?: "busy" | "invalid" | "unavailable" };
 
+export type MemoryHeadCommitInput = {
+	readonly agentId: string;
+	readonly passId: string;
+	readonly entries: readonly {
+		readonly entryId: string;
+		readonly text: string;
+		readonly support: readonly Record<string, unknown>[];
+	}[];
+};
 export type MemoryHeadRequest =
 	| { readonly action: "read"; readonly agentId: string; readonly passId?: string }
 	| { readonly action: "inspect"; readonly agentId: string; readonly content: string }
-	| {
-			readonly action: "commit";
-			readonly input: {
-				readonly agentId: string;
-				readonly passId: string;
-				readonly entries: readonly {
-					readonly entryId: string;
-					readonly text: string;
-					readonly support: readonly Record<string, unknown>[];
-				}[];
-			};
-	  };
+	| { readonly action: "commit"; readonly input: MemoryHeadCommitInput }
+	| { readonly action: "validate"; readonly input: MemoryHeadCommitInput };
 
 export async function requestMemoryHead<Result>(request: MemoryHeadRequest): Promise<Result> {
 	const owner = await getDbOwnerForAccessor(getDbAccessor());
@@ -48,7 +47,6 @@ export type MemoryHeadResult = {
 	readonly hash?: string;
 	readonly changedIds?: readonly string[];
 };
-export type MemoryHeadCommitInput = Extract<MemoryHeadRequest, { action: "commit" }>["input"];
 export interface MemoryHeadCommitter {
 	read(agentId: string): Promise<Record<string, unknown>>;
 	commit(input: MemoryHeadCommitInput): Promise<MemoryHeadResult>;
