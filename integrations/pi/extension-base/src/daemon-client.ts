@@ -139,8 +139,27 @@ export interface DaemonStatusClient extends DaemonClient {
 	postStatus(path: string, body: unknown, timeout?: number): Promise<DaemonFetchResult<void>>;
 }
 
-export function createDaemonClient(daemonUrl: string, config: DaemonClientConfig): DaemonStatusClient {
+export interface DaemonRequestClient {
+	getResult<T>(path: string, timeout?: number, signal?: AbortSignal): Promise<DaemonFetchResult<T>>;
+	patchResult<T>(path: string, body: unknown, timeout?: number, signal?: AbortSignal): Promise<DaemonFetchResult<T>>;
+}
+
+export function createDaemonClient(
+	daemonUrl: string,
+	config: DaemonClientConfig,
+): DaemonStatusClient & DaemonRequestClient {
 	return {
+		getResult<T>(path: string, timeout = config.defaultTimeout, signal?: AbortSignal): Promise<DaemonFetchResult<T>> {
+			return daemonFetchResult<T>(daemonUrl, path, config, { method: "GET", timeout, signal });
+		},
+		patchResult<T>(
+			path: string,
+			body: unknown,
+			timeout = config.defaultTimeout,
+			signal?: AbortSignal,
+		): Promise<DaemonFetchResult<T>> {
+			return daemonFetchResult<T>(daemonUrl, path, config, { method: "PATCH", body, timeout, signal });
+		},
 		async post<T>(
 			path: string,
 			body: unknown,

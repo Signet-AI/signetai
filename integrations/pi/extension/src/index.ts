@@ -11,6 +11,7 @@ import {
 	readTrimmedString,
 } from "@signet/pi-extension-base";
 import { Type } from "@sinclair/typebox";
+import { registerCollabTools } from "./collab-tools.js";
 import { createDaemonClient } from "./daemon-client.js";
 import {
 	type LifecycleDeps,
@@ -887,6 +888,7 @@ const SignetPiExtension: PiExtensionFactory = (pi): void => {
 	}
 
 	registerCommandsAndTools(pi, daemonUrl, agentId);
+	registerCollabTools(pi, createDaemonClient(daemonUrl), agentId);
 };
 
 export default SignetPiExtension;

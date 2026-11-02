@@ -2591,6 +2591,190 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 		);
 	});
 
+	it("exposes cross-agent messaging and board tools with auto-filled identity", () => {
+		const fixture = join(tmpRoot, "python-coordination-fixture");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+
+		const script = [
+			"import json",
+			"import plugins.memory.signet as sig",
+			"class FakeClient:",
+			"    _agent_id = 'agent-a'",
+			"    def __init__(self):",
+			"        self.calls = []",
+			"    def _get(self, path, **kw):",
+			"        self.calls.append(['GET', path, None])",
+			"        return {'ok': True}",
+			"    def _post(self, path, body, **kw):",
+			"        self.calls.append(['POST', path, body])",
+			"        return {'ok': True}",
+			"    def _patch(self, path, body, **kw):",
+			"        self.calls.append(['PATCH', path, body])",
+			"        return {'ok': True}",
+			"p = sig.SignetMemoryProvider()",
+			"p._client = FakeClient()",
+			"p._agent_id = 'agent-a'",
+			"p._session_key = 'sess-1'",
+			"def call(name, **args):",
+			"    out = json.loads(p.handle_tool_call(name, args))",
+			"    return out",
+			"names = [s['name'] for s in p.get_tool_schemas()]",
+			"r = {}",
+			"r['names'] = names",
+			"r['noTarget'] = call('agent_message_send', content='hi')",
+			"r['twoTargets'] = call('agent_message_send', content='hi', to_agent_id='b', broadcast=True)",
+			"call('agent_message_send', content='hi', to_session_key='s/2', type='question')",
+			"call('agent_peers', include_self=True, limit=500)",
+			"call('agent_message_inbox', unread_only=True, limit=99)",
+			"call('agent_message_ack', message_id='m/1')",
+			"call('board_post', thread_id='t 1', body='reply', reply_to_post_id='p1')",
+			"call('board_post', topic='x', title='T', body='B', tags=['a'], from_message_id='m1')",
+			"call('board_read', thread_id='t1')",
+			"call('board_update', thread_id='t1', status='resolved', pinned=True)",
+			"r['badUpdate'] = call('board_update', thread_id='t1')",
+			"call('board_list', status='open')",
+			"p._client._get = lambda *a, **k: None",
+			"r['down'] = call('agent_peers')",
+			"print(json.dumps(r))",
+		].join("\n");
+		const result = spawnSync(resolveTestPythonPath(), ["-c", script], {
+			cwd: fixture,
+			env: { ...process.env, PYTHONPATH: fixture },
+			encoding: "utf-8",
+			timeout: 5_000,
+		});
+		expect(result.status, result.stderr).toBe(0);
+		const parsed = JSON.parse(result.stdout) as {
+			names: string[];
+			noTarget: { error: string };
+			twoTargets: { error: string };
+			badUpdate: { error: string };
+			down: { error: string };
+		};
+		expect(parsed.names).toEqual(
+			expect.arrayContaining([
+				"agent_peers",
+				"agent_message_send",
+				"agent_message_inbox",
+				"agent_message_ack",
+				"board_list",
+				"board_read",
+				"board_post",
+				"board_update",
+			]),
+		);
+		expect(parsed.noTarget.error).toContain("exactly one target");
+		expect(parsed.twoTargets.error).toContain("exactly one target");
+		expect(parsed.badUpdate.error).toContain("at least one");
+		expect(parsed.down.error).toContain("failed");
+	});
+
+	it("routes cross-agent and board calls to the expected daemon paths and bodies", () => {
+		const fixture = join(tmpRoot, "python-coordination-paths");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+
+		const script = [
+			"import json",
+			"import plugins.memory.signet as sig",
+			"calls = []",
+			"class FakeClient:",
+			"    _agent_id = 'agent-a'",
+			"    def _get(self, path, **kw):",
+			"        calls.append(['GET', path, None]); return {'ok': True}",
+			"    def _post(self, path, body, **kw):",
+			"        calls.append(['POST', path, body]); return {'ok': True}",
+			"    def _patch(self, path, body, **kw):",
+			"        calls.append(['PATCH', path, body]); return {'ok': True}",
+			"p = sig.SignetMemoryProvider()",
+			"p._client = FakeClient()",
+			"p._agent_id = 'agent-a'",
+			"p._session_key = 'sess-1'",
+			"def call(name, **a):",
+			"    p.handle_tool_call(name, a)",
+			"call('agent_message_send', content='hi', to_session_key='s2', type='question', fromSessionKey='evil')",
+			"call('agent_message_send', content='all', broadcast=True)",
+			"call('agent_peers', include_self=True, limit=500)",
+			"call('agent_message_inbox', unread_only=True, limit=99, offset=2)",
+			"call('agent_message_ack', message_id='m/1')",
+			"call('board_post', thread_id='t 1', body='reply', reply_to_post_id='p1')",
+			"call('board_post', topic='x', title='T', body='B', tags=['a'], from_message_id='m1')",
+			"call('board_read', thread_id='t1')",
+			"call('board_update', thread_id='t1', status='resolved', pinned=True, tags=['z'])",
+			"call('board_list', status='open', topic='x')",
+			"print(json.dumps(calls))",
+		].join("\n");
+		const result = spawnSync(resolveTestPythonPath(), ["-c", script], {
+			cwd: fixture,
+			env: { ...process.env, PYTHONPATH: fixture },
+			encoding: "utf-8",
+			timeout: 5_000,
+		});
+		expect(result.status, result.stderr).toBe(0);
+		const calls = JSON.parse(result.stdout) as Array<[string, string, Record<string, unknown> | null]>;
+		expect(calls[0]).toEqual([
+			"POST",
+			"/api/cross-agent/messages",
+			{
+				fromAgentId: "agent-a",
+				fromSessionKey: "sess-1",
+				broadcast: false,
+				type: "question",
+				content: "hi",
+				toSessionKey: "s2",
+			},
+		]);
+		expect(calls[1][2]).toMatchObject({ broadcast: true, type: "info", fromSessionKey: "sess-1" });
+		expect(calls[2][1]).toBe(
+			"/api/cross-agent/presence?agent_id=agent-a&session_key=sess-1&include_self=true&limit=50",
+		);
+		expect(calls[3][1]).toBe(
+			"/api/cross-agent/messages?agent_id=agent-a&session_key=sess-1&limit=25&offset=2&unread_only=true",
+		);
+		expect(calls[4]).toEqual([
+			"POST",
+			"/api/cross-agent/messages/m%2F1/ack",
+			{ agentId: "agent-a", sessionKey: "sess-1" },
+		]);
+		expect(calls[5]).toEqual([
+			"POST",
+			"/api/board/threads/t%201/posts",
+			{ agentId: "agent-a", sessionKey: "sess-1", harness: "hermes-agent", body: "reply", replyToPostId: "p1" },
+		]);
+		expect(calls[6]).toEqual([
+			"POST",
+			"/api/board/threads",
+			{
+				agentId: "agent-a",
+				sessionKey: "sess-1",
+				harness: "hermes-agent",
+				topic: "x",
+				title: "T",
+				body: "B",
+				tags: ["a"],
+				fromMessageId: "m1",
+			},
+		]);
+		expect(calls[7][1]).toBe("/api/board/threads/t1?agent_id=agent-a");
+		expect(calls[8]).toEqual(["POST", "/api/board/threads/t1/read", { agentId: "agent-a" }]);
+		expect(calls[9]).toEqual([
+			"PATCH",
+			"/api/board/threads/t1",
+			{ agentId: "agent-a", status: "resolved", pinned: true, tags: ["z"] },
+		]);
+		expect(calls[10][1]).toBe("/api/board/topics?agent_id=agent-a");
+		expect(calls[11][1]).toBe("/api/board/threads?topic=x&status=open&agent_id=agent-a");
+	});
+
 	it("runs the direct-message wake loop with injection, backoff, and clean stop", () => {
 		const fixture = join(tmpRoot, "python-wake-fixture");
 		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });

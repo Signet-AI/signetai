@@ -36,6 +36,7 @@ export {
 	type DaemonClientConfig,
 	type DaemonFetchFailure,
 	type DaemonFetchResult,
+	type DaemonRequestClient,
 	type DaemonStatusClient,
 } from "./daemon-client.js";
 

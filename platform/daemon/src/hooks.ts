@@ -1,4 +1,5 @@
 import { requestMemoryHead } from "./memory-head";
+import { listBoardTopics, resolveBoardViewer } from "./board";
 import { budgetIdentityContent } from "./identity-context";
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -120,7 +121,8 @@ import { advanceRecallContextEpochAsync, applyRecallDedupeAsync, claimRecallItem
 import {
 	buildSignetSystemPrompt,
 	formatLastSeenShort,
-	harnessSupportsNamedCrossAgentTools,
+	buildCrossAgentCapabilitySection,
+	harnessHasCrossAgentTools,
 	renderSessionContinuity,
 	sanitizePeerPromptField,
 	serializeTraversalPath,
@@ -606,6 +608,21 @@ function boundSessionStartAggregate(stableSystemPrompt: string, rawInject: strin
 	return "";
 }
 
+async function buildCrossAgentSessionSection(req: SessionStartRequest): Promise<string | null> {
+	if (!harnessHasCrossAgentTools(req.harness)) return null;
+	const agentId = resolveAgentId(req);
+	let topics: readonly { readonly slug: string; readonly threadCount: number }[] = [];
+	try {
+		topics = await listBoardTopics(await resolveBoardViewer(agentId));
+	} catch (error) {
+		logger.warn("board", "Board topics unavailable for session start", {
+			agentId,
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
+	return buildCrossAgentCapabilitySection({ harness: req.harness, agentId, sessionKey: req.sessionKey, topics });
+}
+
 export async function handleSessionStart(req: SessionStartRequest): Promise<SessionStartResponse> {
 	const start = Date.now();
 	const agentId = resolveAgentId(req);
@@ -1072,15 +1089,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					`- ${safeAgentId} (${safeHarness})${projectLabel}${sessionLabel} [seen ${formatLastSeenShort(peer.lastSeenAt)}]`,
 				);
 			}
-			if (harnessSupportsNamedCrossAgentTools(req.harness)) {
-				dynamicParts.push(
-					"Use `agent_message_send` to ask for help; direct messages wake the recipient. Use `agent_message_inbox` to read replies, and `board_list` / `board_post` for shared topic threads that do not need an immediate answer.",
-				);
-				const safeOwnSession = sanitizePeerPromptField(req.sessionKey);
-				if (safeOwnSession) dynamicParts.push(`Your session key is ${safeOwnSession}.`);
-			}
 		}
 	}
+
+	const crossAgentSection = await buildCrossAgentSessionSection(req);
+	if (crossAgentSection) dynamicParts.push(crossAgentSection);
 
 	if (agentsMdContent) {
 		dynamicParts.push("\n## Agent Instructions\n");

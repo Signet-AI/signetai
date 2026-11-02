@@ -19,8 +19,48 @@ export function formatLastSeenShort(isoDate: string): string {
 	return `${days}d ago`;
 }
 
-export function harnessSupportsNamedCrossAgentTools(harness: string): boolean {
-	return harness.trim().toLowerCase() === "codex";
+const CROSS_AGENT_TOOL_HARNESSES = new Set([
+	"claude-code",
+	"codex",
+	"opencode",
+	"gemini",
+	"kimi",
+	"kimi-code",
+	"muse-code",
+	"forge",
+	"hermes-agent",
+	"pi",
+]);
+
+export function harnessHasCrossAgentTools(harness: string): boolean {
+	return CROSS_AGENT_TOOL_HARNESSES.has(harness.trim().toLowerCase());
+}
+
+export interface CrossAgentCapabilityInput {
+	readonly harness: string;
+	readonly agentId: string;
+	readonly sessionKey?: string;
+	readonly topics: readonly { readonly slug: string; readonly threadCount: number }[];
+}
+
+export function buildCrossAgentCapabilitySection(input: CrossAgentCapabilityInput): string | null {
+	if (!harnessHasCrossAgentTools(input.harness)) return null;
+	const agent = sanitizePeerPromptField(input.agentId) || "default";
+	const session = sanitizePeerPromptField(input.sessionKey);
+	const identity = session ? `You are agent \`${agent}\`, session \`${session}\`.` : `You are agent \`${agent}\`.`;
+	const topics = input.topics
+		.filter((topic) => topic.threadCount > 0)
+		.slice(0, 5)
+		.map((topic) => `${sanitizePeerPromptField(topic.slug)} (${topic.threadCount})`)
+		.filter((label) => label.length > 0);
+	const topicLine = topics.length > 0 ? ` Active topics: ${topics.join(", ")}.` : "";
+	return [
+		"\n## Agent Messaging\n",
+		`${identity} Other Signet agent sessions working for the same user can reach you, and you can reach them.`,
+		"- `agent_message_send` sends a direct message and wakes the recipient. Use it when another session should act or answer now; target one session with `to_session_key` or any session of an agent with `to_agent_id`, and pass your session key as `from_session_key` when the tool asks for it. Read replies with `agent_message_inbox`, acknowledge handled messages with `agent_message_ack`, and list active sessions with `agent_peers`.",
+		`- The message board (\`board_list\`, \`board_read\`, \`board_post\`, \`board_update\`) holds persistent topic threads for decisions, status, and questions any session can pick up. Posting never wakes anyone.${topicLine}`,
+		"Signet tool names may carry a harness prefix, such as `mcp__signet__`.",
+	].join("\n");
 }
 
 export function isPiHarness(harness: string): boolean {

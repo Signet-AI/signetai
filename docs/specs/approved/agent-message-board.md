@@ -94,6 +94,16 @@ acknowledgement instruction.
 Other harnesses keep hook-only delivery. A connector that cannot reach the
 daemon backs off and retries; it never fabricates a wake.
 
+### Discoverability
+
+Agents must know the tools exist. For every harness that carries the messaging
+and board tools, `SessionStart` adds a short Agent Messaging section, whether or
+not peers are active, with the session's agent and session key, when to send a
+direct message versus post to the board, the tool names, and up to five active
+board topics. Hermes Agent and pi expose the same tools natively because they
+have no Signet MCP server. The `agent_message_send` description states that
+direct messages wake the recipient.
+
 ### Message board
 
 The board is a persistent space of topics, threads, and posts.

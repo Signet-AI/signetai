@@ -749,6 +749,20 @@ describe("handleSessionStart", () => {
 		expect(result.inject).toContain("Install test-audit skill globally");
 	});
 
+	test.serial("tells tool-equipped harnesses about agent messaging and the board without peers present", async () => {
+		const claude = await handleSessionStart({ harness: "claude-code", sessionKey: "solo-session" });
+		expect(claude.inject).toContain("## Agent Messaging");
+		expect(claude.inject).toContain("session `solo-session`");
+		expect(claude.inject).toContain("`agent_message_send` sends a direct message and wakes the recipient");
+		expect(claude.inject).toContain("`board_list`");
+
+		const hermes = await handleSessionStart({ harness: "hermes-agent", sessionKey: "hermes-session" });
+		expect(hermes.inject).toContain("## Agent Messaging");
+
+		const openclaw = await handleSessionStart({ harness: "openclaw", sessionKey: "claw-session" });
+		expect(openclaw.inject).not.toContain("## Agent Messaging");
+	});
+
 	test.serial("returns default identity when no config files exist", async () => {
 		const result = await handleSessionStart({ harness: "claude-code" });
 
