@@ -845,6 +845,7 @@ export async function claimBoardActivityNotices(input: {
 	const viewer = await resolveBoardViewer(input.agentId);
 	const visibility = agentVisibility(viewer, "t.author_agent_id");
 	const limit = clamp(input.limit, BOARD_LIMITS.notices, 1, BOARD_LIMITS.notices);
+	const scanStartedAt = new Date().toISOString();
 	const session = input.sessionKey ?? "";
 	const authorSession = input.sessionKey ?? null;
 	const rows = await readAll<{
@@ -914,17 +915,18 @@ export async function claimBoardActivityNotices(input: {
 		}));
 	if (notices.length === 0) return [];
 	const now = new Date(input.nowMs ?? Date.now()).toISOString();
-	await write(
+	const results = await write(
 		notices.map((notice) =>
 			ownerStatement(
 				`INSERT INTO board_notices (agent_id, session_key, thread_id, notified_at) VALUES (?, ?, ?, ?)
-				 ON CONFLICT(agent_id, session_key, thread_id) DO UPDATE SET notified_at = excluded.notified_at`,
-				[input.agentId, session, notice.threadId, now],
+				 ON CONFLICT(agent_id, session_key, thread_id) DO UPDATE SET notified_at = excluded.notified_at
+				 WHERE board_notices.notified_at < ?`,
+				[input.agentId, session, notice.threadId, now, scanStartedAt],
 			),
 		),
 		"board.notices.claim",
 	);
-	return notices;
+	return notices.filter((_, index) => (results[index] as { readonly changes?: number } | undefined)?.changes === 1);
 }
 
 function renderPostArtifact(thread: BoardThread, post: BoardPost): string {

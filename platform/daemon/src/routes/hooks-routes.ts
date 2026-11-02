@@ -674,6 +674,14 @@ function registerDirectMessageWake(app: Hono): void {
 				waitMs,
 				signal: c.req.raw.signal,
 			});
+			if (result.wake && c.req.raw.signal.aborted) {
+				await releaseDirectMessageWakes({
+					agentId: scopedAgent.agentId,
+					sessionKey,
+					messageIds: result.messageIds,
+				});
+				return c.json({ wake: false, reason: "aborted" });
+			}
 			return c.json(result);
 		} catch (error) {
 			logger.error("hooks", "Direct message wake failed", error instanceof Error ? error : new Error(String(error)));

@@ -369,14 +369,14 @@ class _WakeWaiter:
         if conn is not None:
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Signet wake connection close failed: %s", e)
             sock = getattr(conn, "sock", None)
             if sock is not None:
                 try:
                     sock.close()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Signet wake socket close failed: %s", e)
 
     def join(self, timeout: float) -> None:
         if self._thread.is_alive() and threading.current_thread() is not self._thread:
@@ -388,8 +388,8 @@ class _WakeWaiter:
         if conn is not None and self._stop.is_set():
             try:
                 conn.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Signet wake connection close failed: %s", e)
 
     def _injection_ready(self) -> bool:
         if self._can_inject is None:
@@ -1643,8 +1643,8 @@ def _resolve_injection_gate(ctx: Any) -> Optional[Any]:
     if callable(factory):
         try:
             candidates.append(factory())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Signet plugin context unavailable for wake gate: %s", e)
     for candidate in candidates:
         if getattr(candidate, "_manager", None) is not None:
             return lambda: _injection_available(candidate)

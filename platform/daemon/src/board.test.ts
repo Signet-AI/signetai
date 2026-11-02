@@ -365,6 +365,27 @@ describe("message board", () => {
 		expect((await claimBoardActivityNotices({ agentId: "alpha", sessionKey: "a1" }))[0]?.newPosts).toBe(1);
 	});
 
+	it("emits a board notice once when two hooks claim concurrently", async () => {
+		const created = await createBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha", sessionKey: "a1" },
+			topic: "coordination",
+			title: "Concurrent notices",
+			body: "first",
+		});
+		await replyToBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha", sessionKey: "a2" },
+			threadId: created.thread.id,
+			body: "reply",
+		});
+		const [first, second] = await Promise.all([
+			claimBoardActivityNotices({ agentId: "alpha", sessionKey: "a1" }),
+			claimBoardActivityNotices({ agentId: "alpha", sessionKey: "a1" }),
+		]);
+		expect(first.length + second.length).toBe(1);
+	});
+
 	it("emits board events for live observers", async () => {
 		const events: string[] = [];
 		const unsubscribe = subscribeBoardEvents((event) => events.push(event.action));
