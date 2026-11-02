@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-11-02
+- Bug fixes: bound Hermes mirror dedup by recall dates; apply since/until to native artifacts and transcripts.
+
 ### 2026-10-26
 - Features: set the Dreaming pass timeout for slower local models; cap local answering and judging reasoning with a thinking budget; override the Dreaming model context window; cap thinking on local OpenAI-compatible targets; send enable_thinking with the local reasoning effort; set the Dreaming per-turn output budget for local reasoning models; run answering and judging on local OpenAI-compatible models; raise LLM and Dreaming concurrency ceilings to 256.
 - Bug fixes: discover the window only for agents; bound archive retries and clean temp files; report activeAgentId only for that agent; harden the RunPod kit from review; cap waits at the retry deadline; scope dream status to the agent; repair a torn tail on append; read the served context window; cap evidence delivered per pass; bound scheduled content sweeps and size passes by maxPassTokens; size passes so they finish and commit instead of livelocking; treat a DB owner deadline on trigger as retryable; count special-token literals in user text instead of throwing; return a retryable 503 when a trigger hits DB owner pressure; resend dropped requests on a fresh connection and name the failed path; keep every question when resuming an unrestricted run; page session-claim restore so a busy daemon can restart; keep honoring Retry-After while the capture backlog drains; treat a full transcript-capture backlog as retryable write pressure; resend requests the daemon dropped on a pooled connection; take local targets' context window from the server; create each haystack agent once and retry Signet write pressure; surface write pressure as retryable 503s instead of 500s and dropped captures; report running passes in /api/dream/status; restore the loopback endpoint check for local Dreaming models.
@@ -30,12 +33,17 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-10-14
 - Bug fixes: guarantee integrity progress past slow probes and shadowed rowids; check large tables in bounded chunks during integrity sweeps; compact no-op dependency history rebuild pairs; say a rejected memory head commit may be retried; enforce the memory head token budget when it is staged; require a note's own graph structure before skipping it; look up indexed Obsidian documents by canonical path; skip unchanged native source files in the owner.
 
-### 2026-10-13
-- Bug fixes: ignore hygiene passes when marking import nudges seen; consume whitespace-only evidence tails; stop re-arming seen import nudges; keep suppressed passes off stalls; match imported transcript cursors; stop stall attention driving passes; demote stalled continuations; advance evidence by reviewed text; pin bun-types in extension workspaces.
-- Performance: bound import attention drain check.
-- Docs: name migration 169 as latest.
-
 ## Release Ledger
+
+## [0.238.1] - 2026-11-02
+
+Release summary: 2 bug fixes.
+Tag range: `v0.238.0..v0.238.1`.
+
+### Bug Fixes
+
+- **memory**: bound Hermes mirror dedup by recall dates
+- **memory**: apply since/until to native artifacts and transcripts
 
 ## [0.238.0] - 2026-10-26
 
