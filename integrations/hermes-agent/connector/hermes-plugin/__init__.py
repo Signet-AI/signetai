@@ -1734,17 +1734,27 @@ class SignetMemoryProvider(MemoryProvider):
     def _handle_coordination_tool(self, tool_name: str, args: Dict[str, Any]) -> str:
         """Dispatch cross-agent messaging and message board tools with auto-filled identity."""
         client = self._client
-        agent_id = self._agent_id or getattr(client, "_agent_id", "") or "default"
+        agent_id = self._agent_id or getattr(client, "_agent_id", "") or ""
         session_key = self._session_key
         harness = "hermes-agent"
 
         def fail(msg: str) -> str:
             return json.dumps({"error": msg})
 
-        def done(result: Any, label: str) -> str:
-            if result is None:
-                return fail(f"Signet {label} failed or the daemon is unreachable.")
-            return json.dumps(result)
+        def call(method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+            if body is not None:
+                body = {k: v for k, v in body.items() if not (k in ("agentId", "fromAgentId") and not v)}
+            return client.request_result(method, path, body)
+
+        def failure(result: Dict[str, Any], label: str) -> str:
+            status = result.get("status")
+            where = f" (HTTP {status})" if status else ""
+            return fail(f"Signet {label} failed{where}: {result.get('error') or 'unknown error'}")
+
+        def done(result: Dict[str, Any], label: str) -> str:
+            if not result.get("ok"):
+                return failure(result, label)
+            return json.dumps(result.get("data"))
 
         def text(key: str) -> str:
             return str(args.get(key, "") or "").strip()
@@ -1784,7 +1794,7 @@ class SignetMemoryProvider(MemoryProvider):
                 "include_self": bool(flag("include_self")),
                 "limit": num("limit", 1, 50),
             })
-            return done(client._get(f"/api/cross-agent/presence?{query}"), tool_name)
+            return done(call("GET", f"/api/cross-agent/presence?{query}"), tool_name)
 
         if tool_name == "agent_message_send":
             content = text("content")
@@ -1809,7 +1819,7 @@ class SignetMemoryProvider(MemoryProvider):
                 body["toAgentId"] = to_agent
             if to_session:
                 body["toSessionKey"] = to_session
-            return done(client._post("/api/cross-agent/messages", body), tool_name)
+            return done(call("POST", "/api/cross-agent/messages", body), tool_name)
 
         if tool_name == "agent_message_inbox":
             query = qs({
@@ -1820,14 +1830,14 @@ class SignetMemoryProvider(MemoryProvider):
                 "unread_only": flag("unread_only"),
                 "include_sent": flag("include_sent"),
             })
-            return done(client._get(f"/api/cross-agent/messages?{query}"), tool_name)
+            return done(call("GET", f"/api/cross-agent/messages?{query}"), tool_name)
 
         if tool_name == "agent_message_ack":
             message_id = text("message_id")
             if not message_id:
                 return fail("Missing required parameter: message_id")
             return done(
-                client._post(
+                call("POST", 
                     f"/api/cross-agent/messages/{seg(message_id)}/ack",
                     {"agentId": agent_id, "sessionKey": session_key},
                 ),
@@ -1844,11 +1854,19 @@ class SignetMemoryProvider(MemoryProvider):
                 "limit": num("limit", 1, 100),
                 "offset": num("offset", 0, 1_000_000),
             })
-            topics = client._get(f"/api/board/topics?{agent_query}")
-            threads = client._get(f"/api/board/threads?{thread_query}")
-            if topics is None and threads is None:
-                return fail("Signet board_list failed or the daemon is unreachable.")
-            return json.dumps({"topics": topics, "threads": threads})
+            topics = call("GET", f"/api/board/topics?{agent_query}")
+            threads = call("GET", f"/api/board/threads?{thread_query}")
+            if not topics.get("ok") and not threads.get("ok"):
+                return failure(threads, tool_name)
+            out: Dict[str, Any] = {
+                "topics": topics.get("data") if topics.get("ok") else None,
+                "threads": threads.get("data") if threads.get("ok") else None,
+            }
+            if not topics.get("ok"):
+                out["topicsError"] = topics.get("error")
+            if not threads.get("ok"):
+                out["threadsError"] = threads.get("error")
+            return json.dumps(out)
 
         if tool_name == "board_read":
             thread_id = text("thread_id")
@@ -1860,11 +1878,11 @@ class SignetMemoryProvider(MemoryProvider):
                 "limit": num("limit", 1, 200),
                 "offset": num("offset", 0, 1_000_000),
             })
-            thread = client._get(f"{path}?{query}")
-            if thread is None:
-                return fail("Signet board_read failed or the thread was not found.")
-            marked = client._post(f"{path}/read", {"agentId": agent_id})
-            return json.dumps({"thread": thread, "markedRead": marked is not None})
+            thread = call("GET", f"{path}?{query}")
+            if not thread.get("ok"):
+                return failure(thread, tool_name)
+            marked = call("POST", f"{path}/read", {"agentId": agent_id})
+            return json.dumps({"thread": thread.get("data"), "markedRead": bool(marked.get("ok"))})
 
         if tool_name == "board_post":
             thread_id = text("thread_id")
@@ -1880,23 +1898,28 @@ class SignetMemoryProvider(MemoryProvider):
                 }
                 if text("reply_to_post_id"):
                     payload["replyToPostId"] = text("reply_to_post_id")
-                return done(client._post(f"/api/board/threads/{seg(thread_id)}/posts", payload), tool_name)
-            if not (text("topic") and text("title") and body_text):
+                return done(call("POST", f"/api/board/threads/{seg(thread_id)}/posts", payload), tool_name)
+            if text("from_message_id"):
+                if not text("topic"):
+                    return fail("Promoting a direct message requires topic.")
+            elif not (text("topic") and text("title") and body_text):
                 return fail("Starting a thread requires topic, title, and body (or pass thread_id to reply).")
             payload = {
                 "agentId": agent_id,
                 "sessionKey": session_key,
                 "harness": harness,
                 "topic": text("topic"),
-                "title": text("title"),
-                "body": body_text,
             }
+            if text("title"):
+                payload["title"] = text("title")
+            if body_text:
+                payload["body"] = body_text
             tags = tag_list("tags")
             if tags is not None:
                 payload["tags"] = tags
             if text("from_message_id"):
                 payload["fromMessageId"] = text("from_message_id")
-            return done(client._post("/api/board/threads", payload), tool_name)
+            return done(call("POST", "/api/board/threads", payload), tool_name)
 
         if tool_name == "board_update":
             thread_id = text("thread_id")
@@ -1912,9 +1935,9 @@ class SignetMemoryProvider(MemoryProvider):
             tags = tag_list("tags")
             if tags is not None:
                 payload["tags"] = tags
-            if len(payload) == 1:
+            if not any(key in payload for key in ("status", "pinned", "title", "tags")):
                 return fail("Provide at least one of status, pinned, title, or tags.")
-            return done(client._patch(f"/api/board/threads/{seg(thread_id)}", payload), tool_name)
+            return done(call("PATCH", f"/api/board/threads/{seg(thread_id)}", payload), tool_name)
 
         return fail(f"Unknown tool: {tool_name}")
 

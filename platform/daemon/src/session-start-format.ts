@@ -25,7 +25,6 @@ const CROSS_AGENT_TOOL_HARNESSES = new Set([
 	"opencode",
 	"gemini",
 	"kimi",
-	"kimi-code",
 	"muse-code",
 	"forge",
 	"hermes-agent",
@@ -43,15 +42,21 @@ export interface CrossAgentCapabilityInput {
 	readonly topics: readonly { readonly slug: string; readonly threadCount: number }[];
 }
 
+const MAX_PROMPT_FIELD_CHARS = 80;
+
+function capPromptField(value: string): string {
+	return value.length > MAX_PROMPT_FIELD_CHARS ? `${value.slice(0, MAX_PROMPT_FIELD_CHARS - 1)}…` : value;
+}
+
 export function buildCrossAgentCapabilitySection(input: CrossAgentCapabilityInput): string | null {
 	if (!harnessHasCrossAgentTools(input.harness)) return null;
-	const agent = sanitizePeerPromptField(input.agentId) || "default";
-	const session = sanitizePeerPromptField(input.sessionKey);
+	const agent = capPromptField(sanitizePeerPromptField(input.agentId)) || "default";
+	const session = capPromptField(sanitizePeerPromptField(input.sessionKey));
 	const identity = session ? `You are agent \`${agent}\`, session \`${session}\`.` : `You are agent \`${agent}\`.`;
 	const topics = input.topics
 		.filter((topic) => topic.threadCount > 0)
 		.slice(0, 5)
-		.map((topic) => `${sanitizePeerPromptField(topic.slug)} (${topic.threadCount})`)
+		.map((topic) => capPromptField(sanitizePeerPromptField(topic.slug)))
 		.filter((label) => label.length > 0);
 	const topicLine = topics.length > 0 ? ` Active topics: ${topics.join(", ")}.` : "";
 	return [

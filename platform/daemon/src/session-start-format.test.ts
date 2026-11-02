@@ -133,10 +133,18 @@ describe("session start formatting helpers", () => {
 		expect(section).toContain("`agent_message_send` sends a direct message and wakes the recipient");
 		expect(section).toContain("`agent_message_ack`");
 		expect(section).toContain("`board_post`");
-		expect(section).toContain("Active topics: release (2), infra (1).");
+		expect(section).toContain("Active topics: release, infra.");
 		expect(section).not.toContain("empty");
 		expect(section?.split("\n").filter((line) => line.trim().length > 0).length).toBeLessThanOrEqual(5);
 		expect(buildCrossAgentCapabilitySection({ harness: "openclaw", agentId: "default", topics: [] })).toBeNull();
+		const long = buildCrossAgentCapabilitySection({
+			harness: "pi",
+			agentId: "a".repeat(500),
+			sessionKey: "s".repeat(500),
+			topics: [],
+		});
+		expect(long?.length ?? 0).toBeLessThan(1_600);
+		expect(long).toContain("…");
 	});
 
 	test("serializes traversal paths with duplicate IDs removed", () => {

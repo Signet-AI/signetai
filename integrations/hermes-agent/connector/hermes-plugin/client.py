@@ -296,6 +296,33 @@ class SignetClient:
             logger.debug("Signet PATCH %s failed: %s", path, e)
             return None
 
+    def request_result(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Dict[str, Any]] = None,
+        *,
+        timeout: float = _TIMEOUT_SECS,
+    ) -> Dict[str, Any]:
+        """Call the daemon and keep the failure reason: {ok, data} or {ok: False, status, error}."""
+        url = f"{self._base_url}{path}"
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return {"ok": True, "data": _read_json_response(resp)}
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                raw = e.read().decode("utf-8", errors="replace")
+                parsed = json.loads(raw) if raw else {}
+                detail = str(parsed.get("error") or raw) if isinstance(parsed, dict) else raw
+            except Exception as read_err:
+                detail = f"unreadable error body: {read_err}"
+            return {"ok": False, "status": e.code, "error": detail[:300] or f"HTTP {e.code}"}
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
+            return {"ok": False, "status": None, "error": f"daemon unreachable: {e}"}
+
     def _delete(
         self,
         path: str,

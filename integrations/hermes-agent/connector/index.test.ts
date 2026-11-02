@@ -2607,15 +2607,11 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 			"    _agent_id = 'agent-a'",
 			"    def __init__(self):",
 			"        self.calls = []",
-			"    def _get(self, path, **kw):",
-			"        self.calls.append(['GET', path, None])",
-			"        return {'ok': True}",
-			"    def _post(self, path, body, **kw):",
-			"        self.calls.append(['POST', path, body])",
-			"        return {'ok': True}",
-			"    def _patch(self, path, body, **kw):",
-			"        self.calls.append(['PATCH', path, body])",
-			"        return {'ok': True}",
+			"    def request_result(self, method, path, body=None, **kw):",
+			"        self.calls.append([method, path, body])",
+			"        if path.startswith('/api/board/threads/missing'):",
+			"            return {'ok': False, 'status': 404, 'error': 'board thread not found: missing'}",
+			"        return {'ok': True, 'data': {'ok': True}}",
 			"p = sig.SignetMemoryProvider()",
 			"p._client = FakeClient()",
 			"p._agent_id = 'agent-a'",
@@ -2638,7 +2634,8 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 			"call('board_update', thread_id='t1', status='resolved', pinned=True)",
 			"r['badUpdate'] = call('board_update', thread_id='t1')",
 			"call('board_list', status='open')",
-			"p._client._get = lambda *a, **k: None",
+			"r['notFound'] = call('board_read', thread_id='missing')",
+			"p._client.request_result = lambda *a, **k: {'ok': False, 'status': None, 'error': 'daemon unreachable: refused'}",
 			"r['down'] = call('agent_peers')",
 			"print(json.dumps(r))",
 		].join("\n");
@@ -2655,6 +2652,7 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 			twoTargets: { error: string };
 			badUpdate: { error: string };
 			down: { error: string };
+			notFound: { error: string };
 		};
 		expect(parsed.names).toEqual(
 			expect.arrayContaining([
@@ -2671,7 +2669,9 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 		expect(parsed.noTarget.error).toContain("exactly one target");
 		expect(parsed.twoTargets.error).toContain("exactly one target");
 		expect(parsed.badUpdate.error).toContain("at least one");
-		expect(parsed.down.error).toContain("failed");
+		expect(parsed.down.error).toContain("daemon unreachable");
+		expect(parsed.notFound.error).toContain("HTTP 404");
+		expect(parsed.notFound.error).toContain("board thread not found");
 	});
 
 	it("routes cross-agent and board calls to the expected daemon paths and bodies", () => {
@@ -2689,12 +2689,8 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 			"calls = []",
 			"class FakeClient:",
 			"    _agent_id = 'agent-a'",
-			"    def _get(self, path, **kw):",
-			"        calls.append(['GET', path, None]); return {'ok': True}",
-			"    def _post(self, path, body, **kw):",
-			"        calls.append(['POST', path, body]); return {'ok': True}",
-			"    def _patch(self, path, body, **kw):",
-			"        calls.append(['PATCH', path, body]); return {'ok': True}",
+			"    def request_result(self, method, path, body=None, **kw):",
+			"        calls.append([method, path, body]); return {'ok': True, 'data': {'ok': True}}",
 			"p = sig.SignetMemoryProvider()",
 			"p._client = FakeClient()",
 			"p._agent_id = 'agent-a'",
@@ -2711,6 +2707,10 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 			"call('board_read', thread_id='t1')",
 			"call('board_update', thread_id='t1', status='resolved', pinned=True, tags=['z'])",
 			"call('board_list', status='open', topic='x')",
+			"call('board_post', topic='decisions', from_message_id='m9')",
+			"p._agent_id = ''",
+			"p._client._agent_id = ''",
+			"call('agent_message_send', content='anon', to_agent_id='b')",
 			"print(json.dumps(calls))",
 		].join("\n");
 		const result = spawnSync(resolveTestPythonPath(), ["-c", script], {
@@ -2773,6 +2773,13 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 		]);
 		expect(calls[10][1]).toBe("/api/board/topics?agent_id=agent-a");
 		expect(calls[11][1]).toBe("/api/board/threads?topic=x&status=open&agent_id=agent-a");
+		expect(calls[12]).toEqual([
+			"POST",
+			"/api/board/threads",
+			{ agentId: "agent-a", sessionKey: "sess-1", harness: "hermes-agent", topic: "decisions", fromMessageId: "m9" },
+		]);
+		expect(calls[13]?.[2]).not.toHaveProperty("fromAgentId");
+		expect(calls[13]?.[2]).toMatchObject({ fromSessionKey: "sess-1", toAgentId: "b", content: "anon" });
 	});
 
 	it("runs the direct-message wake loop with injection, backoff, and clean stop", () => {
