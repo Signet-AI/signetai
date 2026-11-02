@@ -517,6 +517,69 @@ describe("SignetPiExtension", () => {
 		expect(end?.body).not.toHaveProperty("transcript");
 	});
 
+	it("wakes interactive sessions for direct messages and never polls in print mode", async () => {
+		const requests: Array<{ path: string; body: unknown }> = [];
+		let wakeCount = 0;
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				const body = req.method === "POST" ? ((await req.json().catch(() => undefined)) as unknown) : undefined;
+				requests.push({ path, body });
+				if (path === "/health") return new Response(null, { status: 200 });
+				if (path === "/api/hooks/session-start") return Response.json({ inject: "" });
+				if (path === "/api/hooks/session-end") return Response.json({ ok: true });
+				if (path === "/api/cross-agent/wake") {
+					wakeCount += 1;
+					if (wakeCount === 1) return Response.json({ wake: true, inject: "peer says hi", messageIds: ["m1"] });
+					return Response.json({ wake: false, reason: "superseded" });
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		const delivered: Array<{ text: unknown; options: unknown }> = [];
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+			sendUserMessage(text: unknown, options: unknown) {
+				delivered.push({ text, options });
+			},
+		};
+		SignetPiExtension(pi as never);
+		const ctxFor = (mode: string, id: string) => ({
+			mode,
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id, cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => id,
+			},
+			ui: { notify: () => {}, setStatus: () => {}, theme: { fg: (_color: string, text: string) => text } },
+		});
+
+		await handlers.session_start[0]?.({}, ctxFor("print", "session-print"));
+		await Bun.sleep(50);
+		expect(requests.filter((r) => r.path === "/api/cross-agent/wake")).toHaveLength(0);
+
+		await handlers.session_start[0]?.({}, ctxFor("tui", "session-tui"));
+		for (let attempt = 0; attempt < 50 && wakeCount < 2; attempt++) await Bun.sleep(20);
+		expect(delivered).toEqual([{ text: "peer says hi", options: { deliverAs: "followUp" } }]);
+		expect(requests.find((r) => r.path === "/api/cross-agent/wake")?.body).toMatchObject({
+			harness: "pi",
+			sessionKey: "session-tui",
+		});
+		await handlers.session_shutdown[0]?.({}, ctxFor("tui", "session-tui"));
+	});
+
 	it("session_before_fork ends the previous session with the fork reason", async () => {
 		const requests: Array<{ method: string; path: string; body: unknown }> = [];
 		const server = Bun.serve({

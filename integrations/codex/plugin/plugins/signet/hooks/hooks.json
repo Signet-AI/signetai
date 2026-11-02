@@ -46,6 +46,16 @@
 						"timeout": 30
 					}
 				]
+			},
+			{
+				"hooks": [
+					{
+						"type": "command",
+						"command": "signet hook wake -H codex --no-wait --hook-json",
+						"commandWindows": "signet.exe hook wake -H codex --no-wait --hook-json",
+						"timeout": 5
+					}
+				]
 			}
 		]
 	}

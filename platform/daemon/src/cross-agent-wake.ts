@@ -130,6 +130,31 @@ export async function claimDirectMessageWakes(input: {
 	return claimed;
 }
 
+export async function releaseDirectMessageWakes(input: {
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly messageIds: readonly string[];
+}): Promise<number> {
+	const ids = [...new Set(input.messageIds.filter((id) => typeof id === "string" && id.length > 0))].slice(
+		0,
+		MAX_WAKE_BATCH,
+	);
+	if (ids.length === 0) return 0;
+	const results = await dbOwnerBatch(
+		ids.map((id) =>
+			ownerStatement(
+				"DELETE FROM cross_agent_message_wakes WHERE message_id = ? AND agent_id = ? AND session_key = ?",
+				[id, input.agentId, input.sessionKey],
+			),
+		),
+		{ operation: "cross-agent.wake.release", lane: "write", deadlineMs: 5_000, estimatedWorkUnits: ids.length },
+	);
+	return results.reduce<number>(
+		(total, result) => total + ((result as { readonly changes?: number } | undefined)?.changes ?? 0),
+		0,
+	);
+}
+
 function wakeResult(messages: readonly AgentMessage[], sessionKey: string): WakeWaitResult {
 	const items = messages.map(projectNotificationMessage);
 	return {

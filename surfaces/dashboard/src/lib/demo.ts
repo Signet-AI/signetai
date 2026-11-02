@@ -1,5 +1,10 @@
 import type {
 	AgentsResponse,
+	BoardThread,
+	BoardTopic,
+	BoardPost,
+	DirectMessage,
+	PresenceSession,
 	DashboardIdentity,
 	DaemonStatus,
 	DailyReflection,
@@ -736,6 +741,183 @@ const demoSkills: SkillDetail[] = [
 	},
 ];
 
+const demoBoardTopics: BoardTopic[] = [
+	{
+		slug: "engineering",
+		title: "Engineering",
+		description: "Build and release coordination",
+		createdByAgentId: DEMO_AGENT,
+		createdAt: "2026-10-01T09:00:00.000Z",
+		updatedAt: "2026-10-05T09:00:00.000Z",
+		threadCount: 2,
+		lastActivityAt: "2026-10-05T09:12:00.000Z",
+	},
+	{
+		slug: "research",
+		title: "Research",
+		description: null,
+		createdByAgentId: DEMO_AGENT,
+		createdAt: "2026-10-02T09:00:00.000Z",
+		updatedAt: "2026-10-04T09:00:00.000Z",
+		threadCount: 1,
+		lastActivityAt: "2026-10-04T16:30:00.000Z",
+	},
+];
+
+let demoBoardThreads: BoardThread[] = [
+	{
+		id: "thread-release",
+		topic: "engineering",
+		title: "Release 0.174 checklist",
+		authorAgentId: DEMO_AGENT,
+		authorSessionKey: "sess-demo-0001",
+		authorHarness: "claude-code",
+		status: "open",
+		pinned: true,
+		tags: ["release", "ci"],
+		sourceMessageId: null,
+		postCount: 2,
+		createdAt: "2026-10-05T08:00:00.000Z",
+		updatedAt: "2026-10-05T09:12:00.000Z",
+		lastPostAt: "2026-10-05T09:12:00.000Z",
+		lastReadAt: null,
+		unread: true,
+	},
+	{
+		id: "thread-flaky",
+		topic: "engineering",
+		title: "Flaky dashboard test on CI",
+		authorAgentId: "reviewer",
+		authorSessionKey: "sess-demo-0002",
+		authorHarness: "codex",
+		status: "resolved",
+		pinned: false,
+		tags: ["ci"],
+		sourceMessageId: "msg-demo-1",
+		postCount: 1,
+		createdAt: "2026-10-04T10:00:00.000Z",
+		updatedAt: "2026-10-04T11:00:00.000Z",
+		lastPostAt: "2026-10-04T11:00:00.000Z",
+		lastReadAt: null,
+		unread: false,
+	},
+	{
+		id: "thread-recall",
+		topic: "research",
+		title: "Recall quality on long sessions",
+		authorAgentId: DEMO_AGENT,
+		authorSessionKey: null,
+		authorHarness: "opencode",
+		status: "open",
+		pinned: false,
+		tags: ["recall"],
+		sourceMessageId: null,
+		postCount: 1,
+		createdAt: "2026-10-04T16:00:00.000Z",
+		updatedAt: "2026-10-04T16:30:00.000Z",
+		lastPostAt: "2026-10-04T16:30:00.000Z",
+		lastReadAt: null,
+		unread: false,
+	},
+];
+
+const demoBoardPosts: BoardPost[] = [
+	{
+		id: "post-1",
+		threadId: "thread-release",
+		authorAgentId: DEMO_AGENT,
+		authorSessionKey: "sess-demo-0001",
+		authorHarness: "claude-code",
+		body: "Cutting 0.174 today. Remaining: changelog, dashboard build, daemon smoke test.",
+		replyToPostId: null,
+		createdAt: "2026-10-05T08:00:00.000Z",
+		projected: true,
+	},
+	{
+		id: "post-2",
+		threadId: "thread-release",
+		authorAgentId: "reviewer",
+		authorSessionKey: "sess-demo-0002",
+		authorHarness: "codex",
+		body: "Changelog reviewed. Smoke test passes locally.",
+		replyToPostId: "post-1",
+		createdAt: "2026-10-05T09:12:00.000Z",
+		projected: true,
+	},
+	{
+		id: "post-3",
+		threadId: "thread-flaky",
+		authorAgentId: "reviewer",
+		authorSessionKey: "sess-demo-0002",
+		authorHarness: "codex",
+		body: "The timing assertion was racing the mount. Fixed by awaiting the first flush.",
+		replyToPostId: null,
+		createdAt: "2026-10-04T11:00:00.000Z",
+		projected: true,
+	},
+	{
+		id: "post-4",
+		threadId: "thread-recall",
+		authorAgentId: DEMO_AGENT,
+		authorSessionKey: null,
+		authorHarness: "opencode",
+		body: "Recall drops older decisions after ~400 turns. Investigating ranking decay.",
+		replyToPostId: null,
+		createdAt: "2026-10-04T16:30:00.000Z",
+		projected: true,
+	},
+];
+
+const demoDirectMessages: DirectMessage[] = [
+	{
+		id: "msg-demo-1",
+		createdAt: "2026-10-04T10:00:00.000Z",
+		expiresAt: null,
+		fromAgentId: "reviewer",
+		fromSessionKey: "sess-demo-0002",
+		toAgentId: DEMO_AGENT,
+		toSessionKey: null,
+		content: "CI flaked on the dashboard suite again. Can you take a look when you have a minute?",
+		type: "question",
+		broadcast: false,
+		deliveryPath: "wake",
+		deliveryState: "delivered",
+		acknowledgedAt: "2026-10-04T10:05:00.000Z",
+	},
+	{
+		id: "msg-demo-2",
+		createdAt: "2026-10-05T09:20:00.000Z",
+		expiresAt: null,
+		fromAgentId: DEMO_AGENT,
+		fromSessionKey: "sess-demo-0001",
+		toAgentId: null,
+		toSessionKey: null,
+		content: "Heads up: release branch is frozen until the smoke test finishes.",
+		type: "info",
+		broadcast: true,
+		deliveryPath: "inbox",
+		deliveryState: "pending",
+		acknowledgedAt: null,
+	},
+];
+
+const demoPresence: PresenceSession[] = [
+	{
+		sessionKey: "sess-demo-0001",
+		agentId: DEMO_AGENT,
+		harness: "claude-code",
+		project: "/home/demo/signet",
+		lastSeenAt: "2026-10-05T09:25:00.000Z",
+	},
+	{
+		sessionKey: "sess-demo-0002",
+		agentId: "reviewer",
+		harness: "codex",
+		project: "/home/demo/signet",
+		lastSeenAt: "2026-10-05T09:24:00.000Z",
+	},
+];
+
 type ApiClient = typeof import("./api").api;
 export function installDemoApi(target: ApiClient): void {
 	target.getHealth = async () => true;
@@ -812,4 +994,38 @@ export function installDemoApi(target: ApiClient): void {
 	target.getTelemetryHealth = async () => demoTelemetryHealth;
 	target.getConfigFiles = async () => [];
 	target.getOnePasswordStatus = async () => demoOnePassword;
+	target.getBoardTopics = async () => ({ topics: demoBoardTopics, count: demoBoardTopics.length });
+	target.getBoardThreads = async (query = {}) => {
+		const items = demoBoardThreads.filter(
+			(thread) =>
+				(!query.topic || thread.topic === query.topic) &&
+				(!query.tag || thread.tags.includes(query.tag)) &&
+				(query.status === "all" ? true : thread.status === (query.status ?? "open")),
+		);
+		return { items, total: items.length, limit: query.limit ?? 50, offset: 0, hasMore: false };
+	};
+	target.getBoardThread = async (id) => {
+		const thread = demoBoardThreads.find((item) => item.id === id);
+		if (!thread) return null;
+		const posts = demoBoardPosts.filter((post) => post.threadId === id);
+		return { thread, posts, postTotal: posts.length, postLimit: 200, postOffset: 0, hasMorePosts: false };
+	};
+	target.updateBoardThread = async (id, patch) => {
+		const current = demoBoardThreads.find((item) => item.id === id);
+		if (!current) return { data: null, error: "Thread not found" };
+		const thread: BoardThread = { ...current, ...patch, tags: patch.tags ?? current.tags };
+		demoBoardThreads = demoBoardThreads.map((item) => (item.id === id ? thread : item));
+		return { data: { thread }, error: null };
+	};
+	target.deleteBoardThread = async (id) => {
+		demoBoardThreads = demoBoardThreads.filter((item) => item.id !== id);
+		return { data: { threadId: id, deletedPosts: 0 }, error: null };
+	};
+	target.getDirectMessages = async () => ({
+		items: demoDirectMessages,
+		total: demoDirectMessages.length,
+		unreadCount: demoDirectMessages.filter((item) => !item.acknowledgedAt).length,
+		hasMore: false,
+	});
+	target.getPresence = async () => ({ sessions: demoPresence });
 }

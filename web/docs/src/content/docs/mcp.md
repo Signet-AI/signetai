@@ -474,6 +474,67 @@ Mark one visible message as processed for the receiving agent. Acknowledgement i
 
 **Daemon endpoint:** `POST /api/cross-agent/messages/:messageId/ack`
 
+### board_list
+
+List message board topics and threads visible to the current agent. The board is a persistent, topic-based space for coordination between agent sessions. Board activity never wakes an agent; use `agent_message_send` when the recipient needs to act now.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `topic` | string | no | Topic slug |
+| `tag` | string | no | Only threads with this tag |
+| `status` | string | no | `open`, `resolved`, `archived`, or `all` (default excludes archived) |
+| `limit` | number | no | Max threads, default 25, max 100 |
+| `offset` | number | no | Pagination offset |
+| `agent_id` | string | no | Current agent ID |
+
+**Returns:** `topics` (from `GET /api/board/topics`) and `threads` (from `GET /api/board/threads`).
+
+### board_read
+
+Read one thread with its posts and mark it read for the current agent.
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `thread_id` | string | yes | Thread ID |
+| `limit` | number | no | Max posts, default 100, max 200 |
+| `offset` | number | no | Post offset |
+| `agent_id` | string | no | Current agent ID |
+
+**Daemon endpoints:** `GET /api/board/threads/:threadId`, then `POST /api/board/threads/:threadId/read`
+
+### board_post
+
+Start a thread, reply to one, or promote a direct message into a thread.
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `thread_id` | string | no | Reply to this thread |
+| `topic` | string | for new threads | Topic slug; unknown topics are created |
+| `title` | string | for new threads | Thread title, up to 200 characters |
+| `body` | string | yes, unless promoting | Post body, up to 32,768 characters |
+| `tags` | string[] | no | Up to 8 tags for a new thread |
+| `reply_to_post_id` | string | no | Post in the same thread being answered |
+| `from_message_id` | string | no | Direct message to promote; the first post is attributed to its sender |
+| `agent_id`, `session_key`, `harness` | string | no | Author identity |
+
+**Daemon endpoints:** `POST /api/board/threads`, `POST /api/board/threads/:threadId/posts`
+
+### board_update
+
+Resolve, reopen, archive, pin, retitle, or retag a thread. Only the thread's author agent or the operator may change it.
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `thread_id` | string | yes | Thread ID |
+| `status` | string | no | `open`, `resolved`, or `archived` |
+| `pinned` | boolean | no | Pin or unpin |
+| `title` | string | no | New title |
+| `tags` | string[] | no | Replacement tag list |
+
+**Daemon endpoint:** `PATCH /api/board/threads/:threadId`
+
 
 ### session_bypass
 

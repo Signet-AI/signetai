@@ -65,18 +65,27 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_board_posts_thread
 			ON board_posts(thread_id, created_at, id);
 		CREATE INDEX IF NOT EXISTS idx_board_posts_author
-			ON board_posts(author_agent_id, thread_id);
+			ON board_posts(author_agent_id, author_session_key, thread_id);
 		CREATE INDEX IF NOT EXISTS idx_board_posts_unprojected
 			ON board_posts(created_at, id) WHERE projected_at IS NULL;
 
 		CREATE TABLE IF NOT EXISTS board_reads (
 			agent_id TEXT NOT NULL,
 			thread_id TEXT NOT NULL,
-			last_read_at TEXT,
-			notified_at TEXT,
+			last_read_at TEXT NOT NULL,
 			PRIMARY KEY (agent_id, thread_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_board_reads_thread
 			ON board_reads(thread_id);
+
+		CREATE TABLE IF NOT EXISTS board_notices (
+			agent_id TEXT NOT NULL,
+			session_key TEXT NOT NULL,
+			thread_id TEXT NOT NULL,
+			notified_at TEXT NOT NULL,
+			PRIMARY KEY (agent_id, session_key, thread_id)
+		);
+		CREATE INDEX IF NOT EXISTS idx_board_notices_thread
+			ON board_notices(thread_id);
 	`);
 }

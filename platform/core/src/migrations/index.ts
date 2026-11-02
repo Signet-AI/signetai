@@ -1561,6 +1561,7 @@ export const MIGRATIONS: readonly Migration[] = [
 				"board_thread_tags",
 				"board_posts",
 				"board_reads",
+				"board_notices",
 			],
 		},
 	},

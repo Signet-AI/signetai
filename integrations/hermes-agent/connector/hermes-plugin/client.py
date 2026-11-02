@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import ipaddress
+import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -379,6 +380,59 @@ class SignetClient:
                 "project": project,
             },
             timeout=_RECALL_TIMEOUT_SECS,
+        )
+
+    def wake(
+        self,
+        session_key: str,
+        *,
+        project: str = "",
+        wait_ms: int = 25000,
+        on_connection: Optional[Any] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Long-poll the direct-message wake endpoint; None on transport failure."""
+        parsed = urllib.parse.urlparse(self._base_url)
+        host = parsed.hostname or _DEFAULT_HOST
+        timeout = wait_ms / 1000 + 10
+        factory = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+        conn = factory(host, parsed.port, timeout=timeout)
+        if on_connection:
+            on_connection(conn)
+        body = json.dumps(
+            {
+                "harness": self._harness,
+                "sessionKey": session_key,
+                "agentId": self._agent_id,
+                "project": project,
+                "waitMs": wait_ms,
+            }
+        )
+        try:
+            conn.request("POST", "/api/cross-agent/wake", body=body, headers=self._headers())
+            resp = conn.getresponse()
+            raw = resp.read()
+            data = json.loads(raw.decode("utf-8")) if raw else {}
+            if not isinstance(data, dict):
+                return None
+            if resp.status != 200 and "error" not in data:
+                data["error"] = f"http {resp.status}"
+            return data
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            logger.debug("Signet wake failed: %s", e)
+            return None
+        finally:
+            if on_connection:
+                on_connection(None)
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def release_wake(self, session_key: str, message_ids: List[str]) -> Optional[Dict[str, Any]]:
+        """Return claimed wakes to the daemon after the host refused delivery."""
+        return self._post(
+            "/api/cross-agent/wake/release",
+            {"sessionKey": session_key, "agentId": self._agent_id, "messageIds": message_ids},
         )
 
     def session_end(

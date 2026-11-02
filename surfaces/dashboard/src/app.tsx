@@ -10,6 +10,7 @@ import { SettingsView, useSettingsHotkey } from "@/views/settings";
 import { HomeView } from "@/views/home";
 import { SkillsView } from "@/views/skills";
 import { DreamsView } from "@/views/dreaming";
+import { BoardView } from "@/views/board";
 import { GraphView } from "@/views/graph";
 
 import { OnboardingPage } from "@/components/onboarding/page";
@@ -52,7 +53,7 @@ function Shell() {
 					<SidebarNav open={sidebarOpen} />
 					<div
 						ref={contentRef}
-						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "settings" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}
+						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "board" || view === "settings" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}
 					>
 						{view === "setup" ? (
 							<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />
@@ -79,6 +80,8 @@ function ViewSwitch({ view }: { view: ViewId }) {
 			<DreamsView />
 		) : view === "skills" ? (
 			<SkillsView />
+		) : view === "board" ? (
+			<BoardView />
 		) : view === "settings" ? (
 			<SettingsView />
 		) : null;

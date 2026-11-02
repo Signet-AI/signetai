@@ -87,7 +87,7 @@ import { validateTemporalTimeOptions } from "../temporal-recall";
 import { upsertThreadHead } from "../thread-heads";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { claimBoardActivityNotices } from "../board";
-import { MAX_WAKE_WAIT_MS, waitForDirectMessageWake } from "../cross-agent-wake";
+import { MAX_WAKE_WAIT_MS, releaseDirectMessageWakes, waitForDirectMessageWake } from "../cross-agent-wake";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
@@ -678,6 +678,39 @@ function registerDirectMessageWake(app: Hono): void {
 		} catch (error) {
 			logger.error("hooks", "Direct message wake failed", error instanceof Error ? error : new Error(String(error)));
 			return c.json({ error: "Direct message wake failed", retryAfterMs: 30_000 }, 500);
+		}
+	});
+}
+
+function registerDirectMessageWakeRelease(app: Hono): void {
+	app.post("/api/cross-agent/wake/release", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) return c.json({ error: "invalid request body" }, 400);
+		const sessionKey = parseOptionalString(payload.sessionKey);
+		const messageIds = Array.isArray(payload.messageIds)
+			? payload.messageIds.filter((id): id is string => typeof id === "string")
+			: null;
+		if (!sessionKey || messageIds === null || messageIds.length === 0) {
+			return c.json({ error: "sessionKey and messageIds are required" }, 400);
+		}
+		const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(payload.agentId), sessionKey });
+		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+			requireExisting: false,
+			context: "sessionKey",
+		});
+		if (sessionError) return c.json({ error: sessionError }, 403);
+		try {
+			const released = await releaseDirectMessageWakes({ agentId: scopedAgent.agentId, sessionKey, messageIds });
+			return c.json({ released });
+		} catch (error) {
+			logger.error(
+				"hooks",
+				"Direct message wake release failed",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			return c.json({ error: "Direct message wake release failed" }, 500);
 		}
 	});
 }
@@ -1947,6 +1980,7 @@ export function registerHooksRoutes(app: Hono): void {
 	registerUserPromptSubmit(app);
 	registerNotifications(app);
 	registerDirectMessageWake(app);
+	registerDirectMessageWakeRelease(app);
 	registerSessionEnd(app);
 	registerSkillInvocation(app);
 	registerCheckpointExtract(app);

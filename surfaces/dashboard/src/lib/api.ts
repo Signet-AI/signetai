@@ -865,6 +865,182 @@ export interface DreamStatus {
 	exclusions: ReadonlyArray<{ sourceKind: string; sourceId: string; reason: string }>;
 }
 
+export type BoardStatus = "open" | "resolved" | "archived";
+export type BoardStatusFilter = BoardStatus | "all";
+
+export interface BoardTopic {
+	readonly slug: string;
+	readonly title: string;
+	readonly description: string | null;
+	readonly createdByAgentId: string | null;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly threadCount: number;
+	readonly lastActivityAt: string | null;
+}
+
+export interface BoardThread {
+	readonly id: string;
+	readonly topic: string;
+	readonly title: string;
+	readonly authorAgentId: string;
+	readonly authorSessionKey: string | null;
+	readonly authorHarness: string | null;
+	readonly status: BoardStatus;
+	readonly pinned: boolean;
+	readonly tags: readonly string[];
+	readonly sourceMessageId: string | null;
+	readonly postCount: number;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly lastPostAt: string | null;
+	readonly lastReadAt: string | null;
+	readonly unread: boolean;
+}
+
+export interface BoardPost {
+	readonly id: string;
+	readonly threadId: string;
+	readonly authorAgentId: string;
+	readonly authorSessionKey: string | null;
+	readonly authorHarness: string | null;
+	readonly body: string;
+	readonly replyToPostId: string | null;
+	readonly createdAt: string;
+	readonly projected: boolean;
+}
+
+export interface BoardThreadList {
+	readonly items: readonly BoardThread[];
+	readonly total: number;
+	readonly limit: number;
+	readonly offset: number;
+	readonly hasMore: boolean;
+}
+
+export interface BoardThreadDetail {
+	readonly thread: BoardThread;
+	readonly posts: readonly BoardPost[];
+	readonly postTotal: number;
+	readonly postLimit: number;
+	readonly postOffset: number;
+	readonly hasMorePosts: boolean;
+}
+
+export interface BoardThreadQuery {
+	readonly topic?: string;
+	readonly tag?: string;
+	readonly status?: BoardStatusFilter;
+	readonly limit?: number;
+	readonly offset?: number;
+}
+
+export interface BoardThreadPatch {
+	readonly status?: BoardStatus;
+	readonly pinned?: boolean;
+	readonly tags?: readonly string[];
+	readonly title?: string;
+}
+
+export interface BoardStreamEvent {
+	readonly type: string;
+	readonly action?: "thread_created" | "post_created" | "thread_updated" | "thread_deleted";
+	readonly threadId?: string;
+	readonly topic?: string;
+	readonly threadAuthorAgentId?: string;
+	readonly postId?: string;
+	readonly timestamp?: string;
+}
+
+export interface DirectMessage {
+	readonly id: string;
+	readonly createdAt: string;
+	readonly expiresAt: string | null;
+	readonly fromAgentId: string;
+	readonly fromSessionKey: string | null;
+	readonly toAgentId: string | null;
+	readonly toSessionKey: string | null;
+	readonly toSessionAgentId?: string | null;
+	readonly content: string;
+	readonly type: string;
+	readonly broadcast: boolean;
+	readonly deliveryPath: string | null;
+	readonly deliveryState: string | null;
+	readonly acknowledgedAt: string | null;
+}
+
+export interface DirectMessageList {
+	readonly items: readonly DirectMessage[];
+	readonly total: number;
+	readonly unreadCount: number;
+	readonly hasMore: boolean;
+}
+
+export interface PresenceSession {
+	readonly sessionKey: string;
+	readonly agentId: string;
+	readonly harness: string | null;
+	readonly project: string | null;
+	readonly lastSeenAt: string;
+}
+
+export interface PresenceResponse {
+	readonly sessions: readonly PresenceSession[];
+}
+
+function boardThreadQuery(query: BoardThreadQuery): string {
+	const params = new URLSearchParams({ scope: "all" });
+	if (query.topic) params.set("topic", query.topic);
+	if (query.tag) params.set("tag", query.tag);
+	if (query.status) params.set("status", query.status);
+	if (query.limit !== undefined) params.set("limit", String(query.limit));
+	if (query.offset !== undefined) params.set("offset", String(query.offset));
+	return params.toString();
+}
+
+export async function streamBoardEvents(
+	onEvent: (event: BoardStreamEvent) => void,
+	signal: AbortSignal,
+): Promise<void> {
+	const response = await dashboardFetch("/api/board/stream?scope=all", {
+		signal,
+		headers: { Accept: "text/event-stream", ...authHeaders() },
+	});
+	if (!response.ok || !response.body) throw new Error(`Board stream unavailable (${response.status})`);
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	try {
+		while (true) {
+			const { value, done } = await reader.read();
+			buffer += decoder.decode(value, { stream: !done });
+			if (buffer.length > 1024 * 1024) throw new Error("Board event limit exceeded");
+			let boundary = buffer.indexOf("\n\n");
+			while (boundary >= 0) {
+				const frame = buffer.slice(0, boundary);
+				buffer = buffer.slice(boundary + 2);
+				const data = frame
+					.split("\n")
+					.filter((line) => line.startsWith("data:"))
+					.map((line) => line.slice(5).trimStart())
+					.join("\n");
+				if (data) {
+					try {
+						const parsed: unknown = JSON.parse(data);
+						if (typeof parsed === "object" && parsed !== null && "type" in parsed) {
+							onEvent(parsed as BoardStreamEvent);
+						}
+					} catch {}
+				}
+				boundary = buffer.indexOf("\n\n");
+			}
+			if (done) break;
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+}
+
 export const api = {
 	getStatus: () => getJSON<DaemonStatus>("/api/status"),
 	getIdentity: () => getJSON<DashboardIdentity>("/api/identity"),
@@ -902,6 +1078,31 @@ export const api = {
 		getJSON<{ agentId: string; passId: string; items: DreamToolCall[] }>(
 			`/api/dream/passes/${encodeURIComponent(passId)}/tools`,
 		),
+	getBoardTopics: () => getJSON<{ topics: BoardTopic[]; count: number }>("/api/board/topics?scope=all"),
+	getBoardThreads: (query: BoardThreadQuery = {}) =>
+		getJSON<BoardThreadList>(`/api/board/threads?${boardThreadQuery(query)}`),
+	getBoardThread: (id: string, opts: { limit?: number; offset?: number } = {}) => {
+		const params = new URLSearchParams({ scope: "all" });
+		if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+		if (opts.offset !== undefined) params.set("offset", String(opts.offset));
+		return getJSON<BoardThreadDetail>(`/api/board/threads/${encodeURIComponent(id)}?${params.toString()}`);
+	},
+	updateBoardThread: (id: string, patch: BoardThreadPatch) =>
+		getJSONResult<{ thread: BoardThread }>(`/api/board/threads/${encodeURIComponent(id)}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ scope: "all", ...patch }),
+		}),
+	deleteBoardThread: (id: string) =>
+		getJSONResult<{ threadId: string; deletedPosts: number }>(
+			`/api/board/threads/${encodeURIComponent(id)}?scope=all`,
+			{ method: "DELETE" },
+		),
+	getDirectMessages: (agentId: string, limit = 50) =>
+		getJSON<DirectMessageList>(
+			`/api/cross-agent/messages?agent_id=${encodeURIComponent(agentId)}&include_sent=true&include_broadcast=true&limit=${limit}&order=desc`,
+		),
+	getPresence: () => getJSON<PresenceResponse>("/api/cross-agent/presence?include_self=true"),
 	getDreamQuality: () => getJSON<DreamQuality>("/api/dream/quality"),
 	triggerDream: async (mode: "incremental" | "compact" = "incremental") => {
 		try {

@@ -471,3 +471,87 @@ export interface AgentMessageAcknowledgeResponse {
 	readonly acknowledgedAt: string;
 	readonly alreadyAcknowledged: boolean;
 }
+
+export type AgentWakeResponse =
+	| {
+			readonly wake: true;
+			readonly inject: string;
+			readonly messageIds: readonly string[];
+	  }
+	| {
+			readonly wake: false;
+			readonly reason: "timeout" | "superseded" | "rate_limited" | "aborted" | "closed" | "bypassed";
+			readonly retryAfterMs?: number;
+	  };
+
+export type BoardThreadStatus = "open" | "resolved" | "archived";
+
+export interface BoardTopic {
+	readonly slug: string;
+	readonly title: string | null;
+	readonly description: string | null;
+	readonly createdByAgentId: string;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly threadCount: number;
+	readonly lastActivityAt: string | null;
+}
+
+export interface BoardThread {
+	readonly id: string;
+	readonly topic: string;
+	readonly title: string;
+	readonly authorAgentId: string;
+	readonly authorSessionKey: string | null;
+	readonly authorHarness: string | null;
+	readonly status: BoardThreadStatus;
+	readonly pinned: boolean;
+	readonly tags: readonly string[];
+	readonly sourceMessageId: string | null;
+	readonly postCount: number;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly lastPostAt: string;
+	readonly lastReadAt: string | null;
+	readonly unread: boolean;
+}
+
+export interface BoardPost {
+	readonly id: string;
+	readonly threadId: string;
+	readonly authorAgentId: string;
+	readonly authorSessionKey: string | null;
+	readonly authorHarness: string | null;
+	readonly body: string;
+	readonly replyToPostId: string | null;
+	readonly createdAt: string;
+	readonly projected: boolean;
+}
+
+export interface BoardTopicListResponse {
+	readonly topics: readonly BoardTopic[];
+	readonly count: number;
+}
+
+export interface BoardThreadListResponse {
+	readonly items: readonly BoardThread[];
+	readonly total: number;
+	readonly limit: number;
+	readonly offset: number;
+	readonly hasMore: boolean;
+}
+
+export interface BoardThreadDetailResponse {
+	readonly thread: BoardThread;
+	readonly posts: readonly BoardPost[];
+	readonly postTotal: number;
+	readonly postLimit: number;
+	readonly postOffset: number;
+	readonly hasMorePosts: boolean;
+}
+
+export interface BoardWriteResponse {
+	readonly thread: BoardThread;
+	readonly post: BoardPost;
+	readonly projection: "projected" | "pending";
+}

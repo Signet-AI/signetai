@@ -825,3 +825,153 @@ describe("postAction exit behavior", () => {
 		expect(hookExitCodes[0]).toBe(1);
 	});
 });
+
+describe("hook wake", () => {
+	interface WakeHarness {
+		readonly bodies: Record<string, unknown>[];
+		readonly timeouts: Array<number | undefined>;
+		readonly sleeps: number[];
+		readonly lines: string[];
+		readonly stderr: string[];
+		run: (args: string[], stdin?: Record<string, unknown>) => Promise<void>;
+	}
+
+	type Step = { ok: true; data: Record<string, unknown> } | { ok: false; reason: "offline" | "http" };
+
+	function setup(steps: Step[], clockStepMs = 0): WakeHarness {
+		const bodies: Record<string, unknown>[] = [];
+		const timeouts: Array<number | undefined> = [];
+		const sleeps: number[] = [];
+		const lines: string[] = [];
+		const stderr: string[] = [];
+		let clock = 0;
+		let idx = 0;
+		return {
+			bodies,
+			timeouts,
+			sleeps,
+			lines,
+			stderr,
+			run: async (args, stdin) => {
+				console.log = (line?: unknown) => {
+					lines.push(String(line ?? ""));
+				};
+				const origWrite = process.stderr.write;
+				process.stderr.write = ((chunk: unknown) => {
+					stderr.push(String(chunk));
+					return true;
+				}) as typeof process.stderr.write;
+				try {
+					const program = new Command();
+					registerHookCommands(program, {
+						AGENTS_DIR: "/tmp/agents",
+						fetchDaemonResult: (async (_path: string, opts?: RequestInit & { timeout?: number }) => {
+							bodies.push(JSON.parse(typeof opts?.body === "string" ? opts.body : "{}"));
+							timeouts.push(opts?.timeout);
+							clock += clockStepMs;
+							const step = steps[Math.min(idx, steps.length - 1)];
+							idx++;
+							return step;
+						}) as never,
+						readStaticIdentity: () => null,
+						sleep: async (ms) => {
+							sleeps.push(ms);
+							clock += ms;
+						},
+						now: () => clock,
+						stdin: Readable.from(stdin ? [Buffer.from(JSON.stringify(stdin))] : []),
+					});
+					await program.parseAsync(["node", "test", "hook", "wake", ...args]);
+				} finally {
+					process.stderr.write = origWrite;
+				}
+			},
+		};
+	}
+
+	const session = { session_id: "sess-1", cwd: "/tmp/proj" };
+
+	test("wake writes inject to stderr and exits 2", async () => {
+		const h = setup([{ ok: true, data: { wake: true, inject: "peer says hi", messageIds: ["m1"] } }]);
+		await h.run(["-H", "claude-code"], session);
+		expect(h.stderr.join("")).toContain("peer says hi");
+		expect(hookExitCodes[0]).toBe(2);
+		expect(h.bodies[0]).toMatchObject({
+			harness: "claude-code",
+			sessionKey: "sess-1",
+			project: "/tmp/proj",
+			waitMs: 25000,
+		});
+		expect(h.timeouts[0]).toBe(35000);
+	});
+
+	test("timeout loops until the deadline then exits 0", async () => {
+		const h = setup([{ ok: true, data: { wake: false, reason: "timeout" } }], 25000);
+		await h.run(["-H", "claude-code", "--max-wait-seconds", "100"], session);
+		expect(h.bodies.length).toBe(4);
+		expect(h.sleeps).toEqual([]);
+		expect(hookExitCodes[0]).toBe(0);
+		expect(h.stderr.join("")).toBe("");
+	});
+
+	test("superseded exits 0 after one request", async () => {
+		const h = setup([{ ok: true, data: { wake: false, reason: "superseded" } }]);
+		await h.run(["-H", "claude-code"], session);
+		expect(h.bodies.length).toBe(1);
+		expect(hookExitCodes[0]).toBe(0);
+	});
+
+	test("rate_limited sleeps retryAfterMs then retries", async () => {
+		const h = setup([
+			{ ok: true, data: { wake: false, reason: "rate_limited", retryAfterMs: 4000 } },
+			{ ok: true, data: { wake: true, inject: "later", messageIds: [] } },
+		]);
+		await h.run(["-H", "claude-code"], session);
+		expect(h.sleeps).toEqual([4000]);
+		expect(h.bodies.length).toBe(2);
+		expect(hookExitCodes[0]).toBe(2);
+	});
+
+	test("daemon unreachable backs off and caps at remaining time", async () => {
+		const h = setup([{ ok: false, reason: "offline" }]);
+		await h.run(["-H", "claude-code", "--max-wait-seconds", "20"], session);
+		expect(h.sleeps).toEqual([15000, 5000]);
+		expect(h.bodies.length).toBe(2);
+		expect(hookExitCodes[0]).toBe(0);
+	});
+
+	test("--no-wait sends waitMs 0 once", async () => {
+		const h = setup([{ ok: true, data: { wake: false, reason: "timeout" } }]);
+		await h.run(["-H", "codex", "--no-wait"], session);
+		expect(h.bodies.length).toBe(1);
+		expect(h.bodies[0]?.waitMs).toBe(0);
+		expect(h.sleeps).toEqual([]);
+		expect(hookExitCodes[0]).toBe(0);
+	});
+
+	test("--hook-json prints block decision when woken", async () => {
+		const h = setup([{ ok: true, data: { wake: true, inject: "continue with this", messageIds: ["m"] } }]);
+		await h.run(["-H", "codex", "--no-wait", "--hook-json"], session);
+		expect(JSON.parse(h.lines[0] ?? "{}")).toEqual({ decision: "block", reason: "continue with this" });
+		expect(hookExitCodes[0]).toBe(0);
+	});
+
+	test("--hook-json prints {} when not woken or on error", async () => {
+		const h = setup([{ ok: false, reason: "offline" }]);
+		await h.run(["-H", "codex", "--no-wait", "--hook-json"], session);
+		expect(h.lines).toEqual(["{}"]);
+		expect(hookExitCodes[0]).toBe(0);
+	});
+
+	test("missing session key is silent", async () => {
+		const h = setup([{ ok: true, data: { wake: true, inject: "x", messageIds: [] } }]);
+		await h.run(["-H", "claude-code"], {});
+		expect(h.bodies.length).toBe(0);
+		expect(h.stderr.join("")).toBe("");
+		expect(hookExitCodes[0]).toBe(0);
+
+		const j = setup([]);
+		await j.run(["-H", "codex", "--hook-json"], {});
+		expect(j.lines).toEqual(["{}"]);
+	});
+});

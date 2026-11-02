@@ -4,7 +4,7 @@ import { ModeToggle } from "@/components/mode-toggle";
 import { Settings } from "@/components/mingcute-icons";
 import { PanelIcon } from "@/components/shell/panel-icon";
 import { type ViewId, useView } from "@/lib/view-context";
-import { BookRegular, Home1Regular, MindMapRegular, MoonRegular } from "@mingcute/react/core-regular";
+import { BookRegular, Home1Regular, MindMapRegular, Message1Regular, MoonRegular } from "@mingcute/react/core-regular";
 import { type ButtonHTMLAttributes, type ReactNode, useCallback, useEffect, useState } from "react";
 
 interface NavItem {
@@ -18,6 +18,7 @@ export const TOP_LEVEL_NAV_ITEMS: NavItem[] = [
 	{ view: "memory", label: "Memory", icon: MindMapRegular },
 	{ view: "dreaming", label: "Dreams", icon: MoonRegular },
 	{ view: "skills", label: "Skills", icon: BookRegular },
+	{ view: "board", label: "Board", icon: Message1Regular },
 ];
 
 const SIDEBAR_STORAGE_KEY = "signet-sidebar-open";

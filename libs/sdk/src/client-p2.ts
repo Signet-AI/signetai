@@ -1,6 +1,13 @@
 import type { SignetTransport } from "./transport.js";
 import type {
 	AgentMessageAcknowledgeResponse,
+	AgentWakeResponse,
+	BoardThreadDetailResponse,
+	BoardThreadListResponse,
+	BoardThreadStatus,
+	BoardTopicListResponse,
+	BoardWriteResponse,
+	BoardThread,
 	AgentMessageListResponse,
 	AgentMessageSendResponse,
 	AgentPresenceListResponse,
@@ -418,6 +425,106 @@ export class SignetClientP2 {
 		return this.transport.post<AgentMessageSendResponse>(
 			`/api/cross-agent/messages/${encodeURIComponent(messageId)}/retry`,
 			opts ?? {},
+		);
+	}
+	async waitForAgentWake(opts: {
+		readonly harness: string;
+		readonly sessionKey: string;
+		readonly agentId?: string;
+		readonly project?: string;
+		readonly waitMs?: number;
+	}): Promise<AgentWakeResponse> {
+		return this.transport.post<AgentWakeResponse>("/api/cross-agent/wake", opts);
+	}
+	async listBoardTopics(opts?: { readonly agentId?: string; readonly scope?: "all" }): Promise<BoardTopicListResponse> {
+		return this.transport.get<BoardTopicListResponse>("/api/board/topics", {
+			agent_id: opts?.agentId,
+			scope: opts?.scope,
+		});
+	}
+	async listBoardThreads(opts?: {
+		readonly agentId?: string;
+		readonly scope?: "all";
+		readonly topic?: string;
+		readonly tag?: string;
+		readonly status?: BoardThreadStatus | "all";
+		readonly limit?: number;
+		readonly offset?: number;
+	}): Promise<BoardThreadListResponse> {
+		return this.transport.get<BoardThreadListResponse>("/api/board/threads", {
+			agent_id: opts?.agentId,
+			scope: opts?.scope,
+			topic: opts?.topic,
+			tag: opts?.tag,
+			status: opts?.status,
+			limit: opts?.limit,
+			offset: opts?.offset,
+		});
+	}
+	async getBoardThread(
+		threadId: string,
+		opts?: { readonly agentId?: string; readonly scope?: "all"; readonly limit?: number; readonly offset?: number },
+	): Promise<BoardThreadDetailResponse> {
+		return this.transport.get<BoardThreadDetailResponse>(`/api/board/threads/${encodeURIComponent(threadId)}`, {
+			agent_id: opts?.agentId,
+			scope: opts?.scope,
+			limit: opts?.limit,
+			offset: opts?.offset,
+		});
+	}
+	async createBoardThread(opts: {
+		readonly topic: string;
+		readonly title?: string;
+		readonly body?: string;
+		readonly tags?: readonly string[];
+		readonly fromMessageId?: string;
+		readonly agentId?: string;
+		readonly sessionKey?: string;
+		readonly harness?: string;
+	}): Promise<BoardWriteResponse> {
+		return this.transport.post<BoardWriteResponse>("/api/board/threads", opts);
+	}
+	async replyToBoardThread(
+		threadId: string,
+		opts: {
+			readonly body: string;
+			readonly replyToPostId?: string;
+			readonly agentId?: string;
+			readonly sessionKey?: string;
+			readonly harness?: string;
+		},
+	): Promise<BoardWriteResponse> {
+		return this.transport.post<BoardWriteResponse>(`/api/board/threads/${encodeURIComponent(threadId)}/posts`, opts);
+	}
+	async updateBoardThread(
+		threadId: string,
+		opts: {
+			readonly status?: BoardThreadStatus;
+			readonly pinned?: boolean;
+			readonly title?: string;
+			readonly tags?: readonly string[];
+			readonly agentId?: string;
+			readonly scope?: "all";
+		},
+	): Promise<{ readonly thread: BoardThread }> {
+		return this.transport.patch<{ readonly thread: BoardThread }>(
+			`/api/board/threads/${encodeURIComponent(threadId)}`,
+			opts,
+		);
+	}
+	async markBoardThreadRead(
+		threadId: string,
+		opts?: { readonly agentId?: string },
+	): Promise<{ readonly threadId: string; readonly lastReadAt: string }> {
+		return this.transport.post<{ readonly threadId: string; readonly lastReadAt: string }>(
+			`/api/board/threads/${encodeURIComponent(threadId)}/read`,
+			opts ?? {},
+		);
+	}
+	async deleteBoardThread(threadId: string): Promise<{ readonly threadId: string; readonly deletedPosts: number }> {
+		return this.transport.del<{ readonly threadId: string; readonly deletedPosts: number }>(
+			`/api/board/threads/${encodeURIComponent(threadId)}`,
+			{ scope: "all" },
 		);
 	}
 

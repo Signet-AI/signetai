@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { buildRecallRequestBody, buildRememberRequestBody, formatRecallText, parseRecallPayload } from "@signet/core";
 import type { RecallPayload } from "@signet/core";
 import { resolvePiAgentDir } from "@signet/pi-extension-base/agent-dir";
-import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
+import {
+	type WakeWaiter,
+	createWakeWaiter,
+	readRuntimeEnv,
+	readTrimmedRuntimeEnv,
+	readTrimmedString,
+} from "@signet/pi-extension-base";
 import { Type } from "@sinclair/typebox";
 import { createDaemonClient } from "./daemon-client.js";
 import {
@@ -257,7 +263,20 @@ function updateStatus(ctx: PiExtensionContext): void {
 	ctx.ui.setStatus("signet", ctx.ui.theme.fg("accent", status));
 }
 
-function registerSessionLifecycleHandlers(pi: PiExtensionApi, deps: LifecycleDeps, daemonUrl: string): void {
+function startWake(wake: WakeWaiter | undefined, ctx: PiExtensionContext): void {
+	if (!wake) return;
+	if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
+	const session = currentSessionRef(ctx);
+	if (!session.sessionId) return;
+	wake.start({ sessionKey: session.sessionId, project: session.project });
+}
+
+function registerSessionLifecycleHandlers(
+	pi: PiExtensionApi,
+	deps: LifecycleDeps,
+	daemonUrl: string,
+	wake?: WakeWaiter,
+): void {
 	pi.on("session_start", async (_event, ctx) => {
 		const healthy = await checkDaemonHealth(daemonUrl);
 		if (healthy) {
@@ -269,22 +288,28 @@ function registerSessionLifecycleHandlers(pi: PiExtensionApi, deps: LifecycleDep
 		}
 
 		await refreshSessionStart(deps, ctx);
+		startWake(wake, ctx);
 	});
 	pi.on("session_before_switch", async () => {
+		wake?.stop();
 		await endPreviousSession(deps, {}, "session_switch");
 	});
 	pi.on("session_before_fork", async () => {
+		wake?.stop();
 		await endPreviousSession(deps, {}, "session_fork");
 	});
 
 	pi.on("session_switch", async (_event, ctx) => {
 		await refreshSessionStart(deps, ctx);
+		startWake(wake, ctx);
 	});
 	pi.on("session_fork", async (_event, ctx) => {
 		await refreshSessionStart(deps, ctx);
+		startWake(wake, ctx);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		wake?.stop();
 		ctx.ui.setStatus("signet", undefined);
 		await endCurrentSession(deps, ctx, "session_shutdown");
 	});
@@ -845,7 +870,17 @@ const SignetPiExtension: PiExtensionFactory = (pi): void => {
 			config: PI_LIFECYCLE_CONFIG,
 		};
 
-		registerSessionLifecycleHandlers(pi, deps, daemonUrl);
+		const wake =
+			typeof pi.sendUserMessage === "function"
+				? createWakeWaiter({
+						client: deps.client,
+						harness: HARNESS,
+						agentId,
+						deliver: (inject) => pi.sendUserMessage?.(inject, { deliverAs: "followUp" }),
+					})
+				: undefined;
+
+		registerSessionLifecycleHandlers(pi, deps, daemonUrl, wake);
 		registerPromptHandlers(pi, deps);
 		registerContextHandlers(pi, deps);
 		registerCompactionHandlers(pi, deps);

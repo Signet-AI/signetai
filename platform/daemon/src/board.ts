@@ -363,7 +363,11 @@ function postFromRow(row: PostRow): BoardPost {
 	};
 }
 
-async function readAll<Row>(sql: string, params: readonly DbOwnerParameter[], operation: string): Promise<readonly Row[]> {
+async function readAll<Row>(
+	sql: string,
+	params: readonly DbOwnerParameter[],
+	operation: string,
+): Promise<readonly Row[]> {
 	return await dbOwnerQuery<readonly Row[]>(ownerStatement(sql, params, "all"), {
 		operation,
 		lane: "read",
@@ -569,10 +573,7 @@ function defaultTitleFrom(content: string): string {
 	return firstLine.length > 120 ? `${firstLine.slice(0, 119)}…` : firstLine;
 }
 
-async function readPromotableMessage(
-	messageId: string,
-	author: BoardAuthor,
-): Promise<AgentMessage> {
+async function readPromotableMessage(messageId: string, author: BoardAuthor): Promise<AgentMessage> {
 	const rows = await readAll<CrossAgentMessageRow>(
 		"SELECT m.*, NULL AS acknowledged_at FROM cross_agent_messages m WHERE m.id = ?",
 		[messageId],
@@ -773,13 +774,7 @@ export async function updateBoardThread(input: {
 				`UPDATE board_threads
 				 SET status = COALESCE(?, status), pinned = COALESCE(?, pinned), title = COALESCE(?, title), updated_at = ?
 				 WHERE id = ?`,
-				[
-					input.status ?? null,
-					input.pinned === undefined ? null : input.pinned ? 1 : 0,
-					title ?? null,
-					now,
-					thread.id,
-				],
+				[input.status ?? null, input.pinned === undefined ? null : input.pinned ? 1 : 0, title ?? null, now, thread.id],
 			),
 			requireChanges: true,
 		},
@@ -825,6 +820,7 @@ export async function deleteBoardThread(
 			ownerStatement("DELETE FROM board_posts WHERE thread_id = ?", [thread.id]),
 			ownerStatement("DELETE FROM board_thread_tags WHERE thread_id = ?", [thread.id]),
 			ownerStatement("DELETE FROM board_reads WHERE thread_id = ?", [thread.id]),
+			ownerStatement("DELETE FROM board_notices WHERE thread_id = ?", [thread.id]),
 			ownerStatement("DELETE FROM board_threads WHERE id = ?", [thread.id]),
 		],
 		"board.thread.delete",
@@ -857,31 +853,53 @@ export async function claimBoardActivityNotices(input: {
 		readonly last_post_at: string;
 		readonly new_posts: number;
 	}>(
-		`SELECT t.id, t.topic_slug, t.title, t.last_post_at,
+		`WITH candidates AS (
+			SELECT t.id, t.topic_slug, t.title, t.last_post_at,
+				MAX(
+					COALESCE(r.last_read_at, ''),
+					COALESCE(n.notified_at, ''),
+					COALESCE((
+						SELECT MAX(own.created_at) FROM board_posts own
+						WHERE own.thread_id = t.id AND own.author_agent_id = ? AND COALESCE(own.author_session_key, '') = ?
+					), '')
+				) AS seen_at
+			FROM board_threads t
+			LEFT JOIN board_reads r ON r.thread_id = t.id AND r.agent_id = ?
+			LEFT JOIN board_notices n ON n.thread_id = t.id AND n.agent_id = ? AND n.session_key = ?
+			WHERE t.status <> 'archived'
+			  AND ${visibility.sql}
+			  AND (
+				(t.author_agent_id = ? AND COALESCE(t.author_session_key, '') = ?)
+				OR EXISTS (
+					SELECT 1 FROM board_posts p
+					WHERE p.thread_id = t.id AND p.author_agent_id = ? AND COALESCE(p.author_session_key, '') = ?
+				)
+			  )
+			ORDER BY t.last_post_at DESC
+			LIMIT ?
+		)
+		SELECT c.id, c.topic_slug, c.title, c.last_post_at,
 			(SELECT COUNT(*) FROM board_posts p2
-			 WHERE p2.thread_id = t.id
-			   AND (p2.author_agent_id <> ? OR COALESCE(p2.author_session_key, '') <> ?)
-			   AND p2.created_at > COALESCE(r.last_read_at, '')
-			   AND p2.created_at > COALESCE(r.notified_at, '')) AS new_posts
-		 FROM board_threads t
-		 LEFT JOIN board_reads r ON r.thread_id = t.id AND r.agent_id = ?
-		 WHERE t.status <> 'archived'
-		   AND ${visibility.sql}
-		   AND (t.author_agent_id = ? OR EXISTS (
-			SELECT 1 FROM board_posts p WHERE p.thread_id = t.id AND p.author_agent_id = ?
-		   ))
-		   AND t.last_post_at > COALESCE(r.last_read_at, '')
-		   AND t.last_post_at > COALESCE(r.notified_at, '')
-		 ORDER BY t.last_post_at DESC
-		 LIMIT ?`,
+			 WHERE p2.thread_id = c.id
+			   AND p2.created_at > c.seen_at
+			   AND NOT (p2.author_agent_id = ? AND COALESCE(p2.author_session_key, '') = ?)) AS new_posts
+		FROM candidates c
+		WHERE c.last_post_at > c.seen_at
+		ORDER BY c.last_post_at DESC`,
 		[
 			input.agentId,
 			session,
 			input.agentId,
+			input.agentId,
+			session,
 			...visibility.args,
 			input.agentId,
+			session,
 			input.agentId,
-			BOARD_LIMITS.notices * 4,
+			session,
+			BOARD_LIMITS.notices * 20,
+			input.agentId,
+			session,
 		],
 		"board.notices.scan",
 	);
@@ -900,9 +918,9 @@ export async function claimBoardActivityNotices(input: {
 	await write(
 		notices.map((notice) =>
 			ownerStatement(
-				`INSERT INTO board_reads (agent_id, thread_id, notified_at) VALUES (?, ?, ?)
-				 ON CONFLICT(agent_id, thread_id) DO UPDATE SET notified_at = excluded.notified_at`,
-				[input.agentId, notice.threadId, now],
+				`INSERT INTO board_notices (agent_id, session_key, thread_id, notified_at) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(agent_id, session_key, thread_id) DO UPDATE SET notified_at = excluded.notified_at`,
+				[input.agentId, session, notice.threadId, now],
 			),
 		),
 		"board.notices.claim",
@@ -911,7 +929,9 @@ export async function claimBoardActivityNotices(input: {
 }
 
 function renderPostArtifact(thread: BoardThread, post: BoardPost): string {
-	const author = post.authorSessionKey ? `${post.authorAgentId} (session ${post.authorSessionKey})` : post.authorAgentId;
+	const author = post.authorSessionKey
+		? `${post.authorAgentId} (session ${post.authorSessionKey})`
+		: post.authorAgentId;
 	const lines = [
 		`# Message board post in ${thread.topic}: ${thread.title}`,
 		"",

@@ -1073,7 +1073,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 				);
 			}
 			if (harnessSupportsNamedCrossAgentTools(req.harness)) {
-				dynamicParts.push("Use `agent_message_send` to ask for help and `agent_message_inbox` to read replies.");
+				dynamicParts.push(
+					"Use `agent_message_send` to ask for help; direct messages wake the recipient. Use `agent_message_inbox` to read replies, and `board_list` / `board_post` for shared topic threads that do not need an immediate answer.",
+				);
+				const safeOwnSession = sanitizePeerPromptField(req.sessionKey);
+				if (safeOwnSession) dynamicParts.push(`Your session key is ${safeOwnSession}.`);
 			}
 		}
 	}

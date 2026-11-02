@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acknowledgeAgentMessage, createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "./cross-agent";
+import {
+	acknowledgeAgentMessage,
+	createAgentMessage,
+	resetCrossAgentStateForTest,
+	upsertAgentPresence,
+} from "./cross-agent";
 import {
 	WAKE_RATE_LIMIT_PER_HOUR,
 	activeWakeWaiterCount,
@@ -114,7 +119,12 @@ describe("direct message wake", () => {
 	});
 
 	it("supersedes an earlier waiter for the same session", async () => {
-		const first = waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "claude-code", waitMs: 5_000 });
+		const first = waitForDirectMessageWake({
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "claude-code",
+			waitMs: 5_000,
+		});
 		await Bun.sleep(20);
 		const second = waitForDirectMessageWake({
 			agentId: "beta",

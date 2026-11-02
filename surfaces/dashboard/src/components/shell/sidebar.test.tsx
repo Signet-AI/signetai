@@ -3,7 +3,7 @@ import { TOP_LEVEL_NAV_ITEMS } from "./navigation";
 
 describe("dashboard navigation data", () => {
 	it("keeps primary views in a compact header order", () => {
-		expect(TOP_LEVEL_NAV_ITEMS.map((item) => item.view)).toEqual(["home", "memory", "dreaming", "skills"]);
+		expect(TOP_LEVEL_NAV_ITEMS.map((item) => item.view)).toEqual(["home", "memory", "dreaming", "skills", "board"]);
 	});
 
 	it("gives Dreams its own header entry while Memory opens the graph", () => {

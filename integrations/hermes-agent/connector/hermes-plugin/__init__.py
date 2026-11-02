@@ -328,6 +328,138 @@ def _resolve_agent_workspace(agent_id: str, kwargs: Dict[str, Any]) -> str:
     return str(Path(str(fallback)).expanduser())
 
 
+_WAKE_WAIT_MS = 25000
+_WAKE_DEFAULT_RETRY_SECS = 15.0
+_WAKE_MAX_RETRY_SECS = 300.0
+_WAKE_INJECT_RETRY_SECS = 5.0
+_WAKE_MIN_LOOP_SECS = 1.0
+_WAKE_UNAVAILABLE_RECHECK_SECS = 30.0
+
+
+class _WakeWaiter:
+    """Background long-poll loop that injects direct messages into one session."""
+
+    def __init__(
+        self,
+        client: Any,
+        inject: Any,
+        session_key: str,
+        host_key: str,
+        project: str,
+        can_inject: Any = None,
+    ):
+        self._client = client
+        self._inject = inject
+        self._can_inject = can_inject
+        self._session_key = session_key
+        self._host_key = host_key
+        self._project = project
+        self._stop = threading.Event()
+        self._conn_lock = threading.Lock()
+        self._conn: Any = None
+        self._thread = threading.Thread(target=self._run, daemon=True, name="signet-wake")
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        with self._conn_lock:
+            conn = self._conn
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            sock = getattr(conn, "sock", None)
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+
+    def join(self, timeout: float) -> None:
+        if self._thread.is_alive() and threading.current_thread() is not self._thread:
+            self._thread.join(timeout=timeout)
+
+    def _set_conn(self, conn: Any) -> None:
+        with self._conn_lock:
+            self._conn = conn
+        if conn is not None and self._stop.is_set():
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _injection_ready(self) -> bool:
+        if self._can_inject is None:
+            return True
+        try:
+            return bool(self._can_inject())
+        except Exception:
+            return False
+
+    def _release(self, message_ids: Any) -> None:
+        if not isinstance(message_ids, list) or not message_ids:
+            return
+        try:
+            self._client.release_wake(self._session_key, [str(i) for i in message_ids])
+        except Exception as e:
+            logger.debug("Signet wake release failed: %s", e)
+
+    @staticmethod
+    def _retry_secs(result: Optional[Dict[str, Any]]) -> float:
+        raw = result.get("retryAfterMs") if result else None
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool) and raw > 0:
+            return min(raw / 1000.0, _WAKE_MAX_RETRY_SECS)
+        return _WAKE_DEFAULT_RETRY_SECS
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            if not self._injection_ready():
+                if self._stop.wait(_WAKE_UNAVAILABLE_RECHECK_SECS):
+                    return
+                continue
+            started = time.monotonic()
+            try:
+                result = self._client.wake(
+                    self._session_key,
+                    project=self._project,
+                    wait_ms=_WAKE_WAIT_MS,
+                    on_connection=self._set_conn,
+                )
+            except Exception as e:
+                logger.debug("Signet wake poll raised: %s", e)
+                result = None
+            if self._stop.is_set():
+                return
+            delay = 0.0
+            if not isinstance(result, dict) or "error" in result:
+                delay = self._retry_secs(result)
+            elif result.get("wake") is True:
+                text = result.get("inject")
+                if isinstance(text, str) and text:
+                    delivered = False
+                    try:
+                        delivered = bool(self._inject(text, session_key=self._host_key))
+                    except Exception as e:
+                        logger.debug("Signet wake injection raised: %s", e)
+                    if not delivered:
+                        logger.debug("Signet wake injection was not accepted by the host")
+                        self._release(result.get("messageIds"))
+                        delay = _WAKE_INJECT_RETRY_SECS
+            else:
+                reason = result.get("reason")
+                if reason == "superseded":
+                    return
+                if reason not in ("timeout", "aborted"):
+                    delay = self._retry_secs(result)
+            if delay <= 0 and time.monotonic() - started < _WAKE_MIN_LOOP_SECS:
+                delay = _WAKE_MIN_LOOP_SECS
+            if delay > 0 and self._stop.wait(min(delay, _WAKE_MAX_RETRY_SECS)):
+                return
+
+
 class SignetMemoryProvider(MemoryProvider):
     """Signet persistent memory with hybrid search and knowledge graph."""
 
@@ -359,6 +491,41 @@ class SignetMemoryProvider(MemoryProvider):
         self._mirror_worker: Optional[threading.Thread] = None
         self._mirror_state_lock = threading.Lock()
         self._mirror_shutdown = False
+        self._message_injector: Optional[Any] = None
+        self._can_inject: Optional[Any] = None
+        self._host_session_key = ""
+        self._wake_waiter: Optional[_WakeWaiter] = None
+        self._wake_lock = threading.Lock()
+
+    def set_message_injector(self, injector: Any, can_inject: Any = None) -> None:
+        self._message_injector = injector if callable(injector) else None
+        self._can_inject = can_inject if callable(can_inject) else None
+
+    def _stop_wake_waiter(self) -> None:
+        with self._wake_lock:
+            waiter = self._wake_waiter
+            self._wake_waiter = None
+        if waiter:
+            waiter.stop()
+            waiter.join(1.0)
+
+    def _start_wake_waiter(self) -> None:
+        self._stop_wake_waiter()
+        client = self._client
+        injector = self._message_injector
+        if not client or not injector or not self._session_key:
+            return
+        waiter = _WakeWaiter(
+            client,
+            injector,
+            self._session_key,
+            self._host_session_key or self._session_key,
+            self._project,
+            self._can_inject,
+        )
+        with self._wake_lock:
+            self._wake_waiter = waiter
+        waiter.start()
 
     @property
     def name(self) -> str:
@@ -441,6 +608,7 @@ class SignetMemoryProvider(MemoryProvider):
             return
 
         self._session_key = session_id or "hermes-default"
+        self._host_session_key = str(kwargs.get("gateway_session_key") or self._session_key)
         self._project = _resolve_agent_workspace(agent_id, kwargs)
         result = self._client.session_start(
             self._session_key,
@@ -468,6 +636,8 @@ class SignetMemoryProvider(MemoryProvider):
             )
         else:
             logger.debug("Signet session-start returned no data")
+        if agent_context in ("", "primary"):
+            self._start_wake_waiter()
 
     def system_prompt_block(self) -> str:
         """Return the Signet system prompt injection.
@@ -653,6 +823,7 @@ class SignetMemoryProvider(MemoryProvider):
         if not new_session_id:
             return
         self._session_key = new_session_id
+        self._host_session_key = str(kwargs.get("gateway_session_key") or new_session_id)
         self._session_initialized = False
         self._turn_count = 0
         self._last_checkpoint_turn = 0
@@ -692,6 +863,8 @@ class SignetMemoryProvider(MemoryProvider):
                 self._session_initialized = True
         except Exception as e:
             logger.debug("Signet session switch failed: %s", e)
+        if self._message_injector is not None:
+            self._start_wake_waiter()
 
     @staticmethod
     def _mirror_tags(raw: Any) -> set[str]:
@@ -1075,6 +1248,7 @@ class SignetMemoryProvider(MemoryProvider):
 
     def on_session_end(self, messages: List[Dict[str, Any]]) -> None:
         """Call session-end hook to trigger memory extraction from transcript."""
+        self._stop_wake_waiter()
         with self._prefetch_lock:
             self._session_prefetch_result = ""
             self._prefetch_result = ""
@@ -1414,6 +1588,7 @@ class SignetMemoryProvider(MemoryProvider):
 
     def shutdown(self) -> None:
         """Clean shutdown — wait for background threads."""
+        self._stop_wake_waiter()
         with self._mirror_state_lock:
             self._mirror_shutdown = True
             mirror_worker = self._mirror_worker
@@ -1424,6 +1599,60 @@ class SignetMemoryProvider(MemoryProvider):
             self._prefetch_thread.join(timeout=5.0)
 
 
+def _injection_available(plugin_ctx: Any) -> bool:
+    manager = getattr(plugin_ctx, "_manager", None)
+    if manager is None:
+        return False
+    if getattr(manager, "_cli_ref", None) is not None:
+        return True
+    allowed = getattr(plugin_ctx, "_gateway_injection_allowed", None)
+    try:
+        if not callable(allowed) or not allowed():
+            return False
+    except Exception:
+        return False
+    return bool(
+        getattr(manager, "has_tui_message_injector", False)
+        or getattr(manager, "has_gateway_message_injector", False)
+    )
+
+
+def _resolve_message_injector(ctx: Any) -> Optional[Any]:
+    """Find PluginContext.inject_message on the context Hermes hands to register()."""
+    candidates = [ctx]
+    factory = getattr(ctx, "_plugin_context", None)
+    if callable(factory):
+        try:
+            candidates.append(factory())
+        except Exception as e:
+            logger.debug("Signet could not build a plugin context: %s", e)
+    for candidate in candidates:
+        try:
+            injector = getattr(candidate, "inject_message", None)
+        except Exception:
+            injector = None
+        if callable(injector):
+            return injector
+    return None
+
+
+def _resolve_injection_gate(ctx: Any) -> Optional[Any]:
+    """Return a check that is true only when this Hermes process can deliver an injected turn."""
+    candidates = [ctx]
+    factory = getattr(ctx, "_plugin_context", None)
+    if callable(factory):
+        try:
+            candidates.append(factory())
+        except Exception:
+            pass
+    for candidate in candidates:
+        if getattr(candidate, "_manager", None) is not None:
+            return lambda: _injection_available(candidate)
+    return None
+
+
 def register(ctx) -> None:
     """Register Signet as a memory provider plugin."""
-    ctx.register_memory_provider(SignetMemoryProvider())
+    provider = SignetMemoryProvider()
+    provider.set_message_injector(_resolve_message_injector(ctx), _resolve_injection_gate(ctx))
+    ctx.register_memory_provider(provider)

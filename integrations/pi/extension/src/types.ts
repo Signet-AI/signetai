@@ -87,6 +87,7 @@ export interface PiUI {
 
 export interface PiExtensionContext {
 	readonly cwd?: string;
+	readonly mode?: "tui" | "rpc" | "json" | "print";
 	readonly sessionManager: ReadonlySessionManager;
 	readonly ui: PiUI;
 }
@@ -123,6 +124,7 @@ export interface PiFlagDefinition {
 
 export interface PiExtensionApi {
 	readonly ui: PiUI;
+	sendUserMessage?(content: string, options?: { readonly deliverAs?: "steer" | "followUp" }): unknown;
 	on(event: "session_start", handler: (event: unknown, ctx: PiExtensionContext) => unknown): void;
 	on(event: "session_switch", handler: (event: PiSessionSwitchEvent, ctx: PiExtensionContext) => unknown): void;
 	on(event: "session_fork", handler: (event: PiSessionSwitchEvent, ctx: PiExtensionContext) => unknown): void;

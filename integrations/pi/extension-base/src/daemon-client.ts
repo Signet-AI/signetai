@@ -67,15 +67,16 @@ async function daemonFetchResult<T>(
 		readonly body?: unknown;
 		readonly timeout?: number;
 		readonly parseJson?: boolean;
+		readonly signal?: AbortSignal;
 	} = {},
 ): Promise<DaemonFetchResult<T>> {
-	const { method = "POST", body, timeout = config.defaultTimeout, parseJson = true } = options;
+	const { method = "POST", body, timeout = config.defaultTimeout, parseJson = true, signal } = options;
 
 	try {
 		const init: RequestInit = {
 			method,
 			headers: buildHeaders(config),
-			signal: AbortSignal.timeout(timeout),
+			signal: signal ? AbortSignal.any([AbortSignal.timeout(timeout), signal]) : AbortSignal.timeout(timeout),
 		};
 
 		if (body !== undefined) {
@@ -130,8 +131,8 @@ async function daemonFetchResult<T>(
 }
 
 export interface DaemonClient {
-	post<T>(path: string, body: unknown, timeout?: number): Promise<T | null>;
-	postResult<T>(path: string, body: unknown, timeout?: number): Promise<DaemonFetchResult<T>>;
+	post<T>(path: string, body: unknown, timeout?: number, signal?: AbortSignal): Promise<T | null>;
+	postResult<T>(path: string, body: unknown, timeout?: number, signal?: AbortSignal): Promise<DaemonFetchResult<T>>;
 }
 
 export interface DaemonStatusClient extends DaemonClient {
@@ -140,20 +141,32 @@ export interface DaemonStatusClient extends DaemonClient {
 
 export function createDaemonClient(daemonUrl: string, config: DaemonClientConfig): DaemonStatusClient {
 	return {
-		async post<T>(path: string, body: unknown, timeout = config.defaultTimeout): Promise<T | null> {
+		async post<T>(
+			path: string,
+			body: unknown,
+			timeout = config.defaultTimeout,
+			signal?: AbortSignal,
+		): Promise<T | null> {
 			const result = await daemonFetchResult<T>(daemonUrl, path, config, {
 				method: "POST",
 				body,
 				timeout,
+				signal,
 			});
 			if (!result.ok) return null;
 			return result.data;
 		},
-		postResult<T>(path: string, body: unknown, timeout = config.defaultTimeout): Promise<DaemonFetchResult<T>> {
+		postResult<T>(
+			path: string,
+			body: unknown,
+			timeout = config.defaultTimeout,
+			signal?: AbortSignal,
+		): Promise<DaemonFetchResult<T>> {
 			return daemonFetchResult<T>(daemonUrl, path, config, {
 				method: "POST",
 				body,
 				timeout,
+				signal,
 			});
 		},
 		postStatus(path: string, body: unknown, timeout = config.defaultTimeout): Promise<DaemonFetchResult<void>> {

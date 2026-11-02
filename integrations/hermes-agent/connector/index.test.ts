@@ -2590,4 +2590,106 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 			expect.arrayContaining(["memory_search", "memory_store", "signet_session_search", "recall", "remember"]),
 		);
 	});
+
+	it("runs the direct-message wake loop with injection, backoff, and clean stop", () => {
+		const fixture = join(tmpRoot, "python-wake-fixture");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+
+		const result = spawnSync(
+			resolveTestPythonPath(),
+			[
+				"-c",
+				[
+					"import threading, json",
+					"import plugins.memory.signet as sig",
+					"sig._WAKE_MIN_LOOP_SECS = 0.01",
+					"sig._WAKE_INJECT_RETRY_SECS = 0.01",
+					"sig._WAKE_DEFAULT_RETRY_SECS = 0.01",
+					"done = threading.Event()",
+					"class FakeClient:",
+					"    def __init__(self):",
+					"        self.calls = []",
+					"        self.script = [",
+					"            {'wake': True, 'inject': 'hello', 'messageIds': ['m1']},",
+					"            {'wake': False, 'reason': 'timeout'},",
+					"            None,",
+					"            {'wake': True, 'inject': 'again', 'messageIds': ['m2']},",
+					"            {'wake': False, 'reason': 'closed', 'retryAfterMs': 10},",
+					"            {'wake': False, 'reason': 'superseded'},",
+					"            {'wake': True, 'inject': 'never', 'messageIds': []},",
+					"        ]",
+					"    def wake(self, key, project='', wait_ms=0, on_connection=None):",
+					"        self.calls.append([key, project, wait_ms])",
+					"        return self.script.pop(0)",
+					"    def release_wake(self, key, ids):",
+					"        self.released = getattr(self, 'released', []) + [[key, ids]]",
+					"injected = []",
+					"def inject(text, session_key=None):",
+					"    injected.append([text, session_key])",
+					"    return len(injected) > 1",
+					"client = FakeClient()",
+					"waiter = sig._WakeWaiter(client, inject, 'sess', 'host-sess', '/p')",
+					"waiter.start(); waiter.join(5)",
+					"assert not waiter._thread.is_alive()",
+					"assert len(client.calls) == 6, client.calls",
+					"assert client.calls[0] == ['sess', '/p', 25000]",
+					"assert injected == [['hello', 'host-sess'], ['again', 'host-sess']], injected",
+					"assert client.released == [['sess', ['m1']]], client.released",
+					"sig._WAKE_UNAVAILABLE_RECHECK_SECS = 0.01",
+					"gated = FakeClient()",
+					"checks = []",
+					"def gate():",
+					"    checks.append(1)",
+					"    if len(checks) >= 3: gated_waiter._stop.set()",
+					"    return False",
+					"gated_waiter = sig._WakeWaiter(gated, inject, 'g', 'g', '', gate)",
+					"gated_waiter.start(); gated_waiter.join(5)",
+					"assert gated.calls == [] and len(checks) >= 3, (gated.calls, checks)",
+					"class Mgr:",
+					"    _cli_ref = None",
+					"    has_tui_message_injector = False",
+					"    has_gateway_message_injector = True",
+					"class PCtx:",
+					"    def __init__(self, allowed): self._manager = Mgr(); self.allowed = allowed",
+					"    def _gateway_injection_allowed(self): return self.allowed",
+					"assert sig._injection_available(PCtx(False)) is False",
+					"assert sig._injection_available(PCtx(True)) is True",
+					"cli = PCtx(False); cli._manager._cli_ref = object()",
+					"assert sig._injection_available(cli) is True",
+					"class Ctx:",
+					"    def __init__(self, inner): self.inner = inner; self.provider = None",
+					"    def _plugin_context(self): return self.inner",
+					"    def register_memory_provider(self, p): self.provider = p",
+					"class Inner:",
+					"    def inject_message(self, content, role='user', *, session_key=None, origin=None): return True",
+					"ctx = Ctx(Inner()); sig.register(ctx)",
+					"assert ctx.provider._message_injector is not None",
+					"bare = Ctx(object()); sig.register(bare)",
+					"assert bare.provider._message_injector is None",
+					"bare.provider._start_wake_waiter()",
+					"assert bare.provider._wake_waiter is None",
+					"class Blocking:",
+					"    def wake(self, key, project='', wait_ms=0, on_connection=None):",
+					"        class Conn:",
+					"            def close(self_inner): done.set()",
+					"        on_connection(Conn())",
+					"        done.wait(5)",
+					"        return None",
+					"w2 = sig._WakeWaiter(Blocking(), inject, 's', 's', '')",
+					"w2.start(); w2.stop(); w2.join(5)",
+					"assert not w2._thread.is_alive()",
+					"print('ok')",
+				].join("\n"),
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8", timeout: 20_000 },
+		);
+
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(result.stdout).toContain("ok");
+	});
 });

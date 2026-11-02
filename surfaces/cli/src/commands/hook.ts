@@ -15,6 +15,84 @@ interface HookDeps {
 		opts?: RequestInit & { timeout?: number },
 	) => Promise<DaemonFetchResult<T>>;
 	readonly readStaticIdentity: (basePath: string, status?: string) => string | null;
+	readonly sleep?: (ms: number) => Promise<void>;
+	readonly now?: () => number;
+	readonly stdin?: Readable;
+}
+
+const WAKE_POLL_MS = 25_000;
+const WAKE_REQUEST_GRACE_MS = 10_000;
+const WAKE_NO_WAIT_TIMEOUT_MS = 4_000;
+const WAKE_DEFAULT_BACKOFF_MS = 15_000;
+const WAKE_DEFAULT_MAX_WAIT_SECONDS = 3300;
+const WAKE_MAX_WAIT_SECONDS = 86_400;
+
+interface WakeResponse {
+	readonly wake?: boolean;
+	readonly inject?: string;
+	readonly reason?: string;
+	readonly retryAfterMs?: number;
+}
+
+export type WakeOutcome = { readonly kind: "wake"; readonly inject: string } | { readonly kind: "none" };
+
+export function parseWakeMaxWaitSeconds(raw: unknown): number {
+	const parsed = typeof raw === "number" ? raw : Number.parseInt(String(raw ?? ""), 10);
+	if (!Number.isFinite(parsed)) return WAKE_DEFAULT_MAX_WAIT_SECONDS;
+	return Math.min(WAKE_MAX_WAIT_SECONDS, Math.max(1, Math.floor(parsed)));
+}
+
+export async function runWakeLoop(
+	deps: Pick<HookDeps, "fetchDaemonResult" | "sleep" | "now">,
+	request: {
+		readonly harness: string;
+		readonly sessionKey: string;
+		readonly agentId: string;
+		readonly project: string;
+		readonly noWait: boolean;
+		readonly maxWaitSeconds: number;
+	},
+): Promise<WakeOutcome> {
+	const now = deps.now ?? Date.now;
+	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+	const deadline = now() + request.maxWaitSeconds * 1000;
+	for (;;) {
+		const waitMs = request.noWait ? 0 : WAKE_POLL_MS;
+		const res = await deps.fetchDaemonResult<WakeResponse>("/api/cross-agent/wake", {
+			method: "POST",
+			headers: legacyHookHeaders(),
+			body: JSON.stringify({
+				harness: request.harness,
+				sessionKey: request.sessionKey,
+				...(request.agentId ? { agentId: request.agentId } : {}),
+				...(request.project ? { project: request.project } : {}),
+				waitMs,
+			}),
+			timeout: request.noWait ? WAKE_NO_WAIT_TIMEOUT_MS : waitMs + WAKE_REQUEST_GRACE_MS,
+		});
+		let backoffMs: number | null = null;
+		if (res.ok) {
+			const data = res.data;
+			if (data?.wake === true) {
+				return { kind: "wake", inject: typeof data.inject === "string" ? data.inject : "" };
+			}
+			const reason = data?.reason;
+			if (reason === "superseded" || reason === "closed" || reason === "aborted") return { kind: "none" };
+			if (reason !== "timeout") {
+				backoffMs =
+					typeof data?.retryAfterMs === "number" && data.retryAfterMs > 0 ? data.retryAfterMs : WAKE_DEFAULT_BACKOFF_MS;
+			}
+		} else {
+			backoffMs = WAKE_DEFAULT_BACKOFF_MS;
+		}
+		if (request.noWait) return { kind: "none" };
+		const remaining = deadline - now();
+		if (remaining <= 0) return { kind: "none" };
+		if (backoffMs !== null) {
+			await sleep(Math.min(backoffMs, remaining));
+			if (deadline - now() <= 0) return { kind: "none" };
+		}
+	}
 }
 
 const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeout();
@@ -291,6 +369,49 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			} else if (data.inject) {
 				console.log(data.inject);
 			}
+		});
+
+	hookCmd
+		.command("wake")
+		.description("Wait for a direct message and wake the harness session")
+		.requiredOption("-H, --harness <harness>", "Harness name")
+		.option("--project <project>", "Project path")
+		.option("--agent-id <id>", "Agent ID")
+		.option("--max-wait-seconds <n>", "Overall wait budget in seconds", String(WAKE_DEFAULT_MAX_WAIT_SECONDS))
+		.option("--no-wait", "Claim once without waiting")
+		.option("--hook-json", "Output Codex Stop hook JSON")
+		.action(async (options) => {
+			const hookJson = Boolean(options.hookJson);
+			let outcome: WakeOutcome = { kind: "none" };
+			try {
+				const input = await readJson(deps.stdin);
+				const sessionKey = pickSessionKey(input);
+				if (sessionKey) {
+					outcome = await runWakeLoop(deps, {
+						harness: String(options.harness),
+						sessionKey,
+						agentId: pickString(options.agentId, input?.signet_agent_id, process.env.SIGNET_AGENT_ID),
+						project: pickString(options.project, input?.cwd),
+						noWait: options.wait === false,
+						maxWaitSeconds: parseWakeMaxWaitSeconds(options.maxWaitSeconds),
+					});
+				}
+			} catch (err) {
+				if (!hookJson) {
+					process.stderr.write(`[signet] wake failed: ${err instanceof Error ? err.message : String(err)}\n`);
+				}
+			}
+			if (hookJson) {
+				console.log(JSON.stringify(outcome.kind === "wake" ? { decision: "block", reason: outcome.inject } : {}));
+				process.exit(0);
+				return;
+			}
+			if (outcome.kind === "wake") {
+				process.stderr.write(`${outcome.inject}\n`);
+				process.exit(2);
+				return;
+			}
+			process.exit(0);
 		});
 
 	hookCmd

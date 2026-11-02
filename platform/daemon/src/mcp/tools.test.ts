@@ -253,6 +253,10 @@ describe("createMcpServer", () => {
 		expect(names).toContain("agent_message_retry");
 		expect(names).toContain("agent_message_inbox");
 		expect(names).toContain("agent_message_ack");
+		expect(names).toContain("board_list");
+		expect(names).toContain("board_read");
+		expect(names).toContain("board_post");
+		expect(names).toContain("board_update");
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("secret_exec_status");
@@ -263,7 +267,7 @@ describe("createMcpServer", () => {
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(56);
+		expect(names.length).toBe(60);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {
@@ -1348,6 +1352,66 @@ describe("createMcpServer", () => {
 				agentId: "beta",
 				sessionKey: "session-beta",
 			});
+		});
+	});
+
+	describe("message board tools", () => {
+		function recordFetches(): Array<{ url: string; method: string; body?: string }> {
+			const calls: Array<{ url: string; method: string; body?: string }> = [];
+			globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+				calls.push({
+					url: typeof input === "string" ? input : input.toString(),
+					method: init?.method ?? "GET",
+					body: init?.body as string | undefined,
+				});
+				return new Response(JSON.stringify({ ok: true }), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}) as unknown as typeof fetch;
+			return calls;
+		}
+
+		it("board_post starts a thread without thread_id and replies with thread_id", async () => {
+			const calls = recordFetches();
+			await callTool(server, "board_post", {
+				topic: "release",
+				title: "Checklist",
+				body: "What is left?",
+				tags: ["blocking"],
+				session_key: "s1",
+				harness: "claude-code",
+			});
+			await callTool(server, "board_post", { thread_id: "t 1", body: "Docs.", reply_to_post_id: "p1" });
+
+			expect(calls[0]?.method).toBe("POST");
+			expect(calls[0]?.url).toContain("/api/board/threads");
+			expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({
+				topic: "release",
+				title: "Checklist",
+				tags: ["blocking"],
+				sessionKey: "s1",
+				harness: "claude-code",
+			});
+			expect(calls[1]?.url).toContain("/api/board/threads/t%201/posts");
+			expect(JSON.parse(calls[1]?.body ?? "{}")).toMatchObject({ body: "Docs.", replyToPostId: "p1" });
+		});
+
+		it("board_read fetches the thread and marks it read", async () => {
+			const calls = recordFetches();
+			await callTool(server, "board_read", { thread_id: "t1", agent_id: "beta" });
+			expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([
+				["GET", "/api/board/threads/t1"],
+				["POST", "/api/board/threads/t1/read"],
+			]);
+			expect(calls[0]?.url).toContain("agent_id=beta");
+		});
+
+		it("board_update patches thread state", async () => {
+			const calls = recordFetches();
+			await callTool(server, "board_update", { thread_id: "t1", status: "resolved", pinned: true });
+			expect(calls[0]?.method).toBe("PATCH");
+			expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({ status: "resolved", pinned: true });
 		});
 	});
 

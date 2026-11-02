@@ -89,3 +89,13 @@ export {
 	type LifecycleProviderWindow,
 	type LifecycleShutdownWindow,
 } from "@signet/lifecycle-proof";
+
+export {
+	createWakeWaiter,
+	WAKE_DEFAULT_RETRY_MS,
+	WAKE_MAX_RETRY_MS,
+	WAKE_WAIT_MS,
+	type WakeSessionRef,
+	type WakeWaiter,
+	type WakeWaiterOptions,
+} from "./wake-waiter.js";
