@@ -171,6 +171,7 @@ import { up as memoriesFtsPorter } from "./167-memories-fts-porter";
 import { up as retireSourceParagraphClaims } from "./168-retire-source-paragraph-claims";
 import { up as dreamingEvidenceReviewCursor } from "./169-dreaming-evidence-review-cursor";
 import { up as dependencyHistoryCompactionState } from "./170-dependency-history-compaction-state";
+import { up as agentWakeAndMessageBoard } from "./171-agent-wake-and-message-board";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1546,6 +1547,21 @@ export const MIGRATIONS: readonly Migration[] = [
 		up: dependencyHistoryCompactionState,
 		artifacts: {
 			tables: ["dependency_history_compaction_state"],
+		},
+	},
+	{
+		version: 171,
+		name: "agent-wake-and-message-board",
+		up: agentWakeAndMessageBoard,
+		artifacts: {
+			tables: [
+				"cross_agent_message_wakes",
+				"board_topics",
+				"board_threads",
+				"board_thread_tags",
+				"board_posts",
+				"board_reads",
+			],
 		},
 	},
 ];

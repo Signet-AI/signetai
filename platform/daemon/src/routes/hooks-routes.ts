@@ -54,6 +54,7 @@ import { type EmbeddingConfig, loadMemoryConfig } from "../memory-config";
 import { normalizeMarkdownBody, writeCompactionArtifact } from "../memory-lineage.js";
 import { type RecallParams, hybridRecall } from "../memory-search";
 import {
+	type BoardActivityNotice,
 	type HookNotificationsBlock,
 	appendNotificationInject,
 	collectCrossAgentNotifications,
@@ -85,6 +86,8 @@ import { recordSkillsFromTranscript } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
 import { upsertThreadHead } from "../thread-heads";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
+import { claimBoardActivityNotices } from "../board";
+import { MAX_WAKE_WAIT_MS, waitForDirectMessageWake } from "../cross-agent-wake";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
@@ -288,7 +291,20 @@ interface HookNotificationContext {
 	readonly sessionKey?: string;
 }
 
-function withCrossAgentNotifications<T extends object>(
+async function boardNoticesForHook(context: HookNotificationContext): Promise<readonly BoardActivityNotice[]> {
+	try {
+		return await claimBoardActivityNotices({ agentId: context.agentId, sessionKey: context.sessionKey });
+	} catch (error) {
+		logger.warn("board", "Board activity notices unavailable for hook", {
+			hook: context.hook,
+			agentId: context.agentId,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return [];
+	}
+}
+
+async function withCrossAgentNotifications<T extends object>(
 	result: T & {
 		readonly inject?: string;
 		readonly dynamicContext?: string;
@@ -296,14 +312,17 @@ function withCrossAgentNotifications<T extends object>(
 		readonly clockContext?: string;
 	},
 	context: HookNotificationContext,
-): T & {
-	readonly inject: string;
-	readonly dynamicContext?: string;
-	readonly contextHash?: string;
-	readonly clockContext?: string;
-	readonly notifications?: HookNotificationsBlock;
-} {
-	const notifications = collectCrossAgentNotifications(context);
+): Promise<
+	T & {
+		readonly inject: string;
+		readonly dynamicContext?: string;
+		readonly contextHash?: string;
+		readonly clockContext?: string;
+		readonly notifications?: HookNotificationsBlock;
+	}
+> {
+	const boardNotices = await boardNoticesForHook(context);
+	const notifications = collectCrossAgentNotifications({ ...context, boardNotices });
 	const inject = notifications ? appendNotificationInject(result.inject, notifications) : (result.inject ?? "");
 	const dynamicContext =
 		result.dynamicContext === undefined
@@ -420,7 +439,7 @@ function registerSessionStart(app: Hono): void {
 			recordRecallAttempt("prompt_injection");
 			recallAttempted = true;
 			const result = await handleSessionStart(body);
-			const response = withCrossAgentNotifications(result, {
+			const response = await withCrossAgentNotifications(result, {
 				harness: body.harness,
 				hook: "SessionStart",
 				agentId: scopedAgent.agentId,
@@ -538,7 +557,7 @@ function registerUserPromptSubmit(app: Hono): void {
 				promptSubmitAdmission.release();
 			}
 			return c.json(
-				withCrossAgentNotifications(
+				await withCrossAgentNotifications(
 					{ ...result, sessionKnown: known },
 					{
 						harness: body.harness,
@@ -610,6 +629,59 @@ function registerNotifications(app: Hono): void {
 		}
 	});
 }
+function registerDirectMessageWake(app: Hono): void {
+	app.post("/api/cross-agent/wake", async (c) => {
+		if (isInternalCall(c)) return c.json({ wake: false, reason: "timeout" });
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) return c.json({ error: "invalid request body" }, 400);
+		const harness = parseOptionalString(payload.harness);
+		const sessionKey = parseOptionalString(payload.sessionKey);
+		if (!harness || !sessionKey) return c.json({ error: "harness and sessionKey are required" }, 400);
+		const rawWait = payload.waitMs;
+		if (rawWait !== undefined && (typeof rawWait !== "number" || !Number.isFinite(rawWait) || rawWait < 0)) {
+			return c.json({ error: "waitMs must be a non-negative number" }, 400);
+		}
+		const waitMs = Math.min(MAX_WAKE_WAIT_MS, typeof rawWait === "number" ? rawWait : MAX_WAKE_WAIT_MS);
+		const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(payload.agentId), sessionKey });
+		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+			requireExisting: false,
+			context: "sessionKey",
+		});
+		if (sessionError) return c.json({ error: sessionError }, 403);
+		if (isSessionBypassed(sessionKey, scopedAgent.agentId)) {
+			return c.json({ wake: false, reason: "bypassed", retryAfterMs: 300_000 });
+		}
+
+		const touched = touchAgentPresence(sessionKey, scopedAgent.agentId);
+		if (!touched) {
+			upsertAgentPresence({
+				sessionKey,
+				agentId: scopedAgent.agentId,
+				harness,
+				project: parseOptionalString(payload.project),
+				provider: harness,
+			});
+		}
+		stampHarness(harness);
+
+		try {
+			const result = await waitForDirectMessageWake({
+				agentId: scopedAgent.agentId,
+				sessionKey,
+				harness,
+				waitMs,
+				signal: c.req.raw.signal,
+			});
+			return c.json(result);
+		} catch (error) {
+			logger.error("hooks", "Direct message wake failed", error instanceof Error ? error : new Error(String(error)));
+			return c.json({ error: "Direct message wake failed", retryAfterMs: 30_000 }, 500);
+		}
+	});
+}
+
 function registerSessionEnd(app: Hono): void {
 	app.post("/api/hooks/session-end", async (c) => {
 		if (isInternalCall(c)) {
@@ -1874,6 +1946,7 @@ export function registerHooksRoutes(app: Hono): void {
 	registerSessionStart(app);
 	registerUserPromptSubmit(app);
 	registerNotifications(app);
+	registerDirectMessageWake(app);
 	registerSessionEnd(app);
 	registerSkillInvocation(app);
 	registerCheckpointExtract(app);

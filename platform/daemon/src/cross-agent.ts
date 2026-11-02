@@ -75,7 +75,7 @@ export interface AgentMessage {
 	readonly acknowledgedAt?: string;
 }
 
-interface CrossAgentMessageRow {
+export interface CrossAgentMessageRow {
 	readonly id: string;
 	readonly created_at: string;
 	readonly expires_at: string;
@@ -298,6 +298,9 @@ function prunePresence(nowMs = Date.now()): void {
 }
 
 function pruneExpiredMessages(db: WriteDb, now: string): void {
+	db.prepare(
+		"DELETE FROM cross_agent_message_wakes WHERE message_id IN (SELECT id FROM cross_agent_messages WHERE expires_at <= ?)",
+	).run(now);
 	db.prepare("DELETE FROM cross_agent_messages WHERE expires_at <= ?").run(now);
 }
 
@@ -310,6 +313,10 @@ function sessionKeysForAgent(agentId: string): readonly string[] {
 	return [...presenceByKey.values()]
 		.filter((presence) => presence.agentId === agentId && presence.sessionKey !== undefined)
 		.map((presence) => presence.sessionKey as string);
+}
+
+export function isDirectAgentMessage(message: AgentMessage): boolean {
+	return message.deliveryPath === "local" && !message.broadcast && (!!message.toAgentId || !!message.toSessionKey);
 }
 
 export function getAgentPresenceForSession(sessionKey: string): AgentPresence | null {
@@ -464,7 +471,7 @@ export function listAgentPresence(options: ListAgentPresenceOptions = {}): Agent
 		.map(clonePresence);
 }
 
-function rowToAgentMessage(row: CrossAgentMessageRow): AgentMessage {
+export function rowToAgentMessage(row: CrossAgentMessageRow): AgentMessage {
 	return {
 		id: row.id,
 		createdAt: row.created_at,
@@ -1032,6 +1039,7 @@ export function resetCrossAgentStateForTest(): void {
 	if (!hasDbAccessor()) return;
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		db.prepare("DELETE FROM cross_agent_message_wakes").run();
 		db.prepare("DELETE FROM cross_agent_message_receipts").run();
 		db.prepare("DELETE FROM cross_agent_messages").run();
 	}, "cross-agent.ts:1034");
