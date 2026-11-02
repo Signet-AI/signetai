@@ -118,6 +118,30 @@ describe("direct message wake", () => {
 		expect(olderResult).toEqual({ wake: false, reason: "timeout" });
 	});
 
+	it("can skip agent-addressed backlog so a more recent waiter keeps it", async () => {
+		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "pi" });
+		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "for any beta session" });
+		const direct = createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: "for b1" });
+		const claimed = await claimDirectMessageWakes({
+			agentId: "beta",
+			sessionKey: "b1",
+			harness: "pi",
+			includeAgentAddressed: false,
+		});
+		expect(claimed.map((message) => message.id)).toEqual([direct.id]);
+	});
+
+	it("releases a claim when the waiter finished before the claim committed", async () => {
+		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "racing" });
+		const first = waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 5_000 });
+		const second = waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 5_000 });
+		const results = await Promise.all([first, second]);
+		const woke = results.filter((result) => result.wake);
+		expect(woke).toHaveLength(1);
+		expect(results[0]).toEqual({ wake: false, reason: "superseded" });
+		expect((await wakeRows()).map((row) => row.session_key)).toEqual(["b1"]);
+	});
+
 	it("supersedes an earlier waiter for the same session", async () => {
 		const first = waitForDirectMessageWake({
 			agentId: "beta",

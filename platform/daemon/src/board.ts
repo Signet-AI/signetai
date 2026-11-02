@@ -846,6 +846,7 @@ export async function claimBoardActivityNotices(input: {
 	const visibility = agentVisibility(viewer, "t.author_agent_id");
 	const limit = clamp(input.limit, BOARD_LIMITS.notices, 1, BOARD_LIMITS.notices);
 	const session = input.sessionKey ?? "";
+	const authorSession = input.sessionKey ?? null;
 	const rows = await readAll<{
 		readonly id: string;
 		readonly topic_slug: string;
@@ -853,53 +854,51 @@ export async function claimBoardActivityNotices(input: {
 		readonly last_post_at: string;
 		readonly new_posts: number;
 	}>(
-		`WITH candidates AS (
+		`WITH mine AS (
+			SELECT thread_id FROM board_posts WHERE author_agent_id = ? AND author_session_key IS ?
+			UNION
+			SELECT id AS thread_id FROM board_threads WHERE author_agent_id = ? AND author_session_key IS ?
+		),
+		candidates AS (
 			SELECT t.id, t.topic_slug, t.title, t.last_post_at,
 				MAX(
 					COALESCE(r.last_read_at, ''),
 					COALESCE(n.notified_at, ''),
 					COALESCE((
 						SELECT MAX(own.created_at) FROM board_posts own
-						WHERE own.thread_id = t.id AND own.author_agent_id = ? AND COALESCE(own.author_session_key, '') = ?
+						WHERE own.thread_id = t.id AND own.author_agent_id = ? AND own.author_session_key IS ?
 					), '')
 				) AS seen_at
-			FROM board_threads t
+			FROM mine
+			JOIN board_threads t ON t.id = mine.thread_id
 			LEFT JOIN board_reads r ON r.thread_id = t.id AND r.agent_id = ?
 			LEFT JOIN board_notices n ON n.thread_id = t.id AND n.agent_id = ? AND n.session_key = ?
 			WHERE t.status <> 'archived'
 			  AND ${visibility.sql}
-			  AND (
-				(t.author_agent_id = ? AND COALESCE(t.author_session_key, '') = ?)
-				OR EXISTS (
-					SELECT 1 FROM board_posts p
-					WHERE p.thread_id = t.id AND p.author_agent_id = ? AND COALESCE(p.author_session_key, '') = ?
-				)
-			  )
-			ORDER BY t.last_post_at DESC
-			LIMIT ?
 		)
 		SELECT c.id, c.topic_slug, c.title, c.last_post_at,
 			(SELECT COUNT(*) FROM board_posts p2
 			 WHERE p2.thread_id = c.id
 			   AND p2.created_at > c.seen_at
-			   AND NOT (p2.author_agent_id = ? AND COALESCE(p2.author_session_key, '') = ?)) AS new_posts
+			   AND NOT (p2.author_agent_id = ? AND p2.author_session_key IS ?)) AS new_posts
 		FROM candidates c
 		WHERE c.last_post_at > c.seen_at
-		ORDER BY c.last_post_at DESC`,
+		ORDER BY c.last_post_at DESC
+		LIMIT ?`,
 		[
 			input.agentId,
-			session,
+			authorSession,
+			input.agentId,
+			authorSession,
+			input.agentId,
+			authorSession,
 			input.agentId,
 			input.agentId,
 			session,
 			...visibility.args,
 			input.agentId,
-			session,
-			input.agentId,
-			session,
-			BOARD_LIMITS.notices * 20,
-			input.agentId,
-			session,
+			authorSession,
+			BOARD_LIMITS.notices * 4,
 		],
 		"board.notices.scan",
 	);
@@ -959,11 +958,12 @@ export async function projectBoardPost(postId: string): Promise<boolean> {
 	);
 	const agents = new Set<string>([thread.authorAgentId, ...participants.map((row) => row.author_agent_id)]);
 	const content = renderPostArtifact(thread, post);
+	const path = postPath(thread.id, post.id);
 	for (const agentId of agents) {
 		await indexExternalMemoryArtifact({
 			agentId,
 			harness: BOARD_HARNESS,
-			sourcePath: postPath(thread.id, post.id),
+			sourcePath: path,
 			sourceParentPath: threadPath(thread.id),
 			sourceExternalId: post.id,
 			sourceKind: BOARD_POST_KIND,
@@ -988,6 +988,12 @@ export async function projectBoardPost(postId: string): Promise<boolean> {
 				new Date().toISOString(),
 				post.id,
 			]),
+			ownerStatement(
+				`DELETE FROM memory_artifacts
+				 WHERE source_path = ? AND source_kind = ?
+				   AND NOT EXISTS (SELECT 1 FROM board_posts WHERE id = ?)`,
+				[path, BOARD_POST_KIND, post.id],
+			),
 		],
 		"board.projection.mark",
 	);

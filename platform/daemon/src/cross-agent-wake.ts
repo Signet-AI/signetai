@@ -91,7 +91,7 @@ const CLAIMABLE_SQL = `SELECT m.*, NULL AS acknowledged_at
 	  AND (m.from_session_key IS NULL OR m.from_session_key <> ?)
 	  AND (
 		(m.to_session_key = ? AND (m.to_session_agent_id IS NULL OR m.to_session_agent_id = ?))
-		OR (m.to_session_key IS NULL AND m.to_agent_id = ?)
+		OR (? = 1 AND m.to_session_key IS NULL AND m.to_agent_id = ?)
 	  )
 	ORDER BY m.created_at ASC, m.rowid ASC
 	LIMIT ?`;
@@ -100,13 +100,24 @@ export async function claimDirectMessageWakes(input: {
 	readonly agentId: string;
 	readonly sessionKey: string;
 	readonly harness: string;
+	readonly includeAgentAddressed?: boolean;
 	readonly nowMs?: number;
 }): Promise<readonly AgentMessage[]> {
 	const now = new Date(input.nowMs ?? Date.now()).toISOString();
+	const agentAddressed = input.includeAgentAddressed === false ? 0 : 1;
 	const rows = await dbOwnerQuery<readonly CrossAgentMessageRow[]>(
 		ownerStatement(
 			CLAIMABLE_SQL,
-			[input.agentId, now, input.sessionKey, input.sessionKey, input.agentId, input.agentId, MAX_WAKE_BATCH],
+			[
+				input.agentId,
+				now,
+				input.sessionKey,
+				input.sessionKey,
+				input.agentId,
+				agentAddressed,
+				input.agentId,
+				MAX_WAKE_BATCH,
+			],
 			"all",
 		),
 		{ operation: "cross-agent.wake.candidates", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: 2 },
@@ -177,8 +188,22 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 			waiter.rerun = false;
 			const nowMs = Date.now();
 			if (rateLimitRetryAfter(waiter.sessionKey, nowMs) !== null) return;
-			const claimed = await claimDirectMessageWakes(waiter);
+			const claimed = await claimDirectMessageWakes({
+				agentId: waiter.agentId,
+				sessionKey: waiter.sessionKey,
+				harness: waiter.harness,
+				includeAgentAddressed: isPreferredAgentWaiter(waiter, nowMs),
+			});
 			if (claimed.length > 0) {
+				if (waiter.done) {
+					await releaseDirectMessageWakes({
+						agentId: waiter.agentId,
+						sessionKey: waiter.sessionKey,
+						messageIds: claimed.map((message) => message.id),
+					});
+					redispatch(claimed);
+					return;
+				}
 				recordWake(waiter.sessionKey, nowMs);
 				waiter.finish(wakeResult(claimed, waiter.sessionKey));
 				return;
@@ -193,6 +218,16 @@ function lastSeenMs(sessionKey: string): number {
 	const seen = getAgentPresenceForSession(sessionKey)?.lastSeenAt;
 	const parsed = seen ? Date.parse(seen) : Number.NaN;
 	return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isPreferredAgentWaiter(waiter: Waiter, nowMs: number): boolean {
+	const seen = lastSeenMs(waiter.sessionKey);
+	for (const other of waiters.values()) {
+		if (other === waiter || other.done || other.agentId !== waiter.agentId) continue;
+		if (rateLimitRetryAfter(other.sessionKey, nowMs) !== null) continue;
+		if (lastSeenMs(other.sessionKey) > seen) return false;
+	}
+	return true;
 }
 
 export function selectWakeTarget(message: AgentMessage, nowMs = Date.now()): string | null {
@@ -212,6 +247,14 @@ export function selectWakeTarget(message: AgentMessage, nowMs = Date.now()): str
 		.filter((waiter) => waiter.agentId === message.toAgentId && eligible(waiter))
 		.sort((a, b) => lastSeenMs(b.sessionKey) - lastSeenMs(a.sessionKey));
 	return candidates[0]?.sessionKey ?? null;
+}
+
+function redispatch(messages: readonly AgentMessage[]): void {
+	for (const message of messages) {
+		const target = selectWakeTarget(message);
+		const waiter = target ? waiters.get(target) : undefined;
+		if (waiter) void attemptClaim(waiter).catch(() => {});
+	}
 }
 
 function ensureSubscribed(): void {

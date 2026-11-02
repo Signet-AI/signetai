@@ -41,7 +41,7 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_board_threads_activity
 			ON board_threads(last_post_at DESC, id);
 		CREATE INDEX IF NOT EXISTS idx_board_threads_author
-			ON board_threads(author_agent_id, last_post_at DESC);
+			ON board_threads(author_agent_id, author_session_key);
 
 		CREATE TABLE IF NOT EXISTS board_thread_tags (
 			thread_id TEXT NOT NULL,
