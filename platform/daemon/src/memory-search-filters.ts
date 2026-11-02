@@ -83,6 +83,9 @@ export function buildMemorySearchFilterClause(params: MemorySearchFilterInput): 
 }
 
 export function hasMemoryMetadataFilters(params: MemorySearchFilterInput): boolean {
+	return hasMemoryOnlyFilters(params) || hasDateBounds(params);
+}
+export function hasMemoryOnlyFilters(params: MemorySearchFilterInput): boolean {
 	const hasTags =
 		params.tags
 			?.split(",")
@@ -94,10 +97,25 @@ export function hasMemoryMetadataFilters(params: MemorySearchFilterInput): boole
 		params.who !== undefined ||
 		params.pinned === true ||
 		typeof params.importance_min === "number" ||
-		params.since !== undefined ||
-		params.until !== undefined ||
 		params.scope !== undefined
 	);
+}
+
+export function hasDateBounds(params: MemorySearchFilterInput): boolean {
+	return params.since !== undefined || params.until !== undefined;
+}
+export function dateBoundsSql(column: string, params: MemorySearchFilterInput): { sql: string; args: string[] } {
+	const parts: string[] = [];
+	const args: string[] = [];
+	if (params.since) {
+		parts.push(`AND ${column} >= ?`);
+		args.push(params.since);
+	}
+	if (params.until) {
+		parts.push(`AND ${column} <= ?`);
+		args.push(params.until);
+	}
+	return { sql: parts.join(" "), args };
 }
 
 export function hasRestrictedMemoryContentFilters(params: MemorySearchFilterInput): boolean {

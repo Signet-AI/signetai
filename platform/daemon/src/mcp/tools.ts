@@ -401,8 +401,14 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				type: z.string().optional().describe("Filter by memory type"),
 				tags: z.string().optional().describe("Filter by tags (comma-separated)"),
 				who: z.string().optional().describe("Filter by author"),
-				since: z.string().optional().describe("Only include memories created after this date"),
-				until: z.string().optional().describe("Only include memories created before this date"),
+				since: z
+					.string()
+					.optional()
+					.describe("Only include memories, native memory files and transcripts dated after this date"),
+				until: z
+					.string()
+					.optional()
+					.describe("Only include memories, native memory files and transcripts dated before this date"),
 				time: z
 					.object({
 						start: z.string().optional(),
@@ -502,8 +508,14 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				type: z.string().optional().describe("Filter by memory type"),
 				tags: z.string().optional().describe("Filter by tags (comma-separated)"),
 				who: z.string().optional().describe("Filter by author"),
-				since: z.string().optional().describe("Only include memories created after this date"),
-				until: z.string().optional().describe("Only include memories created before this date"),
+				since: z
+					.string()
+					.optional()
+					.describe("Only include memories, native memory files and transcripts dated after this date"),
+				until: z
+					.string()
+					.optional()
+					.describe("Only include memories, native memory files and transcripts dated before this date"),
 				time: z
 					.object({
 						start: z.string().optional(),

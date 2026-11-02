@@ -250,6 +250,13 @@ embeddings carry a strong source root/project binding. Project-scoped searches
 still use authorized memory rows and native source artifacts; they do not guess
 source ownership from chunk text metadata.
 
+Memory-only filters (`type`, `tags`, `who`, `pinned`, `importance_min`,
+`scope`) disable the source rescue paths, because source rows cannot satisfy
+them. Date bounds (`since`, `until`) do not: native memory artifacts are
+filtered by their file modification time, which is also the `created_at` they
+report. Source chunk vector fallback is skipped under date bounds, because a
+chunk's time is when it was embedded, not when its content was written.
+
 Recall also returns a bounded amount of transcript evidence. After the memory
 results are ranked, keyword search over the requesting agent's own captured
 session transcripts adds at most `search.transcript_evidence_limit` excerpts
@@ -265,9 +272,10 @@ best-matching window of about 900 characters with credentials redacted, has
 the form `transcript:<session>`, and the session in `session_id`. Sessions
 already represented in the results are skipped. Transcripts are never read
 across agents, whatever the read policy, and the lane is skipped for temporal
-windows and metadata filters (`type`, `tags`, `who`, `pinned`,
-`importance_min`, `since`, `until`, `scope`), which transcripts cannot
-satisfy. This keeps details Dreaming does not file, such as general
+windows and memory-only filters (`type`, `tags`, `who`, `pinned`,
+`importance_min`, `scope`), which transcripts cannot satisfy. Date bounds
+(`since`, `until`) apply to the excerpt's `created_at`, which is the session
+start when known and otherwise the capture time. This keeps details Dreaming does not file, such as general
 information the assistant gave, reachable without filing them as claims.
 Prompt-submit injection does not include transcripts. Full transcript search
 remains available through `/api/sessions/search`, MCP `session_search`, and

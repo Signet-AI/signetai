@@ -89,8 +89,8 @@ Common refinements:
 | `type` | string | no | Filter by memory type (e.g. `"preference"`, `"fact"`) |
 | `tags` | string | no | Filter by tags (comma-separated) |
 | `who` | string | no | Filter by author |
-| `since` | string | no | Only include memories created after this date |
-| `until` | string | no | Only include memories created before this date |
+| `since` | string | no | Only include memories, native memory files and transcripts dated after this date |
+| `until` | string | no | Only include memories, native memory files and transcripts dated before this date |
 
 Context and temporal controls:
 
