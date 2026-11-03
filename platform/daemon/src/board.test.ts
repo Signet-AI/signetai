@@ -485,6 +485,21 @@ describe("message board", () => {
 		expect((await readBoardThread(created.thread.id, agent("beta"), { postOffset: 1 })).readThrough).toBeUndefined();
 	});
 
+	it("falls back to self-only when a visibility refresh hangs", async () => {
+		await registerAgent("g1", "group", "ops");
+		await registerAgent("g2", "group", "ops");
+		let clock = 0;
+		const visible = await createBoardEventVisibility(agent("g1", "group", "ops"), {
+			refreshMs: 1_000,
+			refreshTimeoutMs: 0,
+			nowMs: () => clock,
+		});
+		expect(await visible("g2")).toBe(true);
+		clock = 5_000;
+		expect(await visible("g2")).toBe(false);
+		expect(await visible("g1")).toBe(true);
+	});
+
 	it("lists active board topics in the session-start messaging section", async () => {
 		await createBoardThread({
 			viewer: agent("default"),

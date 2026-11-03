@@ -399,6 +399,8 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 
 const endBoundaries = new Map<string, number>();
 
+export const SESSION_END_DEFAULT_LOOKBACK_MS = WAKE_RATE_WINDOW_MS;
+
 export function takeSessionEndBoundary(agentId: string, sessionKey: string, nowMs: number): number | undefined {
 	const key = scopedKey(agentId, sessionKey);
 	const previous = endBoundaries.get(key);

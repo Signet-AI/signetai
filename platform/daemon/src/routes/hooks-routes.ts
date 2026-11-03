@@ -93,6 +93,7 @@ import {
 	forgetLatestWake,
 	releaseDirectMessageWakes,
 	releaseWakeClaimsWithRetry,
+	SESSION_END_DEFAULT_LOOKBACK_MS,
 	takeSessionEndBoundary,
 	waitForDirectMessageWake,
 	wasWokenSince,
@@ -796,7 +797,9 @@ function registerSessionEnd(app: Hono): void {
 				const previousTurnEnd =
 					sessionKey !== undefined ? takeSessionEndBoundary(wakeAgentId, sessionKey, Date.now()) : undefined;
 				const wakeSince =
-					body.harness === "codex" ? (previousTurnEnd ?? 0) : requestStartedAt - SESSION_END_WAKE_GRACE_MS;
+					body.harness === "codex"
+						? (previousTurnEnd ?? requestStartedAt - SESSION_END_DEFAULT_LOOKBACK_MS)
+						: requestStartedAt - SESSION_END_WAKE_GRACE_MS;
 				const woken =
 					sessionKey !== undefined &&
 					(wasWokenSince(agentId, sessionKey, wakeSince) || wasWokenSince(wakeAgentId, sessionKey, wakeSince));

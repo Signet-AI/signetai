@@ -210,6 +210,7 @@ function agentVisibility(viewer: BoardViewer, column: string): { sql: string; ar
 }
 
 const EVENT_VISIBILITY_REFRESH_MS = 30_000;
+const EVENT_VISIBILITY_REFRESH_TIMEOUT_MS = 3_000;
 
 async function eventVisibilityPredicate(viewer: BoardViewer): Promise<(authorAgentId: string) => boolean> {
 	if (viewer.kind === "operator" || viewer.readPolicy === "shared") return () => true;
@@ -227,7 +228,7 @@ async function eventVisibilityPredicate(viewer: BoardViewer): Promise<(authorAge
 
 export async function createBoardEventVisibility(
 	viewer: BoardViewer,
-	options: { readonly refreshMs?: number; readonly nowMs?: () => number } = {},
+	options: { readonly refreshMs?: number; readonly nowMs?: () => number; readonly refreshTimeoutMs?: number } = {},
 ): Promise<(authorAgentId: string) => Promise<boolean>> {
 	if (viewer.kind === "operator") return async () => true;
 	const refreshMs = options.refreshMs ?? EVENT_VISIBILITY_REFRESH_MS;
@@ -236,8 +237,13 @@ export async function createBoardEventVisibility(
 	let fetchedAt = now();
 	let refreshing: Promise<void> | null = null;
 	const refresh = (): Promise<void> => {
-		refreshing ??= resolveBoardViewer(viewer.agentId)
-			.then(eventVisibilityPredicate)
+		if (refreshing) return refreshing;
+		const timeoutMs = options.refreshTimeoutMs ?? EVENT_VISIBILITY_REFRESH_TIMEOUT_MS;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const timeout = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => reject(new Error("board visibility refresh timed out")), timeoutMs);
+		});
+		refreshing = Promise.race([resolveBoardViewer(viewer.agentId).then(eventVisibilityPredicate), timeout])
 			.then((next) => {
 				predicate = next;
 			})
@@ -245,6 +251,7 @@ export async function createBoardEventVisibility(
 				predicate = (authorAgentId) => authorAgentId === viewer.agentId;
 			})
 			.finally(() => {
+				if (timer) clearTimeout(timer);
 				fetchedAt = now();
 				refreshing = null;
 			});
