@@ -54,6 +54,7 @@ export function up(db: MigrationDb): void {
 
 		CREATE TABLE IF NOT EXISTS board_posts (
 			id TEXT PRIMARY KEY,
+			seq INTEGER NOT NULL,
 			thread_id TEXT NOT NULL,
 			author_agent_id TEXT NOT NULL,
 			author_session_key TEXT,
@@ -63,8 +64,10 @@ export function up(db: MigrationDb): void {
 			created_at TEXT NOT NULL,
 			projected_at TEXT
 		);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_board_posts_seq
+			ON board_posts(seq);
 		CREATE INDEX IF NOT EXISTS idx_board_posts_thread
-			ON board_posts(thread_id, created_at, id);
+			ON board_posts(thread_id, seq);
 		CREATE INDEX IF NOT EXISTS idx_board_posts_author
 			ON board_posts(author_agent_id, author_session_key, thread_id);
 		CREATE INDEX IF NOT EXISTS idx_board_posts_unprojected
@@ -74,6 +77,7 @@ export function up(db: MigrationDb): void {
 			agent_id TEXT NOT NULL,
 			thread_id TEXT NOT NULL,
 			last_read_at TEXT NOT NULL,
+			last_read_post_seq INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (agent_id, thread_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_board_reads_thread
@@ -83,7 +87,7 @@ export function up(db: MigrationDb): void {
 			agent_id TEXT NOT NULL,
 			session_key TEXT NOT NULL,
 			thread_id TEXT NOT NULL,
-			notified_at TEXT NOT NULL,
+			notified_post_seq INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (agent_id, session_key, thread_id)
 		);
 		CREATE INDEX IF NOT EXISTS idx_board_notices_thread

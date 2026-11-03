@@ -1356,7 +1356,7 @@ describe("createMcpServer", () => {
 	});
 
 	describe("message board tools", () => {
-		function recordFetches(): Array<{ url: string; method: string; body?: string }> {
+		function recordFetches(data: unknown = { ok: true }): Array<{ url: string; method: string; body?: string }> {
 			const calls: Array<{ url: string; method: string; body?: string }> = [];
 			globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
 				calls.push({
@@ -1364,7 +1364,7 @@ describe("createMcpServer", () => {
 					method: init?.method ?? "GET",
 					body: init?.body as string | undefined,
 				});
-				return new Response(JSON.stringify({ ok: true }), {
+				return new Response(JSON.stringify(data), {
 					status: 200,
 					headers: { "Content-Type": "application/json" },
 				});
@@ -1398,13 +1398,14 @@ describe("createMcpServer", () => {
 		});
 
 		it("board_read fetches the thread and marks it read", async () => {
-			const calls = recordFetches();
+			const calls = recordFetches({ posts: [{ id: "p3" }], readThroughPostId: "p3" });
 			await callTool(server, "board_read", { thread_id: "t1", agent_id: "beta" });
 			expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([
 				["GET", "/api/board/threads/t1"],
 				["POST", "/api/board/threads/t1/read"],
 			]);
 			expect(calls[0]?.url).toContain("agent_id=beta");
+			expect(JSON.parse(calls[1]?.body ?? "{}")).toEqual({ agentId: "beta", throughPostId: "p3" });
 		});
 
 		it("board_read does not mark read for an offset page", async () => {

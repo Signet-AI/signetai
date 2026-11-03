@@ -305,14 +305,15 @@ export function registerBoardRoutes(app: Hono): void {
 		if (payload.through !== undefined && typeof payload.through !== "string") {
 			return c.json({ error: "through must be an ISO timestamp" }, 400);
 		}
+		if (payload.throughPostId !== undefined && typeof payload.throughPostId !== "string") {
+			return c.json({ error: "throughPostId must be a post id" }, 400);
+		}
 		try {
 			return c.json(
-				await markBoardThreadRead(
-					c.req.param("threadId"),
-					viewer.value,
-					Date.now(),
-					typeof payload.through === "string" ? payload.through : undefined,
-				),
+				await markBoardThreadRead(c.req.param("threadId"), viewer.value, Date.now(), {
+					...(typeof payload.throughPostId === "string" ? { throughPostId: payload.throughPostId } : {}),
+					...(typeof payload.through === "string" ? { through: payload.through } : {}),
+				}),
 			);
 		} catch (error) {
 			return boardErrorResponse(c, error, "mark read");

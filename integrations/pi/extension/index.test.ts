@@ -1278,9 +1278,9 @@ describe("collaboration tools", () => {
 				if (url.pathname === "/api/board/threads/bad") return new Response("nope", { status: 500 });
 				if (req.method === "GET" && url.pathname === "/api/board/threads/t%201") {
 					return Response.json({
-						thread: { lastPostAt: "2026-10-05T09:00:00.000Z" },
-						posts: [{ createdAt: "2026-10-05T08:00:00.000Z" }, { createdAt: "2026-10-05T08:30:00.000Z" }],
+						posts: [{ id: "p1" }, { id: "p2" }],
 						hasMorePosts: url.searchParams.get("limit") === "2",
+						readThroughPostId: "p2",
 					});
 				}
 				return Response.json({ ok: true });
@@ -1412,13 +1412,13 @@ describe("collaboration tools", () => {
 		expect(seen[0]?.path).toBe("/api/board/threads/t%201");
 		expect(seen[1]?.method).toBe("POST");
 		expect(seen[1]?.path).toBe("/api/board/threads/t%201/read");
-		expect(seen[1]?.body).toEqual({ agentId: "pi-agent", through: "2026-10-05T09:00:00.000Z" });
+		expect(seen[1]?.body).toEqual({ agentId: "pi-agent", throughPostId: "p2" });
 	});
 
 	it("board_read marks through the newest returned post when more posts remain", async () => {
 		const { tools, seen } = await setup();
 		await run(tools, "board_read", { thread_id: "t 1", limit: 2 });
-		expect(seen[1]?.body).toEqual({ agentId: "pi-agent", through: "2026-10-05T08:30:00.000Z" });
+		expect(seen[1]?.body).toEqual({ agentId: "pi-agent", throughPostId: "p2" });
 	});
 
 	it("board_read leaves the read cursor alone for an offset page", async () => {

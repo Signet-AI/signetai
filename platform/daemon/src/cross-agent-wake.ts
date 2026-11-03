@@ -56,7 +56,14 @@ interface Waiter {
 }
 
 const waiters = new Map<string, Waiter>();
-const wakeTimes = new Map<string, number[]>();
+interface WakeDelivery {
+	readonly sequence: number;
+	readonly at: number;
+	readonly messageIds: Set<string>;
+}
+
+const wakeTimes = new Map<string, WakeDelivery[]>();
+let nextDeliverySequence = 1;
 
 function scopedKey(agentId: string, sessionKey: string): string {
 	return JSON.stringify([agentId, sessionKey]);
@@ -68,8 +75,8 @@ function waiterKey(waiter: Pick<Waiter, "agentId" | "sessionKey">): string {
 let nextWaiterId = 1;
 let unsubscribe: (() => void) | null = null;
 
-function recentWakes(key: string, nowMs: number): number[] {
-	const times = (wakeTimes.get(key) ?? []).filter((at) => nowMs - at < WAKE_RATE_WINDOW_MS);
+function recentWakes(key: string, nowMs: number): WakeDelivery[] {
+	const times = (wakeTimes.get(key) ?? []).filter((delivery) => nowMs - delivery.at < WAKE_RATE_WINDOW_MS);
 	if (times.length === 0) wakeTimes.delete(key);
 	else wakeTimes.set(key, times);
 	return times;
@@ -78,13 +85,17 @@ function recentWakes(key: string, nowMs: number): number[] {
 function rateLimitRetryAfter(key: string, nowMs: number): number | null {
 	const times = recentWakes(key, nowMs);
 	if (times.length < WAKE_RATE_LIMIT_PER_HOUR) return null;
-	const oldest = times[0] ?? nowMs;
+	const oldest = times[0]?.at ?? nowMs;
 	return Math.max(1_000, WAKE_RATE_WINDOW_MS - (nowMs - oldest));
 }
 
-function recordWake(key: string, nowMs: number): void {
+function recordWake(key: string, nowMs: number, messages: readonly AgentMessage[]): void {
 	const times = recentWakes(key, nowMs);
-	times.push(nowMs);
+	times.push({
+		sequence: nextDeliverySequence++,
+		at: nowMs,
+		messageIds: new Set(messages.map((message) => message.id)),
+	});
 	wakeTimes.set(key, times);
 	if (wakeTimes.size > MAX_TRACKED_SESSIONS) {
 		const oldestKey = wakeTimes.keys().next().value;
@@ -167,6 +178,8 @@ export async function releaseDirectMessageWakes(input: {
 	readonly messageIds: readonly string[];
 }): Promise<number> {
 	const ids = [...new Set(input.messageIds.filter((id) => typeof id === "string" && id.length > 0))];
+	const key = scopedKey(input.agentId, input.sessionKey);
+	const deliveries = [...(wakeTimes.get(key) ?? [])];
 	let released = 0;
 	for (let start = 0; start < ids.length; start += MAX_WAKE_BATCH) {
 		const chunk = ids.slice(start, start + MAX_WAKE_BATCH);
@@ -179,10 +192,17 @@ export async function releaseDirectMessageWakes(input: {
 			),
 			{ operation: "cross-agent.wake.release", lane: "write", deadlineMs: 5_000, estimatedWorkUnits: chunk.length },
 		);
-		released += results.reduce<number>(
-			(total, result) => total + ((result as { readonly changes?: number } | undefined)?.changes ?? 0),
-			0,
-		);
+		for (let index = 0; index < results.length; index++) {
+			const changes = (results[index] as { readonly changes?: number } | undefined)?.changes ?? 0;
+			released += changes;
+			const id = chunk[index];
+			if (changes > 0 && id) {
+				for (const delivery of deliveries) delivery.messageIds.delete(id);
+			}
+		}
+		const remaining = (wakeTimes.get(key) ?? []).filter((delivery) => delivery.messageIds.size > 0);
+		if (remaining.length > 0) wakeTimes.set(key, remaining);
+		else wakeTimes.delete(key);
 	}
 	return released;
 }
@@ -227,7 +247,7 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 					redispatch(claimed);
 					return;
 				}
-				recordWake(waiterKey(waiter), Date.now());
+				recordWake(waiterKey(waiter), Date.now(), claimed);
 				waiter.finish(wakeResult(claimed, waiter.sessionKey));
 				return;
 			}
@@ -399,30 +419,22 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 
 const endBoundaries = new Map<string, number>();
 
-export const SESSION_END_DEFAULT_LOOKBACK_MS = WAKE_RATE_WINDOW_MS;
-
-export function takeSessionEndBoundary(agentId: string, sessionKey: string, nowMs: number): number | undefined {
+export function consumeSessionEndWake(agentId: string, sessionKey: string): boolean {
 	const key = scopedKey(agentId, sessionKey);
-	const previous = endBoundaries.get(key);
+	const previous = endBoundaries.get(key) ?? 0;
+	const deliveries = recentWakes(key, Date.now());
+	const woken = deliveries.some((delivery) => delivery.sequence > previous);
 	endBoundaries.delete(key);
-	endBoundaries.set(key, nowMs);
+	endBoundaries.set(key, nextDeliverySequence - 1);
 	if (endBoundaries.size > MAX_TRACKED_SESSIONS) {
 		const oldestKey = endBoundaries.keys().next().value;
 		if (oldestKey !== undefined) endBoundaries.delete(oldestKey);
 	}
-	return previous;
-}
-
-export function forgetLatestWake(agentId: string, sessionKey: string): void {
-	const key = scopedKey(agentId, sessionKey);
-	const times = wakeTimes.get(key);
-	if (!times || times.length === 0) return;
-	times.pop();
-	if (times.length === 0) wakeTimes.delete(key);
+	return woken;
 }
 
 export function wasWokenSince(agentId: string, sessionKey: string, sinceMs: number): boolean {
-	return (wakeTimes.get(scopedKey(agentId, sessionKey)) ?? []).some((at) => at >= sinceMs);
+	return recentWakes(scopedKey(agentId, sessionKey), Date.now()).some((delivery) => delivery.at >= sinceMs);
 }
 
 export function activeWakeWaiterCount(): number {

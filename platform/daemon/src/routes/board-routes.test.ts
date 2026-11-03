@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -155,6 +155,35 @@ describe("wake and session-end ordering", () => {
 		expect(getEndedSession("codex-2", "beta")).toBeDefined();
 	});
 
+	it("counts a Codex Stop wake once even when the next Stop shares its millisecond", async () => {
+		const clock = spyOn(Date, "now").mockReturnValue(Date.now());
+		try {
+			upsertAgentPresence({ agentId: "beta", harness: "codex", sessionKey: "codex-same-ms" });
+			createAgentMessage({ fromAgentId: "alpha", toSessionKey: "codex-same-ms", content: "continue" });
+			const woke = await send("POST", "/api/cross-agent/wake", {
+				harness: "codex",
+				sessionKey: "codex-same-ms",
+				agentId: "beta",
+				waitMs: 0,
+			});
+			expect(((await woke.json()) as { wake: boolean }).wake).toBe(true);
+			const end = () =>
+				send("POST", "/api/hooks/session-end", {
+					harness: "codex",
+					sessionKey: "codex-same-ms",
+					agentId: "beta",
+					runtimePath: "legacy",
+					reason: "stop",
+				});
+			expect((await end()).status).toBe(200);
+			expect(getEndedSession("codex-same-ms", "beta")).toBeUndefined();
+			expect((await end()).status).toBe(200);
+			expect(getEndedSession("codex-same-ms", "beta")).toBeDefined();
+		} finally {
+			clock.mockRestore();
+		}
+	});
+
 	it("keeps a session open when a direct message woke it during its session-end", async () => {
 		upsertAgentPresence({ agentId: "beta", harness: "codex", sessionKey: "codex-1" });
 		markSessionEnded("codex-1", "legacy", "beta");
@@ -220,11 +249,20 @@ describe("message board routes", () => {
 		]) {
 			expect((await send("PATCH", `/api/board/threads/${thread.id}`, body)).status).toBe(400);
 		}
+		const readDetail = (await (await send("GET", `/api/board/threads/${thread.id}?agent_id=alpha`)).json()) as {
+			readThroughPostId?: string;
+		};
+		expect(readDetail.readThroughPostId).toBeTruthy();
 		const readThrough = await send("POST", `/api/board/threads/${thread.id}/read`, {
 			agentId: "alpha",
-			through: "2000-01-01T00:00:00.000Z",
+			throughPostId: readDetail.readThroughPostId,
 		});
-		expect(((await readThrough.json()) as { lastReadAt: string }).lastReadAt).toBe("2000-01-01T00:00:00.000Z");
+		expect(((await readThrough.json()) as { lastReadPostId: string }).lastReadPostId).toBe(
+			readDetail.readThroughPostId ?? "",
+		);
+		expect(
+			(await send("POST", `/api/board/threads/${thread.id}/read`, { agentId: "alpha", throughPostId: "nope" })).status,
+		).toBe(400);
 		expect((await send("POST", `/api/board/threads/${thread.id}/read`, { agentId: "alpha", through: 5 })).status).toBe(
 			400,
 		);

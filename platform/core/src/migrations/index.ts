@@ -1558,7 +1558,9 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "cross_agent_message_wakes", column: "session_key" },
 				{ table: "board_threads", column: "last_post_at" },
 				{ table: "board_posts", column: "projected_at" },
-				{ table: "board_notices", column: "notified_at" },
+				{ table: "board_posts", column: "seq" },
+				{ table: "board_reads", column: "last_read_post_seq" },
+				{ table: "board_notices", column: "notified_post_seq" },
 			],
 			tables: [
 				"cross_agent_message_wakes",

@@ -138,4 +138,75 @@ describe("createWakeWaiter", () => {
 		const release = fake.calls.find((c) => c.path === "/api/cross-agent/wake/release");
 		expect(release?.body).toEqual({ harness: "pi", sessionKey: "s1", agentId: "a1", messageIds: ["m1", "m2"] });
 	});
+
+	it("stops after consecutive refusals, releasing each claim, and re-arms on restart", async () => {
+		const wakeStep = { ok: true, data: { wake: true, inject: "x", messageIds: ["m1"] } } as const;
+		const fake = fakeClient([
+			wakeStep,
+			{ ok: true, data: { released: 1 } },
+			wakeStep,
+			{ ok: false, reason: "offline" },
+			{ ok: true, data: { released: 1 } },
+			wakeStep,
+			{ ok: true, data: { released: 1 } },
+			wakeStep,
+		]);
+		const exhausted: number[] = [];
+		let attempts = 0;
+		const waiter = createWakeWaiter({
+			client: fake.client,
+			harness: "pi",
+			agentId: "a1",
+			deliver: () => {
+				attempts += 1;
+				throw new Error("busy");
+			},
+			onExhausted: (n) => exhausted.push(n),
+			...fast,
+		});
+		waiter.start({ sessionKey: "s1" });
+		await until(() => !waiter.running);
+		expect(attempts).toBe(3);
+		expect(exhausted).toEqual([3]);
+		expect(fake.calls.filter((c) => c.path.endsWith("/release")).length).toBe(4);
+		const before = fake.calls.length;
+		waiter.start({ sessionKey: "s1" });
+		expect(waiter.running).toBe(true);
+		await until(() => fake.calls.length > before);
+		waiter.stop();
+	});
+
+	it("resets the refusal counter after a delivery and does not count network failures", async () => {
+		const w = { ok: true, data: { wake: true, inject: "x", messageIds: ["m"] } } as const;
+		const rel = { ok: true, data: {} } as const;
+		const off = { ok: false, reason: "offline" } as const;
+		const fake = fakeClient([
+			off,
+			off,
+			off,
+			off,
+			w,
+			rel,
+			w,
+			rel,
+			w,
+			w,
+			rel,
+			w,
+			rel,
+			{ ok: true, data: { wake: false, reason: "superseded" } },
+		]);
+		const outcomes = [false, false, true, false, false];
+		const waiter = createWakeWaiter({
+			client: fake.client,
+			harness: "pi",
+			agentId: undefined,
+			deliver: () => outcomes.shift() ?? true,
+			...fast,
+		});
+		waiter.start({ sessionKey: "s1" });
+		await until(() => fake.calls.filter((c) => c.path.endsWith("/release")).length >= 4);
+		expect(outcomes.length).toBe(0);
+		waiter.stop();
+	});
 });

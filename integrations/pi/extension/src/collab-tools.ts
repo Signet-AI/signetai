@@ -57,26 +57,10 @@ function query(entries: Record<string, string | number | boolean | undefined>): 
 	return text ? `?${text}` : "";
 }
 
-function readThrough(data: unknown): string | undefined {
+function readThroughPostId(data: unknown): string | undefined {
 	if (typeof data !== "object" || data === null) return undefined;
-	const detail = data as {
-		thread?: { lastPostAt?: unknown };
-		posts?: unknown;
-		hasMorePosts?: unknown;
-		readThrough?: unknown;
-	};
-	if (typeof detail.readThrough === "string" && detail.readThrough) return detail.readThrough;
-	if (detail.hasMorePosts !== true) {
-		const last = detail.thread?.lastPostAt;
-		return typeof last === "string" && last ? last : undefined;
-	}
-	if (!Array.isArray(detail.posts)) return undefined;
-	let newest: string | undefined;
-	for (const post of detail.posts) {
-		const created = (post as { createdAt?: unknown } | null)?.createdAt;
-		if (typeof created === "string" && (!newest || created > newest)) newest = created;
-	}
-	return newest;
+	const id = (data as { readThroughPostId?: unknown }).readThroughPostId;
+	return typeof id === "string" && id ? id : undefined;
 }
 
 export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, agentId: string | undefined): void {
@@ -277,10 +261,11 @@ export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, ag
 			);
 			if (!result.ok) return fail(`Board read failed: ${describeFailure(result)}`);
 			if ((num(params.offset, 0, Number.MAX_SAFE_INTEGER) ?? 0) > 0) return ok(result.data);
-			const through = readThrough(result.data);
+			const throughPostId = readThroughPostId(result.data);
+			if (!throughPostId) return ok(result.data);
 			const marked = await client.postResult<unknown>(
 				`${path}/read`,
-				{ agentId, ...(through ? { through } : {}) },
+				{ agentId, throughPostId },
 				WRITE_TIMEOUT,
 				signal,
 			);

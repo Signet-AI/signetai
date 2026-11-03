@@ -1227,22 +1227,15 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			}
 			const path = `/api/board/threads/${encodeURIComponent(thread_id)}`;
 			const result = await fetchDaemon<{
-				readonly thread?: { readonly lastPostAt?: string };
-				readonly posts?: ReadonlyArray<{ readonly createdAt?: string }>;
-				readonly hasMorePosts?: boolean;
-				readonly readThrough?: string;
+				readonly readThroughPostId?: string;
 			}>(baseUrl, `${path}?${params.toString()}`);
 			if (!result.ok) return errorResult(`Board read failed: ${result.error}`);
 			if (typeof offset === "number" && Number.isFinite(offset) && offset > 0) return textResult(result.data);
-			const posts = result.data?.posts ?? [];
-			const through =
-				result.data?.readThrough ??
-				(result.data?.hasMorePosts
-					? posts[posts.length - 1]?.createdAt
-					: (result.data?.thread?.lastPostAt ?? posts[posts.length - 1]?.createdAt));
+			const throughPostId = result.data?.readThroughPostId;
+			if (!throughPostId) return textResult(result.data);
 			const marked = await fetchDaemon<unknown>(baseUrl, `${path}/read`, {
 				method: "POST",
-				body: { agentId: agent_id, through },
+				body: { agentId: agent_id, throughPostId },
 			});
 			if (!marked.ok) return errorResult(`Board read succeeded but marking it read failed: ${marked.error}`);
 			return textResult(result.data);

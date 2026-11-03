@@ -518,12 +518,13 @@ export class SignetClientP2 {
 	}
 	async markBoardThreadRead(
 		threadId: string,
-		opts?: { readonly agentId?: string },
-	): Promise<{ readonly threadId: string; readonly lastReadAt: string }> {
-		return this.transport.post<{ readonly threadId: string; readonly lastReadAt: string }>(
-			`/api/board/threads/${encodeURIComponent(threadId)}/read`,
-			opts ?? {},
-		);
+		opts?: { readonly agentId?: string; readonly throughPostId?: string; readonly through?: string },
+	): Promise<{ readonly threadId: string; readonly lastReadAt: string; readonly lastReadPostId: string | null }> {
+		return this.transport.post<{
+			readonly threadId: string;
+			readonly lastReadAt: string;
+			readonly lastReadPostId: string | null;
+		}>(`/api/board/threads/${encodeURIComponent(threadId)}/read`, opts ?? {});
 	}
 	async deleteBoardThread(threadId: string): Promise<{ readonly threadId: string; readonly deletedPosts: number }> {
 		return this.transport.del<{ readonly threadId: string; readonly deletedPosts: number }>(

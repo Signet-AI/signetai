@@ -90,11 +90,9 @@ import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { claimBoardActivityNotices } from "../board";
 import {
 	MAX_WAKE_WAIT_MS,
-	forgetLatestWake,
+	consumeSessionEndWake,
 	releaseDirectMessageWakes,
 	releaseWakeClaimsWithRetry,
-	SESSION_END_DEFAULT_LOOKBACK_MS,
-	takeSessionEndBoundary,
 	waitForDirectMessageWake,
 	wasWokenSince,
 } from "../cross-agent-wake";
@@ -686,7 +684,6 @@ function registerDirectMessageWake(app: Hono): void {
 			});
 			if (result.wake && !c.req.raw.signal.aborted) clearEndedSession(sessionKey, scopedAgent.agentId);
 			if (result.wake && c.req.raw.signal.aborted) {
-				forgetLatestWake(scopedAgent.agentId, sessionKey);
 				await releaseWakeClaimsWithRetry({
 					agentId: scopedAgent.agentId,
 					sessionKey,
@@ -794,15 +791,17 @@ function registerSessionEnd(app: Hono): void {
 				const result = await handleSessionEnd(body);
 				const wakeAgent = resolveScopedAgentId(c, agentId);
 				const wakeAgentId = wakeAgent.error ? agentId : wakeAgent.agentId;
-				const previousTurnEnd =
-					sessionKey !== undefined ? takeSessionEndBoundary(wakeAgentId, sessionKey, Date.now()) : undefined;
-				const wakeSince =
-					body.harness === "codex"
-						? (previousTurnEnd ?? requestStartedAt - SESSION_END_DEFAULT_LOOKBACK_MS)
-						: requestStartedAt - SESSION_END_WAKE_GRACE_MS;
+				const wakeAgentIds = [...new Set([agentId, wakeAgentId])];
+				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
 				const woken =
 					sessionKey !== undefined &&
-					(wasWokenSince(agentId, sessionKey, wakeSince) || wasWokenSince(wakeAgentId, sessionKey, wakeSince));
+					wakeAgentIds
+						.map((id) =>
+							body.harness === "codex"
+								? consumeSessionEndWake(id, sessionKey)
+								: wasWokenSince(id, sessionKey, wakeSince),
+						)
+						.some(Boolean);
 				if (sessionKey && !woken) {
 					markSessionEnded(sessionKey, runtimePath, agentId);
 					removeAgentPresence(sessionKey);

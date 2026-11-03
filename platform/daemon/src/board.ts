@@ -110,7 +110,7 @@ export interface BoardThreadDetail {
 	readonly postLimit: number;
 	readonly postOffset: number;
 	readonly hasMorePosts: boolean;
-	readonly readThrough?: string;
+	readonly readThroughPostId?: string;
 }
 
 export interface BoardWriteResult {
@@ -339,6 +339,8 @@ interface ThreadRow {
 	readonly last_post_at: string;
 	readonly tags_csv: string | null;
 	readonly last_read_at: string | null;
+	readonly last_read_post_seq: number | null;
+	readonly last_post_seq: number | null;
 }
 
 interface PostRow {
@@ -370,7 +372,10 @@ function threadFromRow(row: ThreadRow, viewer: BoardViewer): BoardThread {
 		.map((tag) => tag.trim())
 		.filter((tag) => tag.length > 0)
 		.sort();
-	const unread = viewer.kind === "agent" ? row.last_read_at === null || row.last_post_at > row.last_read_at : false;
+	const unread =
+		viewer.kind === "agent"
+			? row.last_read_post_seq === null || (row.last_post_seq ?? 0) > row.last_read_post_seq
+			: false;
 	return {
 		id: row.id,
 		topic: row.topic_slug,
@@ -429,7 +434,9 @@ async function write(statements: readonly DbOwnerStatement[], operation: string)
 
 const THREAD_SELECT = `SELECT t.*,
 	(SELECT group_concat(g.tag, ',') FROM board_thread_tags g WHERE g.thread_id = t.id) AS tags_csv,
-	r.last_read_at AS last_read_at
+	r.last_read_at AS last_read_at,
+	r.last_read_post_seq AS last_read_post_seq,
+	(SELECT MAX(seq) FROM board_posts lp WHERE lp.thread_id = t.id) AS last_post_seq
 	FROM board_threads t
 	LEFT JOIN board_reads r ON r.thread_id = t.id AND r.agent_id = ?`;
 
@@ -571,12 +578,12 @@ export async function readBoardThread(
 	const postLimit = clamp(options.postLimit, 100, 1, BOARD_LIMITS.postPage);
 	const postOffset = clamp(options.postOffset, 0, 0, Number.MAX_SAFE_INTEGER);
 	const rows = await readAll<PostRow>(
-		"SELECT * FROM board_posts WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ? OFFSET ?",
+		"SELECT * FROM board_posts WHERE thread_id = ? ORDER BY seq ASC LIMIT ? OFFSET ?",
 		[threadId, postLimit, postOffset],
 		"board.posts.list",
 	);
 	const hasMorePosts = postOffset + rows.length < thread.postCount;
-	const readThrough = await pageReadThrough(threadId, thread, rows, postOffset, hasMorePosts);
+	const readThroughPostId = postOffset === 0 ? rows[rows.length - 1]?.id : undefined;
 	return {
 		thread,
 		posts: rows.map(postFromRow),
@@ -584,63 +591,75 @@ export async function readBoardThread(
 		postLimit,
 		postOffset,
 		hasMorePosts,
-		...(readThrough ? { readThrough } : {}),
+		...(readThroughPostId ? { readThroughPostId } : {}),
 	};
 }
 
-async function pageReadThrough(
+async function resolveReadSeq(
 	threadId: string,
-	thread: BoardThread,
-	rows: readonly PostRow[],
-	postOffset: number,
-	hasMorePosts: boolean,
-): Promise<string | undefined> {
-	if (postOffset > 0) return undefined;
-	if (!hasMorePosts) return thread.lastPostAt;
-	const last = rows[rows.length - 1]?.created_at;
-	if (!last) return undefined;
-	const next = await readAll<{ readonly created_at: string }>(
-		"SELECT created_at FROM board_posts WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC LIMIT 1 OFFSET ?",
-		[threadId, postOffset + rows.length],
-		"board.posts.read-through",
+	input: { readonly throughPostId?: string; readonly through?: string },
+): Promise<number> {
+	if (input.throughPostId !== undefined) {
+		if (typeof input.throughPostId !== "string" || input.throughPostId.length === 0) {
+			throw new BoardValidationError("throughPostId must be a post id");
+		}
+		const rows = await readAll<{ readonly seq: number }>(
+			"SELECT seq FROM board_posts WHERE id = ? AND thread_id = ?",
+			[input.throughPostId, threadId],
+			"board.thread.read-cursor-post",
+		);
+		const row = rows[0];
+		if (!row) throw new BoardValidationError("throughPostId does not belong to this thread");
+		return row.seq;
+	}
+	if (input.through !== undefined) {
+		const parsed = ISO_TIMESTAMP_RE.test(input.through) ? Date.parse(input.through) : Number.NaN;
+		if (!Number.isFinite(parsed)) throw new BoardValidationError("through must be an ISO timestamp");
+		const rows = await readAll<{ readonly seq: number | null }>(
+			"SELECT MAX(seq) AS seq FROM board_posts WHERE thread_id = ? AND created_at < ?",
+			[threadId, new Date(parsed).toISOString()],
+			"board.thread.read-cursor-time",
+		);
+		return rows[0]?.seq ?? 0;
+	}
+	const rows = await readAll<{ readonly seq: number | null }>(
+		"SELECT MAX(seq) AS seq FROM board_posts WHERE thread_id = ?",
+		[threadId],
+		"board.thread.read-cursor-head",
 	);
-	if (next[0]?.created_at !== last) return last;
-	return new Date(Date.parse(last) - 1).toISOString();
+	return rows[0]?.seq ?? 0;
 }
 
 export async function markBoardThreadRead(
 	threadId: string,
 	viewer: BoardViewer,
 	nowMs = Date.now(),
-	through?: string,
-): Promise<{ readonly threadId: string; readonly lastReadAt: string }> {
+	through: { readonly throughPostId?: string; readonly through?: string } = {},
+): Promise<{ readonly threadId: string; readonly lastReadAt: string; readonly lastReadPostId: string | null }> {
 	if (viewer.kind !== "agent") throw new BoardValidationError("read cursors require an agent");
 	await readVisibleThread(threadId, viewer);
-	const nowIso = new Date(nowMs).toISOString();
-	let now = nowIso;
-	if (through !== undefined) {
-		const parsed = ISO_TIMESTAMP_RE.test(through) ? Date.parse(through) : Number.NaN;
-		if (!Number.isFinite(parsed)) throw new BoardValidationError("through must be an ISO timestamp");
-		const throughIso = new Date(parsed).toISOString();
-		now = throughIso < nowIso ? throughIso : nowIso;
-	}
+	const seq = await resolveReadSeq(threadId, through);
+	const now = new Date(nowMs).toISOString();
 	await write(
 		[
 			ownerStatement(
-				`INSERT INTO board_reads (agent_id, thread_id, last_read_at) VALUES (?, ?, ?)
-				 ON CONFLICT(agent_id, thread_id) DO UPDATE SET last_read_at = excluded.last_read_at
-				 WHERE board_reads.last_read_at < excluded.last_read_at`,
-				[viewer.agentId, threadId, now],
+				`INSERT INTO board_reads (agent_id, thread_id, last_read_at, last_read_post_seq) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(agent_id, thread_id) DO UPDATE
+				 SET last_read_at = excluded.last_read_at, last_read_post_seq = excluded.last_read_post_seq
+				 WHERE board_reads.last_read_post_seq < excluded.last_read_post_seq`,
+				[viewer.agentId, threadId, now, seq],
 			),
 		],
 		"board.thread.mark-read",
 	);
-	const stored = await readAll<{ readonly last_read_at: string }>(
-		"SELECT last_read_at FROM board_reads WHERE agent_id = ? AND thread_id = ?",
+	const stored = await readAll<{ readonly last_read_at: string; readonly post_id: string | null }>(
+		`SELECT r.last_read_at AS last_read_at,
+			(SELECT p.id FROM board_posts p WHERE p.thread_id = r.thread_id AND p.seq = r.last_read_post_seq) AS post_id
+		 FROM board_reads r WHERE r.agent_id = ? AND r.thread_id = ?`,
 		[viewer.agentId, threadId],
 		"board.thread.read-cursor",
 	);
-	return { threadId, lastReadAt: stored[0]?.last_read_at ?? now };
+	return { threadId, lastReadAt: stored[0]?.last_read_at ?? now, lastReadPostId: stored[0]?.post_id ?? null };
 }
 
 function defaultTitleFrom(content: string): string {
@@ -727,8 +746,8 @@ export async function createBoardThread(input: {
 			),
 			ownerStatement(
 				`INSERT INTO board_posts (
-					id, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at
-				) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+					id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at
+				) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, NULL, ?)`,
 				[postId, threadId, postAuthor.agentId, postAuthor.sessionKey ?? null, postAuthor.harness ?? null, body, now],
 			),
 		],
@@ -787,8 +806,8 @@ export async function replyToBoardThread(input: {
 				},
 				ownerStatement(
 					`INSERT INTO board_posts (
-						id, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at
-					) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+						id, seq, thread_id, author_agent_id, author_session_key, author_harness, body, reply_to_post_id, created_at
+					) VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM board_posts), ?, ?, ?, ?, ?, ?, ?)`,
 					[
 						postId,
 						thread.id,
@@ -931,6 +950,7 @@ export async function claimBoardActivityNotices(input: {
 		readonly topic_slug: string;
 		readonly title: string;
 		readonly last_post_at: string;
+		readonly last_seq: number;
 		readonly new_posts: number;
 	}>(
 		`WITH mine AS (
@@ -940,14 +960,15 @@ export async function claimBoardActivityNotices(input: {
 		),
 		candidates AS (
 			SELECT t.id, t.topic_slug, t.title, t.last_post_at,
+				(SELECT MAX(lp.seq) FROM board_posts lp WHERE lp.thread_id = t.id) AS last_seq,
 				MAX(
-					COALESCE(r.last_read_at, ''),
-					COALESCE(n.notified_at, ''),
+					COALESCE(r.last_read_post_seq, 0),
+					COALESCE(n.notified_post_seq, 0),
 					COALESCE((
-						SELECT MAX(own.created_at) FROM board_posts own
+						SELECT MAX(own.seq) FROM board_posts own
 						WHERE own.thread_id = t.id AND own.author_agent_id = ? AND own.author_session_key IS ?
-					), '')
-				) AS seen_at
+					), 0)
+				) AS seen_seq
 			FROM mine
 			JOIN board_threads t ON t.id = mine.thread_id
 			LEFT JOIN board_reads r ON r.thread_id = t.id AND r.agent_id = ?
@@ -955,13 +976,13 @@ export async function claimBoardActivityNotices(input: {
 			WHERE t.status <> 'archived'
 			  AND ${visibility.sql}
 		)
-		SELECT c.id, c.topic_slug, c.title, c.last_post_at,
+		SELECT c.id, c.topic_slug, c.title, c.last_post_at, c.last_seq,
 			(SELECT COUNT(*) FROM board_posts p2
 			 WHERE p2.thread_id = c.id
-			   AND p2.created_at > c.seen_at
+			   AND p2.seq > c.seen_seq
 			   AND NOT (p2.author_agent_id = ? AND p2.author_session_key IS ?)) AS new_posts
 		FROM candidates c
-		WHERE c.last_post_at > c.seen_at
+		WHERE c.last_seq > c.seen_seq
 		ORDER BY c.last_post_at DESC
 		LIMIT ?`,
 		[
@@ -990,20 +1011,23 @@ export async function claimBoardActivityNotices(input: {
 			title: row.title,
 			newPosts: row.new_posts,
 			lastPostAt: row.last_post_at,
+			seq: row.last_seq,
 		}));
 	if (notices.length === 0) return [];
 	const results = await write(
 		notices.map((notice) =>
 			ownerStatement(
-				`INSERT INTO board_notices (agent_id, session_key, thread_id, notified_at) VALUES (?, ?, ?, ?)
-				 ON CONFLICT(agent_id, session_key, thread_id) DO UPDATE SET notified_at = excluded.notified_at
-				 WHERE board_notices.notified_at < excluded.notified_at`,
-				[input.agentId, session, notice.threadId, notice.lastPostAt],
+				`INSERT INTO board_notices (agent_id, session_key, thread_id, notified_post_seq) VALUES (?, ?, ?, ?)
+				 ON CONFLICT(agent_id, session_key, thread_id) DO UPDATE SET notified_post_seq = excluded.notified_post_seq
+				 WHERE board_notices.notified_post_seq < excluded.notified_post_seq`,
+				[input.agentId, session, notice.threadId, notice.seq],
 			),
 		),
 		"board.notices.claim",
 	);
-	return notices.filter((_, index) => (results[index] as { readonly changes?: number } | undefined)?.changes === 1);
+	return notices
+		.filter((_, index) => (results[index] as { readonly changes?: number } | undefined)?.changes === 1)
+		.map(({ seq: _seq, ...notice }) => notice);
 }
 
 function renderPostArtifact(thread: BoardThread, post: BoardPost): string {

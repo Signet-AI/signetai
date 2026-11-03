@@ -478,6 +478,7 @@ _WAKE_MAX_RETRY_SECS = 300.0
 _WAKE_INJECT_RETRY_SECS = 5.0
 _WAKE_MIN_LOOP_SECS = 1.0
 _WAKE_UNAVAILABLE_RECHECK_SECS = 30.0
+_WAKE_MAX_INJECT_REFUSALS = 3
 
 
 class _WakeWaiter:
@@ -543,13 +544,15 @@ class _WakeWaiter:
         except Exception:
             return False
 
-    def _release(self, message_ids: Any) -> None:
+    def _release(self, message_ids: Any) -> bool:
         if not isinstance(message_ids, list) or not message_ids:
-            return
+            return True
         try:
-            self._client.release_wake(self._session_key, [str(i) for i in message_ids])
+            result = self._client.release_wake(self._session_key, [str(i) for i in message_ids])
         except Exception as e:
             logger.debug("Signet wake release failed: %s", e)
+            return False
+        return not (isinstance(result, dict) and "error" in result)
 
     @staticmethod
     def _retry_secs(result: Optional[Dict[str, Any]]) -> float:
@@ -559,6 +562,7 @@ class _WakeWaiter:
         return _WAKE_DEFAULT_RETRY_SECS
 
     def _run(self) -> None:
+        refusals = 0
         while not self._stop.is_set():
             if not self._injection_ready():
                 if self._stop.wait(_WAKE_UNAVAILABLE_RECHECK_SECS):
@@ -588,9 +592,19 @@ class _WakeWaiter:
                         delivered = bool(self._inject(text, session_key=self._host_key))
                     except Exception as e:
                         logger.debug("Signet wake injection raised: %s", e)
-                    if not delivered:
+                    if delivered:
+                        refusals = 0
+                    else:
+                        refusals += 1
                         logger.debug("Signet wake injection was not accepted by the host")
-                        self._release(result.get("messageIds"))
+                        if not self._release(result.get("messageIds")):
+                            logger.warning("Signet wake release failed; claim will expire daemon-side")
+                        if refusals >= _WAKE_MAX_INJECT_REFUSALS:
+                            logger.warning(
+                                "Signet wake loop stopped after %d consecutive refused injections", refusals
+                            )
+                            self._stop.set()
+                            return
                         delay = _WAKE_INJECT_RETRY_SECS
             else:
                 reason = result.get("reason")
@@ -1886,17 +1900,10 @@ class SignetMemoryProvider(MemoryProvider):
             if (num("offset", 0, 1_000_000) or 0) > 0:
                 return json.dumps({"thread": thread.get("data"), "markedRead": False})
             data = thread.get("data") or {}
-            posts = data.get("posts") or []
-            last_post = posts[-1].get("createdAt") if posts and isinstance(posts[-1], dict) else None
-            if isinstance(data.get("readThrough"), str) and data.get("readThrough"):
-                through = data.get("readThrough")
-            elif data.get("hasMorePosts"):
-                through = last_post
-            else:
-                through = (data.get("thread") or {}).get("lastPostAt") or last_post
-            read_body: Dict[str, Any] = {"agentId": agent_id}
-            if isinstance(through, str) and through:
-                read_body["through"] = through
+            through = data.get("readThroughPostId")
+            if not isinstance(through, str) or not through:
+                return json.dumps({"thread": thread.get("data"), "markedRead": False})
+            read_body: Dict[str, Any] = {"agentId": agent_id, "throughPostId": through}
             marked = call("POST", f"{path}/read", read_body)
             return json.dumps({"thread": thread.get("data"), "markedRead": bool(marked.get("ok"))})
 

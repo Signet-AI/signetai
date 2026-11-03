@@ -6,6 +6,7 @@ export const WAKE_REQUEST_TIMEOUT_MS = WAKE_WAIT_MS + 10_000;
 export const WAKE_DEFAULT_RETRY_MS = 15_000;
 export const WAKE_MAX_RETRY_MS = 300_000;
 export const WAKE_MIN_LOOP_MS = 1_000;
+export const WAKE_MAX_REFUSALS = 3;
 
 interface WakeResponse {
 	readonly wake?: boolean;
@@ -28,6 +29,7 @@ export interface WakeWaiterOptions {
 	readonly waitMs?: number;
 	readonly defaultRetryMs?: number;
 	readonly minLoopMs?: number;
+	readonly onExhausted?: (refusals: number) => void;
 }
 
 export interface WakeWaiter {
@@ -71,7 +73,24 @@ export function createWakeWaiter(options: WakeWaiterOptions): WakeWaiter {
 	let activeKey: string | undefined;
 	let activeProject: string | undefined;
 
+	async function release(session: WakeSessionRef, ids: readonly string[] | undefined): Promise<boolean> {
+		const messageIds = (ids ?? []).filter((id) => typeof id === "string");
+		if (messageIds.length === 0) return true;
+		for (let attempt = 1; attempt <= 3; attempt++) {
+			const released = await options.client
+				.postResult(
+					"/api/cross-agent/wake/release",
+					{ harness: options.harness, sessionKey: session.sessionKey, agentId: options.agentId, messageIds },
+					10_000,
+				)
+				.catch(() => ({ ok: false as const }));
+			if (released.ok) return true;
+		}
+		return false;
+	}
+
 	async function loop(session: WakeSessionRef, signal: AbortSignal): Promise<void> {
+		let refusals = 0;
 		while (!signal.aborted) {
 			const startedAt = Date.now();
 			let delayMs = 0;
@@ -93,27 +112,29 @@ export function createWakeWaiter(options: WakeWaiterOptions): WakeWaiter {
 			} else if (result.data?.wake === true) {
 				const inject = readTrimmedString(result.data.inject);
 				if (inject) {
+					let accepted = false;
 					try {
-						await options.deliver(inject);
+						accepted = (await options.deliver(inject)) !== false;
 					} catch {
+						accepted = false;
+					}
+					if (accepted) {
+						refusals = 0;
+					} else {
+						refusals += 1;
 						delayMs = defaultRetryMs;
-						const messageIds = (result.data.messageIds ?? []).filter((id) => typeof id === "string");
-						if (messageIds.length > 0) {
-							for (let attempt = 1; attempt <= 3; attempt++) {
-								const released = await options.client
-									.postResult(
-										"/api/cross-agent/wake/release",
-										{
-											harness: options.harness,
-											sessionKey: session.sessionKey,
-											agentId: options.agentId,
-											messageIds,
-										},
-										10_000,
-									)
-									.catch(() => ({ ok: false as const }));
-								if (released.ok) break;
+						if (!(await release(session, result.data.messageIds))) {
+							console.warn("signet wake: release failed after three attempts; claim remains held");
+						}
+						if (refusals >= WAKE_MAX_REFUSALS) {
+							if (options.onExhausted) options.onExhausted(refusals);
+							else console.warn(`signet wake: stopped after ${refusals} consecutive refused injections`);
+							if (controller?.signal === signal) {
+								controller = undefined;
+								activeKey = undefined;
+								activeProject = undefined;
 							}
+							return;
 						}
 					}
 				}

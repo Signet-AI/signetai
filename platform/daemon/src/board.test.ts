@@ -388,58 +388,103 @@ describe("message board", () => {
 		expect(first.length + second.length).toBe(1);
 	});
 
-	it("records notices at the noticed post time so later replies are still noticed", async () => {
+	it("notices a same-millisecond reply that lands after a notice scan", async () => {
+		const at = Date.parse("2026-11-02T12:00:00.000Z");
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
 			author: { agentId: "alpha", sessionKey: "a1" },
 			topic: "coordination",
 			title: "Cursor",
 			body: "first",
+			nowMs: at,
 		});
-		await replyToBoardThread({
-			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a2" },
-			threadId: created.thread.id,
-			body: "one",
-		});
+		const reply = (body: string) =>
+			replyToBoardThread({
+				viewer: agent("alpha"),
+				author: { agentId: "alpha", sessionKey: "a2" },
+				threadId: created.thread.id,
+				body,
+				nowMs: at,
+			});
+		await reply("one");
 		expect(await claimBoardActivityNotices({ agentId: "alpha", sessionKey: "a1" })).toHaveLength(1);
-		const rows = await dbOwnerQuery<ReadonlyArray<{ notified_at: string }>>(
-			ownerStatement("SELECT notified_at FROM board_notices", [], "all"),
-			{ operation: "test.notices", lane: "read" },
-		);
-		const thread = (await readBoardThread(created.thread.id, operator)).thread;
-		expect(rows[0]?.notified_at).toBe(thread.lastPostAt);
-		await replyToBoardThread({
-			viewer: agent("alpha"),
-			author: { agentId: "alpha", sessionKey: "a2" },
-			threadId: created.thread.id,
-			body: "two",
-		});
+		await reply("two");
 		expect((await claimBoardActivityNotices({ agentId: "alpha", sessionKey: "a1" }))[0]?.newPosts).toBe(1);
+		expect(await claimBoardActivityNotices({ agentId: "alpha", sessionKey: "a1" })).toHaveLength(0);
 	});
 
-	it("caps the read cursor at the caller's through timestamp", async () => {
+	it("keeps a same-millisecond reply unread after a complete-page read", async () => {
+		const at = Date.parse("2026-11-02T12:00:00.000Z");
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
 			author: { agentId: "alpha" },
 			topic: "t",
 			title: "x",
 			body: "y",
+			nowMs: at,
 		});
-		const early = "2000-01-01T00:00:00.000Z";
-		expect((await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), early)).lastReadAt).toBe(early);
-		const later = "2001-01-01T00:00:00.000Z";
-		await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), later);
-		expect((await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), early)).lastReadAt).toBe(later);
-		expect((await listBoardThreads(agent("alpha"))).items[0]?.unread).toBe(true);
-		await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), created.thread.lastPostAt);
-		expect((await listBoardThreads(agent("alpha"))).items[0]?.unread).toBe(false);
-		await expect(markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), "not a date")).rejects.toThrow(
-			BoardValidationError,
-		);
-		await expect(markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), "January 1, 2000")).rejects.toThrow(
-			BoardValidationError,
-		);
+		const page = await readBoardThread(created.thread.id, agent("beta"));
+		expect(page.hasMorePosts).toBe(false);
+		await replyToBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha" },
+			threadId: created.thread.id,
+			body: "late",
+			nowMs: at,
+		});
+		const marked = await markBoardThreadRead(created.thread.id, agent("beta"), at + 5, {
+			throughPostId: page.readThroughPostId,
+		});
+		expect(marked.lastReadPostId).toBe(page.readThroughPostId ?? null);
+		expect((await readBoardThread(created.thread.id, agent("beta"))).thread.unread).toBe(true);
+	});
+
+	it("keeps read cursors monotonic and rejects foreign or malformed post ids", async () => {
+		const first = await createBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha" },
+			topic: "t",
+			title: "one",
+			body: "a",
+		});
+		const reply = await replyToBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha" },
+			threadId: first.thread.id,
+			body: "b",
+		});
+		const other = await createBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha" },
+			topic: "t",
+			title: "two",
+			body: "c",
+		});
+		await markBoardThreadRead(first.thread.id, agent("beta"), Date.now(), { throughPostId: reply.post.id });
+		const stale = await markBoardThreadRead(first.thread.id, agent("beta"), Date.now(), {
+			throughPostId: first.post.id,
+		});
+		expect(stale.lastReadPostId).toBe(reply.post.id);
+		await expect(
+			markBoardThreadRead(first.thread.id, agent("beta"), Date.now(), { throughPostId: other.post.id }),
+		).rejects.toThrow(BoardValidationError);
+		await expect(
+			markBoardThreadRead(first.thread.id, agent("beta"), Date.now(), { through: "not a date" }),
+		).rejects.toThrow(BoardValidationError);
+	});
+
+	it("treats a legacy timestamp cursor conservatively for equal milliseconds", async () => {
+		const at = Date.parse("2026-11-02T12:00:00.000Z");
+		const created = await createBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha" },
+			topic: "t",
+			title: "x",
+			body: "y",
+			nowMs: at,
+		});
+		await markBoardThreadRead(created.thread.id, agent("beta"), at, { through: "2026-11-02T12:00:00.000Z" });
+		expect((await readBoardThread(created.thread.id, agent("beta"))).thread.unread).toBe(true);
 	});
 
 	it("refreshes group membership for live event visibility", async () => {
@@ -460,7 +505,7 @@ describe("message board", () => {
 		expect(await visible("g1")).toBe(true);
 	});
 
-	it("keeps a same-millisecond post on the next page unread after a partial read", async () => {
+	it("returns the last post id of a partial first page and none for offset pages", async () => {
 		const at = Date.parse("2026-11-02T12:00:00.000Z");
 		const created = await createBoardThread({
 			viewer: agent("alpha"),
@@ -470,7 +515,7 @@ describe("message board", () => {
 			body: "first",
 			nowMs: at,
 		});
-		await replyToBoardThread({
+		const second = await replyToBoardThread({
 			viewer: agent("alpha"),
 			author: { agentId: "alpha", sessionKey: "a1" },
 			threadId: created.thread.id,
@@ -479,10 +524,12 @@ describe("message board", () => {
 		});
 		const page = await readBoardThread(created.thread.id, agent("beta"), { postLimit: 1 });
 		expect(page.hasMorePosts).toBe(true);
-		expect(page.readThrough).toBe("2026-11-02T11:59:59.999Z");
+		expect(page.readThroughPostId).toBe(created.post.id);
 		const full = await readBoardThread(created.thread.id, agent("beta"));
-		expect(full.readThrough).toBe(full.thread.lastPostAt);
-		expect((await readBoardThread(created.thread.id, agent("beta"), { postOffset: 1 })).readThrough).toBeUndefined();
+		expect(full.readThroughPostId).toBe(second.post.id);
+		expect(
+			(await readBoardThread(created.thread.id, agent("beta"), { postOffset: 1 })).readThroughPostId,
+		).toBeUndefined();
 	});
 
 	it("falls back to self-only when a visibility refresh hangs", async () => {

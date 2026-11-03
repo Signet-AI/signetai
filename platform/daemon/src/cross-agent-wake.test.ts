@@ -256,6 +256,42 @@ describe("direct message wake", () => {
 		expect(await wakeRows()).toHaveLength(WAKE_RATE_LIMIT_PER_HOUR);
 	});
 
+	it("refunds only released wake batches, including partial and out-of-order releases", async () => {
+		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "pi" });
+		const input = { agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 };
+		const batches: string[][] = [];
+		for (let index = 0; index < WAKE_RATE_LIMIT_PER_HOUR; index++) {
+			for (let part = 0; part < 2; part++) {
+				createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: `batch ${index}/${part}` });
+			}
+			const result = await waitForDirectMessageWake(input);
+			if (!result.wake) throw new Error("expected wake");
+			batches.push([...result.messageIds]);
+		}
+		expect((await waitForDirectMessageWake(input)).reason).toBe("rate_limited");
+		const first = batches[0];
+		const second = batches[1];
+		if (!first || !second) throw new Error("missing wake batches");
+		expect(await releaseDirectMessageWakes({ ...input, agentId: "other", messageIds: first })).toBe(0);
+		expect((await waitForDirectMessageWake(input)).reason).toBe("rate_limited");
+		await releaseDirectMessageWakes({ ...input, messageIds: [first[0] as string] });
+		expect((await waitForDirectMessageWake(input)).reason).toBe("rate_limited");
+		await releaseDirectMessageWakes({ ...input, messageIds: [first[1] as string] });
+		const retry = await waitForDirectMessageWake(input);
+		expect(retry.wake).toBe(true);
+		if (!retry.wake) throw new Error("expected retry wake");
+		expect(new Set(retry.messageIds)).toEqual(new Set(first));
+		await releaseDirectMessageWakes({ ...input, messageIds: second });
+		const retrySecond = await waitForDirectMessageWake(input);
+		expect(retrySecond.wake).toBe(true);
+		if (!retrySecond.wake) throw new Error("expected second retry wake");
+		expect(new Set(retrySecond.messageIds)).toEqual(new Set(second));
+		expect((await waitForDirectMessageWake(input)).reason).toBe("rate_limited");
+		const release = [...retry.messageIds, ...retrySecond.messageIds, ...batches.slice(2).flat()];
+		expect(await releaseDirectMessageWakes({ ...input, messageIds: release })).toBe(60);
+		expect((await waitForDirectMessageWake(input)).wake).toBe(true);
+	});
+
 	it("keeps wake claims across a daemon restart", async () => {
 		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "before restart" });
 		expect((await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 })).wake).toBe(
