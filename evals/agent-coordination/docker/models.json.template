@@ -1,0 +1,11 @@
+{
+  "providers": {
+    "zai-eval": {
+      "baseUrl": "http://relay:8787",
+      "api": "openai-completions",
+      "apiKey": "__PER_RUN_OPAQUE_TOKEN__",
+      "compat": { "thinkingFormat": "zai", "requiresReasoningContentOnAssistantMessages": true },
+      "models": [{ "id": "glm-5.3-flash", "reasoning": true, "maxTokens": 4000 }]
+    }
+  }
+}

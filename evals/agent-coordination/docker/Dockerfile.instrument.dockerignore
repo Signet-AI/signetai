@@ -1,0 +1,12 @@
+.git
+.worktrees
+**/node_modules
+.env*
+private
+references
+evals/agent-coordination/results
+evals/agent-coordination/ledger
+evals/agent-coordination/tests
+evals/agent-coordination/runner
+evals/agent-coordination/viewer
+evals/agent-coordination/docker

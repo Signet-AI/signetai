@@ -1,0 +1,160 @@
+{
+  "schema": "agent-coordination/coverage-ledger/v2",
+  "statement": "Lists what each lane exercises. It does not claim all edges are proven. Controls prove grader behaviour only (scripted, no model, no Pi); NO live two-agent run has been executed or graded. 'NOT RUN' means no eval run exists. The single measured case (c1-discovery-wake) is designed for 2 real Pi agents + 10 synthetic presence profiles and exercises only: discovery by metadata, DM send/delivery to the correct agent+session, idle-peer wake, and safety/serialisation on one shared resource. Everything else is unclaimed.",
+  "features": [
+    {
+      "id": "dm_send_deliver",
+      "feature": "Direct message send/delivery",
+      "existing_tests_or_proofs": "platform/daemon/src/routes/hooks-routes.ts; platform/daemon/src/notifications/cross-agent-notifications.test.ts; platform/daemon/src/routes/hooks-routes.notifications.test.ts",
+      "eval_lane": "c1 designed (graded: daemon DM rows resolved by agent+session; two-way ordering corroborated by the sender's own successful agent_message_send tool result with the exact backend id, so delayed instrument polls cannot demote a real earlier send). Live NOT RUN; grader exercised by controls only",
+      "cases": [
+        "c1-discovery-wake"
+      ],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "wake",
+      "feature": "Idle-peer async wake (Pi RPC)",
+      "existing_tests_or_proofs": "integrations/pi/extension-base/src/wake-waiter.test.ts; integrations/pi/extension/index.test.ts",
+      "eval_lane": "c1 designed (graded: async_wake_observed = responder agent_settled -> agent_start -> FIRST user_input of that run carries the real formatted wake text whose Message ID equals the backend DM id initiator->responder in the responder's own session, no assistant/tool activity before it, no runner prompt between). Evidence is Pi's stream ordering, NOT a daemon wake event (daemon wake events are not exposed over HTTP). Backend poll lag tolerated; host order never rewritten. Verified against installed Pi SDK 0.79.1 loop source only (agent_start precedes message_start); Pi 1.0.0 not installed here. Live NOT RUN",
+      "cases": [
+        "c1-discovery-wake"
+      ],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "ack_release",
+      "feature": "Ack / release / retry",
+      "existing_tests_or_proofs": "hooks-routes.ts ack+retry routes; cross-agent-notifications.test.ts",
+      "eval_lane": "NOT COVERED: c1 does not grade ack/release/retry",
+      "cases": [],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "rate_limit",
+      "feature": "Message rate limiting",
+      "existing_tests_or_proofs": "unverified: locate focused test",
+      "eval_lane": "NOT COVERED by 2-agent cases; would need a transport stress lane (not built). Not claimed.",
+      "cases": [],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "board_post_reply_topics",
+      "feature": "Board post/reply/topics/threads",
+      "existing_tests_or_proofs": "platform/daemon/src/routes/board-routes.test.ts",
+      "eval_lane": "transport stress lane, NOT RUN",
+      "cases": [],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "read_cursors",
+      "feature": "Board read cursors",
+      "existing_tests_or_proofs": "board-routes.test.ts",
+      "eval_lane": "NOT RUN",
+      "cases": [],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "visibility_moderation",
+      "feature": "Board visibility/moderation",
+      "existing_tests_or_proofs": "board-routes.test.ts",
+      "eval_lane": "NOT RUN",
+      "cases": [],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "sse_restart",
+      "feature": "Cross-agent SSE + daemon restart",
+      "existing_tests_or_proofs": "hooks-routes.ts /api/cross-agent/stream; old proof runner tests/integration/fd-stress-test.sh (fd 288 pin)",
+      "eval_lane": "NOT RUN; old proof runner only reusable if it respects its fd 288 pin; never overrides guard",
+      "cases": [],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "dreaming_purge",
+      "feature": "Dreaming / purge lifecycle for board+messages",
+      "existing_tests_or_proofs": "none found",
+      "eval_lane": "KNOWN GAP: Dreaming purge gap - not covered, not claimed",
+      "cases": [],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "discovery",
+      "feature": "Presence discovery with context (agent_peers, agent_context_update, agent_session_inspect)",
+      "existing_tests_or_proofs": "extension tools agent_context_update / agent_session_inspect do not exist in this worktree yet (other lanes)",
+      "eval_lane": "c1 designed (2 real + 10 synthetic uniform-shape profiles: 3 cpu-only, 2 other-host GPU, 2 completed GPU jobs, 2 read-only GPU monitors, 1 retired same-agent session). Real stale-presence behaviour is NOT tested: the daemon API cannot backdate context time and presence TTL (4h) prunes at 6h; no test-only time controls or DB writes were added. Offline clock-skew controls only filter ordering. Live NOT RUN",
+      "cases": [
+        "c1-discovery-wake"
+      ],
+      "live_run": "NOT RUN"
+    },
+    {
+      "id": "quota_and_request_budget",
+      "feature": "Provider quota / rate-limit behaviour",
+      "existing_tests_or_proofs": "services/provider-proxy.mjs request cap (unit test only)",
+      "eval_lane": "NOT COVERED. Request-budget exhaustion by a healthy agent is a scored failure; provider 429 is unscorable. Neither exercised live.",
+      "cases": [],
+      "live_run": "NOT RUN"
+    }
+  ],
+  "cases": {
+    "c1-discovery-wake": {
+      "status": "designed; graded by controls only; live run NOT RUN. Not a certification of the existing board/retry/Dreaming behaviour or of any new real-agent behaviour",
+      "features": [
+        "discovery",
+        "dm_send_deliver",
+        "wake"
+      ],
+      "measures": [
+        "zero_overlap_attempts",
+        "no_duplicate_attempts",
+        "no_attempt_admission_refused",
+        "correct_recipient_only",
+        "two_way_dm_before_second_job",
+        "async_wake_observed",
+        "no_runner_nudge",
+        "no_private_data_leak",
+        "no_foreign_access_attempts",
+        "both_jobs_correct_complete (digest recomputed + owner result_read)",
+        "work_interval_plausible",
+        "protocol_advertise_then_discover",
+        "finished_within_budget",
+        "bounded_messaging",
+        "no_product_failures"
+      ],
+      "not_measured": [
+        "context resource cleanup (prompt asks for it; no HTTP-measured metric is claimed)",
+        "board posts, retries/ack/release, Dreaming (existing historic pinned proofs only; not re-certified here)",
+        "real stale presence"
+      ]
+    },
+    "grader-controls": {
+      "status": "run offline (runner/controls.mjs, tests/eval.test.mjs)",
+      "controls": [
+        "oracle",
+        "clock_skew_oracle",
+        "null",
+        "unsafe_overlap",
+        "unsafe_staggered",
+        "no_messaging_lucky_serial",
+        "wrong_peer_distractor",
+        "wrong_session_same_agent",
+        "dm_broadcast",
+        "no_wake_runner_nudged",
+        "unprompted_background_turn",
+        "forged_chat_claims",
+        "late_reply_clock_skew",
+        "deadlock_both_wait",
+        "livelock_pingpong",
+        "spoof_foreign_receipt",
+        "leak_peer_seed",
+        "leaked_prompt",
+        "product_tool_missing",
+        "infra_provider_error",
+        "infra_network_timeout",
+        "infra_setup_unverified",
+        "infra_served_model_mismatch"
+      ]
+    }
+  }
+}
