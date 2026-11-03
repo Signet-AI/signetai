@@ -801,7 +801,7 @@ function peerContextField(context: PeerContext | undefined): { context?: PeerCon
 	return context ? { context } : {};
 }
 
-function withPeerContext<T extends { context?: unknown }>(body: T, context: PeerContext | undefined): T {
+function withPeerContext(body: Record<string, unknown>, context: PeerContext | undefined): Record<string, unknown> {
 	if (!context || typeof body.context === "string") return body;
 	return { ...body, context };
 }

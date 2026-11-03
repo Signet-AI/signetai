@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -61,6 +62,15 @@ describe("extractMutatedPaths", () => {
 });
 
 describe("hook peer context", () => {
+	test("the production hook entry passes its scoped TypeScript project", () => {
+		const result = spawnSync(process.execPath, ["run", "typecheck:hooks"], {
+			cwd: new URL("../../", import.meta.url),
+			encoding: "utf-8",
+			timeout: 20_000,
+		});
+		expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+	}, 30_000);
+
 	test("user-prompt-submit sends cwd, hostname and no raw-prompt task, with transcript-observed edits/title", async () => {
 		const t = transcript([
 			{
