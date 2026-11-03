@@ -1490,14 +1490,22 @@ function parseAgentMessageType(value: string | undefined): AgentMessageType | un
 	return undefined;
 }
 
+function resolveCrossAgentScope(
+	c: Context,
+	agentId: string | undefined,
+	sessionKey: string | undefined,
+): { agentId: string; error?: string } {
+	return resolveScopedAgentId(c, resolveAgentId({ agentId, sessionKey }), "default");
+}
+
 function registerCrossAgentPresence(app: Hono): void {
 	app.get("/api/cross-agent/presence", (c) => {
 		const includeSelf = parseOptionalBoolean(c.req.query("include_self")) ?? false;
 		const limit = parseOptionalInt(c.req.query("limit")) ?? 50;
-		const requestedAgentId = parseOptionalString(c.req.query("agent_id"));
+		const requestedAgent = parseOptionalString(c.req.query("agent_id"));
 		const sessionKey = parseOptionalString(c.req.query("session_key"));
 		const project = parseOptionalString(c.req.query("project"));
-		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		const scopedAgent = resolveCrossAgentScope(c, requestedAgent, sessionKey);
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
 		}
@@ -1564,7 +1572,7 @@ function registerCrossAgentPresence(app: Hono): void {
 
 	app.delete("/api/cross-agent/presence/:sessionKey", (c) => {
 		const sessionKey = c.req.param("sessionKey");
-		const scopedAgent = resolveScopedAgentId(c, undefined, "default");
+		const scopedAgent = resolveCrossAgentScope(c, undefined, sessionKey);
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
 		}
@@ -1596,7 +1604,7 @@ async function relayClaimedAcpMessage(attempt: AcpDeliveryAttempt): Promise<Agen
 
 function registerCrossAgentMessages(app: Hono): void {
 	app.get("/api/cross-agent/messages", (c) => {
-		const requestedAgentId = parseOptionalString(c.req.query("agent_id"));
+		const requestedAgent = parseOptionalString(c.req.query("agent_id"));
 		const sessionKey = parseOptionalString(c.req.query("session_key"));
 		const since = parseOptionalString(c.req.query("since"));
 		const includeSent = parseOptionalBoolean(c.req.query("include_sent")) ?? false;
@@ -1605,7 +1613,7 @@ function registerCrossAgentMessages(app: Hono): void {
 		const limit = parseOptionalInt(c.req.query("limit")) ?? 100;
 		const offset = parseOptionalNonNegativeInt(c.req.query("offset")) ?? 0;
 		const order = c.req.query("order") === "asc" ? "asc" : "desc";
-		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		const scopedAgent = resolveCrossAgentScope(c, requestedAgent, sessionKey);
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
 		}
@@ -1676,9 +1684,11 @@ function registerCrossAgentMessages(app: Hono): void {
 		if (payload === null) return c.json({ error: "invalid request body" }, 400);
 		const messageId = parseOptionalString(c.req.param("messageId"));
 		if (!messageId) return c.json({ error: "messageId is required" }, 400);
-		const requestedAgentId =
-			parseOptionalString(payload.agentId) ?? parseOptionalString(c.req.header("x-signet-agent-id"));
-		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		const scopedAgent = resolveCrossAgentScope(
+			c,
+			parseOptionalString(payload.agentId) ?? parseOptionalString(c.req.header("x-signet-agent-id")),
+			undefined,
+		);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 
 		try {
@@ -1728,12 +1738,11 @@ function registerCrossAgentMessages(app: Hono): void {
 		}
 		const type = parsedType ?? "info";
 		const broadcast = parseOptionalBoolean(payload.broadcast) ?? false;
-		const fromAgentId = parseOptionalString(payload.fromAgentId);
-		const scopedSender = resolveScopedAgentId(c, fromAgentId, "default");
+		const fromSessionKey = parseOptionalString(payload.fromSessionKey);
+		const scopedSender = resolveCrossAgentScope(c, parseOptionalString(payload.fromAgentId), fromSessionKey);
 		if (scopedSender.error) {
 			return c.json({ error: scopedSender.error }, 403);
 		}
-		const fromSessionKey = parseOptionalString(payload.fromSessionKey);
 		const fromSessionError = validateSessionAgentBinding(c, fromSessionKey, scopedSender.agentId, {
 			requireExisting: true,
 			context: "fromSessionKey",
@@ -1816,12 +1825,12 @@ function registerCrossAgentMessages(app: Hono): void {
 
 function registerCrossAgentStream(app: Hono): void {
 	app.get("/api/cross-agent/stream", (c) => {
-		const requestedAgentId = parseOptionalString(c.req.query("agent_id"));
+		const requestedAgent = parseOptionalString(c.req.query("agent_id"));
 		const sessionKey = parseOptionalString(c.req.query("session_key"));
 		const project = parseOptionalString(c.req.query("project"));
 		const includeSelf = parseOptionalBoolean(c.req.query("include_self")) ?? false;
 		const includeSent = parseOptionalBoolean(c.req.query("include_sent")) ?? false;
-		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		const scopedAgent = resolveCrossAgentScope(c, requestedAgent, sessionKey);
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
 		}

@@ -134,6 +134,48 @@ describe("cross-agent notification routes", () => {
 		const denied = await post(`/api/cross-agent/messages/${message.id}/ack`, { agentId: "gamma" });
 		expect(denied.status).toBe(404);
 	});
+
+	it("resolves omitted cross-agent identity like session-start instead of the literal default agent", async () => {
+		const previousAgentId = process.env.SIGNET_AGENT_ID;
+		process.env.SIGNET_AGENT_ID = "ops";
+		try {
+			upsertAgentPresence({ agentId: "ops", harness: "hermes", sessionKey: "session-ops" });
+			upsertAgentPresence({ agentId: "beta", harness: "pi", sessionKey: "session-beta" });
+			createAgentMessage({ fromAgentId: "beta", toAgentId: "ops", type: "info", content: "For ops only" });
+
+			const sent = await post("/api/cross-agent/messages", {
+				content: "From ops",
+				toAgentId: "beta",
+				fromSessionKey: "session-ops",
+			});
+			expect(sent.status).toBe(200);
+			expect(((await sent.json()) as { message: { fromAgentId: string } }).message.fromAgentId).toBe("ops");
+
+			const prefixed = await post("/api/cross-agent/messages", {
+				content: "From alpha",
+				toAgentId: "beta",
+				fromSessionKey: "agent:alpha:session-1",
+			});
+			expect(prefixed.status).toBe(200);
+			expect(((await prefixed.json()) as { message: { fromAgentId: string } }).message.fromAgentId).toBe("alpha");
+
+			const inbox = await app.request("/api/cross-agent/messages?session_key=session-ops");
+			expect(inbox.status).toBe(200);
+			const inboxBody = (await inbox.json()) as { items: Array<{ content: string }> };
+			expect(inboxBody.items.map((item) => item.content)).toContain("For ops only");
+
+			const presence = await app.request("/api/cross-agent/presence?session_key=session-ops");
+			expect(presence.status).toBe(200);
+			const presenceBody = (await presence.json()) as { sessions: Array<{ sessionKey: string }> };
+			expect(presenceBody.sessions.map((session) => session.sessionKey)).toEqual(["session-beta"]);
+		} finally {
+			if (previousAgentId === undefined) {
+				Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			} else {
+				process.env.SIGNET_AGENT_ID = previousAgentId;
+			}
+		}
+	});
 	it("attaches pending messages to the universal session-start response", async () => {
 		const message = createAgentMessage({
 			fromAgentId: "alpha",
