@@ -1,5 +1,5 @@
 import { requestMemoryHead } from "./memory-head";
-import { listBoardTopics, resolveBoardViewer } from "./board";
+import { buildCrossAgentSessionSection } from "./cross-agent-session-section";
 import { budgetIdentityContent } from "./identity-context";
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -121,8 +121,6 @@ import { advanceRecallContextEpochAsync, applyRecallDedupeAsync, claimRecallItem
 import {
 	buildSignetSystemPrompt,
 	formatLastSeenShort,
-	buildCrossAgentCapabilitySection,
-	harnessHasCrossAgentTools,
 	renderSessionContinuity,
 	sanitizePeerPromptField,
 	serializeTraversalPath,
@@ -606,21 +604,6 @@ function boundSessionStartAggregate(stableSystemPrompt: string, rawInject: strin
 		return boundedInject;
 	}
 	return "";
-}
-
-async function buildCrossAgentSessionSection(req: SessionStartRequest): Promise<string | null> {
-	if (!harnessHasCrossAgentTools(req.harness)) return null;
-	const agentId = resolveAgentId(req);
-	let topics: readonly { readonly slug: string; readonly threadCount: number }[] = [];
-	try {
-		topics = await listBoardTopics(await resolveBoardViewer(agentId));
-	} catch (error) {
-		logger.warn("board", "Board topics unavailable for session start", {
-			agentId,
-			error: error instanceof Error ? error.message : String(error),
-		});
-	}
-	return buildCrossAgentCapabilitySection({ harness: req.harness, agentId, sessionKey: req.sessionKey, topics });
 }
 
 export async function handleSessionStart(req: SessionStartRequest): Promise<SessionStartResponse> {

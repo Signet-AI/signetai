@@ -38,7 +38,9 @@ function invalidateMutation(path: string): void {
 async function dashboardFetch(path: string, init?: RequestInit): Promise<Response> {
 	if (onboardingPreview) return onboardingPreviewFetch(path, init);
 	const method = init?.method?.toUpperCase() ?? "GET";
-	const deadline = method === "GET" ? AbortSignal.timeout(20_000) : undefined;
+	const accept = new Headers(init?.headers).get("accept") ?? "";
+	const isEventStream = accept.includes("text/event-stream");
+	const deadline = method === "GET" && !isEventStream ? AbortSignal.timeout(20_000) : undefined;
 	const signal = init?.signal && deadline ? AbortSignal.any([init.signal, deadline]) : (init?.signal ?? deadline);
 	const response = await fetch(path, { ...init, signal });
 	if (response.status === 401) {
@@ -1001,12 +1003,14 @@ function boardThreadQuery(query: BoardThreadQuery): string {
 export async function streamBoardEvents(
 	onEvent: (event: BoardStreamEvent) => void,
 	signal: AbortSignal,
+	onOpen?: () => void,
 ): Promise<void> {
 	const response = await dashboardFetch("/api/board/stream?scope=all", {
 		signal,
 		headers: { Accept: "text/event-stream", ...authHeaders() },
 	});
 	if (!response.ok || !response.body) throw new Error(`Board stream unavailable (${response.status})`);
+	onOpen?.();
 	const reader = response.body.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";

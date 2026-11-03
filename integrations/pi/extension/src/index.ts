@@ -885,10 +885,10 @@ const SignetPiExtension: PiExtensionFactory = (pi): void => {
 		registerPromptHandlers(pi, deps);
 		registerContextHandlers(pi, deps);
 		registerCompactionHandlers(pi, deps);
+		registerCollabTools(pi, createDaemonClient(daemonUrl), agentId);
 	}
 
 	registerCommandsAndTools(pi, daemonUrl, agentId);
-	registerCollabTools(pi, createDaemonClient(daemonUrl), agentId);
 };
 
 export default SignetPiExtension;

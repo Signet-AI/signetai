@@ -12,7 +12,9 @@ import {
 	WAKE_RATE_LIMIT_PER_HOUR,
 	activeWakeWaiterCount,
 	claimDirectMessageWakes,
+	releaseDirectMessageWakes,
 	resetDirectMessageWakeStateForTest,
+	setWakeWaiterCapForTest,
 	waitForDirectMessageWake,
 } from "./cross-agent-wake";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
@@ -140,6 +142,47 @@ describe("direct message wake", () => {
 		expect(woke).toHaveLength(1);
 		expect(results[0]).toEqual({ wake: false, reason: "superseded" });
 		expect((await wakeRows()).map((row) => row.session_key)).toEqual(["b1"]);
+	});
+
+	it("lets an older waiter take agent-addressed messages sent by the only more recent waiter", async () => {
+		upsertAgentPresence({ sessionKey: "b-old", agentId: "beta", harness: "pi" });
+		const fromSender = createAgentMessage({
+			fromAgentId: "beta",
+			fromSessionKey: "b-new",
+			toAgentId: "beta",
+			content: "from the newer session",
+		});
+		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "from someone else" });
+		const claimed = await claimDirectMessageWakes({
+			agentId: "beta",
+			sessionKey: "b-old",
+			harness: "pi",
+			agentAddressedOnlyFromSession: "b-new",
+		});
+		expect(claimed.map((message) => message.id)).toEqual([fromSender.id]);
+	});
+
+	it("rejects new waiters past the global cap", async () => {
+		setWakeWaiterCapForTest(1);
+		const first = waitForDirectMessageWake({ agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 2_000 });
+		await Bun.sleep(20);
+		const second = await waitForDirectMessageWake({ agentId: "beta", sessionKey: "b2", harness: "pi", waitMs: 0 });
+		expect(second).toEqual({ wake: false, reason: "rate_limited", retryAfterMs: 30_000 });
+		resetDirectMessageWakeStateForTest();
+		expect((await first).wake).toBe(false);
+	});
+
+	it("releases every submitted claim, beyond one batch", async () => {
+		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "pi" });
+		const ids = Array.from(
+			{ length: 12 },
+			(_, index) => createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: `m${index}` }).id,
+		);
+		await claimDirectMessageWakes({ agentId: "beta", sessionKey: "b1", harness: "pi" });
+		await claimDirectMessageWakes({ agentId: "beta", sessionKey: "b1", harness: "pi" });
+		expect(await wakeRows()).toHaveLength(12);
+		expect(await releaseDirectMessageWakes({ agentId: "beta", sessionKey: "b1", messageIds: ids })).toBe(12);
+		expect(await wakeRows()).toHaveLength(0);
 	});
 
 	it("supersedes an earlier waiter for the same session", async () => {

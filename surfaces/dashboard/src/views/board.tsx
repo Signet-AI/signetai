@@ -7,6 +7,8 @@ import {
 	type BoardStatus,
 	type BoardStatusFilter,
 	type BoardThread,
+	type BoardThreadDetail,
+	type BoardThreadList,
 	type BoardThreadPatch,
 	type DirectMessage,
 	api,
@@ -49,6 +51,45 @@ function sortThreads(items: readonly BoardThread[]): BoardThread[] {
 	});
 }
 
+const THREAD_FETCH_MAX = 100;
+const POST_FETCH_MAX = 200;
+
+export async function loadThreadRange(
+	query: { topic?: string; tag?: string; status?: BoardStatusFilter },
+	count: number,
+): Promise<BoardThreadList | null> {
+	const items: BoardThread[] = [];
+	let last: BoardThreadList | null = null;
+	while (items.length < count) {
+		const page = await api.getBoardThreads({
+			...query,
+			limit: Math.min(THREAD_FETCH_MAX, count - items.length),
+			offset: items.length,
+		});
+		if (!page) return last ? { ...last, items, hasMore: last.hasMore } : null;
+		last = page;
+		items.push(...page.items);
+		if (!page.hasMore || page.items.length === 0) break;
+	}
+	return last ? { ...last, items, offset: 0 } : null;
+}
+
+export async function loadPostRange(id: string, count: number): Promise<BoardThreadDetail | null> {
+	const posts: BoardPost[] = [];
+	let last: BoardThreadDetail | null = null;
+	while (posts.length < count) {
+		const page = await api.getBoardThread(id, {
+			limit: Math.min(POST_FETCH_MAX, count - posts.length),
+			offset: posts.length,
+		});
+		if (!page) return last ? { ...last, posts } : null;
+		last = page;
+		posts.push(...page.posts);
+		if (!page.hasMorePosts || page.posts.length === 0) break;
+	}
+	return last ? { ...last, posts, postOffset: 0 } : null;
+}
+
 function useBoardStream(onChange: () => void): void {
 	const handler = useRef(onChange);
 	handler.current = onChange;
@@ -60,13 +101,21 @@ function useBoardStream(onChange: () => void): void {
 			clearTimeout(timer);
 			timer = setTimeout(() => handler.current(), STREAM_DEBOUNCE_MS);
 		};
+		let dropped = false;
 		const run = async () => {
 			while (!controller.signal.aborted) {
 				try {
-					await streamBoardEvents((event) => {
-						if (event.type === "board") schedule();
-					}, controller.signal);
+					await streamBoardEvents(
+						(event) => {
+							if (event.type === "board") schedule();
+						},
+						controller.signal,
+						() => {
+							if (dropped) schedule();
+						},
+					);
 				} catch {}
+				dropped = true;
 				if (controller.signal.aborted) return;
 				await new Promise<void>((resolve) => {
 					retry = setTimeout(resolve, STREAM_RETRY_MS);
@@ -133,11 +182,13 @@ function ThreadsPane() {
 	const [status, setStatus] = useState<BoardStatusFilter>("open");
 	const [tag, setTag] = useState<string | null>(null);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
-	const [threadLimit, setThreadLimit] = useState(THREAD_PAGE);
+	const filterKey = `${topic ?? "*"}:${status}:${tag ?? "*"}`;
+	const [limitState, setLimitState] = useState({ key: filterKey, limit: THREAD_PAGE });
+	const threadLimit = limitState.key === filterKey ? limitState.limit : THREAD_PAGE;
 
 	const topics = useAsync(() => api.getBoardTopics(), { key: "board-topics" });
 	const threads = useAsync(
-		() => api.getBoardThreads({ topic: topic ?? undefined, tag: tag ?? undefined, status, limit: threadLimit }),
+		() => loadThreadRange({ topic: topic ?? undefined, tag: tag ?? undefined, status }, threadLimit),
 		{
 			key: `board-threads:${topic ?? "*"}:${status}:${tag ?? "*"}:${threadLimit}`,
 			deps: [topic, status, tag, threadLimit],
@@ -276,7 +327,11 @@ function ThreadsPane() {
 					</ul>
 				)}
 				{threads.data?.hasMore && (
-					<Button variant="outline" size="compact" onClick={() => setThreadLimit((n) => n + THREAD_PAGE)}>
+					<Button
+						variant="outline"
+						size="compact"
+						onClick={() => setLimitState({ key: filterKey, limit: threadLimit + THREAD_PAGE })}
+					>
 						Show more
 					</Button>
 				)}
@@ -344,10 +399,10 @@ function ThreadDetail({
 	const [busy, setBusy] = useState(false);
 	const [confirmDelete, setConfirmDelete] = useState(false);
 	const [error, setError] = useState<string | null>(null);
-	const detail = useAsync(
-		() => (threadId ? api.getBoardThread(threadId, { limit: postLimit }) : Promise.resolve(null)),
-		{ key: threadId ? `board-thread:${threadId}:${postLimit}` : undefined, deps: [threadId, postLimit] },
-	);
+	const detail = useAsync(() => (threadId ? loadPostRange(threadId, postLimit) : Promise.resolve(null)), {
+		key: threadId ? `board-thread:${threadId}:${postLimit}` : undefined,
+		deps: [threadId, postLimit],
+	});
 	const refreshDetail = detail.refresh;
 	const seen = useRef(version);
 	useEffect(() => {
@@ -591,6 +646,7 @@ function MessagesPane() {
 							<MessageRow
 								key={message.id}
 								message={message}
+								agent={agentId}
 								open={expanded.has(message.id)}
 								onToggle={() =>
 									setExpanded((prev) => {
@@ -631,7 +687,26 @@ function MessagesPane() {
 	);
 }
 
-function MessageRow({ message, open, onToggle }: { message: DirectMessage; open: boolean; onToggle: () => void }) {
+export function isInboundMessage(message: DirectMessage, agent: string | null): boolean {
+	if (!agent) return true;
+	if (message.fromAgentId === agent) {
+		return message.toAgentId === agent || message.toSessionAgentId === agent;
+	}
+	return true;
+}
+
+function MessageRow({
+	message,
+	agent,
+	open,
+	onToggle,
+}: {
+	message: DirectMessage;
+	agent: string | null;
+	open: boolean;
+	onToggle: () => void;
+}) {
+	const inbound = isInboundMessage(message, agent);
 	const fromSession = shortSession(message.fromSessionKey ?? null);
 	const source = fromSession ? `${message.fromAgentId} (${fromSession})` : message.fromAgentId;
 	const toSession = shortSession(message.toSessionKey ?? null);
@@ -652,9 +727,13 @@ function MessageRow({ message, open, onToggle }: { message: DirectMessage; open:
 				</span>
 				<span>{message.type}</span>
 				<span>{relativeTime(message.createdAt)}</span>
-				<StatusLabel tone={message.acknowledgedAt ? "ok" : "warn"}>
-					{message.acknowledgedAt ? "Acknowledged" : "Unread"}
-				</StatusLabel>
+				{inbound ? (
+					<StatusLabel tone={message.acknowledgedAt ? "ok" : "warn"}>
+						{message.acknowledgedAt ? "Acknowledged" : "Unread"}
+					</StatusLabel>
+				) : (
+					<StatusLabel tone="ok">Sent</StatusLabel>
+				)}
 				{delivery && <span>{delivery}</span>}
 			</div>
 			<pre className="m-0 mt-1.5 font-[inherit] text-[14px] leading-relaxed whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">

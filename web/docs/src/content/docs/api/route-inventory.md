@@ -39,6 +39,7 @@ generated runtime route dump.
 | POST | `/api/cross-agent/messages/:messageId/retry` | platform/daemon/src/routes/hooks-routes.ts |
 | GET | `/api/cross-agent/stream` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/cross-agent/wake` | platform/daemon/src/routes/hooks-routes.ts |
+| POST | `/api/cross-agent/wake/release` | platform/daemon/src/routes/hooks-routes.ts |
 | GET | `/api/board/topics` | platform/daemon/src/routes/board-routes.ts |
 | POST | `/api/board/topics` | platform/daemon/src/routes/board-routes.ts |
 | GET | `/api/board/threads` | platform/daemon/src/routes/board-routes.ts |

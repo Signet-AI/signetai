@@ -286,7 +286,8 @@ describe("board view", () => {
 			const list = container.querySelector('section[aria-label="Direct messages"]');
 			expect(list?.textContent).toContain("alpha → beta");
 			expect(list?.textContent).toContain("question");
-			expect(list?.textContent).toContain("Unread");
+			expect(list?.textContent).toContain("Sent");
+			expect(list?.textContent).not.toContain("Unread");
 			expect(list?.textContent).toContain("delivered · wake");
 			expect(list?.textContent).not.toContain(LONG);
 			await click(button(container, "Show more"));

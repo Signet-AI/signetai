@@ -37,7 +37,13 @@ function isWakeHookEntry(hook: unknown): boolean {
 	return typeof command === "string" && /\bhook wake\b/.test(command) && command.includes("-H claude-code");
 }
 
-function stripWakeGroups(groups: unknown): unknown[] {
+function isSessionStartHookEntry(hook: unknown): boolean {
+	if (typeof hook !== "object" || hook === null) return false;
+	const command = (hook as Record<string, unknown>).command;
+	return typeof command === "string" && /\bhook session-start\b/.test(command) && command.includes("-H claude-code");
+}
+
+function stripWakeGroups(groups: unknown, extra?: (hook: unknown) => boolean): unknown[] {
 	if (!Array.isArray(groups)) return [];
 	const kept: unknown[] = [];
 	for (const group of groups) {
@@ -46,7 +52,7 @@ function stripWakeGroups(groups: unknown): unknown[] {
 			kept.push(group);
 			continue;
 		}
-		const rest = inner.filter((hook) => !isWakeHookEntry(hook));
+		const rest = inner.filter((hook) => !isWakeHookEntry(hook) && !extra?.(hook));
 		if (rest.length === inner.length) kept.push(group);
 		else if (rest.length > 0) kept.push({ ...(group as object), hooks: rest });
 	}
@@ -381,10 +387,18 @@ export class ClaudeCodeConnector extends BaseConnector {
 			hooks.Stop = userStopGroups;
 		}
 
-		settings.hooks = {
-			...(settings.hooks as Record<string, unknown>),
+		const merged: Record<string, unknown> = {
+			...(settings.hooks as Record<string, unknown> | undefined),
 			...hooks,
 		};
+		if (hooksConfig.sessionStart === false) {
+			const userStart = stripWakeGroups(merged.SessionStart, isSessionStartHookEntry);
+			if (userStart.length > 0) merged.SessionStart = userStart;
+			else Reflect.deleteProperty(merged, "SessionStart");
+			if (userStopGroups.length > 0) merged.Stop = userStopGroups;
+			else Reflect.deleteProperty(merged, "Stop");
+		}
+		settings.hooks = merged;
 		const { PreCompaction: _legacyPreCompaction, ...hooksWithoutLegacy } = settings.hooks as Record<string, unknown>;
 		settings.hooks = hooksWithoutLegacy;
 

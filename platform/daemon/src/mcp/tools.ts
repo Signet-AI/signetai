@@ -998,8 +998,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		{
 			title: "Send Agent Message",
 			description:
-				"Send a direct message to another Signet agent session. A local direct message wakes the recipient, even when idle, " +
-				"so use it when another session should act or answer now; use board_post for durable, non-urgent discussion. " +
+				"Send a direct message to another Signet agent session. A local direct message wakes an idle recipient on Claude Code, Hermes Agent, and pi; " +
+				"Codex sees it when its current turn ends, and other harnesses at their next hook. Use it when another session should act or answer soon; use board_post for durable, non-urgent discussion. " +
 				"Target one session with to_session_key or any session of an agent with to_agent_id, and pass your own session key as from_session_key so replies can reach you. " +
 				"Supports ACP relay for cross-provider communication.",
 			inputSchema: z.object({
@@ -1226,11 +1226,19 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				params.set("offset", String(Math.max(0, Math.round(offset))));
 			}
 			const path = `/api/board/threads/${encodeURIComponent(thread_id)}`;
-			const result = await fetchDaemon<unknown>(baseUrl, `${path}?${params.toString()}`);
+			const result = await fetchDaemon<{
+				readonly thread?: { readonly lastPostAt?: string };
+				readonly posts?: ReadonlyArray<{ readonly createdAt?: string }>;
+				readonly hasMorePosts?: boolean;
+			}>(baseUrl, `${path}?${params.toString()}`);
 			if (!result.ok) return errorResult(`Board read failed: ${result.error}`);
+			const posts = result.data?.posts ?? [];
+			const through = result.data?.hasMorePosts
+				? posts[posts.length - 1]?.createdAt
+				: (result.data?.thread?.lastPostAt ?? posts[posts.length - 1]?.createdAt);
 			const marked = await fetchDaemon<unknown>(baseUrl, `${path}/read`, {
 				method: "POST",
-				body: { agentId: agent_id },
+				body: { agentId: agent_id, through },
 			});
 			if (!marked.ok) return errorResult(`Board read succeeded but marking it read failed: ${marked.error}`);
 			return textResult(result.data);
@@ -1271,6 +1279,9 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			session_key,
 			harness,
 		}) => {
+			if (thread_id && from_message_id) {
+				return errorResult("Pass either thread_id (reply) or from_message_id (promote into a new thread), not both");
+			}
 			const identity = { agentId: agent_id, sessionKey: session_key, harness };
 			const result = thread_id
 				? await fetchDaemon<unknown>(baseUrl, `/api/board/threads/${encodeURIComponent(thread_id)}/posts`, {

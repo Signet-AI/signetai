@@ -136,7 +136,7 @@ export function registerBoardRoutes(app: Hono): void {
 		return requirePermission("remember", authConfig)(c, next);
 	});
 	app.use("/api/board/*", async (c, next) => {
-		if (c.req.method !== "POST") {
+		if (c.req.method !== "POST" && c.req.method !== "DELETE" && c.req.method !== "PATCH") {
 			await next();
 			return;
 		}
@@ -235,6 +235,13 @@ export function registerBoardRoutes(app: Hono): void {
 		if (payload === null) return c.json({ error: "invalid request body" }, 400);
 		const viewer = await resolveViewer(c, payload);
 		if (!viewer.ok) return viewer.response;
+		if (payload.status !== undefined && typeof payload.status !== "string") {
+			return c.json({ error: `status must be one of ${BOARD_THREAD_STATUSES.join(", ")}` }, 400);
+		}
+		if (payload.title !== undefined && typeof payload.title !== "string") {
+			return c.json({ error: "title must be a string" }, 400);
+		}
+		if (payload.tags === null) return c.json({ error: "tags must be an array of strings" }, 400);
 		const rawStatus = parseOptionalString(payload.status);
 		const status = rawStatus === undefined ? undefined : parseStatus(rawStatus);
 		if (status === null || status === "all") {
@@ -295,8 +302,18 @@ export function registerBoardRoutes(app: Hono): void {
 		if (payload === null) return c.json({ error: "invalid request body" }, 400);
 		const viewer = await resolveViewer(c, payload);
 		if (!viewer.ok) return viewer.response;
+		if (payload.through !== undefined && typeof payload.through !== "string") {
+			return c.json({ error: "through must be an ISO timestamp" }, 400);
+		}
 		try {
-			return c.json(await markBoardThreadRead(c.req.param("threadId"), viewer.value));
+			return c.json(
+				await markBoardThreadRead(
+					c.req.param("threadId"),
+					viewer.value,
+					Date.now(),
+					typeof payload.through === "string" ? payload.through : undefined,
+				),
+			);
 		} catch (error) {
 			return boardErrorResponse(c, error, "mark read");
 		}

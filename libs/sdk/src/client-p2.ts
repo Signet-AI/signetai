@@ -434,7 +434,11 @@ export class SignetClientP2 {
 		readonly project?: string;
 		readonly waitMs?: number;
 	}): Promise<AgentWakeResponse> {
-		return this.transport.post<AgentWakeResponse>("/api/cross-agent/wake", opts);
+		const waitMs = Math.max(0, Math.min(25_000, opts.waitMs ?? 25_000));
+		return this.transport.request<AgentWakeResponse>("POST", "/api/cross-agent/wake", {
+			body: { ...opts, waitMs },
+			timeoutMs: waitMs + 10_000,
+		});
 	}
 	async listBoardTopics(opts?: { readonly agentId?: string; readonly scope?: "all" }): Promise<BoardTopicListResponse> {
 		return this.transport.get<BoardTopicListResponse>("/api/board/topics", {

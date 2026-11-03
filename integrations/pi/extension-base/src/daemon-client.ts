@@ -8,6 +8,7 @@ export type DaemonFetchResult<T> =
 			readonly ok: false;
 			readonly reason: DaemonFetchFailure;
 			readonly status?: number;
+			readonly detail?: string;
 	  };
 
 export interface DaemonClientConfig {
@@ -58,6 +59,21 @@ async function cancelResponseBody(response: Response): Promise<void> {
 	} catch {}
 }
 
+async function readErrorDetail(response: Response): Promise<string | undefined> {
+	if (!(response.headers.get("content-type") ?? "").includes("application/json")) {
+		await cancelResponseBody(response);
+		return undefined;
+	}
+	try {
+		const parsed: unknown = JSON.parse((await response.text()).slice(0, 4_000));
+		if (typeof parsed !== "object" || parsed === null || !("error" in parsed)) return undefined;
+		const error = (parsed as { readonly error?: unknown }).error;
+		return typeof error === "string" && error.trim() ? error.trim().slice(0, 300) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 async function daemonFetchResult<T>(
 	daemonUrl: string,
 	path: string,
@@ -85,9 +101,11 @@ async function daemonFetchResult<T>(
 
 		const response = await fetch(`${daemonUrl}${path}`, init);
 		if (!response.ok) {
-			await cancelResponseBody(response);
+			const detail = await readErrorDetail(response);
 			logWarning(config, `[${config.logPrefix}] ${method} ${path} failed: ${response.status}`);
-			return { ok: false, reason: "http", status: response.status };
+			return detail
+				? { ok: false, reason: "http", status: response.status, detail }
+				: { ok: false, reason: "http", status: response.status };
 		}
 
 		if (!parseJson) {

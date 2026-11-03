@@ -44,7 +44,8 @@ function fail(message: string): ToolExecuteResult {
 }
 
 function describeFailure(result: Extract<DaemonFetchResult<unknown>, { ok: false }>): string {
-	return result.status !== undefined ? `${result.reason} (HTTP ${result.status})` : result.reason;
+	const base = result.status !== undefined ? `${result.reason} (HTTP ${result.status})` : result.reason;
+	return result.detail ? `${base}: ${result.detail}` : base;
 }
 
 function query(entries: Record<string, string | number | boolean | undefined>): string {
@@ -54,6 +55,22 @@ function query(entries: Record<string, string | number | boolean | undefined>): 
 	}
 	const text = params.toString();
 	return text ? `?${text}` : "";
+}
+
+function readThrough(data: unknown): string | undefined {
+	if (typeof data !== "object" || data === null) return undefined;
+	const detail = data as { thread?: { lastPostAt?: unknown }; posts?: unknown; hasMorePosts?: unknown };
+	if (detail.hasMorePosts !== true) {
+		const last = detail.thread?.lastPostAt;
+		return typeof last === "string" && last ? last : undefined;
+	}
+	if (!Array.isArray(detail.posts)) return undefined;
+	let newest: string | undefined;
+	for (const post of detail.posts) {
+		const created = (post as { createdAt?: unknown } | null)?.createdAt;
+		if (typeof created === "string" && (!newest || created > newest)) newest = created;
+	}
+	return newest;
 }
 
 export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, agentId: string | undefined): void {
@@ -108,7 +125,7 @@ export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, ag
 	define(
 		"agent_message_send",
 		"Send Agent Message",
-		`Send a direct message to another Signet agent session. Direct messages wake the recipient, so use them for urgent or attention-needing coordination; use board_post for non-urgent shared discussion. Provide exactly one target: to_session_key, to_agent_id, or broadcast. ${UNTRUSTED}`,
+		`Send a direct message to another Signet agent session. Direct messages wake an idle recipient on Claude Code, Hermes Agent, and pi (Codex sees them when its current turn ends, other harnesses at their next hook), so use them for coordination that needs attention; use board_post for non-urgent shared discussion. Provide exactly one target: to_session_key, to_agent_id, or broadcast. ${UNTRUSTED}`,
 		Type.Object({
 			content: Type.String({ description: "Message content" }),
 			to_agent_id: Type.Optional(Type.String({ description: "Target agent id" })),
@@ -233,7 +250,7 @@ export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, ag
 	define(
 		"board_read",
 		"Read Board Thread",
-		`Read a message board thread with its posts and mark it read. ${UNTRUSTED}`,
+		`Read a message board thread with its posts and mark it read up to the newest post returned. The returned thread state is the snapshot from before marking. ${UNTRUSTED}`,
 		Type.Object({
 			thread_id: Type.String({ description: "Thread id" }),
 			limit: Type.Optional(Type.Number({ description: "Max posts (default 100, max 200)" })),
@@ -253,7 +270,13 @@ export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, ag
 				signal,
 			);
 			if (!result.ok) return fail(`Board read failed: ${describeFailure(result)}`);
-			const marked = await client.postResult<unknown>(`${path}/read`, { agentId }, WRITE_TIMEOUT, signal);
+			const through = readThrough(result.data);
+			const marked = await client.postResult<unknown>(
+				`${path}/read`,
+				{ agentId, ...(through ? { through } : {}) },
+				WRITE_TIMEOUT,
+				signal,
+			);
 			if (!marked.ok) return fail(`Board read succeeded but marking it read failed: ${describeFailure(marked)}`);
 			return ok(result.data);
 		},
@@ -275,6 +298,9 @@ export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, ag
 		async (params, ctx, signal) => {
 			const identity = { agentId, sessionKey: sessionOf(ctx), harness: HARNESS };
 			const threadId = str(params.thread_id);
+			if (threadId && str(params.from_message_id)) {
+				return fail("Pass either thread_id (reply) or from_message_id (promote into a new thread), not both");
+			}
 			const body = typeof params.body === "string" ? params.body : undefined;
 			const result = threadId
 				? await client.postResult<unknown>(

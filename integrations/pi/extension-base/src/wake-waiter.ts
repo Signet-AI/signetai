@@ -10,6 +10,7 @@ export const WAKE_MIN_LOOP_MS = 1_000;
 interface WakeResponse {
 	readonly wake?: boolean;
 	readonly inject?: string;
+	readonly messageIds?: readonly string[];
 	readonly reason?: string;
 	readonly retryAfterMs?: number;
 }
@@ -96,6 +97,22 @@ export function createWakeWaiter(options: WakeWaiterOptions): WakeWaiter {
 						await options.deliver(inject);
 					} catch {
 						delayMs = defaultRetryMs;
+						const messageIds = (result.data.messageIds ?? []).filter((id) => typeof id === "string");
+						if (messageIds.length > 0) {
+							await options.client
+								.postResult(
+									"/api/cross-agent/wake/release",
+									{
+										harness: options.harness,
+										sessionKey: session.sessionKey,
+										agentId: options.agentId,
+										messageIds,
+									},
+									10_000,
+									signal,
+								)
+								.catch(() => undefined);
+						}
 					}
 				}
 			} else {

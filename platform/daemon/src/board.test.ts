@@ -9,6 +9,7 @@ import {
 	BoardNotFoundError,
 	BoardValidationError,
 	claimBoardActivityNotices,
+	createBoardEventVisibility,
 	createBoardThread,
 	deleteBoardThread,
 	listBoardThreads,
@@ -21,6 +22,7 @@ import {
 	updateBoardThread,
 } from "./board";
 import { createAgentMessage, resetCrossAgentStateForTest } from "./cross-agent";
+import { buildCrossAgentSessionSection } from "./cross-agent-session-section";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { readRecentEpisodicSources } from "./episodic-sources";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
@@ -384,6 +386,87 @@ describe("message board", () => {
 			claimBoardActivityNotices({ agentId: "alpha", sessionKey: "a1" }),
 		]);
 		expect(first.length + second.length).toBe(1);
+	});
+
+	it("records notices at the noticed post time so later replies are still noticed", async () => {
+		const created = await createBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha", sessionKey: "a1" },
+			topic: "coordination",
+			title: "Cursor",
+			body: "first",
+		});
+		await replyToBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha", sessionKey: "a2" },
+			threadId: created.thread.id,
+			body: "one",
+		});
+		expect(await claimBoardActivityNotices({ agentId: "alpha", sessionKey: "a1" })).toHaveLength(1);
+		const rows = await dbOwnerQuery<ReadonlyArray<{ notified_at: string }>>(
+			ownerStatement("SELECT notified_at FROM board_notices", [], "all"),
+			{ operation: "test.notices", lane: "read" },
+		);
+		const thread = (await readBoardThread(created.thread.id, operator)).thread;
+		expect(rows[0]?.notified_at).toBe(thread.lastPostAt);
+		await replyToBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha", sessionKey: "a2" },
+			threadId: created.thread.id,
+			body: "two",
+		});
+		expect((await claimBoardActivityNotices({ agentId: "alpha", sessionKey: "a1" }))[0]?.newPosts).toBe(1);
+	});
+
+	it("caps the read cursor at the caller's through timestamp", async () => {
+		const created = await createBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha" },
+			topic: "t",
+			title: "x",
+			body: "y",
+		});
+		const early = "2000-01-01T00:00:00.000Z";
+		expect((await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), early)).lastReadAt).toBe(early);
+		expect((await listBoardThreads(agent("alpha"))).items[0]?.unread).toBe(true);
+		await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), created.thread.lastPostAt);
+		expect((await listBoardThreads(agent("alpha"))).items[0]?.unread).toBe(false);
+		await expect(markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), "not a date")).rejects.toThrow(
+			BoardValidationError,
+		);
+	});
+
+	it("refreshes group membership for live event visibility", async () => {
+		await registerAgent("g1", "group", "ops");
+		await registerAgent("g2", "group", "ops");
+		let clock = 0;
+		const visible = await createBoardEventVisibility(agent("g1", "group", "ops"), {
+			refreshMs: 1_000,
+			nowMs: () => clock,
+		});
+		expect(visible("g2")).toBe(true);
+		await registerAgent("g2", "group", "other");
+		clock = 5_000;
+		visible("g2");
+		await Bun.sleep(300);
+		expect(visible("g2")).toBe(false);
+	});
+
+	it("lists active board topics in the session-start messaging section", async () => {
+		await createBoardThread({
+			viewer: agent("default"),
+			author: { agentId: "default", sessionKey: "other-session" },
+			topic: "release-planning",
+			title: "What ships next",
+			body: "Collecting items.",
+		});
+		const section = await buildCrossAgentSessionSection({
+			harness: "claude-code",
+			agentId: "default",
+			sessionKey: "solo",
+		});
+		expect(section).toContain("Active topics: release-planning.");
+		expect(await buildCrossAgentSessionSection({ harness: "openclaw", agentId: "default" })).toBeNull();
 	});
 
 	it("emits board events for live observers", async () => {

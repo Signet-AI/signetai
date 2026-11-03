@@ -288,6 +288,10 @@ export function getSessionPath(sessionKey: string, agentId = "default"): Runtime
 	return claim.runtimePath;
 }
 
+export function clearEndedSession(sessionKey: string, agentId = "default"): boolean {
+	return endedSessions.delete(scopedSessionKey(normalizeSessionKey(sessionKey), agentId));
+}
+
 export function getEndedSession(sessionKey: string, agentId = "default"): EndedSessionInfo | undefined {
 	const key = normalizeSessionKey(sessionKey);
 	const ended = endedSessions.get(scopedSessionKey(key, agentId));

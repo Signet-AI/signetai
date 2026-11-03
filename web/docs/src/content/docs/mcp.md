@@ -408,8 +408,8 @@ List currently active peer sessions for cross-agent coordination.
 
 Send a message to another agent/session or broadcast to all active peers.
 Supports local daemon delivery and optional ACP relay. A local direct message
-(`to_agent_id` or `to_session_key`) wakes the recipient session, including an
-idle one, on harnesses that support waking; see [Direct message wake](/hooks/#direct-message-wake).
+(`to_agent_id` or `to_session_key`) wakes an idle recipient session on Claude
+Code, Hermes Agent, and pi; Codex sees it when its current turn ends; see [Direct message wake](/hooks/#direct-message-wake).
 Use `board_post` for discussion that does not need an immediate answer.
 
 **Parameters:**

@@ -310,7 +310,10 @@ class SignetClient:
         req = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return {"ok": True, "data": _read_json_response(resp)}
+                try:
+                    return {"ok": True, "data": _read_json_response(resp)}
+                except ValueError as e:
+                    return {"ok": False, "status": resp.status, "error": f"daemon returned invalid JSON: {e}"}
         except urllib.error.HTTPError as e:
             detail = ""
             try:

@@ -1,4 +1,5 @@
 import { registerDbAccessorCloseParticipant } from "./db-accessor-lifecycle";
+import { logger } from "./logger";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import {
 	type AgentMessage,
@@ -16,6 +17,9 @@ export const WAKE_RATE_LIMIT_PER_HOUR = 30;
 const WAKE_RATE_WINDOW_MS = 60 * 60 * 1000;
 const MAX_WAKE_BATCH = 10;
 const MAX_TRACKED_SESSIONS = 10_000;
+export const MAX_ACTIVE_WAKE_WAITERS = 2_000;
+let activeWaiterCap = MAX_ACTIVE_WAKE_WAITERS;
+const WAITER_CAP_RETRY_MS = 30_000;
 
 export type WakeWaitResult =
 	| {
@@ -45,6 +49,7 @@ interface Waiter {
 	readonly sessionKey: string;
 	readonly harness: string;
 	readonly finish: (result: WakeWaitResult) => void;
+	readonly fail: (error: unknown) => void;
 	claiming: boolean;
 	rerun: boolean;
 	done: boolean;
@@ -91,7 +96,10 @@ const CLAIMABLE_SQL = `SELECT m.*, NULL AS acknowledged_at
 	  AND (m.from_session_key IS NULL OR m.from_session_key <> ?)
 	  AND (
 		(m.to_session_key = ? AND (m.to_session_agent_id IS NULL OR m.to_session_agent_id = ?))
-		OR (? = 1 AND m.to_session_key IS NULL AND m.to_agent_id = ?)
+		OR (
+			m.to_session_key IS NULL AND m.to_agent_id = ?
+			AND (? = 1 OR (? = 2 AND m.from_session_key = ?))
+		)
 	  )
 	ORDER BY m.created_at ASC, m.rowid ASC
 	LIMIT ?`;
@@ -101,10 +109,12 @@ export async function claimDirectMessageWakes(input: {
 	readonly sessionKey: string;
 	readonly harness: string;
 	readonly includeAgentAddressed?: boolean;
+	readonly agentAddressedOnlyFromSession?: string;
 	readonly nowMs?: number;
 }): Promise<readonly AgentMessage[]> {
 	const now = new Date(input.nowMs ?? Date.now()).toISOString();
-	const agentAddressed = input.includeAgentAddressed === false ? 0 : 1;
+	const agentAddressed =
+		input.agentAddressedOnlyFromSession !== undefined ? 2 : input.includeAgentAddressed === false ? 0 : 1;
 	const rows = await dbOwnerQuery<readonly CrossAgentMessageRow[]>(
 		ownerStatement(
 			CLAIMABLE_SQL,
@@ -114,8 +124,10 @@ export async function claimDirectMessageWakes(input: {
 				input.sessionKey,
 				input.sessionKey,
 				input.agentId,
-				agentAddressed,
 				input.agentId,
+				agentAddressed,
+				agentAddressed,
+				input.agentAddressedOnlyFromSession ?? "",
 				MAX_WAKE_BATCH,
 			],
 			"all",
@@ -146,24 +158,25 @@ export async function releaseDirectMessageWakes(input: {
 	readonly sessionKey: string;
 	readonly messageIds: readonly string[];
 }): Promise<number> {
-	const ids = [...new Set(input.messageIds.filter((id) => typeof id === "string" && id.length > 0))].slice(
-		0,
-		MAX_WAKE_BATCH,
-	);
-	if (ids.length === 0) return 0;
-	const results = await dbOwnerBatch(
-		ids.map((id) =>
-			ownerStatement(
-				"DELETE FROM cross_agent_message_wakes WHERE message_id = ? AND agent_id = ? AND session_key = ?",
-				[id, input.agentId, input.sessionKey],
+	const ids = [...new Set(input.messageIds.filter((id) => typeof id === "string" && id.length > 0))];
+	let released = 0;
+	for (let start = 0; start < ids.length; start += MAX_WAKE_BATCH) {
+		const chunk = ids.slice(start, start + MAX_WAKE_BATCH);
+		const results = await dbOwnerBatch(
+			chunk.map((id) =>
+				ownerStatement(
+					"DELETE FROM cross_agent_message_wakes WHERE message_id = ? AND agent_id = ? AND session_key = ?",
+					[id, input.agentId, input.sessionKey],
+				),
 			),
-		),
-		{ operation: "cross-agent.wake.release", lane: "write", deadlineMs: 5_000, estimatedWorkUnits: ids.length },
-	);
-	return results.reduce<number>(
-		(total, result) => total + ((result as { readonly changes?: number } | undefined)?.changes ?? 0),
-		0,
-	);
+			{ operation: "cross-agent.wake.release", lane: "write", deadlineMs: 5_000, estimatedWorkUnits: chunk.length },
+		);
+		released += results.reduce<number>(
+			(total, result) => total + ((result as { readonly changes?: number } | undefined)?.changes ?? 0),
+			0,
+		);
+	}
+	return released;
 }
 
 function wakeResult(messages: readonly AgentMessage[], sessionKey: string): WakeWaitResult {
@@ -188,11 +201,13 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 			waiter.rerun = false;
 			const nowMs = Date.now();
 			if (rateLimitRetryAfter(waiter.sessionKey, nowMs) !== null) return;
+			const preference = agentAddressedPreference(waiter, nowMs);
 			const claimed = await claimDirectMessageWakes({
 				agentId: waiter.agentId,
 				sessionKey: waiter.sessionKey,
 				harness: waiter.harness,
-				includeAgentAddressed: isPreferredAgentWaiter(waiter, nowMs),
+				includeAgentAddressed: preference.mode === "all",
+				agentAddressedOnlyFromSession: preference.mode === "from" ? preference.sessionKey : undefined,
 			});
 			if (claimed.length > 0) {
 				if (waiter.done) {
@@ -220,14 +235,32 @@ function lastSeenMs(sessionKey: string): number {
 	return Number.isFinite(parsed) ? parsed : 0;
 }
 
-function isPreferredAgentWaiter(waiter: Waiter, nowMs: number): boolean {
+type AgentAddressedPreference =
+	| { readonly mode: "all" }
+	| { readonly mode: "none" }
+	| { readonly mode: "from"; readonly sessionKey: string };
+
+function agentAddressedPreference(waiter: Waiter, nowMs: number): AgentAddressedPreference {
 	const seen = lastSeenMs(waiter.sessionKey);
+	const moreRecent: string[] = [];
 	for (const other of waiters.values()) {
 		if (other === waiter || other.done || other.agentId !== waiter.agentId) continue;
 		if (rateLimitRetryAfter(other.sessionKey, nowMs) !== null) continue;
-		if (lastSeenMs(other.sessionKey) > seen) return false;
+		if (lastSeenMs(other.sessionKey) > seen) moreRecent.push(other.sessionKey);
 	}
-	return true;
+	if (moreRecent.length === 0) return { mode: "all" };
+	const only = moreRecent[0];
+	if (moreRecent.length === 1 && only !== undefined) return { mode: "from", sessionKey: only };
+	return { mode: "none" };
+}
+
+function logClaimFailure(waiter: Waiter, error: unknown): void {
+	logger.warn("hooks", "Direct message wake claim failed", {
+		agentId: waiter.agentId,
+		sessionKey: waiter.sessionKey,
+		harness: waiter.harness,
+		error: error instanceof Error ? error.message : String(error),
+	});
 }
 
 export function selectWakeTarget(message: AgentMessage, nowMs = Date.now()): string | null {
@@ -253,7 +286,7 @@ function redispatch(messages: readonly AgentMessage[]): void {
 	for (const message of messages) {
 		const target = selectWakeTarget(message);
 		const waiter = target ? waiters.get(target) : undefined;
-		if (waiter) void attemptClaim(waiter).catch(() => {});
+		if (waiter) void attemptClaim(waiter).catch((error) => logClaimFailure(waiter, error));
 	}
 }
 
@@ -265,7 +298,7 @@ function ensureSubscribed(): void {
 		if (!target) return;
 		const waiter = waiters.get(target);
 		if (!waiter) return;
-		void attemptClaim(waiter).catch(() => {});
+		void attemptClaim(waiter).catch((error) => logClaimFailure(waiter, error));
 	});
 }
 
@@ -276,12 +309,23 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 	if (previous) previous.finish({ wake: false, reason: "superseded" });
 	if (retryAfterMs !== null) return { wake: false, reason: "rate_limited", retryAfterMs };
 	if (input.signal?.aborted) return { wake: false, reason: "aborted" };
+	if (waiters.size >= activeWaiterCap) {
+		return { wake: false, reason: "rate_limited", retryAfterMs: WAITER_CAP_RETRY_MS };
+	}
 
 	ensureSubscribed();
 	const waitMs = Math.max(0, Math.min(MAX_WAKE_WAIT_MS, Math.round(input.waitMs)));
-	return await new Promise<WakeWaitResult>((resolve) => {
+	return await new Promise<WakeWaitResult>((resolve, reject) => {
 		let timer: ReturnType<typeof setTimeout> | null = null;
 		const onAbort = (): void => waiter.finish({ wake: false, reason: "aborted" });
+		const settle = (): boolean => {
+			if (waiter.done) return false;
+			waiter.done = true;
+			if (timer) clearTimeout(timer);
+			input.signal?.removeEventListener("abort", onAbort);
+			if (waiters.get(waiter.sessionKey) === waiter) waiters.delete(waiter.sessionKey);
+			return true;
+		};
 		const waiter: Waiter = {
 			id: nextWaiterId++,
 			agentId: input.agentId,
@@ -291,18 +335,21 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 			rerun: false,
 			done: false,
 			finish: (result) => {
-				if (waiter.done) return;
-				waiter.done = true;
-				if (timer) clearTimeout(timer);
-				input.signal?.removeEventListener("abort", onAbort);
-				if (waiters.get(waiter.sessionKey) === waiter) waiters.delete(waiter.sessionKey);
+				if (!settle()) return;
 				resolve(result);
+			},
+			fail: (error) => {
+				if (!settle()) return;
+				reject(error);
 			},
 		};
 		waiters.set(input.sessionKey, waiter);
 		input.signal?.addEventListener("abort", onAbort, { once: true });
 		void attemptClaim(waiter)
-			.catch(() => {})
+			.catch((error) => {
+				logClaimFailure(waiter, error);
+				waiter.fail(error);
+			})
 			.finally(() => {
 				if (waiter.done) return;
 				if (waitMs === 0) {
@@ -314,6 +361,10 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 	});
 }
 
+export function wasWokenSince(sessionKey: string, sinceMs: number): boolean {
+	return (wakeTimes.get(sessionKey) ?? []).some((at) => at >= sinceMs);
+}
+
 export function activeWakeWaiterCount(): number {
 	return waiters.size;
 }
@@ -323,7 +374,12 @@ export function closeDirectMessageWakeWaiters(): void {
 	waiters.clear();
 }
 
+export function setWakeWaiterCapForTest(cap: number): void {
+	activeWaiterCap = cap;
+}
+
 export function resetDirectMessageWakeStateForTest(): void {
+	activeWaiterCap = MAX_ACTIVE_WAKE_WAITERS;
 	closeDirectMessageWakeWaiters();
 	wakeTimes.clear();
 	unsubscribe?.();

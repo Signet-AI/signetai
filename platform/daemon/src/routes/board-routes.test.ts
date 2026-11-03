@@ -7,6 +7,7 @@ import { resetBoardStateForTest } from "../board";
 import { createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
 import { resetDirectMessageWakeStateForTest } from "../cross-agent-wake";
 import { closeDbAccessor, initDbAccessor } from "../db-accessor";
+import { getEndedSession, markSessionEnded } from "../session-tracker";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 const suiteDir = mkdtempSync(join(tmpdir(), "signet-board-routes-suite-"));
@@ -103,6 +104,33 @@ describe("direct message wake route", () => {
 	});
 });
 
+describe("wake and session-end ordering", () => {
+	it("keeps a session open when a direct message woke it during its session-end", async () => {
+		upsertAgentPresence({ agentId: "beta", harness: "codex", sessionKey: "codex-1" });
+		markSessionEnded("codex-1", "legacy", "beta");
+		expect(getEndedSession("codex-1", "beta")).toBeDefined();
+		createAgentMessage({ fromAgentId: "alpha", toSessionKey: "codex-1", content: "continue please" });
+		const woke = await send("POST", "/api/cross-agent/wake", {
+			harness: "codex",
+			sessionKey: "codex-1",
+			agentId: "beta",
+			waitMs: 0,
+		});
+		expect(((await woke.json()) as { wake: boolean }).wake).toBe(true);
+		expect(getEndedSession("codex-1", "beta")).toBeUndefined();
+
+		const ended = await send("POST", "/api/hooks/session-end", {
+			harness: "codex",
+			sessionKey: "codex-1",
+			agentId: "beta",
+			runtimePath: "legacy",
+			reason: "stop",
+		});
+		expect(ended.status).toBe(200);
+		expect(getEndedSession("codex-1", "beta")).toBeUndefined();
+	});
+});
+
 describe("message board routes", () => {
 	it("creates, replies, lists, updates, and deletes through HTTP with operator-only deletion", async () => {
 		const created = await send("POST", "/api/board/threads", {
@@ -135,6 +163,21 @@ describe("message board routes", () => {
 
 		const forbidden = await send("PATCH", `/api/board/threads/${thread.id}`, { agentId: "beta", status: "resolved" });
 		expect(forbidden.status).toBe(404);
+		for (const body of [
+			{ agentId: "alpha", status: 123, pinned: true },
+			{ agentId: "alpha", title: 7 },
+			{ agentId: "alpha", tags: null },
+		]) {
+			expect((await send("PATCH", `/api/board/threads/${thread.id}`, body)).status).toBe(400);
+		}
+		const readThrough = await send("POST", `/api/board/threads/${thread.id}/read`, {
+			agentId: "alpha",
+			through: "2000-01-01T00:00:00.000Z",
+		});
+		expect(((await readThrough.json()) as { lastReadAt: string }).lastReadAt).toBe("2000-01-01T00:00:00.000Z");
+		expect((await send("POST", `/api/board/threads/${thread.id}/read`, { agentId: "alpha", through: 5 })).status).toBe(
+			400,
+		);
 		const resolved = await send("PATCH", `/api/board/threads/${thread.id}`, { agentId: "alpha", status: "resolved" });
 		expect(((await resolved.json()) as { thread: { status: string } }).thread.status).toBe("resolved");
 

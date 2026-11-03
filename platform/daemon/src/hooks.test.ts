@@ -753,7 +753,9 @@ describe("handleSessionStart", () => {
 		const claude = await handleSessionStart({ harness: "claude-code", sessionKey: "solo-session" });
 		expect(claude.inject).toContain("## Agent Messaging");
 		expect(claude.inject).toContain("session `solo-session`");
-		expect(claude.inject).toContain("`agent_message_send` sends a direct message and wakes the recipient");
+		expect(claude.inject).toContain(
+			"`agent_message_send` sends a direct message. It wakes an idle recipient on Claude Code, Hermes Agent, and pi",
+		);
 		expect(claude.inject).toContain("`board_list`");
 
 		const hermes = await handleSessionStart({ harness: "hermes-agent", sessionKey: "hermes-session" });

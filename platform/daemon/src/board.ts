@@ -207,7 +207,9 @@ function agentVisibility(viewer: BoardViewer, column: string): { sql: string; ar
 	return { sql: `${column} = ?`, args: [viewer.agentId] };
 }
 
-export async function createBoardEventVisibility(viewer: BoardViewer): Promise<(authorAgentId: string) => boolean> {
+const EVENT_VISIBILITY_REFRESH_MS = 30_000;
+
+async function eventVisibilityPredicate(viewer: BoardViewer): Promise<(authorAgentId: string) => boolean> {
 	if (viewer.kind === "operator" || viewer.readPolicy === "shared") return () => true;
 	if (viewer.readPolicy === "group" && viewer.policyGroup) {
 		const rows = await dbOwnerQuery<readonly { readonly id: string }[]>(
@@ -219,6 +221,37 @@ export async function createBoardEventVisibility(viewer: BoardViewer): Promise<(
 		return (authorAgentId) => members.has(authorAgentId);
 	}
 	return (authorAgentId) => authorAgentId === viewer.agentId;
+}
+
+export async function createBoardEventVisibility(
+	viewer: BoardViewer,
+	options: { readonly refreshMs?: number; readonly nowMs?: () => number } = {},
+): Promise<(authorAgentId: string) => boolean> {
+	if (viewer.kind === "operator") return () => true;
+	const refreshMs = options.refreshMs ?? EVENT_VISIBILITY_REFRESH_MS;
+	const now = options.nowMs ?? Date.now;
+	let predicate = await eventVisibilityPredicate(viewer);
+	let fetchedAt = now();
+	let refreshing: Promise<void> | null = null;
+	const refresh = (): Promise<void> => {
+		refreshing ??= resolveBoardViewer(viewer.agentId)
+			.then(eventVisibilityPredicate)
+			.then((next) => {
+				predicate = next;
+			})
+			.catch(() => {
+				predicate = (authorAgentId) => authorAgentId === viewer.agentId;
+			})
+			.finally(() => {
+				fetchedAt = now();
+				refreshing = null;
+			});
+		return refreshing;
+	};
+	return (authorAgentId) => {
+		if (now() - fetchedAt >= refreshMs) void refresh();
+		return predicate(authorAgentId);
+	};
 }
 
 function normalizeText(value: string | undefined | null): string | undefined {
@@ -547,15 +580,24 @@ export async function markBoardThreadRead(
 	threadId: string,
 	viewer: BoardViewer,
 	nowMs = Date.now(),
+	through?: string,
 ): Promise<{ readonly threadId: string; readonly lastReadAt: string }> {
 	if (viewer.kind !== "agent") throw new BoardValidationError("read cursors require an agent");
 	await readVisibleThread(threadId, viewer);
-	const now = new Date(nowMs).toISOString();
+	const nowIso = new Date(nowMs).toISOString();
+	let now = nowIso;
+	if (through !== undefined) {
+		const parsed = Date.parse(through);
+		if (!Number.isFinite(parsed)) throw new BoardValidationError("through must be an ISO timestamp");
+		const throughIso = new Date(parsed).toISOString();
+		now = throughIso < nowIso ? throughIso : nowIso;
+	}
 	await write(
 		[
 			ownerStatement(
 				`INSERT INTO board_reads (agent_id, thread_id, last_read_at) VALUES (?, ?, ?)
-				 ON CONFLICT(agent_id, thread_id) DO UPDATE SET last_read_at = excluded.last_read_at`,
+				 ON CONFLICT(agent_id, thread_id) DO UPDATE SET last_read_at = excluded.last_read_at
+				 WHERE board_reads.last_read_at < excluded.last_read_at`,
 				[viewer.agentId, threadId, now],
 			),
 		],
@@ -845,7 +887,6 @@ export async function claimBoardActivityNotices(input: {
 	const viewer = await resolveBoardViewer(input.agentId);
 	const visibility = agentVisibility(viewer, "t.author_agent_id");
 	const limit = clamp(input.limit, BOARD_LIMITS.notices, 1, BOARD_LIMITS.notices);
-	const scanStartedAt = new Date().toISOString();
 	const session = input.sessionKey ?? "";
 	const authorSession = input.sessionKey ?? null;
 	const rows = await readAll<{
@@ -914,14 +955,13 @@ export async function claimBoardActivityNotices(input: {
 			lastPostAt: row.last_post_at,
 		}));
 	if (notices.length === 0) return [];
-	const now = new Date(input.nowMs ?? Date.now()).toISOString();
 	const results = await write(
 		notices.map((notice) =>
 			ownerStatement(
 				`INSERT INTO board_notices (agent_id, session_key, thread_id, notified_at) VALUES (?, ?, ?, ?)
 				 ON CONFLICT(agent_id, session_key, thread_id) DO UPDATE SET notified_at = excluded.notified_at
-				 WHERE board_notices.notified_at < ?`,
-				[input.agentId, session, notice.threadId, now, scanStartedAt],
+				 WHERE board_notices.notified_at < excluded.notified_at`,
+				[input.agentId, session, notice.threadId, notice.lastPostAt],
 			),
 		),
 		"board.notices.claim",
@@ -954,8 +994,8 @@ export async function projectBoardPost(postId: string): Promise<boolean> {
 	const thread = await readVisibleThread(post.threadId, { kind: "operator" });
 	const participants = await readAll<{ readonly author_agent_id: string }>(
 		`SELECT DISTINCT author_agent_id FROM board_posts
-		 WHERE thread_id = ? AND (created_at < ? OR (created_at = ? AND id = ?))`,
-		[thread.id, post.createdAt, post.createdAt, post.id],
+		 WHERE thread_id = ? AND created_at <= ?`,
+		[thread.id, post.createdAt],
 		"board.projection.participants",
 	);
 	const agents = new Set<string>([thread.authorAgentId, ...participants.map((row) => row.author_agent_id)]);

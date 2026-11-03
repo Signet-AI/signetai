@@ -123,7 +123,7 @@ Other harnesses keep hook-only delivery.
 
 For harnesses that carry Signet's cross-agent tools (Claude Code, Codex, OpenCode, Gemini CLI, Kimi, Muse Code, Forge, Hermes Agent, and pi), `session-start` adds a short Agent Messaging section, whether or not peers are active. It names the session's agent and session key, explains when to send a direct message (it wakes the recipient) versus posting to the board (it never wakes anyone), names the messaging and board tools, and lists up to five active board topics. OpenClaw and Oh My Pi do not get the section because they do not expose those tools.
 
-`session-start` and `user-prompt-submit` notification blocks also list message board threads the current session took part in that have new posts by other sessions. Each notice is shown once per session.
+`session-start` and `user-prompt-submit` notification blocks also list message board threads the current session took part in that have new posts by other sessions. Each notice is normally shown once per session; two hooks for the same session that run at the same moment can both include it.
 
 ---
 

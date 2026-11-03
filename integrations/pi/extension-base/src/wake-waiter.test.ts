@@ -117,4 +117,25 @@ describe("createWakeWaiter", () => {
 		waiter.stop();
 		expect(fake.calls.length).toBeLessThanOrEqual(2);
 	});
+
+	it("releases claimed messages when deliver throws", async () => {
+		const fake = fakeClient([
+			{ ok: true, data: { wake: true, inject: "boom", messageIds: ["m1", "m2"] } },
+			{ ok: true, data: { released: 2 } },
+			{ ok: true, data: { wake: false, reason: "superseded" } },
+		]);
+		const waiter = createWakeWaiter({
+			client: fake.client,
+			harness: "pi",
+			agentId: "a1",
+			deliver: () => {
+				throw new Error("nope");
+			},
+			...fast,
+		});
+		waiter.start({ sessionKey: "s1", project: "/p" });
+		await until(() => !waiter.running);
+		const release = fake.calls.find((c) => c.path === "/api/cross-agent/wake/release");
+		expect(release?.body).toEqual({ harness: "pi", sessionKey: "s1", agentId: "a1", messageIds: ["m1", "m2"] });
+	});
 });

@@ -477,6 +477,7 @@ export type AgentWakeResponse =
 			readonly wake: true;
 			readonly inject: string;
 			readonly messageIds: readonly string[];
+			readonly notifications: { readonly items: readonly Readonly<Record<string, unknown>>[] };
 	  }
 	| {
 			readonly wake: false;

@@ -303,7 +303,8 @@ AGENT_PEERS_SCHEMA = {
 AGENT_MESSAGE_SEND_SCHEMA = {
     "name": "agent_message_send",
     "description": (
-        "Send a direct message to another agent session. Direct messages wake the recipient, "
+        "Send a direct message to another agent session. Direct messages wake an idle recipient on Claude Code, Hermes Agent, and pi "
+        "(Codex sees them when its current turn ends, other harnesses at their next hook), "
         "so use the board (board_post) for non-urgent shared discussion. Provide exactly one of "
         "to_agent_id, to_session_key, or broadcast." + _PEER_NOTE
     ),
@@ -1881,11 +1882,23 @@ class SignetMemoryProvider(MemoryProvider):
             thread = call("GET", f"{path}?{query}")
             if not thread.get("ok"):
                 return failure(thread, tool_name)
-            marked = call("POST", f"{path}/read", {"agentId": agent_id})
+            data = thread.get("data") or {}
+            posts = data.get("posts") or []
+            last_post = posts[-1].get("createdAt") if posts and isinstance(posts[-1], dict) else None
+            if data.get("hasMorePosts"):
+                through = last_post
+            else:
+                through = (data.get("thread") or {}).get("lastPostAt") or last_post
+            read_body: Dict[str, Any] = {"agentId": agent_id}
+            if isinstance(through, str) and through:
+                read_body["through"] = through
+            marked = call("POST", f"{path}/read", read_body)
             return json.dumps({"thread": thread.get("data"), "markedRead": bool(marked.get("ok"))})
 
         if tool_name == "board_post":
             thread_id = text("thread_id")
+            if thread_id and text("from_message_id"):
+                return fail("Pass either thread_id (reply) or from_message_id (promote into a new thread), not both.")
             body_text = text("body")
             if thread_id:
                 if not body_text:
@@ -2003,7 +2016,7 @@ def _resolve_injection_gate(ctx: Any) -> Optional[Any]:
     for candidate in candidates:
         if getattr(candidate, "_manager", None) is not None:
             return lambda: _injection_available(candidate)
-    return None
+    return lambda: False
 
 
 def register(ctx) -> None:

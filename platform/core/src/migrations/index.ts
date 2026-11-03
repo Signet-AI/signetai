@@ -1554,6 +1554,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "agent-wake-and-message-board",
 		up: agentWakeAndMessageBoard,
 		artifacts: {
+			columns: [
+				{ table: "cross_agent_message_wakes", column: "session_key" },
+				{ table: "board_threads", column: "last_post_at" },
+				{ table: "board_posts", column: "projected_at" },
+				{ table: "board_notices", column: "notified_at" },
+			],
 			tables: [
 				"cross_agent_message_wakes",
 				"board_topics",

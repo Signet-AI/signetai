@@ -83,6 +83,22 @@ describe("SignetClient", () => {
 		expect(requestedUrl).toBe("http://127.0.0.1:3850/api/memory/remember");
 	});
 
+	test("waitForAgentWake outlives the default request deadline for long polls", async () => {
+		const server = Bun.serve({
+			port: 0,
+			async fetch() {
+				await Bun.sleep(150);
+				return Response.json({ wake: false, reason: "timeout" });
+			},
+		});
+		servers.push(server);
+		const client = new SignetClient({ daemonUrl: `http://127.0.0.1:${server.port}`, timeoutMs: 50, retries: 0 });
+		expect(await client.waitForAgentWake({ harness: "pi", sessionKey: "s1", waitMs: 100 })).toEqual({
+			wake: false,
+			reason: "timeout",
+		});
+	});
+
 	test("remember() sends POST /api/memory/remember with content", async () => {
 		const { client } = mockDaemon();
 		await client.remember("user prefers dark mode", {

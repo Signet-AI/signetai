@@ -71,6 +71,7 @@ import { sessionStartRecallKey } from "../session-start-state";
 import {
 	type RuntimePath,
 	claimSession,
+	clearEndedSession,
 	getActiveSessions,
 	getEndedSession,
 	getSessionPath,
@@ -87,7 +88,12 @@ import { validateTemporalTimeOptions } from "../temporal-recall";
 import { upsertThreadHead } from "../thread-heads";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { claimBoardActivityNotices } from "../board";
-import { MAX_WAKE_WAIT_MS, releaseDirectMessageWakes, waitForDirectMessageWake } from "../cross-agent-wake";
+import {
+	MAX_WAKE_WAIT_MS,
+	releaseDirectMessageWakes,
+	waitForDirectMessageWake,
+	wasWokenSince,
+} from "../cross-agent-wake";
 import { autoConnectGraphiq } from "./graphiq-routes.js";
 import {
 	AGENTS_DIR,
@@ -629,6 +635,22 @@ function registerNotifications(app: Hono): void {
 		}
 	});
 }
+async function releaseWakeClaimsWithRetry(input: {
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly messageIds: readonly string[];
+}): Promise<void> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await releaseDirectMessageWakes(input);
+			return;
+		} catch (error) {
+			if (attempt >= 3) throw error;
+			await new Promise<void>((resolve) => setTimeout(resolve, 100 * attempt));
+		}
+	}
+}
+
 function registerDirectMessageWake(app: Hono): void {
 	app.post("/api/cross-agent/wake", async (c) => {
 		if (isInternalCall(c)) return c.json({ wake: false, reason: "timeout" });
@@ -674,8 +696,9 @@ function registerDirectMessageWake(app: Hono): void {
 				waitMs,
 				signal: c.req.raw.signal,
 			});
+			if (result.wake && !c.req.raw.signal.aborted) clearEndedSession(sessionKey, scopedAgent.agentId);
 			if (result.wake && c.req.raw.signal.aborted) {
-				await releaseDirectMessageWakes({
+				await releaseWakeClaimsWithRetry({
 					agentId: scopedAgent.agentId,
 					sessionKey,
 					messageIds: result.messageIds,
@@ -723,11 +746,14 @@ function registerDirectMessageWakeRelease(app: Hono): void {
 	});
 }
 
+const SESSION_END_WAKE_GRACE_MS = 10_000;
+
 function registerSessionEnd(app: Hono): void {
 	app.post("/api/hooks/session-end", async (c) => {
 		if (isInternalCall(c)) {
 			return c.json({ memoriesSaved: 0 });
 		}
+		const requestStartedAt = Date.now();
 		try {
 			const body = (await c.req.json()) as SessionEndRequest;
 
@@ -777,7 +803,7 @@ function registerSessionEnd(app: Hono): void {
 
 			try {
 				const result = await handleSessionEnd(body);
-				if (sessionKey) {
+				if (sessionKey && !wasWokenSince(sessionKey, requestStartedAt - SESSION_END_WAKE_GRACE_MS)) {
 					markSessionEnded(sessionKey, runtimePath, agentId);
 					removeAgentPresence(sessionKey);
 				}
