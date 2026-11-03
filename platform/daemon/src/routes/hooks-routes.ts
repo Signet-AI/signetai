@@ -790,7 +790,13 @@ function registerSessionEnd(app: Hono): void {
 
 			try {
 				const result = await handleSessionEnd(body);
-				if (sessionKey && !wasWokenSince(agentId, sessionKey, requestStartedAt - SESSION_END_WAKE_GRACE_MS)) {
+				const wakeAgent = resolveScopedAgentId(c, agentId);
+				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
+				const woken =
+					sessionKey !== undefined &&
+					(wasWokenSince(agentId, sessionKey, wakeSince) ||
+						(!wakeAgent.error && wasWokenSince(wakeAgent.agentId, sessionKey, wakeSince)));
+				if (sessionKey && !woken) {
 					markSessionEnded(sessionKey, runtimePath, agentId);
 					removeAgentPresence(sessionKey);
 				}
