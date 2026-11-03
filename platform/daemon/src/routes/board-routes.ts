@@ -322,7 +322,7 @@ export function registerBoardRoutes(app: Hono): void {
 	app.get("/api/board/stream", async (c) => {
 		const viewer = await resolveViewer(c, null);
 		if (!viewer.ok) return viewer.response;
-		let visible: (authorAgentId: string) => boolean;
+		let visible: (authorAgentId: string) => Promise<boolean>;
 		try {
 			visible = await createBoardEventVisibility(viewer.value);
 		} catch (error) {
@@ -339,8 +339,14 @@ export function registerBoardRoutes(app: Hono): void {
 				if (producer.signal.aborted) return;
 				producer.write({ type: "connected", timestamp: new Date().toISOString() });
 				if (producer.isClosed) return;
+				let pending: Promise<void> = Promise.resolve();
 				unsubscribe = subscribeBoardEvents((event) => {
-					if (visible(event.threadAuthorAgentId)) producer.write(event);
+					pending = pending
+						.then(async () => {
+							if (producer.isClosed) return;
+							if (await visible(event.threadAuthorAgentId)) producer.write(event);
+						})
+						.catch(() => undefined);
 				});
 				if (producer.isClosed) unsubscribe();
 			},

@@ -31,6 +31,20 @@ test("loadThreadRange pages with offset and clamps per-request limit", async () 
 	expect(result?.hasMore).toBe(true);
 });
 
+test("loadThreadRange stops when a page adds no new threads", async () => {
+	let calls = 0;
+	spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL) => {
+		calls++;
+		const url = new URL(String(input), "http://localhost");
+		const limit = Number(url.searchParams.get("limit"));
+		const items = Array.from({ length: Math.min(limit, 100) }, (_, i) => thread(`t${i}`));
+		return Response.json({ items, total: 500, limit, offset: 0, hasMore: true });
+	}) as typeof fetch);
+	const result = await loadThreadRange({}, 150);
+	expect(calls).toBe(2);
+	expect(result?.items.length).toBe(100);
+});
+
 test("loadPostRange sends offset and accumulates posts", async () => {
 	const offsets: string[] = [];
 	spyOn(globalThis, "fetch").mockImplementation((async (input: RequestInfo | URL) => {

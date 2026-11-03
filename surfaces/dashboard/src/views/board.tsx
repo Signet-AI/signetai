@@ -69,8 +69,9 @@ export async function loadThreadRange(
 		if (!page) return last ? { ...last, items, hasMore: last.hasMore } : null;
 		last = page;
 		const seen = new Set(items.map((item) => item.id));
-		items.push(...page.items.filter((item) => !seen.has(item.id)));
-		if (!page.hasMore || page.items.length === 0) break;
+		const fresh = page.items.filter((item) => !seen.has(item.id));
+		items.push(...fresh);
+		if (!page.hasMore || fresh.length === 0) break;
 	}
 	return last ? { ...last, items, offset: 0 } : null;
 }

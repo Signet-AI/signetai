@@ -93,6 +93,7 @@ import {
 	forgetLatestWake,
 	releaseDirectMessageWakes,
 	releaseWakeClaimsWithRetry,
+	takeSessionEndBoundary,
 	waitForDirectMessageWake,
 	wasWokenSince,
 } from "../cross-agent-wake";
@@ -791,11 +792,14 @@ function registerSessionEnd(app: Hono): void {
 			try {
 				const result = await handleSessionEnd(body);
 				const wakeAgent = resolveScopedAgentId(c, agentId);
-				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
+				const wakeAgentId = wakeAgent.error ? agentId : wakeAgent.agentId;
+				const previousTurnEnd =
+					sessionKey !== undefined ? takeSessionEndBoundary(wakeAgentId, sessionKey, Date.now()) : undefined;
+				const wakeSince =
+					body.harness === "codex" ? (previousTurnEnd ?? 0) : requestStartedAt - SESSION_END_WAKE_GRACE_MS;
 				const woken =
 					sessionKey !== undefined &&
-					(wasWokenSince(agentId, sessionKey, wakeSince) ||
-						(!wakeAgent.error && wasWokenSince(wakeAgent.agentId, sessionKey, wakeSince)));
+					(wasWokenSince(agentId, sessionKey, wakeSince) || wasWokenSince(wakeAgentId, sessionKey, wakeSince));
 				if (sessionKey && !woken) {
 					markSessionEnded(sessionKey, runtimePath, agentId);
 					removeAgentPresence(sessionKey);

@@ -450,13 +450,39 @@ describe("message board", () => {
 			refreshMs: 1_000,
 			nowMs: () => clock,
 		});
-		expect(visible("g2")).toBe(true);
-		await registerAgent("g2", "group", "other");
+		expect(await visible("g2")).toBe(true);
+		await registerAgent("g3", "group", "ops");
 		clock = 5_000;
-		expect(visible("g2")).toBe(false);
-		expect(visible("g1")).toBe(true);
-		await Bun.sleep(300);
-		expect(visible("g2")).toBe(false);
+		expect(await visible("g3")).toBe(true);
+		await registerAgent("g2", "group", "other");
+		clock = 10_000;
+		expect(await visible("g2")).toBe(false);
+		expect(await visible("g1")).toBe(true);
+	});
+
+	it("keeps a same-millisecond post on the next page unread after a partial read", async () => {
+		const at = Date.parse("2026-11-02T12:00:00.000Z");
+		const created = await createBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha", sessionKey: "a1" },
+			topic: "release",
+			title: "Same millisecond",
+			body: "first",
+			nowMs: at,
+		});
+		await replyToBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha", sessionKey: "a1" },
+			threadId: created.thread.id,
+			body: "second",
+			nowMs: at,
+		});
+		const page = await readBoardThread(created.thread.id, agent("beta"), { postLimit: 1 });
+		expect(page.hasMorePosts).toBe(true);
+		expect(page.readThrough).toBe("2026-11-02T11:59:59.999Z");
+		const full = await readBoardThread(created.thread.id, agent("beta"));
+		expect(full.readThrough).toBe(full.thread.lastPostAt);
+		expect((await readBoardThread(created.thread.id, agent("beta"), { postOffset: 1 })).readThrough).toBeUndefined();
 	});
 
 	it("lists active board topics in the session-start messaging section", async () => {

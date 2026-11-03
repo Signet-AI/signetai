@@ -110,6 +110,7 @@ export interface BoardThreadDetail {
 	readonly postLimit: number;
 	readonly postOffset: number;
 	readonly hasMorePosts: boolean;
+	readonly readThrough?: string;
 }
 
 export interface BoardWriteResult {
@@ -227,8 +228,8 @@ async function eventVisibilityPredicate(viewer: BoardViewer): Promise<(authorAge
 export async function createBoardEventVisibility(
 	viewer: BoardViewer,
 	options: { readonly refreshMs?: number; readonly nowMs?: () => number } = {},
-): Promise<(authorAgentId: string) => boolean> {
-	if (viewer.kind === "operator") return () => true;
+): Promise<(authorAgentId: string) => Promise<boolean>> {
+	if (viewer.kind === "operator") return async () => true;
 	const refreshMs = options.refreshMs ?? EVENT_VISIBILITY_REFRESH_MS;
 	const now = options.nowMs ?? Date.now;
 	let predicate = await eventVisibilityPredicate(viewer);
@@ -249,11 +250,8 @@ export async function createBoardEventVisibility(
 			});
 		return refreshing;
 	};
-	return (authorAgentId) => {
-		if (now() - fetchedAt >= refreshMs) {
-			void refresh();
-			return authorAgentId === viewer.agentId;
-		}
+	return async (authorAgentId) => {
+		if (now() - fetchedAt >= refreshMs) await refresh();
 		return predicate(authorAgentId);
 	};
 }
@@ -570,14 +568,37 @@ export async function readBoardThread(
 		[threadId, postLimit, postOffset],
 		"board.posts.list",
 	);
+	const hasMorePosts = postOffset + rows.length < thread.postCount;
+	const readThrough = await pageReadThrough(threadId, thread, rows, postOffset, hasMorePosts);
 	return {
 		thread,
 		posts: rows.map(postFromRow),
 		postTotal: thread.postCount,
 		postLimit,
 		postOffset,
-		hasMorePosts: postOffset + rows.length < thread.postCount,
+		hasMorePosts,
+		...(readThrough ? { readThrough } : {}),
 	};
+}
+
+async function pageReadThrough(
+	threadId: string,
+	thread: BoardThread,
+	rows: readonly PostRow[],
+	postOffset: number,
+	hasMorePosts: boolean,
+): Promise<string | undefined> {
+	if (postOffset > 0) return undefined;
+	if (!hasMorePosts) return thread.lastPostAt;
+	const last = rows[rows.length - 1]?.created_at;
+	if (!last) return undefined;
+	const next = await readAll<{ readonly created_at: string }>(
+		"SELECT created_at FROM board_posts WHERE thread_id = ? ORDER BY created_at ASC, rowid ASC LIMIT 1 OFFSET ?",
+		[threadId, postOffset + rows.length],
+		"board.posts.read-through",
+	);
+	if (next[0]?.created_at !== last) return last;
+	return new Date(Date.parse(last) - 1).toISOString();
 }
 
 export async function markBoardThreadRead(

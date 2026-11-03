@@ -227,7 +227,7 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 					redispatch(claimed);
 					return;
 				}
-				recordWake(waiterKey(waiter), nowMs);
+				recordWake(waiterKey(waiter), Date.now());
 				waiter.finish(wakeResult(claimed, waiter.sessionKey));
 				return;
 			}
@@ -397,6 +397,20 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 	});
 }
 
+const endBoundaries = new Map<string, number>();
+
+export function takeSessionEndBoundary(agentId: string, sessionKey: string, nowMs: number): number | undefined {
+	const key = scopedKey(agentId, sessionKey);
+	const previous = endBoundaries.get(key);
+	endBoundaries.delete(key);
+	endBoundaries.set(key, nowMs);
+	if (endBoundaries.size > MAX_TRACKED_SESSIONS) {
+		const oldestKey = endBoundaries.keys().next().value;
+		if (oldestKey !== undefined) endBoundaries.delete(oldestKey);
+	}
+	return previous;
+}
+
 export function forgetLatestWake(agentId: string, sessionKey: string): void {
 	const key = scopedKey(agentId, sessionKey);
 	const times = wakeTimes.get(key);
@@ -426,6 +440,7 @@ export function resetDirectMessageWakeStateForTest(): void {
 	activeWaiterCap = MAX_ACTIVE_WAKE_WAITERS;
 	closeDirectMessageWakeWaiters();
 	wakeTimes.clear();
+	endBoundaries.clear();
 	unsubscribe?.();
 	unsubscribe = null;
 }

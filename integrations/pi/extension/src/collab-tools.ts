@@ -59,7 +59,13 @@ function query(entries: Record<string, string | number | boolean | undefined>): 
 
 function readThrough(data: unknown): string | undefined {
 	if (typeof data !== "object" || data === null) return undefined;
-	const detail = data as { thread?: { lastPostAt?: unknown }; posts?: unknown; hasMorePosts?: unknown };
+	const detail = data as {
+		thread?: { lastPostAt?: unknown };
+		posts?: unknown;
+		hasMorePosts?: unknown;
+		readThrough?: unknown;
+	};
+	if (typeof detail.readThrough === "string" && detail.readThrough) return detail.readThrough;
 	if (detail.hasMorePosts !== true) {
 		const last = detail.thread?.lastPostAt;
 		return typeof last === "string" && last ? last : undefined;

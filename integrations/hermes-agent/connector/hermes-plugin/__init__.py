@@ -1888,7 +1888,9 @@ class SignetMemoryProvider(MemoryProvider):
             data = thread.get("data") or {}
             posts = data.get("posts") or []
             last_post = posts[-1].get("createdAt") if posts and isinstance(posts[-1], dict) else None
-            if data.get("hasMorePosts"):
+            if isinstance(data.get("readThrough"), str) and data.get("readThrough"):
+                through = data.get("readThrough")
+            elif data.get("hasMorePosts"):
                 through = last_post
             else:
                 through = (data.get("thread") or {}).get("lastPostAt") or last_post

@@ -127,6 +127,34 @@ describe("wake and session-end ordering", () => {
 		expect(getEndedSession("cc-1", "beta")).toBeDefined();
 	});
 
+	it("keeps a Codex session open when its Stop wake landed seconds before session-end", async () => {
+		upsertAgentPresence({ agentId: "beta", harness: "codex", sessionKey: "codex-2" });
+		const end = async () =>
+			send("POST", "/api/hooks/session-end", {
+				harness: "codex",
+				sessionKey: "codex-2",
+				agentId: "beta",
+				runtimePath: "legacy",
+				reason: "stop",
+			});
+		expect((await end()).status).toBe(200);
+		expect(getEndedSession("codex-2", "beta")).toBeDefined();
+		upsertAgentPresence({ agentId: "beta", harness: "codex", sessionKey: "codex-2" });
+		createAgentMessage({ fromAgentId: "alpha", toSessionKey: "codex-2", content: "continue" });
+		const woke = await send("POST", "/api/cross-agent/wake", {
+			harness: "codex",
+			sessionKey: "codex-2",
+			agentId: "beta",
+			waitMs: 0,
+		});
+		expect(((await woke.json()) as { wake: boolean }).wake).toBe(true);
+		await Bun.sleep(2_200);
+		expect((await end()).status).toBe(200);
+		expect(getEndedSession("codex-2", "beta")).toBeUndefined();
+		expect((await end()).status).toBe(200);
+		expect(getEndedSession("codex-2", "beta")).toBeDefined();
+	});
+
 	it("keeps a session open when a direct message woke it during its session-end", async () => {
 		upsertAgentPresence({ agentId: "beta", harness: "codex", sessionKey: "codex-1" });
 		markSessionEnded("codex-1", "legacy", "beta");

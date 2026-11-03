@@ -549,6 +549,7 @@ export interface BoardThreadDetailResponse {
 	readonly postLimit: number;
 	readonly postOffset: number;
 	readonly hasMorePosts: boolean;
+	readonly readThrough?: string;
 }
 
 export interface BoardWriteResponse {
