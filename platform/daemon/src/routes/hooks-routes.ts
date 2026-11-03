@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
-import { getAgentScope, resolveAgentId } from "../agent-id";
+import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
@@ -1495,7 +1495,7 @@ function resolveCrossAgentScope(
 	agentId: string | undefined,
 	sessionKey: string | undefined,
 ): { agentId: string; error?: string } {
-	return resolveScopedAgentId(c, resolveAgentId({ agentId, sessionKey }), "default");
+	return resolveScopedAgentId(c, requestedAgentId({ agentId, sessionKey }), resolveDaemonAgentId());
 }
 
 function registerCrossAgentPresence(app: Hono): void {

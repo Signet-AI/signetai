@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import type { TokenClaims } from "../auth";
 import { createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
 import { getSynthesisWorker } from "../hooks";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
@@ -12,6 +13,7 @@ const previousSignetPath = process.env.SIGNET_PATH;
 const suiteDir = mkdtempSync(join(tmpdir(), "signet-notification-routes-suite-"));
 process.env.SIGNET_PATH = suiteDir;
 const { registerHooksRoutes } = await import("./hooks-routes");
+const { authConfig } = await import("./state");
 
 let dir = "";
 let app: Hono;
@@ -169,6 +171,46 @@ describe("cross-agent notification routes", () => {
 			const presenceBody = (await presence.json()) as { sessions: Array<{ sessionKey: string }> };
 			expect(presenceBody.sessions.map((session) => session.sessionKey)).toEqual(["session-beta"]);
 		} finally {
+			if (previousAgentId === undefined) {
+				Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			} else {
+				process.env.SIGNET_AGENT_ID = previousAgentId;
+			}
+		}
+	});
+
+	it("keeps a scoped token's agent when the request omits cross-agent identity", async () => {
+		const previousAgentId = process.env.SIGNET_AGENT_ID;
+		const previousMode = authConfig.mode;
+		process.env.SIGNET_AGENT_ID = "ops";
+		authConfig.mode = "team";
+		const claims: TokenClaims = {
+			sub: "alpha-token",
+			scope: { agent: "alpha" },
+			role: "agent",
+			iat: Math.floor(Date.now() / 1000),
+			exp: Math.floor(Date.now() / 1000) + 3600,
+		};
+		const scoped = new Hono();
+		scoped.use("*", async (c, next) => {
+			c.set("auth", { authenticated: true, claims });
+			await next();
+		});
+		registerHooksRoutes(scoped);
+		try {
+			upsertAgentPresence({ agentId: "alpha", harness: "hermes", sessionKey: "session-alpha" });
+			createAgentMessage({ fromAgentId: "beta", toAgentId: "alpha", type: "info", content: "For alpha only" });
+
+			const inbox = await scoped.request("/api/cross-agent/messages?session_key=session-alpha");
+			expect(inbox.status).toBe(200);
+			const inboxBody = (await inbox.json()) as { items: Array<{ content: string }> };
+			expect(inboxBody.items.map((item) => item.content)).toContain("For alpha only");
+
+			const removed = await scoped.request("/api/cross-agent/presence/session-alpha", { method: "DELETE" });
+			expect(removed.status).toBe(200);
+			expect(await removed.json()).toEqual({ removed: true });
+		} finally {
+			authConfig.mode = previousMode;
 			if (previousAgentId === undefined) {
 				Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 			} else {

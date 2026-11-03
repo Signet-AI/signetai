@@ -12,15 +12,19 @@ export function defaultAgentId(env: NodeJS.ProcessEnv = process.env): string {
 	const configured = env.SIGNET_AGENT_ID?.trim();
 	return configured && configured.length > 0 ? configured : "default";
 }
-export function resolveAgentId(
-	body: { agentId?: string; sessionKey?: string },
-	env: NodeJS.ProcessEnv = process.env,
-): string {
+export function requestedAgentId(body: { agentId?: string; sessionKey?: string }): string | undefined {
 	const explicit = body.agentId?.trim();
 	if (explicit) return explicit;
 	const parts = (body.sessionKey ?? "").split(":");
 	if (parts[0] === "agent" && parts[1]?.trim()) return parts[1].trim();
-	return defaultAgentId(env);
+	return undefined;
+}
+
+export function resolveAgentId(
+	body: { agentId?: string; sessionKey?: string },
+	env: NodeJS.ProcessEnv = process.env,
+): string {
+	return requestedAgentId(body) ?? defaultAgentId(env);
 }
 
 export function resolveDaemonAgentId(env: NodeJS.ProcessEnv = process.env): string {
