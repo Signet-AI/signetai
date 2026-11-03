@@ -59,13 +59,43 @@ async function cancelResponseBody(response: Response): Promise<void> {
 	} catch {}
 }
 
+const MAX_ERROR_BODY_BYTES = 4_096;
+
+async function readBoundedText(response: Response): Promise<string | undefined> {
+	const reader = response.body?.getReader();
+	if (!reader) return undefined;
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		while (total < MAX_ERROR_BODY_BYTES) {
+			const { done, value } = await reader.read();
+			if (done || !value) break;
+			chunks.push(value);
+			total += value.byteLength;
+		}
+	} finally {
+		await reader.cancel().catch(() => undefined);
+	}
+	const bytes = new Uint8Array(Math.min(total, MAX_ERROR_BODY_BYTES));
+	let offset = 0;
+	for (const chunk of chunks) {
+		const slice = chunk.subarray(0, bytes.length - offset);
+		bytes.set(slice, offset);
+		offset += slice.byteLength;
+		if (offset >= bytes.length) break;
+	}
+	return new TextDecoder().decode(bytes);
+}
+
 async function readErrorDetail(response: Response): Promise<string | undefined> {
 	if (!(response.headers.get("content-type") ?? "").includes("application/json")) {
 		await cancelResponseBody(response);
 		return undefined;
 	}
 	try {
-		const parsed: unknown = JSON.parse((await response.text()).slice(0, 4_000));
+		const text = await readBoundedText(response);
+		if (!text) return undefined;
+		const parsed: unknown = JSON.parse(text);
 		if (typeof parsed !== "object" || parsed === null || !("error" in parsed)) return undefined;
 		const error = (parsed as { readonly error?: unknown }).error;
 		return typeof error === "string" && error.trim() ? error.trim().slice(0, 300) : undefined;

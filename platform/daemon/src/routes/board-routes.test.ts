@@ -105,6 +105,28 @@ describe("direct message wake route", () => {
 });
 
 describe("wake and session-end ordering", () => {
+	it("still ends a session that was woken well before its session-end", async () => {
+		upsertAgentPresence({ agentId: "beta", harness: "claude-code", sessionKey: "cc-1" });
+		createAgentMessage({ fromAgentId: "alpha", toSessionKey: "cc-1", content: "earlier" });
+		const woke = await send("POST", "/api/cross-agent/wake", {
+			harness: "claude-code",
+			sessionKey: "cc-1",
+			agentId: "beta",
+			waitMs: 0,
+		});
+		expect(((await woke.json()) as { wake: boolean }).wake).toBe(true);
+		await Bun.sleep(2_200);
+		const ended = await send("POST", "/api/hooks/session-end", {
+			harness: "claude-code",
+			sessionKey: "cc-1",
+			agentId: "beta",
+			runtimePath: "legacy",
+			reason: "exit",
+		});
+		expect(ended.status).toBe(200);
+		expect(getEndedSession("cc-1", "beta")).toBeDefined();
+	});
+
 	it("keeps a session open when a direct message woke it during its session-end", async () => {
 		upsertAgentPresence({ agentId: "beta", harness: "codex", sessionKey: "codex-1" });
 		markSessionEnded("codex-1", "legacy", "beta");

@@ -90,6 +90,7 @@ import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { claimBoardActivityNotices } from "../board";
 import {
 	MAX_WAKE_WAIT_MS,
+	forgetLatestWake,
 	releaseDirectMessageWakes,
 	waitForDirectMessageWake,
 	wasWokenSince,
@@ -698,6 +699,7 @@ function registerDirectMessageWake(app: Hono): void {
 			});
 			if (result.wake && !c.req.raw.signal.aborted) clearEndedSession(sessionKey, scopedAgent.agentId);
 			if (result.wake && c.req.raw.signal.aborted) {
+				forgetLatestWake(sessionKey);
 				await releaseWakeClaimsWithRetry({
 					agentId: scopedAgent.agentId,
 					sessionKey,
@@ -746,7 +748,7 @@ function registerDirectMessageWakeRelease(app: Hono): void {
 	});
 }
 
-const SESSION_END_WAKE_GRACE_MS = 10_000;
+const SESSION_END_WAKE_GRACE_MS = 2_000;
 
 function registerSessionEnd(app: Hono): void {
 	app.post("/api/hooks/session-end", async (c) => {

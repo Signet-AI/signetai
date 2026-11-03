@@ -603,7 +603,12 @@ export async function markBoardThreadRead(
 		],
 		"board.thread.mark-read",
 	);
-	return { threadId, lastReadAt: now };
+	const stored = await readAll<{ readonly last_read_at: string }>(
+		"SELECT last_read_at FROM board_reads WHERE agent_id = ? AND thread_id = ?",
+		[viewer.agentId, threadId],
+		"board.thread.read-cursor",
+	);
+	return { threadId, lastReadAt: stored[0]?.last_read_at ?? now };
 }
 
 function defaultTitleFrom(content: string): string {

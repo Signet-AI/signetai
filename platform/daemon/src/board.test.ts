@@ -428,6 +428,9 @@ describe("message board", () => {
 		});
 		const early = "2000-01-01T00:00:00.000Z";
 		expect((await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), early)).lastReadAt).toBe(early);
+		const later = "2001-01-01T00:00:00.000Z";
+		await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), later);
+		expect((await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), early)).lastReadAt).toBe(later);
 		expect((await listBoardThreads(agent("alpha"))).items[0]?.unread).toBe(true);
 		await markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), created.thread.lastPostAt);
 		expect((await listBoardThreads(agent("alpha"))).items[0]?.unread).toBe(false);

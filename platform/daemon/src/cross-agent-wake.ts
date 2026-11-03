@@ -361,6 +361,13 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 	});
 }
 
+export function forgetLatestWake(sessionKey: string): void {
+	const times = wakeTimes.get(sessionKey);
+	if (!times || times.length === 0) return;
+	times.pop();
+	if (times.length === 0) wakeTimes.delete(sessionKey);
+}
+
 export function wasWokenSince(sessionKey: string, sinceMs: number): boolean {
 	return (wakeTimes.get(sessionKey) ?? []).some((at) => at >= sinceMs);
 }
