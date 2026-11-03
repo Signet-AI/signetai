@@ -1421,6 +1421,12 @@ describe("collaboration tools", () => {
 		expect(seen[1]?.body).toEqual({ agentId: "pi-agent", through: "2026-10-05T08:30:00.000Z" });
 	});
 
+	it("board_read leaves the read cursor alone for an offset page", async () => {
+		const { tools, seen } = await setup();
+		await run(tools, "board_read", { thread_id: "t 1", offset: 3 });
+		expect(seen.map((call) => call.method)).toEqual(["GET"]);
+	});
+
 	it("board_post replies to a thread or starts a new one with harness pi", async () => {
 		const { tools, seen } = await setup();
 		await run(tools, "board_post", { thread_id: "t1", body: "reply", reply_to_post_id: "p1" });

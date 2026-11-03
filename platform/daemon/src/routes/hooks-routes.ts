@@ -92,6 +92,7 @@ import {
 	MAX_WAKE_WAIT_MS,
 	forgetLatestWake,
 	releaseDirectMessageWakes,
+	releaseWakeClaimsWithRetry,
 	waitForDirectMessageWake,
 	wasWokenSince,
 } from "../cross-agent-wake";
@@ -636,22 +637,6 @@ function registerNotifications(app: Hono): void {
 		}
 	});
 }
-async function releaseWakeClaimsWithRetry(input: {
-	readonly agentId: string;
-	readonly sessionKey: string;
-	readonly messageIds: readonly string[];
-}): Promise<void> {
-	for (let attempt = 1; ; attempt++) {
-		try {
-			await releaseDirectMessageWakes(input);
-			return;
-		} catch (error) {
-			if (attempt >= 3) throw error;
-			await new Promise<void>((resolve) => setTimeout(resolve, 100 * attempt));
-		}
-	}
-}
-
 function registerDirectMessageWake(app: Hono): void {
 	app.post("/api/cross-agent/wake", async (c) => {
 		if (isInternalCall(c)) return c.json({ wake: false, reason: "timeout" });
@@ -699,7 +684,7 @@ function registerDirectMessageWake(app: Hono): void {
 			});
 			if (result.wake && !c.req.raw.signal.aborted) clearEndedSession(sessionKey, scopedAgent.agentId);
 			if (result.wake && c.req.raw.signal.aborted) {
-				forgetLatestWake(sessionKey);
+				forgetLatestWake(scopedAgent.agentId, sessionKey);
 				await releaseWakeClaimsWithRetry({
 					agentId: scopedAgent.agentId,
 					sessionKey,
@@ -805,7 +790,7 @@ function registerSessionEnd(app: Hono): void {
 
 			try {
 				const result = await handleSessionEnd(body);
-				if (sessionKey && !wasWokenSince(sessionKey, requestStartedAt - SESSION_END_WAKE_GRACE_MS)) {
+				if (sessionKey && !wasWokenSince(agentId, sessionKey, requestStartedAt - SESSION_END_WAKE_GRACE_MS)) {
 					markSessionEnded(sessionKey, runtimePath, agentId);
 					removeAgentPresence(sessionKey);
 				}

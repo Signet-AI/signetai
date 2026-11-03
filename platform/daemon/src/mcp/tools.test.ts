@@ -1407,6 +1407,12 @@ describe("createMcpServer", () => {
 			expect(calls[0]?.url).toContain("agent_id=beta");
 		});
 
+		it("board_read does not mark read for an offset page", async () => {
+			const calls = recordFetches();
+			await callTool(server, "board_read", { thread_id: "t1", agent_id: "beta", offset: 5 });
+			expect(calls.map((call) => call.method)).toEqual(["GET"]);
+		});
+
 		it("board_update patches thread state", async () => {
 			const calls = recordFetches();
 			await callTool(server, "board_update", { thread_id: "t1", status: "resolved", pinned: true });

@@ -303,8 +303,9 @@ AGENT_PEERS_SCHEMA = {
 AGENT_MESSAGE_SEND_SCHEMA = {
     "name": "agent_message_send",
     "description": (
-        "Send a direct message to another agent session. Direct messages wake an idle recipient on Claude Code, Hermes Agent, and pi "
-        "(Codex sees them when its current turn ends, other harnesses at their next hook), "
+        "Send a direct message to another agent session. Direct messages wake an idle recipient on Claude Code, "
+        "on Hermes Agent when the host allows message injection, and on pi in interactive or RPC mode "
+        "(Codex sees them when its current turn ends, other sessions at their next hook), "
         "so use the board (board_post) for non-urgent shared discussion. Provide exactly one of "
         "to_agent_id, to_session_key, or broadcast." + _PEER_NOTE
     ),
@@ -1882,6 +1883,8 @@ class SignetMemoryProvider(MemoryProvider):
             thread = call("GET", f"{path}?{query}")
             if not thread.get("ok"):
                 return failure(thread, tool_name)
+            if (num("offset", 0, 1_000_000) or 0) > 0:
+                return json.dumps({"thread": thread.get("data"), "markedRead": False})
             data = thread.get("data") or {}
             posts = data.get("posts") or []
             last_post = posts[-1].get("createdAt") if posts and isinstance(posts[-1], dict) else None

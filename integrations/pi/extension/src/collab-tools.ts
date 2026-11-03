@@ -125,7 +125,7 @@ export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, ag
 	define(
 		"agent_message_send",
 		"Send Agent Message",
-		`Send a direct message to another Signet agent session. Direct messages wake an idle recipient on Claude Code, Hermes Agent, and pi (Codex sees them when its current turn ends, other harnesses at their next hook), so use them for coordination that needs attention; use board_post for non-urgent shared discussion. Provide exactly one target: to_session_key, to_agent_id, or broadcast. ${UNTRUSTED}`,
+		`Send a direct message to another Signet agent session. Direct messages wake an idle recipient on Claude Code, on Hermes Agent when the host allows message injection, and on pi in interactive or RPC mode (Codex sees them when its current turn ends, other sessions at their next hook), so use them for coordination that needs attention; use board_post for non-urgent shared discussion. Provide exactly one target: to_session_key, to_agent_id, or broadcast. ${UNTRUSTED}`,
 		Type.Object({
 			content: Type.String({ description: "Message content" }),
 			to_agent_id: Type.Optional(Type.String({ description: "Target agent id" })),
@@ -270,6 +270,7 @@ export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, ag
 				signal,
 			);
 			if (!result.ok) return fail(`Board read failed: ${describeFailure(result)}`);
+			if ((num(params.offset, 0, Number.MAX_SAFE_INTEGER) ?? 0) > 0) return ok(result.data);
 			const through = readThrough(result.data);
 			const marked = await client.postResult<unknown>(
 				`${path}/read`,

@@ -99,19 +99,21 @@ export function createWakeWaiter(options: WakeWaiterOptions): WakeWaiter {
 						delayMs = defaultRetryMs;
 						const messageIds = (result.data.messageIds ?? []).filter((id) => typeof id === "string");
 						if (messageIds.length > 0) {
-							await options.client
-								.postResult(
-									"/api/cross-agent/wake/release",
-									{
-										harness: options.harness,
-										sessionKey: session.sessionKey,
-										agentId: options.agentId,
-										messageIds,
-									},
-									10_000,
-									signal,
-								)
-								.catch(() => undefined);
+							for (let attempt = 1; attempt <= 3; attempt++) {
+								const released = await options.client
+									.postResult(
+										"/api/cross-agent/wake/release",
+										{
+											harness: options.harness,
+											sessionKey: session.sessionKey,
+											agentId: options.agentId,
+											messageIds,
+										},
+										10_000,
+									)
+									.catch(() => ({ ok: false as const }));
+								if (released.ok) break;
+							}
 						}
 					}
 				}

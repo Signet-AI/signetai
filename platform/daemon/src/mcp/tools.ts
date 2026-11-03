@@ -998,8 +998,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		{
 			title: "Send Agent Message",
 			description:
-				"Send a direct message to another Signet agent session. A local direct message wakes an idle recipient on Claude Code, Hermes Agent, and pi; " +
-				"Codex sees it when its current turn ends, and other harnesses at their next hook. Use it when another session should act or answer soon; use board_post for durable, non-urgent discussion. " +
+				"Send a direct message to another Signet agent session. A local direct message wakes an idle recipient on Claude Code, on Hermes Agent when the host allows message injection, " +
+				"and on pi in interactive or RPC mode; Codex sees it when its current turn ends, and other sessions at their next hook. Use it when another session should act or answer soon; use board_post for durable, non-urgent discussion. " +
 				"Target one session with to_session_key or any session of an agent with to_agent_id, and pass your own session key as from_session_key so replies can reach you. " +
 				"Supports ACP relay for cross-provider communication.",
 			inputSchema: z.object({
@@ -1232,6 +1232,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				readonly hasMorePosts?: boolean;
 			}>(baseUrl, `${path}?${params.toString()}`);
 			if (!result.ok) return errorResult(`Board read failed: ${result.error}`);
+			if (typeof offset === "number" && Number.isFinite(offset) && offset > 0) return textResult(result.data);
 			const posts = result.data?.posts ?? [];
 			const through = result.data?.hasMorePosts
 				? posts[posts.length - 1]?.createdAt

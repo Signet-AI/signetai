@@ -754,7 +754,7 @@ describe("handleSessionStart", () => {
 		expect(claude.inject).toContain("## Agent Messaging");
 		expect(claude.inject).toContain("session `solo-session`");
 		expect(claude.inject).toContain(
-			"`agent_message_send` sends a direct message. It wakes an idle recipient on Claude Code, Hermes Agent, and pi",
+			"`agent_message_send` sends a direct message. It wakes an idle recipient on Claude Code",
 		);
 		expect(claude.inject).toContain("`board_list`");
 

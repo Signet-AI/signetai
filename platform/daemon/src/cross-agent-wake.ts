@@ -57,27 +57,35 @@ interface Waiter {
 
 const waiters = new Map<string, Waiter>();
 const wakeTimes = new Map<string, number[]>();
+
+function scopedKey(agentId: string, sessionKey: string): string {
+	return JSON.stringify([agentId, sessionKey]);
+}
+
+function waiterKey(waiter: Pick<Waiter, "agentId" | "sessionKey">): string {
+	return scopedKey(waiter.agentId, waiter.sessionKey);
+}
 let nextWaiterId = 1;
 let unsubscribe: (() => void) | null = null;
 
-function recentWakes(sessionKey: string, nowMs: number): number[] {
-	const times = (wakeTimes.get(sessionKey) ?? []).filter((at) => nowMs - at < WAKE_RATE_WINDOW_MS);
-	if (times.length === 0) wakeTimes.delete(sessionKey);
-	else wakeTimes.set(sessionKey, times);
+function recentWakes(key: string, nowMs: number): number[] {
+	const times = (wakeTimes.get(key) ?? []).filter((at) => nowMs - at < WAKE_RATE_WINDOW_MS);
+	if (times.length === 0) wakeTimes.delete(key);
+	else wakeTimes.set(key, times);
 	return times;
 }
 
-function rateLimitRetryAfter(sessionKey: string, nowMs: number): number | null {
-	const times = recentWakes(sessionKey, nowMs);
+function rateLimitRetryAfter(key: string, nowMs: number): number | null {
+	const times = recentWakes(key, nowMs);
 	if (times.length < WAKE_RATE_LIMIT_PER_HOUR) return null;
 	const oldest = times[0] ?? nowMs;
 	return Math.max(1_000, WAKE_RATE_WINDOW_MS - (nowMs - oldest));
 }
 
-function recordWake(sessionKey: string, nowMs: number): void {
-	const times = recentWakes(sessionKey, nowMs);
+function recordWake(key: string, nowMs: number): void {
+	const times = recentWakes(key, nowMs);
 	times.push(nowMs);
-	wakeTimes.set(sessionKey, times);
+	wakeTimes.set(key, times);
 	if (wakeTimes.size > MAX_TRACKED_SESSIONS) {
 		const oldestKey = wakeTimes.keys().next().value;
 		if (oldestKey !== undefined) wakeTimes.delete(oldestKey);
@@ -200,7 +208,7 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 		do {
 			waiter.rerun = false;
 			const nowMs = Date.now();
-			if (rateLimitRetryAfter(waiter.sessionKey, nowMs) !== null) return;
+			if (rateLimitRetryAfter(waiterKey(waiter), nowMs) !== null) return;
 			const preference = agentAddressedPreference(waiter, nowMs);
 			const claimed = await claimDirectMessageWakes({
 				agentId: waiter.agentId,
@@ -211,7 +219,7 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 			});
 			if (claimed.length > 0) {
 				if (waiter.done) {
-					await releaseDirectMessageWakes({
+					await releaseWakeClaimsWithRetry({
 						agentId: waiter.agentId,
 						sessionKey: waiter.sessionKey,
 						messageIds: claimed.map((message) => message.id),
@@ -219,7 +227,7 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 					redispatch(claimed);
 					return;
 				}
-				recordWake(waiter.sessionKey, nowMs);
+				recordWake(waiterKey(waiter), nowMs);
 				waiter.finish(wakeResult(claimed, waiter.sessionKey));
 				return;
 			}
@@ -245,7 +253,7 @@ function agentAddressedPreference(waiter: Waiter, nowMs: number): AgentAddressed
 	const moreRecent: string[] = [];
 	for (const other of waiters.values()) {
 		if (other === waiter || other.done || other.agentId !== waiter.agentId) continue;
-		if (rateLimitRetryAfter(other.sessionKey, nowMs) !== null) continue;
+		if (rateLimitRetryAfter(waiterKey(other), nowMs) !== null) continue;
 		if (lastSeenMs(other.sessionKey) > seen) moreRecent.push(other.sessionKey);
 	}
 	if (moreRecent.length === 0) return { mode: "all" };
@@ -268,18 +276,45 @@ export function selectWakeTarget(message: AgentMessage, nowMs = Date.now()): str
 	const eligible = (waiter: Waiter): boolean =>
 		!waiter.done &&
 		waiter.sessionKey !== message.fromSessionKey &&
-		rateLimitRetryAfter(waiter.sessionKey, nowMs) === null;
+		rateLimitRetryAfter(waiterKey(waiter), nowMs) === null;
 	if (message.toSessionKey) {
-		const waiter = waiters.get(message.toSessionKey);
-		if (!waiter || !eligible(waiter)) return null;
 		const owner = message.toSessionAgentId ?? message.toAgentId;
-		if (owner && owner !== waiter.agentId) return null;
-		return waiter.sessionKey;
+		const matches = [...waiters.values()].filter(
+			(waiter) => waiter.sessionKey === message.toSessionKey && (!owner || waiter.agentId === owner),
+		);
+		if (matches.length !== 1) return null;
+		const waiter = matches[0];
+		return waiter && eligible(waiter) ? waiterKey(waiter) : null;
 	}
 	const candidates = [...waiters.values()]
 		.filter((waiter) => waiter.agentId === message.toAgentId && eligible(waiter))
 		.sort((a, b) => lastSeenMs(b.sessionKey) - lastSeenMs(a.sessionKey));
-	return candidates[0]?.sessionKey ?? null;
+	const best = candidates[0];
+	return best ? waiterKey(best) : null;
+}
+
+export async function releaseWakeClaimsWithRetry(input: {
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly messageIds: readonly string[];
+}): Promise<void> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			await releaseDirectMessageWakes(input);
+			return;
+		} catch (error) {
+			if (attempt >= 3) {
+				logger.error(
+					"hooks",
+					"Direct message wake claim release failed; the message waits for the next hook",
+					error instanceof Error ? error : new Error(String(error)),
+					{ agentId: input.agentId, sessionKey: input.sessionKey, messageCount: input.messageIds.length },
+				);
+				throw error;
+			}
+			await new Promise<void>((resolve) => setTimeout(resolve, 100 * attempt));
+		}
+	}
 }
 
 function redispatch(messages: readonly AgentMessage[]): void {
@@ -304,8 +339,9 @@ function ensureSubscribed(): void {
 
 export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<WakeWaitResult> {
 	const nowMs = input.nowMs ?? Date.now();
-	const retryAfterMs = rateLimitRetryAfter(input.sessionKey, nowMs);
-	const previous = waiters.get(input.sessionKey);
+	const key = scopedKey(input.agentId, input.sessionKey);
+	const retryAfterMs = rateLimitRetryAfter(key, nowMs);
+	const previous = waiters.get(key);
 	if (previous) previous.finish({ wake: false, reason: "superseded" });
 	if (retryAfterMs !== null) return { wake: false, reason: "rate_limited", retryAfterMs };
 	if (input.signal?.aborted) return { wake: false, reason: "aborted" };
@@ -323,7 +359,7 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 			waiter.done = true;
 			if (timer) clearTimeout(timer);
 			input.signal?.removeEventListener("abort", onAbort);
-			if (waiters.get(waiter.sessionKey) === waiter) waiters.delete(waiter.sessionKey);
+			if (waiters.get(key) === waiter) waiters.delete(key);
 			return true;
 		};
 		const waiter: Waiter = {
@@ -343,7 +379,7 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 				reject(error);
 			},
 		};
-		waiters.set(input.sessionKey, waiter);
+		waiters.set(key, waiter);
 		input.signal?.addEventListener("abort", onAbort, { once: true });
 		void attemptClaim(waiter)
 			.catch((error) => {
@@ -361,15 +397,16 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 	});
 }
 
-export function forgetLatestWake(sessionKey: string): void {
-	const times = wakeTimes.get(sessionKey);
+export function forgetLatestWake(agentId: string, sessionKey: string): void {
+	const key = scopedKey(agentId, sessionKey);
+	const times = wakeTimes.get(key);
 	if (!times || times.length === 0) return;
 	times.pop();
-	if (times.length === 0) wakeTimes.delete(sessionKey);
+	if (times.length === 0) wakeTimes.delete(key);
 }
 
-export function wasWokenSince(sessionKey: string, sinceMs: number): boolean {
-	return (wakeTimes.get(sessionKey) ?? []).some((at) => at >= sinceMs);
+export function wasWokenSince(agentId: string, sessionKey: string, sinceMs: number): boolean {
+	return (wakeTimes.get(scopedKey(agentId, sessionKey)) ?? []).some((at) => at >= sinceMs);
 }
 
 export function activeWakeWaiterCount(): number {

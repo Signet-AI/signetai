@@ -95,6 +95,28 @@ describe("direct message wake", () => {
 		expect(other.wake).toBe(true);
 	});
 
+	it("keeps waiters for two agents that share a session key separate", async () => {
+		upsertAgentPresence({ sessionKey: "shared", agentId: "beta", harness: "pi" });
+		const alphaWait = waitForDirectMessageWake({
+			agentId: "alpha",
+			sessionKey: "shared",
+			harness: "pi",
+			waitMs: 1_500,
+		});
+		const betaWait = waitForDirectMessageWake({ agentId: "beta", sessionKey: "shared", harness: "pi", waitMs: 1_500 });
+		await Bun.sleep(30);
+		const message = createAgentMessage({
+			fromAgentId: "gamma",
+			toSessionKey: "shared",
+			toSessionAgentId: "beta",
+			content: "for beta",
+		});
+		const beta = await betaWait;
+		expect(beta.wake).toBe(true);
+		expect(beta.wake ? beta.messageIds : []).toEqual([message.id]);
+		expect((await alphaWait).reason).toBe("timeout");
+	});
+
 	it("routes session-addressed messages only to that session", async () => {
 		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "hermes-agent" });
 		upsertAgentPresence({ sessionKey: "b2", agentId: "beta", harness: "hermes-agent" });

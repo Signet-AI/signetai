@@ -130,9 +130,7 @@ describe("session start formatting helpers", () => {
 		});
 		expect(section).toContain("## Agent Messaging");
 		expect(section).toContain("You are agent `default`, session `sess- 1 forged`.");
-		expect(section).toContain(
-			"`agent_message_send` sends a direct message. It wakes an idle recipient on Claude Code, Hermes Agent, and pi",
-		);
+		expect(section).toContain("`agent_message_send` sends a direct message. It wakes an idle recipient on Claude Code");
 		expect(section).toContain("`agent_message_ack`");
 		expect(section).toContain("`board_post`");
 		expect(section).toContain("Active topics: release, infra.");

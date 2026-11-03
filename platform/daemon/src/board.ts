@@ -33,6 +33,7 @@ export const BOARD_LIMITS = {
 } as const;
 
 const TOPIC_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})$/;
 const TAG_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 const BOARD_HARNESS = "signet-board";
 const BOARD_POST_KIND = "board_post";
@@ -249,7 +250,10 @@ export async function createBoardEventVisibility(
 		return refreshing;
 	};
 	return (authorAgentId) => {
-		if (now() - fetchedAt >= refreshMs) void refresh();
+		if (now() - fetchedAt >= refreshMs) {
+			void refresh();
+			return authorAgentId === viewer.agentId;
+		}
 		return predicate(authorAgentId);
 	};
 }
@@ -587,7 +591,7 @@ export async function markBoardThreadRead(
 	const nowIso = new Date(nowMs).toISOString();
 	let now = nowIso;
 	if (through !== undefined) {
-		const parsed = Date.parse(through);
+		const parsed = ISO_TIMESTAMP_RE.test(through) ? Date.parse(through) : Number.NaN;
 		if (!Number.isFinite(parsed)) throw new BoardValidationError("through must be an ISO timestamp");
 		const throughIso = new Date(parsed).toISOString();
 		now = throughIso < nowIso ? throughIso : nowIso;

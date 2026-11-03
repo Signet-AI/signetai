@@ -437,6 +437,9 @@ describe("message board", () => {
 		await expect(markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), "not a date")).rejects.toThrow(
 			BoardValidationError,
 		);
+		await expect(markBoardThreadRead(created.thread.id, agent("alpha"), Date.now(), "January 1, 2000")).rejects.toThrow(
+			BoardValidationError,
+		);
 	});
 
 	it("refreshes group membership for live event visibility", async () => {
@@ -450,7 +453,8 @@ describe("message board", () => {
 		expect(visible("g2")).toBe(true);
 		await registerAgent("g2", "group", "other");
 		clock = 5_000;
-		visible("g2");
+		expect(visible("g2")).toBe(false);
+		expect(visible("g1")).toBe(true);
 		await Bun.sleep(300);
 		expect(visible("g2")).toBe(false);
 	});
