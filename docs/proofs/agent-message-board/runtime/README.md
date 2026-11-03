@@ -19,6 +19,8 @@ Preflight requires the pin to be an ancestor of HEAD and every non-test file und
 `integrations/`, `surfaces/` plus package/lock files to be byte-identical to the pin (tracked diff and untracked
 files both checked). Documentation, evidence and test-only changes are allowed. Any other change fails P00 and skips daemon startup and mutation execution.
 
+`report.json` was also regenerated from an evidence-only descendant of the implementation commit. `source-guard-control.json` records the opposite control: the same verifier in a disposable worktree with one production-file newline changed exited nonzero on the source guard, with daemon/mutation startup skipped and zero database snapshots. The sole failed preflight assertion was the intended production-drift check.
+
 ## SQL inspection method and limits
 
 The harness never opens the running workspace database. Assertions use HTTP where possible. For independent SQL
