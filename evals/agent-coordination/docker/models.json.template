@@ -4,7 +4,7 @@
       "baseUrl": "http://relay:8787",
       "api": "openai-completions",
       "apiKey": "__PER_RUN_OPAQUE_TOKEN__",
-      "compat": { "thinkingFormat": "zai", "requiresReasoningContentOnAssistantMessages": true },
+      "compat": { "thinkingFormat": "zai", "requiresReasoningContentOnAssistantMessages": true, "supportsDeveloperRole": false },
       "models": [{ "id": "glm-5.3-flash", "reasoning": true, "maxTokens": 4000 }]
     }
   }
