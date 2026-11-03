@@ -1,0 +1,50 @@
+{
+	"implementation_sha": "fd288111060baf636aa064d3d201f33b1120ddb5",
+	"scope": "scoped verification-tool lint/typecheck and repository comment policy, not full workspace CI",
+	"checks": [
+		{
+			"command": [
+				"bunx",
+				"--no-install",
+				"biome",
+				"check",
+				"scripts/verification/agent-message-board-runtime.ts",
+				"scripts/verification/agent-message-board-dreaming.probe.ts"
+			],
+			"exit_code": 0,
+			"stdout": "Checked 2 files in 36ms. No fixes applied.\n",
+			"stderr": ""
+		},
+		{
+			"command": [
+				"bunx",
+				"--no-install",
+				"tsc",
+				"--noEmit",
+				"--strict",
+				"--noUncheckedIndexedAccess",
+				"--skipLibCheck",
+				"--module",
+				"preserve",
+				"--moduleResolution",
+				"bundler",
+				"--target",
+				"ES2022",
+				"--types",
+				"bun",
+				"--lib",
+				"ES2022,DOM",
+				"scripts/verification/agent-message-board-runtime.ts"
+			],
+			"exit_code": 0,
+			"stdout": "",
+			"stderr": ""
+		},
+		{
+			"command": ["bun", "scripts/strip-comments.ts", "--check"],
+			"exit_code": 0,
+			"stdout": "Comment purge is current\n",
+			"stderr": ""
+		}
+	]
+}

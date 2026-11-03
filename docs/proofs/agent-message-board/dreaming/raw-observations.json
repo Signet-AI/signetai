@@ -1,0 +1,476 @@
+{
+	"_metadata": {
+		"implementation_sha": "fd288111060baf636aa064d3d201f33b1120ddb5",
+		"kind": "pinned behavior characterization, including counterexamples; not acceptance of the observed gaps",
+		"bun_version": "1.4.2",
+		"runner_sha256": "4f72badafdab85deb927e9d3668f413dfd74da124bdc77cacf39d933fd2ff026",
+		"source_manifest": [
+			{
+				"path": "platform/daemon/src/board.ts",
+				"sha256": "0470c32bfba5d8ad4cdbe2aea2c210b06ccf84c3175f9be8d1cbefd399e689dc"
+			},
+			{
+				"path": "platform/daemon/src/cross-agent.ts",
+				"sha256": "b260f6cc2697a39ef9eb8cecefbeca4489485b870a3d4b71ab776bd75346052a"
+			},
+			{
+				"path": "platform/daemon/src/memory-lineage.ts",
+				"sha256": "f0e848a31cceab79e46a1380502fea59edf7a25f7d1b134dd63192d2d19589d4"
+			},
+			{
+				"path": "platform/daemon/src/episodic-sources.ts",
+				"sha256": "b2fd742b47c826caa9e075ac3bf205cf18b4ce983a8e57f91f7e2f3368fc28ce"
+			},
+			{
+				"path": "platform/daemon/src/ontology-proposals.ts",
+				"sha256": "01a19ce7bf0e97ba620cbe339d8a8ea28ca2d7f55684c5c5b400fe611180d8eb"
+			},
+			{
+				"path": "platform/daemon/src/ontology-claim-evidence.ts",
+				"sha256": "0202a4ad5d97c44f753485a5c756c015f1f3be1bb58e72b5b56a896da34a08f4"
+			},
+			{
+				"path": "platform/daemon/src/session-transcripts.ts",
+				"sha256": "7470f5ff2722ee81458948bdd00c5c62d0066cb63c87cd4e17fa050a208d7e69"
+			},
+			{
+				"path": "platform/daemon/src/pipeline/dreaming.ts",
+				"sha256": "e4b11fe61be092b45672b2461d4d250e11802b4d9bdde489f806c6882b14c08c"
+			},
+			{
+				"path": "platform/daemon/src/pipeline/dreaming-evidence.ts",
+				"sha256": "bc103c1342ffd0639339198ecec0c5b6387a0a3ecc19a37b1a21cd981e129d29"
+			},
+			{
+				"path": "platform/daemon/src/pipeline/dreaming-evidence-consumption.ts",
+				"sha256": "2114a4c963a2f61ee6f5199bfe13a0b82082d43dfbaa7b97fe98cbe8c3f41775"
+			},
+			{
+				"path": "platform/daemon/src/pipeline/dreaming-operations.ts",
+				"sha256": "f7ca4b0f3c4a9ffdb879250101d96d2d98755b149f14bd71ac87a5164c333098"
+			}
+		],
+		"executor": "scripted test double calling production Dreaming tools; no LLM inference"
+	},
+	"A_projection": {
+		"rowsAfterWrites": 3,
+		"rowsAfterRepeatedProjection": 3,
+		"drainedAfterRepeats": 0,
+		"identitiesAndHashesStableAcrossRepeats": true,
+		"rows": [
+			{
+				"agent": "alpha",
+				"path": "signet-board://thread/<T>/post/<P1>",
+				"kind": "board_post",
+				"harness": "signet-board",
+				"source_id": null,
+				"source_node_id": "native-memory-bridge",
+				"source_external_id": "<P1>",
+				"source_parent_path": "signet-board://thread/<T>",
+				"sha_prefix": "320e5ab9d5d0",
+				"is_deleted": 0
+			},
+			{
+				"agent": "alpha",
+				"path": "signet-board://thread/<T>/post/<P2>",
+				"kind": "board_post",
+				"harness": "signet-board",
+				"source_id": null,
+				"source_node_id": "native-memory-bridge",
+				"source_external_id": "<P2>",
+				"source_parent_path": "signet-board://thread/<T>",
+				"sha_prefix": "b821ff3abe3c",
+				"is_deleted": 0
+			},
+			{
+				"agent": "beta",
+				"path": "signet-board://thread/<T>/post/<P2>",
+				"kind": "board_post",
+				"harness": "signet-board",
+				"source_id": null,
+				"source_node_id": "native-memory-bridge",
+				"source_external_id": "<P2>",
+				"source_parent_path": "signet-board://thread/<T>",
+				"sha_prefix": "b821ff3abe3c",
+				"is_deleted": 0
+			}
+		]
+	},
+	"B_promote": {
+		"beforePromote": {
+			"artifacts": 0,
+			"transcripts": 0,
+			"memories": 0
+		},
+		"afterPromote": {
+			"boardArtifactRows": 2,
+			"agents": ["alpha", "beta"],
+			"sameShaAcrossAgents": true,
+			"postAuthor": "alpha",
+			"threadAuthor": "beta"
+		}
+	},
+	"C_overlap": {
+		"allCandidates": [
+			{
+				"kind": "transcript",
+				"sourceKind": "transcript",
+				"hasSentinel": true
+			},
+			{
+				"kind": "artifact",
+				"sourceKind": "board_post",
+				"hasSentinel": true
+			}
+		],
+		"candidatesContainingBoardFact": 2,
+		"distinctKindsContainingBoardFact": ["transcript/transcript", "artifact/board_post"],
+		"negativeControl_toolBlocksOnly_candidatesContainingNeg": 0
+	},
+	"D_dedupe_controls": {
+		"identicalContentArtifactsIndexed": 2,
+		"identicalContentArtifactsOffered_deliveryQueue": 1,
+		"identicalContentArtifactsOffered_recentReader": 2,
+		"identicalBodyBoardThreadsIndexed": 2,
+		"identicalBodyBoardArtifactsOffered": 2,
+		"boardShaDistinct": 2
+	},
+	"E_dreaming_pass": {
+		"passResult": {
+			"passId": "0c1a0dcf-70ad-4489-bd47-82d9eb49e16e",
+			"applied": 2,
+			"skipped": 0,
+			"failed": 0,
+			"summary": "scripted test double"
+		},
+		"firstPassDeliveredItems": [
+			{
+				"sourceRef": "transcript:sess-overlap",
+				"keys": [
+					"sourceRef",
+					"kind",
+					"id",
+					"content",
+					"contentOffset",
+					"contentLength",
+					"contentTruncated",
+					"contentHasPrevious",
+					"contentHasNext",
+					"completed",
+					"sourceKind",
+					"sourceId",
+					"sourcePath",
+					"sourceEntryId",
+					"sourceRevision",
+					"project",
+					"harness",
+					"capturedAt"
+				]
+			},
+			{
+				"sourceRef": "artifact:signet-board://thread/<T>/post/<P>",
+				"keys": [
+					"sourceRef",
+					"kind",
+					"id",
+					"content",
+					"contentOffset",
+					"contentLength",
+					"contentTruncated",
+					"contentHasPrevious",
+					"contentHasNext",
+					"completed",
+					"sourceKind",
+					"sourceId",
+					"sourcePath",
+					"sourceEntryId",
+					"sourceRevision",
+					"project",
+					"harness",
+					"capturedAt"
+				]
+			}
+		],
+		"firstPassApply": [
+			{
+				"tool": "apply_ontology_ops",
+				"ok": true,
+				"items": [
+					{
+						"index": 0,
+						"ok": true,
+						"proposal": {
+							"id": "2485166e-2e2c-46dd-aa59-7412f58453a4",
+							"agentId": "alpha",
+							"operation": "add_claim_value",
+							"status": "applied",
+							"payload": {
+								"entity": "Sentinel Widget",
+								"aspect": "keys",
+								"claim_key": "rotation",
+								"value": "Keys: rotate the sentinel widget keys every ninety days."
+							},
+							"confidence": 0,
+							"rationale": "scripted test double: same claim from each cited source",
+							"evidence": [
+								{
+									"source_ref": "artifact:signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+									"source_kind": "board_post",
+									"source_id": "native-memory-bridge",
+									"source_path": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+									"quote": "rotate the sentinel widget keys every ninety days"
+								}
+							],
+							"risk": null,
+							"sourceKind": "board_post",
+							"sourceId": "native-memory-bridge",
+							"sourcePath": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+							"sourceRoot": "dreaming",
+							"createdBy": "dreaming",
+							"appliedBy": "dreaming",
+							"rejectedBy": null,
+							"result": {
+								"entityId": "e-widget",
+								"aspectId": "a-keys",
+								"attributeId": "98be56cf-a165-40e6-bacb-f05727fb844c",
+								"memoryId": "98be56cf-a165-40e6-bacb-f05727fb844c",
+								"deduped": false,
+								"contradictionIds": []
+							},
+							"createdAt": "2026-11-03T17:21:58.645Z",
+							"updatedAt": "2026-11-03T17:21:58.648Z",
+							"appliedAt": "2026-11-03T17:21:58.648Z",
+							"rejectedAt": null
+						},
+						"result": {
+							"entityId": "e-widget",
+							"aspectId": "a-keys",
+							"attributeId": "98be56cf-a165-40e6-bacb-f05727fb844c",
+							"memoryId": "98be56cf-a165-40e6-bacb-f05727fb844c",
+							"deduped": false,
+							"contradictionIds": []
+						}
+					},
+					{
+						"index": 1,
+						"ok": true,
+						"proposal": {
+							"id": "3505cc44-5c34-4c55-a215-54c2d8314f9a",
+							"agentId": "alpha",
+							"operation": "add_claim_value",
+							"status": "applied",
+							"payload": {
+								"entity": "Sentinel Widget",
+								"aspect": "keys",
+								"claim_key": "rotation",
+								"value": "Keys: rotate the sentinel widget keys every ninety days."
+							},
+							"confidence": 0,
+							"rationale": "scripted test double: same claim from each cited source",
+							"evidence": [
+								{
+									"source_ref": "transcript:sess-overlap",
+									"source_kind": "transcript",
+									"source_id": "sess-overlap",
+									"quote": "rotate the sentinel widget keys every ninety days"
+								}
+							],
+							"risk": null,
+							"sourceKind": "transcript",
+							"sourceId": "sess-overlap",
+							"sourcePath": null,
+							"sourceRoot": "dreaming",
+							"createdBy": "dreaming",
+							"appliedBy": "dreaming",
+							"rejectedBy": null,
+							"result": {
+								"entityId": "e-widget",
+								"aspectId": "a-keys",
+								"attributeId": "98be56cf-a165-40e6-bacb-f05727fb844c",
+								"deduped": true,
+								"contradictionIds": []
+							},
+							"createdAt": "2026-11-03T17:21:58.648Z",
+							"updatedAt": "2026-11-03T17:21:58.648Z",
+							"appliedAt": "2026-11-03T17:21:58.648Z",
+							"rejectedAt": null
+						},
+						"result": {
+							"entityId": "e-widget",
+							"aspectId": "a-keys",
+							"attributeId": "98be56cf-a165-40e6-bacb-f05727fb844c",
+							"deduped": true,
+							"contradictionIds": []
+						}
+					}
+				]
+			}
+		],
+		"firstPassReview": [
+			{
+				"tool": "review_evidence",
+				"ok": true,
+				"items": [
+					{
+						"sourceRef": "transcript:sess-overlap",
+						"contentOffset": 0,
+						"reviewedThrough": 99,
+						"excerptEnd": 99,
+						"contentLength": 99,
+						"capturedAt": "2026-11-03T17:21:58.529Z",
+						"sourceEntryId": "",
+						"sourceRevision": "2026-11-03T17:21:58.529Z",
+						"contentSha256": "3b6e8385168be2ff16ed562005ff4152ddf1552ee073d62d80cf022ff943d812"
+					},
+					{
+						"sourceRef": "artifact:signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+						"contentOffset": 0,
+						"reviewedThrough": 294,
+						"excerptEnd": 294,
+						"contentLength": 294,
+						"capturedAt": "2026-11-03T17:21:58.488Z",
+						"sourceEntryId": "",
+						"sourceRevision": "33ed4f6feb40411cc41b668c21054b76b02cbc454db427d1fa67045108449f5f",
+						"contentSha256": "33ed4f6feb40411cc41b668c21054b76b02cbc454db427d1fa67045108449f5f"
+					}
+				]
+			}
+		],
+		"claimEvidence": {
+			"items": 1,
+			"evidenceCountPerItem": [5],
+			"evidence": [
+				{
+					"kind": "ontology_proposal",
+					"found": true,
+					"sourceKind": "ontology_proposal",
+					"sourceId": "2485166e-2e2c-46dd-aa59-7412f58453a4",
+					"sourcePath": null,
+					"label": "proposal:2485166e-2e2c-46dd-aa59-7412f58453a4",
+					"excerpt": "scripted test double: same claim from each cited source",
+					"reference": {
+						"attribute_id": "98be56cf-a165-40e6-bacb-f05727fb844c",
+						"proposal_id": "2485166e-2e2c-46dd-aa59-7412f58453a4"
+					}
+				},
+				{
+					"kind": "memory_artifact",
+					"found": true,
+					"sourceKind": "board_post",
+					"sourceId": "native:signet-board",
+					"sourcePath": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+					"label": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+					"excerpt": "# Message board post in probe: Sentinel thread - Thread: a235cde9-afaf-428d-abb1-478e794c75cf - Post: 66f28840-6bf5-4c9b-b519-5ea1c560d7cd - Author: alpha (session a1) via pi - Posted: 2026-11-03T17:21:58.488Z SENTINEL-BRD-7f3a: we agreed to rotate the sentinel widget keys every ninety days.",
+					"reference": {
+						"source_ref": "artifact:signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+						"source_kind": "board_post",
+						"source_id": "native-memory-bridge",
+						"source_path": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+						"quote": "rotate the sentinel widget keys every ninety days"
+					}
+				},
+				{
+					"kind": "memory_artifact",
+					"found": true,
+					"sourceKind": "board_post",
+					"sourceId": "native:signet-board",
+					"sourcePath": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+					"label": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+					"excerpt": "# Message board post in probe: Sentinel thread - Thread: a235cde9-afaf-428d-abb1-478e794c75cf - Post: 66f28840-6bf5-4c9b-b519-5ea1c560d7cd - Author: alpha (session a1) via pi - Posted: 2026-11-03T17:21:58.488Z SENTINEL-BRD-7f3a: we agreed to rotate the sentinel widget keys every ninety days.",
+					"reference": {
+						"attribute_id": "98be56cf-a165-40e6-bacb-f05727fb844c",
+						"source_kind": "board_post",
+						"source_id": "native-memory-bridge"
+					}
+				},
+				{
+					"kind": "memory_artifact",
+					"found": true,
+					"sourceKind": "board_post",
+					"sourceId": "native:signet-board",
+					"sourcePath": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+					"label": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+					"excerpt": "# Message board post in probe: Sentinel thread - Thread: a235cde9-afaf-428d-abb1-478e794c75cf - Post: 66f28840-6bf5-4c9b-b519-5ea1c560d7cd - Author: alpha (session a1) via pi - Posted: 2026-11-03T17:21:58.488Z SENTINEL-BRD-7f3a: we agreed to rotate the sentinel widget keys every ninety days.",
+					"reference": {
+						"attribute_id": "98be56cf-a165-40e6-bacb-f05727fb844c",
+						"source_kind": "board_post",
+						"source_id": "native-memory-bridge",
+						"source_path": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+						"source_root": "dreaming"
+					}
+				},
+				{
+					"kind": "memory",
+					"found": true,
+					"sourceKind": "dreaming",
+					"sourceId": "native-memory-bridge",
+					"sourcePath": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+					"label": "memory:98be56cf-a165-40e6-bacb-f05727fb844c",
+					"excerpt": "Keys: rotate the sentinel widget keys every ninety days.",
+					"reference": {
+						"attribute_id": "98be56cf-a165-40e6-bacb-f05727fb844c",
+						"memory_id": "98be56cf-a165-40e6-bacb-f05727fb844c"
+					}
+				}
+			]
+		},
+		"reprojectionsAfterReview": 3,
+		"secondPassDeliveredItems": 0,
+		"activeClaimsForSameFactAcrossBothSources": [
+			{
+				"id": "98be56cf-a165-40e6-bacb-f05727fb844c",
+				"status": "active",
+				"claim_key": "rotation",
+				"normalized_content": "keys: rotate the sentinel widget keys every ninety days.",
+				"source_kind": "board_post",
+				"source_id": "native-memory-bridge",
+				"source_path": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+				"source_root": "dreaming"
+			}
+		],
+		"consumptionRows": [
+			{
+				"source_kind": "artifact",
+				"source_id": "signet-board://thread/a235cde9-afaf-428d-abb1-478e794c75cf/post/66f28840-6bf5-4c9b-b519-5ea1c560d7cd",
+				"delivered_offset": 294,
+				"source_length": 294
+			},
+			{
+				"source_kind": "transcript",
+				"source_id": "sess-overlap",
+				"delivered_offset": 99,
+				"source_length": 99
+			}
+		]
+	},
+	"F_lifecycle": {
+		"applyOk": true,
+		"claimsBeforeDelete": [
+			{
+				"status": "active",
+				"source_kind": "board_post",
+				"source_id": "native-memory-bridge",
+				"source_path": "signet-board://thread/44b3e8fe-7df3-4cda-8c1a-482ed7bfdf70/post/903be752-41e2-4919-a909-b8357db5f4c4",
+				"source_root": "dreaming"
+			}
+		],
+		"artifactIsDeletedAfterSoftDeleteCall": [1],
+		"artifactIsDeletedAfterReprojection": [0],
+		"boardArtifactsAfterThreadDelete": 0,
+		"claimsAfterThreadDelete": [
+			{
+				"status": "active",
+				"source_kind": "board_post",
+				"source_id": "native-memory-bridge",
+				"source_path": "signet-board://thread/44b3e8fe-7df3-4cda-8c1a-482ed7bfdf70/post/903be752-41e2-4919-a909-b8357db5f4c4",
+				"source_root": "dreaming"
+			}
+		]
+	},
+	"G_consumption_control": {
+		"pass1_noAck_delivered": ["transcript:sess-overlap", "artifact:signet-board://thread/<T>"],
+		"pass2_noAck_delivered": ["transcript:sess-overlap", "artifact:signet-board://thread/<T>"],
+		"pass3_ack_delivered": ["transcript:sess-overlap", "artifact:signet-board://thread/<T>"],
+		"pass4_after_ack_delivered": []
+	}
+}

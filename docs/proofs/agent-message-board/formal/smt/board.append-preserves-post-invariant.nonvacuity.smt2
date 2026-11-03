@@ -1,0 +1,21 @@
+; benchmark generated from python API
+(set-info :status unknown)
+(declare-fun a_seq () (Array Int Int))
+(declare-fun a_head () Int)
+(declare-fun a_fresh () Int)
+(assert
+ (let (($x557 (forall ((inv_p Int) (inv_q Int) )(let ((?x97 (select a_seq inv_q)))
+ (let (($x676 (> ?x97 0)))
+ (let (($x89 (and (distinct inv_p inv_q) true)))
+ (=> (and $x89 (> (select a_seq inv_p) 0) $x676) (and (distinct (select a_seq inv_p) ?x97) true))))))
+ ))
+ (let (($x31 (forall ((inv_p Int) )(let ((?x97 (select a_seq inv_p)))
+ (let (($x676 (> ?x97 0)))
+ (let (($x29 (= ?x97 0)))
+ (or $x29 (and $x676 (<= ?x97 a_head)))))))
+ ))
+ (let (($x211 (>= a_head 0)))
+ (and $x211 $x31 $x557)))))
+(assert
+ (= (select a_seq a_fresh) 0))
+(check-sat)

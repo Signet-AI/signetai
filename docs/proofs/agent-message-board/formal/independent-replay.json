@@ -1,0 +1,87 @@
+{
+	"implementation_sha": "fd288111060baf636aa064d3d201f33b1120ddb5",
+	"guard_fixture": "copies of named source files, with read-only git-object lookup; only a disposable copy was mutated",
+	"source_files_matched": 14,
+	"changed_copy_rejected": true,
+	"main_runner_sha256": "4429d5cc7cb0ab12b6b7026c14a2284c8fa79c9416b77dbf0db5649579ce95ed",
+	"replay_runner_sha256": "8afd0e06630a58d3530f529290cbab8ea744e400603a4cc12222a29e6b53dabb",
+	"fresh_solver_property_replays": [
+		{
+			"query": "base.initial-state-satisfies-all-invariants.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "board.append-preserves-post-invariant.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "board.delete-preserves-post-invariant.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "board.notice-snapshot-leaves-later-reply-eligible.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "board.offset-page-leaves-cursor.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "board.read-cursor-monotonic.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "board.snapshot-read-leaves-later-post-unread.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "evidence.same-identity-upsert-idempotent.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "identity.guarded-transition-conditional.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "identity.omitted-request-resolves-to-token.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "wake.capacity-pending-reservation-step.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "wake.claim-insert-if-absent-step.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "wake.expiry-uses-elapsed-clock.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "wake.live-batches-pairwise-disjoint-step.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "wake.partial-release-keeps-unreleased-members.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "wake.quota-charge-step.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "wake.release-by-owner-step.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "wake.release-removes-ids-from-all-batches.proof.smt2",
+			"result": "unsat"
+		},
+		{
+			"query": "wake.session-end-consumes-delivery-once.proof.smt2",
+			"result": "unsat"
+		}
+	],
+	"note": "same-solver replay, not an independent proof kernel"
+}

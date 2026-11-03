@@ -1,0 +1,32 @@
+; benchmark generated from python API
+(set-info :status unknown)
+(declare-fun r_count () Int)
+(declare-fun r_owner () Int)
+(declare-fun r_releaser () Int)
+(assert
+ (let (($x909 (= r_owner (- 1))))
+ (let (($x768 (= $x909 (= r_count 0))))
+ (let (($x908 (<= r_count 1)))
+ (let (($x611 (>= r_count 0)))
+ (let (($x344 (>= r_owner (- 1))))
+ (and $x344 $x611 $x908 $x768)))))))
+(assert
+ (>= r_owner 0))
+(assert
+ (>= r_releaser 0))
+(assert
+ (let ((?x327 (ite true (- 1) r_owner)))
+(let (($x16 (= ?x327 r_owner)))
+(let (($x68 (and (distinct r_releaser r_owner) true)))
+(let (($x469 (=> $x68 $x16)))
+(let ((?x501 (ite true 0 r_count)))
+(let (($x415 (= ?x501 0)))
+(let (($x45 (= ?x327 (- 1))))
+(let (($x22 (= $x45 $x415)))
+(let (($x515 (<= ?x501 1)))
+(let (($x5 (>= ?x501 0)))
+(let (($x587 (>= ?x327 (- 1))))
+(let (($x81 (and $x587 $x5 $x515 $x22)))
+(let (($x620 (and $x81 $x469)))
+(not $x620)))))))))))))))
+(check-sat)

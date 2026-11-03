@@ -1,0 +1,492 @@
+{
+	"implementation_sha": "fd288111060baf636aa064d3d201f33b1120ddb5",
+	"scope": "Z3-checked abstract transition obligations. Not a whole-program proof and not an automatic code-to-model refinement; the model/source mapping is by manual inspection.",
+	"transition_scope": "Each obligation is one abstract transition. Composition assumes serialized logical delivery, one live waiter per (agent, session key), and a charge applied only after a completed claim.",
+	"solver": "4.15.3.0",
+	"python": "3.12.12",
+	"runner_sha256": "4429d5cc7cb0ab12b6b7026c14a2284c8fa79c9416b77dbf0db5649579ce95ed",
+	"source_manifest": [
+		{
+			"path": "platform/daemon/src/cross-agent-wake.ts",
+			"sha256": "7d60f24c859b756f3a0e2e6805cd8b452036c2a79f6819b45878a1f0a0b0189d"
+		},
+		{
+			"path": "platform/daemon/src/agent-id.ts",
+			"sha256": "01f9b7f5f7cbb87cd99231b675e249af6e9920079d8ec2e8a0fdd79af067b5c9"
+		},
+		{
+			"path": "platform/daemon/src/request-scope.ts",
+			"sha256": "0abdd3c59eb31e52d5c9115aee2fa7cad682ab0943d3e80db25a9fa6a2293a01"
+		},
+		{
+			"path": "platform/daemon/src/routes/utils.ts",
+			"sha256": "6b88d961e89c7bd9818bbb181dbaf9f9eed6671b01fa886f42bccdc8d528fba0"
+		},
+		{
+			"path": "platform/daemon/src/board.ts",
+			"sha256": "0470c32bfba5d8ad4cdbe2aea2c210b06ccf84c3175f9be8d1cbefd399e689dc"
+		},
+		{
+			"path": "platform/daemon/src/routes/hooks-routes.ts",
+			"sha256": "c54d935df965e135ec04066558233771928c85e46da5d5e1641aa90cd3a6781e"
+		},
+		{
+			"path": "platform/daemon/src/routes/board-routes.ts",
+			"sha256": "8a60047867caff3ae1e2bc8ddcdd8601b189742414ee23aa4792ec4424e95f8a"
+		},
+		{
+			"path": "platform/daemon/src/memory-lineage.ts",
+			"sha256": "f0e848a31cceab79e46a1380502fea59edf7a25f7d1b134dd63192d2d19589d4"
+		},
+		{
+			"path": "platform/daemon/src/episodic-sources.ts",
+			"sha256": "b2fd742b47c826caa9e075ac3bf205cf18b4ce983a8e57f91f7e2f3368fc28ce"
+		},
+		{
+			"path": "platform/core/src/migrations/171-agent-wake-and-message-board.ts",
+			"sha256": "88e9bd55836ec79fd04cc3616c0d65a5d8b6982e9cfd8a1e8aa1413ffb447065"
+		},
+		{
+			"path": "integrations/hermes-agent/connector/hermes-plugin/__init__.py",
+			"sha256": "b28f5114a0d7afab04e809613dcdfa67c53bd1e6fccf448584729e6a8f2c2f4b"
+		},
+		{
+			"path": "integrations/pi/extension-base/src/wake-waiter.ts",
+			"sha256": "bbe2f8a08741a1ba6672f974b3a1c49423581a6f991e098d3bd1f794f4481a1d"
+		},
+		{
+			"path": "integrations/pi/extension/src/collab-tools.ts",
+			"sha256": "492b6d7feed7945e12608f227be3df0cb7398e8ec989c42e22e3a3c614bd147d"
+		},
+		{
+			"path": "platform/daemon/src/mcp/tools.ts",
+			"sha256": "301c19e30141e0818e9fae70c587b38b2e0d111064c723dfb6d82a1c413ed91a"
+		}
+	],
+	"source_manifest_note": "Fingerprints detect drift of the named files; they are not a proof link between model and code.",
+	"obligation_count": 19,
+	"passed": 19,
+	"by_kind": {
+		"base": {
+			"total": 1,
+			"passed": 1
+		},
+		"algebraic": {
+			"total": 1,
+			"passed": 1
+		},
+		"inductive-step": {
+			"total": 14,
+			"passed": 14
+		},
+		"elementary-lemma": {
+			"total": 3,
+			"passed": 3
+		}
+	},
+	"with_mutation_control": 17,
+	"proof_terms": "Z3 derivation terms are exported but not independently kernel-checked.",
+	"elapsed_seconds": 0.213732,
+	"obligations": [
+		{
+			"name": "base.initial-state-satisfies-all-invariants",
+			"kind": "base",
+			"meaning": "The empty initial store satisfies the same claim, quota, capacity, post and batch-disjointness invariants used by the inductive steps.",
+			"implementation": [
+				"platform/core/src/migrations/171-agent-wake-and-message-board.ts:up",
+				"platform/daemon/src/cross-agent-wake.ts:WakeHistory"
+			],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": null,
+			"control_result": null,
+			"control_countermodel": null,
+			"pass": true
+		},
+		{
+			"name": "identity.omitted-request-resolves-to-token",
+			"kind": "algebraic",
+			"meaning": "With no field identity and no key-inferred identity, an agent-scoped token resolves to its own agent; a field or key-derived identity is the requested identity.",
+			"implementation": [
+				"platform/daemon/src/agent-id.ts:requestedAgentId",
+				"platform/daemon/src/request-scope.ts:resolveScopedAgent"
+			],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "fallback to the daemon default instead of the token agent",
+			"control_result": "sat",
+			"control_countermodel": {
+				"has_field": "False",
+				"has_key": "False",
+				"token": "1",
+				"agent_scoped": "True",
+				"daemon_default": "0",
+				"request_field": "0",
+				"key_inferred": "0",
+				"_full_model": "[has_field = False,\n has_key = False,\n token = 1,\n agent_scoped = True,\n daemon_default = 0,\n request_field = 0,\n key_inferred = 0]"
+			},
+			"pass": true
+		},
+		{
+			"name": "identity.guarded-transition-conditional",
+			"kind": "inductive-step",
+			"meaning": "Conditional on hypothesis H-guard (a request is accepted only if effective identity equals the token agent and any active session is owned by it), a state change by an enforced non-admin agent-scoped token implies that guard. Does not cover admin, local or project-only access.",
+			"implementation": [
+				"platform/daemon/src/routes/utils.ts:validateSessionAgentBinding",
+				"platform/daemon/src/request-scope.ts:resolveScopedAgent",
+				"platform/daemon/src/routes/hooks-routes.ts:resolveCrossAgentScope"
+			],
+			"refinement_hypotheses": [
+				"H-guard: accepted implies effective == token and (active -> owner == effective); this follows from the source only by reading resolveScopedAgent, checkScope and validateSessionAgentBinding, not from the solver."
+			],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "H-guard weakened to omit the session-owner check",
+			"control_result": "sat",
+			"control_countermodel": {
+				"g_change": "1",
+				"g_token": "0",
+				"g_accepted": "True",
+				"g_active": "True",
+				"g_old": "0",
+				"g_protected": "True",
+				"g_owner": "1",
+				"g_effective": "0",
+				"_full_model": "[g_change = 1,\n g_token = 0,\n g_accepted = True,\n g_active = True,\n g_old = 0,\n g_protected = True,\n g_owner = 1,\n g_effective = 0]"
+			},
+			"pass": true
+		},
+		{
+			"name": "wake.claim-insert-if-absent-step",
+			"kind": "inductive-step",
+			"meaning": "Insert-if-absent on one message preserves 'at most one successful claim per unreleased epoch'.",
+			"implementation": [
+				"platform/core/src/migrations/171-agent-wake-and-message-board.ts:cross_agent_message_wakes primary key",
+				"platform/daemon/src/cross-agent-wake.ts:claimDirectMessageWakes"
+			],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "claim written unconditionally (no absence check)",
+			"control_result": "sat",
+			"control_countermodel": {
+				"c_count": "1",
+				"c_contender": "1",
+				"c_owner": "0",
+				"c_eligible": "True",
+				"_full_model": "[c_count = 1,\n c_contender = 1,\n c_owner = 0,\n c_eligible = True]"
+			},
+			"pass": true
+		},
+		{
+			"name": "wake.release-by-owner-step",
+			"kind": "inductive-step",
+			"meaning": "A release by a non-owner leaves the claim untouched; an owner release returns to the empty epoch.",
+			"implementation": ["platform/daemon/src/cross-agent-wake.ts:releaseDirectMessageWakes"],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "release deletes regardless of owner",
+			"control_result": "sat",
+			"control_countermodel": {
+				"r_releaser": "0",
+				"r_count": "1",
+				"r_owner": "1",
+				"_full_model": "[r_releaser = 0, r_count = 1, r_owner = 1]"
+			},
+			"pass": true
+		},
+		{
+			"name": "wake.quota-charge-step",
+			"kind": "inductive-step",
+			"meaning": "A charge applied only after a completed claim and only when used < limit keeps used <= limit. Premise: logical deliveries are serialized per key and one waiter completes at most one charge per admission test.",
+			"implementation": [
+				"platform/daemon/src/cross-agent-wake.ts:rateLimitRetryAfter",
+				"platform/daemon/src/cross-agent-wake.ts:attemptClaim"
+			],
+			"refinement_hypotheses": [
+				"H-serial: one live waiter per key; admission test and charge are not interleaved with another charge for the same key."
+			],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "admission test off by one (used <= limit)",
+			"control_result": "sat",
+			"control_countermodel": {
+				"q_claimed": "True",
+				"q_limit": "1",
+				"q_used": "1",
+				"_full_model": "[q_claimed = True, q_limit = 1, q_used = 1]"
+			},
+			"pass": true
+		},
+		{
+			"name": "wake.capacity-pending-reservation-step",
+			"kind": "inductive-step",
+			"meaning": "History slots allocated plus pending claim reservations never exceed capacity (reserve and complete transitions). Here pending counts distinct newly reserved history keys, not the source pendingClaims counter of in-flight requests; the source map already includes reserved keys.",
+			"implementation": ["platform/daemon/src/cross-agent-wake.ts:attemptClaim pendingClaims reservation"],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "admission checks only stored size, ignoring pending reservations",
+			"control_result": "sat",
+			"control_countermodel": {
+				"k_pending": "1",
+				"k_op": "0",
+				"k_cap": "1",
+				"k_size": "0",
+				"_full_model": "[k_pending = 1, k_op = 0, k_cap = 1, k_size = 0]"
+			},
+			"pass": true
+		},
+		{
+			"name": "wake.live-batches-pairwise-disjoint-step",
+			"kind": "inductive-step",
+			"meaning": "Under claim, release and whole-batch expiry transitions, no message ID is in two live batches. Conditional on H-exclusive. Expiry modelled here only as charge deletion; whether expiry also deletes claim rows is not modelled.",
+			"implementation": [
+				"platform/daemon/src/cross-agent-wake.ts:WakeHistory",
+				"platform/daemon/src/cross-agent-wake.ts:releaseDirectMessageWakes"
+			],
+			"refinement_hypotheses": [
+				"H-exclusive: newly inserted message IDs occur in no live batch. Linking claim-row absence to batch absence requires a source lifecycle invariant; the primary key alone does not prove that link."
+			],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "claim inserts an ID that is already in a live batch (H-exclusive violated)",
+			"control_result": "sat",
+			"control_countermodel": {
+				"m_op": "0",
+				"m_new": "4",
+				"_full_model": "[m_op = 0,\n m_new = 4,\n m_ins = [else -> True],\n m_mem = [else ->\n          And(Not(Var(0) == 1), Var(0) == 2, Var(1) == 3)]]"
+			},
+			"pass": true
+		},
+		{
+			"name": "wake.release-removes-ids-from-all-batches",
+			"kind": "inductive-step",
+			"meaning": "A returned ID is absent from every batch afterwards; the model removes it from all batches as the source does.",
+			"implementation": ["platform/daemon/src/cross-agent-wake.ts:releaseDirectMessageWakes"],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "release removes the ID from only one named batch",
+			"control_result": "sat",
+			"control_countermodel": {
+				"e_rb": "2",
+				"_full_model": "[e_rb = 2,\n e_mem = [else -> Var(0) == 1],\n e_ret = [else -> True]]"
+			},
+			"pass": true
+		},
+		{
+			"name": "wake.partial-release-keeps-unreleased-members",
+			"kind": "inductive-step",
+			"meaning": "A batch member whose ID was not returned stays in its batch, so the batch is still charged.",
+			"implementation": ["platform/daemon/src/cross-agent-wake.ts:releaseDirectMessageWakes"],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "release drops the whole batch when any member is returned",
+			"control_result": "sat",
+			"control_countermodel": {
+				"_full_model": "[p_ret = [2 -> True, else -> False], p_mem = [else -> True]]"
+			},
+			"pass": true
+		},
+		{
+			"name": "wake.expiry-uses-elapsed-clock",
+			"kind": "elementary-lemma",
+			"meaning": "Rate-window retention is measured on the elapsed clock; after a full real window the charge is not retained. The control substitutes a wall clock stepped backwards.",
+			"implementation": [
+				"platform/daemon/src/cross-agent-wake.ts:recentWakes",
+				"platform/daemon/src/cross-agent-wake.ts:performance.now"
+			],
+			"refinement_hypotheses": ["H-monotonic: performance.now is monotonic within the daemon process."],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "retention measured on a wall clock that was stepped backwards",
+			"control_result": "sat",
+			"control_countermodel": {
+				"t_now": "1/2",
+				"t_window": "1/2",
+				"t_recorded": "0",
+				"t_step": "1/2",
+				"_full_model": "[t_now = 1/2, t_window = 1/2, t_recorded = 0, t_step = 1/2]"
+			},
+			"pass": true
+		},
+		{
+			"name": "wake.session-end-consumes-delivery-once",
+			"kind": "inductive-step",
+			"meaning": "After a session-end consume the boundary covers the delivered sequence, so a second Stop with no new delivery counts nothing.",
+			"implementation": ["platform/daemon/src/cross-agent-wake.ts:consumeSessionEndWake"],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "boundary not advanced when a delivery is counted",
+			"control_result": "sat",
+			"control_countermodel": {
+				"s_boundary": "0",
+				"s_global": "1",
+				"s_delivered": "1",
+				"_full_model": "[s_boundary = 0, s_global = 1, s_delivered = 1]"
+			},
+			"pass": true
+		},
+		{
+			"name": "board.append-preserves-post-invariant",
+			"kind": "inductive-step",
+			"meaning": "Appending a post with sequence MAX+1 preserves 'every live sequence is in 1..head and unique'. Mutation reuses the current head value.",
+			"implementation": [
+				"platform/daemon/src/board.ts:createBoardThread",
+				"platform/daemon/src/board.ts:replyToBoardThread"
+			],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "new post is assigned the current head sequence",
+			"control_result": "sat",
+			"control_countermodel": {
+				"a_fresh": "3",
+				"a_head": "1",
+				"a_top": "2",
+				"a_seq": "Store(K(Int, 0), 2, 1)",
+				"_full_model": "[a_fresh = 3,\n a_head = 1,\n a_top = 2,\n a_seq = Store(K(Int, 0), 2, 1)]"
+			},
+			"pass": true
+		},
+		{
+			"name": "board.delete-preserves-post-invariant",
+			"kind": "inductive-step",
+			"meaning": "Deleting one live post preserves the same bounded-unique invariant. The abstract deletion retains its previous upper bound. Reduction of the actual SQL MAX after deleting a maximal post is not modelled by this transition.",
+			"implementation": ["platform/daemon/src/board.ts:deleteBoardThread"],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": null,
+			"control_result": null,
+			"control_countermodel": null,
+			"pass": true
+		},
+		{
+			"name": "board.snapshot-read-leaves-later-post-unread",
+			"kind": "inductive-step",
+			"meaning": "Marking the post ID returned by the first-page read leaves a strictly later post unread.",
+			"implementation": [
+				"platform/daemon/src/board.ts:readBoardThread",
+				"platform/daemon/src/board.ts:markBoardThreadRead"
+			],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "cursor set to the live head at write time",
+			"control_result": "sat",
+			"control_countermodel": {
+				"rs_read": "0",
+				"rs_cutoff": "0",
+				"rs_later": "1",
+				"rs_head": "1",
+				"_full_model": "[rs_read = 0, rs_cutoff = 0, rs_later = 1, rs_head = 1]"
+			},
+			"pass": true
+		},
+		{
+			"name": "board.read-cursor-monotonic",
+			"kind": "elementary-lemma",
+			"meaning": "An out-of-order older read cannot move the stored cursor backwards.",
+			"implementation": ["platform/daemon/src/board.ts:markBoardThreadRead ON CONFLICT WHERE"],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "cursor overwritten by the incoming value",
+			"control_result": "sat",
+			"control_countermodel": {
+				"rm_read": "1",
+				"rm_cutoff": "0",
+				"_full_model": "[rm_read = 1, rm_cutoff = 0]"
+			},
+			"pass": true
+		},
+		{
+			"name": "board.offset-page-leaves-cursor",
+			"kind": "inductive-step",
+			"meaning": "An offset page does not advance the cursor past skipped posts, given the client-side guard offset == 0 before marking.",
+			"implementation": [
+				"platform/daemon/src/mcp/tools.ts:board_read",
+				"integrations/pi/extension/src/collab-tools.ts:board_read",
+				"integrations/hermes-agent/connector/hermes-plugin/__init__.py:board_read"
+			],
+			"refinement_hypotheses": [
+				"H-client: each of the three clients applies the offset guard; raw HTTP mark-to-head is a separate explicit operation."
+			],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "client marks read regardless of offset",
+			"control_result": "sat",
+			"control_countermodel": {
+				"o_read": "0",
+				"o_offset": "1",
+				"o_cutoff": "1",
+				"_full_model": "[o_read = 0, o_offset = 1, o_cutoff = 1]"
+			},
+			"pass": true
+		},
+		{
+			"name": "board.notice-snapshot-leaves-later-reply-eligible",
+			"kind": "inductive-step",
+			"meaning": "A notice records the scanned sequence; a later reply stays eligible.",
+			"implementation": ["platform/daemon/src/board.ts:claimBoardActivityNotices"],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "notice cursor set to the live head at write time",
+			"control_result": "sat",
+			"control_countermodel": {
+				"n_own": "0",
+				"n_read": "0",
+				"n_head": "1",
+				"n_scanned": "0",
+				"n_later": "1",
+				"n_notice": "0",
+				"_full_model": "[n_own = 0,\n n_read = 0,\n n_head = 1,\n n_scanned = 0,\n n_later = 1,\n n_notice = 0]"
+			},
+			"pass": true
+		},
+		{
+			"name": "evidence.same-identity-upsert-idempotent",
+			"kind": "elementary-lemma",
+			"meaning": "Source-row existence is idempotent when the complete identity is unchanged. Real rows also update hash and metadata; this is existence only.",
+			"implementation": ["platform/daemon/src/memory-lineage.ts:indexExternalMemoryArtifact"],
+			"refinement_hypotheses": [],
+			"premises_satisfiable": "sat",
+			"negated_property": "unsat",
+			"control_description": "second upsert uses a different identity",
+			"control_result": "sat",
+			"control_countermodel": {
+				"v_artifacts": "K(Int, False)",
+				"v_key": "0",
+				"_full_model": "[v_artifacts = K(Int, False), v_key = 0, Ext = [else -> 1]]"
+			},
+			"pass": true
+		}
+	],
+	"cross_source_illustration": {
+		"result": "sat",
+		"label": "illustration: a constructed witness that two distinct source identities may carry equal payloads. Not an existence claim about the system; the Dreaming probe is the real-data evidence."
+	},
+	"remaining_refinement_assumptions": [
+		"H-guard: acceptance implies the modelled identity guard, for enforced non-admin agent-scoped tokens only. local mode, admin tokens, project-only tokens and hybrid without claims bypass enforcement and receive no protection claim.",
+		"H-exclusive: newly inserted IDs occur in no live batch; claim-row absence must be linked to batch absence by a separate source lifecycle argument.",
+		"H-serial: serialized logical delivery, one live waiter per (agent, session key), charge only after a completed claim; no general concurrency proof.",
+		"H-monotonic: performance.now is monotonic in-process.",
+		"H-client: all three board clients apply the offset guard.",
+		"Expiry/eviction deletion resetting claim rows is not modelled.",
+		"SQLite atomicity and unique constraints; exact JS/SQLite integer representation."
+	],
+	"not_proved": [
+		"Whole-program refinement, compiler/runtime/OS correctness, absence of implementation bugs.",
+		"Fair scheduling, host availability, unconditional liveness, exactly-once host execution.",
+		"Semantic deduplication of board events repeated in transcripts; retraction of derived claims after thread deletion.",
+		"Protection for non-enforced auth modes."
+	]
+}
