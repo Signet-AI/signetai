@@ -10,7 +10,9 @@ import type {
 	BoardThread,
 	AgentMessageListResponse,
 	AgentMessageSendResponse,
+	AgentPresenceContext,
 	AgentPresenceListResponse,
+	AgentSessionInspectResponse,
 	AgentPresenceUpdateResponse,
 	AspectAttributesResponse,
 	CompactionCompleteResponse,
@@ -360,17 +362,56 @@ export class SignetClientP2 {
 		readonly project?: string;
 		readonly includeSelf?: boolean;
 		readonly limit?: number;
+		readonly scope?: "all";
 	}): Promise<AgentPresenceListResponse> {
-		return this.transport.get<AgentPresenceListResponse>("/api/cross-agent/presence", opts);
+		return this.transport.get<AgentPresenceListResponse>("/api/cross-agent/presence", {
+			agent_id: opts?.agentId,
+			session_key: opts?.sessionKey,
+			project: opts?.project,
+			include_self: opts?.includeSelf,
+			limit: opts?.limit,
+			scope: opts?.scope,
+		});
 	}
 	async updateAgentPresence(opts: {
-		readonly harness: string;
+		readonly harness?: string;
 		readonly runtimePath?: "plugin" | "legacy";
 		readonly agentId?: string;
 		readonly sessionKey?: string;
 		readonly project?: string;
+		readonly provider?: string;
+		readonly context?: AgentPresenceContext;
 	}): Promise<AgentPresenceUpdateResponse> {
 		return this.transport.post<AgentPresenceUpdateResponse>("/api/cross-agent/presence", opts);
+	}
+	async updateAgentContext(opts: {
+		readonly sessionKey: string;
+		readonly context: AgentPresenceContext;
+		readonly agentId?: string;
+		readonly harness?: string;
+	}): Promise<AgentPresenceUpdateResponse> {
+		return this.transport.post<AgentPresenceUpdateResponse>("/api/cross-agent/presence", opts);
+	}
+	async inspectAgentSession(
+		sessionKey: string,
+		opts?: {
+			readonly sessionAgentId?: string;
+			readonly agentId?: string;
+			readonly callerSessionKey?: string;
+			readonly maxMessages?: number;
+			readonly scope?: "all";
+		},
+	): Promise<AgentSessionInspectResponse> {
+		return this.transport.get<AgentSessionInspectResponse>(
+			`/api/cross-agent/sessions/${encodeURIComponent(sessionKey)}/context`,
+			{
+				target_agent_id: opts?.sessionAgentId,
+				agent_id: opts?.agentId,
+				caller_session_key: opts?.callerSessionKey,
+				max_messages: opts?.maxMessages,
+				scope: opts?.scope,
+			},
+		);
 	}
 	async removeAgentPresence(sessionKey: string): Promise<{ readonly removed: boolean }> {
 		return this.transport.del<{ readonly removed: boolean }>(`/api/cross-agent/presence/${sessionKey}`, {});

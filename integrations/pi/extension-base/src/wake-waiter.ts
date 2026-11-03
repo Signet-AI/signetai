@@ -1,5 +1,6 @@
 import type { DaemonClient } from "./daemon-client.js";
 import { readTrimmedString } from "./helpers.js";
+import type { PeerContext } from "./peer-context.js";
 
 export const WAKE_WAIT_MS = 25_000;
 export const WAKE_REQUEST_TIMEOUT_MS = WAKE_WAIT_MS + 10_000;
@@ -26,6 +27,7 @@ export interface WakeWaiterOptions {
 	readonly harness: string;
 	readonly agentId: string | undefined;
 	readonly deliver: (inject: string) => unknown;
+	readonly context?: () => PeerContext | undefined;
 	readonly waitMs?: number;
 	readonly defaultRetryMs?: number;
 	readonly minLoopMs?: number;
@@ -73,6 +75,11 @@ export function createWakeWaiter(options: WakeWaiterOptions): WakeWaiter {
 	let activeKey: string | undefined;
 	let activeProject: string | undefined;
 
+	function contextField(): { context?: PeerContext } {
+		const context = options.context?.();
+		return context ? { context } : {};
+	}
+
 	async function release(session: WakeSessionRef, ids: readonly string[] | undefined): Promise<boolean> {
 		const messageIds = (ids ?? []).filter((id) => typeof id === "string");
 		if (messageIds.length === 0) return true;
@@ -101,6 +108,7 @@ export function createWakeWaiter(options: WakeWaiterOptions): WakeWaiter {
 					sessionKey: session.sessionKey,
 					agentId: options.agentId,
 					project: session.project,
+					...contextField(),
 					waitMs,
 				},
 				waitMs + 10_000,

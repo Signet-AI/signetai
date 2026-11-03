@@ -2,6 +2,7 @@ import { type DaemonFetchResult, type DaemonRequestClient, readTrimmedString } f
 import type { DaemonClient } from "@signet/pi-extension-base";
 import { Type } from "@sinclair/typebox";
 import { currentSessionRef } from "./lifecycle.js";
+import { type PeerContextController, createPeerContextController } from "./peer-context.js";
 import {
 	HARNESS,
 	type PiExtensionApi,
@@ -63,7 +64,12 @@ function readThroughPostId(data: unknown): string | undefined {
 	return typeof id === "string" && id ? id : undefined;
 }
 
-export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, agentId: string | undefined): void {
+export function registerCollabTools(
+	pi: PiExtensionApi,
+	client: CollabClient,
+	agentId: string | undefined,
+	peers: PeerContextController = createPeerContextController(client, agentId),
+): void {
 	const sessionOf = (ctx: PiExtensionContext): string | undefined =>
 		readTrimmedString(currentSessionRef(ctx).sessionId);
 
@@ -109,6 +115,54 @@ export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, ag
 			})}`;
 			const result = await client.getResult<unknown>(path, READ_TIMEOUT, signal);
 			return result.ok ? ok(result.data) : fail(`Peer list failed: ${describeFailure(result)}`);
+		},
+	);
+
+	define(
+		"agent_context_update",
+		"Update Session Context",
+		"Update what this session advertises to peer agents: its current task and/or self-reported resource tags (e.g. 'gpu:0', 'port:3000'). Only affects the calling session. cwd, hostname, title and modified files are collected automatically. An empty resources list clears resources; an empty task clears the task.",
+		Type.Object({
+			task: Type.Optional(Type.String({ description: "Short current-task description (max 400 chars)" })),
+			resources: Type.Optional(
+				Type.Array(Type.String(), { description: "Self-reported resource tags (max 20); [] clears" }),
+			),
+		}),
+		async (params, ctx, signal) => {
+			const outcome = await peers.update(
+				ctx,
+				{
+					task: typeof params.task === "string" ? params.task : undefined,
+					resources: Array.isArray(params.resources) ? params.resources : undefined,
+				},
+				signal,
+			);
+			return outcome.ok
+				? ok({ context: outcome.context, presence: outcome.presence })
+				: fail(`Context update failed: ${outcome.error}`);
+		},
+	);
+
+	define(
+		"agent_session_inspect",
+		"Inspect Peer Session",
+		`Inspect one peer agent session: its advertised presence/context plus up to 5 recent messages (bounded). The daemon decides visibility. ${UNTRUSTED}`,
+		Type.Object({
+			session_key: Type.String({ description: "Session key from agent_peers" }),
+			session_agent_id: Type.Optional(
+				Type.String({ description: "Agent id owning that session, if not the caller's" }),
+			),
+		}),
+		async (params, ctx, signal) => {
+			const key = str(params.session_key);
+			if (!key) return fail("session_key is required");
+			const path = `/api/cross-agent/sessions/${enc(key)}/context${query({
+				target_agent_id: str(params.session_agent_id),
+				agent_id: agentId,
+				caller_session_key: sessionOf(ctx),
+			})}`;
+			const result = await client.getResult<unknown>(path, READ_TIMEOUT, signal);
+			return result.ok ? ok(result.data) : fail(`Session inspect failed: ${describeFailure(result)}`);
 		},
 	);
 

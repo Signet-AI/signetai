@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, hasDbAccessor } from "./db-accessor";
+import {
+	type AgentPresenceContext,
+	type AgentPresenceContextPatch,
+	applyContextDefaults,
+	cloneContext,
+	mergePresenceContext,
+} from "./cross-agent-context";
 import { getDbOwnerForAccessor } from "./db-owner-runtime";
 import { ownerRun } from "./db-owner-sql";
 export { relayMessageViaAcp, type AcpRelayRequest, type AcpRelayResult } from "./cross-agent-acp";
@@ -20,6 +27,8 @@ export interface AgentPresence {
 	readonly provider?: string;
 	readonly startedAt: string;
 	readonly lastSeenAt: string;
+	readonly context?: AgentPresenceContext;
+	readonly contextUpdatedAt?: string;
 }
 
 export interface UpsertAgentPresenceInput {
@@ -29,9 +38,12 @@ export interface UpsertAgentPresenceInput {
 	readonly project?: string;
 	readonly runtimePath?: "plugin" | "legacy";
 	readonly provider?: string;
+	readonly context?: AgentPresenceContextPatch;
+	readonly contextDefaults?: AgentPresenceContextPatch;
 }
 
 export interface ListAgentPresenceOptions {
+	readonly allowedAgentIds?: ReadonlySet<string> | null;
 	readonly agentId?: string;
 	readonly includeSelf?: boolean;
 	readonly sessionKey?: string;
@@ -49,6 +61,8 @@ interface MutableAgentPresence {
 	provider?: string;
 	startedAt: string;
 	lastSeenAt: string;
+	context?: AgentPresenceContext;
+	contextUpdatedAt?: string;
 }
 
 export interface AgentMessage {
@@ -263,7 +277,25 @@ function clonePresence(presence: MutableAgentPresence): AgentPresence {
 		provider: presence.provider,
 		startedAt: presence.startedAt,
 		lastSeenAt: presence.lastSeenAt,
+		...(presence.context ? { context: cloneContext(presence.context) } : {}),
+		...(presence.contextUpdatedAt ? { contextUpdatedAt: presence.contextUpdatedAt } : {}),
 	};
+}
+
+function applyPresenceContext(
+	presence: MutableAgentPresence,
+	input: { readonly context?: AgentPresenceContextPatch; readonly contextDefaults?: AgentPresenceContextPatch },
+	now: string,
+): void {
+	const defaults = applyContextDefaults(presence.context, input.contextDefaults);
+	const explicit = input.context;
+	if (!explicit && !defaults) return;
+	const before = JSON.stringify(cloneContext(presence.context) ?? null);
+	const merged = mergePresenceContext(mergePresenceContext(presence.context, defaults), explicit);
+	if (JSON.stringify(cloneContext(merged) ?? null) === before) return;
+	if (merged) presence.context = merged;
+	else delete presence.context;
+	presence.contextUpdatedAt = now;
 }
 
 function emit(event: CrossAgentEvent): void {
@@ -327,6 +359,13 @@ export function getAgentPresenceForSession(sessionKey: string): AgentPresence | 
 	return presence ? clonePresence(presence) : null;
 }
 
+export function getAgentPresenceForSessionAgent(sessionKey: string, agentId: string): AgentPresence | null {
+	const normalizedAgent = normalizeText(agentId);
+	if (!normalizedAgent) return null;
+	const presence = getAgentPresenceForSession(sessionKey);
+	return presence && presence.agentId === normalizedAgent ? presence : null;
+}
+
 export function isMessageVisibleToAgent(
 	message: AgentMessage,
 	options: {
@@ -372,7 +411,18 @@ export function upsertAgentPresence(input: UpsertAgentPresenceInput): AgentPrese
 	const project = normalizeText(input.project);
 	const provider = normalizeText(input.provider);
 
-	const existing = presenceByKey.get(key);
+	let existing = presenceByKey.get(key);
+	if (existing && existing.agentId !== agentId) {
+		presenceByKey.delete(key);
+		emit({
+			type: "presence",
+			action: "remove",
+			presence: clonePresence(existing),
+			activeCount: presenceByKey.size,
+			timestamp: now,
+		});
+		existing = undefined;
+	}
 	if (existing) {
 		existing.sessionKey = sessionKey;
 		existing.agentId = agentId;
@@ -381,6 +431,7 @@ export function upsertAgentPresence(input: UpsertAgentPresenceInput): AgentPrese
 		existing.runtimePath = input.runtimePath;
 		existing.provider = provider;
 		existing.lastSeenAt = now;
+		applyPresenceContext(existing, input, now);
 
 		const out = clonePresence(existing);
 		emit({
@@ -404,6 +455,7 @@ export function upsertAgentPresence(input: UpsertAgentPresenceInput): AgentPrese
 		startedAt: now,
 		lastSeenAt: now,
 	};
+	applyPresenceContext(created, input, now);
 	presenceByKey.set(key, created);
 
 	const out = clonePresence(created);
@@ -417,14 +469,23 @@ export function upsertAgentPresence(input: UpsertAgentPresenceInput): AgentPrese
 	return out;
 }
 
-export function touchAgentPresence(sessionKey: string, agentId?: string): AgentPresence | null {
+export function touchAgentPresence(
+	sessionKey: string,
+	agentId?: string,
+	contextInput: {
+		readonly context?: AgentPresenceContextPatch;
+		readonly contextDefaults?: AgentPresenceContextPatch;
+	} = {},
+): AgentPresence | null {
 	const normalized = normalizeText(sessionKey);
 	if (!normalized) return null;
 	prunePresence();
 	const presence = presenceByKey.get(`session:${normalized}`);
 	if (!presence) return null;
 	if (agentId && presence.agentId !== agentId) return null;
-	presence.lastSeenAt = new Date().toISOString();
+	const now = new Date().toISOString();
+	presence.lastSeenAt = now;
+	applyPresenceContext(presence, contextInput, now);
 	return clonePresence(presence);
 }
 
@@ -457,8 +518,10 @@ export function listAgentPresence(options: ListAgentPresenceOptions = {}): Agent
 	const includeSelf = options.includeSelf !== false;
 	const limit = options.limit && options.limit > 0 ? options.limit : 50;
 
+	const allowed = options.allowedAgentIds;
 	return [...presenceByKey.values()]
 		.filter((presence) => {
+			if (allowed && !allowed.has(presence.agentId)) return false;
 			if (project && presence.project !== project) return false;
 			if (!agentId) return true;
 			if (includeSelf) return true;
@@ -693,7 +756,7 @@ export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage
 			row.created_at,
 			row.expires_at,
 		);
-	}, "cross-agent.ts:652");
+	}, "cross-agent.ts:715");
 
 	const out = rowToAgentMessage(row);
 	emit({ type: "message", message: out, timestamp: now });
@@ -796,7 +859,7 @@ export function claimAcpMessageDelivery(input: {
 		if (row == null) throw new AgentMessageNotFoundError(messageId);
 		if (agentId && row.from_agent_id !== agentId) throw new AgentMessageNotFoundError(messageId);
 		attempt = buildAcpAttempt(row);
-	}, "cross-agent.ts:775");
+	}, "cross-agent.ts:838");
 	if (attempt == null) throw new AgentMessageNotFoundError(messageId);
 	return attempt;
 }
@@ -839,7 +902,7 @@ export function completeAcpMessageDelivery(
 		const row = readMessageRow(db, normalizedId);
 		if (row == null) throw new AgentMessageNotFoundError(normalizedId);
 		updated = rowToAgentMessage(row);
-	}, "cross-agent.ts:820");
+	}, "cross-agent.ts:883");
 	if (updated == null) throw new AgentMessageNotFoundError(normalizedId);
 	emit({ type: "message", message: updated, timestamp: now });
 	return updated;
@@ -878,7 +941,7 @@ export function updateAgentMessageDelivery(
 		const row = readMessageRow(db, normalizedId);
 		if (row == null) throw new AgentMessageNotFoundError(normalizedId);
 		updated = rowToAgentMessage(row);
-	}, "cross-agent.ts:863");
+	}, "cross-agent.ts:926");
 	if (updated == null) throw new AgentMessageNotFoundError(normalizedId);
 	emit({ type: "message", message: updated, timestamp: now });
 	return updated;
@@ -950,7 +1013,7 @@ export function listAgentMessagePage(options: ListAgentMessageOptions = {}): Age
 			offset,
 			hasMore: offset + items.length < total,
 		};
-	}, "cross-agent.ts:929");
+	}, "cross-agent.ts:992");
 }
 
 export function listAgentMessages(options: ListAgentMessageOptions = {}): AgentMessage[] {
@@ -1007,7 +1070,7 @@ export function acknowledgeAgentMessage(input: AcknowledgeAgentMessageInput): Ac
 		const acknowledgedAt = receipt?.acknowledged_at;
 		if (!acknowledgedAt) throw new Error("Failed to persist cross-agent acknowledgement");
 		return { messageId, agentId, acknowledgedAt, alreadyAcknowledged: false };
-	}, "cross-agent.ts:968");
+	}, "cross-agent.ts:1031");
 }
 
 export function subscribeCrossAgentEvents(subscriber: (event: CrossAgentEvent) => void): () => void {
@@ -1042,5 +1105,5 @@ export function resetCrossAgentStateForTest(): void {
 		db.prepare("DELETE FROM cross_agent_message_wakes").run();
 		db.prepare("DELETE FROM cross_agent_message_receipts").run();
 		db.prepare("DELETE FROM cross_agent_messages").run();
-	}, "cross-agent.ts:1041");
+	}, "cross-agent.ts:1104");
 }

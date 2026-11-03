@@ -212,8 +212,8 @@ function agentVisibility(viewer: BoardViewer, column: string): { sql: string; ar
 const EVENT_VISIBILITY_REFRESH_MS = 30_000;
 const EVENT_VISIBILITY_REFRESH_TIMEOUT_MS = 3_000;
 
-async function eventVisibilityPredicate(viewer: BoardViewer): Promise<(authorAgentId: string) => boolean> {
-	if (viewer.kind === "operator" || viewer.readPolicy === "shared") return () => true;
+export async function boardAuthorAudience(viewer: BoardViewer): Promise<ReadonlySet<string> | null> {
+	if (viewer.kind === "operator" || viewer.readPolicy === "shared") return null;
 	if (viewer.readPolicy === "group" && viewer.policyGroup) {
 		const rows = await dbOwnerQuery<readonly { readonly id: string }[]>(
 			ownerStatement("SELECT id FROM agents WHERE policy_group = ?", [viewer.policyGroup], "all"),
@@ -221,9 +221,14 @@ async function eventVisibilityPredicate(viewer: BoardViewer): Promise<(authorAge
 		);
 		const members = new Set(rows.map((row) => row.id));
 		members.add(viewer.agentId);
-		return (authorAgentId) => members.has(authorAgentId);
+		return members;
 	}
-	return (authorAgentId) => authorAgentId === viewer.agentId;
+	return new Set([viewer.agentId]);
+}
+
+async function eventVisibilityPredicate(viewer: BoardViewer): Promise<(authorAgentId: string) => boolean> {
+	const audience = await boardAuthorAudience(viewer);
+	return (authorAgentId) => audience === null || audience.has(authorAgentId);
 }
 
 export async function createBoardEventVisibility(

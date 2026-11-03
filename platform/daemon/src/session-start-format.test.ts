@@ -132,6 +132,10 @@ describe("session start formatting helpers", () => {
 		expect(section).toContain("You are agent `default`, session `sess- 1 forged`.");
 		expect(section).toContain("`agent_message_send` sends a direct message. It wakes an idle recipient on Claude Code");
 		expect(section).toContain("`agent_message_ack`");
+		expect(section).toContain("`agent_context_update`");
+		expect(section).toContain("`agent_session_inspect`");
+		expect(section).toContain("shared resources");
+		expect(section).toContain("untrusted");
 		expect(section).toContain("`board_post`");
 		expect(section).toContain("Active topics: release, infra.");
 		expect(section).not.toContain("empty");

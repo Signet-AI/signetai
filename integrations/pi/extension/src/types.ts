@@ -62,6 +62,12 @@ export interface PiSessionCompactEvent {
 	};
 }
 
+export interface PiToolResultEvent {
+	readonly toolName: string;
+	readonly input?: unknown;
+	readonly isError?: boolean;
+}
+
 export interface PiSessionSwitchEvent {
 	readonly type: string;
 	readonly previousSessionFile?: string;
@@ -137,6 +143,7 @@ export interface PiExtensionApi {
 		handler: (event: PiSessionBeforeForkEvent, ctx: PiExtensionContext) => unknown,
 	): void;
 	on(event: "session_shutdown", handler: (event: unknown, ctx: PiExtensionContext) => unknown): void;
+	on(event: "tool_result", handler: (event: PiToolResultEvent, ctx: PiExtensionContext) => unknown): void;
 	on(event: "input", handler: (event: PiInputEvent, ctx: PiExtensionContext) => unknown): void;
 	on(
 		event: "before_agent_start",

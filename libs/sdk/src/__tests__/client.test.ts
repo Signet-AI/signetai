@@ -632,4 +632,37 @@ describe("SignetClient", () => {
 			},
 		});
 	});
+	test("sends peer context and session inspection with canonical wire fields", async () => {
+		const { client } = mockDaemon();
+
+		await client.updateAgentContext({
+			sessionKey: "sess/1",
+			agentId: "a1",
+			context: { cwd: "/w", task: "train", modifiedFiles: ["a.ts"], resources: [] },
+		});
+		expect(lastRequest()).toMatchObject({
+			method: "POST",
+			path: "/api/cross-agent/presence",
+			body: {
+				sessionKey: "sess/1",
+				agentId: "a1",
+				context: { cwd: "/w", task: "train", modifiedFiles: ["a.ts"], resources: [] },
+			},
+		});
+
+		await client.inspectAgentSession("sess/1", {
+			sessionAgentId: "a2",
+			agentId: "a1",
+			callerSessionKey: "me",
+			maxMessages: 2,
+		});
+		expect(lastRequest()).toMatchObject({
+			method: "GET",
+			path: "/api/cross-agent/sessions/sess%2F1/context",
+			query: { target_agent_id: "a2", agent_id: "a1", caller_session_key: "me", max_messages: "2" },
+		});
+
+		await client.listAgentPresence({ agentId: "a1", includeSelf: true });
+		expect(lastRequest().query).toMatchObject({ agent_id: "a1", include_self: "true" });
+	});
 });

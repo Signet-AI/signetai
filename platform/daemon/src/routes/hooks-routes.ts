@@ -17,6 +17,8 @@ import {
 	claimAcpMessageDelivery,
 	completeAcpMessageDelivery,
 	createAgentMessage,
+	getAgentPresenceForSession,
+	getAgentPresenceForSessionAgent,
 	isMessageVisibleToAgent,
 	listAgentMessagePage,
 	listAgentMessages,
@@ -27,6 +29,15 @@ import {
 	touchAgentPresence,
 	upsertAgentPresence,
 } from "../cross-agent";
+import { boardAuthorAudience, createBoardEventVisibility, resolveBoardViewer } from "../board";
+import { contextFromProject, parsePresenceContext, type AgentPresenceContextPatch } from "../cross-agent-context";
+import {
+	INSPECT_DEFAULT_MESSAGES,
+	INSPECT_MAX_MESSAGES,
+	canViewSessionOf,
+	resolvePresenceAudience,
+	readTranscriptTail,
+} from "../cross-agent-inspect";
 import { getDbAccessor } from "../db-accessor";
 import { fetchEmbedding } from "../embedding-fetch";
 import type { EmbeddingRole } from "../embedding-profile";
@@ -115,6 +126,7 @@ import {
 	readOptionalJsonObject,
 	resolveScopedAgentId,
 	resolveScopedProject,
+	shouldEnforceAuthScope,
 	toRecord,
 	validateSessionAgentBinding,
 } from "./utils";
@@ -287,6 +299,37 @@ function parseOptionalNonNegativeInt(value: unknown): number | undefined {
 function isInternalCall(c: Context): boolean {
 	return c.req.header("x-signet-no-hooks") === "1";
 }
+type HookContextResult =
+	| { readonly ok: true; readonly patch: AgentPresenceContextPatch | undefined }
+	| { readonly ok: false; readonly response: Response };
+
+function resolveHookContext(
+	c: Context,
+	raw: unknown,
+	sessionKey: string | undefined,
+	agentId: string,
+): HookContextResult {
+	if (raw === undefined || typeof raw === "string") return { ok: true, patch: undefined };
+	const parsed = parsePresenceContext(raw);
+	if (!parsed.ok) return { ok: false, response: c.json({ error: parsed.error }, 400) };
+	if (parsed.patch && sessionKey) {
+		const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, {
+			requireExisting: false,
+			context: "sessionKey",
+		});
+		if (bindingError) return { ok: false, response: c.json({ error: bindingError }, 403) };
+	}
+	return { ok: true, patch: parsed.patch };
+}
+
+function hookContextDefaults(...candidates: readonly (string | undefined)[]): AgentPresenceContextPatch | undefined {
+	for (const candidate of candidates) {
+		const found = contextFromProject(candidate);
+		if (found) return found;
+	}
+	return undefined;
+}
+
 function checkBypass(body?: { sessionKey?: string; sessionId?: string; agentId?: string }): boolean {
 	const key = body?.sessionKey ?? body?.sessionId;
 	if (!key) return false;
@@ -410,6 +453,14 @@ function registerSessionStart(app: Hono): void {
 			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 			body.agentId = scopedAgent.agentId;
 
+			const startContext = resolveHookContext(
+				c,
+				body.context,
+				parseOptionalString(body.sessionKey),
+				scopedAgent.agentId,
+			);
+			if (!startContext.ok) return startContext.response;
+
 			if (body.sessionKey && runtimePath) {
 				const claim = claimSession(body.sessionKey, runtimePath, scopedAgent.agentId, body.harness);
 				if (!claim.ok) {
@@ -429,6 +480,8 @@ function registerSessionStart(app: Hono): void {
 				project: parseOptionalString(body.project),
 				runtimePath,
 				provider: body.harness,
+				context: startContext.patch,
+				contextDefaults: hookContextDefaults(body.cwd, parseOptionalString(body.project)),
 			});
 
 			stampHarness(body.harness);
@@ -506,6 +559,8 @@ function registerUserPromptSubmit(app: Hono): void {
 			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 			const agentId = scopedAgent.agentId;
 			body.agentId = agentId;
+			const promptContext = resolveHookContext(c, body.context, sessionKey, agentId);
+			if (!promptContext.ok) return promptContext.response;
 			const known = sessionKey ? hasSession(sessionKey, agentId) : false;
 			const duplicate = claimAutomaticSessionOrSkip(
 				sessionKey,
@@ -524,7 +579,10 @@ function registerUserPromptSubmit(app: Hono): void {
 				return c.json(duplicate);
 			}
 			if (sessionKey) {
-				const touched = touchAgentPresence(sessionKey);
+				const touched = touchAgentPresence(sessionKey, agentId, {
+					context: promptContext.patch,
+					contextDefaults: hookContextDefaults(parseOptionalString(body.project)),
+				});
 				if (!touched) {
 					upsertAgentPresence({
 						sessionKey,
@@ -533,6 +591,8 @@ function registerUserPromptSubmit(app: Hono): void {
 						project: parseOptionalString(body.project),
 						runtimePath,
 						provider: body.harness,
+						context: promptContext.patch,
+						contextDefaults: hookContextDefaults(parseOptionalString(body.project)),
 					});
 				}
 			} else {
@@ -542,6 +602,8 @@ function registerUserPromptSubmit(app: Hono): void {
 					project: parseOptionalString(body.project),
 					runtimePath,
 					provider: body.harness,
+					context: promptContext.patch,
+					contextDefaults: hookContextDefaults(parseOptionalString(body.project)),
 				});
 			}
 
@@ -611,8 +673,10 @@ function registerNotifications(app: Hono): void {
 				return c.json({ inject: "", bypassed: true });
 			}
 
+			const noticeContext = resolveHookContext(c, payload.context, sessionKey, scopedAgent.agentId);
+			if (!noticeContext.ok) return noticeContext.response;
 			if (sessionKey) {
-				const touched = touchAgentPresence(sessionKey, scopedAgent.agentId);
+				const touched = touchAgentPresence(sessionKey, scopedAgent.agentId, { context: noticeContext.patch });
 				if (!touched) {
 					upsertAgentPresence({
 						sessionKey,
@@ -620,6 +684,8 @@ function registerNotifications(app: Hono): void {
 						harness,
 						project: parseOptionalString(payload.project),
 						provider: harness,
+						context: noticeContext.patch,
+						contextDefaults: hookContextDefaults(parseOptionalString(payload.project)),
 					});
 				}
 			}
@@ -662,7 +728,9 @@ function registerDirectMessageWake(app: Hono): void {
 			return c.json({ wake: false, reason: "bypassed", retryAfterMs: 300_000 });
 		}
 
-		const touched = touchAgentPresence(sessionKey, scopedAgent.agentId);
+		const wakeContext = resolveHookContext(c, payload.context, sessionKey, scopedAgent.agentId);
+		if (!wakeContext.ok) return wakeContext.response;
+		const touched = touchAgentPresence(sessionKey, scopedAgent.agentId, { context: wakeContext.patch });
 		if (!touched) {
 			upsertAgentPresence({
 				sessionKey,
@@ -670,6 +738,8 @@ function registerDirectMessageWake(app: Hono): void {
 				harness,
 				project: parseOptionalString(payload.project),
 				provider: harness,
+				context: wakeContext.patch,
+				contextDefaults: hookContextDefaults(parseOptionalString(payload.project)),
 			});
 		}
 		stampHarness(harness);
@@ -1493,12 +1563,16 @@ function resolveCrossAgentScope(
 }
 
 function registerCrossAgentPresence(app: Hono): void {
-	app.get("/api/cross-agent/presence", (c) => {
+	app.get("/api/cross-agent/presence", async (c) => {
 		const includeSelf = parseOptionalBoolean(c.req.query("include_self")) ?? false;
 		const limit = parseOptionalInt(c.req.query("limit")) ?? 50;
 		const requestedAgent = parseOptionalString(c.req.query("agent_id"));
 		const sessionKey = parseOptionalString(c.req.query("session_key"));
 		const project = parseOptionalString(c.req.query("project"));
+		const scopeAll = c.req.query("scope");
+		if (scopeAll !== undefined && scopeAll !== "all") {
+			return c.json({ error: "scope must be 'all' when provided" }, 400);
+		}
 		const scopedAgent = resolveCrossAgentScope(c, requestedAgent, sessionKey);
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
@@ -1510,19 +1584,26 @@ function registerCrossAgentPresence(app: Hono): void {
 		if (sessionError) {
 			return c.json({ error: sessionError }, 403);
 		}
+		const operator = scopeAll === "all";
+		if (operator && shouldEnforceAuthScope(c) && c.get("auth")?.claims?.role !== "admin") {
+			return c.json({ error: "scope=all requires local mode or an admin token" }, 403);
+		}
 
-		const sessions = listAgentPresence({
-			agentId: scopedAgent.agentId,
-			sessionKey,
-			project,
-			includeSelf,
-			limit,
-		});
-
-		return c.json({
-			sessions,
-			count: sessions.length,
-		});
+		try {
+			const allowedAgentIds = operator ? null : await resolvePresenceAudience(scopedAgent.agentId);
+			const sessions = listAgentPresence({
+				agentId: scopedAgent.agentId,
+				sessionKey,
+				project,
+				includeSelf,
+				limit,
+				allowedAgentIds,
+			});
+			return c.json({ sessions, count: sessions.length });
+		} catch (error) {
+			logger.error("hooks", "Presence listing failed", error instanceof Error ? error : new Error(String(error)));
+			return c.json({ error: "Failed to list presence" }, 500);
+		}
 	});
 
 	app.post("/api/cross-agent/presence", async (c) => {
@@ -1531,13 +1612,11 @@ function registerCrossAgentPresence(app: Hono): void {
 			return c.json({ error: "invalid request body" }, 400);
 		}
 
-		const harness = parseOptionalString(payload.harness);
-		if (!harness) {
-			return c.json({ error: "harness is required" }, 400);
+		const parsedContext = parsePresenceContext(payload.context);
+		if (!parsedContext.ok) {
+			return c.json({ error: parsedContext.error }, 400);
 		}
 
-		const runtimePathRaw = parseOptionalString(payload.runtimePath);
-		const runtimePath = runtimePathRaw === "plugin" || runtimePathRaw === "legacy" ? runtimePathRaw : undefined;
 		const sessionKey = parseOptionalString(payload.sessionKey);
 		const scopedAgent = resolveCrossAgentScope(c, parseOptionalString(payload.agentId), sessionKey);
 		if (scopedAgent.error) {
@@ -1551,16 +1630,100 @@ function registerCrossAgentPresence(app: Hono): void {
 			return c.json({ error: sessionError }, 403);
 		}
 
+		const existing = sessionKey ? getAgentPresenceForSession(sessionKey) : null;
+		const owned = existing && existing.agentId === scopedAgent.agentId ? existing : null;
+		const harness = parseOptionalString(payload.harness) ?? owned?.harness;
+		if (!harness) {
+			return c.json({ error: "harness is required" }, 400);
+		}
+
+		const runtimePathRaw = parseOptionalString(payload.runtimePath);
+		const runtimePath =
+			runtimePathRaw === "plugin" || runtimePathRaw === "legacy" ? runtimePathRaw : owned?.runtimePath;
+
+		const project = parseOptionalString(payload.project) ?? owned?.project;
 		const presence = upsertAgentPresence({
 			sessionKey,
 			agentId: scopedAgent.agentId,
 			harness,
-			project: parseOptionalString(payload.project),
+			project,
 			runtimePath,
-			provider: parseOptionalString(payload.provider) ?? harness,
+			provider: parseOptionalString(payload.provider) ?? owned?.provider ?? harness,
+			context: parsedContext.patch,
+			contextDefaults: owned ? undefined : hookContextDefaults(project),
 		});
 
 		return c.json({ presence });
+	});
+
+	app.get("/api/cross-agent/sessions/:sessionKey/context", async (c) => {
+		const targetSessionKey = parseOptionalString(c.req.param("sessionKey"));
+		if (!targetSessionKey) return c.json({ error: "session key is required" }, 400);
+
+		const limitRaw = c.req.query("max_messages");
+		let maxMessages = INSPECT_DEFAULT_MESSAGES;
+		if (limitRaw !== undefined) {
+			const parsed = parseOptionalInt(limitRaw);
+			if (parsed === undefined || parsed < 1 || parsed > INSPECT_MAX_MESSAGES) {
+				return c.json({ error: `max_messages must be between 1 and ${INSPECT_MAX_MESSAGES}` }, 400);
+			}
+			maxMessages = parsed;
+		}
+
+		const scopeAll = c.req.query("scope");
+		if (scopeAll !== undefined && scopeAll !== "all") {
+			return c.json({ error: "scope must be 'all' when provided" }, 400);
+		}
+		const callerSessionKey = parseOptionalString(c.req.query("caller_session_key"));
+		const scopedAgent = resolveCrossAgentScope(c, parseOptionalString(c.req.query("agent_id")), callerSessionKey);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const callerError = validateSessionAgentBinding(c, callerSessionKey, scopedAgent.agentId, {
+			requireExisting: true,
+			context: "caller_session_key",
+		});
+		if (callerError) return c.json({ error: callerError }, 403);
+
+		const operator = scopeAll === "all";
+		if (operator && shouldEnforceAuthScope(c) && c.get("auth")?.claims?.role !== "admin") {
+			return c.json({ error: "scope=all requires local mode or an admin token" }, 403);
+		}
+
+		const targetAgentId = parseOptionalString(c.req.query("target_agent_id"));
+		const target =
+			targetAgentId === undefined
+				? getAgentPresenceForSession(targetSessionKey)
+				: getAgentPresenceForSessionAgent(targetSessionKey, targetAgentId);
+		if (!target) {
+			return c.json({ error: "session not found" }, 404);
+		}
+
+		try {
+			if (!operator && !(await canViewSessionOf(scopedAgent.agentId, target.agentId))) {
+				return c.json({ error: "session is not visible to this agent" }, 403);
+			}
+			const tail = await readTranscriptTail(target.agentId, targetSessionKey, maxMessages);
+			return c.json({
+				presence: target,
+				recentMessages: tail.recentMessages,
+				truncated: tail.truncated,
+				provenance: {
+					presence: "self-reported",
+					transcript: tail.available ? "signet-captured-tail" : "unavailable",
+					transcriptUpdatedAt: tail.transcriptUpdatedAt,
+					transcriptBytes: tail.transcriptBytes,
+					bytesRead: tail.bytesRead,
+					roles: "user-and-assistant-only",
+					untrusted: true,
+				},
+			});
+		} catch (error) {
+			logger.error(
+				"hooks",
+				"Session context inspection failed",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			return c.json({ error: "Failed to inspect session context" }, 500);
+		}
 	});
 
 	app.delete("/api/cross-agent/presence/:sessionKey", (c) => {
@@ -1817,7 +1980,7 @@ function registerCrossAgentMessages(app: Hono): void {
 }
 
 function registerCrossAgentStream(app: Hono): void {
-	app.get("/api/cross-agent/stream", (c) => {
+	app.get("/api/cross-agent/stream", async (c) => {
 		const requestedAgent = parseOptionalString(c.req.query("agent_id"));
 		const sessionKey = parseOptionalString(c.req.query("session_key"));
 		const project = parseOptionalString(c.req.query("project"));
@@ -1835,6 +1998,17 @@ function registerCrossAgentStream(app: Hono): void {
 			return c.json({ error: sessionError }, 403);
 		}
 		const agentId = scopedAgent.agentId;
+		let snapshotAudience: ReadonlySet<string> | null;
+		let presenceVisible: (authorAgentId: string) => Promise<boolean>;
+		try {
+			const viewer = await resolveBoardViewer(agentId);
+			snapshotAudience = await boardAuthorAudience(viewer);
+			presenceVisible = await createBoardEventVisibility(viewer);
+		} catch (error) {
+			logger.error("hooks", "Presence stream scope failed", error instanceof Error ? error : new Error(String(error)));
+			return c.json({ error: "Failed to resolve presence visibility" }, 500);
+		}
+		let presenceQueue: Promise<void> = Promise.resolve();
 
 		const sse = openBoundedSse({
 			requestSignal: c.req.raw.signal,
@@ -1866,6 +2040,7 @@ function registerCrossAgentStream(app: Hono): void {
 						project,
 						includeSelf,
 						limit: 50,
+						allowedAgentIds: snapshotAudience,
 					}),
 					messages: listAgentMessages({
 						agentId,
@@ -1905,6 +2080,15 @@ function registerCrossAgentStream(app: Hono): void {
 						return;
 					}
 
+					if (event.type === "presence") {
+						presenceQueue = presenceQueue
+							.then(async () => {
+								if (producer.isClosed || !(await presenceVisible(event.presence.agentId))) return;
+								writeEvent(event);
+							})
+							.catch(() => {});
+						return;
+					}
 					writeEvent(event);
 				});
 				unsubscribe = nextUnsubscribe;

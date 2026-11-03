@@ -33,6 +33,7 @@ generated runtime route dump.
 | GET | `/api/cross-agent/presence` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/cross-agent/presence` | platform/daemon/src/routes/hooks-routes.ts |
 | DELETE | `/api/cross-agent/presence/:sessionKey` | platform/daemon/src/routes/hooks-routes.ts |
+| GET | `/api/cross-agent/sessions/:sessionKey/context` | platform/daemon/src/routes/hooks-routes.ts |
 | GET | `/api/cross-agent/messages` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/cross-agent/messages` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/cross-agent/messages/:messageId/ack` | platform/daemon/src/routes/hooks-routes.ts |

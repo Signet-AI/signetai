@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import re
+import socket
 import threading
 import time
 import urllib.parse
@@ -416,9 +417,46 @@ BOARD_UPDATE_SCHEMA = {
     },
 }
 
+AGENT_CONTEXT_UPDATE_SCHEMA = {
+    "name": "agent_context_update",
+    "description": (
+        "Update what this session advertises to peer agents: its current task and/or self-reported resource tags "
+        "(for example gpu:0 or port:3000). Only affects the calling session. cwd, hostname and title are collected "
+        "automatically when Hermes exposes them. An empty resources list clears resources; an empty task clears the task."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task": {"type": "string", "description": "Short current-task description (max 400 chars)."},
+            "resources": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Self-reported resource tags (max 20); [] clears.",
+            },
+        },
+    },
+}
+
+AGENT_SESSION_INSPECT_SCHEMA = {
+    "name": "agent_session_inspect",
+    "description": (
+        "Inspect one peer agent session: its advertised presence/context plus up to 5 recent messages (bounded). "
+        "The daemon decides visibility." + _PEER_NOTE
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "session_key": {"type": "string", "description": "Session key from agent_peers."},
+            "session_agent_id": {"type": "string", "description": "Agent id owning that session, if not the caller's."},
+        },
+        "required": ["session_key"],
+    },
+}
+
 _COORDINATION_TOOLS = frozenset(
     {"agent_peers", "agent_message_send", "agent_message_inbox", "agent_message_ack",
-     "board_list", "board_read", "board_post", "board_update"}
+     "board_list", "board_read", "board_post", "board_update",
+     "agent_context_update", "agent_session_inspect"}
 )
 
 ALL_TOOL_SCHEMAS = [
@@ -432,6 +470,8 @@ ALL_TOOL_SCHEMAS = [
     RECALL_ALIAS_SCHEMA,
     REMEMBER_ALIAS_SCHEMA,
     AGENT_PEERS_SCHEMA,
+    AGENT_CONTEXT_UPDATE_SCHEMA,
+    AGENT_SESSION_INSPECT_SCHEMA,
     AGENT_MESSAGE_SEND_SCHEMA,
     AGENT_MESSAGE_INBOX_SCHEMA,
     AGENT_MESSAGE_ACK_SCHEMA,
@@ -472,6 +512,56 @@ def _resolve_agent_workspace(agent_id: str, kwargs: Dict[str, Any]) -> str:
     return str(Path(str(fallback)).expanduser())
 
 
+_PEER_TASK_MAX = 400
+_PEER_TITLE_MAX = 160
+_PEER_RESOURCE_MAX = 160
+_PEER_RESOURCES_MAX = 20
+
+
+_CREDENTIAL_RE = re.compile(
+    r"-----BEGIN (?:[A-Z]+ )*PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z]+ )*PRIVATE KEY-----"
+    r"|\b(?:(?:AKIA|ASIA)[0-9A-Z]{16}|github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"|sk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}|(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{16,}"
+    r"|xox[abprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|glpat-[A-Za-z0-9_-]{20,}|npm_[A-Za-z0-9]{36})\b"
+    r"|\beyJ[A-Za-z0-9_-]{8,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"
+    r"|\bBearer\s+[A-Za-z0-9._~+/-]{16,}=*"
+    r"|(?i:\b(?:access[_-]?token|api[_-]?key|apikey|auth[_-]?token|client[_-]?secret|passw(?:or)?d"
+    r"|refresh[_-]?token|private[_-]?key|secret(?:[_-]?key)?|token))[\"']?\s*[:=]\s*[\"']?"
+    r"(?=[^\s\"',;&<>()\[\]{}$]*\d)[^\s\"',;&<>()\[\]{}$]{8,}"
+)
+
+
+def _redact_credentials(text: str) -> str:
+    return _CREDENTIAL_RE.sub("[redacted credential]", text)
+
+
+def _clip_task(value: Any, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return _clip_text(_redact_credentials(value), limit)
+
+
+def _clip_text(value: Any, limit: int) -> str:
+    if not isinstance(value, str):
+        return ""
+    return " ".join(value.split())[:limit]
+
+
+def _clean_resources(value: Any) -> Optional[List[str]]:
+    if isinstance(value, str):
+        value = value.split(",")
+    if not isinstance(value, list):
+        return None
+    out: List[str] = []
+    for item in value:
+        text = _clip_text(item, _PEER_RESOURCE_MAX)
+        if text and text not in out:
+            out.append(text)
+        if len(out) >= _PEER_RESOURCES_MAX:
+            break
+    return out
+
+
 _WAKE_WAIT_MS = 25000
 _WAKE_DEFAULT_RETRY_SECS = 15.0
 _WAKE_MAX_RETRY_SECS = 300.0
@@ -492,7 +582,11 @@ class _WakeWaiter:
         host_key: str,
         project: str,
         can_inject: Any = None,
+        context_provider: Any = None,
+        advertise: Any = None,
     ):
+        self._context_provider = context_provider
+        self._advertise = advertise
         self._client = client
         self._inject = inject
         self._can_inject = can_inject
@@ -563,6 +657,11 @@ class _WakeWaiter:
 
     def _run(self) -> None:
         refusals = 0
+        if self._advertise is not None:
+            try:
+                self._advertise()
+            except Exception as e:
+                logger.debug("Signet presence advertise failed: %s", e)
         while not self._stop.is_set():
             if not self._injection_ready():
                 if self._stop.wait(_WAKE_UNAVAILABLE_RECHECK_SECS):
@@ -570,11 +669,16 @@ class _WakeWaiter:
                 continue
             started = time.monotonic()
             try:
+                wake_kwargs: Dict[str, Any] = {}
+                wake_context = self._context_provider() if self._context_provider else None
+                if wake_context:
+                    wake_kwargs["context"] = wake_context
                 result = self._client.wake(
                     self._session_key,
                     project=self._project,
                     wait_ms=_WAKE_WAIT_MS,
                     on_connection=self._set_conn,
+                    **wake_kwargs,
                 )
             except Exception as e:
                 logger.debug("Signet wake poll raised: %s", e)
@@ -657,6 +761,59 @@ class SignetMemoryProvider(MemoryProvider):
         self._host_session_key = ""
         self._wake_waiter: Optional[_WakeWaiter] = None
         self._wake_lock = threading.Lock()
+        self._peer_lock = threading.Lock()
+        self._peer_title = ""
+        self._peer_task = ""
+        self._peer_resources: Optional[List[str]] = None
+        self._peer_cwd = ""
+
+    def _reset_peer_state(self) -> None:
+        with self._peer_lock:
+            self._peer_title = ""
+            self._peer_task = ""
+            self._peer_resources = None
+            self._peer_cwd = ""
+
+    def _remember_host_metadata(self, kwargs: Dict[str, Any]) -> None:
+        with self._peer_lock:
+            title = _clip_text(kwargs.get("session_title"), _PEER_TITLE_MAX)
+            if title:
+                self._peer_title = title
+            cwd = kwargs.get("cwd")
+            self._peer_cwd = str(cwd) if isinstance(cwd, str) and cwd.strip() else self._peer_cwd or os.getcwd()
+
+    def _peer_context(self) -> Optional[Dict[str, Any]]:
+        """Collected peer context; omit anything Hermes does not expose."""
+        context: Dict[str, Any] = {}
+        with self._peer_lock:
+            cwd = self._peer_cwd or os.getcwd()
+            if cwd and len(cwd) <= 512:
+                context["cwd"] = cwd
+            host = socket.gethostname()
+            if host and len(host) <= 128:
+                context["hostname"] = host
+            if self._peer_title:
+                context["title"] = self._peer_title
+            if self._peer_task:
+                context["task"] = self._peer_task
+            if self._peer_resources is not None:
+                context["resources"] = list(self._peer_resources)
+        return context or None
+
+    def _advertise_presence(self) -> None:
+        client = self._client
+        if not client or not self._session_key:
+            return
+        body: Dict[str, Any] = {
+            "harness": "hermes-agent",
+            "agentId": self._agent_id,
+            "sessionKey": self._session_key,
+            "project": self._project,
+        }
+        context = self._peer_context()
+        if context:
+            body["context"] = context
+        client.request_result("POST", "/api/cross-agent/presence", body)
 
     def set_message_injector(self, injector: Any, can_inject: Any = None) -> None:
         self._message_injector = injector if callable(injector) else None
@@ -683,6 +840,8 @@ class SignetMemoryProvider(MemoryProvider):
             self._host_session_key or self._session_key,
             self._project,
             self._can_inject,
+            context_provider=self._peer_context,
+            advertise=self._advertise_presence,
         )
         with self._wake_lock:
             self._wake_waiter = waiter
@@ -768,12 +927,17 @@ class SignetMemoryProvider(MemoryProvider):
             self._client = None
             return
 
-        self._session_key = session_id or "hermes-default"
+        next_session_key = session_id or "hermes-default"
+        if self._session_key and self._session_key != next_session_key:
+            self._reset_peer_state()
+        self._session_key = next_session_key
         self._host_session_key = str(kwargs.get("gateway_session_key") or self._session_key)
         self._project = _resolve_agent_workspace(agent_id, kwargs)
+        self._remember_host_metadata(kwargs)
         result = self._client.session_start(
             self._session_key,
             project=self._project,
+            context=self._peer_context(),
         )
         if result:
             raw_stable_prompt = result.get("stableSystemPrompt") or result.get("inject", "")
@@ -840,6 +1004,7 @@ class SignetMemoryProvider(MemoryProvider):
                     self._session_key,
                     "prefetch",
                     project=self._project,
+                    context=self._peer_context(),
                 )
                 if notification is not None:
                     notification_inject = notification.get("inject", "")
@@ -867,6 +1032,7 @@ class SignetMemoryProvider(MemoryProvider):
             return
         with self._transcript_lock:
             self._transcript_lines.append(f"user: {_strip_internal_memory_context(query)}")
+        peer_context = self._peer_context()
         client = self._client
         last_assistant = self._last_assistant_message
         with self._prefetch_lock:
@@ -884,6 +1050,7 @@ class SignetMemoryProvider(MemoryProvider):
                     query,
                     last_assistant_message=last_assistant,
                     project=project,
+                    context=peer_context,
                 )
                 if result:
                     if not result.get("sessionKnown", True) and self._session_initialized:
@@ -951,12 +1118,13 @@ class SignetMemoryProvider(MemoryProvider):
             return
         session_key = self._session_key
         project = self._project
+        peer_context = self._peer_context()
         with self._prefetch_lock:
             generation = self._prefetch_generation
 
         def _run():
             try:
-                result = client.notifications(session_key, hook, project=project)
+                result = client.notifications(session_key, hook, project=project, context=peer_context)
                 inject = (result or {}).get("inject", "")
                 with self._prefetch_lock:
                     if generation == self._prefetch_generation and session_key == self._session_key:
@@ -983,6 +1151,15 @@ class SignetMemoryProvider(MemoryProvider):
         """
         if not new_session_id:
             return
+        previous_session_id = self._session_key
+        keep_peer_state = not reset and (
+            new_session_id == previous_session_id
+            or (
+                kwargs.get("reason") == "compression"
+                and bool(previous_session_id)
+                and parent_session_id == previous_session_id
+            )
+        )
         self._session_key = new_session_id
         self._host_session_key = str(kwargs.get("gateway_session_key") or new_session_id)
         self._session_initialized = False
@@ -1002,6 +1179,9 @@ class SignetMemoryProvider(MemoryProvider):
 
         agent_id = self._agent_id
         self._project = _resolve_agent_workspace(agent_id, kwargs)
+        if not keep_peer_state:
+            self._reset_peer_state()
+        self._remember_host_metadata(kwargs)
         client = self._client
         if not client:
             return
@@ -1010,6 +1190,7 @@ class SignetMemoryProvider(MemoryProvider):
             result = client.session_start(
                 self._session_key,
                 project=self._project,
+                context=self._peer_context(),
             )
             if result:
                 stable_prompt = result.get("stableSystemPrompt") or result.get("inject", "")
@@ -1805,6 +1986,51 @@ class SignetMemoryProvider(MemoryProvider):
 
         def seg(value: str) -> str:
             return urllib.parse.quote(value, safe="")
+
+        if tool_name == "agent_context_update":
+            update: Dict[str, Any] = {}
+            task_arg = args.get("task")
+            if isinstance(task_arg, str):
+                update["task"] = _clip_task(task_arg, _PEER_TASK_MAX)
+            resources_arg = _clean_resources(args.get("resources")) if "resources" in args else None
+            if resources_arg is not None:
+                update["resources"] = resources_arg
+            if not update:
+                return fail("Provide task and/or resources (an empty list clears resources).")
+            with self._peer_lock:
+                if "task" in update:
+                    self._peer_task = update["task"]
+                if "resources" in update:
+                    self._peer_resources = list(update["resources"])
+            context = self._peer_context() or {}
+            if "task" in update and "task" not in context:
+                context["task"] = ""
+            return done(
+                call(
+                    "POST",
+                    "/api/cross-agent/presence",
+                    {
+                        "harness": harness,
+                        "agentId": agent_id,
+                        "sessionKey": session_key,
+                        "project": self._project,
+                        "context": context,
+                    },
+                ),
+                tool_name,
+            )
+
+        if tool_name == "agent_session_inspect":
+            target_key = text("session_key")
+            if not target_key:
+                return fail("Missing required parameter: session_key")
+            query = qs({
+                "target_agent_id": text("session_agent_id"),
+                "agent_id": agent_id,
+                "caller_session_key": session_key,
+            })
+            suffix = f"?{query}" if query else ""
+            return done(call("GET", f"/api/cross-agent/sessions/{seg(target_key)}/context{suffix}"), tool_name)
 
         if tool_name == "agent_peers":
             query = qs({

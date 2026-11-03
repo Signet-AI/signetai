@@ -1,3 +1,6 @@
+import { open as openFile } from "node:fs/promises";
+import { hostname as osHostname } from "node:os";
+import { isAbsolute, resolve as resolvePath } from "node:path";
 import type { Readable } from "node:stream";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
@@ -49,6 +52,7 @@ export async function runWakeLoop(
 		readonly sessionKey: string;
 		readonly agentId: string;
 		readonly project: string;
+		readonly context?: PeerContext;
 		readonly noWait: boolean;
 		readonly maxWaitSeconds: number;
 	},
@@ -66,6 +70,7 @@ export async function runWakeLoop(
 				sessionKey: request.sessionKey,
 				...(request.agentId ? { agentId: request.agentId } : {}),
 				...(request.project ? { project: request.project } : {}),
+				...(request.context ? { context: request.context } : {}),
 				waitMs,
 			}),
 			timeout: request.noWait ? WAKE_NO_WAIT_TIMEOUT_MS : waitMs + WAKE_REQUEST_GRACE_MS,
@@ -93,6 +98,186 @@ export async function runWakeLoop(
 			if (deadline - now() <= 0) return { kind: "none" };
 		}
 	}
+}
+
+export interface PeerContext {
+	cwd?: string;
+	hostname?: string;
+	title?: string;
+	modifiedFiles?: string[];
+}
+
+const PEER_LIMITS = { cwd: 512, hostname: 128, title: 160, path: 300, files: 20 } as const;
+const TRANSCRIPT_TAIL_BYTES = 512 * 1024;
+const MUTATING_TOOLS: ReadonlySet<string> = new Set(["write", "edit", "multiedit", "notebookedit", "apply_patch"]);
+
+function clipText(value: string, max: number): string {
+	return value.replace(/\s+/g, " ").trim().slice(0, max);
+}
+
+export function extractMutatedPaths(toolName: unknown, toolInput: unknown): string[] {
+	if (typeof toolName !== "string" || !MUTATING_TOOLS.has(toolName.toLowerCase())) return [];
+	if (typeof toolInput === "string") return patchHeaderPaths(toolInput);
+	if (typeof toolInput !== "object" || toolInput === null) return [];
+	const record = toolInput as Record<string, unknown>;
+	for (const key of ["file_path", "path", "notebook_path", "filePath"]) {
+		const value = record[key];
+		if (typeof value === "string" && value.trim()) return [value.trim()];
+	}
+	for (const key of ["command", "patch", "input", "patchText"]) {
+		const value = record[key];
+		if (typeof value === "string") {
+			const found = patchHeaderPaths(value);
+			if (found.length > 0) return found;
+		}
+	}
+	return [];
+}
+
+function patchHeaderPaths(text: string): string[] {
+	const out: string[] = [];
+	for (const match of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/gm)) {
+		if (match[1]) out.push(match[1].trim());
+	}
+	return out;
+}
+
+const TRANSCRIPT_DEADLINE_MS = 750;
+const REQUEST_TYPES: ReadonlySet<string> = new Set(["tool_use", "function_call", "custom_tool_call"]);
+const RESULT_TYPES: ReadonlySet<string> = new Set(["tool_result", "function_call_output", "custom_tool_call_output"]);
+
+interface TranscriptScan {
+	title?: string;
+	requests: Array<{ id: string; paths: string[] }>;
+	failed: Set<string>;
+	succeeded: Set<string>;
+}
+
+function parseMaybeJson(value: unknown): unknown {
+	if (typeof value === "string" && value.trimStart().startsWith("{")) {
+		try {
+			return JSON.parse(value);
+		} catch {
+			return undefined;
+		}
+	}
+	return value;
+}
+
+function resultFailed(record: Record<string, unknown>): boolean {
+	if (record.is_error === true || record.isError === true) return true;
+	if (typeof record.status === "string" && record.status !== "completed" && record.status !== "success") return true;
+	const out = parseMaybeJson(record.output ?? record.content);
+	if (typeof out === "object" && out !== null && !Array.isArray(out)) {
+		const meta = (out as Record<string, unknown>).metadata;
+		const code = typeof meta === "object" && meta !== null ? (meta as Record<string, unknown>).exit_code : undefined;
+		if (typeof code === "number" && code !== 0) return true;
+	}
+	return false;
+}
+
+function walkTranscript(node: unknown, found: TranscriptScan, depth = 0): void {
+	if (depth > 6 || typeof node !== "object" || node === null) return;
+	if (Array.isArray(node)) {
+		for (const item of node) walkTranscript(item, found, depth + 1);
+		return;
+	}
+	const record = node as Record<string, unknown>;
+	if (depth === 0) {
+		const custom = record.customTitle;
+		const ai = record.aiTitle;
+		if (typeof custom === "string" && custom.trim()) found.title = custom;
+		else if (typeof ai === "string" && ai.trim() && !found.title) found.title = ai;
+	}
+	const kind = typeof record.type === "string" ? record.type : "";
+	if (REQUEST_TYPES.has(kind) && typeof record.name === "string") {
+		const id = pickString(record.id, record.call_id, record.tool_use_id);
+		if (id) {
+			const args = parseMaybeJson(record.input ?? record.arguments);
+			const paths = extractMutatedPaths(record.name, args);
+			if (paths.length > 0) found.requests.push({ id, paths });
+		}
+	} else if (RESULT_TYPES.has(kind)) {
+		const id = pickString(record.tool_use_id, record.call_id, record.id);
+		if (id) (resultFailed(record) ? found.failed : found.succeeded).add(id);
+	}
+	for (const value of Object.values(record)) {
+		if (typeof value === "object") walkTranscript(value, found, depth + 1);
+	}
+}
+
+async function readTail(path: string): Promise<{ text: string; truncated: boolean }> {
+	const handle = await openFile(path, "r");
+	try {
+		const size = (await handle.stat()).size;
+		const start = Math.max(0, size - TRANSCRIPT_TAIL_BYTES);
+		const buffer = Buffer.alloc(size - start);
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+		return { text: buffer.toString("utf-8", 0, bytesRead), truncated: start > 0 };
+	} finally {
+		await handle.close();
+	}
+}
+
+export async function readTranscriptSignals(path: string): Promise<{ title?: string; modifiedFiles: string[] }> {
+	const found: TranscriptScan = { requests: [], failed: new Set(), succeeded: new Set() };
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const tail = await Promise.race([
+			readTail(path),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error("transcript read deadline")), TRANSCRIPT_DEADLINE_MS);
+				timer.unref?.();
+			}),
+		]);
+		const lines = tail.text.split("\n");
+		if (tail.truncated) lines.shift();
+		for (const line of lines) {
+			if (!line.trim()) continue;
+			try {
+				walkTranscript(JSON.parse(line), found);
+			} catch {}
+		}
+	} catch {
+		return { modifiedFiles: [] };
+	} finally {
+		if (timer) clearTimeout(timer);
+	}
+	const paths: string[] = [];
+	for (const req of found.requests) {
+		if (found.succeeded.has(req.id) && !found.failed.has(req.id)) paths.push(...req.paths);
+	}
+	return { ...(found.title ? { title: found.title } : {}), modifiedFiles: paths };
+}
+
+export async function buildPeerContext(
+	input: Record<string, unknown> | null,
+	options: { readonly project?: string },
+): Promise<PeerContext | undefined> {
+	const cwd = pickString(options.project, input?.cwd);
+	const context: PeerContext = {};
+	if (cwd && cwd.length <= PEER_LIMITS.cwd) context.cwd = cwd;
+	const host = osHostname();
+	if (host && host.length <= PEER_LIMITS.hostname) context.hostname = host;
+	let title = clipText(
+		pickString(input?.session_name, input?.sessionName, input?.thread_name, input?.session_title, input?.title),
+		PEER_LIMITS.title,
+	);
+	const transcriptPath = pickString(input?.transcript_path, input?.transcriptPath);
+	const signals = transcriptPath ? await readTranscriptSignals(transcriptPath) : { modifiedFiles: [] as string[] };
+	if (!title && signals.title) title = clipText(signals.title, PEER_LIMITS.title);
+	if (title) context.title = title;
+	const files: string[] = [];
+	for (const raw of signals.modifiedFiles) {
+		const full = cwd && !isAbsolute(raw) ? resolvePath(cwd, raw) : raw;
+		if (full.length > PEER_LIMITS.path) continue;
+		const path = full;
+		const at = files.indexOf(path);
+		if (at >= 0) files.splice(at, 1);
+		files.push(path);
+	}
+	if (files.length > 0) context.modifiedFiles = files.slice(-PEER_LIMITS.files);
+	return Object.keys(context).length > 0 ? context : undefined;
 }
 
 const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeout();
@@ -221,7 +406,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--json", "Output as JSON")
 		.option("--codex-json", "Output Codex hook JSON")
 		.action(async (options) => {
-			const input = await readJson();
+			const input = await readJson(deps.stdin);
 			const res = await deps.fetchDaemonResult<{
 				identity?: { name: string; description?: string };
 				memories?: Array<{ content: string }>;
@@ -234,7 +419,12 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			}>("/api/hooks/session-start", {
 				method: "POST",
 				headers: legacyHookHeaders(),
-				body: JSON.stringify(buildSessionStartBody(input, options)),
+				body: JSON.stringify(
+					withPeerContext(
+						buildSessionStartBody(input, options),
+						await buildPeerContext(input, { project: options.project }),
+					),
+				),
 				timeout: SESSION_START_TIMEOUT_MS,
 			});
 			if (!res.ok) {
@@ -297,7 +487,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--json", "Output as JSON")
 		.option("--codex-json", "Output Codex hook JSON")
 		.action(async (options) => {
-			const input = await readJson();
+			const input = await readJson(deps.stdin);
 			const stdinProject = pickString(input?.cwd);
 			const data = await fetchHookData<{
 				inject?: string;
@@ -308,7 +498,12 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			}>(deps, "user-prompt-submit", "/api/hooks/user-prompt-submit", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify(buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject)),
+				body: JSON.stringify(
+					withPeerContext(
+						buildUserPromptSubmitBody(input, options.harness, options.project || stdinProject),
+						await buildPeerContext(input, { project: options.project || stdinProject }),
+					),
+				),
 				timeout: PROMPT_SUBMIT_TIMEOUT_MS,
 			});
 			if (!data) {
@@ -338,7 +533,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--hook-json", "Output native hook JSON with additionalContext")
 		.option("--codex-json", "Alias for --hook-json")
 		.action(async (options) => {
-			const input = await readJson();
+			const input = await readJson(deps.stdin);
 			const hook = pickString(options.hook);
 			const data = await fetchHookData<{ inject?: string }>(deps, "notifications", "/api/hooks/notifications", {
 				method: "POST",
@@ -349,6 +544,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 					agentId: pickString(options.agentId, input?.signet_agent_id, process.env.SIGNET_AGENT_ID),
 					sessionKey: pickSessionKey(input),
 					project: pickString(options.project, input?.cwd),
+					...peerContextField(await buildPeerContext(input, { project: options.project })),
 				}),
 				timeout: PROMPT_SUBMIT_TIMEOUT_MS,
 			});
@@ -392,6 +588,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 						sessionKey,
 						agentId: pickString(options.agentId, input?.signet_agent_id, process.env.SIGNET_AGENT_ID),
 						project: pickString(options.project, input?.cwd),
+						context: await buildPeerContext(input, { project: options.project }),
 						noWait: options.wait === false,
 						maxWaitSeconds: parseWakeMaxWaitSeconds(options.maxWaitSeconds),
 					});
@@ -443,7 +640,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.option("--message-count <count>", "Number of messages in session", Number.parseInt)
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
-			const input = await readJson();
+			const input = await readJson(deps.stdin);
 			const sessionKey = pickSessionKey(input);
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
 			const transcriptPath = pickString(input?.transcript_path, input?.transcriptPath);
@@ -598,6 +795,15 @@ function toRecord(value: unknown): Record<string, unknown> | null {
 	if (typeof value !== "object" || value === null) return null;
 	if (Array.isArray(value)) return null;
 	return Object.fromEntries(Object.entries(value));
+}
+
+function peerContextField(context: PeerContext | undefined): { context?: PeerContext } {
+	return context ? { context } : {};
+}
+
+function withPeerContext<T extends { context?: unknown }>(body: T, context: PeerContext | undefined): T {
+	if (!context || typeof body.context === "string") return body;
+	return { ...body, context };
 }
 
 function pickString(...values: unknown[]): string {

@@ -249,6 +249,8 @@ describe("createMcpServer", () => {
 		expect(names).toContain("lcm_expand");
 		expect(names).toContain("session_search");
 		expect(names).toContain("agent_peers");
+		expect(names).toContain("agent_context_update");
+		expect(names).toContain("agent_session_inspect");
 		expect(names).toContain("agent_message_send");
 		expect(names).toContain("agent_message_retry");
 		expect(names).toContain("agent_message_inbox");
@@ -267,7 +269,7 @@ describe("createMcpServer", () => {
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(60);
+		expect(names.length).toBe(62);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {
@@ -1256,6 +1258,79 @@ describe("createMcpServer", () => {
 			expect(cap.url).toContain("/api/cross-agent/presence?");
 			expect(cap.url).not.toContain("agent_id=");
 			expect(cap.url).toContain("include_self=false");
+		});
+
+		it("agent_context_update posts only the supplied context fields to canonical presence", async () => {
+			const cap: { url?: string; method?: string; body?: string } = {};
+			mockFetch(200, { presence: { agentId: "a", harness: "pi", context: { task: "t" } } }, cap);
+
+			await callTool(server, "agent_context_update", {
+				session_key: "s-1",
+				task: "train",
+				resources: [],
+				modified_files: ["a.ts"],
+			});
+			expect(cap.method).toBe("POST");
+			expect(cap.url).toContain("/api/cross-agent/presence");
+			expect(JSON.parse(cap.body ?? "{}")).toEqual({
+				sessionKey: "s-1",
+				context: { task: "train", resources: [], modifiedFiles: ["a.ts"] },
+			});
+		});
+
+		it("agent_session_inspect encodes the target key and bounds the request", async () => {
+			const cap: { url?: string; method?: string } = {};
+			mockFetch(200, { presence: {}, recentMessages: [], truncated: false }, cap);
+
+			await callTool(server, "agent_session_inspect", {
+				session_key: "a/b:c",
+				session_agent_id: "beta",
+				caller_session_key: "me",
+				max_messages: 2,
+			});
+			expect(cap.method ?? "GET").toBe("GET");
+			expect(cap.url).toContain("/api/cross-agent/sessions/a%2Fb%3Ac/context?");
+			expect(cap.url).toContain("target_agent_id=beta");
+			expect(cap.url).toContain("caller_session_key=me");
+			expect(cap.url).toContain("max_messages=2");
+			expect(cap.url).not.toContain("agent_id=beta&agent_id");
+
+			const registered = (
+				server as unknown as { _registeredTools: Record<string, { description?: string; inputSchema: unknown }> }
+			)._registeredTools;
+			expect(registered.agent_session_inspect?.description).toContain("untrusted");
+			expect(registered.agent_context_update?.description).toContain("untrusted");
+		});
+
+		it("agent tools advertise bounded inputs and reject out-of-range values over a real MCP transport", async () => {
+			const cap: { url?: string } = {};
+			mockFetch(200, { presence: {} }, cap);
+			const [ct, st] = InMemoryTransport.createLinkedPair();
+			const client = new Client({ name: "test-client", version: "0.0.1" });
+			await server.connect(st);
+			await client.connect(ct);
+
+			const { tools } = await client.listTools();
+			const inspect = tools.find((tool) => tool.name === "agent_session_inspect");
+			expect(inspect).toBeDefined();
+			const props = inspect?.inputSchema.properties as Record<string, { maximum?: number }> | undefined;
+			expect(props?.max_messages?.maximum).toBe(5);
+
+			const tooMany = await client
+				.callTool({ name: "agent_session_inspect", arguments: { session_key: "x", max_messages: 6 } })
+				.catch(() => ({ isError: true }));
+			expect(tooMany.isError).toBe(true);
+			expect(cap.url).toBeUndefined();
+
+			const tooLong = await client
+				.callTool({ name: "agent_context_update", arguments: { session_key: "x", task: "t".repeat(501) } })
+				.catch(() => ({ isError: true }));
+			expect(tooLong.isError).toBe(true);
+			expect(cap.url).toBeUndefined();
+
+			const ok = await client.callTool({ name: "agent_context_update", arguments: { session_key: "x", task: "ok" } });
+			expect(ok.isError).toBeFalsy();
+			expect(cap.url).toContain("/api/cross-agent/presence");
 		});
 
 		it("agent_message_send posts message payload", async () => {

@@ -400,9 +400,68 @@ List currently active peer sessions for cross-agent coordination.
 | `project` | string | no | Optional project filter |
 | `limit` | number | no | Max sessions to return |
 
-**Returns:** Object with `sessions` array and `count`.
+**Returns:** Object with `sessions` array and `count`. Each session includes
+its optional self-reported `context` (`cwd`, `hostname`, `title`, `task`,
+`modifiedFiles`, `resources`) and `contextUpdatedAt`. Context is untrusted
+peer-reported text, not verified OS state or a resource lock.
 
 **Daemon endpoint:** `GET /api/cross-agent/presence`
+
+### agent_context_update
+
+Publish what this session is doing so peers can pick the right session to
+message, for example which GPU or files it is using. Only the caller's own
+session context changes. Omitted fields keep their value; an empty string or
+empty array clears a field. Invalid types and over-limit values are rejected.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `session_key` | string | yes | Your own session key |
+| `agent_id` | string | no | Current agent id (defaults to the authenticated scope) |
+| `harness` | string | no | Required only if the session is not yet registered |
+| `cwd` | string | no | Working directory (max 512 characters) |
+| `hostname` | string | no | Host (max 128) |
+| `title` | string | no | Short title (max 160) |
+| `task` | string | no | Current task (max 500) |
+| `modified_files` | string[] | no | Up to 20 files, 300 characters each; best effort |
+| `resources` | string[] | no | Up to 20 shared resources such as `gpu:0`, 160 characters each |
+
+**Returns:** `{ presence }` with the stored context.
+
+**Daemon endpoint:** `POST /api/cross-agent/presence` with a `context` body field
+
+### agent_session_inspect
+
+Take a bounded look at one peer session before messaging it. Returns its
+presence and context plus at most 5 recent user and assistant messages
+(default 3, about 4000 characters in total) from the transcript Signet already
+captured. Reasoning, tool output, and the full transcript are never returned,
+and everything returned is untrusted data from another session.
+
+Access follows the agent read policy: you can inspect your own agent's
+sessions, any agent's sessions when your policy is `shared`, and same-group
+agents when your policy is `group`. A token cannot widen this with request
+fields; only local mode or an admin token may pass `scope=all` on the HTTP
+route.
+
+**Parameters:**
+
+| Name | Type | Required | Description |
+|------|------|----------|-------------|
+| `session_key` | string | yes | Peer session key from `agent_peers` |
+| `session_agent_id` | string | no | Owning agent id; `404` if it does not match |
+| `agent_id` | string | no | Your agent id (defaults to the authenticated scope) |
+| `caller_session_key` | string | no | Your own session key |
+| `max_messages` | number | no | 1 to 5 (default 3) |
+
+**Returns:** `{ presence, recentMessages: [{ role, content }], truncated, provenance }`.
+`truncated` is true when older or oversized text was left out. `provenance`
+records that presence is self-reported, whether a captured transcript tail was
+available, how many bytes were read, and that the content is untrusted.
+
+**Daemon endpoint:** `GET /api/cross-agent/sessions/:sessionKey/context`
 
 ### agent_message_send
 

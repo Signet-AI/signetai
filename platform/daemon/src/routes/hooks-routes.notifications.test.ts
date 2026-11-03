@@ -7,6 +7,8 @@ import { Hono } from "hono";
 import type { TokenClaims } from "../auth";
 import { createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
 import { getSynthesisWorker } from "../hooks";
+import { invalidateAgentScopeCache } from "../agent-id";
+import { dbOwnerBatch, ownerStatement } from "../db-owner-runtime";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 
 const previousSignetPath = process.env.SIGNET_PATH;
@@ -141,6 +143,16 @@ describe("cross-agent notification routes", () => {
 		const previousAgentId = process.env.SIGNET_AGENT_ID;
 		process.env.SIGNET_AGENT_ID = "ops";
 		try {
+			await dbOwnerBatch(
+				[
+					ownerStatement(
+						"INSERT OR REPLACE INTO agents (id, name, read_policy, created_at, updated_at) VALUES ('ops', 'ops', 'shared', datetime('now'), datetime('now'))",
+						[],
+					),
+				],
+				{ operation: "test.notification-agent", lane: "write" },
+			);
+			invalidateAgentScopeCache("ops");
 			upsertAgentPresence({ agentId: "ops", harness: "hermes", sessionKey: "session-ops" });
 			upsertAgentPresence({ agentId: "beta", harness: "pi", sessionKey: "session-beta" });
 			createAgentMessage({ fromAgentId: "beta", toAgentId: "ops", type: "info", content: "For ops only" });

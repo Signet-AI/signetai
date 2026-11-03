@@ -406,14 +406,27 @@ export interface DeduplicateResponse extends RepairActionResponse {
 	readonly duplicatesRemoved: number;
 }
 
+export interface AgentPresenceContext {
+	readonly cwd?: string;
+	readonly hostname?: string;
+	readonly title?: string;
+	readonly task?: string;
+	readonly modifiedFiles?: readonly string[];
+	readonly resources?: readonly string[];
+}
+
 export interface AgentPresence {
+	readonly key: string;
 	readonly agentId: string;
-	readonly sessionKey: string;
-	readonly project: string | null;
+	readonly sessionKey?: string;
+	readonly project?: string;
 	readonly harness: string;
-	readonly runtimePath: string | null;
-	readonly lastSeen: string;
-	readonly createdAt: string;
+	readonly runtimePath?: "plugin" | "legacy";
+	readonly provider?: string;
+	readonly startedAt: string;
+	readonly lastSeenAt: string;
+	readonly context?: AgentPresenceContext;
+	readonly contextUpdatedAt?: string;
 }
 
 export interface AgentPresenceListResponse {
@@ -422,9 +435,27 @@ export interface AgentPresenceListResponse {
 }
 
 export interface AgentPresenceUpdateResponse {
-	readonly agentId: string;
-	readonly sessionKey: string;
-	readonly created: boolean;
+	readonly presence: AgentPresence;
+}
+
+export interface AgentSessionInspectMessage {
+	readonly role: "user" | "assistant";
+	readonly content: string;
+}
+
+export interface AgentSessionInspectResponse {
+	readonly presence: AgentPresence;
+	readonly recentMessages: readonly AgentSessionInspectMessage[];
+	readonly truncated: boolean;
+	readonly provenance: {
+		readonly presence: "self-reported";
+		readonly transcript: "signet-captured-tail" | "unavailable";
+		readonly transcriptUpdatedAt: string | null;
+		readonly transcriptBytes: number;
+		readonly bytesRead: number;
+		readonly roles: "user-and-assistant-only";
+		readonly untrusted: true;
+	};
 }
 
 export interface AgentMessage {

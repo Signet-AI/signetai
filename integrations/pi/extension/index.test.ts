@@ -1175,7 +1175,7 @@ describe("SignetPiExtension", () => {
 
 		expect(result).toBeUndefined();
 		expect(requests.map((req) => req.path)).toEqual(["/api/hooks/session-start", "/api/hooks/pre-compaction"]);
-		expect(requests[1]?.body).toEqual({
+		expect(requests[1]?.body).toMatchObject({
 			harness: "pi",
 			sessionKey: "session-pi-compact-1",
 			messageCount: 3,

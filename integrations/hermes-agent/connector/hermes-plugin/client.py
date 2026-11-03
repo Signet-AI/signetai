@@ -354,6 +354,7 @@ class SignetClient:
         *,
         project: str = "",
         claim_only: bool = False,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Call session-start hook, optionally recovering only the session claim."""
         body: Dict[str, Any] = {
@@ -364,6 +365,8 @@ class SignetClient:
         }
         if claim_only:
             body["claimOnly"] = True
+        if context:
+            body["context"] = context
         return self._post(
             "/api/hooks/session-start",
             body,
@@ -377,18 +380,22 @@ class SignetClient:
         *,
         last_assistant_message: str = "",
         project: str = "",
+        context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Call user-prompt-submit hook. Returns recall inject text."""
+        body: Dict[str, Any] = {
+            "harness": self._harness,
+            "sessionKey": session_key,
+            "userMessage": user_message,
+            "lastAssistantMessage": last_assistant_message,
+            "agentId": self._agent_id,
+            "project": project,
+        }
+        if context:
+            body["context"] = context
         return self._post(
             "/api/hooks/user-prompt-submit",
-            {
-                "harness": self._harness,
-                "sessionKey": session_key,
-                "userMessage": user_message,
-                "lastAssistantMessage": last_assistant_message,
-                "agentId": self._agent_id,
-                "project": project,
-            },
+            body,
             timeout=_RECALL_TIMEOUT_SECS,
         )
 
@@ -398,17 +405,21 @@ class SignetClient:
         hook: str,
         *,
         project: str = "",
+        context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Fetch pending peer notifications for a compatible Hermes hook."""
+        body: Dict[str, Any] = {
+            "harness": self._harness,
+            "hook": hook,
+            "sessionKey": session_key,
+            "agentId": self._agent_id,
+            "project": project,
+        }
+        if context:
+            body["context"] = context
         return self._post(
             "/api/hooks/notifications",
-            {
-                "harness": self._harness,
-                "hook": hook,
-                "sessionKey": session_key,
-                "agentId": self._agent_id,
-                "project": project,
-            },
+            body,
             timeout=_RECALL_TIMEOUT_SECS,
         )
 
@@ -419,6 +430,7 @@ class SignetClient:
         project: str = "",
         wait_ms: int = 25000,
         on_connection: Optional[Any] = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Long-poll the direct-message wake endpoint; None on transport failure."""
         parsed = urllib.parse.urlparse(self._base_url)
@@ -428,15 +440,16 @@ class SignetClient:
         conn = factory(host, parsed.port, timeout=timeout)
         if on_connection:
             on_connection(conn)
-        body = json.dumps(
-            {
-                "harness": self._harness,
-                "sessionKey": session_key,
-                "agentId": self._agent_id,
-                "project": project,
-                "waitMs": wait_ms,
-            }
-        )
+        wake_body: Dict[str, Any] = {
+            "harness": self._harness,
+            "sessionKey": session_key,
+            "agentId": self._agent_id,
+            "project": project,
+            "waitMs": wait_ms,
+        }
+        if context:
+            wake_body["context"] = context
+        body = json.dumps(wake_body)
         try:
             conn.request("POST", "/api/cross-agent/wake", body=body, headers=self._headers())
             resp = conn.getresponse()

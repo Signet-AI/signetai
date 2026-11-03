@@ -27,6 +27,7 @@ import {
 	shouldCheckpoint,
 } from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
+import { resolvePresenceAudience } from "./cross-agent-inspect";
 import { getDbAccessor } from "./db-accessor";
 import { getDbOwner } from "./db-owner-runtime";
 import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
@@ -258,7 +259,7 @@ export interface SessionStartRequest {
 	parentKey?: string;
 	parentId?: string;
 	parentID?: string;
-	context?: string;
+	context?: string | Record<string, unknown>;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
 }
@@ -315,6 +316,7 @@ export interface UserPromptSubmitRequest {
 	transcript?: string;
 	runtimePath?: "plugin" | "legacy";
 	memory_feedback?: unknown;
+	context?: unknown;
 }
 
 export interface UserPromptSubmitResponse {
@@ -1051,8 +1053,14 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	if (req.project) {
+		const peerViewerId = resolveAgentId(req);
+		let peerAudience: ReadonlySet<string> | null = new Set<string>();
+		try {
+			peerAudience = await resolvePresenceAudience(peerViewerId);
+		} catch {}
 		const peerSessions = listAgentPresence({
-			agentId: resolveAgentId(req),
+			allowedAgentIds: peerAudience,
+			agentId: peerViewerId,
 			sessionKey: req.sessionKey,
 			project: req.project,
 			includeSelf: false,

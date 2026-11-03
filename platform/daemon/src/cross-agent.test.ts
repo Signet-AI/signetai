@@ -492,3 +492,34 @@ describe("ACP relay", () => {
 		expect(capture.url).toBe("http://localhost:9000/runs");
 	});
 });
+
+describe("presence session-key rebind", () => {
+	it("discards prior owner context and timestamps when another agent takes the same session key", () => {
+		resetCrossAgentStateForTest();
+		upsertAgentPresence({
+			sessionKey: "k",
+			agentId: "a",
+			harness: "pi",
+			project: "/pa",
+			context: { task: "A-PRIVATE", cwd: "/a" },
+		});
+		const changes: string[] = [];
+		const stop = subscribeCrossAgentEvents((event) => {
+			if (event.type === "presence") changes.push(`${event.action}:${event.presence.agentId}:${event.activeCount}`);
+		});
+		const b = upsertAgentPresence({ sessionKey: "k", agentId: "b", harness: "pi" });
+		stop();
+		expect(changes).toEqual(["remove:a:0", "upsert:b:1"]);
+		expect(b.agentId).toBe("b");
+		expect(b.context).toBeUndefined();
+		expect(b.contextUpdatedAt).toBeUndefined();
+		expect(b.project).toBeUndefined();
+		expect(JSON.stringify(b)).not.toContain("A-PRIVATE");
+	});
+
+	it("keeps same-owner context across heartbeats", () => {
+		resetCrossAgentStateForTest();
+		upsertAgentPresence({ sessionKey: "k", agentId: "a", harness: "pi", context: { task: "keep" } });
+		expect(upsertAgentPresence({ sessionKey: "k", agentId: "a", harness: "pi" }).context?.task).toBe("keep");
+	});
+});
