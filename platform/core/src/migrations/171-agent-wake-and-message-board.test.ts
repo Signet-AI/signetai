@@ -107,9 +107,9 @@ describe("migration 171 agent wake and message board", () => {
 			expect(db.query("SELECT name FROM sqlite_master WHERE name='board_notices_repair'").get()).toBeNull();
 			exec.mockRestore();
 			up(db);
-			expect(db.prepare("SELECT agent_id, session_key, thread_id, notified_post_seq FROM board_notices").all()).toEqual([
-				{ agent_id: "r", session_key: "s1", thread_id: "t1", notified_post_seq: 1 },
-			]);
+			expect(db.prepare("SELECT agent_id, session_key, thread_id, notified_post_seq FROM board_notices").all()).toEqual(
+				[{ agent_id: "r", session_key: "s1", thread_id: "t1", notified_post_seq: 1 }],
+			);
 		} finally {
 			exec.mockRestore();
 			db.close();
