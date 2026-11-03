@@ -367,7 +367,7 @@ BOARD_LIST_SCHEMA = {
 
 BOARD_READ_SCHEMA = {
     "name": "board_read",
-    "description": "Read a board thread and mark it read." + _PEER_NOTE,
+    "description": "Read a board thread. Only the first page (offset 0) marks the returned posts read; offset pages leave the read cursor unchanged." + _PEER_NOTE,
     "parameters": {
         "type": "object",
         "properties": {
@@ -552,7 +552,7 @@ class _WakeWaiter:
         except Exception as e:
             logger.debug("Signet wake release failed: %s", e)
             return False
-        return not (isinstance(result, dict) and "error" in result)
+        return isinstance(result, dict) and "error" not in result
 
     @staticmethod
     def _retry_secs(result: Optional[Dict[str, Any]]) -> float:
@@ -580,6 +580,9 @@ class _WakeWaiter:
                 logger.debug("Signet wake poll raised: %s", e)
                 result = None
             if self._stop.is_set():
+                if isinstance(result, dict) and result.get("wake") is True:
+                    if not self._release(result.get("messageIds")):
+                        logger.warning("Signet wake release failed; the message waits for the next hook")
                 return
             delay = 0.0
             if not isinstance(result, dict) or "error" in result:
@@ -598,7 +601,7 @@ class _WakeWaiter:
                         refusals += 1
                         logger.debug("Signet wake injection was not accepted by the host")
                         if not self._release(result.get("messageIds")):
-                            logger.warning("Signet wake release failed; claim will expire daemon-side")
+                            logger.warning("Signet wake release failed; the message waits for the next hook")
                         if refusals >= _WAKE_MAX_INJECT_REFUSALS:
                             logger.warning(
                                 "Signet wake loop stopped after %d consecutive refused injections", refusals

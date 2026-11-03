@@ -106,7 +106,10 @@ export function createWakeWaiter(options: WakeWaiterOptions): WakeWaiter {
 				waitMs + 10_000,
 				signal,
 			);
-			if (signal.aborted) return;
+			if (signal.aborted) {
+				if (result.ok && result.data?.wake === true) await release(session, result.data.messageIds);
+				return;
+			}
 			if (!result.ok) {
 				delayMs = defaultRetryMs;
 			} else if (result.data?.wake === true) {

@@ -89,6 +89,7 @@ import { upsertThreadHead } from "../thread-heads";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { claimBoardActivityNotices } from "../board";
 import {
+	MAX_WAKE_RELEASE_IDS,
 	MAX_WAKE_WAIT_MS,
 	consumeSessionEndWake,
 	releaseDirectMessageWakes,
@@ -650,8 +651,7 @@ function registerDirectMessageWake(app: Hono): void {
 			return c.json({ error: "waitMs must be a non-negative number" }, 400);
 		}
 		const waitMs = Math.min(MAX_WAKE_WAIT_MS, typeof rawWait === "number" ? rawWait : MAX_WAKE_WAIT_MS);
-		const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(payload.agentId), sessionKey });
-		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		const scopedAgent = resolveCrossAgentScope(c, parseOptionalString(payload.agentId), sessionKey);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
 			requireExisting: false,
@@ -704,14 +704,16 @@ function registerDirectMessageWakeRelease(app: Hono): void {
 		const payload = await readOptionalJsonObject(c);
 		if (payload === null) return c.json({ error: "invalid request body" }, 400);
 		const sessionKey = parseOptionalString(payload.sessionKey);
+		if (Array.isArray(payload.messageIds) && payload.messageIds.length > MAX_WAKE_RELEASE_IDS) {
+			return c.json({ error: `messageIds accepts at most ${MAX_WAKE_RELEASE_IDS} ids` }, 400);
+		}
 		const messageIds = Array.isArray(payload.messageIds)
 			? payload.messageIds.filter((id): id is string => typeof id === "string")
 			: null;
 		if (!sessionKey || messageIds === null || messageIds.length === 0) {
 			return c.json({ error: "sessionKey and messageIds are required" }, 400);
 		}
-		const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(payload.agentId), sessionKey });
-		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		const scopedAgent = resolveCrossAgentScope(c, parseOptionalString(payload.agentId), sessionKey);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
 			requireExisting: false,
@@ -739,7 +741,7 @@ function registerSessionEnd(app: Hono): void {
 		if (isInternalCall(c)) {
 			return c.json({ memoriesSaved: 0 });
 		}
-		const requestStartedAt = Date.now();
+		const requestStartedAt = performance.now();
 		try {
 			const body = (await c.req.json()) as SessionEndRequest;
 
@@ -759,22 +761,21 @@ function registerSessionEnd(app: Hono): void {
 			stampHarness(body.harness);
 
 			const sessionKey = body.sessionKey || body.sessionId;
-			let agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
+			const endScope = resolveCrossAgentScope(c, parseOptionalString(body.agentId), sessionKey);
+			if (endScope.error) return c.json({ error: endScope.error }, 403);
+			const agentId = endScope.agentId;
+			body.agentId = agentId;
+			const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+			});
+			if (bindingError) return c.json({ error: bindingError }, 403);
 			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath, agentId);
 			if (conflict) return c.json(conflict);
 			const transcriptPath = parseOptionalString(body.transcriptPath);
 			if (transcriptPath || parseOptionalString(body.lastAssistantMessage)) {
 				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
 				if (denied) return denied;
-				const scopedAgent = resolveScopedAgentId(c, agentId);
-				if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-				const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
-					requireExisting: false,
-					context: "sessionKey",
-				});
-				if (sessionError) return c.json({ error: sessionError }, 403);
-				agentId = scopedAgent.agentId;
-				body.agentId = agentId;
 			}
 			const duplicate = claimAutomaticSessionOrSkip(sessionKey, runtimePath, agentId, body.harness, "session-end", {
 				memoriesSaved: 0,
@@ -789,19 +790,12 @@ function registerSessionEnd(app: Hono): void {
 
 			try {
 				const result = await handleSessionEnd(body);
-				const wakeAgent = resolveScopedAgentId(c, agentId);
-				const wakeAgentId = wakeAgent.error ? agentId : wakeAgent.agentId;
-				const wakeAgentIds = [...new Set([agentId, wakeAgentId])];
 				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
 				const woken =
 					sessionKey !== undefined &&
-					wakeAgentIds
-						.map((id) =>
-							body.harness === "codex"
-								? consumeSessionEndWake(id, sessionKey)
-								: wasWokenSince(id, sessionKey, wakeSince),
-						)
-						.some(Boolean);
+					(body.harness === "codex"
+						? consumeSessionEndWake(agentId, sessionKey)
+						: wasWokenSince(agentId, sessionKey, wakeSince));
 				if (sessionKey && !woken) {
 					markSessionEnded(sessionKey, runtimePath, agentId);
 					removeAgentPresence(sessionKey);
@@ -1545,8 +1539,7 @@ function registerCrossAgentPresence(app: Hono): void {
 		const runtimePathRaw = parseOptionalString(payload.runtimePath);
 		const runtimePath = runtimePathRaw === "plugin" || runtimePathRaw === "legacy" ? runtimePathRaw : undefined;
 		const sessionKey = parseOptionalString(payload.sessionKey);
-		const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(payload.agentId), sessionKey });
-		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		const scopedAgent = resolveCrossAgentScope(c, parseOptionalString(payload.agentId), sessionKey);
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
 		}
@@ -1648,11 +1641,11 @@ function registerCrossAgentMessages(app: Hono): void {
 
 		const sessionKey =
 			parseOptionalString(payload.sessionKey) ?? parseOptionalString(c.req.header("x-signet-session-key"));
-		const requestedAgentId = resolveAgentId({
-			agentId: parseOptionalString(payload.agentId) ?? parseOptionalString(c.req.header("x-signet-agent-id")),
+		const scopedAgent = resolveCrossAgentScope(
+			c,
+			parseOptionalString(payload.agentId) ?? parseOptionalString(c.req.header("x-signet-agent-id")),
 			sessionKey,
-		});
-		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+		);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
 			requireExisting: false,

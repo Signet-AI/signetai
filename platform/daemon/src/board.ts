@@ -595,10 +595,17 @@ export async function readBoardThread(
 	};
 }
 
+function parseReadThrough(value: unknown): string {
+	const parsed = typeof value === "string" && ISO_TIMESTAMP_RE.test(value) ? Date.parse(value) : Number.NaN;
+	if (!Number.isFinite(parsed)) throw new BoardValidationError("through must be an ISO timestamp");
+	return new Date(parsed).toISOString();
+}
+
 async function resolveReadSeq(
 	threadId: string,
 	input: { readonly throughPostId?: string; readonly through?: string },
 ): Promise<number> {
+	const through = input.through === undefined ? undefined : parseReadThrough(input.through);
 	if (input.throughPostId !== undefined) {
 		if (typeof input.throughPostId !== "string" || input.throughPostId.length === 0) {
 			throw new BoardValidationError("throughPostId must be a post id");
@@ -612,12 +619,10 @@ async function resolveReadSeq(
 		if (!row) throw new BoardValidationError("throughPostId does not belong to this thread");
 		return row.seq;
 	}
-	if (input.through !== undefined) {
-		const parsed = ISO_TIMESTAMP_RE.test(input.through) ? Date.parse(input.through) : Number.NaN;
-		if (!Number.isFinite(parsed)) throw new BoardValidationError("through must be an ISO timestamp");
+	if (through !== undefined) {
 		const rows = await readAll<{ readonly seq: number | null }>(
 			"SELECT MAX(seq) AS seq FROM board_posts WHERE thread_id = ? AND created_at < ?",
-			[threadId, new Date(parsed).toISOString()],
+			[threadId, through],
 			"board.thread.read-cursor-time",
 		);
 		return rows[0]?.seq ?? 0;
@@ -643,11 +648,12 @@ export async function markBoardThreadRead(
 	await write(
 		[
 			ownerStatement(
-				`INSERT INTO board_reads (agent_id, thread_id, last_read_at, last_read_post_seq) VALUES (?, ?, ?, ?)
+				`INSERT INTO board_reads (agent_id, thread_id, last_read_at, last_read_post_seq)
+				 SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM board_threads WHERE id = ?)
 				 ON CONFLICT(agent_id, thread_id) DO UPDATE
 				 SET last_read_at = excluded.last_read_at, last_read_post_seq = excluded.last_read_post_seq
 				 WHERE board_reads.last_read_post_seq < excluded.last_read_post_seq`,
-				[viewer.agentId, threadId, now, seq],
+				[viewer.agentId, threadId, now, seq, threadId],
 			),
 		],
 		"board.thread.mark-read",
@@ -659,7 +665,9 @@ export async function markBoardThreadRead(
 		[viewer.agentId, threadId],
 		"board.thread.read-cursor",
 	);
-	return { threadId, lastReadAt: stored[0]?.last_read_at ?? now, lastReadPostId: stored[0]?.post_id ?? null };
+	const row = stored[0];
+	if (!row) throw new BoardNotFoundError(`board thread not found: ${threadId}`);
+	return { threadId, lastReadAt: row.last_read_at, lastReadPostId: row.post_id };
 }
 
 function defaultTitleFrom(content: string): string {

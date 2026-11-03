@@ -16,7 +16,9 @@ export const MAX_WAKE_WAIT_MS = 25_000;
 export const WAKE_RATE_LIMIT_PER_HOUR = 30;
 const WAKE_RATE_WINDOW_MS = 60 * 60 * 1000;
 const MAX_WAKE_BATCH = 10;
+export const MAX_WAKE_RELEASE_IDS = MAX_WAKE_BATCH;
 const MAX_TRACKED_SESSIONS = 10_000;
+let trackedSessionCap = MAX_TRACKED_SESSIONS;
 export const MAX_ACTIVE_WAKE_WAITERS = 2_000;
 let activeWaiterCap = MAX_ACTIVE_WAKE_WAITERS;
 const WAITER_CAP_RETRY_MS = 30_000;
@@ -40,7 +42,6 @@ export interface WakeWaitInput {
 	readonly harness: string;
 	readonly waitMs: number;
 	readonly signal?: AbortSignal;
-	readonly nowMs?: number;
 }
 
 interface Waiter {
@@ -62,8 +63,15 @@ interface WakeDelivery {
 	readonly messageIds: Set<string>;
 }
 
-const wakeTimes = new Map<string, WakeDelivery[]>();
+interface WakeHistory {
+	deliveries: WakeDelivery[];
+	endBoundary: number;
+	pendingClaims: number;
+}
+
+const wakeHistory = new Map<string, WakeHistory>();
 let nextDeliverySequence = 1;
+let nextHistoryExpiry = 0;
 
 function scopedKey(agentId: string, sessionKey: string): string {
 	return JSON.stringify([agentId, sessionKey]);
@@ -76,31 +84,44 @@ let nextWaiterId = 1;
 let unsubscribe: (() => void) | null = null;
 
 function recentWakes(key: string, nowMs: number): WakeDelivery[] {
-	const times = (wakeTimes.get(key) ?? []).filter((delivery) => nowMs - delivery.at < WAKE_RATE_WINDOW_MS);
-	if (times.length === 0) wakeTimes.delete(key);
-	else wakeTimes.set(key, times);
-	return times;
+	const history = wakeHistory.get(key);
+	if (!history) return [];
+	history.deliveries = history.deliveries.filter((delivery) => nowMs - delivery.at < WAKE_RATE_WINDOW_MS);
+	if (history.deliveries.length === 0 && history.pendingClaims === 0) wakeHistory.delete(key);
+	return history.deliveries;
+}
+
+function historyCapacityRetryAfter(key: string, nowMs: number): number | null {
+	if (wakeHistory.has(key) || wakeHistory.size < trackedSessionCap) return null;
+	if (nowMs >= nextHistoryExpiry) {
+		let expiry = Number.POSITIVE_INFINITY;
+		for (const historyKey of [...wakeHistory.keys()]) {
+			const oldest = recentWakes(historyKey, nowMs)[0];
+			if (oldest) expiry = Math.min(expiry, oldest.at + WAKE_RATE_WINDOW_MS);
+		}
+		nextHistoryExpiry = expiry;
+		if (wakeHistory.size < trackedSessionCap) return null;
+	}
+	return Math.max(1_000, Math.min(WAITER_CAP_RETRY_MS, nextHistoryExpiry - nowMs));
 }
 
 function rateLimitRetryAfter(key: string, nowMs: number): number | null {
 	const times = recentWakes(key, nowMs);
-	if (times.length < WAKE_RATE_LIMIT_PER_HOUR) return null;
+	if (times.length < WAKE_RATE_LIMIT_PER_HOUR) return historyCapacityRetryAfter(key, nowMs);
 	const oldest = times[0]?.at ?? nowMs;
 	return Math.max(1_000, WAKE_RATE_WINDOW_MS - (nowMs - oldest));
 }
 
 function recordWake(key: string, nowMs: number, messages: readonly AgentMessage[]): void {
-	const times = recentWakes(key, nowMs);
-	times.push({
+	const history = wakeHistory.get(key) ?? { deliveries: [], endBoundary: 0, pendingClaims: 0 };
+	history.deliveries = recentWakes(key, nowMs);
+	history.deliveries.push({
 		sequence: nextDeliverySequence++,
 		at: nowMs,
 		messageIds: new Set(messages.map((message) => message.id)),
 	});
-	wakeTimes.set(key, times);
-	if (wakeTimes.size > MAX_TRACKED_SESSIONS) {
-		const oldestKey = wakeTimes.keys().next().value;
-		if (oldestKey !== undefined) wakeTimes.delete(oldestKey);
-	}
+	wakeHistory.set(key, history);
+	nextHistoryExpiry = Math.min(nextHistoryExpiry, nowMs + WAKE_RATE_WINDOW_MS);
 }
 
 const CLAIMABLE_SQL = `SELECT m.*, NULL AS acknowledged_at
@@ -179,7 +200,7 @@ export async function releaseDirectMessageWakes(input: {
 }): Promise<number> {
 	const ids = [...new Set(input.messageIds.filter((id) => typeof id === "string" && id.length > 0))];
 	const key = scopedKey(input.agentId, input.sessionKey);
-	const deliveries = [...(wakeTimes.get(key) ?? [])];
+	const deliveries = [...(wakeHistory.get(key)?.deliveries ?? [])];
 	let released = 0;
 	for (let start = 0; start < ids.length; start += MAX_WAKE_BATCH) {
 		const chunk = ids.slice(start, start + MAX_WAKE_BATCH);
@@ -200,9 +221,11 @@ export async function releaseDirectMessageWakes(input: {
 				for (const delivery of deliveries) delivery.messageIds.delete(id);
 			}
 		}
-		const remaining = (wakeTimes.get(key) ?? []).filter((delivery) => delivery.messageIds.size > 0);
-		if (remaining.length > 0) wakeTimes.set(key, remaining);
-		else wakeTimes.delete(key);
+		const history = wakeHistory.get(key);
+		if (history) {
+			history.deliveries = history.deliveries.filter((delivery) => delivery.messageIds.size > 0);
+			if (history.deliveries.length === 0 && history.pendingClaims === 0) wakeHistory.delete(key);
+		}
 	}
 	return released;
 }
@@ -227,16 +250,31 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 	try {
 		do {
 			waiter.rerun = false;
-			const nowMs = Date.now();
-			if (rateLimitRetryAfter(waiterKey(waiter), nowMs) !== null) return;
-			const preference = agentAddressedPreference(waiter, nowMs);
-			const claimed = await claimDirectMessageWakes({
-				agentId: waiter.agentId,
-				sessionKey: waiter.sessionKey,
-				harness: waiter.harness,
-				includeAgentAddressed: preference.mode === "all",
-				agentAddressedOnlyFromSession: preference.mode === "from" ? preference.sessionKey : undefined,
-			});
+			const key = waiterKey(waiter);
+			const retryAfterMs = rateLimitRetryAfter(key, performance.now());
+			if (retryAfterMs !== null) {
+				waiter.finish({ wake: false, reason: "rate_limited", retryAfterMs });
+				return;
+			}
+			const history = wakeHistory.get(key) ?? { deliveries: [], endBoundary: 0, pendingClaims: 0 };
+			history.pendingClaims++;
+			wakeHistory.set(key, history);
+			const preference = agentAddressedPreference(waiter, performance.now());
+			let claimed: readonly AgentMessage[];
+			try {
+				claimed = await claimDirectMessageWakes({
+					agentId: waiter.agentId,
+					sessionKey: waiter.sessionKey,
+					harness: waiter.harness,
+					includeAgentAddressed: preference.mode === "all",
+					agentAddressedOnlyFromSession: preference.mode === "from" ? preference.sessionKey : undefined,
+				});
+			} finally {
+				history.pendingClaims--;
+				if (history.pendingClaims === 0 && history.deliveries.length === 0 && wakeHistory.get(key) === history) {
+					wakeHistory.delete(key);
+				}
+			}
 			if (claimed.length > 0) {
 				if (waiter.done) {
 					await releaseWakeClaimsWithRetry({
@@ -247,7 +285,7 @@ async function attemptClaim(waiter: Waiter): Promise<void> {
 					redispatch(claimed);
 					return;
 				}
-				recordWake(waiterKey(waiter), Date.now(), claimed);
+				recordWake(waiterKey(waiter), performance.now(), claimed);
 				waiter.finish(wakeResult(claimed, waiter.sessionKey));
 				return;
 			}
@@ -291,7 +329,7 @@ function logClaimFailure(waiter: Waiter, error: unknown): void {
 	});
 }
 
-export function selectWakeTarget(message: AgentMessage, nowMs = Date.now()): string | null {
+export function selectWakeTarget(message: AgentMessage, nowMs = performance.now()): string | null {
 	if (!isDirectAgentMessage(message)) return null;
 	const eligible = (waiter: Waiter): boolean =>
 		!waiter.done &&
@@ -358,7 +396,7 @@ function ensureSubscribed(): void {
 }
 
 export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<WakeWaitResult> {
-	const nowMs = input.nowMs ?? Date.now();
+	const nowMs = performance.now();
 	const key = scopedKey(input.agentId, input.sessionKey);
 	const retryAfterMs = rateLimitRetryAfter(key, nowMs);
 	const previous = waiters.get(key);
@@ -417,24 +455,18 @@ export async function waitForDirectMessageWake(input: WakeWaitInput): Promise<Wa
 	});
 }
 
-const endBoundaries = new Map<string, number>();
-
 export function consumeSessionEndWake(agentId: string, sessionKey: string): boolean {
 	const key = scopedKey(agentId, sessionKey);
-	const previous = endBoundaries.get(key) ?? 0;
-	const deliveries = recentWakes(key, Date.now());
-	const woken = deliveries.some((delivery) => delivery.sequence > previous);
-	endBoundaries.delete(key);
-	endBoundaries.set(key, nextDeliverySequence - 1);
-	if (endBoundaries.size > MAX_TRACKED_SESSIONS) {
-		const oldestKey = endBoundaries.keys().next().value;
-		if (oldestKey !== undefined) endBoundaries.delete(oldestKey);
-	}
+	const deliveries = recentWakes(key, performance.now());
+	const history = wakeHistory.get(key);
+	if (!history) return false;
+	const woken = deliveries.some((delivery) => delivery.sequence > history.endBoundary);
+	history.endBoundary = nextDeliverySequence - 1;
 	return woken;
 }
 
 export function wasWokenSince(agentId: string, sessionKey: string, sinceMs: number): boolean {
-	return recentWakes(scopedKey(agentId, sessionKey), Date.now()).some((delivery) => delivery.at >= sinceMs);
+	return recentWakes(scopedKey(agentId, sessionKey), performance.now()).some((delivery) => delivery.at >= sinceMs);
 }
 
 export function activeWakeWaiterCount(): number {
@@ -450,11 +482,16 @@ export function setWakeWaiterCapForTest(cap: number): void {
 	activeWaiterCap = cap;
 }
 
+export function setWakeHistoryCapForTest(cap: number): void {
+	trackedSessionCap = cap;
+}
+
 export function resetDirectMessageWakeStateForTest(): void {
 	activeWaiterCap = MAX_ACTIVE_WAKE_WAITERS;
+	trackedSessionCap = MAX_TRACKED_SESSIONS;
 	closeDirectMessageWakeWaiters();
-	wakeTimes.clear();
-	endBoundaries.clear();
+	wakeHistory.clear();
+	nextHistoryExpiry = 0;
 	unsubscribe?.();
 	unsubscribe = null;
 }

@@ -139,6 +139,32 @@ describe("createWakeWaiter", () => {
 		expect(release?.body).toEqual({ harness: "pi", sessionKey: "s1", agentId: "a1", messageIds: ["m1", "m2"] });
 	});
 
+	it("releases a claim that arrives after stop instead of delivering or stranding it", async () => {
+		const calls: string[] = [];
+		const delivered: string[] = [];
+		let waiter: ReturnType<typeof createWakeWaiter> | undefined;
+		const client: DaemonClient = {
+			async post() {
+				return null;
+			},
+			postResult<T>(path: string): Promise<DaemonFetchResult<T>> {
+				calls.push(path);
+				if (path.endsWith("/release"))
+					return Promise.resolve({ ok: true, data: { released: 1 } } as DaemonFetchResult<T>);
+				waiter?.stop();
+				return Promise.resolve({
+					ok: true,
+					data: { wake: true, inject: "late", messageIds: ["m9"] },
+				} as DaemonFetchResult<T>);
+			},
+		};
+		waiter = createWakeWaiter({ client, harness: "pi", agentId: "a1", deliver: (t) => delivered.push(t), ...fast });
+		waiter.start({ sessionKey: "s1" });
+		await until(() => calls.includes("/api/cross-agent/wake/release"));
+		expect(calls).toEqual(["/api/cross-agent/wake", "/api/cross-agent/wake/release"]);
+		expect(delivered).toEqual([]);
+	});
+
 	it("stops after consecutive refusals, releasing each claim, and re-arms on restart", async () => {
 		const wakeStep = { ok: true, data: { wake: true, inject: "x", messageIds: ["m1"] } } as const;
 		const fake = fakeClient([

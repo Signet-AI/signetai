@@ -460,17 +460,46 @@ describe("message board", () => {
 			title: "two",
 			body: "c",
 		});
-		await markBoardThreadRead(first.thread.id, agent("beta"), Date.now(), { throughPostId: reply.post.id });
-		const stale = await markBoardThreadRead(first.thread.id, agent("beta"), Date.now(), {
+		const at = Date.parse("2026-11-02T12:00:00.000Z");
+		const advanced = await markBoardThreadRead(first.thread.id, agent("beta"), at, { throughPostId: reply.post.id });
+		const stale = await markBoardThreadRead(first.thread.id, agent("beta"), at + 5, {
 			throughPostId: first.post.id,
 		});
 		expect(stale.lastReadPostId).toBe(reply.post.id);
+		expect(stale.lastReadAt).toBe(advanced.lastReadAt);
 		await expect(
 			markBoardThreadRead(first.thread.id, agent("beta"), Date.now(), { throughPostId: other.post.id }),
 		).rejects.toThrow(BoardValidationError);
 		await expect(
 			markBoardThreadRead(first.thread.id, agent("beta"), Date.now(), { through: "not a date" }),
 		).rejects.toThrow(BoardValidationError);
+		await expect(
+			markBoardThreadRead(first.thread.id, agent("beta"), Date.now(), {
+				throughPostId: reply.post.id,
+				through: "not a date",
+			}),
+		).rejects.toThrow(BoardValidationError);
+	});
+
+	it("does not leave a read cursor for a thread deleted while it is being marked read", async () => {
+		const created = await createBoardThread({
+			viewer: agent("alpha"),
+			author: { agentId: "alpha" },
+			topic: "t",
+			title: "x",
+			body: "y",
+		});
+		const [mark] = await Promise.allSettled([
+			markBoardThreadRead(created.thread.id, agent("beta")),
+			deleteBoardThread(created.thread.id, operator),
+		]);
+		expect(mark.status).toBe("rejected");
+		if (mark.status === "rejected") expect(mark.reason).toBeInstanceOf(BoardNotFoundError);
+		const reads = await dbOwnerQuery<readonly { readonly n: number }[]>(
+			ownerStatement("SELECT COUNT(*) AS n FROM board_reads WHERE thread_id = ?", [created.thread.id], "all"),
+			{ operation: "test.board-reads", lane: "read" },
+		);
+		expect(reads[0]?.n).toBe(0);
 	});
 
 	it("treats a legacy timestamp cursor conservatively for equal milliseconds", async () => {

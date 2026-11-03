@@ -3,9 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import type { TokenClaims } from "../auth";
 import { resetBoardStateForTest } from "../board";
 import { createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
-import { resetDirectMessageWakeStateForTest } from "../cross-agent-wake";
+import { consumeSessionEndWake, resetDirectMessageWakeStateForTest } from "../cross-agent-wake";
 import { closeDbAccessor, initDbAccessor } from "../db-accessor";
 import { getEndedSession, markSessionEnded } from "../session-tracker";
 
@@ -14,6 +15,7 @@ const suiteDir = mkdtempSync(join(tmpdir(), "signet-board-routes-suite-"));
 process.env.SIGNET_PATH = suiteDir;
 const { registerHooksRoutes } = await import("./hooks-routes");
 const { registerBoardRoutes } = await import("./board-routes");
+const { authConfig } = await import("./state");
 
 let dir = "";
 let app: Hono;
@@ -101,6 +103,95 @@ describe("direct message wake route", () => {
 		});
 		expect(((await sameSession.json()) as { messageIds: string[] }).messageIds).toEqual([message.id]);
 		expect((await send("POST", "/api/cross-agent/wake/release", { sessionKey: "beta-1" })).status).toBe(400);
+		const oversized = await send("POST", "/api/cross-agent/wake/release", {
+			sessionKey: "beta-1",
+			agentId: "beta",
+			messageIds: Array.from({ length: 11 }, (_, index) => `m${index}`),
+		});
+		expect(oversized.status).toBe(400);
+	});
+});
+
+describe("cross-agent wake routes under a scoped token", () => {
+	async function withAlphaToken(run: (scoped: Hono) => Promise<void>): Promise<void> {
+		const previousAgentId = process.env.SIGNET_AGENT_ID;
+		const previousMode = authConfig.mode;
+		process.env.SIGNET_AGENT_ID = "ops";
+		authConfig.mode = "team";
+		const claims: TokenClaims = {
+			sub: "alpha-token",
+			scope: { agent: "alpha" },
+			role: "agent",
+			iat: Math.floor(Date.now() / 1000),
+			exp: Math.floor(Date.now() / 1000) + 3600,
+		};
+		const scoped = new Hono();
+		scoped.use("*", async (c, next) => {
+			c.set("auth", { authenticated: true, claims });
+			await next();
+		});
+		registerHooksRoutes(scoped);
+		try {
+			await run(scoped);
+		} finally {
+			authConfig.mode = previousMode;
+			if (previousAgentId === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			else process.env.SIGNET_AGENT_ID = previousAgentId;
+		}
+	}
+
+	function post(target: Hono, path: string, body: Readonly<Record<string, unknown>>): Promise<Response> {
+		return Promise.resolve(
+			target.request(path, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			}),
+		);
+	}
+
+	it("uses the token's agent when presence, wake, release, and acknowledgement omit agentId", async () => {
+		await withAlphaToken(async (scoped) => {
+			const presence = await post(scoped, "/api/cross-agent/presence", { harness: "pi", sessionKey: "alpha-1" });
+			expect(presence.status).toBe(200);
+			const message = createAgentMessage({ fromAgentId: "beta", toSessionKey: "alpha-1", content: "wake alpha" });
+			const woke = await post(scoped, "/api/cross-agent/wake", { harness: "pi", sessionKey: "alpha-1", waitMs: 0 });
+			expect(woke.status).toBe(200);
+			expect(((await woke.json()) as { messageIds: string[] }).messageIds).toEqual([message.id]);
+			const released = await post(scoped, "/api/cross-agent/wake/release", {
+				sessionKey: "alpha-1",
+				messageIds: [message.id],
+			});
+			expect(await released.json()).toEqual({ released: 1 });
+			const acked = await post(scoped, `/api/cross-agent/messages/${message.id}/ack`, { sessionKey: "alpha-1" });
+			expect(acked.status).toBe(200);
+		});
+	});
+
+	it("does not let a token for one agent consume another agent's session-end wake", async () => {
+		upsertAgentPresence({ agentId: "beta", harness: "codex", sessionKey: "codex-beta" });
+		createAgentMessage({ fromAgentId: "alpha", toSessionKey: "codex-beta", content: "continue" });
+		const woke = await send("POST", "/api/cross-agent/wake", {
+			harness: "codex",
+			sessionKey: "codex-beta",
+			agentId: "beta",
+			waitMs: 0,
+		});
+		expect(((await woke.json()) as { wake: boolean }).wake).toBe(true);
+		await withAlphaToken(async (scoped) => {
+			for (const suppliedIdentity of [{ agentId: "beta" }, { agentId: "alpha" }, {}]) {
+				const ended = await post(scoped, "/api/hooks/session-end", {
+					harness: "codex",
+					sessionKey: "codex-beta",
+					...suppliedIdentity,
+					runtimePath: "legacy",
+					reason: "stop",
+				});
+				expect(ended.status).toBe(403);
+			}
+		});
+		expect(getEndedSession("codex-beta", "beta")).toBeUndefined();
+		expect(consumeSessionEndWake("beta", "codex-beta")).toBe(true);
 	});
 });
 

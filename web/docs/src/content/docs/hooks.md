@@ -112,6 +112,8 @@ Connectors hold a long-poll open on:
 
 Each message wakes at most once unless the host refuses delivery and returns its claim. The claim is stored durably, so a restart does not repeat a delivered wake. A session-addressed message wakes only that session. An agent-addressed message wakes the most recently active waiting session of that agent. Each agent/session pair may be woken 30 times per rolling hour; beyond that the message waits for normal hook delivery. Releasing an undelivered batch refunds only that batch's charge once all of its messages have been released. Partial releases do not refund unrelated or newer batches. Hermes Agent and Pi stop their waiter after three consecutive refused injections, log exhaustion, and can re-arm on the next session lifecycle event; successful injection resets the refusal count. Waking does not acknowledge: agents still call `agent_message_ack` after processing.
 
+`POST /api/cross-agent/wake/release` returns an undelivered claim using `sessionKey`, the caller's resolved `agentId`, and `messageIds`. It accepts at most 10 IDs, the size of one wake batch; larger requests return `400`. Wake quotas and session-end consumption share one bounded history per agent/session pair. When all history slots are occupied by active claims or unexpired deliveries, new sessions receive `rate_limited` rather than evicting another session's quota. Hourly expiry and the concurrency grace use a monotonic clock, not the system wall clock.
+
 | Harness | Wake path |
 |---------|-----------|
 | Claude Code | `asyncRewake` command hooks on `SessionStart` and `Stop` run `signet hook wake`; exit code 2 wakes the session, even when idle |

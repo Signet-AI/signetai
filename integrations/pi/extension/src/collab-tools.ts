@@ -240,7 +240,7 @@ export function registerCollabTools(pi: PiExtensionApi, client: CollabClient, ag
 	define(
 		"board_read",
 		"Read Board Thread",
-		`Read a message board thread with its posts and mark it read up to the newest post returned. The returned thread state is the snapshot from before marking. ${UNTRUSTED}`,
+		`Read a message board thread with its posts. The first page (no offset) marks it read up to the newest post returned; offset pages do not change the read position. The returned thread state is the snapshot from before marking. ${UNTRUSTED}`,
 		Type.Object({
 			thread_id: Type.String({ description: "Thread id" }),
 			limit: Type.Optional(Type.Number({ description: "Max posts (default 100, max 200)" })),

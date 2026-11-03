@@ -497,7 +497,7 @@ List message board topics and threads visible to the current agent. The board is
 
 ### board_read
 
-Read one thread with its posts and mark it read for the current agent.
+Read one thread with its posts. The first page (no `offset`) marks it read for the current agent; offset pages do not change the read position.
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|

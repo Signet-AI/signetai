@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,8 +12,10 @@ import {
 	WAKE_RATE_LIMIT_PER_HOUR,
 	activeWakeWaiterCount,
 	claimDirectMessageWakes,
+	consumeSessionEndWake,
 	releaseDirectMessageWakes,
 	resetDirectMessageWakeStateForTest,
+	setWakeHistoryCapForTest,
 	setWakeWaiterCapForTest,
 	waitForDirectMessageWake,
 } from "./cross-agent-wake";
@@ -273,6 +275,7 @@ describe("direct message wake", () => {
 		const second = batches[1];
 		if (!first || !second) throw new Error("missing wake batches");
 		expect(await releaseDirectMessageWakes({ ...input, agentId: "other", messageIds: first })).toBe(0);
+		expect(await releaseDirectMessageWakes({ ...input, sessionKey: "b2", messageIds: first })).toBe(0);
 		expect((await waitForDirectMessageWake(input)).reason).toBe("rate_limited");
 		await releaseDirectMessageWakes({ ...input, messageIds: [first[0] as string] });
 		expect((await waitForDirectMessageWake(input)).reason).toBe("rate_limited");
@@ -290,6 +293,78 @@ describe("direct message wake", () => {
 		const release = [...retry.messageIds, ...retrySecond.messageIds, ...batches.slice(2).flat()];
 		expect(await releaseDirectMessageWakes({ ...input, messageIds: release })).toBe(60);
 		expect((await waitForDirectMessageWake(input)).wake).toBe(true);
+	});
+
+	it("keeps a limited session's wake history when the tracked-session table is full", async () => {
+		setWakeHistoryCapForTest(2);
+		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "pi" });
+		const limitedInput = { agentId: "beta", sessionKey: "b1", harness: "pi", waitMs: 0 };
+		for (let index = 0; index < WAKE_RATE_LIMIT_PER_HOUR; index++) {
+			createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: `ping ${index}` });
+			expect((await waitForDirectMessageWake(limitedInput)).wake).toBe(true);
+		}
+		for (const sessionKey of ["b2", "b3"]) {
+			upsertAgentPresence({ sessionKey, agentId: "beta", harness: "pi" });
+			createAgentMessage({ fromAgentId: "alpha", toSessionKey: sessionKey, content: `for ${sessionKey}` });
+		}
+		expect((await waitForDirectMessageWake({ ...limitedInput, sessionKey: "b2" })).wake).toBe(true);
+		const full = await waitForDirectMessageWake({ ...limitedInput, sessionKey: "b3" });
+		expect(full.wake).toBe(false);
+		if (full.wake) throw new Error("expected tracked-session capacity refusal");
+		expect(full.reason).toBe("rate_limited");
+		expect(full.retryAfterMs).toBeGreaterThan(0);
+		createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: "one too many" });
+		expect((await waitForDirectMessageWake(limitedInput)).reason).toBe("rate_limited");
+		expect(await wakeRows()).toHaveLength(WAKE_RATE_LIMIT_PER_HOUR + 1);
+	});
+
+	it("does not report a consumed session-end wake again after other sessions end", async () => {
+		setWakeHistoryCapForTest(2);
+		upsertAgentPresence({ sessionKey: "b1", agentId: "beta", harness: "codex" });
+		createAgentMessage({ fromAgentId: "alpha", toSessionKey: "b1", content: "ping" });
+		const input = { agentId: "beta", sessionKey: "b1", harness: "codex", waitMs: 0 };
+		expect((await waitForDirectMessageWake(input)).wake).toBe(true);
+		expect(consumeSessionEndWake("beta", "b1")).toBe(true);
+		expect(consumeSessionEndWake("beta", "b1")).toBe(false);
+		for (const sessionKey of ["b2", "b3", "b4"]) expect(consumeSessionEndWake("beta", sessionKey)).toBe(false);
+		expect(consumeSessionEndWake("beta", "b1")).toBe(false);
+	});
+
+	it("expires the wake quota by elapsed time even after the wall clock moves backwards", async () => {
+		const wall = spyOn(Date, "now").mockReturnValue(Date.now());
+		const monotonic = spyOn(performance, "now").mockReturnValue(performance.now());
+		const start = performance.now();
+		try {
+			upsertAgentPresence({ sessionKey: "clock-beta", agentId: "beta", harness: "pi" });
+			const input = { agentId: "beta", sessionKey: "clock-beta", harness: "pi", waitMs: 0 };
+			for (let i = 0; i < WAKE_RATE_LIMIT_PER_HOUR; i++) {
+				createAgentMessage({ fromAgentId: "alpha", toSessionKey: "clock-beta", content: `ping ${i}` });
+				expect((await waitForDirectMessageWake(input)).wake).toBe(true);
+			}
+			createAgentMessage({ fromAgentId: "alpha", toSessionKey: "clock-beta", content: "after the hour" });
+			wall.mockReturnValue(Date.now() - 2 * 60 * 60 * 1000);
+			expect(await waitForDirectMessageWake(input)).toMatchObject({ wake: false, reason: "rate_limited" });
+			monotonic.mockReturnValue(start + 60 * 60 * 1000 + 1);
+			expect((await waitForDirectMessageWake(input)).wake).toBe(true);
+		} finally {
+			wall.mockRestore();
+			monotonic.mockRestore();
+		}
+	});
+
+	it("reserves history capacity before concurrent claims complete", async () => {
+		setWakeHistoryCapForTest(2);
+		const inputs = ["one", "two", "three"].map((sessionKey) => {
+			upsertAgentPresence({ sessionKey, agentId: "beta", harness: "pi" });
+			createAgentMessage({ fromAgentId: "alpha", toSessionKey: sessionKey, content: "ping" });
+			return { agentId: "beta", sessionKey, harness: "pi", waitMs: 0 };
+		});
+		const results = await Promise.all(inputs.map(waitForDirectMessageWake));
+		expect(results.filter((result) => result.wake)).toHaveLength(2);
+		expect(results.filter((result) => !result.wake)).toEqual([
+			{ wake: false, reason: "rate_limited", retryAfterMs: 30_000 },
+		]);
+		expect(await wakeRows()).toHaveLength(2);
 	});
 
 	it("keeps wake claims across a daemon restart", async () => {
