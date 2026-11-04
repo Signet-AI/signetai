@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Trusted host-side provider proxy. The provider key exists ONLY in this process's environment
-// (SIGNET_KEY_ZAI, injected by the parent via secret exec). Agent containers receive a per-run opaque
+// (ZAI_CODING_CN_API_KEY, injected by the parent via secret exec). Agent containers receive a per-run opaque
 // token that is useless elsewhere. Enforces request/output/wall-time limits and records the provider's
 // own served model, stop reasons and raw usage. It never invents values: unknown stays null.
 //
@@ -13,13 +13,13 @@ import { appendFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { redact } from "../lib/common.mjs";
 
-export const REAL_UPSTREAM = "https://api.z.ai/api/paas/v4";
-export const EFFECTIVE_PARAMS = Object.freeze({ model: "glm-5.3-flash", reasoning_effort: "max", thinking: { type: "enabled", clear_thinking: false }, n: 1 });
+export const REAL_UPSTREAM = "https://open.bigmodel.cn/api/coding/paas/v4";
+export const EFFECTIVE_PARAMS = Object.freeze({ model: "glm-5.3-flash", n: 1 });
 const MODEL = EFFECTIVE_PARAMS.model;
 const MAX_BODY = 1024 * 1024;
 const MAX_RESPONSE = 8 * 1024 * 1024;
 const MAX_LINE = 1024 * 1024;
-const ALLOWED = new Set(["model", "messages", "tools", "tool_choice", "stream", "stream_options", "temperature", "top_p", "stop", "max_tokens", "thinking", "response_format", "seed", "parallel_tool_calls"]);
+const ALLOWED = new Set(["model", "messages", "tools", "tool_choice", "tool_stream", "stream", "stream_options", "temperature", "top_p", "stop", "max_tokens", "thinking", "reasoning_effort", "response_format", "seed", "parallel_tool_calls"]);
 
 class Reject extends Error {
 	constructor(status, msg) {
@@ -45,8 +45,8 @@ function validateBody(raw, maxOutput) {
 	out.model = MODEL;
 	out.n = 1;
 	out.max_tokens = maxTokens;
-	out.thinking = { ...EFFECTIVE_PARAMS.thinking };
-	out.reasoning_effort = EFFECTIVE_PARAMS.reasoning_effort;
+
+
 	if (out.stream) out.stream_options = { include_usage: true };
 	else delete out.stream_options;
 	return { body: out, stripped: stripped.filter((k) => k !== "n" && k !== "reasoning_effort"), requestedEffort: typeof raw.reasoning_effort === "string" ? raw.reasoning_effort : null };
@@ -108,7 +108,7 @@ function makeParser(sse) {
 	};
 }
 
-export function startProxy({ tokens, eventsPath, maxRequests = 24, maxOutput = 4000, upstream = REAL_UPSTREAM, key = process.env.SIGNET_KEY_ZAI, host = "0.0.0.0", port = 0, fetchImpl }) {
+export function startProxy({ tokens, eventsPath, maxRequests = 24, maxOutput = 4000, upstream = REAL_UPSTREAM, key = process.env.ZAI_CODING_CN_API_KEY, host = "0.0.0.0", port = 0, fetchImpl }) {
 	const injected = typeof fetchImpl === "function";
 	if (!injected && upstream !== REAL_UPSTREAM) throw new Error(`real fetch only allowed against ${REAL_UPSTREAM}; inject fetchImpl (fake provider) for other upstreams`);
 	const doFetch = injected ? fetchImpl : fetch;
@@ -186,7 +186,7 @@ export function startProxy({ tokens, eventsPath, maxRequests = 24, maxOutput = 4
 			if (!res.writableEnded) ac.abort(new Error("client_disconnect"));
 		});
 		const t0 = Date.now();
-		const base = { agent, n, requestId: `r${n}`, stripped: prepared.stripped, requestedEffort: prepared.requestedEffort, effectiveEffort: EFFECTIVE_PARAMS.reasoning_effort, clearThinking: false, maxTokens: prepared.body.max_tokens };
+		const base = { agent, n, requestId: `r${n}`, stripped: prepared.stripped, requestedEffort: prepared.requestedEffort, effectiveEffort: prepared.body.reasoning_effort ?? null, clearThinking: prepared.body.thinking?.clear_thinking ?? null, maxTokens: prepared.body.max_tokens };
 		let up;
 		try {
 			up = await doFetch(`${upstream}/chat/completions`, { method: "POST", redirect: "error", signal: ac.signal, headers: { "content-type": "application/json", authorization: `Bearer ${liveKey}` }, body: JSON.stringify(prepared.body) });
@@ -261,5 +261,5 @@ export function startProxy({ tokens, eventsPath, maxRequests = 24, maxOutput = 4
 if (import.meta.url === `file://${process.argv[1]}`) {
 	const tokens = JSON.parse(process.env.EVAL_PROXY_TOKENS ?? "{}");
 	const p = await startProxy({ tokens, eventsPath: process.env.EVAL_PROXY_EVENTS, port: Number(process.env.PORT ?? 8787) });
-	console.log(JSON.stringify({ proxy: p.port, keyPresent: Boolean(process.env.SIGNET_KEY_ZAI) }));
+	console.log(JSON.stringify({ proxy: p.port, keyPresent: Boolean(process.env.ZAI_CODING_CN_API_KEY) }));
 }

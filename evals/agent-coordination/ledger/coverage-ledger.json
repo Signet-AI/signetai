@@ -1,6 +1,6 @@
 {
   "schema": "agent-coordination/coverage-ledger/v2",
-  "statement": "Lists what each lane exercises. It does not claim all edges are proven. Controls prove grader behaviour only (scripted, no model, no Pi); NO live two-agent run has been executed or graded. 'NOT RUN' means no eval run exists. The single measured case (c1-discovery-wake) is designed for 2 real Pi agents + 10 synthetic presence profiles and exercises only: discovery by metadata, DM send/delivery to the correct agent+session, idle-peer wake, and safety/serialisation on one shared resource. Everything else is unclaimed.",
+  "statement": "C1 is an integration case for discovery, DM delivery, idle-peer wake and simulated resource serialization. Its live provider attempts were rejected and do not establish agent behavior. C2 is a separate real Pi split-coding utility pilot: paired native-model artifacts were graded at the request-budget cutoff, but neither combined application passed within the same 24-request budget. See coding-pilot.json for outcomes, unknown usage, source hashes and limitations. Controls prove grader behavior only. The feature entries below describe C1 coverage, not full PR certification; NOT RUN means no valid live feature evidence, not that no provider attempt occurred.",
   "features": [
     {
       "id": "dm_send_deliver",
@@ -16,7 +16,7 @@
       "id": "wake",
       "feature": "Idle-peer async wake (Pi RPC)",
       "existing_tests_or_proofs": "integrations/pi/extension-base/src/wake-waiter.test.ts; integrations/pi/extension/index.test.ts",
-      "eval_lane": "c1 designed (graded: async_wake_observed = responder agent_settled -> agent_start -> FIRST user_input of that run carries the real formatted wake text whose Message ID equals the backend DM id initiator->responder in the responder's own session, no assistant/tool activity before it, no runner prompt between). Evidence is Pi's stream ordering, NOT a daemon wake event (daemon wake events are not exposed over HTTP). Backend poll lag tolerated; host order never rewritten. Verified against installed Pi SDK 0.79.1 loop source only (agent_start precedes message_start); Pi 1.0.0 not installed here. Live NOT RUN",
+      "eval_lane": "C1 requires a real idle-peer wake correlated with Pi's own first user input and backend DM ID. Pi 1.0.0 is installed and used in C2, but C2 does not require or separately certify an idle wake. Active-session DMs and code outcomes in C2 are not evidence for every-DM wake reliability.",
       "cases": [
         "c1-discovery-wake"
       ],
@@ -81,7 +81,7 @@
     {
       "id": "discovery",
       "feature": "Presence discovery with context (agent_peers, agent_context_update, agent_session_inspect)",
-      "existing_tests_or_proofs": "extension tools agent_context_update / agent_session_inspect do not exist in this worktree yet (other lanes)",
+      "existing_tests_or_proofs": "platform/daemon/src/routes/cross-agent-context-routes.test.ts; native Pi context tools are present and available in the paired coding run. Discovery is diagnostic there, not a required scoring ritual.",
       "eval_lane": "c1 designed (2 real + 10 synthetic uniform-shape profiles: 3 cpu-only, 2 other-host GPU, 2 completed GPU jobs, 2 read-only GPU monitors, 1 retired same-agent session). Real stale-presence behaviour is NOT tested: the daemon API cannot backdate context time and presence TTL (4h) prunes at 6h; no test-only time controls or DB writes were added. Offline clock-skew controls only filter ordering. Live NOT RUN",
       "cases": [
         "c1-discovery-wake"

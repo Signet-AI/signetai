@@ -51,17 +51,28 @@ test("observer: HTTP+SSE only, labels DMs, dedupes poll vs SSE, no sqlite", asyn
 
 test("approval binds run, case, prompts and grader hashes; limits hard-capped", () => {
 	const prepared = { runId: "r1", caseId: "c1", promptsSha256: "p", graderSha256: "g", harnessSha256: "h", imagesSha256: "i" };
-	const good = { approvedBy: "user", runId: "r1", caseIds: ["c1"], promptsSha256: "p", graderSha256: "g", harnessSha256: "h", imagesSha256: "i", maxProviderRequests: 999, maxOutputTokens: 99999, maxWallMs: 9e9 };
+	const good = { approvedBy: "user", runId: "r1", caseIds: ["c1"], promptsSha256: "p", graderSha256: "g", harnessSha256: "h", imagesSha256: "i", maxProviderRequests: 999, maxOutputTokens: 999999, maxWallMs: 9e9 };
 	const v = validateApproval(good, prepared);
 	assert.ok(v.ok);
-	assert.deepEqual(v.limits, { requests: 24, output: 4000, wallMs: 480000 });
+	assert.deepEqual(v.limits, { requests: 24, output: 131072, wallMs: 480000 });
 	for (const bad of [{}, { ...good, approvedBy: "" }, { ...good, runId: "x" }, { ...good, caseIds: [] }, { ...good, promptsSha256: "q" }, { ...good, graderSha256: "q" }, { ...good, harnessSha256: "x" }, { ...good, imagesSha256: "x" }, { ...good, harnessSha256: undefined }, null]) assert.equal(validateApproval(bad, prepared).ok, false);
+});
+
+test("coding shares only its project and baseline omits the Signet extension", () => {
+	const common = { name: "n", runId: "r", network: "net", image: "img", hostname: "h", envFile: "/owned/pi.env", workdir: "/project", projectDir: "/owned/project" };
+	const enabled = piRunArgs(common).join(" ");
+	const baseline = piRunArgs({ ...common, baseline: true }).join(" ");
+	assert.ok(enabled.includes("type=bind,source=/owned/project,target=/project"));
+	assert.ok(enabled.includes("--provider zai-coding-cn"));
+	assert.ok(enabled.includes("-e /opt/signet/signet-pi.mjs"));
+	assert.ok(baseline.includes("--no-extensions"));
+	assert.ok(!baseline.includes("-e /opt/signet/signet-pi.mjs"));
 });
 
 test("docker specs: hardened, no mounts for agents, secrets only via env-file", () => {
 	const args = piRunArgs({ name: "n", runId: "r", network: "net", image: "img", hostname: "h", envFile: "/tmp/e.env", workdir: "/work/w" });
 	const s = args.join(" ");
-	for (const must of ["--read-only", "--cap-drop ALL", "no-new-privileges:true", "--env-file /tmp/e.env", "--network net", "--label coord-eval.run=r", "--thinking high"]) assert.ok(s.includes(must), must);
+	for (const must of ["--read-only", "--cap-drop ALL", "no-new-privileges:true", "--env-file /tmp/e.env", "--network net", "--label coord-eval.run=r", "--thinking medium"]) assert.ok(s.includes(must), must);
 	assert.ok(!args.includes("-v") && !s.includes("docker.sock") && !s.includes("--privileged"));
 	const spec = renderCompose({ runId: "r", project: "p", images: { pi: "pi", daemon: "d", instrument: "i", relay: "r" }, relayTarget: "172.1.1.1:9", goldDir: "/g", instrumentDir: "/i", hostname: "h", piEnvFiles: { A: "/a.env", B: "/b.env" } });
 	assert.equal(spec.services.instrument.mem_limit, "512m");

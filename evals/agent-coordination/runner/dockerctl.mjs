@@ -42,13 +42,13 @@ export async function imageIdentity(tag) {
 export const LABEL = "coord-eval.run";
 
 /** Hardened `docker run -i` argv for one real Pi RPC agent. The secret-bearing env goes through --env-file, never argv. */
-export function piRunArgs({ name, runId, network, image, hostname, envFile, workdir }) {
+export function piRunArgs({ name, runId, network, image, hostname, envFile, workdir, projectDir, baseline = false }) {
 	const script = [
 		"set -e",
 		`mkdir -p ${workdir} && cd ${workdir}`,
 		'mkdir -p "$PI_CODING_AGENT_DIR"',
 		'printf %s "$EVAL_MODELS_JSON" > "$PI_CODING_AGENT_DIR/models.json"',
-		"exec pi --mode rpc --no-session --provider zai-eval --model glm-5.3-flash --thinking high --no-context-files --no-skills --offline -e /opt/signet/signet-pi.mjs",
+		`exec pi --mode rpc --no-session --provider zai-coding-cn --model glm-5.3-flash --thinking medium --no-context-files --no-skills --offline ${baseline ? "--no-extensions" : "-e /opt/signet/signet-pi.mjs"}`,
 	].join("; ");
 	return [
 		"run", "-i", "--rm", "--name", name,
@@ -63,6 +63,7 @@ export function piRunArgs({ name, runId, network, image, hostname, envFile, work
 		"--security-opt", "no-new-privileges:true",
 		"--memory", "1g", "--pids-limit", "256",
 		"--env-file", envFile,
+		...(projectDir ? ["--mount", `type=bind,source=${projectDir},target=/project`] : []),
 		image, "sh", "-c", script,
 	];
 }

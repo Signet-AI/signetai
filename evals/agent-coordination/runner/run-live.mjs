@@ -15,7 +15,7 @@
 // labelled synthetic distractor presence, and starts the loopback-only viewer. It then writes <runDir>/prepared.json.
 //
 // Generation starts ONLY after the parent places a valid approval file (this runner never writes it). The approval must name
-// this runId and carry the promptsSha256 + graderSha256 printed in prepared.json. The provider key (SIGNET_KEY_ZAI, injected by
+// this runId and carry the promptsSha256 + graderSha256 printed in prepared.json. The provider key (ZAI_CODING_CN_API_KEY, injected by
 // the parent via secret exec) lives only in this process env and is served by the host proxy only after approval. Agents get
 // opaque per-run tokens.
 import { createHash, randomBytes, randomUUID } from "node:crypto";
@@ -53,7 +53,7 @@ export const IMAGES = {
 	relay: "alpine/socat@sha256:466c8a0383e16463fabdb7df01008292fb78d07da60224a46cb5d3142ce122ed",
 };
 const EXPECTED_TOOLS = ["agent_peers", "agent_context_update", "agent_session_inspect", "agent_message_send", "agent_message_inbox", "agent_message_ack"];
-const HARD = { requests: 24, output: 4000, wallMs: 480000 };
+const HARD = { requests: 24, output: 131072, wallMs: 480000 };
 
 export const sha = (s) => createHash("sha256").update(s).digest("hex");
 
@@ -68,7 +68,7 @@ export function harnessHash(dir = evalDir) {
 			else files.push(f);
 		}
 	};
-	for (const sub of ["runner", "lib", "services", "viewer", "docker"]) if (existsSync(join(dir, sub))) walk(join(dir, sub));
+	for (const sub of ["runner", "lib", "services", "viewer", "docker", "coding"]) if (existsSync(join(dir, sub))) walk(join(dir, sub));
 	const h = createHash("sha256");
 	for (const f of files.sort()) h.update(`${f.slice(dir.length)}\0${createHash("sha256").update(readFileSync(f)).digest("hex")}\n`);
 	return h.digest("hex");
@@ -220,7 +220,9 @@ async function main() {
 	const prepare = flag("prepare");
 	const dry = !prepare;
 	const keepViewer = flag("keep-viewer") || prepare;
-	const caseId = arg("case", "c1-discovery-wake");
+	const coding = flag("coding");
+	const baseline = coding && flag("no-messaging");
+	const caseId = arg("case", coding ? "c2-split-coding" : "c1-discovery-wake");
 	const seed = Number(arg("seed", 1));
 	const rep = arg("rep", `r${Date.now().toString(36)}${randomBytes(2).toString("hex")}`);
 	const runId = `${caseId}-s${seed}-${rep}-${randomBytes(3).toString("hex")}`;
@@ -248,22 +250,28 @@ async function main() {
 	const infra = (cls, message, extra = {}) => emit({ src: "infra", type: "error", class: cls, message: String(message).slice(0, 300), ...extra });
 
 	// ---- case ----
-	const c = buildCase({ caseId, seed, now: Date.now() });
+	const c = buildCase({ caseId: coding ? "c1-discovery-wake" : caseId, seed, now: Date.now() });
+	const projectDir = coding ? join(runDir, "project") : undefined;
+	if (coding) {
+		mkdirSync(projectDir, { mode: 0o777 });
+		chmodSync(projectDir, 0o777);
+		c.public = { caseId, host: "split-code", objective: "Correct combined job service and CLI from private split briefs", variant: baseline ? "without-messaging" : "with-messaging", realAgents: 2, syntheticProfiles: 0 };
+	}
 	writeFileSync(join(goldDir, "gold.json"), JSON.stringify(c.gold));
 	writeFileSync(join(runDir, "case.public.json"), JSON.stringify(c.public, null, 2));
 	collector.setScan(makeLeakScanner(c.gold));
 	collector.registerGold(c.gold);
 	const labels = Object.keys(c.gold.agents);
 	const order = [c.gold.roles.responder, c.gold.roles.initiator]; // responder first, left idle; initiator starts later
-	const prompts = Object.fromEntries(labels.map((l) => [l, agentPrompt(c, l)]));
+	const prompts = coding ? (await import("../coding/task.mjs")).prompts : Object.fromEntries(labels.map((l) => [l, agentPrompt(c, l)]));
 	writeFileSync(join(runDir, "prompts.json"), JSON.stringify(prompts, null, 2));
 	const promptsSha256 = sha(JSON.stringify(prompts));
-	const graderSha256 = sha(readFileSync(join(evalDir, "lib", "grader.mjs")));
+	const graderSha256 = sha(readFileSync(join(evalDir, coding ? "coding" : "lib", coding ? "grade.mjs" : "grader.mjs")));
 
 	const ids = Object.fromEntries(labels.map((l) => [l, { agentId: randomUUID(), proxyToken: `pt_${randomBytes(18).toString("hex")}` }]));
-	collector.register(process.env.SIGNET_KEY_ZAI, ...labels.map((l) => ids[l].proxyToken));
+	collector.register(process.env.ZAI_CODING_CN_API_KEY, ...labels.map((l) => ids[l].proxyToken));
 	const proxyTokens = Object.fromEntries(labels.map((l) => [ids[l].proxyToken, l]));
-	const syntheticIds = new Set(c.gold.profileTruth.map((p) => p.agentId));
+	const syntheticIds = new Set(coding ? [] : c.gold.profileTruth.map((p) => p.agentId));
 
 	// ---- viewer first: the user can watch before any prompt ----
 	const viewer = await startViewer(runDir);
@@ -275,7 +283,7 @@ async function main() {
 	savePrepared();
 
 	let approved = false;
-	const proxyKey = () => (approved ? process.env.SIGNET_KEY_ZAI : undefined);
+	const proxyKey = () => (approved ? process.env.ZAI_CODING_CN_API_KEY : undefined);
 	let proxy;
 	const pis = {};
 	let observer;
@@ -333,20 +341,21 @@ async function main() {
 
 		// ---- compose render (validated) ----
 		const modelsTpl = JSON.parse(readFileSync(join(evalDir, "docker", "models.json.template"), "utf8"));
-		modelsTpl.providers["zai-eval"].apiKey = "$EVAL_PROXY_TOKEN";
 		const modelsJson = JSON.stringify(modelsTpl);
 		const envFiles = Object.fromEntries(labels.map((l) => [l, join(secretsDir, `pi-${l}.env`)]));
 		const hostname = c.public.host;
 		const composeSpec = renderCompose({ runId, project, images: IMAGES, relayTarget: `${gateway}:${proxy.port}`, goldDir, instrumentDir: instDir, hostname, piEnvFiles: envFiles });
-		assertNoSecrets(composeSpec, [process.env.SIGNET_KEY_ZAI, ...Object.keys(proxyTokens)]);
+		if (coding) delete composeSpec.services.instrument;
+		assertNoSecrets(composeSpec, [process.env.ZAI_CODING_CN_API_KEY, ...Object.keys(proxyTokens)]);
 		const composePath = join(runDir, "compose.rendered.yml");
 		writeFileSync(composePath, JSON.stringify(composeSpec, null, 2));
 		for (const l of labels) writeFileSync(envFiles[l], "", { mode: 0o600 });
 		await docker(["compose", "-f", composePath, "--profile", "rpc", "config", "-q"]);
 		log("compose config validated");
-		await docker(["compose", "-f", composePath, "up", "-d", "daemon", "instrument", "relay"], { timeoutMs: 180000 });
+		const services = coding ? ["daemon", "relay"] : ["daemon", "instrument", "relay"];
+		await docker(["compose", "-f", composePath, "up", "-d", ...services], { timeoutMs: 180000 });
 		const cname = (s) => `${project}-${s}-1`;
-		state.containers = ["daemon", "instrument", "relay"].map(cname);
+		state.containers = services.map(cname);
 		savePrepared();
 
 		// ---- daemon health ----
@@ -397,9 +406,11 @@ async function main() {
 		state.agentsRegistered = { realAgents: labels.length, presenceSessions: labels.length + c.gold.profileTruth.length, uniqueAgents: new Set([...labels.map((l) => ids[l].agentId), ...syntheticIds]).size, syntheticOnlyAgents: [...syntheticIds].filter((x) => !labels.some((l) => ids[l].agentId === x)).length, readPolicy: "shared", readBackAsAdmin: true, readBackAsOwnAgentToken: labels.length };
 		state.tokenScope = "role=agent via deploy create-token.mjs; role-limited, not path/scope-restricted (that script mints scope {})";
 
+		if (!coding) {
 		const instIp = await containerIp(cname("instrument"), `${project}_control`);
 		const probeRes = await fetch(`http://${instIp}:8080/v1/jobs/none`, { headers: { authorization: "Bearer nope" } });
 		if (probeRes.status !== 401) throw new Error(`instrument unauthenticated probe expected 401, got ${probeRes.status}`);
+		}
 		// the instrument's own bad-token probe is a host-origin check; it must not count against an agent (no agent attribution)
 
 		// ---- real Pi RPC processes ----
@@ -407,9 +418,9 @@ async function main() {
 			writeFileSync(
 				envFiles[l],
 				`${[
-					"SIGNET_DAEMON_URL=http://daemon:3850", `SIGNET_TOKEN=${agentTokens[l]}`, `SIGNET_AGENT_ID=${ids[l].agentId}`,
-					"SIMGPU_URL=http://instrument:8080", `SIMGPU_TOKEN=${c.gold.agents[l].token}`,
-					`EVAL_PROXY_TOKEN=${ids[l].proxyToken}`, `EVAL_MODELS_JSON=${modelsJson}`, "PI_OFFLINE=1", "PI_CODING_AGENT_DIR=/home/agent/.pi/agent",
+					...(baseline ? [] : ["SIGNET_DAEMON_URL=http://daemon:3850", `SIGNET_TOKEN=${agentTokens[l]}`, `SIGNET_AGENT_ID=${ids[l].agentId}`]),
+					...(coding ? [] : ["SIMGPU_URL=http://instrument:8080", `SIMGPU_TOKEN=${c.gold.agents[l].token}`]),
+					`ZAI_CODING_CN_API_KEY=${ids[l].proxyToken}`, `EVAL_MODELS_JSON=${modelsJson}`, "PI_OFFLINE=1", "PI_CODING_AGENT_DIR=/home/agent/.pi/agent",
 				].join("\n")}\n`,
 				{ mode: 0o600 },
 			);
@@ -454,8 +465,8 @@ async function main() {
 		};
 		for (const l of labels) {
 			const name = `${project}-pi-${l.toLowerCase()}`;
-			const args = piRunArgs({ name, runId, network: `${project}_evalnet`, image: IMAGES.pi, hostname, envFile: envFiles[l], workdir: `/work/${c.public.agentTasks[l].context.cwd.split("/").pop()}` });
-			assertNoSecrets(args, [process.env.SIGNET_KEY_ZAI, ids[l].proxyToken, agentTokens[l], c.gold.agents[l].token]);
+			const args = piRunArgs({ name, runId, network: `${project}_evalnet`, image: IMAGES.pi, hostname, envFile: envFiles[l], workdir: coding ? "/project" : `/work/${c.public.agentTasks[l].context.cwd.split("/").pop()}`, projectDir, baseline });
+			assertNoSecrets(args, [process.env.ZAI_CODING_CN_API_KEY, ids[l].proxyToken, agentTokens[l], c.gold.agents[l].token]);
 			pis[l] = new PiRpc({ label: l, command: "docker", args, onRecord: piRecord, scan: collector.scan, scrubText: collector.scrubText });
 			state.containers.push(name);
 		}
@@ -473,9 +484,9 @@ async function main() {
 				modelAvailable: JSON.stringify(models.data ?? {}).includes("glm-5.3-flash"),
 				signetCommands: (cmds.data?.commands ?? []).map((x) => x.name).filter((n) => /recall|remember|signet/.test(n)),
 			};
-			if (boot[l].model !== "glm-5.3-flash" || boot[l].provider !== "zai-eval") throw new Error(`pi ${l} wrong model ${JSON.stringify(boot[l])}`);
+			if (boot[l].model !== "glm-5.3-flash" || boot[l].provider !== "zai-coding-cn") throw new Error(`pi ${l} wrong model ${JSON.stringify(boot[l])}`);
 			if (!boot[l].modelAvailable) throw new Error(`pi ${l}: model not in available list`);
-			if (!boot[l].signetCommands.length) throw new Error(`pi ${l}: Signet extension commands not registered`);
+			if (!baseline && !boot[l].signetCommands.length) throw new Error(`pi ${l}: Signet extension commands not registered`);
 		}
 		emit({ src: "runner", type: "pi_bootstrap", boot });
 		state.isolation = await verifyAgentIsolation({ project, actors: Object.fromEntries(labels.map((l) => [l, `${project}-pi-${l.toLowerCase()}`])) });
@@ -483,15 +494,15 @@ async function main() {
 
 		// tool registration of the REAL built extension bundle from the agent image (fake host API, real bundle code)
 		const probe = `import m from "/opt/signet/signet-pi.mjs";const t=[];const noop=()=>{};const api=new Proxy({registerTool:(x)=>t.push(x.name),registerCommand:noop,on:noop,registerProvider:noop},{get:(o,k)=>k in o?o[k]:noop});try{await (m.default??m)(api)}catch(e){console.error(String(e))}console.log(JSON.stringify(t))`;
-		const toolOut = await dockerOut(["run", "--rm", "-i", "--network", "none", "--label", `${LABEL}=${runId}`, "-e", "SIGNET_DAEMON_URL=http://127.0.0.1:1", "-e", "SIGNET_AGENT_ID=probe", IMAGES.pi, "node", "--input-type=module", "-e", probe], { timeoutMs: 60000 });
+		const toolOut = baseline ? "[]" : await dockerOut(["run", "--rm", "-i", "--network", "none", "--label", `${LABEL}=${runId}`, "-e", "SIGNET_DAEMON_URL=http://127.0.0.1:1", "-e", "SIGNET_AGENT_ID=probe", IMAGES.pi, "node", "--input-type=module", "-e", probe], { timeoutMs: 60000 });
 		const tools = JSON.parse(toolOut.split("\n").filter((x) => x.startsWith("[")).pop() ?? "[]");
-		const missing = EXPECTED_TOOLS.filter((t) => !tools.includes(t));
+		const missing = baseline ? [] : EXPECTED_TOOLS.filter((t) => !tools.includes(t));
 		emit({ src: "runner", type: "extension_tools", tools, missing });
 		if (missing.length) throw new Error(`extension tools missing: ${missing}`);
 
 		// ---- presence registered by the real extension with each session's own key ----
 		const sessions = {};
-		for (let i = 0; i < 60 && Object.keys(sessions).length < labels.length; i++) {
+		for (let i = 0; !baseline && i < 60 && Object.keys(sessions).length < labels.length; i++) {
 			for (const l of labels) {
 				if (sessions[l]) continue;
 				try {
@@ -502,16 +513,16 @@ async function main() {
 			}
 			if (Object.keys(sessions).length < labels.length) await sleep(1000);
 		}
-		if (Object.keys(sessions).length < labels.length) {
+		if (!baseline && Object.keys(sessions).length < labels.length) {
 			infra("setup", "real Pi sessions never registered presence");
 			throw new Error("presence not registered");
 		}
 		emit({ src: "runner", type: "presence_registered", sessions: Object.fromEntries(Object.entries(sessions).map(([l, s]) => [l, { agentId: s.agentId, harness: s.harness, context: s.context }])) });
 
-		for (const l of labels) emit({ src: "runner", type: "binding", label: l, agentId: sessions[l].agentId, sessionKey: sessions[l].sessionKey });
+		for (const l of Object.keys(sessions)) emit({ src: "runner", type: "binding", label: l, agentId: sessions[l].agentId, sessionKey: sessions[l].sessionKey });
 		// ---- synthetic presence rows (uniform shape; trap row reuses the responder's agent id). The daemon API cannot backdate
 		// context time, so stale rows are seeded fresh; recorded as staleBackdated:false. ----
-		const rows = seedProfiles(c, Object.fromEntries(labels.map((l) => [l, sessions[l]])));
+		const rows = coding ? [] : seedProfiles(c, Object.fromEntries(labels.map((l) => [l, sessions[l]])));
 		let seeded = 0;
 		const real = sessions[labels[0]];
 		for (const d of rows) {
@@ -520,13 +531,13 @@ async function main() {
 			else emit({ src: "runner", type: "seed_error", status: r.status });
 		}
 		if (seeded !== rows.length) throw new Error(`seeded ${seeded}/${rows.length} presence rows; refusing to continue`);
-		state.agentsRegistered.presenceSessions = labels.length + seeded;
+		state.agentsRegistered.presenceSessions = Object.keys(sessions).length + seeded;
 		emit({ src: "runner", type: "distractors_seeded", seeded, total: rows.length, realStaleCaseTested: false });
 
 		// ---- observer (HTTP/SSE only; no direct DB) ----
 		observer = makeObserver({ baseUrl: daemonUrl, token: adminToken, agents: sessions, syntheticIds, emit });
 		observer.start();
-		emit({ src: "runner", type: "setup_verified", tools: tools.length, presence: labels.length, seeded });
+		emit({ src: "runner", type: "setup_verified", tools: tools.length, presence: Object.keys(sessions).length, seeded });
 
 		Object.assign(state, { phase: "prepared", daemonUrl, bootstrap: boot, tools, distractorsSeeded: seeded });
 		state.approvalFile = resolve(arg("approved", join(runDir, "approval.json")));
@@ -581,7 +592,7 @@ async function main() {
 		if (harnessHash() !== state.harnessSha256) throw new Error("harness files changed after preparation/approval; refusing to generate");
 		const nowImages = Object.fromEntries(await Promise.all(Object.entries(IMAGES).map(async ([k, tag]) => [k, await imageIdentity(tag)])));
 		if (imagesDigest(nowImages) !== state.imagesSha256) throw new Error("image ids changed after approval; refusing to generate");
-		if (!process.env.SIGNET_KEY_ZAI) {
+		if (!process.env.ZAI_CODING_CN_API_KEY) {
 			infra("setup", "provider key absent from runner environment after approval (checked presence only)");
 			throw new Error("provider key missing; no prompt was sent");
 		}
@@ -592,6 +603,9 @@ async function main() {
 		state.phase = "running";
 		savePrepared();
 		emit({ src: "runner", type: "case_start", limits, approvedBy: state.approvedBy });
+		if (coding) {
+			await (await import("../coding/run.mjs")).runCoding({ pis, prompts, flush, eventsPath, wallLeft });
+		} else {
 		for (const l of order) {
 			if (l === c.gold.roles.initiator) await sleep(1500);
 			const settledBefore = pis[l].settledCount;
@@ -629,6 +643,7 @@ async function main() {
 			}
 			await sleep(250);
 		}
+		}
 		// Stop billing first, then end the agents (abort is bounded to 1.5s inside PiRpc.stop).
 		await proxy.close().catch(() => {});
 		await sleep(300);
@@ -640,7 +655,7 @@ async function main() {
 		for (const p of Object.values(pis)) await p.stop().catch(() => {});
 		flush();
 		const trace = readJsonl(readFileSync(eventsPath, "utf8"));
-		const result = grade(c.gold, trace);
+		const result = coding ? await (await import("../coding/run.mjs")).gradeCoding({ projectDir, image: IMAGES.pi, evalDir, trace }) : grade(c.gold, trace);
 		writeFileSync(join(runDir, "grade.json"), JSON.stringify(result, null, 2));
 		const summary = {
 			runId, grade: { pass: result.pass, status: result.status, failureClass: result.failureClass, failed: result.failedChecks }, providerRequests: proxy.count(),

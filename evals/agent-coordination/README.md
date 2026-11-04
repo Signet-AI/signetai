@@ -1,14 +1,28 @@
 # Agent coordination eval (PR2181)
 
-Two REAL Pi CLI RPC processes (Docker, Signet Pi extension built from this branch) must share an 8-unit **simulated** GPU
-(each job needs 6) by negotiating over real Signet DMs. A deterministic grader scores the end state from host-collected
-events. No LLM judge, no hardware GPU.
+Two real Pi sessions run in Docker against an isolated Signet daemon. Pi uses its built-in `zai-coding-cn` provider and `glm-5.3-flash`, authenticated with the Coding credential saved in Signet. The host relay meters requests/output; it does not supply a replacement model definition or rewrite Pi's roles/thinking settings.
 
-**Status: preparation, controls and offline tests run. No paid model call has ever been made from this directory, and
-no live pilot has been graded.** Passing offline tests/controls prove the grader and harness, not agent behaviour. This is
-one pilot case, not a full-suite claim and not a certification of existing board/retry/Dreaming behaviour (see `ledger/coverage-ledger.json`).
+Offline controls are not model results. Live traces, generated projects, grades and provider usage are retained under `results/`. Earlier c1 provider attempts failed before useful work. Neither case certifies the whole PR.
 
-## Case c1-discovery-wake
+## Utility case: c2-split-coding
+
+One session builds a durable job service; the other builds its CLI. Each receives a different private brief (`coding/task.mjs`). They share only the project files, choose their internal API, and reconcile retry identity, intentional resubmission, cancellation and restart semantics. There is no required messaging sequence.
+
+The matched baseline uses the same briefs, shared filesystem, Pi/model, output limit and request/time budgets, but no Signet extension or agent credentials. Agents may inspect each other's code in both arms. No GPU simulator or distractor profiles run in this case.
+
+After generation stops, `coding/grade.mjs` runs the resulting code in a separate network-disabled container. Its trusted worker counts actual calls; tests inject a lost submission response, gate queued work for cancellation, and restart the service. Scores measure working results and correct behavior, not DMs or tool usage. `files_present` and `backend_starts` are prerequisites; the other checks measure application outcomes. One pair is a pilot, not a statistically established improvement.
+
+```
+node --test tests/coding.probe.mjs  # Docker: oracle, missing files, duplicate-work and ineffective-cancel controls
+python coding/launch.py --rep coding-with --pi-image YOUR_PI_IMAGE --daemon-image YOUR_DAEMON_IMAGE --instrument-image YOUR_INSTRUMENT_IMAGE
+python coding/launch.py --no-messaging --rep coding-without --pi-image YOUR_PI_IMAGE --daemon-image YOUR_DAEMON_IMAGE --instrument-image YOUR_INSTRUMENT_IMAGE
+```
+
+The launcher resolves `SIGNET_KEY_ZAI_CODING_CN` through Signet into native `ZAI_CODING_CN_API_KEY`. Both commands prepare and wait for approval; approval limits can be lower than the hard ceiling. Containers receive only per-run relay tokens. The native Coding China upstream is `https://open.bigmodel.cn/api/coding/paas/v4`. The standard API credential is not used.
+
+The generated project is the only shared writable host bind. Neither private brief, expected outcome, grader nor control implementation is mounted into agent containers. The grader is mounted only after agents stop.
+
+## Integration case: c1-discovery-wake
 
 - Agents `A`/`B` are labels held host-side only. Real agent ids are random UUIDs; Pi's own session UUID is used; nothing agent-visible
   (prompts, presence, token subjects, cwd shape) carries A/B or real-vs-synthetic markers. Role order is seeded.
@@ -39,7 +53,7 @@ Scripted clients drive the real instrument over HTTP and write events labelled `
 
 ## Isolation
 - Agent image: Pi, the built `signet-pi.mjs`, `simgpu`; no repo/evals code/gold. Instrument holds gold read-only. Grader, viewer, observer and proxy run on the host; the viewer binds loopback only.
-- Provider key only in the host proxy (`SIGNET_KEY_ZAI`), served only after approval; agents get opaque per-run tokens. Their sole `evalnet` uses `--internal` and `com.docker.network.bridge.gateway_mode_ipv4=isolated`: unlike an ordinary internal bridge, it has no host gateway address. A separate internal `control` bridge lets the trusted observer reach only the daemon and instrument; agents are not attached. Only the relay joins `evalnet` and the proxy's egress bridge. Preparation checks the real actor attachments, absence of a default route and known GPU device nodes, and inability to connect to a disposable host sentinel. It never probes production port 3850. Older Docker engines that cannot create an isolated bridge fail preparation rather than silently weakening it. Hard limits: 24 requests, 4k output, 8 min wall (monotonic; proxy `setLimits` + `close()` abort in-flight fetches).
+- Provider key only in the host proxy (`ZAI_CODING_CN_API_KEY`), served only after approval; agents get opaque per-run tokens. Their sole `evalnet` uses `--internal` and `com.docker.network.bridge.gateway_mode_ipv4=isolated`: unlike an ordinary internal bridge, it has no host gateway address. A separate internal `control` bridge lets the trusted observer reach only the daemon and instrument; agents are not attached. Only the relay joins `evalnet` and the proxy's egress bridge. Preparation checks the real actor attachments, absence of a default route and known GPU device nodes, and inability to connect to a disposable host sentinel. It never probes production port 3850. Older Docker engines that cannot create an isolated bridge fail preparation rather than silently weakening it. Default overall ceiling: 24 requests and 8 minutes wall time (monotonic; proxy `setLimits` + `close()` abort in-flight fetches). The output ceiling matches pinned Pi's native model metadata (131072), not a 4000-token test cap. The initial coding pilots imposed 4000 and are superseded: that allowance included reasoning and cut off the backend before it acted.
 - Resource caps: Pi 1g/256 pids, instrument 512m/1 cpu/128 pids, daemon 2g/2 cpus. Agents receive no GPU requests, Docker socket or host binds; only the trusted instrument mounts this run's private gold/events, and the daemon uses a run-owned Docker volume.
 - Agent tokens are `role=agent` from `deploy/docker/scripts/create-token.mjs`, which mints scope `{}`: **not scope-restricted**.
 

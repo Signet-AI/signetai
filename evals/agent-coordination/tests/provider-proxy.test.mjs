@@ -63,11 +63,11 @@ test("n>1, wrong model, bad thinking rejected; unknown fields stripped; protocol
 	assert.equal(s.n, 1);
 	assert.equal(s.model, "glm-5.3-flash");
 	assert.deepEqual(s.thinking, { type: "enabled", clear_thinking: false });
-	assert.equal(s.reasoning_effort, "max");
+	assert.equal(s.reasoning_effort, "high");
 	for (const k of ["max_completion_tokens", "best_of"]) assert.equal(s[k], undefined, k);
 	const ev = events().find((e) => e.type === "request");
 	assert.equal(ev.requestedEffort, "high");
-	assert.equal(ev.effectiveEffort, "max");
+	assert.equal(ev.effectiveEffort, "high");
 	assert.equal(ev.clearThinking, false);
 	await p.close();
 });
