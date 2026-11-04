@@ -273,6 +273,8 @@ post-processing:
   30-second transcript-read deadline, including queue time; a busy maintenance
   lane can therefore delay placement within that bound. A failed or expired
   read leaves the primary results available and marks transcript evidence failed.
+  Independent row failures retain successful excerpts, mark evidence failed,
+  and wait for all selected reads to settle before returning.
   Cancellation observed before finalization rejects recall instead of claiming
   results or updating access tracking.
   Before placement, the owner revalidates each cached excerpt's scope and

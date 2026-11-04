@@ -1583,10 +1583,10 @@ async function buildTranscriptEvidenceResults(
 	prefetch: TranscriptEvidencePrefetch | null = null,
 	deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS,
 	execution?: RecallExecutionOptions,
-): Promise<RecallResult[]> {
+): Promise<{ results: RecallResult[]; failed: boolean }> {
 	checkRecallCancellation(execution);
 	const fts = sanitizeFtsQuery(query);
-	if (fts.length === 0 || maxResults <= 0) return [];
+	if (fts.length === 0 || maxResults <= 0) return { results: [], failed: false };
 	const represented = new Set(
 		existing.flatMap((row) => [row.session_id, row.source_id]).filter((id): id is string => !!id),
 	);
@@ -1617,7 +1617,7 @@ async function buildTranscriptEvidenceResults(
 			return !represented.has(sessionId) && !(row.source_id && represented.has(row.source_id));
 		})
 		.slice(0, maxResults);
-	const results = await Promise.all(
+	const settled = await Promise.allSettled(
 		selected.map(async (row) => {
 			if (!usablePrefetch || !prefetch.results.has(row.artifact_rowid)) {
 				return await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "foreground", execution);
@@ -1657,7 +1657,21 @@ async function buildTranscriptEvidenceResults(
 			return active === null ? null : prefetched;
 		}),
 	);
-	return results.filter((row): row is RecallResult => row !== null);
+	checkRecallCancellation(execution);
+	for (const [index, result] of settled.entries()) {
+		if (result.status !== "rejected" || (result.reason instanceof Error && result.reason.name === "AbortError"))
+			continue;
+		logger.warn("memory", "Transcript evidence row failed (non-fatal)", {
+			artifactRowid: selected[index]?.artifact_rowid,
+			error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+		});
+	}
+	return {
+		results: settled.flatMap((result) =>
+			result.status === "fulfilled" && result.value !== null ? [result.value] : [],
+		),
+		failed: settled.some((result) => result.status === "rejected"),
+	};
 }
 
 async function buildNativeArtifactRecallHits(
@@ -1975,22 +1989,23 @@ export async function hybridRecall(
 					? reranker.crossEncoderModel
 					: null;
 			try {
-				const placed = await timings.timeAsync("transcript_evidence", async () =>
-					placeTranscriptEvidence(
-						response.results,
-						await timings.timeAsync("transcript_evidence_fetch", async () =>
-							buildTranscriptEvidenceResults(
-								agentId,
-								params.project,
-								params,
-								textQuery,
-								maxExcerpts * 2,
-								response.results,
-								transcriptPrefetch ? await transcriptPrefetch : null,
-								transcriptEvidenceDeadlineAt,
-								execution,
-							),
+				const placed = await timings.timeAsync("transcript_evidence", async () => {
+					const evidence = await timings.timeAsync("transcript_evidence_fetch", async () =>
+						buildTranscriptEvidenceResults(
+							agentId,
+							params.project,
+							params,
+							textQuery,
+							maxExcerpts * 2,
+							response.results,
+							transcriptPrefetch ? await transcriptPrefetch : null,
+							transcriptEvidenceDeadlineAt,
+							execution,
 						),
+					);
+					const placement = await placeTranscriptEvidence(
+						response.results,
+						evidence.results,
 						maxExcerpts,
 						limit,
 						textQuery,
@@ -1998,10 +2013,15 @@ export async function hybridRecall(
 							? null
 							: (rerankQuery, documents) =>
 									scoreWithCrossEncoder(rerankQuery, documents, [], Date.now() + Math.floor(reranker.timeoutMs * 0.75)),
-					),
-				);
+					);
+					return { ...placement, failed: evidence.failed };
+				});
 				response.results = placed.results;
-				transcriptEvidence = { returned: placed.returned, ranking: placed.ranking };
+				transcriptEvidence = {
+					returned: placed.returned,
+					ranking: placed.ranking,
+					...(placed.failed ? { failed: true } : {}),
+				};
 			} catch (e) {
 				checkRecallCancellation(execution);
 				transcriptEvidence = { returned: 0, failed: true };

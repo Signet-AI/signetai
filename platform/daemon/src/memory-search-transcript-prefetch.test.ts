@@ -292,6 +292,179 @@ describe("transcript evidence prefetch owner scheduling", () => {
 		}
 	});
 
+	it.each([
+		["validation", "partial"],
+		["content", "partial"],
+		["validation", "signal"],
+		["validation", "callback"],
+		["content", "signal"],
+		["content", "callback"],
+	])("settles independent %s reads before completing %s recall", async (stage, outcome) => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					harness, captured_at, content, updated_at, is_deleted
+				) VALUES ('agent-a', 'second.jsonl', 'second-fixture', 'transcript', 'session-b',
+					'token-b', 'claude-code', datetime('now'), ?, datetime('now'), 0)`,
+			).run("user: Speyer tourism board phone number? assistant: +49 6232 143.");
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+				 VALUES ('settlement-memory', 'Speyer tourism board phone number', 'fact', 'agent-a', datetime('now'), datetime('now'), 'test')`,
+			).run();
+		});
+		const owner = await getDbOwner();
+		const submit = owner.submit.bind(owner);
+		const failure = new Error(`independent transcript ${stage} failed`);
+		const failed = Promise.withResolvers<void>();
+		const siblingStarted = Promise.withResolvers<void>();
+		const releaseSibling = Promise.withResolvers<void>();
+		const pending = new Set<string>();
+		const jobs: Promise<unknown>[] = [];
+		const reads: DbOwnerSubmitOptions[] = [];
+		const cancellation = new AbortController();
+		let cancelled = false;
+		let settled = false;
+		let pendingAtCompletion = -1;
+		let successfulSession: string | null = null;
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			const handle = submit<Result>(request, options);
+			if (
+				stage === "content" &&
+				options.operation === "memory-search.transcript-evidence" &&
+				options.workloadClass === "maintenance"
+			) {
+				return {
+					...handle,
+					result: handle.result.then(() => {
+						throw new Error("prefetch unavailable");
+					}),
+				};
+			}
+			if (
+				options.operation !== `memory-search.transcript-evidence.${stage === "validation" ? "validate" : "content"}` ||
+				options.workloadClass !== "foreground"
+			)
+				return handle;
+			reads.push(options);
+			const index = reads.length;
+			pending.add(handle.job.id);
+			const result = handle.result
+				.then(async (value) => {
+					if (index === 1) {
+						failed.resolve();
+						throw failure;
+					}
+					if (request.kind !== "query") throw new Error("Expected a real transcript query");
+					const rowid = request.statement.params?.[stage === "content" ? 2 : 0];
+					const row = await getDbAccessor().withReadDbAsync((db) =>
+						db.prepare("SELECT session_id FROM memory_artifacts WHERE rowid = ?").get(rowid),
+					);
+					if (typeof row !== "object" || row === null || !("session_id" in row) || typeof row.session_id !== "string") {
+						throw new Error("Expected the successful transcript session");
+					}
+					successfulSession = row.session_id;
+					siblingStarted.resolve();
+					await releaseSibling.promise;
+					return value;
+				})
+				.finally(() => pending.delete(handle.job.id));
+			jobs.push(result);
+			return { ...handle, result };
+		};
+		const warn = spyOn(logger, "warn");
+		const raw = loadMemoryConfig(directory);
+		const recall = hybridRecall(
+			{
+				query: "Speyer tourism board phone number",
+				limit: 3,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+				sessionKey: "settlement-session",
+				trackRecallAccess: true,
+				claimRecallResults: true,
+			},
+			{
+				...raw,
+				search: { ...raw.search, rehearsal_enabled: false, transcript_evidence_limit: 2 },
+				pipelineV2: {
+					...raw.pipelineV2,
+					graph: { ...raw.pipelineV2.graph, enabled: false },
+					reranker: { ...raw.pipelineV2.reranker, enabled: false },
+				},
+			},
+			async () => null,
+			outcome === "callback"
+				? {
+						checkCancelled: () => {
+							if (cancelled) throw new Error("recall abandoned");
+						},
+					}
+				: { signal: cancellation.signal },
+		).then(
+			(response) => {
+				settled = true;
+				pendingAtCompletion = pending.size;
+				return { response, error: null };
+			},
+			(error: unknown) => {
+				settled = true;
+				pendingAtCompletion = pending.size;
+				return { response: null, error };
+			},
+		);
+		try {
+			await Promise.all([failed.promise, siblingStarted.promise]);
+			await Bun.sleep(20);
+			const settledBeforeRelease = settled;
+			expect(pending.size).toBe(1);
+			if (outcome !== "partial") {
+				cancelled = true;
+				cancellation.abort(new Error("recall abandoned"));
+				await Bun.sleep(20);
+			}
+			const settledBeforeSibling = settled;
+			releaseSibling.resolve();
+			const { response, error } = await recall;
+			if (outcome === "partial") {
+				expect(error).toBeNull();
+				expect(response?.results.filter((row) => row.source === "transcript").map((row) => row.id)).toEqual([
+					`transcript:${successfulSession}`,
+				]);
+				expect(response?.results.find((row) => row.source === "transcript")?.content).toContain("+49 6232 14");
+				expect(response?.meta.transcriptEvidence).toEqual({ returned: 1, ranking: "keyword", failed: true });
+				expect(warn.mock.calls.filter((args) => args[2]?.error === failure.message)).toHaveLength(1);
+			} else {
+				expect(response).toBeNull();
+				expect(error instanceof Error ? error.message : null).toBe("recall abandoned");
+				const state = await getDbAccessor().withReadDbAsync((db) => ({
+					claims: db
+						.prepare("SELECT COUNT(*) AS count FROM session_recall_events WHERE session_key = ? AND agent_id = ?")
+						.get("settlement-session", "agent-a"),
+					access: db
+						.prepare("SELECT access_count FROM memories WHERE id = ? AND agent_id = ?")
+						.get("settlement-memory", "agent-a"),
+				}));
+				expect(state.claims).toEqual({ count: 0 });
+				expect(state.access).toEqual({ access_count: 0 });
+				expect(warn.mock.calls.some((args) => args[2]?.error === "recall abandoned")).toBe(false);
+			}
+			expect(settledBeforeRelease).toBe(false);
+			expect(settledBeforeSibling).toBe(false);
+			expect(reads).toHaveLength(2);
+			expect(pendingAtCompletion).toBe(0);
+			expect(pending.size).toBe(0);
+			expect(owner.health().queuedJobs).toBe(0);
+			expect(owner.health().activeJobId).toBeNull();
+		} finally {
+			releaseSibling.resolve();
+			await recall;
+			await Promise.allSettled(jobs);
+			warn.mockRestore();
+			owner.submit = submit;
+		}
+	});
+
 	it.each([29_000, 31_000])("keeps the original prefetch deadline after a failure at %i ms", async (delay) => {
 		const owner = await getDbOwner();
 		const submit = owner.submit.bind(owner);

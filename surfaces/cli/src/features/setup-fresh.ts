@@ -12,6 +12,8 @@ import {
 	runMigrations,
 	createFreshWorkspaceV2,
 	findExistingWorkspaceDatabase,
+	resolveWorkspaceLayoutAs,
+	WORKSPACE_LAYOUT_V2,
 } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
@@ -35,8 +37,9 @@ import { withSetupPrompt } from "./setup-terminal.js";
 import type { SetupDeps } from "./setup-types.js";
 
 function assertNoExistingWorkspaceDatabase(basePath: string): void {
-	const existingDatabase = findExistingWorkspaceDatabase(basePath);
-	if (existingDatabase) {
+	const existingDatabase =
+		findExistingWorkspaceDatabase(basePath) ?? resolveWorkspaceLayoutAs(basePath, WORKSPACE_LAYOUT_V2).database;
+	if (existsSync(existingDatabase)) {
 		throw new Error(`Refusing to replace an existing database at ${existingDatabase}.`);
 	}
 }
