@@ -1,5 +1,10 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterAll, afterEach, describe, expect, it, mock } from "bun:test";
 import type { EmbeddingHandleOptions, EmbeddingWorkerHandle } from "./embedding-worker-handle";
+
+const realEmbeddingWorkerHandle = { ...(await import("./embedding-worker-handle")) };
+afterAll(() => {
+	mock.module("./embedding-worker-handle", () => realEmbeddingWorkerHandle);
+});
 
 interface FakeHandleState {
 	initialized: boolean;
