@@ -29,6 +29,7 @@ beforeEach(() => {
 	tempDir = mkdtempSync(join(tmpdir(), "signet-cross-agent-"));
 	dbPath = join(tempDir, "memory.db");
 	initDbAccessor(dbPath, { agentsDir: tempDir });
+	resetCrossAgentStateForTest();
 });
 
 afterEach(async () => {

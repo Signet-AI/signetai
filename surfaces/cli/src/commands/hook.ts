@@ -136,7 +136,7 @@ export function extractMutatedPaths(toolName: unknown, toolInput: unknown): stri
 
 function patchHeaderPaths(text: string): string[] {
 	const out: string[] = [];
-	for (const match of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/gm)) {
+	for (const match of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File:[ \t]*(\S.*)$/gm)) {
 		if (match[1]) out.push(match[1].trim());
 	}
 	return out;

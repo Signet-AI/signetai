@@ -3,7 +3,7 @@
 	"compilerOptions": {
 		"noEmit": true,
 		"rootDir": "../..",
-		"types": ["bun"]
+		"types": ["bun-types"]
 	},
 	"files": ["src/commands/hook.ts"],
 	"include": []

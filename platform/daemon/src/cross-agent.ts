@@ -771,7 +771,7 @@ export function createAgentMessage(input: CreateAgentMessageInput): AgentMessage
 			row.created_at,
 			row.expires_at,
 		);
-	}, "cross-agent.ts:715");
+	}, "db:cross-agent.message.create");
 
 	const out = rowToAgentMessage(row);
 	emit({ type: "message", message: out, timestamp: now });
@@ -874,7 +874,7 @@ export function claimAcpMessageDelivery(input: {
 		if (row == null) throw new AgentMessageNotFoundError(messageId);
 		if (agentId && row.from_agent_id !== agentId) throw new AgentMessageNotFoundError(messageId);
 		attempt = buildAcpAttempt(row);
-	}, "cross-agent.ts:838");
+	}, "db:cross-agent.acp-delivery.claim");
 	if (attempt == null) throw new AgentMessageNotFoundError(messageId);
 	return attempt;
 }
@@ -917,7 +917,7 @@ export function completeAcpMessageDelivery(
 		const row = readMessageRow(db, normalizedId);
 		if (row == null) throw new AgentMessageNotFoundError(normalizedId);
 		updated = rowToAgentMessage(row);
-	}, "cross-agent.ts:883");
+	}, "db:cross-agent.acp-delivery.complete");
 	if (updated == null) throw new AgentMessageNotFoundError(normalizedId);
 	emit({ type: "message", message: updated, timestamp: now });
 	return updated;
@@ -956,7 +956,7 @@ export function updateAgentMessageDelivery(
 		const row = readMessageRow(db, normalizedId);
 		if (row == null) throw new AgentMessageNotFoundError(normalizedId);
 		updated = rowToAgentMessage(row);
-	}, "cross-agent.ts:926");
+	}, "db:cross-agent.message-delivery.update");
 	if (updated == null) throw new AgentMessageNotFoundError(normalizedId);
 	emit({ type: "message", message: updated, timestamp: now });
 	return updated;
@@ -1028,7 +1028,7 @@ export function listAgentMessagePage(options: ListAgentMessageOptions = {}): Age
 			offset,
 			hasMore: offset + items.length < total,
 		};
-	}, "cross-agent.ts:992");
+	}, "db:cross-agent.message-page.read");
 }
 
 export function listAgentMessages(options: ListAgentMessageOptions = {}): AgentMessage[] {
@@ -1085,7 +1085,7 @@ export function acknowledgeAgentMessage(input: AcknowledgeAgentMessageInput): Ac
 		const acknowledgedAt = receipt?.acknowledged_at;
 		if (!acknowledgedAt) throw new Error("Failed to persist cross-agent acknowledgement");
 		return { messageId, agentId, acknowledgedAt, alreadyAcknowledged: false };
-	}, "cross-agent.ts:1031");
+	}, "db:cross-agent.message.acknowledge");
 }
 
 export function subscribeCrossAgentEvents(subscriber: (event: CrossAgentEvent) => void): () => void {
@@ -1120,5 +1120,5 @@ export function resetCrossAgentStateForTest(): void {
 		db.prepare("DELETE FROM cross_agent_message_wakes").run();
 		db.prepare("DELETE FROM cross_agent_message_receipts").run();
 		db.prepare("DELETE FROM cross_agent_messages").run();
-	}, "cross-agent.ts:1104");
+	}, "db:cross-agent.test-state.reset");
 }

@@ -807,8 +807,9 @@ class SignetMemoryProvider(MemoryProvider):
         client = self._client
         if not client or not self._session_key:
             return
+        harness = "hermes-agent"
         body: Dict[str, Any] = {
-            "harness": "hermes-agent",
+            "harness": harness,
             "agentId": self._agent_id,
             "sessionKey": self._session_key,
             "project": self._project,

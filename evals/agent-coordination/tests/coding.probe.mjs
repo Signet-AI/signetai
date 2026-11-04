@@ -1,11 +1,11 @@
-import { test } from 'node:test';
-import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { docker } from '../runner/dockerctl.mjs';
-const base = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const root = join(base, 'results', 'parent-validation');
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { docker } from "../runner/dockerctl.mjs";
+const base = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const root = join(base, "results", "parent-validation");
 mkdirSync(root, { recursive: true });
 const backend = `import http from 'node:http';
 import fs from 'node:fs';
@@ -29,17 +29,67 @@ const response=await fetch(url,{method:submit||command==='cancel'?'POST':'GET',h
 if(!response.ok)throw Error('HTTP '+response.status);console.log(JSON.stringify(await response.json()));process.exit(0);
 }catch(e){if(attempt===2){console.error(String(e));process.exit(1);}await new Promise(r=>setTimeout(r,50));}}`;
 async function control(kind) {
-  const project = mkdtempSync(join(root, `coding-${kind}-`));
-  chmodSync(project, 0o755);
-  for(const sub of ['backend','cli'])mkdirSync(join(project,sub));
-  if(kind!=='empty') {
-    const code=kind==='duplicate'?backend.replace('if(old)return send(old);',''):kind==='bad-cancel'?backend.replace("if(j.state==='queued')j.state='cancelled';",''):backend;
-    writeFileSync(join(project,'backend/server.mjs'),code);writeFileSync(join(project,'cli/main.mjs'),cli);
-  }
-  const r=await docker(['run','--rm','--network','none','--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--memory','512m','--pids-limit','128','--tmpfs','/tmp:rw,size=64m,uid=10001','--mount',`type=bind,source=${project},target=/project,readonly`,'--mount',`type=bind,source=${join(base,'coding')},target=/tests,readonly`,'coord-eval-pi:pr2181-explicit-context','node','/tests/grade.mjs'],{timeoutMs:60000});
-  const result=JSON.parse(r.stdout);writeFileSync(join(project,'grade.json'),JSON.stringify(result,null,2));return result;
+	const project = mkdtempSync(join(root, `coding-${kind}-`));
+	chmodSync(project, 0o755);
+	for (const sub of ["backend", "cli"]) mkdirSync(join(project, sub));
+	if (kind !== "empty") {
+		const code =
+			kind === "duplicate"
+				? backend.replace("if(old)return send(old);", "")
+				: kind === "bad-cancel"
+					? backend.replace("if(j.state==='queued')j.state='cancelled';", "")
+					: backend;
+		writeFileSync(join(project, "backend/server.mjs"), code);
+		writeFileSync(join(project, "cli/main.mjs"), cli);
+	}
+	const r = await docker(
+		[
+			"run",
+			"--rm",
+			"--network",
+			"none",
+			"--read-only",
+			"--cap-drop",
+			"ALL",
+			"--security-opt",
+			"no-new-privileges:true",
+			"--memory",
+			"512m",
+			"--pids-limit",
+			"128",
+			"--tmpfs",
+			"/tmp:rw,size=64m,uid=10001",
+			"--mount",
+			`type=bind,source=${project},target=/project,readonly`,
+			"--mount",
+			`type=bind,source=${join(base, "coding")},target=/tests,readonly`,
+			"coord-eval-pi:pr2181-explicit-context",
+			"node",
+			"/tests/grade.mjs",
+		],
+		{ timeoutMs: 60000 },
+	);
+	const result = JSON.parse(r.stdout);
+	writeFileSync(join(project, "grade.json"), JSON.stringify(result, null, 2));
+	return result;
 }
-test('coding grader: known-working control passes every outcome',async()=>{const r=await control('oracle');assert.equal(r.total,10);assert.equal(r.pass,true,JSON.stringify(r));});
-test('coding grader: missing artifact fails with the same denominator',async()=>{const r=await control('empty');assert.equal(r.total,10);assert.equal(r.passed,0);assert.equal(r.pass,false);});
-test('coding grader: duplicate execution is detected',async()=>{const r=await control('duplicate');assert.equal(r.checks.request_id_idempotent,false);assert.equal(r.checks.retry_after_lost_response_no_duplicate,false);});
-test('coding grader: ineffective cancellation is detected',async()=>{const r=await control('bad-cancel');assert.equal(r.checks.queued_cancel_prevents_execution,false);});
+test("coding grader: known-working control passes every outcome", async () => {
+	const r = await control("oracle");
+	assert.equal(r.total, 10);
+	assert.equal(r.pass, true, JSON.stringify(r));
+});
+test("coding grader: missing artifact fails with the same denominator", async () => {
+	const r = await control("empty");
+	assert.equal(r.total, 10);
+	assert.equal(r.passed, 0);
+	assert.equal(r.pass, false);
+});
+test("coding grader: duplicate execution is detected", async () => {
+	const r = await control("duplicate");
+	assert.equal(r.checks.request_id_idempotent, false);
+	assert.equal(r.checks.retry_after_lost_response_no_duplicate, false);
+});
+test("coding grader: ineffective cancellation is detected", async () => {
+	const r = await control("bad-cancel");
+	assert.equal(r.checks.queued_cancel_prevents_execution, false);
+});

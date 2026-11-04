@@ -54,7 +54,7 @@ function patchPaths(input: Record<string, unknown>): string[] {
 	const text = [input.patch, input.input, input.patchText, input.diff].find((v) => typeof v === "string");
 	if (typeof text !== "string") return [];
 	const paths: string[] = [];
-	for (const match of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File:\s*(.+)$/gm)) {
+	for (const match of text.matchAll(/^\*\*\* (?:Add|Update|Delete) File:[ \t]*(\S.*)$/gm)) {
 		if (match[1]) paths.push(match[1].trim());
 	}
 	return paths;

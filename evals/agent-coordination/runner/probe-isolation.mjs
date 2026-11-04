@@ -36,17 +36,33 @@ export async function verifyAgentIsolation({ project, actors }) {
 		const results = {};
 		for (const [label, name] of Object.entries(actors)) {
 			const [actor] = JSON.parse(await dockerOut(["inspect", name]));
-			assert.deepEqual(Object.keys(actor.NetworkSettings.Networks), [network], `${label}: unexpected network attachment`);
-			const raw = await dockerOut(["exec", name, "node", "-e", source, JSON.stringify(targets), String(port)], { timeoutMs: 10000 });
+			assert.deepEqual(
+				Object.keys(actor.NetworkSettings.Networks),
+				[network],
+				`${label}: unexpected network attachment`,
+			);
+			const raw = await dockerOut(["exec", name, "node", "-e", source, JSON.stringify(targets), String(port)], {
+				timeoutMs: 10000,
+			});
 			const result = JSON.parse(raw);
-			assert(!result.probes.some((p) => p.reachable), `${label}: host_sentinel_reachable ${JSON.stringify(result.probes)}`);
+			assert(
+				!result.probes.some((p) => p.reachable),
+				`${label}: host_sentinel_reachable ${JSON.stringify(result.probes)}`,
+			);
 			assert.equal(result.defaultRoute, false, `${label}: unexpected default route`);
 			assert.deepEqual(result.gpuDevices, [], `${label}: real GPU device exposed`);
 			results[label] = result;
 		}
 		assert.equal(info.Internal, true, "agent network must be internal");
-		assert.equal(info.Options["com.docker.network.bridge.gateway_mode_ipv4"], "isolated", "agent bridge must not have a host address");
-		assert(info.IPAM.Config.every((c) => !c.Gateway), "agent bridge exposes a host gateway");
+		assert.equal(
+			info.Options["com.docker.network.bridge.gateway_mode_ipv4"],
+			"isolated",
+			"agent bridge must not have a host address",
+		);
+		assert(
+			info.IPAM.Config.every((c) => !c.Gateway),
+			"agent bridge exposes a host gateway",
+		);
 		return { mode: "isolated", singleNetworkPerAgent: true, hostSentinelReachable: false, actors: results };
 	} finally {
 		await new Promise((resolve) => {

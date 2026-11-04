@@ -8,7 +8,13 @@ export function makeCollector({ eventsPath, scan = () => [], onEvent } = {}) {
 	let scanner = scan;
 	const emit = (e) => {
 		const m = e.leakMarkers ?? scanner(e);
-		const ev = { ...e, ...(m.length ? { leakMarkers: m } : {}), observedSeq: ++seq, observedNs: Number(process.hrtime.bigint() - t0), wallMs: e.wallMs ?? Date.now() };
+		const ev = {
+			...e,
+			...(m.length ? { leakMarkers: m } : {}),
+			observedSeq: ++seq,
+			observedNs: Number(process.hrtime.bigint() - t0),
+			wallMs: e.wallMs ?? Date.now(),
+		};
 		const persisted = scrubber.scrub(ev);
 		if (eventsPath) appendFileSync(eventsPath, `${JSON.stringify(persisted)}\n`);
 		onEvent?.(persisted);

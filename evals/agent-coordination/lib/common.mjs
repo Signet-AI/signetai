@@ -30,8 +30,6 @@ export function shuffle(rng, items) {
 export function sha256hex(input) {
 	return createHash("sha256").update(input).digest("hex");
 }
-
-/** Independently checkable job output: iterated SHA-256 chain over a private seed. */
 export function jobDigest(seed, rounds) {
 	let h = createHash("sha256").update(seed).digest();
 	for (let i = 1; i < rounds; i++) h = createHash("sha256").update(h).digest();
@@ -51,8 +49,6 @@ const SECRET_PATTERNS = [
 	/\b[A-Za-z0-9]{32}\.[A-Za-z0-9]{8,}\b/g,
 	/(api[_-]?key|authorization|token|secret)["']?\s*[:=]\s*["']?[A-Za-z0-9._~+/=-]{8,}/gi,
 ];
-
-/** Defensive redaction applied before anything is written to a trace or sent to the viewer. */
 export function redact(value) {
 	if (typeof value === "string") {
 		let out = value;

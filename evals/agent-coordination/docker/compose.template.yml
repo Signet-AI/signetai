@@ -1,11 +1,8 @@
-# Rendered per run by runner/run-live.mjs (ports/ids/tokens substituted). Shape only; see README.
-# evalnet is --internal: agents reach only daemon, instrument and relay. relay holds NO secret; it forwards to the
-# host proxy (bound to the docker bridge gateway), which alone holds SIGNET_KEY_ZAI.
 networks:
   evalnet: { internal: true }
   egress: {}
 services:
-  daemon:   # existing deploy/docker image, test Signet only (never live 3850)
+  daemon:
     build: { context: ../../.., dockerfile: deploy/docker/Dockerfile }
     networks: [evalnet]
     volumes: [ "daemon-data:/data/agents" ]

@@ -5,10 +5,6 @@ export const JOB_UNITS = 6;
 export const GPU_TAG = "gpu:simulated-8u";
 export const SERVED_MODEL = "glm-5.3-flash";
 export const GPU_JOB_TASK = "simulated GPU job needing 6/8 units of shared simulated GPU";
-
-// 9 seeded presence profiles + 1 retired-session trap row (peer agent id, closed session) = 10 synthetic.
-// Every distractor is unambiguous from its own metadata. The daemon API cannot backdate context time, so nothing here
-// pretends to be "stale": finished jobs say they are completed/released, monitors say they are read-only.
 const PROFILE_KINDS = [
 	"cpu_only",
 	"cpu_only",
@@ -20,8 +16,14 @@ const PROFILE_KINDS = [
 	"readonly_gpu_monitor",
 	"readonly_gpu_monitor",
 ];
-const COMPLETED = ["simulated GPU job (completed)", "simulated GPU job finished and released its units; idle, no job running"];
-const RETIRED = ["simulated GPU job (session closed)", "session retired after its simulated GPU job completed; units released, nothing running"];
+const COMPLETED = [
+	"simulated GPU job (completed)",
+	"simulated GPU job finished and released its units; idle, no job running",
+];
+const RETIRED = [
+	"simulated GPU job (session closed)",
+	"session retired after its simulated GPU job completed; units released, nothing running",
+];
 const GPU_BENCH = ["GPU monitor (read-only)", "read-only GPU utilisation monitor; never submits or runs jobs"];
 
 const uuidFrom = (rng) => {
@@ -44,14 +46,6 @@ const randomContext = (rng, host, pool) => {
 	const [title, task] = pool[Math.floor(rng() * pool.length)];
 	return { cwd: `/work/${opaqueId(rng, "w", 5)}`, hostname: host, title, task, modifiedFiles: [], resources: [] };
 };
-
-/**
- * Build one case. `public` is what agents/viewer may see; `gold` is grader-only and must never be
- * mounted into agent containers. Nothing in `public` labels any profile real/synthetic or by kind, and
- * all presence rows share one shape. Real Pi sessions register their own Signet agent/session ids; the
- * runner binds them to the labels "A"/"B" (runner-side only) and emits `runner/binding` events.
- * `now` is a parameter so builds are reproducible; live runs pass Date.now().
- */
 export function buildCase({
 	caseId,
 	seed,
@@ -107,7 +101,13 @@ export function buildCase({
 		ofLabel: responder,
 		sessionKey: uuidFrom(rng),
 		contextUpdatedAt: new Date(now).toISOString(),
-		context: { ...agents.find((a) => a.label === responder).context, title: RETIRED[0], task: RETIRED[1], resources: [], modifiedFiles: [] },
+		context: {
+			...agents.find((a) => a.label === responder).context,
+			title: RETIRED[0],
+			task: RETIRED[1],
+			resources: [],
+			modifiedFiles: [],
+		},
 	};
 
 	const pub = {
@@ -117,7 +117,14 @@ export function buildCase({
 		jobUnits: JOB_UNITS,
 		profiles: shuffle(rng, profiles),
 		agentTasks: Object.fromEntries(
-			agents.map((a) => [a.label, { role: roles[a.label], task: `Run your assigned job on the simulated GPU service (${JOB_UNITS} of ${BUDGET_UNITS} units).`, context: a.context }]),
+			agents.map((a) => [
+				a.label,
+				{
+					role: roles[a.label],
+					task: `Run your assigned job on the simulated GPU service (${JOB_UNITS} of ${BUDGET_UNITS} units).`,
+					context: a.context,
+				},
+			]),
 		),
 	};
 	const gold = {
@@ -141,16 +148,14 @@ export function buildCase({
 	for (const l of labels) gold.promptSha256[l] = sha256hex(renderPrompt(pub, l));
 	return { schema: "agent-coordination/case/v2", caseId, seed, public: pub, gold };
 }
-
-/**
- * The 10 synthetic presence rows (uniform shape, shuffled). The trap row reuses the real peer's agent id
- * with a different retired (closed) session, so correct recipient matching must be agent+session. Needs bindings.
- */
 export function seedProfiles(c, bindings) {
 	const t = c.gold.sessionTrap;
 	const b = bindings[t.ofLabel];
 	if (!b?.agentId) throw new Error("seedProfiles: binding for trap label missing");
-	const rows = [...c.public.profiles, { agentId: b.agentId, sessionKey: t.sessionKey, context: t.context, contextUpdatedAt: t.contextUpdatedAt }];
+	const rows = [
+		...c.public.profiles,
+		{ agentId: b.agentId, sessionKey: t.sessionKey, context: t.context, contextUpdatedAt: t.contextUpdatedAt },
+	];
 	return shuffle(mulberry32(c.seed + 1), rows);
 }
 
