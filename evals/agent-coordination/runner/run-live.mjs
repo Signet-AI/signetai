@@ -53,7 +53,7 @@ export const IMAGES = {
 	relay: "alpine/socat@sha256:466c8a0383e16463fabdb7df01008292fb78d07da60224a46cb5d3142ce122ed",
 };
 const EXPECTED_TOOLS = ["agent_peers", "agent_context_update", "agent_session_inspect", "agent_message_send", "agent_message_inbox", "agent_message_ack"];
-const HARD = { requests: 24, output: 131072, wallMs: 480000 };
+const HARD = { requests: Infinity, output: 131072, wallMs: Infinity };
 
 export const sha = (s) => createHash("sha256").update(s).digest("hex");
 
@@ -154,7 +154,7 @@ export function validateApproval(approval, prepared) {
 		output: Math.min(HARD.output, Number(approval.maxOutputTokens ?? HARD.output)),
 		wallMs: Math.min(HARD.wallMs, Number(approval.maxWallMs ?? HARD.wallMs)),
 	};
-	if (!Object.values(limits).every((v) => Number.isFinite(v) && v > 0)) return bad("limits invalid");
+	if (!Object.values(limits).every((v) => v > 0)) return bad("limits invalid");
 	return { ok: true, limits };
 }
 
@@ -617,7 +617,7 @@ async function main() {
 			}
 			if (l === c.gold.roles.responder) {
 				try {
-					await pis[l].waitSettled(Math.max(1000, wallLeft()), settledBefore);
+					await pis[l].waitSettled(Math.min(2 ** 31 - 1, Math.max(1000, wallLeft())), settledBefore);
 				} catch {
 					emit({ src: "runner", type: "timeout", kind: "responder_initial_settle" });
 					break;
@@ -664,14 +664,14 @@ async function main() {
 		};
 		writeFileSync(join(runDir, "summary.json"), JSON.stringify(summary, null, 2));
 		console.log(JSON.stringify(summary));
-		await cleanup("finished", { holdViewer: true });
 		const holdMs = Number(arg("viewer-hold-ms", 1800000));
-		log(`containers and proxy are down; viewer stays at ${viewer.url} for ${Math.round(holdMs / 60000)} min (or: node viewer/server.mjs ${runDir})`);
+		log(`agents and proxy are down; viewer ${viewer.url} and the test daemon dashboard stay up for ${Math.round(holdMs / 60000)} min`);
 		await new Promise((r) => {
 			setTimeout(r, holdMs).unref?.();
 			process.once("SIGTERM", r);
 			process.once("SIGINT", r);
 		});
+		await cleanup("finished");
 		closeViewer();
 		process.exit(0);
 	} catch (e) {

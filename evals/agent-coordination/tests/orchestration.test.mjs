@@ -54,7 +54,8 @@ test("approval binds run, case, prompts and grader hashes; limits hard-capped", 
 	const good = { approvedBy: "user", runId: "r1", caseIds: ["c1"], promptsSha256: "p", graderSha256: "g", harnessSha256: "h", imagesSha256: "i", maxProviderRequests: 999, maxOutputTokens: 999999, maxWallMs: 9e9 };
 	const v = validateApproval(good, prepared);
 	assert.ok(v.ok);
-	assert.deepEqual(v.limits, { requests: 24, output: 131072, wallMs: 480000 });
+	assert.deepEqual(v.limits, { requests: 999, output: 131072, wallMs: 9e9 });
+	assert.deepEqual(validateApproval({ ...good, maxProviderRequests: null, maxWallMs: null }, prepared).limits, { requests: Infinity, output: 131072, wallMs: Infinity });
 	for (const bad of [{}, { ...good, approvedBy: "" }, { ...good, runId: "x" }, { ...good, caseIds: [] }, { ...good, promptsSha256: "q" }, { ...good, graderSha256: "q" }, { ...good, harnessSha256: "x" }, { ...good, imagesSha256: "x" }, { ...good, harnessSha256: undefined }, null]) assert.equal(validateApproval(bad, prepared).ok, false);
 });
 

@@ -247,7 +247,7 @@ export function startProxy({ tokens, eventsPath, maxRequests = 24, maxOutput = 4
 				setLimits: (l) => {
 					if (l.requests !== undefined) lim.maxRequests = l.requests;
 					if (l.output !== undefined) lim.maxOutput = l.output;
-					if (l.wallMs !== undefined && deadline === null) {
+					if (Number.isFinite(l.wallMs) && deadline === null) {
 						deadline = performance.now() + l.wallMs;
 						timer = setTimeout(expire, l.wallMs);
 						timer.unref();
