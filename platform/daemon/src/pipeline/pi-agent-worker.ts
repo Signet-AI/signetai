@@ -64,7 +64,9 @@ const dispatchQueued = (): void => {
 	}
 };
 let planningTurn = false;
+let planningRequested = false;
 const endPlanningTurn = (): void => {
+	planningRequested = false;
 	if (!planningTurn) return;
 	planningTurn = false;
 	if (input.thinkingLevel) session.setThinkingLevel(input.thinkingLevel);
@@ -80,7 +82,6 @@ const startsPlanningTurn = (result: unknown): boolean => {
 const customTools: ToolDefinition[] = input.tools.map((tool) => ({
 	...tool,
 	execute(toolCallId, params) {
-		endPlanningTurn();
 		return new Promise((resolve, reject) => {
 			queued.push({
 				call: { resolve, reject },
@@ -106,7 +107,17 @@ if (codemode) {
 		"codemode",
 	]);
 }
-session.subscribe((event) => send({ type: "event", event }));
+session.subscribe((event) => {
+	if (event.type === "turn_end") {
+		const planNextTurn = planningRequested;
+		endPlanningTurn();
+		if (planNextTurn && input.planningThinkingLevel) {
+			planningTurn = true;
+			session.setThinkingLevel(input.planningThinkingLevel);
+		}
+	}
+	send({ type: "event", event });
+});
 let running = false;
 port.on("message", async (request: PiAgentWorkerRequest) => {
 	try {
@@ -128,15 +139,13 @@ port.on("message", async (request: PiAgentWorkerRequest) => {
 		}
 		if (request.type === "tool-result") {
 			const call = pending.get(request.id);
+			if (!call) return;
 			pending.delete(request.id);
-			if (request.error) call?.reject(new Error(request.error));
+			if (request.error) call.reject(new Error(request.error));
 			else if (request.result) {
-				if (input.planningThinkingLevel && startsPlanningTurn(request.result)) {
-					planningTurn = true;
-					session.setThinkingLevel(input.planningThinkingLevel);
-				}
-				call?.resolve(request.result);
-			} else call?.reject(new Error("Missing tool result"));
+				if (input.planningThinkingLevel && startsPlanningTurn(request.result)) planningRequested = true;
+				call.resolve(request.result);
+			} else call.reject(new Error("Missing tool result"));
 			dispatchQueued();
 			return;
 		}

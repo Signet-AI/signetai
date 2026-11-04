@@ -26,62 +26,87 @@ test("allows a Pi agent worker per shared LLM permit plus the retained chat sess
 	}
 });
 
-test("a tool result can give only the next turn the planning thinking budget", async () => {
-	let requests = 0;
-	const budgets: unknown[] = [];
-	const call = (name: string) =>
-		completion({
-			role: "assistant",
-			tool_calls: [{ index: 0, id: `call-${name}`, type: "function", function: { name, arguments: "{}" } }],
-		}) + completion({}, "tool_calls");
-	const server = Bun.serve({
-		port: 0,
-		hostname: "127.0.0.1",
-		async fetch(request) {
-			const body = await request.json();
-			budgets.push(body.thinking_token_budget);
-			requests++;
-			const content =
-				requests === 1
-					? call("read_page")
-					: requests === 2
-						? call("file_page")
-						: completion({ role: "assistant", content: "Filed." }) + completion({}, "stop");
-			return new Response(`${content}data: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
-		},
-	});
-	const tool = (name: string, details: Record<string, unknown>): PiAgentTool => ({
-		name,
-		label: name,
-		description: name,
-		parameters: Type.Object({}),
-		async execute() {
-			return { content: [{ type: "text", text: `${name} done` }], details };
-		},
-	});
-	try {
-		const provider = createPiModelProvider({
-			executor: "openai-compatible",
-			model: "planning-test-model",
-			baseUrl: `http://127.0.0.1:${server.port}/v1`,
-			reasoning: "medium",
-			maxTokens: 32_768,
-			thinking: { format: "chat-template", budgetTokens: 2_000, planningBudgetTokens: 8_000 },
+test.each([undefined, "codemode"] as const)(
+	"a tool result gives only the next model turn the planning budget (exposure: %s)",
+	async (exposure) => {
+		let requests = 0;
+		const budgets: unknown[] = [];
+		const executed: string[] = [];
+		const call = (...names: string[]) =>
+			completion({
+				role: "assistant",
+				tool_calls: exposure
+					? [
+							{
+								index: 0,
+								id: `code-${requests}`,
+								type: "function",
+								function: {
+									name: "codemode",
+									arguments: JSON.stringify({ code: names.map((name) => `await tools.${name}({});`).join("\n") }),
+								},
+							},
+						]
+					: names.map((name, index) => ({
+							index,
+							id: `call-${name}`,
+							type: "function",
+							function: { name, arguments: "{}" },
+						})),
+			}) + completion({}, "tool_calls");
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			async fetch(request) {
+				const body = await request.json();
+				budgets.push(body.thinking_token_budget);
+				requests++;
+				const content =
+					requests === 1
+						? call("read_page", "other_tool")
+						: requests === 2
+							? call("file_page")
+							: completion({ role: "assistant", content: "Filed." }) + completion({}, "stop");
+				return new Response(`${content}data: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+			},
 		});
-		const session = await provider.createAgentSession([
-			tool("read_page", { nextTurnThinking: "planning" }),
-			tool("file_page", {}),
-		]);
+		const tool = (name: string, details: Record<string, unknown>): PiAgentTool => ({
+			name,
+			label: name,
+			description: name,
+			parameters: Type.Object({}),
+			...(exposure ? { exposure } : {}),
+			async execute() {
+				executed.push(name);
+				return { content: [{ type: "text", text: `${name} done` }], details };
+			},
+		});
 		try {
-			await session.prompt("Dream.");
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "planning-test-model",
+				baseUrl: `http://127.0.0.1:${server.port}/v1`,
+				reasoning: "medium",
+				maxTokens: 32_768,
+				thinking: { format: "chat-template", budgetTokens: 2_000, planningBudgetTokens: 8_000 },
+			});
+			const session = await provider.createAgentSession([
+				tool("read_page", { nextTurnThinking: "planning" }),
+				tool("other_tool", {}),
+				tool("file_page", {}),
+			]);
+			try {
+				await session.prompt("Dream.");
+			} finally {
+				await session.dispose();
+			}
+			expect(executed).toEqual(["read_page", "other_tool", "file_page"]);
+			expect(budgets).toEqual([2_000, 8_000, 2_000]);
 		} finally {
-			await session.dispose();
+			server.stop();
 		}
-		expect(budgets).toEqual([2_000, 8_000, 2_000]);
-	} finally {
-		server.stop();
-	}
-});
+	},
+);
 
 test("a planning turn that ends the prompt does not carry into the next prompt", async () => {
 	let requests = 0;

@@ -1193,6 +1193,228 @@ describe("dreaming operations", () => {
 		expect(entities.n).toBe(1);
 	});
 
+	it.each(["add_claim_value", "set_claim_value"])(
+		"binds %s to returned ids across an intervening rename (#2171)",
+		async (operation: string) => {
+			insertEntity("known", "Aster", "aster");
+			insertEpisodicMemory("mem-aster", "Aster is the project name. Ownership is active. Aster is now renamed Birch.");
+			const evidence = [{ source_ref: "memory:mem-aster", quote: "Aster is the project name." }];
+			const result = await applyDreamingOperations({
+				accessor: getDbAccessor(),
+				agentId: "agent-a",
+				actor: "dreaming",
+				operations: [
+					{ operation: "create_entity", payload: { name: "Aster", type: "project" }, evidence },
+					{ operation: "create_aspect", payload: { entityId: "$0", name: "ownership" }, evidence },
+					{
+						operation: "rename_entity",
+						payload: { entityId: "known", newName: "Birch" },
+						evidence: [{ source_ref: "memory:mem-aster", quote: "Aster is now renamed Birch." }],
+					},
+					{
+						operation,
+						payload: { entityId: "$0", aspectId: "$1", claimKey: "status", value: "Ownership is active." },
+						evidence: [{ source_ref: "memory:mem-aster", quote: "Ownership is active." }],
+					},
+				],
+			});
+			expect(result.items.map((item) => [item.ok, item.error ?? null])).toEqual([
+				[true, null],
+				[true, null],
+				[true, null],
+				[true, null],
+			]);
+			const entityId = (result.items[0]?.result as { entityId?: string } | undefined)?.entityId;
+			const aspectId = (result.items[1]?.result as { aspectId?: string } | undefined)?.aspectId;
+			if (!entityId || !aspectId) throw new Error("created ids are missing");
+			expect(entityId).toBe("known");
+			expect(result.items[3]?.result).toMatchObject({ entityId, aspectId });
+			const state = await getDbAccessor().withReadDbAsync((db) => ({
+				entities: db.prepare("SELECT id, name FROM entities WHERE agent_id = ?").all("agent-a"),
+				aspects: db.prepare("SELECT id, entity_id FROM entity_aspects WHERE agent_id = ?").all("agent-a"),
+				claims: db
+					.prepare(
+						"SELECT aspect_id, content, source_id, source_kind, proposal_evidence FROM entity_attributes WHERE agent_id = ?",
+					)
+					.all("agent-a"),
+			}));
+			expect(state.entities).toEqual([{ id: entityId, name: "Birch" }]);
+			expect(state.aspects).toEqual([{ id: aspectId, entity_id: entityId }]);
+			expect(state.claims).toEqual([
+				{
+					aspect_id: aspectId,
+					content: "Ownership is active.",
+					source_id: "mem-aster",
+					source_kind: "manual",
+					proposal_evidence: JSON.stringify([{ source_ref: "memory:mem-aster", quote: "Ownership is active." }]),
+				},
+			]);
+		},
+	);
+
+	it.each(["add_claim_value", "set_claim_value", "supersede_claim_value"])(
+		"rechecks aspect ownership inside the %s writer transaction (#2171)",
+		async (operation: string) => {
+			insertEntity("e-owner", "Aster", "aster");
+			insertEntity("e-other", "Birch", "birch");
+			insertAspect("a-owner", "e-owner", "ownership");
+			insertEpisodicMemory("mem-owner", "Ownership is active.");
+			const evidence = [{ source_ref: "memory:mem-owner", quote: "Ownership is active." }];
+			const base = getDbAccessor();
+			const seeded = await applyDreamingOperations({
+				accessor: base,
+				agentId: "agent-a",
+				actor: "dreaming",
+				operations: [
+					{
+						operation: "add_claim_value",
+						payload: {
+							entityId: "e-owner",
+							aspectId: "a-owner",
+							claimKey: "status",
+							value: "Ownership was pending.",
+						},
+						evidence,
+					},
+				],
+			});
+			expect(seeded.items[0]?.ok).toBe(true);
+			const enqueue = base.withWriteTxAsync;
+			if (!enqueue) throw new Error("async write API is unavailable");
+			const accessor: DbAccessor = {
+				...base,
+				withWriteTxAsync: (fn) =>
+					enqueue((db) => {
+						db.prepare("UPDATE entity_aspects SET entity_id = ? WHERE id = ?").run("e-other", "a-owner");
+						return fn(db);
+					}),
+			};
+			const result = await applyDreamingOperations({
+				accessor,
+				agentId: "agent-a",
+				actor: "dreaming",
+				operations: [
+					{
+						operation,
+						payload: {
+							entityId: "e-owner",
+							aspectId: "a-owner",
+							claimKey: "status",
+							value: "Ownership is active.",
+						},
+						evidence,
+					},
+				],
+			});
+			expect(result.items[0]?.ok).toBe(false);
+			expect(result.items[0]?.error).toMatch(/aspect.*not found/i);
+			const state = await base.withReadDbAsync((db) => ({
+				aspects: db.prepare("SELECT id, entity_id FROM entity_aspects WHERE agent_id = ?").all("agent-a"),
+				claims: db
+					.prepare("SELECT aspect_id, content, status FROM entity_attributes WHERE agent_id = ?")
+					.all("agent-a"),
+				proposals: db.prepare("SELECT COUNT(*) AS n FROM ontology_proposals WHERE agent_id = ?").get("agent-a"),
+			}));
+			expect(state.aspects).toEqual([{ id: "a-owner", entity_id: "e-other" }]);
+			expect(state.claims).toEqual([{ aspect_id: "a-owner", content: "Ownership was pending.", status: "active" }]);
+			expect(state.proposals).toEqual({ n: 1 });
+		},
+	);
+
+	it("retries cross-transaction claim dependencies using committed ids and suffix-local indexes (#2171)", async () => {
+		insertEpisodicMemory("mem-retry-binding", "Aster has active ownership.");
+		const evidence = [{ source_ref: "memory:mem-retry-binding", quote: "Aster has active ownership." }];
+		const operations: DreamingOperationRequest[] = Array.from({ length: 9 }, (_, index) => ({
+			operation: "create_entity",
+			payload: { name: `Retry project ${index}`, type: "project" },
+			evidence,
+		}));
+		operations.push(
+			{ operation: "create_entity", payload: { name: "Aster", type: "project" }, evidence },
+			{ operation: "create_aspect", payload: { entityId: "$9", name: "ownership" }, evidence },
+			{
+				operation: "add_claim_value",
+				payload: {
+					entityId: "$9",
+					aspectId: "$10",
+					claimKey: "status",
+					value: "Aster has active ownership.",
+				},
+				evidence,
+			},
+		);
+		const base = getDbAccessor();
+		const enqueue = base.withWriteTxAsync;
+		if (!enqueue) throw new Error("async write API is unavailable");
+		let rolledBackResult: unknown;
+		const accessor: DbAccessor = {
+			...base,
+			withWriteTxAsync: (fn) =>
+				enqueue((db) => {
+					if (db.prepare("SELECT 1 FROM entities WHERE canonical_name = 'aster'").get()) {
+						rolledBackResult = fn(db);
+						throw new Error("injected suffix rollback");
+					}
+					return fn(db);
+				}),
+		};
+		const partial = await applyDreamingOperations({ accessor, agentId: "agent-a", actor: "dreaming", operations });
+		expect(partial).toMatchObject({ ok: false, retryable: true, retryFrom: 10, error: "injected suffix rollback" });
+		expect(partial.items.map((item) => [item.index, item.ok])).toEqual(
+			Array.from({ length: 10 }, (_, index) => [index, true]),
+		);
+		expect(rolledBackResult).toMatchObject({
+			results: [
+				{ index: 10, ok: true },
+				{ index: 11, ok: true },
+			],
+		});
+		const entityId = (partial.items[9]?.result as { entityId?: string } | undefined)?.entityId;
+		if (!entityId) throw new Error("committed entity id is missing");
+		expect(
+			await base.withReadDbAsync((db) => ({
+				entity: db.prepare("SELECT name FROM entities WHERE id = ?").get(entityId),
+				aspects: db.prepare("SELECT COUNT(*) AS n FROM entity_aspects").get(),
+				claims: db.prepare("SELECT COUNT(*) AS n FROM entity_attributes").get(),
+				proposals: db.prepare("SELECT COUNT(*) AS n FROM ontology_proposals").get(),
+			})),
+		).toEqual({ entity: { name: "Aster" }, aspects: { n: 0 }, claims: { n: 0 }, proposals: { n: 10 } });
+		const aspect = operations[10];
+		const claim = operations[11];
+		if (aspect === undefined || claim === undefined) throw new Error("retry suffix is missing");
+		const resumed = await applyDreamingOperations({
+			accessor: base,
+			agentId: "agent-a",
+			actor: "dreaming",
+			operations: [
+				{ ...aspect, payload: { ...aspect.payload, entityId } },
+				{ ...claim, payload: { ...claim.payload, entityId, aspectId: "$0" } },
+			],
+		});
+		expect(resumed.items.map((item) => [item.index, item.ok, item.error ?? null])).toEqual([
+			[0, true, null],
+			[1, true, null],
+		]);
+		const aspectId = (resumed.items[0]?.result as { aspectId?: string } | undefined)?.aspectId;
+		if (!aspectId) throw new Error("retried aspect id is missing");
+		expect(resumed.items[1]?.result).toMatchObject({ entityId, aspectId });
+		expect(
+			await base.withReadDbAsync((db) => ({
+				entities: db.prepare("SELECT COUNT(*) AS n FROM entities").get(),
+				aspects: db.prepare("SELECT id, entity_id FROM entity_aspects").all(),
+				claims: db.prepare("SELECT aspect_id, content FROM entity_attributes").all(),
+				proposals: db.prepare("SELECT COUNT(*) AS n FROM ontology_proposals").get(),
+				memories: db.prepare("SELECT COUNT(*) AS n FROM memories WHERE memory_kind = 'derived'").get(),
+			})),
+		).toEqual({
+			entities: { n: 10 },
+			aspects: [{ id: aspectId, entity_id: entityId }],
+			claims: [{ aspect_id: aspectId, content: "Aster has active ownership." }],
+			proposals: { n: 12 },
+			memories: { n: 1 },
+		});
+	});
+
 	it("rejects a same-request reference that points forward or at the wrong kind of operation", async () => {
 		insertEpisodicMemory("mem-kayak", "I bought a sea kayak in Portland.");
 		const evidence = [{ source_ref: "memory:mem-kayak", quote: "I bought a sea kayak in Portland" }];

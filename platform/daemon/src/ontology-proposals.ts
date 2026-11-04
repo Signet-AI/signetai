@@ -1130,6 +1130,49 @@ function restoreAttributeMemoryInTx(db: WriteDb, memoryId: string | null, propos
 	});
 }
 
+function resolveClaimTargetInTx(
+	db: WriteDb,
+	agentId: string,
+	payload: Readonly<Record<string, unknown>>,
+	create: boolean,
+	writeCaps?: GraphWriteCaps,
+): { readonly entityId: string; readonly aspectId: string } {
+	if ("entity_id" in payload || "aspect_id" in payload) {
+		const entityId = readString(payload, "entity_id");
+		const aspectId = readString(payload, "aspect_id");
+		if (entityId === null || aspectId === null) {
+			throw new OntologyProposalError("payload.entity_id and payload.aspect_id are required together", 400);
+		}
+		const entity = db
+			.prepare("SELECT id FROM entities WHERE id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active'")
+			.get(entityId, agentId);
+		if (!entity) throw new OntologyProposalError(`Entity not found: ${entityId}`, 404);
+		const aspect = db
+			.prepare(
+				"SELECT id FROM entity_aspects WHERE id = ? AND entity_id = ? AND agent_id = ? AND COALESCE(status, 'active') = 'active'",
+			)
+			.get(aspectId, entityId, agentId);
+		if (!aspect) throw new OntologyProposalError(`Aspect not found on entity ${entityId}: ${aspectId}`, 404);
+		return { entityId, aspectId };
+	}
+	const entity = readString(payload, "entity");
+	const aspect = readString(payload, "aspect");
+	if (entity === null) throw new OntologyProposalError("payload.entity is required", 400);
+	if (aspect === null) throw new OntologyProposalError("payload.aspect is required", 400);
+	const entityId = create
+		? resolveOrCreateEntity(db, agentId, entity, normalizeEntityType(readString(payload, "entity_type")))
+		: resolveEntity(db, agentId, entity);
+	if (entityId === null) throw new OntologyProposalError("payload.entity was not found", 400);
+	if (create) {
+		enforceAspectCapForNewAspect(db, { id: entityId, name: entity }, agentId, aspect, writeCaps);
+	}
+	const aspectId = create
+		? resolveOrCreateAspect(db, entityId, agentId, aspect)
+		: resolveAspect(db, entityId, agentId, aspect);
+	if (aspectId === null) throw new OntologyProposalError("payload.aspect was not found", 400);
+	return { entityId, aspectId };
+}
+
 function applyAddClaimValue(
 	db: WriteDb,
 	agentId: string,
@@ -1138,21 +1181,12 @@ function applyAddClaimValue(
 	actor: string,
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
-	const entity = readString(payload, "entity");
-	const aspect = readString(payload, "aspect");
 	const claimKey = readString(payload, "claim_key");
 	const value = readString(payload, "value");
-	if (entity === null) throw new OntologyProposalError("payload.entity is required", 400);
-	if (aspect === null) throw new OntologyProposalError("payload.aspect is required", 400);
 	if (claimKey === null) throw new OntologyProposalError("payload.claim_key is required", 400);
 	if (value === null) throw new OntologyProposalError("payload.value is required", 400);
 
-	const entityId = resolveOrCreateEntity(db, agentId, entity, normalizeEntityType(readString(payload, "entity_type")));
-	const addEntityRow = db.prepare("SELECT id, name FROM entities WHERE id = ?").get(entityId) as
-		| { id: string; name: string }
-		| undefined;
-	if (addEntityRow !== undefined) enforceAspectCapForNewAspect(db, addEntityRow, agentId, aspect, writeCaps);
-	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect);
+	const { entityId, aspectId } = resolveClaimTargetInTx(db, agentId, payload, true, writeCaps);
 	const groupKey = readString(payload, "group_key") ?? "general";
 	const kind = normalizeAttributeKind(readString(payload, "kind"));
 	const normalized = canonical(value);
@@ -1269,17 +1303,12 @@ function applySetClaimValue(
 	actor: string,
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
-	const entity = readString(payload, "entity");
-	const aspect = readString(payload, "aspect");
 	const claimKey = canonicalKey(readString(payload, "claim_key") ?? readString(payload, "claim"));
 	const value = readString(payload, "value");
-	if (entity === null) throw new OntologyProposalError("payload.entity is required", 400);
-	if (aspect === null) throw new OntologyProposalError("payload.aspect is required", 400);
 	if (claimKey === null) throw new OntologyProposalError("payload.claim_key is required", 400);
 	if (value === null) throw new OntologyProposalError("payload.value is required", 400);
 
-	const entityId = resolveOrCreateEntity(db, agentId, entity, normalizeEntityType(readString(payload, "entity_type")));
-	const aspectId = resolveOrCreateAspect(db, entityId, agentId, aspect);
+	const { entityId, aspectId } = resolveClaimTargetInTx(db, agentId, payload, true);
 	const groupKey = canonicalKey(readString(payload, "group_key") ?? readString(payload, "group")) ?? "general";
 	const kind = normalizeAttributeKind(readString(payload, "kind"));
 	const slot = db
@@ -1484,17 +1513,10 @@ function applySupersedeClaimValue(
 	payload: Readonly<Record<string, unknown>>,
 	actor: string,
 ): Readonly<Record<string, unknown>> {
-	const entity = readString(payload, "entity");
-	const aspect = readString(payload, "aspect");
 	const claimKey = readString(payload, "claim_key");
-	if (entity === null) throw new OntologyProposalError("payload.entity is required", 400);
-	if (aspect === null) throw new OntologyProposalError("payload.aspect is required", 400);
 	if (claimKey === null) throw new OntologyProposalError("payload.claim_key is required", 400);
 
-	const entityId = resolveEntity(db, agentId, entity);
-	if (entityId === null) throw new OntologyProposalError("payload.entity was not found", 400);
-	const aspectId = resolveAspect(db, entityId, agentId, aspect);
-	if (aspectId === null) throw new OntologyProposalError("payload.aspect was not found", 400);
+	const { entityId, aspectId } = resolveClaimTargetInTx(db, agentId, payload, false);
 
 	const groupKey = readString(payload, "group_key") ?? "general";
 	const kind = normalizeAttributeKind(readString(payload, "kind"));
@@ -1536,8 +1558,8 @@ function applySupersedeClaimValue(
 			agentId,
 			proposal,
 			{
-				entity,
-				aspect,
+				entity_id: entityId,
+				aspect_id: aspectId,
 				claim_key: claimKey,
 				group_key: groupKey,
 				kind,
@@ -2562,7 +2584,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2563" },
+		{ siteToken: "ontology-proposals.ts:2585" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2600,7 +2622,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2580" },
+		{ siteToken: "ontology-proposals.ts:2602" },
 	);
 }
 
@@ -2658,7 +2680,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2612" },
+		{ siteToken: "ontology-proposals.ts:2634" },
 	);
 }
 
@@ -2753,7 +2775,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2696" },
+		{ siteToken: "ontology-proposals.ts:2718" },
 	);
 }
 
@@ -3174,7 +3196,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:3176",
+		siteToken: "ontology-proposals.ts:3198",
 	});
 }
 
@@ -3185,7 +3207,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:3187",
+		siteToken: "ontology-proposals.ts:3209",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3236,7 +3258,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3237" },
+		{ siteToken: "ontology-proposals.ts:3259" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {

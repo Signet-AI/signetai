@@ -77,8 +77,13 @@ and attention state within the relevant agent scope.
 When the agent session reports a configured, server-discovered, or catalog
 context window, the daemon sizes queue pages from that window: 60% of the
 window minus a 16,000-token prompt reserve, estimated at four characters per
-token. A page is bounded to 16,000–2,000,000 characters and shrinks for denser
-non-ASCII evidence. Without a known window, the existing `maxInputTokens`
+token. The default page target is bounded to 16,000–2,000,000 characters.
+Actual fragments, including resumed fragments, are charged against a shared
+per-pass token estimate: ASCII characters cost one quarter token and
+non-ASCII UTF-16 code units cost one token. Concurrent queue reads share that
+allowance; a smaller remaining window or explicit pass budget overrides the
+page floor. These delivery estimates are not exact tokenizer counts.
+Without a known window, the existing `maxInputTokens`
 page sizing remains in effect. Generic provider defaults do not count as a
 known serving window.
 

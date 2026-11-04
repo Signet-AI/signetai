@@ -56,13 +56,15 @@ ssh_wait() {
   return 1
 }
 
-pod_healthy() {  # CUDA usable from the image's torch, and the vLLM wheel downloads at >= 10 MB/s
+pod_healthy() {
   local wheel out speed; wheel=$(sed -n 's/^vllm @ //p' "$KIT/pod/freeze.txt")
-  out=$({ echo "timeout 120 python3 -c 'import torch; torch.cuda.mem_get_info(); print(\"CUDA_OK\")' 2>&1 | tail -1"
-          echo "curl -sL -o /dev/null -m 20 -w 'NET %{speed_download}\\n' '$wheel'"; } | on_pod "$1" 200 2>&1 || true)
-  printf '%s' "$out" | grep -q CUDA_OK || { echo "  CUDA unusable: $(printf '%s' "$out" | grep -v '^NET' | tail -1 | cut -c1-100)"; return 1; }
-  speed=$(printf '%s' "$out" | awk '/^NET/{print int($2)}')
-  [ "${speed:-0}" -ge 10000000 ] || { echo "  downloads too slow: ${speed:-0} B/s for the vLLM wheel"; return 1; }
+  out=$({ echo "set -e"
+          echo "timeout 120 python3 -c 'import torch; torch.cuda.mem_get_info(); print(\"CUDA_OK\")'"
+          echo "curl -fsSL --range 0-33554431 -o /dev/null -m 20 -w 'NET %{http_code} %{speed_download}\\n' '$wheel'"
+        } | on_pod "$1" 200 2>&1) || { echo "  GPU or download health check failed"; return 1; }
+  printf '%s\n' "$out" | grep -qx CUDA_OK || { echo "  CUDA unusable"; return 1; }
+  speed=$(printf '%s\n' "$out" | awk '$1 == "NET" && ($2 == 200 || $2 == 206) {print int($3)}')
+  [ "${speed:-0}" -ge 10000000 ] || { echo "  downloads too slow or unsuccessful: ${speed:-0} B/s for the vLLM wheel"; return 1; }
 }
 
 cmd_up() {  # lme up NAME: first GPU type x cloud x datacenter that has capacity, boots, and passes pod_healthy

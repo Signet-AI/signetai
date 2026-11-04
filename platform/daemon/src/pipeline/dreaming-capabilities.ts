@@ -67,17 +67,20 @@ const EVIDENCE_PAGE_WINDOW_SHARE = 0.6;
 const EVIDENCE_PAGE_PROMPT_RESERVE_TOKENS = 16_000;
 
 export function dreamingEvidencePageChars(maxInputTokens: number): number {
-	return evidencePageChars(Math.min(MAX_BUDGET_EVIDENCE_PAGE_CHARS, Math.floor(maxInputTokens / 4)));
+	return evidencePageChars(
+		Math.max(MAX_EVIDENCE_RESULT_CHARS, Math.min(MAX_BUDGET_EVIDENCE_PAGE_CHARS, Math.floor(maxInputTokens / 4))),
+	);
 }
 
 export function dreamingEvidencePageCharsForWindow(contextWindow: number): number {
 	const tokens = Math.floor(contextWindow * EVIDENCE_PAGE_WINDOW_SHARE) - EVIDENCE_PAGE_PROMPT_RESERVE_TOKENS;
-	return evidencePageChars(tokens * EVIDENCE_CHARS_PER_TOKEN);
+	return evidencePageChars(Math.max(MAX_EVIDENCE_RESULT_CHARS, tokens * EVIDENCE_CHARS_PER_TOKEN));
 }
 
 function evidencePageChars(requested: number | undefined): number {
-	const chars = Number.isFinite(requested) ? Math.floor(requested ?? 0) : 0;
-	return Math.min(MAX_EVIDENCE_PAGE_CHARS, Math.max(MAX_EVIDENCE_RESULT_CHARS, chars));
+	if (requested === undefined) return MAX_EVIDENCE_RESULT_CHARS;
+	const chars = Number.isFinite(requested) ? Math.floor(requested) : 0;
+	return Math.min(MAX_EVIDENCE_PAGE_CHARS, Math.max(0, chars));
 }
 const MAX_HYDRATED_ITEMS = 50;
 const MAX_ENTITY_TEXT_CHARS = 2_000;
@@ -331,18 +334,31 @@ export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvi
 }
 
 const DELIVERY_QUEUE_SCAN_LIMIT = MAX_EPISODIC_SOURCE_SCAN;
-const DENSITY_SAMPLE_CHARS = 200_000;
 
-function evidenceTokenDensity(sources: readonly EpisodicSourceRecord[]): number {
-	let sampled = 0;
-	let weighted = 0;
-	for (const source of sources) {
-		const end = Math.min(source.content.length, DENSITY_SAMPLE_CHARS - sampled);
-		for (let index = 0; index < end; index++) weighted += source.content.charCodeAt(index) > 0x7f ? 4 : 1;
-		sampled += end;
-		if (sampled >= DENSITY_SAMPLE_CHARS) break;
+function evidenceTokenCost(content: string): number {
+	let cost = 0;
+	for (let index = 0; index < content.length; index++)
+		cost += content.charCodeAt(index) > 0x7f ? 1 : 1 / EVIDENCE_CHARS_PER_TOKEN;
+	return cost;
+}
+
+function projectBudgetedEvidenceFragment(
+	source: EpisodicSourceRecord,
+	offset: number,
+	tokenBudget: number,
+): Record<string, unknown> | null {
+	const candidate = nextDreamingEvidenceFragment(source, offset, Math.floor(tokenBudget * EVIDENCE_CHARS_PER_TOKEN));
+	if (candidate === null) return null;
+	let cost = 0;
+	let chars = 0;
+	for (; chars < candidate.content.length; chars++) {
+		const next = candidate.content.charCodeAt(chars) > 0x7f ? 1 : 1 / EVIDENCE_CHARS_PER_TOKEN;
+		if (cost + next > tokenBudget) break;
+		cost += next;
 	}
-	return sampled === 0 ? 1 : Math.max(1, weighted / sampled);
+	if (chars === candidate.content.length)
+		return projectEvidenceItem(source, candidate.content, candidate.start, candidate.sourceLength);
+	return projectEvidenceFragment(source, offset, chars);
 }
 const DELIVERY_QUEUE_MAX_SOURCES = DELIVERY_QUEUE_SCAN_LIMIT - 1;
 
@@ -373,17 +389,14 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 	});
 	const fresh = [...scanned.filter((source) => !stalled(source)), ...scanned.filter(stalled)];
 	const continuationSources = pendingDreamingEvidenceContinuations(db, scopeId, DELIVERY_QUEUE_MAX_SOURCES, input.kind);
-	const pageChars = Math.max(
-		MAX_EVIDENCE_RESULT_CHARS,
-		Math.floor(evidencePageChars(input.evidenceChars) / evidenceTokenDensity([...continuationSources, ...fresh])),
-	);
+	const pageTokens = evidencePageChars(input.evidenceChars) / EVIDENCE_CHARS_PER_TOKEN;
 	const page = (sources: readonly EpisodicSourceRecord[], max: number, skip = new Set<string>()) => {
 		const items: Record<string, unknown>[] = [];
-		let remaining = pageChars;
+		let remaining = pageTokens;
 		for (const source of sources) {
 			const ref = `${source.kind}:${source.id}`;
 			if (skip.has(ref)) continue;
-			if (items.length > 0 && remaining < MAX_EVIDENCE_EXCERPT_CHARS) {
+			if (remaining <= 0) {
 				budgetExhausted = true;
 				break;
 			}
@@ -392,14 +405,17 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 			const served = extendDeliveredOffset(reviewed, servedInPass.get(ref));
 			const offset =
 				served > reviewed ? served : dreamingEvidenceResumeStart(source, reviewed, EVIDENCE_RESUME_OVERLAP_CHARS);
-			const fragment = projectEvidenceFragment(source, offset, Math.max(remaining, MAX_EVIDENCE_EXCERPT_CHARS));
-			if (fragment !== null) {
+			const fragment = projectBudgetedEvidenceFragment(source, offset, remaining);
+			if (fragment !== null && typeof fragment.content === "string" && fragment.content.length > reviewed - offset) {
 				items.push(
 					reviewed > offset
-						? { ...fragment, reviewedChars: Math.min(reviewed - offset, String(fragment.content).length) }
+						? { ...fragment, reviewedChars: Math.min(reviewed - offset, fragment.content.length) }
 						: fragment,
 				);
-				remaining -= typeof fragment.content === "string" ? fragment.content.length : 0;
+				remaining -= evidenceTokenCost(fragment.content);
+			} else if (offset < renderDreamingEvidence(source).length) {
+				budgetExhausted = true;
+				break;
 			}
 			if (items.length >= max) break;
 		}
@@ -407,6 +423,7 @@ function drainDreamingEvidenceQueueInDb(db: ReadDb, input: DbOwnerDreamingEviden
 	};
 	const continuationRefs = new Set<string>();
 	const continuations = page(continuationSources, limit + 1, continuationRefs);
+	if (continuations.length === 0 && budgetExhausted) return { ok: true, items: [], hasMore: true };
 	if (continuations.length > 0) {
 		const returned = continuations.slice(0, limit);
 		return {
@@ -525,29 +542,28 @@ export async function listDreamingAttention(
 			});
 }
 
-function deliveredEvidenceChars(items: readonly unknown[]): number {
-	let chars = 0;
+function deliveredEvidenceTokens(items: readonly unknown[]): number {
+	let tokens = 0;
 	for (const item of items) {
 		const content = (item as { content?: unknown } | null)?.content;
-		if (typeof content === "string") chars += content.length;
+		if (typeof content === "string") tokens += evidenceTokenCost(content);
 	}
-	return chars;
+	return tokens;
 }
 
 export function createDreamingCapabilities(params: CreateDreamingCapabilitiesParams): readonly DreamingCapability[] {
 	const { accessor, agentId, actor } = params;
 	const now = params.now ?? Date.now;
 	let lastQueueDeliveryAt: number | undefined;
-	let deliveredQueueChars = 0;
+	let deliveredQueueTokens = 0;
+	let queueDelivery = Promise.resolve();
+	let queueBudgetClosed = false;
 	const queueDeliveryClosed = (at: number): boolean => {
+		if (queueBudgetClosed) return true;
 		if (params.evidenceDeliveryDeadline !== undefined && at >= params.evidenceDeliveryDeadline) return true;
 		const windowChars = params.evidenceWindowChars?.();
-		if (windowChars !== undefined && deliveredQueueChars >= windowChars - MAX_EVIDENCE_EXCERPT_CHARS) return true;
-		if (
-			params.evidenceTokenBudget !== undefined &&
-			deliveredQueueChars >= params.evidenceTokenBudget * EVIDENCE_CHARS_PER_TOKEN
-		)
-			return true;
+		if (windowChars !== undefined && deliveredQueueTokens >= windowChars / EVIDENCE_CHARS_PER_TOKEN) return true;
+		if (params.evidenceTokenBudget !== undefined && deliveredQueueTokens >= params.evidenceTokenBudget) return true;
 		if (params.passDeadline === undefined || lastQueueDeliveryAt === undefined) return false;
 		return at + 2 * (at - lastQueueDeliveryAt) >= params.passDeadline;
 	};
@@ -739,62 +755,80 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 					since === undefined &&
 					before === undefined &&
 					sourceRef === undefined;
-				if (drainsQueue && queueDeliveryClosed(now())) {
-					return {
+				const previousDelivery = queueDelivery;
+				let releaseDelivery: (() => void) | undefined;
+				if (drainsQueue) {
+					queueDelivery = new Promise<void>((resolve) => {
+						releaseDelivery = resolve;
+					});
+					await previousDelivery;
+				}
+				try {
+					const closedDelivery = {
 						ok: true,
 						items: [],
 						hasMore: false,
 						deliveryClosed: true,
 						note: "This pass has used its time or evidence budget for new evidence. File what you have read, write the runbook, and finish; the rest of the queue is delivered to the next pass.",
 					};
+					if (drainsQueue && queueDeliveryClosed(now())) return closedDelivery;
+					const pageChars = typeof params.evidenceChars === "function" ? params.evidenceChars() : params.evidenceChars;
+					const windowChars = drainsQueue ? params.evidenceWindowChars?.() : undefined;
+					const caps = [
+						pageChars,
+						windowChars === undefined
+							? undefined
+							: Math.max(0, windowChars - deliveredQueueTokens * EVIDENCE_CHARS_PER_TOKEN),
+						drainsQueue && params.evidenceTokenBudget !== undefined
+							? Math.max(0, (params.evidenceTokenBudget - deliveredQueueTokens) * EVIDENCE_CHARS_PER_TOKEN)
+							: undefined,
+					].filter((cap): cap is number => cap !== undefined);
+					const evidenceChars = caps.length === 0 ? undefined : Math.min(...caps);
+					const input: DbOwnerDreamingEvidenceSearch = {
+						agentId: scopeId,
+						...(query === undefined ? {} : { query }),
+						...(since === undefined ? {} : { since }),
+						...(before === undefined ? {} : { before }),
+						...(kind === undefined ? {} : { kind }),
+						...(limit === undefined ? {} : { limit }),
+						...(sourceRef === undefined ? {} : { sourceRef }),
+						...(offset === undefined ? {} : { offset }),
+						...(chunkSize === undefined ? {} : { chunkSize }),
+						...(params.passId === undefined ? {} : { passId: params.passId }),
+						...(evidenceChars === undefined ? {} : { evidenceChars }),
+					};
+					const result = await runDbOwnerDomainOperation(accessor, {
+						runWithOwner: async (owner) => {
+							const handle = owner.submit<DreamingCapabilityOutput>(
+								{
+									kind: "dreaming_evidence_search",
+									input,
+								},
+								{
+									operation: "dreaming.capabilities.search-evidence",
+									lane: "read",
+									workloadClass: "foreground",
+									deadlineMs: 30_000,
+									estimatedWorkUnits: 200,
+								},
+							);
+							return await handle.result;
+						},
+						runInline: ({ read }) => read((db) => searchDreamingEvidenceInDb(db, input)),
+					});
+					if (drainsQueue && Array.isArray(result.items)) {
+						if (result.items.length > 0) {
+							lastQueueDeliveryAt = now();
+							deliveredQueueTokens += deliveredEvidenceTokens(result.items);
+						} else if (result.hasMore === true) {
+							queueBudgetClosed = true;
+							return closedDelivery;
+						}
+					}
+					return result;
+				} finally {
+					releaseDelivery?.();
 				}
-				const pageChars = typeof params.evidenceChars === "function" ? params.evidenceChars() : params.evidenceChars;
-				const windowChars = drainsQueue ? params.evidenceWindowChars?.() : undefined;
-				const caps = [
-					pageChars,
-					windowChars === undefined ? undefined : Math.max(0, windowChars - deliveredQueueChars),
-					drainsQueue && params.evidenceTokenBudget !== undefined
-						? Math.max(0, params.evidenceTokenBudget * EVIDENCE_CHARS_PER_TOKEN - deliveredQueueChars)
-						: undefined,
-				].filter((cap): cap is number => cap !== undefined);
-				const evidenceChars = caps.length === 0 ? undefined : Math.min(...caps);
-				const input: DbOwnerDreamingEvidenceSearch = {
-					agentId: scopeId,
-					...(query === undefined ? {} : { query }),
-					...(since === undefined ? {} : { since }),
-					...(before === undefined ? {} : { before }),
-					...(kind === undefined ? {} : { kind }),
-					...(limit === undefined ? {} : { limit }),
-					...(sourceRef === undefined ? {} : { sourceRef }),
-					...(offset === undefined ? {} : { offset }),
-					...(chunkSize === undefined ? {} : { chunkSize }),
-					...(params.passId === undefined ? {} : { passId: params.passId }),
-					...(evidenceChars === undefined ? {} : { evidenceChars }),
-				};
-				const result = await runDbOwnerDomainOperation(accessor, {
-					runWithOwner: async (owner) => {
-						const handle = owner.submit<DreamingCapabilityOutput>(
-							{
-								kind: "dreaming_evidence_search",
-								input,
-							},
-							{
-								operation: "dreaming.capabilities.search-evidence",
-								lane: "read",
-								workloadClass: "foreground",
-								deadlineMs: 30_000,
-								estimatedWorkUnits: 200,
-							},
-						);
-						return await handle.result;
-					},
-					runInline: ({ read }) => read((db) => searchDreamingEvidenceInDb(db, input)),
-				});
-				if (drainsQueue && Array.isArray(result.items) && result.items.length > 0) {
-					lastQueueDeliveryAt = now();
-					deliveredQueueChars += deliveredEvidenceChars(result.items);
-				}
-				return result;
 			},
 		),
 		capability(
@@ -961,7 +995,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"apply_ontology_ops",
 			"Apply ontology operations",
-			'Apply every semantic write through the daemon audit seam in one ordered request, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). The daemon validates every input, citation, and resolvable target before creating flags or applying bounded, yielding writer transactions; each operation and its provenance resolution remains atomic, while an individual operation failure does not block later operations. If a writer transaction fails after earlier transactions committed, the result has `retryable: true` and `retryFrom`; retry only the uncommitted suffix. Do not replay returned items, and replace any earlier `attention:$<index>` references with `attention:<uuid>` built from the flag result `result.attentionId`, and any `$<index>` entityId or aspectId with the `result.entityId` or `result.aspectId` that operation returned, before retrying. A new subject needs no separate calls: create_aspect and claim operations may set entityId to "$<index>" of a create_entity earlier in the same request, and claim operations may set aspectId to "$<index>" of a create_aspect earlier in it. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the request, or "attention:<uuid>" from a prior request. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
+			'Apply every semantic write through the daemon audit seam in one ordered request, in one agent scope (pass the agentId whose graph you are maintaining — hygiene attention records belong to the agent that flagged them). The daemon validates every input, citation, and resolvable target before creating flags or applying bounded, yielding writer transactions; each operation and its provenance resolution remains atomic, while an individual operation failure does not block later operations. If a writer transaction fails after earlier transactions committed, the result has `retryable: true` and `retryFrom`; retry only the uncommitted suffix. A continuation suffix uses its own zero-based indexes: substitute references to operations already committed before retryFrom with attention:<uuid> from result.attentionId or the returned result.entityId/result.aspectId; for references whose targets remain in the suffix, subtract retryFrom from the original $<index> (including attention:$<index>). Do not replay committed operations. A new subject needs no separate calls: create_aspect and claim operations may set entityId to "$<index>" of a create_entity earlier in the same request, and claim operations may set aspectId to "$<index>" of a create_aspect earlier in it. Hygiene ops (flag, archive_*, merge_entities) cite provenance: "attention:$<index>" for a flag earlier in the request, or "attention:<uuid>" from a prior request. decline_attention closes a pending attention record you inspected and judged to keep. Content-bearing ops cite evidence with exact quotes from canonical episodic evidence in that scope.',
 			false,
 			z.object({
 				agentId: z.string().min(1),

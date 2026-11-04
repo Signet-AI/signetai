@@ -708,15 +708,13 @@ function toApplicatorPayload(
 				if (aspectEntityId !== entityId) {
 					return { error: `aspect ${aspectId} belongs to entity ${aspectEntityId}, not ${entityId}` };
 				}
-				const entityName =
-					createdEntity === null
-						? lookupEntityName(accessor, agentId, entityId)
-						: stringField(createdEntity.operation.payload, "name");
-				if (entityName === null) return notFound("entity", entityId, inAgent);
+				if (createdEntity === null && lookupEntityName(accessor, agentId, entityId) === null) {
+					return notFound("entity", entityId, inAgent);
+				}
 				return {
 					payload: {
-						entity: entityName,
-						aspect: stringField(createdAspect.operation.payload, "name"),
+						entity_id: entityId,
+						aspect_id: aspectId,
 						claim_key: claimKey,
 						value,
 						...claimTimingPayload(payload),
@@ -733,7 +731,7 @@ function toApplicatorPayload(
 			if (aspect === null) return notFound("aspect", aspectId, `on entity ${entityId}`);
 			const timing = claimTimingPayload(payload);
 			if (operation !== "supersede_claim_value") {
-				return { payload: { entity: name, aspect, claim_key: claimKey, value, ...timing } };
+				return { payload: { entity_id: entityId, aspect_id: aspectId, claim_key: claimKey, value, ...timing } };
 			}
 			const attributeId =
 				stringField(payload, "attributeId") ?? lookupActiveClaimAttributeId(accessor, agentId, aspectId, claimKey);
@@ -741,8 +739,8 @@ function toApplicatorPayload(
 				? { error: `no active claim ${claimKey} on aspect ${aspectId} to supersede` }
 				: {
 						payload: {
-							entity: name,
-							aspect,
+							entity_id: entityId,
+							aspect_id: aspectId,
 							claim_key: claimKey,
 							attribute_id: attributeId,
 							new_value: value,
@@ -763,7 +761,7 @@ function toApplicatorPayload(
 			if (createdEntity === null) return { payload: { entity_id: entityId, name: stringField(payload, "name") } };
 			if ("error" in createdEntity) return createdEntity;
 			return {
-				payload: { entity: stringField(createdEntity.operation.payload, "name"), name: stringField(payload, "name") },
+				payload: { entity_id: entityId, name: stringField(payload, "name") },
 				dependsOn: [{ index: createdEntity.index, kind: "entity" }],
 			};
 		}
@@ -1086,7 +1084,7 @@ function withSameRequestIds(
 	outcomes: ReadonlyMap<number, DreamingOperationItem>,
 ): { readonly entry: ValidatedDreamingOperation } | { readonly error: string } {
 	if (entry.dependsOn === undefined || entry.input === null) return { entry };
-	let entityId: string | null = null;
+	const payload = { ...entry.input.payload };
 	for (const dependency of entry.dependsOn) {
 		const id = createdId(outcomes.get(dependency.index), dependency.kind);
 		if (id === null) {
@@ -1094,12 +1092,9 @@ function withSameRequestIds(
 				error: `operation ${dependency.index}, which this operation references, did not create its ${dependency.kind}`,
 			};
 		}
-		if (dependency.kind === "entity") entityId = id;
+		payload[dependency.kind === "entity" ? "entity_id" : "aspect_id"] = id;
 	}
-	if (entry.input.operation !== "create_aspect" || entityId === null) return { entry };
-	return {
-		entry: { ...entry, input: { ...entry.input, payload: { entity_id: entityId, name: entry.input.payload.name } } },
-	};
+	return { entry: { ...entry, input: { ...entry.input, payload } } };
 }
 
 export async function applyDreamingOperations(
