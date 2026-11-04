@@ -1022,21 +1022,24 @@ export function runDbOwnerWorker(): void {
 			{ siteToken: "db:recall.embedding.config.read", operation: "recall.resolve-active-embedding" },
 		);
 		const query = payload.query;
-		const queryEmbedding =
+		const queryEmbedding: Promise<readonly number[] | null> =
 			payload.queryEmbedding !== undefined
-				? payload.queryEmbedding
+				? Promise.resolve(payload.queryEmbedding)
 				: query === undefined
-					? null
-					: await (async () => {
-							const { fetchEmbedding } = await import("./embedding-fetch");
-							return await fetchEmbedding(query, embedding, "query", {
+					? Promise.resolve(null)
+					: import("./embedding-fetch").then(({ fetchEmbedding }) =>
+							fetchEmbedding(query, embedding, "query", {
 								usage: { source: "recall", agentId },
-							});
-						})();
+							}),
+						);
+		queryEmbedding.catch(() => undefined);
 		return await hybridRecall(
 			payload.params as Parameters<typeof hybridRecall>[0],
 			{ ...config, embedding },
-			async () => (queryEmbedding === null ? null : queryEmbedding === undefined ? null : [...queryEmbedding]),
+			async () => {
+				const vector = await queryEmbedding;
+				return vector === null ? null : [...vector];
+			},
 		);
 	}
 
@@ -1063,6 +1066,14 @@ export function runDbOwnerWorker(): void {
 		const { initDbAccessorAsync } = await import("./db-accessor");
 		const initialization = await initDbAccessorAsync(ownerDbPath, { agentsDir, deadlineAt: context?.deadlineAt });
 		recallAccessorReady = true;
+		try {
+			const { refreshQueryPlannerStatisticsOnOpen } = await import("./query-planner-statistics");
+			refreshQueryPlannerStatisticsOnOpen(db);
+		} catch (error) {
+			writeDiagnostic(
+				`[db-owner] query planner statistics refresh failed: ${error instanceof Error ? error.message : String(error)}`,
+			);
+		}
 		if (context !== undefined) context.committed = true;
 		return {
 			initialized: true,

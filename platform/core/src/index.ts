@@ -130,6 +130,7 @@ export type {
 	PipelineGraphConfig,
 	PipelineTraversalConfig,
 	PipelineRerankerConfig,
+	PipelineRerankerDevice,
 	PipelineReflectionsConfig,
 	PipelineAutonomousConfig,
 	PipelineRepairConfig,
@@ -578,7 +579,15 @@ export {
 	SIGNET_BLOCK_START,
 	SIGNET_BLOCK_END,
 } from "./markdown";
-export { formatYaml, parseRuntimeYaml, parseSimpleYaml, parseYamlDocument, stringifyYamlDocument } from "./yaml";
+export {
+	editYamlConfigFile,
+	formatYaml,
+	parseRuntimeYaml,
+	parseSimpleYaml,
+	parseYamlDocument,
+	stringifyYamlDocument,
+	type YamlConfigEditor,
+} from "./yaml";
 export {
 	ROUTING_ACCOUNT_KINDS,
 	ROUTING_TARGET_KINDS,

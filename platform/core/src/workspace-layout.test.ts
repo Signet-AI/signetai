@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
 	createFreshWorkspaceV2,
+	findExistingWorkspaceDatabase,
 	hasExistingLegacyWorkspaceState,
 	hasExistingWorkspaceState,
 	persistWorkspaceLayout,
@@ -19,6 +20,27 @@ function overrides(root: string): WorkspaceLayoutOverrides {
 }
 
 describe("canonical workspace layout resolver", () => {
+	it("only discovers the canonical database when a layout is persisted", () => {
+		for (const state of [
+			{ version: 1 as const },
+			{ version: 2 as const, overrides: { database: "custom/recall.sqlite" } },
+			{ version: 2 as const, overrides: { data: "custom-data" } },
+		]) {
+			const root = mkdtempSync(join(tmpdir(), "layout-authoritative-"));
+			try {
+				persistWorkspaceLayout(root, state);
+				mkdirSync(join(root, "data"), { recursive: true });
+				writeFileSync(join(root, "data", "signet.db"), "stale");
+				expect(findExistingWorkspaceDatabase(root)).toBeNull();
+				const canonical = resolveWorkspaceLayout(root).database;
+				mkdirSync(resolve(canonical, ".."), { recursive: true });
+				writeFileSync(canonical, "canonical");
+				expect(findExistingWorkspaceDatabase(root)).toBe(canonical);
+			} finally {
+				rmSync(root, { recursive: true, force: true });
+			}
+		}
+	});
 	it("resolves v1 persisted layout with canonical legacy paths", () => {
 		const root = mkdtempSync(join(tmpdir(), "layout-v1-"));
 		try {

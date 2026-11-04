@@ -1,1 +1,1 @@
-export { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } from "@huggingface/transformers";
+export { AutoModelForSequenceClassification, AutoTokenizer, Tensor, env, pipeline } from "@huggingface/transformers";

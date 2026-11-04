@@ -170,6 +170,27 @@ const nativeAddonAssets = (() => {
 		);
 	}
 })();
+nativeAddonAssets.push(
+	...signetNativeAsset(
+		platformKey === "win32-x64"
+			? "win32-x64-msvc"
+			: platformKey.startsWith("linux-")
+				? `${platformKey}-gnu`
+				: platformKey,
+	),
+);
+
+function signetNativeAsset(packageSuffix: string): { name: string; contentBase64: string }[] {
+	const nodeFile = join(root, "platform", "native", `signet-native.${packageSuffix}.node`);
+	if (!existsSync(nodeFile)) {
+		if (process.env.SIGNET_REQUIRE_NATIVE_ADDON === "1") {
+			throw new Error(`Required signet-native addon is missing for ${packageSuffix}: ${nodeFile}`);
+		}
+		console.warn(`signet-native addon not built for ${packageSuffix}; the compiled binary will use the JS tokenizer`);
+		return [];
+	}
+	return [{ name: "signet-native", contentBase64: readFileSync(nodeFile).toString("base64") }];
+}
 
 function sqliteVecFileName(): string {
 	return platformKey.startsWith("win32-") ? "vec0.dll" : platformKey.startsWith("darwin-") ? "vec0.dylib" : "vec0.so";
@@ -255,7 +276,7 @@ if (patchedTransformersWebRuntimeSource.split(customRuntimeAnchor).length !== 2)
 }
 patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
 	customRuntimeAnchor,
-	`${customRuntimeAnchor}  // The custom-runtime branch does not populate device defaults; pin the\n  // WASM device like the web branch so inference defaults to 'wasm'.\n  supportedDevices.push('wasm');\n  defaultDevices = ['wasm'];\n`,
+	`${customRuntimeAnchor}  // The custom-runtime branch does not populate device defaults. A native\n  // onnxruntime-node runtime installed by the embedding worker reports its\n  // backends; otherwise pin the WASM device like the web branch.\n  if (typeof ONNX.listSupportedBackends === 'function') {\n    for (const backend of ONNX.listSupportedBackends()) supportedDevices.push(backend.name);\n    defaultDevices = ['cpu'];\n  } else {\n    supportedDevices.push('wasm');\n    defaultDevices = ['wasm'];\n  }\n`,
 );
 const nodeDeviceDefault = /defaultDevices = \["cpu"\];/g;
 if ((patchedTransformersWebRuntimeSource.match(nodeDeviceDefault) ?? []).length !== 1) {
@@ -303,7 +324,7 @@ const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]
 }));
 writeFileSync(
 	join(buildDir, "embedding-worker-transformers-runtime.ts"),
-	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;\n`,
+	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] ??= onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { AutoModelForSequenceClassification, AutoTokenizer, Tensor, env, pipeline } = transformers;\n`,
 );
 runBunBuild([
 	"--target=bun",
@@ -316,6 +337,31 @@ runBunBuild([
 workerAssets.push({
 	name: "embedding-worker-transformers-runtime",
 	contentBase64: readFileSync(join(workerDir, "embedding-worker-transformers-runtime.mjs")).toString("base64"),
+});
+const onnxRuntimeNodePackageJson = transformersRequire.resolve("onnxruntime-node/package.json");
+const onnxRuntimeNodeVersion = (JSON.parse(readFileSync(onnxRuntimeNodePackageJson, "utf8")) as { version: string })
+	.version;
+const onnxRuntimeNodeRuntimePath = join(workerDir, "onnxruntime-node-runtime.mjs");
+runBunBuild([
+	"--target=bun",
+	"--format=esm",
+	"--outfile",
+	onnxRuntimeNodeRuntimePath,
+	join(dirname(onnxRuntimeNodePackageJson), "dist", "index.js"),
+]);
+const onnxRuntimeNodeBindingRequire =
+	"require(`../bin/napi-v6/${process.platform}/${process.arch}/onnxruntime_binding.node`)";
+let onnxRuntimeNodeRuntimeSource = readFileSync(onnxRuntimeNodeRuntimePath, "utf8");
+if (onnxRuntimeNodeRuntimeSource.split(onnxRuntimeNodeBindingRequire).length !== 2) {
+	throw new Error("Unsupported onnxruntime-node runtime: native binding require changed");
+}
+onnxRuntimeNodeRuntimeSource = `${onnxRuntimeNodeRuntimeSource.replace(
+	onnxRuntimeNodeBindingRequire,
+	'require(globalThis[Symbol.for("signet.onnxruntimeNodeBinding")])',
+)}\nexport const signetOnnxRuntimeNodeVersion = ${JSON.stringify(onnxRuntimeNodeVersion)};\n`;
+workerAssets.push({
+	name: "onnxruntime-node-runtime",
+	contentBase64: Buffer.from(onnxRuntimeNodeRuntimeSource).toString("base64"),
 });
 
 writeFileSync(
@@ -333,9 +379,9 @@ writeFileSync(
 writeFileSync(
 	join(buildDir, "transformers-web-runtime.ts"),
 	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};
-globalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;
+globalThis[Symbol.for("onnxruntime")] ??= onnxRuntime.default ?? onnxRuntime;
 const transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});
-export const { AutoModelForSequenceClassification, AutoTokenizer, env, pipeline } = transformers;
+export const { AutoModelForSequenceClassification, AutoTokenizer, Tensor, env, pipeline } = transformers;
 `,
 );
 
@@ -495,6 +541,39 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 		process.stdout.write(JSON.stringify({ type: "dreaming-token-count", first, second }) + "\\n");
 	} finally {
 		cache.stop();
+	}
+} else if (process.env.SIGNET_NATIVE_TOKENIZER_SMOKE) {
+	const addonPath = materializeEmbeddedNativeAddon("signet-native");
+	if (addonPath === null) throw new Error("native tokenizer smoke requires an embedded signet-native addon");
+	const { createRequire } = await import("node:module");
+	const addon = createRequire(import.meta.url)(addonPath);
+	const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+	const { tmpdir } = await import("node:os");
+	const directory = await mkdtemp(join(tmpdir(), "signet-native-tokenizer-smoke-"));
+	try {
+		const tokenizerPath = join(directory, "tokenizer.json");
+		await writeFile(tokenizerPath, JSON.stringify({
+			version: "1.0",
+			truncation: null,
+			padding: null,
+			added_tokens: [],
+			normalizer: null,
+			pre_tokenizer: { type: "WhitespaceSplit" },
+			post_processor: { type: "BertProcessing", sep: ["[SEP]", 2], cls: ["[CLS]", 1] },
+			decoder: null,
+			model: { type: "WordLevel", vocab: { "[UNK]": 0, "[CLS]": 1, "[SEP]": 2, alpha: 4, beta: 5 }, unk_token: "[UNK]" },
+		}));
+		const tokenizer = new addon.PairTokenizer(tokenizerPath, 512);
+		const batch = tokenizer.encodePairs("alpha", ["beta"]);
+		if (batch.batchSize !== 1 || batch.sequenceLength !== 5 ||
+			JSON.stringify(batch.inputIds) !== "[1,4,2,5,2]" ||
+			JSON.stringify(batch.attentionMask) !== "[1,1,1,1,1]" ||
+			JSON.stringify(batch.tokenTypeIds) !== "[0,0,0,1,1]") {
+			throw new Error("Native tokenizer smoke returned invalid pair tensors");
+		}
+		process.stdout.write(JSON.stringify({ type: "native-tokenizer", pairTokenizer: true, batchSize: batch.batchSize, sequenceLength: batch.sequenceLength }) + "\\n");
+	} finally {
+		await rm(directory, { recursive: true, force: true });
 	}
 } else if (process.env.SIGNET_RUNTIME_VERSION_SMOKE) {
 	process.stdout.write(JSON.stringify({ type: "runtime-version", bun: Bun.version }) + "\\n");

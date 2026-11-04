@@ -141,6 +141,7 @@ function layoutFor(root: string, version: WorkspaceLayoutVersion, custom: Worksp
 }
 export function findExistingWorkspaceDatabase(rootPath: string): string | null {
 	const layout = resolveWorkspaceLayout(rootPath);
+	if (existsSync(layout.layoutFile)) return existsSync(layout.database) ? layout.database : null;
 	const candidates = [
 		layout.database,
 		join(layout.data, "signet.db"),

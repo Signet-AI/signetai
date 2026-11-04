@@ -4,6 +4,7 @@ import { DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
 import type { VectorSearchOptions, VectorSearchResponse } from "@signet/core";
 import type { RecallParams, RecallResponse } from "./memory-search";
 import type { ResolvedMemoryConfig } from "./memory-config";
+import { effectiveRecallLimit, recordRecallPerformed } from "./recall-telemetry";
 export async function recallThroughDbOwner<Row extends object>(
 	client: DbOwnerClient,
 	sql: string,
@@ -40,7 +41,9 @@ export async function hybridRecallThroughDbOwner(
 			estimatedWorkUnits: Math.max(1, Math.min(10_000, (params.limit ?? 10) * 100)),
 		},
 	);
-	return await client.awaitResult(handle);
+	const response = await client.awaitResult(handle);
+	recordRecallPerformed(response, params.telemetrySurface ?? "other", effectiveRecallLimit(params.limit));
+	return response;
 }
 export async function vectorSearchThroughDbOwner(
 	client: DbOwnerClient,

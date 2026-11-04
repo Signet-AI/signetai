@@ -18,6 +18,7 @@ import {
 import {
 	embeddingProfileFingerprint,
 	embeddingProfileFingerprintsEqual,
+	nativeEmbeddingRuntimeId,
 	recommendedEmbeddingProfileId,
 	type EmbeddingRole,
 } from "./embedding-profile";
@@ -74,6 +75,7 @@ function configForProfile(profile: PersistedEmbeddingProfile, configured: Embedd
 		dimensions: profile.dimensions,
 		base_url: profile.baseUrl,
 		profile: profile.profile ?? "legacy-raw",
+		runtime: profile.provider === "native" && profile.runtime === "onnxruntime" ? "onnxruntime" : "wasm",
 		indexGeneration: "staging",
 	};
 }
@@ -281,7 +283,7 @@ async function projectionCursorThroughAccessor(
 						: null,
 			};
 		},
-		{ siteToken: "embedding-index-migration.ts:267" },
+		{ siteToken: "db:embedding.index.projection-cursor" },
 	);
 }
 
@@ -425,7 +427,7 @@ async function rebuildVectorIndex(
 						readonly vector: Uint8Array;
 					}>;
 				},
-				{ siteToken: "embedding-index-migration.ts:417" },
+				{ siteToken: "db:embedding.index.rebuild-vector-batch" },
 			);
 			if (rows.length === 0) return;
 
@@ -893,7 +895,7 @@ export async function stageEmbeddingBatch(input: {
 }): Promise<{ staged: number; coverage: EmbeddingMigrationCoverage | null }> {
 	if (input.owner) return stageEmbeddingBatchThroughOwner({ ...input, owner: input.owner });
 	const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db), {
-		siteToken: "embedding-index-migration.ts:895",
+		siteToken: "db:embedding.index.stage-read-state",
 	});
 	if (state?.state !== "building" || !state.staging) return { staged: 0, coverage: null };
 	const profile = state.staging;
@@ -928,7 +930,7 @@ export async function stageEmbeddingBatch(input: {
 						: [profile.dimensions, input.batchSize]),
 				) as ActiveEmbeddingRow[];
 		},
-		{ siteToken: "embedding-index-migration.ts:903" },
+		{ siteToken: "db:embedding.index.stage-read-batch" },
 	);
 
 	let staged = 0;
@@ -985,7 +987,7 @@ export async function stageEmbeddingBatch(input: {
 
 	const coverage = await input.accessor.withReadDbAsync(
 		async (db) => stagingCoverage(db, profile.dimensions, profile.fingerprint),
-		{ siteToken: "embedding-index-migration.ts:986" },
+		{ siteToken: "db:embedding.index.stage-coverage" },
 	);
 	return { staged, coverage };
 }
@@ -1149,6 +1151,7 @@ function profileForStorageForOwner(cfg: EmbeddingConfig): PersistedEmbeddingProf
 		dimensions: assertDimensions(cfg.dimensions),
 		baseUrl: cfg.base_url,
 		...(cfg.profile ? { profile: cfg.profile } : {}),
+		...(nativeEmbeddingRuntimeId(cfg) ? { runtime: "onnxruntime" as const } : {}),
 	};
 }
 
@@ -1207,7 +1210,7 @@ export async function promoteStagingIndex(
 		await completeProjectionRebuild(accessor, plan.profile, options?.vectorBatchSize, options?.shouldContinue);
 	}
 	if (accessor.incrementalVacuumAsync)
-		await accessor.incrementalVacuumAsync({ siteToken: "embedding-index-migration.ts:1210" });
+		await accessor.incrementalVacuumAsync({ siteToken: "db:embedding.index.promote-incremental-vacuum" });
 	return true;
 }
 export async function startEmbeddingIndexMigration(input: {

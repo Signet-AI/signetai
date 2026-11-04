@@ -24,6 +24,43 @@ const config: EmbeddingConfig = {
 };
 
 describe("embedding index state", () => {
+	it("retains the active ONNX package across a reverse migration and database reopen", () => {
+		const dir = mkdtempSync(join(tmpdir(), "embedding-runtime-restart-"));
+		const dbPath = join(dir, "memory.db");
+		const onnx: EmbeddingConfig = { ...config, runtime: "onnxruntime", onnxRuntimePath: "/opt/active-ort" };
+		const wasm: EmbeddingConfig = { ...config, runtime: "wasm" };
+		try {
+			const first = new Database(dbPath);
+			try {
+				embeddingIndexGenerations(first as unknown as Parameters<typeof embeddingIndexGenerations>[0]);
+				first.exec("CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY)");
+				ensureEmbeddingIndexState(first as unknown as WriteDb, onnx);
+				beginEmbeddingIndexBuild(first as unknown as WriteDb, wasm);
+			} finally {
+				first.close();
+			}
+			const reopened = new Database(dbPath);
+			try {
+				const db = reopened as unknown as WriteDb;
+				expect(resolveActiveEmbeddingConfig(db, wasm)).toMatchObject({
+					runtime: "onnxruntime",
+					onnxRuntimePath: "/opt/active-ort",
+				});
+				expect(readEmbeddingIndexState(db)?.staging?.runtime).toBeUndefined();
+				reopened.exec(
+					"UPDATE embedding_index_state SET active_profile_json = staging_profile_json, staging_profile_json = NULL, state = 'ready' WHERE id = 1",
+				);
+				const promoted = resolveActiveEmbeddingConfig(db, wasm);
+				expect(promoted.runtime).toBe("wasm");
+				expect(promoted.onnxRuntimePath).toBeUndefined();
+			} finally {
+				reopened.close();
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("seeds one legacy raw active profile and preserves it on later starts", () => {
 		const raw = new Database(":memory:");
 		embeddingIndexGenerations(raw as unknown as Parameters<typeof embeddingIndexGenerations>[0]);

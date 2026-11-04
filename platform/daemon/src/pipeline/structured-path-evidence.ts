@@ -270,6 +270,7 @@ export function findStructuredPathCandidates(
 			   AND m.is_deleted = 0
 			   ${filterSql}
 			   AND (${like})
+			 ORDER BY ea.version_root_id, ea.version DESC, ea.rowid
 			 LIMIT ?`,
 		)
 		.all(
@@ -404,6 +405,7 @@ export async function findStructuredPathCandidatesViaOwner(
 	if (!parsed) return new Map();
 	const haystack = pathSearchHaystack();
 	const like = parsed.tokens.map(() => `${haystack} LIKE ? ESCAPE '\\'`).join(" OR ");
+	const roughScore = parsed.tokens.map(() => `CASE WHEN ${haystack} LIKE ? ESCAPE '\\' THEN 1 ELSE 0 END`).join(" + ");
 	const rows = await ownerReadAll<StructuredPathRow>(
 		owner,
 		`SELECT
@@ -428,12 +430,14 @@ export async function findStructuredPathCandidatesViaOwner(
 		   AND m.is_deleted = 0
 		   ${options.filterSql ?? ""}
 		   AND (${like})
+		 ORDER BY (${roughScore}) DESC, ea.version_root_id, ea.version DESC, ea.rowid
 		 LIMIT ?`,
 		[
 			agentId,
 			agentId,
 			agentId,
 			...(options.filterArgs ?? []),
+			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
 			...parsed.tokens.map((token) => `%${escapeLikeToken(token)}%`),
 			Math.max(options.limit * 8, options.limit),
 		],

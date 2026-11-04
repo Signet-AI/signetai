@@ -1,6 +1,7 @@
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { startDependencyHistoryCompaction } from "../dependency-history-compaction";
+import { refreshQueryPlannerStatisticsThroughOwner } from "../query-planner-statistics";
 
 async function writeTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
 	const writer = accessor.withWriteTxAsync;
@@ -349,6 +350,15 @@ export async function runRetentionSweepOnce(
 		completedTranscriptCaptureJobsPurged,
 		deadTranscriptCaptureJobsPurged,
 	] = postRetention.items;
+	if (ownerMaintenance) {
+		try {
+			await refreshQueryPlannerStatisticsThroughOwner(ownerMaintenance.owner);
+		} catch (error) {
+			logger.warn("retention", "Query planner statistics refresh failed (non-fatal)", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
 
 	return {
 		graphLinksPurged,

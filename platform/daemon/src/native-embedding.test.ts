@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import type { WorkerOptions } from "node:worker_threads";
+import * as embeddingWorkerHandles from "./embedding-worker-handle";
 import {
 	createEmbeddingWorkerHandle,
 	type EmbeddingWorkerFactory,
@@ -30,6 +31,7 @@ class FakeWorker implements EmbeddingWorkerLike {
 	>;
 	ready = false;
 	terminated = false;
+	termination: Promise<number> | null = null;
 
 	on(event: "message" | "error" | "exit", listener: (...a: never[]) => void): this {
 		this.listeners[event].push(listener as never);
@@ -40,9 +42,9 @@ class FakeWorker implements EmbeddingWorkerLike {
 		this.posted.push(msg);
 	}
 
-	terminate(): number {
+	terminate(): number | Promise<number> {
 		this.terminated = true;
-		return 0;
+		return this.termination ?? 0;
 	}
 
 	emit(msg: WorkerToMainMessage): void {
@@ -135,8 +137,9 @@ describe("native-embedding facade (worker-backed)", () => {
 		expect(getNativeProviderStatus().initialized).toBe(false);
 	});
 
-	it("evicts the idle worker and recreates it on the next embedding", async () => {
+	it("evicts the idle ONNX runtime slot and recreates it on the next embedding", async () => {
 		configureNativeEmbeddingLifecycle({ idleTtlMs: 1000 });
+		const runtime = { runtime: "onnxruntime" as const, onnxRuntimePath: "/opt/idle-ort" };
 		const workers: FakeWorker[] = [];
 		__setEmbeddingWorkerFactoryForTests((_path, _init, _options) => {
 			const next = new FakeWorker();
@@ -144,7 +147,19 @@ describe("native-embedding facade (worker-backed)", () => {
 			return next;
 		});
 
-		const first = nativeEmbed("before eviction");
+		let registry: Map<unknown, unknown> | undefined;
+		const set = Map.prototype.set;
+		const observe = spyOn(Map.prototype, "set").mockImplementation(function (this: Map<unknown, unknown>, key, value) {
+			if (key === JSON.stringify([runtime.runtime, runtime.onnxRuntimePath])) registry = this;
+			return set.call(this, key, value);
+		});
+		let first: Promise<number[]>;
+		try {
+			first = nativeEmbed("before eviction", runtime);
+		} finally {
+			observe.mockRestore();
+		}
+		expect(registry).toBeDefined();
 		await flush();
 		workers[0]?.emit({ type: "ready" });
 		await flush();
@@ -158,9 +173,10 @@ describe("native-embedding facade (worker-backed)", () => {
 
 		await Bun.sleep(1200);
 		expect(workers[0]?.terminated).toBe(true);
-		expect(getNativeProviderStatus().initialized).toBe(false);
+		expect(registry?.size).toBe(0);
+		expect(getNativeProviderStatus(runtime).initialized).toBe(false);
 
-		const second = nativeEmbed("after eviction");
+		const second = nativeEmbed("after eviction", runtime);
 		await flush();
 		expect(workers).toHaveLength(2);
 		workers[1]?.emit({ type: "ready" });
@@ -172,6 +188,118 @@ describe("native-embedding facade (worker-backed)", () => {
 			vector: vec(0.02),
 		});
 		await expect(second).resolves.toHaveLength(DIM);
+	});
+
+	it("keeps an evicting slot leased so overlapping calls share its replacement worker", async () => {
+		configureNativeEmbeddingLifecycle({ idleTtlMs: 1000 });
+		const workers: FakeWorker[] = [];
+		let release: (code: number) => void = () => {};
+		const termination = new Promise<number>((resolve) => {
+			release = resolve;
+		});
+		__setEmbeddingWorkerFactoryForTests(() => {
+			const next = new FakeWorker();
+			if (workers.length === 0) next.termination = termination;
+			workers.push(next);
+			return next;
+		});
+		const first = nativeEmbed("first");
+		await flush();
+		workers[0]?.emit({ type: "ready" });
+		await flush();
+		const req = workers[0]?.posted.find((m) => m.type === "embed");
+		workers[0]?.emit({ type: "embed_result", id: req?.type === "embed" ? req.id : -1, vector: vec() });
+		await first;
+		try {
+			await Bun.sleep(1200);
+			expect(workers[0]?.terminated).toBe(true);
+			const second = nativeEmbed("during shutdown");
+			await flush();
+			expect(workers).toHaveLength(1);
+			release(0);
+			await flush();
+			const third = nativeEmbed("after shutdown");
+			await flush();
+			expect(workers).toHaveLength(2);
+			const next = workers[1];
+			next?.emit({ type: "ready" });
+			for (const pending of [second, third]) {
+				await flush();
+				const request = [...(next?.posted ?? [])].reverse().find((m) => m.type === "embed");
+				next?.emit({ type: "embed_result", id: request?.type === "embed" ? request.id : -1, vector: vec() });
+				await expect(pending).resolves.toHaveLength(DIM);
+			}
+		} finally {
+			release(0);
+		}
+	});
+
+	it("retries handle creation after concurrent callers receive the original construction error", async () => {
+		const failure = new Error("worker construction failed");
+		let attempts = 0;
+		__setEmbeddingWorkerFactoryForTests(() => {
+			if (++attempts === 1) throw failure;
+			return worker;
+		});
+		const results = await Promise.allSettled([nativeEmbed("first"), checkNativeProvider()]);
+		expect(results).toEqual([
+			{ status: "rejected", reason: failure },
+			{ status: "rejected", reason: failure },
+		]);
+		const retry = nativeEmbed("retry").then(
+			(vector) => vector,
+			(error: unknown) => error,
+		);
+		await flush();
+		worker.emit({ type: "ready" });
+		await flush();
+		const req = worker.posted.find((m) => m.type === "embed");
+		worker.emit({ type: "embed_result", id: req?.type === "embed" ? req.id : -1, vector: vec() });
+		await expect(retry).resolves.toEqual(vec());
+		expect(attempts).toBe(2);
+	});
+
+	it("does not let a stale creation rejection clear a replacement handle", async () => {
+		const original = embeddingWorkerHandles.createEmbeddingWorkerHandle;
+		const failure = new Error("old worker creation failed");
+		let rejectFirst: (error: Error) => void = () => {};
+		const pending = new Promise<embeddingWorkerHandles.EmbeddingWorkerHandle>((_resolve, reject) => {
+			rejectFirst = reject;
+		});
+		let attempts = 0;
+		const create = spyOn(embeddingWorkerHandles, "createEmbeddingWorkerHandle").mockImplementation((options) =>
+			++attempts === 1 ? pending : original(options),
+		);
+		try {
+			const first = nativeEmbed("old").then(
+				() => null,
+				(error: unknown) => error,
+			);
+			const shutdown = shutdownNativeProvider();
+			const second = nativeEmbed("replacement");
+			rejectFirst(failure);
+			expect(await first).toBe(failure);
+			await shutdown;
+			await flush();
+			worker.emit({ type: "ready" });
+			await flush();
+			let req = worker.posted.find((m) => m.type === "embed");
+			worker.emit({ type: "embed_result", id: req?.type === "embed" ? req.id : -1, vector: vec() });
+			await expect(second).resolves.toHaveLength(DIM);
+			const third = nativeEmbed("reuse replacement").then(
+				(vector) => vector,
+				(error: unknown) => error,
+			);
+			await flush();
+			expect(attempts).toBe(2);
+			req = [...worker.posted].reverse().find((m) => m.type === "embed");
+			worker.emit({ type: "embed_result", id: req?.type === "embed" ? req.id : -1, vector: vec() });
+			await expect(third).resolves.toHaveLength(DIM);
+		} finally {
+			rejectFirst(failure);
+			worker.emit({ type: "ready" });
+			create.mockRestore();
+		}
 	});
 
 	it("★ nativeEmbed awaits in-flight init before embedding (warm-up race #920)", async () => {

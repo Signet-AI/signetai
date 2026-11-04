@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { embeddingProfileFingerprint, formatEmbeddingInput, resolveEmbeddingProfile } from "./embedding-profile";
+import { resolveActiveEmbeddingConfigFromState } from "./embedding-index-state";
+import {
+	embeddingProfileFingerprint,
+	embeddingProfileFingerprintsEqual,
+	formatEmbeddingInput,
+	resolveEmbeddingProfile,
+} from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
 
 function config(overrides: Partial<EmbeddingConfig> = {}): EmbeddingConfig {
@@ -40,5 +46,55 @@ describe("embedding profiles", () => {
 		const cfg = config({ profile: undefined });
 		expect(formatEmbeddingInput("existing text", cfg, "document")).toBe("existing text");
 		expect(formatEmbeddingInput("existing text", cfg, "query")).toBe("existing text");
+	});
+
+	it("keeps WASM native fingerprints unchanged and separates the native ONNX runtime vector space", () => {
+		const native = config({ provider: "native", model: "nomic-embed-text-v1.5", base_url: "" });
+		const legacy = JSON.stringify({
+			profile: "nomic-embed-text-v1.5",
+			provider: "native",
+			model: "nomic-embed-text-v1.5",
+			dimensions: 768,
+		});
+		expect(embeddingProfileFingerprint(native)).toBe(legacy);
+		expect(embeddingProfileFingerprint({ ...native, runtime: "wasm" })).toBe(legacy);
+		const onnx = embeddingProfileFingerprint({ ...native, runtime: "onnxruntime" });
+		expect(embeddingProfileFingerprintsEqual(onnx, legacy)).toBe(false);
+		expect(embeddingProfileFingerprint(config({ runtime: "onnxruntime" }))).toBe(embeddingProfileFingerprint(config()));
+	});
+
+	it("embeds queries with the active index's runtime while a runtime migration is staged", () => {
+		const configured = config({
+			provider: "native",
+			model: "nomic-embed-text-v1.5",
+			base_url: "",
+			profile: undefined,
+			runtime: "onnxruntime",
+			onnxRuntimePath: "/opt/ort",
+		});
+		const active = {
+			fingerprint: embeddingProfileFingerprint({ ...configured, profile: "nomic-embed-text-v1.5", runtime: "wasm" }),
+			provider: "native" as const,
+			model: "nomic-embed-text-v1.5",
+			dimensions: 768,
+			baseUrl: "",
+			profile: "nomic-embed-text-v1.5",
+		};
+		const during = resolveActiveEmbeddingConfigFromState(configured, {
+			active,
+			staging: null,
+			state: "building",
+			lastError: null,
+		});
+		expect(during.runtime).toBe("wasm");
+		expect(embeddingProfileFingerprint(during)).toBe(active.fingerprint);
+		const after = resolveActiveEmbeddingConfigFromState(configured, {
+			active: { ...active, runtime: "onnxruntime" },
+			staging: null,
+			state: "ready",
+			lastError: null,
+		});
+		expect(after.runtime).toBe("onnxruntime");
+		expect(after.onnxRuntimePath).toBe("/opt/ort");
 	});
 });

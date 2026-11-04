@@ -3,6 +3,7 @@ import type { ReadDb, WriteDb } from "./db-accessor";
 import {
 	embeddingProfileFingerprint,
 	embeddingProfileFingerprintsEqual,
+	nativeEmbeddingRuntimeId,
 	recommendedEmbeddingProfileId,
 } from "./embedding-profile";
 import type { EmbeddingConfig } from "./memory-config";
@@ -36,6 +37,8 @@ export interface PersistedEmbeddingProfile {
 	readonly dimensions: number;
 	readonly baseUrl: string;
 	readonly profile?: string;
+	readonly runtime?: "onnxruntime";
+	readonly onnxRuntimePath?: string;
 	readonly projectionSlot?: EmbeddingProjectionSlot;
 	readonly projectionRebuild?: boolean;
 }
@@ -95,6 +98,10 @@ function profileForStorage(cfg: EmbeddingConfig): PersistedEmbeddingProfile {
 		dimensions,
 		baseUrl: normalized.base_url,
 		...(normalized.profile ? { profile: normalized.profile } : {}),
+		...(nativeEmbeddingRuntimeId(normalized) ? { runtime: "onnxruntime" as const } : {}),
+		...(nativeEmbeddingRuntimeId(normalized) && normalized.onnxRuntimePath
+			? { onnxRuntimePath: normalized.onnxRuntimePath }
+			: {}),
 	};
 }
 
@@ -112,6 +119,11 @@ export function resolveActiveEmbeddingConfigFromState(
 		dimensions: active.dimensions,
 		base_url: configured.base_url,
 		...(active.profile ? { profile: active.profile } : { profile: undefined }),
+		runtime: active.provider === "native" && active.runtime === "onnxruntime" ? "onnxruntime" : "wasm",
+		onnxRuntimePath:
+			active.provider === "native" && active.runtime === "onnxruntime"
+				? configured.onnxRuntimePath || active.onnxRuntimePath
+				: undefined,
 	};
 }
 
@@ -245,6 +257,10 @@ function parseProfile(value: string): PersistedEmbeddingProfile | null {
 				? { projectionSlot: parsed.projectionSlot }
 				: {}),
 			...(typeof parsed.profile === "string" ? { profile: parsed.profile } : {}),
+			...(parsed.runtime === "onnxruntime" ? { runtime: "onnxruntime" as const } : {}),
+			...(parsed.provider === "native" && parsed.runtime === "onnxruntime" && typeof parsed.onnxRuntimePath === "string"
+				? { onnxRuntimePath: parsed.onnxRuntimePath }
+				: {}),
 			...(parsed.projectionRebuild === true ? { projectionRebuild: true } : {}),
 		};
 	} catch {
@@ -322,6 +338,7 @@ export function beginEmbeddingIndexBuild(
 			...current.active,
 			fingerprint: staging.fingerprint,
 			baseUrl: cfg.base_url,
+			...(staging.onnxRuntimePath ? { onnxRuntimePath: staging.onnxRuntimePath } : {}),
 		};
 		db.prepare("UPDATE embedding_index_state SET active_profile_json = ? WHERE id = 1").run(
 			JSON.stringify(normalizedActive),

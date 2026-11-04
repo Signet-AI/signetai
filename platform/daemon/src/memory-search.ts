@@ -54,7 +54,8 @@ import { type RerankCandidate, noopReranker, rerank } from "./pipeline/reranker"
 import { createEmbeddingReranker } from "./pipeline/reranker-embedding";
 import { createLlmReranker, summarizeRecallWithLlm } from "./pipeline/reranker-llm";
 import { type RerankOutcome, createCrossEncoderReranker } from "./pipeline/reranker-cross-encoder";
-import { nativeRerank } from "./native-rerank";
+import { createCrossEncoderScoreMemo } from "./cross-encoder-memo";
+import { type NativeRerankRuntime, nativeRerank, nativeRerankActiveDevice } from "./native-rerank";
 import { FTS_STOP } from "./pipeline/stop-words";
 import {
 	type EvidenceCandidateInput,
@@ -74,7 +75,7 @@ import { rankPositions, reciprocalRankScore, selectPrimaryCandidates } from "./r
 import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
 import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
 import { escapeLike } from "./sql-utils";
-import { getActiveTelemetry } from "./telemetry";
+import { recordRecallPerformed } from "./recall-telemetry";
 import { type TemporalTimeOptions, hasFreshnessIntent, resolveTemporalRecall } from "./temporal-recall";
 
 export { buildAgentScopeClause } from "./memory-access-scope";
@@ -190,20 +191,7 @@ export interface RecallResponse {
 	}>;
 }
 
-type RecallTelemetryType = "semantic" | "keyword" | "temporal" | "graph";
-
-export function classifyRecallTelemetry(
-	response: Pick<RecallResponse, "results" | "method"> & {
-		readonly meta: Pick<RecallResponse["meta"], "temporal">;
-	},
-): RecallTelemetryType | undefined {
-	const sources = new Set(response.results.map((result) => result.source));
-	if (response.meta.temporal || [...sources].some((source) => source.startsWith("temporal"))) return "temporal";
-	if (["traversal", "ka_traversal", "structured", "sec", "graph"].some((source) => sources.has(source))) return "graph";
-	if (response.method === "hybrid") return "semantic";
-	if (response.method === "keyword") return "keyword";
-	return undefined;
-}
+export { classifyRecallTelemetry } from "./recall-telemetry";
 
 export interface AggregateRecallUsage extends Omit<LlmUsage, "accountingProvenance"> {
 	readonly accountingProvenance: AccountingSummaryProvenance;
@@ -223,6 +211,7 @@ export type EmbedFn = (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole)
 export interface RecallStageTiming {
 	name: string;
 	durationMs: number;
+	startMs?: number;
 }
 
 export interface RecallTimings {
@@ -249,7 +238,11 @@ function createRecallTimingCollector(): {
 	const start = performance.now();
 	const stages: RecallStageTiming[] = [];
 	const record = (name: string, stageStart: number): void => {
-		stages.push({ name, durationMs: roundDuration(performance.now() - stageStart) });
+		stages.push({
+			name,
+			durationMs: roundDuration(performance.now() - stageStart),
+			startMs: roundDuration(stageStart - start),
+		});
 	};
 	return {
 		record,
@@ -1411,10 +1404,13 @@ async function readTranscriptContent(
 	rowid: number,
 	bytes: number,
 	deadlineAt: number,
+	workloadClass: "foreground" | "maintenance",
+	execution?: RecallExecutionOptions,
 ): Promise<{ readonly text: string; readonly complete: boolean } | null> {
 	const pages: Uint8Array[] = [];
 	const readBytes = Math.min(bytes, TRANSCRIPT_PAGE_BYTES * TRANSCRIPT_EVIDENCE_MAX_PAGES);
 	for (let start = 1; start <= readBytes; start += TRANSCRIPT_PAGE_BYTES) {
+		checkRecallCancellation(execution);
 		const remainingMs = deadlineAt - Date.now();
 		if (remainingMs <= 0) throw new Error("Transcript evidence read exceeded its deadline");
 		const page = await ownerReadOne<{ readonly chunk: string | null }>(
@@ -1425,7 +1421,7 @@ async function readTranscriptContent(
 			[start, Math.min(TRANSCRIPT_PAGE_BYTES, readBytes - start + 1), rowid, agentId, bytes],
 			{
 				operation: "memory-search.transcript-evidence.content",
-				workloadClass: "foreground",
+				workloadClass,
 				estimatedWorkUnits: 1,
 				deadlineMs: remainingMs,
 			},
@@ -1436,34 +1432,47 @@ async function readTranscriptContent(
 	return { text: Buffer.concat(pages).toString("utf8"), complete: readBytes === bytes };
 }
 
-async function buildTranscriptEvidenceResults(
+interface TranscriptEvidenceRow {
+	readonly session_id: string | null;
+	readonly source_id: string | null;
+	readonly source_path: string;
+	readonly source_sha256: string;
+	readonly updated_at: string;
+	readonly harness: string | null;
+	readonly project: string | null;
+	readonly captured_at: string;
+	readonly artifact_rowid: number;
+	readonly content_bytes: number;
+	readonly rank: number;
+}
+
+export interface TranscriptEvidencePrefetch {
+	readonly query: string;
+	readonly since: RecallParams["since"];
+	readonly until: RecallParams["until"];
+	readonly fetchLimit: number;
+	readonly rows: readonly TranscriptEvidenceRow[];
+	readonly results: ReadonlyMap<number, RecallResult | null>;
+}
+
+async function readTranscriptEvidenceRows(
+	owner: DbOwnerClient,
 	agentId: string,
 	project: string | undefined,
 	dateBounds: Pick<RecallParams, "since" | "until">,
-	query: string,
-	maxResults: number,
-	existing: readonly RecallResult[],
-): Promise<RecallResult[]> {
-	const fts = sanitizeFtsQuery(query);
-	if (fts.length === 0 || maxResults <= 0) return [];
-	const represented = new Set(
-		existing.flatMap((row) => [row.session_id, row.source_id]).filter((id): id is string => !!id),
-	);
+	fts: string,
+	fetchLimit: number,
+	deadlineAt: number,
+	workloadClass: "foreground" | "maintenance",
+	execution?: RecallExecutionOptions,
+): Promise<ReadonlyArray<TranscriptEvidenceRow>> {
+	checkRecallCancellation(execution);
+	const remainingMs = deadlineAt - Date.now();
+	if (remainingMs <= 0) throw new Error("Transcript evidence read exceeded its deadline");
 	const dates = dateBoundsSql("COALESCE(ma.started_at, ma.captured_at)", dateBounds);
-	const owner = await getDbOwner(getDbAccessorPath());
-	const rows = await ownerReadAll<{
-		readonly session_id: string | null;
-		readonly source_id: string | null;
-		readonly source_path: string;
-		readonly harness: string | null;
-		readonly project: string | null;
-		readonly captured_at: string;
-		readonly artifact_rowid: number;
-		readonly content_bytes: number;
-		readonly rank: number;
-	}>(
+	return await ownerReadAll<TranscriptEvidenceRow>(
 		owner,
-		`SELECT ma.session_id, ma.source_id, ma.source_path, ma.harness, ma.project,
+		`SELECT ma.session_id, ma.source_id, ma.source_path, ma.source_sha256, ma.updated_at, ma.harness, ma.project,
 			COALESCE(ma.started_at, ma.captured_at) AS captured_at, ma.rowid AS artifact_rowid,
 			length(CAST(ma.content AS BLOB)) AS content_bytes, bm25(memory_artifacts_fts) AS rank
 		 FROM memory_artifacts_fts
@@ -1475,53 +1484,194 @@ async function buildTranscriptEvidenceResults(
 		   ${project ? "AND (ma.project = ? OR ma.project IS NULL)" : ""}
 		   ${dates.sql}
 		 ORDER BY rank ASC LIMIT ?`,
-		[fts, agentId, ...(project ? [project] : []), ...dates.args, maxResults + represented.size],
+		[fts, agentId, ...(project ? [project] : []), ...dates.args, fetchLimit],
 		{
 			operation: "memory-search.transcript-evidence",
-			workloadClass: "foreground",
-			estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, maxResults + represented.size),
-			deadlineMs: 30_000,
+			workloadClass,
+			estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, fetchLimit),
+			deadlineMs: remainingMs,
 		},
 	);
+}
+
+async function readTranscriptEvidenceResult(
+	owner: DbOwnerClient,
+	agentId: string,
+	query: string,
+	row: TranscriptEvidenceRow,
+	deadlineAt: number,
+	workloadClass: "foreground" | "maintenance",
+	execution?: RecallExecutionOptions,
+): Promise<RecallResult | null> {
+	checkRecallCancellation(execution);
+	const transcript = await readTranscriptContent(
+		owner,
+		agentId,
+		row.artifact_rowid,
+		row.content_bytes,
+		deadlineAt,
+		workloadClass,
+		execution,
+	);
+	if (transcript === null) return null;
+	const sessionId = row.session_id ?? row.source_path;
+	const content = transcriptExcerpt(redactCredentials(transcript.text), query, 900);
+	return {
+		id: `transcript:${sessionId}`,
+		content,
+		content_length: content.length,
+		truncated: !transcript.complete || content.length < transcript.text.length,
+		score: Math.round((1 / (1 + Math.abs(row.rank))) * 100) / 100,
+		source: "transcript",
+		source_id: row.source_id ?? sessionId,
+		session_id: sessionId,
+		source_path: row.source_path,
+		type: "transcript",
+		tags: null,
+		pinned: false,
+		importance: 0.5,
+		who: row.harness ?? "transcript",
+		project: row.project,
+		created_at: row.captured_at,
+		supplementary: true,
+	};
+}
+
+export async function prefetchTranscriptEvidence(
+	agentId: string,
+	project: string | undefined,
+	dateBounds: Pick<RecallParams, "since" | "until">,
+	query: string,
+	maxResults: number,
+	resultLimit: number,
+	deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS,
+	execution?: RecallExecutionOptions,
+): Promise<TranscriptEvidencePrefetch | null> {
+	checkRecallCancellation(execution);
+	const fts = sanitizeFtsQuery(query);
+	if (fts.length === 0 || maxResults <= 0) return null;
+	const owner = await getDbOwner(getDbAccessorPath());
+	const fetchLimit = maxResults + 2 * Math.max(0, resultLimit);
+	const rows = await readTranscriptEvidenceRows(
+		owner,
+		agentId,
+		project,
+		dateBounds,
+		fts,
+		fetchLimit,
+		deadlineAt,
+		"maintenance",
+		execution,
+	);
+	const results = new Map<number, RecallResult | null>();
+	for (const row of rows.slice(0, maxResults)) {
+		results.set(
+			row.artifact_rowid,
+			await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "maintenance", execution),
+		);
+	}
+	return { query, since: dateBounds.since, until: dateBounds.until, fetchLimit, rows, results };
+}
+
+async function buildTranscriptEvidenceResults(
+	agentId: string,
+	project: string | undefined,
+	dateBounds: Pick<RecallParams, "since" | "until">,
+	query: string,
+	maxResults: number,
+	existing: readonly RecallResult[],
+	prefetch: TranscriptEvidencePrefetch | null = null,
+	deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS,
+	execution?: RecallExecutionOptions,
+): Promise<{ results: RecallResult[]; failed: boolean }> {
+	checkRecallCancellation(execution);
+	const fts = sanitizeFtsQuery(query);
+	if (fts.length === 0 || maxResults <= 0) return { results: [], failed: false };
+	const represented = new Set(
+		existing.flatMap((row) => [row.session_id, row.source_id]).filter((id): id is string => !!id),
+	);
+	const owner = await getDbOwner(getDbAccessorPath());
+	const fetchLimit = maxResults + represented.size;
+	const usablePrefetch =
+		prefetch !== null &&
+		prefetch.query === query &&
+		prefetch.since === dateBounds.since &&
+		prefetch.until === dateBounds.until &&
+		fetchLimit <= prefetch.fetchLimit;
+	const rows = usablePrefetch
+		? prefetch.rows.slice(0, fetchLimit)
+		: await readTranscriptEvidenceRows(
+				owner,
+				agentId,
+				project,
+				dateBounds,
+				fts,
+				fetchLimit,
+				deadlineAt,
+				"foreground",
+				execution,
+			);
 	const selected = rows
 		.filter((row) => {
 			const sessionId = row.session_id ?? row.source_path;
 			return !represented.has(sessionId) && !(row.source_id && represented.has(row.source_id));
 		})
 		.slice(0, maxResults);
-	const deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS;
-	const transcripts = await Promise.all(
-		selected.map(async (row) => ({
-			row,
-			transcript: await readTranscriptContent(owner, agentId, row.artifact_rowid, row.content_bytes, deadlineAt),
-		})),
+	const settled = await Promise.allSettled(
+		selected.map(async (row) => {
+			if (!usablePrefetch || !prefetch.results.has(row.artifact_rowid)) {
+				return await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "foreground", execution);
+			}
+			const prefetched = prefetch.results.get(row.artifact_rowid) ?? null;
+			if (prefetched === null) return null;
+			checkRecallCancellation(execution);
+			const remainingMs = deadlineAt - Date.now();
+			if (remainingMs <= 0) throw new Error("Transcript evidence read exceeded its deadline");
+			const active = await ownerReadOne<{ readonly active: number }>(
+				owner,
+				`SELECT 1 AS active FROM memory_artifacts
+				 WHERE rowid = ? AND agent_id = ? AND source_kind = 'transcript'
+				   AND COALESCE(is_deleted, 0) = 0
+				   AND source_path = ? AND source_sha256 = ? AND updated_at = ?
+				   AND session_id IS ? AND source_id IS ? AND project IS ? AND harness IS ?
+				   AND COALESCE(started_at, captured_at) = ?`,
+				[
+					row.artifact_rowid,
+					agentId,
+					row.source_path,
+					row.source_sha256,
+					row.updated_at,
+					row.session_id,
+					row.source_id,
+					row.project,
+					row.harness,
+					row.captured_at,
+				],
+				{
+					operation: "memory-search.transcript-evidence.validate",
+					workloadClass: "foreground",
+					estimatedWorkUnits: 1,
+					deadlineMs: remainingMs,
+				},
+			);
+			return active === null ? null : prefetched;
+		}),
 	);
-	return transcripts.flatMap(({ row, transcript }): RecallResult[] => {
-		if (transcript === null) return [];
-		const sessionId = row.session_id ?? row.source_path;
-		const content = transcriptExcerpt(redactCredentials(transcript.text), query, 900);
-		return [
-			{
-				id: `transcript:${sessionId}`,
-				content,
-				content_length: content.length,
-				truncated: !transcript.complete || content.length < transcript.text.length,
-				score: Math.round((1 / (1 + Math.abs(row.rank))) * 100) / 100,
-				source: "transcript",
-				source_id: row.source_id ?? sessionId,
-				session_id: sessionId,
-				source_path: row.source_path,
-				type: "transcript",
-				tags: null,
-				pinned: false,
-				importance: 0.5,
-				who: row.harness ?? "transcript",
-				project: row.project,
-				created_at: row.captured_at,
-				supplementary: true,
-			},
-		];
-	});
+	checkRecallCancellation(execution);
+	for (const [index, result] of settled.entries()) {
+		if (result.status !== "rejected" || (result.reason instanceof Error && result.reason.name === "AbortError"))
+			continue;
+		logger.warn("memory", "Transcript evidence row failed (non-fatal)", {
+			artifactRowid: selected[index]?.artifact_rowid,
+			error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+		});
+	}
+	return {
+		results: settled.flatMap((result) =>
+			result.status === "fulfilled" && result.value !== null ? [result.value] : [],
+		),
+		failed: settled.some((result) => result.status === "rejected"),
+	};
 }
 
 async function buildNativeArtifactRecallHits(
@@ -1725,6 +1875,17 @@ function scoreTemporalTopicEvidence(query: string, content: string): number {
 	const density = matched.length / Math.max(8, contentTokens.size);
 	return Math.min(TEMPORAL_TOPIC_SCORE_CAP, 0.35 + coverage * 0.4 + density * 0.1);
 }
+function nativeRerankRuntime(reranker: ResolvedMemoryConfig["pipelineV2"]["reranker"]): NativeRerankRuntime {
+	if (reranker.device === "cpu") {
+		return { device: "cpu", ...(reranker.onnxRuntimePath ? { onnxRuntimePath: reranker.onnxRuntimePath } : {}) };
+	}
+	if (reranker.device !== "cuda") return { device: "default" };
+	return {
+		device: "cuda",
+		...(reranker.onnxRuntimePath ? { onnxRuntimePath: reranker.onnxRuntimePath } : {}),
+		...(reranker.cudaLibraryPaths.length > 0 ? { cudaLibraryPaths: reranker.cudaLibraryPaths } : {}),
+	};
+}
 export async function hybridRecall(
 	params: RecallParams,
 	cfg: ResolvedMemoryConfig,
@@ -1804,7 +1965,19 @@ export async function hybridRecall(
 		return deduped.items;
 	};
 	let transcriptEvidenceAllowed = false;
+	let transcriptPrefetch: Promise<TranscriptEvidencePrefetch | null> | null = null;
+	let transcriptPrefetchReady: TranscriptEvidencePrefetch | null = null;
+	let transcriptEvidenceDeadlineAt: number | undefined;
+	const crossEncoderModelId = cfg.pipelineV2.reranker.crossEncoderModel;
+	const crossEncoderRuntime = nativeRerankRuntime(cfg.pipelineV2.reranker);
+	const scoreWithCrossEncoder = createCrossEncoderScoreMemo({
+		score: (rerankQuery, documents, deadlineAt) =>
+			nativeRerank(crossEncoderModelId, rerankQuery, documents, crossEncoderRuntime, deadlineAt),
+		activeDevice: nativeRerankActiveDevice,
+		requestedDevice: crossEncoderRuntime.device,
+	});
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
+		checkRecallCancellation(execution);
 		let transcriptEvidence: RecallTranscriptEvidenceMeta | undefined;
 		if (transcriptEvidenceAllowed && params.agentId) {
 			const agentId = params.agentId;
@@ -1816,34 +1989,48 @@ export async function hybridRecall(
 					? reranker.crossEncoderModel
 					: null;
 			try {
-				const placed = await timings.timeAsync("transcript_evidence", async () =>
-					placeTranscriptEvidence(
-						response.results,
-						await buildTranscriptEvidenceResults(
+				const placed = await timings.timeAsync("transcript_evidence", async () => {
+					const evidence = await timings.timeAsync("transcript_evidence_fetch", async () =>
+						buildTranscriptEvidenceResults(
 							agentId,
 							params.project,
 							params,
 							textQuery,
 							maxExcerpts * 2,
 							response.results,
+							transcriptPrefetch ? await transcriptPrefetch : null,
+							transcriptEvidenceDeadlineAt,
+							execution,
 						),
+					);
+					const placement = await placeTranscriptEvidence(
+						response.results,
+						evidence.results,
 						maxExcerpts,
 						limit,
 						textQuery,
 						crossEncoderModel === null
 							? null
-							: (rerankQuery, documents) => nativeRerank(crossEncoderModel, rerankQuery, documents),
-					),
-				);
+							: (rerankQuery, documents) =>
+									scoreWithCrossEncoder(rerankQuery, documents, [], Date.now() + Math.floor(reranker.timeoutMs * 0.75)),
+					);
+					return { ...placement, failed: evidence.failed };
+				});
 				response.results = placed.results;
-				transcriptEvidence = { returned: placed.returned, ranking: placed.ranking };
+				transcriptEvidence = {
+					returned: placed.returned,
+					ranking: placed.ranking,
+					...(placed.failed ? { failed: true } : {}),
+				};
 			} catch (e) {
+				checkRecallCancellation(execution);
 				transcriptEvidence = { returned: 0, failed: true };
 				logger.warn("memory", "Transcript evidence recall failed (non-fatal)", {
 					error: e instanceof Error ? e.message : String(e),
 				});
 			}
 		}
+		checkRecallCancellation(execution);
 		const deduped = applyRecallDedupe({
 			sessionKey: params.sessionKey,
 			agentId: params.agentId,
@@ -1900,18 +2087,11 @@ export async function hybridRecall(
 			logger.warn("memory", "Failed to update access tracking", e as Error);
 		}
 		const recallTimings = timings.finish();
-		const telemetryType = classifyRecallTelemetry(response);
-		getActiveTelemetry()?.record("recall.performed", {
-			...(telemetryType ? { type: telemetryType } : {}),
-			surface: params.telemetrySurface ?? "other",
-			results: response.results.length,
-			latencyMs: recallTimings.totalMs,
-			truncated: response.results.length >= limit,
-			partial: lexicalSearchPartial || graphPartial,
-			...(lexicalSearchPartial || graphPartial
-				? { degradation: graphDegradation ?? (lexicalSearchPartial ? "fts_incomplete" : "graph_traversal_failed") }
-				: {}),
-		});
+		recordRecallPerformed(
+			{ ...response, meta: { ...response.meta, timings: recallTimings } },
+			params.telemetrySurface ?? "other",
+			limit,
+		);
 		const selectedLifecycleSources = response.results.flatMap((row) => {
 			const source = lifecycleSourceResults.get(row.id);
 			return source ? [source] : [];
@@ -1966,6 +2146,36 @@ export async function hybridRecall(
 		params.sourceOnly !== true &&
 		!hasMemoryOnlyFilters(params) &&
 		cfg.search.transcript_evidence_limit > 0;
+	if (transcriptEvidenceAllowed && params.agentId) {
+		transcriptEvidenceDeadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS;
+		transcriptPrefetch = prefetchTranscriptEvidence(
+			params.agentId,
+			params.project,
+			params,
+			params.keywordQuery ?? query,
+			Math.min(cfg.search.transcript_evidence_limit, limit) * 2,
+			limit,
+			transcriptEvidenceDeadlineAt,
+			execution,
+		).then(
+			(prefetched) => {
+				transcriptPrefetchReady = prefetched;
+				return prefetched;
+			},
+			(error) => {
+				if (error instanceof Error && error.name === "AbortError") return null;
+				try {
+					checkRecallCancellation(execution);
+				} catch {
+					return null;
+				}
+				logger.warn("memory", "Transcript evidence prefetch failed; placement will query directly", {
+					error: error instanceof Error ? error.message : String(error),
+				});
+				return null;
+			},
+		);
+	}
 	const temporalCandidateSet = new Set(temporal.candidateIds ?? []);
 	const temporalCandidateMap = new Map<string, number>(
 		[...temporalCandidateSet].map((id) => [id, Math.max(minScore, 0.05)]),
@@ -2127,47 +2337,6 @@ export async function hybridRecall(
 			});
 		}
 	}
-	let queryVecF32: Float32Array | null = null;
-	try {
-		const queryVec = await timings.timeAsync("query_embedding_wait", () => queryVecPromise);
-		if (queryVec) queryVecF32 = new Float32Array(queryVec);
-	} catch (e) {
-		logger.warn("memory", "Embedding failed", { error: String(e) });
-	}
-	const vectorMap = new Map<string, number>();
-	let vectorCompleteness: VectorSearchCompleteness | undefined;
-	let searchedWindow: number | undefined;
-	let comparableQueryVector = null as Float32Array | null;
-	if (queryVecF32) {
-		const queryVector = queryVecF32;
-		if (!recallQueryVectorIsValid(queryVector, cfg.embedding.dimensions)) {
-			vectorCompleteness = "unavailable";
-		} else {
-			try {
-				await timings.timeAsync("vector_search", async () => {
-					if (!(await activeEmbeddingProfileIsKnown(cfg.embedding))) {
-						vectorCompleteness = "unavailable";
-						logger.warn(
-							"memory",
-							"Vector recall skipped because the active embedding profile is unknown or incompatible",
-						);
-						return;
-					}
-					comparableQueryVector = queryVector;
-					const vectorResult = await findAuthorizedVectorCandidates(queryVector, params, cfg, filter, execution);
-					vectorCompleteness = vectorResult.completeness;
-					searchedWindow = vectorResult.searchedWindow;
-					for (const candidate of vectorResult.results) vectorMap.set(candidate.id, candidate.score);
-				});
-			} catch (e) {
-				vectorCompleteness = "unavailable";
-				logger.warn("memory", "Vector search failed, using keyword only", {
-					error: String(e),
-				});
-			}
-		}
-	}
-	const semanticEvidenceMap = new Map(vectorMap);
 	const structuredCandidateMap = new Map<string, number>();
 	let ontologyClaimCandidates: StructuredClaimCandidate[] = [];
 	if (cfg.pipelineV2.graph.enabled) {
@@ -2203,6 +2372,74 @@ export async function hybridRecall(
 			}
 		}
 	}
+	const traversalPrimary =
+		cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled && cfg.pipelineV2.traversal?.primary !== false;
+	const primaryTraversalFetch = timings.timeAsync("traversal_fetch", async () => {
+		const traversalCfg = cfg.pipelineV2.traversal;
+		if (!traversalPrimary || !traversalCfg || getGraphQueryTokens().length === 0) return null;
+		const agentId = params.agentId ?? "default";
+		const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
+		const owner = await getGraphOwner();
+		const focal = await getFocalEntities(owner, agentId, traversalDeadlineAt);
+		if (focal.entityIds.length === 0) return { focal, traversal: null };
+		const traversal = await traverseKnowledgeGraphViaOwner(focal.entityIds, owner, agentId, {
+			maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
+			maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
+			maxDependencyHops: traversalCfg.maxDependencyHops,
+			minDependencyStrength: traversalCfg.minDependencyStrength,
+			maxBranching: traversalCfg.maxBranching,
+			maxTraversalPaths: traversalCfg.maxTraversalPaths,
+			minConfidence: traversalCfg.minConfidence,
+			timeoutMs: traversalCfg.timeoutMs,
+			deadlineAt: traversalDeadlineAt,
+			scope: params.scope,
+		});
+		return { focal, traversal };
+	});
+	primaryTraversalFetch.catch(() => undefined);
+	const embeddingProfileKnown = activeEmbeddingProfileIsKnown(cfg.embedding);
+	embeddingProfileKnown.catch(() => undefined);
+	let queryVecF32: Float32Array | null = null;
+	try {
+		const queryVec = await timings.timeAsync("query_embedding_wait", () => queryVecPromise);
+		if (queryVec) queryVecF32 = new Float32Array(queryVec);
+	} catch (e) {
+		logger.warn("memory", "Embedding failed", { error: String(e) });
+	}
+	const vectorMap = new Map<string, number>();
+	let vectorCompleteness: VectorSearchCompleteness | undefined;
+	let searchedWindow: number | undefined;
+	let comparableQueryVector = null as Float32Array | null;
+	if (queryVecF32) {
+		const queryVector = queryVecF32;
+		if (!recallQueryVectorIsValid(queryVector, cfg.embedding.dimensions)) {
+			vectorCompleteness = "unavailable";
+		} else {
+			try {
+				await timings.timeAsync("vector_search", async () => {
+					if (!(await embeddingProfileKnown)) {
+						vectorCompleteness = "unavailable";
+						logger.warn(
+							"memory",
+							"Vector recall skipped because the active embedding profile is unknown or incompatible",
+						);
+						return;
+					}
+					comparableQueryVector = queryVector;
+					const vectorResult = await findAuthorizedVectorCandidates(queryVector, params, cfg, filter, execution);
+					vectorCompleteness = vectorResult.completeness;
+					searchedWindow = vectorResult.searchedWindow;
+					for (const candidate of vectorResult.results) vectorMap.set(candidate.id, candidate.score);
+				});
+			} catch (e) {
+				vectorCompleteness = "unavailable";
+				logger.warn("memory", "Vector search failed, using keyword only", {
+					error: String(e),
+				});
+			}
+		}
+	}
+	const semanticEvidenceMap = new Map(vectorMap);
 	const allIds = new Set([
 		...bm25Map.keys(),
 		...hintMap.keys(),
@@ -2266,9 +2503,6 @@ export async function hybridRecall(
 
 		flatScored.sort((a, b) => b.score - a.score);
 	});
-	const traversalPrimary =
-		cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled && cfg.pipelineV2.traversal?.primary !== false;
-
 	let scored: Array<{ id: string; score: number; source: string }> = [];
 
 	if (traversalPrimary) {
@@ -2277,28 +2511,12 @@ export async function hybridRecall(
 
 			if (cfg.pipelineV2.traversal) {
 				try {
-					const traversalCfg = cfg.pipelineV2.traversal;
-					const queryTokens = getGraphQueryTokens();
-					if (queryTokens.length > 0) {
-						const agentId = params.agentId ?? "default";
-						const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
-						const owner = await getGraphOwner();
-						const focal = await getFocalEntities(owner, agentId, traversalDeadlineAt);
+					const fetched = await primaryTraversalFetch;
+					if (fetched !== null) {
+						const { focal, traversal } = fetched;
 						if (focal.error) recordGraphResult({ timedOut: false, error: focal.error });
 
-						if (focal.entityIds.length > 0) {
-							const traversal = await traverseKnowledgeGraphViaOwner(focal.entityIds, owner, agentId, {
-								maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
-								maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
-								maxDependencyHops: traversalCfg.maxDependencyHops,
-								minDependencyStrength: traversalCfg.minDependencyStrength,
-								maxBranching: traversalCfg.maxBranching,
-								maxTraversalPaths: traversalCfg.maxTraversalPaths,
-								minConfidence: traversalCfg.minConfidence,
-								timeoutMs: traversalCfg.timeoutMs,
-								deadlineAt: traversalDeadlineAt,
-								scope: params.scope,
-							});
+						if (traversal !== null) {
 							recordGraphResult(traversal);
 							const cosineMap = new Map<string, number>();
 							if (comparableQueryVector && traversal.memoryScores.size > 0) {
@@ -2667,7 +2885,15 @@ export async function hybridRecall(
 				: crossEncoderModel.length > 0
 					? createCrossEncoderReranker({
 							model: crossEncoderModel,
-							score: (rerankQuery, documents) => nativeRerank(crossEncoderModel, rerankQuery, documents),
+							score: (rerankQuery, documents, deadlineAt) =>
+								scoreWithCrossEncoder(
+									rerankQuery,
+									documents,
+									rerankQuery === (params.keywordQuery ?? query) && transcriptPrefetchReady !== null
+										? [...transcriptPrefetchReady.results.values()].flatMap((row) => (row ? [row.content] : []))
+										: [],
+									deadlineAt,
+								),
 							fallback: blend,
 							outcome,
 						})
@@ -2679,6 +2905,10 @@ export async function hybridRecall(
 				throwOnError: cfg.pipelineV2.reranker.useExtractionModel,
 			});
 			const rerankedMap = new Map(reranked.map((row) => [row.id, row.score]));
+			if (outcome.kind === "cross-encoder") {
+				const device = nativeRerankActiveDevice();
+				if (device !== null) outcome.device = device;
+			}
 			for (const s of scored) {
 				const score = rerankedMap.get(s.id);
 				if (typeof score === "number" && Number.isFinite(score)) {

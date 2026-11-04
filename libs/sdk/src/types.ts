@@ -53,7 +53,7 @@ export interface RecallMeta {
 	readonly noHits: boolean;
 	readonly timings?: {
 		readonly totalMs: number;
-		readonly stages: readonly { readonly name: string; readonly durationMs: number }[];
+		readonly stages: readonly { readonly name: string; readonly durationMs: number; readonly startMs?: number }[];
 	};
 	readonly dedupe?: {
 		readonly enabled: boolean;
@@ -662,7 +662,7 @@ export interface MemorySearchTelemetryItem {
 	readonly duration_ms: number;
 	readonly timings: {
 		readonly totalMs: number;
-		readonly stages: readonly { readonly name: string; readonly durationMs: number }[];
+		readonly stages: readonly { readonly name: string; readonly durationMs: number; readonly startMs?: number }[];
 	};
 	readonly results: readonly MemorySearchTelemetryResult[];
 	readonly sources: Readonly<Record<string, string>> | null;

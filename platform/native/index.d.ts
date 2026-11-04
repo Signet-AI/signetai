@@ -39,3 +39,17 @@ export function mergeHybridScores(
 	alpha: number,
 	minScore: number,
 ): ScoredId[];
+
+export interface EncodedPairBatch {
+	inputIds: number[];
+	attentionMask: number[];
+	tokenTypeIds: number[];
+	batchSize: number;
+	sequenceLength: number;
+	cachedDocuments: number;
+}
+
+export class PairTokenizer {
+	constructor(tokenizerPath: string, maxLength: number, cacheLimit?: number | null);
+	encodePairs(query: string, documents: string[]): EncodedPairBatch;
+}

@@ -46,6 +46,24 @@ describe("cross-encoder reranker", () => {
 		expect(outcome).toEqual({ kind: "cross-encoder", model: "test-model" });
 	});
 
+	it("gives the scorer the same deadline it waits for, so the worker can stop abandoned work", async () => {
+		const seen: Array<number | undefined> = [];
+		const before = Date.now();
+		const rerank = createCrossEncoderReranker({
+			model: "test-model",
+			score: async (_query, documents, deadlineAt) => {
+				seen.push(deadlineAt);
+				return documents.map(() => 1);
+			},
+			fallback: async (_query, candidates) => candidates,
+			outcome: { kind: "embedding" },
+		});
+		await rerank("q", candidates(), { topN: 20, timeoutMs: 1000, model: "" });
+		expect(seen).toHaveLength(1);
+		expect(seen[0]).toBeGreaterThanOrEqual(before + 750);
+		expect(seen[0]).toBeLessThanOrEqual(Date.now() + 750);
+	});
+
 	it("falls back to the cosine blend and says why when the cross-encoder fails or is too slow", async () => {
 		const blended: RerankCandidate[] = candidates().reverse();
 		for (const score of [

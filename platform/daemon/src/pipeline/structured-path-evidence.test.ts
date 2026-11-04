@@ -6,6 +6,7 @@ import type { DbOwnerClient } from "../db-owner-client";
 import type { DbOwnerRequest } from "../db-owner-client";
 import {
 	findStructuredClaimCandidates,
+	findStructuredPathCandidatesViaOwner,
 	scoreStructuredPathEvidence,
 	scoreStructuredPathEvidenceViaOwner,
 } from "./structured-path-evidence";
@@ -213,6 +214,45 @@ describe("structured path evidence", () => {
 
 		expect(scores.get("mem-owner") ?? 0).toBeGreaterThan(0);
 		expect(operations).toEqual(["memory-search.structured-path-evidence"]);
+	});
+
+	it("ranks scoped owner path matches before the bounded candidate window", async () => {
+		for (let index = 0; index < 12; index++) {
+			seedMemory(`weak-${index}`, "Weak path match");
+			seedAttribute({
+				id: `attr-weak-${index}`,
+				memoryId: `weak-${index}`,
+				aspect: "overview",
+				group: "context",
+				claim: "weak",
+				content: "alpha",
+			});
+		}
+		for (const id of ["strong", "deleted", "foreign", "filtered"]) {
+			seedMemory(id, "Strong path match");
+			seedAttribute({
+				id: `attr-${id}`,
+				memoryId: id,
+				aspect: "overview",
+				group: "context",
+				claim: id,
+				content: "alpha beta gamma",
+			});
+		}
+		db.exec("UPDATE entity_attributes SET version_root_id = 'a' WHERE memory_id LIKE 'weak-%'");
+		db.exec("UPDATE entity_attributes SET version_root_id = 'z' WHERE memory_id = 'strong'");
+		db.exec("UPDATE memories SET is_deleted = 1 WHERE id = 'deleted'");
+		db.exec("UPDATE entity_attributes SET agent_id = 'other-agent' WHERE memory_id = 'foreign'");
+		db.exec("UPDATE memories SET project = 'excluded' WHERE id = 'filtered'");
+		const operations: string[] = [];
+		const candidates = await findStructuredPathCandidatesViaOwner(
+			asOwner(db, operations),
+			"alpha beta gamma",
+			"memorybench",
+			{ limit: 1, minScore: 0.8, filterSql: "AND m.project IS NULL" },
+		);
+		expect([...candidates.keys()]).toEqual(["strong"]);
+		expect(operations).toEqual(["memory-search.structured-path-candidates", "memory-search.structured-path-evidence"]);
 	});
 
 	it("returns an empty map when there are no candidate IDs", () => {

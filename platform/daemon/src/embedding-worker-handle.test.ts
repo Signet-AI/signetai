@@ -129,6 +129,25 @@ describe("embedding-worker-handle", () => {
 		await expect(failed).rejects.toThrow("model failed");
 	});
 
+	it("forwards the rerank deadline and does not record an abandoned rerank as a provider failure", async () => {
+		const worker = new FakeWorker();
+		const handle = await createEmbeddingWorkerHandle({ workerFactory: () => worker, modelId: "ce", task: "rerank" });
+		worker.emit({ type: "ready" });
+		handles.push(handle);
+		const p = handle.rerank("q", ["a", "b"], { deadlineAt: 12345 });
+		await flush();
+		const request = worker.posted.find((m) => m.type === "rerank");
+		expect(request).toMatchObject({ deadlineAt: 12345 });
+		worker.emit({
+			type: "rerank_error",
+			id: request?.type === "rerank" ? request.id : -1,
+			error: "cross-encoder deadline reached; abandoned remaining documents",
+			cancelled: true,
+		});
+		await expect(p).rejects.toThrow(/deadline/);
+		expect(handle.getLastError()).toBeNull();
+	});
+
 	it("checkAvailable reports available when the worker inits", async () => {
 		const { worker, factory } = fakePair();
 		const handle = await makeHandle(worker, factory);

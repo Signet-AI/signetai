@@ -4,18 +4,18 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 813 sites
+- Exact ledger inventory: 817 sites
 - Synchronous `withWriteTx()` sites: 56
 - Synchronous `withReadDb()` sites: 88
 - Async-named DB sites: 168
 - Async-named ON-PARENT DB sites: 166
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 501
+- Synchronous filesystem/process sites: 505
 - Compile-visible legacy DB sites remaining: 144
   - `withWriteTx`: 56
   - `withReadDb`: 88
 
-The 813-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 56 synchronous writes, 88 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 144 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 817-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 56 synchronous writes, 88 synchronous reads, and 168 async-named DB sites are the complete database-call inventory; 144 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 166 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
@@ -73,13 +73,13 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `discord-source-provider.ts:875` (withReadDbAsync)
 - `discord-source-provider.ts:959` (withReadDbAsync)
 - `discord-source-provider.ts:974` (withWriteTxAsync)
-- `embedding-fetch.ts:492` (withReadDbAsync)
-- `embedding-index-migration.ts:267` (withReadDbAsync)
-- `embedding-index-migration.ts:417` (withReadDbAsync)
-- `embedding-index-migration.ts:895` (withReadDbAsync)
-- `embedding-index-migration.ts:903` (withReadDbAsync)
-- `embedding-index-migration.ts:986` (withReadDbAsync)
-- `embedding-index-migration.ts:1210` (incrementalVacuumAsync)
+- `db:embedding.fetch.resolve-active-config` (withReadDbAsync)
+- `db:embedding.index.projection-cursor` (withReadDbAsync)
+- `db:embedding.index.rebuild-vector-batch` (withReadDbAsync)
+- `db:embedding.index.stage-read-state` (withReadDbAsync)
+- `db:embedding.index.stage-read-batch` (withReadDbAsync)
+- `db:embedding.index.stage-coverage` (withReadDbAsync)
+- `db:embedding.index.promote-incremental-vacuum` (incrementalVacuumAsync)
 - `db:repair.checkpoint.read` (withReadDbAsync)
 - `db:repair.checkpoint.ensure` (withWriteTxAsync)
 - `db:repair.checkpoint.update` (withWriteTxAsync)
@@ -269,8 +269,8 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/telemetry-routes.ts:200` (withReadDb)
 - `routes/telemetry-routes.ts:221` (withReadDb)
 - `routes/telemetry-routes.ts:265` (withReadDb)
-- `routes/utils.ts:435` (withReadDb)
-- `routes/utils.ts:521` (withReadDb)
+- `db:forget.candidates.read` (withReadDb)
+- `db:forget.candidates-by-id.read` (withReadDb)
 - `session-checkpoints.ts:69` (withWriteTxAsync)
 - `session-checkpoints.ts:139` (withWriteTx)
 - `session-checkpoints.ts:247` (withReadDb)

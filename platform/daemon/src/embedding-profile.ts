@@ -7,6 +7,8 @@ export interface EmbeddingProfile {
 	readonly format: (text: string, role: EmbeddingRole) => string;
 }
 
+const NATIVE_ONNXRUNTIME_ID = "onnxruntime-q8";
+
 const QWEN_RETRIEVAL_INSTRUCTION = "Given a web search query, retrieve relevant passages that answer the query";
 
 const identityProfile = (cfg: EmbeddingConfig): EmbeddingProfile => ({
@@ -43,13 +45,19 @@ export function recommendedEmbeddingProfileId(cfg: EmbeddingConfig): string | un
 export function formatEmbeddingInput(text: string, cfg: EmbeddingConfig, role: EmbeddingRole): string {
 	return resolveEmbeddingProfile(cfg).format(text, role);
 }
+export function nativeEmbeddingRuntimeId(cfg: Pick<EmbeddingConfig, "provider" | "runtime">): string | undefined {
+	return cfg.provider === "native" && cfg.runtime === "onnxruntime" ? NATIVE_ONNXRUNTIME_ID : undefined;
+}
+
 export function embeddingProfileFingerprint(cfg: EmbeddingConfig): string {
 	const profile = resolveEmbeddingProfile(cfg);
+	const runtime = nativeEmbeddingRuntimeId(cfg);
 	return JSON.stringify({
 		profile: profile.id,
 		provider: cfg.provider,
 		model: cfg.model,
 		dimensions: profile.dimensions,
+		...(runtime ? { runtime } : {}),
 	});
 }
 export function embeddingProfileFingerprintsEqual(left: string, right: string): boolean {
@@ -62,6 +70,7 @@ export function embeddingProfileFingerprintsEqual(left: string, right: string): 
 				provider: value.provider,
 				model: value.model,
 				dimensions: value.dimensions,
+				runtime: value.runtime,
 			});
 		return normalize(a) === normalize(b);
 	} catch {
