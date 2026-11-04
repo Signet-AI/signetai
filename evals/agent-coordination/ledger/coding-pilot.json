@@ -1,118 +1,87 @@
 {
-  "schema": "split-coding-pilot/v1",
+  "schema": "split-coding-pilot/v2",
   "model": "glm-5.3-flash",
-  "provider": "zai-coding-cn",
-  "realPiAgentsPerVariant": 2,
-  "modelOutput": "Native pinned Pi ceiling, no 4000-token clamp",
-  "interpretation": "Neither variant produced a working combined application within 24 forwarded requests. No demonstrated end-to-end utility improvement. One pair, not a statistical estimate. Both runs exhausted the request budget before natural settlement; this is an equal-budget pilot, not evidence they could never finish.",
-  "messagingFailure": "Both agents sent incompatible API proposals. Backend then adopted the CLI proposal (id/requestId/completed). CLI partially adopted backend initial proposal and still required jobId. Basic submission therefore failed.",
-  "baselineFailure": "CLI submissions returned HTTP 400; no worker invocation was observed.",
-  "gradingScope": "Queued cancellation and cancellation after completion; clean SIGTERM restart of queued jobs. Not running-job cancellation, crash consistency or all PR features.",
-  "monitoringLimitation": "Runner deleted the messaging daemon and DB after generation; the replay viewer retained trace history. Opening the baseline dashboard did not show messages from that earlier instance.",
-  "supersededPilots": [
-    "seed1-coding-with-01",
-    "seed1-coding-without-01"
+  "provider": "zai-coding-cn (native Pi provider)",
+  "limits": "No request, wall-clock or response cap beyond the native model output ceiling; each run ended when both agents settled.",
+  "result": "With messaging 10/10; without messaging 6/10. The baseline failures are the split-brief conflicts: backend reported state \"done\" where the CLI contract requires \"completed\", and the backend deduplicated identical text so intentional resubmissions collapsed into one job. With messaging, the agents negotiated the contract over 4 direct messages and the combined system passed every check.",
+  "caveats": [
+    "One pair, not a statistical estimate.",
+    "The messaging agents also posted contract copies to the board; tool guidance was changed afterwards to keep a conversation with one session in direct messages.",
+    "Baseline in-run grade was empty because the grader container hit a 60s wrapper timeout; it was regraded with the same grader and image (grade.regrade.json). The wrapper timeout is removed.",
+    "Earlier capped pilots (24 requests, 8 minutes) are superseded; neither variant completed there."
   ],
   "variants": [
     {
       "variant": "with-messaging",
-      "runId": "c2-split-coding-s1-native-with-02-1a9d31",
-      "localArtifacts": "evals/agent-coordination/results/c2-split-coding/seed1-native-with-02",
-      "status": "scored",
-      "combinedApplicationPass": false,
+      "runId": "c2-split-coding-s1-unbounded-with-03-49e848",
+      "passed": 10,
+      "total": 10,
       "checks": {
         "files_present": true,
         "backend_starts": true,
-        "basic_submit_result": false,
-        "request_id_idempotent": false,
-        "identical_text_distinct_jobs": false,
-        "retry_after_lost_response_no_duplicate": false,
-        "queued_cancel_prevents_execution": false,
-        "cancel_completed_preserved": false,
-        "queued_survives_restart": false,
+        "basic_submit_result": true,
+        "request_id_idempotent": true,
+        "identical_text_distinct_jobs": true,
+        "retry_after_lost_response_no_duplicate": true,
+        "queued_cancel_prevents_execution": true,
+        "cancel_completed_preserved": true,
+        "queued_survives_restart": true,
         "single_concurrency": true
       },
-      "details": {
-        "basic_submit_result": " error: submit response missing jobId\n null",
-        "request_id_idempotent": "ids undefined/undefined calls 1 error: submit response missing jobId\n",
-        "identical_text_distinct_jobs": "ids undefined/undefined calls 2",
-        "retry_after_lost_response_no_duplicate": "injected true out  err error: submit response missing jobId\n calls 1",
-        "queued_cancel_prevents_execution": "cancel null status null calls 1",
-        "cancel_completed_preserved": "undefined null",
-        "queued_survives_restart": "restart true null  error: submit response missing jobId\n"
-      },
-      "forwardedProviderRequests": 24,
-      "providerRequestsWithReportedUsage": 21,
-      "providerRequestsWithoutReportedUsage": 3,
-      "reportedInputTokens": 308509,
-      "reportedOutputTokens": 27462,
-      "usageComplete": false,
-      "generationSeconds": 300.49,
-      "stopReason": "request_budget",
-      "limits": {
-        "requests": 24,
-        "output": 131072,
-        "wallMs": 480000
-      },
-      "backendObservedDMs": 3,
+      "failureDetails": {},
+      "providerRequests": 50,
+      "reportedInputTokens": 1136222,
+      "reportedOutputTokens": 42975,
+      "requestsWithoutUsage": 0,
+      "generationSeconds": 966.8,
+      "endedBy": "both agents settled",
+      "directMessages": 4,
+      "boardPosts": 4,
       "artifactSha256": {
-        "backend/server.mjs": "79fa12a8d7e0bf207b0ab696ea3e002738656397d0b6fdd40ff2798a1f1e24e4",
-        "cli/main.mjs": "e149f7389739fbcba23c1aff6a4c61255d16cfce25d2f1a86253eb8d5867c43b"
+        "backend/server.mjs": "2033ff5fec848a1d81e14c3ad18281afd1d685bf9f5603ecc2d0fce430f9cc8a",
+        "cli/main.mjs": "34f95caa338cf517b63ab9ca8e5b11c66e48c0918058f4bc877c06d8af2b76b1"
       },
+      "harnessSha256": "ce1331610c0f72538dce14580b5fac8e6f6fa9f5d1f4ef6f1acc1a3ddc88ee5f",
       "promptsSha256": "31033dfc72f67c2979cdbb4b5e31c6483c504aabda51851568e18d413e7b54a8",
-      "graderSha256": "398a63a18d8cc880a2380b4a831c02b1ea7f65cebb9f59e7725d06be92c12536",
-      "harnessSha256": "7ed45bbe577d5a9b7809288f87db53f136bf8ffd94639b020400ba6ab9156feb",
       "imagesSha256": "69a79fb9e0d202940fb046105155eeac7b58684e06e788edad9ee4eb7044ccb9"
     },
     {
       "variant": "without-messaging",
-      "runId": "c2-split-coding-s1-native-without-02-6f0fcb",
-      "localArtifacts": "evals/agent-coordination/results/c2-split-coding/seed1-native-without-02",
-      "status": "scored",
-      "combinedApplicationPass": false,
+      "runId": "c2-split-coding-s1-unbounded-without-03-c8dd33",
+      "passed": 6,
+      "total": 10,
       "checks": {
         "files_present": true,
         "backend_starts": true,
         "basic_submit_result": false,
-        "request_id_idempotent": false,
+        "request_id_idempotent": true,
         "identical_text_distinct_jobs": false,
-        "retry_after_lost_response_no_duplicate": false,
-        "queued_cancel_prevents_execution": false,
+        "retry_after_lost_response_no_duplicate": true,
+        "queued_cancel_prevents_execution": true,
         "cancel_completed_preserved": false,
         "queued_survives_restart": false,
-        "single_concurrency": false
+        "single_concurrency": true
       },
-      "details": {
-        "basic_submit_result": " error: submit failed: HTTP 400\n null",
-        "request_id_idempotent": "ids undefined/undefined calls 0 error: submit failed: HTTP 400\n",
-        "identical_text_distinct_jobs": "ids undefined/undefined calls 0",
-        "retry_after_lost_response_no_duplicate": "injected true out  err error: submit failed: HTTP 400\n calls 0",
-        "queued_cancel_prevents_execution": "cancel null status null calls 0",
-        "cancel_completed_preserved": "undefined null",
-        "queued_survives_restart": "restart true null  error: submit failed: HTTP 400\n",
-        "single_concurrency": "peak 0"
+      "failureDetails": {
+        "basic_submit_result": "{\"id\":\"8b23f5e2-169b-4c11-939d-80814fb0802c\"}\n  {\"id\":\"8b23f5e2-169b-4c11-939d-80814fb0802c\",\"state\":\"done\",\"result\":\"dc40fed27513a78b5b263c3a8f7acdc4e34f4b7e6e233050d387c6127de54576\"}",
+        "identical_text_distinct_jobs": "ids fabf9dea-f9e9-4501-8bdd-c9c2277cb278/fabf9dea-f9e9-4501-8bdd-c9c2277cb278 calls 1",
+        "cancel_completed_preserved": " {\"id\":\"8b23f5e2-169b-4c11-939d-80814fb0802c\",\"state\":\"done\",\"result\":\"dc40fed27513a78b5b263c3a8f7acdc4e34f4b7e6e233050d387c6127de54576\"}",
+        "queued_survives_restart": "restart true {\"id\":\"41493dac-b967-4e42-89dc-7fd08f9a86e2\",\"state\":\"done\",\"result\":\"f43174b03fc5fc1bb7abc80495aae747fbe88d3cce2315f47ccd908ab5c057fd\"} {\"id\":\"41493dac-b967-4e42-89dc-7fd08f9a86e2\"}\n "
       },
-      "forwardedProviderRequests": 24,
-      "providerRequestsWithReportedUsage": 22,
-      "providerRequestsWithoutReportedUsage": 2,
-      "reportedInputTokens": 241439,
-      "reportedOutputTokens": 23285,
-      "usageComplete": false,
-      "generationSeconds": 271.7,
-      "stopReason": "request_budget",
-      "limits": {
-        "requests": 24,
-        "output": 131072,
-        "wallMs": 480000
-      },
-      "backendObservedDMs": 0,
+      "providerRequests": 30,
+      "reportedInputTokens": 501788,
+      "reportedOutputTokens": 39356,
+      "requestsWithoutUsage": 0,
+      "generationSeconds": 884.6,
+      "endedBy": "both agents settled",
+      "directMessages": 0,
+      "boardPosts": 0,
       "artifactSha256": {
-        "backend/server.mjs": "7c48da3457d081985a9682164af267cd4e202011ba9ffa4b69dc145692ece9ab",
-        "cli/main.mjs": "74e825548d77593537a8c09b4cabcfc60a68cb39aca0443d37b47f2e161b7b30"
+        "backend/server.mjs": "a205a1a5fe90ec045ab83756edf0ac38f932fed717cf8825701d0abe5d71e469",
+        "cli/main.mjs": "eea2c2e58f7de3392298c1b5bdd20befc4e9c113c35064ad7206adba48d37db8"
       },
+      "harnessSha256": "ce1331610c0f72538dce14580b5fac8e6f6fa9f5d1f4ef6f1acc1a3ddc88ee5f",
       "promptsSha256": "31033dfc72f67c2979cdbb4b5e31c6483c504aabda51851568e18d413e7b54a8",
-      "graderSha256": "398a63a18d8cc880a2380b4a831c02b1ea7f65cebb9f59e7725d06be92c12536",
-      "harnessSha256": "7ed45bbe577d5a9b7809288f87db53f136bf8ffd94639b020400ba6ab9156feb",
       "imagesSha256": "69a79fb9e0d202940fb046105155eeac7b58684e06e788edad9ee4eb7044ccb9"
     }
   ]

@@ -51,6 +51,45 @@ async function post(path: string, body: Readonly<Record<string, unknown>>): Prom
 }
 
 describe("cross-agent notification routes", () => {
+	it("lists other agents' messages only in operator scope", async () => {
+		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "private" });
+		const normal = await app.request("/api/cross-agent/messages?agent_id=default");
+		expect(((await normal.json()) as { items: unknown[] }).items).toHaveLength(0);
+		const all = await app.request("/api/cross-agent/messages?scope=all");
+		const items = ((await all.json()) as { items: { id: string; acknowledgedAt?: string }[] }).items;
+		expect(items).toHaveLength(1);
+		expect(items[0]?.acknowledgedAt).toBeUndefined();
+		expect((await post(`/api/cross-agent/messages/${items[0]?.id}/ack`, { agentId: "beta" })).status).toBe(200);
+		const acked = await app.request("/api/cross-agent/messages?scope=all");
+		expect(((await acked.json()) as { items: { acknowledgedAt?: string }[] }).items[0]?.acknowledgedAt).toBeString();
+		expect((await app.request("/api/cross-agent/messages?scope=bad")).status).toBe(400);
+	});
+	it("allows an admin token to list all messages", async () => {
+		const previousMode = authConfig.mode;
+		authConfig.mode = "team";
+		const claims: TokenClaims = {
+			sub: "admin-token",
+			scope: { agent: "alpha" },
+			role: "admin",
+			iat: Math.floor(Date.now() / 1000),
+			exp: Math.floor(Date.now() / 1000) + 3600,
+		};
+		const scoped = new Hono();
+		scoped.use("*", async (c, next) => {
+			c.set("auth", { authenticated: true, claims });
+			await next();
+		});
+		registerHooksRoutes(scoped);
+		try {
+			createAgentMessage({ fromAgentId: "beta", toAgentId: "gamma", content: "admin view" });
+			const response = await scoped.request("/api/cross-agent/messages?scope=all");
+			expect(response.status).toBe(200);
+			expect(((await response.json()) as { items: unknown[] }).items).toHaveLength(1);
+		} finally {
+			authConfig.mode = previousMode;
+		}
+	});
+
 	it("rejects retired synthesis completion with its structured contract and without changing MEMORY.md", async () => {
 		const memoryPath = join(dir, "MEMORY.md");
 		const before = "# Existing head\n\n- keep this content\n";
@@ -213,6 +252,9 @@ describe("cross-agent notification routes", () => {
 			upsertAgentPresence({ agentId: "alpha", harness: "hermes", sessionKey: "session-alpha" });
 			createAgentMessage({ fromAgentId: "beta", toAgentId: "alpha", type: "info", content: "For alpha only" });
 
+			const denied = await scoped.request("/api/cross-agent/messages?scope=all");
+			expect(denied.status).toBe(403);
+			expect(await denied.json()).toEqual({ error: "scope=all requires local mode or an admin token" });
 			const inbox = await scoped.request("/api/cross-agent/messages?session_key=session-alpha");
 			expect(inbox.status).toBe(200);
 			const inboxBody = (await inbox.json()) as { items: Array<{ content: string }> };

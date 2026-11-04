@@ -169,7 +169,7 @@ export function registerCollabTools(
 	define(
 		"agent_message_send",
 		"Send Agent Message",
-		`Send a direct message to another Signet agent session. Direct messages wake an idle recipient on Claude Code, on Hermes Agent when the host allows message injection, and on pi in interactive or RPC mode (Codex sees them when its current turn ends, other sessions at their next hook), so use them for coordination that needs attention; use board_post for non-urgent shared discussion. Provide exactly one target: to_session_key, to_agent_id, or broadcast. ${UNTRUSTED}`,
+		`Send a direct message to another Signet agent session. Direct messages wake an idle recipient on Claude Code, on Hermes Agent when the host allows message injection, and on pi in interactive or RPC mode (Codex sees them when its current turn ends, other sessions at their next hook). Use them for any conversation with a specific session, including proposals, agreements, and replies, and keep that conversation here rather than reposting it with board_post. Provide exactly one target: to_session_key, to_agent_id, or broadcast. ${UNTRUSTED}`,
 		Type.Object({
 			content: Type.String({ description: "Message content" }),
 			to_agent_id: Type.Optional(Type.String({ description: "Target agent id" })),
@@ -331,7 +331,7 @@ export function registerCollabTools(
 	define(
 		"board_post",
 		"Post to Message Board",
-		"Start a thread (topic + title + body), reply to a thread (thread_id + body), or promote a direct message into a thread (topic + from_message_id). Use the board for durable, non-urgent shared discussion; use agent_message_send for messages that need the recipient's attention.",
+		"Start a thread (topic + title + body), reply to a thread (thread_id + body), or promote a direct message into a thread (topic + from_message_id). Use the board for things sessions you are not talking to should find later, such as resource claims, announcements, and standing decisions. To talk with a specific session, use agent_message_send; do not copy direct messages onto the board.",
 		Type.Object({
 			thread_id: Type.Optional(Type.String({ description: "Reply to this thread" })),
 			topic: Type.Optional(Type.String({ description: "Topic slug for a new thread" })),

@@ -96,6 +96,17 @@ describe("cross-agent presence", () => {
 });
 
 describe("cross-agent messages", () => {
+	it("pages all agents' direct and broadcast messages without changing the default inbox", () => {
+		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "first" });
+		createAgentMessage({ fromAgentId: "beta", toAgentId: "alpha", content: "second" });
+		createAgentMessage({ fromAgentId: "gamma", broadcast: true, content: "broadcast" });
+		expect(listAgentMessagePage({ agentId: "owner", includeBroadcast: false }).total).toBe(0);
+		const first = listAgentMessagePage({ agentId: "owner", allAgents: true, limit: 2, order: "asc" });
+		const second = listAgentMessagePage({ agentId: "owner", allAgents: true, limit: 2, offset: 2, order: "asc" });
+		expect(first.total).toBe(3);
+		expect(first.hasMore).toBe(true);
+		expect([...first.items, ...second.items].map((item) => item.content)).toEqual(["first", "second", "broadcast"]);
+	});
 	it("stores direct messages and lists inbox for recipient", () => {
 		upsertAgentPresence({
 			sessionKey: "sess-a",

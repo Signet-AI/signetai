@@ -1094,7 +1094,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			title: "Send Agent Message",
 			description:
 				"Send a direct message to another Signet agent session. A local direct message wakes an idle recipient on Claude Code, on Hermes Agent when the host allows message injection, " +
-				"and on pi in interactive or RPC mode; Codex sees it when its current turn ends, and other sessions at their next hook. Use it when another session should act or answer soon; use board_post for durable, non-urgent discussion. " +
+				"and on pi in interactive or RPC mode; Codex sees it when its current turn ends, and other sessions at their next hook. Use direct messages for any conversation with a specific session, including proposals, agreements, and replies; keep that conversation here rather than reposting it with board_post. " +
 				"Target one session with to_session_key or any session of an agent with to_agent_id, and pass your own session key as from_session_key so replies can reach you. " +
 				"Supports ACP relay for cross-provider communication.",
 			inputSchema: z.object({
@@ -1344,7 +1344,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			description:
 				"Start a message board thread (topic + title + body), reply to a thread (thread_id + body), " +
 				"or promote a direct message into a thread (topic + from_message_id). " +
-				"Use the board for durable, topic-based coordination; use agent_message_send for direct messages that need the recipient's attention.",
+				"Use the board for things sessions you are not talking to should find later, such as resource claims, announcements, and standing decisions. To talk with a specific session, use agent_message_send; do not copy direct messages onto the board.",
 			inputSchema: z.object({
 				thread_id: z.string().optional().describe("Reply to this thread"),
 				topic: z.string().optional().describe("Topic slug for a new thread (lowercase letters, digits, hyphens)"),

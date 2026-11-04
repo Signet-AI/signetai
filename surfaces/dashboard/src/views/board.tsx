@@ -1,3 +1,4 @@
+import { MessageResponse } from "@/components/ai-elements/message";
 import { PageHeading, SectionHeading, StatusLabel } from "@/components/dashboard/heading";
 import { Check, Loader2, RefreshCw, Trash2, X } from "@/components/mingcute-icons";
 import { Button } from "@/components/ui/button";
@@ -11,6 +12,7 @@ import {
 	type BoardThreadList,
 	type BoardThreadPatch,
 	type DirectMessage,
+	type PresenceSession,
 	api,
 	streamBoardEvents,
 } from "@/lib/api";
@@ -39,9 +41,48 @@ function relativeTime(value: string | null | undefined, now = Date.now()): strin
 	return `${Math.round(hours / 24)}d ago`;
 }
 
-function shortSession(key: string | null): string | null {
-	if (!key) return null;
-	return key.length > 14 ? `${key.slice(0, 8)}…${key.slice(-4)}` : key;
+function SessionLabel({
+	agentId,
+	sessionKey,
+	sessions,
+	harness,
+}: {
+	agentId: string;
+	sessionKey?: string | null;
+	sessions: readonly PresenceSession[];
+	harness?: string | null;
+}) {
+	const matches = sessions.filter(
+		(session) =>
+			(agentId === "unknown" ? !!sessionKey : session.agentId === agentId) &&
+			(!sessionKey || session.sessionKey === sessionKey),
+	);
+	const session = matches.length === 1 ? matches[0] : undefined;
+	const key = sessionKey ?? session?.sessionKey;
+	const project = session?.project ?? session?.context?.cwd;
+	const name = session
+		? [session.harness, project?.replace(/\/$/, "").split(/[\\/]/).pop(), key?.slice(0, 6)].filter(Boolean).join(" · ")
+		: [agentId.slice(0, 12), harness, key?.slice(0, 6)].filter(Boolean).join(" · ");
+	const task = session?.context?.task;
+	const details = [session?.context?.title, task && (task.length > 80 ? `${task.slice(0, 80)}…` : task)].filter(
+		Boolean,
+	);
+	let hash = 0;
+	for (const char of key ?? agentId) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+	return (
+		<span
+			title={`Agent: ${session?.agentId ?? agentId}\nSession: ${key ?? "unknown"}`}
+			className="inline-flex items-center gap-1"
+		>
+			<span
+				aria-hidden="true"
+				className="inline-block size-2 shrink-0 rounded-full"
+				style={{ backgroundColor: `hsl(${hash % 360} 65% 55%)` }}
+			/>
+			{name}
+			{details.length > 0 ? ` — ${details.join(" · ")}` : ""}
+		</span>
+	);
 }
 
 function sortThreads(items: readonly BoardThread[]): BoardThread[] {
@@ -137,6 +178,8 @@ type BoardTab = "threads" | "messages";
 
 export function BoardView() {
 	const [tab, setTab] = useState<BoardTab>("threads");
+	const presence = useAsync(() => api.getPresence(), { key: "board-presence", intervalMs: 10_000 });
+	const sessions = presence.data?.sessions ?? [];
 	return (
 		<div className="board-page">
 			<div className="board-content">
@@ -154,7 +197,11 @@ export function BoardView() {
 						</TabButton>
 					</div>
 				</PageHeading>
-				{tab === "threads" ? <ThreadsPane /> : <MessagesPane />}
+				{tab === "threads" ? (
+					<ThreadsPane sessions={sessions} />
+				) : (
+					<MessagesPane sessions={sessions} refreshPresence={presence.refresh} />
+				)}
 			</div>
 		</div>
 	);
@@ -179,7 +226,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 	);
 }
 
-function ThreadsPane() {
+function ThreadsPane({ sessions }: { sessions: readonly PresenceSession[] }) {
 	const [topic, setTopic] = useState<string | null>(null);
 	const [status, setStatus] = useState<BoardStatusFilter>("open");
 	const [tag, setTag] = useState<string | null>(null);
@@ -313,10 +360,12 @@ function ThreadsPane() {
 									</span>
 									<span className="mt-1 flex flex-wrap items-center gap-x-3 text-[12px] text-muted-foreground">
 										<span>{thread.topic}</span>
-										<span>
-											{thread.authorAgentId}
-											{thread.authorHarness ? ` via ${thread.authorHarness}` : ""}
-										</span>
+										<SessionLabel
+											agentId={thread.authorAgentId}
+											sessionKey={thread.authorSessionKey}
+											harness={thread.authorHarness}
+											sessions={sessions}
+										/>
 										<span>
 											{thread.postCount} {thread.postCount === 1 ? "post" : "posts"}
 										</span>
@@ -340,6 +389,7 @@ function ThreadsPane() {
 			</section>
 
 			<ThreadDetail
+				sessions={sessions}
 				key={selectedId ?? "none"}
 				threadId={selectedId}
 				version={detailVersion}
@@ -385,12 +435,14 @@ function TopicButton({
 }
 
 function ThreadDetail({
+	sessions,
 	threadId,
 	version,
 	onTag,
 	onChanged,
 	onDeleted,
 }: {
+	sessions: readonly PresenceSession[];
 	threadId: string | null;
 	version: number;
 	onTag: (tag: string) => void;
@@ -479,9 +531,13 @@ function ThreadDetail({
 				<div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
 					<span>Topic {thread.topic}</span>
 					<span>
-						Started by {thread.authorAgentId}
-						{thread.authorHarness ? ` via ${thread.authorHarness}` : ""}
-						{shortSession(thread.authorSessionKey) ? ` (${shortSession(thread.authorSessionKey)})` : ""}
+						Started by{" "}
+						<SessionLabel
+							agentId={thread.authorAgentId}
+							sessionKey={thread.authorSessionKey}
+							harness={thread.authorHarness}
+							sessions={sessions}
+						/>
 					</span>
 					<span>{relativeTime(thread.createdAt)}</span>
 					{thread.pinned && <span>Pinned</span>}
@@ -552,20 +608,33 @@ function ThreadDetail({
 					return (
 						<li key={post.id} className="rounded-xl border border-border bg-card p-4" data-post-id={post.id}>
 							<div className="flex flex-wrap items-baseline gap-x-3 text-[12px] text-muted-foreground">
-								<span className="text-[13px] font-medium text-foreground">{post.authorAgentId}</span>
-								{post.authorHarness && <span>{post.authorHarness}</span>}
-								{shortSession(post.authorSessionKey) && <span>{shortSession(post.authorSessionKey)}</span>}
+								<SessionLabel
+									agentId={post.authorAgentId}
+									sessionKey={post.authorSessionKey}
+									harness={post.authorHarness}
+									sessions={sessions}
+								/>
 								<span>{relativeTime(post.createdAt)}</span>
 								{!post.projected && <span>memory projection pending</span>}
 							</div>
 							{post.replyToPostId && (
 								<p className="m-0 mt-1 text-[12px] text-muted-foreground">
-									Replying to {parent ? parent.authorAgentId : "an earlier post"}
+									Replying to{" "}
+									{parent ? (
+										<SessionLabel
+											agentId={parent.authorAgentId}
+											sessionKey={parent.authorSessionKey}
+											harness={parent.authorHarness}
+											sessions={sessions}
+										/>
+									) : (
+										"an earlier post"
+									)}
 								</p>
 							)}
-							<pre className="m-0 mt-2 font-[inherit] text-[14px] leading-relaxed whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
+							<MessageResponse className="mt-2 text-[14px] leading-relaxed text-foreground [overflow-wrap:anywhere]">
 								{post.body}
-							</pre>
+							</MessageResponse>
 						</li>
 					);
 				})}
@@ -596,20 +665,37 @@ function ThreadDetail({
 	);
 }
 
-function MessagesPane() {
-	const status = useAsync(() => api.getStatus(), { key: "board-agent" });
-	const agentId = status.loading ? null : (status.data?.agentId ?? "default");
-	const messages = useAsync(() => (agentId ? api.getDirectMessages(agentId) : Promise.resolve(null)), {
-		key: agentId ? `board-dms:${agentId}` : undefined,
-		deps: [agentId],
-		intervalMs: 10_000,
-	});
-	const presence = useAsync(() => api.getPresence(), { key: "board-presence", intervalMs: 10_000 });
+function MessagesPane({
+	sessions,
+	refreshPresence,
+}: {
+	sessions: readonly PresenceSession[];
+	refreshPresence: () => Promise<unknown>;
+}) {
+	const [limit, setLimit] = useState(50);
+	const messages = useAsync(
+		async () => {
+			const items: DirectMessage[] = [];
+			let page = await api.getDirectMessages(50, 0);
+			if (!page) throw new Error("Could not load messages");
+			items.push(...page.items);
+			while (page.hasMore && items.length < limit) {
+				const next = await api.getDirectMessages(50, items.length);
+				if (!next || next.items.length === 0) break;
+				page = next;
+				items.push(...page.items);
+			}
+			return { ...page, items };
+		},
+		{
+			key: `board-dms:all:${limit}`,
+			deps: [limit],
+			intervalMs: 10_000,
+		},
+	);
 	const refreshMessages = messages.refresh;
-	const refreshPresence = presence.refresh;
 	const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
 	const items = messages.data?.items ?? [];
-	const sessions = presence.data?.sessions ?? [];
 
 	return (
 		<div className="grid min-h-0 flex-1 grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_320px]">
@@ -617,11 +703,7 @@ function MessagesPane() {
 				<SectionHeading
 					title="Direct messages"
 					level="h3"
-					meta={
-						<span className="text-[12px] text-muted-foreground">
-							{messages.data ? `${messages.data.unreadCount} unread` : ""}
-						</span>
-					}
+					meta={<span className="text-[12px] text-muted-foreground">{messages.data?.total ?? ""}</span>}
 					actions={
 						<Button
 							variant="outline"
@@ -636,8 +718,10 @@ function MessagesPane() {
 						</Button>
 					}
 				/>
-				{messages.loading || status.loading ? (
+				{messages.loading ? (
 					<p className="m-0 text-[13px] text-muted-foreground">Loading messages…</p>
+				) : messages.error && !messages.data ? (
+					<p className="m-0 text-[13px] text-muted-foreground">Could not load messages.</p>
 				) : items.length === 0 ? (
 					<p className="m-0 rounded-lg border border-dashed border-border p-4 text-[13px] text-muted-foreground">
 						No direct messages yet.
@@ -648,7 +732,7 @@ function MessagesPane() {
 							<MessageRow
 								key={message.id}
 								message={message}
-								agent={agentId}
+								sessions={sessions}
 								open={expanded.has(message.id)}
 								onToggle={() =>
 									setExpanded((prev) => {
@@ -660,6 +744,11 @@ function MessagesPane() {
 							/>
 						))}
 					</ul>
+				)}
+				{messages.data?.hasMore && (
+					<Button variant="outline" size="compact" onClick={() => setLimit((value) => value + 50)}>
+						Show more messages
+					</Button>
 				)}
 			</section>
 			<aside aria-label="Active sessions" className="flex min-w-0 flex-col gap-3">
@@ -674,10 +763,15 @@ function MessagesPane() {
 					<ul className="m-0 flex list-none flex-col p-0">
 						{sessions.map((session) => (
 							<li key={session.sessionKey} className="border-b border-border py-2 last:border-b-0">
-								<div className="text-[13px] text-foreground">{session.agentId}</div>
+								<div className="text-[13px] text-foreground">
+									<SessionLabel agentId={session.agentId} sessionKey={session.sessionKey} sessions={sessions} />
+								</div>
 								<div className="flex flex-wrap gap-x-3 text-[12px] text-muted-foreground">
 									{session.harness && <span>{session.harness}</span>}
 									{session.project && <span className="min-w-0 truncate">{session.project}</span>}
+									{session.context?.cwd && session.context.cwd !== session.project && (
+										<span className="min-w-0 truncate">{session.context.cwd}</span>
+									)}
 									<span>{relativeTime(session.lastSeenAt)}</span>
 								</div>
 							</li>
@@ -699,25 +793,16 @@ export function isInboundMessage(message: DirectMessage, agent: string | null): 
 
 function MessageRow({
 	message,
-	agent,
+	sessions,
 	open,
 	onToggle,
 }: {
 	message: DirectMessage;
-	agent: string | null;
+	sessions: readonly PresenceSession[];
 	open: boolean;
 	onToggle: () => void;
 }) {
-	const inbound = isInboundMessage(message, agent);
-	const fromSession = shortSession(message.fromSessionKey ?? null);
-	const source = fromSession ? `${message.fromAgentId} (${fromSession})` : message.fromAgentId;
-	const toSession = shortSession(message.toSessionKey ?? null);
-	const toAgent = message.toAgentId ?? message.toSessionAgentId ?? null;
-	const target = message.broadcast
-		? "Broadcast"
-		: toSession
-			? `${toAgent ?? "session"} (${toSession})`
-			: (toAgent ?? "unknown");
+	const toAgent = message.toAgentId ?? message.toSessionAgentId ?? "unknown";
 	const long = message.content.length > PREVIEW_CHARS;
 	const preview = long ? `${message.content.slice(0, PREVIEW_CHARS)}…` : message.content;
 	const delivery = [message.deliveryState, message.deliveryPath].filter(Boolean).join(" · ");
@@ -725,22 +810,21 @@ function MessageRow({
 		<li className="border-b border-border py-3 last:border-b-0">
 			<div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
 				<span className="text-[13px] font-medium text-foreground">
-					{source} → {target}
+					From <SessionLabel agentId={message.fromAgentId} sessionKey={message.fromSessionKey} sessions={sessions} /> →
+					To{" "}
+					{message.broadcast ? (
+						"Broadcast"
+					) : (
+						<SessionLabel agentId={toAgent} sessionKey={message.toSessionKey} sessions={sessions} />
+					)}
 				</span>
 				<span>{message.type}</span>
 				<span>{relativeTime(message.createdAt)}</span>
-				{inbound ? (
-					<StatusLabel tone={message.acknowledgedAt ? "ok" : "warn"}>
-						{message.acknowledgedAt ? "Acknowledged" : "Unread"}
-					</StatusLabel>
-				) : (
-					<StatusLabel tone="ok">Sent</StatusLabel>
-				)}
 				{delivery && <span>{delivery}</span>}
 			</div>
-			<pre className="m-0 mt-1.5 font-[inherit] text-[14px] leading-relaxed whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
+			<MessageResponse className="mt-1.5 text-[14px] leading-relaxed text-foreground [overflow-wrap:anywhere]">
 				{open ? message.content : preview}
-			</pre>
+			</MessageResponse>
 			{long && (
 				<button
 					type="button"

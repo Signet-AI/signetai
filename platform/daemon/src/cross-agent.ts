@@ -138,6 +138,7 @@ export interface CreateAgentMessageInput {
 }
 
 export interface ListAgentMessageOptions {
+	readonly allAgents?: boolean;
 	readonly agentId?: string;
 	readonly sessionKey?: string;
 	readonly since?: string;
@@ -620,6 +621,12 @@ function buildMessageQuery(options: ListAgentMessageOptions, now: string): Messa
 		visibility.push("m.from_agent_id = ?");
 		visibilityArgs.push(agentId);
 	}
+	const allAgents = options.allAgents === true;
+	if (allAgents) {
+		visibility.length = 0;
+		visibilityArgs.length = 0;
+		visibility.push("1 = 1");
+	}
 	if (visibility.length === 0) return null;
 
 	const filters = ["m.expires_at > ?", `(${visibility.join(" OR ")})`];
@@ -633,6 +640,14 @@ function buildMessageQuery(options: ListAgentMessageOptions, now: string): Messa
 		filters.push("r.acknowledged_at IS NULL");
 	}
 
+	if (allAgents) {
+		return {
+			join: "LEFT JOIN cross_agent_message_receipts r ON r.message_id = m.id AND r.agent_id = COALESCE(m.to_session_agent_id, m.to_agent_id)",
+			where: filters.join(" AND "),
+			args,
+			agentId,
+		};
+	}
 	return {
 		join: agentId
 			? "LEFT JOIN cross_agent_message_receipts r ON r.message_id = m.id AND r.agent_id = ?"

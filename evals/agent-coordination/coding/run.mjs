@@ -24,7 +24,7 @@ export async function gradeCoding({ projectDir, image, evalDir, trace }) {
     "--security-opt", "no-new-privileges:true", "--memory", "512m", "--pids-limit", "128",
     "--tmpfs", "/tmp:rw,size=64m,uid=10001", "--mount", `type=bind,source=${projectDir},target=/project,readonly`,
     "--mount", `type=bind,source=${join(evalDir, "coding")},target=/tests,readonly`, image, "node", "/tests/grade.mjs",
-  ], { timeoutMs: 60000, allowFail: true });
+  ], { timeoutMs: 0, allowFail: true });
   let result;
   try { result = JSON.parse(execution.stdout.trim()); }
   catch { return { status: "unscorable", pass: false, failureClass: "infra:grader", detail: execution.stderr.slice(-1500) }; }

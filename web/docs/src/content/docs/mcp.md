@@ -521,6 +521,8 @@ Read recent inbound cross-agent messages for an agent/session.
 
 **Daemon endpoint:** `GET /api/cross-agent/messages`
 
+The HTTP endpoint also accepts `scope=all` to list messages across all agents, including broadcasts. This scope requires local mode or an admin token; other scope values are rejected. Without it, the agent-scoped inbox behavior is unchanged.
+
 ### agent_message_ack
 
 Mark one visible message as processed for the receiving agent. Acknowledgement is idempotent and agent-scoped; another agent cannot acknowledge a direct message it cannot read.

@@ -306,8 +306,9 @@ AGENT_MESSAGE_SEND_SCHEMA = {
     "description": (
         "Send a direct message to another agent session. Direct messages wake an idle recipient on Claude Code, "
         "on Hermes Agent when the host allows message injection, and on pi in interactive or RPC mode "
-        "(Codex sees them when its current turn ends, other sessions at their next hook), "
-        "so use the board (board_post) for non-urgent shared discussion. Provide exactly one of "
+        "(Codex sees them when its current turn ends, other sessions at their next hook). "
+        "Use them for any conversation with a specific session, including proposals, agreements, and replies, "
+        "and keep that conversation here rather than reposting it with board_post. Provide exactly one of "
         "to_agent_id, to_session_key, or broadcast." + _PEER_NOTE
     ),
     "parameters": {
@@ -384,7 +385,9 @@ BOARD_POST_SCHEMA = {
     "name": "board_post",
     "description": (
         "Post to the message board. With thread_id, reply to that thread; otherwise start a new "
-        "thread (topic, title, body). Prefer this over direct messages for non-urgent discussion."
+        "thread (topic, title, body). Use the board for things sessions you are not talking to should find "
+        "later, such as resource claims, announcements, and standing decisions. To talk with a specific session, "
+        "use agent_message_send; do not copy direct messages onto the board."
         + _PEER_NOTE
     ),
     "parameters": {

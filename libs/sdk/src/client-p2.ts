@@ -417,6 +417,7 @@ export class SignetClientP2 {
 		return this.transport.del<{ readonly removed: boolean }>(`/api/cross-agent/presence/${sessionKey}`, {});
 	}
 	async listAgentMessages(opts?: {
+		readonly scope?: "all";
 		readonly agentId?: string;
 		readonly sessionKey?: string;
 		readonly since?: string;
@@ -427,6 +428,7 @@ export class SignetClientP2 {
 		readonly includeBroadcast?: boolean;
 	}): Promise<AgentMessageListResponse> {
 		return this.transport.get<AgentMessageListResponse>("/api/cross-agent/messages", {
+			scope: opts?.scope,
 			agent_id: opts?.agentId,
 			session_key: opts?.sessionKey,
 			since: opts?.since,

@@ -51,7 +51,7 @@ const POSTS = [
 		authorAgentId: "beta",
 		authorSessionKey: null,
 		authorHarness: "codex",
-		body: "second post",
+		body: "second **bold** post with `code`",
 		replyToPostId: "p1",
 		createdAt: "2026-10-05T09:00:00.000Z",
 		projected: false,
@@ -64,14 +64,29 @@ const MESSAGES = [
 		createdAt: "2026-10-05T09:00:00.000Z",
 		expiresAt: null,
 		fromAgentId: "alpha",
-		fromSessionKey: null,
+		fromSessionKey: "session-alpha",
 		toAgentId: "beta",
-		toSessionKey: null,
-		content: LONG,
+		toSessionKey: "session-beta",
+		content: `**hello** with \`code\` ${LONG}`,
 		type: "question",
 		broadcast: false,
 		deliveryPath: "wake",
 		deliveryState: "delivered",
+		acknowledgedAt: null,
+	},
+	{
+		id: "m2",
+		createdAt: "2026-10-05T09:00:00.000Z",
+		expiresAt: null,
+		fromAgentId: "unseen-agent-123456",
+		fromSessionKey: null,
+		toAgentId: "unknown-target",
+		toSessionKey: null,
+		content: "Fallback",
+		type: "info",
+		broadcast: false,
+		deliveryPath: null,
+		deliveryState: null,
 		acknowledgedAt: null,
 	},
 ];
@@ -134,11 +149,27 @@ beforeAll(async () => {
 			return Response.json({ items, total: items.length, limit: 50, offset: 0, hasMore: false });
 		}
 		if (url.includes("/api/cross-agent/messages")) {
-			return Response.json({ items: MESSAGES, total: 1, unreadCount: 1, hasMore: false });
+			return Response.json({ items: MESSAGES, total: 2, unreadCount: 1, hasMore: false });
 		}
 		if (url.includes("/api/cross-agent/presence")) {
 			return Response.json({
 				sessions: [
+					{
+						sessionKey: "session-beta",
+						agentId: "beta",
+						harness: "pi",
+						project: "/repo/other",
+						context: { title: "Builder" },
+						lastSeenAt: "2026-10-05T09:00:00.000Z",
+					},
+					{
+						sessionKey: "session-alpha",
+						agentId: "alpha",
+						harness: "pi",
+						project: "/repo/project",
+						context: { task: "Fix issue", title: "Reviewer" },
+						lastSeenAt: "2026-10-05T09:00:00.000Z",
+					},
 					{
 						sessionKey: "s1",
 						agentId: "gamma",
@@ -191,7 +222,7 @@ async function cleanup(root: Root, container: HTMLElement): Promise<void> {
 }
 
 describe("board view", () => {
-	test("lists topics, filters threads by topic, and renders a thread as plain text", async () => {
+	test("lists topics, filters threads, and safely renders Markdown", async () => {
 		const [container, root] = await render();
 		try {
 			expect(container.querySelector('nav[aria-label="Topics"]')?.textContent).toContain("All topics");
@@ -205,12 +236,13 @@ describe("board view", () => {
 			);
 			await click(row);
 			const detail = container.querySelector('section[aria-label="Thread"]');
-			expect(detail?.textContent).toContain("Started by alpha via claude-code");
+			expect(detail?.textContent).toContain("Started by alpha · claude-code · sess-a");
 			expect(detail?.textContent).toContain("Promoted from a direct message (msg-9)");
-			expect(detail?.textContent).toContain("Replying to alpha");
-			expect(detail?.textContent).toContain("second post");
+			expect(detail?.textContent).toContain("Replying to pi · project · sessio");
+			expect(detail?.querySelector('[data-streamdown="strong"]')?.textContent).toBe("bold");
+			expect(detail?.querySelector("code")?.textContent).toBe("code");
 			expect(detail?.querySelector("img")).toBeNull();
-			expect(detail?.textContent).toContain("<img src=x onerror=alert(1)> first post");
+			expect(detail?.textContent).toContain("first post");
 		} finally {
 			await cleanup(root, container);
 		}
@@ -282,17 +314,24 @@ describe("board view", () => {
 		const [container, root] = await render();
 		try {
 			await click(button(container, "Direct messages"));
-			expect(calls.some((c) => c.url.includes("agent_id=alpha"))).toBe(true);
+			expect(calls.some((c) => c.url.includes("/api/cross-agent/messages?scope=all"))).toBe(true);
 			const list = container.querySelector('section[aria-label="Direct messages"]');
-			expect(list?.textContent).toContain("alpha → beta");
+			expect(list?.textContent).toContain(
+				"From pi · project · sessio — Reviewer · Fix issue → To pi · other · sessio — Builder",
+			);
+			expect(list?.querySelector("[title*=session-alpha]")).toBeTruthy();
+			expect(list?.textContent).toContain("From unseen-agent → To unknown-targ");
+			expect(list?.querySelector('[data-streamdown="strong"]')?.textContent).toBe("hello");
+			expect(list?.querySelector("code")?.textContent).toBe("code");
 			expect(list?.textContent).toContain("question");
-			expect(list?.textContent).toContain("Sent");
 			expect(list?.textContent).not.toContain("Unread");
 			expect(list?.textContent).toContain("delivered · wake");
 			expect(list?.textContent).not.toContain(LONG);
 			await click(button(container, "Show more"));
 			expect(container.querySelector('section[aria-label="Direct messages"]')?.textContent).toContain(LONG);
-			expect(container.querySelector('aside[aria-label="Active sessions"]')?.textContent).toContain("gamma");
+			expect(container.querySelector('aside[aria-label="Active sessions"]')?.textContent).toContain(
+				"opencode · proj · s1",
+			);
 		} finally {
 			await cleanup(root, container);
 		}

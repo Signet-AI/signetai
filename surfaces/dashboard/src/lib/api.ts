@@ -983,6 +983,7 @@ export interface PresenceSession {
 	readonly agentId: string;
 	readonly harness: string | null;
 	readonly project: string | null;
+	readonly context?: { readonly task?: string; readonly title?: string; readonly cwd?: string };
 	readonly lastSeenAt: string;
 }
 
@@ -1102,11 +1103,9 @@ export const api = {
 			`/api/board/threads/${encodeURIComponent(id)}?scope=all`,
 			{ method: "DELETE" },
 		),
-	getDirectMessages: (agentId: string, limit = 50) =>
-		getJSON<DirectMessageList>(
-			`/api/cross-agent/messages?agent_id=${encodeURIComponent(agentId)}&include_sent=true&include_broadcast=true&limit=${limit}&order=desc`,
-		),
-	getPresence: () => getJSON<PresenceResponse>("/api/cross-agent/presence?include_self=true"),
+	getDirectMessages: (limit = 50, offset = 0) =>
+		getJSON<DirectMessageList>(`/api/cross-agent/messages?scope=all&limit=${limit}&offset=${offset}&order=desc`),
+	getPresence: () => getJSON<PresenceResponse>("/api/cross-agent/presence?scope=all&include_self=true"),
 	getDreamQuality: () => getJSON<DreamQuality>("/api/dream/quality"),
 	triggerDream: async (mode: "incremental" | "compact" = "incremental") => {
 		try {

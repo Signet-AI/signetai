@@ -1760,6 +1760,12 @@ async function relayClaimedAcpMessage(attempt: AcpDeliveryAttempt): Promise<Agen
 
 function registerCrossAgentMessages(app: Hono): void {
 	app.get("/api/cross-agent/messages", (c) => {
+		const scope = c.req.query("scope");
+		if (scope !== undefined && scope !== "all") return c.json({ error: "scope must be 'all' when provided" }, 400);
+		const operator = scope === "all";
+		if (operator && shouldEnforceAuthScope(c) && c.get("auth")?.claims?.role !== "admin") {
+			return c.json({ error: "scope=all requires local mode or an admin token" }, 403);
+		}
 		const requestedAgent = parseOptionalString(c.req.query("agent_id"));
 		const sessionKey = parseOptionalString(c.req.query("session_key"));
 		const since = parseOptionalString(c.req.query("since"));
@@ -1782,6 +1788,7 @@ function registerCrossAgentMessages(app: Hono): void {
 		}
 
 		const page = listAgentMessagePage({
+			allAgents: operator,
 			agentId: scopedAgent.agentId,
 			sessionKey,
 			since,
