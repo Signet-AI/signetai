@@ -74,6 +74,28 @@ The evidence search capability is `search_evidence`. Other read capabilities
 allow Dreaming to inspect entities, aspects, claims, links, contradictions,
 and attention state within the relevant agent scope.
 
+When the agent session reports a configured, server-discovered, or catalog
+context window, the daemon sizes queue pages from that window: 60% of the
+window minus a 16,000-token prompt reserve, estimated at four characters per
+token. A page is bounded to 16,000–2,000,000 characters and shrinks for denser
+non-ASCII evidence. Without a known window, the existing `maxInputTokens`
+page sizing remains in effect. Generic provider defaults do not count as a
+known serving window.
+
+A page holds at most 100 source revisions. Omit `query`, `since`, `before`, and
+`limit` to drain as many as fit; an explicit `limit` is still respected.
+Window-based sizing also bounds the total evidence drained across a pass's
+scopes, and an explicit `maxPassTokens` can lower the allowance. The scheduler
+uses the routed window to avoid grouping scopes whose combined backlog
+exceeds one pass budget; an oversized individual scope can still run alone
+and continue in later passes. These estimates bound delivery, not the model's
+ability to preserve every detail.
+
+Larger pages apply automatically when the window is known. An optional
+[local planning thinking budget](/configuration/inference-routing/#local-thinking-budgets)
+can give the turn after a large page more reasoning room; it is not enabled
+by default.
+
 ### 2. Reason with bounded capabilities
 
 Dreaming is an agentic pass, not a fixed per-fact classifier. Its capability
@@ -175,6 +197,23 @@ Dreaming can create or update semantic graph state, but it does not silently
 rewrite the episodic source that justified the operation. Claims and links keep
 their available evidence and provenance so later review can distinguish source
 truth from the current semantic view.
+
+A request can create an entity, its aspect, and its claims together.
+`create_aspect`, `add_claim_value`, and `set_claim_value` may use
+`entityId: "$0"` to reference an earlier `create_entity` at operation index 0.
+Claim operations may likewise use `aspectId: "$1"` for an earlier
+`create_aspect` at index 1. Indices are zero-based within that request.
+References must point backward to the correct operation kind, and a claim's
+aspect must belong to its entity. Each content operation still needs valid
+source evidence. A dependent operation fails if the referenced create did
+not apply, including when it was held for review.
+
+The daemon accepts up to 100 operations per request; the prompt recommends
+about 40 per filing call to keep generated output manageable. When a writer
+failure returns `retryable` and `retryFrom`, retry only the uncommitted suffix.
+Replace same-request references to committed operations with their returned
+entity or aspect IDs, and reindex any references retained within the suffix.
+Do not replay the committed prefix.
 
 Inference and embedding work happen before the short database mutation phase.
 The write path must remain deterministic and bounded; a slow provider call must
