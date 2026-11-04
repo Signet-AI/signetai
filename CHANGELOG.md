@@ -6,6 +6,11 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-11-04
+- Features: expose scoped peer context across harnesses; tell every tool-equipped session about messaging and the board; native tools for Hermes and Pi; wake adapters for Claude Code, Codex, Hermes, and Pi; message board MCP, SDK, dashboard, and docs; wake idle sessions for direct messages and add message board core.
+- Bug fixes: clear PR baseline failures; name sessions by agent and key suffix; show agent DMs to operators; use ZAI-compatible system message roles; type-check peer context hook payloads; enforce session scope and recover bounded wake lifecycles; keep token agent for omitted identity; resolve omitted agent like session-start; identify board cursors and refused wake deliveries explicitly; bound board visibility refresh, bound first Codex turn lookback; per-turn Codex wake boundary, ordered SSE visibility refresh, same-millisecond read cursor, thread paging guard; match the wake route's scoped agent in the session-end wake check; scope wake waiters by agent, keep offset board reads unread, qualify wake gates; narrow the session-end wake grace, return the stored read cursor, bound Pi error body reads; address CodeRabbit review and CI isolation failures; let the daemon resolve Hermes tool identity, surface daemon errors, allow DM promotion, and cap the session-start section; release wakes for disconnected clients, dedupe concurrent board notices, log swallowed Hermes errors; release wake claims for finished waiters, index board notices, clean late projections.
+- Docs: move verification evidence out of the PR.
+
 ### 2026-11-02
 - Bug fixes: bound Hermes mirror dedup by recall dates; apply since/until to native artifacts and transcripts.
 
@@ -30,10 +35,44 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-10-18
 - Bug fixes: register implicit agents as isolated.
 
-### 2026-10-14
-- Bug fixes: guarantee integrity progress past slow probes and shadowed rowids; check large tables in bounded chunks during integrity sweeps; compact no-op dependency history rebuild pairs; say a rejected memory head commit may be retried; enforce the memory head token budget when it is staged; require a note's own graph structure before skipping it; look up indexed Obsidian documents by canonical path; skip unchanged native source files in the owner.
-
 ## Release Ledger
+
+## [0.239.0] - 2026-11-04
+
+Release summary: 4 features, 18 bug fixes, and 1 docs update.
+Tag range: `v0.238.1..v0.239.0`.
+
+### Features
+
+- expose scoped peer context across harnesses
+- **cross-agent**: tell every tool-equipped session about messaging and the board; native tools for Hermes and Pi
+- **cross-agent**: wake adapters for Claude Code, Codex, Hermes, and Pi; message board MCP, SDK, dashboard, and docs
+- **cross-agent**: wake idle sessions for direct messages and add message board core
+
+### Bug Fixes
+
+- clear PR baseline failures
+- **board**: name sessions by agent and key suffix
+- **board**: show agent DMs to operators
+- **eval**: use ZAI-compatible system message roles
+- **cli**: type-check peer context hook payloads
+- **cross-agent**: enforce session scope and recover bounded wake lifecycles
+- **cross-agent**: keep token agent for omitted identity
+- **cross-agent**: resolve omitted agent like session-start
+- **cross-agent**: identify board cursors and refused wake deliveries explicitly
+- **cross-agent**: bound board visibility refresh, bound first Codex turn lookback
+- **cross-agent**: per-turn Codex wake boundary, ordered SSE visibility refresh, same-millisecond read cursor, thread paging guard
+- **cross-agent**: match the wake route's scoped agent in the session-end wake check
+- **cross-agent**: scope wake waiters by agent, keep offset board reads unread, qualify wake gates
+- **cross-agent**: narrow the session-end wake grace, return the stored read cursor, bound Pi error body reads
+- **cross-agent**: address CodeRabbit review and CI isolation failures
+- **cross-agent**: let the daemon resolve Hermes tool identity, surface daemon errors, allow DM promotion, and cap the session-start section
+- **cross-agent**: release wakes for disconnected clients, dedupe concurrent board notices, log swallowed Hermes errors
+- **cross-agent**: release wake claims for finished waiters, index board notices, clean late projections
+
+### Docs
+
+- move verification evidence out of the PR
 
 ## [0.238.1] - 2026-11-02
 
