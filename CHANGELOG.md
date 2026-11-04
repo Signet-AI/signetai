@@ -7,10 +7,10 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-11-04
-- Features: expose scoped peer context across harnesses; tell every tool-equipped session about messaging and the board; native tools for Hermes and Pi; wake adapters for Claude Code, Codex, Hermes, and Pi; message board MCP, SDK, dashboard, and docs; wake idle sessions for direct messages and add message board core.
-- Bug fixes: clear PR baseline failures; name sessions by agent and key suffix; show agent DMs to operators; use ZAI-compatible system message roles; type-check peer context hook payloads; enforce session scope and recover bounded wake lifecycles; keep token agent for omitted identity; resolve omitted agent like session-start; identify board cursors and refused wake deliveries explicitly; bound board visibility refresh, bound first Codex turn lookback; per-turn Codex wake boundary, ordered SSE visibility refresh, same-millisecond read cursor, thread paging guard; match the wake route's scoped agent in the session-end wake check; scope wake waiters by agent, keep offset board reads unread, qualify wake gates; narrow the session-end wake grace, return the stored read cursor, bound Pi error body reads; address CodeRabbit review and CI isolation failures; let the daemon resolve Hermes tool identity, surface daemon errors, allow DM promotion, and cap the session-start section; release wakes for disconnected clients, dedupe concurrent board notices, log swallowed Hermes errors; release wake claims for finished waiters, index board notices, clean late projections.
-- Performance: skip directories no native source pattern can match.
-- Docs: move verification evidence out of the PR.
+- Features: add signet accelerate to install native and CUDA recall runtimes; report each stage's start offset in recall timings; expose scoped peer context across harnesses; tell every tool-equipped session about messaging and the board; native tools for Hermes and Pi; wake adapters for Claude Code, Codex, Hermes, and Pi; message board MCP, SDK, dashboard, and docs; wake idle sessions for direct messages and add message board core.
+- Bug fixes: settle optional transcript reads; fence stale review state; close review follow-ups; address acceleration review; close review findings on runtime pinning, CUDA batch size and stats refresh; record recall.performed for recalls served by the recall owner; bound transcript placement and keep the score memo after a fallback; never rewrite an unparseable agent.yaml and verify installed runtimes by hash; stop abandoned cross-encoder work and add a native CPU cross-encoder; keep CUDA after a rerank timeout and check the runtime version first; load real workspaces from data/signet.db in the recall bench; publish a settled worker status after a failed model load; clear PR baseline failures; name sessions by agent and key suffix; show agent DMs to operators; use ZAI-compatible system message roles; type-check peer context hook payloads; enforce session scope and recover bounded wake lifecycles; keep token agent for omitted identity; resolve omitted agent like session-start; identify board cursors and refused wake deliveries explicitly; bound board visibility refresh, bound first Codex turn lookback; per-turn Codex wake boundary, ordered SSE visibility refresh, same-millisecond read cursor, thread paging guard; match the wake route's scoped agent in the session-end wake check; scope wake waiters by agent, keep offset board reads unread, qualify wake gates; narrow the session-end wake grace, return the stored read cursor, bound Pi error body reads; address CodeRabbit review and CI isolation failures; let the daemon resolve Hermes tool identity, surface daemon errors, allow DM promotion, and cap the session-start section; release wakes for disconnected clients, dedupe concurrent board notices, log swallowed Hermes errors; release wake claims for finished waiters, index board notices, clean late projections.
+- Performance: keep SQLite query planner statistics and make two LIMIT cuts deterministic; score transcript evidence in the main cross-encoder batch; embed with the native ONNX runtime when configured; tokenize cross-encoder pairs natively and once per document; use up to four WASM threads for embeddings on Linux; run embedding-independent channels while the query embeds; compute the query embedding inside the recall ledger; run the cross-encoder on CUDA when configured; skip directories no native source pattern can match.
+- Docs: document the CUDA cross-encoder and correct compiled rerank latency; move verification evidence out of the PR.
 
 ### 2026-11-02
 - Bug fixes: bound Hermes mirror dedup by recall dates; apply since/until to native artifacts and transcripts.
@@ -37,6 +37,46 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: register implicit agents as isolated.
 
 ## Release Ledger
+
+## [0.240.0] - 2026-11-04
+
+Release summary: 2 features, 12 bug fixes, 8 performance improvements, and 1 docs update.
+Tag range: `v0.239.1..v0.240.0`.
+
+### Features
+
+- **cli**: add signet accelerate to install native and CUDA recall runtimes
+- **recall**: report each stage's start offset in recall timings
+
+### Bug Fixes
+
+- **recall**: settle optional transcript reads
+- **recall**: fence stale review state
+- **recall**: close review follow-ups
+- **recall**: address acceleration review
+- **recall**: close review findings on runtime pinning, CUDA batch size and stats refresh
+- **telemetry**: record recall.performed for recalls served by the recall owner
+- **recall**: bound transcript placement and keep the score memo after a fallback
+- **cli**: never rewrite an unparseable agent.yaml and verify installed runtimes by hash
+- **recall**: stop abandoned cross-encoder work and add a native CPU cross-encoder
+- **recall**: keep CUDA after a rerank timeout and check the runtime version first
+- **bench**: load real workspaces from data/signet.db in the recall bench
+- **embedding**: publish a settled worker status after a failed model load
+
+### Performance
+
+- **db**: keep SQLite query planner statistics and make two LIMIT cuts deterministic
+- **recall**: score transcript evidence in the main cross-encoder batch
+- **embedding**: embed with the native ONNX runtime when configured
+- **recall**: tokenize cross-encoder pairs natively and once per document
+- **embedding**: use up to four WASM threads for embeddings on Linux
+- **recall**: run embedding-independent channels while the query embeds
+- **recall**: compute the query embedding inside the recall ledger
+- **recall**: run the cross-encoder on CUDA when configured
+
+### Docs
+
+- **memory**: document the CUDA cross-encoder and correct compiled rerank latency
 
 ## [0.239.1] - 2026-11-04
 
