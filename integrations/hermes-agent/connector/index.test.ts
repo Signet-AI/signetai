@@ -2590,4 +2590,351 @@ describe("HermesAgentConnector — native bundle (SIGNET_DIR) plugin resolution"
 			expect.arrayContaining(["memory_search", "memory_store", "signet_session_search", "recall", "remember"]),
 		);
 	});
+
+	it("exposes cross-agent messaging and board tools with auto-filled identity", () => {
+		const fixture = join(tmpRoot, "python-coordination-fixture");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+
+		const script = [
+			"import json",
+			"import plugins.memory.signet as sig",
+			"class FakeClient:",
+			"    _agent_id = 'agent-a'",
+			"    def __init__(self):",
+			"        self.calls = []",
+			"    def request_result(self, method, path, body=None, **kw):",
+			"        self.calls.append([method, path, body])",
+			"        if path.startswith('/api/board/threads/missing'):",
+			"            return {'ok': False, 'status': 404, 'error': 'board thread not found: missing'}",
+			"        if method == 'GET' and path.startswith('/api/board/threads/t1'):",
+			"            return {'ok': True, 'data': {'posts': [{'id': 'p9'}], 'readThroughPostId': 'p9'}}",
+			"        return {'ok': True, 'data': {'ok': True}}",
+			"p = sig.SignetMemoryProvider()",
+			"p._client = FakeClient()",
+			"p._agent_id = 'agent-a'",
+			"p._session_key = 'sess-1'",
+			"def call(name, **args):",
+			"    out = json.loads(p.handle_tool_call(name, args))",
+			"    return out",
+			"names = [s['name'] for s in p.get_tool_schemas()]",
+			"r = {}",
+			"r['names'] = names",
+			"r['noTarget'] = call('agent_message_send', content='hi')",
+			"r['twoTargets'] = call('agent_message_send', content='hi', to_agent_id='b', broadcast=True)",
+			"call('agent_message_send', content='hi', to_session_key='s/2', type='question')",
+			"call('agent_peers', include_self=True, limit=500)",
+			"call('agent_message_inbox', unread_only=True, limit=99)",
+			"call('agent_message_ack', message_id='m/1')",
+			"call('board_post', thread_id='t 1', body='reply', reply_to_post_id='p1')",
+			"call('board_post', topic='x', title='T', body='B', tags=['a'], from_message_id='m1')",
+			"call('board_read', thread_id='t1')",
+			"call('board_update', thread_id='t1', status='resolved', pinned=True)",
+			"r['badUpdate'] = call('board_update', thread_id='t1')",
+			"call('board_list', status='open')",
+			"r['notFound'] = call('board_read', thread_id='missing')",
+			"p._client.request_result = lambda *a, **k: {'ok': False, 'status': None, 'error': 'daemon unreachable: refused'}",
+			"r['down'] = call('agent_peers')",
+			"print(json.dumps(r))",
+		].join("\n");
+		const result = spawnSync(resolveTestPythonPath(), ["-c", script], {
+			cwd: fixture,
+			env: { ...process.env, PYTHONPATH: fixture },
+			encoding: "utf-8",
+			timeout: 5_000,
+		});
+		expect(result.status, result.stderr).toBe(0);
+		const parsed = JSON.parse(result.stdout) as {
+			names: string[];
+			noTarget: { error: string };
+			twoTargets: { error: string };
+			badUpdate: { error: string };
+			down: { error: string };
+			notFound: { error: string };
+		};
+		expect(parsed.names).toEqual(
+			expect.arrayContaining([
+				"agent_peers",
+				"agent_message_send",
+				"agent_message_inbox",
+				"agent_message_ack",
+				"board_list",
+				"board_read",
+				"board_post",
+				"board_update",
+			]),
+		);
+		expect(parsed.noTarget.error).toContain("exactly one target");
+		expect(parsed.twoTargets.error).toContain("exactly one target");
+		expect(parsed.badUpdate.error).toContain("at least one");
+		expect(parsed.down.error).toContain("daemon unreachable");
+		expect(parsed.notFound.error).toContain("HTTP 404");
+		expect(parsed.notFound.error).toContain("board thread not found");
+	});
+
+	it("routes cross-agent and board calls to the expected daemon paths and bodies", () => {
+		const fixture = join(tmpRoot, "python-coordination-paths");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+
+		const script = [
+			"import json",
+			"import plugins.memory.signet as sig",
+			"calls = []",
+			"class FakeClient:",
+			"    _agent_id = 'agent-a'",
+			"    def request_result(self, method, path, body=None, **kw):",
+			"        calls.append([method, path, body])",
+			"        if method == 'GET' and path.startswith('/api/board/threads/t1'):",
+			"            return {'ok': True, 'data': {'posts': [{'id': 'p9'}], 'readThroughPostId': 'p9'}}",
+			"        return {'ok': True, 'data': {'ok': True}}",
+			"p = sig.SignetMemoryProvider()",
+			"p._client = FakeClient()",
+			"p._agent_id = 'agent-a'",
+			"p._session_key = 'sess-1'",
+			"def call(name, **a):",
+			"    p.handle_tool_call(name, a)",
+			"call('agent_message_send', content='hi', to_session_key='s2', type='question', fromSessionKey='evil')",
+			"call('agent_message_send', content='all', broadcast=True)",
+			"call('agent_peers', include_self=True, limit=500)",
+			"call('agent_message_inbox', unread_only=True, limit=99, offset=2)",
+			"call('agent_message_ack', message_id='m/1')",
+			"call('board_post', thread_id='t 1', body='reply', reply_to_post_id='p1')",
+			"call('board_post', topic='x', title='T', body='B', tags=['a'], from_message_id='m1')",
+			"call('board_read', thread_id='t1')",
+			"call('board_update', thread_id='t1', status='resolved', pinned=True, tags=['z'])",
+			"call('board_list', status='open', topic='x')",
+			"call('board_post', topic='decisions', from_message_id='m9')",
+			"p._agent_id = ''",
+			"p._client._agent_id = ''",
+			"call('agent_message_send', content='anon', to_agent_id='b')",
+			"print(json.dumps(calls))",
+		].join("\n");
+		const result = spawnSync(resolveTestPythonPath(), ["-c", script], {
+			cwd: fixture,
+			env: { ...process.env, PYTHONPATH: fixture },
+			encoding: "utf-8",
+			timeout: 5_000,
+		});
+		expect(result.status, result.stderr).toBe(0);
+		const calls = JSON.parse(result.stdout) as Array<[string, string, Record<string, unknown> | null]>;
+		expect(calls[0]).toEqual([
+			"POST",
+			"/api/cross-agent/messages",
+			{
+				fromAgentId: "agent-a",
+				fromSessionKey: "sess-1",
+				broadcast: false,
+				type: "question",
+				content: "hi",
+				toSessionKey: "s2",
+			},
+		]);
+		expect(calls[1][2]).toMatchObject({ broadcast: true, type: "info", fromSessionKey: "sess-1" });
+		expect(calls[2][1]).toBe(
+			"/api/cross-agent/presence?agent_id=agent-a&session_key=sess-1&include_self=true&limit=50",
+		);
+		expect(calls[3][1]).toBe(
+			"/api/cross-agent/messages?agent_id=agent-a&session_key=sess-1&limit=25&offset=2&unread_only=true",
+		);
+		expect(calls[4]).toEqual([
+			"POST",
+			"/api/cross-agent/messages/m%2F1/ack",
+			{ agentId: "agent-a", sessionKey: "sess-1" },
+		]);
+		expect(calls[5]).toEqual([
+			"POST",
+			"/api/board/threads/t%201/posts",
+			{ agentId: "agent-a", sessionKey: "sess-1", harness: "hermes-agent", body: "reply", replyToPostId: "p1" },
+		]);
+		expect(calls[6]).toEqual([
+			"POST",
+			"/api/board/threads",
+			{
+				agentId: "agent-a",
+				sessionKey: "sess-1",
+				harness: "hermes-agent",
+				topic: "x",
+				title: "T",
+				body: "B",
+				tags: ["a"],
+				fromMessageId: "m1",
+			},
+		]);
+		expect(calls[7][1]).toBe("/api/board/threads/t1?agent_id=agent-a");
+		expect(calls[8]).toEqual(["POST", "/api/board/threads/t1/read", { agentId: "agent-a", throughPostId: "p9" }]);
+		expect(calls[9]).toEqual([
+			"PATCH",
+			"/api/board/threads/t1",
+			{ agentId: "agent-a", status: "resolved", pinned: true, tags: ["z"] },
+		]);
+		expect(calls[10][1]).toBe("/api/board/topics?agent_id=agent-a");
+		expect(calls[11][1]).toBe("/api/board/threads?topic=x&status=open&agent_id=agent-a");
+		expect(calls[12]).toEqual([
+			"POST",
+			"/api/board/threads",
+			{ agentId: "agent-a", sessionKey: "sess-1", harness: "hermes-agent", topic: "decisions", fromMessageId: "m9" },
+		]);
+		expect(calls[13]?.[2]).not.toHaveProperty("fromAgentId");
+		expect(calls[13]?.[2]).toMatchObject({ fromSessionKey: "sess-1", toAgentId: "b", content: "anon" });
+	});
+
+	it("runs the direct-message wake loop with injection, backoff, and clean stop", () => {
+		const fixture = join(tmpRoot, "python-wake-fixture");
+		cpSync(join(import.meta.dir, "hermes-plugin"), join(fixture, "plugins", "memory", "signet"), { recursive: true });
+		mkdirSync(join(fixture, "agent"), { recursive: true });
+		writeFileSync(join(fixture, "agent", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "__init__.py"), "");
+		writeFileSync(join(fixture, "plugins", "memory", "__init__.py"), "");
+		writeFileSync(join(fixture, "agent", "memory_provider.py"), "class MemoryProvider:\n    pass\n");
+
+		const result = spawnSync(
+			resolveTestPythonPath(),
+			[
+				"-c",
+				[
+					"import threading, json",
+					"import plugins.memory.signet as sig",
+					"sig._WAKE_MIN_LOOP_SECS = 0.01",
+					"sig._WAKE_INJECT_RETRY_SECS = 0.01",
+					"sig._WAKE_DEFAULT_RETRY_SECS = 0.01",
+					"done = threading.Event()",
+					"class FakeClient:",
+					"    def __init__(self):",
+					"        self.calls = []",
+					"        self.script = [",
+					"            {'wake': True, 'inject': 'hello', 'messageIds': ['m1']},",
+					"            {'wake': False, 'reason': 'timeout'},",
+					"            None,",
+					"            {'wake': True, 'inject': 'again', 'messageIds': ['m2']},",
+					"            {'wake': False, 'reason': 'closed', 'retryAfterMs': 10},",
+					"            {'wake': False, 'reason': 'superseded'},",
+					"            {'wake': True, 'inject': 'never', 'messageIds': []},",
+					"        ]",
+					"    def wake(self, key, project='', wait_ms=0, on_connection=None):",
+					"        self.calls.append([key, project, wait_ms])",
+					"        return self.script.pop(0)",
+					"    def release_wake(self, key, ids):",
+					"        self.released = getattr(self, 'released', []) + [[key, ids]]",
+					"injected = []",
+					"def inject(text, session_key=None):",
+					"    injected.append([text, session_key])",
+					"    return len(injected) > 1",
+					"client = FakeClient()",
+					"waiter = sig._WakeWaiter(client, inject, 'sess', 'host-sess', '/p')",
+					"waiter.start(); waiter.join(5)",
+					"assert not waiter._thread.is_alive()",
+					"assert len(client.calls) == 6, client.calls",
+					"assert client.calls[0] == ['sess', '/p', 25000]",
+					"assert injected == [['hello', 'host-sess'], ['again', 'host-sess']], injected",
+					"assert client.released == [['sess', ['m1']]], client.released",
+					"sig._WAKE_UNAVAILABLE_RECHECK_SECS = 0.01",
+					"gated = FakeClient()",
+					"checks = []",
+					"def gate():",
+					"    checks.append(1)",
+					"    if len(checks) >= 3: gated_waiter._stop.set()",
+					"    return False",
+					"gated_waiter = sig._WakeWaiter(gated, inject, 'g', 'g', '', gate)",
+					"gated_waiter.start(); gated_waiter.join(5)",
+					"assert gated.calls == [] and len(checks) >= 3, (gated.calls, checks)",
+					"class Mgr:",
+					"    _cli_ref = None",
+					"    has_tui_message_injector = False",
+					"    has_gateway_message_injector = True",
+					"class PCtx:",
+					"    def __init__(self, allowed): self._manager = Mgr(); self.allowed = allowed",
+					"    def _gateway_injection_allowed(self): return self.allowed",
+					"assert sig._injection_available(PCtx(False)) is False",
+					"assert sig._injection_available(PCtx(True)) is True",
+					"cli = PCtx(False); cli._manager._cli_ref = object()",
+					"assert sig._injection_available(cli) is True",
+					"class Ctx:",
+					"    def __init__(self, inner): self.inner = inner; self.provider = None",
+					"    def _plugin_context(self): return self.inner",
+					"    def register_memory_provider(self, p): self.provider = p",
+					"class Inner:",
+					"    def inject_message(self, content, role='user', *, session_key=None, origin=None): return True",
+					"ctx = Ctx(Inner()); sig.register(ctx)",
+					"assert ctx.provider._message_injector is not None",
+					"bare = Ctx(object()); sig.register(bare)",
+					"assert bare.provider._message_injector is None",
+					"bare.provider._start_wake_waiter()",
+					"assert bare.provider._wake_waiter is None",
+					"class Blocking:",
+					"    def wake(self, key, project='', wait_ms=0, on_connection=None):",
+					"        class Conn:",
+					"            def close(self_inner): done.set()",
+					"        on_connection(Conn())",
+					"        done.wait(5)",
+					"        return None",
+					"w2 = sig._WakeWaiter(Blocking(), inject, 's', 's', '')",
+					"w2.start(); w2.stop(); w2.join(5)",
+					"assert not w2._thread.is_alive()",
+					"class Refusing:",
+					"    def __init__(self, script): self.script = script; self.calls = 0; self.released = []",
+					"    def wake(self, key, project='', wait_ms=0, on_connection=None, **kw):",
+					"        self.calls += 1",
+					"        return self.script.pop(0) if self.script else {'wake': True, 'inject': 'r', 'messageIds': ['r%d' % self.calls]}",
+					"    def release_wake(self, key, ids):",
+					"        self.released.append(ids); return {'released': len(ids)}",
+					"deny = lambda text, session_key=None: False",
+					"rc = Refusing([])",
+					"rw = sig._WakeWaiter(rc, deny, 's', 's', '')",
+					"rw.start(); rw.join(5)",
+					"assert not rw._thread.is_alive() and rc.calls == 3 and len(rc.released) == 3, (rc.calls, rc.released)",
+					"ok_after = []",
+					"flip = [False, False, True, False, False, True]",
+					"def flaky(text, session_key=None):",
+					"    r = flip.pop(0) if flip else False; ok_after.append(r); return r",
+					"wk = lambda i: {'wake': True, 'inject': 'x', 'messageIds': [i]}",
+					"net = Refusing([None, {'error': 'x'}, None, wk('a'), wk('b'), wk('c'), None, wk('d'), wk('e'), wk('f'), wk('g'), wk('h')])",
+					"nw = sig._WakeWaiter(net, flaky, 's', 's', '')",
+					"nw.start(); nw.join(5)",
+					"assert not nw._thread.is_alive() and len(net.released) == 7 and net.calls == 13, (net.calls, net.released, ok_after)",
+					"class FailRel(Refusing):",
+					"    def release_wake(self, key, ids): raise RuntimeError('down')",
+					"fr = FailRel([])",
+					"fw = sig._WakeWaiter(fr, deny, 's', 's', '')",
+					"fw.start(); fw.join(5)",
+					"assert not fw._thread.is_alive() and fr.calls == 3",
+					"class RelRes(Refusing):",
+					"    def __init__(self, res): Refusing.__init__(self, []); self.res = res",
+					"    def release_wake(self, key, ids): return self.res",
+					"for res, want in ((None, False), ({'error': 'x'}, False), ({'released': 1}, True)):",
+					"    assert sig._WakeWaiter(RelRes(res), deny, 's', 's', '')._release(['m']) is want, res",
+					"class StopAfterClaim(Refusing):",
+					"    def __init__(self): Refusing.__init__(self, []); self.w = None",
+					"    def wake(self, key, project='', wait_ms=0, on_connection=None, **kw):",
+					"        self.calls += 1; self.w.stop()",
+					"        return {'wake': True, 'inject': 'late', 'messageIds': ['late1']}",
+					"injected = []",
+					"sc = StopAfterClaim()",
+					"sw = sig._WakeWaiter(sc, lambda t, session_key=None: injected.append(t) or True, 's', 's', '')",
+					"sc.w = sw; sw.start(); sw.join(5)",
+					"assert not sw._thread.is_alive() and sc.calls == 1 and sc.released == [['late1']] and injected == [], (sc.calls, sc.released, injected)",
+					"p = sig.SignetMemoryProvider()",
+					"p._client = Refusing([]); p._message_injector = deny; p._session_key = 's'",
+					"p._start_wake_waiter(); dead = p._wake_waiter; dead.join(5)",
+					"assert not dead._thread.is_alive()",
+					"p._start_wake_waiter()",
+					"assert p._wake_waiter is not dead",
+					"p._stop_wake_waiter(); assert p._wake_waiter is None",
+					"print('ok')",
+				].join("\n"),
+			],
+			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8", timeout: 20_000 },
+		);
+
+		expect(result.status, result.stderr || result.stdout).toBe(0);
+		expect(result.stdout).toContain("ok");
+	});
 });

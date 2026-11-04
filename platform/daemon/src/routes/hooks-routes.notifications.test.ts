@@ -4,14 +4,18 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import type { TokenClaims } from "../auth";
 import { createAgentMessage, resetCrossAgentStateForTest, upsertAgentPresence } from "../cross-agent";
 import { getSynthesisWorker } from "../hooks";
+import { invalidateAgentScopeCache } from "../agent-id";
+import { dbOwnerBatch, ownerStatement } from "../db-owner-runtime";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 const suiteDir = mkdtempSync(join(tmpdir(), "signet-notification-routes-suite-"));
 process.env.SIGNET_PATH = suiteDir;
 const { registerHooksRoutes } = await import("./hooks-routes");
+const { authConfig } = await import("./state");
 
 let dir = "";
 let app: Hono;
@@ -47,6 +51,45 @@ async function post(path: string, body: Readonly<Record<string, unknown>>): Prom
 }
 
 describe("cross-agent notification routes", () => {
+	it("lists other agents' messages only in operator scope", async () => {
+		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "private" });
+		const normal = await app.request("/api/cross-agent/messages?agent_id=default");
+		expect(((await normal.json()) as { items: unknown[] }).items).toHaveLength(0);
+		const all = await app.request("/api/cross-agent/messages?scope=all");
+		const items = ((await all.json()) as { items: { id: string; acknowledgedAt?: string }[] }).items;
+		expect(items).toHaveLength(1);
+		expect(items[0]?.acknowledgedAt).toBeUndefined();
+		expect((await post(`/api/cross-agent/messages/${items[0]?.id}/ack`, { agentId: "beta" })).status).toBe(200);
+		const acked = await app.request("/api/cross-agent/messages?scope=all");
+		expect(((await acked.json()) as { items: { acknowledgedAt?: string }[] }).items[0]?.acknowledgedAt).toBeString();
+		expect((await app.request("/api/cross-agent/messages?scope=bad")).status).toBe(400);
+	});
+	it("allows an admin token to list all messages", async () => {
+		const previousMode = authConfig.mode;
+		authConfig.mode = "team";
+		const claims: TokenClaims = {
+			sub: "admin-token",
+			scope: { agent: "alpha" },
+			role: "admin",
+			iat: Math.floor(Date.now() / 1000),
+			exp: Math.floor(Date.now() / 1000) + 3600,
+		};
+		const scoped = new Hono();
+		scoped.use("*", async (c, next) => {
+			c.set("auth", { authenticated: true, claims });
+			await next();
+		});
+		registerHooksRoutes(scoped);
+		try {
+			createAgentMessage({ fromAgentId: "beta", toAgentId: "gamma", content: "admin view" });
+			const response = await scoped.request("/api/cross-agent/messages?scope=all");
+			expect(response.status).toBe(200);
+			expect(((await response.json()) as { items: unknown[] }).items).toHaveLength(1);
+		} finally {
+			authConfig.mode = previousMode;
+		}
+	});
+
 	it("rejects retired synthesis completion with its structured contract and without changing MEMORY.md", async () => {
 		const memoryPath = join(dir, "MEMORY.md");
 		const before = "# Existing head\n\n- keep this content\n";
@@ -133,6 +176,101 @@ describe("cross-agent notification routes", () => {
 
 		const denied = await post(`/api/cross-agent/messages/${message.id}/ack`, { agentId: "gamma" });
 		expect(denied.status).toBe(404);
+	});
+
+	it("resolves omitted cross-agent identity like session-start instead of the literal default agent", async () => {
+		const previousAgentId = process.env.SIGNET_AGENT_ID;
+		process.env.SIGNET_AGENT_ID = "ops";
+		try {
+			await dbOwnerBatch(
+				[
+					ownerStatement(
+						"INSERT OR REPLACE INTO agents (id, name, read_policy, created_at, updated_at) VALUES ('ops', 'ops', 'shared', datetime('now'), datetime('now'))",
+						[],
+					),
+				],
+				{ operation: "test.notification-agent", lane: "write" },
+			);
+			invalidateAgentScopeCache("ops");
+			upsertAgentPresence({ agentId: "ops", harness: "hermes", sessionKey: "session-ops" });
+			upsertAgentPresence({ agentId: "beta", harness: "pi", sessionKey: "session-beta" });
+			createAgentMessage({ fromAgentId: "beta", toAgentId: "ops", type: "info", content: "For ops only" });
+
+			const sent = await post("/api/cross-agent/messages", {
+				content: "From ops",
+				toAgentId: "beta",
+				fromSessionKey: "session-ops",
+			});
+			expect(sent.status).toBe(200);
+			expect(((await sent.json()) as { message: { fromAgentId: string } }).message.fromAgentId).toBe("ops");
+
+			const prefixed = await post("/api/cross-agent/messages", {
+				content: "From alpha",
+				toAgentId: "beta",
+				fromSessionKey: "agent:alpha:session-1",
+			});
+			expect(prefixed.status).toBe(200);
+			expect(((await prefixed.json()) as { message: { fromAgentId: string } }).message.fromAgentId).toBe("alpha");
+
+			const inbox = await app.request("/api/cross-agent/messages?session_key=session-ops");
+			expect(inbox.status).toBe(200);
+			const inboxBody = (await inbox.json()) as { items: Array<{ content: string }> };
+			expect(inboxBody.items.map((item) => item.content)).toContain("For ops only");
+
+			const presence = await app.request("/api/cross-agent/presence?session_key=session-ops");
+			expect(presence.status).toBe(200);
+			const presenceBody = (await presence.json()) as { sessions: Array<{ sessionKey: string }> };
+			expect(presenceBody.sessions.map((session) => session.sessionKey)).toEqual(["session-beta"]);
+		} finally {
+			if (previousAgentId === undefined) {
+				Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			} else {
+				process.env.SIGNET_AGENT_ID = previousAgentId;
+			}
+		}
+	});
+
+	it("keeps a scoped token's agent when the request omits cross-agent identity", async () => {
+		const previousAgentId = process.env.SIGNET_AGENT_ID;
+		const previousMode = authConfig.mode;
+		process.env.SIGNET_AGENT_ID = "ops";
+		authConfig.mode = "team";
+		const claims: TokenClaims = {
+			sub: "alpha-token",
+			scope: { agent: "alpha" },
+			role: "agent",
+			iat: Math.floor(Date.now() / 1000),
+			exp: Math.floor(Date.now() / 1000) + 3600,
+		};
+		const scoped = new Hono();
+		scoped.use("*", async (c, next) => {
+			c.set("auth", { authenticated: true, claims });
+			await next();
+		});
+		registerHooksRoutes(scoped);
+		try {
+			upsertAgentPresence({ agentId: "alpha", harness: "hermes", sessionKey: "session-alpha" });
+			createAgentMessage({ fromAgentId: "beta", toAgentId: "alpha", type: "info", content: "For alpha only" });
+
+			const denied = await scoped.request("/api/cross-agent/messages?scope=all");
+			expect(denied.status).toBe(403);
+			expect(await denied.json()).toEqual({ error: "scope=all requires local mode or an admin token" });
+			const inbox = await scoped.request("/api/cross-agent/messages?session_key=session-alpha");
+			expect(inbox.status).toBe(200);
+			const inboxBody = (await inbox.json()) as { items: Array<{ content: string }> };
+			expect(inboxBody.items.map((item) => item.content)).toContain("For alpha only");
+
+			const removed = await scoped.request("/api/cross-agent/presence/session-alpha", { method: "DELETE" });
+			expect(removed.status).toBe(200);
+			expect(await removed.json()).toEqual({ removed: true });
+		} finally {
+			authConfig.mode = previousMode;
+			if (previousAgentId === undefined) {
+				Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			} else {
+				process.env.SIGNET_AGENT_ID = previousAgentId;
+			}
+		}
 	});
 	it("attaches pending messages to the universal session-start response", async () => {
 		const message = createAgentMessage({

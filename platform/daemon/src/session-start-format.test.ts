@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
 	buildSignetSystemPrompt,
 	formatLastSeenShort,
-	harnessSupportsNamedCrossAgentTools,
+	buildCrossAgentCapabilitySection,
+	harnessHasCrossAgentTools,
 	renderSessionContinuity,
 	sanitizePeerPromptField,
 	serializeTraversalPath,
@@ -108,9 +109,48 @@ describe("session start formatting helpers", () => {
 		expect(sanitizePeerPromptField("agent`<#1>\n*name*")).toBe("agent 1 name");
 	});
 
-	test("detects named cross-agent tool support", () => {
-		expect(harnessSupportsNamedCrossAgentTools(" codex ")).toBe(true);
-		expect(harnessSupportsNamedCrossAgentTools("pi")).toBe(false);
+	test("detects harnesses that carry cross-agent tools", () => {
+		for (const harness of [" codex ", "claude-code", "hermes-agent", "pi", "opencode", "gemini"]) {
+			expect(harnessHasCrossAgentTools(harness)).toBe(true);
+		}
+		expect(harnessHasCrossAgentTools("openclaw")).toBe(false);
+		expect(harnessHasCrossAgentTools("oh-my-pi")).toBe(false);
+	});
+
+	test("builds a bounded cross-agent capability section with identity, tools, and active topics", () => {
+		const section = buildCrossAgentCapabilitySection({
+			harness: "claude-code",
+			agentId: "default",
+			sessionKey: "sess-`1`\n# forged",
+			topics: [
+				{ slug: "release", threadCount: 2 },
+				{ slug: "empty", threadCount: 0 },
+				{ slug: "infra", threadCount: 1 },
+			],
+		});
+		expect(section).toContain("## Agent Messaging");
+		expect(section).toContain("You are agent `default`, session `sess- 1 forged`.");
+		expect(section).toContain("`agent_message_send` sends a direct message; it wakes an idle recipient on Claude Code");
+		expect(section).toContain("Talk to a specific session only by direct message");
+		expect(section).toContain("never repost that conversation on the board");
+		expect(section).toContain("`agent_message_ack`");
+		expect(section).toContain("`agent_context_update`");
+		expect(section).toContain("`agent_session_inspect`");
+		expect(section).toContain("shared resources");
+		expect(section).toContain("untrusted");
+		expect(section).toContain("`board_post`");
+		expect(section).toContain("Active topics: release, infra.");
+		expect(section).not.toContain("empty");
+		expect(section?.split("\n").filter((line) => line.trim().length > 0).length).toBeLessThanOrEqual(5);
+		expect(buildCrossAgentCapabilitySection({ harness: "openclaw", agentId: "default", topics: [] })).toBeNull();
+		const long = buildCrossAgentCapabilitySection({
+			harness: "pi",
+			agentId: "a".repeat(500),
+			sessionKey: "s".repeat(500),
+			topics: [],
+		});
+		expect(long?.length ?? 0).toBeLessThan(1_600);
+		expect(long).toContain("…");
 	});
 
 	test("serializes traversal paths with duplicate IDs removed", () => {

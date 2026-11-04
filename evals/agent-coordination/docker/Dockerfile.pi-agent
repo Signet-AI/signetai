@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1.7
+# Real Pi CLI + the Signet Pi extension BUILT FROM THIS BRANCH. No LLM access, no key, no gold at build time.
+# Build from repo root:  docker build -f evals/agent-coordination/docker/Dockerfile.pi-agent -t coord-eval-pi:<tag> .
+FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS ext
+WORKDIR /app
+COPY package.json bun.lock bunfig.toml tsconfig.json biome.json ./
+COPY AGENTS.md CLAUDE.md LICENSE README.md ./
+COPY scripts ./scripts
+COPY skills ./skills
+COPY memorybench ./memorybench
+COPY platform ./platform
+COPY surfaces ./surfaces
+COPY integrations ./integrations
+COPY libs ./libs
+COPY dist ./dist
+COPY plugins ./plugins
+COPY public ./public
+COPY web ./web
+RUN bun install --frozen-lockfile --ignore-scripts \
+ && (cd platform/core && bun run build) \
+ && (cd libs/connector-base && bun run build) \
+ && (cd integrations/pi/extension && bun run build) \
+ && test -s integrations/pi/extension/dist/signet-pi.mjs
+
+FROM node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
+ARG PI_VERSION=1.0.0
+RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@${PI_VERSION} \
+ && test "$(pi --version)" = "${PI_VERSION}" \
+ && useradd -m -u 10001 agent \
+ && mkdir -p /work /home/agent/.pi/agent && chown -R agent /work /home/agent
+COPY --from=ext /app/integrations/pi/extension/dist/signet-pi.mjs /opt/signet/signet-pi.mjs
+COPY evals/agent-coordination/docker/simgpu /opt/eval/bin/simgpu
+RUN chmod +x /opt/eval/bin/simgpu
+ENV PATH=/opt/eval/bin:$PATH PI_OFFLINE=1 PI_CODING_AGENT_DIR=/home/agent/.pi/agent
+USER agent
+WORKDIR /work
+# Final image: Pi + built extension + simgpu only. Entry supplied by the runner (pi --mode rpc ...).

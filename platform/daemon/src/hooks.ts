@@ -1,4 +1,5 @@
 import { requestMemoryHead } from "./memory-head";
+import { buildCrossAgentSessionSection } from "./cross-agent-session-section";
 import { budgetIdentityContent } from "./identity-context";
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -26,6 +27,7 @@ import {
 	shouldCheckpoint,
 } from "./continuity-state";
 import { listAgentPresence } from "./cross-agent";
+import { resolvePresenceAudience } from "./cross-agent-inspect";
 import { getDbAccessor } from "./db-accessor";
 import { getDbOwner } from "./db-owner-runtime";
 import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
@@ -120,7 +122,6 @@ import { advanceRecallContextEpochAsync, applyRecallDedupeAsync, claimRecallItem
 import {
 	buildSignetSystemPrompt,
 	formatLastSeenShort,
-	harnessSupportsNamedCrossAgentTools,
 	renderSessionContinuity,
 	sanitizePeerPromptField,
 	serializeTraversalPath,
@@ -258,7 +259,7 @@ export interface SessionStartRequest {
 	parentKey?: string;
 	parentId?: string;
 	parentID?: string;
-	context?: string;
+	context?: string | Record<string, unknown>;
 	sessionKey?: string;
 	runtimePath?: "plugin" | "legacy";
 }
@@ -315,6 +316,7 @@ export interface UserPromptSubmitRequest {
 	transcript?: string;
 	runtimePath?: "plugin" | "legacy";
 	memory_feedback?: unknown;
+	context?: unknown;
 }
 
 export interface UserPromptSubmitResponse {
@@ -1051,8 +1053,14 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 
 	if (req.project) {
+		const peerViewerId = resolveAgentId(req);
+		let peerAudience: ReadonlySet<string> | null = new Set<string>();
+		try {
+			peerAudience = await resolvePresenceAudience(peerViewerId);
+		} catch {}
 		const peerSessions = listAgentPresence({
-			agentId: resolveAgentId(req),
+			allowedAgentIds: peerAudience,
+			agentId: peerViewerId,
 			sessionKey: req.sessionKey,
 			project: req.project,
 			includeSelf: false,
@@ -1072,11 +1080,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					`- ${safeAgentId} (${safeHarness})${projectLabel}${sessionLabel} [seen ${formatLastSeenShort(peer.lastSeenAt)}]`,
 				);
 			}
-			if (harnessSupportsNamedCrossAgentTools(req.harness)) {
-				dynamicParts.push("Use `agent_message_send` to ask for help and `agent_message_inbox` to read replies.");
-			}
 		}
 	}
+
+	const crossAgentSection = await buildCrossAgentSessionSection(req);
+	if (crossAgentSection) dynamicParts.push(crossAgentSection);
 
 	if (agentsMdContent) {
 		dynamicParts.push("\n## Agent Instructions\n");

@@ -1,12 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import * as realOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	ClaudeCodeConnector,
-	type SessionEndFireAndForgetPayload,
-	dispatchSessionEndFireAndForget,
-} from "./src/index.js";
+
+mock.module("node:os", () => ({
+	...realOs,
+	default: { ...realOs, homedir: () => process.env.HOME ?? realOs.homedir() },
+	homedir: () => process.env.HOME ?? realOs.homedir(),
+}));
+
+const { ClaudeCodeConnector, dispatchSessionEndFireAndForget } = await import("./src/index.js");
+type SessionEndFireAndForgetPayload = import("./src/index.js").SessionEndFireAndForgetPayload;
 
 const origHome = process.env.HOME;
 let tmpRoot = "";
@@ -14,6 +19,10 @@ let tmpRoot = "";
 beforeEach(() => {
 	tmpRoot = mkdtempSync(join(tmpdir(), "signet-claude-code-test-"));
 	process.env.HOME = tmpRoot;
+});
+
+afterAll(() => {
+	mock.module("node:os", () => realOs);
 });
 
 afterEach(() => {
@@ -145,5 +154,83 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 		const result = await new ClaudeCodeConnector().install(tmpRoot);
 		expect(readFileSync(agentsPath, "utf-8")).toBe("plain content\n");
 		expect(result.filesWritten).not.toContain(agentsPath);
+	});
+});
+
+describe("ClaudeCodeConnector wake hooks", () => {
+	const settingsFile = () => join(tmpRoot, ".claude", "settings.json");
+	const readHooks = () => JSON.parse(readFileSync(settingsFile(), "utf-8")).hooks as Record<string, unknown[]>;
+	const commandsOf = (groups: unknown[]) =>
+		groups.flatMap((g) => ((g as { hooks: Array<Record<string, unknown>> }).hooks ?? []).map((h) => h));
+
+	it("installs asyncRewake wake hooks on SessionStart and Stop", async () => {
+		await new ClaudeCodeConnector().install(tmpRoot);
+		const hooks = readHooks();
+		const start = commandsOf(hooks.SessionStart ?? []);
+		expect(String(start[0]?.command)).toContain("hook session-start");
+		const wakeStart = start.filter((h) => String(h.command).includes("hook wake"));
+		expect(wakeStart).toHaveLength(1);
+		expect(wakeStart[0]?.asyncRewake).toBe(true);
+		expect(wakeStart[0]?.timeout).toBe(3600);
+		expect(String(wakeStart[0]?.command)).toContain('hook wake -H claude-code --project "');
+		const stop = commandsOf(hooks.Stop ?? []).filter((h) => String(h.command).includes("hook wake"));
+		expect(stop).toHaveLength(1);
+		expect(stop[0]?.asyncRewake).toBe(true);
+	});
+
+	it("is idempotent and preserves user Stop hooks", async () => {
+		const { mkdirSync } = await import("node:fs");
+		mkdirSync(join(tmpRoot, ".claude"), { recursive: true });
+		writeFileSync(
+			settingsFile(),
+			JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo mine" }] }] } }),
+			"utf-8",
+		);
+		const connector = new ClaudeCodeConnector();
+		await connector.install(tmpRoot);
+		await connector.install(tmpRoot);
+		const hooks = readHooks();
+		const stop = commandsOf(hooks.Stop ?? []);
+		expect(stop.filter((h) => String(h.command).includes("hook wake"))).toHaveLength(1);
+		expect(stop.filter((h) => h.command === "echo mine")).toHaveLength(1);
+		expect(commandsOf(hooks.SessionStart ?? []).filter((h) => String(h.command).includes("hook wake"))).toHaveLength(1);
+	});
+
+	it("uninstall removes wake hooks but keeps user Stop hooks", async () => {
+		const { mkdirSync } = await import("node:fs");
+		mkdirSync(join(tmpRoot, ".claude"), { recursive: true });
+		writeFileSync(
+			settingsFile(),
+			JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: "command", command: "echo mine" }] }] } }),
+			"utf-8",
+		);
+		const connector = new ClaudeCodeConnector();
+		await connector.install(tmpRoot);
+		await connector.uninstall();
+		const hooks = readHooks();
+		expect(hooks.SessionStart).toBeUndefined();
+		const stop = commandsOf(hooks.Stop ?? []);
+		expect(stop.map((h) => h.command)).toEqual(["echo mine"]);
+	});
+
+	it("sessionStart:false removes Signet session-start and wake hooks but keeps user hooks", async () => {
+		const { mkdirSync } = await import("node:fs");
+		mkdirSync(join(tmpRoot, ".claude"), { recursive: true });
+		await new ClaudeCodeConnector().install(tmpRoot);
+		const installed = JSON.parse(readFileSync(settingsFile(), "utf-8"));
+		installed.hooks.SessionStart.push({ hooks: [{ type: "command", command: "echo start" }] });
+		writeFileSync(settingsFile(), JSON.stringify(installed), "utf-8");
+		await new ClaudeCodeConnector({ hooks: { sessionStart: false } } as never).install(tmpRoot);
+		const hooks = readHooks();
+		expect(commandsOf(hooks.SessionStart ?? []).map((h) => h.command)).toEqual(["echo start"]);
+		expect(hooks.Stop).toBeUndefined();
+	});
+
+	it("sessionStart:false drops empty SessionStart", async () => {
+		await new ClaudeCodeConnector().install(tmpRoot);
+		await new ClaudeCodeConnector({ hooks: { sessionStart: false } } as never).install(tmpRoot);
+		const hooks = readHooks();
+		expect(hooks.SessionStart).toBeUndefined();
+		expect(hooks.Stop).toBeUndefined();
 	});
 });

@@ -62,6 +62,12 @@ export interface PiSessionCompactEvent {
 	};
 }
 
+export interface PiToolResultEvent {
+	readonly toolName: string;
+	readonly input?: unknown;
+	readonly isError?: boolean;
+}
+
 export interface PiSessionSwitchEvent {
 	readonly type: string;
 	readonly previousSessionFile?: string;
@@ -87,6 +93,7 @@ export interface PiUI {
 
 export interface PiExtensionContext {
 	readonly cwd?: string;
+	readonly mode?: "tui" | "rpc" | "json" | "print";
 	readonly sessionManager: ReadonlySessionManager;
 	readonly ui: PiUI;
 }
@@ -123,6 +130,7 @@ export interface PiFlagDefinition {
 
 export interface PiExtensionApi {
 	readonly ui: PiUI;
+	sendUserMessage?(content: string, options?: { readonly deliverAs?: "steer" | "followUp" }): unknown;
 	on(event: "session_start", handler: (event: unknown, ctx: PiExtensionContext) => unknown): void;
 	on(event: "session_switch", handler: (event: PiSessionSwitchEvent, ctx: PiExtensionContext) => unknown): void;
 	on(event: "session_fork", handler: (event: PiSessionSwitchEvent, ctx: PiExtensionContext) => unknown): void;
@@ -135,6 +143,7 @@ export interface PiExtensionApi {
 		handler: (event: PiSessionBeforeForkEvent, ctx: PiExtensionContext) => unknown,
 	): void;
 	on(event: "session_shutdown", handler: (event: unknown, ctx: PiExtensionContext) => unknown): void;
+	on(event: "tool_result", handler: (event: PiToolResultEvent, ctx: PiExtensionContext) => unknown): void;
 	on(event: "input", handler: (event: PiInputEvent, ctx: PiExtensionContext) => unknown): void;
 	on(
 		event: "before_agent_start",

@@ -797,7 +797,10 @@ export function buildHooksFile(
 			SessionStart: [cmd("session-start", resolveCodexSessionStartTimeoutSeconds())],
 			UserPromptSubmit: [cmd("user-prompt-submit", resolveCodexPromptSubmitTimeoutSeconds())],
 			PreToolUse: [cmd("notifications", NOTIFICATION_HOOK_TIMEOUT_SECONDS, true, ["--hook", "PreToolUse"])],
-			Stop: [cmd("session-end", SESSION_END_TIMEOUT_SECONDS, false)],
+			Stop: [
+				cmd("session-end", SESSION_END_TIMEOUT_SECONDS, false),
+				cmd("wake", NOTIFICATION_HOOK_TIMEOUT_SECONDS, false, ["--no-wait", "--hook-json"]),
+			],
 		},
 	};
 }
@@ -823,7 +826,13 @@ function writeHooksFile(path: string, file: HooksFile): void {
 	atomicWriteJson(path, file);
 }
 
-const SIGNET_HOOK_SUBCOMMANDS = ["session-start", "user-prompt-submit", "notifications", "session-end"] as const;
+const SIGNET_HOOK_SUBCOMMANDS = [
+	"session-start",
+	"user-prompt-submit",
+	"notifications",
+	"wake",
+	"session-end",
+] as const;
 
 function escapeRegExp(value: string): string {
 	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

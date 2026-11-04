@@ -415,7 +415,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(170);
+			expect(applied.version).toBe(171);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -2363,6 +2363,44 @@ describe("migration framework", () => {
 		]);
 		expect(() => db.exec("INSERT INTO dependency_history_compaction_state (id) VALUES (2)")).toThrow();
 		expect(() => db.exec("UPDATE dependency_history_compaction_state SET cursor_rowid = -1")).toThrow();
+	});
+
+	test("migration 171 creates wake claims and message board tables idempotently", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		for (const table of [
+			"cross_agent_message_wakes",
+			"board_topics",
+			"board_threads",
+			"board_thread_tags",
+			"board_posts",
+			"board_reads",
+			"board_notices",
+		]) {
+			db.exec(`DROP TABLE ${table}`);
+		}
+		db.prepare("DELETE FROM schema_migrations WHERE version = 171").run();
+		runMigrations(db);
+		runMigrations(db);
+
+		db.exec(`
+			INSERT INTO board_threads (id, topic_slug, title, author_agent_id, created_at, updated_at, last_post_at)
+			VALUES ('t1', 'general', 'Hello', 'alpha', '2026-11-02T00:00:00Z', '2026-11-02T00:00:00Z', '2026-11-02T00:00:00Z')
+		`);
+		expect(db.query("SELECT status, pinned, post_count FROM board_threads WHERE id = 't1'").get()).toEqual({
+			status: "open",
+			pinned: 0,
+			post_count: 0,
+		});
+		expect(() => db.exec("UPDATE board_threads SET status = 'deleted' WHERE id = 't1'")).toThrow();
+		db.exec(
+			"INSERT INTO cross_agent_message_wakes (message_id, agent_id, session_key, harness, woken_at) VALUES ('m1', 'a', 's', 'pi', 'now')",
+		);
+		expect(() =>
+			db.exec(
+				"INSERT INTO cross_agent_message_wakes (message_id, agent_id, session_key, harness, woken_at) VALUES ('m1', 'a', 's2', 'pi', 'now')",
+			),
+		).toThrow();
 	});
 
 	test("migration 063 limits memories_fts updates to content changes", () => {

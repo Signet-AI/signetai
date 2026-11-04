@@ -1,9 +1,18 @@
 import type { SignetTransport } from "./transport.js";
 import type {
 	AgentMessageAcknowledgeResponse,
+	AgentWakeResponse,
+	BoardThreadDetailResponse,
+	BoardThreadListResponse,
+	BoardThreadStatus,
+	BoardTopicListResponse,
+	BoardWriteResponse,
+	BoardThread,
 	AgentMessageListResponse,
 	AgentMessageSendResponse,
+	AgentPresenceContext,
 	AgentPresenceListResponse,
+	AgentSessionInspectResponse,
 	AgentPresenceUpdateResponse,
 	AspectAttributesResponse,
 	CompactionCompleteResponse,
@@ -353,22 +362,62 @@ export class SignetClientP2 {
 		readonly project?: string;
 		readonly includeSelf?: boolean;
 		readonly limit?: number;
+		readonly scope?: "all";
 	}): Promise<AgentPresenceListResponse> {
-		return this.transport.get<AgentPresenceListResponse>("/api/cross-agent/presence", opts);
+		return this.transport.get<AgentPresenceListResponse>("/api/cross-agent/presence", {
+			agent_id: opts?.agentId,
+			session_key: opts?.sessionKey,
+			project: opts?.project,
+			include_self: opts?.includeSelf,
+			limit: opts?.limit,
+			scope: opts?.scope,
+		});
 	}
 	async updateAgentPresence(opts: {
-		readonly harness: string;
+		readonly harness?: string;
 		readonly runtimePath?: "plugin" | "legacy";
 		readonly agentId?: string;
 		readonly sessionKey?: string;
 		readonly project?: string;
+		readonly provider?: string;
+		readonly context?: AgentPresenceContext;
 	}): Promise<AgentPresenceUpdateResponse> {
 		return this.transport.post<AgentPresenceUpdateResponse>("/api/cross-agent/presence", opts);
+	}
+	async updateAgentContext(opts: {
+		readonly sessionKey: string;
+		readonly context: AgentPresenceContext;
+		readonly agentId?: string;
+		readonly harness?: string;
+	}): Promise<AgentPresenceUpdateResponse> {
+		return this.transport.post<AgentPresenceUpdateResponse>("/api/cross-agent/presence", opts);
+	}
+	async inspectAgentSession(
+		sessionKey: string,
+		opts?: {
+			readonly sessionAgentId?: string;
+			readonly agentId?: string;
+			readonly callerSessionKey?: string;
+			readonly maxMessages?: number;
+			readonly scope?: "all";
+		},
+	): Promise<AgentSessionInspectResponse> {
+		return this.transport.get<AgentSessionInspectResponse>(
+			`/api/cross-agent/sessions/${encodeURIComponent(sessionKey)}/context`,
+			{
+				target_agent_id: opts?.sessionAgentId,
+				agent_id: opts?.agentId,
+				caller_session_key: opts?.callerSessionKey,
+				max_messages: opts?.maxMessages,
+				scope: opts?.scope,
+			},
+		);
 	}
 	async removeAgentPresence(sessionKey: string): Promise<{ readonly removed: boolean }> {
 		return this.transport.del<{ readonly removed: boolean }>(`/api/cross-agent/presence/${sessionKey}`, {});
 	}
 	async listAgentMessages(opts?: {
+		readonly scope?: "all";
 		readonly agentId?: string;
 		readonly sessionKey?: string;
 		readonly since?: string;
@@ -379,6 +428,7 @@ export class SignetClientP2 {
 		readonly includeBroadcast?: boolean;
 	}): Promise<AgentMessageListResponse> {
 		return this.transport.get<AgentMessageListResponse>("/api/cross-agent/messages", {
+			scope: opts?.scope,
 			agent_id: opts?.agentId,
 			session_key: opts?.sessionKey,
 			since: opts?.since,
@@ -418,6 +468,111 @@ export class SignetClientP2 {
 		return this.transport.post<AgentMessageSendResponse>(
 			`/api/cross-agent/messages/${encodeURIComponent(messageId)}/retry`,
 			opts ?? {},
+		);
+	}
+	async waitForAgentWake(opts: {
+		readonly harness: string;
+		readonly sessionKey: string;
+		readonly agentId?: string;
+		readonly project?: string;
+		readonly waitMs?: number;
+	}): Promise<AgentWakeResponse> {
+		const waitMs = Math.max(0, Math.min(25_000, opts.waitMs ?? 25_000));
+		return this.transport.request<AgentWakeResponse>("POST", "/api/cross-agent/wake", {
+			body: { ...opts, waitMs },
+			timeoutMs: waitMs + 10_000,
+		});
+	}
+	async listBoardTopics(opts?: { readonly agentId?: string; readonly scope?: "all" }): Promise<BoardTopicListResponse> {
+		return this.transport.get<BoardTopicListResponse>("/api/board/topics", {
+			agent_id: opts?.agentId,
+			scope: opts?.scope,
+		});
+	}
+	async listBoardThreads(opts?: {
+		readonly agentId?: string;
+		readonly scope?: "all";
+		readonly topic?: string;
+		readonly tag?: string;
+		readonly status?: BoardThreadStatus | "all";
+		readonly limit?: number;
+		readonly offset?: number;
+	}): Promise<BoardThreadListResponse> {
+		return this.transport.get<BoardThreadListResponse>("/api/board/threads", {
+			agent_id: opts?.agentId,
+			scope: opts?.scope,
+			topic: opts?.topic,
+			tag: opts?.tag,
+			status: opts?.status,
+			limit: opts?.limit,
+			offset: opts?.offset,
+		});
+	}
+	async getBoardThread(
+		threadId: string,
+		opts?: { readonly agentId?: string; readonly scope?: "all"; readonly limit?: number; readonly offset?: number },
+	): Promise<BoardThreadDetailResponse> {
+		return this.transport.get<BoardThreadDetailResponse>(`/api/board/threads/${encodeURIComponent(threadId)}`, {
+			agent_id: opts?.agentId,
+			scope: opts?.scope,
+			limit: opts?.limit,
+			offset: opts?.offset,
+		});
+	}
+	async createBoardThread(opts: {
+		readonly topic: string;
+		readonly title?: string;
+		readonly body?: string;
+		readonly tags?: readonly string[];
+		readonly fromMessageId?: string;
+		readonly agentId?: string;
+		readonly sessionKey?: string;
+		readonly harness?: string;
+	}): Promise<BoardWriteResponse> {
+		return this.transport.post<BoardWriteResponse>("/api/board/threads", opts);
+	}
+	async replyToBoardThread(
+		threadId: string,
+		opts: {
+			readonly body: string;
+			readonly replyToPostId?: string;
+			readonly agentId?: string;
+			readonly sessionKey?: string;
+			readonly harness?: string;
+		},
+	): Promise<BoardWriteResponse> {
+		return this.transport.post<BoardWriteResponse>(`/api/board/threads/${encodeURIComponent(threadId)}/posts`, opts);
+	}
+	async updateBoardThread(
+		threadId: string,
+		opts: {
+			readonly status?: BoardThreadStatus;
+			readonly pinned?: boolean;
+			readonly title?: string;
+			readonly tags?: readonly string[];
+			readonly agentId?: string;
+			readonly scope?: "all";
+		},
+	): Promise<{ readonly thread: BoardThread }> {
+		return this.transport.patch<{ readonly thread: BoardThread }>(
+			`/api/board/threads/${encodeURIComponent(threadId)}`,
+			opts,
+		);
+	}
+	async markBoardThreadRead(
+		threadId: string,
+		opts?: { readonly agentId?: string; readonly throughPostId?: string; readonly through?: string },
+	): Promise<{ readonly threadId: string; readonly lastReadAt: string; readonly lastReadPostId: string | null }> {
+		return this.transport.post<{
+			readonly threadId: string;
+			readonly lastReadAt: string;
+			readonly lastReadPostId: string | null;
+		}>(`/api/board/threads/${encodeURIComponent(threadId)}/read`, opts ?? {});
+	}
+	async deleteBoardThread(threadId: string): Promise<{ readonly threadId: string; readonly deletedPosts: number }> {
+		return this.transport.del<{ readonly threadId: string; readonly deletedPosts: number }>(
+			`/api/board/threads/${encodeURIComponent(threadId)}`,
+			{ scope: "all" },
 		);
 	}
 

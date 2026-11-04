@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signet coordination eval</title>
+<style>
+:root{--bench:#0f1115;--panel:#151820;--line:#262b36;--ink:#d7dae0;--muted:#929bad;--ok:#7ee787;--warn:#e3b341;--bad:#ff7b72}
+*{box-sizing:border-box}body{font:14px/1.5 system-ui,sans-serif;margin:0;background:var(--bench);color:var(--ink)}header,section{padding:12px 16px;border-bottom:1px solid var(--line)}h1{font-size:17px;margin:0 0 4px}h2,h3{font-size:14px;margin:0}p{margin:4px 0}.muted,.t{color:var(--muted)}.bad{color:var(--bad)}.good{color:var(--ok)}.warn{color:var(--warn)}code,pre,.ev{font-family:ui-monospace,monospace}pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;margin:8px 0}summary,label{cursor:pointer}summary:focus-visible,input:focus-visible{outline:2px solid var(--warn);outline-offset:3px}#controls{display:flex;gap:20px;align-items:center;flex-wrap:wrap}#cols{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding:12px 16px}.col{background:var(--panel);border:1px solid var(--line);min-width:0}.col h3{padding:8px;border-bottom:1px solid var(--line)}.log{height:50vh;min-height:260px;overflow:auto}.ev{font-size:12px;padding:6px 8px;border-bottom:1px solid var(--line);white-space:pre-wrap;overflow-wrap:anywhere}.ev details{margin-top:4px}.ev p{margin:4px 0}#inputs{display:grid;grid-template-columns:1fr 1fr;gap:16px}#phase{color:var(--warn)}#grade{margin:0}a{color:var(--ink);text-underline-offset:3px}@media(max-width:850px){#cols,#inputs{grid-template-columns:1fr}.log{height:35vh}}
+</style>
+<header>
+<h1>Signet coordination eval</h1>
+<p id="phase">Reading preparation state...</p>
+<p class="muted">Two real Pi sessions, ten synthetic peer profiles. Simulated GPU only; no hardware GPU is exposed.</p>
+<p class="muted" id="identity">Selected model and served identity have not yet been verified.</p>
+</header>
+<section>
+<details><summary>Review the exact agent inputs and pass criteria</summary>
+<p>Both agents must retrieve their correct results, find the correct peer, exchange DMs, and run without overlapping their 6-unit allocations on an 8-unit device. The responder must actually wake from idle through Signet, not a runner nudge. The grader also checks identity, private-data exposure, bounded work and completion.</p>
+<p class="muted">No test starts from this page. Approval is handled separately after input and grader review.</p>
+<div id="inputs"><div><h2>Agent A input</h2><pre id="promptA">Not prepared yet.</pre></div><div><h2>Agent B input</h2><pre id="promptB">Not prepared yet.</pre></div></div>
+<details><summary>Presence fixture visible through discovery</summary><pre id="fixture"></pre></details>
+</details>
+</section>
+<section id="controls">
+<span>Connection: <span id="connection">connecting</span></span>
+<span>Events received: <span id="count">0</span></span>
+<span>Simulated allocation: <span id="allocation">0 / 8 units</span></span>
+<label><input type="checkbox" id="protocol"> Show raw protocol events</label>
+<label><input type="checkbox" id="follow" checked> Follow new events</label>
+</section>
+<div id="cols">
+<div class="col"><h3>Agent A · Pi</h3><div class="log" id="A"></div></div>
+<div class="col"><h3>Agent B · Pi</h3><div class="log" id="B"></div></div>
+<div class="col"><h3>DMs, resource instrument and runner</h3><div class="log" id="X"></div></div>
+</div>
+<section><h2 id="headline">Not scored</h2><pre id="grade">No live result exists yet.</pre></section>
+<script>
+const $ = id => document.getElementById(id);
+let count=0, initialized=false;
+const active=new Map(), seen=new Set(), served=new Set();
+function bodyText(event){
+ if(event.type==='rpc_message_end'){
+  const m=event.raw?.message;
+  if(!m || !['user','assistant'].includes(m.role))return null;
+  const text=typeof m.content==='string'?m.content:(m.content||[]).filter(b=>b.type==='text').map(b=>b.text||'').join('\n');
+  return text?`${m.role}: ${text}`:null;
+ }
+ if(event.src==='daemon'&&event.type==='dm')return `DM ${event.fromSession||event.fromAgent} → ${event.toSession||event.toAgent}\n${event.content||''}`;
+ return null;
+}
+function line(e){
+ if(e.observedSeq!=null){if(seen.has(e.observedSeq))return;seen.add(e.observedSeq)}
+ $('count').textContent=++count;
+ if(e.src==='instrument'){
+  if(e.type==='attempt')active.set(e.receipt,e.units);
+  if(['complete','cancelled'].includes(e.type))active.delete(e.receipt);
+  const units=[...active.values()].reduce((a,b)=>a+b,0);
+  $('allocation').textContent=`${units} / 8 units`;
+  $('allocation').className=units>8?'bad':'';
+ }
+ if(e.src==='proxy'&&e.servedModel){served.add(e.servedModel);$('identity').textContent=`Provider-reported model: ${[...served].join(', ')}`}
+ const text=bodyText(e);
+ if(e.type?.startsWith('rpc_')&&!text&&!$('protocol').checked)return;
+ if(e.type==='usage'&&!$('protocol').checked)return;
+ const box=$(e.agent==='A'?'A':e.agent==='B'?'B':'X'), row=document.createElement('div');row.className='ev';
+ const label=document.createElement('span');label.className=/denied|error|timeout|refused/.test(e.type)?'bad':/complete|ack/.test(e.type)?'good':/attempt|dm|wake/.test(e.type)?'warn':'';
+ const when=e.observedNs!=null?`${(e.observedNs/1e9).toFixed(2)}s `:'';label.textContent=`${when}${e.src}.${e.type}`;row.append(label);
+ if(text){const p=document.createElement('p');p.textContent=text.slice(0,16000);row.append(p)}
+ const details=document.createElement('details'), summary=document.createElement('summary'), pre=document.createElement('pre');summary.textContent='Event details';pre.textContent=JSON.stringify(e,null,2);details.append(summary,pre);row.append(details);box.append(row);
+ while(box.children.length>300)box.firstElementChild.remove();
+ if($('follow').checked)box.scrollTop=box.scrollHeight;
+}
+const stream=new EventSource('/events');
+stream.onopen=()=>$('connection').textContent='live';stream.onerror=()=>$('connection').textContent='reconnecting';stream.onmessage=m=>{try{line(JSON.parse(m.data))}catch{}};
+async function refresh(){
+ try{
+  const [state,result]=await Promise.all([fetch('/status').then(r=>r.json()),fetch('/grade').then(r=>r.json())]);
+  if(state){$('phase').textContent=state.phase==='prepared'?'Prepared. Waiting for explicit approval before generation.':`${state.caseId}: ${state.phase}`;
+   if(!served.size){const selected=Object.values(state.bootstrap||{}).map(x=>x.model).filter(Boolean);$('identity').textContent=selected.length?`Pi selected: ${[...new Set(selected)].join(', ')}. Provider-served identity: not observed yet.`:'Pi sessions are starting; no provider-served identity observed.'}
+  }
+  if(!initialized){const inputs=await fetch('/inputs').then(r=>r.json());if(inputs.prompts){$('promptA').textContent=inputs.prompts.A||'';$('promptB').textContent=inputs.prompts.B||'';$('fixture').textContent=JSON.stringify(inputs.case,null,2);initialized=true}}
+  if(result){$('headline').textContent=result.status==='unscorable'?`Unscorable: ${result.failureClass}`:result.pass?'PASS':`FAIL: ${(result.failedChecks||[]).join(', ')}`;$('headline').className=result.status==='unscorable'?'warn':result.pass?'good':'bad';$('grade').textContent=JSON.stringify(result,null,2)}
+ }catch{$('connection').textContent='viewer unavailable'}
+}
+setInterval(refresh,2000);refresh();
+</script>
+</html>

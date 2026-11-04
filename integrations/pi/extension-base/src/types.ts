@@ -30,6 +30,7 @@ export interface BaseReadonlySessionManager {
 	getHeader(): BaseSessionHeader | undefined;
 	getSessionFile(): string | undefined;
 	getSessionId(): string | undefined;
+	getSessionName?(): string | undefined;
 }
 
 export interface BaseExtensionContext {
