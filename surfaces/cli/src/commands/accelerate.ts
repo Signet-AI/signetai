@@ -55,6 +55,18 @@ async function printStatus(deps: AccelerateDeps, json: boolean): Promise<void> {
 	console.log(chalk.dim("  Run `signet accelerate cpu` or `signet accelerate cuda`, then `signet restart`.\n"));
 }
 
+function updateConfig(deps: AccelerateDeps, mode: AccelerationMode): ReturnType<typeof applyAccelerationConfig> | null {
+	try {
+		return applyAccelerationConfig(deps.AGENTS_DIR, mode, acceleratorPaths(deps.AGENTS_DIR));
+	} catch (error) {
+		console.error(
+			chalk.red(`  Cannot update the Signet config: ${error instanceof Error ? error.message : String(error)}`),
+		);
+		process.exitCode = 1;
+		return null;
+	}
+}
+
 async function enable(deps: AccelerateDeps, mode: Exclude<AccelerationMode, "off">): Promise<void> {
 	const platform = platformKey();
 	if (mode === "cuda") {
@@ -92,16 +104,8 @@ async function enable(deps: AccelerateDeps, mode: Exclude<AccelerationMode, "off
 		process.exitCode = 1;
 		return;
 	}
-	let change: ReturnType<typeof applyAccelerationConfig>;
-	try {
-		change = applyAccelerationConfig(deps.AGENTS_DIR, mode, paths);
-	} catch (error) {
-		console.error(
-			chalk.red(`  Cannot update the Signet config: ${error instanceof Error ? error.message : String(error)}`),
-		);
-		process.exitCode = 1;
-		return;
-	}
+	const change = updateConfig(deps, mode);
+	if (change === null) return;
 	console.log(chalk.green(`  Updated ${change.file}: cross-encoder on ${mode === "cuda" ? "CUDA" : "native CPU"}.`));
 	if (change.embeddingSkipped) console.log(chalk.dim(`  Embeddings unchanged: ${change.embeddingSkipped}.`));
 	if (change.embeddingRuntimeChanged) {
@@ -115,7 +119,8 @@ async function enable(deps: AccelerateDeps, mode: Exclude<AccelerationMode, "off
 }
 
 function disable(deps: AccelerateDeps): void {
-	const change = applyAccelerationConfig(deps.AGENTS_DIR, "off", acceleratorPaths(deps.AGENTS_DIR));
+	const change = updateConfig(deps, "off");
+	if (change === null) return;
 	console.log(chalk.green(`  Updated ${change.file}: back to the WebAssembly runtime.`));
 	if (change.embeddingRuntimeChanged) {
 		console.log(

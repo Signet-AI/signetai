@@ -1405,10 +1405,12 @@ async function readTranscriptContent(
 	bytes: number,
 	deadlineAt: number,
 	workloadClass: "foreground" | "maintenance",
+	execution?: RecallExecutionOptions,
 ): Promise<{ readonly text: string; readonly complete: boolean } | null> {
 	const pages: Uint8Array[] = [];
 	const readBytes = Math.min(bytes, TRANSCRIPT_PAGE_BYTES * TRANSCRIPT_EVIDENCE_MAX_PAGES);
 	for (let start = 1; start <= readBytes; start += TRANSCRIPT_PAGE_BYTES) {
+		checkRecallCancellation(execution);
 		const remainingMs = deadlineAt - Date.now();
 		if (remainingMs <= 0) throw new Error("Transcript evidence read exceeded its deadline");
 		const page = await ownerReadOne<{ readonly chunk: string | null }>(
@@ -1460,7 +1462,9 @@ async function readTranscriptEvidenceRows(
 	fetchLimit: number,
 	deadlineAt: number,
 	workloadClass: "foreground" | "maintenance",
+	execution?: RecallExecutionOptions,
 ): Promise<ReadonlyArray<TranscriptEvidenceRow>> {
+	checkRecallCancellation(execution);
 	const remainingMs = deadlineAt - Date.now();
 	if (remainingMs <= 0) throw new Error("Transcript evidence read exceeded its deadline");
 	const dates = dateBoundsSql("COALESCE(ma.started_at, ma.captured_at)", dateBounds);
@@ -1495,7 +1499,9 @@ async function readTranscriptEvidenceResult(
 	row: TranscriptEvidenceRow,
 	deadlineAt: number,
 	workloadClass: "foreground" | "maintenance",
+	execution?: RecallExecutionOptions,
 ): Promise<RecallResult | null> {
+	checkRecallCancellation(execution);
 	const transcript = await readTranscriptContent(
 		owner,
 		agentId,
@@ -1503,6 +1509,7 @@ async function readTranscriptEvidenceResult(
 		row.content_bytes,
 		deadlineAt,
 		workloadClass,
+		execution,
 	);
 	if (transcript === null) return null;
 	const sessionId = row.session_id ?? row.source_path;
@@ -1536,7 +1543,9 @@ export async function prefetchTranscriptEvidence(
 	maxResults: number,
 	resultLimit: number,
 	deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS,
+	execution?: RecallExecutionOptions,
 ): Promise<TranscriptEvidencePrefetch | null> {
+	checkRecallCancellation(execution);
 	const fts = sanitizeFtsQuery(query);
 	if (fts.length === 0 || maxResults <= 0) return null;
 	const owner = await getDbOwner(getDbAccessorPath());
@@ -1550,12 +1559,13 @@ export async function prefetchTranscriptEvidence(
 		fetchLimit,
 		deadlineAt,
 		"maintenance",
+		execution,
 	);
 	const results = new Map<number, RecallResult | null>();
 	for (const row of rows.slice(0, maxResults)) {
 		results.set(
 			row.artifact_rowid,
-			await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "maintenance"),
+			await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "maintenance", execution),
 		);
 	}
 	return { query, since: dateBounds.since, until: dateBounds.until, fetchLimit, rows, results };
@@ -1570,7 +1580,9 @@ async function buildTranscriptEvidenceResults(
 	existing: readonly RecallResult[],
 	prefetch: TranscriptEvidencePrefetch | null = null,
 	deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS,
+	execution?: RecallExecutionOptions,
 ): Promise<RecallResult[]> {
+	checkRecallCancellation(execution);
 	const fts = sanitizeFtsQuery(query);
 	if (fts.length === 0 || maxResults <= 0) return [];
 	const represented = new Set(
@@ -1586,7 +1598,17 @@ async function buildTranscriptEvidenceResults(
 		fetchLimit <= prefetch.fetchLimit;
 	const rows = usablePrefetch
 		? prefetch.rows.slice(0, fetchLimit)
-		: await readTranscriptEvidenceRows(owner, agentId, project, dateBounds, fts, fetchLimit, deadlineAt, "foreground");
+		: await readTranscriptEvidenceRows(
+				owner,
+				agentId,
+				project,
+				dateBounds,
+				fts,
+				fetchLimit,
+				deadlineAt,
+				"foreground",
+				execution,
+			);
 	const selected = rows
 		.filter((row) => {
 			const sessionId = row.session_id ?? row.source_path;
@@ -1597,7 +1619,7 @@ async function buildTranscriptEvidenceResults(
 		selected.map(async (row) =>
 			usablePrefetch && prefetch.results.has(row.artifact_rowid)
 				? (prefetch.results.get(row.artifact_rowid) ?? null)
-				: await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "foreground"),
+				: await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "foreground", execution),
 		),
 	);
 	return results.filter((row): row is RecallResult => row !== null);
@@ -1930,6 +1952,7 @@ export async function hybridRecall(
 								response.results,
 								transcriptPrefetch ? await transcriptPrefetch : null,
 								transcriptEvidenceDeadlineAt,
+								execution,
 							),
 						),
 						maxExcerpts,
@@ -2075,6 +2098,7 @@ export async function hybridRecall(
 			Math.min(cfg.search.transcript_evidence_limit, limit) * 2,
 			limit,
 			transcriptEvidenceDeadlineAt,
+			execution,
 		).then(
 			(prefetched) => {
 				transcriptPrefetchReady = prefetched;

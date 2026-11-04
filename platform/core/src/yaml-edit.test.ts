@@ -121,6 +121,17 @@ describe("editYamlConfigFile", () => {
 		expect(readFileSync(`${path}.bak`, "utf8")).toBe("name: ant\n");
 	});
 
+	it("does not report a committed config edit as failed when its lock was removed", () => {
+		const path = file("name: ant\n");
+		expect(() =>
+			editYamlConfigFile(path, (config) => {
+				rmSync(`${path}.lock`);
+				config.set(["name"], "edited");
+			}),
+		).not.toThrow();
+		expect(readFileSync(path, "utf8")).toBe("name: edited\n");
+	});
+
 	it("refuses a file it cannot parse and leaves it untouched", () => {
 		const broken = "name: ant\nmemory:\n  pipelineV2: [unclosed\n";
 		const path = file(broken);

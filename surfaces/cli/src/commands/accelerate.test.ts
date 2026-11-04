@@ -21,7 +21,8 @@ function run(args: readonly string[], setup = "", yaml = "embedding:\n  provider
 		[
 			"-e",
 			`
-			import { Command } from "commander";
+			import { createRequire } from "node:module";
+			const { Command } = createRequire(${JSON.stringify(command)})("commander");
 			const dir = ${JSON.stringify(dir)};
 			let fetchFromDaemon = async () => ({ results: [{}], meta: { reranker: { kind: "cross-encoder", device: "cpu" } } });
 			${setup}
@@ -164,30 +165,37 @@ describe("accelerate verify", () => {
 });
 
 describe("accelerate configuration failures", () => {
-	it("reports missing, malformed, and unwritable config without false enable success", () => {
-		for (const fixture of [
-			{ yaml: "", setup: `const { rmSync } = await import("node:fs"); rmSync(dir + "/agent.yaml");` },
-			{ yaml: "memory: [unclosed\n", setup: "" },
-			{
-				yaml: "embedding:\n  provider: native\n",
-				setup: `const { mkdirSync } = await import("node:fs"); mkdirSync(dir + "/agent.yaml.bak");`,
-			},
-		]) {
-			const result = run(
-				["cpu"],
-				`
+	it.each(["cpu", "off"])(
+		"reports missing, malformed, unwritable, and locked config without false %s success",
+		(mode) => {
+			for (const fixture of [
+				{ yaml: "", setup: `const { rmSync } = await import("node:fs"); rmSync(dir + "/agent.yaml");` },
+				{ yaml: "memory: [unclosed\n", setup: "" },
+				{
+					yaml: "embedding:\n  provider: native\n",
+					setup: `const { mkdirSync } = await import("node:fs"); mkdirSync(dir + "/agent.yaml.bak");`,
+				},
+				{
+					yaml: "embedding:\n  provider: native\n",
+					setup: `const { writeFileSync } = await import("node:fs"); writeFileSync(dir + "/agent.yaml.lock", "");`,
+				},
+			]) {
+				const result = run(
+					[mode],
+					`
 				const { mock } = await import("bun:test");
 				const actual = await import(${JSON.stringify(feature)});
 				mock.module(${JSON.stringify(feature)}, () => ({ ...actual, installCpuRuntime: async () => "present" }));
 				${fixture.setup}
 			`,
-				fixture.yaml,
-			);
-			expect(result.code).toBe(1);
-			expect(result.stderr).toContain("Cannot update the Signet config:");
-			expect(result.stderr).not.toContain("Unhandled");
-			expect(result.stdout).not.toContain("Updated");
-			expect(result.stdout).not.toContain("Restart the daemon");
-		}
-	});
+					fixture.yaml,
+				);
+				expect(result.code).toBe(1);
+				expect(result.stderr).toContain("Cannot update the Signet config:");
+				expect(result.stderr).not.toContain("Unhandled");
+				expect(result.stdout).not.toContain("Updated");
+				expect(result.stdout).not.toContain("Restart the daemon");
+			}
+		},
+	);
 });

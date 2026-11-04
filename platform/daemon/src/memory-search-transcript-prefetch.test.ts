@@ -6,7 +6,7 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import type { DbOwnerJobHandle, DbOwnerRequest, DbOwnerSubmitOptions } from "./db-owner-client";
 import { getDbOwner } from "./db-owner-runtime";
 import { loadMemoryConfig } from "./memory-config";
-import { hybridRecall, prefetchTranscriptEvidence } from "./memory-search";
+import { TRANSCRIPT_PAGE_BYTES, hybridRecall, prefetchTranscriptEvidence } from "./memory-search";
 
 describe("transcript evidence prefetch owner scheduling", () => {
 	let directory = "";
@@ -57,6 +57,98 @@ describe("transcript evidence prefetch owner scheduling", () => {
 			owner.submit = submit;
 		}
 	});
+
+	it.each(["signal", "callback"])("does not submit prefetch reads when already cancelled through %s", async (kind) => {
+		const cancellation = new AbortController();
+		cancellation.abort(new Error("recall abandoned"));
+		const execution =
+			kind === "signal"
+				? { signal: cancellation.signal }
+				: {
+						checkCancelled: () => {
+							throw new Error("recall abandoned");
+						},
+					};
+		const owner = await getDbOwner();
+		const submit = spyOn(owner, "submit");
+		try {
+			await expect(
+				prefetchTranscriptEvidence("agent-a", undefined, {}, "Speyer tourism", 1, 3, undefined, execution),
+			).rejects.toThrow("recall abandoned");
+			expect(submit).not.toHaveBeenCalled();
+		} finally {
+			submit.mockRestore();
+		}
+	});
+
+	it.each(["metadata", "page", "artifact"])(
+		"stops transcript reads after recall cancellation during %s",
+		async (stage) => {
+			await getDbAccessor().withWriteTxAsync((db) => {
+				db.prepare(
+					`INSERT INTO memory_artifacts (
+					agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+					harness, captured_at, content, updated_at, is_deleted
+				) VALUES ('agent-a', 'second.jsonl', 'second-fixture', 'transcript', 'session-b',
+					'token-b', 'claude-code', datetime('now'), ?, datetime('now'), 0)`,
+				).run("user: Speyer tourism board phone number? assistant: +49 6232 143.");
+				if (stage === "page") {
+					db.prepare("UPDATE memory_artifacts SET content = content || ?").run("x".repeat(TRANSCRIPT_PAGE_BYTES * 2));
+				}
+			});
+			const cancellation = new AbortController();
+			const owner = await getDbOwner();
+			const submit = owner.submit.bind(owner);
+			const reads: DbOwnerSubmitOptions[] = [];
+			owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+				const handle = submit<Result>(request, options);
+				if (!options.operation.startsWith("memory-search.transcript-evidence")) return handle;
+				reads.push(options);
+				return {
+					...handle,
+					result: handle.result.then((result) => {
+						if (
+							(stage === "metadata" && options.operation === "memory-search.transcript-evidence") ||
+							(stage !== "metadata" && options.operation === "memory-search.transcript-evidence.content")
+						)
+							cancellation.abort(new Error("recall abandoned"));
+						return result;
+					}),
+				};
+			};
+			try {
+				const raw = loadMemoryConfig(directory);
+				await hybridRecall(
+					{
+						query: "Speyer tourism board phone number",
+						limit: 3,
+						agentId: "agent-a",
+						readPolicy: "isolated",
+						trackRecallAccess: false,
+						claimRecallResults: false,
+					},
+					{
+						...raw,
+						search: { ...raw.search, rehearsal_enabled: false, transcript_evidence_limit: 1 },
+						pipelineV2: {
+							...raw.pipelineV2,
+							graph: { ...raw.pipelineV2.graph, enabled: false },
+							reranker: { ...raw.pipelineV2.reranker, enabled: false },
+						},
+					},
+					async () => null,
+					{ signal: cancellation.signal },
+				);
+				expect(cancellation.signal.aborted).toBe(true);
+				expect(reads.map((options) => [options.operation, options.workloadClass])).toEqual([
+					["memory-search.transcript-evidence", "maintenance"],
+					...(stage === "metadata" ? [] : [["memory-search.transcript-evidence.content", "maintenance"]]),
+				]);
+			} finally {
+				owner.submit = submit;
+			}
+		},
+	);
 
 	it.each([29_000, 31_000])("keeps the original prefetch deadline after a failure at %i ms", async (delay) => {
 		const owner = await getDbOwner();

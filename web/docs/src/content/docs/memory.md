@@ -220,14 +220,15 @@ post-processing:
     fetched member by member from NuGet and PyPI and checked against pinned
     SHA-256 hashes), and runs the cross-encoder on the GPU in full precision.
   - `signet accelerate off` returns to WebAssembly; `signet accelerate`
-    alone shows the detected GPU and the active runtimes. Native-runtime
-    installation status checks the pinned file hashes, not just their sizes.
+    alone shows the detected GPU and the active runtimes. CPU-runtime status
+    verifies pinned hashes. CUDA status checks that every pinned provider and
+    library file has its expected size; installation verifies their hashes.
 
   Enabling or disabling acceleration preserves hand-set `onnxRuntimePath`
   values and CUDA library directories; only paths inside the managed
   accelerators directory are replaced or removed. A custom runtime must meet
   the version and CUDA requirements below. Config edits preserve symlinks,
-  permissions, comments, and unrelated keys, and save the previous content
+  permission bits, comments, and unrelated keys, and save the previous content
   beside the resolved target as `.bak`. Concurrent edits fail rather than
   silently overwrite each other. An interrupted edit can leave a `.lock` file;
   confirm no config editor is running before removing it and retrying.
@@ -238,9 +239,12 @@ post-processing:
 
   Native embeddings produce slightly different vectors from WebAssembly, so
   switching re-embeds stored memories in the background; recall keeps using
-  the current vectors until the new index is ready. Files live in
-  `runtime/accelerators` inside the Signet workspace. The command writes these keys,
-  which can also be set by hand:
+  the current vectors until the new index is ready. The active generation
+  retains its ONNX package path when the configuration removes it during a
+  switch back to WebAssembly. An explicit configured package path still takes
+  precedence, allowing the same runtime to be relocated without re-embedding.
+  Files live in `runtime/accelerators` inside the Signet workspace. The command
+  writes these keys, which can also be set by hand:
 
   ```yaml
   embedding:
@@ -264,6 +268,11 @@ post-processing:
   runtime and logs why. When the `@signet/native` addon is present, the
   cross-encoder tokenizes query and candidate pairs natively and caches each
   candidate's tokens.
+- Transcript prefetch uses the owner's maintenance priority, below primary
+  memory queries. Placement shares the original
+  30-second transcript-read deadline, including queue time; a busy maintenance
+  lane can therefore delay placement within that bound. A failed or expired
+  read leaves the primary results available and marks transcript evidence failed.
 - **Dampening** penalizes low-overlap semantic hits, hub-like entity
   dominance, and other noisy retrieval shapes. The low-overlap penalty never
   drops a hit below the scores it leaves untouched, and an entity counts as a

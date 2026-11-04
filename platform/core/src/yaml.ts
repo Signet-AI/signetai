@@ -118,7 +118,7 @@ export function editYamlConfigFile(file: string, edit: (editor: YamlConfigEditor
 			rmSync(backup, { force: true });
 		} finally {
 			closeSync(descriptor);
-			rmSync(lock);
+			rmSync(lock, { force: true });
 		}
 	}
 }
