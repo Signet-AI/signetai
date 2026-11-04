@@ -248,6 +248,25 @@ specs:
       - "Notification selection remains below the 250 ms evaluation budget"
     decision: null
 
+  - id: agent-message-board
+    status: approved
+    path: docs/specs/approved/agent-message-board.md
+    hard_depends_on:
+      - cross-agent-notification-delivery
+      - multi-agent-support
+    soft_depends_on: []
+    blocks: []
+    informed_by:
+      - docs/specs/approved/cross-agent-notification-delivery.md
+      - docs/specs/approved/multi-agent-support.md
+    success_criteria:
+      - "Every local direct message wakes at most one recipient session once, including idle sessions on harnesses with a wake primitive"
+      - "Wake claims are durable, deduplicated per message, bounded per session, and never replace explicit acknowledgement"
+      - "Board threads and posts persist without expiry, respect agent read policy, and are visible in the dashboard"
+      - "Every board post is projected as attributable Dreaming evidence and is purged with its thread"
+      - "Board activity never wakes an agent"
+    decision: null
+
   - id: signet-runtime
     status: approved
     path: docs/specs/approved/signet-runtime.md

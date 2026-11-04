@@ -83,6 +83,22 @@ describe("SignetClient", () => {
 		expect(requestedUrl).toBe("http://127.0.0.1:3850/api/memory/remember");
 	});
 
+	test("waitForAgentWake outlives the default request deadline for long polls", async () => {
+		const server = Bun.serve({
+			port: 0,
+			async fetch() {
+				await Bun.sleep(150);
+				return Response.json({ wake: false, reason: "timeout" });
+			},
+		});
+		servers.push(server);
+		const client = new SignetClient({ daemonUrl: `http://127.0.0.1:${server.port}`, timeoutMs: 50, retries: 0 });
+		expect(await client.waitForAgentWake({ harness: "pi", sessionKey: "s1", waitMs: 100 })).toEqual({
+			wake: false,
+			reason: "timeout",
+		});
+	});
+
 	test("remember() sends POST /api/memory/remember with content", async () => {
 		const { client } = mockDaemon();
 		await client.remember("user prefers dark mode", {
@@ -615,5 +631,38 @@ describe("SignetClient", () => {
 				limit: "10",
 			},
 		});
+	});
+	test("sends peer context and session inspection with canonical wire fields", async () => {
+		const { client } = mockDaemon();
+
+		await client.updateAgentContext({
+			sessionKey: "sess/1",
+			agentId: "a1",
+			context: { cwd: "/w", task: "train", modifiedFiles: ["a.ts"], resources: [] },
+		});
+		expect(lastRequest()).toMatchObject({
+			method: "POST",
+			path: "/api/cross-agent/presence",
+			body: {
+				sessionKey: "sess/1",
+				agentId: "a1",
+				context: { cwd: "/w", task: "train", modifiedFiles: ["a.ts"], resources: [] },
+			},
+		});
+
+		await client.inspectAgentSession("sess/1", {
+			sessionAgentId: "a2",
+			agentId: "a1",
+			callerSessionKey: "me",
+			maxMessages: 2,
+		});
+		expect(lastRequest()).toMatchObject({
+			method: "GET",
+			path: "/api/cross-agent/sessions/sess%2F1/context",
+			query: { target_agent_id: "a2", agent_id: "a1", caller_session_key: "me", max_messages: "2" },
+		});
+
+		await client.listAgentPresence({ agentId: "a1", includeSelf: true });
+		expect(lastRequest().query).toMatchObject({ agent_id: "a1", include_self: "true" });
 	});
 });

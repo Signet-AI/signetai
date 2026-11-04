@@ -4,6 +4,7 @@ import { readStaticIdentity } from "@signet/core";
 import { emitLifecycleObservation } from "@signet/lifecycle-proof";
 import type { DaemonClient } from "./daemon-client.js";
 import { readTrimmedRuntimeEnv, readTrimmedString } from "./helpers.js";
+import type { PeerContext } from "./peer-context.js";
 import type { BaseSessionState, PromptRecall } from "./session-state.js";
 import { buildTranscriptFromEntries, readSessionFileSnapshot } from "./transcript.js";
 import type { BaseExtensionContext, BaseSessionEntry } from "./types.js";
@@ -56,6 +57,7 @@ export interface LifecycleDeps {
 	readonly client: DaemonClient;
 	readonly state: BaseSessionState;
 	readonly config: LifecycleConfig;
+	readonly peerContext?: (ctx: BaseExtensionContext) => PeerContext | undefined;
 }
 
 export function defaultStaticFallback(_reason: "offline" | "timeout"): string {
@@ -70,6 +72,11 @@ function getSessionEntries(ctx: BaseExtensionContext): ReadonlyArray<BaseSession
 	}
 	const allEntries = ctx.sessionManager.getEntries();
 	return Array.isArray(allEntries) ? allEntries : [];
+}
+
+export function contextField(deps: LifecycleDeps, ctx: BaseExtensionContext): { readonly context?: PeerContext } {
+	const context = deps.peerContext?.(ctx);
+	return context ? { context } : {};
 }
 
 export function currentSessionRef(ctx: BaseExtensionContext): SessionRef {
@@ -178,6 +185,7 @@ export async function refreshSessionStart(deps: LifecycleDeps, ctx: BaseExtensio
 			agentId: deps.agentId,
 			sessionKey: session.sessionId,
 			runtimePath: deps.config.runtimePath,
+			...contextField(deps, ctx),
 		},
 		deps.config.sessionStartTimeout(),
 	);
@@ -295,6 +303,7 @@ export async function requestNotifications(
 			agentId: deps.agentId,
 			sessionKey: session.sessionId,
 			project: session.project,
+			...contextField(deps, ctx),
 		},
 		deps.config.promptSubmitTimeout,
 	);
@@ -319,6 +328,7 @@ async function submitPrompt(
 			sessionKey: session.sessionId,
 			userMessage: prompt,
 			runtimePath: deps.config.runtimePath,
+			...contextField(deps, ctx),
 		},
 		deps.config.promptSubmitTimeout,
 	);

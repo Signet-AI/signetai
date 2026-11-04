@@ -32,3 +32,19 @@ test("chat transport sends only canonical model selection fields", async () => {
 		mocked.mockRestore();
 	}
 });
+
+test("board event stream is not aborted by the GET deadline", async () => {
+	const { streamBoardEvents } = await import("./api");
+	let signal: AbortSignal | null | undefined;
+	const mocked = spyOn(globalThis, "fetch").mockImplementation((async (_i: RequestInfo | URL, init?: RequestInit) => {
+		signal = init?.signal;
+		return new Response('data: {"type":"board"}\n\n', { headers: { "Content-Type": "text/event-stream" } });
+	}) as typeof fetch);
+	try {
+		const controller = new AbortController();
+		await streamBoardEvents(() => {}, controller.signal);
+		expect(signal).toBe(controller.signal);
+	} finally {
+		mocked.mockRestore();
+	}
+});

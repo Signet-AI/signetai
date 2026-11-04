@@ -346,8 +346,9 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain(`${prefix}user_prompt_submit:0:0"]`);
 		expect(content).toContain(`${prefix}stop:0:0"]`);
 		expect(content).toContain(`${prefix}pre_tool_use:0:0"]`);
-		expect(content.match(/trusted_hash = 'sha256:[0-9a-f]{64}'/g)?.length).toBe(4);
-		expect(content.match(/enabled = true/g)?.length).toBe(4);
+		expect(content).toContain(`${prefix}stop:1:0"]`);
+		expect(content.match(/trusted_hash = 'sha256:[0-9a-f]{64}'/g)?.length).toBe(5);
+		expect(content.match(/enabled = true/g)?.length).toBe(5);
 	});
 
 	test("repairs disabled Signet hook state on reinstall", async () => {
@@ -447,7 +448,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		const hooks = readHooksJson().hooks as Record<string, Record<string, unknown>[]>;
 		expect(hooks.SessionStart).toHaveLength(1);
 		expect(hooks.UserPromptSubmit).toHaveLength(1);
-		expect(hooks.Stop).toHaveLength(1);
+		expect(hooks.Stop).toHaveLength(2);
 	});
 
 	test("rejects unsafe remote daemon URLs before writing Codex config", async () => {

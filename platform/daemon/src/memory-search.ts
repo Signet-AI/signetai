@@ -29,7 +29,10 @@ import { parseEmbeddingIndexStateRow, type EmbeddingIndexStateRow } from "./embe
 import {
 	buildMemorySearchFilterClause as buildFilterClause,
 	currentMemorySql,
+	dateBoundsSql,
+	hasDateBounds,
 	hasMemoryMetadataFilters,
+	hasMemoryOnlyFilters,
 	hasRestrictedMemoryContentFilters,
 	type MemorySearchFilterClause as FilterClause,
 } from "./memory-search-filters";
@@ -1440,6 +1443,8 @@ interface TranscriptEvidenceRow {
 
 export interface TranscriptEvidencePrefetch {
 	readonly query: string;
+	readonly since: RecallParams["since"];
+	readonly until: RecallParams["until"];
 	readonly fetchLimit: number;
 	readonly rows: readonly TranscriptEvidenceRow[];
 	readonly results: ReadonlyMap<number, RecallResult | null>;
@@ -1449,9 +1454,11 @@ async function readTranscriptEvidenceRows(
 	owner: DbOwnerClient,
 	agentId: string,
 	project: string | undefined,
+	dateBounds: Pick<RecallParams, "since" | "until">,
 	fts: string,
 	fetchLimit: number,
 ): Promise<ReadonlyArray<TranscriptEvidenceRow>> {
+	const dates = dateBoundsSql("COALESCE(ma.started_at, ma.captured_at)", dateBounds);
 	return await ownerReadAll<TranscriptEvidenceRow>(
 		owner,
 		`SELECT ma.session_id, ma.source_id, ma.source_path, ma.harness, ma.project,
@@ -1464,8 +1471,9 @@ async function readTranscriptEvidenceRows(
 		   AND ma.source_kind = 'transcript'
 		   AND COALESCE(ma.is_deleted, 0) = 0
 		   ${project ? "AND (ma.project = ? OR ma.project IS NULL)" : ""}
+		   ${dates.sql}
 		 ORDER BY rank ASC LIMIT ?`,
-		[fts, agentId, ...(project ? [project] : []), fetchLimit],
+		[fts, agentId, ...(project ? [project] : []), ...dates.args, fetchLimit],
 		{
 			operation: "memory-search.transcript-evidence",
 			workloadClass: "foreground",
@@ -1510,6 +1518,7 @@ async function readTranscriptEvidenceResult(
 export async function prefetchTranscriptEvidence(
 	agentId: string,
 	project: string | undefined,
+	dateBounds: Pick<RecallParams, "since" | "until">,
 	query: string,
 	maxResults: number,
 	resultLimit: number,
@@ -1518,18 +1527,19 @@ export async function prefetchTranscriptEvidence(
 	if (fts.length === 0 || maxResults <= 0) return null;
 	const owner = await getDbOwner(getDbAccessorPath());
 	const fetchLimit = maxResults + 2 * Math.max(0, resultLimit);
-	const rows = await readTranscriptEvidenceRows(owner, agentId, project, fts, fetchLimit);
+	const rows = await readTranscriptEvidenceRows(owner, agentId, project, dateBounds, fts, fetchLimit);
 	const deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS;
 	const results = new Map<number, RecallResult | null>();
 	for (const row of rows.slice(0, maxResults)) {
 		results.set(row.artifact_rowid, await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt));
 	}
-	return { query, fetchLimit, rows, results };
+	return { query, since: dateBounds.since, until: dateBounds.until, fetchLimit, rows, results };
 }
 
 async function buildTranscriptEvidenceResults(
 	agentId: string,
 	project: string | undefined,
+	dateBounds: Pick<RecallParams, "since" | "until">,
 	query: string,
 	maxResults: number,
 	existing: readonly RecallResult[],
@@ -1542,10 +1552,15 @@ async function buildTranscriptEvidenceResults(
 	);
 	const owner = await getDbOwner(getDbAccessorPath());
 	const fetchLimit = maxResults + represented.size;
-	const usablePrefetch = prefetch !== null && prefetch.query === query && fetchLimit <= prefetch.fetchLimit;
+	const usablePrefetch =
+		prefetch !== null &&
+		prefetch.query === query &&
+		prefetch.since === dateBounds.since &&
+		prefetch.until === dateBounds.until &&
+		fetchLimit <= prefetch.fetchLimit;
 	const rows = usablePrefetch
 		? prefetch.rows.slice(0, fetchLimit)
-		: await readTranscriptEvidenceRows(owner, agentId, project, fts, fetchLimit);
+		: await readTranscriptEvidenceRows(owner, agentId, project, dateBounds, fts, fetchLimit);
 	const selected = rows
 		.filter((row) => {
 			const sessionId = row.session_id ?? row.source_path;
@@ -1589,6 +1604,7 @@ async function buildNativeArtifactRecallHits(
 		const agentId = params.agentId ?? "default";
 		const artifactLimit = Math.max(2, Math.min(50, params.limit ?? 10) + existingSourceIds.size);
 		const artifactProject = params.project ? "AND (ma.project = ? OR ma.project IS NULL)" : "";
+		const artifactDates = dateBoundsSql("ma.captured_at", params);
 		const rows = await ownerReadAll<{
 			rowid: number;
 			source_id: string | null;
@@ -1603,7 +1619,7 @@ async function buildNativeArtifactRecallHits(
 		}>(
 			owner,
 			`SELECT ma.rowid, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project, ma.source_sha256,
-				COALESCE(ma.updated_at, ma.captured_at) AS updated_at, ma.content,
+				COALESCE(ma.captured_at, ma.updated_at) AS updated_at, ma.content,
 				bm25(memory_artifacts_fts) AS rank
 			 FROM memory_artifacts_fts
 			 JOIN memory_artifacts ma ON ma.rowid = memory_artifacts_fts.rowid
@@ -1614,8 +1630,16 @@ async function buildNativeArtifactRecallHits(
 			   AND ma.source_node_id = ?
 			   AND ma.harness IS NOT NULL
 			   ${artifactProject}
+			   ${artifactDates.sql}
 			 ORDER BY rank ASC, updated_at DESC LIMIT ?`,
-			[fts, agentId, NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID, ...(params.project ? [params.project] : []), artifactLimit],
+			[
+				fts,
+				agentId,
+				NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID,
+				...(params.project ? [params.project] : []),
+				...artifactDates.args,
+				artifactLimit,
+			],
 			{
 				operation: "memory-search.native-artifact-fts",
 				workloadClass: "foreground",
@@ -1654,6 +1678,11 @@ async function buildNativeArtifactRecallHits(
 				mirrorParts.push("AND m.scope = ?");
 				mirrorArgs.push(params.scope);
 			} else mirrorParts.push("AND m.scope IS NULL");
+			const mirrorDates = dateBoundsSql("m.created_at", params);
+			if (mirrorDates.sql) {
+				mirrorParts.push(mirrorDates.sql);
+				mirrorArgs.push(...mirrorDates.args);
+			}
 			mirrorParts.push(`AND m.content_hash IN (${hashPlaceholders})`);
 			mirrorArgs.push(...candidateHashes);
 			const mirrorRows = await ownerReadAll<{ readonly content_hash: string | null }>(
@@ -1869,6 +1898,7 @@ export async function hybridRecall(
 							buildTranscriptEvidenceResults(
 								agentId,
 								params.project,
+								params,
 								textQuery,
 								maxExcerpts * 2,
 								response.results,
@@ -2006,12 +2036,13 @@ export async function hybridRecall(
 	transcriptEvidenceAllowed =
 		!temporal.meta &&
 		params.sourceOnly !== true &&
-		!hasMemoryMetadataFilters(params) &&
+		!hasMemoryOnlyFilters(params) &&
 		cfg.search.transcript_evidence_limit > 0;
 	if (transcriptEvidenceAllowed && params.agentId) {
 		transcriptPrefetch = prefetchTranscriptEvidence(
 			params.agentId,
 			params.project,
+			params,
 			params.keywordQuery ?? query,
 			Math.min(cfg.search.transcript_evidence_limit, limit) * 2,
 			limit,
@@ -2993,7 +3024,8 @@ export async function hybridRecall(
 	const ontologyClaimResults = ontologyClaimCandidates.map((candidate) =>
 		ontologyClaimToRecallResult(candidate, recallTruncate),
 	);
-	const allowSourceFallbacks = temporalCandidateSet.size === 0 && !hasMemoryMetadataFilters(params);
+	const allowArtifactFallbacks = temporalCandidateSet.size === 0 && !hasMemoryOnlyFilters(params);
+	const allowSourceFallbacks = allowArtifactFallbacks && !hasDateBounds(params);
 	let sourceChunkSearchDiagnostics: SourceChunkVectorDiagnostics | undefined;
 
 	if (topIds.length === 0) {
@@ -3054,7 +3086,7 @@ export async function hybridRecall(
 			}
 		}
 		const nativeHits =
-			allowSourceFallbacks && results.length < limit
+			allowArtifactFallbacks && results.length < limit
 				? await timings.timeAsync(
 						"native_artifact_fallback",
 						async () => await buildNativeArtifactRecallHits(params, query, new Set()),
@@ -3242,7 +3274,7 @@ export async function hybridRecall(
 
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
-		const nativeHits = allowSourceFallbacks
+		const nativeHits = allowArtifactFallbacks
 			? await timings.timeAsync("native_artifact_supplement", () =>
 					buildNativeArtifactRecallHits(params, query, existingSourceIds),
 				)

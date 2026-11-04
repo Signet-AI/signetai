@@ -1,0 +1,6 @@
+FROM node:22-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
+WORKDIR /svc
+COPY evals/agent-coordination/lib/common.mjs /svc/lib/common.mjs
+COPY evals/agent-coordination/services/instrument.mjs /svc/services/instrument.mjs
+USER node
+CMD ["node","services/instrument.mjs"]

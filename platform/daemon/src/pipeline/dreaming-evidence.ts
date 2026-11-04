@@ -153,7 +153,7 @@ function recordType(value: Record<string, unknown>): string {
 	return (stringValue(value.type) ?? "").toLowerCase();
 }
 
-function isReasoningRecord(value: Record<string, unknown>): boolean {
+export function isReasoningRecord(value: Record<string, unknown>): boolean {
 	const type = recordType(value);
 	const role = (stringValue(value.role) ?? "").toLowerCase();
 	const content = value.content;
@@ -169,11 +169,11 @@ function isReasoningRecord(value: Record<string, unknown>): boolean {
 	);
 }
 
-function isToolCallRecord(value: Record<string, unknown>): boolean {
+export function isToolCallRecord(value: Record<string, unknown>): boolean {
 	return TOOL_CALL_TYPES.some((candidate) => recordType(value).includes(candidate));
 }
 
-function isToolResultRecord(value: Record<string, unknown>): boolean {
+export function isToolResultRecord(value: Record<string, unknown>): boolean {
 	const type = recordType(value);
 	const role = (stringValue(value.role) ?? "").toLowerCase();
 	if (TOOL_RESULT_TYPES.some((candidate) => type.includes(candidate)) || role === "tool" || role === "function")

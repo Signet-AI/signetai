@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import ipaddress
+import http.client
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -295,6 +296,36 @@ class SignetClient:
             logger.debug("Signet PATCH %s failed: %s", path, e)
             return None
 
+    def request_result(
+        self,
+        method: str,
+        path: str,
+        body: Optional[Dict[str, Any]] = None,
+        *,
+        timeout: float = _TIMEOUT_SECS,
+    ) -> Dict[str, Any]:
+        """Call the daemon and keep the failure reason: {ok, data} or {ok: False, status, error}."""
+        url = f"{self._base_url}{path}"
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, headers=self._headers(), method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                try:
+                    return {"ok": True, "data": _read_json_response(resp)}
+                except ValueError as e:
+                    return {"ok": False, "status": resp.status, "error": f"daemon returned invalid JSON: {e}"}
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                raw = e.read().decode("utf-8", errors="replace")
+                parsed = json.loads(raw) if raw else {}
+                detail = str(parsed.get("error") or raw) if isinstance(parsed, dict) else raw
+            except Exception as read_err:
+                detail = f"unreadable error body: {read_err}"
+            return {"ok": False, "status": e.code, "error": detail[:300] or f"HTTP {e.code}"}
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
+            return {"ok": False, "status": None, "error": f"daemon unreachable: {e}"}
+
     def _delete(
         self,
         path: str,
@@ -323,6 +354,7 @@ class SignetClient:
         *,
         project: str = "",
         claim_only: bool = False,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Call session-start hook, optionally recovering only the session claim."""
         body: Dict[str, Any] = {
@@ -333,6 +365,8 @@ class SignetClient:
         }
         if claim_only:
             body["claimOnly"] = True
+        if context:
+            body["context"] = context
         return self._post(
             "/api/hooks/session-start",
             body,
@@ -346,18 +380,22 @@ class SignetClient:
         *,
         last_assistant_message: str = "",
         project: str = "",
+        context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Call user-prompt-submit hook. Returns recall inject text."""
+        body: Dict[str, Any] = {
+            "harness": self._harness,
+            "sessionKey": session_key,
+            "userMessage": user_message,
+            "lastAssistantMessage": last_assistant_message,
+            "agentId": self._agent_id,
+            "project": project,
+        }
+        if context:
+            body["context"] = context
         return self._post(
             "/api/hooks/user-prompt-submit",
-            {
-                "harness": self._harness,
-                "sessionKey": session_key,
-                "userMessage": user_message,
-                "lastAssistantMessage": last_assistant_message,
-                "agentId": self._agent_id,
-                "project": project,
-            },
+            body,
             timeout=_RECALL_TIMEOUT_SECS,
         )
 
@@ -367,18 +405,77 @@ class SignetClient:
         hook: str,
         *,
         project: str = "",
+        context: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Fetch pending peer notifications for a compatible Hermes hook."""
+        body: Dict[str, Any] = {
+            "harness": self._harness,
+            "hook": hook,
+            "sessionKey": session_key,
+            "agentId": self._agent_id,
+            "project": project,
+        }
+        if context:
+            body["context"] = context
         return self._post(
             "/api/hooks/notifications",
-            {
-                "harness": self._harness,
-                "hook": hook,
-                "sessionKey": session_key,
-                "agentId": self._agent_id,
-                "project": project,
-            },
+            body,
             timeout=_RECALL_TIMEOUT_SECS,
+        )
+
+    def wake(
+        self,
+        session_key: str,
+        *,
+        project: str = "",
+        wait_ms: int = 25000,
+        on_connection: Optional[Any] = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Long-poll the direct-message wake endpoint; None on transport failure."""
+        parsed = urllib.parse.urlparse(self._base_url)
+        host = parsed.hostname or _DEFAULT_HOST
+        timeout = wait_ms / 1000 + 10
+        factory = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+        conn = factory(host, parsed.port, timeout=timeout)
+        if on_connection:
+            on_connection(conn)
+        wake_body: Dict[str, Any] = {
+            "harness": self._harness,
+            "sessionKey": session_key,
+            "agentId": self._agent_id,
+            "project": project,
+            "waitMs": wait_ms,
+        }
+        if context:
+            wake_body["context"] = context
+        body = json.dumps(wake_body)
+        try:
+            conn.request("POST", "/api/cross-agent/wake", body=body, headers=self._headers())
+            resp = conn.getresponse()
+            raw = resp.read()
+            data = json.loads(raw.decode("utf-8")) if raw else {}
+            if not isinstance(data, dict):
+                return None
+            if resp.status != 200 and "error" not in data:
+                data["error"] = f"http {resp.status}"
+            return data
+        except (OSError, ValueError, http.client.HTTPException) as e:
+            logger.debug("Signet wake failed: %s", e)
+            return None
+        finally:
+            if on_connection:
+                on_connection(None)
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def release_wake(self, session_key: str, message_ids: List[str]) -> Optional[Dict[str, Any]]:
+        """Return claimed wakes to the daemon after the host refused delivery."""
+        return self._post(
+            "/api/cross-agent/wake/release",
+            {"sessionKey": session_key, "agentId": self._agent_id, "messageIds": message_ids},
         )
 
     def session_end(

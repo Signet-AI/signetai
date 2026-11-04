@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { SETTINGS_SECTIONS, type SettingsSection } from "./settings-sections";
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
-export type ViewId = "home" | "memory" | "graph" | "dreaming" | "skills" | "settings" | "setup";
+export type ViewId = "home" | "memory" | "graph" | "dreaming" | "skills" | "board" | "settings" | "setup";
 
 const VIEW_LABELS: Record<ViewId, string> = {
 	home: "Home",
@@ -11,6 +11,7 @@ const VIEW_LABELS: Record<ViewId, string> = {
 	graph: "Memory",
 	dreaming: "Dreams",
 	skills: "Skills",
+	board: "Board",
 	settings: "Settings",
 	setup: "Setup",
 };

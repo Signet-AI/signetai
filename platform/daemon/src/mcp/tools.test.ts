@@ -249,10 +249,16 @@ describe("createMcpServer", () => {
 		expect(names).toContain("lcm_expand");
 		expect(names).toContain("session_search");
 		expect(names).toContain("agent_peers");
+		expect(names).toContain("agent_context_update");
+		expect(names).toContain("agent_session_inspect");
 		expect(names).toContain("agent_message_send");
 		expect(names).toContain("agent_message_retry");
 		expect(names).toContain("agent_message_inbox");
 		expect(names).toContain("agent_message_ack");
+		expect(names).toContain("board_list");
+		expect(names).toContain("board_read");
+		expect(names).toContain("board_post");
+		expect(names).toContain("board_update");
 		expect(names).toContain("secret_list");
 		expect(names).toContain("secret_exec");
 		expect(names).toContain("secret_exec_status");
@@ -263,7 +269,7 @@ describe("createMcpServer", () => {
 		for (const alias of GRAPHIQ_COMPAT_ALIASES) {
 			expect(names).toContain(alias);
 		}
-		expect(names.length).toBe(56);
+		expect(names.length).toBe(62);
 	});
 
 	it("forwards bounded claim trace inputs to the canonical daemon route", async () => {
@@ -1254,6 +1260,79 @@ describe("createMcpServer", () => {
 			expect(cap.url).toContain("include_self=false");
 		});
 
+		it("agent_context_update posts only the supplied context fields to canonical presence", async () => {
+			const cap: { url?: string; method?: string; body?: string } = {};
+			mockFetch(200, { presence: { agentId: "a", harness: "pi", context: { task: "t" } } }, cap);
+
+			await callTool(server, "agent_context_update", {
+				session_key: "s-1",
+				task: "train",
+				resources: [],
+				modified_files: ["a.ts"],
+			});
+			expect(cap.method).toBe("POST");
+			expect(cap.url).toContain("/api/cross-agent/presence");
+			expect(JSON.parse(cap.body ?? "{}")).toEqual({
+				sessionKey: "s-1",
+				context: { task: "train", resources: [], modifiedFiles: ["a.ts"] },
+			});
+		});
+
+		it("agent_session_inspect encodes the target key and bounds the request", async () => {
+			const cap: { url?: string; method?: string } = {};
+			mockFetch(200, { presence: {}, recentMessages: [], truncated: false }, cap);
+
+			await callTool(server, "agent_session_inspect", {
+				session_key: "a/b:c",
+				session_agent_id: "beta",
+				caller_session_key: "me",
+				max_messages: 2,
+			});
+			expect(cap.method ?? "GET").toBe("GET");
+			expect(cap.url).toContain("/api/cross-agent/sessions/a%2Fb%3Ac/context?");
+			expect(cap.url).toContain("target_agent_id=beta");
+			expect(cap.url).toContain("caller_session_key=me");
+			expect(cap.url).toContain("max_messages=2");
+			expect(cap.url).not.toContain("agent_id=beta&agent_id");
+
+			const registered = (
+				server as unknown as { _registeredTools: Record<string, { description?: string; inputSchema: unknown }> }
+			)._registeredTools;
+			expect(registered.agent_session_inspect?.description).toContain("untrusted");
+			expect(registered.agent_context_update?.description).toContain("untrusted");
+		});
+
+		it("agent tools advertise bounded inputs and reject out-of-range values over a real MCP transport", async () => {
+			const cap: { url?: string } = {};
+			mockFetch(200, { presence: {} }, cap);
+			const [ct, st] = InMemoryTransport.createLinkedPair();
+			const client = new Client({ name: "test-client", version: "0.0.1" });
+			await server.connect(st);
+			await client.connect(ct);
+
+			const { tools } = await client.listTools();
+			const inspect = tools.find((tool) => tool.name === "agent_session_inspect");
+			expect(inspect).toBeDefined();
+			const props = inspect?.inputSchema.properties as Record<string, { maximum?: number }> | undefined;
+			expect(props?.max_messages?.maximum).toBe(5);
+
+			const tooMany = await client
+				.callTool({ name: "agent_session_inspect", arguments: { session_key: "x", max_messages: 6 } })
+				.catch(() => ({ isError: true }));
+			expect(tooMany.isError).toBe(true);
+			expect(cap.url).toBeUndefined();
+
+			const tooLong = await client
+				.callTool({ name: "agent_context_update", arguments: { session_key: "x", task: "t".repeat(501) } })
+				.catch(() => ({ isError: true }));
+			expect(tooLong.isError).toBe(true);
+			expect(cap.url).toBeUndefined();
+
+			const ok = await client.callTool({ name: "agent_context_update", arguments: { session_key: "x", task: "ok" } });
+			expect(ok.isError).toBeFalsy();
+			expect(cap.url).toContain("/api/cross-agent/presence");
+		});
+
 		it("agent_message_send posts message payload", async () => {
 			const cap: { method?: string; body?: string } = {};
 			mockFetch(200, { message: { id: "m1" } }, cap);
@@ -1348,6 +1427,73 @@ describe("createMcpServer", () => {
 				agentId: "beta",
 				sessionKey: "session-beta",
 			});
+		});
+	});
+
+	describe("message board tools", () => {
+		function recordFetches(data: unknown = { ok: true }): Array<{ url: string; method: string; body?: string }> {
+			const calls: Array<{ url: string; method: string; body?: string }> = [];
+			globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+				calls.push({
+					url: typeof input === "string" ? input : input.toString(),
+					method: init?.method ?? "GET",
+					body: init?.body as string | undefined,
+				});
+				return new Response(JSON.stringify(data), {
+					status: 200,
+					headers: { "Content-Type": "application/json" },
+				});
+			}) as unknown as typeof fetch;
+			return calls;
+		}
+
+		it("board_post starts a thread without thread_id and replies with thread_id", async () => {
+			const calls = recordFetches();
+			await callTool(server, "board_post", {
+				topic: "release",
+				title: "Checklist",
+				body: "What is left?",
+				tags: ["blocking"],
+				session_key: "s1",
+				harness: "claude-code",
+			});
+			await callTool(server, "board_post", { thread_id: "t 1", body: "Docs.", reply_to_post_id: "p1" });
+
+			expect(calls[0]?.method).toBe("POST");
+			expect(calls[0]?.url).toContain("/api/board/threads");
+			expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({
+				topic: "release",
+				title: "Checklist",
+				tags: ["blocking"],
+				sessionKey: "s1",
+				harness: "claude-code",
+			});
+			expect(calls[1]?.url).toContain("/api/board/threads/t%201/posts");
+			expect(JSON.parse(calls[1]?.body ?? "{}")).toMatchObject({ body: "Docs.", replyToPostId: "p1" });
+		});
+
+		it("board_read fetches the thread and marks it read", async () => {
+			const calls = recordFetches({ posts: [{ id: "p3" }], readThroughPostId: "p3" });
+			await callTool(server, "board_read", { thread_id: "t1", agent_id: "beta" });
+			expect(calls.map((call) => [call.method, new URL(call.url).pathname])).toEqual([
+				["GET", "/api/board/threads/t1"],
+				["POST", "/api/board/threads/t1/read"],
+			]);
+			expect(calls[0]?.url).toContain("agent_id=beta");
+			expect(JSON.parse(calls[1]?.body ?? "{}")).toEqual({ agentId: "beta", throughPostId: "p3" });
+		});
+
+		it("board_read does not mark read for an offset page", async () => {
+			const calls = recordFetches();
+			await callTool(server, "board_read", { thread_id: "t1", agent_id: "beta", offset: 5 });
+			expect(calls.map((call) => call.method)).toEqual(["GET"]);
+		});
+
+		it("board_update patches thread state", async () => {
+			const calls = recordFetches();
+			await callTool(server, "board_update", { thread_id: "t1", status: "resolved", pinned: true });
+			expect(calls[0]?.method).toBe("PATCH");
+			expect(JSON.parse(calls[0]?.body ?? "{}")).toMatchObject({ status: "resolved", pinned: true });
 		});
 	});
 

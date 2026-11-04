@@ -29,6 +29,36 @@ export interface SessionContext {
 	transcriptPath?: string;
 }
 
+const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
+
+function isWakeHookEntry(hook: unknown): boolean {
+	if (typeof hook !== "object" || hook === null) return false;
+	const command = (hook as Record<string, unknown>).command;
+	return typeof command === "string" && /\bhook wake\b/.test(command) && command.includes("-H claude-code");
+}
+
+function isSessionStartHookEntry(hook: unknown): boolean {
+	if (typeof hook !== "object" || hook === null) return false;
+	const command = (hook as Record<string, unknown>).command;
+	return typeof command === "string" && /\bhook session-start\b/.test(command) && command.includes("-H claude-code");
+}
+
+function stripWakeGroups(groups: unknown, extra?: (hook: unknown) => boolean): unknown[] {
+	if (!Array.isArray(groups)) return [];
+	const kept: unknown[] = [];
+	for (const group of groups) {
+		const inner = (group as { hooks?: unknown } | null)?.hooks;
+		if (!Array.isArray(inner)) {
+			kept.push(group);
+			continue;
+		}
+		const rest = inner.filter((hook) => !isWakeHookEntry(hook) && !extra?.(hook));
+		if (rest.length === inner.length) kept.push(group);
+		else if (rest.length > 0) kept.push({ ...(group as object), hooks: rest });
+	}
+	return kept;
+}
+
 export interface SessionStartResult {
 	identity: {
 		name: string;
@@ -172,6 +202,8 @@ export class ClaudeCodeConnector extends BaseConnector {
 				settings.hooks.PreCompaction = undefined;
 				settings.hooks.PreCompact = undefined;
 				settings.hooks.SessionEnd = undefined;
+				const remainingStop = stripWakeGroups(settings.hooks.Stop);
+				settings.hooks.Stop = remainingStop.length > 0 ? remainingStop : undefined;
 				if (Object.keys(settings.hooks).length === 0) {
 					settings.hooks = undefined;
 				}
@@ -270,6 +302,12 @@ export class ClaudeCodeConnector extends BaseConnector {
 		const pwdExpr = process.platform === "win32" ? "%CD%" : "$(pwd)";
 
 		const hooks: Record<string, unknown[]> = {};
+		const wakeHook = {
+			type: "command",
+			command: `${signetCmd} hook wake -H claude-code --project "${pwdExpr}"`,
+			asyncRewake: true,
+			timeout: WAKE_HOOK_TIMEOUT_SECONDS,
+		};
 
 		if (hooksConfig.sessionStart !== false) {
 			hooks.SessionStart = [
@@ -280,6 +318,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 							command: `${signetCmd} hook session-start -H claude-code --project "${pwdExpr}"`,
 							timeout: sessionStartHookTimeout(),
 						},
+						wakeHook,
 					],
 				},
 			];
@@ -341,10 +380,25 @@ export class ClaudeCodeConnector extends BaseConnector {
 			];
 		}
 
-		settings.hooks = {
-			...(settings.hooks as Record<string, unknown>),
+		const userStopGroups = stripWakeGroups((settings.hooks as Record<string, unknown> | undefined)?.Stop);
+		if (hooksConfig.sessionStart !== false) {
+			hooks.Stop = [...userStopGroups, { hooks: [wakeHook] }];
+		} else if (userStopGroups.length > 0) {
+			hooks.Stop = userStopGroups;
+		}
+
+		const merged: Record<string, unknown> = {
+			...(settings.hooks as Record<string, unknown> | undefined),
 			...hooks,
 		};
+		if (hooksConfig.sessionStart === false) {
+			const userStart = stripWakeGroups(merged.SessionStart, isSessionStartHookEntry);
+			if (userStart.length > 0) merged.SessionStart = userStart;
+			else Reflect.deleteProperty(merged, "SessionStart");
+			if (userStopGroups.length > 0) merged.Stop = userStopGroups;
+			else Reflect.deleteProperty(merged, "Stop");
+		}
+		settings.hooks = merged;
 		const { PreCompaction: _legacyPreCompaction, ...hooksWithoutLegacy } = settings.hooks as Record<string, unknown>;
 		settings.hooks = hooksWithoutLegacy;
 

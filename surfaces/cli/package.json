@@ -1,6 +1,6 @@
 {
 	"name": "@signet/cli",
-	"version": "0.238.0",
+	"version": "0.239.0",
 	"description": "CLI for Signet - portable AI agent identity",
 	"type": "module",
 	"bin": "./dist/cli.js",
@@ -23,7 +23,8 @@
 		"copy:skills": "bun ../../scripts/copy-skills.ts surfaces/cli/skills",
 		"prebuild": "bun run build:workspace-deps && bun run copy:skills",
 		"prepublishOnly": "bun run build",
-		"test": "bun test"
+		"test": "bun test",
+		"typecheck:hooks": "tsc --project tsconfig.hooks.json"
 	},
 	"keywords": [
 		"signet",
