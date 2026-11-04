@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
@@ -226,36 +226,95 @@ describe("native source worker", () => {
 		}
 	});
 
-	it("does not descend into directories that no pattern can match", async () => {
-		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-prune-"));
-		const unrelated = join(root, "plugins", "cache");
-		await mkdir(unrelated, { recursive: true });
-		await mkdir(join(root, "projects", "repo", "memory", "notes"), { recursive: true });
-		await mkdir(join(root, "projects", "repo", "subagents"), { recursive: true });
-		await writeFile(join(root, "projects", "repo", "memory", "MEMORY.md"), "index");
-		await writeFile(join(root, "projects", "repo", "memory", "notes", "deep.md"), "deep");
-		await writeFile(join(root, "projects", "repo", "subagents", "other.md"), "other");
-		await writeFile(join(unrelated, "noise.md"), "noise");
-		await chmod(unrelated, 0o000);
-		const source = {
-			root: `${root}/`,
-			files: [
-				{ glob: "projects/*/memory/MEMORY.md", kind: "index" },
-				{ glob: "projects/*/memory/**/*.md", kind: "memory", excludeBasenames: ["MEMORY.md"] },
-			],
-		};
+	it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"prunes unrelated directories, including a saved frontier, but reports inaccessible matching directories",
+		async () => {
+			const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-prune-"));
+			const unrelated = join(root, "plugins", "cache");
+			const relevant = join(root, "projects", "blocked", "memory");
+			const worker = createNativeSourceWorker();
+			try {
+				await mkdir(unrelated, { recursive: true });
+				await mkdir(relevant, { recursive: true });
+				await mkdir(join(root, "projects", "repo", "memory", "notes"), { recursive: true });
+				await mkdir(join(root, "projects", "repo", "subagents"), { recursive: true });
+				await writeFile(join(root, "projects", "repo", "memory", "MEMORY.md"), "index");
+				await writeFile(join(root, "projects", "repo", "memory", "notes", "deep.md"), "deep");
+				await writeFile(join(root, "projects", "repo", "subagents", "other.md"), "other");
+				await writeFile(join(unrelated, "noise.md"), "noise");
+				await chmod(unrelated, 0o000);
+				await chmod(relevant, 0o000);
+				const source = {
+					root: `${root}/`,
+					files: [
+						{ glob: "projects/*/memory/MEMORY.md", kind: "index" },
+						{ glob: "projects/*/memory/**/*.md", kind: "memory", excludeBasenames: ["MEMORY.md"] },
+					],
+				};
+				const page = await worker.scan({ source, cursor: null, pageSize: 100 });
+				expect(page.files.map((file) => [file.kind, file.content]).sort()).toEqual([
+					["index", "index"],
+					["memory", "deep"],
+				]);
+				expect(page.permissionDeniedPaths).toEqual([relevant]);
+				expect(page.complete).toBe(true);
+				await worker.close();
+				const resumed = await worker.scan({
+					source,
+					cursor: page.nextCursor,
+					frontier: [join(root, "projects", "repo", "memory"), unrelated],
+					pageSize: 100,
+				});
+				expect(resumed.files).toEqual(page.files);
+				expect(resumed.permissionDeniedPaths).toEqual([]);
+				expect(resumed.complete).toBe(true);
+				expect(resumed.frontier).toEqual([]);
+			} finally {
+				await worker.close();
+				await chmod(unrelated, 0o700);
+				await chmod(relevant, 0o700);
+				await rm(root, { recursive: true, force: true });
+			}
+		},
+	);
+
+	it.each([
+		{ glob: "ROOT.md", expected: ["root"] },
+		{ glob: "projects/**/memory/*.md", expected: ["index", "many", "zero"] },
+		{ glob: "projects/*/memory/**/*.md", expected: ["deep", "index"] },
+		{ glob: "proj*/*/mem*/**/*.md", expected: ["deep", "index"] },
+		{ glob: "projects\\*\\memory\\**\\*.md", expected: ["deep", "index"] },
+		{
+			glob: "**/*.md",
+			excludeBasenames: ["MEMORY.md"],
+			excludeGlobs: ["plugins/**", "**/notes/**"],
+			expected: ["many", "root", "zero"],
+		},
+	])("preserves file matching for $glob", async ({ glob, expected, excludeBasenames, excludeGlobs }) => {
+		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-patterns-"));
 		const worker = createNativeSourceWorker();
 		try {
-			const page = await worker.scan({ source, cursor: null, pageSize: 100 });
-			expect(page.files.map((file) => [file.kind, file.content]).sort()).toEqual([
-				["index", "index"],
-				["memory", "deep"],
-			]);
-			expect(page.permissionDeniedPaths).toEqual([]);
+			for (const [path, content] of [
+				["ROOT.md", "root"],
+				["projects/memory/zero.md", "zero"],
+				["projects/repo/memory/MEMORY.md", "index"],
+				["projects/repo/memory/notes/deep.md", "deep"],
+				["projects/team/repo/memory/many.md", "many"],
+				["plugins/cache/noise.md", "noise"],
+			] as const) {
+				await mkdir(join(root, path, ".."), { recursive: true });
+				await writeFile(join(root, path), content);
+			}
+			const page = await worker.scan({
+				source: { root, files: [{ glob, kind: "memory", excludeBasenames, excludeGlobs }] },
+				cursor: null,
+				pageSize: 100,
+			});
+			expect(page.files.map((file) => file.content).sort()).toEqual([...expected]);
 			expect(page.complete).toBe(true);
 		} finally {
 			await worker.close();
-			await chmod(unrelated, 0o700);
+			await rm(root, { recursive: true, force: true });
 		}
 	});
 });
