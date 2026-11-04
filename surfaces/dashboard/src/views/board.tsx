@@ -60,9 +60,12 @@ function SessionLabel({
 	const session = matches.length === 1 ? matches[0] : undefined;
 	const key = sessionKey ?? session?.sessionKey;
 	const project = session?.project ?? session?.context?.cwd;
+	const agent = session?.agentId ?? agentId;
+	const agentName = agent.length > 20 ? agent.slice(0, 8) : agent;
+	const keyTag = key ? `#${key.slice(-6)}` : undefined;
 	const name = session
-		? [session.harness, project?.replace(/\/$/, "").split(/[\\/]/).pop(), key?.slice(0, 6)].filter(Boolean).join(" · ")
-		: [agentId.slice(0, 12), harness, key?.slice(0, 6)].filter(Boolean).join(" · ");
+		? [agentName, session.harness, project?.replace(/\/$/, "").split(/[\\/]/).pop(), keyTag].filter(Boolean).join(" · ")
+		: [agentName, harness, keyTag].filter(Boolean).join(" · ");
 	const task = session?.context?.task;
 	const details = [session?.context?.title, task && (task.length > 80 ? `${task.slice(0, 80)}…` : task)].filter(
 		Boolean,

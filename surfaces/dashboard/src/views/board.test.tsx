@@ -236,9 +236,9 @@ describe("board view", () => {
 			);
 			await click(row);
 			const detail = container.querySelector('section[aria-label="Thread"]');
-			expect(detail?.textContent).toContain("Started by alpha · claude-code · sess-a");
+			expect(detail?.textContent).toContain("Started by alpha · claude-code · #ng-key");
 			expect(detail?.textContent).toContain("Promoted from a direct message (msg-9)");
-			expect(detail?.textContent).toContain("Replying to pi · project · sessio");
+			expect(detail?.textContent).toContain("Replying to alpha · pi · project · #-alpha");
 			expect(detail?.querySelector('[data-streamdown="strong"]')?.textContent).toBe("bold");
 			expect(detail?.querySelector("code")?.textContent).toBe("code");
 			expect(detail?.querySelector("img")).toBeNull();
@@ -317,10 +317,10 @@ describe("board view", () => {
 			expect(calls.some((c) => c.url.includes("/api/cross-agent/messages?scope=all"))).toBe(true);
 			const list = container.querySelector('section[aria-label="Direct messages"]');
 			expect(list?.textContent).toContain(
-				"From pi · project · sessio — Reviewer · Fix issue → To pi · other · sessio — Builder",
+				"From alpha · pi · project · #-alpha — Reviewer · Fix issue → To beta · pi · other · #n-beta — Builder",
 			);
 			expect(list?.querySelector("[title*=session-alpha]")).toBeTruthy();
-			expect(list?.textContent).toContain("From unseen-agent → To unknown-targ");
+			expect(list?.textContent).toContain("From unseen-agent-123456 → To unknown-target");
 			expect(list?.querySelector('[data-streamdown="strong"]')?.textContent).toBe("hello");
 			expect(list?.querySelector("code")?.textContent).toBe("code");
 			expect(list?.textContent).toContain("question");
@@ -330,7 +330,7 @@ describe("board view", () => {
 			await click(button(container, "Show more"));
 			expect(container.querySelector('section[aria-label="Direct messages"]')?.textContent).toContain(LONG);
 			expect(container.querySelector('aside[aria-label="Active sessions"]')?.textContent).toContain(
-				"opencode · proj · s1",
+				"gamma · opencode · proj · #s1",
 			);
 		} finally {
 			await cleanup(root, container);

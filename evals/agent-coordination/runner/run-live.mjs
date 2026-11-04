@@ -268,7 +268,8 @@ async function main() {
 	const promptsSha256 = sha(JSON.stringify(prompts));
 	const graderSha256 = sha(readFileSync(join(evalDir, coding ? "coding" : "lib", coding ? "grade.mjs" : "grader.mjs")));
 
-	const ids = Object.fromEntries(labels.map((l) => [l, { agentId: randomUUID(), proxyToken: `pt_${randomBytes(18).toString("hex")}` }]));
+	const codingNames = { A: "backend-agent", B: "cli-agent" };
+	const ids = Object.fromEntries(labels.map((l) => [l, { agentId: coding ? codingNames[l] : randomUUID(), proxyToken: `pt_${randomBytes(18).toString("hex")}` }]));
 	collector.register(process.env.ZAI_CODING_CN_API_KEY, ...labels.map((l) => ids[l].proxyToken));
 	const proxyTokens = Object.fromEntries(labels.map((l) => [ids[l].proxyToken, l]));
 	const syntheticIds = new Set(coding ? [] : c.gold.profileTruth.map((p) => p.agentId));
