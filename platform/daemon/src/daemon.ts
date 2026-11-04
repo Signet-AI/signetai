@@ -306,6 +306,7 @@ import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
 import { mountHealthRoutes } from "./routes/health.js";
 import { mountProtectionRoutes } from "./protection.js";
 import { registerHooksRoutes } from "./routes/hooks-routes.js";
+import { registerBoardRoutes } from "./routes/board-routes.js";
 import { registerImportRoutes } from "./routes/import-routes.js";
 import { registerTranscriptImportRoutes } from "./routes/transcript-import-routes.js";
 import { mountInferenceRoutes } from "./routes/inference.js";
@@ -540,6 +541,7 @@ registerAuthRoutes(app);
 
 registerMemoryRoutes(app, { recallOwner });
 registerHooksRoutes(app);
+registerBoardRoutes(app);
 registerKnowledgeRoutes(app);
 registerOntologyRoutes(app);
 registerRepairRoutes(app);

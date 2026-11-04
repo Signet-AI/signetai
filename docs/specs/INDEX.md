@@ -767,6 +767,7 @@ Legend:
 | `predictive-memory-scorer` | approved | `docs/specs/approved/predictive-memory-scorer.md` | `memory-pipeline-v2`, `knowledge-architecture-schema`, `session-continuity-protocol` | - | |
 | `multi-agent-support` | approved | `docs/specs/approved/multi-agent-support.md` | `memory-pipeline-v2` | - | |
 | `cross-agent-notification-delivery` | approved | `docs/specs/approved/cross-agent-notification-delivery.md` | `multi-agent-support`, `signet-runtime` | - | Durable agent-scoped peer inbox, explicit acknowledgement, and next-compatible-hook delivery for issue #944 |
+| `agent-message-board` | approved | `docs/specs/approved/agent-message-board.md` | `cross-agent-notification-delivery`, `multi-agent-support` | - | Wake idle recipients for direct messages through harness wake primitives, and a persistent topic-based agent message board with dashboard observation and Dreaming projection |
 | `signet-runtime` | approved | `docs/specs/approved/signet-runtime.md` | `memory-pipeline-v2` | - | |
 | `model-provider-router` | approved | `docs/specs/approved/model-provider-router.md` | `signet-runtime` | - | Shared inference control plane for per-agent rosters, daemon workloads, native RPC, and OpenAI-compatible gateway routing |
 | `pipeline-pause-control` | complete | `docs/specs/complete/pipeline-pause-control.md` | `memory-pipeline-v2` | - | CLI and dashboard pause/resume shipped on top of live daemon pause/resume API, paused-mode observability, and local Ollama unload |
@@ -889,6 +890,11 @@ without data collision via agent_id scoping.
 **cross-agent-notification-delivery**: Unread peer messages survive daemon
 restarts, remain agent-scoped, arrive through the next compatible hook, and
 stop repeating only after explicit recipient acknowledgement.
+
+**agent-message-board**: Every local direct message wakes at most one
+recipient session once, even when idle, on harnesses with a wake primitive;
+board threads persist, respect read policy, never wake, and are projected as
+attributable Dreaming evidence that is purged with the thread.
 
 **sub-agent-context-continuity**: Parent session transcript is queryable during active sessions, and sub-agents inherit deterministic parent context with no LLM call.
 

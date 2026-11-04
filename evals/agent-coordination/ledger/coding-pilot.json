@@ -1,0 +1,173 @@
+{
+	"schema": "split-coding-pilot/v2",
+	"model": "glm-5.3-flash",
+	"provider": "zai-coding-cn (native Pi provider)",
+	"limits": "No request, wall-clock or response cap beyond the native model output ceiling; each run ended when both agents settled.",
+	"result": "Two uncapped pairs. With messaging: 10/10 and 10/10. Without messaging: 6/10 and 3/10. Every baseline failure is a cross-brief contract conflict (state names, identical-text resubmission, response id field). In pair 04 the agents used 10 direct messages, 17 acknowledgements and no board posts.",
+	"caveats": [
+		"The messaging agents also posted contract copies to the board; tool guidance was changed afterwards to keep a conversation with one session in direct messages.",
+		"Baseline in-run grade was empty because the grader container hit a 60s wrapper timeout; it was regraded with the same grader and image (grade.regrade.json). The wrapper timeout is removed.",
+		"Earlier capped pilots (24 requests, 8 minutes) are superseded; neither variant completed there.",
+		"Two pairs, not a statistical estimate."
+	],
+	"pairs": [
+		{
+			"pair": "unbounded-03",
+			"variants": [
+				{
+					"variant": "with-messaging",
+					"runId": "c2-split-coding-s1-unbounded-with-03-49e848",
+					"passed": 10,
+					"total": 10,
+					"checks": {
+						"files_present": true,
+						"backend_starts": true,
+						"basic_submit_result": true,
+						"request_id_idempotent": true,
+						"identical_text_distinct_jobs": true,
+						"retry_after_lost_response_no_duplicate": true,
+						"queued_cancel_prevents_execution": true,
+						"cancel_completed_preserved": true,
+						"queued_survives_restart": true,
+						"single_concurrency": true
+					},
+					"failureDetails": {},
+					"providerRequests": 50,
+					"reportedInputTokens": 1136222,
+					"reportedOutputTokens": 42975,
+					"requestsWithoutUsage": 0,
+					"generationSeconds": 966.8,
+					"endedBy": "both agents settled",
+					"directMessages": 4,
+					"boardPosts": 4,
+					"artifactSha256": {
+						"backend/server.mjs": "2033ff5fec848a1d81e14c3ad18281afd1d685bf9f5603ecc2d0fce430f9cc8a",
+						"cli/main.mjs": "34f95caa338cf517b63ab9ca8e5b11c66e48c0918058f4bc877c06d8af2b76b1"
+					},
+					"harnessSha256": "ce1331610c0f72538dce14580b5fac8e6f6fa9f5d1f4ef6f1acc1a3ddc88ee5f",
+					"promptsSha256": "31033dfc72f67c2979cdbb4b5e31c6483c504aabda51851568e18d413e7b54a8",
+					"imagesSha256": "69a79fb9e0d202940fb046105155eeac7b58684e06e788edad9ee4eb7044ccb9"
+				},
+				{
+					"variant": "without-messaging",
+					"runId": "c2-split-coding-s1-unbounded-without-03-c8dd33",
+					"passed": 6,
+					"total": 10,
+					"checks": {
+						"files_present": true,
+						"backend_starts": true,
+						"basic_submit_result": false,
+						"request_id_idempotent": true,
+						"identical_text_distinct_jobs": false,
+						"retry_after_lost_response_no_duplicate": true,
+						"queued_cancel_prevents_execution": true,
+						"cancel_completed_preserved": false,
+						"queued_survives_restart": false,
+						"single_concurrency": true
+					},
+					"failureDetails": {
+						"basic_submit_result": "{\"id\":\"8b23f5e2-169b-4c11-939d-80814fb0802c\"}\n  {\"id\":\"8b23f5e2-169b-4c11-939d-80814fb0802c\",\"state\":\"done\",\"result\":\"dc40fed27513a78b5b263c3a8f7acdc4e34f4b7e6e233050d387c6127de54576\"}",
+						"identical_text_distinct_jobs": "ids fabf9dea-f9e9-4501-8bdd-c9c2277cb278/fabf9dea-f9e9-4501-8bdd-c9c2277cb278 calls 1",
+						"cancel_completed_preserved": " {\"id\":\"8b23f5e2-169b-4c11-939d-80814fb0802c\",\"state\":\"done\",\"result\":\"dc40fed27513a78b5b263c3a8f7acdc4e34f4b7e6e233050d387c6127de54576\"}",
+						"queued_survives_restart": "restart true {\"id\":\"41493dac-b967-4e42-89dc-7fd08f9a86e2\",\"state\":\"done\",\"result\":\"f43174b03fc5fc1bb7abc80495aae747fbe88d3cce2315f47ccd908ab5c057fd\"} {\"id\":\"41493dac-b967-4e42-89dc-7fd08f9a86e2\"}\n "
+					},
+					"providerRequests": 30,
+					"reportedInputTokens": 501788,
+					"reportedOutputTokens": 39356,
+					"requestsWithoutUsage": 0,
+					"generationSeconds": 884.6,
+					"endedBy": "both agents settled",
+					"directMessages": 0,
+					"boardPosts": 0,
+					"artifactSha256": {
+						"backend/server.mjs": "a205a1a5fe90ec045ab83756edf0ac38f932fed717cf8825701d0abe5d71e469",
+						"cli/main.mjs": "eea2c2e58f7de3392298c1b5bdd20befc4e9c113c35064ad7206adba48d37db8"
+					},
+					"harnessSha256": "ce1331610c0f72538dce14580b5fac8e6f6fa9f5d1f4ef6f1acc1a3ddc88ee5f",
+					"promptsSha256": "31033dfc72f67c2979cdbb4b5e31c6483c504aabda51851568e18d413e7b54a8",
+					"imagesSha256": "69a79fb9e0d202940fb046105155eeac7b58684e06e788edad9ee4eb7044ccb9"
+				}
+			]
+		},
+		{
+			"pair": "readable-04",
+			"note": "Rebuilt images with the operator DM view, readable agent names, and DM-first tool guidance.",
+			"variants": [
+				{
+					"variant": "with-messaging",
+					"runId": "c2-split-coding-s1-readable-with-04-c171b1",
+					"passed": 10,
+					"total": 10,
+					"checks": {
+						"files_present": true,
+						"backend_starts": true,
+						"basic_submit_result": true,
+						"request_id_idempotent": true,
+						"identical_text_distinct_jobs": true,
+						"retry_after_lost_response_no_duplicate": true,
+						"queued_cancel_prevents_execution": true,
+						"cancel_completed_preserved": true,
+						"queued_survives_restart": true,
+						"single_concurrency": true
+					},
+					"failureDetails": {},
+					"providerRequests": 64,
+					"reportedInputTokens": 2290888,
+					"reportedOutputTokens": 71018,
+					"generationSeconds": 1243.6,
+					"directMessages": 10,
+					"boardPosts": 0,
+					"acknowledgements": 17,
+					"artifactSha256": {
+						"backend/server.mjs": "155d114f4508088ddeda8944236f333b3b4ffae3381aa2d5b79f1f5983e82689",
+						"cli/main.mjs": "92ef7d1afb589be24b74027c72a2699fc440c58b10bad9361b55652f07e5003b"
+					},
+					"harnessSha256": "e7ecdcfad522fcaf87361fdcd44030317f9ab6601e667df4c0b85f2e92b64830",
+					"promptsSha256": "31033dfc72f67c2979cdbb4b5e31c6483c504aabda51851568e18d413e7b54a8",
+					"imagesSha256": "162c2deb385feca09567975bdbafec401c789f4fdfa4775422dce4c07b82dffd"
+				},
+				{
+					"variant": "without-messaging",
+					"runId": "c2-split-coding-s1-readable-without-04-9d470f",
+					"passed": 3,
+					"total": 10,
+					"checks": {
+						"files_present": true,
+						"backend_starts": true,
+						"basic_submit_result": false,
+						"request_id_idempotent": false,
+						"identical_text_distinct_jobs": false,
+						"retry_after_lost_response_no_duplicate": false,
+						"queued_cancel_prevents_execution": false,
+						"cancel_completed_preserved": false,
+						"queued_survives_restart": false,
+						"single_concurrency": true
+					},
+					"failureDetails": {
+						"basic_submit_result": " {\"error\":\"job service response missing id\"}\n null",
+						"request_id_idempotent": "ids undefined/undefined calls 1 {\"error\":\"job service response missing id\"}\n",
+						"identical_text_distinct_jobs": "ids undefined/undefined calls 1",
+						"retry_after_lost_response_no_duplicate": "injected true out  err {\"error\":\"job service response missing id\"}\n calls 1",
+						"queued_cancel_prevents_execution": "cancel null status null calls 1",
+						"cancel_completed_preserved": "undefined null",
+						"queued_survives_restart": "restart true null  {\"error\":\"job service response missing id\"}\n"
+					},
+					"providerRequests": 27,
+					"reportedInputTokens": 546299,
+					"reportedOutputTokens": 42943,
+					"generationSeconds": 892.0,
+					"directMessages": 0,
+					"boardPosts": 0,
+					"acknowledgements": 0,
+					"artifactSha256": {
+						"backend/server.mjs": "da9e8f9ea1c1aff725dbdf6136277daa7ac50f37abbfcc84dc6afecabf6c6dc9",
+						"cli/main.mjs": "7925e6e764c3534ed0c6c0f25c756f22ce0917a72a2013125b1f5ccbfe90b601"
+					},
+					"harnessSha256": "e7ecdcfad522fcaf87361fdcd44030317f9ab6601e667df4c0b85f2e92b64830",
+					"promptsSha256": "31033dfc72f67c2979cdbb4b5e31c6483c504aabda51851568e18d413e7b54a8",
+					"imagesSha256": "162c2deb385feca09567975bdbafec401c789f4fdfa4775422dce4c07b82dffd"
+				}
+			]
+		}
+	]
+}

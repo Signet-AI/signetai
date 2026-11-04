@@ -1,0 +1,10 @@
+{
+	"extends": "../../tsconfig.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"rootDir": "../..",
+		"types": ["bun-types"]
+	},
+	"files": ["src/commands/hook.ts"],
+	"include": []
+}

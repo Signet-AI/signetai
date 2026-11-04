@@ -29,6 +29,7 @@ beforeEach(() => {
 	tempDir = mkdtempSync(join(tmpdir(), "signet-cross-agent-"));
 	dbPath = join(tempDir, "memory.db");
 	initDbAccessor(dbPath, { agentsDir: tempDir });
+	resetCrossAgentStateForTest();
 });
 
 afterEach(async () => {
@@ -96,6 +97,17 @@ describe("cross-agent presence", () => {
 });
 
 describe("cross-agent messages", () => {
+	it("pages all agents' direct and broadcast messages without changing the default inbox", () => {
+		createAgentMessage({ fromAgentId: "alpha", toAgentId: "beta", content: "first" });
+		createAgentMessage({ fromAgentId: "beta", toAgentId: "alpha", content: "second" });
+		createAgentMessage({ fromAgentId: "gamma", broadcast: true, content: "broadcast" });
+		expect(listAgentMessagePage({ agentId: "owner", includeBroadcast: false }).total).toBe(0);
+		const first = listAgentMessagePage({ agentId: "owner", allAgents: true, limit: 2, order: "asc" });
+		const second = listAgentMessagePage({ agentId: "owner", allAgents: true, limit: 2, offset: 2, order: "asc" });
+		expect(first.total).toBe(3);
+		expect(first.hasMore).toBe(true);
+		expect([...first.items, ...second.items].map((item) => item.content)).toEqual(["first", "second", "broadcast"]);
+	});
 	it("stores direct messages and lists inbox for recipient", () => {
 		upsertAgentPresence({
 			sessionKey: "sess-a",
@@ -490,5 +502,36 @@ describe("ACP relay", () => {
 
 		expect(result?.ok).toBe(true);
 		expect(capture.url).toBe("http://localhost:9000/runs");
+	});
+});
+
+describe("presence session-key rebind", () => {
+	it("discards prior owner context and timestamps when another agent takes the same session key", () => {
+		resetCrossAgentStateForTest();
+		upsertAgentPresence({
+			sessionKey: "k",
+			agentId: "a",
+			harness: "pi",
+			project: "/pa",
+			context: { task: "A-PRIVATE", cwd: "/a" },
+		});
+		const changes: string[] = [];
+		const stop = subscribeCrossAgentEvents((event) => {
+			if (event.type === "presence") changes.push(`${event.action}:${event.presence.agentId}:${event.activeCount}`);
+		});
+		const b = upsertAgentPresence({ sessionKey: "k", agentId: "b", harness: "pi" });
+		stop();
+		expect(changes).toEqual(["remove:a:0", "upsert:b:1"]);
+		expect(b.agentId).toBe("b");
+		expect(b.context).toBeUndefined();
+		expect(b.contextUpdatedAt).toBeUndefined();
+		expect(b.project).toBeUndefined();
+		expect(JSON.stringify(b)).not.toContain("A-PRIVATE");
+	});
+
+	it("keeps same-owner context across heartbeats", () => {
+		resetCrossAgentStateForTest();
+		upsertAgentPresence({ sessionKey: "k", agentId: "a", harness: "pi", context: { task: "keep" } });
+		expect(upsertAgentPresence({ sessionKey: "k", agentId: "a", harness: "pi" }).context?.task).toBe("keep");
 	});
 });

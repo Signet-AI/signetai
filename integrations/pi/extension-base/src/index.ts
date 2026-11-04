@@ -36,10 +36,12 @@ export {
 	type DaemonClientConfig,
 	type DaemonFetchFailure,
 	type DaemonFetchResult,
+	type DaemonRequestClient,
 	type DaemonStatusClient,
 } from "./daemon-client.js";
 
 export {
+	contextField,
 	currentSessionRef,
 	defaultStaticFallback,
 	endCurrentSession,
@@ -89,3 +91,25 @@ export {
 	type LifecycleProviderWindow,
 	type LifecycleShutdownWindow,
 } from "@signet/lifecycle-proof";
+
+export {
+	createWakeWaiter,
+	WAKE_DEFAULT_RETRY_MS,
+	WAKE_MAX_RETRY_MS,
+	WAKE_WAIT_MS,
+	type WakeSessionRef,
+	type WakeWaiter,
+	type WakeWaiterOptions,
+} from "./wake-waiter.js";
+
+export {
+	boundResources,
+	boundTask,
+	mutatedPaths,
+	PeerContextTracker,
+	PEER_MODIFIED_FILES_MAX,
+	PEER_RESOURCES_MAX,
+	PEER_TASK_MAX,
+	type PeerContext,
+	type PeerContextBase,
+} from "./peer-context.js";

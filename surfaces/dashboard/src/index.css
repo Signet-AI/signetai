@@ -341,6 +341,9 @@
 		.dreams-summary { padding: 16px 16px 0; border-radius: 14px; }
 		.dreams-reflection-body { margin-inline: -16px; padding: 0 16px 18px; }
 	}
+	.board-page { container: board / inline-size; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
+	.board-content { --board-gutter: clamp(16px, 3cqi, 40px); display: flex; flex-direction: column; gap: 24px; flex: 1 0 0; width: 100%; max-width: 1560px; margin-inline: auto; padding: 30px var(--board-gutter) 32px; }
+	.board-page button:focus-visible { outline: 1px solid var(--home-focus, var(--ring)); outline-offset: -1px; }
 	.skills-page { container: skills / inline-size; display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 	.skills-content { --skills-gutter: clamp(16px, 3cqi, 40px); display: flex; flex-direction: column; gap: 24px; flex: 1 0 0; min-block-size: 560px; width: 100%; max-width: 1560px; margin-inline: auto; padding: 30px var(--skills-gutter) 32px; }
 	.skills-layout { display: grid; flex: 1; min-height: 0; grid-template-columns: clamp(280px, 30%, 380px) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 28px; }

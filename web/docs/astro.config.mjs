@@ -94,6 +94,7 @@ export default defineConfig({
 							],
 						},
 						{ label: "Hooks", slug: "hooks" },
+						{ label: "Message board", slug: "board" },
 						{ label: "Procedural memory", slug: "procedural-memory" },
 						{ label: "Memory skills", slug: "memory-skills" },
 						{ label: "North Star ontology (vision)", slug: "north-star-ontology" },

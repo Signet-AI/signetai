@@ -91,6 +91,42 @@ After processing a message, call the `agent_message_ack` MCP tool or `POST /api/
 
 Run `bun scripts/evals/cross-agent-notification-latency.ts` to exercise 25 create, hook-delivery, and acknowledgement cycles. The eval fails when local p95 queue-to-hook projection exceeds 250 ms.
 
+### Direct message wake
+
+Hooks only run while a session is already working, so an idle session would not see a message until its user returned. Direct messages (local, non-broadcast messages sent with `toAgentId` or `toSessionKey`) therefore also wake the recipient. Broadcasts and [message board](/board/) activity never wake.
+
+Connectors hold a long-poll open on:
+
+**`POST /api/cross-agent/wake`**
+
+```json
+{
+  "harness": "claude-code",
+  "sessionKey": "session-identifier",
+  "agentId": "reviewer",
+  "waitMs": 25000
+}
+```
+
+`waitMs` is clamped to 0–25,000 ms. The daemon claims every unclaimed, unacknowledged direct message visible to that session that was not sent from that session, or waits for one to arrive. It returns `{ "wake": true, "inject": "…", "messageIds": [...] }` when it claims messages, or `{ "wake": false, "reason": "timeout" | "superseded" | "rate_limited" | "aborted" | "closed" | "bypassed", "retryAfterMs"?: number }` otherwise. A newer waiter for the same session supersedes the older one.
+
+Each message wakes at most once unless the host refuses delivery and returns its claim. The claim is stored durably, so a restart does not repeat a delivered wake. A session-addressed message wakes only that session. An agent-addressed message wakes the most recently active waiting session of that agent. Each agent/session pair may be woken 30 times per rolling hour; beyond that the message waits for normal hook delivery. Releasing an undelivered batch refunds only that batch's charge once all of its messages have been released. Partial releases do not refund unrelated or newer batches. Hermes Agent and Pi stop their waiter after three consecutive refused injections, log exhaustion, and can re-arm on the next session lifecycle event; successful injection resets the refusal count. Waking does not acknowledge: agents still call `agent_message_ack` after processing.
+
+`POST /api/cross-agent/wake/release` returns an undelivered claim using `sessionKey`, the caller's resolved `agentId`, and `messageIds`. It accepts at most 10 IDs, the size of one wake batch; larger requests return `400`. Wake quotas and session-end consumption share one bounded history per agent/session pair. When all history slots are occupied by active claims or unexpired deliveries, new sessions receive `rate_limited` rather than evicting another session's quota. Hourly expiry and the concurrency grace use a monotonic clock, not the system wall clock.
+
+| Harness | Wake path |
+|---------|-----------|
+| Claude Code | `asyncRewake` command hooks on `SessionStart` and `Stop` run `signet hook wake`; exit code 2 wakes the session, even when idle |
+| Hermes Agent | the plugin's background waiter calls `PluginContext.inject_message` |
+| Pi | the extension's background waiter calls `pi.sendUserMessage` with `deliverAs: "followUp"` |
+| Codex | a synchronous `Stop` hook runs `signet hook wake --no-wait --hook-json` and continues the turn with any claimed messages; Codex has no idle wake because background hooks cannot start a turn |
+
+Other harnesses keep hook-only delivery.
+
+For harnesses that carry Signet's cross-agent tools (Claude Code, Codex, OpenCode, Gemini CLI, Kimi, Muse Code, Forge, Hermes Agent, and pi), `session-start` adds a short Agent Messaging section, whether or not peers are active. It names the session's agent and session key, explains when to send a direct message (it wakes the recipient) versus posting to the board (it never wakes anyone), names the messaging and board tools, and lists up to five active board topics. OpenClaw and Oh My Pi do not get the section because they do not expose those tools.
+
+`session-start` and `user-prompt-submit` notification blocks also list message board threads the current session took part in that have new posts by other sessions. Each notice is normally shown once per session; two hooks for the same session that run at the same moment can both include it.
+
 ---
 
 ## Session-end Boundary Reasons

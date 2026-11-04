@@ -8,6 +8,7 @@ export type DaemonFetchResult<T> =
 			readonly ok: false;
 			readonly reason: DaemonFetchFailure;
 			readonly status?: number;
+			readonly detail?: string;
 	  };
 
 export interface DaemonClientConfig {
@@ -58,6 +59,51 @@ async function cancelResponseBody(response: Response): Promise<void> {
 	} catch {}
 }
 
+const MAX_ERROR_BODY_BYTES = 4_096;
+
+async function readBoundedText(response: Response): Promise<string | undefined> {
+	const reader = response.body?.getReader();
+	if (!reader) return undefined;
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		while (total < MAX_ERROR_BODY_BYTES) {
+			const { done, value } = await reader.read();
+			if (done || !value) break;
+			chunks.push(value);
+			total += value.byteLength;
+		}
+	} finally {
+		await reader.cancel().catch(() => undefined);
+	}
+	const bytes = new Uint8Array(Math.min(total, MAX_ERROR_BODY_BYTES));
+	let offset = 0;
+	for (const chunk of chunks) {
+		const slice = chunk.subarray(0, bytes.length - offset);
+		bytes.set(slice, offset);
+		offset += slice.byteLength;
+		if (offset >= bytes.length) break;
+	}
+	return new TextDecoder().decode(bytes);
+}
+
+async function readErrorDetail(response: Response): Promise<string | undefined> {
+	if (!(response.headers.get("content-type") ?? "").includes("application/json")) {
+		await cancelResponseBody(response);
+		return undefined;
+	}
+	try {
+		const text = await readBoundedText(response);
+		if (!text) return undefined;
+		const parsed: unknown = JSON.parse(text);
+		if (typeof parsed !== "object" || parsed === null || !("error" in parsed)) return undefined;
+		const error = (parsed as { readonly error?: unknown }).error;
+		return typeof error === "string" && error.trim() ? error.trim().slice(0, 300) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 async function daemonFetchResult<T>(
 	daemonUrl: string,
 	path: string,
@@ -67,15 +113,16 @@ async function daemonFetchResult<T>(
 		readonly body?: unknown;
 		readonly timeout?: number;
 		readonly parseJson?: boolean;
+		readonly signal?: AbortSignal;
 	} = {},
 ): Promise<DaemonFetchResult<T>> {
-	const { method = "POST", body, timeout = config.defaultTimeout, parseJson = true } = options;
+	const { method = "POST", body, timeout = config.defaultTimeout, parseJson = true, signal } = options;
 
 	try {
 		const init: RequestInit = {
 			method,
 			headers: buildHeaders(config),
-			signal: AbortSignal.timeout(timeout),
+			signal: signal ? AbortSignal.any([AbortSignal.timeout(timeout), signal]) : AbortSignal.timeout(timeout),
 		};
 
 		if (body !== undefined) {
@@ -84,9 +131,11 @@ async function daemonFetchResult<T>(
 
 		const response = await fetch(`${daemonUrl}${path}`, init);
 		if (!response.ok) {
-			await cancelResponseBody(response);
+			const detail = await readErrorDetail(response);
 			logWarning(config, `[${config.logPrefix}] ${method} ${path} failed: ${response.status}`);
-			return { ok: false, reason: "http", status: response.status };
+			return detail
+				? { ok: false, reason: "http", status: response.status, detail }
+				: { ok: false, reason: "http", status: response.status };
 		}
 
 		if (!parseJson) {
@@ -130,30 +179,61 @@ async function daemonFetchResult<T>(
 }
 
 export interface DaemonClient {
-	post<T>(path: string, body: unknown, timeout?: number): Promise<T | null>;
-	postResult<T>(path: string, body: unknown, timeout?: number): Promise<DaemonFetchResult<T>>;
+	post<T>(path: string, body: unknown, timeout?: number, signal?: AbortSignal): Promise<T | null>;
+	postResult<T>(path: string, body: unknown, timeout?: number, signal?: AbortSignal): Promise<DaemonFetchResult<T>>;
 }
 
 export interface DaemonStatusClient extends DaemonClient {
 	postStatus(path: string, body: unknown, timeout?: number): Promise<DaemonFetchResult<void>>;
 }
 
-export function createDaemonClient(daemonUrl: string, config: DaemonClientConfig): DaemonStatusClient {
+export interface DaemonRequestClient {
+	getResult<T>(path: string, timeout?: number, signal?: AbortSignal): Promise<DaemonFetchResult<T>>;
+	patchResult<T>(path: string, body: unknown, timeout?: number, signal?: AbortSignal): Promise<DaemonFetchResult<T>>;
+}
+
+export function createDaemonClient(
+	daemonUrl: string,
+	config: DaemonClientConfig,
+): DaemonStatusClient & DaemonRequestClient {
 	return {
-		async post<T>(path: string, body: unknown, timeout = config.defaultTimeout): Promise<T | null> {
+		getResult<T>(path: string, timeout = config.defaultTimeout, signal?: AbortSignal): Promise<DaemonFetchResult<T>> {
+			return daemonFetchResult<T>(daemonUrl, path, config, { method: "GET", timeout, signal });
+		},
+		patchResult<T>(
+			path: string,
+			body: unknown,
+			timeout = config.defaultTimeout,
+			signal?: AbortSignal,
+		): Promise<DaemonFetchResult<T>> {
+			return daemonFetchResult<T>(daemonUrl, path, config, { method: "PATCH", body, timeout, signal });
+		},
+		async post<T>(
+			path: string,
+			body: unknown,
+			timeout = config.defaultTimeout,
+			signal?: AbortSignal,
+		): Promise<T | null> {
 			const result = await daemonFetchResult<T>(daemonUrl, path, config, {
 				method: "POST",
 				body,
 				timeout,
+				signal,
 			});
 			if (!result.ok) return null;
 			return result.data;
 		},
-		postResult<T>(path: string, body: unknown, timeout = config.defaultTimeout): Promise<DaemonFetchResult<T>> {
+		postResult<T>(
+			path: string,
+			body: unknown,
+			timeout = config.defaultTimeout,
+			signal?: AbortSignal,
+		): Promise<DaemonFetchResult<T>> {
 			return daemonFetchResult<T>(daemonUrl, path, config, {
 				method: "POST",
 				body,
 				timeout,
+				signal,
 			});
 		},
 		postStatus(path: string, body: unknown, timeout = config.defaultTimeout): Promise<DaemonFetchResult<void>> {

@@ -692,3 +692,150 @@ Both raw keys and `session:<uuid>` forms are accepted.
 ```
 
 Returns `404` if the session key is not found.
+
+## Cross-agent presence and peer context
+
+Active sessions register presence so peers can find them. Presence may carry
+self-reported context so an agent can choose which of many sessions to message.
+Context is untrusted text from the session or its harness; it is not verified
+OS state, a complete list of changed files, or a resource lock.
+
+### POST /api/cross-agent/presence
+
+Registers or refreshes a session and optionally updates its context.
+
+**Request body**
+
+```json
+{
+  "harness": "pi",
+  "sessionKey": "session-uuid",
+  "agentId": "default",
+  "project": "/work/render",
+  "context": {
+    "cwd": "/work/render",
+    "hostname": "box-a",
+    "title": "render",
+    "task": "training a LoRA",
+    "modifiedFiles": ["train.py"],
+    "resources": ["gpu:0"]
+  }
+}
+```
+
+`harness` is optional when the session is already registered for the same
+agent. `context` and every field in it are optional. Omitted fields keep their
+stored value, including on a heartbeat with no `context`; an empty string or
+empty array clears a field. Limits: `cwd` 512, `hostname` 128, `title` 160,
+`task` 500 characters; `modifiedFiles` up to 20 entries of 300 characters;
+`resources` up to 20 entries of 160 characters. Wrong types, unknown fields,
+or over-limit values return `400` and change nothing. Control and bidi
+characters are removed. The agent is resolved from the authenticated scope, and
+a session owned by another agent returns `403`.
+
+The same optional `context` object is accepted by `POST /api/hooks/session-start`
+(as an object; a string value is ignored), `POST /api/hooks/user-prompt-submit`,
+`POST /api/hooks/notifications`, and `POST /api/cross-agent/wake`. When a hook
+creates a session's presence, `context.cwd` defaults to the hook's `cwd` or
+`project`.
+
+**Response**
+
+```json
+{
+  "presence": {
+    "key": "session:session-uuid",
+    "sessionKey": "session-uuid",
+    "agentId": "default",
+    "harness": "pi",
+    "project": "/work/render",
+    "startedAt": "2026-11-03T18:00:00.000Z",
+    "lastSeenAt": "2026-11-03T18:05:00.000Z",
+    "context": { "cwd": "/work/render", "task": "training a LoRA", "resources": ["gpu:0"] },
+    "contextUpdatedAt": "2026-11-03T18:04:30.000Z"
+  }
+}
+```
+
+`contextUpdatedAt` changes only when context changes; `lastSeenAt` advances on
+every heartbeat.
+
+### GET /api/cross-agent/presence
+
+Lists active sessions the caller may read. Each session includes its `context`
+and `contextUpdatedAt` when set. No transcript content is returned here.
+
+**Visibility.** The caller's read policy is applied before `limit`, so hidden
+newer sessions cannot crowd out visible ones: `shared` sees every agent,
+`group` sees its own agent and agents in the same policy group (regardless of
+the target's own policy), and `isolated` (or an unknown agent) sees only its
+own sessions. Other sessions of the caller's own agent are listed when
+`session_key` names the caller's session. `project` filters only when given.
+`scope=all` bypasses the policy and is limited to local mode or an admin token.
+The same policy filters `GET /api/cross-agent/stream` presence snapshots and
+live presence events, and the automatic peer list injected at session start.
+Policy lookup failures fail closed to the caller's own sessions.
+
+### GET /api/cross-agent/sessions/:sessionKey/context
+
+Bounded drilldown into one active session. URL-encode the session key.
+
+**Query parameters:** `target_agent_id` (owner; `404` on mismatch), `agent_id`
+and `caller_session_key` (the caller, resolved against the authenticated
+scope), `max_messages` (1 to 5, default 3), and `scope=all` (local mode or an
+admin token only).
+
+**Response**
+
+```json
+{
+  "presence": { "sessionKey": "session-uuid", "agentId": "beta", "harness": "pi" },
+  "recentMessages": [{ "role": "user", "content": "how is it going" }],
+  "truncated": true,
+  "provenance": {
+    "presence": "self-reported",
+    "transcript": "signet-captured-tail",
+    "transcriptUpdatedAt": "2026-11-03T18:05:00.000Z",
+    "transcriptBytes": 812345,
+    "bytesRead": 32768,
+    "roles": "user-and-assistant-only",
+    "untrusted": true
+  }
+}
+```
+
+Only user and assistant turns from the transcript Signet already captured are
+returned, at most 5 messages and about 4000 characters in total, with
+credentials redacted. Reasoning, tool output, system turns, and the full
+transcript are never returned. The database owner reads only a bounded tail
+(32 KiB); `truncated` is true when anything older or longer was left out.
+`transcript` is `unavailable` when no transcript has been captured yet. The
+tail is parsed conservatively: the possibly cut first line is dropped, and
+plain `User:`/`Assistant:` turns and Claude, Pi, Hermes, and Codex JSONL
+records are read for user and assistant text blocks only. `<thinking>` markup,
+`Assistant reasoning:` lines, tool, system, and unknown structured rows are
+dropped, never returned raw. Visible hidden-block delimiters are processed before
+role labels or JSONL records, so forged roles inside a recognized hidden block
+are omitted. An unclosed block suppresses the remaining tail, including apparent
+JSONL records. A cut tail discards content up to any orphan closing tag. If a
+plain-text tail starts inside a block longer than 32 KiB and no delimiters occur
+in the returned tail, its prior hidden state cannot be reconstructed; this
+best-effort preview is not a complete hidden-content filtering guarantee.
+The query still reads the stored value server-side (the 32 KiB bound applies to
+returned content, not database I/O). Presence keys are global per session key:
+when another agent registers a key, the old owner's presence and context are
+discarded, a removal event is emitted for the old audience, and a fresh presence
+is created. The lookup is the exact `(sessionKey, owner)` tuple;
+`target_agent_id` never falls back to another agent's session.
+
+Hermes retains explicit task/resource metadata for same-id refreshes and verified
+compression continuations (`reason=compression`, parent equal to the active key,
+no reset). A new conversation, branch, unrelated rotation or explicit reset
+clears it; a parent id alone is not evidence of continuity.
+
+**Access.** The caller can inspect sessions of its own agent. Otherwise its
+read policy applies: `shared` may inspect any agent, `group` only agents in the
+same policy group, `isolated` only itself, and denial returns `403`. A missing
+session, or a `target_agent_id` that does not own the key, returns `404`. A
+scoped token cannot name another agent as the caller. `scope=all` bypasses the
+read policy and is limited to local mode or an admin token.

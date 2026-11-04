@@ -24,6 +24,7 @@ interface RequestOptions {
 	readonly body?: unknown;
 	readonly query?: Record<string, string | number | boolean | undefined>;
 	readonly signal?: AbortSignal;
+	readonly timeoutMs?: number;
 }
 
 export class SignetTransport {
@@ -51,6 +52,10 @@ export class SignetTransport {
 			headers["Content-Type"] = "application/json";
 		}
 
+		const timeoutMs =
+			opts?.timeoutMs !== undefined && Number.isFinite(opts.timeoutMs) && opts.timeoutMs >= 0
+				? Math.min(MAX_TIMER_MS, opts.timeoutMs)
+				: this.config.timeoutMs;
 		const canRetry = IDEMPOTENT_METHODS.has(method.toUpperCase());
 		const maxAttempts = canRetry ? this.config.retries + 1 : 1;
 
@@ -66,7 +71,7 @@ export class SignetTransport {
 					method,
 					headers,
 					body: opts?.body !== undefined ? JSON.stringify(opts.body) : undefined,
-					signal: buildRequestSignal(opts?.signal, this.config.timeoutMs),
+					signal: buildRequestSignal(opts?.signal, timeoutMs),
 				});
 
 				if (!response.ok) {
@@ -80,7 +85,7 @@ export class SignetTransport {
 					throw error;
 				}
 
-				const networkError = toNetworkError(error, this.config.timeoutMs);
+				const networkError = toNetworkError(error, timeoutMs);
 				if (opts?.signal?.aborted) {
 					throw networkError;
 				}

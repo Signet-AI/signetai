@@ -3,8 +3,15 @@ import { join } from "node:path";
 import { buildRecallRequestBody, buildRememberRequestBody, formatRecallText, parseRecallPayload } from "@signet/core";
 import type { RecallPayload } from "@signet/core";
 import { resolvePiAgentDir } from "@signet/pi-extension-base/agent-dir";
-import { readRuntimeEnv, readTrimmedRuntimeEnv, readTrimmedString } from "@signet/pi-extension-base";
+import {
+	type WakeWaiter,
+	createWakeWaiter,
+	readRuntimeEnv,
+	readTrimmedRuntimeEnv,
+	readTrimmedString,
+} from "@signet/pi-extension-base";
 import { Type } from "@sinclair/typebox";
+import { registerCollabTools } from "./collab-tools.js";
 import { createDaemonClient } from "./daemon-client.js";
 import {
 	type LifecycleDeps,
@@ -18,6 +25,7 @@ import {
 	requestNotifications,
 	settlePromptSubmit,
 } from "./lifecycle.js";
+import { type PeerContextController, createPeerContextController } from "./peer-context.js";
 import { type PiSessionState, createSessionState } from "./session-state.js";
 import {
 	DAEMON_URL_DEFAULT,
@@ -31,6 +39,7 @@ import {
 	type PiInputEvent,
 	type PiSessionBeforeCompactEvent,
 	type PiSessionCompactEvent,
+	type PiToolResultEvent,
 	type PreCompactionResult,
 	READ_TIMEOUT,
 	RUNTIME_PATH,
@@ -257,7 +266,22 @@ function updateStatus(ctx: PiExtensionContext): void {
 	ctx.ui.setStatus("signet", ctx.ui.theme.fg("accent", status));
 }
 
-function registerSessionLifecycleHandlers(pi: PiExtensionApi, deps: LifecycleDeps, daemonUrl: string): void {
+function startWake(wake: WakeWaiter | undefined, ctx: PiExtensionContext, peers?: PeerContextController): void {
+	if (!wake) return;
+	if (ctx.mode !== "tui" && ctx.mode !== "rpc") return;
+	const session = currentSessionRef(ctx);
+	if (!session.sessionId) return;
+	void peers?.publish(ctx, true).catch(() => false);
+	wake.start({ sessionKey: session.sessionId, project: session.project });
+}
+
+function registerSessionLifecycleHandlers(
+	pi: PiExtensionApi,
+	deps: LifecycleDeps,
+	daemonUrl: string,
+	wake?: WakeWaiter,
+	peers?: PeerContextController,
+): void {
 	pi.on("session_start", async (_event, ctx) => {
 		const healthy = await checkDaemonHealth(daemonUrl);
 		if (healthy) {
@@ -269,24 +293,38 @@ function registerSessionLifecycleHandlers(pi: PiExtensionApi, deps: LifecycleDep
 		}
 
 		await refreshSessionStart(deps, ctx);
+		startWake(wake, ctx, peers);
 	});
 	pi.on("session_before_switch", async () => {
+		wake?.stop();
 		await endPreviousSession(deps, {}, "session_switch");
 	});
 	pi.on("session_before_fork", async () => {
+		wake?.stop();
 		await endPreviousSession(deps, {}, "session_fork");
 	});
 
 	pi.on("session_switch", async (_event, ctx) => {
 		await refreshSessionStart(deps, ctx);
+		startWake(wake, ctx, peers);
 	});
 	pi.on("session_fork", async (_event, ctx) => {
 		await refreshSessionStart(deps, ctx);
+		startWake(wake, ctx, peers);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		wake?.stop();
 		ctx.ui.setStatus("signet", undefined);
 		await endCurrentSession(deps, ctx, "session_shutdown");
+		peers?.forget(currentSessionRef(ctx).sessionId);
+	});
+}
+
+function registerToolObservers(pi: PiExtensionApi, peers: PeerContextController): void {
+	pi.on("tool_result", (event: PiToolResultEvent, ctx) => {
+		if (event.isError !== false) return;
+		peers.recordMutation(ctx, event.toolName, event.input);
 	});
 }
 
@@ -337,6 +375,7 @@ function registerCompactionHandlers(pi: PiExtensionApi, deps: LifecycleDeps): vo
 					? event.preparation.messagesToSummarize.length
 					: undefined,
 				runtimePath: RUNTIME_PATH,
+				...(deps.peerContext?.(ctx) ? { context: deps.peerContext(ctx) } : {}),
 			},
 			READ_TIMEOUT,
 		);
@@ -838,17 +877,33 @@ const SignetPiExtension: PiExtensionFactory = (pi): void => {
 	const daemonUrl = readTrimmedRuntimeEnv("SIGNET_DAEMON_URL") ?? DAEMON_URL_DEFAULT;
 	const agentId = readTrimmedRuntimeEnv("SIGNET_AGENT_ID");
 	if (readRuntimeEnv("SIGNET_BYPASS") !== "1") {
+		const client = createDaemonClient(daemonUrl);
+		const peers = createPeerContextController(client, agentId);
 		const deps: PiDeps = {
 			agentId,
-			client: createDaemonClient(daemonUrl),
+			client,
+			peerContext: (ctx) => peers.contextFor(ctx as PiExtensionContext),
 			state: createSessionState(),
 			config: PI_LIFECYCLE_CONFIG,
 		};
 
-		registerSessionLifecycleHandlers(pi, deps, daemonUrl);
+		const wake =
+			typeof pi.sendUserMessage === "function"
+				? createWakeWaiter({
+						client: deps.client,
+						harness: HARNESS,
+						agentId,
+						deliver: (inject) => pi.sendUserMessage?.(inject, { deliverAs: "followUp" }),
+						context: () => peers.latest(),
+					})
+				: undefined;
+
+		registerSessionLifecycleHandlers(pi, deps, daemonUrl, wake, peers);
+		registerToolObservers(pi, peers);
 		registerPromptHandlers(pi, deps);
 		registerContextHandlers(pi, deps);
 		registerCompactionHandlers(pi, deps);
+		registerCollabTools(pi, createDaemonClient(daemonUrl), agentId, peers);
 	}
 
 	registerCommandsAndTools(pi, daemonUrl, agentId);

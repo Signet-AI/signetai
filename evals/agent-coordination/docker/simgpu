@@ -1,0 +1,8 @@
+#!/usr/bin/env node
+// Agent-side CLI for the simulated GPU. Identity = SIMGPU_TOKEN (per container). `start` returns a receipt immediately.
+const [cmd, receipt] = process.argv.slice(2);
+const base = process.env.SIMGPU_URL, token = process.env.SIMGPU_TOKEN;
+const call = async (m, p) => { const r = await fetch(base + p, { method: m, headers: { authorization: `Bearer ${token}` } }); return r.json(); };
+if (cmd === "start") console.log(JSON.stringify(await call("POST", "/v1/jobs")));
+else if (cmd === "status" || cmd === "result") console.log(JSON.stringify(await call("GET", `/v1/jobs/${receipt}`)));
+else { console.error("usage: simgpu start | status <receipt> | result <receipt>"); process.exit(2); }

@@ -517,6 +517,69 @@ describe("SignetPiExtension", () => {
 		expect(end?.body).not.toHaveProperty("transcript");
 	});
 
+	it("wakes interactive sessions for direct messages and never polls in print mode", async () => {
+		const requests: Array<{ path: string; body: unknown }> = [];
+		let wakeCount = 0;
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				const body = req.method === "POST" ? ((await req.json().catch(() => undefined)) as unknown) : undefined;
+				requests.push({ path, body });
+				if (path === "/health") return new Response(null, { status: 200 });
+				if (path === "/api/hooks/session-start") return Response.json({ inject: "" });
+				if (path === "/api/hooks/session-end") return Response.json({ ok: true });
+				if (path === "/api/cross-agent/wake") {
+					wakeCount += 1;
+					if (wakeCount === 1) return Response.json({ wake: true, inject: "peer says hi", messageIds: ["m1"] });
+					return Response.json({ wake: false, reason: "superseded" });
+				}
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		const delivered: Array<{ text: unknown; options: unknown }> = [];
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+			sendUserMessage(text: unknown, options: unknown) {
+				delivered.push({ text, options });
+			},
+		};
+		SignetPiExtension(pi as never);
+		const ctxFor = (mode: string, id: string) => ({
+			mode,
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id, cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => id,
+			},
+			ui: { notify: () => {}, setStatus: () => {}, theme: { fg: (_color: string, text: string) => text } },
+		});
+
+		await handlers.session_start[0]?.({}, ctxFor("print", "session-print"));
+		await Bun.sleep(50);
+		expect(requests.filter((r) => r.path === "/api/cross-agent/wake")).toHaveLength(0);
+
+		await handlers.session_start[0]?.({}, ctxFor("tui", "session-tui"));
+		for (let attempt = 0; attempt < 50 && wakeCount < 2; attempt++) await Bun.sleep(20);
+		expect(delivered).toEqual([{ text: "peer says hi", options: { deliverAs: "followUp" } }]);
+		expect(requests.find((r) => r.path === "/api/cross-agent/wake")?.body).toMatchObject({
+			harness: "pi",
+			sessionKey: "session-tui",
+		});
+		await handlers.session_shutdown[0]?.({}, ctxFor("tui", "session-tui"));
+	});
+
 	it("session_before_fork ends the previous session with the fork reason", async () => {
 		const requests: Array<{ method: string; path: string; body: unknown }> = [];
 		const server = Bun.serve({
@@ -1112,7 +1175,7 @@ describe("SignetPiExtension", () => {
 
 		expect(result).toBeUndefined();
 		expect(requests.map((req) => req.path)).toEqual(["/api/hooks/session-start", "/api/hooks/pre-compaction"]);
-		expect(requests[1]?.body).toEqual({
+		expect(requests[1]?.body).toMatchObject({
 			harness: "pi",
 			sessionKey: "session-pi-compact-1",
 			messageCount: 3,
@@ -1183,5 +1246,222 @@ describe("SignetPiExtension", () => {
 			agentId: "agent-pi-test",
 			runtimePath: "plugin",
 		});
+	});
+});
+
+describe("collaboration tools", () => {
+	type Tool = {
+		execute: (
+			id: string,
+			params: Record<string, unknown>,
+			signal: AbortSignal,
+			onUpdate: unknown,
+			ctx: unknown,
+		) => Promise<{ content: Array<{ text: string }>; isError?: boolean }>;
+	};
+	type Seen = { method: string; path: string; search: string; body: unknown };
+
+	async function setup(): Promise<{ tools: Map<string, Tool>; seen: Seen[] }> {
+		const seen: Seen[] = [];
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const url = new URL(req.url);
+				if (url.pathname === "/health") return new Response(null, { status: 200 });
+				const text = req.method === "GET" ? "" : await req.text();
+				seen.push({
+					method: req.method,
+					path: url.pathname,
+					search: url.search,
+					body: text ? JSON.parse(text) : undefined,
+				});
+				if (url.pathname === "/api/board/threads/bad") return new Response("nope", { status: 500 });
+				if (req.method === "GET" && url.pathname === "/api/board/threads/t%201") {
+					return Response.json({
+						posts: [{ id: "p1" }, { id: "p2" }],
+						hasMorePosts: url.searchParams.get("limit") === "2",
+						readThroughPostId: "p2",
+					});
+				}
+				return Response.json({ ok: true });
+			},
+		});
+		servers.push(server);
+		savedEnv = {
+			SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
+			SIGNET_AGENT_ID: process.env.SIGNET_AGENT_ID,
+			SIGNET_BYPASS: process.env.SIGNET_BYPASS,
+		};
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+		process.env.SIGNET_AGENT_ID = "pi-agent";
+		Reflect.deleteProperty(process.env, "SIGNET_BYPASS");
+		const tools = new Map<string, Tool>();
+		SignetPiExtension({
+			on() {},
+			registerCommand() {},
+			registerTool(opts: { name: string }) {
+				tools.set(opts.name, opts as unknown as Tool);
+			},
+		} as never);
+		return { tools, seen };
+	}
+
+	const ctx = {
+		sessionManager: {
+			getHeader: () => ({ id: "pi-sess" }),
+			getSessionId: () => "pi-sess",
+			getSessionFile: () => undefined,
+		},
+		ui: { setStatus: () => {}, theme: { fg: (_c: string, t: string) => t } },
+	};
+
+	function run(tools: Map<string, Tool>, name: string, params: Record<string, unknown>) {
+		const tool = tools.get(name);
+		if (!tool) throw new Error(`missing tool ${name}`);
+		return tool.execute("call", params, new AbortController().signal, undefined, ctx);
+	}
+
+	it("registers all tools", async () => {
+		const { tools } = await setup();
+		for (const name of [
+			"agent_peers",
+			"agent_message_send",
+			"agent_message_inbox",
+			"agent_message_ack",
+			"board_list",
+			"board_read",
+			"board_post",
+			"board_update",
+		]) {
+			expect(tools.has(name)).toBe(true);
+		}
+	});
+
+	it("agent_peers fills identity", async () => {
+		const { tools, seen } = await setup();
+		await run(tools, "agent_peers", { include_self: true, limit: 5 });
+		const params = new URLSearchParams(seen[0]?.search);
+		expect(seen[0]?.path).toBe("/api/cross-agent/presence");
+		expect(params.get("agent_id")).toBe("pi-agent");
+		expect(params.get("session_key")).toBe("pi-sess");
+		expect(params.get("include_self")).toBe("true");
+		expect(params.get("limit")).toBe("5");
+	});
+
+	it("agent_message_send requires exactly one target and auto-fills sender", async () => {
+		const { tools, seen } = await setup();
+		const none = await run(tools, "agent_message_send", { content: "hi" });
+		const both = await run(tools, "agent_message_send", { content: "hi", to_agent_id: "a", broadcast: true });
+		expect(none.isError).toBe(true);
+		expect(both.isError).toBe(true);
+		expect(seen).toHaveLength(0);
+
+		const sent = await run(tools, "agent_message_send", {
+			content: "hi",
+			to_session_key: "peer-1",
+			type: "question",
+			fromSessionKey: "spoofed",
+		});
+		expect(sent.isError).toBeUndefined();
+		expect(seen[0]?.method).toBe("POST");
+		expect(seen[0]?.path).toBe("/api/cross-agent/messages");
+		expect(seen[0]?.body).toMatchObject({
+			fromAgentId: "pi-agent",
+			fromSessionKey: "pi-sess",
+			toSessionKey: "peer-1",
+			broadcast: false,
+			type: "question",
+			content: "hi",
+		});
+	});
+
+	it("agent_message_inbox and ack use encoded paths", async () => {
+		const { tools, seen } = await setup();
+		await run(tools, "agent_message_inbox", { unread_only: true, limit: 99 });
+		const params = new URLSearchParams(seen[0]?.search);
+		expect(seen[0]?.path).toBe("/api/cross-agent/messages");
+		expect(params.get("agent_id")).toBe("pi-agent");
+		expect(params.get("session_key")).toBe("pi-sess");
+		expect(params.get("unread_only")).toBe("true");
+		expect(params.get("limit")).toBe("25");
+
+		await run(tools, "agent_message_ack", { message_id: "m/1" });
+		expect(seen[1]?.method).toBe("POST");
+		expect(seen[1]?.path).toBe("/api/cross-agent/messages/m%2F1/ack");
+		expect(seen[1]?.body).toEqual({ agentId: "pi-agent", sessionKey: "pi-sess" });
+	});
+
+	it("board_list returns topics and threads", async () => {
+		const { tools, seen } = await setup();
+		const result = await run(tools, "board_list", { topic: "dev", status: "all", limit: 3 });
+		expect(seen.map((s) => s.path).sort()).toEqual(["/api/board/threads", "/api/board/topics"]);
+		const threads = seen.find((s) => s.path === "/api/board/threads");
+		const params = new URLSearchParams(threads?.search);
+		expect(params.get("topic")).toBe("dev");
+		expect(params.get("status")).toBe("all");
+		expect(params.get("agent_id")).toBe("pi-agent");
+		expect(result.content[0]?.text).toContain("topics");
+		expect(result.content[0]?.text).toContain("threads");
+	});
+
+	it("board_read fetches then marks read", async () => {
+		const { tools, seen } = await setup();
+		const result = await run(tools, "board_read", { thread_id: "t 1" });
+		expect(result.isError).toBeUndefined();
+		expect(seen[0]?.method).toBe("GET");
+		expect(seen[0]?.path).toBe("/api/board/threads/t%201");
+		expect(seen[1]?.method).toBe("POST");
+		expect(seen[1]?.path).toBe("/api/board/threads/t%201/read");
+		expect(seen[1]?.body).toEqual({ agentId: "pi-agent", throughPostId: "p2" });
+	});
+
+	it("board_read marks through the newest returned post when more posts remain", async () => {
+		const { tools, seen } = await setup();
+		await run(tools, "board_read", { thread_id: "t 1", limit: 2 });
+		expect(seen[1]?.body).toEqual({ agentId: "pi-agent", throughPostId: "p2" });
+	});
+
+	it("board_read leaves the read cursor alone for an offset page", async () => {
+		const { tools, seen } = await setup();
+		await run(tools, "board_read", { thread_id: "t 1", offset: 3 });
+		expect(seen.map((call) => call.method)).toEqual(["GET"]);
+	});
+
+	it("board_post replies to a thread or starts a new one with harness pi", async () => {
+		const { tools, seen } = await setup();
+		await run(tools, "board_post", { thread_id: "t1", body: "reply", reply_to_post_id: "p1" });
+		expect(seen[0]?.path).toBe("/api/board/threads/t1/posts");
+		expect(seen[0]?.body).toMatchObject({
+			agentId: "pi-agent",
+			sessionKey: "pi-sess",
+			harness: "pi",
+			body: "reply",
+			replyToPostId: "p1",
+		});
+
+		await run(tools, "board_post", { topic: "dev", title: "T", body: "b", tags: ["x"], from_message_id: "m1" });
+		expect(seen[1]?.path).toBe("/api/board/threads");
+		expect(seen[1]?.body).toMatchObject({
+			agentId: "pi-agent",
+			sessionKey: "pi-sess",
+			harness: "pi",
+			topic: "dev",
+			title: "T",
+			body: "b",
+			tags: ["x"],
+			fromMessageId: "m1",
+		});
+	});
+
+	it("board_update sends PATCH and reports errors", async () => {
+		const { tools, seen } = await setup();
+		await run(tools, "board_update", { thread_id: "t1", status: "resolved", pinned: true, tags: ["a"] });
+		expect(seen[0]?.method).toBe("PATCH");
+		expect(seen[0]?.path).toBe("/api/board/threads/t1");
+		expect(seen[0]?.body).toEqual({ agentId: "pi-agent", status: "resolved", pinned: true, tags: ["a"] });
+
+		const failed = await run(tools, "board_update", { thread_id: "bad", status: "open" });
+		expect(failed.isError).toBe(true);
+		expect(failed.content[0]?.text).toContain("500");
 	});
 });

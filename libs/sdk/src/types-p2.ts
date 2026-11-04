@@ -406,14 +406,27 @@ export interface DeduplicateResponse extends RepairActionResponse {
 	readonly duplicatesRemoved: number;
 }
 
+export interface AgentPresenceContext {
+	readonly cwd?: string;
+	readonly hostname?: string;
+	readonly title?: string;
+	readonly task?: string;
+	readonly modifiedFiles?: readonly string[];
+	readonly resources?: readonly string[];
+}
+
 export interface AgentPresence {
+	readonly key: string;
 	readonly agentId: string;
-	readonly sessionKey: string;
-	readonly project: string | null;
+	readonly sessionKey?: string;
+	readonly project?: string;
 	readonly harness: string;
-	readonly runtimePath: string | null;
-	readonly lastSeen: string;
-	readonly createdAt: string;
+	readonly runtimePath?: "plugin" | "legacy";
+	readonly provider?: string;
+	readonly startedAt: string;
+	readonly lastSeenAt: string;
+	readonly context?: AgentPresenceContext;
+	readonly contextUpdatedAt?: string;
 }
 
 export interface AgentPresenceListResponse {
@@ -422,9 +435,27 @@ export interface AgentPresenceListResponse {
 }
 
 export interface AgentPresenceUpdateResponse {
-	readonly agentId: string;
-	readonly sessionKey: string;
-	readonly created: boolean;
+	readonly presence: AgentPresence;
+}
+
+export interface AgentSessionInspectMessage {
+	readonly role: "user" | "assistant";
+	readonly content: string;
+}
+
+export interface AgentSessionInspectResponse {
+	readonly presence: AgentPresence;
+	readonly recentMessages: readonly AgentSessionInspectMessage[];
+	readonly truncated: boolean;
+	readonly provenance: {
+		readonly presence: "self-reported";
+		readonly transcript: "signet-captured-tail" | "unavailable";
+		readonly transcriptUpdatedAt: string | null;
+		readonly transcriptBytes: number;
+		readonly bytesRead: number;
+		readonly roles: "user-and-assistant-only";
+		readonly untrusted: true;
+	};
 }
 
 export interface AgentMessage {
@@ -470,4 +501,90 @@ export interface AgentMessageAcknowledgeResponse {
 	readonly agentId: string;
 	readonly acknowledgedAt: string;
 	readonly alreadyAcknowledged: boolean;
+}
+
+export type AgentWakeResponse =
+	| {
+			readonly wake: true;
+			readonly inject: string;
+			readonly messageIds: readonly string[];
+			readonly notifications: { readonly items: readonly Readonly<Record<string, unknown>>[] };
+	  }
+	| {
+			readonly wake: false;
+			readonly reason: "timeout" | "superseded" | "rate_limited" | "aborted" | "closed" | "bypassed";
+			readonly retryAfterMs?: number;
+	  };
+
+export type BoardThreadStatus = "open" | "resolved" | "archived";
+
+export interface BoardTopic {
+	readonly slug: string;
+	readonly title: string | null;
+	readonly description: string | null;
+	readonly createdByAgentId: string;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly threadCount: number;
+	readonly lastActivityAt: string | null;
+}
+
+export interface BoardThread {
+	readonly id: string;
+	readonly topic: string;
+	readonly title: string;
+	readonly authorAgentId: string;
+	readonly authorSessionKey: string | null;
+	readonly authorHarness: string | null;
+	readonly status: BoardThreadStatus;
+	readonly pinned: boolean;
+	readonly tags: readonly string[];
+	readonly sourceMessageId: string | null;
+	readonly postCount: number;
+	readonly createdAt: string;
+	readonly updatedAt: string;
+	readonly lastPostAt: string;
+	readonly lastReadAt: string | null;
+	readonly unread: boolean;
+}
+
+export interface BoardPost {
+	readonly id: string;
+	readonly threadId: string;
+	readonly authorAgentId: string;
+	readonly authorSessionKey: string | null;
+	readonly authorHarness: string | null;
+	readonly body: string;
+	readonly replyToPostId: string | null;
+	readonly createdAt: string;
+	readonly projected: boolean;
+}
+
+export interface BoardTopicListResponse {
+	readonly topics: readonly BoardTopic[];
+	readonly count: number;
+}
+
+export interface BoardThreadListResponse {
+	readonly items: readonly BoardThread[];
+	readonly total: number;
+	readonly limit: number;
+	readonly offset: number;
+	readonly hasMore: boolean;
+}
+
+export interface BoardThreadDetailResponse {
+	readonly thread: BoardThread;
+	readonly posts: readonly BoardPost[];
+	readonly postTotal: number;
+	readonly postLimit: number;
+	readonly postOffset: number;
+	readonly hasMorePosts: boolean;
+	readonly readThroughPostId?: string;
+}
+
+export interface BoardWriteResponse {
+	readonly thread: BoardThread;
+	readonly post: BoardPost;
+	readonly projection: "projected" | "pending";
 }

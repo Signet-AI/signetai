@@ -8,6 +8,7 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 export type LogCategory =
 	| "daemon"
 	| "api"
+	| "board"
 	| "memory"
 	| "sync"
 	| "git"

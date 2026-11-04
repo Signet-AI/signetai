@@ -1,0 +1,30 @@
+networks:
+  evalnet: { internal: true }
+  egress: {}
+services:
+  daemon:
+    build: { context: ../../.., dockerfile: deploy/docker/Dockerfile }
+    networks: [evalnet]
+    volumes: [ "daemon-data:/data/agents" ]
+  instrument:
+    build: { context: ../../.., dockerfile: evals/agent-coordination/docker/Dockerfile.instrument }
+    networks: [evalnet]
+    environment: { EVAL_GOLD_PATH: /gold/gold.json, EVAL_INSTRUMENT_EVENTS: /events/instrument.jsonl, PORT: "8080" }
+    volumes: [ "${GOLD_DIR}:/gold:ro", "${RUN_DIR}:/events" ]
+  relay:
+    image: alpine/socat
+    networks: [evalnet, egress]
+    command: TCP-LISTEN:8787,fork,reuseaddr TCP:${PROXY_GATEWAY_IP}:${PROXY_PORT}
+  pi-a: &pi
+    build: { context: ../../.., dockerfile: evals/agent-coordination/docker/Dockerfile.pi-agent }
+    networks: [evalnet]
+    stdin_open: true
+    read_only: true
+    tmpfs: [ /tmp, /work, /home/agent ]
+    cap_drop: [ALL]
+    security_opt: [ "no-new-privileges:true" ]
+    mem_limit: 1g
+    pids_limit: 256
+    environment: { SIGNET_DAEMON_URL: "http://daemon:3850", SIMGPU_URL: "http://instrument:8080" }
+  pi-b: *pi
+volumes: { daemon-data: {} }

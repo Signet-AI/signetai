@@ -1,0 +1,7 @@
+{
+  "providers": {
+    "zai-coding-cn": {
+      "baseUrl": "http://relay:8787"
+    }
+  }
+}
