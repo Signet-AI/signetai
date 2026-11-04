@@ -121,15 +121,33 @@ describe("editYamlConfigFile", () => {
 		expect(readFileSync(`${path}.bak`, "utf8")).toBe("name: ant\n");
 	});
 
-	it("does not report a committed config edit as failed when its lock was removed", () => {
+	it("rejects an edit if its lock was removed", () => {
 		const path = file("name: ant\n");
+		writeFileSync(`${path}.bak`, "existing backup\n");
 		expect(() =>
 			editYamlConfigFile(path, (config) => {
 				rmSync(`${path}.lock`);
 				config.set(["name"], "edited");
 			}),
-		).not.toThrow();
-		expect(readFileSync(path, "utf8")).toBe("name: edited\n");
+		).toThrow("lock lost");
+		expect(readFileSync(path, "utf8")).toBe("name: ant\n");
+		expect(readFileSync(`${path}.bak`, "utf8")).toBe("existing backup\n");
+		expect(existsSync(`${path}.lock`)).toBe(false);
+	});
+
+	it("rejects an edit if its lock was replaced and preserves the successor", () => {
+		const path = file("name: ant\n");
+		writeFileSync(`${path}.bak`, "existing backup\n");
+		expect(() =>
+			editYamlConfigFile(path, (config) => {
+				rmSync(`${path}.lock`);
+				writeFileSync(`${path}.lock`, "successor");
+				config.set(["name"], "edited");
+			}),
+		).toThrow("lock lost");
+		expect(readFileSync(path, "utf8")).toBe("name: ant\n");
+		expect(readFileSync(`${path}.bak`, "utf8")).toBe("existing backup\n");
+		expect(readFileSync(`${path}.lock`, "utf8")).toBe("successor");
 	});
 
 	it("refuses a file it cannot parse and leaves it untouched", () => {

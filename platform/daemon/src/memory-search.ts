@@ -1436,6 +1436,8 @@ interface TranscriptEvidenceRow {
 	readonly session_id: string | null;
 	readonly source_id: string | null;
 	readonly source_path: string;
+	readonly source_sha256: string;
+	readonly updated_at: string;
 	readonly harness: string | null;
 	readonly project: string | null;
 	readonly captured_at: string;
@@ -1470,7 +1472,7 @@ async function readTranscriptEvidenceRows(
 	const dates = dateBoundsSql("COALESCE(ma.started_at, ma.captured_at)", dateBounds);
 	return await ownerReadAll<TranscriptEvidenceRow>(
 		owner,
-		`SELECT ma.session_id, ma.source_id, ma.source_path, ma.harness, ma.project,
+		`SELECT ma.session_id, ma.source_id, ma.source_path, ma.source_sha256, ma.updated_at, ma.harness, ma.project,
 			COALESCE(ma.started_at, ma.captured_at) AS captured_at, ma.rowid AS artifact_rowid,
 			length(CAST(ma.content AS BLOB)) AS content_bytes, bm25(memory_artifacts_fts) AS rank
 		 FROM memory_artifacts_fts
@@ -1616,11 +1618,44 @@ async function buildTranscriptEvidenceResults(
 		})
 		.slice(0, maxResults);
 	const results = await Promise.all(
-		selected.map(async (row) =>
-			usablePrefetch && prefetch.results.has(row.artifact_rowid)
-				? (prefetch.results.get(row.artifact_rowid) ?? null)
-				: await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "foreground", execution),
-		),
+		selected.map(async (row) => {
+			if (!usablePrefetch || !prefetch.results.has(row.artifact_rowid)) {
+				return await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "foreground", execution);
+			}
+			const prefetched = prefetch.results.get(row.artifact_rowid) ?? null;
+			if (prefetched === null) return null;
+			checkRecallCancellation(execution);
+			const remainingMs = deadlineAt - Date.now();
+			if (remainingMs <= 0) throw new Error("Transcript evidence read exceeded its deadline");
+			const active = await ownerReadOne<{ readonly active: number }>(
+				owner,
+				`SELECT 1 AS active FROM memory_artifacts
+				 WHERE rowid = ? AND agent_id = ? AND source_kind = 'transcript'
+				   AND COALESCE(is_deleted, 0) = 0
+				   AND source_path = ? AND source_sha256 = ? AND updated_at = ?
+				   AND session_id IS ? AND source_id IS ? AND project IS ? AND harness IS ?
+				   AND COALESCE(started_at, captured_at) = ?`,
+				[
+					row.artifact_rowid,
+					agentId,
+					row.source_path,
+					row.source_sha256,
+					row.updated_at,
+					row.session_id,
+					row.source_id,
+					row.project,
+					row.harness,
+					row.captured_at,
+				],
+				{
+					operation: "memory-search.transcript-evidence.validate",
+					workloadClass: "foreground",
+					estimatedWorkUnits: 1,
+					deadlineMs: remainingMs,
+				},
+			);
+			return active === null ? null : prefetched;
+		}),
 	);
 	return results.filter((row): row is RecallResult => row !== null);
 }
@@ -1928,6 +1963,7 @@ export async function hybridRecall(
 		requestedDevice: crossEncoderRuntime.device,
 	});
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
+		checkRecallCancellation(execution);
 		let transcriptEvidence: RecallTranscriptEvidenceMeta | undefined;
 		if (transcriptEvidenceAllowed && params.agentId) {
 			const agentId = params.agentId;
@@ -1967,12 +2003,14 @@ export async function hybridRecall(
 				response.results = placed.results;
 				transcriptEvidence = { returned: placed.returned, ranking: placed.ranking };
 			} catch (e) {
+				checkRecallCancellation(execution);
 				transcriptEvidence = { returned: 0, failed: true };
 				logger.warn("memory", "Transcript evidence recall failed (non-fatal)", {
 					error: e instanceof Error ? e.message : String(e),
 				});
 			}
 		}
+		checkRecallCancellation(execution);
 		const deduped = applyRecallDedupe({
 			sessionKey: params.sessionKey,
 			agentId: params.agentId,
@@ -2105,6 +2143,12 @@ export async function hybridRecall(
 				return prefetched;
 			},
 			(error) => {
+				if (error instanceof Error && error.name === "AbortError") return null;
+				try {
+					checkRecallCancellation(execution);
+				} catch {
+					return null;
+				}
 				logger.warn("memory", "Transcript evidence prefetch failed; placement will query directly", {
 					error: error instanceof Error ? error.message : String(error),
 				});

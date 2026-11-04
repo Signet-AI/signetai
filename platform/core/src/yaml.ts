@@ -5,6 +5,7 @@ import {
 	fchmodSync,
 	fstatSync,
 	fsyncSync,
+	lstatSync,
 	openSync,
 	readFileSync,
 	realpathSync,
@@ -76,6 +77,19 @@ export function editYamlConfigFile(file: string, edit: (editor: YamlConfigEditor
 	}
 	const temporary = `${target}.${randomUUID()}.tmp`;
 	const backup = `${temporary}.bak`;
+	const ownsLock = (): boolean => {
+		try {
+			const held = fstatSync(descriptor);
+			const current = lstatSync(lock);
+			return current.isFile() && held.dev === current.dev && held.ino === current.ino;
+		} catch (error) {
+			if (error instanceof Error && "code" in error && error.code === "ENOENT") return false;
+			throw error;
+		}
+	};
+	const requireLock = (): void => {
+		if (!ownsLock()) throw new Error(`${file} edit lock lost; retry the config edit`);
+	};
 	try {
 		const source = openSync(target, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
 		let text: string;
@@ -103,6 +117,7 @@ export function editYamlConfigFile(file: string, edit: (editor: YamlConfigEditor
 				document.deleteIn(path);
 			},
 		});
+		requireLock();
 		const next = document.toString();
 		if (next === text) return;
 		writeConfigReplacement(backup, text, mode);
@@ -110,15 +125,20 @@ export function editYamlConfigFile(file: string, edit: (editor: YamlConfigEditor
 		if (realpathSync(file) !== target || readFileSync(target, "utf8") !== text) {
 			throw new Error(`${file} changed while being edited; retry the config edit`);
 		}
+		requireLock();
 		renameSync(backup, `${target}.bak`);
+		requireLock();
 		renameSync(temporary, target);
 	} finally {
 		try {
 			rmSync(temporary, { force: true });
 			rmSync(backup, { force: true });
 		} finally {
-			closeSync(descriptor);
-			rmSync(lock, { force: true });
+			try {
+				if (ownsLock()) rmSync(lock, { force: true });
+			} finally {
+				closeSync(descriptor);
+			}
 		}
 	}
 }

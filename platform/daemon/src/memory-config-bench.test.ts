@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -94,6 +94,31 @@ describe("recall benchmark workspace configuration", () => {
 			expect(exitCode).not.toBe(0);
 			expect(stderr).toContain("Source memory DB not found:");
 			expect(stdout).not.toContain("Hybrid recall latency benchmark");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not copy a stale database when the persisted canonical database is missing", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-bench-stale-"));
+		const source = join(root, "source");
+		try {
+			mkdirSync(join(source, "data"), { recursive: true });
+			writeFileSync(join(source, "data", "signet.db"), "stale database");
+			writeFileSync(
+				join(source, "workspace-layout.json"),
+				JSON.stringify({ version: 2, overrides: { database: "custom/db.sqlite" } }),
+			);
+			writeFileSync(join(source, "agent.yaml"), "name: Bench\n");
+			const { exitCode, stdout, stderr } = await runBenchmark(source, root);
+			expect(exitCode).not.toBe(0);
+			expect(stderr).toContain("Source memory DB not found:");
+			expect(stdout).not.toContain("Hybrid recall latency benchmark");
+			const workspaces = readdirSync(root).filter((name) => name.startsWith("signet-recall-bench-"));
+			expect(workspaces).toHaveLength(1);
+			for (const entry of workspaces) {
+				expect(existsSync(join(root, entry, "memory", "memories.db"))).toBe(false);
+			}
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

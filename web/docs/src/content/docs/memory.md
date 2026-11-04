@@ -273,6 +273,10 @@ post-processing:
   30-second transcript-read deadline, including queue time; a busy maintenance
   lane can therefore delay placement within that bound. A failed or expired
   read leaves the primary results available and marks transcript evidence failed.
+  Cancellation observed before finalization rejects recall instead of claiming
+  results or updating access tracking.
+  Before placement, the owner revalidates each cached excerpt's scope and
+  artifact revision. Deleted, purged, or changed artifacts are withheld.
 - **Dampening** penalizes low-overlap semantic hits, hub-like entity
   dominance, and other noisy retrieval shapes. The low-overlap penalty never
   drops a hit below the scores it leaves untouched, and an entity counts as a

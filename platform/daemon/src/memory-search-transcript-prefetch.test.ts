@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import type { DbOwnerJobHandle, DbOwnerRequest, DbOwnerSubmitOptions } from "./db-owner-client";
 import { getDbOwner } from "./db-owner-runtime";
+import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import { TRANSCRIPT_PAGE_BYTES, hybridRecall, prefetchTranscriptEvidence } from "./memory-search";
 
@@ -118,27 +119,29 @@ describe("transcript evidence prefetch owner scheduling", () => {
 			};
 			try {
 				const raw = loadMemoryConfig(directory);
-				await hybridRecall(
-					{
-						query: "Speyer tourism board phone number",
-						limit: 3,
-						agentId: "agent-a",
-						readPolicy: "isolated",
-						trackRecallAccess: false,
-						claimRecallResults: false,
-					},
-					{
-						...raw,
-						search: { ...raw.search, rehearsal_enabled: false, transcript_evidence_limit: 1 },
-						pipelineV2: {
-							...raw.pipelineV2,
-							graph: { ...raw.pipelineV2.graph, enabled: false },
-							reranker: { ...raw.pipelineV2.reranker, enabled: false },
+				await expect(
+					hybridRecall(
+						{
+							query: "Speyer tourism board phone number",
+							limit: 3,
+							agentId: "agent-a",
+							readPolicy: "isolated",
+							trackRecallAccess: false,
+							claimRecallResults: false,
 						},
-					},
-					async () => null,
-					{ signal: cancellation.signal },
-				);
+						{
+							...raw,
+							search: { ...raw.search, rehearsal_enabled: false, transcript_evidence_limit: 1 },
+							pipelineV2: {
+								...raw.pipelineV2,
+								graph: { ...raw.pipelineV2.graph, enabled: false },
+								reranker: { ...raw.pipelineV2.reranker, enabled: false },
+							},
+						},
+						async () => null,
+						{ signal: cancellation.signal },
+					),
+				).rejects.toThrow("recall abandoned");
 				expect(cancellation.signal.aborted).toBe(true);
 				expect(reads.map((options) => [options.operation, options.workloadClass])).toEqual([
 					["memory-search.transcript-evidence", "maintenance"],
@@ -149,6 +152,145 @@ describe("transcript evidence prefetch owner scheduling", () => {
 			}
 		},
 	);
+
+	it.each([
+		["signal", "metadata"],
+		["callback", "metadata"],
+		["signal", "validation"],
+		["callback", "validation"],
+	])("does not claim or track results when transcript cancellation uses %s during %s", async (kind, stage) => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+				 VALUES ('cancelled-memory', 'Speyer tourism board phone number', 'fact', 'agent-a', datetime('now'), datetime('now'), 'test')`,
+			).run();
+		});
+		const cancellation = new AbortController();
+		let cancelled = false;
+		const execution =
+			kind === "signal"
+				? { signal: cancellation.signal }
+				: {
+						checkCancelled: () => {
+							if (cancelled) throw new Error("recall abandoned");
+						},
+					};
+		const owner = await getDbOwner();
+		const submit = owner.submit.bind(owner);
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			const handle = submit<Result>(request, options);
+			const operation =
+				stage === "metadata" ? "memory-search.transcript-evidence" : "memory-search.transcript-evidence.validate";
+			if (options.operation !== operation) return handle;
+			return {
+				...handle,
+				result: handle.result.then((result) => {
+					cancelled = true;
+					cancellation.abort(new Error("recall abandoned"));
+					return result;
+				}),
+			};
+		};
+		const warn = spyOn(logger, "warn");
+		try {
+			const raw = loadMemoryConfig(directory);
+			const error = await hybridRecall(
+				{
+					query: "Speyer tourism board phone number",
+					limit: 3,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					sessionKey: "cancelled-session",
+					trackRecallAccess: true,
+					claimRecallResults: true,
+				},
+				{
+					...raw,
+					search: { ...raw.search, rehearsal_enabled: false, transcript_evidence_limit: 1 },
+					pipelineV2: {
+						...raw.pipelineV2,
+						graph: { ...raw.pipelineV2.graph, enabled: false },
+						reranker: { ...raw.pipelineV2.reranker, enabled: false },
+					},
+				},
+				async () => null,
+				execution,
+			).then(
+				() => null,
+				(error: unknown) => error,
+			);
+			const state = await getDbAccessor().withReadDbAsync((db) => ({
+				claims: db
+					.prepare("SELECT COUNT(*) AS count FROM session_recall_events WHERE session_key = ? AND agent_id = ?")
+					.get("cancelled-session", "agent-a"),
+				access: db
+					.prepare("SELECT access_count FROM memories WHERE id = ? AND agent_id = ?")
+					.get("cancelled-memory", "agent-a"),
+			}));
+			expect(state.claims).toEqual({ count: 0 });
+			expect(state.access).toEqual({ access_count: 0 });
+			expect(error instanceof Error ? error.message : null).toBe("recall abandoned");
+			expect(warn.mock.calls.some((args) => args[1].startsWith("Transcript evidence"))).toBe(false);
+		} finally {
+			warn.mockRestore();
+			owner.submit = submit;
+		}
+	});
+
+	it.each([
+		["unchanged", "UPDATE memory_artifacts SET source_sha256 = source_sha256"],
+		["deleted", "UPDATE memory_artifacts SET is_deleted = 1"],
+		["purged", "DELETE FROM memory_artifacts"],
+		["revised", "UPDATE memory_artifacts SET source_sha256 = 'new-revision', content = replace(content, '142', '999')"],
+		["updated", "UPDATE memory_artifacts SET updated_at = '2099-01-01T00:00:00Z'"],
+		["changed source", "UPDATE memory_artifacts SET source_id = 'new-source'"],
+		["other agent", "UPDATE memory_artifacts SET agent_id = 'agent-b'"],
+		["other project", "UPDATE memory_artifacts SET project = 'project-b'"],
+	])("revalidates %s transcripts after prefetch and before placement", async (kind, mutation) => {
+		const owner = await getDbOwner();
+		const submit = owner.submit.bind(owner);
+		let changed = false;
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			const handle = submit<Result>(request, options);
+			if (options.operation !== "memory-search.transcript-evidence.content" || changed) return handle;
+			changed = true;
+			return {
+				...handle,
+				result: handle.result.then(async (result) => {
+					await getDbAccessor().withWriteTxAsync((db) => db.exec(mutation));
+					return result;
+				}),
+			};
+		};
+		try {
+			const raw = loadMemoryConfig(directory);
+			const result = await hybridRecall(
+				{
+					query: "Speyer tourism board phone number",
+					limit: 3,
+					agentId: "agent-a",
+					project: "project-a",
+					readPolicy: "isolated",
+				},
+				{
+					...raw,
+					search: { ...raw.search, rehearsal_enabled: false, transcript_evidence_limit: 1 },
+					pipelineV2: {
+						...raw.pipelineV2,
+						graph: { ...raw.pipelineV2.graph, enabled: false },
+						reranker: { ...raw.pipelineV2.reranker, enabled: false },
+					},
+				},
+				async () => null,
+			);
+			expect(changed).toBe(true);
+			const transcripts = result.results.filter((row) => row.source === "transcript");
+			expect(transcripts).toHaveLength(kind === "unchanged" ? 1 : 0);
+			if (kind === "unchanged") expect(transcripts[0]?.content).toContain("+49 6232 142");
+		} finally {
+			owner.submit = submit;
+		}
+	});
 
 	it.each([29_000, 31_000])("keeps the original prefetch deadline after a failure at %i ms", async (delay) => {
 		const owner = await getDbOwner();
