@@ -26,6 +26,41 @@ export const pipeline = async () => { throw new Error("model load failed"); };
 }
 
 describe("embedding worker status", () => {
+	for (const runtime of [
+		{ task: "embed", runtime: "onnxruntime" },
+		{ task: "rerank", runtime: "onnxruntime" },
+		{ task: "rerank", device: "cuda" },
+	] as const) {
+		it(`rejects an unloadable configured ONNX package for ${JSON.stringify(runtime)}`, async () => {
+			const dir = mkdtempSync(join(tmpdir(), "signet-embedding-runtime-"));
+			dirs.push(dir);
+			const init: EmbeddingWorkerInit = {
+				cacheDir: dir,
+				wasmDir: null,
+				transformersRuntimePath: null,
+				onnxRuntimePath: join(dir, "configured-onnx"),
+				remoteHostOverride: "http://127.0.0.1:1/",
+				modelId: "test/model",
+				expectedDimensions: 4,
+				...runtime,
+			};
+			const worker = new Worker(join(import.meta.dir, "embedding-worker.ts"), { workerData: init });
+			try {
+				const result = await new Promise<Extract<WorkerToMainMessage, { type: "check_result" }>>((resolve, reject) => {
+					worker.on("error", reject);
+					worker.on("message", (msg: WorkerToMainMessage) => {
+						if (msg.type === "ready") worker.postMessage({ type: "checkAvailable", id: 1 });
+						if (msg.type === "check_result") resolve(msg);
+					});
+				});
+				expect(result.available).toBe(false);
+				expect(result.error).toMatch(/onnxRuntimePath is set, but this worker build cannot load it/);
+			} finally {
+				await worker.terminate();
+			}
+		});
+	}
+
 	it("publishes a settled status after a failed initialization so callers can retry or fall back", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-embedding-cache-"));
 		dirs.push(dir);

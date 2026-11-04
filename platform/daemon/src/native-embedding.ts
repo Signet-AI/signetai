@@ -86,6 +86,20 @@ function clearIdleTimer(slot: ProviderSlot): void {
 	}
 }
 
+function forgetIdleSlot(slot: ProviderSlot): void {
+	if (
+		slot.activeUses === 0 &&
+		!slot.resolvedHandle &&
+		!slot.handlePromise &&
+		!slot.idleShutdownPromise &&
+		!slot.initPromise &&
+		!slot.idleTimer &&
+		slots.get(slot.key) === slot
+	) {
+		slots.delete(slot.key);
+	}
+}
+
 function scheduleIdleEviction(slot: ProviderSlot): void {
 	clearIdleTimer(slot);
 	if (
@@ -118,11 +132,13 @@ function scheduleIdleEviction(slot: ProviderSlot): void {
 		void shutdown.then(
 			() => {
 				if (slot.idleShutdownPromise === shutdown) slot.idleShutdownPromise = null;
+				forgetIdleSlot(slot);
 				if (slot.activeUses === 0 && slot.resolvedHandle) scheduleIdleEviction(slot);
 			},
 			(error) => {
 				if (slot.idleShutdownPromise === shutdown) slot.idleShutdownPromise = null;
 				logger.warn("native-embedding", "Idle embedding worker eviction failed", { error: String(error) });
+				forgetIdleSlot(slot);
 				if (slot.activeUses === 0 && slot.resolvedHandle) scheduleIdleEviction(slot);
 			},
 		);
@@ -137,6 +153,7 @@ function beginUse(slot: ProviderSlot): void {
 
 function endUse(slot: ProviderSlot): void {
 	slot.activeUses = Math.max(0, slot.activeUses - 1);
+	forgetIdleSlot(slot);
 	if (slot.activeUses === 0) scheduleIdleEviction(slot);
 }
 export function configureNativeEmbeddingLifecycle(options: { readonly idleTtlMs?: number }): void {
@@ -162,7 +179,7 @@ async function getHandle(slot: ProviderSlot): Promise<EmbeddingWorkerHandle> {
 						...(slot.runtime.onnxRuntimePath ? { onnxRuntimePath: slot.runtime.onnxRuntimePath } : {}),
 					}
 				: {};
-		slot.handlePromise = createEmbeddingWorkerHandle(
+		const pending = createEmbeddingWorkerHandle(
 			workerFactoryOverride
 				? { workerFactory: workerFactoryOverride, ...runtimeOptions }
 				: remoteHostOverride
@@ -171,6 +188,10 @@ async function getHandle(slot: ProviderSlot): Promise<EmbeddingWorkerHandle> {
 		).then((h) => {
 			slot.resolvedHandle = h;
 			return h;
+		});
+		slot.handlePromise = pending;
+		void pending.catch(() => {
+			if (slot.handlePromise === pending) slot.handlePromise = null;
 		});
 	}
 	return slot.handlePromise;

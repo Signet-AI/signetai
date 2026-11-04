@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, mkdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { editYamlConfigFile, readPipelineConfigData } from "@signet/core";
 import {
 	type Fetcher,
@@ -60,12 +60,6 @@ function packageVersionMatches(paths: AcceleratorPaths): boolean {
 	} catch {
 		return false;
 	}
-}
-
-function cpuRuntimeFilesPresent(paths: AcceleratorPaths, platform: string): boolean {
-	const files = ONNXRUNTIME_PLATFORM_FILES[platform];
-	if (!files || !packageVersionMatches(paths)) return false;
-	return files.every((file) => fileMatchesSize(join(paths.ortBinDir, file.name), file.size));
 }
 
 async function cpuRuntimeVerified(paths: AcceleratorPaths, platform: string): Promise<boolean> {
@@ -168,8 +162,7 @@ function asRecord(value: unknown): Record<string, unknown> {
 }
 
 function ownedByAccelerator(value: unknown, paths: AcceleratorPaths): boolean {
-	const values = Array.isArray(value) ? value : [value];
-	return values.length > 0 && values.every((entry) => typeof entry === "string" && entry.startsWith(paths.root));
+	return typeof value === "string" && value.startsWith(`${paths.root}${sep}`);
 }
 
 export function applyAccelerationConfig(
@@ -188,7 +181,24 @@ export function applyAccelerationConfig(
 		const nativeEmbedding = provider === "native" || provider === "local";
 		const previousRuntime = config.get(["embedding", "runtime"]) === "onnxruntime" ? "onnxruntime" : "wasm";
 		const removeOwned = (path: readonly string[]): void => {
-			if (ownedByAccelerator(config.get(path), paths)) config.delete(path);
+			const value = config.get(path);
+			if (Array.isArray(value)) {
+				const retained = value.filter((entry) => !ownedByAccelerator(entry, paths));
+				if (retained.length === value.length) return;
+				if (retained.length === 0) {
+					config.delete(path);
+					return;
+				}
+				config.set(path, retained);
+				return;
+			}
+			if (ownedByAccelerator(value, paths)) config.delete(path);
+		};
+		const setRuntimePath = (path: readonly string[]): void => {
+			const value = config.get(path);
+			if (typeof value !== "string" || value.trim() === "" || ownedByAccelerator(value, paths)) {
+				config.set(path, paths.ortPackageDir);
+			}
 		};
 		if (!nativeEmbedding) {
 			embeddingSkipped = `embedding.provider is ${provider}; only native embeddings use this runtime`;
@@ -197,7 +207,7 @@ export function applyAccelerationConfig(
 			removeOwned(["embedding", "onnxRuntimePath"]);
 		} else {
 			config.set(["embedding", "runtime"], "onnxruntime");
-			config.set(["embedding", "onnxRuntimePath"], paths.ortPackageDir);
+			setRuntimePath(["embedding", "onnxRuntimePath"]);
 		}
 		const nextRuntime = config.get(["embedding", "runtime"]) === "onnxruntime" ? "onnxruntime" : "wasm";
 		embeddingRuntimeChanged = nativeEmbedding && previousRuntime !== nextRuntime;
@@ -208,9 +218,12 @@ export function applyAccelerationConfig(
 			return;
 		}
 		config.set([...reranker, "device"], mode);
-		config.set([...reranker, "onnxRuntimePath"], paths.ortPackageDir);
-		if (mode === "cuda") config.set([...reranker, "cudaLibraryPaths"], [paths.cudaLibDir]);
-		else removeOwned([...reranker, "cudaLibraryPaths"]);
+		setRuntimePath([...reranker, "onnxRuntimePath"]);
+		removeOwned([...reranker, "cudaLibraryPaths"]);
+		if (mode === "cuda") {
+			const existing = config.get([...reranker, "cudaLibraryPaths"]);
+			config.set([...reranker, "cudaLibraryPaths"], [...(Array.isArray(existing) ? existing : []), paths.cudaLibDir]);
+		}
 	});
 	return { file, embeddingRuntimeChanged, embeddingSkipped, rerankerDevice: mode === "off" ? "default" : mode };
 }
@@ -224,7 +237,10 @@ export interface AccelerationStatus {
 	readonly paths: AcceleratorPaths;
 }
 
-export function readAccelerationStatus(agentsDir: string, platform: string = platformKey()): AccelerationStatus {
+export async function readAccelerationStatus(
+	agentsDir: string,
+	platform: string = platformKey(),
+): Promise<AccelerationStatus> {
 	const paths = acceleratorPaths(agentsDir);
 	const { root, pipeline } = readPipelineConfigData(agentsDir);
 	const embedding = asRecord(root?.embedding);
@@ -233,7 +249,7 @@ export function readAccelerationStatus(agentsDir: string, platform: string = pla
 	const provider = CUDA_PROVIDER[platform];
 	return {
 		platform,
-		cpuRuntimeInstalled: cpuRuntimeFilesPresent(paths, platform),
+		cpuRuntimeInstalled: await cpuRuntimeVerified(paths, platform),
 		cudaFilesPresent:
 			(provider?.members.every((member) => fileMatchesSize(join(paths.ortBinDir, member.name), member.size)) ??
 				false) &&

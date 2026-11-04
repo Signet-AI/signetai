@@ -188,7 +188,7 @@ export const CUDA_LIBRARIES: Readonly<Record<string, readonly PinnedZip[]>> = {
 			],
 		},
 		{
-			label: "cuDNN 9 loader",
+			label: "cuDNN 9.27",
 			url: `${PYPI}/65/e4/c5a205d48ff00ed8b27882bb45d338d8138e976c76385f328a326bbfaeda/nvidia_cudnn_cu12-9.27.0.42-py3-none-manylinux_2_27_x86_64.whl`,
 			members: [
 				{
@@ -196,6 +196,60 @@ export const CUDA_LIBRARIES: Readonly<Record<string, readonly PinnedZip[]>> = {
 					name: "libcudnn.so.9",
 					sha256: "4c3ccb552ee0c43aacca7498e12914fbda31be4fcb52cbdc1aaa87e78fb96e19",
 					size: 133336,
+				},
+				{
+					path: "nvidia/cudnn/lib/libcudnn_adv.so.9",
+					name: "libcudnn_adv.so.9",
+					sha256: "6fb2f7455e690d77df3351483be3abd23c7b26c85cb2b70fe62abd27c0a14fa2",
+					size: 274846904,
+				},
+				{
+					path: "nvidia/cudnn/lib/libcudnn_cnn.so.9",
+					name: "libcudnn_cnn.so.9",
+					sha256: "0bc150ee4d6ed549287a5e2c04f3284155b208a22084543b6af2ec6521e02561",
+					size: 4203880,
+				},
+				{
+					path: "nvidia/cudnn/lib/libcudnn_engines_precompiled.so.9",
+					name: "libcudnn_engines_precompiled.so.9",
+					sha256: "106171d50adb53c263c9ce8e83d3b257fe231731372dbb72d31520fa58fae7d1",
+					size: 566255968,
+				},
+				{
+					path: "nvidia/cudnn/lib/libcudnn_engines_runtime_compiled.so.9",
+					name: "libcudnn_engines_runtime_compiled.so.9",
+					sha256: "3f480e78a61ab16d54263c0397f62f57915af67213752b8e7235e74f4b027a36",
+					size: 48269728,
+				},
+				{
+					path: "nvidia/cudnn/lib/libcudnn_engines_tensor_ir.so.9",
+					name: "libcudnn_engines_tensor_ir.so.9",
+					sha256: "805ec06f754944c107ce4e2c234a3a190a8e42d5b4bfae82a9128460fd5959bd",
+					size: 2099128,
+				},
+				{
+					path: "nvidia/cudnn/lib/libcudnn_ext.so.9",
+					name: "libcudnn_ext.so.9",
+					sha256: "fb7f46eaaadd2c81bda58504726058fa4bbbe76cbc87073c271513152f0ab9dd",
+					size: 8401752,
+				},
+				{
+					path: "nvidia/cudnn/lib/libcudnn_graph.so.9",
+					name: "libcudnn_graph.so.9",
+					sha256: "28aaa0dc993c91d7c537846d3409a45dd71b94097c4794aedf9aac8a98a0bac8",
+					size: 115562616,
+				},
+				{
+					path: "nvidia/cudnn/lib/libcudnn_heuristic.so.9",
+					name: "libcudnn_heuristic.so.9",
+					sha256: "0f8bebd3f041bdce10e11c7981f3cd397e90e1f953215b6afa1c37b1d65db15a",
+					size: 96473880,
+				},
+				{
+					path: "nvidia/cudnn/lib/libcudnn_ops.so.9",
+					name: "libcudnn_ops.so.9",
+					sha256: "e6c3242e8ea81fdc9b33d6a20144cab7ba246d2a4bb6b9ed31f0894be55921e4",
+					size: 106964664,
 				},
 			],
 		},

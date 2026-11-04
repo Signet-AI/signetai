@@ -1404,6 +1404,7 @@ async function readTranscriptContent(
 	rowid: number,
 	bytes: number,
 	deadlineAt: number,
+	workloadClass: "foreground" | "maintenance",
 ): Promise<{ readonly text: string; readonly complete: boolean } | null> {
 	const pages: Uint8Array[] = [];
 	const readBytes = Math.min(bytes, TRANSCRIPT_PAGE_BYTES * TRANSCRIPT_EVIDENCE_MAX_PAGES);
@@ -1418,7 +1419,7 @@ async function readTranscriptContent(
 			[start, Math.min(TRANSCRIPT_PAGE_BYTES, readBytes - start + 1), rowid, agentId, bytes],
 			{
 				operation: "memory-search.transcript-evidence.content",
-				workloadClass: "foreground",
+				workloadClass,
 				estimatedWorkUnits: 1,
 				deadlineMs: remainingMs,
 			},
@@ -1457,7 +1458,11 @@ async function readTranscriptEvidenceRows(
 	dateBounds: Pick<RecallParams, "since" | "until">,
 	fts: string,
 	fetchLimit: number,
+	deadlineAt: number,
+	workloadClass: "foreground" | "maintenance",
 ): Promise<ReadonlyArray<TranscriptEvidenceRow>> {
+	const remainingMs = deadlineAt - Date.now();
+	if (remainingMs <= 0) throw new Error("Transcript evidence read exceeded its deadline");
 	const dates = dateBoundsSql("COALESCE(ma.started_at, ma.captured_at)", dateBounds);
 	return await ownerReadAll<TranscriptEvidenceRow>(
 		owner,
@@ -1476,9 +1481,9 @@ async function readTranscriptEvidenceRows(
 		[fts, agentId, ...(project ? [project] : []), ...dates.args, fetchLimit],
 		{
 			operation: "memory-search.transcript-evidence",
-			workloadClass: "foreground",
+			workloadClass,
 			estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, fetchLimit),
-			deadlineMs: 30_000,
+			deadlineMs: remainingMs,
 		},
 	);
 }
@@ -1489,8 +1494,16 @@ async function readTranscriptEvidenceResult(
 	query: string,
 	row: TranscriptEvidenceRow,
 	deadlineAt: number,
+	workloadClass: "foreground" | "maintenance",
 ): Promise<RecallResult | null> {
-	const transcript = await readTranscriptContent(owner, agentId, row.artifact_rowid, row.content_bytes, deadlineAt);
+	const transcript = await readTranscriptContent(
+		owner,
+		agentId,
+		row.artifact_rowid,
+		row.content_bytes,
+		deadlineAt,
+		workloadClass,
+	);
 	if (transcript === null) return null;
 	const sessionId = row.session_id ?? row.source_path;
 	const content = transcriptExcerpt(redactCredentials(transcript.text), query, 900);
@@ -1522,16 +1535,28 @@ export async function prefetchTranscriptEvidence(
 	query: string,
 	maxResults: number,
 	resultLimit: number,
+	deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS,
 ): Promise<TranscriptEvidencePrefetch | null> {
 	const fts = sanitizeFtsQuery(query);
 	if (fts.length === 0 || maxResults <= 0) return null;
 	const owner = await getDbOwner(getDbAccessorPath());
 	const fetchLimit = maxResults + 2 * Math.max(0, resultLimit);
-	const rows = await readTranscriptEvidenceRows(owner, agentId, project, dateBounds, fts, fetchLimit);
-	const deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS;
+	const rows = await readTranscriptEvidenceRows(
+		owner,
+		agentId,
+		project,
+		dateBounds,
+		fts,
+		fetchLimit,
+		deadlineAt,
+		"maintenance",
+	);
 	const results = new Map<number, RecallResult | null>();
 	for (const row of rows.slice(0, maxResults)) {
-		results.set(row.artifact_rowid, await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt));
+		results.set(
+			row.artifact_rowid,
+			await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "maintenance"),
+		);
 	}
 	return { query, since: dateBounds.since, until: dateBounds.until, fetchLimit, rows, results };
 }
@@ -1544,6 +1569,7 @@ async function buildTranscriptEvidenceResults(
 	maxResults: number,
 	existing: readonly RecallResult[],
 	prefetch: TranscriptEvidencePrefetch | null = null,
+	deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS,
 ): Promise<RecallResult[]> {
 	const fts = sanitizeFtsQuery(query);
 	if (fts.length === 0 || maxResults <= 0) return [];
@@ -1560,19 +1586,18 @@ async function buildTranscriptEvidenceResults(
 		fetchLimit <= prefetch.fetchLimit;
 	const rows = usablePrefetch
 		? prefetch.rows.slice(0, fetchLimit)
-		: await readTranscriptEvidenceRows(owner, agentId, project, dateBounds, fts, fetchLimit);
+		: await readTranscriptEvidenceRows(owner, agentId, project, dateBounds, fts, fetchLimit, deadlineAt, "foreground");
 	const selected = rows
 		.filter((row) => {
 			const sessionId = row.session_id ?? row.source_path;
 			return !represented.has(sessionId) && !(row.source_id && represented.has(row.source_id));
 		})
 		.slice(0, maxResults);
-	const deadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS;
 	const results = await Promise.all(
 		selected.map(async (row) =>
 			usablePrefetch && prefetch.results.has(row.artifact_rowid)
 				? (prefetch.results.get(row.artifact_rowid) ?? null)
-				: await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt),
+				: await readTranscriptEvidenceResult(owner, agentId, query, row, deadlineAt, "foreground"),
 		),
 	);
 	return results.filter((row): row is RecallResult => row !== null);
@@ -1871,6 +1896,7 @@ export async function hybridRecall(
 	let transcriptEvidenceAllowed = false;
 	let transcriptPrefetch: Promise<TranscriptEvidencePrefetch | null> | null = null;
 	let transcriptPrefetchReady: TranscriptEvidencePrefetch | null = null;
+	let transcriptEvidenceDeadlineAt: number | undefined;
 	const crossEncoderModelId = cfg.pipelineV2.reranker.crossEncoderModel;
 	const crossEncoderRuntime = nativeRerankRuntime(cfg.pipelineV2.reranker);
 	const scoreWithCrossEncoder = createCrossEncoderScoreMemo({
@@ -1903,6 +1929,7 @@ export async function hybridRecall(
 								maxExcerpts * 2,
 								response.results,
 								transcriptPrefetch ? await transcriptPrefetch : null,
+								transcriptEvidenceDeadlineAt,
 							),
 						),
 						maxExcerpts,
@@ -2039,6 +2066,7 @@ export async function hybridRecall(
 		!hasMemoryOnlyFilters(params) &&
 		cfg.search.transcript_evidence_limit > 0;
 	if (transcriptEvidenceAllowed && params.agentId) {
+		transcriptEvidenceDeadlineAt = Date.now() + TRANSCRIPT_EVIDENCE_DEADLINE_MS;
 		transcriptPrefetch = prefetchTranscriptEvidence(
 			params.agentId,
 			params.project,
@@ -2046,6 +2074,7 @@ export async function hybridRecall(
 			params.keywordQuery ?? query,
 			Math.min(cfg.search.transcript_evidence_limit, limit) * 2,
 			limit,
+			transcriptEvidenceDeadlineAt,
 		).then(
 			(prefetched) => {
 				transcriptPrefetchReady = prefetched;

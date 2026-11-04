@@ -93,7 +93,13 @@ async function handleFor(modelId: string, requested: NativeRerankRuntime): Promi
 		handle: createHandle(modelId, runtime),
 		initializedOnce: false,
 	};
-	return await current.handle;
+	const created = current;
+	try {
+		return await created.handle;
+	} catch (error) {
+		if (current === created) current = null;
+		throw error;
+	}
 }
 
 export function nativeRerankActiveDevice(): NativeRerankDevice | null {

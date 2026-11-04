@@ -283,6 +283,27 @@ describe("fetchEmbedding", () => {
 		expect(fetched).toBe(0);
 	});
 
+	it("returns pinned ONNX embeddings through the native provider even when a fallback is configured", async () => {
+		const vector = [0.1, 0.2, 0.3];
+		const native = mock(async () => vector);
+		setNativeEmbeddingProviderForTest(native, () => true);
+		setNativeFallbackProvider("ollama");
+		globalThis.fetch = mock(() => {
+			throw new Error("pinned ONNX must not contact the fallback");
+		}) as unknown as typeof fetch;
+		expect(
+			await fetchEmbedding("query", {
+				provider: "native",
+				model: "nomic-embed-text",
+				dimensions: 3,
+				base_url: "",
+				runtime: "onnxruntime",
+				onnxRuntimePath: "/opt/ort",
+			}),
+		).toEqual(vector);
+		expect(native).toHaveBeenCalledWith("query", { runtime: "onnxruntime", onnxRuntimePath: "/opt/ort" });
+	});
+
 	it("does not record provider-down telemetry when native embeddings are disabled without a fallback", async () => {
 		const telemetry = captureTelemetry();
 		setActiveTelemetry(telemetry.collector);

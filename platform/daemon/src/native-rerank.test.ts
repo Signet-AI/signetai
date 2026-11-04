@@ -16,6 +16,7 @@ interface FakeHandleState {
 const created: EmbeddingHandleOptions[] = [];
 const stopped: string[] = [];
 const seenDeadlines: number[] = [];
+let creationError: Error | null = null;
 
 function fakeHandle(options: EmbeddingHandleOptions): EmbeddingWorkerHandle {
 	const cuda = options.device === "cuda";
@@ -56,6 +57,7 @@ function fakeHandle(options: EmbeddingHandleOptions): EmbeddingWorkerHandle {
 mock.module("./embedding-worker-handle", () => ({
 	createEmbeddingWorkerHandle: async (options: EmbeddingHandleOptions) => {
 		created.push(options);
+		if (creationError) throw creationError;
 		return fakeHandle(options);
 	},
 }));
@@ -73,9 +75,19 @@ afterEach(async () => {
 	created.length = 0;
 	stopped.length = 0;
 	seenDeadlines.length = 0;
+	creationError = null;
 });
 
 describe("nativeRerank runtime selection", () => {
+	it("retries the same runtime after handle creation rejects, preserving the original error", async () => {
+		const failure = new Error("worker construction failed");
+		creationError = failure;
+		await expect(nativeRerank("retry-model", "q", ["a"])).rejects.toBe(failure);
+		creationError = null;
+		expect(await nativeRerank("retry-model", "q", ["a", "b"])).toEqual([0, 1]);
+		expect(created).toHaveLength(2);
+	});
+
 	it("passes the CUDA runtime settings to the cross-encoder worker", async () => {
 		await expect(nativeRerank("model", "q", ["a"], cudaRuntime)).rejects.toThrow(/loading/);
 		expect(created[0]).toMatchObject({

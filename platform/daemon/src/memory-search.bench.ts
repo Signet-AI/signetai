@@ -1,3 +1,4 @@
+import { resolveWorkspaceLayout } from "@signet/core";
 import { copyFileSync, existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -41,16 +42,11 @@ function copyIfExists(from: string, to: string): void {
 function setupWorkspace(): void {
 	mkdirSync(join(TEST_DIR, "memory"), { recursive: true });
 	if (SOURCE_PATH) {
-		const dbPath = [join(SOURCE_PATH, "data", "signet.db"), join(SOURCE_PATH, "memory", "memories.db")].find((path) =>
-			existsSync(path),
-		);
+		const dbPath = resolveWorkspaceLayout(SOURCE_PATH).database;
 		const cfgPath = join(SOURCE_PATH, "agent.yaml");
-		if (!dbPath)
-			throw new Error(`Source memory DB not found under ${SOURCE_PATH} (data/signet.db or memory/memories.db)`);
+		if (!existsSync(dbPath)) throw new Error(`Source memory DB not found: ${dbPath}`);
 		if (!existsSync(cfgPath)) throw new Error(`Source agent.yaml not found: ${cfgPath}`);
-		const targetDir = join(TEST_DIR, dbPath.endsWith("signet.db") ? "data" : "memory");
-		const targetPath = join(targetDir, dbPath.endsWith("signet.db") ? "signet.db" : "memories.db");
-		mkdirSync(targetDir, { recursive: true });
+		const targetPath = resolveWorkspaceLayout(TEST_DIR).database;
 		copyFileSync(cfgPath, join(TEST_DIR, "agent.yaml"));
 		copyFileSync(dbPath, targetPath);
 		copyIfExists(`${dbPath}-wal`, `${targetPath}-wal`);

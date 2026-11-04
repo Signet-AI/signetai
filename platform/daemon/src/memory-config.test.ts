@@ -1008,6 +1008,16 @@ describe("loadPipelineConfig", () => {
 		expect(result.reranker.cudaLibraryPaths[1]?.startsWith("~")).toBe(false);
 	});
 
+	for (const entry of [null, "", "   ", 42, false, "relative/lib"]) {
+		it(`rejects invalid CUDA library path ${JSON.stringify(entry)} at config load`, () => {
+			expect(() =>
+				loadPipelineConfig({
+					memory: { pipelineV2: { reranker: { cudaLibraryPaths: ["/opt/cuda/lib", entry] } } },
+				}),
+			).toThrow(/memory\.pipelineV2\.reranker\.cudaLibraryPaths/);
+		});
+	}
+
 	it("rejects unknown reranker devices and relative runtime paths instead of ignoring them", () => {
 		expect(() => loadPipelineConfig({ memory: { pipelineV2: { reranker: { device: "gpu" } } } })).toThrow(
 			/reranker\.device/,

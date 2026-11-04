@@ -547,7 +547,34 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 	if (addonPath === null) throw new Error("native tokenizer smoke requires an embedded signet-native addon");
 	const { createRequire } = await import("node:module");
 	const addon = createRequire(import.meta.url)(addonPath);
-	process.stdout.write(JSON.stringify({ type: "native-tokenizer", pairTokenizer: typeof addon.PairTokenizer === "function" }) + "\\n");
+	const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+	const { tmpdir } = await import("node:os");
+	const directory = await mkdtemp(join(tmpdir(), "signet-native-tokenizer-smoke-"));
+	try {
+		const tokenizerPath = join(directory, "tokenizer.json");
+		await writeFile(tokenizerPath, JSON.stringify({
+			version: "1.0",
+			truncation: null,
+			padding: null,
+			added_tokens: [],
+			normalizer: null,
+			pre_tokenizer: { type: "WhitespaceSplit" },
+			post_processor: { type: "BertProcessing", sep: ["[SEP]", 2], cls: ["[CLS]", 1] },
+			decoder: null,
+			model: { type: "WordLevel", vocab: { "[UNK]": 0, "[CLS]": 1, "[SEP]": 2, alpha: 4, beta: 5 }, unk_token: "[UNK]" },
+		}));
+		const tokenizer = new addon.PairTokenizer(tokenizerPath, 512);
+		const batch = tokenizer.encodePairs("alpha", ["beta"]);
+		if (batch.batchSize !== 1 || batch.sequenceLength !== 5 ||
+			JSON.stringify(batch.inputIds) !== "[1,4,2,5,2]" ||
+			JSON.stringify(batch.attentionMask) !== "[1,1,1,1,1]" ||
+			JSON.stringify(batch.tokenTypeIds) !== "[0,0,0,1,1]") {
+			throw new Error("Native tokenizer smoke returned invalid pair tensors");
+		}
+		process.stdout.write(JSON.stringify({ type: "native-tokenizer", pairTokenizer: true, batchSize: batch.batchSize, sequenceLength: batch.sequenceLength }) + "\\n");
+	} finally {
+		await rm(directory, { recursive: true, force: true });
+	}
 } else if (process.env.SIGNET_RUNTIME_VERSION_SMOKE) {
 	process.stdout.write(JSON.stringify({ type: "runtime-version", bun: Bun.version }) + "\\n");
 } else if (process.env.SIGNET_NATIVE_WORKER_THREAD_SMOKE) {

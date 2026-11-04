@@ -19,14 +19,15 @@ interface AccelerateDeps {
 }
 
 interface RecallProbe {
+	readonly results?: readonly unknown[];
 	readonly meta?: {
 		readonly reranker?: { readonly kind?: string; readonly device?: string; readonly fallback?: string };
 		readonly timings?: { readonly totalMs?: number };
 	};
 }
 
-function printStatus(deps: AccelerateDeps, json: boolean): void {
-	const status = readAccelerationStatus(deps.AGENTS_DIR);
+async function printStatus(deps: AccelerateDeps, json: boolean): Promise<void> {
+	const status = await readAccelerationStatus(deps.AGENTS_DIR);
 	const gpus = detectNvidiaGpus();
 	const cudaProblem = cudaSupportProblem(gpus, status.platform);
 	if (json) {
@@ -91,7 +92,16 @@ async function enable(deps: AccelerateDeps, mode: Exclude<AccelerationMode, "off
 		process.exitCode = 1;
 		return;
 	}
-	const change = applyAccelerationConfig(deps.AGENTS_DIR, mode, paths);
+	let change: ReturnType<typeof applyAccelerationConfig>;
+	try {
+		change = applyAccelerationConfig(deps.AGENTS_DIR, mode, paths);
+	} catch (error) {
+		console.error(
+			chalk.red(`  Cannot update the Signet config: ${error instanceof Error ? error.message : String(error)}`),
+		);
+		process.exitCode = 1;
+		return;
+	}
 	console.log(chalk.green(`  Updated ${change.file}: cross-encoder on ${mode === "cuda" ? "CUDA" : "native CPU"}.`));
 	if (change.embeddingSkipped) console.log(chalk.dim(`  Embeddings unchanged: ${change.embeddingSkipped}.`));
 	if (change.embeddingRuntimeChanged) {
@@ -116,7 +126,7 @@ function disable(deps: AccelerateDeps): void {
 }
 
 async function verify(deps: AccelerateDeps, timeoutMs: number): Promise<void> {
-	const expected = readAccelerationStatus(deps.AGENTS_DIR).rerankerDevice;
+	const expected = (await readAccelerationStatus(deps.AGENTS_DIR)).rerankerDevice;
 	const spinner = ora("Asking the daemon for a full-quality recall").start();
 	const deadline = Date.now() + timeoutMs;
 	let last: RecallProbe | null = null;
@@ -125,7 +135,7 @@ async function verify(deps: AccelerateDeps, timeoutMs: number): Promise<void> {
 			method: "POST",
 			headers: { "content-type": "application/json" },
 			body: JSON.stringify({ query: "signet accelerate verification", limit: 3, trackRecallAccess: false }),
-			timeout: 30_000,
+			timeout: Math.max(1, Math.min(30_000, deadline - Date.now())),
 		});
 		if (last === null) {
 			spinner.fail("The daemon is not reachable. Start it with `signet start`.");
@@ -133,7 +143,13 @@ async function verify(deps: AccelerateDeps, timeoutMs: number): Promise<void> {
 			return;
 		}
 		if (last.meta?.reranker?.kind === "cross-encoder") break;
-		await new Promise((resolve) => setTimeout(resolve, 1_000));
+		if (last.results?.length === 0) {
+			spinner.warn("Acceleration not verified: no matching memories to rerank. Add a memory, then retry verification.");
+			process.exitCode = 1;
+			return;
+		}
+		const remaining = deadline - Date.now();
+		if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, remaining)));
 	}
 	const reranker = last?.meta?.reranker;
 	if (reranker?.kind !== "cross-encoder") {
@@ -181,5 +197,14 @@ export function registerAccelerateCommands(program: Command, deps: AccelerateDep
 		.command("verify")
 		.description("Check that the running daemon reranks on the configured device")
 		.option("--timeout <seconds>", "How long to wait for the model to load", "120")
-		.action(async (opts: { timeout: string }) => verify(deps, Math.max(5, Number(opts.timeout) || 120) * 1000));
+		.action(async (opts: { timeout: string }) => {
+			const seconds = Number(opts.timeout);
+			const timeoutMs = Math.max(5, seconds || 120) * 1000;
+			if (!Number.isFinite(seconds) || !Number.isFinite(timeoutMs)) {
+				console.error(chalk.red(`  --timeout must be a finite number of seconds, got ${opts.timeout}.`));
+				process.exitCode = 1;
+				return;
+			}
+			await verify(deps, timeoutMs);
+		});
 }

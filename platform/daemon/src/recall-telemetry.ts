@@ -1,4 +1,5 @@
 import type { RecallSurface } from "@signet/core";
+import { logger } from "./logger";
 import { getActiveTelemetry } from "./telemetry";
 
 export type RecallResultState = "empty" | "non_empty" | "truncated" | "error";
@@ -84,13 +85,17 @@ export function recordRecallPerformed(response: RecallPerformedResponse, surface
 	if (!telemetry) return;
 	const type = classifyRecallTelemetry(response);
 	const partial = response.meta.partial === true;
-	telemetry.record("recall.performed", {
-		...(type ? { type } : {}),
-		surface,
-		results: response.results.length,
-		latencyMs: response.meta.timings?.totalMs ?? 0,
-		truncated: response.results.length >= limit,
-		partial,
-		...(partial && response.meta.degradation ? { degradation: response.meta.degradation } : {}),
-	});
+	try {
+		telemetry.record("recall.performed", {
+			...(type ? { type } : {}),
+			surface,
+			results: response.results.length,
+			latencyMs: response.meta.timings?.totalMs ?? 0,
+			truncated: response.results.length >= limit,
+			partial,
+			...(partial && response.meta.degradation ? { degradation: response.meta.degradation } : {}),
+		});
+	} catch {
+		logger.warn("telemetry", "Failed to record recall.performed");
+	}
 }

@@ -759,7 +759,15 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 						"memory.pipelineV2.reranker.cudaLibraryPaths must be a list of paths",
 					);
 				}
-				return v.map((entry) => absoluteConfigPath(entry, "memory.pipelineV2.reranker.cudaLibraryPaths"));
+				return v.map((entry) => {
+					const path = absoluteConfigPath(entry, "memory.pipelineV2.reranker.cudaLibraryPaths");
+					if (path === "") {
+						throw new PipelineConfigValidationError(
+							"memory.pipelineV2.reranker.cudaLibraryPaths entries must be non-empty paths",
+						);
+					}
+					return path;
+				});
 			})(),
 		},
 

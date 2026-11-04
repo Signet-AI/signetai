@@ -148,6 +148,9 @@ async function preloadCudaLibraries(dirs: readonly string[]): Promise<number> {
 }
 
 async function prepareNativeOnnxRuntime(purpose: string): Promise<void> {
+	if (!init.transformersRuntimePath && init.onnxRuntimePath) {
+		throw new Error(`onnxRuntimePath is set, but this worker build cannot load it for the ${purpose}`);
+	}
 	const preloaded = await preloadCudaLibraries(init.cudaLibraryPaths ?? []);
 	if (init.transformersRuntimePath) {
 		if (!init.onnxRuntimeModulePath) throw new Error("This Signet build does not include the native ONNX runtime");

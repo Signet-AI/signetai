@@ -1,6 +1,10 @@
 import { Database } from "bun:sqlite";
 import { describe, expect, it } from "bun:test";
-import { refreshQueryPlannerStatisticsOnOpen } from "./query-planner-statistics";
+import type { DbOwnerClient, DbOwnerRequest, DbOwnerSubmitOptions } from "./db-owner-client";
+import {
+	refreshQueryPlannerStatisticsOnOpen,
+	refreshQueryPlannerStatisticsThroughOwner,
+} from "./query-planner-statistics";
 
 function plan(db: Database, sql: string, ...params: string[]): string {
 	return (db.query(`EXPLAIN QUERY PLAN ${sql}`).all(...params) as { detail: string }[])
@@ -36,6 +40,32 @@ const observedScores = `SELECT memory_id, AVG(agent_relevance_score) AS score
 	GROUP BY memory_id`;
 
 describe("query planner statistics", () => {
+	it("refreshes planner statistics through maintenance owner jobs", async () => {
+		const db = seededDb();
+		const submissions: Array<{ sql: string; lane: string }> = [];
+		const owner = {
+			submit<Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions) {
+				if (request.kind !== "query") throw new Error("Expected an owner query");
+				submissions.push({ sql: request.statement.sql, lane: options.lane });
+				const result = db.prepare(request.statement.sql).run();
+				return { result: Promise.resolve(result as Result) };
+			},
+		} as unknown as DbOwnerClient;
+		try {
+			await refreshQueryPlannerStatisticsThroughOwner(owner);
+			expect(submissions).toEqual([
+				{ sql: "PRAGMA analysis_limit = 400", lane: "maintenance" },
+				{ sql: "PRAGMA optimize = 0x10002", lane: "maintenance" },
+			]);
+			expect(db.query("PRAGMA analysis_limit").get()).toEqual({ analysis_limit: 400 });
+			expect(plan(db, observedScores, "default", "memory-1", "memory-2", "memory-3")).toContain(
+				"idx_session_memories_memory",
+			);
+		} finally {
+			db.close();
+		}
+	});
+
 	it("records statistics so selective indexes drive hot recall lookups", () => {
 		const db = seededDb();
 		expect(plan(db, observedScores, "default", "memory-1", "memory-2", "memory-3")).toContain(

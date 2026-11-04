@@ -216,11 +216,25 @@ post-processing:
     embeddings and the cross-encoder.
   - `signet accelerate cuda` (Linux x64, NVIDIA driver 525 or newer) also
     installs the ONNX Runtime CUDA provider and the CUDA 12 libraries it
-    links against (about 1.6 GB, fetched member by member from NuGet and
-    PyPI and checked against pinned SHA-256 hashes), and runs the
-    cross-encoder on the GPU in full precision.
+    links against, including all cuDNN 9 sub-libraries (about 2.9 GB installed,
+    fetched member by member from NuGet and PyPI and checked against pinned
+    SHA-256 hashes), and runs the cross-encoder on the GPU in full precision.
   - `signet accelerate off` returns to WebAssembly; `signet accelerate`
-    alone shows the detected GPU and the active runtimes.
+    alone shows the detected GPU and the active runtimes. Native-runtime
+    installation status checks the pinned file hashes, not just their sizes.
+
+  Enabling or disabling acceleration preserves hand-set `onnxRuntimePath`
+  values and CUDA library directories; only paths inside the managed
+  accelerators directory are replaced or removed. A custom runtime must meet
+  the version and CUDA requirements below. Config edits preserve symlinks,
+  permissions, comments, and unrelated keys, and save the previous content
+  beside the resolved target as `.bak`. Concurrent edits fail rather than
+  silently overwrite each other. An interrupted edit can leave a `.lock` file;
+  confirm no config editor is running before removing it and retrying.
+
+  Verification waits at most `--timeout` seconds for a cross-encoder result
+  (default 120, minimum 5). An empty recall stops immediately as "not verified":
+  add a matching memory and retry; it is not proof of runtime failure or success.
 
   Native embeddings produce slightly different vectors from WebAssembly, so
   switching re-embeds stored memories in the background; recall keeps using

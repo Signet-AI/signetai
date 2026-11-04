@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
 import { cudaSupportProblem, parseNvidiaSmi } from "./detect.js";
 import { acceleratorPaths, applyAccelerationConfig, readAccelerationStatus } from "./index.js";
-import { CUDA_LIBRARIES, CUDA_PROVIDER, ONNXRUNTIME_NODE_VERSION } from "./manifest.js";
+import { CUDA_LIBRARIES, CUDA_PROVIDER, ONNXRUNTIME_NODE_VERSION, ONNXRUNTIME_PLATFORM_FILES } from "./manifest.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -75,7 +75,7 @@ describe("GPU detection", () => {
 describe("acceleration config", () => {
 	const base = `embedding:\n  provider: native\n  model: nomic-embed-text-v1.5\n  dimensions: 768\nmemory:\n  pipelineV2:\n    reranker:\n      topN: 20\n`;
 
-	it("enables the native runtime for embeddings and the cross-encoder, keeping other settings", () => {
+	it("enables the native runtime for embeddings and the cross-encoder, keeping other settings", async () => {
 		const dir = workspace(base);
 		const paths = acceleratorPaths(dir);
 		const change = applyAccelerationConfig(dir, "cpu", paths);
@@ -91,7 +91,7 @@ describe("acceleration config", () => {
 			onnxRuntimePath: paths.ortPackageDir,
 		});
 		expect(change.embeddingRuntimeChanged).toBe(true);
-		expect(readAccelerationStatus(dir)).toMatchObject({ embeddingRuntime: "onnxruntime", rerankerDevice: "cpu" });
+		expect(await readAccelerationStatus(dir)).toMatchObject({ embeddingRuntime: "onnxruntime", rerankerDevice: "cpu" });
 	});
 
 	it("points the CUDA cross-encoder at the installed libraries and can switch back off", () => {
@@ -108,6 +108,37 @@ describe("acceleration config", () => {
 		expect(yaml.memory.pipelineV2.reranker.cudaLibraryPaths).toBeUndefined();
 		expect(yaml.embedding.runtime).toBeUndefined();
 		expect(off.embeddingRuntimeChanged).toBe(true);
+	});
+
+	it("enables CPU and CUDA without replacing user-owned runtime paths across off", () => {
+		const dir = workspace(base);
+		const paths = acceleratorPaths(dir);
+		const rerankerPath = `${paths.root}-custom/ort`;
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`embedding:\n  provider: native\n  onnxRuntimePath: /opt/ort-embedding\nmemory:\n  pipelineV2:\n    reranker:\n      onnxRuntimePath: ${rerankerPath}\n`,
+		);
+		for (const mode of ["cpu", "cuda", "off"] as const) {
+			applyAccelerationConfig(dir, mode, paths);
+			const yaml = readYaml(dir);
+			expect(yaml.embedding.onnxRuntimePath).toBe("/opt/ort-embedding");
+			expect(yaml.memory.pipelineV2.reranker.onnxRuntimePath).toBe(rerankerPath);
+			expect(yaml.memory.pipelineV2.reranker.device).toBe(mode === "off" ? "default" : mode);
+			expect(yaml.embedding.runtime).toBe(mode === "off" ? undefined : "onnxruntime");
+		}
+	});
+
+	it("preserves custom CUDA directories across enable, repeated enable, CPU and off", () => {
+		const dir = workspace(
+			"embedding:\n  provider: native\nmemory:\n  pipelineV2:\n    reranker:\n      cudaLibraryPaths: [/opt/custom-cuda/lib]\n",
+		);
+		const paths = acceleratorPaths(dir);
+		for (const mode of ["cuda", "cuda", "cpu", "cuda", "off"] as const) {
+			applyAccelerationConfig(dir, mode, paths);
+			expect(readYaml(dir).memory.pipelineV2.reranker.cudaLibraryPaths).toEqual(
+				mode === "cuda" ? ["/opt/custom-cuda/lib", paths.cudaLibDir] : ["/opt/custom-cuda/lib"],
+			);
+		}
 	});
 
 	it("leaves remote embedding providers alone", () => {
@@ -136,5 +167,20 @@ describe("acceleration config", () => {
 		expect(yaml.memory.pipelineV2.reranker).toMatchObject({ device: "default", onnxRuntimePath: "/opt/ort" });
 		expect(yaml.embedding.onnxRuntimePath).toBe("/opt/ort");
 		expect(yaml.embedding.runtime).toBeUndefined();
+	});
+});
+
+describe("acceleration status", () => {
+	it("does not report same-sized corrupt native runtime files as installed", async () => {
+		const dir = workspace("embedding:\n  provider: native\n");
+		const paths = acceleratorPaths(dir);
+		mkdirSync(paths.ortBinDir, { recursive: true });
+		writeFileSync(join(paths.ortPackageDir, "package.json"), JSON.stringify({ version: ONNXRUNTIME_NODE_VERSION }));
+		for (const file of ONNXRUNTIME_PLATFORM_FILES["linux-x64"] ?? []) {
+			const target = join(paths.ortBinDir, file.name);
+			writeFileSync(target, "");
+			truncateSync(target, file.size);
+		}
+		expect((await readAccelerationStatus(dir, "linux-x64")).cpuRuntimeInstalled).toBe(false);
 	});
 });

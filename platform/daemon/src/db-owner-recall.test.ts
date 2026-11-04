@@ -23,6 +23,7 @@ function testConfig(path: string): ResolvedMemoryConfig {
 		pipelineV2: {
 			...raw.pipelineV2,
 			graph: { ...raw.pipelineV2.graph, enabled: false },
+			reranker: { ...raw.pipelineV2.reranker, enabled: false },
 		},
 	};
 }
@@ -159,7 +160,7 @@ describe("DB owner recall lane", () => {
 		}
 	});
 
-	test("records recall.performed in the daemon for recalls that ran in the recall owner", async () => {
+	test.each([5, 1])("records recall.performed in the daemon for owner recalls with limit %i", async (limit) => {
 		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-recall-telemetry-"));
 		previousSignetPath = process.env.SIGNET_PATH;
 		mkdirSync(join(directory, "memory"), { recursive: true });
@@ -182,7 +183,7 @@ describe("DB owner recall lane", () => {
 				{
 					query: "owner recall fixture",
 					keywordQuery: "owner recall fixture",
-					limit: 5,
+					limit,
 					agentId: "agent-a",
 					readPolicy: "isolated",
 					trackRecallAccess: false,
@@ -195,12 +196,56 @@ describe("DB owner recall lane", () => {
 			const performed = events.filter((entry) => entry.event === "recall.performed");
 			expect(performed).toHaveLength(1);
 			expect(performed[0]?.properties).toMatchObject({
+				type: "keyword",
 				surface: "explicit_api",
 				results: routed.results.length,
 				latencyMs: routed.meta.timings.totalMs,
 				partial: routed.meta.partial === true,
+				truncated: limit === 1,
 			});
+			expect(routed.results).toHaveLength(Math.min(limit, 2));
 			expect(routed.meta.timings.totalMs).toBeGreaterThan(0);
+		} finally {
+			setActiveTelemetry(undefined);
+			await client.close();
+		}
+	});
+
+	test("returns a completed owner recall when the telemetry collector throws", async () => {
+		directory = mkdtempSync(join(tmpdir(), "signet-db-owner-recall-telemetry-failure-"));
+		previousSignetPath = process.env.SIGNET_PATH;
+		mkdirSync(join(directory, "memory"), { recursive: true });
+		writeFileSync(join(directory, "agent.yaml"), "name: DbOwnerRecallTest\n");
+		process.env.SIGNET_PATH = directory;
+		const databasePath = join(directory, "memory", "memories.db");
+		initDbAccessor(databasePath);
+		seedFacts();
+		const cfg = testConfig(directory);
+		await closeDbAccessor();
+		let attempts = 0;
+		setActiveTelemetry({
+			record: () => {
+				attempts++;
+				throw new Error("collector unavailable");
+			},
+		} as never);
+		const client = createDbOwnerClient({ dbPath: databasePath, workerRole: "recall" });
+		try {
+			const response = await hybridRecallThroughDbOwner(
+				client,
+				{
+					query: "owner recall fixture",
+					limit: 5,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					trackRecallAccess: false,
+					claimRecallResults: false,
+				},
+				cfg,
+				{ queryEmbedding: null },
+			);
+			expect(response.results.map((row) => row.id).sort()).toEqual(["owner-fact-a", "owner-fact-a-second"]);
+			expect(attempts).toBe(1);
 		} finally {
 			setActiveTelemetry(undefined);
 			await client.close();
@@ -308,6 +353,7 @@ describe("DB owner recall lane", () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(request) {
+				if (request.method === "HEAD") return new Response(null);
 				if (new URL(request.url).pathname.endsWith("/models")) {
 					return new Response(JSON.stringify({ data: [] }), { headers: { "content-type": "application/json" } });
 				}
