@@ -9,6 +9,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-11-04
 - Features: expose scoped peer context across harnesses; tell every tool-equipped session about messaging and the board; native tools for Hermes and Pi; wake adapters for Claude Code, Codex, Hermes, and Pi; message board MCP, SDK, dashboard, and docs; wake idle sessions for direct messages and add message board core.
 - Bug fixes: clear PR baseline failures; name sessions by agent and key suffix; show agent DMs to operators; use ZAI-compatible system message roles; type-check peer context hook payloads; enforce session scope and recover bounded wake lifecycles; keep token agent for omitted identity; resolve omitted agent like session-start; identify board cursors and refused wake deliveries explicitly; bound board visibility refresh, bound first Codex turn lookback; per-turn Codex wake boundary, ordered SSE visibility refresh, same-millisecond read cursor, thread paging guard; match the wake route's scoped agent in the session-end wake check; scope wake waiters by agent, keep offset board reads unread, qualify wake gates; narrow the session-end wake grace, return the stored read cursor, bound Pi error body reads; address CodeRabbit review and CI isolation failures; let the daemon resolve Hermes tool identity, surface daemon errors, allow DM promotion, and cap the session-start section; release wakes for disconnected clients, dedupe concurrent board notices, log swallowed Hermes errors; release wake claims for finished waiters, index board notices, clean late projections.
+- Performance: skip directories no native source pattern can match.
 - Docs: move verification evidence out of the PR.
 
 ### 2026-11-02
@@ -36,6 +37,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: register implicit agents as isolated.
 
 ## Release Ledger
+
+## [0.239.1] - 2026-11-04
+
+Release summary: 1 performance improvement.
+Tag range: `v0.239.0..v0.239.1`.
+
+### Performance
+
+- **daemon**: skip directories no native source pattern can match
 
 ## [0.239.0] - 2026-11-04
 
