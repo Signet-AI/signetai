@@ -2,7 +2,7 @@
 
 Two real Pi sessions run in Docker against an isolated Signet daemon. Pi uses its built-in `zai-coding-cn` provider and `glm-5.3-flash`, authenticated with the Coding credential saved in Signet. The host relay meters requests/output; it does not supply a replacement model definition or rewrite Pi's roles/thinking settings.
 
-Offline controls are not model results. Live traces, generated projects, grades and provider usage are retained under `results/`; the summary of the uncapped c2 pair is in `ledger/coding-pilot.json` (with messaging 10/10, without 6/10, one pair). Earlier c1 provider attempts failed before useful work. Neither case certifies the whole PR.
+Offline controls are not model results. Live traces, generated projects, grades and provider usage are retained under `results/`; the summary of the uncapped c2 pair is in `ledger/coding-pilot.json` (two uncapped pairs: with messaging 10/10 both times, without 6/10 and 3/10). Earlier c1 provider attempts failed before useful work. Neither case certifies the whole PR.
 
 ## Utility case: c2-split-coding
 
