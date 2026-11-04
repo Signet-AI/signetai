@@ -177,6 +177,12 @@ memory:
 			(db) => db.prepare("SELECT type FROM memories WHERE id = ?").get(json.id) as { type: string } | undefined,
 		);
 		expect(row?.type).toBe("decision");
+
+		await closeDbAccessor();
+		initDbAccessor(join(agentsDir, "memory", "memories.db"));
+		const reopened = await app.request(`http://localhost/api/memory/${json.id}`);
+		expect(reopened.status).toBe(200);
+		expect(await reopened.json()).toMatchObject({ id: json.id, type: "decision" });
 	});
 
 	it("POST /api/memory/remember infers the type when none is requested", async () => {
@@ -196,16 +202,19 @@ memory:
 		}
 	});
 
-	it("POST /api/memory/remember trims the requested type", async () => {
+	it("POST /api/memory/remember trims custom types without changing their case", async () => {
 		const res = await app.request("http://localhost/api/memory/remember", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ content: "Deploys run from the release checklist", type: "  procedural  " }),
+			body: JSON.stringify({ content: "Deploys run from the release checklist", type: "  Release-Note  " }),
 		});
-		const json = (await res.json()) as { type?: string };
+		const json = (await res.json()) as { id: string; type: string };
 
 		expect(res.status).toBe(200);
-		expect(json.type).toBe("procedural");
+		expect(json.type).toBe("Release-Note");
+		const saved = await app.request(`http://localhost/api/memory/${json.id}`);
+		expect(saved.status).toBe(200);
+		expect(await saved.json()).toMatchObject({ type: "Release-Note" });
 	});
 
 	it("POST /api/memory/remember stores the requested type with structured data", async () => {

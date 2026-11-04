@@ -112,7 +112,10 @@ trimmed of surrounding whitespace. When it is missing or `null`, the daemon
 infers the type from the content (see [Memory Types](/memory/#memory-types)).
 Any other value returns 400: a value that is not a string, a blank string, or a
 type longer than 64 characters. The type is free text; there is no fixed list
-of allowed values.
+of allowed values. Types are case-sensitive: use `decision` for the built-in
+decision behavior; `Decision` is a distinct custom label.
+When content deduplicates to an existing memory, the stored type is returned
+unchanged. Use the modify endpoint to retype an eligible existing memory.
 For oversized content split into chunks, every chunk gets the requested type.
 When no type is given, the type is inferred for each chunk separately, so
 chunks of the same request can end up with different types.
