@@ -151,6 +151,15 @@ export function parseOptionalString(value: unknown): string | undefined {
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
+export const MAX_MEMORY_TYPE_CHARS = 64;
+
+export function parseMemoryType(value: unknown): { readonly type: string } | { readonly error: string } {
+	const type = parseOptionalString(value);
+	if (type === undefined) return { error: "type must be a non-empty string" };
+	if (type.length > MAX_MEMORY_TYPE_CHARS) return { error: `type must be at most ${MAX_MEMORY_TYPE_CHARS} characters` };
+	return { type };
+}
+
 export function parseOptionalNumber(value: unknown): number | undefined {
 	if (typeof value === "number" && Number.isFinite(value)) return value;
 	if (typeof value === "string" && value.trim().length > 0) {
@@ -591,11 +600,11 @@ export function parseModifyPatch(
 	}
 
 	if (hasField("type")) {
-		const type = parseOptionalString(payload.type);
-		if (!type) {
-			return { ok: false, error: "type must be a non-empty string" };
+		const parsed = parseMemoryType(payload.type);
+		if ("error" in parsed) {
+			return { ok: false, error: parsed.error };
 		}
-		patch.type = type;
+		patch.type = parsed.type;
 		changed = true;
 	}
 
