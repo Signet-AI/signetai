@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-11-05
+- Bug fixes: bound memory type length and document it; store the requested memory type on remember.
+- Docs: say chunk types differ when type is inferred.
+
 ### 2026-11-04
 - Features: add signet accelerate to install native and CUDA recall runtimes; report each stage's start offset in recall timings; expose scoped peer context across harnesses; tell every tool-equipped session about messaging and the board; native tools for Hermes and Pi; wake adapters for Claude Code, Codex, Hermes, and Pi; message board MCP, SDK, dashboard, and docs; wake idle sessions for direct messages and add message board core.
 - Bug fixes: settle optional transcript reads; fence stale review state; close review follow-ups; address acceleration review; close review findings on runtime pinning, CUDA batch size and stats refresh; record recall.performed for recalls served by the recall owner; bound transcript placement and keep the score memo after a fallback; never rewrite an unparseable agent.yaml and verify installed runtimes by hash; stop abandoned cross-encoder work and add a native CPU cross-encoder; keep CUDA after a rerank timeout and check the runtime version first; load real workspaces from data/signet.db in the recall bench; publish a settled worker status after a failed model load; clear PR baseline failures; name sessions by agent and key suffix; show agent DMs to operators; use ZAI-compatible system message roles; type-check peer context hook payloads; enforce session scope and recover bounded wake lifecycles; keep token agent for omitted identity; resolve omitted agent like session-start; identify board cursors and refused wake deliveries explicitly; bound board visibility refresh, bound first Codex turn lookback; per-turn Codex wake boundary, ordered SSE visibility refresh, same-millisecond read cursor, thread paging guard; match the wake route's scoped agent in the session-end wake check; scope wake waiters by agent, keep offset board reads unread, qualify wake gates; narrow the session-end wake grace, return the stored read cursor, bound Pi error body reads; address CodeRabbit review and CI isolation failures; let the daemon resolve Hermes tool identity, surface daemon errors, allow DM promotion, and cap the session-start section; release wakes for disconnected clients, dedupe concurrent board notices, log swallowed Hermes errors; release wake claims for finished waiters, index board notices, clean late projections.
@@ -33,10 +37,21 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: skip subagent transcripts in recovery scan; forward home overrides to service daemon; send Anthropic auth headers on probe.
 - Docs: sync translations.
 
-### 2026-10-18
-- Bug fixes: register implicit agents as isolated.
-
 ## Release Ledger
+
+## [0.240.1] - 2026-11-05
+
+Release summary: 2 bug fixes and 1 docs update.
+Tag range: `v0.240.0..v0.240.1`.
+
+### Bug Fixes
+
+- **daemon**: bound memory type length and document it
+- **daemon**: store the requested memory type on remember
+
+### Docs
+
+- **daemon**: say chunk types differ when type is inferred
 
 ## [0.240.0] - 2026-11-04
 
