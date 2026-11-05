@@ -743,6 +743,71 @@ describe("doctor physical memory diagnostics", () => {
 	});
 });
 
+describe("doctor retired identity files", () => {
+	async function doctorFindings(root: string): Promise<Array<{ level?: string; code?: string; message?: string }>> {
+		const lines: string[] = [];
+		const oldLog = console.log;
+		try {
+			console.log = (...args: unknown[]) => {
+				lines.push(args.join(" "));
+			};
+			await showDoctor(
+				{ json: true },
+				{
+					...depsFor(root),
+					detectInstallations: () => ({
+						target: { kind: "unsupported", executablePath: "/tmp/signet", reason: "test fixture" },
+						installations: [],
+						inactive: [],
+					}),
+				},
+			);
+		} finally {
+			console.log = oldLog;
+		}
+		return (JSON.parse(lines.join("\n")) as { findings: Array<{ level?: string; code?: string; message?: string }> })
+			.findings;
+	}
+
+	it("reports a retired DREAMING.md identity.special entry as info", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-retired-identity-"));
+		try {
+			writeFileSync(
+				join(root, "agent.yaml"),
+				"identity:\n  preset: minimal\n  startup:\n    load:\n      - path: AGENTS.md\n  special:\n    - path: DREAMING.md\n      kind: dreaming\n      role: dreaming_prompt\n",
+			);
+			writeFileSync(join(root, "AGENTS.md"), "agents");
+			writeFileSync(join(root, "DREAMING.md"), "dreaming");
+
+			expect(await doctorFindings(root)).toContainEqual(
+				expect.objectContaining({
+					level: "info",
+					code: "retired_identity_file",
+					message: expect.stringContaining("DREAMING.md"),
+				}),
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not report current special-session entries", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-current-identity-"));
+		try {
+			writeFileSync(
+				join(root, "agent.yaml"),
+				"identity:\n  preset: openclaw\n  special:\n    - path: HEARTBEAT.md\n      kind: heartbeat\n",
+			);
+			writeFileSync(join(root, "AGENTS.md"), "agents");
+
+			const findings = await doctorFindings(root);
+			expect(findings.some((finding) => finding.code === "retired_identity_file")).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("getExtractionStatusNotice", () => {
 	it("returns a warning for degraded extraction", () => {
 		const notice = getExtractionStatusNotice({

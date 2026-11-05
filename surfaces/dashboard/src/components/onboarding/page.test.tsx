@@ -212,6 +212,24 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		}
 	});
 
+	test("identity setup drops a retired DREAMING.md entry without touching the file", async () => {
+		config =
+			"agent:\n  name: Existing\nharnesses: []\nidentity:\n  preset: minimal\n  startup:\n    load:\n      - path: AGENTS.md\n        role: operating_instructions\n  special:\n    - path: DREAMING.md\n      kind: dreaming\n      role: dreaming_prompt\n";
+		const originals = { "AGENTS.md": "My existing instructions", "DREAMING.md": "Old dreaming prompt" };
+		const view = await mount(originals);
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			await view.click("Save identity");
+			expect(config).toContain("path: AGENTS.md");
+			expect(config).not.toContain("DREAMING.md");
+			expect(config).not.toContain("kind: dreaming");
+			expect(identityFiles["DREAMING.md"]).toBe(originals["DREAMING.md"]);
+		} finally {
+			await view.close();
+		}
+	});
+
 	test("failed identity writes keep setup incomplete and can be retried", async () => {
 		config = "agent:\n  name: Existing\nharnesses: []\n";
 		const view = await mount();

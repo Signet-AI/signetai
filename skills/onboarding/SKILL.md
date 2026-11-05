@@ -12,8 +12,7 @@ Walk the user through an interactive interview to personalize their
 Signet workspace. Start by choosing the identity/context preset
 (OpenClaw, Hermes, Minimal, or Custom) so onboarding matches the user's
 token budget and identity-file conventions instead of assuming one fixed
-stack. Minimal loads only AGENTS.md during startup and still creates
-DREAMING.md as a special dreaming-session prompt file.
+stack. Minimal loads only AGENTS.md during startup.
 
 ## What This Skill Does
 
@@ -21,8 +20,8 @@ This skill writes configuration files to `~/.agents/`. Specifically:
 
 - Reads and writes whichever startup identity files the selected preset uses
   (for example AGENTS.md only in Minimal, or the richer OpenClaw stack)
-- Writes special session prompt files such as DREAMING.md without loading
-  them into ordinary startup context
+- Writes special session prompt files such as HEARTBEAT.md (OpenClaw) without
+  loading them into ordinary startup context
 - Runs `signet setup` if Signet isn't initialized yet
 - Does NOT access external APIs or services
 - Does NOT send data anywhere outside the local machine
@@ -86,7 +85,7 @@ here's what we'll walk through together:
 
 1. identity preset — OpenClaw, Hermes, Minimal, or Custom
 2. identity files — choose startup-loaded files and order, if using Custom
-3. special session files — DREAMING.md for dreaming sessions, HEARTBEAT.md for heartbeat sessions, etc.
+3. special session files — HEARTBEAT.md for heartbeat sessions, BOOTSTRAP.md for first-run setup
 4. agent identity — who am i? (name, creature type, vibe), if the preset uses that layer
 5. personality & tone — how should i communicate?, if the preset uses that layer
 6. your profile — who are you?, if the preset uses that layer
@@ -101,15 +100,13 @@ directly in ~/.agents/.
 first, pick your identity/context preset:
 
 - OpenClaw — rich workspace identity using OpenClaw-style templates such as
-  AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md, HEARTBEAT.md,
-  BOOT/BOOTSTRAP.md, and DREAMING.md.
+  AGENTS.md, SOUL.md, IDENTITY.md, USER.md, MEMORY.md, HEARTBEAT.md, and
+  BOOT/BOOTSTRAP.md.
 - Hermes — Hermes-style primary identity centered on SOUL.md plus Hermes'
   project-context discovery behavior (.hermes.md/HERMES.md, AGENTS.md,
   CLAUDE.md, .cursorrules). Do not invent OpenClaw's SOUL/IDENTITY/USER
   stack semantics for Hermes.
-- Minimal — AGENTS.md only for startup context, lowest token use. Still
-  include DREAMING.md as a special dreaming-session prompt file; it is not
-  loaded into normal startup context.
+- Minimal — AGENTS.md only for startup context, lowest token use.
 - Custom — choose any startup files and explicit load order.
 
 ready? let's choose the preset first.

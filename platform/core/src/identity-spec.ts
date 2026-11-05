@@ -7,7 +7,7 @@ export const IDENTITY_MODES = ["managed", "off"] as const;
 
 export type IdentityFileContext = "startup" | "session";
 
-export type IdentitySessionKind = "dreaming" | "heartbeat" | "bootstrap";
+export type IdentitySessionKind = "heartbeat" | "bootstrap";
 
 export interface IdentityFileSpec {
 	path: string;
@@ -26,6 +26,10 @@ export interface IdentityContextFileEntry {
 
 export interface IdentitySpecialFileEntry extends IdentityContextFileEntry {
 	kind: IdentitySessionKind;
+}
+
+export function isRetiredIdentitySpecialEntry(value: unknown): boolean {
+	return typeof value === "object" && value !== null && Reflect.get(value, "kind") === "dreaming";
 }
 
 export interface IdentityPresetSpec {
@@ -95,21 +99,14 @@ export const IDENTITY_FILES: Record<string, IdentityFileSpec> = {
 		context: "session",
 		session: "bootstrap",
 	},
-	dreaming: {
-		path: "DREAMING.md",
-		description: "Dreaming/reflection prompt used only for dreaming sessions",
-		optional: true,
-		context: "session",
-		session: "dreaming",
-	},
 };
 
 export const IDENTITY_PRESETS: Record<IdentityPresetName, IdentityPresetSpec> = {
 	minimal: {
 		name: "minimal",
-		description: "AGENTS.md only for normal startup, plus DREAMING.md for dreaming sessions.",
+		description: "AGENTS.md only for normal startup.",
 		startup: [{ path: "AGENTS.md", role: "operating_instructions", budget: 12_000 }],
-		special: [{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 }],
+		special: [],
 	},
 	hermes: {
 		name: "hermes",
@@ -118,7 +115,7 @@ export const IDENTITY_PRESETS: Record<IdentityPresetName, IdentityPresetSpec> = 
 			{ path: "SOUL.md", role: "primary_identity", budget: 4_000 },
 			{ path: "AGENTS.md", role: "project_context", budget: 12_000 },
 		],
-		special: [{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 }],
+		special: [],
 	},
 	openclaw: {
 		name: "openclaw",
@@ -132,7 +129,6 @@ export const IDENTITY_PRESETS: Record<IdentityPresetName, IdentityPresetSpec> = 
 		],
 		special: [
 			{ path: "HEARTBEAT.md", kind: "heartbeat", role: "heartbeat_prompt", budget: 4_000 },
-			{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 },
 			{ path: "BOOTSTRAP.md", kind: "bootstrap", role: "bootstrap_prompt", budget: 4_000 },
 		],
 	},
@@ -140,7 +136,7 @@ export const IDENTITY_PRESETS: Record<IdentityPresetName, IdentityPresetSpec> = 
 		name: "custom",
 		description: "User-selected startup files and explicit order.",
 		startup: [{ path: "AGENTS.md", role: "operating_instructions", budget: 12_000 }],
-		special: [{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4_000 }],
+		special: [],
 	},
 };
 export const REQUIRED_IDENTITY_KEYS = Object.entries(IDENTITY_FILES)

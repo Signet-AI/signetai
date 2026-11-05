@@ -8,6 +8,7 @@ import {
 	getMissingIdentityFiles,
 	hasValidIdentity,
 	inactivePackageManagerInstallations,
+	listRetiredIdentityEntries,
 	loadIdentityMode,
 	resolveWorkspaceLayout,
 } from "@signet/core";
@@ -159,6 +160,7 @@ interface StatusReport {
 	readonly installed: boolean;
 	readonly validIdentity: boolean;
 	readonly missingIdentityFiles: readonly string[];
+	readonly retiredIdentityEntries: readonly string[];
 	readonly files: readonly FileReport[];
 	readonly db: DbReport;
 	readonly daemon: DaemonStatus;
@@ -234,6 +236,7 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 		installed,
 		validIdentity: installed ? hasValidIdentity(basePath) : false,
 		missingIdentityFiles: installed ? getMissingIdentityFiles(basePath) : [],
+		retiredIdentityEntries: installed ? listRetiredIdentityEntries(basePath) : [],
 		files,
 		db: {
 			exists: existing.memoryDb,
@@ -1031,6 +1034,15 @@ function getDoctorFindings(report: StatusReport, installations: SignetInstallati
 			level: "error",
 			message: `Missing required identity files${missing ? `: ${missing}` : "."}`,
 			fix: "Run `signet setup` or restore the missing files.",
+		});
+	}
+
+	if (report.retiredIdentityEntries.length > 0) {
+		findings.push({
+			level: "info",
+			code: "retired_identity_file",
+			message: `agent.yaml lists retired Dreaming identity files under identity.special: ${report.retiredIdentityEntries.join(", ")}. Signet ignores them; Dreaming builds its own prompt.`,
+			fix: "Remove the kind: dreaming entries from identity.special in agent.yaml. DREAMING.md can be deleted.",
 		});
 	}
 
