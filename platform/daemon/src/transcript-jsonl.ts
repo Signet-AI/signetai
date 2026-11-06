@@ -1,6 +1,5 @@
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import {
-	appendFileSync,
 	closeSync,
 	createReadStream,
 	existsSync,
@@ -16,6 +15,7 @@ import {
 	writeSync,
 	writeFileSync,
 } from "node:fs";
+import { appendFile, open, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
@@ -426,11 +426,11 @@ function dropTornTail(path: string): void {
 	}
 }
 
-function appendRecords(path: string, records: readonly CanonicalTranscriptRecord[]): void {
+async function appendRecords(path: string, records: readonly CanonicalTranscriptRecord[]): Promise<void> {
 	if (records.length === 0) return;
 	mkdirSync(dirname(path), { recursive: true });
 	dropTornTail(path);
-	appendFileSync(
+	await appendFile(
 		path,
 		records
 			.map((record) => JSON.stringify(record))
@@ -440,12 +440,12 @@ function appendRecords(path: string, records: readonly CanonicalTranscriptRecord
 	);
 }
 
-function fsyncDirectory(path: string): void {
-	const fd = openSync(dirname(path), "r");
+async function syncPath(path: string): Promise<void> {
+	const handle = await open(path, "r");
 	try {
-		fsyncSync(fd);
+		await handle.sync();
 	} finally {
-		closeSync(fd);
+		await handle.close();
 	}
 }
 
@@ -632,12 +632,12 @@ async function loadSessionSeqIndex(path: string): Promise<Map<string, SessionSeq
 	return entries;
 }
 
-function appendIndexedRecords(
+async function appendIndexedRecords(
 	path: string,
 	entries: Map<string, SessionSeqEntry>,
 	records: readonly CanonicalTranscriptRecord[],
-): void {
-	appendRecords(path, records);
+): Promise<void> {
+	await appendRecords(path, records);
 	for (const record of records) recordSessionSeq(entries, record);
 	const signature = fileSignature(path);
 	if (signature) sessionSeqIndexes.set(path, { ...signature, entries });
@@ -745,6 +745,51 @@ const ROLE_PREFIX: Readonly<Record<TranscriptRole, string>> = {
 	unknown: "",
 };
 
+async function partitionSessionLines(
+	path: string,
+	input: TranscriptIdentity,
+	emit: (line: string) => Promise<void>,
+): Promise<ExistingSessionTurn[]> {
+	const existingSessionTurns: ExistingSessionTurn[] = [];
+	const stream = createReadStream(path, { encoding: "utf8" });
+	const lines = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
+	try {
+		for await (const line of lines) {
+			const trimmedLine = line.trim();
+			if (trimmedLine.length === 0) continue;
+			let parsed: Partial<CanonicalTranscriptRecord> | null;
+			try {
+				parsed = JSON.parse(trimmedLine) as Partial<CanonicalTranscriptRecord>;
+			} catch {
+				parsed = null;
+			}
+			if (
+				parsed !== null &&
+				parsed.schema === "signet.transcript.v1" &&
+				typeof parsed.content === "string" &&
+				isTranscriptRole(parsed.role) &&
+				sameSession(parsed as CanonicalTranscriptRecord, input)
+			) {
+				existingSessionTurns.push({
+					role: parsed.role,
+					content: cleanTurnContent(parsed.content),
+					live: parsed.source_format === "live",
+					capturedAt: typeof parsed.captured_at === "string" ? parsed.captured_at : null,
+					project: typeof parsed.project === "string" ? parsed.project : null,
+				});
+				continue;
+			}
+			await emit(line);
+		}
+	} finally {
+		lines.close();
+		stream.destroy();
+	}
+	return existingSessionTurns;
+}
+
+const SNAPSHOT_WRITE_CHUNK_CHARS = 1 << 20;
+
 export function writeCanonicalTranscriptSnapshot(
 	input: TranscriptIdentity & {
 		readonly transcript: string;
@@ -760,75 +805,25 @@ export function writeCanonicalTranscriptSnapshot(
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
 		if (next.length === 0) return null;
 
-		if (!existsSync(path)) {
-			mkdirSync(dirname(path), { recursive: true });
-			const body = next.map((r) => JSON.stringify(r)).join("\n");
-			const fd = openSync(path, "w");
-			try {
-				writeSync(fd, `${body}\n`, undefined, "utf8");
-				fsyncSync(fd);
-			} finally {
-				closeSync(fd);
-			}
-			fsyncDirectory(path);
-			sessionSeqIndexes.delete(path);
-			return next;
-		}
-
 		const tmpPath = `${path}.snapshot-tmp`;
 		const entries = await loadSessionSeqIndex(path);
 		if (lastSessionSeq(entries, input) === 0) {
-			rmSync(tmpPath, { force: true });
-			appendIndexedRecords(path, entries, next);
-			const appended = openSync(path, "r");
-			try {
-				fsyncSync(appended);
-			} finally {
-				closeSync(appended);
-			}
+			await rm(tmpPath, { force: true });
+			await appendIndexedRecords(path, entries, next);
+			await syncPath(path);
 			return next;
 		}
 
-		let fd: number | null = null;
+		const handle = await open(tmpPath, "w");
+		let pending = "";
+		const emit = async (text: string): Promise<void> => {
+			pending += `${text}\n`;
+			if (pending.length < SNAPSHOT_WRITE_CHUNK_CHARS) return;
+			await handle.writeFile(pending);
+			pending = "";
+		};
 		try {
-			fd = openSync(tmpPath, "w");
-			const existingSessionTurns: ExistingSessionTurn[] = [];
-			const lines = createInterface({
-				input: createReadStream(path, { encoding: "utf8" }),
-				crlfDelay: Number.POSITIVE_INFINITY,
-			});
-			try {
-				for await (const line of lines) {
-					const trimmedLine = line.trim();
-					if (trimmedLine.length === 0) continue;
-					try {
-						const parsed = JSON.parse(trimmedLine) as Partial<CanonicalTranscriptRecord>;
-						if (
-							parsed.schema !== "signet.transcript.v1" ||
-							typeof parsed.content !== "string" ||
-							!isTranscriptRole(parsed.role)
-						) {
-							writeSync(fd, `${line}\n`);
-							continue;
-						}
-						if (sameSession(parsed as CanonicalTranscriptRecord, input)) {
-							existingSessionTurns.push({
-								role: parsed.role,
-								content: cleanTurnContent(parsed.content),
-								live: parsed.source_format === "live",
-								capturedAt: typeof parsed.captured_at === "string" ? parsed.captured_at : null,
-								project: typeof parsed.project === "string" ? parsed.project : null,
-							});
-							continue;
-						}
-						writeSync(fd, `${line}\n`);
-					} catch {
-						writeSync(fd, `${line}\n`);
-					}
-				}
-			} finally {
-				lines.close();
-			}
+			const existingSessionTurns = await partitionSessionLines(path, input, emit);
 			const incomingExtendsExisting = existingSessionTurns.every((turn, index) => sameTurn(turn, next[index]));
 			const unchangedSession =
 				incomingExtendsExisting &&
@@ -873,27 +868,22 @@ export function writeCanonicalTranscriptSnapshot(
 						? entry.turn === existingSessionTurns[index]
 						: existingSessionTurns[index]?.live === false,
 				);
-			if (refused || unchangedSession || mergeChangedNothing) {
-				closeSync(fd);
-				fd = null;
-				rmSync(tmpPath, { force: true });
-				return refused ? null : records;
-			}
-			for (const r of records) {
-				writeSync(fd, `${JSON.stringify(r)}\n`);
-			}
-			fsyncSync(fd);
-			closeSync(fd);
-			fd = null;
-			renameSync(tmpPath, path);
-			fsyncDirectory(path);
+			if (refused || unchangedSession || mergeChangedNothing) return refused ? null : records;
+			for (const record of records) await emit(JSON.stringify(record));
+			await handle.writeFile(pending);
+			await handle.sync();
+			await handle.close();
+			await rename(tmpPath, path);
+			await syncPath(dirname(path));
 			sessionSeqIndexes.delete(path);
 			if (incomingReplacesLegacy) input.onLegacySessionReplaced?.(existingSessionTurns.length, next.length);
 			return records;
-		} catch (error) {
-			if (fd !== null) closeSync(fd);
-			rmSync(tmpPath, { force: true });
-			throw error;
+		} finally {
+			try {
+				await handle.close();
+			} finally {
+				await rm(tmpPath, { force: true });
+			}
 		}
 	});
 }
@@ -912,7 +902,7 @@ export function appendCanonicalTranscriptTurns(
 			.map((turn) => makeRecord(input, turn, ++seq))
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
 		if (next.length === 0) return null;
-		appendIndexedRecords(path, entries, next);
+		await appendIndexedRecords(path, entries, next);
 		return path;
 	});
 }
@@ -933,7 +923,7 @@ export function appendCanonicalTranscriptSnapshotIfMissing(
 			.map((turn, index) => makeRecord(input, turn, index + 1))
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
 		if (next.length === 0) return null;
-		appendIndexedRecords(path, entries, next);
+		await appendIndexedRecords(path, entries, next);
 		knownSessionKeys?.add(key);
 		return path;
 	});

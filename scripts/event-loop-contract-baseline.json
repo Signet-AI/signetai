@@ -5200,13 +5200,6 @@
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 433,
-      "api": "appendFileSync",
-      "source": "appendFileSync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
       "line": 458,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(join(path, \"owner.json\"), \"utf8\")) as { readonly pid?: unknown };",
@@ -5291,63 +5284,21 @@
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 763,
-      "api": "existsSync",
-      "source": "if (!existsSync(path)) {",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
-      "line": 764,
-      "api": "mkdirSync",
-      "source": "mkdirSync(dirname(path), { recursive: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
-      "line": 781,
-      "api": "rmSync",
-      "source": "rmSync(tmpPath, { force: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
-      "line": 879,
-      "api": "rmSync",
-      "source": "rmSync(tmpPath, { force: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
-      "line": 888,
-      "api": "renameSync",
-      "source": "renameSync(tmpPath, path);",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
-      "line": 895,
-      "api": "rmSync",
-      "source": "rmSync(tmpPath, { force: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
-      "line": 946,
+      "line": 936,
       "api": "existsSync",
       "source": "if (replacements.size === 0 || !existsSync(jsonlPath)) return Promise.resolve(0);",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 1030,
+      "line": 1020,
       "api": "renameSync",
       "source": "renameSync(tmpPath, jsonlPath);",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 1035,
+      "line": 1025,
       "api": "rmSync",
       "source": "rmSync(tmpPath, { force: true });",
       "category": "hot-path"
