@@ -145,6 +145,7 @@ function sameTurn(
 type ExistingSessionTurn = Pick<CanonicalTranscriptRecord, "role" | "content"> & {
 	readonly live: boolean;
 	readonly capturedAt: string | null;
+	readonly project: string | null;
 };
 
 type MergedSessionTurn =
@@ -738,6 +739,7 @@ async function partitionSessionLines(
 					content: cleanTurnContent(parsed.content),
 					live: parsed.source_format === "live",
 					capturedAt: typeof parsed.captured_at === "string" ? parsed.captured_at : null,
+					project: typeof parsed.project === "string" ? parsed.project : null,
 				});
 				continue;
 			}
@@ -777,6 +779,7 @@ function reconcileSessionTurns(
 								sourceFormat: "live" as const,
 								sourcePath: undefined,
 								capturedAt: entry.turn.capturedAt ?? input.capturedAt,
+								project: entry.turn.project ?? input.project,
 							};
 				const record = makeRecord(identity, entry.turn, seq);
 				return record ? [record] : [];

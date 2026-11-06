@@ -902,6 +902,34 @@ describe("backfill OOM regression (#587)", () => {
 		},
 	);
 
+	test("keeps the project of a live turn that the source does not contain", async () => {
+		const root = makeRoot("live-kept-project");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			project: "/work/project-a",
+			sourceFormat: "live",
+			turns: [
+				{ role: "user", content: "first question" },
+				{ role: "user", content: "cancelled prompt" },
+			],
+		});
+
+		await writeSourceSnapshot(root, ["User: first question", "Assistant: first answer"], true);
+
+		const records = readFileSync(canonicalTranscriptPath(root, "claude-code"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { content: string; source_format: string; project: string | null });
+		expect(records.map((record) => [record.content, record.source_format, record.project])).toEqual([
+			["first question", "jsonl", null],
+			["first answer", "jsonl", null],
+			["cancelled prompt", "live", "/work/project-a"],
+		]);
+	});
+
 	test("leaves the file untouched when a repeated source capture changes nothing", async () => {
 		const root = makeRoot("live-kept-unchanged");
 		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
