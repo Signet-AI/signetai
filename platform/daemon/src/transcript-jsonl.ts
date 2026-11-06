@@ -135,13 +135,11 @@ function collapseTurnWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-function turnContainsLiveTurn(
-	candidate: Pick<CanonicalTranscriptRecord, "role" | "content"> | undefined,
-	role: CanonicalTranscriptRecord["role"],
-	content: string,
+function sameTurn(
+	a: Pick<CanonicalTranscriptRecord, "role" | "content">,
+	b: Pick<CanonicalTranscriptRecord, "role" | "content"> | undefined,
 ): boolean {
-	if (!candidate || candidate.role !== role) return false;
-	return candidate.content === content || candidate.content.startsWith(`${content} `);
+	return b !== undefined && a.role === b.role && a.content === b.content;
 }
 
 type ExistingSessionTurn = Pick<CanonicalTranscriptRecord, "role" | "content"> & {
@@ -157,7 +155,9 @@ function mergeSourceWithLiveTurns(
 	existing: readonly ExistingSessionTurn[],
 	incoming: readonly CanonicalTranscriptRecord[],
 ): readonly MergedSessionTurn[] | null {
-	const collapsed = incoming.map((turn) => ({ role: turn.role, content: collapseTurnWhitespace(turn.content) }));
+	const collapsed: string[] = [];
+	const collapsedAt = (index: number): string =>
+		(collapsed[index] ??= collapseTurnWhitespace(incoming[index]?.content ?? ""));
 	const merged: MergedSessionTurn[] = [];
 	let pending: ExistingSessionTurn[] = [];
 	let cursor = 0;
@@ -173,19 +173,18 @@ function mergeSourceWithLiveTurns(
 	};
 	for (const turn of existing) {
 		if (!turn.live) {
-			const source = incoming[cursor];
-			if (!source || source.role !== turn.role || source.content !== turn.content) return null;
+			if (!sameTurn(turn, incoming[cursor])) return null;
 			flushPending();
 			takeSourceUntil(cursor + 1);
 			continue;
 		}
 		const content = collapseTurnWhitespace(turn.content);
+		const extended = `${content} `;
 		let match = -1;
-		for (let index = cursor; index < collapsed.length; index++) {
-			if (turnContainsLiveTurn(collapsed[index], turn.role, content)) {
-				match = index;
-				break;
-			}
+		for (let index = cursor; index < incoming.length && match < 0; index++) {
+			if (incoming[index]?.role !== turn.role) continue;
+			const source = collapsedAt(index);
+			if (source === content || source.startsWith(extended)) match = index;
 		}
 		if (match < 0) {
 			pending.push(turn);
@@ -673,7 +672,6 @@ export function writeCanonicalTranscriptSnapshot(
 		try {
 			fd = openSync(tmpPath, "w");
 			const existingSessionTurns: ExistingSessionTurn[] = [];
-			let existingSessionLiveOnly = true;
 			const lines = createInterface({
 				input: createReadStream(path, { encoding: "utf8" }),
 				crlfDelay: Number.POSITIVE_INFINITY,
@@ -689,7 +687,6 @@ export function writeCanonicalTranscriptSnapshot(
 							continue;
 						}
 						if (sameSession(parsed as CanonicalTranscriptRecord, input)) {
-							if (parsed.source_format !== "live") existingSessionLiveOnly = false;
 							existingSessionTurns.push({
 								role: parsed.role as CanonicalTranscriptRecord["role"],
 								content: cleanTurnContent(parsed.content),
@@ -706,29 +703,16 @@ export function writeCanonicalTranscriptSnapshot(
 			} finally {
 				lines.close();
 			}
-			const incomingMatchesExisting =
-				existingSessionTurns.length === next.length &&
-				existingSessionTurns.every(
-					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
-				);
-			if (incomingMatchesExisting) {
+			const incomingExtendsExisting = existingSessionTurns.every((turn, index) => sameTurn(turn, next[index]));
+			if (incomingExtendsExisting && existingSessionTurns.length === next.length) {
 				closeSync(fd);
 				fd = null;
 				rmSync(tmpPath, { force: true });
 				return true;
 			}
-			const incomingExtendsExisting =
-				existingSessionTurns.length < next.length &&
-				existingSessionTurns.every(
-					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
-				);
-			const appendOnly = input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly);
-			const existingHasLive = existingSessionTurns.some((turn) => turn.live);
 			const merged =
-				!incomingExtendsExisting && input.sourcePath && existingHasLive
-					? mergeSourceWithLiveTurns(existingSessionTurns, next)
-					: null;
-			const refused = !incomingExtendsExisting && (input.sourcePath && existingHasLive ? merged === null : appendOnly);
+				incomingExtendsExisting || !input.sourcePath ? null : mergeSourceWithLiveTurns(existingSessionTurns, next);
+			const refused = !incomingExtendsExisting && (input.sourcePath ? merged === null : input.preserveExistingSession);
 			if (refused) {
 				closeSync(fd);
 				fd = null;
@@ -736,22 +720,21 @@ export function writeCanonicalTranscriptSnapshot(
 				return false;
 			}
 			const records = merged
-				? merged
-						.map((entry, index) =>
+				? merged.flatMap((entry, index) => {
+						const seq = index + 1;
+						if (entry.kind === "source" && entry.turn.seq === seq) return [entry.turn];
+						const identity =
 							entry.kind === "source"
-								? makeRecord(input, entry.turn, index + 1)
-								: makeRecord(
-										{
-											...input,
-											sourceFormat: "live",
-											sourcePath: undefined,
-											capturedAt: entry.turn.capturedAt ?? input.capturedAt,
-										},
-										entry.turn,
-										index + 1,
-									),
-						)
-						.filter((record): record is CanonicalTranscriptRecord => record !== null)
+								? input
+								: {
+										...input,
+										sourceFormat: "live" as const,
+										sourcePath: undefined,
+										capturedAt: entry.turn.capturedAt ?? input.capturedAt,
+									};
+						const record = makeRecord(identity, entry.turn, seq);
+						return record ? [record] : [];
+					})
 				: next;
 			for (const r of records) {
 				writeSync(fd, `${JSON.stringify(r)}\n`);

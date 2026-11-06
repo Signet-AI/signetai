@@ -217,22 +217,16 @@ describe("transcript capture worker", () => {
 
 	it("completes a source capture that fills the gaps of a completed live-only session", async () => {
 		const sourcePath = join(dir, "live-session.jsonl");
-		await appendCanonicalLiveTranscriptTurns({
-			basePath: dir,
-			agentId: "agent-a",
-			harness: "pi",
-			sessionKey: "live-session",
-			project: "/repo",
-			userMessage: "first question",
-		});
-		await appendCanonicalLiveTranscriptTurns({
-			basePath: dir,
-			agentId: "agent-a",
-			harness: "pi",
-			sessionKey: "live-session",
-			project: "/repo",
-			userMessage: "second question",
-		});
+		for (const userMessage of ["first question", "second question"]) {
+			await appendCanonicalLiveTranscriptTurns({
+				basePath: dir,
+				agentId: "agent-a",
+				harness: "pi",
+				sessionKey: "live-session",
+				project: "/repo",
+				userMessage,
+			});
+		}
 		await upsertSessionTranscriptAsync(
 			"live-session",
 			"User: first question\nUser: second question",
