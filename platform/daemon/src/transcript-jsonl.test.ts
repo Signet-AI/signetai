@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,6 +13,7 @@ import {
 	readCanonicalTranscriptSessionKeys,
 	rewriteReplacingLiveOnlySessions,
 	sessionSeqCacheKey,
+	transcriptTextToTurns,
 	writeCanonicalTranscriptSnapshot,
 } from "./transcript-jsonl";
 
@@ -50,14 +51,15 @@ function writeSourceSnapshot(
 	root: string,
 	lines: readonly string[],
 	preserveExistingSession?: boolean,
+	sessionKey = "session-1",
 ): ReturnType<typeof writeCanonicalTranscriptSnapshot> {
 	return writeCanonicalTranscriptSnapshot({
 		basePath: root,
 		agentId: "default",
 		harness: "claude-code",
-		sessionKey: "session-1",
+		sessionKey,
 		sourceFormat: "jsonl",
-		sourcePath: join(root, "session-1.jsonl"),
+		sourcePath: join(root, `${sessionKey}.jsonl`),
 		preserveExistingSession,
 		transcript: lines.join("\n"),
 	});
@@ -745,6 +747,118 @@ describe("backfill OOM regression (#587)", () => {
 			["assistant", "third answer", "jsonl"],
 		]);
 	});
+
+	test("parses a large transcript in linear time", () => {
+		const line = "z".repeat(1000);
+		const transcript = Array.from(
+			{ length: 10_000 },
+			(_, index) => `User: question ${index} ${line}\nAssistant: answer ${index}`,
+		).join("\n");
+
+		const started = performance.now();
+		const turns = transcriptTextToTurns(transcript);
+		const elapsed = performance.now() - started;
+
+		expect(turns).toHaveLength(20_000);
+		expect(turns.at(-1)).toEqual({ role: "assistant", content: "answer 9999" });
+		expect(elapsed).toBeLessThan(2_000);
+	});
+
+	test("keeps the event loop responsive while it writes a large source snapshot", async () => {
+		const root = makeRoot("large-snapshot-event-loop");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "question 0" },
+			{ role: "user", content: "cancelled prompt" },
+		]);
+		const pad = "w".repeat(4000);
+		const lines = Array.from({ length: 1600 }, (_, index) => [
+			`User: question ${index} ${pad}`,
+			`Assistant: answer ${index}`,
+		]).flat();
+		lines[0] = "User: question 0";
+
+		let longestBlock = 0;
+		let last = performance.now();
+		const timer = setInterval(() => {
+			const now = performance.now();
+			longestBlock = Math.max(longestBlock, now - last);
+			last = now;
+		}, 1);
+		const written = await writeSourceSnapshot(root, lines, true);
+		clearInterval(timer);
+
+		expect(written).toHaveLength(3201);
+		expect(written?.at(-1)).toMatchObject({ content: "cancelled prompt", source_format: "live" });
+		expect(longestBlock).toBeLessThan(500);
+	});
+
+	test("merges many live turns that the source does not contain", async () => {
+		const root = makeRoot("many-unmatched-live");
+		const live = Array.from({ length: 1200 }, (_, index) => ({ role: "user" as const, content: `draft ${index}` }));
+		await appendLiveTurns(root, live);
+		const source = Array.from({ length: 1200 }, (_, index) => [
+			`User: question ${index}`,
+			`Assistant: answer ${index}`,
+		]).flat();
+
+		const written = await writeSourceSnapshot(root, source, true);
+
+		expect(written).toHaveLength(3600);
+		const records = readSessionRecords(canonicalTranscriptPath(root, "claude-code"));
+		expect(records.slice(0, 2400).every(([, , format]) => format === "jsonl")).toBe(true);
+		expect(records.slice(2400)).toEqual(live.map((turn) => ["user", turn.content, "live"]));
+	});
+
+	test("serializes concurrent snapshot writes to the same transcript file", async () => {
+		const root = makeRoot("concurrent-snapshots");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await writeSourceSnapshot(root, ["User: seed"]);
+		const writes = Array.from({ length: 6 }, (_, index) =>
+			writeSourceSnapshot(
+				root,
+				[`User: question ${index}`, `Assistant: answer ${index}`],
+				undefined,
+				`session-${index + 2}`,
+			),
+		);
+		writes.push(writeSourceSnapshot(root, ["User: seed", "Assistant: seed answer"], true));
+
+		const results = await Promise.all(writes);
+
+		expect(results.every((result) => result !== null)).toBe(true);
+		const records = readFileSync(jsonlPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { session_key: string; content: string });
+		expect(records).toHaveLength(14);
+		expect(records.filter((record) => record.session_key === "session-1").map((record) => record.content)).toEqual([
+			"seed",
+			"seed answer",
+		]);
+		expect(existsSync(`${jsonlPath}.snapshot-tmp`)).toBe(false);
+	});
+
+	test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"leaves the transcript file unchanged and removes the temporary file when a rewrite fails",
+		async () => {
+			const root = makeRoot("rewrite-failure");
+			const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+			await writeSourceSnapshot(root, ["User: first question"]);
+			await appendLiveTurns(root, [{ role: "user", content: "second question" }]);
+			const before = readFileSync(jsonlPath, "utf8");
+			chmodSync(jsonlPath, 0o000);
+			try {
+				await expect(
+					writeSourceSnapshot(root, ["User: first question", "Assistant: first answer", "User: second question"], true),
+				).rejects.toThrow();
+			} finally {
+				chmodSync(jsonlPath, 0o644);
+			}
+
+			expect(readFileSync(jsonlPath, "utf8")).toBe(before);
+			expect(existsSync(`${jsonlPath}.snapshot-tmp`)).toBe(false);
+		},
+	);
 
 	test("leaves the file untouched when a repeated source capture changes nothing", async () => {
 		const root = makeRoot("live-kept-unchanged");
