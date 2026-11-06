@@ -135,28 +135,29 @@ function collapseTurnWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-function turnContainsLiveTurn(
-	candidate: Pick<CanonicalTranscriptRecord, "role" | "content"> | undefined,
-	role: CanonicalTranscriptRecord["role"],
-	content: string,
+function sameTurn(
+	a: Pick<CanonicalTranscriptRecord, "role" | "content">,
+	b: Pick<CanonicalTranscriptRecord, "role" | "content"> | undefined,
 ): boolean {
-	if (!candidate || candidate.role !== role) return false;
-	return candidate.content === content || candidate.content.startsWith(`${content} `);
+	return b !== undefined && a.role === b.role && a.content === b.content;
 }
 
 function turnsAppearInOrder(
 	existing: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
 	incoming: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
 ): boolean {
-	const collapsed = incoming.map((turn) => ({ role: turn.role, content: collapseTurnWhitespace(turn.content) }));
 	let cursor = 0;
 	for (const turn of existing) {
 		const content = collapseTurnWhitespace(turn.content);
-		while (cursor < collapsed.length && !turnContainsLiveTurn(collapsed[cursor], turn.role, content)) {
-			cursor++;
+		const extended = `${content} `;
+		let found = false;
+		while (cursor < incoming.length && !found) {
+			const candidate = incoming[cursor++];
+			if (candidate?.role !== turn.role) continue;
+			const source = collapseTurnWhitespace(candidate.content);
+			found = source === content || source.startsWith(extended);
 		}
-		if (cursor === collapsed.length) return false;
-		cursor++;
+		if (!found) return false;
 	}
 	return true;
 }
@@ -665,30 +666,19 @@ export function writeCanonicalTranscriptSnapshot(
 			} finally {
 				lines.close();
 			}
-			const incomingMatchesExisting =
-				existingSessionTurns.length === next.length &&
-				existingSessionTurns.every(
-					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
-				);
-			if (incomingMatchesExisting) {
+			const incomingExtendsExisting = existingSessionTurns.every((turn, index) => sameTurn(turn, next[index]));
+			if (incomingExtendsExisting && existingSessionTurns.length === next.length) {
 				closeSync(fd);
 				fd = null;
 				rmSync(tmpPath, { force: true });
 				return true;
 			}
-			const incomingExtendsExisting =
-				existingSessionTurns.length < next.length &&
-				existingSessionTurns.every(
-					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
-				);
 			const appendOnly = input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly);
-			const incomingFillsLiveSession =
+			const refused =
 				appendOnly &&
 				!incomingExtendsExisting &&
-				Boolean(input.sourcePath) &&
-				existingSessionLiveOnly &&
-				turnsAppearInOrder(existingSessionTurns, next);
-			if (appendOnly && !incomingExtendsExisting && !incomingFillsLiveSession) {
+				!(input.sourcePath && existingSessionLiveOnly && turnsAppearInOrder(existingSessionTurns, next));
+			if (refused) {
 				closeSync(fd);
 				fd = null;
 				rmSync(tmpPath, { force: true });
