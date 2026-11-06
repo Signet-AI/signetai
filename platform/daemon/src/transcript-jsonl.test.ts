@@ -580,6 +580,115 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content).not.toContain('"content":"X"');
 	});
 
+	test("a source snapshot fills the gaps of a completed live-only session", async () => {
+		const root = makeRoot("fill-live-only");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [
+				{ role: "user", content: "first  question" },
+				{ role: "user", content: "second question" },
+			],
+		});
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath: join(root, "session-1.jsonl"),
+			preserveExistingSession: true,
+			transcript: "User: first question\nAssistant: first answer\nUser: second question\nAssistant: second answer",
+		});
+
+		expect(replaced).toBe(true);
+		const records = readFileSync(jsonlPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { role: string; content: string; source_format: string });
+		expect(records.map((record) => [record.role, record.content])).toEqual([
+			["user", "first question"],
+			["assistant", "first answer"],
+			["user", "second question"],
+			["assistant", "second answer"],
+		]);
+		expect(records.every((record) => record.source_format === "jsonl")).toBe(true);
+	});
+
+	test("keeps a completed live-only session when a live turn is missing from the source snapshot", async () => {
+		const root = makeRoot("keep-live-only-extra-turn");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [
+				{ role: "user", content: "first question" },
+				{ role: "user", content: "only captured live" },
+			],
+		});
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath: join(root, "session-1.jsonl"),
+			preserveExistingSession: true,
+			transcript: "User: first question\nAssistant: first answer\nUser: second question",
+		});
+
+		expect(replaced).toBe(false);
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content).toContain('"content":"only captured live"');
+		expect(content).not.toContain('"content":"first answer"');
+	});
+
+	test("keeps a completed session with non-live records when the source snapshot only fills gaps", async () => {
+		const root = makeRoot("keep-mixed-session");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath: join(root, "session-1.jsonl"),
+			transcript: "User: first question",
+		});
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "second question" }],
+		});
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath: join(root, "session-1.jsonl"),
+			preserveExistingSession: true,
+			transcript: "User: first question\nAssistant: first answer\nUser: second question",
+		});
+
+		expect(replaced).toBe(false);
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content).not.toContain('"content":"first answer"');
+	});
+
 	test("an append after a crash-torn record drops the torn tail instead of corrupting the new records", async () => {
 		const root = makeRoot("snapshot-append-torn-tail");
 		const jsonlPath = canonicalTranscriptPath(root, "memorybench");

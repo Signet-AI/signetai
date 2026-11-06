@@ -131,6 +131,30 @@ function cleanTurnContent(text: string): string {
 	return normalizeLf(text);
 }
 
+function collapseTurnWhitespace(text: string): string {
+	return text.replace(/\s+/g, " ").trim();
+}
+
+function turnsAppearInOrder(
+	existing: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
+	incoming: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
+): boolean {
+	const collapsed = incoming.map((turn) => ({ role: turn.role, content: collapseTurnWhitespace(turn.content) }));
+	let cursor = 0;
+	for (const turn of existing) {
+		const content = collapseTurnWhitespace(turn.content);
+		while (
+			cursor < collapsed.length &&
+			!(collapsed[cursor]?.role === turn.role && collapsed[cursor]?.content === content)
+		) {
+			cursor++;
+		}
+		if (cursor === collapsed.length) return false;
+		cursor++;
+	}
+	return true;
+}
+
 function sha256(text: string): string {
 	return createHash("sha256").update(text, "utf8").digest("hex");
 }
@@ -651,10 +675,14 @@ export function writeCanonicalTranscriptSnapshot(
 				existingSessionTurns.every(
 					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
 				);
-			if (
-				(input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly)) &&
-				!incomingExtendsExisting
-			) {
+			const appendOnly = input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly);
+			const incomingFillsLiveSession =
+				appendOnly &&
+				!incomingExtendsExisting &&
+				Boolean(input.sourcePath) &&
+				existingSessionLiveOnly &&
+				turnsAppearInOrder(existingSessionTurns, next);
+			if (appendOnly && !incomingExtendsExisting && !incomingFillsLiveSession) {
 				closeSync(fd);
 				fd = null;
 				rmSync(tmpPath, { force: true });

@@ -13,7 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { indexCanonicalTranscriptJsonl, writeTranscriptArtifact } from "./memory-lineage";
-import { writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
+import { upsertSessionTranscriptAsync } from "./session-transcripts";
+import { appendCanonicalLiveTranscriptTurns, writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
 import {
 	enqueueTranscriptCaptureJob,
 	getTranscriptCaptureJobStatus,
@@ -212,6 +213,62 @@ describe("transcript capture worker", () => {
 			'"content":"second"',
 		);
 		expect(readdirSync(join(dir, ".daemon", "logs", "transcripts"))).toHaveLength(1);
+	});
+
+	it("completes a source capture that fills the gaps of a completed live-only session", async () => {
+		const sourcePath = join(dir, "live-session.jsonl");
+		await appendCanonicalLiveTranscriptTurns({
+			basePath: dir,
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "live-session",
+			project: "/repo",
+			userMessage: "first question",
+		});
+		await appendCanonicalLiveTranscriptTurns({
+			basePath: dir,
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "live-session",
+			project: "/repo",
+			userMessage: "second question",
+		});
+		await upsertSessionTranscriptAsync(
+			"live-session",
+			"User: first question\nUser: second question",
+			"pi",
+			"/repo",
+			"agent-a",
+			"2026-06-20T10:00:00.000Z",
+			getDbAccessor(),
+			{ completedAt: "2026-06-20T10:00:00.000Z" },
+		);
+		writeFileSync(
+			sourcePath,
+			"User: first question\nAssistant: first answer\nUser: second question\nAssistant: second answer\n",
+			"utf8",
+		);
+
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "live-session",
+			sessionId: "live-session",
+			project: "/repo",
+			transcript: "",
+			rawTranscript: "",
+			transcriptPath: sourcePath,
+			capturedAt: "2026-06-20T10:01:00.000Z",
+			endedAt: "2026-06-20T10:01:00.000Z",
+		});
+		if (!id) throw new Error("expected source capture job");
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+
+		expect(await getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id)).toMatchObject({ status: "completed" });
+		const canonical = readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8");
+		expect(canonical).toContain('"content":"first answer"');
+		expect(canonical).toContain('"content":"second answer"');
+		expect(canonical).not.toContain('"source_format":"live"');
 	});
 
 	it("clears recoverable legacy payloads without deleting the job", async () => {
