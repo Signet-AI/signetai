@@ -800,6 +800,39 @@ describe("backfill OOM regression (#587)", () => {
 		expect(longestBlock).toBeLessThan(500);
 	});
 
+	test("matches live turns after an unmatched one by whole words only", async () => {
+		const root = makeRoot("indexed-live-matches");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "cancelled draft" },
+			{ role: "user", content: "question  one" },
+			{ role: "user", content: "question two" },
+		]);
+
+		const written = await writeSourceSnapshot(
+			root,
+			[
+				"User: question one",
+				"Assistant: answer one",
+				"User: question twofold",
+				"Assistant: answer twofold",
+				"User: question two extra context",
+				"Assistant: answer two",
+			],
+			true,
+		);
+
+		expect(written).toHaveLength(7);
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+			["user", "cancelled draft", "live"],
+			["user", "question one", "jsonl"],
+			["assistant", "answer one", "jsonl"],
+			["user", "question twofold", "jsonl"],
+			["assistant", "answer twofold", "jsonl"],
+			["user", "question two extra context", "jsonl"],
+			["assistant", "answer two", "jsonl"],
+		]);
+	});
+
 	test("merges many live turns that the source does not contain without blocking the event loop", async () => {
 		const root = makeRoot("many-unmatched-live");
 		const live = Array.from({ length: 5000 }, (_, index) => ({ role: "user" as const, content: `draft ${index}` }));
