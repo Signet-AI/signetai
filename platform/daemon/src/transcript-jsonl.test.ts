@@ -24,6 +24,14 @@ function makeRoot(name: string): string {
 	return root;
 }
 
+function readSessionRecords(path: string): Array<[string, string, string]> {
+	return readFileSync(path, "utf8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as { role: string; content: string; source_format: string })
+		.map((record) => [record.role, record.content, record.source_format]);
+}
+
 function advancePastBackfillRetry(): void {
 	setSystemTime(new Date(Date.now() + 61 * 60_000));
 }
@@ -658,8 +666,8 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content).not.toContain('"source_format":"live"');
 	});
 
-	test("keeps a completed live-only session when a live turn only shares a word prefix with the source", async () => {
-		const root = makeRoot("keep-live-only-word-prefix");
+	test("keeps a live turn that only shares a word prefix with the source as a live tail", async () => {
+		const root = makeRoot("live-tail-word-prefix");
 		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
 		await appendCanonicalTranscriptTurns({
 			basePath: root,
@@ -681,12 +689,16 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: okay then\nAssistant: done",
 		});
 
-		expect(replaced).toBe(false);
-		expect(readFileSync(jsonlPath, "utf8")).toContain('"content":"ok"');
+		expect(replaced).toBe(true);
+		expect(readSessionRecords(jsonlPath)).toEqual([
+			["user", "okay then", "jsonl"],
+			["assistant", "done", "jsonl"],
+			["user", "ok", "live"],
+		]);
 	});
 
-	test("keeps a completed live-only session when a live turn is missing from the source snapshot", async () => {
-		const root = makeRoot("keep-live-only-extra-turn");
+	test("keeps a live turn that the source never had in its place between source turns", async () => {
+		const root = makeRoot("live-middle-kept");
 		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
 		await appendCanonicalTranscriptTurns({
 			basePath: root,
@@ -696,11 +708,65 @@ describe("backfill OOM regression (#587)", () => {
 			sourceFormat: "live",
 			turns: [
 				{ role: "user", content: "first question" },
-				{ role: "user", content: "only captured live" },
+				{ role: "user", content: "cancelled prompt" },
+				{ role: "user", content: "second question" },
 			],
 		});
 
-		const replaced = await writeCanonicalTranscriptSnapshot({
+		for (const preserveExistingSession of [false, true]) {
+			const replaced = await writeCanonicalTranscriptSnapshot({
+				basePath: root,
+				agentId: "default",
+				harness: "claude-code",
+				sessionKey: "session-1",
+				sourceFormat: "jsonl",
+				sourcePath: join(root, "session-1.jsonl"),
+				preserveExistingSession,
+				transcript: "User: first question\nAssistant: first answer\nUser: second question\nAssistant: second answer",
+			});
+			expect(replaced).toBe(true);
+			expect(readSessionRecords(jsonlPath)).toEqual([
+				["user", "first question", "jsonl"],
+				["assistant", "first answer", "jsonl"],
+				["user", "cancelled prompt", "live"],
+				["user", "second question", "jsonl"],
+				["assistant", "second answer", "jsonl"],
+			]);
+		}
+	});
+
+	test("keeps live turns that are newer than the source of a session in progress", async () => {
+		const root = makeRoot("live-tail-in-progress");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [
+				{ role: "user", content: "first question" },
+				{ role: "user", content: "second question" },
+			],
+		});
+
+		const first = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath: join(root, "session-1.jsonl"),
+			transcript: "User: first question\nAssistant: first answer",
+		});
+		expect(first).toBe(true);
+		expect(readSessionRecords(jsonlPath)).toEqual([
+			["user", "first question", "jsonl"],
+			["assistant", "first answer", "jsonl"],
+			["user", "second question", "live"],
+		]);
+
+		const second = await writeCanonicalTranscriptSnapshot({
 			basePath: root,
 			agentId: "default",
 			harness: "claude-code",
@@ -708,17 +774,22 @@ describe("backfill OOM regression (#587)", () => {
 			sourceFormat: "jsonl",
 			sourcePath: join(root, "session-1.jsonl"),
 			preserveExistingSession: true,
-			transcript: "User: first question\nAssistant: first answer\nUser: second question",
+			transcript: [
+				"User: first question",
+				"Assistant: first answer",
+				"User: second question",
+				"System: UserPromptSubmit hook additional context: project rules",
+				"Assistant: second answer",
+			].join("\n"),
 		});
-
-		expect(replaced).toBe(false);
-		const content = readFileSync(jsonlPath, "utf8");
-		expect(content).toContain('"content":"only captured live"');
-		expect(content).not.toContain('"content":"first answer"');
+		expect(second).toBe(true);
+		const records = readSessionRecords(jsonlPath);
+		expect(records.map(([role]) => role)).toEqual(["user", "assistant", "user", "assistant"]);
+		expect(records.every(([, , format]) => format === "jsonl")).toBe(true);
 	});
 
-	test("keeps a completed session with non-live records when the source snapshot only fills gaps", async () => {
-		const root = makeRoot("keep-mixed-session");
+	test("a source snapshot absorbs the live tail of a session that already has source records", async () => {
+		const root = makeRoot("mixed-live-tail");
 		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
 		await writeCanonicalTranscriptSnapshot({
 			basePath: root,
@@ -727,7 +798,7 @@ describe("backfill OOM regression (#587)", () => {
 			sessionKey: "session-1",
 			sourceFormat: "jsonl",
 			sourcePath: join(root, "session-1.jsonl"),
-			transcript: "User: first question",
+			transcript: "User: first question\nAssistant: first answer",
 		});
 		await appendCanonicalTranscriptTurns({
 			basePath: root,
@@ -746,12 +817,59 @@ describe("backfill OOM regression (#587)", () => {
 			sourceFormat: "jsonl",
 			sourcePath: join(root, "session-1.jsonl"),
 			preserveExistingSession: true,
-			transcript: "User: first question\nAssistant: first answer\nUser: second question",
+			transcript: [
+				"User: first question",
+				"Assistant: first answer",
+				"User: second question",
+				"System: UserPromptSubmit hook additional context: project rules",
+				"Assistant: second answer",
+			].join("\n"),
+		});
+
+		expect(replaced).toBe(true);
+		const records = readSessionRecords(jsonlPath);
+		expect(records).toHaveLength(4);
+		expect(records.every(([, , format]) => format === "jsonl")).toBe(true);
+	});
+
+	test("refuses a source snapshot that does not start with the session's source records", async () => {
+		const root = makeRoot("mixed-divergent-prefix");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath: join(root, "session-1.jsonl"),
+			transcript: "User: first question\nAssistant: first answer",
+		});
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "second question" }],
+		});
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath: join(root, "session-1.jsonl"),
+			preserveExistingSession: true,
+			transcript: "User: another question\nAssistant: another answer\nUser: second question",
 		});
 
 		expect(replaced).toBe(false);
-		const content = readFileSync(jsonlPath, "utf8");
-		expect(content).not.toContain('"content":"first answer"');
+		expect(readSessionRecords(jsonlPath).map(([, content]) => content)).toEqual([
+			"first question",
+			"first answer",
+			"second question",
+		]);
 	});
 
 	test("an append after a crash-torn record drops the torn tail instead of corrupting the new records", async () => {

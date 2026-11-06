@@ -144,21 +144,60 @@ function turnContainsLiveTurn(
 	return candidate.content === content || candidate.content.startsWith(`${content} `);
 }
 
-function turnsAppearInOrder(
-	existing: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
-	incoming: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
-): boolean {
+type ExistingSessionTurn = Pick<CanonicalTranscriptRecord, "role" | "content"> & {
+	readonly live: boolean;
+	readonly capturedAt: string | null;
+};
+
+type MergedSessionTurn =
+	| { readonly kind: "source"; readonly turn: CanonicalTranscriptRecord }
+	| { readonly kind: "live"; readonly turn: ExistingSessionTurn };
+
+function mergeSourceWithLiveTurns(
+	existing: readonly ExistingSessionTurn[],
+	incoming: readonly CanonicalTranscriptRecord[],
+): readonly MergedSessionTurn[] | null {
 	const collapsed = incoming.map((turn) => ({ role: turn.role, content: collapseTurnWhitespace(turn.content) }));
+	const merged: MergedSessionTurn[] = [];
+	let pending: ExistingSessionTurn[] = [];
 	let cursor = 0;
-	for (const turn of existing) {
-		const content = collapseTurnWhitespace(turn.content);
-		while (cursor < collapsed.length && !turnContainsLiveTurn(collapsed[cursor], turn.role, content)) {
-			cursor++;
+	const takeSourceUntil = (end: number): void => {
+		for (; cursor < end; cursor++) {
+			const turn = incoming[cursor];
+			if (turn) merged.push({ kind: "source", turn });
 		}
-		if (cursor === collapsed.length) return false;
-		cursor++;
+	};
+	const flushPending = (): void => {
+		for (const turn of pending) merged.push({ kind: "live", turn });
+		pending = [];
+	};
+	for (const turn of existing) {
+		if (!turn.live) {
+			const source = incoming[cursor];
+			if (!source || source.role !== turn.role || source.content !== turn.content) return null;
+			flushPending();
+			takeSourceUntil(cursor + 1);
+			continue;
+		}
+		const content = collapseTurnWhitespace(turn.content);
+		let match = -1;
+		for (let index = cursor; index < collapsed.length; index++) {
+			if (turnContainsLiveTurn(collapsed[index], turn.role, content)) {
+				match = index;
+				break;
+			}
+		}
+		if (match < 0) {
+			pending.push(turn);
+			continue;
+		}
+		takeSourceUntil(match);
+		flushPending();
+		takeSourceUntil(match + 1);
 	}
-	return true;
+	takeSourceUntil(incoming.length);
+	flushPending();
+	return merged;
 }
 
 function sha256(text: string): string {
@@ -633,7 +672,7 @@ export function writeCanonicalTranscriptSnapshot(
 		let fd: number | null = null;
 		try {
 			fd = openSync(tmpPath, "w");
-			const existingSessionTurns: Array<Pick<CanonicalTranscriptRecord, "role" | "content">> = [];
+			const existingSessionTurns: ExistingSessionTurn[] = [];
 			let existingSessionLiveOnly = true;
 			const lines = createInterface({
 				input: createReadStream(path, { encoding: "utf8" }),
@@ -654,6 +693,8 @@ export function writeCanonicalTranscriptSnapshot(
 							existingSessionTurns.push({
 								role: parsed.role as CanonicalTranscriptRecord["role"],
 								content: cleanTurnContent(parsed.content),
+								live: parsed.source_format === "live",
+								capturedAt: typeof parsed.captured_at === "string" ? parsed.captured_at : null,
 							});
 							continue;
 						}
@@ -682,19 +723,37 @@ export function writeCanonicalTranscriptSnapshot(
 					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
 				);
 			const appendOnly = input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly);
-			const incomingFillsLiveSession =
-				appendOnly &&
-				!incomingExtendsExisting &&
-				Boolean(input.sourcePath) &&
-				existingSessionLiveOnly &&
-				turnsAppearInOrder(existingSessionTurns, next);
-			if (appendOnly && !incomingExtendsExisting && !incomingFillsLiveSession) {
+			const existingHasLive = existingSessionTurns.some((turn) => turn.live);
+			const merged =
+				!incomingExtendsExisting && input.sourcePath && existingHasLive
+					? mergeSourceWithLiveTurns(existingSessionTurns, next)
+					: null;
+			const refused = !incomingExtendsExisting && (input.sourcePath && existingHasLive ? merged === null : appendOnly);
+			if (refused) {
 				closeSync(fd);
 				fd = null;
 				rmSync(tmpPath, { force: true });
 				return false;
 			}
-			for (const r of next) {
+			const records = merged
+				? merged
+						.map((entry, index) =>
+							entry.kind === "source"
+								? makeRecord(input, entry.turn, index + 1)
+								: makeRecord(
+										{
+											...input,
+											sourceFormat: "live",
+											sourcePath: undefined,
+											capturedAt: entry.turn.capturedAt ?? input.capturedAt,
+										},
+										entry.turn,
+										index + 1,
+									),
+						)
+						.filter((record): record is CanonicalTranscriptRecord => record !== null)
+				: next;
+			for (const r of records) {
 				writeSync(fd, `${JSON.stringify(r)}\n`);
 			}
 			fsyncSync(fd);
