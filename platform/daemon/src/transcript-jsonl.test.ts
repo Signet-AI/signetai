@@ -53,17 +53,34 @@ function writeSourceSnapshot(
 	root: string,
 	lines: readonly string[],
 	preserveExistingSession?: boolean,
+	sessionKey = "session-1",
 ): ReturnType<typeof writeCanonicalTranscriptSnapshot> {
 	return writeCanonicalTranscriptSnapshot({
 		basePath: root,
 		agentId: "default",
 		harness: "claude-code",
-		sessionKey: "session-1",
+		sessionKey,
 		sourceFormat: "jsonl",
-		sourcePath: join(root, "session-1.jsonl"),
+		sourcePath: join(root, `${sessionKey}.jsonl`),
 		preserveExistingSession,
 		transcript: lines.join("\n"),
 	});
+}
+
+async function measureLongestBlock<T>(work: () => Promise<T>): Promise<[T, number]> {
+	let longestBlock = 0;
+	let last = performance.now();
+	const timer = setInterval(() => {
+		const now = performance.now();
+		longestBlock = Math.max(longestBlock, now - last);
+		last = now;
+	}, 1);
+	try {
+		const result = await work();
+		return [result, Math.max(longestBlock, performance.now() - last)];
+	} finally {
+		clearInterval(timer);
+	}
 }
 
 function advancePastBackfillRetry(): void {
@@ -808,6 +825,55 @@ describe("backfill OOM regression (#587)", () => {
 		} finally {
 			yields.mockRestore();
 		}
+	});
+
+	test("keeps the event loop responsive while it writes a large source snapshot", async () => {
+		const root = makeRoot("large-snapshot-event-loop");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "question 0" },
+			{ role: "user", content: "cancelled prompt" },
+		]);
+		const pad = "w".repeat(4000);
+		const lines = Array.from({ length: 1600 }, (_, index) => [
+			`User: question ${index} ${pad}`,
+			`Assistant: answer ${index}`,
+		]).flat();
+		lines[0] = "User: question 0";
+
+		const [written, longestBlock] = await measureLongestBlock(() => writeSourceSnapshot(root, lines, true));
+
+		expect(written).toHaveLength(3201);
+		expect(written?.at(-1)).toMatchObject({ content: "cancelled prompt", source_format: "live" });
+		expect(longestBlock).toBeLessThan(500);
+	});
+
+	test("serializes concurrent snapshot writes to the same transcript file", async () => {
+		const root = makeRoot("concurrent-snapshots");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await writeSourceSnapshot(root, ["User: seed"]);
+		const writes = Array.from({ length: 6 }, (_, index) =>
+			writeSourceSnapshot(
+				root,
+				[`User: question ${index}`, `Assistant: answer ${index}`],
+				undefined,
+				`session-${index + 2}`,
+			),
+		);
+		writes.push(writeSourceSnapshot(root, ["User: seed", "Assistant: seed answer"], true));
+
+		const results = await Promise.all(writes);
+
+		expect(results.every((result) => result !== null)).toBe(true);
+		const records = readFileSync(jsonlPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { session_key: string; content: string });
+		expect(records).toHaveLength(14);
+		expect(records.filter((record) => record.session_key === "session-1").map((record) => record.content)).toEqual([
+			"seed",
+			"seed answer",
+		]);
+		expect(existsSync(`${jsonlPath}.snapshot-tmp`)).toBe(false);
 	});
 
 	test("keeps the project of a live turn that the source does not contain", async () => {
