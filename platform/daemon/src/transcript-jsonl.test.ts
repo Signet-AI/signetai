@@ -50,7 +50,7 @@ function writeSourceSnapshot(
 	root: string,
 	lines: readonly string[],
 	preserveExistingSession?: boolean,
-): Promise<boolean> {
+): ReturnType<typeof writeCanonicalTranscriptSnapshot> {
 	return writeCanonicalTranscriptSnapshot({
 		basePath: root,
 		agentId: "default",
@@ -612,7 +612,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: A\nAssistant: X",
 		});
 
-		expect(replaced).toBe(false);
+		expect(replaced).toBeNull();
 		const content = readFileSync(jsonlPath, "utf8");
 		expect(content).toContain('"content":"B"');
 		expect(content).toContain('"content":"C"');
@@ -632,7 +632,7 @@ describe("backfill OOM regression (#587)", () => {
 			true,
 		);
 
-		expect(replaced).toBe(true);
+		expect(replaced).not.toBeNull();
 		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
 			["user", "first question", "jsonl"],
 			["assistant", "first answer", "jsonl"],
@@ -660,7 +660,7 @@ describe("backfill OOM regression (#587)", () => {
 			true,
 		);
 
-		expect(replaced).toBe(true);
+		expect(replaced).not.toBeNull();
 		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
 			["user", "first question\nSystem: UserPromptSubmit hook additional context: project rules", "jsonl"],
 			["assistant", "first answer", "jsonl"],
@@ -675,7 +675,7 @@ describe("backfill OOM regression (#587)", () => {
 
 		const replaced = await writeSourceSnapshot(root, ["User: okay then", "Assistant: done"], true);
 
-		expect(replaced).toBe(true);
+		expect(replaced).not.toBeNull();
 		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
 			["user", "okay then", "jsonl"],
 			["assistant", "done", "jsonl"],
@@ -697,7 +697,7 @@ describe("backfill OOM regression (#587)", () => {
 				["User: first question", "Assistant: first answer", "User: second question", "Assistant: second answer"],
 				preserveExistingSession,
 			);
-			expect(replaced).toBe(true);
+			expect(replaced).not.toBeNull();
 			expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
 				["user", "first question", "jsonl"],
 				["assistant", "first answer", "jsonl"],
@@ -708,6 +708,96 @@ describe("backfill OOM regression (#587)", () => {
 		}
 	});
 
+	test("keeps a retained live turn in place when a later source turn repeats its text", async () => {
+		const root = makeRoot("live-repeated-later");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first question" },
+			{ role: "user", content: "yes" },
+			{ role: "user", content: "second question" },
+		]);
+		await writeSourceSnapshot(
+			root,
+			["User: first question", "Assistant: first answer", "User: second question", "Assistant: second answer"],
+			true,
+		);
+
+		const replaced = await writeSourceSnapshot(
+			root,
+			[
+				"User: first question",
+				"Assistant: first answer",
+				"User: second question",
+				"Assistant: second answer",
+				"User: yes",
+				"Assistant: third answer",
+			],
+			true,
+		);
+
+		expect(replaced).not.toBeNull();
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+			["user", "first question", "jsonl"],
+			["assistant", "first answer", "jsonl"],
+			["user", "yes", "live"],
+			["user", "second question", "jsonl"],
+			["assistant", "second answer", "jsonl"],
+			["user", "yes", "jsonl"],
+			["assistant", "third answer", "jsonl"],
+		]);
+	});
+
+	test("leaves the file untouched when a repeated source capture changes nothing", async () => {
+		const root = makeRoot("live-kept-unchanged");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first question" },
+			{ role: "user", content: "cancelled prompt" },
+		]);
+		const capture = (capturedAt: string) =>
+			writeCanonicalTranscriptSnapshot({
+				basePath: root,
+				agentId: "default",
+				harness: "claude-code",
+				sessionKey: "session-1",
+				sourceFormat: "jsonl",
+				sourcePath: join(root, "session-1.jsonl"),
+				preserveExistingSession: true,
+				capturedAt,
+				transcript: "User: first question\nAssistant: first answer",
+			});
+		expect(await capture("2026-06-20T10:00:00.000Z")).not.toBeNull();
+		const before = readFileSync(jsonlPath, "utf8");
+
+		expect(await capture("2026-06-20T11:00:00.000Z")).not.toBeNull();
+
+		expect(readFileSync(jsonlPath, "utf8")).toBe(before);
+		expect(readSessionRecords(jsonlPath)).toEqual([
+			["user", "first question", "jsonl"],
+			["assistant", "first answer", "jsonl"],
+			["user", "cancelled prompt", "live"],
+		]);
+	});
+
+	test("a source snapshot equal to the live records gives them source provenance", async () => {
+		const root = makeRoot("live-exact-match");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first question" },
+			{ role: "assistant", content: "first answer" },
+		]);
+
+		const replaced = await writeSourceSnapshot(root, ["User: first question", "Assistant: first answer"], true);
+
+		expect(replaced).not.toBeNull();
+		const records = readFileSync(canonicalTranscriptPath(root, "claude-code"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { source_format: string; source_path?: string });
+		expect(records.map((record) => [record.source_format, record.source_path])).toEqual([
+			["jsonl", join(root, "session-1.jsonl")],
+			["jsonl", join(root, "session-1.jsonl")],
+		]);
+	});
+
 	test("keeps live turns that are newer than the source of a session in progress", async () => {
 		const root = makeRoot("live-tail-in-progress");
 		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
@@ -716,7 +806,7 @@ describe("backfill OOM regression (#587)", () => {
 			{ role: "user", content: "second question" },
 		]);
 
-		expect(await writeSourceSnapshot(root, ["User: first question", "Assistant: first answer"])).toBe(true);
+		expect(await writeSourceSnapshot(root, ["User: first question", "Assistant: first answer"])).not.toBeNull();
 		expect(readSessionRecords(jsonlPath)).toEqual([
 			["user", "first question", "jsonl"],
 			["assistant", "first answer", "jsonl"],
@@ -734,7 +824,7 @@ describe("backfill OOM regression (#587)", () => {
 			],
 			true,
 		);
-		expect(second).toBe(true);
+		expect(second).not.toBeNull();
 		expect(readSessionRecords(jsonlPath)).toEqual([
 			["user", "first question", "jsonl"],
 			["assistant", "first answer", "jsonl"],
@@ -765,7 +855,7 @@ describe("backfill OOM regression (#587)", () => {
 				true,
 			);
 
-			expect(replaced).toBe(true);
+			expect(replaced).not.toBeNull();
 			expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
 				["user", "first question", "jsonl"],
 				["assistant", "first answer", "jsonl"],
@@ -784,7 +874,7 @@ describe("backfill OOM regression (#587)", () => {
 				true,
 			);
 
-			expect(replaced).toBe(false);
+			expect(replaced).toBeNull();
 			expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
 				["user", "first question", "jsonl"],
 				["assistant", "first answer", "jsonl"],
@@ -816,7 +906,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: second\nAssistant: reply two",
 		});
 
-		expect(written).toBe(true);
+		expect(written).not.toBeNull();
 		const after = readFileSync(jsonlPath, "utf8");
 		expect(after.startsWith(intact)).toBe(true);
 		const lines = after.split("\n").filter((line) => line.trim().length > 0);
@@ -850,7 +940,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: new prompt\nAssistant: new reply",
 		});
 
-		expect(written).toBe(true);
+		expect(written).not.toBeNull();
 		expect(statSync(jsonlPath).ino).toBe(inodeBefore);
 		const after = readFileSync(jsonlPath, "utf8");
 		expect(after.startsWith(before)).toBe(true);
@@ -872,7 +962,7 @@ describe("backfill OOM regression (#587)", () => {
 			sourceFormat: "normalized",
 			transcript: "User: new prompt\nAssistant: new reply\nUser: follow-up",
 		});
-		expect(replaced).toBe(true);
+		expect(replaced).not.toBeNull();
 		const records = readFileSync(jsonlPath, "utf8")
 			.split("\n")
 			.filter((line) => line.trim().length > 0)
