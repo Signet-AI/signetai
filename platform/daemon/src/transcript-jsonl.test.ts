@@ -1113,7 +1113,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: second\nAssistant: reply two",
 		});
 
-		expect(written).not.toBeNull();
+		expect(written).toHaveLength(2);
 		const after = readFileSync(jsonlPath, "utf8");
 		expect(after.startsWith(intact)).toBe(true);
 		const lines = after.split("\n").filter((line) => line.trim().length > 0);
@@ -1147,7 +1147,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: new prompt\nAssistant: new reply",
 		});
 
-		expect(written).not.toBeNull();
+		expect(written).toHaveLength(2);
 		expect(statSync(jsonlPath).ino).toBe(inodeBefore);
 		const after = readFileSync(jsonlPath, "utf8");
 		expect(after.startsWith(before)).toBe(true);
@@ -1169,7 +1169,7 @@ describe("backfill OOM regression (#587)", () => {
 			sourceFormat: "normalized",
 			transcript: "User: new prompt\nAssistant: new reply\nUser: follow-up",
 		});
-		expect(replaced).not.toBeNull();
+		expect(replaced).toHaveLength(3);
 		const records = readFileSync(jsonlPath, "utf8")
 			.split("\n")
 			.filter((line) => line.trim().length > 0)
