@@ -620,6 +620,71 @@ describe("backfill OOM regression (#587)", () => {
 		expect(records.every((record) => record.source_format === "jsonl")).toBe(true);
 	});
 
+	test("a source snapshot fills a live-only session when hook output follows a user turn", async () => {
+		const root = makeRoot("fill-live-only-hook-output");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [
+				{ role: "user", content: "first question" },
+				{ role: "user", content: "second question" },
+			],
+		});
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath: join(root, "session-1.jsonl"),
+			preserveExistingSession: true,
+			transcript: [
+				"User: first question",
+				"System: UserPromptSubmit hook additional context: project rules",
+				"Assistant: first answer",
+				"User: second question",
+				"Assistant: second answer",
+			].join("\n"),
+		});
+
+		expect(replaced).toBe(true);
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content).toContain('"content":"first answer"');
+		expect(content).not.toContain('"source_format":"live"');
+	});
+
+	test("keeps a completed live-only session when a live turn only shares a word prefix with the source", async () => {
+		const root = makeRoot("keep-live-only-word-prefix");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "ok" }],
+		});
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath: join(root, "session-1.jsonl"),
+			preserveExistingSession: true,
+			transcript: "User: okay then\nAssistant: done",
+		});
+
+		expect(replaced).toBe(false);
+		expect(readFileSync(jsonlPath, "utf8")).toContain('"content":"ok"');
+	});
+
 	test("keeps a completed live-only session when a live turn is missing from the source snapshot", async () => {
 		const root = makeRoot("keep-live-only-extra-turn");
 		const jsonlPath = canonicalTranscriptPath(root, "claude-code");

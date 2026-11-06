@@ -135,6 +135,15 @@ function collapseTurnWhitespace(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
+function turnContainsLiveTurn(
+	candidate: Pick<CanonicalTranscriptRecord, "role" | "content"> | undefined,
+	role: CanonicalTranscriptRecord["role"],
+	content: string,
+): boolean {
+	if (!candidate || candidate.role !== role) return false;
+	return candidate.content === content || candidate.content.startsWith(`${content} `);
+}
+
 function turnsAppearInOrder(
 	existing: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
 	incoming: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
@@ -143,10 +152,7 @@ function turnsAppearInOrder(
 	let cursor = 0;
 	for (const turn of existing) {
 		const content = collapseTurnWhitespace(turn.content);
-		while (
-			cursor < collapsed.length &&
-			!(collapsed[cursor]?.role === turn.role && collapsed[cursor]?.content === content)
-		) {
+		while (cursor < collapsed.length && !turnContainsLiveTurn(collapsed[cursor], turn.role, content)) {
 			cursor++;
 		}
 		if (cursor === collapsed.length) return false;
