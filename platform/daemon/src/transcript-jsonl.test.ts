@@ -833,6 +833,29 @@ describe("backfill OOM regression (#587)", () => {
 		]);
 	});
 
+	test("indexes many live turns of different lengths against long source turns in linear time", async () => {
+		const root = makeRoot("many-live-lengths");
+		const live = Array.from({ length: 2000 }, (_, index) => ({
+			role: "user" as const,
+			content: "z ".repeat(index + 1).trim(),
+		}));
+		await appendLiveTurns(root, live);
+		const longTurn = "y ".repeat(2000).trim();
+		const source = Array.from({ length: 1000 }, (_, index) => [
+			`User: ${longTurn}`,
+			`Assistant: answer ${index}`,
+		]).flat();
+
+		const [written, longestBlock] = await measureLongestBlock(() => writeSourceSnapshot(root, source, true));
+
+		expect(written).toHaveLength(4000);
+		const records = readSessionRecords(canonicalTranscriptPath(root, "claude-code"));
+		expect(records.slice(2000).map(([, content, format]) => [content.length, format])).toEqual(
+			live.map((turn) => [turn.content.length, "live"]),
+		);
+		expect(longestBlock).toBeLessThan(400);
+	});
+
 	test("merges many live turns that the source does not contain without blocking the event loop", async () => {
 		const root = makeRoot("many-unmatched-live");
 		const live = Array.from({ length: 5000 }, (_, index) => ({ role: "user" as const, content: `draft ${index}` }));

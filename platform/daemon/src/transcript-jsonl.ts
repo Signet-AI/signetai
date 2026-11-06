@@ -152,38 +152,46 @@ type MergedSessionTurn =
 	| { readonly kind: "source"; readonly turn: CanonicalTranscriptRecord }
 	| { readonly kind: "live"; readonly turn: ExistingSessionTurn };
 
-function liveMatchKey(role: TranscriptRole, content: string): string {
-	return `${role}\n${content}`;
+interface LiveWordNode {
+	readonly next: Map<string, LiveWordNode>;
+	matches: number[] | null;
+}
+
+function childOf<K>(nodes: Map<K, LiveWordNode>, key: K): LiveWordNode {
+	let node = nodes.get(key);
+	if (!node) {
+		node = { next: new Map(), matches: null };
+		nodes.set(key, node);
+	}
+	return node;
 }
 
 function indexLiveMatches(
 	existing: readonly ExistingSessionTurn[],
 	incoming: readonly CanonicalTranscriptRecord[],
 	collapsedAt: (index: number) => string,
-): Map<string, number[]> {
-	const wanted = new Set<string>();
-	const lengths = new Set<number>();
-	for (const turn of existing) {
-		if (!turn.live) continue;
-		const content = collapseTurnWhitespace(turn.content);
-		wanted.add(liveMatchKey(turn.role, content));
-		lengths.add(content.length);
-	}
-	const matches = new Map<string, number[]>();
+): readonly (readonly number[])[] {
+	const roots = new Map<TranscriptRole, LiveWordNode>();
+	const ends = existing.map((turn) => {
+		if (!turn.live) return null;
+		let node = childOf(roots, turn.role);
+		for (const word of collapseTurnWhitespace(turn.content).split(" ")) node = childOf(node.next, word);
+		node.matches ??= [];
+		return node;
+	});
 	for (const [index, turn] of incoming.entries()) {
+		let node = roots.get(turn.role);
+		if (!node) continue;
 		const source = collapsedAt(index);
-		for (let boundary = source.indexOf(" "); ; boundary = source.indexOf(" ", boundary + 1)) {
-			const length = boundary < 0 ? source.length : boundary;
-			const key = lengths.has(length) ? liveMatchKey(turn.role, source.slice(0, length)) : null;
-			if (key !== null && wanted.has(key)) {
-				const indexes = matches.get(key);
-				if (indexes) indexes.push(index);
-				else matches.set(key, [index]);
-			}
-			if (boundary < 0) break;
+		for (let start = 0; node && start <= source.length; ) {
+			const space = source.indexOf(" ", start);
+			const end = space < 0 ? source.length : space;
+			node = node.next.get(source.slice(start, end));
+			node?.matches?.push(index);
+			start = end + 1;
 		}
 	}
-	return matches;
+	return ends.map((node) => node?.matches ?? []);
 }
 
 function firstAtOrAfter(sorted: readonly number[], value: number): number {
@@ -218,7 +226,7 @@ function mergeSourceWithLiveTurns(
 		pending = [];
 	};
 	let end: number | undefined;
-	let liveMatches: Map<string, number[]> | undefined;
+	let liveMatches: readonly (readonly number[])[] | undefined;
 	const searchEndAfter = (position: number): number => {
 		let next = position + 1;
 		while (existing[next]?.live) next++;
@@ -236,23 +244,22 @@ function mergeSourceWithLiveTurns(
 			takeSourceUntil(cursor + 1);
 			continue;
 		}
-		const content = collapseTurnWhitespace(turn.content);
 		end ??= searchEndAfter(position);
-		let match = -1;
+		let match: number | undefined;
 		if (liveMatches) {
-			const candidates = liveMatches.get(liveMatchKey(turn.role, content)) ?? [];
-			const candidate = candidates[firstAtOrAfter(candidates, cursor)];
-			if (candidate !== undefined && candidate < end) match = candidate;
+			const candidates = liveMatches[position] ?? [];
+			match = candidates[firstAtOrAfter(candidates, cursor)];
 		} else {
+			const content = collapseTurnWhitespace(turn.content);
 			const extended = `${content} `;
-			for (let index = cursor; index < end && match < 0; index++) {
+			for (let index = cursor; index < end && match === undefined; index++) {
 				if (incoming[index]?.role !== turn.role) continue;
 				const source = collapsedAt(index);
 				if (source === content || source.startsWith(extended)) match = index;
 			}
-			if (match < 0) liveMatches = indexLiveMatches(existing, incoming, collapsedAt);
+			if (match === undefined) liveMatches = indexLiveMatches(existing, incoming, collapsedAt);
 		}
-		if (match < 0) {
+		if (match === undefined || match >= end) {
 			pending.push(turn);
 			continue;
 		}
@@ -815,7 +822,7 @@ export function writeCanonicalTranscriptSnapshot(
 			await rm(tmpPath, { force: true });
 			await appendIndexedRecords(path, entries, next);
 			await syncPath(path);
-			await syncPath(dirname(path));
+			if (entries.size === 0) await syncPath(dirname(path));
 			return next;
 		}
 
@@ -829,7 +836,13 @@ export function writeCanonicalTranscriptSnapshot(
 		};
 		try {
 			const reconciled = reconcileSessionTurns(await partitionSessionLines(path, input, emit), next, input);
-			if (!reconciled.write) return reconciled.records;
+			if (!reconciled.write) {
+				if (reconciled.records) {
+					await syncPath(path);
+					await syncPath(dirname(path));
+				}
+				return reconciled.records;
+			}
 			const { records } = reconciled;
 			for (const record of records) await emit(JSON.stringify(record));
 			await handle.writeFile(pending);
