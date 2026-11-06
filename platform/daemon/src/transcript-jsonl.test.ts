@@ -65,6 +65,22 @@ function writeSourceSnapshot(
 	});
 }
 
+async function measureLongestBlock<T>(work: () => Promise<T>): Promise<[T, number]> {
+	let longestBlock = 0;
+	let last = performance.now();
+	const timer = setInterval(() => {
+		const now = performance.now();
+		longestBlock = Math.max(longestBlock, now - last);
+		last = now;
+	}, 1);
+	try {
+		const result = await work();
+		return [result, Math.max(longestBlock, performance.now() - last)];
+	} finally {
+		clearInterval(timer);
+	}
+}
+
 function advancePastBackfillRetry(): void {
 	setSystemTime(new Date(Date.now() + 61 * 60_000));
 }
@@ -777,36 +793,29 @@ describe("backfill OOM regression (#587)", () => {
 		]).flat();
 		lines[0] = "User: question 0";
 
-		let longestBlock = 0;
-		let last = performance.now();
-		const timer = setInterval(() => {
-			const now = performance.now();
-			longestBlock = Math.max(longestBlock, now - last);
-			last = now;
-		}, 1);
-		const written = await writeSourceSnapshot(root, lines, true);
-		clearInterval(timer);
+		const [written, longestBlock] = await measureLongestBlock(() => writeSourceSnapshot(root, lines, true));
 
 		expect(written).toHaveLength(3201);
 		expect(written?.at(-1)).toMatchObject({ content: "cancelled prompt", source_format: "live" });
 		expect(longestBlock).toBeLessThan(500);
 	});
 
-	test("merges many live turns that the source does not contain", async () => {
+	test("merges many live turns that the source does not contain without blocking the event loop", async () => {
 		const root = makeRoot("many-unmatched-live");
-		const live = Array.from({ length: 1200 }, (_, index) => ({ role: "user" as const, content: `draft ${index}` }));
+		const live = Array.from({ length: 5000 }, (_, index) => ({ role: "user" as const, content: `draft ${index}` }));
 		await appendLiveTurns(root, live);
-		const source = Array.from({ length: 1200 }, (_, index) => [
+		const source = Array.from({ length: 10_000 }, (_, index) => [
 			`User: question ${index}`,
 			`Assistant: answer ${index}`,
 		]).flat();
 
-		const written = await writeSourceSnapshot(root, source, true);
+		const [written, longestBlock] = await measureLongestBlock(() => writeSourceSnapshot(root, source, true));
 
-		expect(written).toHaveLength(3600);
+		expect(written).toHaveLength(25_000);
 		const records = readSessionRecords(canonicalTranscriptPath(root, "claude-code"));
-		expect(records.slice(0, 2400).every(([, , format]) => format === "jsonl")).toBe(true);
-		expect(records.slice(2400)).toEqual(live.map((turn) => ["user", turn.content, "live"]));
+		expect(records.slice(0, 20_000).every(([, , format]) => format === "jsonl")).toBe(true);
+		expect(records.slice(20_000)).toEqual(live.map((turn) => ["user", turn.content, "live"]));
+		expect(longestBlock).toBeLessThan(200);
 	});
 
 	test("serializes concurrent snapshot writes to the same transcript file", async () => {
