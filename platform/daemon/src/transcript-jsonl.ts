@@ -811,6 +811,7 @@ export function writeCanonicalTranscriptSnapshot(
 			await rm(tmpPath, { force: true });
 			await appendIndexedRecords(path, entries, next);
 			await syncPath(path);
+			if (entries.size === 0) await syncPath(dirname(path));
 			return next;
 		}
 
@@ -868,7 +869,13 @@ export function writeCanonicalTranscriptSnapshot(
 						? entry.turn === existingSessionTurns[index]
 						: existingSessionTurns[index]?.live === false,
 				);
-			if (refused || unchangedSession || mergeChangedNothing) return refused ? null : records;
+			if (refused || unchangedSession || mergeChangedNothing) {
+				if (!refused) {
+					await syncPath(path);
+					await syncPath(dirname(path));
+				}
+				return refused ? null : records;
+			}
 			for (const record of records) await emit(JSON.stringify(record));
 			await handle.writeFile(pending);
 			await handle.sync();
