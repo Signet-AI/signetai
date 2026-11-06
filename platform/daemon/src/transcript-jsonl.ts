@@ -728,25 +728,15 @@ export function writeCanonicalTranscriptSnapshot(
 				lines.close();
 			}
 			const incomingExtendsExisting = existingSessionTurns.every((turn, index) => sameTurn(turn, next[index]));
-			if (
+			const unchangedSession =
 				incomingExtendsExisting &&
 				existingSessionTurns.length === next.length &&
-				!(input.sourcePath && existingSessionTurns.some((turn) => turn.live))
-			) {
-				closeSync(fd);
-				fd = null;
-				rmSync(tmpPath, { force: true });
-				return next;
-			}
+				!(input.sourcePath && existingSessionTurns.some((turn) => turn.live));
 			const merged =
-				incomingExtendsExisting || !input.sourcePath ? null : mergeSourceWithLiveTurns(existingSessionTurns, next);
+				unchangedSession || incomingExtendsExisting || !input.sourcePath
+					? null
+					: mergeSourceWithLiveTurns(existingSessionTurns, next);
 			const refused = !incomingExtendsExisting && (input.sourcePath ? merged === null : input.preserveExistingSession);
-			if (refused) {
-				closeSync(fd);
-				fd = null;
-				rmSync(tmpPath, { force: true });
-				return null;
-			}
 			const records = merged
 				? merged.flatMap((entry, index) => {
 						const seq = index + 1;
@@ -772,11 +762,11 @@ export function writeCanonicalTranscriptSnapshot(
 						? entry.turn === existingSessionTurns[index]
 						: existingSessionTurns[index]?.live === false,
 				);
-			if (mergeChangedNothing) {
+			if (refused || unchangedSession || mergeChangedNothing) {
 				closeSync(fd);
 				fd = null;
 				rmSync(tmpPath, { force: true });
-				return records;
+				return refused ? null : records;
 			}
 			for (const r of records) {
 				writeSync(fd, `${JSON.stringify(r)}\n`);
