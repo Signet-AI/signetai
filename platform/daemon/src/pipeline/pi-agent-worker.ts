@@ -9,7 +9,7 @@ import {
 	createCodemodeExtension,
 } from "@earendil-works/pi-coding-agent";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { PI_AGENT_MAX_MESSAGE_BYTES } from "./pi-agent-protocol";
+import { PI_AGENT_MAX_MESSAGE_BYTES, PI_AGENT_PLANNING_TURN_DETAIL } from "./pi-agent-protocol";
 import type { PiAgentWorkerInput, PiAgentWorkerRequest, PiAgentWorkerResponse } from "./pi-agent-protocol";
 
 const port = parentPort;
@@ -63,6 +63,22 @@ const dispatchQueued = (): void => {
 		next.dispatch(id);
 	}
 };
+let planningTurn = false;
+let planningRequested = false;
+const endPlanningTurn = (): void => {
+	planningRequested = false;
+	if (!planningTurn) return;
+	planningTurn = false;
+	if (input.thinkingLevel) session.setThinkingLevel(input.thinkingLevel);
+};
+const startsPlanningTurn = (result: unknown): boolean => {
+	const details = (result as { readonly details?: unknown } | undefined)?.details;
+	return (
+		typeof details === "object" &&
+		details !== null &&
+		(details as Record<string, unknown>)[PI_AGENT_PLANNING_TURN_DETAIL] === "planning"
+	);
+};
 const customTools: ToolDefinition[] = input.tools.map((tool) => ({
 	...tool,
 	execute(toolCallId, params) {
@@ -91,7 +107,17 @@ if (codemode) {
 		"codemode",
 	]);
 }
-session.subscribe((event) => send({ type: "event", event }));
+session.subscribe((event) => {
+	if (event.type === "turn_end") {
+		const planNextTurn = planningRequested;
+		endPlanningTurn();
+		if (planNextTurn && input.planningThinkingLevel) {
+			planningTurn = true;
+			session.setThinkingLevel(input.planningThinkingLevel);
+		}
+	}
+	send({ type: "event", event });
+});
 let running = false;
 port.on("message", async (request: PiAgentWorkerRequest) => {
 	try {
@@ -107,15 +133,19 @@ port.on("message", async (request: PiAgentWorkerRequest) => {
 				models: [{ ...request.model }],
 			});
 			await session.setModel(request.model);
+			endPlanningTurn();
 			send({ type: "configured" });
 			return;
 		}
 		if (request.type === "tool-result") {
 			const call = pending.get(request.id);
+			if (!call) return;
 			pending.delete(request.id);
-			if (request.error) call?.reject(new Error(request.error));
-			else if (request.result) call?.resolve(request.result);
-			else call?.reject(new Error("Missing tool result"));
+			if (request.error) call.reject(new Error(request.error));
+			else if (request.result) {
+				if (input.planningThinkingLevel && startsPlanningTurn(request.result)) planningRequested = true;
+				call.resolve(request.result);
+			} else call.reject(new Error("Missing tool result"));
 			dispatchQueued();
 			return;
 		}
@@ -124,6 +154,7 @@ port.on("message", async (request: PiAgentWorkerRequest) => {
 			pending.clear();
 			for (const { call } of queued.splice(0)) call.reject(new Error("Pi agent aborted"));
 			await session.abort();
+			endPlanningTurn();
 			send({ type: "aborted" });
 			return;
 		}
@@ -158,6 +189,7 @@ port.on("message", async (request: PiAgentWorkerRequest) => {
 						: undefined,
 			});
 		} finally {
+			endPlanningTurn();
 			running = false;
 		}
 	} catch (error) {

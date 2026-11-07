@@ -65,9 +65,13 @@ export function localThinkingCompat(thinking: RoutingLocalThinkingConfig | undef
 	};
 }
 
+export const PLANNING_THINKING_LEVEL: ThinkingLevel = "high";
+const FILING_THINKING_LEVEL: ThinkingLevel = "medium";
+
 export function localThinkingBudgets(thinking: RoutingLocalThinkingConfig | undefined): ThinkingBudgets | undefined {
 	const budget = thinking?.budgetTokens;
-	return budget ? { minimal: budget, low: budget, medium: budget, high: budget } : undefined;
+	if (!budget) return undefined;
+	return { minimal: budget, low: budget, medium: budget, high: thinking.planningBudgetTokens ?? budget };
 }
 
 export interface PiModelProviderConfig {
@@ -106,6 +110,7 @@ export interface PiAgentSession {
 	getSystemPrompt?(): string;
 	getSessionId?(): string;
 	getModelName?(): string | undefined;
+	getContextWindow?(): number | undefined;
 	getActiveToolNames(): readonly string[];
 	getExecutionThreadId?(): number;
 	getFailureMessage(): string | undefined;
@@ -116,6 +121,7 @@ export interface PiAgentSession {
 export interface PiAgentSessionProvider {
 	readonly isPiAgentSessionProvider: true;
 	readonly agentSessionTimeoutMs: number;
+	contextWindow?(): Promise<number | undefined>;
 	createAgentSession(
 		tools: readonly PiAgentTool[],
 		options?: {
@@ -553,7 +559,8 @@ export function createPiModelProvider(
 	const name = config.name ?? label;
 	const accountingProvenance = accountingProvenanceForConfig(config, piModel);
 	const defaultTimeoutMs = config.defaultTimeoutMs ?? 60_000;
-	const reasoning = config.reasoning;
+	const planning = config.thinking?.planningBudgetTokens !== undefined && config.reasoning !== undefined;
+	const reasoning = planning ? FILING_THINKING_LEVEL : config.reasoning;
 	const thinkingBudgets = localThinkingBudgets(config.thinking);
 	const modelRuntime = ModelRuntime.create({
 		credentials: new InMemoryCredentialStore(),
@@ -744,6 +751,13 @@ export function createPiModelProvider(
 		...(accountingProvenance ? { accountingProvenance } : {}),
 		isPiAgentSessionProvider: true,
 		agentSessionTimeoutMs: defaultTimeoutMs,
+		async contextWindow() {
+			return (
+				config.contextWindow ??
+				(config.resolveContextWindow ? await config.resolveContextWindow() : undefined) ??
+				config.piModel?.contextWindow
+			);
+		},
 		async createAgentSession(
 			tools: readonly PiAgentTool[],
 			options: {
@@ -762,7 +776,8 @@ export function createPiModelProvider(
 				config.contextWindow === undefined && config.resolveContextWindow
 					? await config.resolveContextWindow()
 					: undefined;
-			return create(
+			const knownWindow = config.contextWindow ?? discoveredWindow ?? config.piModel?.contextWindow;
+			const session = await create(
 				{
 					model: {
 						...piModel,
@@ -783,10 +798,12 @@ export function createPiModelProvider(
 					...(options.retry ? { retry: options.retry } : {}),
 					...(config.thinking && reasoning !== undefined ? { thinkingLevel: reasoning } : {}),
 					...(config.thinking && reasoning !== undefined && thinkingBudgets ? { thinkingBudgets } : {}),
+					...(planning ? { planningThinkingLevel: PLANNING_THINKING_LEVEL } : {}),
 				},
 				tools,
 				options.signal,
 			);
+			return Object.assign(session, { getContextWindow: () => knownWindow });
 		},
 	};
 }
