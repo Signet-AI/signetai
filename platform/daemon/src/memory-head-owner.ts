@@ -136,7 +136,11 @@ export function withContentPassWrites<T>(db: WriteDb, passId: string | undefined
 	return result;
 }
 
-export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommitInput): Record<string, unknown> {
+type PreparedCommit =
+	| { readonly settled: Record<string, unknown> }
+	| { readonly body: string; readonly contentHash: string; readonly revision: number; readonly currentHash: string };
+
+function prepareMemoryHeadCommit(db: WriteDb, input: MemoryHeadCommitInput): PreparedCommit {
 	const agentId = input.agentId;
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
 	const head = db
@@ -149,60 +153,88 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 		| undefined;
 	if (pass?.status !== "running" || pass.mode !== "incremental-content" || pass.agent_id !== agentId)
 		return {
-			ok: false,
-			code: "PASS_NOT_AUTHORIZED",
-			error: "only a running scoped content pass may commit the memory head",
+			settled: {
+				ok: false,
+				code: "PASS_NOT_AUTHORIZED",
+				error: "only a running scoped content pass may commit the memory head",
+			},
 		};
 	const revision = head?.revision ?? 0;
 	const currentHash = head?.content_hash ?? "";
 	if (pass.head_base_revision !== revision)
 		return {
-			ok: false,
-			code: "STALE_HEAD",
-			error: "evidence or head changed outside this content pass since it started",
-			revision,
-			hash: currentHash,
+			settled: {
+				ok: false,
+				code: "STALE_HEAD",
+				error: "evidence or head changed outside this content pass since it started",
+				revision,
+				hash: currentHash,
+			},
 		};
 	const invalid = memoryHeadInputError(input);
-	if (invalid !== null) return { ok: false, ...invalid };
+	if (invalid !== null) return { settled: { ok: false, ...invalid } };
 	const body = renderMemoryHeadBody(input.entries);
 	if (input.entries.length === 0 && (head?.content ?? "") === "")
-		return { ok: true, code: "NOOP", revision, hash: currentHash, changed: false, changedIds: [] };
+		return { settled: { ok: true, code: "NOOP", revision, hash: currentHash, changed: false, changedIds: [] } };
 	if (input.entries.length === 0) {
 		const carried = committedEntries(db, agentId, head?.revision_id ?? null);
 		if (carried.entries.length > 0 || carried.unverifiable)
 			return {
-				ok: false,
-				code: "INVALID_HEAD",
-				error:
-					"committed entries still have valid or unverifiable support; resubmit or replace them instead of clearing the head",
+				settled: {
+					ok: false,
+					code: "INVALID_HEAD",
+					error:
+						"committed entries still have valid or unverifiable support; resubmit or replace them instead of clearing the head",
+				},
 			};
 	}
 	const contentHash = hash(body);
 	if (head?.is_current === 1 && currentHash === contentHash)
-		return { ok: true, code: "NOOP", revision, hash: contentHash, changed: false, changedIds: [] };
-	const result = commitEntries(db, input, body, contentHash, revision, currentHash);
-	if (result.ok) {
-		const now = new Date().toISOString();
-		const revisionId = String(result.revisionId);
-		db.prepare(
-			"UPDATE memory_md_heads SET content=?, content_hash=?, revision=?, revision_id=?, pass_id=?, updated_at=?, is_current=1, lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL WHERE agent_id=?",
-		).run(body, contentHash, revision + 1, revisionId, input.passId, now, agentId);
-		db.prepare("UPDATE dreaming_passes SET head_revision=?, head_hash=? WHERE id=? AND agent_id=?").run(
-			revision + 1,
-			contentHash,
-			input.passId,
-			agentId,
-		);
-		db.prepare(
-			"INSERT INTO memory_head_publications (agent_id, revision, revision_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
-		).run(agentId, revision + 1, revisionId, now);
+		return { settled: { ok: true, code: "NOOP", revision, hash: contentHash, changed: false, changedIds: [] } };
+	const evidence: Evidence = new Map();
+	for (const entry of input.entries) {
+		if (entry.support.length === 0)
+			return { settled: { ok: false, code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` } };
+		for (const support of entry.support) {
+			const invalid = supportError(db, agentId, entry.entryId, support, evidence);
+			if (invalid !== null) return { settled: { ok: false, ...invalid } };
+		}
 	}
+	return { body, contentHash, revision, currentHash };
+}
+
+export function validateCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommitInput): Record<string, unknown> {
+	const prepared = prepareMemoryHeadCommit(db, input);
+	return "settled" in prepared ? prepared.settled : { ok: true, code: "VALID" };
+}
+
+export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommitInput): Record<string, unknown> {
+	const prepared = prepareMemoryHeadCommit(db, input);
+	if ("settled" in prepared) return prepared.settled;
+	const agentId = input.agentId;
+	const { body, contentHash, revision } = prepared;
+	const result = commitEntries(db, input, body, contentHash, revision, prepared.currentHash);
+	const now = new Date().toISOString();
+	const revisionId = String(result.revisionId);
+	db.prepare(
+		"UPDATE memory_md_heads SET content=?, content_hash=?, revision=?, revision_id=?, pass_id=?, updated_at=?, is_current=1, lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL WHERE agent_id=?",
+	).run(body, contentHash, revision + 1, revisionId, input.passId, now, agentId);
+	db.prepare("UPDATE dreaming_passes SET head_revision=?, head_hash=? WHERE id=? AND agent_id=?").run(
+		revision + 1,
+		contentHash,
+		input.passId,
+		agentId,
+	);
+	db.prepare(
+		"INSERT INTO memory_head_publications (agent_id, revision, revision_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+	).run(agentId, revision + 1, revisionId, now);
 	return result;
 }
 
 export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHeadRequest): Record<string, unknown> {
-	if (!["read", "inspect", "commit"].includes(request.action)) throw new Error("Unsupported memory head action");
+	if (!["read", "inspect", "commit", "validate"].includes(request.action))
+		throw new Error("Unsupported memory head action");
+	if (request.action === "validate") return validateCuratedMemoryHeadInDb(db, request.input);
 	const agentId = request.action === "commit" ? request.input.agentId : request.agentId;
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
 	if (request.action === "commit") {
@@ -348,21 +380,12 @@ function supportError(
 
 function commitEntries(
 	db: WriteDb,
-	input: Extract<MemoryHeadRequest, { action: "commit" }>["input"],
+	input: MemoryHeadCommitInput,
 	body: string,
 	contentHash: string,
 	revision: number,
 	currentHash: string,
 ): Record<string, unknown> {
-	const evidence: Evidence = new Map();
-	for (const entry of input.entries) {
-		if (entry.support.length === 0)
-			return { ok: false, code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` };
-		for (const support of entry.support) {
-			const invalid = supportError(db, input.agentId, entry.entryId, support, evidence);
-			if (invalid !== null) return { ok: false, ...invalid };
-		}
-	}
 	const nextRevision = revision + 1;
 	const revisionId = randomUUID();
 	const now = new Date().toISOString();
