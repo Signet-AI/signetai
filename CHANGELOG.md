@@ -6,6 +6,11 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-11-07
+- Bug fixes: match live turns that the source extends with hook output; let a source snapshot fill a live-only transcript session.
+- Refactoring: simplify the live-only snapshot fill check.
+- Docs: add rust core map.
+
 ### 2026-11-05
 - Bug fixes: bound memory type length and document it; store the requested memory type on remember.
 - Docs: say chunk types differ when type is inferred.
@@ -33,11 +38,25 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-10-24
 - Bug fixes: keep temporal window fill when vector reads fail; decode owner hex in linear time and bound vector pages; page transcript evidence by bytes; keep paged recall reads in scope and bounded; decode and page traversal vectors; page transcript evidence reads; retry stapler validation on lost Apple connection; dedupe escaped PATH profile entries; escape shell metachars in PATH line; print PATH commands after piped install.
 
-### 2026-10-23
-- Bug fixes: skip subagent transcripts in recovery scan; forward home overrides to service daemon; send Anthropic auth headers on probe.
-- Docs: sync translations.
-
 ## Release Ledger
+
+## [0.240.2] - 2026-11-07
+
+Release summary: 2 bug fixes, 1 refactor, and 1 docs update.
+Tag range: `v0.240.1..v0.240.2`.
+
+### Bug Fixes
+
+- **daemon**: match live turns that the source extends with hook output
+- **daemon**: let a source snapshot fill a live-only transcript session
+
+### Refactoring
+
+- **daemon**: simplify the live-only snapshot fill check
+
+### Docs
+
+- **specs**: add rust core map
 
 ## [0.240.1] - 2026-11-05
 
