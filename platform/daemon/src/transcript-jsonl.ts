@@ -142,24 +142,74 @@ function sameTurn(
 	return b !== undefined && a.role === b.role && a.content === b.content;
 }
 
-function turnsAppearInOrder(
-	existing: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
-	incoming: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
-): boolean {
+type ExistingSessionTurn = Pick<CanonicalTranscriptRecord, "role" | "content"> & {
+	readonly live: boolean;
+	readonly capturedAt: string | null;
+	readonly project: string | null;
+};
+
+type MergedSessionTurn =
+	| { readonly kind: "source"; readonly turn: CanonicalTranscriptRecord }
+	| { readonly kind: "live"; readonly turn: ExistingSessionTurn };
+
+function mergeSourceWithLiveTurns(
+	existing: readonly ExistingSessionTurn[],
+	incoming: readonly CanonicalTranscriptRecord[],
+): readonly MergedSessionTurn[] | null {
+	const collapsed: string[] = [];
+	const collapsedAt = (index: number): string =>
+		(collapsed[index] ??= collapseTurnWhitespace(incoming[index]?.content ?? ""));
+	const merged: MergedSessionTurn[] = [];
+	let pending: ExistingSessionTurn[] = [];
 	let cursor = 0;
-	for (const turn of existing) {
+	const takeSourceUntil = (end: number): void => {
+		for (; cursor < end; cursor++) {
+			const turn = incoming[cursor];
+			if (turn) merged.push({ kind: "source", turn });
+		}
+	};
+	const flushPending = (): void => {
+		for (const turn of pending) merged.push({ kind: "live", turn });
+		pending = [];
+	};
+	let end: number | undefined;
+	const searchEndAfter = (position: number): number => {
+		let next = position + 1;
+		while (existing[next]?.live) next++;
+		const anchor = existing[next];
+		if (!anchor) return incoming.length;
+		let index = cursor;
+		while (index < incoming.length && !sameTurn(anchor, incoming[index])) index++;
+		return index;
+	};
+	for (const [position, turn] of existing.entries()) {
+		if (!turn.live) {
+			end = undefined;
+			if (!sameTurn(turn, incoming[cursor])) return null;
+			flushPending();
+			takeSourceUntil(cursor + 1);
+			continue;
+		}
 		const content = collapseTurnWhitespace(turn.content);
 		const extended = `${content} `;
-		let found = false;
-		while (cursor < incoming.length && !found) {
-			const candidate = incoming[cursor++];
-			if (candidate?.role !== turn.role) continue;
-			const source = collapseTurnWhitespace(candidate.content);
-			found = source === content || source.startsWith(extended);
+		end ??= searchEndAfter(position);
+		let match = -1;
+		for (let index = cursor; index < end && match < 0; index++) {
+			if (incoming[index]?.role !== turn.role) continue;
+			const source = collapsedAt(index);
+			if (source === content || source.startsWith(extended)) match = index;
 		}
-		if (!found) return false;
+		if (match < 0) {
+			pending.push(turn);
+			continue;
+		}
+		takeSourceUntil(match);
+		flushPending();
+		takeSourceUntil(match + 1);
 	}
-	return true;
+	takeSourceUntil(incoming.length);
+	flushPending();
+	return merged;
 }
 
 function sha256(text: string): string {
@@ -590,17 +640,29 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 	};
 }
 
+export function canonicalSessionText(
+	records: ReadonlyArray<Pick<CanonicalTranscriptRecord, "role" | "content">>,
+): string {
+	return records.map((record) => `${ROLE_PREFIX[record.role]}${record.content}`).join("\n");
+}
+
+const ROLE_PREFIX: Readonly<Record<TranscriptRole, string>> = {
+	user: "User: ",
+	assistant: "Assistant: ",
+	unknown: "",
+};
+
 export function writeCanonicalTranscriptSnapshot(
 	input: TranscriptIdentity & { readonly transcript: string },
-): Promise<boolean> {
+): Promise<readonly CanonicalTranscriptRecord[] | null> {
 	const turns = transcriptTextToTurns(input.transcript);
-	if (turns.length === 0) return Promise.resolve(false);
+	if (turns.length === 0) return Promise.resolve(null);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	return withTranscriptFileLock(path, async () => {
 		const next = turns
 			.map((turn, index) => makeRecord(input, turn, index + 1))
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
-		if (next.length === 0) return false;
+		if (next.length === 0) return null;
 
 		if (!existsSync(path)) {
 			mkdirSync(dirname(path), { recursive: true });
@@ -614,7 +676,7 @@ export function writeCanonicalTranscriptSnapshot(
 			}
 			fsyncDirectory(path);
 			sessionSeqIndexes.delete(path);
-			return true;
+			return next;
 		}
 
 		const tmpPath = `${path}.snapshot-tmp`;
@@ -628,14 +690,13 @@ export function writeCanonicalTranscriptSnapshot(
 			} finally {
 				closeSync(appended);
 			}
-			return true;
+			return next;
 		}
 
 		let fd: number | null = null;
 		try {
 			fd = openSync(tmpPath, "w");
-			const existingSessionTurns: Array<Pick<CanonicalTranscriptRecord, "role" | "content">> = [];
-			let existingSessionLiveOnly = true;
+			const existingSessionTurns: ExistingSessionTurn[] = [];
 			const lines = createInterface({
 				input: createReadStream(path, { encoding: "utf8" }),
 				crlfDelay: Number.POSITIVE_INFINITY,
@@ -651,10 +712,12 @@ export function writeCanonicalTranscriptSnapshot(
 							continue;
 						}
 						if (sameSession(parsed as CanonicalTranscriptRecord, input)) {
-							if (parsed.source_format !== "live") existingSessionLiveOnly = false;
 							existingSessionTurns.push({
 								role: parsed.role as CanonicalTranscriptRecord["role"],
 								content: cleanTurnContent(parsed.content),
+								live: parsed.source_format === "live",
+								capturedAt: typeof parsed.captured_at === "string" ? parsed.captured_at : null,
+								project: typeof parsed.project === "string" ? parsed.project : null,
 							});
 							continue;
 						}
@@ -667,24 +730,48 @@ export function writeCanonicalTranscriptSnapshot(
 				lines.close();
 			}
 			const incomingExtendsExisting = existingSessionTurns.every((turn, index) => sameTurn(turn, next[index]));
-			if (incomingExtendsExisting && existingSessionTurns.length === next.length) {
+			const unchangedSession =
+				incomingExtendsExisting &&
+				existingSessionTurns.length === next.length &&
+				!(input.sourcePath && existingSessionTurns.some((turn) => turn.live));
+			const merged =
+				unchangedSession || incomingExtendsExisting || !input.sourcePath
+					? null
+					: mergeSourceWithLiveTurns(existingSessionTurns, next);
+			const refused = !incomingExtendsExisting && (input.sourcePath ? merged === null : input.preserveExistingSession);
+			const records = merged
+				? merged.flatMap((entry, index) => {
+						const seq = index + 1;
+						if (entry.kind === "source" && entry.turn.seq === seq) return [entry.turn];
+						const identity =
+							entry.kind === "source"
+								? input
+								: {
+										...input,
+										sourceFormat: "live" as const,
+										sourcePath: undefined,
+										capturedAt: entry.turn.capturedAt ?? input.capturedAt,
+										project: entry.turn.project ?? input.project,
+									};
+						const record = makeRecord(identity, entry.turn, seq);
+						return record ? [record] : [];
+					})
+				: next;
+			const mergeChangedNothing =
+				merged !== null &&
+				merged.length === existingSessionTurns.length &&
+				merged.every((entry, index) =>
+					entry.kind === "live"
+						? entry.turn === existingSessionTurns[index]
+						: existingSessionTurns[index]?.live === false,
+				);
+			if (refused || unchangedSession || mergeChangedNothing) {
 				closeSync(fd);
 				fd = null;
 				rmSync(tmpPath, { force: true });
-				return true;
+				return refused ? null : records;
 			}
-			const appendOnly = input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly);
-			const refused =
-				appendOnly &&
-				!incomingExtendsExisting &&
-				!(input.sourcePath && existingSessionLiveOnly && turnsAppearInOrder(existingSessionTurns, next));
-			if (refused) {
-				closeSync(fd);
-				fd = null;
-				rmSync(tmpPath, { force: true });
-				return false;
-			}
-			for (const r of next) {
+			for (const r of records) {
 				writeSync(fd, `${JSON.stringify(r)}\n`);
 			}
 			fsyncSync(fd);
@@ -693,7 +780,7 @@ export function writeCanonicalTranscriptSnapshot(
 			renameSync(tmpPath, path);
 			fsyncDirectory(path);
 			sessionSeqIndexes.delete(path);
-			return true;
+			return records;
 		} catch (error) {
 			if (fd !== null) closeSync(fd);
 			rmSync(tmpPath, { force: true });
