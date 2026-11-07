@@ -152,6 +152,18 @@ export function startEmbeddingTracker(
 	let lastCycleAt: string | null = null;
 	let lastQueueDepth = 0;
 	const failures = new Map<string, FailureState>();
+	let profileMismatch: FailureState | null = null;
+
+	function backOffProfileMismatch(now: number): void {
+		const count = (profileMismatch?.count ?? 0) + 1;
+		const wait = computeEmbeddingRetryBackoffMs(count, trackerCfg.pollMs);
+		profileMismatch = { count, retryAt: now + wait };
+		logger.warn(
+			"embedding-tracker",
+			"Embedding profile does not match the active index profile; pausing embedding refresh",
+			{ model: embeddingCfg.model, attempt: count, retryAfterMs: wait },
+		);
+	}
 
 	async function tick(): Promise<boolean> {
 		if (!running) return false;
@@ -162,8 +174,13 @@ export function startEmbeddingTracker(
 
 		try {
 			const now = Date.now();
-			const staleRows: StaleRow[] = await accessor.withReadDbAsync(
+			if (profileMismatch !== null && profileMismatch.retryAt > now) {
+				skippedCycles++;
+				return false;
+			}
+			const staleRows: StaleRow[] | null = await accessor.withReadDbAsync(
 				(db: import("./db-accessor").ReadDb) => {
+					if (!isActiveEmbeddingConfig(db, embeddingCfg)) return null;
 					return listStaleEmbeddingRows(
 						db,
 						embeddingCfg.model,
@@ -173,6 +190,15 @@ export function startEmbeddingTracker(
 				},
 				{ siteToken: "db:embedding-tracker.stale-rows.read" },
 			);
+			if (staleRows === null) {
+				backOffProfileMismatch(now);
+				skippedCycles++;
+				return false;
+			}
+			if (profileMismatch !== null) {
+				logger.info("embedding-tracker", "Embedding profile matches the active index profile; resuming");
+				profileMismatch = null;
+			}
 			const persistedFailures = await loadEmbeddingRepairFailures(
 				accessor,
 				staleRows.map((row) => ({ id: row.id, contentHash: row.contentHash })),
@@ -278,6 +304,7 @@ export function startEmbeddingTracker(
 					eligibility: applied || ((db) => isActiveEmbeddingConfig(db, embeddingCfg)),
 					...(applied || cycle.results.length === 0 ? {} : { error: "embedding profile changed before persistence" }),
 				});
+				if (!applied && cycle.results.length > 0) backOffProfileMismatch(now);
 				logger.debug("embedding-tracker", `Refreshed ${applied ? cycle.results.length : 0} embeddings`);
 				return applied && !budgeted && staleRows.length >= trackerCfg.batchSize;
 			} catch (error) {
