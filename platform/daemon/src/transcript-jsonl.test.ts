@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -13,6 +13,7 @@ import {
 	readCanonicalTranscriptSessionKeys,
 	rewriteReplacingLiveOnlySessions,
 	sessionSeqCacheKey,
+	transcriptTextToTurns,
 	writeCanonicalTranscriptSnapshot,
 } from "./transcript-jsonl";
 
@@ -50,17 +51,34 @@ function writeSourceSnapshot(
 	root: string,
 	lines: readonly string[],
 	preserveExistingSession?: boolean,
-): Promise<boolean> {
+	sessionKey = "session-1",
+): ReturnType<typeof writeCanonicalTranscriptSnapshot> {
 	return writeCanonicalTranscriptSnapshot({
 		basePath: root,
 		agentId: "default",
 		harness: "claude-code",
-		sessionKey: "session-1",
+		sessionKey,
 		sourceFormat: "jsonl",
-		sourcePath: join(root, "session-1.jsonl"),
+		sourcePath: join(root, `${sessionKey}.jsonl`),
 		preserveExistingSession,
 		transcript: lines.join("\n"),
 	});
+}
+
+async function measureLongestBlock<T>(work: () => Promise<T>): Promise<[T, number]> {
+	let longestBlock = 0;
+	let last = performance.now();
+	const timer = setInterval(() => {
+		const now = performance.now();
+		longestBlock = Math.max(longestBlock, now - last);
+		last = now;
+	}, 1);
+	try {
+		const result = await work();
+		return [result, Math.max(longestBlock, performance.now() - last)];
+	} finally {
+		clearInterval(timer);
+	}
 }
 
 function advancePastBackfillRetry(): void {
@@ -612,7 +630,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: A\nAssistant: X",
 		});
 
-		expect(replaced).toBe(false);
+		expect(replaced).toBeNull();
 		const content = readFileSync(jsonlPath, "utf8");
 		expect(content).toContain('"content":"B"');
 		expect(content).toContain('"content":"C"');
@@ -632,7 +650,7 @@ describe("backfill OOM regression (#587)", () => {
 			true,
 		);
 
-		expect(replaced).toBe(true);
+		expect(replaced).not.toBeNull();
 		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
 			["user", "first question", "jsonl"],
 			["assistant", "first answer", "jsonl"],
@@ -660,7 +678,7 @@ describe("backfill OOM regression (#587)", () => {
 			true,
 		);
 
-		expect(replaced).toBe(true);
+		expect(replaced).not.toBeNull();
 		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
 			["user", "first question\nSystem: UserPromptSubmit hook additional context: project rules", "jsonl"],
 			["assistant", "first answer", "jsonl"],
@@ -669,52 +687,407 @@ describe("backfill OOM regression (#587)", () => {
 		]);
 	});
 
-	test("keeps a completed live-only session when a live turn only shares a word prefix with the source", async () => {
-		const root = makeRoot("keep-live-only-word-prefix");
+	test("keeps a live turn that only shares a word prefix with the source as a live tail", async () => {
+		const root = makeRoot("live-tail-word-prefix");
 		await appendLiveTurns(root, [{ role: "user", content: "ok" }]);
 
 		const replaced = await writeSourceSnapshot(root, ["User: okay then", "Assistant: done"], true);
 
-		expect(replaced).toBe(false);
-		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([["user", "ok", "live"]]);
+		expect(replaced).not.toBeNull();
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+			["user", "okay then", "jsonl"],
+			["assistant", "done", "jsonl"],
+			["user", "ok", "live"],
+		]);
 	});
 
-	test("keeps a completed live-only session when a live turn is missing from the source snapshot", async () => {
-		const root = makeRoot("keep-live-only-extra-turn");
+	test("keeps a live turn that the source never had in its place between source turns", async () => {
+		const root = makeRoot("live-middle-kept");
 		await appendLiveTurns(root, [
 			{ role: "user", content: "first question" },
-			{ role: "user", content: "only captured live" },
+			{ role: "user", content: "cancelled prompt" },
+			{ role: "user", content: "second question" },
 		]);
 
-		const replaced = await writeSourceSnapshot(
+		for (const preserveExistingSession of [false, true]) {
+			const replaced = await writeSourceSnapshot(
+				root,
+				["User: first question", "Assistant: first answer", "User: second question", "Assistant: second answer"],
+				preserveExistingSession,
+			);
+			expect(replaced).not.toBeNull();
+			expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+				["user", "first question", "jsonl"],
+				["assistant", "first answer", "jsonl"],
+				["user", "cancelled prompt", "live"],
+				["user", "second question", "jsonl"],
+				["assistant", "second answer", "jsonl"],
+			]);
+		}
+	});
+
+	test("keeps a retained live turn in place when a later source turn repeats its text", async () => {
+		const root = makeRoot("live-repeated-later");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first question" },
+			{ role: "user", content: "yes" },
+			{ role: "user", content: "second question" },
+		]);
+		await writeSourceSnapshot(
 			root,
-			["User: first question", "Assistant: first answer", "User: second question"],
+			["User: first question", "Assistant: first answer", "User: second question", "Assistant: second answer"],
 			true,
 		);
 
-		expect(replaced).toBe(false);
+		const replaced = await writeSourceSnapshot(
+			root,
+			[
+				"User: first question",
+				"Assistant: first answer",
+				"User: second question",
+				"Assistant: second answer",
+				"User: yes",
+				"Assistant: third answer",
+			],
+			true,
+		);
+
+		expect(replaced).not.toBeNull();
 		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
-			["user", "first question", "live"],
-			["user", "only captured live", "live"],
+			["user", "first question", "jsonl"],
+			["assistant", "first answer", "jsonl"],
+			["user", "yes", "live"],
+			["user", "second question", "jsonl"],
+			["assistant", "second answer", "jsonl"],
+			["user", "yes", "jsonl"],
+			["assistant", "third answer", "jsonl"],
 		]);
 	});
 
-	test("keeps a completed session with non-live records when the source snapshot only fills gaps", async () => {
-		const root = makeRoot("keep-mixed-session");
-		await writeSourceSnapshot(root, ["User: first question"]);
-		await appendLiveTurns(root, [{ role: "user", content: "second question" }]);
+	test("parses a large transcript in linear time", () => {
+		const line = "z".repeat(1000);
+		const transcript = Array.from(
+			{ length: 10_000 },
+			(_, index) => `User: question ${index} ${line}\nAssistant: answer ${index}`,
+		).join("\n");
 
-		const replaced = await writeSourceSnapshot(
+		const started = performance.now();
+		const turns = transcriptTextToTurns(transcript);
+		const elapsed = performance.now() - started;
+
+		expect(turns).toHaveLength(20_000);
+		expect(turns.at(-1)).toEqual({ role: "assistant", content: "answer 9999" });
+		expect(elapsed).toBeLessThan(2_000);
+	});
+
+	test("keeps the event loop responsive while it writes a large source snapshot", async () => {
+		const root = makeRoot("large-snapshot-event-loop");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "question 0" },
+			{ role: "user", content: "cancelled prompt" },
+		]);
+		const pad = "w".repeat(4000);
+		const lines = Array.from({ length: 1600 }, (_, index) => [
+			`User: question ${index} ${pad}`,
+			`Assistant: answer ${index}`,
+		]).flat();
+		lines[0] = "User: question 0";
+
+		const [written, longestBlock] = await measureLongestBlock(() => writeSourceSnapshot(root, lines, true));
+
+		expect(written).toHaveLength(3201);
+		expect(written?.at(-1)).toMatchObject({ content: "cancelled prompt", source_format: "live" });
+		expect(longestBlock).toBeLessThan(500);
+	});
+
+	test("matches live turns after an unmatched one by whole words only", async () => {
+		const root = makeRoot("indexed-live-matches");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "cancelled draft" },
+			{ role: "user", content: "question  one" },
+			{ role: "user", content: "question two" },
+		]);
+
+		const written = await writeSourceSnapshot(
 			root,
-			["User: first question", "Assistant: first answer", "User: second question"],
+			[
+				"User: question one",
+				"Assistant: answer one",
+				"User: question twofold",
+				"Assistant: answer twofold",
+				"User: question two extra context",
+				"Assistant: answer two",
+			],
 			true,
 		);
 
-		expect(replaced).toBe(false);
+		expect(written).toHaveLength(7);
 		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+			["user", "cancelled draft", "live"],
+			["user", "question one", "jsonl"],
+			["assistant", "answer one", "jsonl"],
+			["user", "question twofold", "jsonl"],
+			["assistant", "answer twofold", "jsonl"],
+			["user", "question two extra context", "jsonl"],
+			["assistant", "answer two", "jsonl"],
+		]);
+	});
+
+	test("indexes many live turns of different lengths against long source turns in linear time", async () => {
+		const root = makeRoot("many-live-lengths");
+		const live = Array.from({ length: 2000 }, (_, index) => ({
+			role: "user" as const,
+			content: "z ".repeat(index + 1).trim(),
+		}));
+		await appendLiveTurns(root, live);
+		const longTurn = "y ".repeat(2000).trim();
+		const source = Array.from({ length: 1000 }, (_, index) => [
+			`User: ${longTurn}`,
+			`Assistant: answer ${index}`,
+		]).flat();
+
+		const [written, longestBlock] = await measureLongestBlock(() => writeSourceSnapshot(root, source, true));
+
+		expect(written).toHaveLength(4000);
+		const records = readSessionRecords(canonicalTranscriptPath(root, "claude-code"));
+		expect(records.slice(2000).map(([, content, format]) => [content.length, format])).toEqual(
+			live.map((turn) => [turn.content.length, "live"]),
+		);
+		expect(longestBlock).toBeLessThan(400);
+	});
+
+	test("merges many live turns that the source does not contain without blocking the event loop", async () => {
+		const root = makeRoot("many-unmatched-live");
+		const live = Array.from({ length: 5000 }, (_, index) => ({ role: "user" as const, content: `draft ${index}` }));
+		await appendLiveTurns(root, live);
+		const source = Array.from({ length: 10_000 }, (_, index) => [
+			`User: question ${index}`,
+			`Assistant: answer ${index}`,
+		]).flat();
+
+		const [written, longestBlock] = await measureLongestBlock(() => writeSourceSnapshot(root, source, true));
+
+		expect(written).toHaveLength(25_000);
+		const records = readSessionRecords(canonicalTranscriptPath(root, "claude-code"));
+		expect(records.slice(0, 20_000).every(([, , format]) => format === "jsonl")).toBe(true);
+		expect(records.slice(20_000)).toEqual(live.map((turn) => ["user", turn.content, "live"]));
+		expect(longestBlock).toBeLessThan(200);
+	});
+
+	test("serializes concurrent snapshot writes to the same transcript file", async () => {
+		const root = makeRoot("concurrent-snapshots");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await writeSourceSnapshot(root, ["User: seed"]);
+		const writes = Array.from({ length: 6 }, (_, index) =>
+			writeSourceSnapshot(
+				root,
+				[`User: question ${index}`, `Assistant: answer ${index}`],
+				undefined,
+				`session-${index + 2}`,
+			),
+		);
+		writes.push(writeSourceSnapshot(root, ["User: seed", "Assistant: seed answer"], true));
+
+		const results = await Promise.all(writes);
+
+		expect(results.every((result) => result !== null)).toBe(true);
+		const records = readFileSync(jsonlPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { session_key: string; content: string });
+		expect(records).toHaveLength(14);
+		expect(records.filter((record) => record.session_key === "session-1").map((record) => record.content)).toEqual([
+			"seed",
+			"seed answer",
+		]);
+		expect(existsSync(`${jsonlPath}.snapshot-tmp`)).toBe(false);
+	});
+
+	test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"leaves the transcript file unchanged and removes the temporary file when a rewrite fails",
+		async () => {
+			const root = makeRoot("rewrite-failure");
+			const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+			await writeSourceSnapshot(root, ["User: first question"]);
+			await appendLiveTurns(root, [{ role: "user", content: "second question" }]);
+			const before = readFileSync(jsonlPath, "utf8");
+			chmodSync(jsonlPath, 0o000);
+			try {
+				await expect(
+					writeSourceSnapshot(root, ["User: first question", "Assistant: first answer", "User: second question"], true),
+				).rejects.toThrow();
+			} finally {
+				chmodSync(jsonlPath, 0o644);
+			}
+
+			expect(readFileSync(jsonlPath, "utf8")).toBe(before);
+			expect(existsSync(`${jsonlPath}.snapshot-tmp`)).toBe(false);
+		},
+	);
+
+	test("keeps the project of a live turn that the source does not contain", async () => {
+		const root = makeRoot("live-kept-project");
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			project: "/work/project-a",
+			sourceFormat: "live",
+			turns: [
+				{ role: "user", content: "first question" },
+				{ role: "user", content: "cancelled prompt" },
+			],
+		});
+
+		await writeSourceSnapshot(root, ["User: first question", "Assistant: first answer"], true);
+
+		const records = readFileSync(canonicalTranscriptPath(root, "claude-code"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { content: string; source_format: string; project: string | null });
+		expect(records.map((record) => [record.content, record.source_format, record.project])).toEqual([
+			["first question", "jsonl", null],
+			["first answer", "jsonl", null],
+			["cancelled prompt", "live", "/work/project-a"],
+		]);
+	});
+
+	test("leaves the file untouched when a repeated source capture changes nothing", async () => {
+		const root = makeRoot("live-kept-unchanged");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first question" },
+			{ role: "user", content: "cancelled prompt" },
+		]);
+		const capture = (capturedAt: string) =>
+			writeCanonicalTranscriptSnapshot({
+				basePath: root,
+				agentId: "default",
+				harness: "claude-code",
+				sessionKey: "session-1",
+				sourceFormat: "jsonl",
+				sourcePath: join(root, "session-1.jsonl"),
+				preserveExistingSession: true,
+				capturedAt,
+				transcript: "User: first question\nAssistant: first answer",
+			});
+		expect(await capture("2026-06-20T10:00:00.000Z")).not.toBeNull();
+		const before = readFileSync(jsonlPath, "utf8");
+
+		expect(await capture("2026-06-20T11:00:00.000Z")).not.toBeNull();
+
+		expect(readFileSync(jsonlPath, "utf8")).toBe(before);
+		expect(readSessionRecords(jsonlPath)).toEqual([
 			["user", "first question", "jsonl"],
+			["assistant", "first answer", "jsonl"],
+			["user", "cancelled prompt", "live"],
+		]);
+	});
+
+	test("a source snapshot equal to the live records gives them source provenance", async () => {
+		const root = makeRoot("live-exact-match");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first question" },
+			{ role: "assistant", content: "first answer" },
+		]);
+
+		const replaced = await writeSourceSnapshot(root, ["User: first question", "Assistant: first answer"], true);
+
+		expect(replaced).not.toBeNull();
+		const records = readFileSync(canonicalTranscriptPath(root, "claude-code"), "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { source_format: string; source_path?: string });
+		expect(records.map((record) => [record.source_format, record.source_path])).toEqual([
+			["jsonl", join(root, "session-1.jsonl")],
+			["jsonl", join(root, "session-1.jsonl")],
+		]);
+	});
+
+	test("keeps live turns that are newer than the source of a session in progress", async () => {
+		const root = makeRoot("live-tail-in-progress");
+		const jsonlPath = canonicalTranscriptPath(root, "claude-code");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first question" },
+			{ role: "user", content: "second question" },
+		]);
+
+		expect(await writeSourceSnapshot(root, ["User: first question", "Assistant: first answer"])).not.toBeNull();
+		expect(readSessionRecords(jsonlPath)).toEqual([
+			["user", "first question", "jsonl"],
+			["assistant", "first answer", "jsonl"],
 			["user", "second question", "live"],
 		]);
+
+		const second = await writeSourceSnapshot(
+			root,
+			[
+				"User: first question",
+				"Assistant: first answer",
+				"User: second question",
+				"System: UserPromptSubmit hook additional context: project rules",
+				"Assistant: second answer",
+			],
+			true,
+		);
+		expect(second).not.toBeNull();
+		expect(readSessionRecords(jsonlPath)).toEqual([
+			["user", "first question", "jsonl"],
+			["assistant", "first answer", "jsonl"],
+			["user", "second question\nSystem: UserPromptSubmit hook additional context: project rules", "jsonl"],
+			["assistant", "second answer", "jsonl"],
+		]);
+	});
+
+	describe("session with source records and a live tail", () => {
+		async function seedMixedSession(root: string): Promise<void> {
+			await writeSourceSnapshot(root, ["User: first question", "Assistant: first answer"]);
+			await appendLiveTurns(root, [{ role: "user", content: "second question" }]);
+		}
+
+		test("a source snapshot absorbs the live tail", async () => {
+			const root = makeRoot("mixed-live-tail");
+			await seedMixedSession(root);
+
+			const replaced = await writeSourceSnapshot(
+				root,
+				[
+					"User: first question",
+					"Assistant: first answer",
+					"User: second question",
+					"System: UserPromptSubmit hook additional context: project rules",
+					"Assistant: second answer",
+				],
+				true,
+			);
+
+			expect(replaced).not.toBeNull();
+			expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+				["user", "first question", "jsonl"],
+				["assistant", "first answer", "jsonl"],
+				["user", "second question\nSystem: UserPromptSubmit hook additional context: project rules", "jsonl"],
+				["assistant", "second answer", "jsonl"],
+			]);
+		});
+
+		test("refuses a source snapshot that does not start with the session's source records", async () => {
+			const root = makeRoot("mixed-divergent-prefix");
+			await seedMixedSession(root);
+
+			const replaced = await writeSourceSnapshot(
+				root,
+				["User: another question", "Assistant: another answer", "User: second question"],
+				true,
+			);
+
+			expect(replaced).toBeNull();
+			expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+				["user", "first question", "jsonl"],
+				["assistant", "first answer", "jsonl"],
+				["user", "second question", "live"],
+			]);
+		});
 	});
 
 	test("an append after a crash-torn record drops the torn tail instead of corrupting the new records", async () => {
@@ -740,7 +1113,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: second\nAssistant: reply two",
 		});
 
-		expect(written).toBe(true);
+		expect(written).toHaveLength(2);
 		const after = readFileSync(jsonlPath, "utf8");
 		expect(after.startsWith(intact)).toBe(true);
 		const lines = after.split("\n").filter((line) => line.trim().length > 0);
@@ -774,7 +1147,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: new prompt\nAssistant: new reply",
 		});
 
-		expect(written).toBe(true);
+		expect(written).toHaveLength(2);
 		expect(statSync(jsonlPath).ino).toBe(inodeBefore);
 		const after = readFileSync(jsonlPath, "utf8");
 		expect(after.startsWith(before)).toBe(true);
@@ -796,7 +1169,7 @@ describe("backfill OOM regression (#587)", () => {
 			sourceFormat: "normalized",
 			transcript: "User: new prompt\nAssistant: new reply\nUser: follow-up",
 		});
-		expect(replaced).toBe(true);
+		expect(replaced).toHaveLength(3);
 		const records = readFileSync(jsonlPath, "utf8")
 			.split("\n")
 			.filter((line) => line.trim().length > 0)
