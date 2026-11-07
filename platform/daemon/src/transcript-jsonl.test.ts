@@ -24,6 +24,45 @@ function makeRoot(name: string): string {
 	return root;
 }
 
+function readSessionRecords(path: string): Array<[string, string, string]> {
+	return readFileSync(path, "utf8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as { role: string; content: string; source_format: string })
+		.map((record) => [record.role, record.content, record.source_format]);
+}
+
+function appendLiveTurns(
+	root: string,
+	turns: Parameters<typeof appendCanonicalTranscriptTurns>[0]["turns"],
+): Promise<string | null> {
+	return appendCanonicalTranscriptTurns({
+		basePath: root,
+		agentId: "default",
+		harness: "claude-code",
+		sessionKey: "session-1",
+		sourceFormat: "live",
+		turns,
+	});
+}
+
+function writeSourceSnapshot(
+	root: string,
+	lines: readonly string[],
+	preserveExistingSession?: boolean,
+): Promise<boolean> {
+	return writeCanonicalTranscriptSnapshot({
+		basePath: root,
+		agentId: "default",
+		harness: "claude-code",
+		sessionKey: "session-1",
+		sourceFormat: "jsonl",
+		sourcePath: join(root, "session-1.jsonl"),
+		preserveExistingSession,
+		transcript: lines.join("\n"),
+	});
+}
+
 function advancePastBackfillRetry(): void {
 	setSystemTime(new Date(Date.now() + 61 * 60_000));
 }
@@ -578,6 +617,104 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content).toContain('"content":"B"');
 		expect(content).toContain('"content":"C"');
 		expect(content).not.toContain('"content":"X"');
+	});
+
+	test("a source snapshot fills the gaps of a completed live-only session", async () => {
+		const root = makeRoot("fill-live-only");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first  question" },
+			{ role: "user", content: "second question" },
+		]);
+
+		const replaced = await writeSourceSnapshot(
+			root,
+			["User: first question", "Assistant: first answer", "User: second question", "Assistant: second answer"],
+			true,
+		);
+
+		expect(replaced).toBe(true);
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+			["user", "first question", "jsonl"],
+			["assistant", "first answer", "jsonl"],
+			["user", "second question", "jsonl"],
+			["assistant", "second answer", "jsonl"],
+		]);
+	});
+
+	test("a source snapshot fills a live-only session when hook output follows a user turn", async () => {
+		const root = makeRoot("fill-live-only-hook-output");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first question" },
+			{ role: "user", content: "second question" },
+		]);
+
+		const replaced = await writeSourceSnapshot(
+			root,
+			[
+				"User: first question",
+				"System: UserPromptSubmit hook additional context: project rules",
+				"Assistant: first answer",
+				"User: second question",
+				"Assistant: second answer",
+			],
+			true,
+		);
+
+		expect(replaced).toBe(true);
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+			["user", "first question\nSystem: UserPromptSubmit hook additional context: project rules", "jsonl"],
+			["assistant", "first answer", "jsonl"],
+			["user", "second question", "jsonl"],
+			["assistant", "second answer", "jsonl"],
+		]);
+	});
+
+	test("keeps a completed live-only session when a live turn only shares a word prefix with the source", async () => {
+		const root = makeRoot("keep-live-only-word-prefix");
+		await appendLiveTurns(root, [{ role: "user", content: "ok" }]);
+
+		const replaced = await writeSourceSnapshot(root, ["User: okay then", "Assistant: done"], true);
+
+		expect(replaced).toBe(false);
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([["user", "ok", "live"]]);
+	});
+
+	test("keeps a completed live-only session when a live turn is missing from the source snapshot", async () => {
+		const root = makeRoot("keep-live-only-extra-turn");
+		await appendLiveTurns(root, [
+			{ role: "user", content: "first question" },
+			{ role: "user", content: "only captured live" },
+		]);
+
+		const replaced = await writeSourceSnapshot(
+			root,
+			["User: first question", "Assistant: first answer", "User: second question"],
+			true,
+		);
+
+		expect(replaced).toBe(false);
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+			["user", "first question", "live"],
+			["user", "only captured live", "live"],
+		]);
+	});
+
+	test("keeps a completed session with non-live records when the source snapshot only fills gaps", async () => {
+		const root = makeRoot("keep-mixed-session");
+		await writeSourceSnapshot(root, ["User: first question"]);
+		await appendLiveTurns(root, [{ role: "user", content: "second question" }]);
+
+		const replaced = await writeSourceSnapshot(
+			root,
+			["User: first question", "Assistant: first answer", "User: second question"],
+			true,
+		);
+
+		expect(replaced).toBe(false);
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code"))).toEqual([
+			["user", "first question", "jsonl"],
+			["user", "second question", "live"],
+		]);
 	});
 
 	test("an append after a crash-torn record drops the torn tail instead of corrupting the new records", async () => {
