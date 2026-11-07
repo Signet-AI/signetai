@@ -1,9 +1,8 @@
 import { getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
-import type { PiAgentRetryPolicy, PiAgentTool } from "./pipeline/pi-agent-protocol";
+import type { PiAgentEvent, PiAgentRetryPolicy, PiAgentTool } from "./pipeline/pi-agent-protocol";
 import { randomUUID } from "node:crypto";
 import { readFile as readFileAsync, stat as statAsync } from "node:fs/promises";
 import { isAbsolute, join, normalize, resolve } from "node:path";
-import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type {
 	AcpxModelSelection,
 	LlmGenerateResult,
@@ -1085,7 +1084,7 @@ export class InferenceRouter {
 			readonly systemPrompt?: string;
 			readonly retry?: PiAgentRetryPolicy;
 			readonly signal?: AbortSignal;
-			readonly onEvent?: (event: AgentSessionEvent) => void;
+			readonly onEvent?: (event: PiAgentEvent) => void;
 			readonly onSessionInfo?: (info: {
 				readonly sessionId?: string;
 				readonly model?: string;
