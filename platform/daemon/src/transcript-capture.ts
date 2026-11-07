@@ -1,4 +1,5 @@
 import { stripInternalMemoryContext } from "@signet/core";
+import { logger } from "./logger";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
 import {
 	appendCanonicalTranscriptTurns,
@@ -32,6 +33,14 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 		sourcePath: params.transcriptPath,
 		preserveExistingSession: params.preserveExistingSession,
 		transcript: stripInternalMemoryContext(params.transcript),
+		onLegacySessionReplaced: (legacyTurns, sourceTurns) =>
+			logger.info("transcripts", "Legacy canonical transcript session replaced by its richer source", {
+				harness: params.harness,
+				sessionKey: params.sessionKey,
+				sourcePath: params.transcriptPath,
+				legacyTurns,
+				sourceTurns,
+			}),
 	});
 }
 
