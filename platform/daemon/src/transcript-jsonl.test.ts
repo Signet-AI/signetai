@@ -326,12 +326,21 @@ await appendCanonicalTranscriptTurns({
 		await appendLiveTurns(root, [reply, prompt]);
 		await appendLiveTurns(root, [reply, prompt]);
 		await appendLiveTurns(root, [reply]);
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-2",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "other session prompt" }],
+		});
 		await appendLiveTurns(root, [reply]);
 
 		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code")).map(([role]) => role)).toEqual([
 			"assistant",
 			"user",
 			"assistant",
+			"user",
 		]);
 	});
 });
