@@ -979,9 +979,16 @@ describe("hook wake", () => {
 describe("hook stop", () => {
 	type StopResult =
 		| { ok: true; data: Record<string, unknown> }
-		| { ok: false; reason: "offline" | "http"; status?: number };
+		| { ok: false; reason: "offline" | "http" | "timeout"; status?: number };
 
-	async function runStop(stdin: Record<string, unknown>, result: StopResult = { ok: true, data: { recorded: true } }) {
+	async function runStop(
+		stdin: Record<string, unknown>,
+		replies: StopResult | StopResult[] = { ok: true, data: { recorded: true } },
+		attemptMs = 0,
+	) {
+		const queue = Array.isArray(replies) ? [...replies] : [replies];
+		let clock = 1_000_000;
+		const sleeps: number[] = [];
 		const calls: Array<{ path: string; body: Record<string, unknown>; runtimePath: string | null; timeout?: number }> =
 			[];
 		const lines: string[] = [];
@@ -1005,16 +1012,22 @@ describe("hook stop", () => {
 						runtimePath: new Headers(opts?.headers).get("x-signet-runtime-path"),
 						timeout: opts?.timeout,
 					});
-					return result;
+					clock += attemptMs;
+					return (queue.length > 1 ? queue.shift() : queue[0]) as never;
 				}) as never,
 				readStaticIdentity: () => null,
+				now: () => clock,
+				sleep: async (ms: number) => {
+					sleeps.push(ms);
+					clock += ms;
+				},
 				stdin: Readable.from([Buffer.from(JSON.stringify(stdin))]),
 			});
 			await program.parseAsync(["node", "test", "hook", "stop", "-H", "claude-code"]);
 		} finally {
 			process.stderr.write = origWrite;
 		}
-		return { calls, lines, stderr };
+		return { calls, lines, stderr, sleeps };
 	}
 
 	const payload = {
@@ -1075,5 +1088,55 @@ describe("hook stop", () => {
 		expect(busy.lines).toEqual([]);
 		expect(busy.stderr.join("")).toContain("HTTP 503");
 		expect(hookExitCodes).toEqual([0, 0]);
+	});
+
+	test("retries an HTTP 503 once and records the reply on the second attempt", async () => {
+		const run = await runStop(payload, [
+			{ ok: false, reason: "http", status: 503 },
+			{ ok: true, data: { recorded: true } },
+		]);
+
+		expect(run.calls).toHaveLength(2);
+		expect(run.calls[1]?.body).toEqual(run.calls[0]?.body);
+		expect(run.sleeps).toEqual([1_000]);
+		expect(run.lines).toEqual([]);
+		expect(run.stderr).toEqual([]);
+		expect(hookExitCodes).toEqual([0]);
+	});
+
+	test("stops after three attempts when the daemon keeps answering 503", async () => {
+		const run = await runStop(payload, { ok: false, reason: "http", status: 503 });
+
+		expect(run.calls).toHaveLength(3);
+		expect(run.sleeps).toEqual([1_000, 1_000]);
+		expect(run.lines).toEqual([]);
+		expect(run.stderr.join("")).toContain("HTTP 503");
+		expect(hookExitCodes).toEqual([0]);
+	});
+
+	test("does not retry other statuses, timeouts, or an offline daemon", async () => {
+		for (const result of [
+			{ ok: false, reason: "http", status: 500 },
+			{ ok: false, reason: "timeout" },
+			{ ok: false, reason: "offline" },
+		] as StopResult[]) {
+			const run = await runStop(payload, result);
+			expect(run.calls).toHaveLength(1);
+			expect(run.sleeps).toEqual([]);
+		}
+	});
+
+	test("gives each attempt only the time left before the 10 second deadline", async () => {
+		const run = await runStop(payload, { ok: false, reason: "http", status: 503 }, 3_000);
+
+		expect(run.calls.map((call) => call.timeout)).toEqual([10_000, 6_000, 2_000]);
+		expect(run.sleeps).toEqual([1_000, 1_000]);
+	});
+
+	test("skips the retry when the sleep would leave no attempt budget", async () => {
+		const run = await runStop(payload, { ok: false, reason: "http", status: 503 }, 9_000);
+
+		expect(run.calls).toHaveLength(1);
+		expect(run.sleeps).toEqual([]);
 	});
 });

@@ -58,7 +58,7 @@ export async function runWakeLoop(
 	},
 ): Promise<WakeOutcome> {
 	const now = deps.now ?? Date.now;
-	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+	const sleep = deps.sleep ?? defaultSleep;
 	const deadline = now() + request.maxWaitSeconds * 1000;
 	for (;;) {
 		const waitMs = request.noWait ? 0 : WAKE_POLL_MS;
@@ -283,6 +283,9 @@ export async function buildPeerContext(
 const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeout();
 const PROMPT_SUBMIT_TIMEOUT_MS = resolvePromptSubmitTimeout();
 const STOP_TIMEOUT_MS = 10_000;
+const STOP_MAX_ATTEMPTS = 3;
+const STOP_RETRY_SLEEP_MS = 1_000;
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const LEGACY_RUNTIME_PATH = "legacy" as const;
 const STDIN_TIMEOUT_MS = 2000;
 
@@ -639,11 +642,20 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		.action(async (options) => {
 			const body = buildStopBody(await readJson(deps.stdin), options.harness);
 			if (!body) return;
-			await fetchHookData(deps, "stop", "/api/hooks/stop", {
-				method: "POST",
-				body: JSON.stringify(body),
-				timeout: STOP_TIMEOUT_MS,
-			});
+			const now = deps.now ?? Date.now;
+			const sleep = deps.sleep ?? defaultSleep;
+			const deadline = now() + STOP_TIMEOUT_MS;
+			const request = { method: "POST", headers: legacyHookHeaders(), body: JSON.stringify(body) };
+			for (let attempt = 1; ; attempt++) {
+				const res = await deps.fetchDaemonResult("/api/hooks/stop", { ...request, timeout: deadline - now() });
+				if (res.ok) return;
+				const busy = res.reason === "http" && res.status === 503;
+				if (!busy || attempt === STOP_MAX_ATTEMPTS || deadline - now() <= STOP_RETRY_SLEEP_MS) {
+					process.stderr.write(formatHookFailure("stop", res));
+					return;
+				}
+				await sleep(STOP_RETRY_SLEEP_MS);
+			}
 		});
 
 	hookCmd
