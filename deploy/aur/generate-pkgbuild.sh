@@ -6,7 +6,7 @@ if [ "$#" -ne 3 ]; then
   exit 1
 fi
 
-VER="$1"
+VER="${1//-/}"
 URL="$2"
 SHA="$3"
 ASSET="${URL##*/}"

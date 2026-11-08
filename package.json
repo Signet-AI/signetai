@@ -79,6 +79,7 @@
 		"audit:agent-identity": "bun scripts/audit-agent-identity.ts",
 		"typecheck": "bun run --filter '*' typecheck",
 		"version:sync": "bun scripts/version-sync.ts",
+		"release:prepare": "bun scripts/release-prepare.ts",
 		"dev:web": "cd web/marketing && bun run dev",
 		"deploy:web": "cd web/marketing && bun run deploy",
 		"changelog": "bun scripts/changelog.ts",

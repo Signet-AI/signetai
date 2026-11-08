@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -12,6 +13,58 @@ import {
 } from "./version-sync";
 
 describe("version-sync", () => {
+	test("stamps prereleases and orders origin/main with SemVer", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-version-cli-"));
+		const manifest = join(dir, "package.json");
+		const run = (...args: string[]) =>
+			spawnSync(process.execPath, [join(import.meta.dir, "version-sync.ts"), ...args], { cwd: dir, encoding: "utf8" });
+		const git = (...args: string[]) => {
+			const result = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+			expect(result.status).toBe(0);
+		};
+		try {
+			git("init");
+			writeFileSync(manifest, JSON.stringify({ name: "fixture", version: "1.0.1", private: true }));
+			git("add", "package.json");
+			git("-c", "user.name=Test", "-c", "user.email=test@example.invalid", "commit", "-m", "fixture");
+			git("update-ref", "refs/remotes/origin/main", "HEAD");
+			const stamped = run("--to", "1.0.1-next.10");
+			expect(stamped.status, stamped.stderr).toBe(0);
+			expect(JSON.parse(readFileSync(manifest, "utf8")).version).toBe("1.0.1-next.10");
+			const synced = run();
+			expect(synced.status, synced.stderr).toBe(0);
+			expect(JSON.parse(readFileSync(manifest, "utf8")).version).toBe("1.0.1");
+			expect(run("--check").status).toBe(0);
+			expect(run("--to", "1.0.2-check.20").status).toBe(0);
+			expect(run().status).toBe(0);
+			expect(JSON.parse(readFileSync(manifest, "utf8")).version).toBe("1.0.2-check.20");
+			for (const version of ["1.0", "01.0.0", "1.0.0-next.01", "1.0.0-"])
+				expect(run("--to", version).status).not.toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("realigns exact prerelease dependencies on a second stamp", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-version-restamp-"));
+		try {
+			const core = join(dir, "core.json");
+			const client = join(dir, "client.json");
+			writeFileSync(core, JSON.stringify({ name: "@signet/core", publishConfig: { access: "public" } }));
+			writeFileSync(
+				client,
+				JSON.stringify({
+					name: "@signet/client",
+					publishConfig: { access: "public" },
+					dependencies: { "@signet/core": "1.0.1-next.1" },
+				}),
+			);
+			expect(resolveWorkspaceProtocols([core, client], "1.0.1-check.2", false)).toEqual([client]);
+			expect(JSON.parse(readFileSync(client, "utf8")).dependencies["@signet/core"]).toBe("1.0.1-check.2");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("keeps web workspace manifests out of Signet release version sync", () => {
 		expect(VERSION_SYNC_PACKAGE_GLOBS).not.toContain("web/**/package.json");
 	});

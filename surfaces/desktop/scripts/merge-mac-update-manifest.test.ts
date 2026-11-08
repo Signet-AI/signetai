@@ -200,5 +200,8 @@ describe("macOS update manifest merge", () => {
 		expect(merge).toContain("name: desktop-macos-arm64");
 		expect(merge).toContain("bun surfaces/desktop/scripts/merge-mac-update-manifest.ts");
 		expect(merge).toContain("mac-update/latest-mac.yml --clobber");
+		expect(merge).toContain("if: inputs.release_tag != ''");
+		expect(merge).toContain("ref: ${{ inputs.ref || github.sha }}");
+		expect(merge).toContain("--verify mac-update/latest-mac.yml");
 	});
 });

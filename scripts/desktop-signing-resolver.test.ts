@@ -74,6 +74,8 @@ test("macOS releases default to official signing with the configured certificate
 	const workflow = await Bun.file(workflowPath).text();
 	expect(workflow).toContain("default: auto");
 	expect(workflow).toContain("startsWith(matrix.runner, 'macos-') && 'official'");
+	expect(workflow).toContain("inputs.version != '' &&");
+	expect(workflow).not.toContain("github.event_name == 'workflow_dispatch'");
 	expect(workflow).toContain("secrets.MACOS_CERTIFICATE_P12");
 	expect(workflow).toContain("secrets.MACOS_CERTIFICATE_PASSWORD");
 	expect(workflow).not.toContain("secrets.APPLE_SIGNING_IDENTITY");

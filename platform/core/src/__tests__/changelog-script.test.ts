@@ -78,6 +78,20 @@ afterEach(() => {
 });
 
 describe("scripts/changelog.ts", () => {
+	test("ignores every prerelease tag in pending ranges and rebuild", () => {
+		const dir = makePendingReleaseRepo();
+		for (const tag of ["v0.1.1-next.1", "v0.1.1-check.2", "v0.1.1-rc.3", "v0.1.1preview", "unrelated"])
+			run(["git", "tag", tag], dir);
+		run(["bun", changelogScript, "--version", "0.1.1"], dir);
+		const pending = readFileSync(join(dir, "CHANGELOG.md"), "utf8");
+		expect(pending).toContain("Tag range: `v0.1.0..v0.1.1`.");
+		expect(pending).toContain("repair release notes ordering");
+		run(["git", "tag", "v0.1.1"], dir);
+		run(["bun", changelogScript, "--rebuild"], dir);
+		const rebuilt = readFileSync(join(dir, "CHANGELOG.md"), "utf8");
+		expect(rebuilt).toContain("Tag range: `v0.1.0..v0.1.1`.");
+		for (const suffix of ["-next.", "-check.", "-rc."]) expect(rebuilt).not.toContain(suffix);
+	});
 	test("writes the changelog section for the explicit release version instead of the pre-bump package version", () => {
 		const dir = makePendingReleaseRepo();
 

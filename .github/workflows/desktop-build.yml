@@ -1,8 +1,18 @@
 name: Desktop Build
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        required: true
+      version:
+        type: string
+        required: true
+      release_tag:
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
     inputs:
       signing_mode:
@@ -14,6 +24,8 @@ on:
           - auto
           - official
           - self-signed
+
+permissions: {}
 
 jobs:
   build:
@@ -37,12 +49,18 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
     defaults:
       run:
         shell: bash
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -52,7 +70,7 @@ jobs:
         id: signing
         shell: bash
         env:
-          SIGNING_MODE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || (startsWith(matrix.runner, 'macos-') && 'official' || 'auto') }}
+          SIGNING_MODE_INPUT: ${{ inputs.version != '' && (startsWith(matrix.runner, 'macos-') && 'official' || 'auto') || inputs.signing_mode || 'auto' }}
           APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -239,6 +257,13 @@ jobs:
             write_env CSC_KEY_PASSWORD "${WINDOWS_CERTIFICATE_PASSWORD}"
           fi
 
+      - name: Stamp release version
+        shell: bash
+        run: |
+          if [ -n "$RELEASE_VERSION" ] && [ "$RELEASE_VERSION" != "$(bun -p 'require("./package.json").version')" ]; then
+            bun scripts/version-sync.ts --to "$RELEASE_VERSION"
+          fi
+
       - name: Install dependencies
         run: bun install
 
@@ -275,7 +300,7 @@ jobs:
           bun run verify:macos
 
       - name: Generate AUR metadata
-        if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.runner == 'ubuntu-22.04' && inputs.release_tag != ''
         run: |
           set -euo pipefail
           APPIMAGE="$(find surfaces/desktop/release -name '*.AppImage' | head -n 1)"
@@ -284,7 +309,7 @@ jobs:
             exit 1
           fi
           SHA="$(sha256sum "${APPIMAGE}" | awk '{print $1}')"
-          VER="${GITHUB_REF_NAME#v}"
+          VER="${RELEASE_VERSION}"
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/v${VER}/$(basename "${APPIMAGE}")"
           bash deploy/aur/generate-pkgbuild.sh "${VER}" "${URL}" "${SHA}"
 
@@ -303,7 +328,7 @@ jobs:
           if-no-files-found: error
 
       - name: Upload AUR metadata
-        if: matrix.runner == 'ubuntu-22.04' && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.runner == 'ubuntu-22.04' && inputs.release_tag != ''
         uses: actions/upload-artifact@v4
         with:
           name: aur-metadata
@@ -313,7 +338,7 @@ jobs:
           include-hidden-files: true
 
       - name: Publish release assets
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: inputs.release_tag != ''
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -337,18 +362,22 @@ jobs:
             echo "::error::No desktop release assets found"
             exit 1
           fi
-          scripts/retry-github-release.sh gh release upload "${GITHUB_REF_NAME}" "${publish_files[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
+          scripts/retry-github-release.sh gh release upload "${RELEASE_TAG}" "${publish_files[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   publish-mac-update-manifest:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -366,7 +395,7 @@ jobs:
           name: desktop-macos-arm64
           path: mac-update/arm64
 
-      - name: Merge and publish latest-mac.yml
+      - name: Merge and verify latest-mac.yml
         run: |
           set -euo pipefail
           bun surfaces/desktop/scripts/merge-mac-update-manifest.ts \
@@ -374,16 +403,28 @@ jobs:
             --arm64 mac-update/arm64/latest-mac.yml \
             --out mac-update/latest-mac.yml
           cat mac-update/latest-mac.yml
-          scripts/retry-github-release.sh gh release upload "${GITHUB_REF_NAME}" mac-update/latest-mac.yml --clobber --repo "${GITHUB_REPOSITORY}"
+          version="${RELEASE_VERSION:-$(bun -p 'require("./package.json").version')}"
+          bun surfaces/desktop/scripts/merge-mac-update-manifest.ts --verify mac-update/latest-mac.yml --version "$version"
+        env:
+          RELEASE_VERSION: ${{ inputs.version || '' }}
+
+      - name: Publish latest-mac.yml
+        if: inputs.release_tag != ''
+        run: scripts/retry-github-release.sh gh release upload "${RELEASE_TAG}" mac-update/latest-mac.yml --clobber --repo "${GITHUB_REPOSITORY}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   validate-aur:
+    permissions:
+      contents: read
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: inputs.release_tag != ''
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
 
       - name: Download AUR metadata
         uses: actions/download-artifact@v4

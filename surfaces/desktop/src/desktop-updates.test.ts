@@ -190,7 +190,7 @@ describe("desktop update packaging", () => {
 		expect(verifier).toContain('run("spctl", ["--assess", "--type", "execute"');
 	});
 
-	test("materializes API keys, provisions keychain profiles, and publishes only stable v tags", () => {
+	test("materializes API keys, provisions profiles, and publishes only an explicit release target", () => {
 		const workflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "desktop-build.yml"), "utf8");
 		const configureStart = workflow.indexOf("      - name: Configure Electron signing");
 		const installStart = workflow.indexOf("      - name: Install dependencies", configureStart);
@@ -206,7 +206,7 @@ describe("desktop update packaging", () => {
 		const publishStart = workflow.indexOf("      - name: Publish release assets");
 		const validateStart = workflow.indexOf("\n\n  validate-aur:", publishStart);
 		const publish = workflow.slice(publishStart, validateStart);
-		expect(publish).toContain("if: startsWith(github.ref, 'refs/tags/v')");
+		expect(publish).toContain("if: inputs.release_tag != ''");
 		expect(publish).not.toContain("if: startsWith(github.ref, 'refs/tags/')");
 	});
 
@@ -218,22 +218,22 @@ describe("desktop update packaging", () => {
 
 		expect(workflow).not.toContain("finalize-release:");
 		expect(workflow).not.toContain("--draft=false");
-		expect(publish).toContain("needs: [release, build-native]");
-		expect(publish).toContain("Wait for desktop release assets");
+		expect(publish).toContain("needs: [plan, build-native, desktop]");
+		expect(publish).toContain("Verify all release assets");
 		expect(publish).toContain("latest-mac.yml");
-		expect(publish).toContain("sleep 30");
+		expect(publish).not.toContain("sleep 30");
 		expect(publish).toContain("scripts/retry-github-release.sh gh release edit");
 		expect(publish).toContain("--draft=false");
-		expect(releaseWorkflow).toContain("scripts/retry-github-release.sh gh release view");
+		expect(releaseWorkflow).toContain("uses: ./.github/workflows/desktop-build.yml");
 	});
 
-	test("authenticates the cross-workflow desktop asset poll", () => {
+	test("authenticates the manifest verification after reusable desktop builds", () => {
 		const releaseWorkflow = readFileSync(join(desktopRoot, "..", "..", ".github", "workflows", "release.yml"), "utf8");
-		const waitStart = releaseWorkflow.indexOf("      - name: Wait for desktop release assets");
+		const waitStart = releaseWorkflow.indexOf("      - name: Verify macOS update manifest");
 		const finalizeStart = releaseWorkflow.indexOf("      - name: Finalize GitHub release", waitStart);
 		const wait = releaseWorkflow.slice(waitStart, finalizeStart);
 
-		expect(wait).toContain("scripts/retry-github-release.sh gh release view");
+		expect(wait).toContain("scripts/retry-github-release.sh gh release download");
 		expect(wait).toContain(`        env:\n          GITHUB_TOKEN: \${{ secrets.GITHUB_TOKEN }}`);
 	});
 
