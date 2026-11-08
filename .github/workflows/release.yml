@@ -197,12 +197,24 @@ jobs:
     if: inputs.channel != 'check'
     permissions:
       contents: write
+    outputs:
+      packages: ${{ steps.npm.outputs.packages }}
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       NEW_VERSION: ${{ needs.plan.outputs.version }}
       RELEASE_VERSION: ${{ needs.plan.outputs.version }}
       CHANNEL: ${{ inputs.channel }}
     steps:
+      - name: Refuse a published release
+        run: |
+          draft=$(gh release view "v${NEW_VERSION}" --json isDraft --jq .isDraft --repo "${GITHUB_REPOSITORY}")
+          if [ "${draft}" != "true" ]; then
+            echo "::error::v${NEW_VERSION} is already published; re-run the promote job instead"
+            exit 1
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.sha }}
@@ -349,6 +361,7 @@ jobs:
         run: bun scripts/stage-npm-publish.ts "${RUNNER_TEMP}/signet-npm-publish"
 
       - name: Publish npm packages
+        id: npm
         run: |
           set -euo pipefail
           : > "${RUNNER_TEMP}/released-npm-packages"
@@ -388,6 +401,7 @@ jobs:
           publish_npm_package "${STAGED_NPM_ROOT}/codex-plugin"
           publish_npm_package dist/signetai
           publish_npm_package integrations/openclaw/memory-adapter true
+          echo "packages=$(paste -sd ' ' "${RUNNER_TEMP}/released-npm-packages")" >> "$GITHUB_OUTPUT"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
@@ -403,11 +417,33 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  promote:
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      NEW_VERSION: ${{ needs.plan.outputs.version }}
+      CHANNEL: ${{ inputs.channel }}
+      PACKAGES: ${{ needs.publish.outputs.packages }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
       - name: Advance npm channels
         shell: bash
         run: |
           set -euo pipefail
-          while IFS= read -r package_name; do
+          test -n "$NODE_AUTH_TOKEN"
+          test -n "$PACKAGES"
+          npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
+          for package_name in $PACKAGES; do
             if [ "$CHANNEL" = stable ]; then
               scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" latest
             fi
@@ -416,13 +452,14 @@ jobs:
             if [ "$staged" = "$NEW_VERSION" ]; then
               npm dist-tag rm "${package_name}" release-staging
             fi
-          done < "${RUNNER_TEMP}/released-npm-packages"
+          done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
 
   docker:
     needs: [plan, publish]
+    if: inputs.channel == 'stable'
     permissions:
       contents: read
       packages: write

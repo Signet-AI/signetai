@@ -28,7 +28,8 @@ if (channel !== "check" && channel !== "next" && channel !== "stable") throw new
 if (!/^[a-f0-9]{40}$/.test(sha) || !/^[1-9]\d*$/.test(run) || !output || !repo)
 	throw new Error("Missing release workflow context");
 if (typeof base !== "string" || !plain.test(base)) throw new Error("Committed version must be plain x.y.z");
-if (channel === "stable" && ref !== "refs/heads/main") throw new Error("Stable releases require refs/heads/main");
+if ((channel === "stable" || channel === "next") && ref !== "refs/heads/main")
+	throw new Error(`${channel} releases require refs/heads/main`);
 
 const baseTag = channel === "check" ? undefined : remoteTag(`v${base}`);
 const parts = base.split(".");
@@ -48,43 +49,33 @@ if (channel === "stable") {
 }
 
 if (channel !== "check") {
-	const [owner, name] = repo.split("/");
-	const id = exec("gh", [
+	const lines = exec("gh", [
 		"api",
-		"graphql",
-		"-f",
-		"query=query($owner: String!, $name: String!, $tag: String!) { repository(owner: $owner, name: $name) { release(tagName: $tag) { databaseId } } }",
-		"-f",
-		`owner=${owner}`,
-		"-f",
-		`name=${name}`,
-		"-f",
-		`tag=${tag}`,
+		"--paginate",
+		`repos/${repo}/releases?per_page=100`,
 		"--jq",
-		".data.repository.release.databaseId // 0",
-	]);
-	if (!/^\d+$/.test(id)) throw new Error("Invalid GitHub release ID");
-	const release: unknown =
-		id === "0"
-			? null
-			: JSON.parse(exec("gh", ["api", `repos/${repo}/releases/${id}`, "--jq", "{tag_name, draft, target_commitish}"]));
+		`.[] | select(.tag_name == "${tag}") | {draft, target_commitish} | @json`,
+	])
+		.split("\n")
+		.filter(Boolean);
+	if (lines.length > 1) throw new Error(`Found ${lines.length} GitHub releases for ${tag}; delete the duplicates`);
+	const release: unknown = lines[0] === undefined ? null : JSON.parse(lines[0]);
 	if (
 		release !== null &&
 		(typeof release !== "object" ||
-			!("tag_name" in release) ||
-			release.tag_name !== tag ||
 			!("draft" in release) ||
 			typeof release.draft !== "boolean" ||
 			!("target_commitish" in release) ||
 			typeof release.target_commitish !== "string")
 	)
 		throw new Error("Invalid GitHub release response");
-	if (release?.draft && release.target_commitish !== sha)
+	if (release && !release.draft)
+		throw new Error(`${tag} is already published; re-run the failed jobs of its original Release run instead`);
+	if (release && release.target_commitish !== sha)
 		throw new Error(`Draft ${tag} targets a different commit; delete the draft before retrying`);
 	if (channel === "stable") {
 		const latest = exec("npm", ["view", "signetai", "dist-tags.latest"]);
 		if (!plain.test(latest)) throw new Error(`Invalid npm latest version: ${latest}`);
-		if (release && !release.draft && latest === version) throw new Error(`${tag} already released`);
 		if (Bun.semver.order(version, latest) < 0)
 			throw new Error(`${version} must not be older than npm latest ${latest}`);
 	}
