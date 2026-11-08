@@ -142,6 +142,12 @@ Stable is marked normal/latest; next is marked prerelease/not latest. Then it
 advances the channel dist-tags and removes its staging tag. The OpenClaw memory
 adapter remains optional; its absence does not block the required packages.
 
+Last, Release calls the **Docker Image** workflow, which builds
+`ghcr.io/signet-ai/signet` from the new tag. Stable releases also move the
+image's `latest`, `X.Y.Z`, `X.Y`, and `X` tags. Docker publishing no longer runs
+on tag pushes; if only the Docker job fails, dispatch **Docker Image** with the
+released version.
+
 A build or upload failure leaves no new tag and at most a draft release. A later
 npm failure can also leave staged npm versions. Re-run the failed workflow to
 reuse its SHA, version, draft, and already-published npm versions. A fresh stable
