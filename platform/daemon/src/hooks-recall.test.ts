@@ -1,11 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
+import { createConcurrencyAdmission } from "./concurrency-admission";
 import { setFtsIndexIncomplete } from "./fts-index-state";
 import {
 	__setPromptSubmitAdmissionForTests,
+	__setStopAdmissionForTests,
 	createPromptSubmitAdmission,
 	preferHookRecallCause,
 } from "./routes/hooks-routes";
@@ -688,6 +690,315 @@ memory:
 		} finally {
 			authConfig.mode = previousMode;
 			releaseSession?.(sessionKey);
+		}
+	});
+
+	function postStop(body: Record<string, unknown>, routes: Pick<Hono, "request"> = app): Promise<Response> {
+		return routes.request("/api/hooks/stop", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", "x-signet-runtime-path": "legacy" },
+			body: JSON.stringify(body),
+		});
+	}
+
+	function stopRecords(sessionKey: string): Record<string, unknown>[] {
+		const path = join(dir, "memory", "claude-code", "transcripts", "transcript.jsonl");
+		if (!existsSync(path)) return [];
+		return readFileSync(path, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>)
+			.filter((record) => record.session_key === sessionKey);
+	}
+
+	function storedTranscript(sessionKey: string): unknown {
+		return getDbAccessor?.().withReadDb((db) =>
+			db.prepare("SELECT content FROM session_transcripts WHERE session_key = ?").get(sessionKey),
+		);
+	}
+
+	it("records a stop hook reply even when the harness has a transcript source", async () => {
+		const sessionKey = `claude-stop-route-${crypto.randomUUID()}`;
+		const resp = await postStop({
+			harness: "claude-code",
+			sessionKey,
+			transcriptPath: join(dir, "stop-route-source.jsonl"),
+			lastAssistantMessage: "route reply",
+		});
+
+		expect(resp.status).toBe(200);
+		expect(await resp.json()).toEqual({ recorded: true });
+		expect(storedTranscript(sessionKey)).toEqual({ content: "Assistant: route reply" });
+		expect(stopRecords(sessionKey)).toMatchObject([
+			{ role: "assistant", content: "route reply", source_format: "live" },
+		]);
+		expect(getSessionPath?.(sessionKey)).toBeUndefined();
+		expect(getEndedSession?.(sessionKey)).toBeUndefined();
+	});
+
+	it("validates the stop hook request and treats a missing reply as nothing to record", async () => {
+		const badBody = await app.request("/api/hooks/stop", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", "x-signet-runtime-path": "legacy" },
+			body: "{",
+		});
+		expect(badBody.status).toBe(400);
+		expect(await badBody.json()).toEqual({ error: "invalid request body" });
+
+		const sessionKey = `claude-stop-rejected-${crypto.randomUUID()}`;
+		const rejected = [
+			{ body: { sessionKey, lastAssistantMessage: "reply" }, status: 400, error: "harness is required" },
+			{ body: { harness: "claude-code", lastAssistantMessage: "reply" }, status: 400, error: "sessionKey is required" },
+			{
+				body: { harness: "claude-code", sessionKey, lastAssistantMessage: 42 },
+				status: 400,
+				error: "lastAssistantMessage must be a string",
+			},
+			{
+				body: { harness: "claude-code", sessionKey, lastAssistantMessage: null },
+				status: 400,
+				error: "lastAssistantMessage must be a string",
+			},
+			{
+				body: { harness: "claude-code", sessionKey, lastAssistantMessage: "x".repeat(262_145) },
+				status: 413,
+				error: "lastAssistantMessage exceeds 262144 characters",
+			},
+		];
+		for (const { body, status, error } of rejected) {
+			const resp = await postStop(body);
+			expect(resp.status).toBe(status);
+			expect(await resp.json()).toEqual({ error });
+		}
+		expect(stopRecords(sessionKey)).toEqual([]);
+
+		const noReply = await postStop({ harness: "claude-code", sessionKey });
+		expect(noReply.status).toBe(200);
+		expect(await noReply.json()).toEqual({ recorded: false });
+		expect(stopRecords(sessionKey)).toEqual([]);
+
+		const aliasKey = `claude-stop-alias-${crypto.randomUUID()}`;
+		const alias = await postStop({ harness: "claude-code", sessionId: aliasKey, lastAssistantMessage: "alias reply" });
+		expect(alias.status).toBe(200);
+		expect(stopRecords(aliasKey)).toMatchObject([{ role: "assistant", content: "alias reply" }]);
+	});
+
+	it("records a retried stop hook reply at the size limit once", async () => {
+		const sessionKey = `claude-stop-limit-${crypto.randomUUID()}`;
+		const lastAssistantMessage = "x".repeat(262_144);
+		for (let attempt = 0; attempt < 2; attempt++) {
+			const resp = await postStop({ harness: "claude-code", sessionKey, lastAssistantMessage });
+			expect(resp.status).toBe(200);
+		}
+
+		expect(stopRecords(sessionKey)).toHaveLength(1);
+	});
+
+	it("rejects a stop hook reply from a caller without remember permission or outside its agent scope", async () => {
+		const { authConfig } = await import("./routes/state");
+		const { registerHooksRoutes } = await import("./routes/hooks-routes");
+		const { Hono } = await import("hono");
+		const now = Math.floor(Date.now() / 1000);
+		const cases = [
+			{
+				agent: "stop-reader",
+				role: "readonly",
+				agentId: "stop-reader",
+				error: "role 'readonly' lacks 'remember' permission",
+			},
+			{
+				agent: "stop-writer",
+				role: "agent",
+				agentId: "someone-else",
+				error: "scope restricted to agent 'stop-writer'",
+			},
+		] as const;
+		const previousMode = authConfig.mode;
+		authConfig.mode = "team";
+		try {
+			for (const { agent, role, agentId, error } of cases) {
+				const routes = new Hono();
+				routes.use("*", async (c, next) => {
+					c.set("auth", {
+						authenticated: true,
+						claims: { sub: agent, scope: { agent }, role, iat: now, exp: now + 3600 },
+					});
+					await next();
+				});
+				registerHooksRoutes(routes);
+				const sessionKey = `claude-stop-denied-${crypto.randomUUID()}`;
+				const resp = await postStop(
+					{ harness: "claude-code", sessionKey, agentId, lastAssistantMessage: "forged assistant turn" },
+					routes,
+				);
+
+				expect(resp.status).toBe(403);
+				expect(await resp.json()).toEqual({ error });
+				expect(storedTranscript(sessionKey)).toBeNull();
+				expect(stopRecords(sessionKey)).toEqual([]);
+			}
+		} finally {
+			authConfig.mode = previousMode;
+		}
+	});
+
+	it("records a stop hook reply under the agent prompt submit resolved for a scoped admin token", async () => {
+		const { authConfig } = await import("./routes/state");
+		const { registerHooksRoutes } = await import("./routes/hooks-routes");
+		const { Hono } = await import("hono");
+		const now = Math.floor(Date.now() / 1000);
+		const routes = new Hono();
+		routes.use("*", async (c, next) => {
+			c.set("auth", {
+				authenticated: true,
+				claims: { sub: "stop-admin", scope: { agent: "stop-admin-agent" }, role: "admin", iat: now, exp: now + 3600 },
+			});
+			await next();
+		});
+		registerHooksRoutes(routes);
+		const sessionKey = `claude-stop-admin-${crypto.randomUUID()}`;
+		const previousMode = authConfig.mode;
+		authConfig.mode = "team";
+		try {
+			const prompt = await routes.request("/api/hooks/user-prompt-submit", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "x-signet-runtime-path": "legacy" },
+				body: JSON.stringify({ harness: "claude-code", sessionKey, userMessage: "admin prompt" }),
+			});
+			expect(prompt.status).toBe(200);
+
+			const resp = await postStop({ harness: "claude-code", sessionKey, lastAssistantMessage: "admin reply" }, routes);
+
+			expect(resp.status).toBe(200);
+			expect(await resp.json()).toEqual({ recorded: true });
+			const row = getDbAccessor?.().withReadDb((db) =>
+				db.prepare("SELECT agent_id, content FROM session_transcripts WHERE session_key = ?").all(sessionKey),
+			);
+			expect(row).toEqual([{ agent_id: "default", content: "User: admin prompt\nAssistant: admin reply" }]);
+		} finally {
+			authConfig.mode = previousMode;
+			releaseSession?.(sessionKey);
+		}
+	});
+
+	async function withFailingTranscriptWrites<T>(failure: Error, run: () => Promise<T>): Promise<T> {
+		const accessor = getDbAccessor?.();
+		if (!accessor) throw new Error("db accessor not initialized");
+		const original = accessor.withWriteTxAsync;
+		accessor.withWriteTxAsync = (fn, options) =>
+			options?.operation?.startsWith("transcripts.") ? Promise.reject(failure) : original.call(accessor, fn, options);
+		try {
+			return await run();
+		} finally {
+			accessor.withWriteTxAsync = original;
+		}
+	}
+
+	it("answers a retryable 503 when write pressure blocks the stop hook row and records a retry once", async () => {
+		const { DbWriteQueueFullError } = await import("./db-accessor");
+		const sessionKey = `claude-stop-pressure-${crypto.randomUUID()}`;
+		const body = { harness: "claude-code", sessionKey, lastAssistantMessage: "pressured reply" };
+
+		const blocked = await withFailingTranscriptWrites(new DbWriteQueueFullError(), () => postStop(body));
+		expect(blocked.status).toBe(503);
+		expect(blocked.headers.get("Retry-After")).toBe("1");
+		expect(await blocked.json()).toMatchObject({ retryable: true });
+		expect(storedTranscript(sessionKey)).toBeNull();
+
+		const retried = await postStop(body);
+		expect(retried.status).toBe(200);
+		expect(await retried.json()).toEqual({ recorded: true });
+		expect(storedTranscript(sessionKey)).toEqual({ content: "Assistant: pressured reply" });
+		expect(stopRecords(sessionKey)).toMatchObject([{ role: "assistant", content: "pressured reply" }]);
+	});
+
+	it("fails the stop hook request when the transcript row write fails", async () => {
+		const sessionKey = `claude-stop-row-failed-${crypto.randomUUID()}`;
+
+		const resp = await withFailingTranscriptWrites(new Error("forced row failure"), () =>
+			postStop({ harness: "claude-code", sessionKey, lastAssistantMessage: "unrecorded reply" }),
+		);
+
+		expect(resp.status).toBe(500);
+		expect(await resp.json()).toEqual({ error: "Hook execution failed" });
+		expect(storedTranscript(sessionKey)).toBeNull();
+	});
+
+	it("releases the stop cap after a recorded reply and after a failed one", async () => {
+		writeFileSync(join(dir, "memory", "stop-blocked"), "not a directory");
+		__setStopAdmissionForTests(createConcurrencyAdmission(1));
+		try {
+			const recorded = await postStop({
+				harness: "claude-code",
+				sessionKey: `claude-stop-release-${crypto.randomUUID()}`,
+				lastAssistantMessage: "first reply",
+			});
+			expect(recorded.status).toBe(200);
+
+			const failed = await postStop({
+				harness: "stop-blocked",
+				sessionKey: `claude-stop-release-${crypto.randomUUID()}`,
+				lastAssistantMessage: "blocked reply",
+			});
+			expect(failed.status).toBe(500);
+			expect(await failed.json()).toEqual({ error: "Hook execution failed" });
+
+			const sessionKey = `claude-stop-release-${crypto.randomUUID()}`;
+			const after = await postStop({ harness: "claude-code", sessionKey, lastAssistantMessage: "later reply" });
+			expect(after.status).toBe(200);
+			expect(stopRecords(sessionKey)).toHaveLength(1);
+		} finally {
+			__setStopAdmissionForTests(null);
+		}
+	});
+
+	it("rejects a stop hook reply with 503 while the stop cap is saturated", async () => {
+		const sessionKey = `claude-stop-saturated-${crypto.randomUUID()}`;
+		__setStopAdmissionForTests(createConcurrencyAdmission(0));
+		try {
+			const resp = await postStop({ harness: "claude-code", sessionKey, lastAssistantMessage: "busy reply" });
+
+			expect(resp.status).toBe(503);
+			expect(resp.headers.get("Retry-After")).toBe("1");
+			expect(stopRecords(sessionKey)).toEqual([]);
+		} finally {
+			__setStopAdmissionForTests(null);
+		}
+	});
+
+	it("skips a stop hook reply without claiming a foreign, ended or bypassed session", async () => {
+		const tracker = await import("./session-tracker");
+		const cases = [
+			{
+				setup: (key: string) => tracker.claimSession(key, "plugin"),
+				body: { recorded: false, skipped: true, duplicateRuntimePath: true, claimedBy: "plugin" },
+				owner: "plugin",
+			},
+			{
+				setup: (key: string) => tracker.markSessionEnded(key, "legacy"),
+				body: { recorded: false, skipped: true, sessionEnded: true },
+				owner: undefined,
+			},
+			{
+				setup: (key: string) => tracker.bypassSession(key, { allowUnknown: true }),
+				body: { recorded: false, bypassed: true },
+				owner: undefined,
+			},
+		];
+		for (const { setup, body, owner } of cases) {
+			const sessionKey = `claude-stop-skip-${crypto.randomUUID()}`;
+			setup(sessionKey);
+			try {
+				const resp = await postStop({ harness: "claude-code", sessionKey, lastAssistantMessage: "skipped reply" });
+
+				expect(resp.status).toBe(200);
+				expect(await resp.json()).toEqual(body);
+				expect(stopRecords(sessionKey)).toEqual([]);
+				expect(getSessionPath?.(sessionKey)).toBe(owner);
+				expect(Boolean(getEndedSession?.(sessionKey))).toBe("sessionEnded" in body);
+			} finally {
+				releaseSession?.(sessionKey);
+			}
 		}
 	});
 

@@ -15,6 +15,7 @@ Hooks are HTTP endpoints exposed by the Signet [Daemon](/daemon/). Harnesses cal
 |------|------|---------|
 | `session-start` | New session begins | Inject the Signet capability prefix, bounded identity/working memory, and Session Continuity previews |
 | `user-prompt-submit` | Before each user turn | Inject compact current-view context only when the prompt mentions a known entity or active entity alias, and provide a separate dynamic clock signal |
+| `stop` | Agent finishes a turn | Append the turn's final assistant reply to the live transcript |
 | `notifications` | Any declared compatible harness hook | Inject unread cross-agent messages without running recall or transcript side effects |
 | `session-end` | Session finishes | Persist transcript lineage and queue session summary |
 | `pre-compaction` | Before context compaction | Get summary guidelines |
@@ -198,11 +199,12 @@ extraction but still have access to MCP tools like `memory_search` and
 
 ### Behavior when bypassed
 
-When bypass is active for a session, all seven hook endpoints return empty
+When bypass is active for a session, all eight hook endpoints return empty
 no-op responses with `bypassed: true`:
 
 - `session-start` — no memories or identity injected
 - `user-prompt-submit` — no per-prompt context loaded
+- `stop`: the assistant reply is not recorded
 - `session-end` — no memory extraction (but the session claim is still
   released so future sessions are not blocked)
 - `pre-compaction` — no summary guidelines
@@ -631,10 +633,20 @@ Claude Code uses file-based hooks in `~/.claude/settings.json`. The hooks call t
         "command": "signet hook session-end -H claude-code",
         "timeout": 15000
       }]
+    }],
+    "Stop": [{
+      "hooks": [{
+        "type": "command",
+        "command": "signet hook stop -H claude-code",
+        "async": true
+      }]
     }]
   }
 }
 ```
+
+The `Stop` hook records the reply that ends each turn; see
+[Claude Code](/harnesses/claude-code/).
 
 Prompt-submit timeout note: `SIGNET_PROMPT_SUBMIT_TIMEOUT` defaults to
 `5000` (daemon wait budget). Claude Code hook config adds a `+2000ms`
