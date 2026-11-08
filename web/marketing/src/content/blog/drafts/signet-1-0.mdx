@@ -139,7 +139,7 @@ Details are recorded in the [release changelog](https://github.com/Signet-AI/sig
 
 This is the first stable release with telemetry, so if you’re upgrading, it’s new to you. Signet now sends anonymous usage data: install and version counts, which features get used, token and cost totals per provider, and sanitized crash reports. It never sends memory content, prompts, search queries, or anything that identifies you personally; events carry a random install ID. Every event is also written to a local log at `runtime/telemetry/events.jsonl` in your workspace, so you can read exactly what was recorded.
 
-New installs start with telemetry off. Existing workspaces upgrading from an earlier stable release have it **on** unless you’ve already set a preference. To turn it off, set `memory.pipelineV2.telemetryEnabled: false` in `agent.yaml`, or `SIGNET_TELEMETRY_OPTOUT=1` in your environment. Details are in [telemetry controls](https://docs.signetai.sh/analytics/).
+New installs start with workspace telemetry off. The npm package also sends one anonymous install count, version and platform only, when it installs; set `SIGNET_TELEMETRY_OPTOUT=1` before installing to skip it. Existing workspaces upgrading from an earlier stable release have it **on** unless you’ve already set a preference. To turn it off, set `memory.pipelineV2.telemetryEnabled: false` in `agent.yaml`, or `SIGNET_TELEMETRY_OPTOUT=1` in your environment. Details are in [telemetry controls](https://docs.signetai.sh/analytics/).
 
 ## Installing and updating
 
@@ -182,7 +182,7 @@ signet update channel stable
 signet update install
 ```
 
-`signet update channel stable` moves you to the stable track; `signet update install` installs the latest stable release. Follow any restart instructions printed by the updater, then check `signet status`. See [upgrading](https://docs.signetai.sh/upgrading/) for details.
+`signet update channel stable` moves you to the stable track; `signet update install` installs the latest stable release. Auto-update doesn't install a new major version, so existing installs, including nightly ones, need this step once to reach 1.0. Follow any restart instructions printed by the updater, then check `signet status`. See [upgrading](https://docs.signetai.sh/upgrading/) for details.
 
 **If you used the native installer on Linux or Windows,** `signet update install` from `v0.157.3` (or any release before `v0.235.1`) will stop with:
 
@@ -197,6 +197,8 @@ Nothing is wrong with the download. The older updater rejects binaries larger th
 Back up your workspace first. The first time the 1.0 daemon starts, it moves an existing workspace to the Workspace v2 layout in place: the database, transcripts, caches, and runtime state move into their new folders under the same workspace root, while your notes, identity files, `agent.yaml`, skills, and secrets stay where they are. Check the result with `signet status`.
 
 If an older daemon is still running, the upgrade waits until it stops. If something blocks the upgrade, such as a file already in the way, Signet undoes the moves it made, starts on the old layout, and `signet status` tells you what to fix; fix it and restart. Once a workspace has upgraded, don’t run older Signet versions against it.
+
+**Turn on Dreaming after upgrading.** Dreaming replaces the old extraction pipeline, which no longer runs. In an upgraded workspace that has no Dreaming setting, Dreaming is off, so Signet writes no new memories until you set `memory.dreaming.enabled: true` in `agent.yaml`. It also needs a working inference provider. New installs turn it on during setup.
 
 See the [Workspace v2 guide](https://docs.signetai.sh/workspace-v2/) for the full list of moves and recovery steps.
 
