@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=9b1392b1d2e92186c981c96663a99987b6e3a7f0 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=de16dbc216af698ec2db226ca9d155d541f86ae4 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 > [!CAUTION]
 > **Betrugswarnung: Signet hat keinen Token oder Coin.** Jeder Token oder Coin, der den Namen Signet trägt, hat nichts mit diesem Projekt zu tun. Kauf ihn nicht in dem Glauben, damit Signet zu unterstützen.
 
@@ -136,8 +136,8 @@ signet desktop install
 - **Aussagen-Traces:** Du kannst nachfragen, warum Signet etwas glaubt, und erhältst den Verlauf, konkurrierende Aussagen und die exakten Quellenpassagen – über die CLI, die API oder MCP.
 - **Agent-Isolation:** Jeder Agent sieht nur das Gedächtnis, das er lesen darf.
 - **Secrets:** Secrets werden verschlüsselt gespeichert, mit dem Masterschlüssel im Keyring deines Betriebssystems. Systeme ohne Keyring weichen auf verschlüsselte Dateispeicherung aus und zeigen eine Warnung zum Systemzustand an. Nimm deinen Schlüsselbund unbedingt in deinen Wiederherstellungsplan auf; siehe [Secrets](https://docs.signetai.sh/secrets/).
-- **Recovery:** Der Schutzstatus zeigt, ob ein Backup als wiederherstellbar verifiziert wurde, und markiert Backups, die fehlen oder veraltet sind.
-- **Schädliche Inhalte:** Inhalte, die auf bekannte feindliche Muster passen, bleiben deinen Agenten verborgen.
+- **Recovery:** Der Schutzstatus zeigt, welche Teile deines Workspace geschützt sind, und markiert Backups, die fehlen oder veraltet sind.
+- **Credentials:** Text, der wie ein bekanntes Credential aussieht – etwa ein API-Schlüssel –, wird geschwärzt, bevor deine Agenten ihn sehen.
 
 ## Telemetrie
 
