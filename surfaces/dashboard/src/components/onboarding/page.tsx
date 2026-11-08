@@ -2,6 +2,7 @@ import {
 	TELEMETRY_CONSENT_BODY,
 	TELEMETRY_CONSENT_PATH,
 	TELEMETRY_CONSENT_TITLE,
+	readTelemetryConsent,
 } from "@signet/core/telemetry-consent";
 import { renderTelemetryParagraph } from "@/components/telemetry-consent";
 import { ONBOARDING_STEPS as STEPS, restoreOnboardingStep } from "./progress";
@@ -498,7 +499,7 @@ export function OnboardingPage({
 		}
 		if (step === 7) {
 			if (recalled) {
-				setStep(status.data?.telemetryDisabledByEnv ? 9 : 8);
+				setStep(status.data?.telemetryDisabledByEnv || readTelemetryConsent(store.agent) !== undefined ? 9 : 8);
 				return;
 			}
 			void perform(async (signal) => {
