@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import type { Command } from "commander";
 import {
 	readWorkspaceTelemetryConsent,
@@ -17,6 +19,7 @@ export function registerTelemetryCommands(
 		program.command("telemetry [state]").description("Show or change anonymous usage data consent (on or off)"),
 	).action((state: string | undefined, options: { path?: string }) => {
 		const basePath = deps.normalizeAgentPath(options.path ?? deps.AGENTS_DIR);
+		if (!existsSync(join(basePath, "agent.yaml"))) throw new Error(`No Signet workspace at ${basePath}`);
 		if (state !== undefined) {
 			if (state !== "on" && state !== "off") throw new Error("Usage: signet telemetry [on|off]");
 			writeTelemetryConsent(basePath, state === "on");

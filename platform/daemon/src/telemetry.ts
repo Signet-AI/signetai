@@ -307,6 +307,19 @@ export interface TelemetryCollector {
 
 let activeCollector: TelemetryCollector | undefined;
 
+export async function discardUnsentTelemetry(owner: DbOwnerClient): Promise<void> {
+	try {
+		await ownerTransaction(
+			owner,
+			"telemetry.events.discard-pending",
+			[ownerStatement("DELETE FROM telemetry_events WHERE sent_to_posthog = 0")],
+			{ deadlineMs: 5_000, estimatedWorkUnits: 1 },
+		);
+	} catch {
+		logger.warn("telemetry", "Failed to discard pending telemetry events");
+	}
+}
+
 export function setActiveTelemetry(collector: TelemetryCollector | undefined): void {
 	activeCollector = collector;
 }
@@ -1477,16 +1490,7 @@ export function createTelemetryCollector(
 			flushAbortController?.abort();
 			if (flushPromise) await flushPromise;
 			await awaitPendingAsyncWrites();
-			try {
-				await ownerTransaction(
-					await owner(),
-					"telemetry.events.discard-pending",
-					[ownerStatement("DELETE FROM telemetry_events WHERE sent_to_posthog = 0")],
-					{ deadlineMs: 5_000, estimatedWorkUnits: 1 },
-				);
-			} catch {
-				logger.warn("telemetry", "Failed to discard pending telemetry events");
-			}
+			await discardUnsentTelemetry(await owner());
 			logger.info("telemetry", "Telemetry collector disabled");
 		},
 

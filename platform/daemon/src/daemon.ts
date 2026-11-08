@@ -260,6 +260,7 @@ import {
 	type TelemetryConfigSnapshot,
 	createTelemetryCollector,
 	defaultTelemetryLogPath,
+	discardUnsentTelemetry,
 	sanitizeCrashError,
 	setActiveTelemetry,
 	stopActiveTelemetry,
@@ -634,14 +635,12 @@ let startupSourceSyncTimer: ReturnType<typeof setTimeout> | null = null;
 const SYNC_DEBOUNCE_MS = 2000;
 
 function startTelemetry(memoryCfg: ResolvedMemoryConfig): TelemetryCollector | undefined {
-	if (
-		telemetryRef ||
-		shuttingDown ||
-		migrationIntegrityWritesBlocked ||
-		!memoryCfg.pipelineV2.telemetryEnabled ||
-		telemetryDisabledByEnv()
-	)
+	if (telemetryRef || shuttingDown || !memoryCfg.pipelineV2.telemetryEnabled || telemetryDisabledByEnv())
 		return telemetryRef;
+	if (migrationIntegrityWritesBlocked) {
+		logger.warn("telemetry", "Telemetry stays off while database writes are blocked by a migration integrity check");
+		return undefined;
+	}
 	const telemetryCollector = createTelemetryCollector(
 		getDbAccessor(),
 		memoryCfg.pipelineV2.telemetry,
@@ -2687,6 +2686,8 @@ async function main() {
 
 	const memoryCfg = startupMemoryConfig;
 	const telemetryCollector = startTelemetry(memoryCfg);
+	if (!memoryCfg.pipelineV2.telemetryEnabled && !migrationIntegrityWritesBlocked)
+		await discardUnsentTelemetry(daemonDbOwner());
 	if (telemetryCollector) {
 		if (previousExit !== null) {
 			telemetryCollector.record("daemon.previous_exit", previousExitTelemetryProperties(previousExit));

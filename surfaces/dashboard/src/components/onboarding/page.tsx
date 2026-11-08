@@ -1289,6 +1289,7 @@ export function OnboardingPage({
 							onClick={() => {
 								setError(null);
 								if (step === 5 && sourceKind) setSourceKind(null);
+								else if (step === 9 && status.data?.telemetryDisabledByEnv) setStep(7);
 								else setStep((n) => n - 1);
 							}}
 						>

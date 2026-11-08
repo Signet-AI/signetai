@@ -161,10 +161,11 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		dom.close();
 	});
 
-	async function mount(files: Record<string, string> = {}, consent = false) {
+	async function mount(files: Record<string, string> = {}, consent = false, savedStep?: string) {
 		identityFiles = { ...files };
 		window.location.hash = "#setup";
 		localStorage.clear();
+		if (savedStep) localStorage.setItem("signet:onboarding:/fixture:alice", JSON.stringify({ step: savedStep }));
 		dashboardQueryCache.clear(false, false);
 		calls.length = 0;
 		const element = document.createElement("div");
@@ -226,6 +227,16 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			}
 		},
 	);
+
+	test("upgrade consent still asks when onboarding was left unfinished", async () => {
+		config = "memory: {}\n";
+		const view = await mount({}, true, "Sources");
+		try {
+			expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+		} finally {
+			await view.close();
+		}
+	});
 
 	test.each(["failed-fetch", "env-opt-out"])("upgrade consent is hidden on %s", async (reason) => {
 		config = "memory: {}\n";
@@ -502,9 +513,14 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		}
 	});
 
-	test.each([undefined, true])(
-		"the page requires a successful save and probe, exposes sources, and recalls scoped evidence (consent: %s)",
-		async (consent) => {
+	test.each([
+		[undefined, false],
+		[true, false],
+		[undefined, true],
+	])(
+		"the page requires a successful save and probe, exposes sources, and recalls scoped evidence (consent: %s, env opt-out: %s)",
+		async (consent, envOptOut) => {
+			optOut = envOptOut;
 			config = `name: Example\nharnesses: []\noperator_setting: preserved\n${consent === undefined ? "" : `memory:\n  pipelineV2:\n    telemetryEnabled: ${consent}\n`}`;
 			const view = await mount();
 			try {
@@ -567,6 +583,13 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 					expect(document.body.textContent).toContain("Your setup, at a glance.");
 					return;
 				}
+				if (envOptOut) {
+					expect(document.body.textContent).toContain("Your setup, at a glance.");
+					await view.click("Back");
+					expect(document.body.textContent).not.toContain("Share anonymous usage data?");
+					expect(config).not.toContain("telemetryEnabled");
+					return;
+				}
 				expect(document.body.textContent).toContain("Share anonymous usage data?");
 				const choices = [...document.querySelectorAll("button.choice")];
 				expect(choices.map((button) => button.textContent)).toEqual(["Share usage data", "Don't share"]);
@@ -586,6 +609,7 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 				expect(document.body.textContent).toContain("Your setup, at a glance.");
 			} finally {
 				saveFails = false;
+				optOut = false;
 				await view.close();
 			}
 		},

@@ -57,6 +57,22 @@ test.each([true, false])("TTY consent saves an explicit answer once: %s", async 
 	expect(readFileSync(join(workspace, "agent.yaml"), "utf8")).toContain("# Keep this comment");
 });
 
+test.each(["missing", "malformed"])("consent never breaks the caller when agent.yaml is %s", async (state) => {
+	const prompt = spyOn(prompts, "confirm").mockResolvedValue(true);
+	if (state === "missing") rmSync(join(workspace, "agent.yaml"));
+	else writeFileSync(join(workspace, "agent.yaml"), "memory: [\n");
+	await promptTelemetryConsent(workspace);
+	expect(prompt).not.toHaveBeenCalled();
+});
+
+test("cancelling the consent prompt writes nothing and asks again later", async () => {
+	const cancelled = new Error("User force closed the prompt");
+	cancelled.name = "ExitPromptError";
+	spyOn(prompts, "confirm").mockRejectedValue(cancelled);
+	await promptTelemetryConsent(workspace);
+	expect(readWorkspaceTelemetryConsent(workspace)).toBeUndefined();
+});
+
 test.each(["non-tty", "1", "true"])("consent never prompts or writes for %s", async (reason) => {
 	const prompt = spyOn(prompts, "confirm").mockResolvedValue(true);
 	if (reason === "non-tty") Object.defineProperty(process.stdin, "isTTY", { value: false, configurable: true });

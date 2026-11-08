@@ -20,6 +20,9 @@ test.each([false, true])(
 				"cli-install",
 				"2020-01-01T00:00:00.000Z",
 			);
+			db.prepare(
+				"INSERT INTO telemetry_events (id, event, timestamp, properties, sent_to_posthog, created_at) VALUES (?, ?, ?, ?, 0, ?)",
+			).run("pre-consent", "daemon.heartbeat", "2020-01-01T00:00:00.000Z", "{}", "2020-01-01T00:00:00.000Z");
 			db.close();
 		}
 		const listener = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({}) });
@@ -85,6 +88,15 @@ test.each([false, true])(
 			await until(async () => (await health()) === false);
 			await Bun.sleep(1000);
 			expect(existsSync(logPath)).toBe(false);
+			await until(() => {
+				const db = new Database(layout.database, { readonly: true });
+				db.exec("PRAGMA busy_timeout = 5000");
+				const unsent = db.prepare("SELECT COUNT(*) AS count FROM telemetry_events WHERE sent_to_posthog = 0").get() as {
+					count: number;
+				};
+				db.close();
+				return unsent.count === 0;
+			});
 			editYamlConfigFile(configPath, (editor) => editor.set(["memory", "pipelineV2", "telemetryEnabled"], true));
 			await until(async () => (await health()) === true && existsSync(logPath));
 			await until(() => readFileSync(logPath, "utf8").includes('"event":"install.activated"'));
