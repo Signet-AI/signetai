@@ -975,3 +975,105 @@ describe("hook wake", () => {
 		expect(j.lines).toEqual(["{}"]);
 	});
 });
+
+describe("hook stop", () => {
+	type StopResult =
+		| { ok: true; data: Record<string, unknown> }
+		| { ok: false; reason: "offline" | "http"; status?: number };
+
+	async function runStop(stdin: Record<string, unknown>, result: StopResult = { ok: true, data: { recorded: true } }) {
+		const calls: Array<{ path: string; body: Record<string, unknown>; runtimePath: string | null; timeout?: number }> =
+			[];
+		const lines: string[] = [];
+		const stderr: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+		const origWrite = process.stderr.write;
+		process.stderr.write = ((chunk: unknown) => {
+			stderr.push(String(chunk));
+			return true;
+		}) as typeof process.stderr.write;
+		try {
+			const program = new Command();
+			registerHookCommands(program, {
+				AGENTS_DIR: "/tmp/agents",
+				fetchDaemonResult: (async (path: string, opts?: RequestInit & { timeout?: number }) => {
+					calls.push({
+						path,
+						body: JSON.parse(typeof opts?.body === "string" ? opts.body : "{}"),
+						runtimePath: new Headers(opts?.headers).get("x-signet-runtime-path"),
+						timeout: opts?.timeout,
+					});
+					return result;
+				}) as never,
+				readStaticIdentity: () => null,
+				stdin: Readable.from([Buffer.from(JSON.stringify(stdin))]),
+			});
+			await program.parseAsync(["node", "test", "hook", "stop", "-H", "claude-code"]);
+		} finally {
+			process.stderr.write = origWrite;
+		}
+		return { calls, lines, stderr };
+	}
+
+	const payload = {
+		session_id: "sess-stop",
+		cwd: "/tmp/proj",
+		hook_event_name: "Stop",
+		stop_hook_active: false,
+		last_assistant_message: "Final paragraph A.\n\nFinal paragraph B.",
+	};
+
+	test("sends the turn-end reply to the daemon and prints nothing", async () => {
+		const run = await runStop(payload);
+
+		expect(run.calls).toEqual([
+			{
+				path: "/api/hooks/stop",
+				body: {
+					harness: "claude-code",
+					sessionKey: "sess-stop",
+					cwd: "/tmp/proj",
+					lastAssistantMessage: "Final paragraph A.\n\nFinal paragraph B.",
+					runtimePath: "legacy",
+				},
+				runtimePath: "legacy",
+				timeout: 10_000,
+			},
+		]);
+		expect(run.lines).toEqual([]);
+		expect(run.stderr).toEqual([]);
+		expect(hookExitCodes).toEqual([0]);
+	});
+
+	test("keeps the Claude Code subagent id out of the Signet agent scope", async () => {
+		const native = await runStop({ ...payload, agent_id: "claude-subagent" });
+		expect(native.calls[0]?.body.agentId).toBeUndefined();
+
+		const signet = await runStop({ ...payload, agent_id: "claude-subagent", signet_agent_id: "research-agent" });
+		expect(signet.calls[0]?.body.agentId).toBe("research-agent");
+	});
+
+	test("skips the daemon when the payload has no reply or no session", async () => {
+		for (const stdin of [
+			{ ...payload, last_assistant_message: "   " },
+			{ ...payload, session_id: undefined },
+		]) {
+			const run = await runStop(stdin);
+			expect(run.calls).toEqual([]);
+			expect(run.stderr).toEqual([]);
+		}
+		expect(hookExitCodes).toEqual([0, 0]);
+	});
+
+	test("exits 0 without output when the daemon is down or rejects the reply", async () => {
+		const offline = await runStop(payload, { ok: false, reason: "offline" });
+		const busy = await runStop(payload, { ok: false, reason: "http", status: 503 });
+
+		expect(offline.lines).toEqual([]);
+		expect(busy.lines).toEqual([]);
+		expect(busy.stderr.join("")).toContain("HTTP 503");
+		expect(hookExitCodes).toEqual([0, 0]);
+	});
+});
