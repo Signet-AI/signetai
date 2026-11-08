@@ -25,6 +25,7 @@ interface Registry {
 	assets?: string[];
 	failPackage?: string;
 	failFinalize?: boolean;
+	missingRelease?: boolean;
 }
 function fixture(channel = "stable") {
 	const dir = mkdtempSync(join(tmpdir(), "signet-release-publish-"));
@@ -70,6 +71,7 @@ state.calls.push([${JSON.stringify(command)}, ...args]);
 const save = () => writeFileSync(path, JSON.stringify(state));
 save();
 if (${JSON.stringify(command)} === "gh") {
+ if (args[0] === "api") { if (!state.missingRelease) console.log(String(!state.public)); process.exit(0); }
  if (args[1] === "view") { console.log(args.includes("isDraft") ? String(!state.public) : (state.assets ?? []).join("\\n")); process.exit(0); }
  if (state.failFinalize) process.exit(1);
  state.public = true; save(); process.exit(0);
@@ -223,6 +225,8 @@ test("publish refuses to rebuild assets onto an already published release", () =
 	const result = value.run("Refuse a published release");
 	expect(result.exitCode).not.toBe(0);
 	expect(new TextDecoder().decode(result.stdout)).toContain("re-run the promote job");
+	value.write({ ...value.read(), public: false, missingRelease: true });
+	expect(value.run("Refuse a published release").exitCode).not.toBe(0);
 });
 
 test("promote advances exactly the packages publish reported", () => {

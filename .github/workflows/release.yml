@@ -207,9 +207,9 @@ jobs:
     steps:
       - name: Refuse a published release
         run: |
-          draft=$(gh release view "v${NEW_VERSION}" --json isDraft --jq .isDraft --repo "${GITHUB_REPOSITORY}")
+          draft=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"v${NEW_VERSION}\") | .draft")
           if [ "${draft}" != "true" ]; then
-            echo "::error::v${NEW_VERSION} is already published; re-run the promote job instead"
+            echo "::error::v${NEW_VERSION} is not exactly one draft release; if it is already published, re-run the promote job instead"
             exit 1
           fi
         env:

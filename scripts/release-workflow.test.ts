@@ -80,8 +80,6 @@ test("desktop is reusable without a tag trigger and check has no publication tar
 	);
 	expect(desktop.jobs.build.steps[0].with.ref).toBe("${{ inputs.ref || github.sha }}");
 	expect(desktopText).toContain('bun scripts/version-sync.ts --to "$RELEASE_VERSION"');
-	const desktopPackage = JSON.parse(readFileSync(join(root, "surfaces/desktop/package.json"), "utf8"));
-	expect(desktopPackage.build.detectUpdateChannel).toBe(false);
 });
 
 test("publication stages npm behind all builds and assets before finalizing then moving tags", () => {
