@@ -1,7 +1,19 @@
-import { afterEach, describe, expect, mock, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
 import { Command } from "commander";
 import { registerUpdateCommands } from "./update.js";
 
+let workspace = "";
+const originalEnv = { ...process.env };
+beforeEach(() => {
+	workspace = mkdtempSync(join(tmpdir(), "signet-update-"));
+	process.env.HOME = workspace;
+	process.env.HERMES_HOME = join(workspace, "hermes");
+	process.env.XDG_CONFIG_HOME = join(workspace, "config");
+	delete process.env.HERMES_REPO;
+});
 const originalExit = process.exit;
 const originalLog = console.log;
 const originalError = console.error;
@@ -11,6 +23,9 @@ afterEach(() => {
 	console.log = originalLog;
 	console.error = originalError;
 	mock.restore();
+	for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
+	Object.assign(process.env, originalEnv);
+	rmSync(workspace, { recursive: true, force: true });
 });
 
 function makeProgram(
@@ -20,7 +35,7 @@ function makeProgram(
 	const calls: Array<{ path: string; opts?: RequestInit }> = [];
 	const program = new Command();
 	registerUpdateCommands(program, {
-		AGENTS_DIR: "/tmp/signet-update-test",
+		AGENTS_DIR: workspace,
 		MAX_AUTO_UPDATE_INTERVAL: 604800,
 		MIN_AUTO_UPDATE_INTERVAL: 300,
 		configureHarnessHooks: async () => {},

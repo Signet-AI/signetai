@@ -1,3 +1,4 @@
+import { TELEMETRY_CONSENT_PATH, readTelemetryConsent } from "@signet/core/telemetry-consent";
 import { Button } from "@/components/ui/button";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { Switch } from "@/components/ui/switch";
@@ -66,28 +67,21 @@ function DreamingToggle({ store }: { store: AgentConfigStore }) {
 	);
 }
 
-function readTelemetryEnabled(agent: Record<string, unknown>): boolean {
-	const memory = agent.memory;
-	if (memory == null || typeof memory !== "object" || Array.isArray(memory)) return true;
-	const pipeline = (memory as Record<string, unknown>).pipelineV2;
-	if (pipeline == null || typeof pipeline !== "object" || Array.isArray(pipeline)) return true;
-	const value = (pipeline as Record<string, unknown>).telemetryEnabled;
-	return typeof value === "boolean" ? value : true;
-}
-
 function TelemetrySettings({ store }: { store: AgentConfigStore }) {
 	const [confirmOptOut, setConfirmOptOut] = useState(false);
-	const path = ["memory", "pipelineV2", "telemetryEnabled"] as const;
-	const enabled = readTelemetryEnabled(store.agent);
+	const path = TELEMETRY_CONSENT_PATH;
+	const consent = readTelemetryConsent(store.agent);
+	const enabled = consent === true;
 
 	return (
 		<>
 			<SettingRow
 				title="Anonymous telemetry"
-				desc="Share anonymous usage and performance data to help improve Signet. No memory content or personal identity is sent."
+				desc={`${consent === undefined ? "Not yet answered. Usage data is off." : enabled ? "Usage data is on." : "Usage data is off."} Share anonymous usage and performance data to help improve Signet. No memory content or personal identity is sent. Changes apply immediately.`}
 			>
 				<Switch
 					checked={enabled}
+					disabled={!store.ready || store.saving}
 					onCheckedChange={(next: boolean) => {
 						if (!next) {
 							setConfirmOptOut(true);
@@ -110,7 +104,7 @@ function TelemetrySettings({ store }: { store: AgentConfigStore }) {
 				description={
 					<>
 						Turning off anonymous telemetry stops future usage and performance reports. Signet will continue working
-						normally. You can turn telemetry back on here later; it will resume after the daemon restarts.
+						normally. You can turn telemetry back on here later; changes apply immediately.
 					</>
 				}
 				actions={

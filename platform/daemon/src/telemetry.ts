@@ -376,7 +376,7 @@ function resolveInstallIdentity(w: import("./db-accessor").WriteDb, daemonVersio
 		}
 		return {
 			id: existing.id,
-			created: false,
+			created: !existing.last_seen_version,
 			...(existing.last_seen_version ? { previousVersion: existing.last_seen_version } : {}),
 		};
 	}
@@ -421,7 +421,7 @@ function ownerInstallIdentity(results: readonly unknown[]): InstallIdentity {
 	if (!row?.id) throw new Error("DB owner did not return an install identity");
 	return {
 		id: row.id,
-		created: ownerChanges(results[1]) > 0,
+		created: !before?.last_seen_version,
 		...(before?.last_seen_version ? { previousVersion: before.last_seen_version } : {}),
 	};
 }

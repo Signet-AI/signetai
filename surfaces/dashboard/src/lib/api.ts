@@ -357,6 +357,7 @@ export interface OnePasswordResult {
 }
 
 export interface DaemonStatus {
+	telemetryDisabledByEnv?: boolean;
 	status: string;
 	version: string;
 	uptime: number;
