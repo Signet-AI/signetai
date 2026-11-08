@@ -10,7 +10,6 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { useAgentConfig } from "@/lib/agent-config";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
-import { ONBOARDING_STEPS, restoreOnboardingStep } from "./onboarding/progress";
 
 export function renderTelemetryParagraph(text: string) {
 	return text
@@ -33,12 +32,6 @@ export function TelemetryConsentDialog() {
 			readTelemetryConsent(store.agent) !== undefined
 		)
 			return;
-		const key = `signet:onboarding:${status.data.agentsDir}:${status.data.agentId}`;
-		try {
-			const saved = JSON.parse(localStorage.getItem(key) ?? "null");
-			const restored = restoreOnboardingStep(saved?.step);
-			if (restored >= 0 && restored < ONBOARDING_STEPS.length - 1) return;
-		} catch {}
 		setOpen(true);
 	}, [store.ready, store.agent, status.data]);
 	const choose = async (enabled: boolean) => {
