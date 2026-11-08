@@ -187,6 +187,7 @@ connector packages automatically; you rarely need to invoke them directly.
 ```bash
 signet hook session-start --harness claude-code
 signet hook user-prompt-submit --harness claude-code
+signet hook stop --harness claude-code
 signet hook session-end --harness claude-code
 signet hook pre-compaction --harness claude-code
 signet hook compaction-complete --harness claude-code --summary "..."
@@ -200,6 +201,7 @@ Subcommands:
 |---------|-------------|
 | `signet hook session-start` | Initialize session, inject context |
 | `signet hook user-prompt-submit` | Inject relevant memories for a prompt |
+| `signet hook stop` | Record the assistant reply that ends a turn |
 | `signet hook session-end` | Extract and save memories from transcript |
 | `signet hook pre-compaction` | Get summary instructions before compaction |
 | `signet hook compaction-complete` | Save session summary after compaction |
@@ -220,6 +222,10 @@ When hook payloads are provided over stdin, the CLI now prefers canonical
 provided, while still carrying legacy `userPrompt` compatibility fields.
 `signet hook session-end` forwards both stdin `transcript_path` /
 `transcriptPath` and inline `transcript` content for lossless capture.
+`signet hook stop` prints nothing, because Claude Code reads Stop hook output
+as a decision. It reads `last_assistant_message` and `cwd` from stdin, skips
+the daemon call when the payload has no session or no reply, and stops waiting
+for the daemon after 10 seconds.
 `signet hook compaction-complete` also forwards stdin `cwd` as the fallback
 `project` scope when transcript persistence has not landed yet.
 not running, hooks exit cleanly with code 0 so the harness is not blocked.

@@ -134,6 +134,44 @@ concurrently, the hook returns `503` with a `Retry shortly` error instead of
 queueing indefinitely. Callers should treat `503` as backpressure and retry
 with backoff.
 
+### POST /api/hooks/stop
+
+Called when the agent finishes a turn. Appends the turn's final assistant reply
+to the session's live transcript: the canonical JSONL transcript first, then the
+`session_transcripts` row. Requires `remember` permission (via hook routing).
+
+**Request body**
+
+```json
+{
+  "harness": "claude-code",
+  "sessionKey": "session-uuid",
+  "agentId": "optional-signet-agent-id",
+  "cwd": "/workspace/repo",
+  "lastAssistantMessage": "I've finished the refactor. The tests pass.",
+  "runtimePath": "legacy"
+}
+```
+
+`harness` and `sessionKey` are required; `sessionId` is accepted as an alias for
+`sessionKey`. An empty `lastAssistantMessage` records nothing. `cwd` sets the
+transcript's project. `agentId` follows the same scope and session-binding
+rules as the other hooks.
+
+**Response**: `{ "recorded": true }` when the reply was appended. A retried
+call with the same reply records it once. The daemon skips the write and
+returns `recorded: false` with `skipped: true` when the other runtime path owns
+the session (`duplicateRuntimePath`, `claimedBy`) or the session has ended
+(`sessionEnded`), and with `bypassed: true` when the session is bypassed.
+
+**Errors**
+
+- `400`: missing `harness` or `sessionKey`, or a non-string `lastAssistantMessage`.
+- `403`: an agent scope or session-binding violation.
+- `413`: `lastAssistantMessage` longer than 262,144 characters.
+- `503`: more than 8 stop calls in flight (`Retry-After: 1`), or database write
+  pressure (`retryable: true` and a `Retry-After` header).
+
 ### POST /api/hooks/session-end
 
 Called at session end. Captures immutable episodic transcript evidence for

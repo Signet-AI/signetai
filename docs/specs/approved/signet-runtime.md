@@ -246,6 +246,7 @@ integration surface a harness adapter must cover for full parity:
 |-----------------------------|--------------------------------------|-------|
 | Session start context       | POST /api/hooks/session-start        | start |
 | Per-prompt context + FTS    | POST /api/hooks/user-prompt-submit   | turn  |
+| Turn-end assistant reply    | POST /api/hooks/stop                 | turn  |
 | Session end / extraction    | POST /api/hooks/session-end          | end   |
 | Pre-compaction summary      | POST /api/hooks/pre-compaction       | cmpct |
 | Save compaction result      | POST /api/hooks/compaction-complete  | cmpct |
