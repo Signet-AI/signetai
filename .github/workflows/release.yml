@@ -1,322 +1,53 @@
-name: Nightly Release
+name: Release
 
 on:
   workflow_dispatch:
     inputs:
-      resume_from_tag:
-        description: "Resume build and publish for an existing tag, for example v0.207.1"
-        required: false
-        type: string
-      signing_preflight_only:
-        description: "Run macOS signing acceptance checks without creating a release"
-        required: false
-        type: boolean
-        default: false
-  push:
-    branches: [main]
+      channel:
+        description: Release channel
+        type: choice
+        required: true
+        default: check
+        options:
+          - check
+          - next
+          - stable
+
+permissions: {}
+
+concurrency:
+  group: release-${{ inputs.channel }}
+  cancel-in-progress: false
 
 jobs:
-  macos-signing-preflight:
-    if: "!contains(github.event.head_commit.message, 'chore: release')"
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-15-intel
-            platform: darwin-x64
-            asset: signet-darwin-x64
-          - os: xcode-27
-            platform: darwin-arm64
-            asset: signet-darwin-arm64
-    runs-on: ${{ matrix.os }}
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      SIGNET_NATIVE_PLATFORM: ${{ matrix.platform }}
-      RELEASE_ASSET: ${{ matrix.asset }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Check for code changes
-        id: changes
-        env:
-          RESUME_INPUT: ${{ inputs.resume_from_tag }}
-          SIGNING_PREFLIGHT_ONLY: ${{ inputs.signing_preflight_only }}
-        run: |
-          if [ "$SIGNING_PREFLIGHT_ONLY" = "true" ]; then
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Explicit signing-only run; checking both macOS targets"
-            exit 0
-          fi
-          if [ -n "$RESUME_INPUT" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "Resume requested; signing preflight is not required"
-            exit 0
-          fi
-          git fetch --force --tags origin +refs/heads/main:refs/remotes/origin/main
-          CODE_CHANGES=$(scripts/release-code-changes.sh --since-release origin/main)
-          if [ -z "$CODE_CHANGES" ]; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "No code changes detected; skipping signing preflight"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "Code changes detected; running macOS signing preflight"
-          fi
-
-      - uses: oven-sh/setup-bun@v2
-        if: steps.changes.outputs.skip != 'true'
-        with:
-          bun-version-file: package.json
-
-      - name: Install dependencies
-        if: steps.changes.outputs.skip != 'true'
-        run: bun install
-
-      - name: Build workspace dependencies
-        if: steps.changes.outputs.skip != 'true'
-        run: bun run build
-
-      - name: Build dashboard assets
-        if: steps.changes.outputs.skip != 'true'
-        run: bun run build:dashboard
-
-      - name: Build native Signet binary
-        if: steps.changes.outputs.skip != 'true'
-        env:
-          SIGNET_REQUIRE_NATIVE_ADDON: "1"
-        run: bun run build:native-bun
-
-      - name: Sign and verify macOS native binary with Developer ID
-        if: steps.changes.outputs.skip != 'true'
-        shell: bash
-        env:
-          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: bash scripts/sign-macos-native.sh "./dist/native/${RELEASE_ASSET}"
-
-      - name: Smoke signed native binary
-        if: steps.changes.outputs.skip != 'true'
-        shell: bash
-        run: ./dist/native/"$RELEASE_ASSET" --help > /dev/null
-
-  release:
-    needs: macos-signing-preflight
+  plan:
     runs-on: ubuntu-latest
-    env:
-      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-    concurrency:
-      group: ${{ inputs.resume_from_tag && format('nightly-release-resume-{0}', inputs.resume_from_tag) || 'nightly-release-pipeline' }}
-      cancel-in-progress: false
-    if: >-
-      always() &&
-      !contains(github.event.head_commit.message, 'chore: release') &&
-      inputs.signing_preflight_only != true &&
-      needs.macos-signing-preflight.result == 'success'
-
     permissions:
       contents: write
-
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      sha: ${{ steps.plan.outputs.sha }}
+      prerelease: ${{ steps.plan.outputs.prerelease }}
     steps:
-      - name: Validate resume tag input
-        env:
-          RESUME_INPUT: ${{ inputs.resume_from_tag }}
-        run: |
-          set -euo pipefail
-          if [ -z "$RESUME_INPUT" ]; then
-            exit 0
-          fi
-          if [ "${#RESUME_INPUT}" -gt 64 ]; then
-            echo "::error::resume_from_tag must be at most 64 characters"
-            exit 1
-          fi
-          if [[ ! "$RESUME_INPUT" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::resume_from_tag must be a version tag such as v0.207.1"
-            exit 1
-          fi
-          printf 'RESUME_TAG=%s\n' "$RESUME_INPUT" >> "$GITHUB_ENV"
-
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-          token: ${{ secrets.RELEASE_PAT }}
-
-      - name: Checkout validated resume tag
-        if: inputs.resume_from_tag != ''
-        env:
-          RESUME_TAG: ${{ inputs.resume_from_tag }}
-        run: |
-          set -euo pipefail
-          git fetch --force --tags origin "refs/tags/${RESUME_TAG}:refs/tags/${RESUME_TAG}"
-          TAG_SHA=$(git rev-parse --verify "refs/tags/${RESUME_TAG}^{commit}")
-          git checkout --detach "$TAG_SHA"
-          HEAD_SHA=$(git rev-parse HEAD)
-          if [ "$HEAD_SHA" != "$TAG_SHA" ]; then
-            echo "::error::Resume checkout mismatch: HEAD=$HEAD_SHA tag=$TAG_SHA"
-            exit 1
-          fi
-          printf 'NEW_VERSION=%s\n' "${RESUME_TAG#v}" >> "$GITHUB_ENV"
-          echo "Checked out ${RESUME_TAG} at ${TAG_SHA}"
-
-      - name: Check for code changes
-        id: changes
-        env:
-          RESUME_INPUT: ${{ inputs.resume_from_tag }}
-        run: |
-          if [ -n "$RESUME_INPUT" ]; then
-            echo "skip=false" >> $GITHUB_OUTPUT
-            echo "Resume requested for $RESUME_INPUT"
-            exit 0
-          fi
-          set -euo pipefail
-          git fetch --force --tags origin +refs/heads/main:refs/remotes/origin/main
-          CODE_CHANGES=$(scripts/release-code-changes.sh --since-release origin/main)
-          if [ -z "$CODE_CHANGES" ]; then
-            echo "skip=true" >> $GITHUB_OUTPUT
-            echo "No code changes detected, skipping release"
-          else
-            echo "skip=false" >> $GITHUB_OUTPUT
-            echo "Code changes detected, proceeding with release"
-          fi
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-        if: steps.changes.outputs.skip != 'true'
 
-      - name: Install dependencies
-        if: steps.changes.outputs.skip != 'true'
-        run: bun install
-
-      - name: Build
-        if: steps.changes.outputs.skip != 'true'
-        run: bun run build
-
-      - name: CLI runtime smoke check
-        if: steps.changes.outputs.skip != 'true'
-        run: bun surfaces/cli/src/cli.ts --help > /dev/null
-
-      - name: Native embedding /health isolation (source daemon)
-        if: steps.changes.outputs.skip != 'true'
-        working-directory: platform/daemon
-        run: bun test src/native-embedding-eventloop-isolation.test.ts
-
-      - name: Configure Git
-        if: steps.changes.outputs.skip != 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Sync with remote main
-        if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag == ''
-        run: |
-          git reset --hard HEAD
-          git clean -fd
-          git pull --rebase origin main
-
-      - name: Resolve resume tag
-        if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag != ''
-        run: |
-          set -euo pipefail
-          TAG_SHA=$(git rev-parse --verify "refs/tags/${RESUME_TAG}^{commit}")
-          HEAD_SHA=$(git rev-parse HEAD)
-          if [ "$HEAD_SHA" != "$TAG_SHA" ]; then
-            echo "::error::Resume checkout assertion failed: HEAD=$HEAD_SHA tag=$TAG_SHA"
-            exit 1
-          fi
-          echo "Resuming release for $RESUME_TAG at $TAG_SHA without changing version or tag"
-
-      - name: Bump version
-        id: bump_version
-        if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag == ''
-        run: |
-          set -euo pipefail
-
-          LOCAL_VERSION=$(jq -r '.version' package.json)
-          REMOTE_VERSION_JSON=$(git show 'origin/main:package.json' 2>/dev/null || true)
-
-          if [ -n "$REMOTE_VERSION_JSON" ]; then
-            REMOTE_VERSION=$(printf '%s' "$REMOTE_VERSION_JSON" | jq -r '.version')
-          else
-            REMOTE_VERSION="$LOCAL_VERSION"
-          fi
-
-          BASE_VERSION=$(printf '%s\n%s\n' "$LOCAL_VERSION" "$REMOTE_VERSION" | sort -V | tail -n1)
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
-
-          bun scripts/changelog.ts --bump-only
-
-          BUMP=$(cat .bump-level 2>/dev/null || echo "patch")
-          case "$BUMP" in
-            major) NEW_VERSION="$((MAJOR + 1)).0.0" ;;
-            minor) NEW_VERSION="$MAJOR.$((MINOR + 1)).0" ;;
-            *)     NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))" ;;
-          esac
-
-          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-          echo "BUMP_LEVEL=$BUMP" >> $GITHUB_ENV
-          echo "bump_level=$BUMP" >> $GITHUB_OUTPUT
-          rm -f .bump-level
-          bun scripts/version-sync.ts --to "$NEW_VERSION"
-
-          bun scripts/changelog.ts --version "$NEW_VERSION"
-          bun install
-
-          git add -A
-          git commit -m "chore: release $NEW_VERSION"
-          git tag "v$NEW_VERSION"
-
-      - name: Push version bump
-        if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag == ''
-        run: |
-          git push origin HEAD:main
-          git push origin "v$NEW_VERSION"
-
-      - name: Create GitHub Nightly Release (draft prerelease)
-        id: create_release
-        if: steps.changes.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          NOTES=$(bun scripts/extract-changelog-section.ts "$NEW_VERSION")
-          if [ -z "$NOTES" ] || [ "$NOTES" = "No changelog section found for v$NEW_VERSION" ]; then
-            echo "::error::Missing CHANGELOG.md section for v$NEW_VERSION"
-            exit 1
-          fi
-          tag="v$NEW_VERSION"
-          for attempt in 1 2 3; do
-            if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
-              echo "Reusing existing GitHub release $tag"
-              break
-            fi
-            set +e
-            output=$(gh release create "$tag" --draft --prerelease --title "$tag" --notes "$NOTES" 2>&1)
-            status=$?
-            set -e
-            if [ "$status" -eq 0 ] || gh release view "$tag" --json isDraft >/dev/null 2>&1; then
-              echo "GitHub release $tag is available"
-              break
-            fi
-            printf '%s\n' "$output" >&2
-            if [ "$attempt" -eq 3 ]; then
-              exit "$status"
-            fi
-            echo "Retrying release creation after transient GitHub API failure (${attempt}/3)"
-            sleep $((attempt * 5))
-          done
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+      - name: Plan release and prepare draft
+        id: plan
+        run: bun scripts/release-plan.ts
         env:
+          CHANNEL: ${{ inputs.channel }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    outputs:
-      version: ${{ steps.create_release.outputs.version }}
-      skip: ${{ steps.changes.outputs.skip }}
-      bump_level: ${{ steps.bump_version.outputs.bump_level }}
-
-
   build-native:
-    needs: release
-    if: needs.release.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != '' && inputs.signing_preflight_only != true
+    needs: plan
     permissions:
       contents: write
     strategy:
@@ -341,23 +72,40 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      RELEASE_VERSION: ${{ needs.release.outputs.version }}
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
       SIGNET_NATIVE_PLATFORM: ${{ matrix.platform }}
       RELEASE_ASSET: ${{ matrix.asset }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ needs.release.outputs.version }}
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+
+      - name: Stamp release version
+        shell: bash
+        run: |
+          if [ "$RELEASE_VERSION" != "$(bun -p 'require("./package.json").version')" ]; then
+            bun scripts/version-sync.ts --to "$RELEASE_VERSION"
+          fi
 
       - name: Install dependencies
         run: bun install
 
       - name: Build workspace dependencies
         run: bun run build
+
+      - name: CLI runtime smoke check
+        if: matrix.platform == 'linux-x64'
+        run: bun surfaces/cli/src/cli.ts --help > /dev/null
+
+      - name: Native embedding /health isolation (source daemon)
+        if: matrix.platform == 'linux-x64'
+        working-directory: platform/daemon
+        run: bun test src/native-embedding-eventloop-isolation.test.ts
 
       - name: Build dashboard assets
         run: bun run build:dashboard
@@ -420,6 +168,7 @@ jobs:
         run: bun test scripts/native-first-use-smoke.test.ts
 
       - name: Upload to release
+        if: inputs.channel != 'check'
         shell: bash
         run: |
           STAGING="${RUNNER_TEMP}/upload"
@@ -431,23 +180,44 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  desktop:
+    needs: plan
+    permissions:
+      contents: write
+    uses: ./.github/workflows/desktop-build.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      version: ${{ needs.plan.outputs.version }}
+      release_tag: ${{ inputs.channel != 'check' && needs.plan.outputs.tag || '' }}
+    secrets: inherit
+
   publish:
-    needs: [release, build-native]
+    needs: [plan, build-native, desktop]
     runs-on: ubuntu-latest
-    if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != '' && inputs.signing_preflight_only != true
+    if: inputs.channel != 'check'
     permissions:
       contents: write
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-      NEW_VERSION: ${{ needs.release.outputs.version }}
+      NEW_VERSION: ${{ needs.plan.outputs.version }}
+      RELEASE_VERSION: ${{ needs.plan.outputs.version }}
+      CHANNEL: ${{ inputs.channel }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: v${{ needs.release.outputs.version }}
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
+
+      - name: Stamp release version
+        shell: bash
+        run: |
+          if [ "$RELEASE_VERSION" != "$(bun -p 'require("./package.json").version')" ]; then
+            bun scripts/version-sync.ts --to "$RELEASE_VERSION"
+          fi
 
       - name: Install dependencies
         run: bun install
@@ -458,7 +228,7 @@ jobs:
       - name: Download native release assets
         run: |
           mkdir -p dist/native
-          gh release download "v${NEW_VERSION}" --pattern "signet-*" --dir dist/native --repo "$GITHUB_REPOSITORY"
+          gh release download "v${NEW_VERSION}" --pattern "signet-*" --dir dist/native --clobber --repo "$GITHUB_REPOSITORY"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -493,6 +263,21 @@ jobs:
             signet-connectors-${NEW_VERSION}.tar.gz
             signet-daemon-js-${NEW_VERSION}.tar.gz
             native-manifest.json
+            "Signet-${NEW_VERSION}-linux-amd64.deb"
+            "Signet-${NEW_VERSION}-linux-x86_64.AppImage"
+            "Signet-${NEW_VERSION}-mac-arm64.dmg"
+            "Signet-${NEW_VERSION}-mac-arm64.dmg.blockmap"
+            "Signet-${NEW_VERSION}-mac-arm64.zip"
+            "Signet-${NEW_VERSION}-mac-arm64.zip.blockmap"
+            "Signet-${NEW_VERSION}-mac-x64.dmg"
+            "Signet-${NEW_VERSION}-mac-x64.dmg.blockmap"
+            "Signet-${NEW_VERSION}-mac-x64.zip"
+            "Signet-${NEW_VERSION}-mac-x64.zip.blockmap"
+            "Signet-${NEW_VERSION}-win-x64.exe"
+            "Signet-${NEW_VERSION}-win-x64.exe.blockmap"
+            "latest-linux.yml"
+            "latest-mac.yml"
+            "latest.yml"
           )
           for asset in "${expected[@]}"; do
             if ! printf '%s\n' "${ASSETS[@]}" | grep -Fxq "$asset"; then
@@ -500,6 +285,19 @@ jobs:
               exit 1
             fi
           done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify macOS update manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest_dir="${RUNNER_TEMP}/mac-update-manifest"
+          mkdir -p "${manifest_dir}"
+          scripts/retry-github-release.sh gh release download "v${NEW_VERSION}" --pattern "latest-mac.yml" --dir "${manifest_dir}" --clobber --repo "${GITHUB_REPOSITORY}"
+          bun surfaces/desktop/scripts/merge-mac-update-manifest.ts \
+            --verify "${manifest_dir}/latest-mac.yml" \
+            --version "${NEW_VERSION}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -552,6 +350,8 @@ jobs:
 
       - name: Publish npm packages
         run: |
+          set -euo pipefail
+          : > "${RUNNER_TEMP}/released-npm-packages"
           test -n "$NODE_AUTH_TOKEN"
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
           publish_npm_package() {
@@ -562,14 +362,13 @@ jobs:
             local current
             current=$(npm view "${package_name}@${NEW_VERSION}" version 2>/dev/null || echo "0.0.0")
             if [ "$current" = "$NEW_VERSION" ]; then
-              echo "${package_name}@${NEW_VERSION} already published, refreshing next tag"
+              echo "${package_name}@${NEW_VERSION} already published; reusing it"
             elif [ "$optional" = "true" ]; then
               (cd "$package_dir" && npm publish --tag release-staging --access public) || return 0
             else
               (cd "$package_dir" && npm publish --tag release-staging --access public)
             fi
-            npm dist-tag rm "${package_name}" release-staging >/dev/null 2>&1 || true
-            scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" next
+            printf '%s\n' "${package_name}" >> "${RUNNER_TEMP}/released-npm-packages"
           }
 
           STAGED_NPM_ROOT="${RUNNER_TEMP}/signet-npm-publish"
@@ -593,58 +392,31 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
 
-      - name: Wait for desktop release assets
+      - name: Finalize GitHub release
+        shell: bash
+        run: |
+          if [ "$CHANNEL" = stable ]; then
+            scripts/retry-github-release.sh gh release edit "v${NEW_VERSION}" --draft=false --prerelease=false --latest --repo "${GITHUB_REPOSITORY}"
+          else
+            scripts/retry-github-release.sh gh release edit "v${NEW_VERSION}" --draft=false --prerelease --latest=false --repo "${GITHUB_REPOSITORY}"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Advance npm channels
         shell: bash
         run: |
           set -euo pipefail
-          expected=(
-            "Signet-${NEW_VERSION}-linux-amd64.deb"
-            "Signet-${NEW_VERSION}-linux-x86_64.AppImage"
-            "Signet-${NEW_VERSION}-mac-arm64.dmg"
-            "Signet-${NEW_VERSION}-mac-arm64.dmg.blockmap"
-            "Signet-${NEW_VERSION}-mac-arm64.zip"
-            "Signet-${NEW_VERSION}-mac-arm64.zip.blockmap"
-            "Signet-${NEW_VERSION}-mac-x64.dmg"
-            "Signet-${NEW_VERSION}-mac-x64.dmg.blockmap"
-            "Signet-${NEW_VERSION}-mac-x64.zip"
-            "Signet-${NEW_VERSION}-mac-x64.zip.blockmap"
-            "Signet-${NEW_VERSION}-win-x64.exe"
-            "Signet-${NEW_VERSION}-win-x64.exe.blockmap"
-            "latest-linux.yml"
-            "latest-mac.yml"
-            "latest.yml"
-          )
-
-          for attempt in $(seq 1 90); do
-            assets=$(scripts/retry-github-release.sh gh release view "v${NEW_VERSION}" --json assets --jq '.assets[].name' --repo "${GITHUB_REPOSITORY}" 2>/dev/null || true)
-            missing=()
-            for asset in "${expected[@]}"; do
-              if ! printf '%s\n' "${assets}" | grep -Fxq "${asset}"; then
-                missing+=("${asset}")
-              fi
-            done
-            if [ "${#missing[@]}" -eq 0 ]; then
-              echo "All desktop release assets are present"
-              break
+          while IFS= read -r package_name; do
+            if [ "$CHANNEL" = stable ]; then
+              scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" latest
             fi
-            if [ "${attempt}" -eq 90 ]; then
-              echo "::error::Timed out waiting for desktop release assets: ${missing[*]}"
-              exit 1
+            scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" next
+            staged=$(npm view "${package_name}" dist-tags.release-staging)
+            if [ "$staged" = "$NEW_VERSION" ]; then
+              npm dist-tag rm "${package_name}" release-staging
             fi
-            echo "Waiting for desktop release assets (attempt ${attempt}/90): ${missing[*]}"
-            sleep 30
-          done
-
-          manifest_dir="${RUNNER_TEMP}/mac-update-manifest"
-          mkdir -p "${manifest_dir}"
-          scripts/retry-github-release.sh gh release download "v${NEW_VERSION}" --pattern "latest-mac.yml" --dir "${manifest_dir}" --repo "${GITHUB_REPOSITORY}"
-          bun surfaces/desktop/scripts/merge-mac-update-manifest.ts \
-            --verify "${manifest_dir}/latest-mac.yml" \
-            --version "${NEW_VERSION}"
+          done < "${RUNNER_TEMP}/released-npm-packages"
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Finalize GitHub release
-        run: scripts/retry-github-release.sh gh release edit "v${NEW_VERSION}" --draft=false --repo "${GITHUB_REPOSITORY}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc

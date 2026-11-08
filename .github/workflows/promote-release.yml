@@ -1,10 +1,10 @@
-name: Promote Release
+name: Point Stable at Release
 
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Nightly version to promote to stable/latest (e.g. 0.113.1)"
+        description: "Published stable version for latest, including rollback (e.g. 1.0.0)"
         required: true
         type: string
 
@@ -15,11 +15,11 @@ jobs:
       contents: write
 
     steps:
-      - name: Promote to stable/latest
+      - name: Point stable at published release
         run: |
           set -euo pipefail
           test -n "$NODE_AUTH_TOKEN"
-          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
             echo "::error::Invalid release version: $VERSION"
             exit 1
           fi
@@ -47,7 +47,11 @@ jobs:
           for package in "${required_packages[@]}"; do
             npm view "${package}@${VERSION}" version >/dev/null
           done
-          gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" >/dev/null
+          draft=$(gh release view "v${VERSION}" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+          if [ "${draft}" != "false" ]; then
+            echo "::error::Release v${VERSION} must be published, not a draft"
+            exit 1
+          fi
 
           promoted_packages=("${required_packages[@]}")
           for package in "${optional_packages[@]}"; do
@@ -71,7 +75,7 @@ jobs:
           done
 
           gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
-          echo "Promoted v${VERSION} to stable/latest"
+          echo "Pointed stable/latest at v${VERSION}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

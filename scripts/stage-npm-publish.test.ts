@@ -58,7 +58,7 @@ describe("stage-npm-publish", () => {
 		);
 	});
 
-	test("stages every scoped package listed by the nightly publish step", () => {
+	test("stages every scoped package listed by the manual release publish step", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf8");
 		const publishNames = Array.from(

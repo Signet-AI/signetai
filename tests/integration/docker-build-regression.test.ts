@@ -142,7 +142,7 @@ describe("Docker build pipeline regression guard", () => {
 		expect(desktopTypecheck).toContain("tsc -p tsconfig.json --noEmit");
 	});
 
-	it("keeps Electron Builder from auto-publishing during tag builds", () => {
+	it("keeps Electron Builder from auto-publishing during explicit release builds", () => {
 		expect(desktopBuild).toBeDefined();
 		if (!desktopBuild) return;
 		expect(desktopBuild).toContain("electron-builder --publish never");

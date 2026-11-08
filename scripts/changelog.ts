@@ -73,7 +73,9 @@ function execGit(command: string): string {
 
 export function getPreviousTag(): string | null {
 	try {
-		return execGit("git describe --tags --abbrev=0").trim();
+		const tags = listVersionTags();
+		if (tags.length === 0) return null;
+		return execGit(`git describe --tags --abbrev=0 ${tags.map((tag) => `--match '${tag}'`).join(" ")}`).trim();
 	} catch {
 		return null;
 	}
@@ -127,7 +129,7 @@ export function buildGroups(lines: readonly string[]): Map<string, string[]> {
 		if (line.startsWith("chore: release")) continue;
 		const commit = parseCommit(line);
 		if (commit === null) continue;
-		if (!Object.prototype.hasOwnProperty.call(INCLUDE_TYPES, commit.type)) continue;
+		if (!Object.hasOwn(INCLUDE_TYPES, commit.type)) continue;
 
 		const entry = formatEntry(commit);
 		const existing = groups.get(commit.type);

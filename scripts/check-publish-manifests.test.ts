@@ -22,11 +22,12 @@ function writeJson(file: string, value: unknown): void {
 }
 
 describe("check-publish-manifests", () => {
-	test("keeps the nightly release manually triggerable", () => {
+	test("keeps releases manual with explicit dispatch channels", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf-8");
 
 		expect(workflow).toContain("  workflow_dispatch:\n    inputs:");
+		expect(workflow).not.toMatch(/^\s*push:/m);
 	});
 
 	test("does not ship the retired threaded extraction worker", () => {

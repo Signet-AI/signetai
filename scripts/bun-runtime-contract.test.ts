@@ -107,5 +107,7 @@ describe("Bun runtime contract", () => {
 		expect(signingStep).toMatch(/APPLE_TEAM_ID: \$\{\{ secrets\.APPLE_TEAM_ID \}\}/);
 		expect(signingStep).toMatch(/run: bash scripts\/sign-macos-native\.sh "\.\/dist\/native\/\$\{RELEASE_ASSET\}"/);
 		expect(uploadStart).toBeGreaterThan(signingEnd);
+		expect(buildNativeWorkflow).toContain("ref: ${{ needs.plan.outputs.sha }}");
+		expect(buildNativeWorkflow).toContain("if: inputs.channel != 'check'");
 	});
 });
