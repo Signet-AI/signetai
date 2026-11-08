@@ -133,8 +133,8 @@ signet desktop install
 - **Claim traces:** you can ask why Signet believes something and get its history, competing claims, and the exact source passages, from the CLI, API, or MCP.
 - **Agent isolation:** each agent only sees the memory it's allowed to read.
 - **Secrets:** secrets are stored encrypted, with the master key in your OS keyring. Systems without a keyring fall back to encrypted file storage and show a health warning. Make sure to keep your keychain in your recovery plan; see [Secrets](https://docs.signetai.sh/secrets/).
-- **Recovery:** protection status shows whether a backup has been verified as restorable and flags backups that are missing or stale.
-- **Hostile content:** content that matches known hostile patterns is kept out of what your agents see.
+- **Recovery:** protection status shows which parts of your workspace are protected and flags backups that are missing or stale.
+- **Credentials:** text that looks like a known credential, such as an API key, is redacted from what your agents see.
 
 ## Telemetry
 
