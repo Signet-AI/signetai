@@ -37,6 +37,7 @@
 		"productName": "Signet",
 		"executableName": "signet",
 		"artifactName": "Signet-${version}-${os}-${arch}.${ext}",
+		"detectUpdateChannel": false,
 		"asar": true,
 		"npmRebuild": false,
 		"afterPack": "./scripts/after-pack.mjs",

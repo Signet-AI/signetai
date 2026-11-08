@@ -54,7 +54,8 @@ test("Release is manual with exactly three channels and per-channel queueing", (
 test("builds use the planned SHA and stamp before installing or building", () => {
 	for (const name of ["build-native", "publish"]) {
 		const steps = release.jobs[name].steps;
-		expect(steps[0].with.ref).toBe("${{ needs.plan.outputs.sha }}");
+		const checkout = steps.find((step: { uses?: string }) => step.uses === "actions/checkout@v4");
+		expect(checkout.with.ref).toBe("${{ needs.plan.outputs.sha }}");
 		const stamp = steps.findIndex((step: { name?: string }) => step.name === "Stamp release version");
 		const install = steps.findIndex((step: { name?: string }) => step.name === "Install dependencies");
 		expect(stamp).toBeGreaterThan(0);
@@ -79,6 +80,8 @@ test("desktop is reusable without a tag trigger and check has no publication tar
 	);
 	expect(desktop.jobs.build.steps[0].with.ref).toBe("${{ inputs.ref || github.sha }}");
 	expect(desktopText).toContain('bun scripts/version-sync.ts --to "$RELEASE_VERSION"');
+	const desktopPackage = JSON.parse(readFileSync(join(root, "surfaces/desktop/package.json"), "utf8"));
+	expect(desktopPackage.build.detectUpdateChannel).toBe(false);
 });
 
 test("publication stages npm behind all builds and assets before finalizing then moving tags", () => {
@@ -93,7 +96,6 @@ test("publication stages npm behind all builds and assets before finalizing then
 		"Stage scoped npm packages",
 		"Publish npm packages",
 		"Finalize GitHub release",
-		"Advance npm channels",
 	];
 	let previous = -1;
 	for (const name of order) {
@@ -114,7 +116,11 @@ test("publication stages npm behind all builds and assets before finalizing then
 	).run;
 	expect(publish).toContain("npm publish --tag release-staging");
 	expect(publish).not.toContain("dist-tag");
-	const advance = release.jobs.publish.steps.find(
+	expect(release.jobs.publish.steps[0].name).toBe("Refuse a published release");
+	expect(names.at(-1)).toBe("Finalize GitHub release");
+	expect(release.jobs.promote.needs).toEqual(["plan", "publish"]);
+	expect(release.jobs.promote.env.PACKAGES).toBe("${{ needs.publish.outputs.packages }}");
+	const advance = release.jobs.promote.steps.find(
 		(step: { name?: string }) => step.name === "Advance npm channels",
 	).run;
 	expect(advance).toContain('scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" latest');
@@ -129,6 +135,7 @@ test("Docker publishes from the finalized tag through Release, not a tag push", 
 	expect(docker.jobs.publish.steps[0].with.ref).toBe("v${{ inputs.version }}");
 	expect(text).not.toContain("github.ref_name");
 	expect(release.jobs.docker.needs).toEqual(["plan", "publish"]);
+	expect(release.jobs.docker.if).toBe("inputs.channel == 'stable'");
 	expect(release.jobs.docker.uses).toBe("./.github/workflows/docker-image.yml");
 	expect(release.jobs.docker.with.version).toBe("${{ needs.plan.outputs.version }}");
 	expect(release.jobs.docker.permissions).toEqual({ contents: "read", packages: "write" });

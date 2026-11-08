@@ -15,6 +15,7 @@ interface Scenario {
 	tagSha?: string;
 	latest?: string;
 	release?: { draft: boolean; target_commitish: string };
+	duplicate?: boolean;
 	notes?: string;
 	apiFails?: boolean;
 }
@@ -39,8 +40,8 @@ if (${JSON.stringify(command)} === "git") console.log(scenario.tagSha ? scenario
 if (${JSON.stringify(command)} === "npm") console.log(scenario.latest ?? "1.0.0");
 if (${JSON.stringify(command)} === "gh" && args[0] === "api") {
  if (scenario.apiFails) process.exit(1);
- if (args[1] === "graphql") console.log(scenario.release ? "123" : "0");
- else console.log(JSON.stringify({ tag_name: "v" + (scenario.channel === "next" ? "1.0.1-next.42" : "1.0.1"), ...scenario.release }));
+ if (scenario.release) console.log(JSON.stringify(scenario.release));
+ if (scenario.release && scenario.duplicate) console.log(JSON.stringify(scenario.release));
 }
 `,
 		);
@@ -78,8 +79,8 @@ test("stable plans the committed SHA and creates an untagged draft with changelo
 	expect(value.result.exitCode, value.error).toBe(0);
 	expect(value.output).toBe(`version=1.0.1\ntag=v1.0.1\nsha=${sha}\nprerelease=false\n`);
 	const calls = await value.calls.text();
-	expect(calls).toContain('"api","graphql"');
-	expect(calls).not.toContain("--paginate");
+	expect(calls).toContain('"api","--paginate","repos/example/repo/releases?per_page=100"');
+	expect(calls).toContain('select(.tag_name == \\"v1.0.1\\")');
 	expect(calls).toContain(`"--draft","--target","${sha}`);
 	expect(calls).toContain('"--notes"');
 	expect(calls).not.toContain('"push"');
@@ -95,7 +96,9 @@ test("stable rejects wrong refs, invalid versions, missing notes, older versions
 		{ latest: "1.0.2" },
 		{ tagSha: "b".repeat(40) },
 		{ release: { draft: true, target_commitish: "b".repeat(40) } },
+		{ release: { draft: true, target_commitish: sha }, duplicate: true },
 		{ apiFails: true },
+		{ channel: "next", ref: "refs/heads/feature" },
 	]) {
 		const value = run(scenario);
 		expect(value.result.exitCode).not.toBe(0);
@@ -104,15 +107,21 @@ test("stable rejects wrong refs, invalid versions, missing notes, older versions
 	expect(run({ release: { draft: true, target_commitish: "b".repeat(40) } }).error).toContain("delete the draft");
 });
 
-test("stable blocks completed releases but resumes before either finalization boundary", async () => {
-	const complete = run({ latest: "1.0.1", release: { draft: false, target_commitish: sha }, tagSha: sha });
-	expect(complete.result.exitCode).not.toBe(0);
-	expect(complete.error).toContain("already released");
-	for (const draft of [true, false]) {
-		const resumed = run({ release: { draft, target_commitish: sha }, latest: draft ? "1.0.1" : "1.0.0", tagSha: sha });
-		expect(resumed.result.exitCode, resumed.error).toBe(0);
-		expect(await resumed.calls.text()).not.toContain('"create"');
+test("published releases are never re-planned, so public assets are never rebuilt", () => {
+	for (const channel of ["stable", "next"]) {
+		for (const latest of ["1.0.0", "1.0.1"]) {
+			const value = run({ channel, latest, release: { draft: false, target_commitish: sha }, tagSha: sha });
+			expect(value.result.exitCode).not.toBe(0);
+			expect(value.output).toBe("");
+			expect(value.error).toContain("already published");
+		}
 	}
+});
+
+test("stable resumes its own draft without recreating it", async () => {
+	const value = run({ release: { draft: true, target_commitish: sha } });
+	expect(value.result.exitCode, value.error).toBe(0);
+	expect(await value.calls.text()).not.toContain('"create"');
 });
 
 test("next uses the unreleased base or the next patch after a base tag", async () => {
@@ -133,8 +142,7 @@ test("next resumes its run-number draft without recreating it", async () => {
 	expect(value.result.exitCode, value.error).toBe(0);
 	const calls = await value.calls.text();
 	expect(calls).not.toContain('"create"');
-	expect(calls).toContain('"api","repos/example/repo/releases/123"');
-	expect(calls).toContain('"tag=v1.0.1-next.42"');
+	expect(calls).toContain('select(.tag_name == \\"v1.0.1-next.42\\")');
 });
 
 test("check uses only local metadata and never calls publication services", () => {

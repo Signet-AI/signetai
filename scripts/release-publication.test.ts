@@ -6,7 +6,7 @@ import { parse } from "yaml";
 
 const root = join(import.meta.dir, "..");
 const workflow = parse(readFileSync(join(root, ".github/workflows/release.yml"), "utf8"));
-const steps: { name: string; run: string }[] = workflow.jobs.publish.steps;
+const steps: { name: string; run: string }[] = [...workflow.jobs.publish.steps, ...workflow.jobs.promote.steps];
 const script = (name: string): string => {
 	const step = steps.find((step) => step.name === name);
 	if (!step) throw new Error(`Missing workflow step ${name}`);
@@ -48,6 +48,14 @@ function fixture(channel = "stable") {
 		writeFileSync(join(absolute, "package.json"), JSON.stringify({ name, version: "1.0.1" }));
 	}
 	const stateFile = join(dir, "registry.json");
+	const outputFile = join(dir, "github-output");
+	writeFileSync(outputFile, "");
+	const packages = (): string =>
+		readFileSync(outputFile, "utf8")
+			.split("\n")
+			.filter((line) => line.startsWith("packages="))
+			.at(-1)
+			?.slice("packages=".length) ?? "";
 	writeFileSync(stateFile, JSON.stringify({ versions: {}, tags: {}, calls: [], public: false }));
 	for (const command of ["npm", "gh"]) {
 		const path = join(dir, "tools", command);
@@ -115,6 +123,8 @@ process.exit(9);
 					VERSION: "1.0.1",
 					NODE_AUTH_TOKEN: "test-only-not-a-token",
 					GITHUB_REPOSITORY: "example/repo",
+					GITHUB_OUTPUT: outputFile,
+					PACKAGES: packages(),
 					CHANNEL: channel,
 				},
 				stdout: "pipe",
@@ -204,6 +214,26 @@ test("failed GitHub finalization leaves staged versions for an idempotent retry"
 	value.write({ ...value.read(), failFinalize: false });
 	for (const name of ["Publish npm packages", "Finalize GitHub release", "Advance npm channels"])
 		expect(value.run(name).exitCode).toBe(0);
+});
+
+test("publish refuses to rebuild assets onto an already published release", () => {
+	const value = fixture();
+	expect(value.run("Refuse a published release").exitCode).toBe(0);
+	value.write({ ...value.read(), public: true });
+	const result = value.run("Refuse a published release");
+	expect(result.exitCode).not.toBe(0);
+	expect(new TextDecoder().decode(result.stdout)).toContain("re-run the promote job");
+});
+
+test("promote advances exactly the packages publish reported", () => {
+	const value = fixture();
+	value.write({ ...value.read(), failPackage: "@signetai/signet-memory-openclaw" });
+	expect(value.run("Publish npm packages").exitCode).toBe(0);
+	expect(value.run("Finalize GitHub release").exitCode).toBe(0);
+	expect(value.run("Advance npm channels").exitCode).toBe(0);
+	const state = value.read();
+	expect(state.tags["@signetai/signet-memory-openclaw"]).toBeUndefined();
+	expect(state.tags.signetai).toEqual({ latest: "1.0.1", next: "1.0.1" });
 });
 
 test("rollback requires all packages and a public release before moving only latest backward", () => {

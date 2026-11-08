@@ -85,8 +85,12 @@ The **Release** workflow (`.github/workflows/release.yml`) has one input,
 | Dispatch channel | Result |
 | --- | --- |
 | `check` (default) | Build, sign, and smoke-test the candidate; publish no release, git tag, or npm package |
-| `next` | Build a development prerelease and advance npm `next` |
+| `next` | Build a development prerelease from `main` and advance npm `next` |
 | `stable` | Release the committed plain version from `main` and advance npm `latest` and `next` |
+
+`check` runs from any branch and does not run the stable planning checks below
+(changelog section, npm ordering, existing releases), so a green check proves
+the builds, not that a stable plan will pass.
 
 All build jobs use the same planned commit SHA. Next and check jobs stamp the
 resolved version, then install dependencies before building. Native platforms,
@@ -95,7 +99,8 @@ remain release gates. The reusable Desktop Build workflow also supports a manual
 unpublished build of its current ref; tags do not trigger desktop builds.
 AUR metadata omits the prerelease hyphen in `pkgver` (for example,
 `1.0.1next.42`) because Arch forbids hyphens there; download URLs retain the
-exact SemVer release version.
+exact SemVer release version. Desktop builds disable electron-builder's update
+channel detection, so prerelease versions still write `latest*.yml` update files.
 
 ## Cut a stable release
 
@@ -142,26 +147,25 @@ Stable is marked normal/latest; next is marked prerelease/not latest. Then it
 advances the channel dist-tags and removes its staging tag. The OpenClaw memory
 adapter remains optional; its absence does not block the required packages.
 
-Last, Release calls the **Docker Image** workflow, which builds
-`ghcr.io/signet-ai/signet` from the new tag. Stable releases also move the
-image's `latest`, `X.Y.Z`, `X.Y`, and `X` tags. Docker publishing no longer runs
-on tag pushes; if only the Docker job fails, dispatch **Docker Image** with the
-released version.
+Last, a stable release calls the **Docker Image** workflow, which builds
+`ghcr.io/signet-ai/signet` from the new tag and moves the image's `latest`,
+`X.Y.Z`, `X.Y`, and `X` tags. Development releases publish no image. Docker
+publishing no longer runs on tag pushes; if only the Docker job fails, dispatch
+**Docker Image** with the released version.
 
 A build or upload failure leaves no new tag and at most a draft release. A later
-npm failure can also leave staged npm versions. Re-run the failed workflow to
-reuse its SHA, version, draft, and already-published npm versions. A fresh stable
-dispatch can resume the same version only from the same commit. For next, use
-GitHub's re-run action to retain the run number; a fresh dispatch has a new
-prerelease version. Do not advance `main` and expect it to resume an old draft.
+npm failure can also leave staged npm versions. Re-run the failed jobs to reuse
+the run's SHA, version, draft, and already-published npm versions. A fresh stable
+dispatch can also resume the same version, but only from the same commit and only
+while the release is still a draft. For next, use GitHub's re-run action to
+retain the run number; a fresh dispatch has a new prerelease version. Do not
+advance `main` and expect it to resume an old draft.
 
-Publication is not a transaction across npm and GitHub. A failure after GitHub
-finalization can leave a public release and partially advanced npm dist-tags.
-Re-run failed jobs to finish advancing tags. A fresh stable dispatch rejects a
-version as **already released** when its GitHub release is public and npm
-`signetai` latest already equals that version. In that case, use the failed run's
-re-run action rather than starting a new plan. Dist-tags never move backward
-through the Release workflow.
+Publication is not a transaction across npm and GitHub. Finalizing the GitHub
+release is the last step of the publish job, and moving dist-tags is a separate
+`promote` job. Once a release is public, planning and the publish job both refuse
+to run for it, so public assets are never rebuilt or replaced. If `promote` fails,
+re-run only that job. Dist-tags never move backward through the Release workflow.
 
 ## Roll back stable
 
