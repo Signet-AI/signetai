@@ -136,7 +136,7 @@ test("publication stages npm behind all builds and assets before finalizing then
 	).run;
 	expect(advance).toContain('scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" latest');
 	expect(advance).toContain('scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" next');
-	expect(advance.indexOf(" next")).toBeLessThan(advance.indexOf("dist-tag rm"));
+	expect(advance).not.toContain("dist-tag rm");
 });
 
 test("Docker publishes from the finalized tag through Release, not a tag push", () => {
@@ -152,12 +152,14 @@ test("Docker publishes from the finalized tag through Release, not a tag push", 
 	expect(release.jobs.docker.permissions).toEqual({ contents: "read", packages: "write" });
 });
 
-test("rollback admits only plain published non-draft releases and leaves next unchanged", () => {
+test("rollback admits only plain published non-draft releases and moves next only forward", () => {
 	const text = readFileSync(join(root, ".github/workflows/promote-release.yml"), "utf8");
 	expect(parse(text).name).toBe("Point Stable at Release");
 	expect(text).toContain("--json isDraft");
 	expect(text).toContain('"${draft}" != "false"');
 	expect(text).not.toContain("(-[0-9A-Za-z.-]+)");
 	expect(text).not.toMatch(/dist-tag add .* next/);
+	expect(text).toContain('scripts/advance-npm-dist-tag.sh "${package}" "${VERSION}" next');
+	expect(text).not.toContain("dist-tag rm");
 	expect(text.indexOf("--json isDraft")).toBeLessThan(text.indexOf("npm dist-tag add"));
 });

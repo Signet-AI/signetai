@@ -451,10 +451,6 @@ jobs:
               scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" latest
             fi
             scripts/advance-npm-dist-tag.sh "${package_name}" "${NEW_VERSION}" next
-            staged=$(npm view "${package_name}" dist-tags.release-staging)
-            if [ "$staged" = "$NEW_VERSION" ]; then
-              npm dist-tag rm "${package_name}" release-staging
-            fi
           done
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

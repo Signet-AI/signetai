@@ -422,7 +422,7 @@ versions. A fresh stable dispatch can resume only the same version and commit;
 a next re-run must retain the run number. A failure after GitHub finalization
 can leave partial npm dist-tags: re-run the failed jobs rather than creating a
 new release. **Point Stable at Release** is the separate rollback workflow; it
-requires a published plain version and moves `latest`, never `next`.
+requires a published plain version, moves `latest`, and moves `next` only forward.
 
 The required publish set is `signetai`, the scoped core and connector-base
 packages, all listed harness connectors, and the Codex plugin. The OpenClaw

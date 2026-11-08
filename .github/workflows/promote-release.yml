@@ -15,6 +15,14 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+
       - name: Point stable at published release
         run: |
           set -euo pipefail
@@ -72,6 +80,10 @@ jobs:
               echo "::error::${package} latest is ${latest}, expected ${VERSION}"
               exit 1
             fi
+          done
+
+          for package in "${promoted_packages[@]}"; do
+            scripts/advance-npm-dist-tag.sh "${package}" "${VERSION}" next
           done
 
           gh release edit "v${VERSION}" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
