@@ -32,7 +32,6 @@ export interface SessionContext {
 
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
 
-// Signet owns the wake and reply-capture entries it adds to user hook groups.
 function isSignetOwnedHookEntry(hook: unknown): boolean {
 	if (typeof hook !== "object" || hook === null) return false;
 	const command = (hook as Record<string, unknown>).command;
@@ -383,10 +382,6 @@ export class ClaudeCodeConnector extends BaseConnector {
 			];
 		}
 
-		// Stop fires only for the main agent, so the capture records main-session turns.
-		// SubagentStop is left alone: subagent replies are not turns of the main session.
-		// The hook runs async because recording the reply must never delay the turn end;
-		// `signet hook stop` bounds its own daemon request.
 		const signetStopHooks: unknown[] = [];
 		if (hooksConfig.stop !== false) {
 			signetStopHooks.push({ type: "command", command: `${signetCmd} hook stop -H claude-code`, async: true });
