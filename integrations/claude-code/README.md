@@ -6,7 +6,7 @@ Signet connector for [Claude Code](https://docs.anthropic.com/en/docs/claude-cod
 
 Integrates Signet's memory system with Claude Code's lifecycle hooks so your agent retains context across sessions.
 
-- Registers hook scripts in `~/.claude/settings.json` for `SessionStart`, `UserPromptSubmit`, `PreCompact`, and `SessionEnd` events
+- Registers hook scripts in `~/.claude/settings.json` for `SessionStart`, `UserPromptSubmit`, `PreCompact`, `SessionEnd`, and `Stop` events
 - Registers the Signet MCP server in `~/.claude.json` for tool-based memory access
 - Generates `AGENTS.md` identity files from your agent workspace
 

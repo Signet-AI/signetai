@@ -558,15 +558,9 @@ export function upsertSessionTranscript(
 				.get();
 			if (!row) return false;
 			const existing = options?.preserveExistingContent
-				? (db
-						.prepare(
-							`SELECT content
-							 FROM session_transcripts
-							 WHERE session_key = ? AND agent_id = ?`,
-						)
-						.get(sessionKey, agentId) as { content?: string } | null | undefined)
+				? readExactTranscriptContent(db, sessionKey, agentId)
 				: undefined;
-			const retainedTranscript = mergeTranscriptContent(existing?.content ?? "", transcript);
+			const retainedTranscript = mergeTranscriptContent(existing ?? "", transcript);
 			const now = capturedAt ?? new Date().toISOString();
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			const hasUpdated = cols.some((col) => col.name === "updated_at");
@@ -578,7 +572,7 @@ export function upsertSessionTranscript(
 			const updates = [
 				"content = excluded.content",
 				"harness = excluded.harness",
-				"project = excluded.project",
+				"project = COALESCE(excluded.project, session_transcripts.project)",
 				"agent_id = excluded.agent_id",
 			];
 			const sameContent = hasHash
@@ -665,7 +659,7 @@ export function writeSessionTranscriptRow(
 	const updates = [
 		"content = excluded.content",
 		"harness = excluded.harness",
-		"project = excluded.project",
+		"project = COALESCE(excluded.project, session_transcripts.project)",
 		"agent_id = excluded.agent_id",
 	];
 	const sameContent = hasHash
@@ -713,21 +707,9 @@ export async function upsertSessionTranscriptAsync(
 	if (sessionKey.trim().length === 0 || transcript.trim().length === 0) return false;
 
 	try {
-		return await accessor.withWriteTxAsync(
-			(db) => {
-				return (
-					writeSessionTranscriptRow(db, {
-						sessionKey,
-						transcript,
-						harness,
-						project,
-						agentId,
-						capturedAt,
-						...options,
-					}) === "written"
-				);
-			},
-			{ siteToken: "session-transcripts.ts:716", operation: "transcripts.upsert", signal: options?.signal },
+		return await writeSessionTranscriptAsync(
+			{ sessionKey, transcript, harness, project, agentId, capturedAt, ...options },
+			accessor,
 		);
 	} catch (error) {
 		if (options?.signal?.aborted) throw error;
@@ -737,6 +719,44 @@ export async function upsertSessionTranscriptAsync(
 		});
 		return false;
 	}
+}
+
+export async function appendSessionTranscriptAsync(
+	input: {
+		readonly sessionKey: string;
+		readonly agentId: string;
+		readonly harness: string;
+		readonly project: string | null;
+		readonly append: (existing: string | undefined) => string;
+	},
+	accessor: DbAccessor = getDbAccessor(),
+): Promise<void> {
+	const written = await writeSessionTranscriptAsync({ ...input, transcript: "" }, accessor);
+	if (!written) throw new Error("Transcript append did not write a row");
+}
+
+async function writeSessionTranscriptAsync(
+	input: Parameters<typeof writeSessionTranscriptRow>[1] & {
+		readonly append?: (existing: string | undefined) => string;
+	},
+	accessor: DbAccessor,
+): Promise<boolean> {
+	return await accessor.withWriteTxAsync(
+		(db) => {
+			const transcript = input.append
+				? input.append(readExactTranscriptContent(db, input.sessionKey, input.agentId))
+				: input.transcript;
+			return writeSessionTranscriptRow(db, { ...input, transcript }) === "written";
+		},
+		{ siteToken: "session-transcripts.ts:744", operation: "transcripts.upsert", signal: input.signal },
+	);
+}
+
+function readExactTranscriptContent(db: WriteDb, sessionKey: string, agentId: string): string | undefined {
+	const row = db
+		.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+		.get(sessionKey, agentId) as { content?: string } | null | undefined;
+	return row?.content;
 }
 
 function mergeTranscriptContent(existing: string, incoming: string): string {
@@ -773,7 +793,7 @@ export function markSessionTranscriptCompleted(
 		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
-		}, "session-transcripts.ts:773");
+		}, "session-transcripts.ts:793");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript completion marker failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -836,7 +856,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				completedAt: row.completed_at ?? null,
 				contentHash: row.content_hash ?? null,
 			};
-		}, "session-transcripts.ts:805");
+		}, "session-transcripts.ts:825");
 	} catch {
 		return undefined;
 	}
@@ -904,7 +924,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ siteToken: "session-transcripts.ts:902", operation: "transcripts.lookup", signal },
+			{ siteToken: "session-transcripts.ts:922", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;
@@ -934,7 +954,7 @@ export function getSessionTranscriptContent(
 				| { content: string }
 				| undefined;
 			return row?.content;
-		}, "session-transcripts.ts:925");
+		}, "session-transcripts.ts:945");
 	} catch {
 		return undefined;
 	}
@@ -982,7 +1002,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:958");
+		}, "session-transcripts.ts:978");
 	} catch {
 		return [];
 	}
@@ -1030,7 +1050,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:1013");
+		}, "session-transcripts.ts:1033");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -1073,7 +1093,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:1058");
+						}, "session-transcripts.ts:1078");
 
 					const hits = rows
 						.map((row) => ({
@@ -1143,7 +1163,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1122");
+			}, "session-transcripts.ts:1142");
 
 		return rows
 			.map((row) => ({

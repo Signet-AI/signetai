@@ -20,6 +20,7 @@ export interface ConnectorConfig {
 		userPromptSubmit?: boolean;
 		preCompact?: boolean;
 		sessionEnd?: boolean;
+		stop?: boolean;
 	};
 }
 
@@ -33,7 +34,7 @@ export interface SessionContext {
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
 
 const SIGNET_HOOK_COMMAND =
-	/^(?:("[^"]+"|'[^']+'|[^\s"';&|<>`$()]+) )?("[^"]+"|'[^']+'|[^\s"';&|<>`$()]+) hook (session-start|user-prompt-submit|notifications|pre-compaction|session-end|wake) -H claude-code(?:\s|$)/;
+	/^(?:("[^"]+"|'[^']+'|[^\s"';&|<>`$()]+) )?("[^"]+"|'[^']+'|[^\s"';&|<>`$()]+) hook (session-start|user-prompt-submit|notifications|pre-compaction|session-end|wake|stop) -H claude-code(?:\s|$)/;
 
 function readClaudeSettings(path: string): Record<string, unknown> {
 	if (!existsSync(path)) return {};
@@ -309,6 +310,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			userPromptSubmit: true,
 			preCompact: true,
 			sessionEnd: true,
+			stop: true,
 		};
 		let signetCmd = "signet";
 		if (process.platform === "win32") {
@@ -399,9 +401,12 @@ export class ClaudeCodeConnector extends BaseConnector {
 			];
 		}
 
-		if (hooksConfig.sessionStart !== false) {
-			hooks.Stop = [{ hooks: [wakeHook] }];
+		const stopHooks: unknown[] = [];
+		if (hooksConfig.stop !== false) {
+			stopHooks.push({ type: "command", command: `${signetCmd} hook stop -H claude-code`, async: true });
 		}
+		if (hooksConfig.sessionStart !== false) stopHooks.push(wakeHook);
+		if (stopHooks.length > 0) hooks.Stop = [{ hooks: stopHooks }];
 
 		const merged = withoutSignetHooks(settings.hooks);
 		for (const [event, groups] of Object.entries(hooks)) {
