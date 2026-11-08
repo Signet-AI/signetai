@@ -382,7 +382,7 @@ Be transparent about AI assistance in PRs where applicable. See the
 Conventional Commits and Versioning
 ---
 
-Commit types drive automated version bumps:
+Commit types guide the version chosen during release preparation:
 
 - `feat:` or `feat(scope):` → **minor** version bump (user-facing features only)
 - `fix:`, `refactor:`, `chore:`, `perf:`, `docs:`, etc. → **patch** bump
@@ -395,42 +395,50 @@ improvements, helpers, and plumbing should use `fix:`, `refactor:`,
 Release Workflow
 ---
 
-Releases are fully automated via GitHub Actions (`.github/workflows/release.yml`).
-**Do not publish packages manually.** Push to `main` and CI handles the rest.
+Releases are manual. Merging to `main` never bumps a version or publishes a
+release. Stable versions use SemVer starting with `1.0.0`: breaking changes are
+major, features are minor, and fixes or compatible maintenance are patch.
+**Do not publish packages or push release tags by hand.**
 
-### What triggers a release
+1. From an up-to-date PR branch, run `bun run release:prepare [version]`.
+   Use `1.0.0` explicitly for the first release under this policy. An omitted
+   version uses conventional commit subjects since the last stable tag.
+2. Review the version, changelog, and lockfile changes. Open a PR titled
+   `chore: release <version>`. A person makes this deliberate release commit;
+   the workflow never writes version commits to `main`.
+3. After merge, dispatch **Release** (`.github/workflows/release.yml`) on `main`
+   with `channel=check`. It builds, signs, and smoke-tests without publishing.
+4. After a successful check, dispatch **Release** on the same candidate with
+   `channel=stable`.
 
-Every push to `main` triggers the workflow, **unless** the commit message
-contains `chore: release` (prevents infinite loops from release commits)
-or the push only changes non-code files (markdown, images, etc.).
+For an opt-in development build, dispatch with `channel=next`. Its version is
+`X.Y.Z-next.N` for an unreleased committed base, or the next patch's `-next.N`
+if the base is already tagged. Check builds use `X.Y.Z-check.N`. Neither version
+is committed. All build jobs use the planned SHA, stamp if necessary, and install
+dependencies before building.
 
-### Automated steps
+Native and reusable desktop builds upload to a draft. The publish job verifies
+all assets, stages npm versions with `release-staging`, publishes the GitHub
+release (which creates the tag), then advances npm channels. Stable advances
+`latest` and `next`; development advances only `next`. Both move forward under
+SemVer ordering, so nightly follows stable when no newer development build
+exists. User channel names remain `stable` and `nightly`.
 
-1. **Build** — `bun install && bun run build` on all packages
-2. **Version bump** — Reads the current version from `dist/signetai/package.json`,
-   compares with remote, computes bump level from commit messages, and increments
-   accordingly. All `package.json` files (except `surfaces/dashboard/package.json`)
-   are updated to the new version.
-3. **Changelog** — `bun scripts/changelog.ts --bump-only` computes the bump level from
-   conventional commit subjects since the last tag, then
-   `bun scripts/changelog.ts --version <new-version>` writes the matching
-   `CHANGELOG.md` entry for the actual release version.
-4. **npm publish** — Publishes `signetai` and `@signetai/signet-memory-openclaw`
-   to npm with the `next` tag, then promotes to `latest` (unless it's a major bump).
-5. **Commit and tag** — Commits the version bump and changelog as `chore: release <version>`,
-   creates a `v<version>` git tag, and pushes both.
-6. **GitHub Release** — Creates a GitHub release with the changelog section as notes.
+Re-run a failed workflow to reuse its version, commit, draft, and existing npm
+versions. A fresh stable dispatch can resume only the same version and commit;
+a next re-run must retain the run number. A failure after GitHub finalization
+can leave partial npm dist-tags: re-run the failed jobs rather than creating a
+new release. **Point Stable at Release** is the separate rollback workflow; it
+requires a published plain version and moves `latest`, never `next`.
 
-### Published packages
+The required publish set is `signetai`, the scoped core and connector-base
+packages, all listed harness connectors, and the Codex plugin. The OpenClaw
+memory adapter remains optional. Native npm tarballs are GitHub release assets,
+not separately published registry packages. Add new required scoped packages to
+both the publish/staging list and the rollback package list, with tests.
 
-- `signetai` (meta-package bundling CLI + daemon)
-- `@signetai/signet-memory-openclaw` (OpenClaw runtime adapter)
-
-### Adding a new package to the publish step
-
-Append an additional `cd ../path && npm publish --tag next --access public`
-line to the "Publish to npm" step in `.github/workflows/release.yml`, and
-add a corresponding `npm dist-tag add` in the "Promote to latest" step.
+See [Release channels](https://github.com/Signet-AI/signetai/blob/main/docs/RELEASE_CHANNELS.md) for the full versioning,
+publication, resume, rollback, and verification contract.
 
 Scripts
 ---
@@ -440,12 +448,12 @@ All scripts live in `scripts/` and are written in TypeScript (run via
 
 | Script | Description |
 |--------|-------------|
-| `changelog.ts` | Computes the semver bump from conventional commits since the last git tag, can prepend a CHANGELOG.md entry for an explicit release version, and can rebuild the full changelog from git tags. Generated entries include a short release summary, optional tag range, and grouped sections (`feat`, `fix`, `perf`, `refactor`, `docs`). Writes a `.bump-level` file used by CI to determine the semver bump. Called automatically during the release workflow. |
-| `bump-level.ts` | Exports `computeBumpLevel()` — scans commit subjects for `BREAKING CHANGE:` (→ major), `feat:` (→ minor), or defaults to patch. Used by `changelog.ts`. |
-| `version-sync.ts` | Aligns the `version` field in versioned Signet runtime/package workspaces to match the reference version in `dist/signetai/package.json`. Web manifests are intentionally excluded. Run manually with `bun run version:sync` or pass `--to <version>` to set an explicit version. |
+| `changelog.ts` | Generates release sections and rebuilds the changelog from stable tags only. Prerelease tags never truncate a stable range. `--bump-only` writes `.bump-level` for local inspection. |
+| `release-prepare.ts` | Chooses a stable version, runs version sync and changelog generation, installs dependencies to update the lockfile, and prints PR and dispatch instructions. |
+| `bump-level.ts` | Exports `computeBumpLevel()` — scans commit subjects for `BREAKING CHANGE:` (→ major), `feat:` (→ minor), or defaults to patch. Used by changelog and release preparation. |
+| `version-sync.ts` | Aligns the `version` field in versioned Signet runtime/package workspaces to match the reference version in root `package.json`. Web manifests are intentionally excluded. Run manually with `bun run version:sync` or pass `--to <version>` to set an explicit version. |
 | `extract-changelog-section.ts` | Extracts a single version's section from CHANGELOG.md. Used by CI to populate GitHub release notes. |
 | `check-install-guide.ts` | Validates that the install guide (`web/marketing/public/skill.md`), README, and landing page components contain the expected install prompt and don't reference deprecated commands. |
-| `post-push-sync.sh` | Watches for the release workflow to complete after a push to `main`, then pulls the resulting release commit locally. Useful for staying in sync after pushing. |
 
 Identity Files
 ---
@@ -482,13 +490,13 @@ integrations, and operational safeguards.
 To run any script manually:
 
 ```bash
+bun run release:prepare 1.0.0
 bun scripts/changelog.ts --bump-only
 bun scripts/changelog.ts --version 1.2.3
 bun scripts/changelog.ts --rebuild
 bun scripts/version-sync.ts --to 1.2.3
 bun scripts/extract-changelog-section.ts 0.14.5
 bun scripts/check-install-guide.ts
-./scripts/post-push-sync.sh
 ```
 
 Test Discovery
