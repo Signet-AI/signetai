@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=9b1392b1d2e92186c981c96663a99987b6e3a7f0 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=de16dbc216af698ec2db226ca9d155d541f86ae4 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 > [!CAUTION]
 > **詐欺警告: Signet にトークンやコインは存在しません。** Signet の名前を使ったトークンやコインは、本プロジェクトとは一切関係ありません。「Signet を支援するから」といった理由で購入しないでください。
 
@@ -136,8 +136,8 @@ signet desktop install
 - **主張のトレース:** Signet がなぜあることを確信しているのかを問い合わせると、その履歴、競合する主張、元のソースの該当箇所を、CLI、API、MCP のいずれからでも確認できます。
 - **エージェントの分離:** 各エージェントは、読み取りを許可されたメモリしか参照できません。
 - **シークレット:** シークレットは暗号化して保存され、マスターキーは OS のキーリングに保管されます。キーリングのないシステムでは暗号化ファイルストレージへフォールバックし、ヘルス警告が表示されます。キーチェーンは必ずリカバリープランに含めてください。詳細は[シークレット](https://docs.signetai.sh/secrets/)を参照してください。
-- **リカバリー:** 保護ステータスには、バックアップが復元可能として検証済みかどうかが表示され、欠落していたり古くなったりしているバックアップにはフラグが立ちます。
-- **敵対コンテンツ:** 既知の敵対パターンに一致するコンテンツは、エージェントの見る範囲から排除されます。
+- **リカバリー:** 保護ステータスには、ワークスペースのどの部分が保護されているかが表示され、欠落していたり古くなったりしているバックアップにはフラグが立ちます。
+- **クレデンシャル:** API キーなど、既知のクレデンシャルと思しきテキストは、エージェントの見る内容からマスキングされます。
 
 ## テレメトリ
 

@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=9b1392b1d2e92186c981c96663a99987b6e3a7f0 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=de16dbc216af698ec2db226ca9d155d541f86ae4 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 > [!CAUTION]
 > **防骗警示：Signet 没有任何代币或加密货币。** 任何使用 Signet 之名的代币或加密货币都与本项目无关。请不要以为购买它们就是在支持 Signet。
 
@@ -136,8 +136,8 @@ signet desktop install
 - **论断追溯：**你可以通过 CLI、API 或 MCP 询问 Signet 为什么相信某个说法，并获得它的演变历史、与之相悖的论断，以及确切的原文出处段落。
 - **智能体隔离：**每个智能体只能看到自己被允许读取的记忆。
 - **机密信息：**机密信息以加密方式存储，主密钥保存在操作系统的钥匙串（keyring）中。没有钥匙串的系统会回退到加密文件存储，并显示健康警告。请务必将你的钥匙串纳入恢复计划；参见[机密信息](https://docs.signetai.sh/secrets/)。
-- **恢复：**保护状态会显示备份是否已验证可恢复，并标记缺失或过期的备份。
-- **恶意内容：**符合已知恶意模式的内容会被排除在智能体能看到的内容之外。
+- **恢复：**保护状态会显示工作区中的哪些部分受到保护，并标记缺失或过期的备份。
+- **凭据：**看起来像是已知凭据（例如 API 密钥）的文本会被脱敏处理，不会出现在智能体看到的内容中。
 
 ## 遥测
 
