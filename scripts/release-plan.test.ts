@@ -39,7 +39,8 @@ if (${JSON.stringify(command)} === "git") console.log(scenario.tagSha ? scenario
 if (${JSON.stringify(command)} === "npm") console.log(scenario.latest ?? "1.0.0");
 if (${JSON.stringify(command)} === "gh" && args[0] === "api") {
  if (scenario.apiFails) process.exit(1);
- console.log(JSON.stringify([scenario.release ? [{ tag_name: "v" + (scenario.channel === "next" ? "1.0.1-next.42" : "1.0.1"), ...scenario.release }] : []]));
+ if (args[1] === "graphql") console.log(scenario.release ? "123" : "0");
+ else console.log(JSON.stringify({ tag_name: "v" + (scenario.channel === "next" ? "1.0.1-next.42" : "1.0.1"), ...scenario.release }));
 }
 `,
 		);
@@ -77,6 +78,8 @@ test("stable plans the committed SHA and creates an untagged draft with changelo
 	expect(value.result.exitCode, value.error).toBe(0);
 	expect(value.output).toBe(`version=1.0.1\ntag=v1.0.1\nsha=${sha}\nprerelease=false\n`);
 	const calls = await value.calls.text();
+	expect(calls).toContain('"api","graphql"');
+	expect(calls).not.toContain("--paginate");
 	expect(calls).toContain(`"--draft","--target","${sha}`);
 	expect(calls).toContain('"--notes"');
 	expect(calls).not.toContain('"push"');
@@ -128,7 +131,10 @@ test("next uses the unreleased base or the next patch after a base tag", async (
 test("next resumes its run-number draft without recreating it", async () => {
 	const value = run({ channel: "next", release: { draft: true, target_commitish: sha } });
 	expect(value.result.exitCode, value.error).toBe(0);
-	expect(await value.calls.text()).not.toContain('"create"');
+	const calls = await value.calls.text();
+	expect(calls).not.toContain('"create"');
+	expect(calls).toContain('"api","repos/example/repo/releases/123"');
+	expect(calls).toContain('"tag=v1.0.1-next.42"');
 });
 
 test("check uses only local metadata and never calls publication services", () => {
