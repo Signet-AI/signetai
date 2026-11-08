@@ -57,7 +57,6 @@ search:
 
 memory:
   pipelineV2:
-    telemetryEnabled: true
     autonomous:
       enabled: true
       frozen: false

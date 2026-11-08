@@ -1,3 +1,10 @@
+import {
+	TELEMETRY_CONSENT_BODY,
+	TELEMETRY_CONSENT_PATH,
+	TELEMETRY_CONSENT_TITLE,
+} from "@signet/core/telemetry-consent";
+import { renderTelemetryParagraph } from "@/components/telemetry-consent";
+import { ONBOARDING_STEPS as STEPS, restoreOnboardingStep } from "./progress";
 import { routeBlockedBy } from "@/lib/inference-errors";
 import { EmbeddingStep, embeddingDraft, type EmbeddingDraft } from "./embedding-step";
 import { writeEmbeddingEndpoint } from "@/lib/embedding-config";
@@ -24,18 +31,6 @@ import { getDesktopBridge } from "@/lib/desktop";
 import { useConnectController } from "@/components/settings/connect-controller";
 import { ConnectSourceDialog, type SourceKind } from "@/components/sources/connect-source-dialog";
 import "./onboarding.css";
-
-const STEPS = [
-	"Welcome",
-	"How it works",
-	"Identity",
-	"Harnesses",
-	"Connection",
-	"Sources",
-	"Search",
-	"First memory",
-	"Summary",
-];
 
 function MemoryArtwork({ stage }: { stage: number }) {
 	return (
@@ -196,12 +191,7 @@ export function OnboardingPage({
 		if (Array.isArray(configured)) setSelected(configured.filter((x): x is string => typeof x === "string"));
 		try {
 			const saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");
-			const restored =
-				typeof saved?.step === "string"
-					? STEPS.indexOf(saved.step)
-					: Number.isInteger(saved?.step)
-						? [0, 2, 3, 4, 5, 6, 1, 7, 8][saved.step]
-						: -1;
+			const restored = restoreOnboardingStep(saved?.step);
 			if (restored >= 0 && restored < STEPS.length) {
 				setStep(Math.min(restored, 4));
 				if (typeof saved.memory === "string") setMemory(saved.memory.slice(0, 240));
@@ -508,7 +498,7 @@ export function OnboardingPage({
 		}
 		if (step === 7) {
 			if (recalled) {
-				setStep(8);
+				setStep(status.data?.telemetryDisabledByEnv ? 9 : 8);
 				return;
 			}
 			void perform(async (signal) => {
@@ -547,13 +537,20 @@ export function OnboardingPage({
 		}
 		onClose();
 	};
+	const chooseTelemetry = (enabled: boolean) => {
+		void perform(async () => {
+			store.aSetBool(TELEMETRY_CONSENT_PATH, enabled);
+			if (!(await store.save())) throw new Error("Could not save your choice. Retry.");
+			setStep(9);
+		});
+	};
 	const blocked = busy || sourceBusy || store.saving || phase.kind === "oauth-running" || phase.kind === "saving";
 	const heading = (over: string, title: string, description: string) => (
 		<div className="step-intro">
 			<div className="eyebrow">{over}</div>
 			<h1>{title}</h1>
 			<p>{description}</p>
-			{step !== 0 && step !== 2 && <MemoryArtwork stage={[0, 5, 0, 1, 2, 3, 4, 6, 7][step]} />}
+			{step !== 0 && step !== 2 && <MemoryArtwork stage={[0, 5, 0, 1, 2, 3, 4, 6, 7, 7][step]} />}
 		</div>
 	);
 	let label = [
@@ -565,6 +562,7 @@ export function OnboardingPage({
 		"Continue",
 		"Save search settings",
 		memoryId ? (recalled ? "Continue" : "Recall it") : "Remember this",
+		"Continue",
 		"Open Signet",
 	][step];
 	if (step === 4 && !verified)
@@ -1179,6 +1177,24 @@ export function OnboardingPage({
 							)}
 							{step === 8 && (
 								<>
+									{heading("09 / Usage data", TELEMETRY_CONSENT_TITLE, TELEMETRY_CONSENT_BODY[0])}
+									<div>
+										{TELEMETRY_CONSENT_BODY.slice(1).map((paragraph) => (
+											<p key={paragraph}>{renderTelemetryParagraph(paragraph)}</p>
+										))}
+									</div>
+									<div className="choices agent-choices">
+										<button type="button" className="choice" disabled={blocked} onClick={() => chooseTelemetry(true)}>
+											<strong>Share usage data</strong>
+										</button>
+										<button type="button" className="choice" disabled={blocked} onClick={() => chooseTelemetry(false)}>
+											<strong>Don't share</strong>
+										</button>
+									</div>
+								</>
+							)}
+							{step === 9 && (
+								<>
 									{heading(
 										"Ready for your next conversation",
 										"Your setup, at a glance.",
@@ -1304,29 +1320,31 @@ export function OnboardingPage({
 							Set up later
 						</button>
 					)}
-					<button
-						type="button"
-						className="primary"
-						disabled={
-							blocked ||
-							!store.ready ||
-							!status.data ||
-							!catalog.data ||
-							(step === 2 &&
-								(!identity?.name.trim() ||
-									(identity.managed &&
-										!identity.selected.some(
-											(path) => !Object.values(IDENTITY_FILES).find((file) => file.path === path)?.context,
-										)))) ||
-							(step === 4 && (!provider || (!local && !oauth && !connected && !key.trim()))) ||
-							(step === 6 && !embedding) ||
-							(step === 7 && !memory.trim())
-						}
-						onClick={advance}
-					>
-						{busy ? "Working…" : label}
-						<span aria-hidden="true">→</span>
-					</button>
+					{step !== 8 && (
+						<button
+							type="button"
+							className="primary"
+							disabled={
+								blocked ||
+								!store.ready ||
+								!status.data ||
+								!catalog.data ||
+								(step === 2 &&
+									(!identity?.name.trim() ||
+										(identity.managed &&
+											!identity.selected.some(
+												(path) => !Object.values(IDENTITY_FILES).find((file) => file.path === path)?.context,
+											)))) ||
+								(step === 4 && (!provider || (!local && !oauth && !connected && !key.trim()))) ||
+								(step === 6 && !embedding) ||
+								(step === 7 && !memory.trim())
+							}
+							onClick={advance}
+						>
+							{busy ? "Working…" : label}
+							<span aria-hidden="true">→</span>
+						</button>
+					)}
 				</footer>
 			</div>
 		</section>

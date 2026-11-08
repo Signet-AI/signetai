@@ -207,7 +207,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		inheritContext: true,
 		tailChars: 3000,
 	},
-	telemetryEnabled: true,
+	telemetryEnabled: false,
 	telemetry: {
 		posthogHost: DEFAULT_TELEMETRY_POSTHOG_HOST,
 		posthogApiKey: DEFAULT_TELEMETRY_POSTHOG_API_KEY,

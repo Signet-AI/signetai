@@ -79,7 +79,6 @@ export async function runDashboardSetupBootstrap(
 		embedding: { provider: "none" },
 		memory: {
 			database: relative(basePath, workspaceLayout.database),
-			pipelineV2: { telemetryEnabled: false },
 			dreaming: { enabled: true },
 		},
 	};
@@ -246,10 +245,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		if (plan.daemonUrl) {
 			config.daemon = { url: plan.daemonUrl };
 		}
-		const telemetryEnabled = false;
-		const memoryCfg = (config.memory as Record<string, unknown> | undefined) ?? {};
-		const pipelineCfg = (memoryCfg.pipelineV2 as Record<string, unknown> | undefined) ?? {};
-		config.memory = { ...memoryCfg, pipelineV2: { ...pipelineCfg, telemetryEnabled } };
 
 		writeFileSync(join(context.basePath, "agent.yaml"), formatYaml(config));
 		if (plan.sources && plan.sources.length > 0) {

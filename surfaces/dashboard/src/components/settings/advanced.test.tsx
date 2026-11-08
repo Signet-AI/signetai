@@ -148,3 +148,25 @@ test("a refused settings save is shown instead of dropped", async () => {
 		await view.close();
 	}
 });
+
+test.each([undefined, false, true])(
+	"telemetry is off until explicitly enabled, with a distinct unanswered state: %s",
+	async (consent) => {
+		config = consent === undefined ? "memory: {}\n" : `memory:\n  pipelineV2:\n    telemetryEnabled: ${consent}\n`;
+		const view = await mount();
+		try {
+			expect(switchFor("Anonymous telemetry").getAttribute("aria-checked")).toBe(String(consent === true));
+			expect(document.body.textContent).toContain(
+				consent === undefined ? "Not yet answered" : consent ? "Usage data is on." : "Usage data is off.",
+			);
+			if (consent !== true) {
+				await act(async () => switchFor("Anonymous telemetry").click());
+				await settle();
+				expect(config).toMatch(/memory:\n {2}pipelineV2:\n {4}telemetryEnabled: true/);
+				expect(document.body.textContent).toContain("Changes apply immediately");
+			}
+		} finally {
+			await view.close();
+		}
+	},
+);

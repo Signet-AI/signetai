@@ -64,6 +64,7 @@ import { registerSecretCommands } from "./commands/secret.js";
 import { registerSessionCommands } from "./commands/session.js";
 import { registerSkillCommands } from "./commands/skill.js";
 import { registerSourcesCommands } from "./commands/sources.js";
+import { registerTelemetryCommands } from "./commands/telemetry.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
 import { registerWorkspaceCommands } from "./commands/workspace.js";
@@ -963,6 +964,8 @@ registerAppCommands(program, {
 	showStatus: (options) => showStatus(options, healthDeps),
 	syncTemplates: () => runSyncTemplates(),
 });
+
+registerTelemetryCommands(program, { AGENTS_DIR, normalizeAgentPath });
 
 registerDesktopCommands(program, {
 	buildDesktopFromSource,

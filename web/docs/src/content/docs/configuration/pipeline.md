@@ -17,7 +17,6 @@ signet daemon status --json
 ```yaml
 memory:
   pipelineV2:
-    telemetryEnabled: true
     autonomous:
       enabled: true
       frozen: false
@@ -39,7 +38,7 @@ Omit settings you do not need. The daemon supplies bounded defaults and clamps a
 
 ## Controls
 
-`telemetryEnabled` defaults to `true`. Set it to `false` to opt out persistently; `SIGNET_TELEMETRY_OPTOUT=1` disables telemetry for the process without changing YAML. See [Analytics](/analytics/) for the local audit path and privacy boundary.
+`telemetryEnabled` defaults to `false`; a missing key means not yet answered and also disables collection. Only an explicit `true` opts in. Changes apply live without restarting; `SIGNET_TELEMETRY_OPTOUT=1` disables telemetry for the process without changing YAML. See [Analytics](/analytics/) for the local audit path and privacy boundary.
 
 `autonomous.enabled` controls autonomous maintenance. `autonomous.frozen` pauses autonomous writes without deleting configuration. `autonomous.maintenanceMode` is `observe` or `execute`. Use `observe` while evaluating a new deployment; use the repair endpoints only with an authenticated operator or admin principal where applicable.
 

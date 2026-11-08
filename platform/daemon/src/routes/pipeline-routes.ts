@@ -59,6 +59,7 @@ import {
 } from "../pipeline/model-registry.js";
 import { getCachedResourceSnapshot } from "../resource-monitor.js";
 import { activeSessionCount, getBypassedSessionKeys, getSessionTrackerStats } from "../session-tracker.js";
+import { telemetryDisabledByEnv } from "../telemetry.js";
 import { getTranscriptCaptureStatus } from "../transcript-capture-worker.js";
 import { getTranscriptHealthReport } from "../transcript-health.js";
 import { getWorkspaceStatusSummary } from "../status-summary.js";
@@ -408,6 +409,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			workspaceLayout: readWorkspaceLayoutStatus(AGENTS_DIR, WORKSPACE_LAYOUT.version),
 			resources: getCachedResourceSnapshot(),
 			pipelineV2: config.pipelineV2,
+			telemetryDisabledByEnv: telemetryDisabledByEnv(),
 			pipeline: {
 				queue: pipelineQueueBlock({ allowSynchronousRead: false }),
 				dreaming: dreamingWorker?.scheduler ?? null,

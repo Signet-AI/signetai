@@ -359,6 +359,8 @@ let transcriptImportWorkerHandle: TranscriptImportWorkerHandle | null = null;
 let manualInboxWorkerHandle: ManualInboxWorkerHandle | null = null;
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+let restartedHeartbeatPending = false;
+let telemetryTransition = Promise.resolve();
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
 
 function armMigrationIntegrityWriteBlock(): void {
@@ -613,6 +615,7 @@ mountChangelogRoutes(app);
 setupDashboardRoutes(app);
 
 let watcher: ReturnType<typeof watch> | null = null;
+let configWatcher: ReturnType<typeof watch> | null = null;
 let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
 const ingestedMemoryFiles = new Map<string, string>();
 const LEGACY_MARKDOWN_IMPORTER_VERSION = 1;
@@ -629,6 +632,112 @@ let memoryImportInFlight = false;
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
 let startupSourceSyncTimer: ReturnType<typeof setTimeout> | null = null;
 const SYNC_DEBOUNCE_MS = 2000;
+
+function startTelemetry(memoryCfg: ResolvedMemoryConfig): TelemetryCollector | undefined {
+	if (
+		telemetryRef ||
+		shuttingDown ||
+		migrationIntegrityWritesBlocked ||
+		!memoryCfg.pipelineV2.telemetryEnabled ||
+		telemetryDisabledByEnv()
+	)
+		return telemetryRef;
+	const telemetryCollector = createTelemetryCollector(
+		getDbAccessor(),
+		memoryCfg.pipelineV2.telemetry,
+		CURRENT_VERSION,
+		{
+			telemetryLogPath: defaultTelemetryLogPath(AGENTS_DIR),
+			configSnapshot: buildTelemetryConfigSnapshot(AGENTS_DIR, memoryCfg),
+			owner: daemonDbOwner(),
+			dbPath: MEMORY_DB,
+		},
+	);
+	telemetryCollector.start();
+	telemetryRef = telemetryCollector;
+	setTelemetryRef(telemetryCollector);
+	setActiveTelemetry(telemetryCollector);
+
+	heartbeatTimer = setInterval(
+		() => {
+			void (async () => {
+				if (!telemetryRef) return;
+				try {
+					const liveCfg = loadMemoryConfig(AGENTS_DIR);
+					const owner = daemonDbOwner();
+					const [memoryRow, connectors, queue] = await Promise.all([
+						dbOwnerQuery<{ readonly cnt?: number } | null>(
+							ownerStatement(
+								"SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL",
+								[],
+								"get",
+							),
+							{ operation: "heartbeat.memory-count", lane: "read", deadlineMs: 5_000 },
+						),
+						dbOwnerQuery<readonly { readonly status: string }[]>(
+							ownerStatement("SELECT * FROM connectors ORDER BY created_at DESC", [], "all"),
+							{ operation: "heartbeat.list-connectors", lane: "read", deadlineMs: 5_000 },
+						),
+						ownerQueuePressureSnapshot(owner),
+					]);
+					const memoryCount = memoryRow?.cnt ?? 0;
+					let runtimePressure: ReturnType<typeof buildRuntimePressureEnvelope> | undefined;
+					let resourceTelemetry: ReturnType<typeof buildResourceUtilizationTelemetry> | undefined;
+					try {
+						const workers = getPipelineWorkerStatus();
+						const resources = getResourceSnapshot();
+						resourceTelemetry = buildResourceUtilizationTelemetry(
+							resources,
+							getSystemPressure(),
+							dreamingWorkerHandle?.running === true,
+						);
+						const recoveryOutcome: PressureRecoveryOutcome = restartedHeartbeatPending
+							? "restarted"
+							: getPressureRecoveryOutcome();
+						runtimePressure = buildRuntimePressureEnvelope({
+							memoryQueueDepth: queue.memoryQueueDepth,
+							summaryQueueDepth: queue.summaryQueueDepth,
+							oldestJobAgeSec: queue.oldestJobAgeSec,
+							activeWorkers: countActiveWorkers(
+								[
+									workers.summary.running,
+									workers.document.running,
+									workers.retention.running,
+									workers.maintenance.running,
+									workers.synthesis.running,
+									workers.hints.running,
+									workers.dreaming.running,
+								],
+								workers.llmConcurrency.concurrency.running,
+							),
+							batchSize: liveCfg.pipelineV2.embeddingTracker.batchSize,
+							memoryRssMb: resources.rss,
+							cpuPercent: resources.cpuPercent,
+							recoveryOutcome,
+						});
+						setRuntimePressureEnvelope(runtimePressure);
+					} catch {}
+					telemetryRef?.record("daemon.heartbeat", {
+						uptimeMs: Math.floor(process.uptime() * 1000),
+						version: CURRENT_VERSION,
+						platform: process.platform,
+						memoryCount,
+						connectorsActive: countConnectorsActive(connectors),
+						pipelineMode: readPipelineMode(liveCfg.pipelineV2),
+						extractionProvider: providerRuntimeResolution.extraction.effective,
+						embeddingProvider: liveCfg.embedding.provider,
+						...(runtimePressure ?? {}),
+						...(resourceTelemetry ?? {}),
+					});
+					if (runtimePressure?.recoveryOutcome === "restarted") restartedHeartbeatPending = false;
+				} catch {}
+			})();
+		},
+		5 * 60 * 1000,
+	);
+	setHeartbeatTimer(heartbeatTimer);
+	return telemetryCollector;
+}
 
 async function syncHarnessConfigs() {
 	const identityMode = loadIdentityMode(AGENTS_DIR);
@@ -1434,9 +1543,6 @@ function invalidateInferenceConfigForPath(path: string): void {
 function startFileWatcher() {
 	watcher = watch(
 		[
-			join(AGENTS_DIR, "agent.yaml"),
-			join(AGENTS_DIR, "AGENT.yaml"),
-			join(AGENTS_DIR, "config.yaml"),
 			join(AGENTS_DIR, "AGENTS.md"),
 			join(AGENTS_DIR, "SOUL.md"),
 			join(AGENTS_DIR, "MEMORY.md"),
@@ -1446,18 +1552,14 @@ function startFileWatcher() {
 			join(AGENTS_DIR, ".sigignore"),
 			join(AGENTS_DIR, "agents"),
 		],
-		{
-			persistent: true,
-			ignoreInitial: true,
-			ignored: createAgentsWatcherIgnoreMatcher(AGENTS_DIR),
-		},
+		{ persistent: true, ignoreInitial: true, ignored: createAgentsWatcherIgnoreMatcher(AGENTS_DIR) },
 	);
 
 	watcher.on("error", (error) => {
 		logger.error("watcher", "File watcher error", error instanceof Error ? error : new Error(String(error)));
 	});
 
-	watcher.on("change", (path) => {
+	const handleFileChange = (path: string) => {
 		logger.info("watcher", "File changed", { path });
 		const base = basename(path);
 		const isRuntimeConfig = base === "agent.yaml" || base === "AGENT.yaml" || base === "config.yaml";
@@ -1483,15 +1585,28 @@ function startFileWatcher() {
 			} catch (e) {
 				logger.error("config", "Failed to reload auth config", e as Error);
 			}
-			try {
-				if (!loadMemoryConfig(AGENTS_DIR).pipelineV2.telemetryEnabled) {
+			telemetryTransition = telemetryTransition
+				.then(async () => {
+					const config = loadMemoryConfig(AGENTS_DIR);
+					if (config.pipelineV2.telemetryEnabled && !telemetryDisabledByEnv()) {
+						startTelemetry(config);
+						return;
+					}
+					telemetryRef = undefined;
 					setTelemetryRef(undefined);
-					void stopActiveTelemetry();
+					if (heartbeatTimer) clearInterval(heartbeatTimer);
+					heartbeatTimer = undefined;
+					setHeartbeatTimer(undefined);
+					await stopActiveTelemetry();
 					logger.info("telemetry", "Telemetry disabled from configuration");
-				}
-			} catch (e) {
-				logger.error("telemetry", "Failed to apply telemetry configuration; telemetry state unchanged", e as Error);
-			}
+				})
+				.catch((error: unknown) => {
+					logger.error(
+						"telemetry",
+						"Failed to apply telemetry configuration",
+						error instanceof Error ? error : new Error(String(error)),
+					);
+				});
 		}
 
 		const SYNC_TRIGGER_FILES = [
@@ -1523,7 +1638,23 @@ function startFileWatcher() {
 				}),
 			);
 		}
-	});
+	};
+	watcher.on("change", handleFileChange);
+	configWatcher = watch(
+		["agent.yaml", "AGENT.yaml", "config.yaml"].map((name) => join(AGENTS_DIR, name)),
+		{
+			persistent: true,
+			ignoreInitial: true,
+			usePolling: true,
+			interval: 500,
+		},
+	);
+	configWatcher.on("error", (error) =>
+		logger.error("watcher", "Config watcher error", error instanceof Error ? error : new Error(String(error))),
+	);
+	configWatcher.on("change", handleFileChange);
+	configWatcher.on("add", handleFileChange);
+	configWatcher.on("unlink", handleFileChange);
 
 	watcher.on("unlink", (path) => {
 		logger.info("watcher", "File removed", { path });
@@ -2054,6 +2185,9 @@ async function cleanup() {
 	await stopPiAgentWorkers(true);
 	stopResourceMonitors();
 	logFdSnapshot("cleanup-start");
+	await configWatcher?.close();
+	configWatcher = null;
+	await telemetryTransition;
 	await flushPendingSourceLifecycleTelemetry();
 	if (telemetryRef) {
 		try {
@@ -2351,7 +2485,7 @@ async function main() {
 	const previousLifecycle = readDaemonLifecycle(AGENTS_DIR);
 	lifecycleStartedAt = new Date().toISOString();
 	const previousExit = classifyPreviousDaemonExit(previousLifecycle, lifecycleStartedAt);
-	let restartedHeartbeatPending = previousExit !== null && previousExit.classification !== "clean";
+	restartedHeartbeatPending = previousExit !== null && previousExit.classification !== "clean";
 	writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("starting"));
 	try {
 		migrateConfig(AGENTS_DIR);
@@ -2552,24 +2686,8 @@ async function main() {
 	await ensureArchitectureDoc();
 
 	const memoryCfg = startupMemoryConfig;
-	let telemetryCollector: TelemetryCollector | undefined;
-	if (!migrationIntegrityWritesBlocked && memoryCfg.pipelineV2.telemetryEnabled && !telemetryDisabledByEnv()) {
-		const posthogApiKey = memoryCfg.pipelineV2.telemetry.posthogApiKey;
-		const resolvedTelemetryCfg = {
-			...memoryCfg.pipelineV2.telemetry,
-			posthogApiKey,
-		};
-		telemetryCollector = createTelemetryCollector(getDbAccessor(), resolvedTelemetryCfg, CURRENT_VERSION, {
-			telemetryLogPath: defaultTelemetryLogPath(AGENTS_DIR),
-			configSnapshot: buildTelemetryConfigSnapshot(AGENTS_DIR, memoryCfg),
-			owner: daemonDbOwner(),
-			dbPath: MEMORY_DB,
-		});
-		telemetryCollector.start();
-		telemetryRef = telemetryCollector;
-		setTelemetryRef(telemetryCollector);
-		setActiveTelemetry(telemetryCollector);
-
+	const telemetryCollector = startTelemetry(memoryCfg);
+	if (telemetryCollector) {
 		if (previousExit !== null) {
 			telemetryCollector.record("daemon.previous_exit", previousExitTelemetryProperties(previousExit));
 		}
@@ -2606,86 +2724,6 @@ async function main() {
 				void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
 			}
 		}
-
-		const daemonStartTime = Date.now();
-		heartbeatTimer = setInterval(
-			() => {
-				void (async () => {
-					if (!telemetryRef) return;
-					try {
-						const liveCfg = loadMemoryConfig(AGENTS_DIR);
-						const owner = daemonDbOwner();
-						const [memoryRow, connectors, queue] = await Promise.all([
-							dbOwnerQuery<{ readonly cnt?: number } | null>(
-								ownerStatement(
-									"SELECT COUNT(*) as cnt FROM memories WHERE is_deleted = 0 OR is_deleted IS NULL",
-									[],
-									"get",
-								),
-								{ operation: "heartbeat.memory-count", lane: "read", deadlineMs: 5_000 },
-							),
-							dbOwnerQuery<readonly { readonly status: string }[]>(
-								ownerStatement("SELECT * FROM connectors ORDER BY created_at DESC", [], "all"),
-								{ operation: "heartbeat.list-connectors", lane: "read", deadlineMs: 5_000 },
-							),
-							ownerQueuePressureSnapshot(owner),
-						]);
-						const memoryCount = memoryRow?.cnt ?? 0;
-						let runtimePressure: ReturnType<typeof buildRuntimePressureEnvelope> | undefined;
-						let resourceTelemetry: ReturnType<typeof buildResourceUtilizationTelemetry> | undefined;
-						try {
-							const workers = getPipelineWorkerStatus();
-							const resources = getResourceSnapshot();
-							resourceTelemetry = buildResourceUtilizationTelemetry(
-								resources,
-								getSystemPressure(),
-								dreamingWorkerHandle?.running === true,
-							);
-							const recoveryOutcome: PressureRecoveryOutcome = restartedHeartbeatPending
-								? "restarted"
-								: getPressureRecoveryOutcome();
-							runtimePressure = buildRuntimePressureEnvelope({
-								memoryQueueDepth: queue.memoryQueueDepth,
-								summaryQueueDepth: queue.summaryQueueDepth,
-								oldestJobAgeSec: queue.oldestJobAgeSec,
-								activeWorkers: countActiveWorkers(
-									[
-										workers.summary.running,
-										workers.document.running,
-										workers.retention.running,
-										workers.maintenance.running,
-										workers.synthesis.running,
-										workers.hints.running,
-										workers.dreaming.running,
-									],
-									workers.llmConcurrency.concurrency.running,
-								),
-								batchSize: liveCfg.pipelineV2.embeddingTracker.batchSize,
-								memoryRssMb: resources.rss,
-								cpuPercent: resources.cpuPercent,
-								recoveryOutcome,
-							});
-							setRuntimePressureEnvelope(runtimePressure);
-						} catch {}
-						telemetryRef?.record("daemon.heartbeat", {
-							uptimeMs: Date.now() - daemonStartTime,
-							version: CURRENT_VERSION,
-							platform: process.platform,
-							memoryCount,
-							connectorsActive: countConnectorsActive(connectors),
-							pipelineMode: readPipelineMode(liveCfg.pipelineV2),
-							extractionProvider: providerRuntimeResolution.extraction.effective,
-							embeddingProvider: liveCfg.embedding.provider,
-							...(runtimePressure ?? {}),
-							...(resourceTelemetry ?? {}),
-						});
-						if (runtimePressure?.recoveryOutcome === "restarted") restartedHeartbeatPending = false;
-					} catch {}
-				})();
-			},
-			5 * 60 * 1000,
-		);
-		setHeartbeatTimer(heartbeatTimer);
 	}
 
 	const deferredRuntimeGate = createDeferredRuntimeGate();

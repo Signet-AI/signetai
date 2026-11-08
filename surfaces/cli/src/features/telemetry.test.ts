@@ -48,20 +48,36 @@ function createTelemetryQueue(): string {
 	return memoryDir;
 }
 
+const originalEnv = { ...process.env };
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "signet-cli-telemetry-"));
+	process.env.HOME = dir;
+	process.env.HERMES_HOME = join(dir, "hermes");
 });
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
-	delete process.env.SIGNET_TELEMETRY_OPTOUT;
+	for (const key of Object.keys(process.env)) if (!(key in originalEnv)) delete process.env[key];
+	Object.assign(process.env, originalEnv);
 	rmSync(dir, { recursive: true, force: true });
 });
 
 describe("cli telemetry (issue #1280)", () => {
-	it("is enabled by default when agent.yaml has no telemetryEnabled", () => {
+	it("records and sends nothing until agent.yaml explicitly enables telemetry", async () => {
 		writeAgentYaml();
-		expect(cliTelemetryEnabled(dir)).toBe(true);
+		expect(cliTelemetryEnabled(dir)).toBe(false);
+		recordCommandInvoked(dir, "remember");
+		let requests = 0;
+		globalThis.fetch = Object.assign(
+			async () => {
+				requests++;
+				return Response.json({});
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+		await flushCliTelemetry(dir, "0.0.0-test");
+		expect(requests).toBe(0);
+		expect(existsSync(cliTelemetryLogPath(dir))).toBe(false);
 	});
 
 	it("is disabled when telemetryEnabled is false", () => {
