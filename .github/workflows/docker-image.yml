@@ -1,21 +1,35 @@
 name: Docker Image
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Released version to publish (e.g. 1.0.0)"
+        type: string
+        required: true
 
-permissions:
-  contents: read
-  packages: write
+permissions: {}
 
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      STABLE: ${{ !contains(inputs.version, '-') }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: v${{ inputs.version }}
+          persist-credentials: false
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -36,12 +50,12 @@ jobs:
         with:
           images: ghcr.io/signet-ai/signet
           tags: |
-            type=ref,event=tag
+            type=raw,value=v${{ inputs.version }}
             type=sha
-            type=semver,pattern={{version}},enable=${{ !contains(github.ref_name, '-') }}
-            type=semver,pattern={{major}}.{{minor}},enable=${{ !contains(github.ref_name, '-') }}
-            type=semver,pattern={{major}},enable=${{ !contains(github.ref_name, '-') }}
-            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+            type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ env.STABLE }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ env.STABLE }}
+            type=semver,pattern={{major}},value=${{ inputs.version }},enable=${{ env.STABLE }}
+            type=raw,value=latest,enable=${{ env.STABLE }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -56,7 +70,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Verify public GHCR latest pull
-        if: ${{ !contains(github.ref_name, '-') }}
+        if: env.STABLE == 'true'
         run: |
           set -euo pipefail
           tmp_config="$(mktemp -d)"

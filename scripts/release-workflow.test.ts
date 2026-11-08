@@ -122,6 +122,18 @@ test("publication stages npm behind all builds and assets before finalizing then
 	expect(advance.indexOf(" next")).toBeLessThan(advance.indexOf("dist-tag rm"));
 });
 
+test("Docker publishes from the finalized tag through Release, not a tag push", () => {
+	const text = readFileSync(join(root, ".github/workflows/docker-image.yml"), "utf8");
+	const docker = parse(text);
+	expect(Object.keys(docker.on).sort()).toEqual(["workflow_call", "workflow_dispatch"]);
+	expect(docker.jobs.publish.steps[0].with.ref).toBe("v${{ inputs.version }}");
+	expect(text).not.toContain("github.ref_name");
+	expect(release.jobs.docker.needs).toEqual(["plan", "publish"]);
+	expect(release.jobs.docker.uses).toBe("./.github/workflows/docker-image.yml");
+	expect(release.jobs.docker.with.version).toBe("${{ needs.plan.outputs.version }}");
+	expect(release.jobs.docker.permissions).toEqual({ contents: "read", packages: "write" });
+});
+
 test("rollback admits only plain published non-draft releases and leaves next unchanged", () => {
 	const text = readFileSync(join(root, ".github/workflows/promote-release.yml"), "utf8");
 	expect(parse(text).name).toBe("Point Stable at Release");

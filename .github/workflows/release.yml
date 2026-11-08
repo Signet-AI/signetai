@@ -420,3 +420,12 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_USERCONFIG: ${{ runner.temp }}/.npmrc
+
+  docker:
+    needs: [plan, publish]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-image.yml
+    with:
+      version: ${{ needs.plan.outputs.version }}
