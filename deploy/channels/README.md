@@ -17,7 +17,7 @@ bash deploy/channels/generate-manifests.sh \
 
 ## Publish flow
 
-1. Run desktop tag build (`.github/workflows/desktop-build.yml`).
+1. Run Release (`.github/workflows/release.yml`) with the intended channel; it calls the reusable Desktop Build workflow. Tags do not start desktop builds.
 2. Download `desktop-channel-manifests` artifact.
 3. Submit updates:
    - Homebrew tap: replace `Casks/signet.rb`

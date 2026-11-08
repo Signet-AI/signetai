@@ -1,84 +1,68 @@
 # Release channels
 
-Signet ships two user-facing release channels:
+Signet uses deliberate, manual releases. Merging to `main` does not publish a
+release, bump a version, or create a tag.
 
-| Channel | npm dist-tag | GitHub release state | Intended users |
-| --- | --- | --- | --- |
-| `stable` | `latest` | normal release | Default channel for normal users who want predictable behavior. |
-| `nightly` | `next` | prerelease | Opt-in channel for Signet development, dogfooding, and early validation. |
+## Versioning
 
-There is no LTS channel yet. Stable/nightly gives Signet room to move quickly without promising long-term branch support before the project is ready for that maintenance burden.
+Starting with `1.0.0`, stable releases use SemVer: a major version changes an
+incompatible public contract, a minor version adds a feature, and a patch version
+fixes behavior or makes compatible maintenance changes. Earlier `0.x` versions
+remain in the release history.
 
-## Policy
+The root `package.json` owns the committed release version. A maintainer prepares
+one version-and-changelog commit in a PR; automation never commits a version bump
+to `main`. Development and check versions exist only in build workspaces:
 
-### Nightly
+- If the committed version `X.Y.Z` has not been tagged, a development build is
+  `X.Y.Z-next.N`.
+- If `vX.Y.Z` already exists, a development build increments the patch first:
+  `X.Y.(Z+1)-next.N`.
+- A check build is `X.Y.Z-check.N`.
 
-- Built automatically from `main` by `.github/workflows/release.yml`.
-- Published to npm with the `next` dist-tag. The tag only moves forward: when
-  two release pipelines overlap and an older version finishes publishing last,
-  `next` stays on the newer version.
-- Created as a GitHub prerelease.
-- Release runs queue rather than cancel each other. A run releases every
-  release-relevant change on `main` since the newest release tag, so a
-  superseded queued run's commits ship with the run that replaces it.
-- May include experimental defaults, unstable behavior, and day-to-day development churn.
-- Must remain opt-in; Signet should not silently move a stable user to nightly.
+`N` is the Release workflow run number. Re-running the same run retains that
+number. Development builds do not consume stable version numbers.
 
-Install explicitly:
+## User channels
+
+The public channel names remain **stable** and **nightly**. These names are also
+accepted by `signet update channel` and the installer's `SIGNET_CHANNEL` variable.
+
+| User channel | npm dist-tag | GitHub release |
+| --- | --- | --- |
+| `stable` | `latest` | Normal release, marked latest |
+| `nightly` | `next` | Development prerelease, or the newer stable release |
+
+A stable release advances both `latest` and `next` for each published package.
+A development release advances only `next`. Tags move forward in SemVer order:
+`1.0.1` replaces `1.0.1-next.5`, but `1.0.2` does not replace `1.1.0-next.3`.
+Thus nightly follows stable when no development build is newer. Stable users do
+not move to a development prerelease.
+
+Install stable:
+
+```bash
+npm install -g signetai
+curl -fsSL https://signetai.sh/install.sh | bash
+signet update channel stable
+```
+
+Opt into nightly:
 
 ```bash
 npm install -g signetai@next
-
-# Direct native installer
 curl -fsSL https://signetai.sh/install.sh | SIGNET_CHANNEL=nightly bash
+signet update channel nightly
 ```
 
 On Windows x64:
 
 ```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
 $env:SIGNET_CHANNEL = "nightly"; iwr -useb https://signetai.sh/install.ps1 | iex
 ```
 
-The npm package is a wrapper around the same compiled Signet binary published
-to the GitHub release for that version.
-
-Or switch an existing install's update checks:
-
-```bash
-signet update channel nightly
-```
-
-### Stable
-
-- Published by manually running `.github/workflows/promote-release.yml` for a known-good nightly version.
-- Promoted to npm `latest`.
-- Marked as a normal GitHub release.
-- Default for install and update checks.
-
-Install:
-
-```bash
-npm install -g signetai
-
-# Direct native installer (stable is the default)
-curl -fsSL https://signetai.sh/install.sh | bash
-```
-
-On Windows x64, the stable channel is the default:
-
-```powershell
-iwr -useb https://signetai.sh/install.ps1 | iex
-```
-
-Or switch back from nightly:
-
-```bash
-signet update channel stable
-```
-
-## Update behavior
-
-The daemon stores the user-facing channel in `agent.yaml`:
+The daemon stores the channel in `agent.yaml`:
 
 ```yaml
 updates:
@@ -87,44 +71,115 @@ updates:
   channel: stable
 ```
 
-Compatibility aliases are accepted when reading config or CLI input:
+The compatibility aliases `latest` and `next` resolve to `stable` and `nightly`.
+Stable checks GitHub's latest stable release first, then npm `latest`. Nightly
+checks npm `next` directly. The direct installer uses GitHub `releases/latest`
+for stable and npm `next` for nightly. `SIGNET_RELEASE_TAG`, `SIGNET_VERSION`,
+and the existing `VERSION` alias remain explicit version overrides.
 
-- `latest` -> `stable`
-- `next` -> `nightly`
+## Dispatch channels
 
-Channel lookup rules:
+The **Release** workflow (`.github/workflows/release.yml`) has one input,
+`channel`, and runs only through `workflow_dispatch`:
 
-- `stable` checks GitHub latest stable release first, then falls back to npm `latest`.
-- `nightly` skips GitHub latest and checks npm `next` directly, so it cannot be accidentally pinned back to stable by the GitHub latest endpoint.
-- The public direct installer resolves GitHub `releases/latest` for stable and
-  npm `next` for nightly. `SIGNET_RELEASE_TAG`, `SIGNET_VERSION`, or the
-  existing `VERSION` alias remains an explicit version override.
+| Dispatch channel | Result |
+| --- | --- |
+| `check` (default) | Build, sign, and smoke-test the candidate; publish no release, git tag, or npm package |
+| `next` | Build a development prerelease and advance npm `next` |
+| `stable` | Release the committed plain version from `main` and advance npm `latest` and `next` |
+
+All build jobs use the same planned commit SHA. Next and check jobs stamp the
+resolved version, then install dependencies before building. Native platforms,
+desktop packaging, macOS signing and notarization, and runtime acceptance checks
+remain release gates. The reusable Desktop Build workflow also supports a manual
+unpublished build of its current ref; tags do not trigger desktop builds.
+AUR metadata omits the prerelease hyphen in `pkgver` (for example,
+`1.0.1next.42`) because Arch forbids hyphens there; download URLs retain the
+exact SemVer release version.
+
+## Cut a stable release
+
+1. Start a PR branch from current `main`, with release tags fetched.
+2. For the first release under this policy, run
+   `bun run release:prepare 1.0.0`. For later releases, run
+   `bun run release:prepare [version]`. An explicit version must be plain
+   `x.y.z` and greater than the committed version. With no argument, conventional
+   commit subjects since the last stable tag determine major, minor, or patch.
+   Prerelease tags never shorten the changelog or bump range.
+3. Review the new `CHANGELOG.md` section, workspace versions, Cargo versions and
+   lockfiles. The script runs version sync, changelog generation, and `bun install`.
+4. Open a PR titled `chore: release <version>`. Merge the deliberate release
+   commit after review and normal checks. Do not push a release tag.
+5. Dispatch **Release** on `main` with `channel=check`. Inspect its results.
+6. Dispatch **Release** on the same candidate with `channel=stable`.
+7. Confirm the workflow succeeds, the public GitHub release has all native and
+   desktop assets, and npm dist-tags point to the intended versions:
+
+   ```bash
+   npm view signetai dist-tags --json
+   gh release view v<version>
+   ```
+
+To distribute development work instead, dispatch **Release** with `channel=next`.
+No preparation commit is needed for a development build.
+
+## Publication and resume
+
+Planning validates the stable branch, version, changelog section, remote tag,
+existing GitHub release, and current npm `latest`. A remote stable tag must name
+the exact planned commit. A draft targeting a different commit is rejected with
+an instruction to delete the draft; it is not silently reused.
+
+Stable and next runs create or reuse a draft release targeting the planned SHA.
+No git tag is created at this stage. All native and desktop jobs finish and
+upload to the draft before publication proceeds. The publish job checks every
+expected native, desktop, and manifest asset and verifies the merged macOS update
+manifest. It builds and stages npm packages and publishes each missing version
+with `release-staging`, not a user-facing dist-tag.
+
+Only after those steps does it publish the GitHub release, creating the tag.
+Stable is marked normal/latest; next is marked prerelease/not latest. Then it
+advances the channel dist-tags and removes its staging tag. The OpenClaw memory
+adapter remains optional; its absence does not block the required packages.
+
+A build or upload failure leaves no new tag and at most a draft release. A later
+npm failure can also leave staged npm versions. Re-run the failed workflow to
+reuse its SHA, version, draft, and already-published npm versions. A fresh stable
+dispatch can resume the same version only from the same commit. For next, use
+GitHub's re-run action to retain the run number; a fresh dispatch has a new
+prerelease version. Do not advance `main` and expect it to resume an old draft.
+
+Publication is not a transaction across npm and GitHub. A failure after GitHub
+finalization can leave a public release and partially advanced npm dist-tags.
+Re-run failed jobs to finish advancing tags. A fresh stable dispatch rejects a
+version as **already released** when its GitHub release is public and npm
+`signetai` latest already equals that version. In that case, use the failed run's
+re-run action rather than starting a new plan. Dist-tags never move backward
+through the Release workflow.
+
+## Roll back stable
+
+**Point Stable at Release** (`.github/workflows/promote-release.yml`) is an
+explicit stable-pointer override, not development-to-stable promotion. Supply a
+plain `x.y.z` version whose required npm packages already exist and whose GitHub
+release is public, not a draft. It points each required package's npm `latest`
+at that version, includes the optional adapter only if published, verifies the
+tags, and marks the GitHub release latest. It does not change npm `next`, rebuild
+assets, or publish packages.
+
+This permits rolling the stable pointer back. It does not force already-installed
+newer clients to downgrade. Verify the selected release and npm `latest` after
+running it.
 
 ## Release integrity and trust
 
-Native self-updates validate the selected asset's declared size and SHA-256
-digest against `native-manifest.json` from the same versioned GitHub release.
-The public direct installer validates the asset's SHA-256 digest against that
-manifest. These checks detect incomplete, corrupted, or mismatched downloads,
-but do not independently authenticate the manifest. Native release assets and
-the manifest are not currently signed.
+Native self-updates validate each selected asset's size and SHA-256 against
+`native-manifest.json` from the same release. The direct installer checks the
+asset's SHA-256. These checks detect incomplete, corrupted, or mismatched
+downloads; they do not independently authenticate the manifest. macOS native
+binaries use Developer ID signing, and official macOS desktop builds are signed,
+notarized, and checked with Gatekeeper. The native manifest itself is not signed.
 
-The current trust anchor is the Signet GitHub Actions release workflow, its
-repository release permissions, and HTTPS delivery from GitHub. Artifact
-signing or attestations would require a separate trust root and verification
-flow; they are not implied by the SHA-256 checks described here.
-
-## Promotion checklist
-
-Before promoting a nightly to stable:
-
-1. Confirm CI for the nightly release workflow passed.
-2. Confirm daemon release assets exist for every supported platform.
-3. Confirm the npm package was published under `next`.
-4. Confirm the regression sentinel has not reported a blocker.
-5. Run the `Promote Release` workflow with the exact version.
-6. Verify npm `latest` points to the promoted version:
-
-```bash
-npm view signetai dist-tags --json
-```
+The release workflow, repository release permissions, and HTTPS delivery from
+GitHub remain the distribution trust boundary. Hash checks are not a substitute
+for an independently authenticated manifest.
