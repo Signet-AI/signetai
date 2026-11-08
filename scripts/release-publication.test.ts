@@ -163,6 +163,17 @@ test("next advances only next and tolerates an unavailable optional adapter", ()
 	for (const name of ["Publish npm packages", "Finalize GitHub release", "Advance npm channels"])
 		expect(value.run(name).exitCode).toBe(0);
 	const state = value.read();
+	expect(state.calls).toContainEqual([
+		"gh",
+		"release",
+		"edit",
+		"v1.0.1",
+		"--draft=false",
+		"--prerelease",
+		"--latest=false",
+		"--repo",
+		"example/repo",
+	]);
 	expect(state.versions["@signetai/signet-memory-openclaw"]).toBeUndefined();
 	for (const tags of Object.values(state.tags)) expect(tags).toEqual({ next: "1.0.1" });
 });
