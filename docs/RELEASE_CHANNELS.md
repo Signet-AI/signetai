@@ -99,8 +99,11 @@ remain release gates. The reusable Desktop Build workflow also supports a manual
 unpublished build of its current ref; tags do not trigger desktop builds.
 AUR metadata omits the prerelease hyphen in `pkgver` (for example,
 `1.0.1next.42`) because Arch forbids hyphens there; download URLs retain the
-exact SemVer release version. Desktop builds disable electron-builder's update
-channel detection, so prerelease versions still write `latest*.yml` update files.
+exact SemVer release version. With the GitHub publish provider, electron-builder
+writes `latest*.yml` update files for prerelease versions too, so every channel
+has the same asset list. The desktop auto-updater in a development build looks
+for `next*.yml` instead, so desktop apps installed from a `next` build do not
+auto-update; install a stable build to restore updates.
 
 ## Cut a stable release
 
@@ -165,7 +168,9 @@ Publication is not a transaction across npm and GitHub. Finalizing the GitHub
 release is the last step of the publish job, and moving dist-tags is a separate
 `promote` job. Once a release is public, planning and the publish job both refuse
 to run for it, so public assets are never rebuilt or replaced. If `promote` fails,
-re-run only that job. Dist-tags never move backward through the Release workflow.
+re-run only that job. If npm publishing fails partway, the versions it did publish
+keep their `release-staging` tag until a re-run of `publish` succeeds and
+`promote` removes it. Dist-tags never move backward through the Release workflow.
 
 ## Roll back stable
 
