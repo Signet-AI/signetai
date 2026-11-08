@@ -101,9 +101,8 @@ AUR metadata omits the prerelease hyphen in `pkgver` (for example,
 `1.0.1next.42`) because Arch forbids hyphens there; download URLs retain the
 exact SemVer release version. With the GitHub publish provider, electron-builder
 writes `latest*.yml` update files for prerelease versions too, so every channel
-has the same asset list. The desktop auto-updater in a development build looks
-for `next*.yml` instead, so desktop apps installed from a `next` build do not
-auto-update; install a stable build to restore updates.
+has the same asset list. Desktop auto-update from a development build is
+untested; install a stable desktop build for automatic updates.
 
 ## Cut a stable release
 
@@ -134,7 +133,9 @@ No preparation commit is needed for a development build.
 ## Publication and resume
 
 Planning validates the stable branch, version, changelog section, remote tag,
-existing GitHub release, and current npm `latest`. A remote stable tag must name
+existing GitHub release, and current npm `latest`. A version already on npm is
+reused only by a run that resumes its own draft for the same commit; otherwise
+planning stops and a new version must be prepared. A remote stable tag must name
 the exact planned commit. A draft targeting a different commit is rejected with
 an instruction to delete the draft; it is not silently reused.
 
@@ -151,10 +152,12 @@ advances the channel dist-tags and removes its staging tag. The OpenClaw memory
 adapter remains optional; its absence does not block the required packages.
 
 Last, a stable release calls the **Docker Image** workflow, which builds
-`ghcr.io/signet-ai/signet` from the new tag and moves the image's `latest`,
-`X.Y.Z`, `X.Y`, and `X` tags. Development releases publish no image. Docker
-publishing no longer runs on tag pushes; if only the Docker job fails, dispatch
-**Docker Image** with the released version.
+`ghcr.io/signet-ai/signet` from the new tag and pushes `vX.Y.Z` and `X.Y.Z`. It
+moves the floating `latest`, `X.Y`, and `X` tags only when the version is
+GitHub's latest release, so rebuilding an older version never moves them
+backward. Development releases publish no image. Docker publishing no longer
+runs on tag pushes; if only the Docker job fails, dispatch **Docker Image** with
+the released version.
 
 A build or upload failure leaves no new tag and at most a draft release. A later
 npm failure can also leave staged npm versions. Re-run the failed jobs to reuse
@@ -168,7 +171,13 @@ Publication is not a transaction across npm and GitHub. Finalizing the GitHub
 release is the last step of the publish job, and moving dist-tags is a separate
 `promote` job. Once a release is public, planning and the publish job both refuse
 to run for it, so public assets are never rebuilt or replaced. If `promote` fails,
-re-run only that job. If npm publishing fails partway, the versions it did publish
+re-run only that job. Every upload checks that the release is still a draft, so
+re-running a single build job after publication fails instead of replacing a
+public asset. Finalization treats an API error as success when the release did
+become public. If the publish job still fails after the release is public,
+point npm `latest` with **Point Stable at Release** and move `next` with
+`scripts/advance-npm-dist-tag.sh`. Concurrent `promote` jobs are serialized.
+If npm publishing fails partway, the versions it did publish
 keep their `release-staging` tag until a re-run of `publish` succeeds and
 `promote` removes it. Dist-tags never move backward through the Release workflow.
 

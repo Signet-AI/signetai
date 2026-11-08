@@ -13,7 +13,13 @@ const desktop = parse(desktopText);
 test("directly executed release helpers remain committed executable", () => {
 	const entries = execFileSync(
 		"git",
-		["ls-files", "-s", "scripts/advance-npm-dist-tag.sh", "scripts/retry-github-release.sh"],
+		[
+			"ls-files",
+			"-s",
+			"scripts/advance-npm-dist-tag.sh",
+			"scripts/require-draft-release.sh",
+			"scripts/retry-github-release.sh",
+		],
 		{ cwd: root, encoding: "utf8" },
 	);
 	expect(
@@ -21,7 +27,7 @@ test("directly executed release helpers remain committed executable", () => {
 			.trim()
 			.split("\n")
 			.map((line) => line.split(/\s+/)[0]),
-	).toEqual(["100755", "100755"]);
+	).toEqual(["100755", "100755", "100755"]);
 });
 
 test("Release is manual with exactly three channels and per-channel queueing", () => {
@@ -105,6 +111,13 @@ test("publication stages npm behind all builds and assets before finalizing then
 		(step: { name?: string }) => step.name === "Upload to release",
 	);
 	expect(upload.if).toBe("inputs.channel != 'check'");
+	expect(upload.run.indexOf("scripts/require-draft-release.sh")).toBeGreaterThan(-1);
+	expect(upload.run.indexOf("scripts/require-draft-release.sh")).toBeLessThan(upload.run.indexOf("gh release upload"));
+	for (const step of [...desktop.jobs.build.steps, ...desktop.jobs["publish-mac-update-manifest"].steps].filter(
+		(step: { run?: string }) => step.run?.includes("gh release upload"),
+	))
+		expect(step.run.indexOf("scripts/require-draft-release.sh")).toBeLessThan(step.run.indexOf("gh release upload"));
+	expect(release.jobs.promote.concurrency).toEqual({ group: "release-promote", "cancel-in-progress": false });
 	expect(releaseText).not.toContain("Wait for desktop release assets");
 	expect(releaseText).not.toContain("sleep 30");
 	expect(releaseText).toContain("--prerelease=false --latest");
@@ -114,7 +127,7 @@ test("publication stages npm behind all builds and assets before finalizing then
 	).run;
 	expect(publish).toContain("npm publish --tag release-staging");
 	expect(publish).not.toContain("dist-tag");
-	expect(release.jobs.publish.steps[0].name).toBe("Refuse a published release");
+	expect(release.jobs.publish.steps[1].name).toBe("Refuse a published release");
 	expect(names.at(-1)).toBe("Finalize GitHub release");
 	expect(release.jobs.promote.needs).toEqual(["plan", "publish"]);
 	expect(release.jobs.promote.env.PACKAGES).toBe("${{ needs.publish.outputs.packages }}");

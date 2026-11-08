@@ -16,6 +16,8 @@ interface Scenario {
 	latest?: string;
 	release?: { draft: boolean; target_commitish: string };
 	duplicate?: boolean;
+	npmHas?: boolean;
+	npmError?: boolean;
 	notes?: string;
 	apiFails?: boolean;
 }
@@ -37,7 +39,11 @@ const args = process.argv.slice(2);
 appendFileSync(process.env.LOG, JSON.stringify([${JSON.stringify(command)}, ...args]) + "\\n");
 const scenario = JSON.parse(process.env.SCENARIO);
 if (${JSON.stringify(command)} === "git") console.log(scenario.tagSha ? scenario.tagSha + "\\trefs/tags/v1.0.1^{}" : "");
-if (${JSON.stringify(command)} === "npm") console.log(scenario.latest ?? "1.0.0");
+if (${JSON.stringify(command)} === "npm" && args[1].includes("@")) {
+ if (scenario.npmError) { console.error("npm error code ETIMEDOUT"); process.exit(1); }
+ if (!scenario.npmHas) { console.error("npm error code E404"); process.exit(1); }
+ console.log(args[1].split("@")[1]);
+} else if (${JSON.stringify(command)} === "npm") console.log(scenario.latest ?? "1.0.0");
 if (${JSON.stringify(command)} === "gh" && args[0] === "api") {
  if (scenario.apiFails) process.exit(1);
  if (scenario.release) console.log(JSON.stringify(scenario.release));
@@ -118,6 +124,18 @@ test("published releases are never re-planned, so public assets are never rebuil
 	}
 });
 
+test("an npm version left behind without its draft is never reused for another commit", async () => {
+	const orphan = run({ npmHas: true });
+	expect(orphan.result.exitCode).not.toBe(0);
+	expect(orphan.error).toContain("prepare a new version");
+	expect(await orphan.calls.text()).not.toContain('"create"');
+	const unknown = run({ npmError: true });
+	expect(unknown.result.exitCode).not.toBe(0);
+	expect(unknown.output).toBe("");
+	const resumed = run({ npmHas: true, release: { draft: true, target_commitish: sha } });
+	expect(resumed.result.exitCode, resumed.error).toBe(0);
+});
+
 test("stable resumes its own draft without recreating it", async () => {
 	const value = run({ release: { draft: true, target_commitish: sha } });
 	expect(value.result.exitCode, value.error).toBe(0);
@@ -133,7 +151,7 @@ test("next uses the unreleased base or the next patch after a base tag", async (
 		const calls = await value.calls.text();
 		expect(calls).toContain('"--prerelease"');
 		expect(calls).toContain('"--generate-notes"');
-		expect(calls).not.toContain('"npm"');
+		expect(calls).not.toContain("dist-tags.latest");
 	}
 });
 
