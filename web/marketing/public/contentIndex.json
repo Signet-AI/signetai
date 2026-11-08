@@ -98,6 +98,19 @@
     "links": [],
     "collection": "blog"
   },
+  "blog/signet-1-0": {
+    "title": "Signet 1.0",
+    "url": "/blog/signet-1-0/",
+    "tags": [
+      "release",
+      "announcement",
+      "dreaming",
+      "sources",
+      "desktop"
+    ],
+    "links": [],
+    "collection": "blog"
+  },
   "blog/the-obsidian-of-ai-memory-systems": {
     "title": "The Obsidian of AI Memory Systems",
     "url": "/blog/the-obsidian-of-ai-memory-systems/",

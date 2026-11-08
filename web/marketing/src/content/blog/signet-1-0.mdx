@@ -2,13 +2,13 @@
 slug: signet-1-0
 title: "Signet 1.0"
 description: "Signet 1.0.0 is on the stable channel, with Dreaming, Sources, agents that work together, Windows and desktop support, guided setup, and memory you can inspect."
-date: 2026-11-07
+date: 2026-11-08
 banner: "Signet 1.0 is here"
 tags: ["release", "announcement", "dreaming", "sources", "desktop"]
-image: ../../../assets/blog/signet-1-0/hero.webp
+image: ../../assets/blog/signet-1-0/hero.webp
 imageAlt: "Signet Memory 1.0.0: a chrome robotic arm against a deep blue background."
 imageCover: true
-draft: true
+draft: false
 category: announcement
 coverLabel: "Signet 1.0 is stable"
 ---
@@ -35,11 +35,11 @@ The biggest changes in this release are about making Signet easier to use day to
 
 ## Sources and Dreaming: bringing your context together
 
-![Glass icons for a folder, GitHub, Notion, a document, and a chat flowing along a stream of blue light.](../../../assets/blog/signet-1-0/sources.webp)
+![Glass icons for a folder, GitHub, Notion, a document, and a chat flowing along a stream of blue light.](../../assets/blog/signet-1-0/sources.webp)
 
 **Sources** are how the context you already have gets into Signet: notes, project documents, Notion pages, agent conversations, and so on. You can connect an Obsidian vault or Notion workspace during onboarding, so your agents start with useful context from your existing work. You can also bring in webpages, PDFs, Office documents, and EPUBs as one-time imports, without setting up an ongoing connection.
 
-![The Add a source dialog in Signet Desktop, offering file, web page, and transcript imports alongside Obsidian, GitHub, and Discord connections.](../../../assets/blog/signet-1-0/add-source.webp)
+![The Add a source dialog in Signet Desktop, offering file, web page, and transcript imports alongside Obsidian, GitHub, and Discord connections.](../../assets/blog/signet-1-0/add-source.webp)
 
 Conversation imports preserve who said what, when, and where it came from. They can resume after an interruption, and importing the same conversation again won’t duplicate its evidence. You can also export conversations as structured JSONL for analysis, fine-tuning preparation, or re-import, choosing which agents and dates to include. That context is yours to take with you.
 
@@ -53,7 +53,7 @@ Dreaming runs passes for separate agents in parallel, and it works with local mo
 
 You can follow that work in the dashboard through live traces, pass summaries, and an operation ledger. This release also improves recovery from interrupted work and stalled triggers, prevents duplicate pass creation, and keeps passes within their budgets on large backlogs.
 
-![The Dreams view showing the latest reflection, recent passes with token and cost totals, and the steps of a pass.](../../../assets/blog/signet-1-0/dreams.webp)
+![The Dreams view showing the latest reflection, recent passes with token and cost totals, and the steps of a pass.](../../assets/blog/signet-1-0/dreams.webp)
 
 Read more about [connecting and importing sources](https://docs.signetai.sh/sources/), [transcript import and export](https://docs.signetai.sh/cli/data-portability/), and [Dreaming and ontology maintenance](https://docs.signetai.sh/pipeline/extraction-decisions/).
 
@@ -61,7 +61,7 @@ Read more about [connecting and importing sources](https://docs.signetai.sh/sour
 
 Sources bring your existing work into Signet. Harness integrations bring that context into the agents you use, and capture new context as you work. (A harness is the app or environment your agent runs in.) Signet connects through a harness’s supported hooks, extensions, and plugins to supply relevant memory in the background, without making you paste the same context into every session.
 
-![Connector settings listing Claude Code, Codex, Hermes Agent, OpenCode, OpenClaw, Gemini, Pi, Oh My Pi, and Kimi with their connection state.](../../../assets/blog/signet-1-0/connectors.webp)
+![Connector settings listing Claude Code, Codex, Hermes Agent, OpenCode, OpenClaw, Gemini, Pi, Oh My Pi, and Kimi with their connection state.](../../assets/blog/signet-1-0/connectors.webp)
 
 We maintain integrations for Claude Code, Codex, OpenCode, OpenClaw, Hermes Agent, Pi, Oh My Pi, Kimi Code, and Muse Code. They connect your sessions to a shared memory, so switching between agents can carry forward the decisions, preferences, and project knowledge you’ve already built up. What each integration can do depends on its host: session context, conversation capture, and on-demand memory tools where the host supports them.
 
@@ -98,7 +98,7 @@ Read more about [how recall works](https://docs.signetai.sh/memory/).
 
 ## At home on your desktop
 
-![The Signet Desktop home screen with a daily brief, recently saved memories, an activity heatmap, and system status.](../../../assets/blog/signet-1-0/home.webp)
+![The Signet Desktop home screen with a daily brief, recently saved memories, an activity heatmap, and system status.](../../assets/blog/signet-1-0/home.webp)
 
 Signet is designed for both server and desktop use. You can run it as a server for yourself or an organization, or use it like any other app on your computer. Install Signet normally, then add the optional desktop app with `signet desktop install`. It’s available on macOS, Linux, and Windows x64.
 
@@ -106,13 +106,13 @@ We’ve redesigned the dashboard around what you actually do there: look through
 
 The dashboard also has a new memory graph, a 2D map of the people, projects, and claims Signet knows about and how they connect, for all of your agents or one at a time. Next to it is a chat where you can ask questions of your memory using any connected model that supports tools. Answers cite the memories they draw on, and from the same chat you can ask Signet to remember something or have Dreaming review it.
 
-![The memory graph beside a chat panel, where Signet answers a question and links the evidence it retrieved.](../../../assets/blog/signet-1-0/memory-graph.webp)
+![The memory graph beside a chat panel, where Signet answers a question and links the evidence it retrieved.](../../assets/blog/signet-1-0/memory-graph.webp)
 
 A new Skills library shows the skills your agents can use and their instructions. If you run Signet for a team, the dashboard now has a proper sign-in screen, and admins can create and revoke API keys from settings.
 
 Getting started now happens there as well. Guided onboarding walks you through choosing a provider and connecting your sources and agents in the dashboard or desktop app, replacing the old terminal questionnaire. Non-interactive CLI setup remains available for headless installations, or if you’d rather have an agent handle setup for you.
 
-![Guided setup asking how memory should run, with a provider and memory model selected and Dreaming enabled.](../../../assets/blog/signet-1-0/onboarding.webp)
+![Guided setup asking how memory should run, with a provider and memory model selected and Dreaming enabled.](../../assets/blog/signet-1-0/onboarding.webp)
 
 ## Other improvements
 
@@ -124,7 +124,7 @@ Getting started now happens there as well. Guided onboarding walks you through c
 - Protection status: see which parts of your workspace are protected, with missing or stale backups flagged. Git sync on its own doesn’t cover your whole workspace.
 - Transparent memory: recall shows where each memory came from, how it’s changed, and whether it’s been reviewed.
 
-  ![An entity detail card in the memory graph showing its aspects, attributes, and the stored claim with its source.](../../../assets/blog/signet-1-0/entity.webp)
+  ![An entity detail card in the memory graph showing its aspects, attributes, and the stored claim with its source.](../../assets/blog/signet-1-0/entity.webp)
 - Credentials that look like known secrets, such as API keys, are redacted from what your agents see. You can also ask why Signet believes something: a claim trace returns its history, competing claims, and the exact source passages behind it, from the CLI, API, or MCP.
 - Recall and search: fixed scope and filter bugs, fewer duplicate session results, caps on expensive searches, and resumable rebuilds when the full-text index is damaged.
 - Dreaming and embedding recovery: fixed stuck triggers and duplicate passes, and improved recovery from interrupted embedding migrations and provider failures.
@@ -204,7 +204,7 @@ If an older daemon is still running, the upgrade waits until it stops. If someth
 
 See the [Workspace v2 guide](https://docs.signetai.sh/workspace-v2/) for the full list of moves and recovery steps.
 
-![Data and files settings showing the workspace location, storage migration status, recovery coverage, and file imports.](../../../assets/blog/signet-1-0/data-and-files.webp)
+![Data and files settings showing the workspace location, storage migration status, recovery coverage, and file imports.](../../assets/blog/signet-1-0/data-and-files.webp)
 
 **Secret recovery also depends on the keyring.** After secrets migrate to keyring-backed storage, a workspace backup alone is not enough to recover them. Preserve the corresponding platform keychain as part of your recovery plan; see [secret storage and recovery](https://docs.signetai.sh/secrets/).
 
