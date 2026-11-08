@@ -503,14 +503,14 @@ function getOrCreateInstallId(db: DbAccessor, daemonVersion: string, owner?: DbO
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return db.withWriteTx(
 			(w: import("./db-accessor").WriteDb) => resolveInstallIdentity(w, daemonVersion),
-			"telemetry.ts:491",
+			"telemetry.ts:504",
 		);
 	} catch {
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			return db.withWriteTx(
 				(w: import("./db-accessor").WriteDb) => resolveLegacyInstallIdentity(w),
-				"telemetry.ts:498",
+				"telemetry.ts:511",
 			);
 		} catch {
 			return fallback;
