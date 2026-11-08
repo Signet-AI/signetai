@@ -39,6 +39,7 @@ const {
 	handleSynthesisRequest,
 	handleUserPromptSubmit,
 	handleSessionEnd,
+	handleStop,
 	handleCheckpointExtract,
 	effectiveScore,
 	selectWithBudget,
@@ -476,6 +477,15 @@ function createMemoryDb(
 function openTestDb(): Database {
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
 	return new Database(dbPath);
+}
+function canonicalSessionRecords(harness: string, sessionKey: string): Record<string, unknown>[] {
+	const path = join(TEST_DIR, "memory", harness, "transcripts", "transcript.jsonl");
+	if (!existsSync(path)) return [];
+	return readFileSync(path, "utf-8")
+		.trim()
+		.split("\n")
+		.map((line) => JSON.parse(line) as Record<string, unknown>)
+		.filter((record) => record.session_key === sessionKey);
 }
 
 function insertCompletedTranscript(
@@ -1731,6 +1741,114 @@ describe("direct transcript regressions", () => {
 		} finally {
 			db.close();
 		}
+	});
+
+	test.serial("records a turn-end assistant reply as a live turn", async () => {
+		createMemoryDb([]);
+
+		const result = await handleStop({
+			harness: "claude-code",
+			sessionKey: "claude-stop-session",
+			agentId: "default",
+			cwd: "/home/user/signetai",
+			lastAssistantMessage: "Final paragraph A.\n\nFinal paragraph B.",
+		});
+
+		expect(result).toEqual({ recorded: true });
+		const db = openTestDb();
+		try {
+			const stored = db
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get("claude-stop-session", "default") as { content: string } | undefined;
+			expect(stored?.content).toBe("Assistant: Final paragraph A.\n\nFinal paragraph B.");
+		} finally {
+			db.close();
+		}
+		const records = canonicalSessionRecords("claude-code", "claude-stop-session");
+		expect(records).toHaveLength(1);
+		expect(records[0]).toMatchObject({
+			role: "assistant",
+			content: "Final paragraph A.\n\nFinal paragraph B.",
+			source_format: "live",
+			project: "/home/user/signetai",
+		});
+	});
+
+	test.serial("records nothing for a turn-end reply without text", async () => {
+		createMemoryDb([]);
+
+		const result = await handleStop({
+			harness: "claude-code",
+			sessionKey: "claude-empty-stop-session",
+			agentId: "default",
+			lastAssistantMessage: "  \n ",
+		});
+
+		expect(result).toEqual({ recorded: false });
+		const db = openTestDb();
+		try {
+			expect(
+				db
+					.prepare("SELECT COUNT(*) AS count FROM session_transcripts WHERE session_key = ?")
+					.get("claude-empty-stop-session"),
+			).toEqual({ count: 0 });
+		} finally {
+			db.close();
+		}
+		expect(canonicalSessionRecords("claude-code", "claude-empty-stop-session")).toEqual([]);
+	});
+
+	test.serial("records a repeated turn-end reply once and the same reply again after a new prompt", async () => {
+		createMemoryDb([]);
+		const sessionKey = "claude-repeated-stop-session";
+		const stop = (lastAssistantMessage: string) =>
+			handleStop({ harness: "claude-code", sessionKey, agentId: "default", lastAssistantMessage });
+
+		await stop("Done.");
+		await stop("Done.");
+		await stop("Second reply.");
+		await handleUserPromptSubmit({ harness: "claude-code", sessionKey, userPrompt: "again please" });
+		await stop("Done.");
+
+		expect(canonicalSessionRecords("claude-code", sessionKey).map((record) => [record.role, record.content])).toEqual([
+			["assistant", "Done."],
+			["assistant", "Second reply."],
+			["user", "again please"],
+			["assistant", "Done."],
+		]);
+		const db = openTestDb();
+		try {
+			const stored = db
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get(sessionKey, "default") as { content: string } | undefined;
+			expect(stored?.content).toBe("Assistant: Done.\nAssistant: Second reply.\nUser: again please\nAssistant: Done.");
+		} finally {
+			db.close();
+		}
+	});
+
+	test.serial("records the first prompt and reply of a new agent as live turns", async () => {
+		createMemoryDb([]);
+
+		await handleUserPromptSubmit({
+			harness: "claude-code",
+			sessionKey: "fresh-agent-prompt-session",
+			agentId: "fresh-prompt-agent",
+			userPrompt: "first prompt of a new agent",
+		});
+		await handleStop({
+			harness: "claude-code",
+			sessionKey: "fresh-agent-stop-session",
+			agentId: "fresh-stop-agent",
+			lastAssistantMessage: "first reply of a new agent",
+		});
+
+		expect(canonicalSessionRecords("claude-code", "fresh-agent-prompt-session")).toMatchObject([
+			{ role: "user", content: "first prompt of a new agent", source_format: "live" },
+		]);
+		expect(canonicalSessionRecords("claude-code", "fresh-agent-stop-session")).toMatchObject([
+			{ role: "assistant", content: "first reply of a new agent", source_format: "live" },
+		]);
 	});
 
 	test.serial("writes full canonical transcript content without a summary input copy", async () => {

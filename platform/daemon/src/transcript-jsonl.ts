@@ -239,18 +239,19 @@ function parseRecords(text: string): CanonicalTranscriptRecord[] {
 	return records;
 }
 
-function readTailRecords(path: string): CanonicalTranscriptRecord[] {
+function readTailRecords(path: string, minRecords: number): CanonicalTranscriptRecord[] {
 	if (!existsSync(path)) return [];
 	const size = statSync(path).size;
-	const start = Math.max(0, size - TAIL_SCAN_BYTES);
-	const length = size - start;
-	if (length <= 0) return [];
 	const fd = openSync(path, "r");
 	try {
-		const buffer = Buffer.alloc(length);
-		readSync(fd, buffer, 0, length, start);
-		const text = buffer.toString("utf8");
-		return parseRecords(start === 0 ? text : text.slice(Math.max(0, text.indexOf("\n") + 1)));
+		for (let scan = TAIL_SCAN_BYTES; ; scan *= 2) {
+			const start = Math.max(0, size - scan);
+			const buffer = Buffer.alloc(size - start);
+			readSync(fd, buffer, 0, buffer.length, start);
+			const text = buffer.toString("utf8");
+			const records = parseRecords(start === 0 ? text : text.slice(text.indexOf("\n") + 1));
+			if (start === 0 || records.length >= minRecords) return records;
+		}
 	} finally {
 		closeSync(fd);
 	}
@@ -709,7 +710,7 @@ export function appendCanonicalTranscriptTurns(
 	if (turns.length === 0) return Promise.resolve(null);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	return withTranscriptFileLock(path, async () => {
-		if (hasTrailingTurns(readTailRecords(path), input, turns)) return path;
+		if (hasTrailingTurns(readTailRecords(path, turns.length), input, turns)) return path;
 		const entries = await loadSessionSeqIndex(path);
 		let seq = lastSessionSeq(entries, input);
 		const next = turns

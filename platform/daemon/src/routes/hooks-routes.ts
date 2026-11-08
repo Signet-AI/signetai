@@ -48,12 +48,14 @@ import {
 	type RememberRequest,
 	type SessionEndRequest,
 	type SessionStartRequest,
+	type StopResponse,
 	type SynthesisRequest,
 	type UserPromptSubmitRequest,
 	handleCheckpointExtract,
 	handlePreCompaction,
 	handleSessionEnd,
 	handleSessionStart,
+	handleStop,
 	handleSynthesisRequest,
 	handleUserPromptSubmit,
 	resetSessionStartDedupe,
@@ -800,6 +802,84 @@ function registerDirectMessageWakeRelease(app: Hono): void {
 				error instanceof Error ? error : new Error(String(error)),
 			);
 			return c.json({ error: "Direct message wake release failed" }, 500);
+		}
+	});
+}
+
+const MAX_STOP_REPLY_CHARS = 262_144;
+const STOP_MAX_IN_FLIGHT = 8;
+let stopAdmission: ConcurrencyAdmission = createConcurrencyAdmission(STOP_MAX_IN_FLIGHT);
+export function __setStopAdmissionForTests(admission: ConcurrencyAdmission | null): void {
+	stopAdmission = admission ?? createConcurrencyAdmission(STOP_MAX_IN_FLIGHT);
+}
+
+function registerStop(app: Hono): void {
+	app.post("/api/hooks/stop", async (c) => {
+		if (isInternalCall(c)) return c.json({ recorded: false });
+		try {
+			const body = await readOptionalJsonObject(c);
+			if (body === null) return c.json({ error: "invalid request body" }, 400);
+			const harness = parseOptionalString(body.harness);
+			if (!harness) return c.json({ error: "harness is required" }, 400);
+			const sessionKey = parseOptionalString(body.sessionKey) ?? parseOptionalString(body.sessionId);
+			if (!sessionKey) return c.json({ error: "sessionKey is required" }, 400);
+			const lastAssistantMessage = body.lastAssistantMessage ?? "";
+			if (typeof lastAssistantMessage !== "string") {
+				return c.json({ error: "lastAssistantMessage must be a string" }, 400);
+			}
+			if (lastAssistantMessage.length > MAX_STOP_REPLY_CHARS) {
+				return c.json({ error: `lastAssistantMessage exceeds ${MAX_STOP_REPLY_CHARS} characters` }, 413);
+			}
+			const runtimePath = resolveRuntimePath(c, { runtimePath: parseOptionalString(body.runtimePath) });
+			const scope = resolveCrossAgentScope(c, parseOptionalString(body.agentId), sessionKey);
+			if (scope.error) return c.json({ error: scope.error }, 403);
+			const agentId = scope.agentId;
+			const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+			});
+			if (bindingError) return c.json({ error: bindingError }, 403);
+			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+			stampHarness(harness);
+			const claimedBy = getSessionPath(sessionKey, agentId);
+			if (runtimePath && claimedBy && claimedBy !== runtimePath) {
+				return c.json({ recorded: false, skipped: true, duplicateRuntimePath: true, claimedBy } satisfies StopResponse);
+			}
+			if (getEndedSession(sessionKey, agentId)) {
+				return c.json({ recorded: false, skipped: true, sessionEnded: true } satisfies StopResponse);
+			}
+			if (isSessionBypassed(sessionKey, agentId)) {
+				return c.json({ recorded: false, bypassed: true } satisfies StopResponse);
+			}
+
+			if (!stopAdmission.acquire()) {
+				c.header("Retry-After", "1");
+				return c.json({ error: `Too many concurrent stop hooks (max ${STOP_MAX_IN_FLIGHT}); retry shortly` }, 503);
+			}
+			try {
+				return c.json(
+					await handleStop({
+						harness,
+						sessionKey,
+						agentId,
+						cwd: parseOptionalString(body.cwd),
+						lastAssistantMessage,
+					}),
+				);
+			} finally {
+				stopAdmission.release();
+			}
+		} catch (e) {
+			if (isRetryableWritePressure(e)) {
+				logger.warn("hooks", "Stop hook deferred by write pressure; caller should retry", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+				c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
+				return c.json({ error: "Write pressure; retry the stop hook", retryable: true }, 503);
+			}
+			logger.error("hooks", "Stop hook failed", e as Error);
+			return c.json({ error: "Hook execution failed" }, 500);
 		}
 	});
 }
@@ -2208,6 +2288,7 @@ export function registerHooksRoutes(app: Hono): void {
 	registerDirectMessageWake(app);
 	registerDirectMessageWakeRelease(app);
 	registerSessionEnd(app);
+	registerStop(app);
 	registerSkillInvocation(app);
 	registerCheckpointExtract(app);
 	registerRemember(app);

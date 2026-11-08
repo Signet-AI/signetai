@@ -385,6 +385,23 @@ export interface SessionEndResponse {
 	transcriptCaptureJobId?: string;
 }
 
+export interface StopRequest {
+	harness: string;
+	sessionKey: string;
+	agentId: string;
+	cwd?: string;
+	lastAssistantMessage: string;
+}
+
+export interface StopResponse {
+	recorded: boolean;
+	skipped?: true;
+	duplicateRuntimePath?: true;
+	claimedBy?: string;
+	sessionEnded?: true;
+	bypassed?: true;
+}
+
 export interface CheckpointExtractRequest {
 	harness: string;
 	sessionKey: string;
@@ -1607,6 +1624,15 @@ export async function handleUserPromptSubmit(
 
 	if (req.sessionKey && userMessage.trim().length > 0) {
 		try {
+			await transcriptCapture.appendCanonicalLiveTranscriptTurns({
+				basePath: getAgentsDir(),
+				agentId,
+				harness: req.harness,
+				sessionKey: req.sessionKey,
+				project: req.project ?? null,
+				userMessage,
+				lastAssistantMessage: req.lastAssistantMessage,
+			});
 			const liveTranscript = transcriptCapture.formatLivePromptTranscript(userMessage, req.lastAssistantMessage);
 			const prevInfo = await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId);
 			const prev = prevInfo?.content;
@@ -1617,15 +1643,6 @@ export async function handleUserPromptSubmit(
 				req.project ?? null,
 				agentId,
 			);
-			await transcriptCapture.appendCanonicalLiveTranscriptTurns({
-				basePath: getAgentsDir(),
-				agentId,
-				harness: req.harness,
-				sessionKey: req.sessionKey,
-				project: req.project ?? null,
-				userMessage,
-				lastAssistantMessage: req.lastAssistantMessage,
-			});
 		} catch (error) {
 			logger.warn("hooks", "Prompt transcript append failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -1856,28 +1873,49 @@ export async function handleUserPromptSubmit(
 function isClearSessionStart(req: SessionStartRequest): boolean {
 	return req.source?.trim().toLowerCase() === "clear";
 }
+async function appendLiveAssistantTurn(params: {
+	readonly harness: string;
+	readonly sessionKey: string;
+	readonly agentId: string;
+	readonly project: string | null;
+	readonly message: string;
+}): Promise<boolean> {
+	const assistantLine = transcriptCapture.formatLiveAssistantTranscript(params.message);
+	if (!assistantLine) return false;
+	await transcriptCapture.appendCanonicalLiveAssistantTurn({ basePath: getAgentsDir(), ...params });
+	const storedTranscript = (await getStoredSessionTranscriptInfoAsync(params.sessionKey, params.agentId))?.content;
+	await upsertSessionTranscriptAsync(
+		params.sessionKey,
+		transcriptCapture.appendLivePromptTranscript(storedTranscript, assistantLine),
+		params.harness,
+		params.project,
+		params.agentId,
+	);
+	return true;
+}
+
+export async function handleStop(req: StopRequest): Promise<StopResponse> {
+	const recorded = await appendLiveAssistantTurn({
+		harness: req.harness,
+		sessionKey: req.sessionKey,
+		agentId: req.agentId,
+		project: req.cwd ?? null,
+		message: req.lastAssistantMessage,
+	});
+	return { recorded };
+}
+
 async function appendSessionEndAssistantTurn(
 	req: SessionEndRequest,
 	sessionKey: string | undefined,
 	agentId: string,
 ): Promise<void> {
 	if (!sessionKey || req.transcriptPath || req.transcript?.trim()) return;
-	const live = transcriptCapture.formatLiveAssistantTranscript(req.lastAssistantMessage ?? "");
-	if (!live) return;
 	try {
-		const prev = (await getStoredSessionTranscriptInfoAsync(sessionKey, agentId))?.content;
-		await upsertSessionTranscriptAsync(
-			sessionKey,
-			transcriptCapture.appendLivePromptTranscript(prev, live),
-			req.harness,
-			req.cwd ?? null,
-			agentId,
-		);
-		await transcriptCapture.appendCanonicalLiveAssistantTurn({
-			basePath: getAgentsDir(),
-			agentId,
+		await appendLiveAssistantTurn({
 			harness: req.harness,
 			sessionKey,
+			agentId,
 			project: req.cwd ?? null,
 			message: req.lastAssistantMessage ?? "",
 		});

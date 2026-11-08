@@ -317,6 +317,23 @@ await appendCanonicalTranscriptTurns({
 		expect(transcript.match(/same assistant context/g)?.length).toBe(1);
 		expect(transcript.match(/same retried prompt/g)?.length).toBe(1);
 	});
+
+	test("deduplicates retried live appends whose records exceed the tail scan window", async () => {
+		const root = makeRoot("dedupe-large");
+		const reply = { role: "assistant" as const, content: "界".repeat(120_000) };
+		const prompt = { role: "user" as const, content: "large retried prompt" };
+
+		await appendLiveTurns(root, [reply, prompt]);
+		await appendLiveTurns(root, [reply, prompt]);
+		await appendLiveTurns(root, [reply]);
+		await appendLiveTurns(root, [reply]);
+
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code")).map(([role]) => role)).toEqual([
+			"assistant",
+			"user",
+			"assistant",
+		]);
+	});
 });
 
 describe("backfill OOM regression (#587)", () => {
