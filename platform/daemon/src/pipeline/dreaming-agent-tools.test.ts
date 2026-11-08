@@ -250,6 +250,65 @@ describe("dreaming-agent-tools", () => {
 		).toEqual({ content: "- Meeting is Tuesday." });
 	});
 
+	it("rejects an inexact memory-head quote when it is staged and lets the pass resubmit the exact one", async () => {
+		insertEpisodicMemory("head-evidence", "Meeting is Tuesday.");
+		const accessor = getDbAccessor();
+		const owner = await getDbOwnerForAccessor(accessor);
+		const options = { operation: "head-provenance-fixture", lane: "read" as const, deadlineMs: 10000 };
+		const cfg = {
+			tokenThreshold: 100000,
+			maxInterval: 3600000,
+			maxInputTokens: 32000,
+			maxOutputTokens: 16000,
+			timeout: 30000,
+			backfillOnFirstRun: true,
+		};
+		const entry = (quote: string) => ({
+			entryId: "meeting",
+			text: "Meeting is Tuesday.",
+			support: [{ source_ref: "memory:head-evidence", quote }],
+		});
+		const runPass = (retry: boolean) =>
+			runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						const invoke = async (name: string, args: unknown) =>
+							readResult(await findTool(input.tools, name).execute(name, args, undefined, undefined, {} as never));
+						await invoke("memory_head_read", { agentId: "owner" });
+						expect(
+							await invoke("memory_head_commit", { agentId: "owner", entries: [entry("The meeting is on Tuesday.")] }),
+						).toMatchObject({
+							ok: false,
+							code: "INVALID_PROVENANCE",
+							error: "entry meeting quote is not exact scoped evidence",
+						});
+						if (retry)
+							expect(
+								await invoke("memory_head_commit", { agentId: "owner", entries: [entry("Meeting is Tuesday.")] }),
+							).toMatchObject({ ok: true, code: "STAGED_FOR_FINALIZATION" });
+						return { summary: "Kept the meeting day." };
+					},
+				},
+				cfg,
+				dir,
+				"owner",
+				["owner"],
+				"incremental-content",
+			);
+
+		await expect(runPass(false)).rejects.toThrow(
+			"memory_head_commit was rejected (INVALID_PROVENANCE): entry meeting quote is not exact scoped evidence",
+		);
+		const completed = await runPass(true);
+		expect(
+			await ownerReadOne(owner, "SELECT status FROM dreaming_passes WHERE id=?", [completed.passId], options),
+		).toEqual({ status: "completed" });
+		expect(
+			await ownerReadOne(owner, "SELECT content FROM memory_md_heads WHERE agent_id='owner'", [], options),
+		).toEqual({ content: "- Meeting is Tuesday." });
+	});
+
 	it("binds the memory-head commit to the running pass instead of asking the agent for its id", async () => {
 		const manifest = getDreamingCapabilityManifest().find((capability) => capability.id === "memory_head_commit");
 		const schema = manifest?.inputSchema as { properties?: Record<string, unknown>; required?: string[] } | undefined;
@@ -353,7 +412,11 @@ describe("dreaming-agent-tools", () => {
 									},
 								],
 							});
-							expect(publication).toMatchObject({ ok: true, code: "STAGED_FOR_FINALIZATION" });
+							expect(publication).toMatchObject(
+								behavior === "stale"
+									? { ok: false, code: "STALE_HEAD" }
+									: { ok: true, code: "STAGED_FOR_FINALIZATION" },
+							);
 							if (behavior === "fail-finalization-after-head-commit") {
 								await ownerRun(
 									owner,

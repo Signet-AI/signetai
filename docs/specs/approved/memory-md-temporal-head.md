@@ -143,6 +143,12 @@ commit to the running content pass; callers never supply a pass ID, base revisio
 body and records entry provenance and removals. Deferrals and reasons for no
 change belong in the existing pass log, not a second publication format.
 
+The commit is staged during the pass and published at finalization. Staging runs
+the publication checks (pass binding, fence, budget, and exact scoped quotes)
+through the same owner operation without writing, so a rejection reaches the
+agent while it can still correct and resubmit. Finalization revalidates, so
+evidence that changes after staging still fails the commit.
+
 `curate_memory_head` is retired: it is absent from discovery and calls fail as
 unknown capabilities. Internal `curate` owner requests also fail explicitly.
 Callers must submit structured entries to `memory_head_commit`; freeform bodies

@@ -64,7 +64,12 @@ import {
 	type MemoryHeadCommitInput,
 	type MemoryHeadCommitter,
 } from "../memory-head";
-import { commitCuratedMemoryHeadInDb, memoryHeadInputError, withContentPassWrites } from "../memory-head-owner";
+import {
+	commitCuratedMemoryHeadInDb,
+	memoryHeadInputError,
+	validateCuratedMemoryHeadInDb,
+	withContentPassWrites,
+} from "../memory-head-owner";
 import { renderDreamingEvidence, sanitizeTranscriptForDreaming } from "./dreaming-evidence";
 import {
 	deliveredOffsetForSource,
@@ -1855,6 +1860,22 @@ ${JSON.stringify(liveOptions.userRequest)}
 				if (invalid !== null) {
 					memoryHeadCommitRejection = invalid;
 					return { ok: false, ...invalid };
+				}
+				const request = { action: "validate", input } as const;
+				const validation = await runDbOwnerDomainOperation(accessor, {
+					runWithOwner: async (owner) =>
+						await owner.submit<Record<string, unknown>>(
+							{ kind: "memory_head", request },
+							{ operation: "memory-head.validate", lane: "write", deadlineMs: 5_000, estimatedWorkUnits: 1_000 },
+						).result,
+					runInline: ({ write }) => write((db) => validateCuratedMemoryHeadInDb(db, input)),
+				});
+				if (validation.ok !== true) {
+					memoryHeadCommitRejection = {
+						code: typeof validation.code === "string" ? validation.code : "unknown",
+						error: typeof validation.error === "string" ? validation.error : "commit was rejected",
+					};
+					return { ...validation, ok: false };
 				}
 				memoryHeadCommitInput = input;
 				return { ok: true, code: "STAGED_FOR_FINALIZATION" };
