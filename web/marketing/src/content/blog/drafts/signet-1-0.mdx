@@ -137,9 +137,11 @@ Details are recorded in the [release changelog](https://github.com/Signet-AI/sig
 
 ## Telemetry
 
-This is the first stable release with telemetry, so if you’re upgrading, it’s new to you. Signet now sends anonymous usage data: install and version counts, which features get used, token and cost totals per provider, and sanitized crash reports. It never sends memory content, prompts, search queries, or anything that identifies you personally; events carry a random install ID. Every event is also written to a local log at `runtime/telemetry/events.jsonl` in your workspace, so you can read exactly what was recorded.
+Signet asks before it sends anything. Setup, `signet update install`, and the dashboard each ask once whether to share anonymous usage data, and nothing is collected until you say yes. That includes existing workspaces: if you never set a preference, Signet asks the first time you update or open the dashboard.
 
-New installs start with workspace telemetry off. The npm package also sends one anonymous install count, version and platform only, when it installs; set `SIGNET_TELEMETRY_OPTOUT=1` before installing to skip it. Existing workspaces upgrading from an earlier stable release have it **on** unless you’ve already set a preference. To turn it off, set `memory.pipelineV2.telemetryEnabled: false` in `agent.yaml`, or `SIGNET_TELEMETRY_OPTOUT=1` in your environment. Details are in [telemetry controls](https://docs.signetai.sh/analytics/).
+If you say yes, Signet sends install and version counts, which features get used, token and cost totals per provider, and sanitized crash reports. It never sends memory content, prompts, search queries, or anything that identifies you personally; events carry a random install ID. Every event is also written to a local log at `runtime/telemetry/events.jsonl` in your workspace, so you can read exactly what was recorded.
+
+The npm package also sends one anonymous install count, version and platform only, when it installs; set `SIGNET_TELEMETRY_OPTOUT=1` before installing to skip it. Change your answer any time with `signet telemetry on` or `signet telemetry off`, or in Settings → Advanced. Details are in [telemetry controls](https://docs.signetai.sh/analytics/).
 
 ## Installing and updating
 
