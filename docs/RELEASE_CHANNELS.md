@@ -148,7 +148,8 @@ with `release-staging`, not a user-facing dist-tag.
 
 Only after those steps does it publish the GitHub release, creating the tag.
 Stable is marked normal/latest; next is marked prerelease/not latest. Then it
-advances the channel dist-tags and removes its staging tag. The OpenClaw memory
+advances the channel dist-tags. `release-staging` keeps pointing at the newest
+published version; the release token cannot delete dist-tags. The OpenClaw memory
 adapter remains optional; its absence does not block the required packages.
 
 Last, a stable release calls the **Docker Image** workflow, which builds
@@ -174,12 +175,12 @@ to run for it, so public assets are never rebuilt or replaced. If `promote` fail
 re-run only that job. Every upload checks that the release is still a draft, so
 re-running a single build job after publication fails instead of replacing a
 public asset. Finalization treats an API error as success when the release did
-become public. If the publish job still fails after the release is public,
-point npm `latest` with **Point Stable at Release** and move `next` with
-`scripts/advance-npm-dist-tag.sh`. Concurrent `promote` jobs are serialized.
-If npm publishing fails partway, the versions it did publish
-keep their `release-staging` tag until a re-run of `publish` succeeds and
-`promote` removes it. Dist-tags never move backward through the Release workflow.
+become public. If the publish job still fails after the release is public, or a
+`promote` re-run cannot succeed, run **Point Stable at Release** with the version:
+it moves `latest` and advances `next`. Concurrent `promote` jobs are serialized.
+If npm publishing fails partway, the versions it did publish carry only
+`release-staging` until a re-run of `publish` succeeds and `promote` moves the
+user-facing tags. Dist-tags never move backward through the Release workflow.
 
 ## Roll back stable
 
@@ -188,8 +189,9 @@ explicit stable-pointer override, not development-to-stable promotion. Supply a
 plain `x.y.z` version whose required npm packages already exist and whose GitHub
 release is public, not a draft. It points each required package's npm `latest`
 at that version, includes the optional adapter only if published, verifies the
-tags, and marks the GitHub release latest. It does not change npm `next`, rebuild
-assets, or publish packages.
+tags, and marks the GitHub release latest. It advances npm `next` to the same
+version only when `next` is older, so a rollback never moves `next` backward. It
+does not rebuild assets or publish packages.
 
 This permits rolling the stable pointer back. It does not force already-installed
 newer clients to downgrade. Verify the selected release and npm `latest` after

@@ -104,7 +104,7 @@ if (args[0] === "dist-tag") {
  if (args[1] === "add") {
   const split = args[2].lastIndexOf("@");
   (state.tags[args[2].slice(0, split)] ??= {})[args[3]] = args[2].slice(split + 1);
- } else delete state.tags[args[2]][args[3]];
+ } else { console.error("npm error 403 Forbidden - DELETE dist-tag"); process.exit(1); }
  save(); process.exit(0);
 }
 process.exit(9);
@@ -150,7 +150,8 @@ test("real publication steps stage every package before finalizing and advancing
 			for (const tags of Object.values(state.tags)) expect(tags).toEqual({ "release-staging": "1.0.1" });
 		}
 	}
-	for (const tags of Object.values(value.read().tags)) expect(tags).toEqual({ latest: "1.0.1", next: "1.0.1" });
+	for (const tags of Object.values(value.read().tags))
+		expect(tags).toEqual({ "release-staging": "1.0.1", latest: "1.0.1", next: "1.0.1" });
 	const published = value.read().calls.filter((call) => call[1] === "publish").length;
 	for (const name of ["Publish npm packages", "Finalize GitHub release", "Advance npm channels"])
 		expect(value.run(name).exitCode).toBe(0);
@@ -175,7 +176,7 @@ test("next advances only next and tolerates an unavailable optional adapter", ()
 		"example/repo",
 	]);
 	expect(state.versions["@signetai/signet-memory-openclaw"]).toBeUndefined();
-	for (const tags of Object.values(state.tags)) expect(tags).toEqual({ next: "1.0.1" });
+	for (const tags of Object.values(state.tags)) expect(tags).toEqual({ "release-staging": "1.0.1", next: "1.0.1" });
 });
 
 test("required npm failure stops before finalization and leaves no user-facing tags", () => {
@@ -199,7 +200,8 @@ test("stable leaves a newer development next tag ahead", () => {
 	});
 	for (const name of ["Publish npm packages", "Finalize GitHub release", "Advance npm channels"])
 		expect(value.run(name).exitCode).toBe(0);
-	for (const tags of Object.values(value.read().tags)) expect(tags).toEqual({ latest: "1.0.1", next: "1.1.0-next.3" });
+	for (const tags of Object.values(value.read().tags))
+		expect(tags).toEqual({ "release-staging": "1.0.1", latest: "1.0.1", next: "1.1.0-next.3" });
 });
 
 test("the asset gate rejects any missing native, desktop, or manifest asset", () => {
@@ -251,7 +253,7 @@ test("promote advances exactly the packages publish reported", () => {
 	expect(value.run("Advance npm channels").exitCode).toBe(0);
 	const state = value.read();
 	expect(state.tags["@signetai/signet-memory-openclaw"]).toBeUndefined();
-	expect(state.tags.signetai).toEqual({ latest: "1.0.1", next: "1.0.1" });
+	expect(state.tags.signetai).toEqual({ "release-staging": "1.0.1", latest: "1.0.1", next: "1.0.1" });
 });
 
 test("finalize succeeds when GitHub published the release but the API call reported failure", () => {
@@ -261,10 +263,14 @@ test("finalize succeeds when GitHub published the release but the API call repor
 	expect(value.read().public).toBe(true);
 });
 
-test("rollback requires all packages and a public release before moving only latest backward", () => {
+const rollbackScript = (): string =>
+	parse(readFileSync(join(root, ".github/workflows/promote-release.yml"), "utf8")).jobs.promote.steps.find(
+		(step: { name?: string }) => step.name === "Point stable at published release",
+	).run;
+
+test("rollback requires all packages and a public release before moving latest backward, never next", () => {
 	const value = fixture();
-	const rollback = parse(readFileSync(join(root, ".github/workflows/promote-release.yml"), "utf8")).jobs.promote
-		.steps[0].run;
+	const rollback = rollbackScript();
 	expect(value.run("rollback", rollback).exitCode).not.toBe(0);
 	expect(value.run("Publish npm packages").exitCode).toBe(0);
 	expect(value.run("rollback", rollback).exitCode).not.toBe(0);
@@ -277,4 +283,17 @@ test("rollback requires all packages and a public release before moving only lat
 	const result = value.run("rollback", rollback);
 	expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
 	for (const tags of Object.values(value.read().tags)) expect(tags).toEqual({ latest: "1.0.1", next: "1.1.0-next.3" });
+});
+
+test("pointing stable at a newer release also advances a next tag left behind", () => {
+	const value = fixture();
+	expect(value.run("Publish npm packages").exitCode).toBe(0);
+	value.write({
+		...value.read(),
+		public: true,
+		tags: Object.fromEntries(value.names.map((name) => [name, { latest: "0.9.0", next: "1.0.0" }])),
+	});
+	const result = value.run("rollback", rollbackScript());
+	expect(result.exitCode, new TextDecoder().decode(result.stderr)).toBe(0);
+	for (const tags of Object.values(value.read().tags)) expect(tags).toEqual({ latest: "1.0.1", next: "1.0.1" });
 });
