@@ -48,20 +48,37 @@ if (channel === "stable") {
 }
 
 if (channel !== "check") {
-	const pages: unknown = JSON.parse(exec("gh", ["api", `repos/${repo}/releases`, "--paginate", "--slurp"]));
-	if (!Array.isArray(pages)) throw new Error("Invalid GitHub release response");
-	const releases: unknown[] = pages.flat();
-	const release = releases.find(
-		(value): value is { tag_name: string; draft: boolean; target_commitish: string } =>
-			typeof value === "object" &&
-			value !== null &&
-			"tag_name" in value &&
-			value.tag_name === tag &&
-			"draft" in value &&
-			typeof value.draft === "boolean" &&
-			"target_commitish" in value &&
-			typeof value.target_commitish === "string",
-	);
+	const [owner, name] = repo.split("/");
+	const id = exec("gh", [
+		"api",
+		"graphql",
+		"-f",
+		"query=query($owner: String!, $name: String!, $tag: String!) { repository(owner: $owner, name: $name) { release(tagName: $tag) { databaseId } } }",
+		"-f",
+		`owner=${owner}`,
+		"-f",
+		`name=${name}`,
+		"-f",
+		`tag=${tag}`,
+		"--jq",
+		".data.repository.release.databaseId // 0",
+	]);
+	if (!/^\d+$/.test(id)) throw new Error("Invalid GitHub release ID");
+	const release: unknown =
+		id === "0"
+			? null
+			: JSON.parse(exec("gh", ["api", `repos/${repo}/releases/${id}`, "--jq", "{tag_name, draft, target_commitish}"]));
+	if (
+		release !== null &&
+		(typeof release !== "object" ||
+			!("tag_name" in release) ||
+			release.tag_name !== tag ||
+			!("draft" in release) ||
+			typeof release.draft !== "boolean" ||
+			!("target_commitish" in release) ||
+			typeof release.target_commitish !== "string")
+	)
+		throw new Error("Invalid GitHub release response");
 	if (release?.draft && release.target_commitish !== sha)
 		throw new Error(`Draft ${tag} targets a different commit; delete the draft before retrying`);
 	if (channel === "stable") {
