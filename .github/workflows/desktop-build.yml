@@ -362,6 +362,7 @@ jobs:
             echo "::error::No desktop release assets found"
             exit 1
           fi
+          scripts/require-draft-release.sh "${RELEASE_TAG}"
           scripts/retry-github-release.sh gh release upload "${RELEASE_TAG}" "${publish_files[@]}" --clobber --repo "${GITHUB_REPOSITORY}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -410,7 +411,9 @@ jobs:
 
       - name: Publish latest-mac.yml
         if: inputs.release_tag != ''
-        run: scripts/retry-github-release.sh gh release upload "${RELEASE_TAG}" mac-update/latest-mac.yml --clobber --repo "${GITHUB_REPOSITORY}"
+        run: |
+          scripts/require-draft-release.sh "${RELEASE_TAG}"
+          scripts/retry-github-release.sh gh release upload "${RELEASE_TAG}" mac-update/latest-mac.yml --clobber --repo "${GITHUB_REPOSITORY}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

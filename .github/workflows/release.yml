@@ -175,6 +175,7 @@ jobs:
           mkdir -p "${STAGING}"
           cp "dist/native/${RELEASE_ASSET}" "${STAGING}/${RELEASE_ASSET}"
           openssl dgst -sha256 -hex "${STAGING}/${RELEASE_ASSET}" | awk '{print $NF}' > "${STAGING}/${RELEASE_ASSET}.sha256"
+          scripts/require-draft-release.sh "v${RELEASE_VERSION}"
           gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}" --clobber
           gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}.sha256" --clobber
         env:
@@ -205,20 +206,15 @@ jobs:
       RELEASE_VERSION: ${{ needs.plan.outputs.version }}
       CHANNEL: ${{ inputs.channel }}
     steps:
-      - name: Refuse a published release
-        run: |
-          draft=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.tag_name == \"v${NEW_VERSION}\") | .draft")
-          if [ "${draft}" != "true" ]; then
-            echo "::error::v${NEW_VERSION} is not exactly one draft release; if it is already published, re-run the promote job instead"
-            exit 1
-          fi
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.plan.outputs.sha }}
           persist-credentials: false
+
+      - name: Refuse a published release
+        run: scripts/require-draft-release.sh "v${NEW_VERSION}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -410,9 +406,13 @@ jobs:
         shell: bash
         run: |
           if [ "$CHANNEL" = stable ]; then
-            scripts/retry-github-release.sh gh release edit "v${NEW_VERSION}" --draft=false --prerelease=false --latest --repo "${GITHUB_REPOSITORY}"
+            flags=(--prerelease=false --latest)
           else
-            scripts/retry-github-release.sh gh release edit "v${NEW_VERSION}" --draft=false --prerelease --latest=false --repo "${GITHUB_REPOSITORY}"
+            flags=(--prerelease --latest=false)
+          fi
+          if ! scripts/retry-github-release.sh gh release edit "v${NEW_VERSION}" --draft=false "${flags[@]}" --repo "${GITHUB_REPOSITORY}"; then
+            draft=$(gh release view "v${NEW_VERSION}" --json isDraft --jq .isDraft --repo "${GITHUB_REPOSITORY}")
+            test "${draft}" = false
           fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -420,6 +420,9 @@ jobs:
   promote:
     needs: [plan, publish]
     runs-on: ubuntu-latest
+    concurrency:
+      group: release-promote
+      cancel-in-progress: false
     permissions:
       contents: read
     env:

@@ -25,6 +25,7 @@ interface Registry {
 	assets?: string[];
 	failPackage?: string;
 	failFinalize?: boolean;
+	failFinalizeAfterPublish?: boolean;
 	missingRelease?: boolean;
 }
 function fixture(channel = "stable") {
@@ -34,6 +35,7 @@ function fixture(channel = "stable") {
 	mkdirSync(join(dir, "tools"));
 	copyFileSync(join(root, "scripts/advance-npm-dist-tag.sh"), join(dir, "scripts/advance-npm-dist-tag.sh"));
 	copyFileSync(join(root, "scripts/retry-github-release.sh"), join(dir, "scripts/retry-github-release.sh"));
+	copyFileSync(join(root, "scripts/require-draft-release.sh"), join(dir, "scripts/require-draft-release.sh"));
 	const names: string[] = [];
 	for (const match of script("Publish npm packages").matchAll(/^\s*publish_npm_package (.+?)( true)?$/gm)) {
 		const path = match[1]?.replaceAll('"', "").replace("${STAGED_NPM_ROOT}", join(dir, "signet-npm-publish"));
@@ -74,7 +76,8 @@ if (${JSON.stringify(command)} === "gh") {
  if (args[0] === "api") { if (!state.missingRelease) console.log(String(!state.public)); process.exit(0); }
  if (args[1] === "view") { console.log(args.includes("isDraft") ? String(!state.public) : (state.assets ?? []).join("\\n")); process.exit(0); }
  if (state.failFinalize) process.exit(1);
- state.public = true; save(); process.exit(0);
+ state.public = true; save();
+ process.exit(state.failFinalizeAfterPublish ? 1 : 0);
 }
 if (args[0] === "config") process.exit(0);
 if (args[0] === "view") {
@@ -224,7 +227,7 @@ test("publish refuses to rebuild assets onto an already published release", () =
 	value.write({ ...value.read(), public: true });
 	const result = value.run("Refuse a published release");
 	expect(result.exitCode).not.toBe(0);
-	expect(new TextDecoder().decode(result.stdout)).toContain("re-run the promote job");
+	expect(new TextDecoder().decode(result.stdout)).toContain("never rebuilt or re-uploaded");
 	value.write({ ...value.read(), public: false, missingRelease: true });
 	expect(value.run("Refuse a published release").exitCode).not.toBe(0);
 });
@@ -238,6 +241,13 @@ test("promote advances exactly the packages publish reported", () => {
 	const state = value.read();
 	expect(state.tags["@signetai/signet-memory-openclaw"]).toBeUndefined();
 	expect(state.tags.signetai).toEqual({ latest: "1.0.1", next: "1.0.1" });
+});
+
+test("finalize succeeds when GitHub published the release but the API call reported failure", () => {
+	const value = fixture();
+	value.write({ ...value.read(), failFinalizeAfterPublish: true });
+	expect(value.run("Finalize GitHub release").exitCode).toBe(0);
+	expect(value.read().public).toBe(true);
 });
 
 test("rollback requires all packages and a public release before moving only latest backward", () => {

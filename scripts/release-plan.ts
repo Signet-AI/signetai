@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 
 function exec(command: string, args: readonly string[]): string {
@@ -14,6 +14,13 @@ function remoteTag(tag: string): string | undefined {
 		.filter(Boolean)
 		.map((line) => line.split(/\s+/));
 	return (entries.find((entry) => entry[1]?.endsWith("^{}")) ?? entries[0])?.[0];
+}
+
+function npmHasVersion(version: string): boolean {
+	const result = spawnSync("npm", ["view", `signetai@${version}`, "version"], { encoding: "utf8" });
+	if (result.status === 0) return result.stdout.trim() === version;
+	if (result.stderr.includes("E404")) return false;
+	throw new Error(`npm view signetai@${version} failed: ${result.stderr.trim()}`);
 }
 
 const channel = process.env.CHANNEL;
@@ -73,6 +80,8 @@ if (channel !== "check") {
 		throw new Error(`${tag} is already published; re-run the failed jobs of its original Release run instead`);
 	if (release && release.target_commitish !== sha)
 		throw new Error(`Draft ${tag} targets a different commit; delete the draft before retrying`);
+	if (!release && npmHasVersion(version))
+		throw new Error(`signetai@${version} is already on npm but has no draft for ${sha}; prepare a new version`);
 	if (channel === "stable") {
 		const latest = exec("npm", ["view", "signetai", "dist-tags.latest"]);
 		if (!plain.test(latest)) throw new Error(`Invalid npm latest version: ${latest}`);

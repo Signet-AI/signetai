@@ -31,6 +31,19 @@ jobs:
           ref: v${{ inputs.version }}
           persist-credentials: false
 
+      - name: Decide floating tags
+        id: floating
+        run: |
+          latest=$(gh release view --json tagName --jq .tagName --repo "${GITHUB_REPOSITORY}")
+          if [ "${STABLE}" = true ] && [ "${latest}" = "v${VERSION}" ]; then
+            echo "move=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "move=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
@@ -48,14 +61,17 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
+          context: git
           images: ghcr.io/signet-ai/signet
           tags: |
             type=raw,value=v${{ inputs.version }}
             type=sha
             type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ env.STABLE }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ env.STABLE }}
-            type=semver,pattern={{major}},value=${{ inputs.version }},enable=${{ env.STABLE }}
-            type=raw,value=latest,enable=${{ env.STABLE }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }},enable=${{ steps.floating.outputs.move }}
+            type=semver,pattern={{major}},value=${{ inputs.version }},enable=${{ steps.floating.outputs.move }}
+            type=raw,value=latest,enable=${{ steps.floating.outputs.move }}
+          flavor: |
+            latest=false
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -70,7 +86,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Verify public GHCR latest pull
-        if: env.STABLE == 'true'
+        if: steps.floating.outputs.move == 'true'
         run: |
           set -euo pipefail
           tmp_config="$(mktemp -d)"
