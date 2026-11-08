@@ -823,15 +823,19 @@ function registerStop(app: Hono): void {
 			if (!harness) return c.json({ error: "harness is required" }, 400);
 			const sessionKey = parseOptionalString(body.sessionKey) ?? parseOptionalString(body.sessionId);
 			if (!sessionKey) return c.json({ error: "sessionKey is required" }, 400);
-			const lastAssistantMessage = body.lastAssistantMessage ?? "";
-			if (typeof lastAssistantMessage !== "string") {
+			if (body.lastAssistantMessage !== undefined && typeof body.lastAssistantMessage !== "string") {
 				return c.json({ error: "lastAssistantMessage must be a string" }, 400);
 			}
+			const lastAssistantMessage = body.lastAssistantMessage ?? "";
 			if (lastAssistantMessage.length > MAX_STOP_REPLY_CHARS) {
 				return c.json({ error: `lastAssistantMessage exceeds ${MAX_STOP_REPLY_CHARS} characters` }, 413);
 			}
 			const runtimePath = resolveRuntimePath(c, { runtimePath: parseOptionalString(body.runtimePath) });
-			const scope = resolveCrossAgentScope(c, parseOptionalString(body.agentId), sessionKey);
+			const scope = resolveScopedAgentId(
+				c,
+				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey }),
+				"default",
+			);
 			if (scope.error) return c.json({ error: scope.error }, 403);
 			const agentId = scope.agentId;
 			const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, {

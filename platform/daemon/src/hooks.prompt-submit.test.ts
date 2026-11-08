@@ -60,9 +60,7 @@ function makeDeps(overrides: Partial<PromptDeps> = {}): PromptDeps {
 		hybridRecall: hybridRecallMock,
 		fetchEmbedding: fetchEmbeddingMock,
 		searchTemporalFallback: searchTemporalFallbackMock,
-		async upsertSessionTranscriptAsync() {
-			return true;
-		},
+		async appendSessionTranscriptAsync() {},
 		getExpiryWarning: () => null,
 		recordPrompt() {},
 		shouldCheckpoint() {
@@ -333,9 +331,14 @@ describe("handleUserPromptSubmit entity context", () => {
 	it("keeps prompt bookkeeping ahead of the low-signal gate", async () => {
 		seedEntityContext();
 		const recordPrompt = mock((_sessionKey: string | undefined, _queryTerms?: string, _snippet?: string) => {});
-		const upsertSessionTranscriptAsync = mock(
-			async (_sessionKey: string, _transcript: string, _harness: string, _project: string | null, _agentId: string) =>
-				true,
+		const appendSessionTranscriptAsync = mock(
+			async (_input: {
+				readonly sessionKey: string;
+				readonly agentId: string;
+				readonly harness: string;
+				readonly project: string | null;
+				readonly append: (existing: string | undefined) => string;
+			}) => {},
 		);
 
 		const result = await handleUserPromptSubmit(
@@ -343,13 +346,24 @@ describe("handleUserPromptSubmit entity context", () => {
 				harness: "codex",
 				userMessage: "hi",
 				sessionKey: "session-bookkeeping",
+				project: "/repo",
 				transcript: "User: hi",
 			},
-			makeDeps({ recordPrompt, upsertSessionTranscriptAsync }),
+			makeDeps({ recordPrompt, appendSessionTranscriptAsync }),
 		);
 
 		expect(recordPrompt).toHaveBeenCalledWith("session-bookkeeping", undefined, "hi");
-		expect(upsertSessionTranscriptAsync).toHaveBeenCalled();
+		expect(appendSessionTranscriptAsync).toHaveBeenCalledTimes(1);
+		const appended = appendSessionTranscriptAsync.mock.calls[0]?.[0];
+		expect(appended).toMatchObject({
+			sessionKey: "session-bookkeeping",
+			agentId: "default",
+			harness: "codex",
+			project: "/repo",
+		});
+		expect(appended?.append(undefined)).toBe("User: hi");
+		expect(appended?.append("Assistant: earlier")).toBe("Assistant: earlier\nUser: hi");
+		expect(appended?.append("Assistant: earlier\nUser: hi")).toBe("Assistant: earlier\nUser: hi");
 		expect(result.inject).toBe("");
 	});
 

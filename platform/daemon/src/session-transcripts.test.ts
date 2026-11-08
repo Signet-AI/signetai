@@ -2,8 +2,14 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, initDbAccessor } from "./db-accessor";
-import { searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
+import { type DbAccessor, type WriteDb, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import {
+	appendSessionTranscriptAsync,
+	getStoredSessionTranscriptInfoAsync,
+	searchTranscriptFallback,
+	upsertSessionTranscript,
+	upsertSessionTranscriptAsync,
+} from "./session-transcripts";
 
 let dir = "";
 
@@ -59,5 +65,80 @@ describe("session transcript lookup", () => {
 
 		expect(hits).toHaveLength(1);
 		expect(hits[0]?.sessionKey).toBe("same-session");
+	});
+});
+
+describe("session transcript live append", () => {
+	afterEach(async () => {
+		await closeDbAccessor();
+		if (dir) rmSync(dir, { recursive: true, force: true });
+		dir = "";
+	});
+
+	function init(): DbAccessor {
+		dir = mkdtempSync(join(tmpdir(), "signet-session-transcripts-append-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		return getDbAccessor();
+	}
+
+	it("appends to the stored row inside one write transaction", async () => {
+		const accessor = init();
+		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
+
+		await appendSessionTranscriptAsync({
+			sessionKey: "live-session",
+			agentId: "agent-a",
+			harness: "claude-code",
+			project: "/repo",
+			append: (existing) => `${existing}\nAssistant: second`,
+		});
+
+		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
+		expect(stored).toMatchObject({
+			content: "User: first\nAssistant: second",
+			project: "/repo",
+			harness: "claude-code",
+		});
+	});
+
+	it("fails the append without overwriting the row when the in-transaction read fails", async () => {
+		const accessor = init();
+		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
+		const failingRead: DbAccessor = {
+			...accessor,
+			withWriteTxAsync: (fn, options) =>
+				accessor.withWriteTxAsync(
+					(db) =>
+						fn(
+							new Proxy(db, {
+								get(target, property, receiver) {
+									if (property !== "prepare") return Reflect.get(target, property, receiver);
+									return (sql: string) => {
+										if (sql.includes("SELECT session_key, agent_id, content")) throw new Error("forced read failure");
+										return target.prepare(sql);
+									};
+								},
+							}) as WriteDb,
+						),
+					options,
+				),
+		};
+
+		await expect(
+			appendSessionTranscriptAsync(
+				{
+					sessionKey: "live-session",
+					agentId: "agent-a",
+					harness: "claude-code",
+					project: "/repo",
+					append: (existing) => `${existing ?? ""}\nAssistant: second`.trim(),
+				},
+				failingRead,
+			),
+		).rejects.toThrow("forced read failure");
+
+		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
+		expect(stored?.content).toBe("User: first");
 	});
 });

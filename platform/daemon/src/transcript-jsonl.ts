@@ -79,7 +79,7 @@ export interface TranscriptIdentity {
 const LOCK_DEAD_OWNER_STALE_MS = 30_000;
 const LOCK_POLL_MS = 10;
 const TAIL_SCAN_BYTES = 256 * 1024;
-const LINE_START_SCAN_BYTES = 16 * 1024;
+const TAIL_RECORD_SLACK_BYTES = 4 * 1024;
 
 type SessionIdentityFields = Pick<CanonicalTranscriptRecord, "agent_id" | "harness" | "session_key" | "session_id">;
 
@@ -240,26 +240,26 @@ function parseRecords(text: string): CanonicalTranscriptRecord[] {
 	return records;
 }
 
-function readTailRecords(path: string): CanonicalTranscriptRecord[] {
+function tailScanBytes(turns: readonly TranscriptTurn[]): number {
+	let bytes = 0;
+	for (const turn of turns) {
+		bytes += Buffer.byteLength(JSON.stringify(cleanTurnContent(turn.content))) + TAIL_RECORD_SLACK_BYTES;
+	}
+	return Math.max(TAIL_SCAN_BYTES, bytes);
+}
+
+function readTailRecords(path: string, scanBytes: number): CanonicalTranscriptRecord[] {
 	if (!existsSync(path)) return [];
 	const size = statSync(path).size;
+	const start = Math.max(0, size - scanBytes);
+	const from = Math.max(0, start - 1);
 	const fd = openSync(path, "r");
 	try {
-		let start = Math.max(0, size - TAIL_SCAN_BYTES);
-		while (start > 0) {
-			const from = Math.max(0, start - LINE_START_SCAN_BYTES);
-			const chunk = Buffer.alloc(start - from);
-			readSync(fd, chunk, 0, chunk.length, from);
-			const newline = chunk.lastIndexOf(0x0a);
-			if (newline !== -1) {
-				start = from + newline + 1;
-				break;
-			}
-			start = from;
-		}
-		const buffer = Buffer.alloc(size - start);
-		readSync(fd, buffer, 0, buffer.length, start);
-		return parseRecords(buffer.toString("utf8"));
+		const buffer = Buffer.alloc(size - from);
+		readSync(fd, buffer, 0, buffer.length, from);
+		if (start === 0) return parseRecords(buffer.toString("utf8"));
+		const newline = buffer.indexOf(0x0a);
+		return newline === -1 ? [] : parseRecords(buffer.subarray(newline + 1).toString("utf8"));
 	} finally {
 		closeSync(fd);
 	}
@@ -718,7 +718,7 @@ export function appendCanonicalTranscriptTurns(
 	if (turns.length === 0) return Promise.resolve(null);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	return withTranscriptFileLock(path, async () => {
-		if (hasTrailingTurns(readTailRecords(path), input, turns)) return path;
+		if (hasTrailingTurns(readTailRecords(path, tailScanBytes(turns)), input, turns)) return path;
 		const entries = await loadSessionSeqIndex(path);
 		let seq = lastSessionSeq(entries, input);
 		const next = turns

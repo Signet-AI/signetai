@@ -755,6 +755,11 @@ memory:
 				error: "lastAssistantMessage must be a string",
 			},
 			{
+				body: { harness: "claude-code", sessionKey, lastAssistantMessage: null },
+				status: 400,
+				error: "lastAssistantMessage must be a string",
+			},
+			{
 				body: { harness: "claude-code", sessionKey, lastAssistantMessage: "x".repeat(262_145) },
 				status: 413,
 				error: "lastAssistantMessage exceeds 262144 characters",
@@ -835,6 +840,88 @@ memory:
 		} finally {
 			authConfig.mode = previousMode;
 		}
+	});
+
+	it("records a stop hook reply under the agent prompt submit resolved for a scoped admin token", async () => {
+		const { authConfig } = await import("./routes/state");
+		const { registerHooksRoutes } = await import("./routes/hooks-routes");
+		const { Hono } = await import("hono");
+		const now = Math.floor(Date.now() / 1000);
+		const routes = new Hono();
+		routes.use("*", async (c, next) => {
+			c.set("auth", {
+				authenticated: true,
+				claims: { sub: "stop-admin", scope: { agent: "stop-admin-agent" }, role: "admin", iat: now, exp: now + 3600 },
+			});
+			await next();
+		});
+		registerHooksRoutes(routes);
+		const sessionKey = `claude-stop-admin-${crypto.randomUUID()}`;
+		const previousMode = authConfig.mode;
+		authConfig.mode = "team";
+		try {
+			const prompt = await routes.request("/api/hooks/user-prompt-submit", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "x-signet-runtime-path": "legacy" },
+				body: JSON.stringify({ harness: "claude-code", sessionKey, userMessage: "admin prompt" }),
+			});
+			expect(prompt.status).toBe(200);
+
+			const resp = await postStop({ harness: "claude-code", sessionKey, lastAssistantMessage: "admin reply" }, routes);
+
+			expect(resp.status).toBe(200);
+			expect(await resp.json()).toEqual({ recorded: true });
+			const row = getDbAccessor?.().withReadDb((db) =>
+				db.prepare("SELECT agent_id, content FROM session_transcripts WHERE session_key = ?").all(sessionKey),
+			);
+			expect(row).toEqual([{ agent_id: "default", content: "User: admin prompt\nAssistant: admin reply" }]);
+		} finally {
+			authConfig.mode = previousMode;
+			releaseSession?.(sessionKey);
+		}
+	});
+
+	async function withFailingTranscriptWrites<T>(failure: Error, run: () => Promise<T>): Promise<T> {
+		const accessor = getDbAccessor?.();
+		if (!accessor) throw new Error("db accessor not initialized");
+		const original = accessor.withWriteTxAsync;
+		accessor.withWriteTxAsync = (fn, options) =>
+			options?.operation?.startsWith("transcripts.") ? Promise.reject(failure) : original.call(accessor, fn, options);
+		try {
+			return await run();
+		} finally {
+			accessor.withWriteTxAsync = original;
+		}
+	}
+
+	it("answers a retryable 503 when write pressure blocks the stop hook row and records a retry once", async () => {
+		const { DbWriteQueueFullError } = await import("./db-accessor");
+		const sessionKey = `claude-stop-pressure-${crypto.randomUUID()}`;
+		const body = { harness: "claude-code", sessionKey, lastAssistantMessage: "pressured reply" };
+
+		const blocked = await withFailingTranscriptWrites(new DbWriteQueueFullError(), () => postStop(body));
+		expect(blocked.status).toBe(503);
+		expect(blocked.headers.get("Retry-After")).toBe("1");
+		expect(await blocked.json()).toMatchObject({ retryable: true });
+		expect(storedTranscript(sessionKey)).toBeNull();
+
+		const retried = await postStop(body);
+		expect(retried.status).toBe(200);
+		expect(await retried.json()).toEqual({ recorded: true });
+		expect(storedTranscript(sessionKey)).toEqual({ content: "Assistant: pressured reply" });
+		expect(stopRecords(sessionKey)).toMatchObject([{ role: "assistant", content: "pressured reply" }]);
+	});
+
+	it("fails the stop hook request when the transcript row write fails", async () => {
+		const sessionKey = `claude-stop-row-failed-${crypto.randomUUID()}`;
+
+		const resp = await withFailingTranscriptWrites(new Error("forced row failure"), () =>
+			postStop({ harness: "claude-code", sessionKey, lastAssistantMessage: "unrecorded reply" }),
+		);
+
+		expect(resp.status).toBe(500);
+		expect(await resp.json()).toEqual({ error: "Hook execution failed" });
+		expect(storedTranscript(sessionKey)).toBeNull();
 	});
 
 	it("releases the stop cap after a recorded reply and after a failed one", async () => {

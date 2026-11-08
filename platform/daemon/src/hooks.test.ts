@@ -1827,6 +1827,31 @@ describe("direct transcript regressions", () => {
 		}
 	});
 
+	test.serial("keeps every line when turn-end replies and a prompt overlap on one session", async () => {
+		createMemoryDb([]);
+		const sessionKey = "claude-overlapping-stop-session";
+		const replies = ["Overlap reply one.", "Overlap reply two.", "Overlap reply three."];
+
+		await Promise.all([
+			...replies.map((lastAssistantMessage) =>
+				handleStop({ harness: "claude-code", sessionKey, agentId: "default", lastAssistantMessage }),
+			),
+			handleUserPromptSubmit({ harness: "claude-code", sessionKey, userPrompt: "overlapping prompt" }),
+		]);
+
+		const db = openTestDb();
+		try {
+			const stored = db
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get(sessionKey, "default") as { content: string } | undefined;
+			expect(stored?.content.split("\n").sort()).toEqual(
+				[...replies.map((reply) => `Assistant: ${reply}`), "User: overlapping prompt"].sort(),
+			);
+		} finally {
+			db.close();
+		}
+	});
+
 	test.serial("records the first prompt and reply of a new agent as live turns", async () => {
 		createMemoryDb([]);
 
@@ -1844,11 +1869,26 @@ describe("direct transcript regressions", () => {
 		});
 
 		expect(canonicalSessionRecords("claude-code", "fresh-agent-prompt-session")).toMatchObject([
-			{ role: "user", content: "first prompt of a new agent", source_format: "live" },
+			{ role: "user", content: "first prompt of a new agent", source_format: "live", agent_id: "fresh-prompt-agent" },
 		]);
 		expect(canonicalSessionRecords("claude-code", "fresh-agent-stop-session")).toMatchObject([
-			{ role: "assistant", content: "first reply of a new agent", source_format: "live" },
+			{ role: "assistant", content: "first reply of a new agent", source_format: "live", agent_id: "fresh-stop-agent" },
 		]);
+		const db = openTestDb();
+		try {
+			expect(
+				db
+					.prepare(
+						"SELECT session_key, agent_id FROM session_transcripts WHERE session_key IN (?, ?) ORDER BY session_key",
+					)
+					.all("fresh-agent-prompt-session", "fresh-agent-stop-session"),
+			).toEqual([
+				{ session_key: "fresh-agent-prompt-session", agent_id: "fresh-prompt-agent" },
+				{ session_key: "fresh-agent-stop-session", agent_id: "fresh-stop-agent" },
+			]);
+		} finally {
+			db.close();
+		}
 	});
 
 	test.serial("writes full canonical transcript content without a summary input copy", async () => {

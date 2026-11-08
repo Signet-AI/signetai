@@ -137,6 +137,7 @@ import {
 } from "./session-start-state";
 import { getExpiryWarning } from "./session-tracker";
 import {
+	appendSessionTranscriptAsync,
 	findStaleLiveSessions,
 	getStoredSessionTranscriptInfoAsync,
 	upsertSessionTranscriptAsync,
@@ -1528,7 +1529,7 @@ type UserPromptSubmitDeps = {
 	readonly consumeState: typeof consumeState;
 	readonly queueCheckpointWrite: typeof queueCheckpointWrite;
 	readonly formatPeriodicDigest: typeof formatPeriodicDigest;
-	readonly upsertSessionTranscriptAsync: typeof upsertSessionTranscriptAsync;
+	readonly appendSessionTranscriptAsync: typeof appendSessionTranscriptAsync;
 	readonly getExpiryWarning: typeof getExpiryWarning;
 	readonly hybridRecall: typeof hybridRecall;
 	readonly fetchEmbedding: typeof fetchEmbedding;
@@ -1550,7 +1551,7 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 	consumeState,
 	queueCheckpointWrite,
 	formatPeriodicDigest,
-	upsertSessionTranscriptAsync,
+	appendSessionTranscriptAsync,
 	getExpiryWarning,
 	hybridRecall,
 	fetchEmbedding,
@@ -1634,15 +1635,13 @@ export async function handleUserPromptSubmit(
 				lastAssistantMessage: req.lastAssistantMessage,
 			});
 			const liveTranscript = transcriptCapture.formatLivePromptTranscript(userMessage, req.lastAssistantMessage);
-			const prevInfo = await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId);
-			const prev = prevInfo?.content;
-			await deps.upsertSessionTranscriptAsync(
-				req.sessionKey,
-				transcriptCapture.appendLivePromptTranscript(prev, liveTranscript),
-				req.harness,
-				req.project ?? null,
+			await deps.appendSessionTranscriptAsync({
+				sessionKey: req.sessionKey,
 				agentId,
-			);
+				harness: req.harness,
+				project: req.project ?? null,
+				append: (existing) => transcriptCapture.appendLivePromptTranscript(existing, liveTranscript),
+			});
 		} catch (error) {
 			logger.warn("hooks", "Prompt transcript append failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -1883,14 +1882,13 @@ async function appendLiveAssistantTurn(params: {
 	const assistantLine = transcriptCapture.formatLiveAssistantTranscript(params.message);
 	if (!assistantLine) return false;
 	await transcriptCapture.appendCanonicalLiveAssistantTurn({ basePath: getAgentsDir(), ...params });
-	const storedTranscript = (await getStoredSessionTranscriptInfoAsync(params.sessionKey, params.agentId))?.content;
-	await upsertSessionTranscriptAsync(
-		params.sessionKey,
-		transcriptCapture.appendLivePromptTranscript(storedTranscript, assistantLine),
-		params.harness,
-		params.project,
-		params.agentId,
-	);
+	await appendSessionTranscriptAsync({
+		sessionKey: params.sessionKey,
+		agentId: params.agentId,
+		harness: params.harness,
+		project: params.project,
+		append: (existing) => transcriptCapture.appendLivePromptTranscript(existing, assistantLine),
+	});
 	return true;
 }
 
