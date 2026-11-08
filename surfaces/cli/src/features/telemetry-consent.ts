@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
+import chalk from "chalk";
 import { editYamlConfigFile, parseRuntimeYaml } from "@signet/core";
 import {
 	TELEMETRY_CONSENT_BODY,
@@ -24,8 +25,10 @@ export function telemetryConsentDisabledByEnv(): boolean {
 export async function promptTelemetryConsent(basePath: string): Promise<void> {
 	if (!process.stdin.isTTY || telemetryConsentDisabledByEnv() || readWorkspaceTelemetryConsent(basePath) !== undefined)
 		return;
-	console.log(`\n${TELEMETRY_CONSENT_TITLE}\n\n${TELEMETRY_CONSENT_BODY.join("\n\n")}\n`);
+	console.log(`\n  ${chalk.bold(TELEMETRY_CONSENT_TITLE)}\n`);
+	for (const paragraph of TELEMETRY_CONSENT_BODY)
+		console.log(`  ${paragraph.replace(/`([^`]+)`/g, (_, code: string) => chalk.cyan(code))}\n`);
 	const enabled = await confirm({ message: "Send anonymous usage data?", default: false });
 	writeTelemetryConsent(basePath, enabled);
-	console.log(enabled ? "Usage data on. Thanks." : "Usage data off.");
+	console.log(enabled ? chalk.green("  ✓ Usage data on. Thanks.") : chalk.dim("  Usage data off."));
 }
