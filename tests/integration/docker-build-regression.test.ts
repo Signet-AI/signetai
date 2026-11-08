@@ -142,7 +142,7 @@ describe("Docker build pipeline regression guard", () => {
 		expect(desktopTypecheck).toContain("tsc -p tsconfig.json --noEmit");
 	});
 
-	it("keeps Electron Builder from auto-publishing during tag builds", () => {
+	it("keeps Electron Builder from auto-publishing during explicit release builds", () => {
 		expect(desktopBuild).toBeDefined();
 		if (!desktopBuild) return;
 		expect(desktopBuild).toContain("electron-builder --publish never");
@@ -169,7 +169,10 @@ describe("Docker build pipeline regression guard", () => {
 
 	it("fails stable Docker release CI when GHCR latest is not publicly pullable", () => {
 		expect(dockerImageWorkflow).toContain("Verify public GHCR latest pull");
-		expect(dockerImageWorkflow).toContain("if: ${{ !contains(github.ref_name, '-') }}");
+		expect(dockerImageWorkflow).toContain("STABLE: ${{ !contains(inputs.version, '-') }}");
+		expect(dockerImageWorkflow).toContain("if: steps.floating.outputs.move == 'true'");
+		expect(dockerImageWorkflow).toContain("latest=false");
+		expect(dockerImageWorkflow).toContain("context: git");
 		expect(dockerImageWorkflow).toContain(
 			'DOCKER_CONFIG="${tmp_config}" docker manifest inspect ghcr.io/signet-ai/signet:latest',
 		);

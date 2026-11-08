@@ -82,6 +82,18 @@ const imageUrl = new URL(image, Astro.site ?? "https://signetai.sh");
 
   </head>
   <body>
+    <aside class="site-banner" aria-label="Scam warning" transition:persist>
+      <strong>Scam warning: Signet has no token or coin.</strong> Any token or coin using the Signet name has nothing to do with this project. Do not buy it thinking it supports Signet.
+    </aside>
+    <script>
+      const banner = document.querySelector<HTMLElement>(".site-banner");
+      if (banner) {
+        const measure = () => document.documentElement.style.setProperty("--site-banner-height", `${banner.offsetHeight}px`);
+        measure();
+        new ResizeObserver(measure).observe(banner);
+        document.addEventListener("astro:after-swap", measure);
+      }
+    </script>
     <slot />
 
     <script src="../scripts/analytics.ts"></script>

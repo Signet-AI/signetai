@@ -41,3 +41,4 @@ package-lock.json
 pnpm-lock.yaml
 tmp/
 yarn.lock
+.bump-level

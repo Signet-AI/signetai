@@ -76,16 +76,21 @@ describe("advance-npm-dist-tag", () => {
 		expect(run("0.237.9", "0.237.9").added).toBe("signetai@0.237.9 next");
 	});
 
-	test("does not order prerelease versions with sort -V", () => {
-		const { result, added } = run("0.238.0", "0.238.0-rc.1");
-		expect(added).toBe("signetai@0.238.0 next");
-		expect(result.stdout).toContain("::warning::Not ordering signetai@next (0.238.0-rc.1) against 0.238.0");
+	test("orders stable and development versions with SemVer", () => {
+		expect(run("1.0.2", "1.1.0-next.3").added).toBeNull();
+		expect(run("1.0.1", "1.0.1-next.5").added).toBe("signetai@1.0.1 next");
+		expect(run("1.0.1-next.9", "1.0.1-next.10").added).toBeNull();
+		expect(run("1.0.1-next.10", "1.0.1-next.9").added).toBe("signetai@1.0.1-next.10 next");
 	});
 
-	test("warns and sets the tag when the current tag cannot be read", () => {
+	test("fails closed on invalid versions", () => {
+		expect(run("not-semver", "1.0.0").result.status).not.toBe(0);
+		expect(run("1.0.0", "invalid").added).toBeNull();
+	});
+
+	test("fails closed when the current tag cannot be read", () => {
 		const { result, added } = run("0.237.9", "0.237.10", true);
-		expect(result.status).toBe(0);
-		expect(added).toBe("signetai@0.237.9 next");
-		expect(result.stdout).toContain("::warning::Could not read signetai@next");
+		expect(result.status).not.toBe(0);
+		expect(added).toBeNull();
 	});
 });

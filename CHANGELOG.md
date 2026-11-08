@@ -6,6 +6,16 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-11-08
+- Features: ask once before usage data.
+- Bug fixes: harden consent prompt and gating; ask once across CLI and onboarding; split the install ping paragraph; guard uploads and npm reuse by draft; build arm64 on macos-15 runners; run version sync on Windows; look up drafts through the API; never rebuild a published release; bound draft release lookup.
+- Docs: explain manual release channels.
+
+### 2026-11-07
+- Bug fixes: match live turns that the source extends with hook output; let a source snapshot fill a live-only transcript session.
+- Refactoring: simplify the live-only snapshot fill check.
+- Docs: add rust core map.
+
 ### 2026-11-05
 - Bug fixes: bound memory type length and document it; store the requested memory type on remember.
 - Docs: say chunk types differ when type is inferred.
@@ -30,14 +40,75 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: retire search.alpha.
 - Docs: state what the hint-only cap guarantees.
 
-### 2026-10-24
-- Bug fixes: keep temporal window fill when vector reads fail; decode owner hex in linear time and bound vector pages; page transcript evidence by bytes; keep paged recall reads in scope and bounded; decode and page traversal vectors; page transcript evidence reads; retry stapler validation on lost Apple connection; dedupe escaped PATH profile entries; escape shell metachars in PATH line; print PATH commands after piped install.
-
-### 2026-10-23
-- Bug fixes: skip subagent transcripts in recovery scan; forward home overrides to service daemon; send Anthropic auth headers on probe.
-- Docs: sync translations.
-
 ## Release Ledger
+
+## [1.0.0] - 2026-11-08
+
+Signet 1.0 is the first stable release since `v0.157.3`. The full announcement is at https://signetai.sh/blog/signet-1-0/.
+
+### Highlights
+
+- **Dreaming** replaces the old extraction pipeline with an agentic loop that maintains memory and the ontology, with citations back to the original evidence. Claims carry real-world event time and validity. Passes run in parallel across agents and work with local OpenAI-compatible models.
+- **Sources** bring in notes, documents, Notion pages, and agent conversations with provenance. Transcript import is resumable and idempotent, and transcripts can be exported as JSONL.
+- **Agents work together:** direct messages wake idle Claude Code, Hermes Agent, and Pi sessions. A shared message board holds threads, and peer context shows what other sessions are working on.
+- **Recall:** a local cross-encoder reranker is on by default. Keyword search is stemmed, transcript excerpts appear when Dreaming hasn't filed a detail, and `signet accelerate` adds native CPU and CUDA runtimes.
+- **Desktop and Windows:** official Windows x64 support, an optional desktop app (`signet desktop install`), a redesigned dashboard with a memory graph and chat, and guided onboarding.
+- **Harnesses:** Claude Code, Codex and ChatGPT desktop, OpenCode, OpenClaw, Hermes Agent, Pi, Oh My Pi, Kimi Code, and Muse Code.
+
+### Upgrading
+
+- Auto-update does not install a new major version, so no existing install moves to 1.0 on its own. Run `signet update install`, then `signet daemon restart`.
+- Back up your workspace. The first time the 1.0 daemon starts, it upgrades an existing workspace to the Workspace v2 layout in place. Check the result with `signet status`.
+- Native installs on Linux or Windows older than `v0.235.1` cannot self-update to 1.0 because of the old 256 MiB updater limit. Rerun the native installer instead.
+- Dreaming is off in upgraded workspaces that have no Dreaming setting, and the old extraction pipeline no longer runs, so new memories are not written until you set `memory.dreaming.enabled: true` in `agent.yaml`. Dreaming also needs a working inference provider. New installs turn it on during setup.
+- Signet now asks before sending anonymous usage data. Setup, `signet update install`, and the dashboard each ask once, and nothing is collected until you say yes, including in upgraded workspaces that never set a preference. Change it any time with `signet telemetry on` or `signet telemetry off`. The npm package also sends one anonymous install count (version and platform only) when it installs; set `SIGNET_TELEMETRY_OPTOUT=1` before installing to skip it.
+
+### Releases
+
+Signet now follows semantic versioning, with manual stable releases. Nightly builds are paused. Installs on the nightly channel need the same manual `signet update install` to reach 1.0.0, and then follow stable releases.
+
+### Changes since 0.240.2
+
+Release summary: 1 feature, 9 bug fixes, and 1 docs update.
+Tag range: `v0.240.2..v1.0.0`.
+
+### Features
+
+- **telemetry**: ask once before usage data
+
+### Bug Fixes
+
+- **telemetry**: harden consent prompt and gating
+- **telemetry**: ask once across CLI and onboarding
+- **telemetry**: split the install ping paragraph
+- **release**: guard uploads and npm reuse by draft
+- **desktop**: build arm64 on macos-15 runners
+- **release**: run version sync on Windows
+- **release**: look up drafts through the API
+- **release**: never rebuild a published release
+- **release**: bound draft release lookup
+
+### Docs
+
+- **release**: explain manual release channels
+
+## [0.240.2] - 2026-11-07
+
+Release summary: 2 bug fixes, 1 refactor, and 1 docs update.
+Tag range: `v0.240.1..v0.240.2`.
+
+### Bug Fixes
+
+- **daemon**: match live turns that the source extends with hook output
+- **daemon**: let a source snapshot fill a live-only transcript session
+
+### Refactoring
+
+- **daemon**: simplify the live-only snapshot fill check
+
+### Docs
+
+- **specs**: add rust core map
 
 ## [0.240.1] - 2026-11-05
 

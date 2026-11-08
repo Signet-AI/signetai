@@ -34,7 +34,7 @@ Counters and in-memory buffers are runtime observations. They can reset when the
 
 ## Telemetry
 
-Telemetry is configured at `memory.pipelineV2.telemetryEnabled` and defaults to enabled. Persistently opt out with:
+Daemon and CLI telemetry are configured at `memory.pipelineV2.telemetryEnabled` and default to off. Only explicit `true` enables collection. Missing means not yet answered; `false` means declined. Interactive setup, update install, and the dashboard ask once. You can keep it off explicitly with:
 
 ```yaml
 memory:
@@ -42,7 +42,9 @@ memory:
     telemetryEnabled: false
 ```
 
-For a process-local opt-out without editing configuration:
+Use `signet telemetry` to inspect consent, `signet telemetry on` or `signet telemetry off` to change it, or Settings → Advanced. Changes apply without restarting. Automated setup never prompts or writes a consent choice.
+
+The npm package separately sends an anonymous install count before consent. Set `SIGNET_TELEMETRY_OPTOUT=1` before installing to skip it. For a process-local opt-out that also suppresses consent prompts without editing configuration:
 
 ```bash
 SIGNET_TELEMETRY_OPTOUT=1 signet daemon start

@@ -27,6 +27,23 @@ const NO_HARNESSES = {
 	gemini: false,
 };
 
+const originalTestEnv = { ...process.env };
+let testHome = "";
+beforeEach(() => {
+	testHome = mkdtempSync(join(tmpdir(), "setup-home-"));
+	process.env.HOME = testHome;
+	process.env.HERMES_HOME = join(testHome, "hermes");
+	process.env.XDG_CONFIG_HOME = join(testHome, "config");
+	delete process.env.HERMES_REPO;
+	spyOn(prompts, "confirm").mockResolvedValue(false);
+});
+afterEach(() => {
+	for (const key of Object.keys(process.env)) if (!(key in originalTestEnv)) delete process.env[key];
+	Object.assign(process.env, originalTestEnv);
+	rmSync(testHome, { recursive: true, force: true });
+	mock.restore();
+});
+
 const ORIGINAL_HOME = process.env.HOME;
 const ORIGINAL_HERMES_REPO = process.env.HERMES_REPO;
 const ORIGINAL_HERMES_HOME = process.env.HERMES_HOME;
@@ -753,11 +770,17 @@ memory:
 			})),
 		});
 
-		await setupWizard({ nonInteractive: true, skipGit: true }, deps);
-
-		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
-		expect(agentYaml.indexOf("memory:")).toBeGreaterThanOrEqual(0);
-		expect(agentYaml.indexOf("telemetryEnabled: false")).toBeGreaterThan(agentYaml.indexOf("memory:"));
+		const tty = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			await setupWizard({ nonInteractive: true, path: basePath, skipGit: true }, deps);
+			expect(prompts.confirm).not.toHaveBeenCalled();
+			const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
+			expect(agentYaml.indexOf("memory:")).toBeGreaterThanOrEqual(0);
+			expect(agentYaml).not.toContain("telemetryEnabled");
+		} finally {
+			Object.defineProperty(process.stdin, "isTTY", { value: tty, configurable: true });
+		}
 	});
 
 	it("writes custom identity preset with concrete files for every referenced path", async () => {
@@ -1577,7 +1600,7 @@ describe("interactive onboarding", () => {
 		}
 	});
 
-	it("resumes through the dashboard without rewriting the workspace", async () => {
+	it("resumes through the dashboard and saves only the explicit telemetry answer", async () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-onboarding-"));
 		const config = "name: Existing agent\noperator_setting: preserve-me\n";
 		writeFileSync(join(root, "agent.yaml"), config);
@@ -1595,7 +1618,11 @@ describe("interactive onboarding", () => {
 			});
 			await setupWizard({}, deps);
 			expect(open).toHaveBeenCalledWith(`http://127.0.0.1:${server.port}/#setup`);
-			expect(readFileSync(join(root, "agent.yaml"), "utf8")).toBe(config);
+			expect(parseSimpleYaml(readFileSync(join(root, "agent.yaml"), "utf8"))).toEqual({
+				...parseSimpleYaml(config),
+				memory: { pipelineV2: { telemetryEnabled: false } },
+			});
+			expect(prompts.confirm).toHaveBeenCalledWith({ message: "Send anonymous usage data?", default: false });
 			expect(readFileSync(join(root, "AGENTS.md"), "utf8")).toBe("User-authored instructions");
 			expect(deps.configureHarnessHooks).not.toHaveBeenCalled();
 		} finally {

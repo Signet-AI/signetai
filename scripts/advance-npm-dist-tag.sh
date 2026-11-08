@@ -9,21 +9,17 @@ fi
 package="$1"
 version="$2"
 tag="$3"
-if ! current=$(npm view "${package}" "dist-tags.${tag}" 2>/dev/null); then
-  echo "::warning::Could not read ${package}@${tag}; setting it to ${version} without an ordering check"
-  current=""
-fi
-plain='^[0-9]+\.[0-9]+\.[0-9]+$'
-if [ -n "${current}" ] && { [[ ! "${current}" =~ ${plain} ]] || [[ ! "${version}" =~ ${plain} ]]; }; then
-  echo "::warning::Not ordering ${package}@${tag} (${current}) against ${version}; setting it to ${version}"
-  current=""
-fi
-if [ -n "${current}" ] && [ "${current}" != "${version}" ]; then
-  newest=$(printf '%s\n%s\n' "${current}" "${version}" | sort -V | tail -n1)
-  if [ "${newest}" = "${current}" ]; then
-    echo "${package}@${tag} is already ${current}; leaving it ahead of ${version}"
-    exit 0
-  fi
+current=$(npm view "${package}" "dist-tags.${tag}")
+order=$(bun -e '
+  const [version, current] = process.argv.slice(1);
+  for (const value of [version, current].filter(Boolean)) {
+    Bun.semver.order(value, value);
+  }
+  console.log(current ? Bun.semver.order(version, current) : 1);
+' "${version}" "${current}")
+if [ "${order}" -lt 0 ]; then
+  echo "${package}@${tag} is already ${current}; leaving it ahead of ${version}"
+  exit 0
 fi
 
 npm dist-tag add "${package}@${version}" "${tag}"

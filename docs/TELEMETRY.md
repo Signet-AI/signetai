@@ -7,7 +7,7 @@
 
 ## What telemetry is and why
 
-Signet ships an anonymous, default-on telemetry collector so the project can
+Signet ships an anonymous, opt-in telemetry collector so the project can
 understand how it runs in the wild. It answers three questions:
 
 - **Install and usage analytics** — how many installs, on which platforms and
@@ -17,8 +17,15 @@ understand how it runs in the wild. It answers three questions:
 - **Per-install economics** — token and cost counts per provider, so the
   project can reason about what running Signet actually costs.
 
-Telemetry is opt-out, not opt-in: `telemetryEnabled: false` in config, or
-`SIGNET_TELEMETRY_OPTOUT=1` in the environment. It never carries memory
+Daemon and CLI telemetry are off until `memory.pipelineV2.telemetryEnabled`
+is explicitly `true`. `false` records a refusal; a missing key means the user
+has not answered and also records and sends nothing. Consent lives only in
+that key, with no separate asked flag or timestamp. `SIGNET_TELEMETRY_OPTOUT=1`
+(or `true`) overrides the choice and suppresses consent prompts.
+
+The npm postinstall `install.ping` is the exception: it sends an anonymous
+install count before consent. Set `SIGNET_TELEMETRY_OPTOUT=1` before installing
+to skip it. The collector never carries memory
 content, query text, prompt text, or personal identity (see the
 [privacy contract](#privacy-contract)). Sending is best-effort and can never
 break the daemon.
@@ -39,7 +46,7 @@ break the daemon.
   delivery is configured and a telemetry SQLite database with its tables is
   available.
 - **Open JSONL log** — every recorded event is mirrored as one JSON line to
-  `<agentsDir>/.daemon/telemetry/events.jsonl`, the inspectable audit surface
+  `<agentsDir>/runtime/telemetry/events.jsonl`, the inspectable audit surface
   (see [below](#the-open-audit-log)).
 
 CLI `command.invoked` events follow the same contract as daemon events: they
@@ -75,7 +82,7 @@ paths, or user identity.
 | Event | When | Key payload fields |
 |---|---|---|
 | `install.ping` | npm wrapper postinstall (native binary install) | `version`, `platform`, `deploymentRole`, `installChannel` (`package-manager`) |
-| `install.activated` | first daemon run of a new install (persisted install id first created) | `version`, `platform`, `deploymentRole`, `installChannel` |
+| `install.activated` | first collector start after opt-in, once per install (including delayed opt-in) | `version`, `platform`, `deploymentRole`, `installChannel` |
 | `first.remember` / `first.recall` | first successful remember / recall per install, exactly once | `version`, `platform` |
 | `daemon.started` | daemon boot | `version`, `platform`, `uptimeMs` |
 | `daemon.previous_exit` | next successful boot reconciles the prior lifecycle record, exactly once when one exists | `classification` (`clean` / `error` / `unrecorded`), `reasonCategory`, `exitCode`, `previousVersion`, `previousUptimeMs`, `restartDelayMs` |
@@ -347,7 +354,7 @@ All telemetry keys live under `memory.pipelineV2` in `agent.yaml`:
 
 | Key | Default | Range | Description |
 |---|---|---|---|
-| `telemetryEnabled` | `true` | boolean | Master switch; `false` opts out |
+| `telemetryEnabled` | `false` | boolean | Only explicit `true` enables collection; missing means not yet answered |
 | `telemetry.posthogHost` | `https://us.i.posthog.com` | — | PostHog instance URL; empty disables sending |
 | `telemetry.posthogApiKey` | public ingest key | — | PostHog project API key shared by daemon and CLI |
 | `telemetry.flushIntervalMs` | `60000` | 5s-10min | Time between event flushes |
@@ -401,18 +408,44 @@ resolve to the configured value or `unknown`. No paths, package URLs, process
 names, repository names, IP addresses, or memory content are used to infer
 either field.
 
-**Disclosure:** `signet setup` tells users telemetry is on by default and
-asks whether to disable it, including sharing top-level CLI command names with
-PostHog. Declining writes `telemetryEnabled: false`; non-interactive/CI setups
-keep the default (enabled).
+**Disclosure:** Interactive `signet setup` and a successful interactive
+`signet update install` show the usage-data explainer and ask once, defaulting
+to No, when the key is missing. Only an explicit answer writes `true` or `false`
+at `memory.pipelineV2.telemetryEnabled`. Non-TTY, `--non-interactive`,
+`--file`/`--json` plans, and `--dry-run` never ask or manufacture an answer.
+
+Dashboard onboarding includes a Usage data step with equally weighted Share
+usage data and Don't share buttons. Existing workspaces with completed
+onboarding and an unanswered choice see the same disclosure in a dialog. A
+failed configuration fetch never counts as an unanswered choice. The dialog
+cannot be dismissed without answering; a failed save stays open for retry.
+
+Inspect or change consent any time:
+
+```bash
+signet telemetry
+signet telemetry on
+signet telemetry off
+```
+
+The status distinguishes on, off, not yet answered, and disabled by
+`SIGNET_TELEMETRY_OPTOUT`. Commands also accept `--path <workspace>`. Settings →
+Advanced shows the same three saved states. Changes start or stop the collector
+live without restarting the daemon. The daemon watches the three supported
+configuration filenames with a bounded 500 ms polling interval so atomic CLI
+file replacements are applied too. Opting out discards unsent daemon events
+and aborts in-flight delivery rather than draining them to PostHog. A workspace
+that opts in later emits `install.activated` on its first collector start, even
+if the CLI created the install identity first; subsequent starts do not
+reactivate it.
 
 ## The open audit log
 
-Every recorded event is appended as one JSON line to
-`<agentsDir>/.daemon/telemetry/events.jsonl` — daemon events and CLI
+After consent, each daemon and CLI event is appended as one JSON line to
+`<agentsDir>/runtime/telemetry/events.jsonl` — daemon events and CLI
 `command.invoked` lines alike. It is the single inspectable surface for
 exactly what was recorded: users can audit the file without trusting the
-sink. The CLI always appends `command.invoked` (command name only) locally. When a
+sink. The CLI appends `command.invoked` (command name only) locally only after opt-in. The npm install ping is not mirrored in the workspace log. When a
 PostHog host and key are configured and the workspace has a telemetry SQLite
 database with its tables, it also queues the event for best-effort PostHog
 delivery, with no daemon round-trip or auth. Fresh workspaces without that
@@ -439,7 +472,7 @@ Both local recording and remote delivery are gated on the same
   marker means the batch was accepted by the endpoint, not that every event
   was ingested.
 - CI and dev fleets can inflate "user" counts: every automated daemon boot
-  with default config is a phantom install. Identify CI as
+  with an explicitly opted-in config can count as an install. Identify CI as
   `daemon.started` without a matching `install.ping`, set
   `SIGNET_TELEMETRY_OPTOUT=1` in workflows, and set
   `SIGNET_TELEMETRY_ENV=dev` for operator-owned development checkouts.

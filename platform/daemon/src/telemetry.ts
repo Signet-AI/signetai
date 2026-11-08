@@ -307,6 +307,19 @@ export interface TelemetryCollector {
 
 let activeCollector: TelemetryCollector | undefined;
 
+export async function discardUnsentTelemetry(owner: DbOwnerClient): Promise<void> {
+	try {
+		await ownerTransaction(
+			owner,
+			"telemetry.events.discard-pending",
+			[ownerStatement("DELETE FROM telemetry_events WHERE sent_to_posthog = 0")],
+			{ deadlineMs: 5_000, estimatedWorkUnits: 1 },
+		);
+	} catch {
+		logger.warn("telemetry", "Failed to discard pending telemetry events");
+	}
+}
+
 export function setActiveTelemetry(collector: TelemetryCollector | undefined): void {
 	activeCollector = collector;
 }
@@ -376,7 +389,7 @@ function resolveInstallIdentity(w: import("./db-accessor").WriteDb, daemonVersio
 		}
 		return {
 			id: existing.id,
-			created: false,
+			created: !existing.last_seen_version,
 			...(existing.last_seen_version ? { previousVersion: existing.last_seen_version } : {}),
 		};
 	}
@@ -421,7 +434,7 @@ function ownerInstallIdentity(results: readonly unknown[]): InstallIdentity {
 	if (!row?.id) throw new Error("DB owner did not return an install identity");
 	return {
 		id: row.id,
-		created: ownerChanges(results[1]) > 0,
+		created: !before?.last_seen_version,
 		...(before?.last_seen_version ? { previousVersion: before.last_seen_version } : {}),
 	};
 }
@@ -490,14 +503,14 @@ function getOrCreateInstallId(db: DbAccessor, daemonVersion: string, owner?: DbO
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return db.withWriteTx(
 			(w: import("./db-accessor").WriteDb) => resolveInstallIdentity(w, daemonVersion),
-			"telemetry.ts:491",
+			"telemetry.ts:504",
 		);
 	} catch {
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			return db.withWriteTx(
 				(w: import("./db-accessor").WriteDb) => resolveLegacyInstallIdentity(w),
-				"telemetry.ts:498",
+				"telemetry.ts:511",
 			);
 		} catch {
 			return fallback;
@@ -1477,16 +1490,7 @@ export function createTelemetryCollector(
 			flushAbortController?.abort();
 			if (flushPromise) await flushPromise;
 			await awaitPendingAsyncWrites();
-			try {
-				await ownerTransaction(
-					await owner(),
-					"telemetry.events.discard-pending",
-					[ownerStatement("DELETE FROM telemetry_events WHERE sent_to_posthog = 0")],
-					{ deadlineMs: 5_000, estimatedWorkUnits: 1 },
-				);
-			} catch {
-				logger.warn("telemetry", "Failed to discard pending telemetry events");
-			}
+			await discardUnsentTelemetry(await owner());
 			logger.info("telemetry", "Telemetry collector disabled");
 		},
 

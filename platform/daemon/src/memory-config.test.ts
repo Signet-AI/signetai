@@ -110,6 +110,20 @@ function restoreWarmNativeEnv(value: string | undefined): void {
 }
 
 describe("loadMemoryConfig", () => {
+	it("defaults telemetry off and requires an explicit boolean opt-in at the canonical path", () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "telemetry-consent-"));
+		tmpDirs.push(agentsDir);
+		expect(DEFAULT_PIPELINE_V2.telemetryEnabled).toBe(false);
+		for (const [content, enabled] of [
+			["memory: {}", false],
+			["pipelineV2:\n  telemetryEnabled: true", false],
+			["memory:\n  pipelineV2:\n    telemetryEnabled: false", false],
+			["memory:\n  pipelineV2:\n    telemetryEnabled: true", true],
+		] as const) {
+			writeFileSync(join(agentsDir, "agent.yaml"), content);
+			expect(loadMemoryConfig(agentsDir).pipelineV2.telemetryEnabled).toBe(enabled);
+		}
+	});
 	it("rejects malformed selected YAML without falling back to another config file", () => {
 		const agentsDir = makeTempAgentsDir();
 		writeFileSync(join(agentsDir, "agent.yaml"), "embedding: [\nauth:\n  mode: team\n");

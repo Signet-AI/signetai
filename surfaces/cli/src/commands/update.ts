@@ -5,6 +5,7 @@ import { type SignetInstallationReport, detectSignetInstallations } from "@signe
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
+import { promptTelemetryConsent } from "../features/telemetry-consent.js";
 import { printConcurrentInstallationWarning } from "../features/installation-warning.js";
 
 interface UpdateDeps {
@@ -176,6 +177,7 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 			}
 
 			spinner.succeed(data.message || "Update installed");
+			await promptTelemetryConsent(deps.AGENTS_DIR);
 			if (data.desktopUpdate?.status === "updated") {
 				console.log(chalk.green(`  ✓ ${data.desktopUpdate.message}`));
 			} else if (data.desktopUpdate?.status === "error") {

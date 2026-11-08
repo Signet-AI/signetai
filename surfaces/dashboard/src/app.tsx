@@ -13,6 +13,7 @@ import { DreamsView } from "@/views/dreaming";
 import { BoardView } from "@/views/board";
 import { GraphView } from "@/views/graph";
 
+import { TelemetryConsentDialog } from "@/components/telemetry-consent";
 import { OnboardingPage } from "@/components/onboarding/page";
 
 export function App() {
@@ -68,6 +69,7 @@ function Shell() {
 					</div>
 				</div>
 			</main>
+			{view !== "setup" && <TelemetryConsentDialog />}
 		</div>
 	);
 }

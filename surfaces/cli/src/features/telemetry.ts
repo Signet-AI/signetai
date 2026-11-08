@@ -106,7 +106,7 @@ function readTelemetrySettings(agentsDir: string, env: NodeJS.ProcessEnv = proce
 		const config = parseSimpleYaml(readFileSync(yamlPath, "utf-8"));
 		const memory = config?.memory as Record<string, unknown> | undefined;
 		const pipeline = memory?.pipelineV2 as Record<string, unknown> | undefined;
-		if (pipeline?.telemetryEnabled === false) return null;
+		if (pipeline?.telemetryEnabled !== true) return null;
 
 		const telemetry = pipeline?.telemetry as Record<string, unknown> | undefined;
 		const posthogHost =

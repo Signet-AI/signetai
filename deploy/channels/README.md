@@ -17,8 +17,8 @@ bash deploy/channels/generate-manifests.sh \
 
 ## Publish flow
 
-1. Run desktop tag build (`.github/workflows/desktop-build.yml`).
-2. Download `desktop-channel-manifests` artifact.
+1. Run Release (`.github/workflows/release.yml`) with the intended channel; it calls the reusable Desktop Build workflow. Tags do not start desktop builds.
+2. Run `generate-manifests.sh` with the desktop asset URLs and SHA-256 checksums from the GitHub release.
 3. Submit updates:
    - Homebrew tap: replace `Casks/signet.rb`
    - winget-pkgs: add versioned manifests under `manifests/s/SignetAI/Signet/<version>/`

@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=9b1392b1d2e92186c981c96663a99987b6e3a7f0 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=de16dbc216af698ec2db226ca9d155d541f86ae4 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 > [!CAUTION]
 > **사기 경고: Signet에는 토큰이나 코인이 없습니다.** Signet이라는 이름을 사용하는 모든 토큰과 코인은 이 프로젝트와 아무런 관련이 없습니다. Signet을 지원한다고 여기고 구매하지 마세요.
 
@@ -136,8 +136,8 @@ signet desktop install
 - **주장 추적(claim traces):** Signet이 왜 어떤 내용을 믿게 되었는지 물으면, CLI, API, MCP를 통해 그 이력과 경합하는 다른 주장, 그리고 정확한 원본 구절까지 확인할 수 있습니다.
 - **에이전트 격리:** 각 에이전트는 읽도록 허용된 메모리만 볼 수 있습니다.
 - **시크릿:** 시크릿은 암호화되어 저장되며, 마스터 키는 OS 키링에 보관됩니다. 키링이 없는 시스템에서는 암호화된 파일 저장 방식으로 대체되고 상태 경고가 표시됩니다. 키체인은 반드시 복구 계획에 포함하세요. 자세한 내용은 [시크릿](https://docs.signetai.sh/secrets/) 문서를 참고하세요.
-- **복구:** 보호 상태에서는 백업이 복원 가능한 것으로 검증되었는지 확인할 수 있고, 누락되었거나 오래된 백업은 따로 표시됩니다.
-- **악성 콘텐츠:** 알려진 악성 패턴에 해당하는 콘텐츠는 에이전트가 보는 범위에서 걸러집니다.
+- **복구:** 보호 상태는 워크스페이스의 어느 부분이 보호되고 있는지 보여주며, 누락되었거나 오래된 백업은 따로 표시됩니다.
+- **자격 증명:** API 키처럼 알려진 자격 증명으로 보이는 텍스트는 에이전트가 보는 범위에서 가려집니다.
 
 ## 텔레메트리
 

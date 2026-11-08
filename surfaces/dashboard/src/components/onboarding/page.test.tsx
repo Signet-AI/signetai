@@ -1,9 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { dashboardQueryCache } from "@/lib/query-cache";
 import { Window } from "happy-dom";
 import { act } from "react";
 let createRoot: typeof import("react-dom/client").createRoot;
 let OnboardingPage: typeof import("./page").OnboardingPage;
+let TelemetryConsentDialog: typeof import("../telemetry-consent").TelemetryConsentDialog;
+let configFails = false;
+let optOut = false;
 
 const dom = new Window({ url: "http://localhost/#setup" });
 const originalFetch = globalThis.fetch;
@@ -35,10 +39,12 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			if (!(key in globalThis)) Reflect.set(globalThis, key, Reflect.get(dom, key));
 		({ createRoot } = await import("react-dom/client"));
 		({ OnboardingPage } = await import("./page"));
+		({ TelemetryConsentDialog } = await import("../telemetry-consent"));
 		globalThis.fetch = async (input, init) => {
 			const path = String(input);
 			calls.push(`${init?.method ?? "GET"} ${path}`);
 			if (path === "/api/config") {
+				if (configFails) return Response.json({ error: "unavailable" }, { status: 500 });
 				if (init?.method === "POST") {
 					if (saveFails) return Response.json({ error: "disk full" }, { status: 500 });
 					const body = JSON.parse(String(init.body));
@@ -59,7 +65,12 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 				});
 			}
 			if (path === "/api/status")
-				return Response.json({ agentId: "alice", agentsDir: "/fixture", pipelineV2: { enabled: false, paused: true } });
+				return Response.json({
+					agentId: "alice",
+					agentsDir: "/fixture",
+					telemetryDisabledByEnv: optOut,
+					pipelineV2: { enabled: false, paused: true },
+				});
 			if (path === "/api/harnesses")
 				return Response.json({ harnesses: [{ id: "codex", name: "Codex", exists: true }] });
 			if (path === "/api/inference/catalog")
@@ -150,16 +161,18 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		dom.close();
 	});
 
-	async function mount(files: Record<string, string> = {}) {
+	async function mount(files: Record<string, string> = {}, consent = false, savedStep?: string) {
 		identityFiles = { ...files };
 		window.location.hash = "#setup";
 		localStorage.clear();
+		if (savedStep) localStorage.setItem("signet:onboarding:/fixture:alice", JSON.stringify({ step: savedStep }));
+		dashboardQueryCache.clear(false, false);
 		calls.length = 0;
 		const element = document.createElement("div");
 		document.body.append(element);
 		const root = createRoot(element);
 		await act(async () => {
-			root.render(<OnboardingPage onClose={() => {}} />);
+			root.render(consent ? <TelemetryConsentDialog /> : <OnboardingPage onClose={() => {}} />);
 		});
 		return {
 			async click(text: string) {
@@ -187,6 +200,58 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			},
 		};
 	}
+
+	test.each([undefined, false, true])(
+		"upgrade consent requires an answer only for a missing key: %s",
+		async (consent) => {
+			config = consent === undefined ? "memory: {}\n" : `memory:\n  pipelineV2:\n    telemetryEnabled: ${consent}\n`;
+			const view = await mount({}, true);
+			try {
+				expect(Boolean(document.querySelector('[role="dialog"]'))).toBe(consent === undefined);
+				if (consent === undefined) {
+					expect(document.querySelector('[data-slot="dialog-close"]')).toBeNull();
+					expect(document.activeElement?.getAttribute("role")).toBe("dialog");
+					await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+					expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+					saveFails = true;
+					await view.click("Don't share");
+					expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+					saveFails = false;
+					await view.click("Don't share");
+					expect(config).toContain("    telemetryEnabled: false");
+					expect(document.querySelector('[role="dialog"]')).toBeNull();
+				}
+			} finally {
+				saveFails = false;
+				await view.close();
+			}
+		},
+	);
+
+	test("upgrade consent still asks when onboarding was left unfinished", async () => {
+		config = "memory: {}\n";
+		const view = await mount({}, true, "Sources");
+		try {
+			expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+		} finally {
+			await view.close();
+		}
+	});
+
+	test.each(["failed-fetch", "env-opt-out"])("upgrade consent is hidden on %s", async (reason) => {
+		config = "memory: {}\n";
+		configFails = reason === "failed-fetch";
+		optOut = reason === "env-opt-out";
+		const view = await mount({}, true);
+		try {
+			expect(document.querySelector('[role="dialog"]')).toBeNull();
+			expect(calls).not.toContain("POST /api/config");
+		} finally {
+			configFails = false;
+			optOut = false;
+			await view.close();
+		}
+	});
 
 	test("identity setup preserves user-owned files, scope, and unrelated config", async () => {
 		config = "agent:\n  name: Existing\noperator_setting: preserved\nharnesses: []\n";
@@ -292,6 +357,7 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			await view.click("Remember this");
 			await view.click("Recall it");
 			await view.click("Continue");
+			await view.click("Don't share");
 			expect(document.body.textContent).toContain("Connection setup deferred");
 			expect(document.body.textContent).not.toContain("answered the connection test");
 		} finally {
@@ -447,66 +513,105 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		}
 	});
 
-	test("the page requires a successful save and probe, exposes sources, and recalls scoped evidence", async () => {
-		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
-		const view = await mount();
-		try {
-			await view.click("Get started");
-			await view.click("Continue");
-			await view.input("Agent name", "Fixture Agent");
-			await view.click("Save identity");
-			await view.click("Continue");
-			await view.click("Local model");
-			await view.input("Model name", "fixture-model");
-			saveFails = true;
-			await view.click("Test and enable memory");
-			expect(calls).not.toContain("POST /api/pipeline/resume");
-			saveFails = false;
-			await view.click("Test and enable memory");
-			expect(document.body.textContent).not.toContain("Choose a model before testing");
-			expect(calls).toContain("POST /api/inference/execute");
-			expect(calls).toContain("POST /api/pipeline/resume");
-			expect(config).toContain("operator_setting: preserved");
-			expect(config).toMatch(/dreaming:\s*\n\s+enabled: true/);
-			await view.click("Continue");
-			expect(document.body.textContent).toContain("Bring your context");
-			expect(document.body.textContent).toContain("Obsidian");
-			expect(document.body.textContent).toContain("Bulk import conversation exports");
-			await view.click("ObsidianConnect a vault");
-			await view.input("Vault path", "/fixture/notes");
-			await view.click("Connect & index");
-			expect(calls).toContain("POST /api/sources/obsidian");
-			const next = [...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Continue"));
-			expect(next?.disabled).toBe(false);
-			await view.click("Agent transcriptsBulk import");
-			const files = document.querySelector('input[type="file"]');
-			const target = document.querySelector('button[aria-label="Target agent"]');
-			if (!(files instanceof HTMLInputElement) || !(target instanceof HTMLButtonElement))
-				throw new Error("Missing transcript controls");
-			expect(files.accept).toBe(".jsonl");
-			await act(async () => {
-				const transfer = new DataTransfer();
-				transfer.items.add(new dom.File(["{}\n"], "conversation.jsonl"));
-				files.files = transfer.files;
-				files.dispatchEvent(new Event("change", { bubbles: true }));
-				target.click();
-			});
-			await act(async () => {
-				const option = document.querySelector('[role="option"]');
-				if (!(option instanceof HTMLElement)) throw new Error("Missing agent option");
-				option.click();
-			});
-			await view.click("Import & index");
-			expect(calls).toContain("POST /api/sources/imports/import-job/start?agentId=alice");
-			await view.click("Continue");
-			await view.click("Keep current settings");
-			await view.click("How I like answers");
-			await view.click("Remember this");
-			await view.click("Recall it");
-			expect(document.body.textContent).toContain("Retrieved evidence");
-		} finally {
-			saveFails = false;
-			await view.close();
-		}
-	});
+	test.each([
+		[undefined, false],
+		[true, false],
+		[undefined, true],
+	])(
+		"the page requires a successful save and probe, exposes sources, and recalls scoped evidence (consent: %s, env opt-out: %s)",
+		async (consent, envOptOut) => {
+			optOut = envOptOut;
+			config = `name: Example\nharnesses: []\noperator_setting: preserved\n${consent === undefined ? "" : `memory:\n  pipelineV2:\n    telemetryEnabled: ${consent}\n`}`;
+			const view = await mount();
+			try {
+				await view.click("Get started");
+				await view.click("Continue");
+				await view.input("Agent name", "Fixture Agent");
+				await view.click("Save identity");
+				await view.click("Continue");
+				await view.click("Local model");
+				await view.input("Model name", "fixture-model");
+				saveFails = true;
+				await view.click("Test and enable memory");
+				expect(calls).not.toContain("POST /api/pipeline/resume");
+				saveFails = false;
+				await view.click("Test and enable memory");
+				expect(document.body.textContent).not.toContain("Choose a model before testing");
+				expect(calls).toContain("POST /api/inference/execute");
+				expect(calls).toContain("POST /api/pipeline/resume");
+				expect(config).toContain("operator_setting: preserved");
+				expect(config).toMatch(/dreaming:\s*\n\s+enabled: true/);
+				await view.click("Continue");
+				expect(document.body.textContent).toContain("Bring your context");
+				expect(document.body.textContent).toContain("Obsidian");
+				expect(document.body.textContent).toContain("Bulk import conversation exports");
+				await view.click("ObsidianConnect a vault");
+				await view.input("Vault path", "/fixture/notes");
+				await view.click("Connect & index");
+				expect(calls).toContain("POST /api/sources/obsidian");
+				const next = [...document.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Continue"));
+				expect(next?.disabled).toBe(false);
+				await view.click("Agent transcriptsBulk import");
+				const files = document.querySelector('input[type="file"]');
+				const target = document.querySelector('button[aria-label="Target agent"]');
+				if (!(files instanceof HTMLInputElement) || !(target instanceof HTMLButtonElement))
+					throw new Error("Missing transcript controls");
+				expect(files.accept).toBe(".jsonl");
+				await act(async () => {
+					const transfer = new DataTransfer();
+					transfer.items.add(new dom.File(["{}\n"], "conversation.jsonl"));
+					files.files = transfer.files;
+					files.dispatchEvent(new Event("change", { bubbles: true }));
+					target.click();
+				});
+				await act(async () => {
+					const option = document.querySelector('[role="option"]');
+					if (!(option instanceof HTMLElement)) throw new Error("Missing agent option");
+					option.click();
+				});
+				await view.click("Import & index");
+				expect(calls).toContain("POST /api/sources/imports/import-job/start?agentId=alice");
+				await view.click("Continue");
+				await view.click("Keep current settings");
+				await view.click("How I like answers");
+				await view.click("Remember this");
+				await view.click("Recall it");
+				expect(document.body.textContent).toContain("Retrieved evidence");
+				await view.click("Continue");
+				if (consent !== undefined) {
+					expect(document.body.textContent).not.toContain("Share anonymous usage data?");
+					expect(document.body.textContent).toContain("Your setup, at a glance.");
+					return;
+				}
+				if (envOptOut) {
+					expect(document.body.textContent).toContain("Your setup, at a glance.");
+					await view.click("Back");
+					expect(document.body.textContent).not.toContain("Share anonymous usage data?");
+					expect(config).not.toContain("telemetryEnabled");
+					return;
+				}
+				expect(document.body.textContent).toContain("Share anonymous usage data?");
+				const choices = [...document.querySelectorAll("button.choice")];
+				expect(choices.map((button) => button.textContent)).toEqual(["Share usage data", "Don't share"]);
+				expect(choices[0]?.className).toBe(choices[1]?.className);
+				expect(config).not.toContain("telemetryEnabled");
+				saveFails = true;
+				await view.click("Don't share");
+				expect(config).not.toContain("telemetryEnabled");
+				expect(document.body.textContent).toContain("Could not save your choice");
+				saveFails = false;
+				await view.click("Don't share");
+				expect(config).toMatch(/memory:\n(?:.*\n)*? {2}pipelineV2:\n(?:.*\n)*? {4}telemetryEnabled: false/);
+				expect(document.body.textContent).toContain("Your setup, at a glance.");
+				await view.click("Back");
+				await view.click("Share usage data");
+				expect(config).toMatch(/ {4}telemetryEnabled: true/);
+				expect(document.body.textContent).toContain("Your setup, at a glance.");
+			} finally {
+				saveFails = false;
+				optOut = false;
+				await view.close();
+			}
+		},
+	);
 }

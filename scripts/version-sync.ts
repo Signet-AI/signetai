@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -16,22 +16,16 @@ export const VERSION_SYNC_PACKAGE_GLOBS = [
 ] as const;
 const PUBLISH_RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
 
-function parseSemver(version: string): [number, number, number] {
-	const match = version.match(/^(\d+)\.(\d+)\.(\d+)$/);
-	if (!match) {
-		throw new Error(`Expected x.y.z version, got '${version}'`);
-	}
-
-	return [Number(match[1]), Number(match[2]), Number(match[3])];
+function validateSemver(version: string): void {
+	const valid =
+		/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/;
+	if (!valid.test(version)) throw new Error(`Expected SemVer version, got '${version}'`);
 }
 
 function compareSemver(a: string, b: string): number {
-	const [aMajor, aMinor, aPatch] = parseSemver(a);
-	const [bMajor, bMinor, bPatch] = parseSemver(b);
-
-	if (aMajor !== bMajor) return aMajor - bMajor;
-	if (aMinor !== bMinor) return aMinor - bMinor;
-	return aPatch - bPatch;
+	validateSemver(a);
+	validateSemver(b);
+	return Bun.semver.order(a, b);
 }
 
 function readPackageVersion(filePath: string): string {
@@ -58,7 +52,7 @@ function getRemoteVersion(filePath: string): string | null {
 }
 
 function listTargetPackageFiles(): string[] {
-	const output = execSync(`git ls-files ${VERSION_SYNC_PACKAGE_GLOBS.map((glob) => `'${glob}'`).join(" ")}`, {
+	const output = execFileSync("git", ["ls-files", ...VERSION_SYNC_PACKAGE_GLOBS], {
 		encoding: "utf8",
 	});
 
@@ -89,7 +83,7 @@ function updateFileVersion(filePath: string, targetVersion: string, checkOnly: b
 }
 
 function listCargoFiles(): string[] {
-	const output = execSync("git ls-files 'platform/**/Cargo.toml'", {
+	const output = execFileSync("git", ["ls-files", "platform/**/Cargo.toml"], {
 		encoding: "utf8",
 	});
 
@@ -102,14 +96,14 @@ function listCargoFiles(): string[] {
 
 function readCargoVersion(filePath: string): string | null {
 	const raw = readFileSync(filePath, "utf8");
-	const match = raw.match(/\[(?:workspace\.)?package\][^\[]*version\s*=\s*"([^"]+)"/s);
-	return match ? match[1] : null;
+	const match = raw.match(/\[(?:workspace\.)?package\][^[]*version\s*=\s*"([^"]+)"/s);
+	return match?.[1] ?? null;
 }
 
 function readCargoPackageName(filePath: string): string | null {
 	const raw = readFileSync(filePath, "utf8");
-	const match = raw.match(/\[package\][^\[]*name\s*=\s*"([^"]+)"/s);
-	return match ? match[1] : null;
+	const match = raw.match(/\[package\][^[]*name\s*=\s*"([^"]+)"/s);
+	return match?.[1] ?? null;
 }
 
 function findNearestCargoLock(filePath: string): string | null {
@@ -128,8 +122,8 @@ function findNearestWorkspaceVersion(filePath: string): string | null {
 		const cargoFile = join(dir, "Cargo.toml");
 		if (existsSync(cargoFile)) {
 			const raw = readFileSync(cargoFile, "utf8");
-			const match = raw.match(/\[workspace\.package\][^\[]*version\s*=\s*"([^"]+)"/s);
-			if (match) return match[1];
+			const match = raw.match(/\[workspace\.package\][^[]*version\s*=\s*"([^"]+)"/s);
+			if (match) return match[1] ?? null;
 		}
 		dir = dirname(dir);
 	}
@@ -172,13 +166,13 @@ export function collectCargoLockMismatches(cargoFiles: readonly string[], target
 }
 
 function usesWorkspaceVersion(raw: string): boolean {
-	return /\[package\][^\[]*version\.workspace\s*=\s*true/s.test(raw);
+	return /\[package\][^[]*version\.workspace\s*=\s*true/s.test(raw);
 }
 
 function updateCargoVersion(filePath: string, targetVersion: string, checkOnly: boolean): boolean {
 	const raw = readFileSync(filePath, "utf8");
 	if (usesWorkspaceVersion(raw)) return false;
-	const versionPattern = /(\[(?:workspace\.)?package\][^\[]*version\s*=\s*")([^"]+)(")/s;
+	const versionPattern = /(\[(?:workspace\.)?package\][^[]*version\s*=\s*")([^"]+)(")/s;
 	if (!versionPattern.test(raw)) {
 		throw new Error(`Could not find [package] version in ${filePath}`);
 	}
@@ -221,7 +215,12 @@ function resolveWorkspaceSpec(spec: string, version: string): string {
 }
 
 function isExactSemverSpec(spec: string): boolean {
-	return /^\d+\.\d+\.\d+$/.test(spec);
+	try {
+		validateSemver(spec);
+		return true;
+	} catch {
+		return false;
+	}
 }
 
 function isPublishablePackage(pkg: Record<string, unknown>): boolean {
@@ -329,7 +328,7 @@ function main() {
 		throw new Error("Use either --to or --check, not both");
 	}
 	if (explicitVersion) {
-		parseSemver(explicitVersion);
+		validateSemver(explicitVersion);
 	}
 
 	const localReferenceVersion = readPackageVersion(REFERENCE_FILE);

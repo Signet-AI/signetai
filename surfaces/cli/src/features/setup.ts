@@ -69,6 +69,7 @@ import {
 	readString,
 	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
+import { promptTelemetryConsent } from "./telemetry-consent.js";
 import type { SetupDeps, SetupWizardOptions } from "./setup-types.js";
 
 const DEFAULT_OPENAI_COMPATIBLE_ENDPOINT = "http://127.0.0.1:1234/v1";
@@ -333,6 +334,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 			allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
 			createLocalBackup: options.createLocalBackup === true,
 		});
+		await promptTelemetryConsent(basePath);
 		return;
 	}
 	if (!existing.agentYaml && !existing.configYaml && !existing.memoryDb) {
@@ -385,6 +387,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		throw new Error(
 			"Another workspace is running at this address. Stop it or select its workspace before continuing setup.",
 		);
+	await promptTelemetryConsent(basePath);
 	const url = `${client.url}/#setup`;
 	console.log(chalk.cyan(`  Continue setup: ${url}`));
 	console.log(chalk.dim("  Connect your provider, select a memory model, and test the connection."));
