@@ -30,7 +30,7 @@ function environment(
 	for (const key of signingSecrets) result[key] = "";
 	Object.assign(result, overrides);
 	result.SIGNING_MODE_INPUT = mode;
-	result.RUNNER = "macos-14";
+	result.RUNNER = "macos-15";
 	result.GITHUB_OUTPUT = outputPath;
 	result.GITHUB_REF = "refs/tags/v0.199.12";
 	return result;
