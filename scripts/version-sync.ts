@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -52,7 +52,7 @@ function getRemoteVersion(filePath: string): string | null {
 }
 
 function listTargetPackageFiles(): string[] {
-	const output = execSync(`git ls-files ${VERSION_SYNC_PACKAGE_GLOBS.map((glob) => `'${glob}'`).join(" ")}`, {
+	const output = execFileSync("git", ["ls-files", ...VERSION_SYNC_PACKAGE_GLOBS], {
 		encoding: "utf8",
 	});
 
@@ -83,7 +83,7 @@ function updateFileVersion(filePath: string, targetVersion: string, checkOnly: b
 }
 
 function listCargoFiles(): string[] {
-	const output = execSync("git ls-files 'platform/**/Cargo.toml'", {
+	const output = execFileSync("git", ["ls-files", "platform/**/Cargo.toml"], {
 		encoding: "utf8",
 	});
 
