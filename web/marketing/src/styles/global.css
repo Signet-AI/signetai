@@ -273,7 +273,28 @@ section {
 	justify-content: center;
 	padding: 18px 20px 0;
 	pointer-events: none;
-	transition: transform 400ms var(--ease);
+	transition:
+		transform 400ms var(--ease),
+		top 400ms var(--ease);
+}
+
+.site-nav-wrapper.nav-at-top {
+	top: var(--site-banner-height, 0px);
+}
+
+.site-banner {
+	padding: 8px 20px;
+	border-bottom: 1px solid rgba(239, 68, 68, 0.45);
+	background: #5f1414;
+	color: #fecaca;
+	font-size: 13px;
+	line-height: 1.45;
+	text-align: center;
+}
+
+.site-banner strong {
+	color: #ffffff;
+	font-weight: 600;
 }
 
 .site-nav-wrapper.nav-hidden {
