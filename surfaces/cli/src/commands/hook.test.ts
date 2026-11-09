@@ -985,6 +985,7 @@ describe("hook stop", () => {
 		stdin: Record<string, unknown>,
 		replies: StopResult | StopResult[] = { ok: true, data: { recorded: true } },
 		attemptMs = 0,
+		sleepAdvanceMs?: number,
 	) {
 		const queue = Array.isArray(replies) ? [...replies] : [replies];
 		let clock = 1_000_000;
@@ -1019,7 +1020,7 @@ describe("hook stop", () => {
 				now: () => clock,
 				sleep: async (ms: number) => {
 					sleeps.push(ms);
-					clock += ms;
+					clock += sleepAdvanceMs ?? ms;
 				},
 				stdin: Readable.from([Buffer.from(JSON.stringify(stdin))]),
 			});
@@ -1138,5 +1139,20 @@ describe("hook stop", () => {
 
 		expect(run.calls).toHaveLength(1);
 		expect(run.sleeps).toEqual([]);
+	});
+
+	test("stops without another attempt when the clock passes the deadline during the retry sleep", async () => {
+		const run = await runStop(
+			payload,
+			[
+				{ ok: false, reason: "http", status: 503 },
+				{ ok: true, data: { recorded: true } },
+			],
+			0,
+			20_000,
+		);
+
+		expect(run.calls).toHaveLength(1);
+		expect(run.stderr.join("")).not.toBe("");
 	});
 });

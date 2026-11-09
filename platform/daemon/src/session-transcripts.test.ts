@@ -115,7 +115,7 @@ describe("session transcript live append", () => {
 								get(target, property, receiver) {
 									if (property !== "prepare") return Reflect.get(target, property, receiver);
 									return (sql: string) => {
-										if (sql.includes("SELECT session_key, agent_id, content")) throw new Error("forced read failure");
+										if (sql.includes("SELECT content FROM session_transcripts")) throw new Error("forced read failure");
 										return target.prepare(sql);
 									};
 								},
@@ -140,5 +140,47 @@ describe("session transcript live append", () => {
 
 		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
 		expect(stored?.content).toBe("User: first");
+	});
+
+	it("keeps the stored project when an append has no project", async () => {
+		const accessor = init();
+		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
+
+		await appendSessionTranscriptAsync({
+			sessionKey: "live-session",
+			agentId: "agent-a",
+			harness: "claude-code",
+			project: null,
+			append: (existing) => `${existing}\nAssistant: second`,
+		});
+
+		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
+		expect(stored).toMatchObject({ content: "User: first\nAssistant: second", project: "/repo" });
+	});
+
+	it("appends to the exact session key without copying a row stored under an alias", async () => {
+		const accessor = init();
+		const hyphenKey = "019f3a7a-218f-7000-b6a3-0dcc8801a625";
+		const colonKey = "019f3a7a-218f:7000:b6a3-0dcc8801a625";
+		await upsertSessionTranscriptAsync(hyphenKey, "User: first", "oh-my-pi", "/repo", "agent-a");
+
+		await appendSessionTranscriptAsync({
+			sessionKey: colonKey,
+			agentId: "agent-a",
+			harness: "oh-my-pi",
+			project: "/repo",
+			append: (existing) => [existing, "Assistant: second"].filter(Boolean).join("\n"),
+		});
+
+		const rows = await accessor.withReadDbAsync(
+			(db) =>
+				db
+					.prepare("SELECT session_key, content FROM session_transcripts WHERE agent_id = ? ORDER BY session_key")
+					.all("agent-a") as Array<{ session_key: string; content: string }>,
+		);
+		expect(rows).toEqual([
+			{ session_key: hyphenKey, content: "User: first" },
+			{ session_key: colonKey, content: "Assistant: second" },
+		]);
 	});
 });

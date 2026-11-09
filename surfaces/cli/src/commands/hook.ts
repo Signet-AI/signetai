@@ -650,11 +650,12 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 				const res = await deps.fetchDaemonResult("/api/hooks/stop", { ...request, timeout: deadline - now() });
 				if (res.ok) return;
 				const busy = res.reason === "http" && res.status === 503;
-				if (!busy || attempt === STOP_MAX_ATTEMPTS || deadline - now() <= STOP_RETRY_SLEEP_MS) {
-					process.stderr.write(formatHookFailure("stop", res));
-					return;
+				if (busy && attempt < STOP_MAX_ATTEMPTS && deadline - now() > STOP_RETRY_SLEEP_MS) {
+					await sleep(STOP_RETRY_SLEEP_MS);
+					if (deadline - now() > 0) continue;
 				}
-				await sleep(STOP_RETRY_SLEEP_MS);
+				process.stderr.write(formatHookFailure("stop", res));
+				return;
 			}
 		});
 
