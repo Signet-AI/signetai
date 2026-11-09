@@ -32,7 +32,24 @@ export interface SessionContext {
 
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
 
-const SIGNET_HOOK_COMMAND = /\bhook ([a-z-]+) -H claude-code\b/;
+const SIGNET_HOOK_COMMAND =
+	/(?:^|[\\/])signet(?:\.js")? hook (session-start|user-prompt-submit|notifications|pre-compaction|session-end|wake) -H claude-code(?:\s|$)/;
+
+function readClaudeSettings(path: string): Record<string, unknown> {
+	if (!existsSync(path)) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(path, "utf-8"));
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		throw new Error(`Refusing to modify ${path}: could not parse JSON (${reason})`);
+	}
+	if (!isJsonObject(parsed)) throw new Error(`Refusing to modify ${path}: settings must be a JSON object`);
+	if (parsed.hooks !== undefined && !isJsonObject(parsed.hooks)) {
+		throw new Error(`Refusing to modify ${path}: hooks must be a JSON object`);
+	}
+	return parsed;
+}
 
 function signetHookName(hook: unknown): string | undefined {
 	const command = isJsonObject(hook) ? hook.command : undefined;
@@ -175,13 +192,14 @@ export class ClaudeCodeConnector extends BaseConnector {
 	}
 	async install(basePath: string): Promise<InstallResult> {
 		const expandedBasePath = expandHome(basePath);
+		const settingsPath = this.getConfigPath();
+		const settings = readClaudeSettings(settingsPath);
 		const filesWritten: string[] = [];
 		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
 		if (strippedAgentsPath !== null) {
 			filesWritten.push(strippedAgentsPath);
 		}
-		await this.configureHooks(expandedBasePath);
-		const settingsPath = this.getConfigPath();
+		this.configureHooks(settingsPath, settings);
 		filesWritten.push(settingsPath);
 		const staleClaude = join(homedir(), ".claude", "CLAUDE.md");
 		try {
@@ -204,25 +222,18 @@ export class ClaudeCodeConnector extends BaseConnector {
 	}
 	async uninstall(): Promise<UninstallResult> {
 		const settingsPath = this.getConfigPath();
-		const filesRemoved: string[] = [];
-
 		if (!existsSync(settingsPath)) {
-			return { filesRemoved };
+			return { filesRemoved: [] };
 		}
 
-		try {
-			const content = readFileSync(settingsPath, "utf-8");
-			const settings = JSON.parse(content);
-			if (settings.hooks) {
-				settings.hooks = nonEmpty(withoutSignetHooks(settings.hooks));
-			}
-
-			atomicWriteJson(settingsPath, settings);
-			filesRemoved.push(settingsPath);
-		} catch {}
+		const settings = readClaudeSettings(settingsPath);
+		if (settings.hooks) {
+			settings.hooks = nonEmpty(withoutSignetHooks(settings.hooks));
+		}
+		atomicWriteJson(settingsPath, settings);
 		this.removeMcpServer();
 
-		return { filesRemoved };
+		return { filesRemoved: [settingsPath] };
 	}
 	isInstalled(): boolean {
 		const settingsPath = this.getConfigPath();
@@ -281,20 +292,8 @@ export class ClaudeCodeConnector extends BaseConnector {
 
 		return { success: dispatched, memoriesExtracted: 0 };
 	}
-	private async configureHooks(_basePath: string): Promise<void> {
-		const settingsPath = this.getConfigPath();
-		const claudeDir = join(homedir(), ".claude");
-
-		mkdirSync(claudeDir, { recursive: true });
-
-		let settings: Record<string, unknown> = {};
-		if (existsSync(settingsPath)) {
-			try {
-				settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
-			} catch {
-				settings = {};
-			}
-		}
+	private configureHooks(settingsPath: string, settings: Record<string, unknown>): void {
+		mkdirSync(join(homedir(), ".claude"), { recursive: true });
 
 		const hooksConfig = this.config.hooks || {
 			sessionStart: true,

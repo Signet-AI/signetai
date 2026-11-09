@@ -29,7 +29,7 @@ The connector writes hooks to `~/.claude/settings.json`:
 | `PreCompact` | `signet hook pre-compaction -H claude-code --project "$(pwd)"` | 3 seconds |
 | `SessionEnd` | `signet hook session-end -H claude-code` | 15 seconds |
 
-Signet identifies its own entries by their `signet hook <name> -H claude-code` command. Installation adds the Signet hook groups after the groups already on each event. A later installation replaces only the Signet entries, and disconnecting Claude Code removes only those entries. Hooks you add yourself stay in place.
+Signet identifies its own entries by their `signet hook <name> -H claude-code` command. Installation adds the Signet hook groups after the groups already on each event. A later installation replaces only the Signet entries, and disconnecting Claude Code removes only those entries. Hooks you add yourself stay in place. If `settings.json` is not valid JSON, or its `hooks` value is not an object, installation and disconnect stop with an error and leave the file unchanged.
 
 The default daemon session-start budget is 15 seconds, so the default installed `SessionStart` timeout is 17 seconds. The connector computes this when it writes the configuration from `SIGNET_SESSION_START_TIMEOUT` (or the compatibility fetch-timeout variable). It does not assume a home directory or bake a personal path into the hook command.
 

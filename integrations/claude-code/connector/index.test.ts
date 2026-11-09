@@ -306,4 +306,56 @@ describe("ClaudeCodeConnector user hooks", () => {
 		await new ClaudeCodeConnector().install(tmpRoot);
 		expect(readHooks().PreCompaction).toEqual([userGroup("PreCompaction")]);
 	});
+
+	it("keeps user commands that only look like Signet hooks", async () => {
+		const lookalikes = [
+			{ hooks: [{ type: "command", command: "my-wrapper hook wake -H claude-code" }] },
+			{ hooks: [{ type: "command", command: "my-signet hook session-start -H claude-code" }] },
+			{ hooks: [{ type: "command", command: "signet hook custom -H claude-code" }] },
+		];
+		writeSettings({ hooks: { Stop: lookalikes } });
+		const connector = new ClaudeCodeConnector();
+		await connector.install(tmpRoot);
+		expect(readHooks().Stop?.slice(0, 3)).toEqual(lookalikes);
+		await connector.uninstall();
+		expect(readHooks().Stop).toEqual(lookalikes);
+	});
+
+	it("matches the Windows command form of Signet hooks", async () => {
+		const windowsGroup = {
+			hooks: [{ type: "command", command: '"C:\\node.exe" "C:\\signet\\bin\\signet.js" hook wake -H claude-code' }],
+		};
+		writeSettings({ hooks: { Stop: [windowsGroup, userGroup("Stop")] } });
+		await new ClaudeCodeConnector().uninstall();
+		expect(readHooks().Stop).toEqual([userGroup("Stop")]);
+	});
+
+	it("keeps a user hook that shares a group with a Signet hook", async () => {
+		const signetEntry = { type: "command", command: 'signet hook session-start -H claude-code --project "$(pwd)"' };
+		const userEntry = { type: "command", command: userCommand("SessionStart") };
+		writeSettings({ hooks: { SessionStart: [{ matcher: "startup", hooks: [userEntry, signetEntry] }] } });
+		const connector = new ClaudeCodeConnector();
+		await connector.install(tmpRoot);
+		expect(readHooks().SessionStart?.[0]).toEqual({ matcher: "startup", hooks: [userEntry] });
+		await connector.uninstall();
+		expect(readHooks().SessionStart).toEqual([{ matcher: "startup", hooks: [userEntry] }]);
+	});
+
+	const operations = {
+		install: (connector: InstanceType<typeof ClaudeCodeConnector>) => connector.install(tmpRoot),
+		uninstall: (connector: InstanceType<typeof ClaudeCodeConnector>) => connector.uninstall(),
+	};
+	for (const [label, content] of [
+		["settings that are not valid JSON", "{ not json"],
+		["settings whose hooks value is not an object", JSON.stringify({ hooks: [] })],
+	] as const) {
+		for (const [name, run] of Object.entries(operations)) {
+			it(`${name} refuses ${label} and leaves the file unchanged`, async () => {
+				mkdirSync(join(tmpRoot, ".claude"), { recursive: true });
+				writeFileSync(settingsFile(), content, "utf-8");
+				await expect(run(new ClaudeCodeConnector())).rejects.toThrow("Refusing to modify");
+				expect(readFileSync(settingsFile(), "utf-8")).toBe(content);
+			});
+		}
+	}
 });
