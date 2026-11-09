@@ -321,11 +321,16 @@ describe("ClaudeCodeConnector user hooks", () => {
 		expect(readHooks().Stop).toEqual(lookalikes);
 	});
 
-	it("matches the Windows command form of Signet hooks", async () => {
+	it("matches the Windows and quoted-path command forms of Signet hooks", async () => {
 		const windowsGroup = {
 			hooks: [{ type: "command", command: '"C:\\node.exe" "C:\\signet\\bin\\signet.js" hook wake -H claude-code' }],
 		};
-		writeSettings({ hooks: { Stop: [windowsGroup, userGroup("Stop")] } });
+		const quotedGroup = {
+			hooks: [
+				{ type: "command", command: '"/opt/my tools/signet" hook session-start -H claude-code --project "$(pwd)"' },
+			],
+		};
+		writeSettings({ hooks: { Stop: [windowsGroup, quotedGroup, userGroup("Stop")] } });
 		await new ClaudeCodeConnector().uninstall();
 		expect(readHooks().Stop).toEqual([userGroup("Stop")]);
 	});

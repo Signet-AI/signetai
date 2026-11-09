@@ -33,7 +33,7 @@ export interface SessionContext {
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
 
 const SIGNET_HOOK_COMMAND =
-	/(?:^|[\\/])signet(?:\.js")? hook (session-start|user-prompt-submit|notifications|pre-compaction|session-end|wake) -H claude-code(?:\s|$)/;
+	/(?:^|[\\/"])signet(?:\.js)?"? hook (session-start|user-prompt-submit|notifications|pre-compaction|session-end|wake) -H claude-code(?:\s|$)/;
 
 function readClaudeSettings(path: string): Record<string, unknown> {
 	if (!existsSync(path)) return {};
