@@ -7,6 +7,7 @@ import {
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
+	isJsonObject,
 	isSignetGeneratedFile,
 	resolveSignetMcpCommand,
 } from "@signet/connector-base";
@@ -31,32 +32,49 @@ export interface SessionContext {
 
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
 
-function isWakeHookEntry(hook: unknown): boolean {
-	if (typeof hook !== "object" || hook === null) return false;
-	const command = (hook as Record<string, unknown>).command;
-	return typeof command === "string" && /\bhook wake\b/.test(command) && command.includes("-H claude-code");
+const SIGNET_HOOK_COMMAND = /\bhook ([a-z-]+) -H claude-code\b/;
+
+function signetHookName(hook: unknown): string | undefined {
+	const command = isJsonObject(hook) ? hook.command : undefined;
+	return typeof command === "string" ? SIGNET_HOOK_COMMAND.exec(command)?.[1] : undefined;
 }
 
-function isSessionStartHookEntry(hook: unknown): boolean {
-	if (typeof hook !== "object" || hook === null) return false;
-	const command = (hook as Record<string, unknown>).command;
-	return typeof command === "string" && /\bhook session-start\b/.test(command) && command.includes("-H claude-code");
+function innerHooks(group: unknown): unknown[] | undefined {
+	const inner = isJsonObject(group) ? group.hooks : undefined;
+	return Array.isArray(inner) ? inner : undefined;
 }
 
-function stripWakeGroups(groups: unknown, extra?: (hook: unknown) => boolean): unknown[] {
-	if (!Array.isArray(groups)) return [];
+function stripSignetGroups(groups: unknown[]): unknown[] {
 	const kept: unknown[] = [];
 	for (const group of groups) {
-		const inner = (group as { hooks?: unknown } | null)?.hooks;
-		if (!Array.isArray(inner)) {
+		const inner = innerHooks(group);
+		if (!inner) {
 			kept.push(group);
 			continue;
 		}
-		const rest = inner.filter((hook) => !isWakeHookEntry(hook) && !extra?.(hook));
+		const rest = inner.filter((hook) => signetHookName(hook) === undefined);
 		if (rest.length === inner.length) kept.push(group);
 		else if (rest.length > 0) kept.push({ ...(group as object), hooks: rest });
 	}
 	return kept;
+}
+
+function withoutSignetHooks(hooks: unknown): Record<string, unknown> {
+	const kept: Record<string, unknown> = {};
+	if (!isJsonObject(hooks)) return kept;
+	for (const [event, groups] of Object.entries(hooks)) {
+		if (!Array.isArray(groups)) {
+			kept[event] = groups;
+			continue;
+		}
+		const rest = stripSignetGroups(groups);
+		if (rest.length > 0) kept[event] = rest;
+	}
+	return kept;
+}
+
+function nonEmpty(hooks: Record<string, unknown>): Record<string, unknown> | undefined {
+	return Object.keys(hooks).length > 0 ? hooks : undefined;
 }
 
 export interface SessionStartResult {
@@ -196,17 +214,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			const content = readFileSync(settingsPath, "utf-8");
 			const settings = JSON.parse(content);
 			if (settings.hooks) {
-				settings.hooks.SessionStart = undefined;
-				settings.hooks.UserPromptSubmit = undefined;
-				settings.hooks.PreToolUse = undefined;
-				settings.hooks.PreCompaction = undefined;
-				settings.hooks.PreCompact = undefined;
-				settings.hooks.SessionEnd = undefined;
-				const remainingStop = stripWakeGroups(settings.hooks.Stop);
-				settings.hooks.Stop = remainingStop.length > 0 ? remainingStop : undefined;
-				if (Object.keys(settings.hooks).length === 0) {
-					settings.hooks = undefined;
-				}
+				settings.hooks = nonEmpty(withoutSignetHooks(settings.hooks));
 			}
 
 			atomicWriteJson(settingsPath, settings);
@@ -224,8 +232,11 @@ export class ClaudeCodeConnector extends BaseConnector {
 		try {
 			const content = readFileSync(settingsPath, "utf-8");
 			const settings = JSON.parse(content);
-			const cmd = settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command ?? "";
-			return cmd.includes("hook session-start");
+			const groups: unknown = settings.hooks?.SessionStart;
+			return (
+				Array.isArray(groups) &&
+				groups.some((group) => innerHooks(group)?.some((hook) => signetHookName(hook) === "session-start"))
+			);
 		} catch {
 			return false;
 		}
@@ -380,27 +391,16 @@ export class ClaudeCodeConnector extends BaseConnector {
 			];
 		}
 
-		const userStopGroups = stripWakeGroups((settings.hooks as Record<string, unknown> | undefined)?.Stop);
 		if (hooksConfig.sessionStart !== false) {
-			hooks.Stop = [...userStopGroups, { hooks: [wakeHook] }];
-		} else if (userStopGroups.length > 0) {
-			hooks.Stop = userStopGroups;
+			hooks.Stop = [{ hooks: [wakeHook] }];
 		}
 
-		const merged: Record<string, unknown> = {
-			...(settings.hooks as Record<string, unknown> | undefined),
-			...hooks,
-		};
-		if (hooksConfig.sessionStart === false) {
-			const userStart = stripWakeGroups(merged.SessionStart, isSessionStartHookEntry);
-			if (userStart.length > 0) merged.SessionStart = userStart;
-			else Reflect.deleteProperty(merged, "SessionStart");
-			if (userStopGroups.length > 0) merged.Stop = userStopGroups;
-			else Reflect.deleteProperty(merged, "Stop");
+		const merged = withoutSignetHooks(settings.hooks);
+		for (const [event, groups] of Object.entries(hooks)) {
+			const userGroups = merged[event];
+			merged[event] = [...(Array.isArray(userGroups) ? userGroups : []), ...groups];
 		}
-		settings.hooks = merged;
-		const { PreCompaction: _legacyPreCompaction, ...hooksWithoutLegacy } = settings.hooks as Record<string, unknown>;
-		settings.hooks = hooksWithoutLegacy;
+		settings.hooks = nonEmpty(merged);
 
 		atomicWriteJson(settingsPath, settings);
 		this.registerMcpServer();
