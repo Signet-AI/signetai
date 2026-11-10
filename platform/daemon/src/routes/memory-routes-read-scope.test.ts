@@ -660,3 +660,159 @@ describe("memory routes keep a scoped credential to its own agent's memories by 
 		);
 	});
 });
+
+describe("scope boundaries around memory routes", () => {
+	async function appWith(mode: "local" | "team", register: (app: Hono) => Promise<void>): Promise<Hono> {
+		const app = await makeApp(mode);
+		await register(app);
+		return app;
+	}
+
+	it("keeps remember dedupe inside the credential's project", async () => {
+		const app = await makeApp("team");
+		const secret = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "secret" })}` };
+		const allowed = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "allowed" })}` };
+		const created = await send(app, "POST", "/api/memory/remember", secret, {
+			content: "Secret launch is on Friday.",
+			project: "secret",
+			sourceId: "shared-source",
+			idempotencyKey: "shared-key",
+		});
+		expect(created.status).toBe(200);
+
+		const bySource = await send(app, "POST", "/api/memory/remember", allowed, {
+			content: "Unrelated note.",
+			project: "allowed",
+			sourceId: "shared-source",
+		});
+		const byKey = await send(app, "POST", "/api/memory/remember", allowed, {
+			content: "Another unrelated note.",
+			project: "allowed",
+			idempotencyKey: "shared-key",
+		});
+		for (const res of [bySource, byKey]) {
+			expect(res.body.id).not.toBe(created.body.id);
+			expect(JSON.stringify(res.body)).not.toContain("Secret launch");
+		}
+		expect(byKey.status).toBe(409);
+	});
+
+	it("requires admin to change or remove an agent, and limits registration to the credential's agent", async () => {
+		const app = await appWith("team", async (target) => {
+			const { registerMiscRoutes } = await import("./misc-routes");
+			registerMiscRoutes(target);
+		});
+		if (!state.authSecret) throw new Error("expected auth secret");
+		const readonly = createToken(state.authSecret, { sub: "ro", role: "readonly", scope: { agent: "alpha" } }, 60);
+		const headers = { authorization: `Bearer ${readonly}` };
+		const operator = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+
+		expect((await send(app, "DELETE", "/api/agents/beta?purge=true", headers)).status).toBe(403);
+		expect((await send(app, "DELETE", "/api/agents/beta?purge=true", operator)).status).toBe(403);
+		expect((await send(app, "PATCH", "/api/agents/alpha", operator, { read_policy: "shared" })).status).toBe(403);
+		expect((await send(app, "POST", "/api/agents", operator, { name: "intruder" })).status).toBe(403);
+		expect((await send(app, "POST", "/api/agents", headers, { name: "alpha" })).status).toBe(403);
+
+		const betaRows = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS n FROM memories WHERE agent_id = 'beta'").get() as { n: number },
+		);
+		expect(betaRows.n).toBe(2);
+		expect((await get(app, "/api/memory/beta-global", operator)).status).toBe(404);
+	});
+
+	it("refuses a knowledge read for another agent", async () => {
+		const app = await appWith("team", async (target) => {
+			const { registerKnowledgeRoutes } = await import("./knowledge-routes");
+			registerKnowledgeRoutes(target);
+		});
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+
+		for (const path of [
+			"/api/knowledge/entities?agent_id=beta",
+			"/api/knowledge/entities/any/aspects/any/attributes?agent_id=beta",
+			"/api/knowledge/navigation/tree?entity=x&agent_id=beta",
+			"/api/knowledge/constellation?agent_id=beta",
+		]) {
+			expect({ path, status: (await get(app, path, headers)).status }).toEqual({ path, status: 403 });
+		}
+		expect((await get(app, "/api/knowledge/entities", headers)).status).toBe(200);
+	});
+
+	it("keeps a session transcript inside the credential's project", async () => {
+		const app = await appWith("team", async (target) => {
+			const { registerSessionRoutes } = await import("./session-routes");
+			registerSessionRoutes(target, {
+				gitConfig: {
+					enabled: false,
+					autoCommit: false,
+					autoSync: false,
+					syncInterval: 60,
+					remote: "origin",
+					branch: "main",
+				},
+				stopGitSyncTimer: async () => {},
+				startGitSyncTimer: () => {},
+				getGitStatus: async () => ({}),
+				gitPull: async () => ({}),
+				gitPush: async () => ({}),
+				gitSync: async () => ({}),
+			} as never);
+		});
+		const secret = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "secret" })}` };
+		const allowed = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "allowed" })}` };
+		const created = await send(app, "POST", "/api/memory/remember", secret, {
+			content: "Session summary",
+			project: "secret",
+			sourceType: "session",
+			sourceId: "secret-session",
+			transcript: "Secret transcript evidence",
+		});
+		expect(created.status).toBe(200);
+
+		expect((await get(app, "/api/sessions/secret-session/transcript?agent_id=alpha", allowed)).status).toBe(404);
+		const own = await get(app, "/api/sessions/secret-session/transcript?agent_id=alpha", secret);
+		expect(own.body.content).toBe("Secret transcript evidence");
+	});
+
+	it("hides another agent's memory job", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+		getDbAccessor().withWriteTx((db) => {
+			const insert = db.prepare(
+				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, created_at, updated_at, error)
+				 VALUES (?, ?, 'extract', 'dead', 1, 3, ?, ?, 'provider failure')`,
+			);
+			insert.run("beta-job", "beta-private", NOW, NOW);
+			insert.run("alpha-job", "alpha-private", NOW, NOW);
+		});
+
+		expect((await get(app, "/api/memory/jobs/beta-job", headers)).status).toBe(404);
+		expect((await get(app, "/api/memory/jobs/alpha-job", headers)).body.memory_id).toBe("alpha-private");
+	});
+
+	it("marks a similarity result truncated when out-of-scope neighbors fill the candidate window", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+		const vector = (values: number[]) => new Uint8Array(new Float32Array(values).buffer);
+		seedMemory("alpha-neighbor", "alpha");
+		for (let i = 0; i < 8; i++) seedMemory(`beta-near-${i}`, "beta");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE embeddings SET vector = ?, dimensions = 2 WHERE source_id = 'alpha-global'").run(
+				vector([1, 0]),
+			);
+			const put = db.prepare(
+				`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, 2, 'memory', ?, 'chunk', ?, ?)`,
+			);
+			put.run("alpha-neighbor-emb", "alpha-neighbor-hash", vector([0.8, 0.6]), "alpha-neighbor", NOW, "alpha");
+			for (let i = 0; i < 8; i++) {
+				put.run(`beta-near-${i}-emb`, `beta-near-${i}-hash`, vector([1, 0]), `beta-near-${i}`, NOW, "beta");
+			}
+		});
+
+		const res = await get(app, "/memory/similar?id=alpha-global&k=1", headers);
+		expect(res.status).toBe(200);
+		expect(JSON.stringify(res.body.results)).not.toContain("beta-near");
+		expect(res.body.truncated).toBe(true);
+	});
+});

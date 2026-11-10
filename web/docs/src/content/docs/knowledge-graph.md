@@ -480,7 +480,9 @@ default-agent view.
 
 ## Agent Scope
 
-Every graph read or write must be scoped by `agent_id`. Route defaults should
+Every graph read or write must be scoped by `agent_id`. The knowledge routes
+check a requested `agent_id` against the credential's scoped agent, and answer
+`403` when they differ. Route defaults should
 resolve through the daemon's configured agent ID where possible; internal logic
 should thread the resolved agent ID through queries and mutations rather than
 relying on a global graph.

@@ -865,7 +865,11 @@ export async function getStoredSessionTranscriptInfoAsync(
 	}
 }
 
-export function getSessionTranscriptContent(sessionKey: string, agentId: string): string | undefined {
+export function getSessionTranscriptContent(
+	sessionKey: string,
+	agentId: string,
+	project: string | undefined,
+): string | undefined {
 	if (!tableExists("session_transcripts")) return undefined;
 	const aliases = [...new Set([sessionKey, canonicalizeTranscriptLookup(sessionKey)])];
 	const placeholders = aliases.map(() => "?").join(", ");
@@ -875,13 +879,15 @@ export function getSessionTranscriptContent(sessionKey: string, agentId: string)
 			const row = db
 				.prepare(
 					`SELECT content FROM session_transcripts
-					 WHERE agent_id = ? AND session_key IN (${placeholders})
+					 WHERE agent_id = ? AND session_key IN (${placeholders})${project === undefined ? "" : " AND project = ?"}
 					 ORDER BY CASE WHEN session_key = ? THEN 0 ELSE 1 END, ${hasUpdatedAt() ? "COALESCE(updated_at, created_at)" : "created_at"} DESC
 					 LIMIT 1`,
 				)
-				.get(agentId, ...aliases, sessionKey) as { content: string } | undefined;
+				.get(agentId, ...aliases, ...(project === undefined ? [] : [project]), sessionKey) as
+				| { content: string }
+				| undefined;
 			return row?.content;
-		}, "session-transcripts.ts:874");
+		}, "session-transcripts.ts:878");
 	} catch {
 		return undefined;
 	}
@@ -929,7 +935,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:905");
+		}, "session-transcripts.ts:911");
 	} catch {
 		return [];
 	}
@@ -977,7 +983,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:960");
+		}, "session-transcripts.ts:966");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -1020,7 +1026,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:1005");
+						}, "session-transcripts.ts:1011");
 
 					const hits = rows
 						.map((row) => ({
@@ -1090,7 +1096,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1069");
+			}, "session-transcripts.ts:1075");
 
 		return rows
 			.map((row) => ({

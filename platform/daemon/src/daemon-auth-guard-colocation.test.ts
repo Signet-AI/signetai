@@ -693,8 +693,20 @@ inference:
 		});
 		it("POST /api/agents distinguishes omitted, null, valid, and invalid policy_group", async () => {
 			const app = await makeApp();
+			const state = await import("./routes/state.js");
+			const { createAuthMiddleware, createToken } = await import("./auth");
 			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			const secret = state.authSecret;
+			if (!secret) throw new Error("expected auth secret for team-mode agent test");
+			app.use("*", createAuthMiddleware(state.authConfig, secret));
 			registerMiscRoutes(app);
+			const anonymous = await app.request("/api/agents", {
+				method: "POST",
+				headers: { "content-type": "application/json" },
+				body: JSON.stringify({ name: "agent-anonymous" }),
+			});
+			expect(anonymous.status).toBe(401);
+			const admin = createToken(secret, { sub: "agents-admin", role: "admin", scope: {} }, 60);
 			const cases = [
 				[{ name: "agent-omitted" }, 201],
 				[{ name: "agent-null-isolated", read_policy: "isolated", policy_group: null }, 201],
@@ -707,7 +719,7 @@ inference:
 			for (const [body, expectedStatus] of cases) {
 				const response = await app.request("/api/agents", {
 					method: "POST",
-					headers: { "content-type": "application/json" },
+					headers: { "content-type": "application/json", authorization: `Bearer ${admin}` },
 					body: JSON.stringify(body),
 				});
 				expect(response.status).toBe(expectedStatus);

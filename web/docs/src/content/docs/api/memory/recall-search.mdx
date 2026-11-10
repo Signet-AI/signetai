@@ -576,7 +576,7 @@ Results follow the requesting agent's read policy, the same scope recall uses. T
 
 ## GET /memory/similar
 
-Returns memories whose embeddings are closest to an existing memory. The anchor and the results follow the requesting agent's read policy, resolved as for `GET /memory/search` (without `all`). Neighbors are taken from the nearest `4 × (k + 1)` candidates, at most 200, and then filtered to that scope, so fewer than `k` can come back.
+Returns memories whose embeddings are closest to an existing memory. The anchor and the results follow the requesting agent's read policy, resolved as for `GET /memory/search` (without `all`). Neighbors are taken from the nearest `4 × (k + 1)` candidates, at most 200, and then filtered to that scope, so fewer than `k` can come back. When that happens and the candidate cap was reached, the response includes `"truncated": true`: closer memories outside the scope filled the candidate window, and in-scope neighbors further out were not searched.
 
 <EndpointSpec
 	rows={{

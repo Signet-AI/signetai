@@ -188,9 +188,16 @@ Register a new agent. Requires `remember` permission.
 }
 ```
 
-Only `name` is required. `read_policy` defaults to `"isolated"`.
+Only `name` is required. `read_policy` defaults to `"isolated"`. A credential
+scoped to an agent can only register that agent; another `name` gets `403`.
 
 **Response** — the created agent record.
+
+### PATCH /api/agents/:name
+
+Change an agent's `read_policy` (or `memory`) and `policy_group`. Requires
+`admin` permission, because widening a read policy changes which memories that
+agent can read. The `default` agent cannot be modified.
 
 ### DELETE /api/agents/:name
 
