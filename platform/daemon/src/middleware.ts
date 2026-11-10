@@ -2,7 +2,7 @@ import { isIP } from "node:net";
 import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
-import { createAuthMiddleware, verifyApiKey } from "./auth";
+import { createAuthMiddleware, isAuthOpenPath, verifyApiKey } from "./auth";
 import { isLocalhost } from "./auth/middleware";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
@@ -18,7 +18,7 @@ function trustsRequestWithoutCredential(c: Context): boolean {
 }
 
 function isForeignBrowserWrite(c: Context): boolean {
-	if (!UNSAFE_METHODS.has(c.req.method)) return false;
+	if (!UNSAFE_METHODS.has(c.req.method) || isAuthOpenPath(c.req.path)) return false;
 	const origin = c.req.header("origin");
 	if (origin === undefined) return c.req.header("sec-fetch-site") === "cross-site";
 	if (isAllowedOrigin(origin) || EXTENSION_ORIGIN.test(origin)) return false;
