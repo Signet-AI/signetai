@@ -28,3 +28,23 @@ describe("api.updateAgentScope", () => {
 		}
 	});
 });
+
+describe("memory views", () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it("does not ask for every agent before the session is known", async () => {
+		const urls: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation((async (input) => {
+			urls.push(String(input instanceof Request ? input.url : input));
+			return new Response(JSON.stringify({ memories: [], stats: {} }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}) as typeof fetch);
+
+		await api.getMemories({ limit: 5 });
+
+		expect(urls).toHaveLength(1);
+		expect(urls[0]).not.toContain("agentId=");
+	});
+});
