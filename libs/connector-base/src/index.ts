@@ -193,8 +193,14 @@ export function writeConfigText(path: string, content: string): void {
 	try {
 		const mode = fstatSync(fd).mode & 0o777;
 		if ((mode & 0o077) !== 0) fchmodSync(fd, mode & 0o700);
-		ftruncateSync(fd, 0);
-		writeSync(fd, content, 0, "utf-8");
+		const bytes = Buffer.from(content, "utf-8");
+		let offset = 0;
+		while (offset < bytes.length) {
+			const written = writeSync(fd, bytes, offset, bytes.length - offset, offset);
+			if (written <= 0) throw new Error(`Write made no progress: ${path}`);
+			offset += written;
+		}
+		ftruncateSync(fd, bytes.length);
 	} finally {
 		closeSync(fd);
 	}

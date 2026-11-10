@@ -188,6 +188,12 @@ describe("files that hold the Signet API key", () => {
 		const fresh = join(dir, "fresh.toml");
 		writeConfigText(fresh, `auth = "${key}"\n`);
 		expect(statSync(fresh).mode & 0o777).toBe(0o600);
+
+		const large = `auth = "${key}"\n${"x = 1\n".repeat(200_000)}`;
+		writeConfigText(fresh, large);
+		expect(readFileSync(fresh, "utf-8")).toBe(large);
+		writeConfigText(fresh, `auth = "${key}"\n`);
+		expect(readFileSync(fresh, "utf-8")).toBe(`auth = "${key}"\n`);
 	});
 
 	it.skipIf(process.platform === "win32")("treats a key that serialization would escape as present", () => {
