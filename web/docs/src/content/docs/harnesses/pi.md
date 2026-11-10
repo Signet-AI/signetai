@@ -22,7 +22,9 @@ needed.
 During setup or connect, the connector writes a bundled
 `signet-pi.js` file into the pi extensions directory. If
 `PI_CODING_AGENT_DIR` is set, Signet uses that agent directory.
-Otherwise it writes to `~/.pi/agent/extensions/`.
+Otherwise it writes to `~/.pi/agent/extensions/`. The file can contain the
+configured Signet API key, so Signet writes it with mode `0600` and resets a
+broader mode on every setup or sync run.
 
 ### Runtime behavior
 

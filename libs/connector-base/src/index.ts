@@ -1,5 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
@@ -369,6 +378,15 @@ export function removeManagedExtensionFile(filePath: string, marker: string): bo
 	if (!content?.includes(marker)) return false;
 	unlinkSync(filePath);
 	return true;
+}
+
+export function writeManagedExtensionFile(filePath: string, content: string): boolean {
+	if (readManagedExtensionFile(filePath) !== content) {
+		atomicWriteText(filePath, content, 0o600);
+		return true;
+	}
+	if ((statSync(filePath).mode & 0o077) !== 0) chmodSync(filePath, 0o600);
+	return false;
 }
 
 export interface ConnectorInstallerOptions {

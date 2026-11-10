@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
 	BaseConnector,
@@ -13,6 +13,7 @@ import {
 	resolveSignetApiKey,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
+	writeManagedExtensionFile,
 } from "@signet/connector-base";
 import { createAgentDir } from "@signet/connector-base/agent-dir";
 import { EXTENSION_BUNDLE } from "./extension-bundle.js";
@@ -95,9 +96,7 @@ export class PiConnector extends BaseConnector {
 			agentId: resolveSignetAgentId(),
 			apiKey: resolveSignetApiKey(),
 		});
-		const previous = existsSync(targetPath) ? readFileSync(targetPath, "utf8") : null;
-		if (previous !== managedContent) {
-			writeFileSync(targetPath, managedContent, "utf8");
+		if (writeManagedExtensionFile(targetPath, managedContent)) {
 			filesWritten.push(targetPath);
 		}
 

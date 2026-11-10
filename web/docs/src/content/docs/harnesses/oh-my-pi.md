@@ -22,7 +22,9 @@ needed.
 During setup or connect, the connector writes a bundled
 `signet-oh-my-pi.js` file into the Oh My Pi extensions directory. If
 `PI_CODING_AGENT_DIR` is set, Signet uses that agent directory.
-Otherwise it writes to `~/.omp/agent/extensions/`.
+Otherwise it writes to `~/.omp/agent/extensions/`. The file can contain the
+configured Signet API key, so Signet writes it with mode `0600` and resets a
+broader mode on every setup or sync run.
 
 The install path is idempotent and only manages `signet-oh-my-pi.js`.
 Older Signet-managed `.mjs` installs are removed automatically on the
