@@ -503,3 +503,160 @@ describe("memory list result size", () => {
 		expect(body.error).toBe("Result is too large; request a smaller limit");
 	});
 });
+
+async function send(
+	app: Hono,
+	method: string,
+	path: string,
+	headers: Record<string, string>,
+	body?: Record<string, unknown>,
+) {
+	const res = await app.request(`http://localhost${path}`, {
+		method,
+		headers: { "content-type": "application/json", ...headers },
+		body: body === undefined ? undefined : JSON.stringify(body),
+	});
+	return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+function memoryRow(id: string): { importance: number; is_deleted: number; version: number } {
+	return getDbAccessor().withReadDb(
+		(db) =>
+			db.prepare("SELECT importance, is_deleted, version FROM memories WHERE id = ?").get(id) as {
+				importance: number;
+				is_deleted: number;
+				version: number;
+			},
+	);
+}
+
+function softDelete(id: string): void {
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare("UPDATE memories SET is_deleted = 1, deleted_at = ? WHERE id = ?").run(new Date().toISOString(), id);
+	});
+}
+
+describe("memory routes keep a scoped credential to its own agent's memories by id", () => {
+	it("hides another agent's memory from get, history, lineage, and similarity without naming an agent", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+
+		expect((await get(app, "/api/memory/beta-private", headers)).status).toBe(404);
+		expect((await get(app, "/api/memory/beta-private/history", headers)).status).toBe(404);
+		expect((await get(app, "/api/memory/beta-private/lineage", headers)).body.count).toBe(0);
+		expect((await get(app, "/memory/similar?id=beta-global", headers)).status).toBe(404);
+		expect((await get(app, "/api/memory/alpha-private", headers)).status).toBe(200);
+	});
+
+	it("refuses to edit, delete, recover, tombstone, or supersede another agent's memory", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+		softDelete("beta-private");
+
+		const edit = await send(app, "PATCH", "/api/memory/beta-global", headers, { importance: 0.1, reason: "x" });
+		expect(edit).toEqual({ status: 404, body: { id: "beta-global", status: "not_found", error: "Not found" } });
+		expect((await send(app, "DELETE", "/api/memory/beta-global", headers, { reason: "x" })).status).toBe(404);
+		expect((await send(app, "POST", "/api/memory/beta-private/recover", headers, { reason: "x" })).status).toBe(404);
+		expect((await send(app, "POST", "/api/memories/beta-global/tombstone", headers, {})).status).toBe(404);
+		expect(
+			(await send(app, "POST", "/api/memories/alpha-global/supersede", headers, { superseded_by: "beta-global" }))
+				.status,
+		).toBe(404);
+
+		expect(memoryRow("beta-global")).toEqual({ importance: 0.95, is_deleted: 0, version: 1 });
+		expect(memoryRow("beta-private").is_deleted).toBe(1);
+
+		const own = await send(app, "PATCH", "/api/memory/alpha-global", headers, { importance: 0.4, reason: "x" });
+		expect(own.status).toBe(200);
+		expect(memoryRow("alpha-global").importance).toBe(0.4);
+	});
+
+	it("leaves another agent's memories out of batch modify and batch forget", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+
+		const modify = await send(app, "POST", "/api/memory/modify", headers, {
+			reason: "x",
+			patches: [
+				{ id: "alpha-global", importance: 0.3 },
+				{ id: "beta-global", importance: 0.3 },
+			],
+		});
+		expect(modify.body.results).toEqual([
+			expect.objectContaining({ id: "alpha-global", status: "updated" }),
+			{ id: "beta-global", status: "not_found", error: "Not found" },
+		]);
+
+		const byIds = await send(app, "POST", "/api/memory/forget", headers, {
+			mode: "preview",
+			ids: ["alpha-private", "beta-private"],
+		});
+		expect(rowIds(byIds.body.candidates)).toEqual(["alpha-private"]);
+
+		const byFilter = await send(app, "POST", "/api/memory/forget", headers, {
+			mode: "execute",
+			type: "fact",
+			reason: "x",
+			force: true,
+		});
+		expect(rowIds(byFilter.body.results)).toEqual(["alpha-archived", "alpha-global"]);
+		expect(memoryRow("beta-global").is_deleted).toBe(0);
+		expect(memoryRow("beta-private").is_deleted).toBe(0);
+		expect(memoryRow("team-b-global").is_deleted).toBe(0);
+	});
+
+	it("rejects a scoped credential that names another agent on a mutation", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+
+		expect(
+			(await send(app, "PATCH", "/api/memory/beta-global?agentId=beta", headers, { importance: 0.1, reason: "x" }))
+				.status,
+		).toBe(403);
+		expect(
+			(
+				await send(app, "POST", "/api/memory/feedback", headers, {
+					sessionKey: "s",
+					agentId: "beta",
+					feedback: { "beta-global": 1 },
+				})
+			).status,
+		).toBe(403);
+		expect(memoryRow("beta-global").version).toBe(1);
+	});
+
+	it("lets an admin credential change any agent's memory", async () => {
+		const app = await makeApp("team");
+		if (!state.authSecret) throw new Error("expected auth secret");
+		const admin = createToken(state.authSecret, { sub: "admin", role: "admin", scope: {} }, 60);
+
+		const res = await send(
+			app,
+			"PATCH",
+			"/api/memory/beta-global",
+			{ authorization: `Bearer ${admin}` },
+			{
+				importance: 0.2,
+				reason: "x",
+			},
+		);
+		expect(res.status).toBe(200);
+		expect(memoryRow("beta-global").importance).toBe(0.2);
+	});
+
+	it("keeps local mutations to the named agent and leaves unnamed local mutations unrestricted", async () => {
+		const app = await makeApp("local");
+
+		expect(
+			(await send(app, "PATCH", "/api/memory/beta-global?agentId=alpha", {}, { importance: 0.1, reason: "x" })).status,
+		).toBe(404);
+		expect(
+			(await send(app, "DELETE", "/api/memory/beta-global", { "x-signet-agent-id": "alpha" }, { reason: "x" })).status,
+		).toBe(404);
+		expect(memoryRow("beta-global")).toEqual({ importance: 0.95, is_deleted: 0, version: 1 });
+
+		expect((await send(app, "PATCH", "/api/memory/beta-global", {}, { importance: 0.1, reason: "x" })).status).toBe(
+			200,
+		);
+	});
+});
