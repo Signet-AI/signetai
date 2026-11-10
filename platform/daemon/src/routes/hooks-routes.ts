@@ -843,10 +843,6 @@ function registerSessionEnd(app: Hono): void {
 			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath, agentId);
 			if (conflict) return c.json(conflict);
 			const transcriptPath = parseOptionalString(body.transcriptPath);
-			if (transcriptPath || parseOptionalString(body.lastAssistantMessage)) {
-				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
-				if (denied) return denied;
-			}
 			const duplicate = claimAutomaticSessionOrSkip(sessionKey, runtimePath, agentId, body.harness, "session-end", {
 				memoriesSaved: 0,
 			});
@@ -994,7 +990,12 @@ function registerCheckpointExtract(app: Hono): void {
 
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
-			const agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey });
+			const scopedAgent = resolveScopedAgentId(
+				c,
+				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+			);
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const agentId = scopedAgent.agentId;
 
 			const duplicate = claimAutomaticSessionOrSkip(
 				body.sessionKey,
@@ -1239,18 +1240,18 @@ function registerPreCompaction(app: Hono): void {
 			const runtimePath = resolveRuntimePath(c, body);
 			if (runtimePath) body.runtimePath = runtimePath;
 
-			let agentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey });
+			const scopedAgent = resolveScopedAgentId(
+				c,
+				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+			);
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const agentId = scopedAgent.agentId;
 			if (transcriptPath) {
-				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
-				if (denied) return denied;
-				const scopedAgent = resolveScopedAgentId(c, agentId);
-				if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-				const sessionError = validateSessionAgentBinding(c, body.sessionKey, scopedAgent.agentId, {
+				const sessionError = validateSessionAgentBinding(c, body.sessionKey, agentId, {
 					requireExisting: false,
 					context: "sessionKey",
 				});
 				if (sessionError) return c.json({ error: sessionError }, 403);
-				agentId = scopedAgent.agentId;
 				body.agentId = agentId;
 			}
 			const duplicate = claimAutomaticSessionOrSkip(
@@ -1309,10 +1310,18 @@ function registerCompactionComplete(app: Hono): void {
 			const summary = normalizeMarkdownBody(body.summary);
 
 			const runtimePath = resolveRuntimePath(c, body);
+			const scopedAgent = resolveScopedAgentId(
+				c,
+				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+			);
+			if (scopedAgent.error) {
+				return c.json({ error: scopedAgent.error }, 403);
+			}
+			const agentId = scopedAgent.agentId;
 			const duplicate = claimAutomaticSessionOrSkip(
 				body.sessionKey,
 				runtimePath,
-				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+				agentId,
 				body.harness,
 				"compaction-complete",
 				{
@@ -1330,14 +1339,6 @@ function registerCompactionComplete(app: Hono): void {
 			}
 
 			const now = new Date().toISOString();
-			const scopedAgent = resolveScopedAgentId(
-				c,
-				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
-			);
-			if (scopedAgent.error) {
-				return c.json({ error: scopedAgent.error }, 403);
-			}
-			const agentId = scopedAgent.agentId;
 			const transcriptRow = body.sessionKey
 				? // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 					getDbAccessor().withReadDb(
@@ -2181,7 +2182,19 @@ function recallAttributedEmbedFn(
 		});
 }
 
+const SESSION_LIFECYCLE_HOOKS = [
+	"/api/hooks/session-start",
+	"/api/hooks/user-prompt-submit",
+	"/api/hooks/session-end",
+	"/api/hooks/session-checkpoint-extract",
+	"/api/hooks/pre-compaction",
+	"/api/hooks/compaction-complete",
+] as const;
+
 export function registerHooksRoutes(app: Hono): void {
+	for (const path of SESSION_LIFECYCLE_HOOKS) {
+		app.use(path, async (c, next) => requirePermission("remember", authConfig)(c, next));
+	}
 	app.use("/api/cross-agent", async (c, next) => {
 		if (c.req.method === "GET") {
 			return requirePermission("recall", authConfig)(c, next);
