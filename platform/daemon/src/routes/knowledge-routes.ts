@@ -636,6 +636,12 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		if (denied) return denied;
 
 		const body = await c.req.json().catch(() => ({}));
+		const scopedAgent = resolveScopedAgentId(
+			c,
+			typeof body.agentId === "string" ? body.agentId : c.req.query("agent_id"),
+			"default",
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const entityId = typeof body.entityId === "string" ? body.entityId.trim() : "";
 		const direction = body.direction === "upstream" ? "upstream" : "downstream";
 		const maxDepth = typeof body.maxDepth === "number" ? Math.max(1, Math.min(body.maxDepth, 10)) : 3;
@@ -645,8 +651,8 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		}
 
 		const result = await getDbAccessor().withReadDbAsync(
-			async (db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:647" },
+			async (db) => walkImpact(db, { entityId, agentId: scopedAgent.agentId, direction, maxDepth, timeoutMs: 200 }),
+			{ siteToken: "routes/knowledge-routes.ts:653" },
 		);
 		return c.json(result);
 	});

@@ -806,6 +806,61 @@ describe("scope boundaries around memory routes", () => {
 		expect((await get(app, "/api/sessions/secret-session/transcript?agent_id=alpha", allowed)).status).toBe(404);
 		const own = await get(app, "/api/sessions/secret-session/transcript?agent_id=alpha", secret);
 		expect(own.body.content).toBe("Secret transcript evidence");
+
+		const replaced = await send(app, "POST", "/api/memory/remember", allowed, {
+			content: "A different summary",
+			project: "allowed",
+			sourceType: "session",
+			sourceId: "secret-session",
+			transcript: "Replacement transcript",
+		});
+		expect(replaced.status).toBe(409);
+		expect((await get(app, "/api/sessions/secret-session/transcript?agent_id=alpha", secret)).body.content).toBe(
+			"Secret transcript evidence",
+		);
+		expect((await get(app, "/api/sessions/secret-session?agent_id=alpha", allowed)).status).toBe(404);
+		expect((await get(app, "/api/sessions/secret-session?agent_id=alpha", secret)).body.project).toBe("secret");
+	});
+
+	it("answers a hidden supersedes target the same as a missing one", async () => {
+		const app = await makeApp("team");
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+		const missing = await send(app, "POST", "/api/memory/remember", headers, {
+			content: "Supersedes a missing memory",
+			supersedes: "no-such-memory",
+		});
+		const hidden = await send(app, "POST", "/api/memory/remember", headers, {
+			content: "Supersedes another agent's memory",
+			supersedes: "beta-private",
+		});
+		expect(hidden.status).toBe(missing.status);
+		expect(hidden.body).toEqual(missing.body);
+	});
+
+	it("keeps graph impact inside the credential's agent", async () => {
+		const app = await appWith("team", async (target) => {
+			const { registerKnowledgeRoutes } = await import("./knowledge-routes");
+			registerKnowledgeRoutes(target);
+		});
+		const headers = { authorization: `Bearer ${teamToken({ agent: "alpha" })}` };
+		getDbAccessor().withWriteTx((db) => {
+			const entity = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', ?, 1, ?, ?)`,
+			);
+			entity.run("beta-root", "Beta root", "beta root", "beta", NOW, NOW);
+			entity.run("beta-child", "Beta child", "beta child", "beta", NOW, NOW);
+			db.prepare(
+				`INSERT INTO entity_dependencies (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, reason, created_at, updated_at)
+				 VALUES ('beta-dep', 'beta-root', 'beta-child', 'beta', 'related_to', 0.5, 0.7, 'r', ?, ?)`,
+			).run(NOW, NOW);
+		});
+
+		const res = await send(app, "POST", "/api/graph/impact", headers, { entityId: "beta-root" });
+		expect(JSON.stringify(res.body)).not.toContain("Beta");
+		expect(
+			(await send(app, "POST", "/api/graph/impact", headers, { entityId: "beta-root", agentId: "beta" })).status,
+		).toBe(403);
 	});
 
 	it("hides another agent's memory job", async () => {

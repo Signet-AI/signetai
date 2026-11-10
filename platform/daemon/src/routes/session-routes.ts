@@ -258,6 +258,11 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 
 		const stored = getStoredSessionTranscriptInfo(key, scopedAgent.agentId);
 		if (!stored) return c.json({ error: "Session not found" }, 404);
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		if (scopedProject.project !== undefined && (stored.project ?? "") !== scopedProject.project) {
+			return c.json({ error: "Session not found" }, 404);
+		}
 		return c.json({
 			key: `session:${stored.sessionKey}`,
 			sessionKey: stored.sessionKey,
