@@ -159,6 +159,34 @@ export function isSignetGeneratedFile(raw: string): boolean {
 	});
 }
 
+function containsSignetApiKey(content: string): boolean {
+	const key = resolveSignetApiKey();
+	return key !== undefined && content.includes(key);
+}
+
+export function keepSignetApiKeyFilePrivate(path: string): void {
+	let mode: number;
+	try {
+		mode = statSync(path).mode & 0o777;
+	} catch {
+		return;
+	}
+	if ((mode & 0o077) === 0 || !containsSignetApiKey(readFileSync(path, "utf-8"))) return;
+	chmodSync(path, mode & 0o700);
+}
+
+export function writeConfigText(path: string, content: string): void {
+	if (!containsSignetApiKey(content)) {
+		writeFileSync(path, content, "utf-8");
+		return;
+	}
+	try {
+		const mode = statSync(path).mode & 0o777;
+		if ((mode & 0o077) !== 0) chmodSync(path, mode & 0o700);
+	} catch {}
+	writeFileSync(path, content, { encoding: "utf-8", mode: 0o600 });
+}
+
 export function atomicWriteText(path: string, content: string, mode?: number): void {
 	const tmp = join(dirname(path), `.${randomBytes(6).toString("hex")}.tmp`);
 	let writeMode = mode;
@@ -167,6 +195,7 @@ export function atomicWriteText(path: string, content: string, mode?: number): v
 			writeMode = statSync(path).mode & 0o777;
 		} catch {}
 	}
+	if (containsSignetApiKey(content)) writeMode = (writeMode ?? 0o600) & 0o700;
 	try {
 		writeFileSync(tmp, content, { encoding: "utf-8", mode: writeMode });
 		renameSync(tmp, path);

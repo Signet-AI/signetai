@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
@@ -6,7 +6,9 @@ import {
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
+	keepSignetApiKeyFilePrivate,
 	resolveSignetMcpCommand,
+	writeConfigText,
 } from "@signet/connector-base";
 import {
 	expandHome,
@@ -186,8 +188,11 @@ function patchConfigToml(path: string, entries: readonly KimiHookEntry[]): boole
 	const cleaned = removeSignetKimiHookBlocks(existing).trimEnd();
 	const blocks = entries.map(serializeHookEntry).join("\n\n");
 	const updated = `${cleaned.length > 0 ? `${cleaned}\n\n` : ""}${blocks}\n`;
-	if (updated === existing) return false;
-	writeFileSync(path, updated);
+	if (updated === existing) {
+		keepSignetApiKeyFilePrivate(path);
+		return false;
+	}
+	writeConfigText(path, updated);
 	return true;
 }
 
@@ -197,7 +202,7 @@ function unpatchConfigToml(path: string): boolean {
 	if (!SIGNET_KIMI_HOOK_PATTERN.test(content)) return false;
 	const updated = removeSignetKimiHookBlocks(content);
 	if (updated === content) return false;
-	writeFileSync(path, updated);
+	writeConfigText(path, updated);
 	return true;
 }
 
