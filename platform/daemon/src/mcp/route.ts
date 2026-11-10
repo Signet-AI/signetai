@@ -45,11 +45,12 @@ export function getMcpWorkloadDiagnostics(agentId = "default"): McpWorkloadDiagn
 	return { inFlight, oldestAgeMs, maxInFlight: MCP_MAX_IN_FLIGHT };
 }
 
+function requestedMcpAgentId(c: Context): string | undefined {
+	return c.req.query("agentId")?.trim() || c.req.header("x-signet-agent-id")?.trim() || undefined;
+}
+
 function resolveMcpWorkloadAgentId(c: Context): string {
-	const scopedAgentId = c.get("auth")?.claims?.scope.agent?.trim();
-	if (scopedAgentId) return scopedAgentId;
-	const requestedAgentId = c.req.query("agentId") ?? c.req.header("x-signet-agent-id") ?? "default";
-	return requestedAgentId.trim() || "default";
+	return c.get("auth")?.claims?.scope.agent?.trim() || requestedMcpAgentId(c) || "default";
 }
 
 export function mountMcpRoute(app: Hono): void {
@@ -85,7 +86,7 @@ export function mountMcpRoute(app: Hono): void {
 			});
 			server = await createMcpServer({
 				authorizationHeader: c.req.header("authorization"),
-				agentId: c.req.query("agentId") ?? c.req.header("x-signet-agent-id"),
+				agentId: requestedMcpAgentId(c),
 			});
 			await server.connect(transport);
 			const response = await transport.handleRequest(c.req.raw, parsedBody === undefined ? undefined : { parsedBody });

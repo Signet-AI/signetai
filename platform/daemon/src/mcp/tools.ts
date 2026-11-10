@@ -379,6 +379,11 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 	const authorizationHeader = normalizeAuthorizationHeader(opts?.authorizationHeader);
 	const configuredAgentId = opts?.agentId?.trim() || undefined;
 	const agentFor = (requested: string | undefined): string | undefined => requested?.trim() || configuredAgentId;
+	const memoryMutationPath = (id: string, requested: string | undefined): string => {
+		const agentId = agentFor(requested);
+		const qs = agentId ? `?${new URLSearchParams({ agentId })}` : "";
+		return `/api/memory/${encodeURIComponent(id)}${qs}`;
+	};
 	const fetchDaemon = <T>(
 		requestBaseUrl: string,
 		path: string,
@@ -846,6 +851,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (offset !== undefined) params.set("offset", String(offset));
 			if (type !== undefined) params.set("type", type);
 			const agentId = agentFor(agent_id);
+			if (agentId === "all") return errorResult("List failed: agent_id must name one agent");
 			if (agentId) params.set("agentId", agentId);
 
 			const qs = params.toString();
@@ -872,11 +878,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 				tags: z.string().optional().describe("New tags (comma-separated)"),
 				pinned: z.boolean().optional().describe("Pin or unpin this memory"),
 				reason: z.string().describe("Why this edit is being made"),
+				agent_id: z.string().optional().describe("Agent ID that owns the memory"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ id, content, type, importance, tags, reason, pinned }) => {
-			const result = await fetchDaemon<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
+		async ({ id, content, type, importance, tags, reason, pinned, agent_id }) => {
+			const result = await fetchDaemon<unknown>(baseUrl, memoryMutationPath(id, agent_id), {
 				method: "PATCH",
 				body: {
 					content,
@@ -903,11 +910,12 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			inputSchema: z.object({
 				id: z.string().describe("Memory ID to forget"),
 				reason: z.string().describe("Why this memory should be forgotten"),
+				agent_id: z.string().optional().describe("Agent ID that owns the memory"),
 			}),
 			annotations: { readOnlyHint: false },
 		},
-		async ({ id, reason }) => {
-			const result = await fetchDaemon<unknown>(baseUrl, `/api/memory/${encodeURIComponent(id)}`, {
+		async ({ id, reason, agent_id }) => {
+			const result = await fetchDaemon<unknown>(baseUrl, memoryMutationPath(id, agent_id), {
 				method: "DELETE",
 				body: { reason },
 			});
@@ -1661,6 +1669,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		agent_id: z.string().optional().describe("Agent scope, default default"),
 	});
 
+	const setNavigationAgent = (params: URLSearchParams, requested: string | undefined): void => {
+		const agentId = agentFor(requested);
+		if (agentId) params.set("agent_id", agentId);
+	};
 	const fetchNavigation = async (path: string, params: URLSearchParams, label: string) => {
 		const query = params.toString();
 		const result = await fetchDaemon<unknown>(baseUrl, query ? `${path}?${query}` : path);
@@ -1679,7 +1691,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		const params = new URLSearchParams();
 		if (!entity) {
 			if (max_aspects !== undefined) params.set("limit", String(max_aspects));
-			if (agent_id) params.set("agent_id", agent_id);
+			setNavigationAgent(params, agent_id);
 			return fetchNavigation("/api/knowledge/navigation/entities", params, "Knowledge tree entity listing");
 		}
 		params.set("entity", entity);
@@ -1688,7 +1700,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		if (max_groups !== undefined) params.set("max_groups", String(max_groups));
 		if (max_claims !== undefined) params.set("max_claims", String(max_claims));
 		if (max_total_claims !== undefined) params.set("max_total_claims", String(max_total_claims));
-		if (agent_id) params.set("agent_id", agent_id);
+		setNavigationAgent(params, agent_id);
 		return fetchNavigation("/api/knowledge/navigation/tree", params, "Knowledge tree");
 	};
 	const listEntities = async ({ query, type, limit, offset, agent_id }: z.infer<typeof listEntitiesInput>) => {
@@ -1697,29 +1709,29 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		if (type) params.set("type", type);
 		if (limit !== undefined) params.set("limit", String(limit));
 		if (offset !== undefined) params.set("offset", String(offset));
-		if (agent_id) params.set("agent_id", agent_id);
+		setNavigationAgent(params, agent_id);
 		return fetchNavigation("/api/knowledge/navigation/entities", params, "Entity list");
 	};
 	const getEntity = async ({ name, agent_id }: z.infer<typeof getEntityInput>) => {
 		const params = new URLSearchParams({ name });
-		if (agent_id) params.set("agent_id", agent_id);
+		setNavigationAgent(params, agent_id);
 		return fetchNavigation("/api/knowledge/navigation/entity", params, "Entity get");
 	};
 	const listAspects = async ({ entity, agent_id }: z.infer<typeof listAspectsInput>) => {
 		const params = new URLSearchParams({ entity });
-		if (agent_id) params.set("agent_id", agent_id);
+		setNavigationAgent(params, agent_id);
 		return fetchNavigation("/api/knowledge/navigation/aspects", params, "Entity aspects");
 	};
 	const listGroups = async ({ entity, aspect, agent_id }: z.infer<typeof listGroupsInput>) => {
 		const params = new URLSearchParams({ entity, aspect });
-		if (agent_id) params.set("agent_id", agent_id);
+		setNavigationAgent(params, agent_id);
 		return fetchNavigation("/api/knowledge/navigation/groups", params, "Entity groups");
 	};
 	const listClaims = async ({ entity, aspect, group, limit, offset, agent_id }: z.infer<typeof listClaimsInput>) => {
 		const params = new URLSearchParams({ entity, aspect, group });
 		if (limit !== undefined) params.set("limit", String(limit));
 		if (offset !== undefined) params.set("offset", String(offset));
-		if (agent_id) params.set("agent_id", agent_id);
+		setNavigationAgent(params, agent_id);
 		return fetchNavigation("/api/knowledge/navigation/claims", params, "Entity claims");
 	};
 	const listAttributes = async ({
@@ -1738,7 +1750,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		if (kind) params.set("kind", kind);
 		if (limit !== undefined) params.set("limit", String(limit));
 		if (offset !== undefined) params.set("offset", String(offset));
-		if (agent_id) params.set("agent_id", agent_id);
+		setNavigationAgent(params, agent_id);
 		return fetchNavigation("/api/knowledge/navigation/attributes", params, "Entity attributes");
 	};
 	const explainClaim = async ({
@@ -1761,14 +1773,14 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		if (reverse_limit !== undefined) params.set("reverse_limit", String(reverse_limit));
 		if (max_depth !== undefined) params.set("max_depth", String(max_depth));
 		if (session_key) params.set("session_key", session_key);
-		if (agent_id) params.set("agent_id", agent_id);
+		setNavigationAgent(params, agent_id);
 		return fetchNavigation("/api/ontology/claims/explain", params, "Claim trace");
 	};
 	const hygieneReport = async ({ limit, memory_limit, agent_id }: z.infer<typeof hygieneReportInput>) => {
 		const params = new URLSearchParams();
 		if (limit !== undefined) params.set("limit", String(limit));
 		if (memory_limit !== undefined) params.set("memory_limit", String(memory_limit));
-		if (agent_id) params.set("agent_id", agent_id);
+		setNavigationAgent(params, agent_id);
 		return fetchNavigation("/api/knowledge/hygiene", params, "Knowledge hygiene report");
 	};
 
