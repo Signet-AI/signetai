@@ -2,10 +2,12 @@ import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
 import type { Context } from "hono";
 import type { Hono } from "hono";
+import { requirePermission } from "../auth";
 import { getPeerAddress } from "../auth/middleware";
 import { type DocumentImportStatus, importDocument } from "../document-import-service";
 import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_FILE_BYTES } from "../import-normalizer";
 import { ImportAdmissionConflictError, type DurableImportAdmission } from "../import-inbox";
+import { authConfig } from "./state.js";
 
 const MAX_MULTIPART_OVERHEAD = 1 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD;
@@ -17,6 +19,7 @@ export interface ImportRouteDeps {
 }
 
 export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
+	app.use("/api/sources/import", async (c, next) => requirePermission("documents", authConfig)(c, next));
 	app.post("/api/sources/import", async (c) => {
 		const contentLength = Number.parseInt(c.req.header("content-length") ?? "", 10);
 		if (Number.isFinite(contentLength) && contentLength > IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD) {
@@ -35,8 +38,12 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 		const pathEntries = form
 			.getAll("paths")
 			.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
-		if (pathEntries.length > 0 && !isLoopbackRequest(c))
-			return c.json({ error: "Filesystem path imports are only available on a local daemon" }, 400);
+		if (pathEntries.length > 0) {
+			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+			if (!isLoopbackRequest(c))
+				return c.json({ error: "Filesystem path imports are only available on a local daemon" }, 400);
+		}
 		if (uploadedEntries.length + pathEntries.length === 0)
 			return c.json({ error: "At least one file is required" }, 400);
 		const requestIdempotencyKey = c.req.header("Idempotency-Key")?.trim();

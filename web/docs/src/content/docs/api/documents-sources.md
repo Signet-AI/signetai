@@ -140,6 +140,12 @@ Sources connect read-only external knowledge bases to Signet recall without
 turning them into ordinary saved memories. Supported source kinds are
 `obsidian`, `discord`, `github`, `notion`, `web`, and `import`.
 
+In `team` and `hybrid` mode, permissions apply as follows:
+
+- `POST /api/sources/import` requires `documents`. Its `paths` field requires `admin`.
+- Routes that read or browse the daemon host require `admin`: `POST /api/sources/obsidian`, `POST /api/sources/pick-files`, `POST /api/sources/pick-directory`, and `POST /api/sources/discord` with `syncMode: "desktop-cache"` or `desktopCachePath`.
+- Other source changes require `connectors`: `POST /api/sources/discord`, `github`, `notion`, and `web`, `POST /api/sources/:sourceId/snapshot/import`, and `DELETE /api/sources/:sourceId`.
+
 ### GET /api/sources
 
 List configured sources and lightweight index stats for the current daemon
@@ -216,9 +222,9 @@ provenance. Document formats are converted to a Markdown projection. Raw upload
 bytes are not retained by the importer.
 
 A local desktop daemon may also receive repeated `paths` fields instead of
-`files`; it reads those paths directly only for loopback requests. Remote
-clients must upload file bytes through `files`, so a desktop path is never
-interpreted by a remote daemon.
+`files`; it reads those paths directly only for loopback requests from a caller
+with `admin` permission. Remote clients must upload file bytes through `files`,
+so a desktop path is never interpreted by a remote daemon.
 
 Imported artifacts are available immediately through source-backed recall, with
 `source_id` and `source_path` pointing back to the imported source. Import
