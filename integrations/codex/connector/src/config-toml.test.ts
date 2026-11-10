@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -398,6 +398,21 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain("[mcp_servers.signet]");
 		expect(content).not.toContain("[mcp_servers.signet.http_headers]");
 		expect(content).not.toContain("sig_sk_codex_old_secret");
+	});
+
+	test.skipIf(process.platform === "win32")("keeps Codex files that hold the API key private", async () => {
+		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850";
+		process.env.SIGNET_API_KEY = "sig_sk_codex_private_secret";
+		mkdirSync(join(configPath, ".."), { recursive: true });
+		writeFileSync(configPath, "model = 'gpt'\n", "utf-8");
+		chmodSync(configPath, 0o644);
+
+		await connector().install(tempHome);
+
+		expect(readFileSync(configPath, "utf-8")).toContain("sig_sk_codex_private_secret");
+		expect(statSync(configPath).mode & 0o777).toBe(0o600);
+		expect(readFileSync(hooksPath, "utf-8")).toContain("sig_sk_codex_private_secret");
+		expect(statSync(hooksPath).mode & 0o777).toBe(0o600);
 	});
 
 	test("still writes Codex lifecycle hooks when remote HTTP MCP is configured", async () => {

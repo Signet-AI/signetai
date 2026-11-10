@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ForgeConnector } from "./src/index.js";
@@ -129,6 +139,21 @@ describe("ForgeConnector.install", () => {
 				headers: { Authorization: "Bearer sig_sk_forge_test_secret" },
 			},
 		});
+	});
+
+	it.skipIf(process.platform === "win32")("keeps an MCP config that holds the API key private", async () => {
+		writeIdentity(tmpRoot);
+		const configPath = join(tmpRoot, ".forge", ".mcp.json");
+		mkdirSync(join(tmpRoot, ".forge"), { recursive: true });
+		writeFileSync(configPath, JSON.stringify({ mcpServers: { other: { command: "other" } } }), "utf-8");
+		chmodSync(configPath, 0o644);
+		process.env.SIGNET_DAEMON_URL = "https://daemon.example.test:3850";
+		process.env.SIGNET_API_KEY = "sig_sk_forge_test_secret";
+
+		await new ForgeConnector().install(tmpRoot);
+
+		expect(readFileSync(configPath, "utf-8")).toContain("sig_sk_forge_test_secret");
+		expect(statSync(configPath).mode & 0o777).toBe(0o600);
 	});
 
 	it("strips legacy Signet block from source AGENTS.md", async () => {

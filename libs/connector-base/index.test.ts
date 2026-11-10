@@ -1,5 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import {
@@ -12,12 +23,14 @@ import {
 	buildSignetRuntimeEnv,
 	isChildOf,
 	isJsonObject,
+	keepSignetApiKeyFilePrivate,
 	readTrimmedEnv,
 	removeManagedExtensionFile,
 	resolveRemoteDaemonUrl,
 	resolveSignetCliCommand,
 	resolveSignetDaemonUrl,
 	resolveSignetMcpCommand,
+	writeConfigText,
 	resolveSignetWorkspacePath,
 } from "./src/index";
 import { parseLenientJsonObject } from "./src/lenient-json";
@@ -112,6 +125,83 @@ describe("atomicWriteText", () => {
 
 		expect(readFileSync(file, "utf-8")).toBe("{\n  // preserved\n}\n");
 		if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
+	});
+});
+
+describe("files that hold the Signet API key", () => {
+	const key = "sig_sk_private_mode_test";
+	let previousKey: string | undefined;
+	let previousToken: string | undefined;
+
+	beforeEach(() => {
+		previousKey = process.env.SIGNET_API_KEY;
+		previousToken = process.env.SIGNET_TOKEN;
+		process.env.SIGNET_API_KEY = key;
+		Reflect.deleteProperty(process.env, "SIGNET_TOKEN");
+		dir = mkdtempSync(join(tmpdir(), "signet-connector-base-key-mode-"));
+	});
+
+	afterEach(() => {
+		if (previousKey === undefined) Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+		else process.env.SIGNET_API_KEY = previousKey;
+		if (previousToken === undefined) Reflect.deleteProperty(process.env, "SIGNET_TOKEN");
+		else process.env.SIGNET_TOKEN = previousToken;
+	});
+
+	it.skipIf(process.platform === "win32")("writes them owner-only and keeps other files as they were", () => {
+		const created = join(dir, "created.json");
+		atomicWriteText(created, `{"key":"${key}"}`);
+		expect(statSync(created).mode & 0o777).toBe(0o600);
+
+		const shared = join(dir, "shared.json");
+		writeFileSync(shared, "{}", "utf-8");
+		chmodSync(shared, 0o644);
+		atomicWriteText(shared, `{"key":"${key}"}`);
+		expect(statSync(shared).mode & 0o777).toBe(0o600);
+
+		const script = join(dir, "hook.sh");
+		writeFileSync(script, "#!/bin/sh\n", "utf-8");
+		chmodSync(script, 0o755);
+		atomicWriteText(script, `#!/bin/sh\nSIGNET_API_KEY=${key} signet hook\n`);
+		expect(statSync(script).mode & 0o777).toBe(0o700);
+
+		const plain = join(dir, "plain.json");
+		writeFileSync(plain, "{}", "utf-8");
+		chmodSync(plain, 0o644);
+		atomicWriteText(plain, `{"other":true}`);
+		expect(statSync(plain).mode & 0o777).toBe(0o644);
+	});
+
+	it.skipIf(process.platform === "win32")("writes harness config in place through symlinks", () => {
+		const target = join(dir, "dotfiles-config.toml");
+		writeFileSync(target, "[other]\n", "utf-8");
+		chmodSync(target, 0o644);
+		const link = join(dir, "config.toml");
+		symlinkSync(target, link);
+
+		writeConfigText(link, `[mcp]\nauth = "${key}"\n`);
+
+		expect(lstatSync(link).isSymbolicLink()).toBe(true);
+		expect(readFileSync(target, "utf-8")).toContain(key);
+		expect(statSync(target).mode & 0o777).toBe(0o600);
+
+		const fresh = join(dir, "fresh.toml");
+		writeConfigText(fresh, `auth = "${key}"\n`);
+		expect(statSync(fresh).mode & 0o777).toBe(0o600);
+	});
+
+	it.skipIf(process.platform === "win32")("tightens an unchanged file that already holds the key", () => {
+		const file = join(dir, "config.toml");
+		writeFileSync(file, `auth = "${key}"\n`, "utf-8");
+		chmodSync(file, 0o644);
+		keepSignetApiKeyFilePrivate(file);
+		expect(statSync(file).mode & 0o777).toBe(0o600);
+
+		const other = join(dir, "other.toml");
+		writeFileSync(other, "x = 1\n", "utf-8");
+		chmodSync(other, 0o644);
+		keepSignetApiKeyFilePrivate(other);
+		expect(statSync(other).mode & 0o777).toBe(0o644);
 	});
 });
 

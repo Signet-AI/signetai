@@ -23,6 +23,7 @@ import {
 	resolveSignetApiKey,
 	resolveSignetCliCommand,
 	resolveSignetMcpCommand,
+	writeConfigText,
 } from "@signet/connector-base";
 import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
 
@@ -572,7 +573,7 @@ export function writeCodexPluginBundle(input: {
 	)) {
 		const path = join(marketplaceRoot, file.relativePath);
 		mkdirSync(join(path, ".."), { recursive: true });
-		writeFileSync(path, file.content, "utf-8");
+		writeConfigText(path, file.content);
 		filesWritten.push(path);
 	}
 	if (windowsHookCommand && !filesWritten.includes(windowsHookCommand)) filesWritten.push(windowsHookCommand);
@@ -754,7 +755,7 @@ function writeWindowsHookWrapper(
 	const invocation = signetArgs.map(windowsBatchArg).join(" ");
 	lines.push(`${windowsBatchEntrypoint(signetArgs[0] ?? "")}${invocation} %*`);
 	lines.push("exit /b %ERRORLEVEL%", "");
-	writeFileSync(wrapperPath, `${lines.join("\r\n")}`, "utf-8");
+	writeConfigText(wrapperPath, `${lines.join("\r\n")}`);
 	return wrapperPath;
 }
 
@@ -1082,7 +1083,7 @@ function patchHookTrustState(path: string, entries: readonly HookTrustEntry[]): 
 		updated = updated.replace("[mcp_servers.signet]", "# Signet MCP server\n[mcp_servers.signet]");
 	}
 	if (updated === content) return false;
-	writeFileSync(path, updated);
+	writeConfigText(path, updated);
 	return true;
 }
 
@@ -1111,7 +1112,7 @@ function removeHookTrustState(path: string, entries: readonly HookTrustEntry[]):
 		.replace(/\n{3,}/g, "\n\n")
 		.trimEnd()}\n`;
 	if (updated === content) return false;
-	writeFileSync(path, updated);
+	writeConfigText(path, updated);
 	return true;
 }
 
@@ -1177,20 +1178,20 @@ function patchConfigToml(path: string, mcp: SignetMcpConfig): boolean {
 	const block = buildMcpBlock(mcp);
 
 	if (!existsSync(path)) {
-		writeFileSync(path, block);
+		writeConfigText(path, block);
 		return true;
 	}
 
 	const content = readFileSync(path, "utf-8");
 
 	if (!content.includes("[mcp_servers.signet]")) {
-		writeFileSync(path, `${content.trimEnd()}\n\n${block}`);
+		writeConfigText(path, `${content.trimEnd()}\n\n${block}`);
 		return true;
 	}
 	unpatchConfigToml(path);
 	const updated = existsSync(path) ? readFileSync(path, "utf-8").trim() : "";
 	const prefix = updated.length > 0 ? `${updated}\n\n` : "";
-	writeFileSync(path, prefix + block);
+	writeConfigText(path, prefix + block);
 	return true;
 }
 
@@ -1261,7 +1262,7 @@ function unpatchNativePluginConfig(path: string): boolean {
 	const content = readFileSync(path, "utf-8");
 	const updated = removeTomlSection(removeTomlSection(content, marketplaceHeader), pluginHeader);
 	if (updated === content) return false;
-	writeFileSync(path, updated);
+	writeConfigText(path, updated);
 	return true;
 }
 
