@@ -1371,7 +1371,7 @@ const signetPlugin = {
 								aggregateBudget: aggregate_budget,
 								saveAggregate: save_aggregate,
 								sessionKey: session_key,
-								agentId: agent_id ?? readString(toolCtx.agentId),
+								agentId: readString(agent_id) ?? readString(toolCtx.agentId),
 								includeRecalled: include_recalled,
 							});
 							const parsed = parseRecallPayload(recall);
@@ -1496,7 +1496,7 @@ const signetPlugin = {
 								...opts,
 								sessionKey: session_key,
 								currentSessionKey: current_session_key,
-								agentId: agent_id ?? readString(toolCtx.agentId),
+								agentId: readString(agent_id) ?? readString(toolCtx.agentId),
 								project,
 								limit,
 							});
