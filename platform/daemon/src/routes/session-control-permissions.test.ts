@@ -337,6 +337,25 @@ describe("session control permissions in team mode", () => {
 		}
 	});
 
+	it("keeps an expired session in its recorded project", async () => {
+		await transcripts.upsertSessionTranscriptAsync("expired", "user: hi", "codex", "proj-a", "agent-a");
+		const res = await teamApp().request("http://localhost/api/hooks/session-start", {
+			method: "POST",
+			headers: bearer("agent", { scope: { agent: "agent-a", project: "proj-b" } }),
+			body: JSON.stringify({
+				harness: "codex",
+				sessionKey: "expired",
+				agentId: "agent-a",
+				runtimePath: "plugin",
+				claimOnly: true,
+				project: "proj-b",
+			}),
+		});
+		expect(res.status).toBe(403);
+		expect(presence.getAgentPresenceForSession("expired")).toBeNull();
+		expect(tracker.hasSession("expired", "agent-a")).toBe(false);
+	});
+
 	it("lets each agent use its own claim on a shared session key", async () => {
 		expect(tracker.claimSession("shared", "plugin", "agent-a", "codex").ok).toBe(true);
 		expect(tracker.claimSession("shared", "plugin", "agent-b", "codex").ok).toBe(true);
