@@ -3,7 +3,8 @@ import { SectionHeading } from "@/components/dashboard/heading";
 import { SearchField } from "@/components/ui/field";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { api, type Memory } from "@/lib/api";
+import { api, type Memory, viewsAllAgents } from "@/lib/api";
+import { useSession } from "@/lib/session";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import { useMemo, useState } from "react";
@@ -19,6 +20,7 @@ export function HomeRecentMemories() {
 	const [query, setQuery] = useState("");
 	const [sourceFilter, setSourceFilter] = useState("all");
 	const trimmedQuery = query.trim();
+	const memoryScope = viewsAllAgents(useSession()) ? "all" : "own";
 	const memoriesQuery = useAsync(
 		async () => {
 			try {
@@ -28,7 +30,7 @@ export function HomeRecentMemories() {
 				return { memories: null, query: trimmedQuery };
 			}
 		},
-		{ key: `recent-memories:${trimmedQuery}`, deps: [trimmedQuery], intervalMs: 30_000 },
+		{ key: `recent-memories:${memoryScope}:${trimmedQuery}`, deps: [trimmedQuery], intervalMs: 30_000 },
 	);
 	const memories = memoriesQuery.data?.memories ?? [];
 	const sourceOptions = useMemo(

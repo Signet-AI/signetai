@@ -2,7 +2,7 @@ import { dashboardQueryCache } from "./query-cache";
 import { installDemoApi } from "./demo";
 import { getDesktopBridge } from "./desktop";
 import { onboardingPreviewFetch, installOnboardingPreview } from "./onboarding-preview";
-import { authHeaders, can, currentSession, noteUnauthorized } from "./session";
+import { type Session, authHeaders, can, currentSession, noteUnauthorized } from "./session";
 
 export const onboardingPreview = import.meta.env.DEV && import.meta.env.VITE_ONBOARDING_PREVIEW === true;
 
@@ -1047,11 +1047,14 @@ export async function streamBoardEvents(
 	}
 }
 
+export function viewsAllAgents(session: Session): boolean {
+	if (session.kind === "checking" || session.kind === "unreachable") return false;
+	if (session.kind === "signed-out" && !session.renewal) return false;
+	return can(session, "admin");
+}
+
 function memoryViewAgent(requested: string | undefined): string | undefined {
-	if (requested !== undefined) return requested;
-	const session = currentSession();
-	if (session.kind !== "open" && session.kind !== "signed-in") return undefined;
-	return can(session, "admin") ? "all" : undefined;
+	return requested ?? (viewsAllAgents(currentSession()) ? "all" : undefined);
 }
 
 export const api = {

@@ -5,7 +5,8 @@ import { HomeConnectorsPanel, connectorIssue } from "@/components/home/connector
 import { ActivityHeatmap, type DayBucket, type KpiData, KpiFooter, useDateString } from "@/components/home/kpi";
 import { HomeRecentMemories } from "@/components/home/recent-memories";
 import { HomeSecretsPanel } from "@/components/home/secrets";
-import { type HarnessConnector, type SignetSource, api } from "@/lib/api";
+import { type HarnessConnector, type SignetSource, api, viewsAllAgents } from "@/lib/api";
+import { useSession } from "@/lib/session";
 import { useView } from "@/lib/view-context";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
@@ -17,8 +18,9 @@ export function HomeView() {
 	const stats = useAsync(() => api.getKnowledgeStats(), { key: "knowledge-stats", intervalMs: 30000 }).data;
 	const sourcesQuery = useAsync(() => api.getSources(), { key: "sources", intervalMs: 30000 });
 	const sources = sourcesQuery.data?.sources;
+	const memoryScope = viewsAllAgents(useSession()) ? "all" : "own";
 	const timeline = useAsync(() => api.getMemoryTimeline(new Date().getTimezoneOffset()), {
-		key: `timeline:${new Date().getTimezoneOffset()}`,
+		key: `timeline:${new Date().getTimezoneOffset()}:${memoryScope}`,
 	}).data;
 	const today = useDateString(new Date().toLocaleDateString("en-US"));
 	const harnessesQuery = useAsync(() => api.getHarnesses(), { key: "harnesses", intervalMs: 30000 });
