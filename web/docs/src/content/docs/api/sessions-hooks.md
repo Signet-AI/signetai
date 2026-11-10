@@ -670,7 +670,8 @@ agent-scoped.
 
 Toggle bypass for a session. When enabled, all hook endpoints for this session
 return empty no-op responses with `bypassed: true`. MCP tools are not affected.
-Both raw keys and `session:<uuid>` forms are accepted.
+Both raw keys and `session:<uuid>` forms are accepted. Requires `modify`
+permission, as does `POST /api/sessions/:key/renew`.
 
 **Request body**
 

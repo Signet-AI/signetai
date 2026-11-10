@@ -99,6 +99,12 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
+	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c, next) => {
+		return requirePermission("modify", authConfig)(c, next);
+	});
+	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/renew", async (c, next) => {
+		return requirePermission("modify", authConfig)(c, next);
+	});
 	app.use("/api/git/*", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
 	});
@@ -174,7 +180,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 					project: scopedProject.project,
 					limit,
 				}),
-			"routes/session-routes.ts:166",
+			"routes/session-routes.ts:172",
 		);
 		return c.json({ query, hits, count: hits.length });
 	});
@@ -347,7 +353,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:347",
+			"routes/session-routes.ts:353",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -398,7 +404,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:357");
+		}, "routes/session-routes.ts:363");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {
