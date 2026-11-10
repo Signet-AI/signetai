@@ -17,6 +17,11 @@ declares whether the caller is the `plugin` or `legacy` runtime path. The
 daemon enforces that only one path can be active per session — subsequent
 calls from the other path return `409`.
 
+Hooks that claim, renew, or end a session require `remember` permission:
+`session-start`, `user-prompt-submit`, `session-end`,
+`session-checkpoint-extract`, `pre-compaction`, and `compaction-complete`. They
+act only on sessions of the credential's agent.
+
 ### POST /api/hooks/session-start
 
 Called at the beginning of a session. Returns bounded Session Continuity previews,
@@ -670,8 +675,9 @@ agent-scoped.
 
 Toggle bypass for a session. When enabled, all hook endpoints for this session
 return empty no-op responses with `bypassed: true`. MCP tools are not affected.
-Both raw keys and `session:<uuid>` forms are accepted. Requires `modify`
-permission, as does `POST /api/sessions/:key/renew`.
+Both raw keys and `session:<uuid>` forms are accepted. Requires `remember`
+permission, as does `POST /api/sessions/:key/renew`. A project-scoped
+credential can only control sessions in its project.
 
 **Request body**
 

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import type { TokenRole } from "../auth";
+import type { Permission, TokenRole, TokenScope } from "../auth";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 let agentsDir: string;
@@ -11,6 +11,7 @@ let appFactory: typeof import("hono").Hono;
 let createAuthMiddleware: typeof import("../auth").createAuthMiddleware;
 let createToken: typeof import("../auth").createToken;
 let registerSessionRoutes: typeof import("./session-routes").registerSessionRoutes;
+let registerHooksRoutes: typeof import("./hooks-routes").registerHooksRoutes;
 let initDbAccessor: typeof import("../db-accessor").initDbAccessor;
 let closeDbAccessor: typeof import("../db-accessor").closeDbAccessor;
 let presence: typeof import("../cross-agent");
@@ -44,14 +45,23 @@ function teamApp(): Hono {
 		gitPush: async () => ({}),
 		gitSync: async () => ({}),
 	});
+	registerHooksRoutes(app);
 	return app;
 }
 
-function bearer(role: TokenRole): Record<string, string> {
+function bearer(
+	role: TokenRole,
+	options: { readonly scope?: TokenScope; readonly permissions?: readonly Permission[] } = {},
+): Record<string, string> {
 	if (!state.authSecret) throw new Error("expected auth secret");
 	const token = createToken(
 		state.authSecret,
-		{ sub: `session-control-${role}`, role, scope: { agent: "agent-a" } },
+		{
+			sub: `session-control-${role}`,
+			role,
+			scope: options.scope ?? { agent: "agent-a" },
+			...(options.permissions ? { permissions: options.permissions } : {}),
+		},
 		60,
 	);
 	return { authorization: `Bearer ${token}`, "content-type": "application/json" };
@@ -66,6 +76,7 @@ beforeAll(async () => {
 	appFactory = (await import("hono")).Hono;
 	({ createAuthMiddleware, createToken } = await import("../auth"));
 	({ registerSessionRoutes } = await import("./session-routes"));
+	({ registerHooksRoutes } = await import("./hooks-routes"));
 	({ initDbAccessor, closeDbAccessor } = await import("../db-accessor"));
 	presence = await import("../cross-agent");
 	tracker = await import("../session-tracker");
@@ -78,6 +89,8 @@ beforeAll(async () => {
 beforeEach(() => {
 	presence.clearAllPresence();
 	tracker.unbypassSession("sess-a", "agent-a");
+	tracker.releaseSession("sess-a", "agent-a");
+	tracker.releaseSession("sess-b", "agent-b");
 	presence.upsertAgentPresence({
 		sessionKey: "sess-a",
 		agentId: "agent-a",
@@ -116,7 +129,7 @@ describe("session control permissions in team mode", () => {
 		expect(renew.status).toBe(403);
 	});
 
-	it("lets a credential with modify permission manage its scoped session", async () => {
+	it("lets a write-capable credential manage its scoped session", async () => {
 		const bypass = await teamApp().request("http://localhost/api/sessions/sess-a/bypass?agent_id=agent-a", {
 			method: "POST",
 			headers: bearer("agent"),
@@ -130,6 +143,95 @@ describe("session control permissions in team mode", () => {
 			headers: bearer("agent"),
 		});
 		expect(renew.status).toBe(200);
+	});
+
+	it("lets a default connector key manage its scoped session", async () => {
+		const connector = bearer("agent", { permissions: ["recall", "remember", "documents"] });
+		const bypass = await teamApp().request("http://localhost/api/sessions/sess-a/bypass?agent_id=agent-a", {
+			method: "POST",
+			headers: connector,
+			body: JSON.stringify({ enabled: true }),
+		});
+		expect(bypass.status).toBe(200);
+		expect(tracker.isSessionBypassed("sess-a", "agent-a")).toBe(true);
+
+		const renew = await teamApp().request("http://localhost/api/sessions/sess-a/renew?agent_id=agent-a", {
+			method: "POST",
+			headers: connector,
+		});
+		expect(renew.status).toBe(200);
+	});
+
+	it("denies session controls outside the credential's project", async () => {
+		const otherProject = bearer("agent", { scope: { agent: "agent-a", project: "proj-b" } });
+		const bypass = await teamApp().request("http://localhost/api/sessions/sess-a/bypass?agent_id=agent-a", {
+			method: "POST",
+			headers: otherProject,
+			body: JSON.stringify({ enabled: true }),
+		});
+		expect(bypass.status).toBe(403);
+		expect(tracker.isSessionBypassed("sess-a", "agent-a")).toBe(false);
+
+		const renew = await teamApp().request("http://localhost/api/sessions/sess-a/renew?agent_id=agent-a", {
+			method: "POST",
+			headers: otherProject,
+		});
+		expect(renew.status).toBe(403);
+
+		const sameProject = bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } });
+		const allowed = await teamApp().request("http://localhost/api/sessions/sess-a/renew?agent_id=agent-a", {
+			method: "POST",
+			headers: sameProject,
+		});
+		expect(allowed.status).toBe(200);
+	});
+
+	it("denies session lifecycle hooks to read-only credentials", async () => {
+		expect(tracker.claimSession("sess-a", "plugin", "agent-a", "codex").ok).toBe(true);
+		const readonly = bearer("readonly");
+		const hooks = [
+			["/api/hooks/session-end", { harness: "codex", sessionKey: "sess-a", agentId: "agent-a", runtimePath: "legacy" }],
+			[
+				"/api/hooks/session-start",
+				{ harness: "codex", sessionKey: "sess-a", agentId: "agent-a", runtimePath: "legacy", claimOnly: true },
+			],
+			[
+				"/api/hooks/user-prompt-submit",
+				{ harness: "codex", sessionKey: "sess-a", agentId: "agent-a", runtimePath: "legacy", userPrompt: "hi" },
+			],
+			["/api/hooks/session-checkpoint-extract", { harness: "codex", sessionKey: "sess-a", runtimePath: "legacy" }],
+			["/api/hooks/pre-compaction", { harness: "codex", sessionKey: "sess-a", runtimePath: "legacy" }],
+			[
+				"/api/hooks/compaction-complete",
+				{ harness: "codex", sessionKey: "sess-a", runtimePath: "legacy", summary: "s" },
+			],
+		] as const;
+		for (const [path, body] of hooks) {
+			const res = await teamApp().request(`http://localhost${path}`, {
+				method: "POST",
+				headers: readonly,
+				body: JSON.stringify(body),
+			});
+			expect({ path, status: res.status }).toEqual({ path, status: 403 });
+		}
+		expect(tracker.claimSession("sess-a", "plugin", "agent-a", "codex").ok).toBe(true);
+	});
+
+	it("does not let a hook claim another agent's session", async () => {
+		expect(tracker.claimSession("sess-b", "plugin", "agent-b", "codex").ok).toBe(true);
+		for (const [path, body] of [
+			["/api/hooks/session-checkpoint-extract", { harness: "codex", sessionKey: "sess-b", agentId: "agent-b" }],
+			["/api/hooks/pre-compaction", { harness: "codex", sessionKey: "sess-b", agentId: "agent-b" }],
+			["/api/hooks/compaction-complete", { harness: "codex", sessionKey: "sess-b", agentId: "agent-b", summary: "s" }],
+		] as const) {
+			const res = await teamApp().request(`http://localhost${path}`, {
+				method: "POST",
+				headers: { ...bearer("agent"), "x-signet-runtime-path": "legacy" },
+				body: JSON.stringify({ ...body, runtimePath: "legacy" }),
+			});
+			expect({ path, status: res.status }).toEqual({ path, status: 403 });
+		}
+		expect(tracker.claimSession("sess-b", "plugin", "agent-b", "codex").ok).toBe(true);
 	});
 
 	it("still reads the session list with a read-only credential", async () => {
