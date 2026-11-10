@@ -15,6 +15,7 @@ let server: ReturnType<typeof import("./http-server").createSignetHttpServer>;
 let port = 0;
 let handled = 0;
 let state: typeof import("./routes/state.js");
+let createToken: typeof import("./auth").createToken;
 
 function writeAuthMode(mode: "local" | "hybrid" | "team"): void {
 	writeFileSync(
@@ -37,6 +38,7 @@ function send(method: string, headers: Record<string, string>, path = "/api/secr
 
 beforeAll(async () => {
 	state = await import("./routes/state.js");
+	({ createToken } = await import("./auth"));
 	const { Hono } = await import("hono");
 	const { createSignetHttpServer } = await import("./http-server");
 	const { registerGlobalMiddleware } = await import("./middleware");
@@ -71,6 +73,7 @@ describe("browser writes without credentials", () => {
 		expect(await send("POST", { ...textPlain, origin: "http://evil.example" })).toBe(403);
 		expect(await send("POST", { ...textPlain, origin: "null" })).toBe(403);
 		expect(await send("POST", { ...textPlain, "sec-fetch-site": "cross-site" })).toBe(403);
+		expect(await send("POST", { origin: `http://127.0.0.1:${port}`, "sec-fetch-site": "cross-site" })).toBe(403);
 		expect(await send("DELETE", { origin: "http://evil.example" })).toBe(403);
 		expect(handled).toBe(before);
 	});
@@ -87,16 +90,21 @@ describe("browser writes without credentials", () => {
 		expect(await send("POST", { origin: "http://127.0.0.1:3850" })).toBe(200);
 		expect(await send("POST", { origin: `http://127.0.0.1:${port}` })).toBe(200);
 		expect(await send("POST", { host: `localhost:${port}`, origin: `http://localhost:${port}` })).toBe(200);
+		expect(await send("POST", { host: `localhost.:${port}`, origin: `http://localhost.:${port}` })).toBe(200);
 		expect(await send("POST", { "sec-fetch-site": "same-origin" })).toBe(200);
 		expect(await send("POST", { origin: "chrome-extension://abcdefghijklmnop" })).toBe(200);
 		expect(await send("POST", { origin: "moz-extension://4b1f1c1e-0000-4000-8000-000000000000" })).toBe(200);
 		expect(await send("GET", { origin: "http://evil.example" })).toBe(200);
 	});
 
-	it("applies to unauthenticated loopback trust in hybrid mode only", async () => {
+	it("applies in hybrid mode unless the request carries a verified credential", async () => {
 		writeAuthMode("hybrid");
 		expect(await send("POST", { origin: "http://evil.example" })).toBe(403);
-		expect(await send("POST", { origin: "http://evil.example", authorization: "Bearer not-a-token" })).toBe(200);
+		expect(await send("POST", { origin: "http://evil.example", authorization: "Bearer not-a-token" })).toBe(403);
+		expect(await send("POST", { origin: "http://evil.example", authorization: "Basic eDp4" })).toBe(403);
+		if (!state.authSecret) throw new Error("expected auth secret in hybrid mode");
+		const token = createToken(state.authSecret, { sub: "origin-test", role: "agent", scope: {} }, 60);
+		expect(await send("POST", { origin: "http://evil.example", authorization: `Bearer ${token}` })).toBe(200);
 		expect(await send("POST", { origin: "https://signet.example" }, "/api/auth/login")).toBe(200);
 
 		writeAuthMode("team");

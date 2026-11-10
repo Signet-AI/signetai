@@ -3,7 +3,6 @@ import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { createAuthMiddleware, isAuthOpenPath, verifyApiKey } from "./auth";
-import { isLocalhost } from "./auth/middleware";
 import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { analyticsCollector, authConfig, authSecret, isAllowedOrigin, shuttingDown } from "./routes/state.js";
@@ -12,19 +11,16 @@ const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const EXTENSION_ORIGIN = /^(chrome-extension|moz-extension|safari-web-extension):\/\//;
 
-function trustsRequestWithoutCredential(c: Context): boolean {
-	if (authConfig.mode === "local") return true;
-	return authConfig.mode === "hybrid" && !c.req.header("authorization") && isLocalhost(c);
-}
-
 function isForeignBrowserWrite(c: Context): boolean {
 	if (!UNSAFE_METHODS.has(c.req.method) || isAuthOpenPath(c.req.path)) return false;
 	const origin = c.req.header("origin");
-	if (origin === undefined) return c.req.header("sec-fetch-site") === "cross-site";
-	if (isAllowedOrigin(origin) || EXTENSION_ORIGIN.test(origin)) return false;
+	if (origin !== undefined && (isAllowedOrigin(origin) || EXTENSION_ORIGIN.test(origin))) return false;
+	if (c.req.header("sec-fetch-site") === "cross-site") return true;
+	if (origin === undefined) return false;
 	const url = new URL(c.req.url);
 	if (origin !== url.origin) return true;
-	return !LOOPBACK_HOSTNAMES.has(url.hostname) && isIP(url.hostname.replace(/^\[|\]$/g, "")) === 0;
+	const host = url.hostname.replace(/\.$/, "");
+	return !LOOPBACK_HOSTNAMES.has(host) && isIP(host.replace(/^\[|\]$/g, "")) === 0;
 }
 
 export function registerGlobalMiddleware(app: Hono): void {
@@ -35,12 +31,6 @@ export function registerGlobalMiddleware(app: Hono): void {
 			credentials: true,
 		}),
 	);
-	app.use("*", async (c, next) => {
-		if (trustsRequestWithoutCredential(c) && isForeignBrowserWrite(c)) {
-			return c.json({ error: "cross-origin request rejected" }, 403);
-		}
-		return next();
-	});
 	app.use("*", async (c, next) => {
 		if (shuttingDown && !c.req.path.startsWith("/health")) {
 			c.status(503);
@@ -55,6 +45,12 @@ export function registerGlobalMiddleware(app: Hono): void {
 		}
 		const mw = createAuthMiddleware(authConfig, authSecret, (token) => verifyApiKey(getDbAccessor(), token));
 		return mw(c, next);
+	});
+	app.use("*", async (c, next) => {
+		if (authConfig.mode !== "team" && !c.get("auth")?.claims && isForeignBrowserWrite(c)) {
+			return c.json({ error: "cross-origin request rejected" }, 403);
+		}
+		return next();
 	});
 	const limitBody = bodyLimit({
 		maxSize: 10 * 1_048_576,

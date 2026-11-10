@@ -47,7 +47,7 @@ export function getPeerAddress(c: Context): string | null {
 	}
 }
 
-export function isLocalhost(c: Context): boolean {
+function isLocalhost(c: Context): boolean {
 	const remote = getPeerAddress(c);
 	return remote ? LOOPBACK.has(remote) : false;
 }
