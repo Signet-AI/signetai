@@ -162,6 +162,10 @@ describe("ClaudeCodeConnector wake hooks", () => {
 	const readHooks = () => JSON.parse(readFileSync(settingsFile(), "utf-8")).hooks as Record<string, unknown[]>;
 	const commandsOf = (groups: unknown[]) =>
 		groups.flatMap((g) => ((g as { hooks: Array<Record<string, unknown>> }).hooks ?? []).map((h) => h));
+	const stopHooksMatching = (hooks: Record<string, unknown[]>, pattern: RegExp) =>
+		commandsOf(hooks.Stop ?? []).filter((h) => pattern.test(String(h.command)));
+	const stopCapture = (hooks: Record<string, unknown[]>) => stopHooksMatching(hooks, /\bhook stop\b/);
+	const stopWake = (hooks: Record<string, unknown[]>) => stopHooksMatching(hooks, /\bhook wake\b/);
 
 	it("installs asyncRewake wake hooks on SessionStart and Stop", async () => {
 		await new ClaudeCodeConnector().install(tmpRoot);
@@ -173,9 +177,28 @@ describe("ClaudeCodeConnector wake hooks", () => {
 		expect(wakeStart[0]?.asyncRewake).toBe(true);
 		expect(wakeStart[0]?.timeout).toBe(3600);
 		expect(String(wakeStart[0]?.command)).toContain('hook wake -H claude-code --project "');
-		const stop = commandsOf(hooks.Stop ?? []).filter((h) => String(h.command).includes("hook wake"));
+		const stop = stopWake(hooks);
 		expect(stop).toHaveLength(1);
 		expect(stop[0]?.asyncRewake).toBe(true);
+	});
+
+	it("installs an async Stop hook that records the turn-end reply, and no SubagentStop hook", async () => {
+		await new ClaudeCodeConnector().install(tmpRoot);
+		const hooks = readHooks();
+		const capture = stopCapture(hooks);
+		expect(capture).toHaveLength(1);
+		expect(String(capture[0]?.command)).toContain("hook stop -H claude-code");
+		expect(capture[0]?.async).toBe(true);
+		expect(capture[0]?.asyncRewake).toBeUndefined();
+		expect(hooks.SubagentStop).toBeUndefined();
+	});
+
+	it("stop:false leaves the reply capture out and keeps the wake hook", async () => {
+		await new ClaudeCodeConnector().install(tmpRoot);
+		await new ClaudeCodeConnector({ hooks: { stop: false } } as never).install(tmpRoot);
+		const hooks = readHooks();
+		expect(stopCapture(hooks)).toHaveLength(0);
+		expect(stopWake(hooks)).toHaveLength(1);
 	});
 
 	it("is idempotent and preserves user Stop hooks", async () => {
@@ -192,6 +215,7 @@ describe("ClaudeCodeConnector wake hooks", () => {
 		const hooks = readHooks();
 		const stop = commandsOf(hooks.Stop ?? []);
 		expect(stop.filter((h) => String(h.command).includes("hook wake"))).toHaveLength(1);
+		expect(stopCapture(hooks)).toHaveLength(1);
 		expect(stop.filter((h) => h.command === "echo mine")).toHaveLength(1);
 		expect(commandsOf(hooks.SessionStart ?? []).filter((h) => String(h.command).includes("hook wake"))).toHaveLength(1);
 	});
@@ -223,7 +247,8 @@ describe("ClaudeCodeConnector wake hooks", () => {
 		await new ClaudeCodeConnector({ hooks: { sessionStart: false } } as never).install(tmpRoot);
 		const hooks = readHooks();
 		expect(commandsOf(hooks.SessionStart ?? []).map((h) => h.command)).toEqual(["echo start"]);
-		expect(hooks.Stop).toBeUndefined();
+		expect(stopWake(hooks)).toHaveLength(0);
+		expect(stopCapture(hooks)).toHaveLength(1);
 	});
 
 	it("sessionStart:false drops empty SessionStart", async () => {
@@ -231,6 +256,12 @@ describe("ClaudeCodeConnector wake hooks", () => {
 		await new ClaudeCodeConnector({ hooks: { sessionStart: false } } as never).install(tmpRoot);
 		const hooks = readHooks();
 		expect(hooks.SessionStart).toBeUndefined();
-		expect(hooks.Stop).toBeUndefined();
+		expect(stopWake(hooks)).toHaveLength(0);
+	});
+
+	it("drops an empty Stop when both the wake hook and the reply capture are off", async () => {
+		await new ClaudeCodeConnector().install(tmpRoot);
+		await new ClaudeCodeConnector({ hooks: { sessionStart: false, stop: false } } as never).install(tmpRoot);
+		expect(readHooks().Stop).toBeUndefined();
 	});
 });

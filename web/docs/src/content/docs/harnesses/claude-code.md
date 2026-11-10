@@ -28,10 +28,17 @@ The connector writes hooks to `~/.claude/settings.json`:
 | `PreToolUse` | `signet hook notifications -H claude-code --hook PreToolUse --project "$(pwd)" --hook-json` | 3 seconds |
 | `PreCompact` | `signet hook pre-compaction -H claude-code --project "$(pwd)"` | 3 seconds |
 | `SessionEnd` | `signet hook session-end -H claude-code` | 15 seconds |
+| `Stop` | `signet hook stop -H claude-code` | none (`async: true`) |
 
 The default daemon session-start budget is 15 seconds, so the default installed `SessionStart` timeout is 17 seconds. The connector computes this when it writes the configuration from `SIGNET_SESSION_START_TIMEOUT` (or the compatibility fetch-timeout variable). It does not assume a home directory or bake a personal path into the hook command.
 
 Likewise, the prompt-submit hook uses the resolved `SIGNET_PROMPT_SUBMIT_TIMEOUT` plus two seconds. Existing settings are not changed until setup or connector installation runs again.
+
+The `Stop` hook never delays, blocks, or continues a turn. It records the reply that ends each turn, which Claude Code passes as `last_assistant_message`. Claude Code runs it in the background, and [`signet hook stop`](/cli/integrations-security/#signet-hook) prints nothing.
+
+Because the hook runs in the background, the daemon can, in rare cases, record a reply after the next prompt; SessionEnd then imports the full transcript and restores the order. `claude -p` stops async hooks that are still running when it exits, so only SessionEnd records the reply of its last turn.
+
+`Stop` fires only for the main agent. The connector does not register `SubagentStop`, which also fires for subagents and for internal agents such as prompt suggestions and `/btw`, whose replies are not main-session turns.
 
 ### MCP tools
 

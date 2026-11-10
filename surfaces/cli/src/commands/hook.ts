@@ -58,7 +58,7 @@ export async function runWakeLoop(
 	},
 ): Promise<WakeOutcome> {
 	const now = deps.now ?? Date.now;
-	const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+	const sleep = deps.sleep ?? defaultSleep;
 	const deadline = now() + request.maxWaitSeconds * 1000;
 	for (;;) {
 		const waitMs = request.noWait ? 0 : WAKE_POLL_MS;
@@ -282,6 +282,10 @@ export async function buildPeerContext(
 
 const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeout();
 const PROMPT_SUBMIT_TIMEOUT_MS = resolvePromptSubmitTimeout();
+const STOP_TIMEOUT_MS = 10_000;
+const STOP_MAX_ATTEMPTS = 3;
+const STOP_RETRY_SLEEP_MS = 1_000;
+const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const LEGACY_RUNTIME_PATH = "legacy" as const;
 const STDIN_TIMEOUT_MS = 2000;
 
@@ -632,6 +636,30 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 		});
 
 	hookCmd
+		.command("stop")
+		.description("Record the assistant reply that ends a turn")
+		.requiredOption("-H, --harness <harness>", "Harness name")
+		.action(async (options) => {
+			const body = buildStopBody(await readJson(deps.stdin), options.harness);
+			if (!body) return;
+			const now = deps.now ?? Date.now;
+			const sleep = deps.sleep ?? defaultSleep;
+			const deadline = now() + STOP_TIMEOUT_MS;
+			const request = { method: "POST", headers: legacyHookHeaders(), body: JSON.stringify(body) };
+			for (let attempt = 1; ; attempt++) {
+				const res = await deps.fetchDaemonResult("/api/hooks/stop", { ...request, timeout: deadline - now() });
+				if (res.ok) return;
+				const busy = res.reason === "http" && res.status === 503;
+				if (busy && attempt < STOP_MAX_ATTEMPTS && deadline - now() > STOP_RETRY_SLEEP_MS) {
+					await sleep(STOP_RETRY_SLEEP_MS);
+					if (deadline - now() > 0) continue;
+				}
+				process.stderr.write(formatHookFailure("stop", res));
+				return;
+			}
+		});
+
+	hookCmd
 		.command("pre-compaction")
 		.description("Get summary instructions before session compaction")
 		.requiredOption("-H, --harness <harness>", "Harness name")
@@ -644,14 +672,7 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const sessionKey = pickSessionKey(input);
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
 			const transcriptPath = pickString(input?.transcript_path, input?.transcriptPath);
-			const nativeAgentId = options.harness === "claude-code" ? pickString(input?.agent_id) : "";
-			const agentId = pickString(
-				options.agentId,
-				input?.signet_agent_id,
-				input?.signetAgentId,
-				input?.agentId,
-				nativeAgentId ? "" : input?.agent_id,
-			);
+			const agentId = pickString(options.agentId, pickHookAgentId(input, options.harness));
 			const data = await fetchHookData<{ summaryPrompt?: string; guidelines?: string; error?: string }>(
 				deps,
 				"pre-compaction",
@@ -905,14 +926,8 @@ export function buildUserPromptSubmitBody(
 	const userPrompt = pickString(body?.prompt, body?.user_prompt, body?.userPrompt);
 	const userMessage = pickString(body?.user_message, body?.userMessage, userPrompt);
 	const lastAssistantMessage = readLastAssistantMessage(body);
-	const nativeAgentId = harness === "claude-code" ? pickString(body?.agent_id) : "";
-	const agentId = pickString(
-		body?.signet_agent_id,
-		body?.signetAgentId,
-		body?.agentId,
-		nativeAgentId ? "" : body?.agent_id,
-	);
-	const harnessAgentId = pickString(body?.harness_agent_id, body?.harnessAgentId, nativeAgentId);
+	const agentId = pickHookAgentId(body, harness);
+	const harnessAgentId = pickString(body?.harness_agent_id, body?.harnessAgentId, nativeAgentId(body, harness));
 	return {
 		harness,
 		project,
@@ -984,13 +999,7 @@ export function buildSessionEndBody(
 	const sessionKey = pickSessionKey(body);
 	const sessionId = pickString(body.session_id, body.sessionId, sessionKey);
 	const lastAssistantMessage = readLastAssistantMessage(body);
-	const nativeAgentId = harness === "claude-code" ? pickString(body.agent_id) : "";
-	const agentId = pickString(
-		body.signet_agent_id,
-		body.signetAgentId,
-		body.agentId,
-		nativeAgentId ? "" : body.agent_id,
-	);
+	const agentId = pickHookAgentId(body, harness);
 	return {
 		harness,
 		transcriptPath: pickString(body.transcript_path, body.transcriptPath),
@@ -1003,6 +1012,44 @@ export function buildSessionEndBody(
 		...(lastAssistantMessage ? { lastAssistantMessage } : {}),
 		runtimePath: LEGACY_RUNTIME_PATH,
 	};
+}
+
+export function buildStopBody(
+	input: Record<string, unknown> | null,
+	harness: string,
+): {
+	harness: string;
+	sessionKey: string;
+	agentId?: string;
+	cwd: string;
+	lastAssistantMessage: string;
+	runtimePath: typeof LEGACY_RUNTIME_PATH;
+} | null {
+	const sessionKey = pickSessionKey(input);
+	const lastAssistantMessage = readLastAssistantMessage(input);
+	if (!sessionKey || !lastAssistantMessage) return null;
+	const agentId = pickHookAgentId(input, harness);
+	return {
+		harness,
+		sessionKey,
+		...(agentId ? { agentId } : {}),
+		cwd: pickString(input?.cwd),
+		lastAssistantMessage,
+		runtimePath: LEGACY_RUNTIME_PATH,
+	};
+}
+
+function nativeAgentId(input: Record<string, unknown> | null, harness: string): string {
+	return harness === "claude-code" ? pickString(input?.agent_id) : "";
+}
+
+function pickHookAgentId(input: Record<string, unknown> | null, harness: string): string {
+	return pickString(
+		input?.signet_agent_id,
+		input?.signetAgentId,
+		input?.agentId,
+		nativeAgentId(input, harness) ? "" : input?.agent_id,
+	);
 }
 
 function readLastAssistantMessage(input: Record<string, unknown> | null): string {

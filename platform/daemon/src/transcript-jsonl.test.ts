@@ -317,6 +317,68 @@ await appendCanonicalTranscriptTurns({
 		expect(transcript.match(/same assistant context/g)?.length).toBe(1);
 		expect(transcript.match(/same retried prompt/g)?.length).toBe(1);
 	});
+
+	test("deduplicates retried live appends whose records exceed the tail scan window", async () => {
+		const root = makeRoot("dedupe-large");
+		const reply = { role: "assistant" as const, content: "界".repeat(120_000) };
+		const prompt = { role: "user" as const, content: "large retried prompt" };
+
+		await appendLiveTurns(root, [reply, prompt]);
+		await appendLiveTurns(root, [reply, prompt]);
+		await appendLiveTurns(root, [reply]);
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-2",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "other session prompt" }],
+		});
+		await appendLiveTurns(root, [reply]);
+
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code")).map(([role]) => role)).toEqual([
+			"assistant",
+			"user",
+			"assistant",
+			"user",
+		]);
+	});
+
+	test("deduplicates a retried batch whose last record exceeds the tail scan window", async () => {
+		const root = makeRoot("dedupe-large-last");
+		const batch = [
+			{ role: "assistant" as const, content: "short reply before a large prompt" },
+			{ role: "user" as const, content: "界".repeat(100_000) },
+		];
+
+		await appendLiveTurns(root, batch);
+		await appendLiveTurns(root, batch);
+
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code")).map(([role]) => role)).toEqual([
+			"assistant",
+			"user",
+		]);
+	});
+
+	test("does not read a large older record beyond the tail needed to deduplicate a small batch", async () => {
+		const root = makeRoot("dedupe-bounded");
+		const huge = "x".repeat(2 * 1024 * 1024);
+		await appendLiveTurns(root, [{ role: "user", content: huge }]);
+		await appendLiveTurns(root, [{ role: "assistant", content: "Done." }]);
+		const parse = spyOn(JSON, "parse");
+		try {
+			await appendLiveTurns(root, [{ role: "assistant", content: "Done." }]);
+			const parsedLengths = parse.mock.calls.map(([text]) => (typeof text === "string" ? text.length : 0));
+			expect(Math.max(0, ...parsedLengths)).toBeLessThan(huge.length);
+		} finally {
+			parse.mockRestore();
+		}
+
+		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code")).map(([role]) => role)).toEqual([
+			"user",
+			"assistant",
+		]);
+	});
 });
 
 describe("backfill OOM regression (#587)", () => {

@@ -2,8 +2,14 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, initDbAccessor } from "./db-accessor";
-import { searchTranscriptFallback, upsertSessionTranscript } from "./session-transcripts";
+import { type DbAccessor, type WriteDb, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import {
+	appendSessionTranscriptAsync,
+	getStoredSessionTranscriptInfoAsync,
+	searchTranscriptFallback,
+	upsertSessionTranscript,
+	upsertSessionTranscriptAsync,
+} from "./session-transcripts";
 
 let dir = "";
 
@@ -59,5 +65,122 @@ describe("session transcript lookup", () => {
 
 		expect(hits).toHaveLength(1);
 		expect(hits[0]?.sessionKey).toBe("same-session");
+	});
+});
+
+describe("session transcript live append", () => {
+	afterEach(async () => {
+		await closeDbAccessor();
+		if (dir) rmSync(dir, { recursive: true, force: true });
+		dir = "";
+	});
+
+	function init(): DbAccessor {
+		dir = mkdtempSync(join(tmpdir(), "signet-session-transcripts-append-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		return getDbAccessor();
+	}
+
+	it("appends to the stored row inside one write transaction", async () => {
+		const accessor = init();
+		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
+
+		await appendSessionTranscriptAsync({
+			sessionKey: "live-session",
+			agentId: "agent-a",
+			harness: "claude-code",
+			project: "/repo",
+			append: (existing) => `${existing}\nAssistant: second`,
+		});
+
+		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
+		expect(stored).toMatchObject({
+			content: "User: first\nAssistant: second",
+			project: "/repo",
+			harness: "claude-code",
+		});
+	});
+
+	it("fails the append without overwriting the row when the in-transaction read fails", async () => {
+		const accessor = init();
+		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
+		const failingRead: DbAccessor = {
+			...accessor,
+			withWriteTxAsync: (fn, options) =>
+				accessor.withWriteTxAsync(
+					(db) =>
+						fn(
+							new Proxy(db, {
+								get(target, property, receiver) {
+									if (property !== "prepare") return Reflect.get(target, property, receiver);
+									return (sql: string) => {
+										if (sql.includes("SELECT content FROM session_transcripts")) throw new Error("forced read failure");
+										return target.prepare(sql);
+									};
+								},
+							}) as WriteDb,
+						),
+					options,
+				),
+		};
+
+		await expect(
+			appendSessionTranscriptAsync(
+				{
+					sessionKey: "live-session",
+					agentId: "agent-a",
+					harness: "claude-code",
+					project: "/repo",
+					append: (existing) => `${existing ?? ""}\nAssistant: second`.trim(),
+				},
+				failingRead,
+			),
+		).rejects.toThrow("forced read failure");
+
+		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
+		expect(stored?.content).toBe("User: first");
+	});
+
+	it("keeps the stored project when an append has no project", async () => {
+		const accessor = init();
+		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
+
+		await appendSessionTranscriptAsync({
+			sessionKey: "live-session",
+			agentId: "agent-a",
+			harness: "claude-code",
+			project: null,
+			append: (existing) => `${existing}\nAssistant: second`,
+		});
+
+		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
+		expect(stored).toMatchObject({ content: "User: first\nAssistant: second", project: "/repo" });
+	});
+
+	it("appends to the exact session key without copying a row stored under an alias", async () => {
+		const accessor = init();
+		const hyphenKey = "019f3a7a-218f-7000-b6a3-0dcc8801a625";
+		const colonKey = "019f3a7a-218f:7000:b6a3-0dcc8801a625";
+		await upsertSessionTranscriptAsync(hyphenKey, "User: first", "oh-my-pi", "/repo", "agent-a");
+
+		await appendSessionTranscriptAsync({
+			sessionKey: colonKey,
+			agentId: "agent-a",
+			harness: "oh-my-pi",
+			project: "/repo",
+			append: (existing) => [existing, "Assistant: second"].filter(Boolean).join("\n"),
+		});
+
+		const rows = await accessor.withReadDbAsync(
+			(db) =>
+				db
+					.prepare("SELECT session_key, content FROM session_transcripts WHERE agent_id = ? ORDER BY session_key")
+					.all("agent-a") as Array<{ session_key: string; content: string }>,
+		);
+		expect(rows).toEqual([
+			{ session_key: hyphenKey, content: "User: first" },
+			{ session_key: colonKey, content: "Assistant: second" },
+		]);
 	});
 });

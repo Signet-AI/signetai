@@ -19,6 +19,7 @@ export interface ConnectorConfig {
 		userPromptSubmit?: boolean;
 		preCompact?: boolean;
 		sessionEnd?: boolean;
+		stop?: boolean;
 	};
 }
 
@@ -31,10 +32,10 @@ export interface SessionContext {
 
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
 
-function isWakeHookEntry(hook: unknown): boolean {
+function isSignetOwnedHookEntry(hook: unknown): boolean {
 	if (typeof hook !== "object" || hook === null) return false;
 	const command = (hook as Record<string, unknown>).command;
-	return typeof command === "string" && /\bhook wake\b/.test(command) && command.includes("-H claude-code");
+	return typeof command === "string" && /\bhook (wake|stop)\b/.test(command) && command.includes("-H claude-code");
 }
 
 function isSessionStartHookEntry(hook: unknown): boolean {
@@ -43,7 +44,7 @@ function isSessionStartHookEntry(hook: unknown): boolean {
 	return typeof command === "string" && /\bhook session-start\b/.test(command) && command.includes("-H claude-code");
 }
 
-function stripWakeGroups(groups: unknown, extra?: (hook: unknown) => boolean): unknown[] {
+function stripSignetGroups(groups: unknown, extra?: (hook: unknown) => boolean): unknown[] {
 	if (!Array.isArray(groups)) return [];
 	const kept: unknown[] = [];
 	for (const group of groups) {
@@ -52,7 +53,7 @@ function stripWakeGroups(groups: unknown, extra?: (hook: unknown) => boolean): u
 			kept.push(group);
 			continue;
 		}
-		const rest = inner.filter((hook) => !isWakeHookEntry(hook) && !extra?.(hook));
+		const rest = inner.filter((hook) => !isSignetOwnedHookEntry(hook) && !extra?.(hook));
 		if (rest.length === inner.length) kept.push(group);
 		else if (rest.length > 0) kept.push({ ...(group as object), hooks: rest });
 	}
@@ -202,7 +203,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 				settings.hooks.PreCompaction = undefined;
 				settings.hooks.PreCompact = undefined;
 				settings.hooks.SessionEnd = undefined;
-				const remainingStop = stripWakeGroups(settings.hooks.Stop);
+				const remainingStop = stripSignetGroups(settings.hooks.Stop);
 				settings.hooks.Stop = remainingStop.length > 0 ? remainingStop : undefined;
 				if (Object.keys(settings.hooks).length === 0) {
 					settings.hooks = undefined;
@@ -290,6 +291,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			userPromptSubmit: true,
 			preCompact: true,
 			sessionEnd: true,
+			stop: true,
 		};
 		let signetCmd = "signet";
 		if (process.platform === "win32") {
@@ -380,23 +382,26 @@ export class ClaudeCodeConnector extends BaseConnector {
 			];
 		}
 
-		const userStopGroups = stripWakeGroups((settings.hooks as Record<string, unknown> | undefined)?.Stop);
-		if (hooksConfig.sessionStart !== false) {
-			hooks.Stop = [...userStopGroups, { hooks: [wakeHook] }];
-		} else if (userStopGroups.length > 0) {
-			hooks.Stop = userStopGroups;
+		const signetStopHooks: unknown[] = [];
+		if (hooksConfig.stop !== false) {
+			signetStopHooks.push({ type: "command", command: `${signetCmd} hook stop -H claude-code`, async: true });
 		}
+		if (hooksConfig.sessionStart !== false) signetStopHooks.push(wakeHook);
+		const stopGroups = [
+			...stripSignetGroups((settings.hooks as Record<string, unknown> | undefined)?.Stop),
+			...(signetStopHooks.length > 0 ? [{ hooks: signetStopHooks }] : []),
+		];
 
 		const merged: Record<string, unknown> = {
 			...(settings.hooks as Record<string, unknown> | undefined),
 			...hooks,
 		};
+		if (stopGroups.length > 0) merged.Stop = stopGroups;
+		else Reflect.deleteProperty(merged, "Stop");
 		if (hooksConfig.sessionStart === false) {
-			const userStart = stripWakeGroups(merged.SessionStart, isSessionStartHookEntry);
+			const userStart = stripSignetGroups(merged.SessionStart, isSessionStartHookEntry);
 			if (userStart.length > 0) merged.SessionStart = userStart;
 			else Reflect.deleteProperty(merged, "SessionStart");
-			if (userStopGroups.length > 0) merged.Stop = userStopGroups;
-			else Reflect.deleteProperty(merged, "Stop");
 		}
 		settings.hooks = merged;
 		const { PreCompaction: _legacyPreCompaction, ...hooksWithoutLegacy } = settings.hooks as Record<string, unknown>;
