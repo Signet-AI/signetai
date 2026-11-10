@@ -4,6 +4,7 @@ import {
 	closeSync,
 	constants,
 	existsSync,
+	fchmodSync,
 	fstatSync,
 	ftruncateSync,
 	lstatSync,
@@ -324,6 +325,14 @@ const SECURE_WRITE_FILE_SCRIPT = [
 	"finally:",
 	"    os.close(fd)",
 ].join("\n");
+
+const SECURE_WRITE_PRIVATE_FILE_SCRIPT = SECURE_WRITE_FILE_SCRIPT.replace(
+	"file_fd = os.open(name, flags, 0o666, dir_fd=fd)",
+	"file_fd = os.open(name, flags, 0o600, dir_fd=fd)",
+).replace(
+	"        os.ftruncate(file_fd, 0)",
+	"        if stat.S_IMODE(opened.st_mode) & 0o077:\n            os.fchmod(file_fd, stat.S_IMODE(opened.st_mode) & 0o700)\n        os.ftruncate(file_fd, 0)",
+);
 const SECURE_READ_FILE_SCRIPT = [
 	"import os, stat, sys",
 	"try:",
@@ -530,7 +539,12 @@ function ensureContainedDirectory(directory: string, targetRoot: string): void {
 	}
 }
 
-function writeContainedFile(targetPath: string, content: string | Uint8Array, targetRoot: string): void {
+function writeContainedFile(
+	targetPath: string,
+	content: string | Uint8Array,
+	targetRoot: string,
+	ownerOnly: boolean,
+): void {
 	const safePath = resolveContainedWritePath(targetPath, targetRoot);
 	if (!DESCRIPTOR_WRITES_SUPPORTED) {
 		throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
@@ -550,7 +564,13 @@ function writeContainedFile(targetPath: string, content: string | Uint8Array, ta
 		}
 		const fd = openDirectoryNoFollow(rootPath);
 		try {
-			runSecureFilesystemOperation(fd, rootPath, SECURE_WRITE_FILE_SCRIPT, [...components, fileName], content);
+			runSecureFilesystemOperation(
+				fd,
+				rootPath,
+				ownerOnly ? SECURE_WRITE_PRIVATE_FILE_SCRIPT : SECURE_WRITE_FILE_SCRIPT,
+				[...components, fileName],
+				content,
+			);
 		} finally {
 			closeDirectory(fd);
 		}
@@ -605,7 +625,7 @@ function writeContainedFile(targetPath: string, content: string | Uint8Array, ta
 			constants.O_WRONLY |
 				constants.O_NOFOLLOW |
 				(existingFileIdentity === undefined ? constants.O_CREAT | constants.O_EXCL : 0),
-			0o666,
+			ownerOnly ? 0o600 : 0o666,
 		);
 		try {
 			const expectedFile = join(expected, fileName);
@@ -614,6 +634,10 @@ function writeContainedFile(targetPath: string, content: string | Uint8Array, ta
 			}
 			if (realpathSync(descriptorPath(fileFd)) !== expectedFile) {
 				throw new Error(`Hermes target file changed during secure write: ${targetPath}`);
+			}
+			if (ownerOnly) {
+				const mode = fstatSync(fileFd).mode & 0o777;
+				if ((mode & 0o077) !== 0) fchmodSync(fileFd, mode & 0o700);
 			}
 			ftruncateSync(fileFd, 0);
 			const bytes = typeof content === "string" ? Buffer.from(content) : Buffer.from(content);
@@ -636,7 +660,11 @@ function ensureTargetDirectory(directory: string, targetRoot: string): void {
 }
 
 function writeTargetFile(path: string, content: string | Uint8Array, targetRoot: string): void {
-	writeContainedFile(path, content, targetRoot);
+	writeContainedFile(path, content, targetRoot, false);
+}
+
+function writePrivateTargetFile(path: string, content: string, targetRoot: string): void {
+	writeContainedFile(path, content, targetRoot, true);
 }
 
 function rejectSymlinkedPathComponents(path: string, root: string, targetPath: string): void {
@@ -1707,7 +1735,7 @@ export class HermesAgentConnector extends BaseConnector {
 
 			if (changed) {
 				ensureTargetDirectory(hermesHome, targetRoot);
-				writeTargetFile(envPath, envContent, targetRoot);
+				writePrivateTargetFile(envPath, envContent, targetRoot);
 				configsPatched.push(envPath);
 			}
 		} catch (e) {
@@ -1816,7 +1844,7 @@ export class HermesAgentConnector extends BaseConnector {
 					}
 				}
 				if (changed) {
-					writeTargetFile(envPath, `${envContent.replace(/\n{3,}/g, "\n\n").trimEnd()}\n`, targetRoot);
+					writePrivateTargetFile(envPath, `${envContent.replace(/\n{3,}/g, "\n\n").trimEnd()}\n`, targetRoot);
 					configsPatched.push(envPath);
 				}
 			} catch (e) {

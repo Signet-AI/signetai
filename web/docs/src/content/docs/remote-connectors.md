@@ -231,7 +231,9 @@ npx -y @signetai/codex-plugin install \
 The installer writes the daemon URL and API key into the harness config it
 manages. Any file it writes that contains the API key is readable only by your
 user: new files get mode `0600`, and an existing file loses its group and other
-permissions. It uses `SIGNET_DAEMON_URL` and `SIGNET_API_KEY` at runtime.
+permissions. If the installer cannot tighten an existing file, it fails instead
+of writing the key. Reinstalling also tightens an unchanged file that already
+holds the key. It uses `SIGNET_DAEMON_URL` and `SIGNET_API_KEY` at runtime.
 `SIGNET_TOKEN` remains a backwards-compatible alias, but new installs should
 use `SIGNET_API_KEY`.
 

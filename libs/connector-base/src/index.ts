@@ -1,13 +1,20 @@
 import { randomBytes } from "node:crypto";
 import {
 	chmodSync,
+	closeSync,
+	constants,
 	existsSync,
+	fchmodSync,
+	fstatSync,
+	ftruncateSync,
+	openSync,
 	readFileSync,
 	realpathSync,
 	renameSync,
 	statSync,
 	unlinkSync,
 	writeFileSync,
+	writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
@@ -161,7 +168,9 @@ export function isSignetGeneratedFile(raw: string): boolean {
 
 function containsSignetApiKey(content: string): boolean {
 	const key = resolveSignetApiKey();
-	return key !== undefined && content.includes(key);
+	if (key === undefined) return false;
+	if (!/^[A-Za-z0-9._~+/=-]+$/.test(key)) return true;
+	return content.includes(key);
 }
 
 export function keepSignetApiKeyFilePrivate(path: string): void {
@@ -180,11 +189,15 @@ export function writeConfigText(path: string, content: string): void {
 		writeFileSync(path, content, "utf-8");
 		return;
 	}
+	const fd = openSync(path, constants.O_WRONLY | constants.O_CREAT, 0o600);
 	try {
-		const mode = statSync(path).mode & 0o777;
-		if ((mode & 0o077) !== 0) chmodSync(path, mode & 0o700);
-	} catch {}
-	writeFileSync(path, content, { encoding: "utf-8", mode: 0o600 });
+		const mode = fstatSync(fd).mode & 0o777;
+		if ((mode & 0o077) !== 0) fchmodSync(fd, mode & 0o700);
+		ftruncateSync(fd, 0);
+		writeSync(fd, content, 0, "utf-8");
+	} finally {
+		closeSync(fd);
+	}
 }
 
 export function atomicWriteText(path: string, content: string, mode?: number): void {

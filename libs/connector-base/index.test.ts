@@ -190,6 +190,15 @@ describe("files that hold the Signet API key", () => {
 		expect(statSync(fresh).mode & 0o777).toBe(0o600);
 	});
 
+	it.skipIf(process.platform === "win32")("treats a key that serialization would escape as present", () => {
+		process.env.SIGNET_API_KEY = `odd"key'\\value`;
+		const file = join(dir, "escaped.json");
+		writeFileSync(file, "{}", "utf-8");
+		chmodSync(file, 0o644);
+		atomicWriteText(file, JSON.stringify({ key: process.env.SIGNET_API_KEY }));
+		expect(statSync(file).mode & 0o777).toBe(0o600);
+	});
+
 	it.skipIf(process.platform === "win32")("tightens an unchanged file that already holds the key", () => {
 		const file = join(dir, "config.toml");
 		writeFileSync(file, `auth = "${key}"\n`, "utf-8");

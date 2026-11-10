@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenClawConnector } from "../src/index";
@@ -189,6 +189,19 @@ describe("OpenClawConnector config patching", () => {
 			daemonUrl: "http://127.0.0.1:3850",
 			customSetting: "preserved",
 		});
+	});
+
+	it.skipIf(process.platform === "win32")("keeps the config backup as private as the config", async () => {
+		const configPath = join(tmpRoot, "openclaw.json");
+		writeFileSync(configPath, JSON.stringify({ env: { vars: { SIGNET_API_KEY: "sig_sk_openclaw_private" } } }));
+		chmodSync(configPath, 0o600);
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+
+		await new OpenClawConnector().syncMultipleAgents([{ name: "helper" }], join(tmpRoot, "agents"));
+
+		const backupPath = `${configPath}.signet-backup`;
+		expect(readFileSync(backupPath, "utf-8")).toContain("sig_sk_openclaw_private");
+		expect(statSync(backupPath).mode & 0o777).toBe(0o600);
 	});
 
 	it("does not execute non-JSON expressions while parsing configs", async () => {

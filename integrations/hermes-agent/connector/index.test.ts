@@ -6,9 +6,10 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
-	realpathSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -765,6 +766,26 @@ describe("HermesAgentConnector.install()", () => {
 		expect(envContent).toContain("SIGNET_DAEMON_URL=https://daemon.example.test:8443/api/ignored");
 		expect(envContent).toContain("SIGNET_API_KEY=sig_sk_hermes_test_secret");
 		expect(envContent).toContain("SIGNET_TRUSTED_DAEMON_ORIGINS=https://daemon.example.test:8443");
+	});
+
+	it.skipIf(process.platform === "win32")("keeps the .env that holds the API key owner-only", async () => {
+		const hermesRepo = join(tmpRoot, "hermes-agent");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		const hermesHome = join(tmpRoot, ".hermes");
+		mkdirSync(hermesHome, { recursive: true });
+		const envPath = join(hermesHome, ".env");
+		writeFileSync(envPath, "OPENAI_API_KEY=other-secret\n");
+		chmodSync(envPath, 0o644);
+		process.env.HERMES_REPO = hermesRepo;
+		process.env.HERMES_HOME = hermesHome;
+		process.env.SIGNET_API_KEY = "sig_sk_hermes_private";
+
+		await new HermesAgentConnector().install(tmpRoot);
+
+		const envContent = await Bun.file(envPath).text();
+		expect(envContent).toContain("OPENAI_API_KEY=other-secret");
+		expect(envContent).toContain("SIGNET_API_KEY=sig_sk_hermes_private");
+		expect(statSync(envPath).mode & 0o777).toBe(0o600);
 	});
 
 	it("derives SIGNET_AGENT_WORKSPACE for named agents", async () => {

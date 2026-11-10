@@ -1,5 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MuseCodeConnector, buildMuseHookCommand, isSignetMuseHookCommand, readMuseSettings } from "./index";
@@ -127,6 +137,19 @@ describe("MuseCodeConnector", () => {
 		expect(signet.transport).toBe("stdio");
 		expect(signet.mode).toBe("optional");
 		expect(connector.isInstalled()).toBe(true);
+	});
+
+	test.skipIf(process.platform === "win32")("tightens an unchanged settings file on reinstall", async () => {
+		process.env.SIGNET_API_KEY = "sig_sk_muse_private";
+		const connector = new MuseCodeConnector();
+		await connector.install(workspace());
+		chmodSync(settingsPath(), 0o644);
+
+		const result = await connector.install(workspace());
+
+		expect(result.configsPatched).toEqual([]);
+		expect(readFileSync(settingsPath(), "utf-8")).toContain("sig_sk_muse_private");
+		expect(statSync(settingsPath()).mode & 0o777).toBe(0o600);
 	});
 
 	test("preserves user hooks and servers and is idempotent", async () => {
