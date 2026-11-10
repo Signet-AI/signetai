@@ -14,7 +14,13 @@ function canonical(path: string): string {
 
 function privatePaths(agentsDir: string): readonly string[] {
 	const layout = resolveWorkspaceLayout(agentsDir);
-	return [layout.runtime, join(layout.root, ".daemon"), layout.secrets, dirname(layout.database)].map(canonical);
+	return [
+		layout.runtime,
+		join(layout.root, ".daemon"),
+		layout.secrets,
+		dirname(layout.database),
+		layout.transcripts,
+	].map(canonical);
 }
 
 function isWithin(path: string, parent: string): boolean {
@@ -33,9 +39,15 @@ export function isWorkspacePrivatePath(path: string, agentsDir: string): boolean
 	return privatePaths(agentsDir).some((entry) => isWithin(target, entry));
 }
 
-export function exposesWorkspacePrivatePath(root: string, agentsDir: string): boolean {
+export function exposesWorkspacePrivatePath(
+	root: string,
+	agentsDir: string,
+	options: { readonly skipsHiddenPaths: boolean },
+): boolean {
 	const target = canonical(root);
 	return privatePaths(agentsDir).some(
-		(entry) => isWithin(target, entry) || (isWithin(entry, target) && !isHiddenBelow(entry, target)),
+		(entry) =>
+			isWithin(target, entry) ||
+			(isWithin(entry, target) && !(options.skipsHiddenPaths && isHiddenBelow(entry, target))),
 	);
 }

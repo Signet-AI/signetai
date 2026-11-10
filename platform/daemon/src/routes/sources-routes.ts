@@ -287,7 +287,11 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		}
 
 		const root = body.root ?? body.path ?? "";
-		if (typeof root === "string" && root.trim() && exposesWorkspacePrivatePath(root, agentsDir)) {
+		if (
+			typeof root === "string" &&
+			root.trim() &&
+			exposesWorkspacePrivatePath(root, agentsDir, { skipsHiddenPaths: true })
+		) {
 			recordSourceConnectionFailure("obsidian", "private workspace path");
 			return c.json({ error: "Folder includes Signet's private workspace data" }, 400);
 		}
@@ -333,7 +337,10 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
 			if (denied) return denied;
 		}
-		if (desktopCachePath !== undefined && exposesWorkspacePrivatePath(desktopCachePath, agentsDir)) {
+		if (
+			desktopCachePath !== undefined &&
+			exposesWorkspacePrivatePath(desktopCachePath, agentsDir, { skipsHiddenPaths: false })
+		) {
 			recordSourceConnectionFailure("discord", "private workspace path");
 			return c.json({ error: "Folder includes Signet's private workspace data" }, 400);
 		}
