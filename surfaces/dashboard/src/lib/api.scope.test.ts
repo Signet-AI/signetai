@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "bun:test";
-import { api } from "./api";
+import { api, viewsAllAgents } from "./api";
 
 describe("api.updateAgentScope", () => {
 	afterEach(() => vi.restoreAllMocks());
@@ -46,5 +46,37 @@ describe("memory views", () => {
 
 		expect(urls).toHaveLength(1);
 		expect(urls[0]).not.toContain("agentId=");
+	});
+});
+
+describe("viewsAllAgents", () => {
+	const renewal = {
+		kind: "signed-out",
+		mode: "team",
+		providers: [],
+		reason: null,
+		expired: true,
+		renewal: true,
+		permissions: ["admin"],
+	} as const;
+
+	it("keeps an admin on the all-agent view while renewing", () => {
+		expect(viewsAllAgents(renewal)).toBe(true);
+		expect(
+			viewsAllAgents({
+				kind: "signed-in",
+				mode: "team",
+				identity: { sub: "a", name: null, role: "admin", expiresAt: 0 },
+				permissions: ["admin"],
+				expiresSoon: false,
+			}),
+		).toBe(true);
+	});
+
+	it("uses the credential's agent until an admin session is known", () => {
+		expect(viewsAllAgents({ kind: "checking" })).toBe(false);
+		expect(viewsAllAgents({ kind: "unreachable", error: "down" })).toBe(false);
+		expect(viewsAllAgents({ ...renewal, renewal: false })).toBe(false);
+		expect(viewsAllAgents({ kind: "open", mode: "team", permissions: ["recall"] })).toBe(false);
 	});
 });
