@@ -341,6 +341,9 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		await tool("memory_search")?.execute("call-search-explicit", { query: "Juniper", agent_id: "other" });
 		expect(lastMemoryRecallBody).toMatchObject({ agentId: "other" });
 
+		await tool("memory_search")?.execute("call-search-blank", { query: "Juniper", agent_id: " " });
+		expect(lastMemoryRecallBody).toMatchObject({ agentId: "main" });
+
 		await tool("memory_store")?.execute("call-store", { content: "Trunk ports use VLAN 20" });
 		expect(lastRememberBody).toMatchObject({ agentId: "main" });
 
