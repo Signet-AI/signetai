@@ -12,6 +12,8 @@ draft: false
 category: announcement
 coverLabel: "Signet 1.0 is stable"
 ---
+> **Update, November 10: install 1.0.1, not 1.0.0.** Signet 1.0.1 fixes five security vulnerabilities in 1.0.0, in the daemon API and in connector setup. If you’re already on 1.0.0, update now. The commands in **Installing and updating** below install 1.0.1, and the [1.0.1 release notes](https://github.com/Signet-AI/signetai/releases/tag/v1.0.1) list the fixes.
+
 Signet is 1.0.
 
 Today `v1.0.0` goes out on the stable release channel, carrying more than 2,800 commits since our last stable release.
@@ -182,9 +184,12 @@ For a new installation, run `signet setup` after installing. See the [installati
 ```bash
 signet update channel stable
 signet update install
+signet sync
 ```
 
-`signet update channel stable` moves you to the stable track; `signet update install` installs the latest stable release. Auto-update doesn't install a new major version, so existing installs, including nightly ones, need this step once to reach 1.0. Follow any restart instructions printed by the updater, then check `signet status`. See [upgrading](https://docs.signetai.sh/upgrading/) for details.
+`signet update channel stable` moves you to the stable track; `signet update install` installs the latest stable release, currently 1.0.1. Auto-update doesn't install a new major version, so existing installs, including nightly ones, need this step once to reach 1.0. `signet sync` rewrites connector files written by older versions so the ones that hold your API key are readable only by you. Follow any restart instructions printed by the updater, then check `signet status`. See [upgrading](https://docs.signetai.sh/upgrading/) for details.
+
+**Already on 1.0.0?** With automatic updates on, you get 1.0.1 on your own. Otherwise run `signet update install` and `signet daemon restart`. Either way, run `signet sync` once afterward.
 
 **If you used the native installer on Linux or Windows,** `signet update install` from `v0.157.3` (or any release before `v0.235.1`) will stop with:
 
@@ -192,7 +197,7 @@ signet update install
 ✖ Native manifest linux-x64 asset entry failed URL, checksum, or size validation
 ```
 
-Nothing is wrong with the download. The older updater rejects binaries larger than 256 MiB, and the Linux and Windows 1.0 binaries are larger than that. Run the native installer for your platform from above instead; it replaces the binary, and the new daemon upgrades your workspace when it starts. Then run `signet daemon restart`. npm and Bun installs update through the package manager and aren't affected. Updaters from `v0.235.1` on accept the larger binaries, so this is a one-time step.
+Nothing is wrong with the download. The older updater rejects binaries larger than 256 MiB, and the Linux and Windows 1.0 binaries are larger than that. Run the native installer for your platform from above instead; it replaces the binary, and the new daemon upgrades your workspace when it starts. Then run `signet daemon restart` and `signet sync`. npm and Bun installs update through the package manager and aren't affected. Updaters from `v0.235.1` on accept the larger binaries, so this is a one-time step.
 
 ### Upgrading an existing workspace
 
@@ -212,7 +217,7 @@ See the [Workspace v2 guide](https://docs.signetai.sh/workspace-v2/) for the ful
 
 Until now, stable releases were rare and most changes shipped as nightly builds, which is how the version number climbed to 0.240. From 1.0 on, we’ll ship stable releases regularly, numbered with semantic versioning: patch releases for fixes, minor releases for new features, and a major release only when something breaks compatibility.
 
-We’re pausing nightly builds. If you’re on the nightly channel, you’ll move to 1.0.0 and receive each stable release after it without changing anything.
+We’re pausing nightly builds. If you’re on the nightly channel, you’ll move to 1.0.1 and receive each stable release after it without changing anything.
 
 ## Since the previous stable release
 
