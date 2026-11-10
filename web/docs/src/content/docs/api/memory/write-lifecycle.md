@@ -149,7 +149,7 @@ Multi-agent fields:
 
 | Field        | Description |
 |--------------|-------------|
-| `agentId`    | Agent that owns this memory. Defaults to the credential's scoped agent, then the daemon's configured agent (`$SIGNET_AGENT_ID`, otherwise `"default"`). A scoped credential that names another agent gets `403`. |
+| `agentId`    | Agent that owns this memory. Defaults to the agent in an `agent:<id>:` session key (`x-signet-session-key`), then the credential's scoped agent, then the daemon's configured agent (`$SIGNET_AGENT_ID`, otherwise `"default"`). When credential scope is enforced, naming another agent directly or through the session key gets `403`. |
 | `visibility` | `"global"` (any permitted agent can read), `"private"` (owner only). Defaults to `"global"`. |
 
 First-seen named `agentId` values are registered in the `agents` table with
@@ -387,10 +387,29 @@ from an old version surfaces the full v3 → v2 → v1 history.
 }
 ```
 
+### Mutation scope
+
+Every route that changes an existing memory by ID (`recover`, `PATCH`,
+`DELETE`, `POST /api/memory/forget`, `POST /api/memory/modify`, and the
+curator `tombstone` and `supersede` routes) only touches memories the caller
+owns:
+
+- A credential scoped to an agent can change only that agent's memories, and
+  a credential scoped to a project only that project's memories. Admin
+  credentials are not restricted.
+- A request that names an agent with `agentId`/`agent_id`,
+  `x-signet-agent-id`, or an `agent:<id>:` session key can change only that
+  agent's memories. A scoped credential that names another agent gets `403`.
+- A memory outside that scope returns `404` with status `not_found`, the same
+  as a memory that does not exist. Batch routes leave it out of the
+  candidates (`forget`) or report it as `not_found` (`modify`).
+
+In local mode a request that names no agent is not restricted.
+
 ### POST /api/memory/:id/recover
 
 Restore a soft-deleted memory. The recovery window is 30 days from deletion.
-Requires `recover` permission.
+Requires `recover` permission. See [Mutation scope](#mutation-scope).
 
 **Request body**
 
@@ -433,8 +452,7 @@ Update a memory's metadata fields. At least one of `content`, `type`, `tags`,
 `importance`, or `pinned` must be provided. Requires `modify` permission.
 Rate-limited to 60/min.
 
-Scoped tokens in non-local mode have their project scope checked against the
-target memory's `project` field before the mutation is applied.
+See [Mutation scope](#mutation-scope) for which memories a request can change.
 
 **Episodic evidence immutability:** memories saved via remember (`memory_kind =
 'episodic'`) are immutable evidence. `content` and `type` cannot be changed on
@@ -495,8 +513,8 @@ Possible `status` values and their HTTP codes:
 Soft-delete a memory. Deleted memories can be recovered within 30 days.
 Requires `forget` permission. Rate-limited to 30/min.
 
-Scoped tokens have their project scope checked before the deletion. Pinned
-memories require `force: true`. Autonomous agents (pipeline/agent actor type)
+See [Mutation scope](#mutation-scope) for which memories a request can
+delete. Pinned memories require `force: true`. Autonomous agents (pipeline/agent actor type)
 cannot force-delete pinned memories.
 
 **Request body** (or query parameters)
@@ -537,7 +555,8 @@ Possible `status` values and their HTTP codes:
 ### POST /api/memory/forget
 
 Batch forget with preview/execute workflow. Requires `forget` permission.
-Rate-limited to 5/min (batch forget limiter).
+Rate-limited to 5/min (batch forget limiter). Candidates are limited to the
+[mutation scope](#mutation-scope).
 
 Requires at least one of: `query`, `ids`, or a filter field (`type`, `tags`,
 `who`, `source_type`, `since`, `until`). The batch size cap is 200.
@@ -615,7 +634,9 @@ Or target specific IDs:
 ### POST /api/memory/modify
 
 Batch update multiple memories in a single request. Requires `modify`
-permission. Rate-limited to 60/min. Maximum 200 patches per request.
+permission. Rate-limited to 60/min. Maximum 200 patches per request. A patch
+for a memory outside the [mutation scope](#mutation-scope) reports
+`not_found`.
 
 **Request body**
 

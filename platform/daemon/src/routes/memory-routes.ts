@@ -125,7 +125,7 @@ async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<Res
 	return {
 		...cfg,
 		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
-			siteToken: "routes/memory-routes.ts:126",
+			siteToken: "routes/memory-routes.ts:127",
 		}),
 	};
 }
@@ -607,32 +607,61 @@ async function resolveMemoryReadScope(
 	};
 }
 
-async function authorizeMemoryMutationScope(c: Context, memoryIds: readonly string[]): Promise<{ error?: string }> {
-	if (!shouldEnforceAuthScope(c)) return {};
-	const ids = [...new Set(memoryIds.map((id) => id.trim()).filter(Boolean))];
-	if (ids.length === 0) return {};
-	const rows = await Promise.all(
-		ids.map((id) =>
-			dbOwnerQuery<{ id: string; agent_id: string | null; project: string | null } | undefined>(
-				{ sql: "SELECT id, agent_id, project FROM memories WHERE id = ?", params: [id], result: "get" },
-				{ operation: "memory.authorize_mutation", lane: "read", deadlineMs: 2_000 },
-			),
-		),
-	);
+interface MemoryMutationScope {
+	readonly sql: string;
+	readonly args: readonly DbOwnerParameter[];
+}
+
+function resolveMemoryMutationScope(c: Context): MemoryMutationScope | Response {
+	const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
+	const sessionKey = c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key");
 	const claims = c.get("auth")?.claims ?? null;
-	for (const row of rows) {
-		if (!row) continue;
-		if (claims?.role !== "admin" && claims?.scope?.project && row.project !== claims.scope.project) {
-			return { error: `scope restricted to project '${claims.scope.project}'` };
-		}
-		const decision = checkScope(
-			claims,
-			{ agent: row.agent_id ?? "default", project: row.project ?? undefined },
-			authConfig.mode,
-		);
-		if (!decision.allowed) return { error: decision.reason ?? "scope violation" };
+	const tokenScoped = shouldEnforceAuthScope(c) && claims !== null && claims.role !== "admin";
+	let agentId = tokenScoped ? parseOptionalString(claims.scope.agent) : undefined;
+	if (resolveAgentIdHint({ agentId: requestedAgentId, sessionKey })) {
+		const scopedAgent = resolveMemoryScopedAgentId(c, { agentId: requestedAgentId, sessionKey });
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		agentId = scopedAgent.agentId;
 	}
-	return {};
+	const project = tokenScoped ? parseOptionalString(claims.scope.project) : undefined;
+	const parts: string[] = [];
+	const args: DbOwnerParameter[] = [];
+	if (agentId) {
+		parts.push(" AND COALESCE(m.agent_id, 'default') = ?");
+		args.push(agentId);
+	}
+	if (project) {
+		parts.push(" AND m.project = ?");
+		args.push(project);
+	}
+	return { sql: parts.join(""), args };
+}
+
+async function memoriesOutsideMutationScope(
+	scope: MemoryMutationScope,
+	memoryIds: readonly string[],
+): Promise<readonly string[]> {
+	if (!scope.sql) return [];
+	const ids = [...new Set(memoryIds.map((id) => id.trim()).filter(Boolean))];
+	if (ids.length === 0) return [];
+	const rows = await dbOwnerQuery<Array<{ id: string }>>(
+		{
+			sql: `SELECT m.id FROM memories m WHERE m.id IN (${ids.map(() => "?").join(", ")})${scope.sql}`,
+			params: [...ids, ...scope.args],
+			result: "all",
+		},
+		{ operation: "memory.authorize_mutation", lane: "read", deadlineMs: 2_000 },
+	);
+	const visible = new Set(rows.map((row) => row.id));
+	return ids.filter((id) => !visible.has(id));
+}
+
+async function denyMemoryMutation(c: Context, memoryIds: readonly string[]): Promise<Response | undefined> {
+	const scope = resolveMemoryMutationScope(c);
+	if (scope instanceof Response) return scope;
+	const hidden = await memoriesOutsideMutationScope(scope, memoryIds);
+	if (hidden.length === 0) return undefined;
+	return c.json({ id: hidden[0], status: "not_found", error: "Not found" }, 404);
 }
 
 interface DocumentScopeRow {
@@ -921,23 +950,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	});
 
 	app.use("/api/memory/:id", async (c, next) => {
-		if (authConfig.mode !== "local" && (c.req.method === "PATCH" || c.req.method === "DELETE")) {
-			const auth = c.get("auth");
-			if (auth?.claims?.scope?.project) {
-				const memoryId = c.req.param("id");
-				const row = await dbOwnerQuery<{ project: string | null } | undefined>(
-					{ sql: "SELECT project FROM memories WHERE id = ?", params: [memoryId], result: "get" },
-					{ operation: "memory.authorize_project", lane: "read", deadlineMs: 2_000 },
-				);
-				if (row) {
-					const decision = checkScope(auth.claims, { project: row.project ?? undefined }, authConfig.mode);
-					if (!decision.allowed) {
-						return c.json({ error: decision.reason ?? "scope violation" }, 403);
-					}
-				}
-			}
-		}
-
 		if (c.req.method === "PATCH") {
 			return requirePermissionWithRateLimit("modify", "modify", authModifyLimiter, authConfig)(c, next);
 		}
@@ -1121,7 +1133,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			if (scope instanceof Response) return scope;
 			const timeline = await getDbAccessor().withReadDbAsync(
 				async (db) => buildMemoryTimeline(db, { tzOffsetMin, scope }),
-				{ siteToken: "routes/memory-routes.ts:1121" },
+				{ siteToken: "routes/memory-routes.ts:1134" },
 			);
 			return c.json(timeline);
 		} catch (e) {
@@ -1479,7 +1491,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1471" },
+				{ siteToken: "routes/memory-routes.ts:1492" },
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
@@ -1487,7 +1499,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const existingChunks = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1479" },
+				{ siteToken: "routes/memory-routes.ts:1500" },
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1520,7 +1532,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				contentHashes.add(plan.normalized.contentHash);
 				const byHash = await getDbAccessor().withReadDbAsync(
 					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "routes/memory-routes.ts:1512" },
+					{ siteToken: "routes/memory-routes.ts:1533" },
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1723,7 +1735,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1715" },
+						{ siteToken: "routes/memory-routes.ts:1736" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -1838,7 +1850,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:1826" },
+					{ siteToken: "routes/memory-routes.ts:1847" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -2407,6 +2419,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (cfg.pipelineV2.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		}
+		const denied = await denyMemoryMutation(c, [memoryId]);
+		if (denied) return denied;
 
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
@@ -2498,6 +2512,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (cfg.pipelineV2.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		}
+		const denied = await denyMemoryMutation(c, [memoryId]);
+		if (denied) return denied;
 
 		let embeddingVector: number[] | null = null;
 		if (parsedPatch.value.contentForEmbedding !== null) {
@@ -2641,6 +2657,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (cfg.pipelineV2.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		}
+		const denied = await denyMemoryMutation(c, [memoryId]);
+		if (denied) return denied;
 
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
@@ -2717,8 +2735,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const cfg = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		if (cfg.pipelineV2.mutationsFrozen) return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
-		const scopeDecision = await authorizeMemoryMutationScope(c, [memoryId]);
-		if (scopeDecision.error) return c.json({ error: scopeDecision.error }, 403);
+		const denied = await denyMemoryMutation(c, [memoryId]);
+		if (denied) return denied;
 
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
@@ -2757,8 +2775,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		if (cfg.pipelineV2.mutationsFrozen) return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
-		const scopeDecision = await authorizeMemoryMutationScope(c, [memoryId, supersededBy]);
-		if (scopeDecision.error) return c.json({ error: scopeDecision.error }, 403);
+		const denied = await denyMemoryMutation(c, [memoryId, supersededBy]);
+		if (denied) return denied;
 
 		const now = new Date().toISOString();
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
@@ -2815,7 +2833,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Invalid feedback format — expected map of ID to number (-1 to 1)" }, 400);
 		}
 
-		const agentId = parseOptionalString(payload.agentId) ?? "default";
+		const scopedAgent = resolveMemoryScopedAgentId(c, { agentId: parseOptionalString(payload.agentId), sessionKey });
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const agentId = scopedAgent.agentId;
 		const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.feedback;
 		try {
 			const result = recordPathFeedback(getDbAccessor(), {
@@ -2909,7 +2929,12 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			);
 		}
 
-		const candidates = ids.length > 0 ? loadForgetCandidatesByIds(ids, limit) : loadForgetCandidates(request);
+		const mutationScope = resolveMemoryMutationScope(c);
+		if (mutationScope instanceof Response) return mutationScope;
+		const candidates =
+			ids.length > 0
+				? loadForgetCandidatesByIds(ids, limit, mutationScope)
+				: loadForgetCandidates(request, mutationScope);
 		const candidateIds = candidates.map((candidate) => candidate.id);
 		const confirmToken = buildForgetConfirmToken(candidateIds);
 		const requiresConfirm = candidateIds.length > FORGET_CONFIRM_THRESHOLD;
@@ -3030,6 +3055,14 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const defaultReason = parseOptionalString(payload.reason);
 		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
 		const changedAt = new Date().toISOString();
+		const mutationScope = resolveMemoryMutationScope(c);
+		if (mutationScope instanceof Response) return mutationScope;
+		const hidden = new Set(
+			await memoriesOutsideMutationScope(
+				mutationScope,
+				payload.patches.map((patch) => parseOptionalString(toRecord(patch)?.id) ?? ""),
+			),
+		);
 
 		const results: Array<{
 			id: string | null;
@@ -3060,6 +3093,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					status: "invalid_request",
 					error: "Patch id is required",
 				});
+				continue;
+			}
+			if (hidden.has(memoryId)) {
+				results.push({ id: memoryId, status: "not_found", error: "Not found" });
 				continue;
 			}
 
@@ -3316,7 +3353,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3309",
+							siteToken: "routes/memory-routes.ts:3355",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3443,7 +3480,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3397" },
+				{ siteToken: "routes/memory-routes.ts:3443" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3491,7 +3528,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3478" },
+			{ siteToken: "routes/memory-routes.ts:3524" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3500,7 +3537,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3492" },
+			{ siteToken: "routes/memory-routes.ts:3538" },
 		);
 		return c.json(report);
 	});
@@ -3579,7 +3616,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									}
 								: undefined,
 						}),
-					{ siteToken: "routes/memory-routes.ts:3553" },
+					{ siteToken: "routes/memory-routes.ts:3599" },
 				);
 
 				return c.json({
@@ -3609,7 +3646,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: 0;
 				return { cached: cachedResult, total: count };
 			},
-			{ siteToken: "routes/memory-routes.ts:3593" },
+			{ siteToken: "routes/memory-routes.ts:3639" },
 		);
 
 		if (cached !== null && cached.embeddingCount === total) {
@@ -3641,7 +3678,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const computation = (async () => {
 				try {
 					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:3634",
+						siteToken: "routes/memory-routes.ts:3680",
 					});
 					const count = await getDbAccessor().withReadDbAsync(
 						async (db) => {
@@ -3650,7 +3687,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								? row.count
 								: 0;
 						},
-						{ siteToken: "routes/memory-routes.ts:3637" },
+						{ siteToken: "routes/memory-routes.ts:3683" },
 					);
 					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {
