@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSourcesConfig } from "@signet/core";
@@ -29,7 +29,7 @@ function writeAuthConfig(mode: "local" | "team"): void {
 }
 
 function teamApp(): Hono {
-	if (!state.authSecret) throw new Error("expected auth secret in team mode");
+	if (state.authConfig.mode === "team" && !state.authSecret) throw new Error("expected auth secret in team mode");
 	const app = new appFactory();
 	app.use("*", createAuthMiddleware(state.authConfig, state.authSecret));
 	registerSourcesRoutes(app, { agentsDir });
@@ -200,5 +200,93 @@ describe("source route authorization in team mode", () => {
 			headers: bearer("operator"),
 		});
 		expect(missing.status).toBe(404);
+
+		const snapshot = await teamApp().request("http://localhost/api/sources/obsidian:abc/snapshot", {
+			headers: bearer("agent"),
+		});
+		expect(snapshot.status).toBe(403);
+		const snapshotMissing = await teamApp().request("http://localhost/api/sources/obsidian:abc/snapshot", {
+			headers: bearer("operator"),
+		});
+		expect(snapshotMissing.status).toBe(404);
+	});
+
+	it("does not treat an empty desktop cache path as a host path", async () => {
+		for (const desktopCachePath of ["", null]) {
+			const response = await teamApp().request("http://localhost/api/sources/discord", {
+				method: "POST",
+				headers: { ...bearer("operator"), "content-type": "application/json" },
+				body: JSON.stringify({ guildIds: ["1"], desktopCachePath }),
+			});
+			expect(response.status).not.toBe(403);
+		}
+	});
+});
+
+describe("workspace private data", () => {
+	async function importPath(path: string): Promise<number> {
+		const response = await teamApp().request(
+			"http://localhost/api/sources/import",
+			{ method: "POST", headers: bearer("admin"), body: pathForm(path) },
+			loopback,
+		);
+		return response.status;
+	}
+
+	async function addFolder(path: string): Promise<number> {
+		const response = await teamApp().request(
+			"http://localhost/api/sources/obsidian",
+			{
+				method: "POST",
+				headers: { ...bearer("admin"), "content-type": "application/json" },
+				body: JSON.stringify({ path }),
+			},
+			loopback,
+		);
+		return response.status;
+	}
+
+	it("refuses path imports of the daemon's own files in every auth mode", async () => {
+		const link = join(agentsDir, "innocent.txt");
+		symlinkSync(secretPath, link);
+		try {
+			expect(await importPath(secretPath)).toBe(400);
+			expect(await importPath(link)).toBe(400);
+			expect(await importPath(join(agentsDir, "memory", "..", ".daemon", "auth-secret"))).toBe(400);
+			expect(await importPath(join(agentsDir, "memory", "memories.db"))).toBe(400);
+
+			writeAuthConfig("local");
+			state.reloadAuthState(agentsDir);
+			const local = await teamApp().request(
+				"http://localhost/api/sources/import",
+				{ method: "POST", body: pathForm(secretPath) },
+				loopback,
+			);
+			expect(local.status).toBe(400);
+		} finally {
+			writeAuthConfig("team");
+			state.reloadAuthState(agentsDir);
+			rmSync(link, { force: true });
+		}
+		expect(admitted).toEqual([]);
+	});
+
+	it("refuses folder sources that would index the daemon's own files", async () => {
+		expect(await addFolder(join(agentsDir, ".daemon"))).toBe(400);
+		expect(await addFolder(join(agentsDir, "memory"))).toBe(400);
+		expect(await addFolder(agentsDir)).toBe(400);
+
+		const discord = await teamApp().request(
+			"http://localhost/api/sources/discord",
+			{
+				method: "POST",
+				headers: { ...bearer("admin"), "content-type": "application/json" },
+				body: JSON.stringify({ syncMode: "desktop-cache", desktopCachePath: join(agentsDir, ".daemon") }),
+			},
+			loopback,
+		);
+		expect(discord.status).toBe(400);
+		const kinds = loadSourcesConfig(agentsDir).sources.map((source) => source.kind);
+		expect(kinds.filter((kind) => kind === "obsidian" || kind === "discord")).toEqual([]);
 	});
 });

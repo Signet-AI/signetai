@@ -145,6 +145,9 @@ In `team` and `hybrid` mode, permissions apply as follows:
 - `POST /api/sources/import` requires `documents`. Its `paths` field requires `admin`.
 - Routes that read or browse the daemon host require `admin`: `POST /api/sources/obsidian`, `POST /api/sources/pick-files`, `POST /api/sources/pick-directory`, and `POST /api/sources/discord` with `syncMode: "desktop-cache"` or `desktopCachePath`.
 - Other source changes require `connectors`: `POST /api/sources/discord`, `github`, `notion`, and `web`, `POST /api/sources/:sourceId/snapshot/import`, and `DELETE /api/sources/:sourceId`.
+- `GET /api/sources/:sourceId/snapshot` requires `connectors`.
+
+In every auth mode, the daemon refuses an import path or folder root that is inside its own runtime, secrets, or database directories. It also refuses a folder root that contains one of them, unless a hidden directory on the way already excludes it from indexing. Paths are compared after `~` expansion and symlink resolution, and the request returns `400`.
 
 ### GET /api/sources
 
@@ -223,7 +226,7 @@ bytes are not retained by the importer.
 
 A local desktop daemon may also receive repeated `paths` fields instead of
 `files`; it reads those paths directly only for loopback requests from a caller
-with `admin` permission. Remote clients must upload file bytes through `files`,
+with `admin` permission, and never from Signet's private workspace data. Remote clients must upload file bytes through `files`,
 so a desktop path is never interpreted by a remote daemon.
 
 Imported artifacts are available immediately through source-backed recall, with

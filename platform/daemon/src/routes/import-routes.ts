@@ -7,7 +7,8 @@ import { getPeerAddress } from "../auth/middleware";
 import { type DocumentImportStatus, importDocument } from "../document-import-service";
 import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_FILE_BYTES } from "../import-normalizer";
 import { ImportAdmissionConflictError, type DurableImportAdmission } from "../import-inbox";
-import { authConfig } from "./state.js";
+import { isWorkspacePrivatePath } from "../workspace-private-paths";
+import { AGENTS_DIR, authConfig } from "./state.js";
 
 const MAX_MULTIPART_OVERHEAD = 1 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD;
@@ -43,6 +44,8 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 			if (denied) return denied;
 			if (!isLoopbackRequest(c))
 				return c.json({ error: "Filesystem path imports are only available on a local daemon" }, 400);
+			if (pathEntries.some((path) => isWorkspacePrivatePath(path, AGENTS_DIR)))
+				return c.json({ error: "Path is inside Signet's private workspace data" }, 400);
 		}
 		if (uploadedEntries.length + pathEntries.length === 0)
 			return c.json({ error: "At least one file is required" }, 400);
