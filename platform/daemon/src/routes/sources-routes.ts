@@ -43,6 +43,7 @@ import {
 } from "../native-memory-sources";
 
 import { getActiveTelemetry } from "../telemetry";
+import { exposesWorkspacePrivatePath } from "../workspace-private-paths";
 import { authConfig } from "./state.js";
 import {
 	type SourceIndexJob,
@@ -217,6 +218,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	app.use("/api/sources/github", gate("connectors"));
 	app.use("/api/sources/notion", gate("connectors"));
 	app.use("/api/sources/web", gate("connectors"));
+	app.use("/api/sources/:sourceId/snapshot", gate("connectors"));
 	app.use("/api/sources/:sourceId/snapshot/import", gate("connectors"));
 	app.use("/api/sources/:sourceId", async (c, next) =>
 		c.req.method === "DELETE" ? requirePermission("connectors", authConfig)(c, next) : next(),
@@ -285,6 +287,10 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		}
 
 		const root = body.root ?? body.path ?? "";
+		if (typeof root === "string" && root.trim() && exposesWorkspacePrivatePath(root, agentsDir)) {
+			recordSourceConnectionFailure("obsidian", "private workspace path");
+			return c.json({ error: "Folder includes Signet's private workspace data" }, 400);
+		}
 		const excludeGlobs = Array.isArray(body.excludeGlobs)
 			? body.excludeGlobs.filter((entry) => typeof entry === "string")
 			: undefined;
@@ -321,9 +327,15 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
-		if (body.syncMode === "desktop-cache" || body.desktopCachePath !== undefined) {
+		const desktopCachePath =
+			typeof body.desktopCachePath === "string" && body.desktopCachePath.trim() ? body.desktopCachePath : undefined;
+		if (body.syncMode === "desktop-cache" || desktopCachePath !== undefined) {
 			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
 			if (denied) return denied;
+		}
+		if (desktopCachePath !== undefined && exposesWorkspacePrivatePath(desktopCachePath, agentsDir)) {
+			recordSourceConnectionFailure("discord", "private workspace path");
+			return c.json({ error: "Folder includes Signet's private workspace data" }, 400);
 		}
 		const guildIds = Array.isArray(body.guildIds)
 			? body.guildIds.filter((entry): entry is string => typeof entry === "string")
@@ -343,7 +355,7 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 					guildIds,
 					tokenRef: typeof body.tokenRef === "string" ? body.tokenRef : "",
 					name: body.name,
-					desktopCachePath: typeof body.desktopCachePath === "string" ? body.desktopCachePath : undefined,
+					desktopCachePath,
 					desktopCacheFullScan: body.desktopCacheFullScan,
 					channelFilter,
 					maxMessagesPerChannel: body.maxMessagesPerChannel,
