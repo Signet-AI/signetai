@@ -24,7 +24,7 @@ import {
 	readOptionalJsonObject,
 	resolveScopedAgentId,
 	resolveScopedProject,
-	validateSessionAgentBinding,
+	validateSessionControl,
 } from "./utils.js";
 
 function listLiveSessions(agentId: string): Array<{
@@ -279,8 +279,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		if (!session) {
 			return c.json({ error: "Session not found" }, 404);
 		}
-		const bindingError = validateSessionAgentBinding(c, key, scopedAgent.agentId, {
-			requireExisting: false,
+		const bindingError = await validateSessionControl(c, key, scopedAgent.agentId, {
 			context: "session",
 		});
 		if (bindingError) return c.json({ error: bindingError }, 403);
@@ -302,7 +301,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		return c.json({ key, bypassed: enabled });
 	});
 
-	app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", (c) => {
+	app.post("/api/sessions/:key{(?!summaries$)[^/]+}/renew", async (c) => {
 		const scopedAgent = resolveScopedAgentId(c, c.req.query("agent_id"), "default");
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const key = normalizeSessionKey(c.req.param("key"));
@@ -310,8 +309,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		if (!session) {
 			return c.json({ error: "Session not found" }, 404);
 		}
-		const bindingError = validateSessionAgentBinding(c, key, scopedAgent.agentId, {
-			requireExisting: false,
+		const bindingError = await validateSessionControl(c, key, scopedAgent.agentId, {
 			context: "session",
 		});
 		if (bindingError) return c.json({ error: bindingError }, 403);
@@ -369,7 +367,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:369",
+			"routes/session-routes.ts:367",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -420,7 +418,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:379");
+		}, "routes/session-routes.ts:377");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {

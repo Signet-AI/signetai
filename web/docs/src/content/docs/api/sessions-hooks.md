@@ -22,8 +22,11 @@ Hooks that claim, renew, or end a session require `remember` permission:
 `session-checkpoint-extract`, `pre-compaction`, and `compaction-complete`.
 Before claiming or updating a session, they check that it is not held by
 another agent and that its project, and any `project` in the request, is within
-the credential's scope. A failed check returns `403` without changing the
-session.
+the credential's scope. A session key claimed only by other agents is
+rejected. If a project-limited credential targets a session that has a claim
+but no live presence, for example after a daemon restart, the project comes
+from the stored transcript; when there is none, the request is rejected. A
+failed check returns `403` without changing the session.
 
 ### POST /api/hooks/session-start
 

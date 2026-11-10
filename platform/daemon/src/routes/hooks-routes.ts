@@ -129,6 +129,7 @@ import {
 	shouldEnforceAuthScope,
 	toRecord,
 	validateSessionAgentBinding,
+	validateSessionControl,
 } from "./utils";
 import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
@@ -460,8 +461,7 @@ function registerSessionStart(app: Hono): void {
 				scopedAgent.agentId,
 			);
 			if (!startContext.ok) return startContext.response;
-			const startBinding = validateSessionAgentBinding(c, body.sessionKey, scopedAgent.agentId, {
-				requireExisting: false,
+			const startBinding = await validateSessionControl(c, body.sessionKey, scopedAgent.agentId, {
 				context: "sessionKey",
 				project: parseOptionalString(body.project),
 			});
@@ -567,8 +567,7 @@ function registerUserPromptSubmit(app: Hono): void {
 			body.agentId = agentId;
 			const promptContext = resolveHookContext(c, body.context, sessionKey, agentId);
 			if (!promptContext.ok) return promptContext.response;
-			const promptBinding = validateSessionAgentBinding(c, sessionKey, agentId, {
-				requireExisting: false,
+			const promptBinding = await validateSessionControl(c, sessionKey, agentId, {
 				context: "sessionKey",
 				project: parseOptionalString(body.project),
 			});
@@ -847,8 +846,7 @@ function registerSessionEnd(app: Hono): void {
 			if (endScope.error) return c.json({ error: endScope.error }, 403);
 			const agentId = endScope.agentId;
 			body.agentId = agentId;
-			const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, {
-				requireExisting: false,
+			const bindingError = await validateSessionControl(c, sessionKey, agentId, {
 				context: "sessionKey",
 			});
 			if (bindingError) return c.json({ error: bindingError }, 403);
@@ -1008,8 +1006,7 @@ function registerCheckpointExtract(app: Hono): void {
 			);
 			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 			const agentId = scopedAgent.agentId;
-			const checkpointBinding = validateSessionAgentBinding(c, body.sessionKey, agentId, {
-				requireExisting: false,
+			const checkpointBinding = await validateSessionControl(c, body.sessionKey, agentId, {
 				context: "sessionKey",
 			});
 			if (checkpointBinding) return c.json({ error: checkpointBinding }, 403);
@@ -1263,8 +1260,7 @@ function registerPreCompaction(app: Hono): void {
 			);
 			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 			const agentId = scopedAgent.agentId;
-			const sessionError = validateSessionAgentBinding(c, body.sessionKey, agentId, {
-				requireExisting: false,
+			const sessionError = await validateSessionControl(c, body.sessionKey, agentId, {
 				context: "sessionKey",
 			});
 			if (sessionError) return c.json({ error: sessionError }, 403);
@@ -1333,8 +1329,7 @@ function registerCompactionComplete(app: Hono): void {
 				return c.json({ error: scopedAgent.error }, 403);
 			}
 			const agentId = scopedAgent.agentId;
-			const compactionBinding = validateSessionAgentBinding(c, body.sessionKey, agentId, {
-				requireExisting: false,
+			const compactionBinding = await validateSessionControl(c, body.sessionKey, agentId, {
 				context: "sessionKey",
 				project: parseOptionalString(body.project),
 			});
@@ -1644,8 +1639,7 @@ function registerCrossAgentPresence(app: Hono): void {
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
 		}
-		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
-			requireExisting: false,
+		const sessionError = await validateSessionControl(c, sessionKey, scopedAgent.agentId, {
 			context: "sessionKey",
 			project: parseOptionalString(payload.project),
 		});

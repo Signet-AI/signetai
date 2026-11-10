@@ -3432,14 +3432,14 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1358,
+      "line": 1353,
       "api": "existsSync",
       "source": "if (!existsSync(getCurrentMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1365,
+      "line": 1360,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb(",
       "category": "hot-path",
@@ -3447,7 +3447,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1395,
+      "line": 1390,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -3455,7 +3455,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1508,
+      "line": 1503,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -3915,14 +3915,14 @@
     },
     {
       "path": "routes/session-routes.ts",
-      "line": 369,
+      "line": 367,
       "api": "withReadDb",
       "source": "const tableExists = accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "routes/session-routes.ts",
-      "line": 379,
+      "line": 377,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path"
@@ -4273,7 +4273,7 @@
     },
     {
       "path": "routes/utils.ts",
-      "line": 453,
+      "line": 471,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4281,7 +4281,7 @@
     },
     {
       "path": "routes/utils.ts",
-      "line": 539,
+      "line": 557,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
