@@ -23,6 +23,10 @@ import { resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
 export type TranscriptRole = "user" | "assistant" | "unknown";
 export type TranscriptSourceFormat = "jsonl" | "markdown" | "db" | "live" | "normalized";
 
+function isTranscriptRole(value: unknown): value is TranscriptRole {
+	return value === "user" || value === "assistant" || value === "unknown";
+}
+
 export interface CanonicalTranscriptRecord {
 	readonly schema: "signet.transcript.v1";
 	readonly id: string;
@@ -606,7 +610,7 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 			if (
 				parsed?.schema !== "signet.transcript.v1" ||
 				typeof parsed.content !== "string" ||
-				(parsed.role !== "user" && parsed.role !== "assistant" && parsed.role !== "unknown") ||
+				!isTranscriptRole(parsed.role) ||
 				typeof parsed.agent_id !== "string" ||
 				typeof parsed.harness !== "string"
 			) {
@@ -707,13 +711,17 @@ export function writeCanonicalTranscriptSnapshot(
 					if (trimmedLine.length === 0) continue;
 					try {
 						const parsed = JSON.parse(trimmedLine) as Partial<CanonicalTranscriptRecord>;
-						if (parsed.schema !== "signet.transcript.v1" || typeof parsed.content !== "string") {
+						if (
+							parsed.schema !== "signet.transcript.v1" ||
+							typeof parsed.content !== "string" ||
+							!isTranscriptRole(parsed.role)
+						) {
 							writeSync(fd, `${line}\n`);
 							continue;
 						}
 						if (sameSession(parsed as CanonicalTranscriptRecord, input)) {
 							existingSessionTurns.push({
-								role: parsed.role as CanonicalTranscriptRecord["role"],
+								role: parsed.role,
 								content: cleanTurnContent(parsed.content),
 								live: parsed.source_format === "live",
 								capturedAt: typeof parsed.captured_at === "string" ? parsed.captured_at : null,

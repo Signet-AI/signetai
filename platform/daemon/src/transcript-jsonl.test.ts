@@ -892,6 +892,26 @@ describe("backfill OOM regression (#587)", () => {
 			]);
 		});
 
+		test("a source snapshot keeps a live record with an invalid role as written and leaves it out of the merge", async () => {
+			const root = makeRoot("mixed-invalid-role");
+			await seedMixedSession(root);
+			const path = canonicalTranscriptPath(root, "claude-code");
+			const liveLine = readFileSync(path, "utf8").trim().split("\n").at(-1) ?? "";
+			const { role: _role, ...withoutRole } = JSON.parse(liveLine) as Record<string, unknown>;
+			const malformed = JSON.stringify({ ...withoutRole, seq: 4, content: "stray live text" });
+			writeFileSync(path, `${readFileSync(path, "utf8")}${malformed}\n`);
+
+			await writeSourceSnapshot(
+				root,
+				["User: first question", "Assistant: first answer", "User: second question", "Assistant: second answer"],
+				true,
+			);
+
+			const lines = readFileSync(path, "utf8").trim().split("\n");
+			expect(lines).toContain(malformed);
+			expect(lines.filter((line) => line.includes("stray live text"))).toHaveLength(1);
+		});
+
 		test("refuses a source snapshot that does not start with the session's source records", async () => {
 			const root = makeRoot("mixed-divergent-prefix");
 			await seedMixedSession(root);
