@@ -330,9 +330,9 @@ export async function validateSessionControl(
 	if (bindingError) return bindingError;
 	const key = parseOptionalString(sessionKey);
 	if (!key || !shouldEnforceAuthScope(c) || !c.get("auth")?.claims?.scope.project) return undefined;
-	if (getAgentPresenceForSession(key) || !hasSession(key, agentId)) return undefined;
+	if (getAgentPresenceForSession(key)) return undefined;
 	const stored = await getStoredSessionTranscriptInfoAsync(key, agentId);
-	if (!stored) return `${options.context} project cannot be verified`;
+	if (!stored) return hasSession(key, agentId) ? `${options.context} project cannot be verified` : undefined;
 	return stored.project ? resolveScopedProject(c, stored.project).error : undefined;
 }
 

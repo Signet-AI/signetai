@@ -23,9 +23,10 @@ Hooks that claim, renew, or end a session require `remember` permission:
 Before claiming or updating a session, they check that it is not held by
 another agent and that its project, and any `project` in the request, is within
 the credential's scope. A session key claimed only by other agents is
-rejected. If a project-limited credential targets a session that has a claim
-but no live presence, for example after a daemon restart, the project comes
-from the stored transcript; when there is none, the request is rejected. A
+rejected. If a project-limited credential targets a session with no live
+presence, for example after a daemon restart or claim expiry, the project comes
+from the stored transcript. A session with a claim but no stored transcript is
+rejected. A
 failed check returns `403` without changing the session.
 
 ### POST /api/hooks/session-start
