@@ -147,7 +147,7 @@ In `team` and `hybrid` mode, permissions apply as follows:
 - Other source changes require `connectors`: `POST /api/sources/discord`, `github`, `notion`, and `web`, `POST /api/sources/:sourceId/snapshot/import`, and `DELETE /api/sources/:sourceId`.
 - `GET /api/sources/:sourceId/snapshot` requires `connectors`.
 
-In every auth mode, the daemon refuses an import path or folder root that is inside its own runtime, secrets, or database directories. It also refuses a folder root that contains one of them, unless a hidden directory on the way already excludes it from indexing. Paths are compared after `~` expansion and symlink resolution, and the request returns `400`.
+In every auth mode, the daemon refuses an import path or folder root that is inside its own runtime, secrets, database, or transcript directories. It also refuses a folder root that contains one of them. For Obsidian sources, which never index hidden directories, a root is allowed when the private directory is below a hidden directory, so a vault rooted at `~` still works with the workspace at `~/.agents`. Paths are compared after `~` expansion and symlink resolution, and the request returns `400`.
 
 ### GET /api/sources
 

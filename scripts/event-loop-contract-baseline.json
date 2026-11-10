@@ -4195,35 +4195,35 @@
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1126,
+      "line": 1133,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1128,
+      "line": 1135,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1138,
+      "line": 1145,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1140,
+      "line": 1147,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\\n`, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1141,
+      "line": 1148,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"

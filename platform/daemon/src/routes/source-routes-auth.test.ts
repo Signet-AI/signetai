@@ -286,6 +286,18 @@ describe("workspace private data", () => {
 			loopback,
 		);
 		expect(discord.status).toBe(400);
+
+		const parent = join(agentsDir, "..");
+		const discordParent = await teamApp().request(
+			"http://localhost/api/sources/discord",
+			{
+				method: "POST",
+				headers: { ...bearer("admin"), "content-type": "application/json" },
+				body: JSON.stringify({ syncMode: "desktop-cache", desktopCachePath: parent }),
+			},
+			loopback,
+		);
+		expect(discordParent.status).toBe(400);
 		const kinds = loadSourcesConfig(agentsDir).sources.map((source) => source.kind);
 		expect(kinds.filter((kind) => kind === "obsidian" || kind === "discord")).toEqual([]);
 	});
