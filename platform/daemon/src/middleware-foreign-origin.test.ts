@@ -24,9 +24,9 @@ function writeAuthMode(mode: "local" | "hybrid" | "team"): void {
 	state.reloadAuthState(agentsDir);
 }
 
-function send(method: string, headers: Record<string, string>): Promise<number> {
+function send(method: string, headers: Record<string, string>, path = "/api/secrets/exec"): Promise<number> {
 	return new Promise((resolve, reject) => {
-		const req = request({ host: "127.0.0.1", port, path: "/api/secrets/exec", method, headers }, (res) => {
+		const req = request({ host: "127.0.0.1", port, path, method, headers }, (res) => {
 			res.resume();
 			res.on("end", () => resolve(res.statusCode ?? 0));
 		});
@@ -97,6 +97,7 @@ describe("browser writes without credentials", () => {
 		writeAuthMode("hybrid");
 		expect(await send("POST", { origin: "http://evil.example" })).toBe(403);
 		expect(await send("POST", { origin: "http://evil.example", authorization: "Bearer not-a-token" })).toBe(200);
+		expect(await send("POST", { origin: "https://signet.example" }, "/api/auth/login")).toBe(200);
 
 		writeAuthMode("team");
 		expect(await send("POST", { origin: "http://evil.example" })).toBe(401);
