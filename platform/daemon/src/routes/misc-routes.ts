@@ -29,7 +29,7 @@ import {
 } from "../update-system.js";
 import { loadDashboardIdentity } from "./dashboard-identity.js";
 import { AGENTS_DIR, authConfig } from "./state.js";
-import { parseOptionalString, toRecord } from "./utils.js";
+import { parseOptionalString, resolveScopedAgentId, toRecord } from "./utils.js";
 import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
 
 const GUARDED_CONFIG_FILES_CI = new Set(["agent.yaml", "config.yaml"]);
@@ -248,10 +248,14 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.post("/api/agents", async (c) => {
+		const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
 		const body = toRecord(await c.req.json().catch(() => null));
 		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
 		const name = parseOptionalString(body.name);
 		if (!name) return c.json({ error: "name is required" }, 400);
+		const scopedAgent = resolveScopedAgentId(c, name);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		let resolved: ReturnType<typeof resolveAgentMemoryPolicy>;
 		try {
 			const rawPolicy = Object.hasOwn(body, "read_policy") ? body.read_policy : undefined;
@@ -299,6 +303,8 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.patch("/api/agents/:name", async (c) => {
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
 		const name = c.req.param("name");
 		if (name === "default") return c.json({ error: "Cannot modify the default agent" }, 400);
 		const body = toRecord(await c.req.json().catch(() => null));
@@ -353,6 +359,8 @@ export function registerMiscRoutes(app: Hono): void {
 	});
 
 	app.delete("/api/agents/:name", async (c) => {
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
 		const name = c.req.param("name");
 		if (name === "default") return c.json({ error: "Cannot remove the default agent" }, 400);
 		const purge = c.req.query("purge") === "true";

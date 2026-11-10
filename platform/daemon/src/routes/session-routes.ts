@@ -201,7 +201,9 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 			}),
 		);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		const content = getSessionTranscriptContent(key, scopedAgent.agentId);
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		const content = getSessionTranscriptContent(key, scopedAgent.agentId, scopedProject.project);
 		if (!content) return c.json({ error: "Transcript not found" }, 404);
 		return c.json({ sessionKey: key, agentId: scopedAgent.agentId, content });
 	});

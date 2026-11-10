@@ -479,7 +479,8 @@ Returns `404` if the session key is not found.
 
 Return the canonical cleaned transcript for a session. Results are scoped to
 the authenticated agent; pass `agent_id` only when calling with an authorized
-agent scope.
+agent scope. A credential scoped to a project only reads transcripts recorded
+under that project; `project` narrows the lookup the same way for other callers.
 
 Both raw keys (`abc123`) and prefixed keys (`session:abc123`) are accepted.
 
