@@ -607,6 +607,85 @@ export function upsertSessionTranscript(
 	}
 }
 
+export function writeSessionTranscriptRow(
+	db: WriteDb,
+	input: SessionTranscriptUpsertOptions & {
+		readonly sessionKey: string;
+		readonly transcript: string;
+		readonly harness: string;
+		readonly project: string | null;
+		readonly agentId: string;
+		readonly capturedAt?: string;
+		readonly sameProjectOnly?: boolean;
+	},
+): "written" | "skipped" | "conflict" {
+	const { sessionKey, transcript, harness, project, agentId, capturedAt } = input;
+	if (sessionKey.trim().length === 0 || transcript.trim().length === 0) return "skipped";
+	if (!tableExistsInDatabase(db, "session_transcripts")) return "skipped";
+	if (input.sameProjectOnly) {
+		const owner = db
+			.prepare(
+				"SELECT COALESCE(project, '') AS project FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+			)
+			.get(sessionKey, agentId) as { project: string } | null | undefined;
+		if (owner != null && owner.project !== (project ?? "")) return "conflict";
+	}
+	const existing = input.preserveExistingContent
+		? (db
+				.prepare(
+					`SELECT content
+						 FROM session_transcripts
+						 WHERE session_key = ? AND agent_id = ?`,
+				)
+				.get(sessionKey, agentId) as { content?: string } | null | undefined)
+		: undefined;
+	const retainedTranscript = mergeTranscriptContent(existing?.content ?? "", transcript);
+	const now = capturedAt ?? new Date().toISOString();
+	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
+	const hasUpdated = cols.some((col) => col.name === "updated_at");
+	const hasCompleted = cols.some((col) => col.name === "completed_at");
+	const hasHash = cols.some((col) => col.name === "content_hash");
+	const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
+	const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at"];
+	const values: unknown[] = [sessionKey, retainedTranscript, harness, project, agentId, now];
+	const updates = [
+		"content = excluded.content",
+		"harness = excluded.harness",
+		"project = excluded.project",
+		"agent_id = excluded.agent_id",
+	];
+	const sameContent = hasHash
+		? "(session_transcripts.content_hash = excluded.content_hash OR (session_transcripts.content_hash IS NULL AND session_transcripts.content = excluded.content))"
+		: "session_transcripts.content = excluded.content";
+	if (hasUpdated) {
+		insertColumns.push("updated_at");
+		values.push(now);
+		updates.push(
+			`updated_at = CASE WHEN ${sameContent} THEN session_transcripts.updated_at ELSE excluded.updated_at END`,
+		);
+	}
+	if (hasCompleted) {
+		insertColumns.push("completed_at");
+		values.push(input.completedAt ?? null);
+		updates.push(
+			input.completedAt
+				? "completed_at = CASE WHEN session_transcripts.completed_at IS NULL THEN excluded.completed_at ELSE session_transcripts.completed_at END"
+				: `completed_at = CASE WHEN ${sameContent} THEN session_transcripts.completed_at ELSE NULL END`,
+		);
+	}
+	if (hasHash) {
+		insertColumns.push("content_hash");
+		values.push(contentHash);
+		updates.push("content_hash = excluded.content_hash");
+	}
+	db.prepare(
+		`INSERT INTO session_transcripts (${insertColumns.join(", ")})
+		 VALUES (${insertColumns.map(() => "?").join(", ")})
+		 ON CONFLICT(agent_id, session_key) DO UPDATE SET ${updates.join(", ")}`,
+	).run(...values);
+	return "written";
+}
+
 export async function upsertSessionTranscriptAsync(
 	sessionKey: string,
 	transcript: string,
@@ -622,65 +701,19 @@ export async function upsertSessionTranscriptAsync(
 	try {
 		return await accessor.withWriteTxAsync(
 			(db) => {
-				if (!tableExistsInDatabase(db, "session_transcripts")) return false;
-				const existing = options?.preserveExistingContent
-					? (db
-							.prepare(
-								`SELECT content
-								 FROM session_transcripts
-								 WHERE session_key = ? AND agent_id = ?`,
-							)
-							.get(sessionKey, agentId) as { content?: string } | null | undefined)
-					: undefined;
-				const retainedTranscript = mergeTranscriptContent(existing?.content ?? "", transcript);
-				const now = capturedAt ?? new Date().toISOString();
-				const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<
-					Record<string, unknown>
-				>;
-				const hasUpdated = cols.some((col) => col.name === "updated_at");
-				const hasCompleted = cols.some((col) => col.name === "completed_at");
-				const hasHash = cols.some((col) => col.name === "content_hash");
-				const contentHash = createHash("sha256").update(retainedTranscript).digest("hex");
-				const insertColumns = ["session_key", "content", "harness", "project", "agent_id", "created_at"];
-				const values: unknown[] = [sessionKey, retainedTranscript, harness, project, agentId, now];
-				const updates = [
-					"content = excluded.content",
-					"harness = excluded.harness",
-					"project = excluded.project",
-					"agent_id = excluded.agent_id",
-				];
-				const sameContent = hasHash
-					? "(session_transcripts.content_hash = excluded.content_hash OR (session_transcripts.content_hash IS NULL AND session_transcripts.content = excluded.content))"
-					: "session_transcripts.content = excluded.content";
-				if (hasUpdated) {
-					insertColumns.push("updated_at");
-					values.push(now);
-					updates.push(
-						`updated_at = CASE WHEN ${sameContent} THEN session_transcripts.updated_at ELSE excluded.updated_at END`,
-					);
-				}
-				if (hasCompleted) {
-					insertColumns.push("completed_at");
-					values.push(options?.completedAt ?? null);
-					updates.push(
-						options?.completedAt
-							? "completed_at = CASE WHEN session_transcripts.completed_at IS NULL THEN excluded.completed_at ELSE session_transcripts.completed_at END"
-							: `completed_at = CASE WHEN ${sameContent} THEN session_transcripts.completed_at ELSE NULL END`,
-					);
-				}
-				if (hasHash) {
-					insertColumns.push("content_hash");
-					values.push(contentHash);
-					updates.push("content_hash = excluded.content_hash");
-				}
-				db.prepare(
-					`INSERT INTO session_transcripts (${insertColumns.join(", ")})
-						 VALUES (${insertColumns.map(() => "?").join(", ")})
-						 ON CONFLICT(agent_id, session_key) DO UPDATE SET ${updates.join(", ")}`,
-				).run(...values);
-				return true;
+				return (
+					writeSessionTranscriptRow(db, {
+						sessionKey,
+						transcript,
+						harness,
+						project,
+						agentId,
+						capturedAt,
+						...options,
+					}) === "written"
+				);
 			},
-			{ siteToken: "session-transcripts.ts:623", operation: "transcripts.upsert", signal: options?.signal },
+			{ siteToken: "session-transcripts.ts:702", operation: "transcripts.upsert", signal: options?.signal },
 		);
 	} catch (error) {
 		if (options?.signal?.aborted) throw error;
@@ -726,7 +759,7 @@ export function markSessionTranscriptCompleted(
 		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
-		}, "session-transcripts.ts:726");
+		}, "session-transcripts.ts:759");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript completion marker failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -789,7 +822,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				completedAt: row.completed_at ?? null,
 				contentHash: row.content_hash ?? null,
 			};
-		}, "session-transcripts.ts:758");
+		}, "session-transcripts.ts:791");
 	} catch {
 		return undefined;
 	}
@@ -857,7 +890,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ siteToken: "session-transcripts.ts:855", operation: "transcripts.lookup", signal },
+			{ siteToken: "session-transcripts.ts:888", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;
@@ -887,7 +920,7 @@ export function getSessionTranscriptContent(
 				| { content: string }
 				| undefined;
 			return row?.content;
-		}, "session-transcripts.ts:878");
+		}, "session-transcripts.ts:911");
 	} catch {
 		return undefined;
 	}
@@ -935,7 +968,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:911");
+		}, "session-transcripts.ts:944");
 	} catch {
 		return [];
 	}
@@ -983,7 +1016,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:966");
+		}, "session-transcripts.ts:999");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -1026,7 +1059,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:1011");
+						}, "session-transcripts.ts:1044");
 
 					const hits = rows
 						.map((row) => ({
@@ -1096,7 +1129,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1075");
+			}, "session-transcripts.ts:1108");
 
 		return rows
 			.map((row) => ({
