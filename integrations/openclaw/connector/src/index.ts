@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import {
@@ -6,6 +6,7 @@ import {
 	type InstallResult,
 	type UninstallResult,
 	atomicWriteJson,
+	atomicWriteText,
 	isJsonObject,
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
@@ -130,7 +131,7 @@ function removePluginAllow(pluginsObj: JsonObject, pluginName: string): { change
 }
 function backupConfig(configPath: string, raw: string): void {
 	try {
-		writeFileSync(`${configPath}.signet-backup`, raw, "utf-8");
+		atomicWriteText(`${configPath}.signet-backup`, raw, statSync(configPath).mode & 0o777);
 	} catch {}
 }
 export class OpenClawConnector extends BaseConnector {

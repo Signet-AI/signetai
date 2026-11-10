@@ -10,6 +10,7 @@ import {
 	type UninstallResult,
 	atomicWriteText,
 	isJsonObject,
+	keepSignetApiKeyFilePrivate,
 	readTrimmedEnv,
 	resolveSignetAgentId,
 	resolveSignetApiKey,
@@ -287,6 +288,8 @@ export class MuseCodeConnector extends BaseConnector {
 		if (JSON.stringify(next) !== JSON.stringify(current)) {
 			writeMuseSettings(settingsPath, next);
 			configsPatched.push(settingsPath);
+		} else {
+			keepSignetApiKeyFilePrivate(settingsPath);
 		}
 
 		if (workspace !== defaultWorkspacePath()) {
