@@ -1,8 +1,8 @@
-import type { Context, Hono } from "hono";
+import type { Hono } from "hono";
 import { resolveAgentId } from "../agent-id.js";
 import { requirePermission } from "../auth";
 import { buildBlackBoxSession, listBlackBoxSessions } from "../black-box.js";
-import { getAgentPresenceForSessionAgent, listAgentPresence, touchAgentPresence } from "../cross-agent.js";
+import { listAgentPresence, touchAgentPresence } from "../cross-agent.js";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 import {
@@ -19,7 +19,13 @@ import { searchSessionTranscripts } from "../subagent-context.js";
 import { expandTemporalNode } from "../temporal-expand.js";
 import { clampGitSyncIntervalSeconds } from "./git-config.js";
 import { authConfig } from "./state.js";
-import { parseOptionalString, readOptionalJsonObject, resolveScopedAgentId, resolveScopedProject } from "./utils.js";
+import {
+	parseOptionalString,
+	readOptionalJsonObject,
+	resolveScopedAgentId,
+	resolveScopedProject,
+	validateSessionAgentBinding,
+} from "./utils.js";
 
 function listLiveSessions(agentId: string): Array<{
 	key: string;
@@ -60,11 +66,6 @@ export interface GitConfig {
 	syncInterval: number;
 	remote: string;
 	branch: string;
-}
-
-function sessionProjectError(c: Context, key: string, agentId: string): string | undefined {
-	const project = getAgentPresenceForSessionAgent(key, agentId)?.project;
-	return project ? resolveScopedProject(c, project).error : undefined;
 }
 
 export function applyGitConfigPatch(gc: GitConfig, body: Partial<GitConfig>): void {
@@ -185,7 +186,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 					project: scopedProject.project,
 					limit,
 				}),
-			"routes/session-routes.ts:177",
+			"routes/session-routes.ts:178",
 		);
 		return c.json({ query, hits, count: hits.length });
 	});
@@ -278,8 +279,11 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		if (!session) {
 			return c.json({ error: "Session not found" }, 404);
 		}
-		const projectError = sessionProjectError(c, key, scopedAgent.agentId);
-		if (projectError) return c.json({ error: projectError }, 403);
+		const bindingError = validateSessionAgentBinding(c, key, scopedAgent.agentId, {
+			requireExisting: false,
+			context: "session",
+		});
+		if (bindingError) return c.json({ error: bindingError }, 403);
 
 		const body = await readOptionalJsonObject(c);
 		if (!body || typeof body.enabled !== "boolean") {
@@ -306,8 +310,11 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		if (!session) {
 			return c.json({ error: "Session not found" }, 404);
 		}
-		const projectError = sessionProjectError(c, key, scopedAgent.agentId);
-		if (projectError) return c.json({ error: projectError }, 403);
+		const bindingError = validateSessionAgentBinding(c, key, scopedAgent.agentId, {
+			requireExisting: false,
+			context: "session",
+		});
+		if (bindingError) return c.json({ error: bindingError }, 403);
 		if (session.expiresAt === null) {
 			touchAgentPresence(key, scopedAgent.agentId);
 			return c.json({ key, renewed: true });
@@ -362,7 +369,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:362",
+			"routes/session-routes.ts:369",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -413,7 +420,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:372");
+		}, "routes/session-routes.ts:379");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {

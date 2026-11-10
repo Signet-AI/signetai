@@ -19,8 +19,11 @@ calls from the other path return `409`.
 
 Hooks that claim, renew, or end a session require `remember` permission:
 `session-start`, `user-prompt-submit`, `session-end`,
-`session-checkpoint-extract`, `pre-compaction`, and `compaction-complete`. They
-act only on sessions of the credential's agent.
+`session-checkpoint-extract`, `pre-compaction`, and `compaction-complete`.
+Before claiming or updating a session, they check that it is not held by
+another agent and that its project, and any `project` in the request, is within
+the credential's scope. A failed check returns `403` without changing the
+session.
 
 ### POST /api/hooks/session-start
 
