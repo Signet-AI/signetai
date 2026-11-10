@@ -864,6 +864,35 @@ describe("scope boundaries around memory routes", () => {
 		expect(raceRows.n).toBe(1);
 	});
 
+	it("leaves a newer transcript alone when a remember is replayed", async () => {
+		const app = await makeApp("local");
+		const request = {
+			content: "Summary of the replayed session",
+			agentId: "alpha",
+			sourceType: "session",
+			sourceId: "replayed-session",
+			transcript: "User: first turn",
+		};
+		expect((await send(app, "POST", "/api/memory/remember", {}, request)).status).toBe(200);
+		const { upsertSessionTranscriptAsync } = await import("../session-transcripts");
+		const full = "User: first turn\nAssistant: answer\nUser: correction";
+		await upsertSessionTranscriptAsync("replayed-session", full, "session", null, "alpha", undefined, undefined, {
+			completedAt: NOW,
+		});
+		const replay = await send(app, "POST", "/api/memory/remember", {}, request);
+		expect(replay.status).toBe(200);
+		expect(replay.body.deduped).toBe(true);
+		const row = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT content, completed_at FROM session_transcripts WHERE agent_id = 'alpha' AND session_key = 'replayed-session'",
+					)
+					.get() as { content: string; completed_at: string | null },
+		);
+		expect(row).toEqual({ content: full, completed_at: NOW });
+	});
+
 	it("lets an unscoped caller move a session to another project", async () => {
 		const app = await makeApp("local");
 		for (const project of ["old", "new"]) {
