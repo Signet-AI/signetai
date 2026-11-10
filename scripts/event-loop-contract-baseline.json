@@ -3432,14 +3432,14 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1337,
+      "line": 1358,
       "api": "existsSync",
       "source": "if (!existsSync(getCurrentMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1344,
+      "line": 1365,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb(",
       "category": "hot-path",
@@ -3447,7 +3447,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1374,
+      "line": 1395,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -3455,7 +3455,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1487,
+      "line": 1508,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -3908,21 +3908,21 @@
     },
     {
       "path": "routes/session-routes.ts",
-      "line": 177,
+      "line": 178,
       "api": "withReadDb",
       "source": "const hits = getDbAccessor().withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "routes/session-routes.ts",
-      "line": 362,
+      "line": 369,
       "api": "withReadDb",
       "source": "const tableExists = accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "routes/session-routes.ts",
-      "line": 372,
+      "line": 379,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path"
@@ -4273,7 +4273,7 @@
     },
     {
       "path": "routes/utils.ts",
-      "line": 445,
+      "line": 453,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4281,7 +4281,7 @@
     },
     {
       "path": "routes/utils.ts",
-      "line": 531,
+      "line": 539,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",

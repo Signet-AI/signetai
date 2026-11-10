@@ -460,6 +460,12 @@ function registerSessionStart(app: Hono): void {
 				scopedAgent.agentId,
 			);
 			if (!startContext.ok) return startContext.response;
+			const startBinding = validateSessionAgentBinding(c, body.sessionKey, scopedAgent.agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+				project: parseOptionalString(body.project),
+			});
+			if (startBinding) return c.json({ error: startBinding }, 403);
 
 			if (body.sessionKey && runtimePath) {
 				const claim = claimSession(body.sessionKey, runtimePath, scopedAgent.agentId, body.harness);
@@ -561,6 +567,12 @@ function registerUserPromptSubmit(app: Hono): void {
 			body.agentId = agentId;
 			const promptContext = resolveHookContext(c, body.context, sessionKey, agentId);
 			if (!promptContext.ok) return promptContext.response;
+			const promptBinding = validateSessionAgentBinding(c, sessionKey, agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+				project: parseOptionalString(body.project),
+			});
+			if (promptBinding) return c.json({ error: promptBinding }, 403);
 			const known = sessionKey ? hasSession(sessionKey, agentId) : false;
 			const duplicate = claimAutomaticSessionOrSkip(
 				sessionKey,
@@ -996,6 +1008,11 @@ function registerCheckpointExtract(app: Hono): void {
 			);
 			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 			const agentId = scopedAgent.agentId;
+			const checkpointBinding = validateSessionAgentBinding(c, body.sessionKey, agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+			});
+			if (checkpointBinding) return c.json({ error: checkpointBinding }, 403);
 
 			const duplicate = claimAutomaticSessionOrSkip(
 				body.sessionKey,
@@ -1246,14 +1263,12 @@ function registerPreCompaction(app: Hono): void {
 			);
 			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 			const agentId = scopedAgent.agentId;
-			if (transcriptPath) {
-				const sessionError = validateSessionAgentBinding(c, body.sessionKey, agentId, {
-					requireExisting: false,
-					context: "sessionKey",
-				});
-				if (sessionError) return c.json({ error: sessionError }, 403);
-				body.agentId = agentId;
-			}
+			const sessionError = validateSessionAgentBinding(c, body.sessionKey, agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+			});
+			if (sessionError) return c.json({ error: sessionError }, 403);
+			if (transcriptPath) body.agentId = agentId;
 			const duplicate = claimAutomaticSessionOrSkip(
 				body.sessionKey,
 				runtimePath,
@@ -1318,6 +1333,12 @@ function registerCompactionComplete(app: Hono): void {
 				return c.json({ error: scopedAgent.error }, 403);
 			}
 			const agentId = scopedAgent.agentId;
+			const compactionBinding = validateSessionAgentBinding(c, body.sessionKey, agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+				project: parseOptionalString(body.project),
+			});
+			if (compactionBinding) return c.json({ error: compactionBinding }, 403);
 			const duplicate = claimAutomaticSessionOrSkip(
 				body.sessionKey,
 				runtimePath,
@@ -1626,6 +1647,7 @@ function registerCrossAgentPresence(app: Hono): void {
 		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
 			requireExisting: false,
 			context: "sessionKey",
+			project: parseOptionalString(payload.project),
 		});
 		if (sessionError) {
 			return c.json({ error: sessionError }, 403);

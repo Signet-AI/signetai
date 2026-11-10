@@ -13,6 +13,7 @@ import {
 	setNativeFallbackProvider,
 } from "../embedding-fetch";
 import { logger } from "../logger";
+import { getActiveSessions, normalizeSessionKey } from "../session-tracker";
 import type { EmbeddingConfig } from "../memory-config";
 import type { NativeEmbeddingRuntimeOptions } from "../native-embedding";
 import {
@@ -291,11 +292,18 @@ export function validateSessionAgentBinding(
 	c: Context,
 	sessionKey: string | undefined,
 	agentId: string,
-	options: { requireExisting: boolean; context: string },
+	options: { requireExisting: boolean; context: string; project?: string },
 ): string | undefined {
 	const normalizedSessionKey = parseOptionalString(sessionKey);
 	if (!normalizedSessionKey || !shouldEnforceAuthScope(c)) {
 		return undefined;
+	}
+	const requestedProject = resolveScopedProject(c, options.project);
+	if (requestedProject.error) return requestedProject.error;
+
+	const trackedKey = normalizeSessionKey(normalizedSessionKey);
+	if (getActiveSessions().some((session) => session.key === trackedKey && session.agentId !== agentId)) {
+		return `${options.context} belongs to a different agent`;
 	}
 
 	const existing = getAgentPresenceForSession(normalizedSessionKey);
@@ -307,7 +315,7 @@ export function validateSessionAgentBinding(
 		return `${options.context} belongs to a different agent`;
 	}
 
-	return undefined;
+	return existing.project ? resolveScopedProject(c, existing.project).error : undefined;
 }
 
 export function parseTagsMutation(value: unknown): string | null | undefined {
