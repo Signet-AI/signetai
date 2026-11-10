@@ -26,6 +26,7 @@ import {
 } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
+import { type Permission, requirePermission } from "../auth";
 import { getPeerAddress } from "../auth/middleware";
 import { dbOwnerQuery, dbOwnerSourceEvidenceEligibility } from "../db-owner-runtime";
 import type { DbOwnerParameter } from "../db-owner-protocol";
@@ -42,6 +43,7 @@ import {
 } from "../native-memory-sources";
 
 import { getActiveTelemetry } from "../telemetry";
+import { authConfig } from "./state.js";
 import {
 	type SourceIndexJob,
 	beginSourceIndexJob,
@@ -206,6 +208,19 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 	const importSnapshot = deps.importSourceSnapshot ?? importSourceSnapshot;
 	const pickerExecFile = deps.pickerExecFile ?? execFileAsync;
 	const pickerPlatform = deps.pickerPlatform ?? process.platform;
+	const gate = (permission: Permission) => async (c: Context, next: () => Promise<void>) =>
+		requirePermission(permission, authConfig)(c, next);
+	app.use("/api/sources/pick-directory", gate("admin"));
+	app.use("/api/sources/pick-files", gate("admin"));
+	app.use("/api/sources/obsidian", gate("admin"));
+	app.use("/api/sources/discord", gate("connectors"));
+	app.use("/api/sources/github", gate("connectors"));
+	app.use("/api/sources/notion", gate("connectors"));
+	app.use("/api/sources/web", gate("connectors"));
+	app.use("/api/sources/:sourceId/snapshot/import", gate("connectors"));
+	app.use("/api/sources/:sourceId", async (c, next) =>
+		c.req.method === "DELETE" ? requirePermission("connectors", authConfig)(c, next) : next(),
+	);
 	app.get("/api/sources", async (c) => {
 		const config = loadSourcesConfig(agentsDir);
 		const agentId = resolveDaemonAgentId();
@@ -306,6 +321,10 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 			return c.json({ error: "Invalid JSON body" }, 400);
 		}
 
+		if (body.syncMode === "desktop-cache" || body.desktopCachePath !== undefined) {
+			const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+		}
 		const guildIds = Array.isArray(body.guildIds)
 			? body.guildIds.filter((entry): entry is string => typeof entry === "string")
 			: typeof body.guildId === "string"
