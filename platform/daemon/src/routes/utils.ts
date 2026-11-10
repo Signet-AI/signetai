@@ -13,7 +13,8 @@ import {
 	setNativeFallbackProvider,
 } from "../embedding-fetch";
 import { logger } from "../logger";
-import { getActiveSessions, normalizeSessionKey } from "../session-tracker";
+import { getActiveSessions, hasSession, normalizeSessionKey } from "../session-tracker";
+import { getStoredSessionTranscriptInfoAsync } from "../session-transcripts";
 import type { EmbeddingConfig } from "../memory-config";
 import type { NativeEmbeddingRuntimeOptions } from "../native-embedding";
 import {
@@ -302,7 +303,8 @@ export function validateSessionAgentBinding(
 	if (requestedProject.error) return requestedProject.error;
 
 	const trackedKey = normalizeSessionKey(normalizedSessionKey);
-	if (getActiveSessions().some((session) => session.key === trackedKey && session.agentId !== agentId)) {
+	const claimants = getActiveSessions().filter((session) => session.key === trackedKey);
+	if (claimants.length > 0 && !claimants.some((session) => session.agentId === agentId)) {
 		return `${options.context} belongs to a different agent`;
 	}
 
@@ -316,6 +318,22 @@ export function validateSessionAgentBinding(
 	}
 
 	return existing.project ? resolveScopedProject(c, existing.project).error : undefined;
+}
+
+export async function validateSessionControl(
+	c: Context,
+	sessionKey: string | undefined,
+	agentId: string,
+	options: { context: string; project?: string },
+): Promise<string | undefined> {
+	const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, { ...options, requireExisting: false });
+	if (bindingError) return bindingError;
+	const key = parseOptionalString(sessionKey);
+	if (!key || !shouldEnforceAuthScope(c) || !c.get("auth")?.claims?.scope.project) return undefined;
+	if (getAgentPresenceForSession(key) || !hasSession(key, agentId)) return undefined;
+	const stored = await getStoredSessionTranscriptInfoAsync(key, agentId);
+	if (!stored) return `${options.context} project cannot be verified`;
+	return stored.project ? resolveScopedProject(c, stored.project).error : undefined;
 }
 
 export function parseTagsMutation(value: unknown): string | null | undefined {

@@ -16,6 +16,7 @@ let initDbAccessor: typeof import("../db-accessor").initDbAccessor;
 let closeDbAccessor: typeof import("../db-accessor").closeDbAccessor;
 let presence: typeof import("../cross-agent");
 let tracker: typeof import("../session-tracker");
+let transcripts: typeof import("../session-transcripts");
 let state: typeof import("./state.js");
 
 function writeAuthConfig(mode: "local" | "team"): void {
@@ -80,6 +81,7 @@ beforeAll(async () => {
 	({ initDbAccessor, closeDbAccessor } = await import("../db-accessor"));
 	presence = await import("../cross-agent");
 	tracker = await import("../session-tracker");
+	transcripts = await import("../session-transcripts");
 	state = await import("./state.js");
 	initDbAccessor(join(agentsDir, "memory", "memories.db"));
 	writeAuthConfig("team");
@@ -299,6 +301,56 @@ describe("session control permissions in team mode", () => {
 		});
 		expect(bypass.status).toBe(403);
 		expect(tracker.claimSession("sess-a", "plugin", "agent-a", "codex").ok).toBe(true);
+	});
+
+	it("requires a recorded project before a project-limited credential controls a claim-only session", async () => {
+		const projectB = bearer("agent", { scope: { agent: "agent-a", project: "proj-b" } });
+		const projectA = bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } });
+		expect(tracker.claimSession("orphan", "plugin", "agent-a", "codex").ok).toBe(true);
+		expect(tracker.claimSession("recorded", "plugin", "agent-a", "codex").ok).toBe(true);
+		await transcripts.upsertSessionTranscriptAsync("recorded", "user: hi", "codex", "proj-a", "agent-a");
+		try {
+			const request = (path: string, headers: Record<string, string>, body: unknown) =>
+				teamApp().request(`http://localhost${path}`, { method: "POST", headers, body: JSON.stringify(body) });
+
+			for (const key of ["orphan", "recorded"]) {
+				expect(
+					(await request(`/api/sessions/${key}/bypass?agent_id=agent-a`, projectB, { enabled: true })).status,
+				).toBe(403);
+				expect((await request(`/api/sessions/${key}/renew?agent_id=agent-a`, projectB, {})).status).toBe(403);
+				const start = await request("/api/hooks/session-start", projectB, {
+					harness: "codex",
+					sessionKey: key,
+					agentId: "agent-a",
+					runtimePath: "plugin",
+					claimOnly: true,
+					project: "proj-b",
+				});
+				expect(start.status).toBe(403);
+				expect(presence.getAgentPresenceForSession(key)).toBeNull();
+			}
+
+			expect((await request("/api/sessions/recorded/renew?agent_id=agent-a", projectA, {})).status).toBe(200);
+		} finally {
+			tracker.releaseSession("orphan", "agent-a");
+			tracker.releaseSession("recorded", "agent-a");
+		}
+	});
+
+	it("lets each agent use its own claim on a shared session key", async () => {
+		expect(tracker.claimSession("shared", "plugin", "agent-a", "codex").ok).toBe(true);
+		expect(tracker.claimSession("shared", "plugin", "agent-b", "codex").ok).toBe(true);
+		try {
+			const res = await teamApp().request("http://localhost/api/sessions/shared/renew?agent_id=agent-a", {
+				method: "POST",
+				headers: bearer("agent"),
+				body: "{}",
+			});
+			expect(res.status).toBe(200);
+		} finally {
+			tracker.releaseSession("shared", "agent-a");
+			tracker.releaseSession("shared", "agent-b");
+		}
 	});
 
 	it("still reads the session list with a read-only credential", async () => {
