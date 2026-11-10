@@ -241,6 +241,27 @@ describe("createMcpServer", () => {
 		mockFetch(200, { memories: [], stats: {} }, capture);
 		await callTool(server, "memory_list", { limit: 5 });
 		expect(new URL(capture.url ?? "").searchParams.get("agentId")).toBe("opencode-a");
+
+		mockFetch(200, { id: "mem-1", status: "updated" }, capture);
+		await callTool(server, "memory_modify", { id: "mem-1", importance: 0.2, reason: "x" });
+		expect(new URL(capture.url ?? "").searchParams.get("agentId")).toBe("opencode-a");
+		await callTool(server, "memory_forget", { id: "mem-1", reason: "x", agent_id: "explicit" });
+		expect(new URL(capture.url ?? "").searchParams.get("agentId")).toBe("explicit");
+
+		mockFetch(200, { entities: [] }, capture);
+		await callTool(server, "knowledge_list_entities", {});
+		expect(new URL(capture.url ?? "").searchParams.get("agent_id")).toBe("opencode-a");
+	});
+
+	it("refuses an all-agents memory_list from a configured agent", async () => {
+		await server.close();
+		server = await createMcpServer({ daemonUrl: "http://localhost:3850", version: "0.0.1-test", agentId: "all" });
+		const capture: { url?: string } = {};
+		mockFetch(200, { memories: [], stats: {} }, capture);
+
+		const result = await callTool(server, "memory_list", {});
+		expect(capture.url).toBeUndefined();
+		expect(JSON.stringify(result)).toContain("agent_id must name one agent");
 	});
 
 	it("leaves the agent to the daemon when none is configured", async () => {

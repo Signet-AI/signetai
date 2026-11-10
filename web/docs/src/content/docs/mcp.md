@@ -60,12 +60,15 @@ for agent-initiated, on-demand operations.
 
 The memory tools act as whichever agent the request identifies. The daemon
 resolves it the same way for reads and writes: an `agent_id` argument on
-`memory_search`, `signet_recall`, `memory_get`, or `memory_list`, then the
+`memory_search`, `signet_recall`, `memory_get`, `memory_list`,
+`memory_modify`, or `memory_forget`, then the
 credential's scoped agent, then the daemon's configured agent
 (`SIGNET_AGENT_ID` in the daemon's environment, otherwise `default`). A scoped
 credential rejects any other agent. Over HTTP (`/mcp`), a request's `agentId`
 query parameter or `x-signet-agent-id` header sets the agent for every memory
-tool in that request. The stdio server (`signet mcp`) does not read
+tool in that request. When an agent is named this way or by a
+scoped credential, `memory_modify` and `memory_forget` only change that
+agent's memories. The stdio server (`signet mcp`) does not read
 `SIGNET_AGENT_ID` from its own environment. `memory_list` does not accept
 `all`; the all-agents view is for operator surfaces such as the dashboard.
 
@@ -252,6 +255,7 @@ history tracking).
 | `type` | string | no | New type |
 | `importance` | number | no | New importance |
 | `tags` | string | no | New tags (comma-separated) |
+| `agent_id` | string | no | Agent that owns the memory. Defaults to the request's agent (see [Agent identity](#agent-identity)). When an agent is set, a memory owned by another agent returns `404`. |
 
 **Returns:** Updated memory object.
 
@@ -278,6 +282,7 @@ as forgotten with a reason for auditability.
 |------|------|----------|-------------|
 | `id` | string | yes | Memory ID to forget |
 | `reason` | string | yes | Why this memory should be forgotten |
+| `agent_id` | string | no | Agent that owns the memory. Defaults to the request's agent (see [Agent identity](#agent-identity)). When an agent is set, a memory owned by another agent returns `404`. |
 
 **Returns:** Confirmation of deletion.
 

@@ -80,7 +80,7 @@ describe("MCP route", () => {
 		expect(body.result.serverInfo.name).toBe("signet");
 	});
 
-	it("forwards the caller's agent header to memory tools", async () => {
+	it("forwards the caller's agent header to memory tools when the query agent is blank", async () => {
 		const requested: string[] = [];
 		globalThis.fetch = mock(async (input: string | URL | Request) => {
 			requested.push(typeof input === "string" ? input : input.toString());
@@ -90,7 +90,7 @@ describe("MCP route", () => {
 			});
 		}) as unknown as typeof fetch;
 
-		const res = await makeApp().request("/mcp", {
+		const res = await makeApp().request("/mcp?agentId=%20", {
 			method: "POST",
 			headers: { ...streamableHeaders, "x-signet-agent-id": "hermes-a" },
 			body: JSON.stringify({
