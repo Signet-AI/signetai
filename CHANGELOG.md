@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-11-10
+- Bug fixes: skip the transcript on deduped remembers; write transcripts with their memory; keep transcripts and lookups in scope; refetch memory views when scope changes; wait for the session before all agents; require admin for wider agent policy; close other cross-scope memory paths; ignore a blank search agent_id; send the agent on memory edits; limit memory edits to the owner; scope session_search to the agent; request all agents only as admin; take the agent only from explicit input; check the token agent on recall and remember; ask for the all-agents memory view; scope memory tools to the agent; send the plugin agent on tools; take hook agent from SIGNET_AGENT_ID; act as the configured agent; scope every memory read route; redact credentials in memory list; count hash-shared embeddings in list; scope GET /api/memories to agent; write config files completely; tighten key files before writing; keep API key files owner-only; check stored project without presence; verify project of claim-only sessions; bind hooks to the session owner; gate session lifecycle hooks; gate session controls by permission; guard startup and current workspace; resolve workspace per import request; refuse Discord roots over workspace; keep private workspace data out of sources; gate source routes by permission; drop own origin in dev proxy; check origin on unverified requests; keep login reachable from proxies; reject cross-origin local writes; write pi extensions owner-only; finish promotion without deleting tags.
+- Docs: sync translations; match 1.0 stats to the release tag; publish the 1.0 announcement; describe the telemetry consent prompt; note Dreaming opt-in and manual 1.0 update; update the 1.0 announcement.
+
 ### 2026-11-08
 - Features: ask once before usage data.
 - Bug fixes: harden consent prompt and gating; ask once across CLI and onboarding; split the install ping paragraph; guard uploads and npm reuse by draft; build arm64 on macos-15 runners; run version sync on Windows; look up drafts through the API; never rebuild a published release; bound draft release lookup.
@@ -35,12 +39,106 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Performance: scope the per-agent canonical backfill query to that agent; append a new session's snapshot instead of rewriting the canonical JSONL.
 - Docs: record the Qwen3.8-27B vLLM recipe for one Blackwell GPU.
 
-### 2026-10-25
-- Bug fixes: return primary candidates in fused rank order; score the best fused recall hit 1; reserve candidate slots for the best vector hits; rank keyword and vector hits by position in hybrid recall; keep rehearsal boost finite for unparseable access times; measure hint coverage against the sanitized FTS query; count traversal cosine as direct evidence at final rank; measure hint coverage with a unicode tokenizer; cap hint-only rows by evidence, not source label; bound hint and rehearsal contributions to recall scores; publish head over unrecorded revisions.
-- Refactoring: retire search.alpha.
-- Docs: state what the hint-only cap guarantees.
-
 ## Release Ledger
+
+## [1.0.1] - 2026-11-10
+
+Security release. 1.0.1 fixes five reported vulnerabilities in the daemon
+API and in connector setup. Everyone on 1.0.0 should update.
+
+### Security
+
+- **Cross-site writes to a local daemon** (GHSA-qj47-64cr-4mgp, high): in
+  local mode, and in hybrid mode without a verified credential, the daemon
+  now rejects write requests from a foreign `Origin` or with
+  `Sec-Fetch-Site: cross-site`. A web page could previously reach
+  `/api/secrets/exec` on `127.0.0.1:3850` with a simple cross-site request.
+- **Host file reads through source import** (GHSA-pv54-5wqc-phh6, critical):
+  source routes now require a role (`documents` to upload, `admin` for host
+  paths and folder sources, `connectors` for other source changes). In every
+  auth mode the daemon refuses import paths and source roots that resolve
+  into its own runtime, secrets, database, or transcript directories.
+- **Cross-agent memory access** (GHSA-5xqp-76gc-wc4x, high): every memory
+  read, edit, delete, and similarity route enforces the token's agent scope,
+  and the all-agents view requires `admin`.
+- **Session control with read-only tokens** (GHSA-9rwp-jw4x-9r7x, moderate):
+  session bypass, renew, and the lifecycle hooks require write permission and
+  stay bound to the session's agent and project.
+- **API key in world-readable connector files** (GHSA-8cjq-c6pj-vch3, low):
+  connectors write files that contain the API key owner-only (`0600`),
+  including the pi and Oh My Pi extensions, Forge, Codex, Kimi, Muse Code,
+  the Hermes `.env`, and OpenClaw config backups.
+
+### Upgrading
+
+- Run `signet update install`, then `signet daemon restart`. Installs with
+  automatic updates enabled pick up 1.0.1 on their own.
+- Run `signet sync` once after updating, so connector files written by older
+  versions are tightened to `0600`.
+- Browser pages on other origins can no longer write to a local daemon. The
+  CLI, harness hooks, the SDK, and the bundled dashboard are unaffected.
+- Team and hybrid deployments: read-only tokens can no longer renew or bypass
+  sessions, agent-scoped tokens see only their own agent's memories, and
+  source routes need the roles listed above.
+
+### Changes since 1.0.0
+
+Release summary: 42 bug fixes and 6 docs updates.
+Tag range: `v1.0.0..v1.0.1`.
+
+### Bug Fixes
+
+- **daemon**: skip the transcript on deduped remembers
+- **daemon**: write transcripts with their memory
+- **daemon**: keep transcripts and lookups in scope
+- **dashboard**: refetch memory views when scope changes
+- **dashboard**: wait for the session before all agents
+- **daemon**: require admin for wider agent policy
+- **daemon**: close other cross-scope memory paths
+- **openclaw**: ignore a blank search agent_id
+- **mcp**: send the agent on memory edits
+- **daemon**: limit memory edits to the owner
+- **openclaw**: scope session_search to the agent
+- **dashboard**: request all agents only as admin
+- **mcp**: take the agent only from explicit input
+- **daemon**: check the token agent on recall and remember
+- **dashboard**: ask for the all-agents memory view
+- **openclaw**: scope memory tools to the agent
+- **opencode**: send the plugin agent on tools
+- **cli**: take hook agent from SIGNET_AGENT_ID
+- **mcp**: act as the configured agent
+- **daemon**: scope every memory read route
+- **daemon**: redact credentials in memory list
+- **daemon**: count hash-shared embeddings in list
+- **daemon**: scope GET /api/memories to agent
+- **connectors**: write config files completely
+- **connectors**: tighten key files before writing
+- **connectors**: keep API key files owner-only
+- **daemon**: check stored project without presence
+- **daemon**: verify project of claim-only sessions
+- **daemon**: bind hooks to the session owner
+- **daemon**: gate session lifecycle hooks
+- **daemon**: gate session controls by permission
+- **daemon**: guard startup and current workspace
+- **daemon**: resolve workspace per import request
+- **daemon**: refuse Discord roots over workspace
+- **daemon**: keep private workspace data out of sources
+- **daemon**: gate source routes by permission
+- **dashboard**: drop own origin in dev proxy
+- **daemon**: check origin on unverified requests
+- **daemon**: keep login reachable from proxies
+- **daemon**: reject cross-origin local writes
+- **connectors**: write pi extensions owner-only
+- **release**: finish promotion without deleting tags
+
+### Docs
+
+- **readme**: sync translations
+- **blog**: match 1.0 stats to the release tag
+- **blog**: publish the 1.0 announcement
+- **blog**: describe the telemetry consent prompt
+- **blog**: note Dreaming opt-in and manual 1.0 update
+- **blog**: update the 1.0 announcement
 
 ## [1.0.0] - 2026-11-08
 
