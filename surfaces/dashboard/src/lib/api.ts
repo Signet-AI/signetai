@@ -1048,7 +1048,10 @@ export async function streamBoardEvents(
 }
 
 function memoryViewAgent(requested: string | undefined): string | undefined {
-	return requested ?? (can(currentSession(), "admin") ? "all" : undefined);
+	if (requested !== undefined) return requested;
+	const session = currentSession();
+	if (session.kind !== "open" && session.kind !== "signed-in") return undefined;
+	return can(session, "admin") ? "all" : undefined;
 }
 
 export const api = {
