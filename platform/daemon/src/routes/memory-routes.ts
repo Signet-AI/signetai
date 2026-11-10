@@ -54,7 +54,7 @@ import {
 	recordRecallOutcome,
 } from "../recall-telemetry";
 import { parseFeedback, recordAgentFeedback } from "../session-memories";
-import { upsertSessionTranscriptAsync } from "../session-transcripts";
+import { writeSessionTranscriptRow } from "../session-transcripts";
 import { getActiveTelemetry } from "../telemetry";
 import { txInsertMemoryTemporalEdges, type MemoryTemporalEdgeInput } from "../temporal-edges";
 import { normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../temporal-recall";
@@ -413,16 +413,21 @@ function getScopedIdempotencyDedupeRow(
 
 const TRANSCRIPT_PROJECT_CONFLICT = "transcript project conflict";
 
-function transcriptOwnedByOtherProject(
-	db: WriteDb,
-	sessionKey: string,
+async function supersedesTargetVisible(
+	memoryId: string,
 	agentId: string,
-	project: string | null,
-): boolean {
-	const row = db
-		.prepare("SELECT COALESCE(project, '') AS project FROM session_transcripts WHERE agent_id = ? AND session_key = ?")
-		.get(agentId, sessionKey) as { project: string } | null | undefined;
-	return row != null && row.project !== (project ?? "");
+	project: string | undefined,
+): Promise<boolean> {
+	const projectSql = project === undefined ? "" : " AND COALESCE(project, '') = ?";
+	const row = await dbOwnerQuery<unknown>(
+		{
+			sql: `SELECT 1 AS found FROM memories WHERE id = ? AND agent_id = ?${projectSql} LIMIT 1`,
+			params: project === undefined ? [memoryId, agentId] : [memoryId, agentId, project],
+			result: "get",
+		},
+		{ operation: "memory.authorize_supersedes", lane: "read", deadlineMs: 2_000 },
+	);
+	return row != null;
 }
 
 function getScopedSourceDedupeRow(
@@ -1148,7 +1153,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			if (scope instanceof Response) return scope;
 			const timeline = await getDbAccessor().withReadDbAsync(
 				async (db) => buildMemoryTimeline(db, { tzOffsetMin, scope }),
-				{ siteToken: "routes/memory-routes.ts:1149" },
+				{ siteToken: "routes/memory-routes.ts:1154" },
 			);
 			return c.json(timeline);
 		} catch (e) {
@@ -1408,13 +1413,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (body.supersedes !== undefined && !requestedSupersedes) {
 			return c.json({ error: "supersedes must be a memory id" }, 400);
 		}
-		if (requestedSupersedes) {
-			const mutationScope = resolveMemoryMutationScope(c);
-			if (mutationScope instanceof Response) return mutationScope;
-			if ((await memoriesOutsideMutationScope(mutationScope, [requestedSupersedes])).length > 0) {
-				return c.json({ error: "supersedes target rejected: not_found" }, 400);
-			}
-		}
 		const scope = body.scope ?? null;
 		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
 		const scopedAgent = resolveMemoryScopedAgentId(c, {
@@ -1433,6 +1431,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			if (!scopeDecision.allowed) {
 				return c.json({ error: scopeDecision.reason ?? "scope violation" }, 403);
 			}
+		}
+		const enforcedProject =
+			auth?.claims && auth.claims.role !== "admin" ? parseOptionalString(auth.claims.scope?.project) : undefined;
+		if (requestedSupersedes && !(await supersedesTargetVisible(requestedSupersedes, agentId, enforcedProject))) {
+			return c.json({ error: "supersedes target rejected: not_found" }, 400);
 		}
 
 		const hasBodyType = body.type !== undefined && body.type !== null;
@@ -1513,7 +1516,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1514" },
+				{ siteToken: "routes/memory-routes.ts:1517" },
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
@@ -1521,7 +1524,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const existingChunks = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1522" },
+				{ siteToken: "routes/memory-routes.ts:1525" },
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1554,7 +1557,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				contentHashes.add(plan.normalized.contentHash);
 				const byHash = await getDbAccessor().withReadDbAsync(
 					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "routes/memory-routes.ts:1555" },
+					{ siteToken: "routes/memory-routes.ts:1558" },
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1760,7 +1763,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1761" },
+						{ siteToken: "routes/memory-routes.ts:1764" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -1770,9 +1773,24 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		try {
 			const result = await runWriteTxAsync(getDbAccessor(), (db) => {
-				if (body.transcript && sourceId && transcriptOwnedByOtherProject(db, sourceId, agentId, project)) {
+				const saved = saveMemory(db);
+				if (
+					body.transcript &&
+					sourceId &&
+					writeSessionTranscriptRow(db, {
+						sessionKey: sourceId,
+						transcript: body.transcript,
+						harness: sourceType,
+						project,
+						agentId,
+						sameProjectOnly: enforcedProject !== undefined,
+					}) === "conflict"
+				) {
 					throw new Error(TRANSCRIPT_PROJECT_CONFLICT);
 				}
+				return saved;
+			});
+			function saveMemory(db: WriteDb) {
 				if (sourceId) {
 					const bySource = getScopedSourceDedupeRow(db, sourceType, sourceId, dedupeScope);
 					if (bySource) return { deduped: true as const, row: bySource };
@@ -1843,7 +1861,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					superseded = result.status;
 				}
 				return { deduped: false as const, superseded };
-			});
+			}
 			supersededStatus = result.deduped ? null : (result as { superseded: SupersedeMemoryTxStatus | null }).superseded;
 
 			if (result.deduped) {
@@ -1878,7 +1896,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:1875" },
+					{ siteToken: "routes/memory-routes.ts:1893" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -1915,9 +1933,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				return c.json({ error: e.message }, 400);
 			}
 			return c.json({ error: "Failed to save memory" }, 500);
-		}
-		if (body.transcript && sourceId) {
-			await upsertSessionTranscriptAsync(sourceId, body.transcript, sourceType, project, agentId);
 		}
 		let embedded = false;
 		try {
@@ -3393,7 +3408,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3395",
+							siteToken: "routes/memory-routes.ts:3410",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3521,7 +3536,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3484" },
+				{ siteToken: "routes/memory-routes.ts:3499" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3569,7 +3584,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3565" },
+			{ siteToken: "routes/memory-routes.ts:3580" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3578,7 +3593,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3579" },
+			{ siteToken: "routes/memory-routes.ts:3594" },
 		);
 		return c.json(report);
 	});
@@ -3657,7 +3672,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									}
 								: undefined,
 						}),
-					{ siteToken: "routes/memory-routes.ts:3640" },
+					{ siteToken: "routes/memory-routes.ts:3655" },
 				);
 
 				return c.json({
@@ -3687,7 +3702,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: 0;
 				return { cached: cachedResult, total: count };
 			},
-			{ siteToken: "routes/memory-routes.ts:3680" },
+			{ siteToken: "routes/memory-routes.ts:3695" },
 		);
 
 		if (cached !== null && cached.embeddingCount === total) {
@@ -3719,7 +3734,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const computation = (async () => {
 				try {
 					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:3721",
+						siteToken: "routes/memory-routes.ts:3736",
 					});
 					const count = await getDbAccessor().withReadDbAsync(
 						async (db) => {
@@ -3728,7 +3743,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								? row.count
 								: 0;
 						},
-						{ siteToken: "routes/memory-routes.ts:3724" },
+						{ siteToken: "routes/memory-routes.ts:3739" },
 					);
 					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {

@@ -820,6 +820,85 @@ describe("scope boundaries around memory routes", () => {
 		);
 		expect((await get(app, "/api/sessions/secret-session?agent_id=alpha", allowed)).status).toBe(404);
 		expect((await get(app, "/api/sessions/secret-session?agent_id=alpha", secret)).body.project).toBe("secret");
+
+		const { claimSession, releaseSession } = await import("../session-tracker");
+		claimSession("secret-session", "plugin", "alpha");
+		try {
+			expect((await get(app, "/api/sessions/secret-session?agent_id=alpha", allowed)).status).toBe(404);
+			expect((await get(app, "/api/sessions/secret-session?agent_id=alpha", secret)).status).toBe(200);
+		} finally {
+			releaseSession("secret-session", "alpha");
+		}
+
+		const racers = await Promise.all(
+			["race-a", "race-b"].map((project) =>
+				send(
+					app,
+					"POST",
+					"/api/memory/remember",
+					{ authorization: `Bearer ${teamToken({ agent: "alpha", project })}` },
+					{
+						content: `Race summary for ${project}`,
+						project,
+						sourceType: "session",
+						sourceId: "race-session",
+						transcript: `Transcript from ${project}`,
+					},
+				),
+			),
+		);
+		expect(racers.map((res) => res.status).sort()).toEqual([200, 409]);
+		const winner = racers[0].status === 200 ? "race-a" : "race-b";
+		const stored = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						"SELECT project, content FROM session_transcripts WHERE agent_id = 'alpha' AND session_key = 'race-session'",
+					)
+					.get() as { project: string; content: string },
+		);
+		expect(stored).toEqual({ project: winner, content: `Transcript from ${winner}` });
+		const raceRows = getDbAccessor().withReadDb(
+			(db) => db.prepare("SELECT COUNT(*) AS n FROM memories WHERE source_id = 'race-session'").get() as { n: number },
+		);
+		expect(raceRows.n).toBe(1);
+	});
+
+	it("lets an unscoped caller move a session to another project", async () => {
+		const app = await makeApp("local");
+		for (const project of ["old", "new"]) {
+			const res = await send(
+				app,
+				"POST",
+				"/api/memory/remember",
+				{},
+				{
+					content: `Summary in ${project}`,
+					agentId: "alpha",
+					project,
+					sourceType: "session",
+					sourceId: "moving-session",
+					transcript: `Transcript in ${project}`,
+				},
+			);
+			expect(res.status).toBe(200);
+		}
+	});
+
+	it("checks a supersedes target against the agent the memory is written for", async () => {
+		const app = await makeApp("local");
+		const res = await send(
+			app,
+			"POST",
+			"/api/memory/remember?agentId=alpha",
+			{},
+			{
+				content: "Beta's newer global note",
+				agentId: "beta",
+				supersedes: "beta-global",
+			},
+		);
+		expect(res.status).toBe(200);
 	});
 
 	it("answers a hidden supersedes target the same as a missing one", async () => {
