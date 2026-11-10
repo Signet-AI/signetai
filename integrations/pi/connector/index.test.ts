@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,6 +78,26 @@ describe("PiConnector", () => {
 		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_API_KEY", "sig_sk_test_connector")');
 		expect(content).toContain(`Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${JSON.stringify(tmpRoot)})`);
 		expect(content.length).toBeGreaterThan(1_000);
+	});
+
+	it.skipIf(process.platform === "win32")("keeps the managed extension private to the owner", async () => {
+		const connector = new PiConnector();
+		const installedPath = join(tmpRoot, "agent", "extensions", "signet-pi.js");
+		const mode = (): number => statSync(installedPath).mode & 0o777;
+
+		await connector.install(tmpRoot);
+		expect(mode()).toBe(0o600);
+
+		chmodSync(installedPath, 0o644);
+		const unchanged = await connector.install(tmpRoot);
+		expect(unchanged.filesWritten).not.toContain(installedPath);
+		expect(mode()).toBe(0o600);
+
+		chmodSync(installedPath, 0o644);
+		process.env.SIGNET_API_KEY = "sig_sk_test_rotated";
+		const rotated = await connector.install(tmpRoot);
+		expect(rotated.filesWritten).toContain(installedPath);
+		expect(mode()).toBe(0o600);
 	});
 
 	it("writes a portable extension with no baked-in SIGNET_PATH for the default workspace (#1015)", async () => {
