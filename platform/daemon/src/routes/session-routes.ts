@@ -372,7 +372,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:367",
+			"routes/session-routes.ts:372",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -423,7 +423,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:377");
+		}, "routes/session-routes.ts:382");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {
