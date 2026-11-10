@@ -697,6 +697,35 @@ describe("scope boundaries around memory routes", () => {
 		expect(byKey.status).toBe(409);
 	});
 
+	it("refuses a chunked idempotency key reused from another project", async () => {
+		const app = await makeApp("team");
+		const secret = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "secret" })}` };
+		const allowed = { authorization: `Bearer ${teamToken({ agent: "alpha", project: "allowed" })}` };
+		const content = Array.from(
+			{ length: 20 },
+			(_, i) => `Unique sentence number ${i} with some meaningful words for chunking and testing.`,
+		).join(" ");
+
+		const first = await send(app, "POST", "/api/memory/remember", secret, {
+			content,
+			project: "secret",
+			idempotencyKey: "chunk-key",
+		});
+		expect(first.body.chunked).toBe(true);
+		const reuse = await send(app, "POST", "/api/memory/remember", allowed, {
+			content,
+			project: "allowed",
+			idempotencyKey: "chunk-key",
+		});
+		expect(reuse.status).toBe(409);
+		const retry = await send(app, "POST", "/api/memory/remember", secret, {
+			content,
+			project: "secret",
+			idempotencyKey: "chunk-key",
+		});
+		expect(retry.status).toBe(200);
+	});
+
 	it("requires admin to change or remove an agent, and limits registration to the credential's agent", async () => {
 		const app = await appWith("team", async (target) => {
 			const { registerMiscRoutes } = await import("./misc-routes");
@@ -712,6 +741,11 @@ describe("scope boundaries around memory routes", () => {
 		expect((await send(app, "PATCH", "/api/agents/alpha", operator, { read_policy: "shared" })).status).toBe(403);
 		expect((await send(app, "POST", "/api/agents", operator, { name: "intruder" })).status).toBe(403);
 		expect((await send(app, "POST", "/api/agents", headers, { name: "alpha" })).status).toBe(403);
+		const newcomer = { authorization: `Bearer ${teamToken({ agent: "delta" })}` };
+		expect((await send(app, "POST", "/api/agents", newcomer, { name: "delta", read_policy: "shared" })).status).toBe(
+			403,
+		);
+		expect((await send(app, "POST", "/api/agents", newcomer, { name: "delta" })).status).toBe(201);
 
 		const betaRows = getDbAccessor().withReadDb(
 			(db) => db.prepare("SELECT COUNT(*) AS n FROM memories WHERE agent_id = 'beta'").get() as { n: number },

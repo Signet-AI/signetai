@@ -269,6 +269,10 @@ export function registerMiscRoutes(app: Hono): void {
 		}
 		const readPolicy = resolved.readPolicy;
 		const group = resolved.policyGroup;
+		if (readPolicy !== "isolated") {
+			const widened = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+			if (widened) return widened;
+		}
 		const now = new Date().toISOString();
 		try {
 			await dbOwnerQuery(

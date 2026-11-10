@@ -190,6 +190,8 @@ Register a new agent. Requires `remember` permission.
 
 Only `name` is required. `read_policy` defaults to `"isolated"`. A credential
 scoped to an agent can only register that agent; another `name` gets `403`.
+`shared` and `group` widen what the agent can read, so registering with either
+requires `admin` permission.
 
 **Response** — the created agent record.
 
