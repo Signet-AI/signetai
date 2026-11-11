@@ -12,7 +12,7 @@ Signet gives your AI agents a shared memory. You can use it to store, sync, and 
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="Apache-2.0 License"></a>
 <a href="https://docs.signetai.sh/benchmarking/#current-longmemeval-score"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97.6% answer accuracy"></a>
 
-[Quick start](#quick-start) · [How it works](#how-it-works) · [Harnesses](#harnesses) · [Docs](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7)
+[Quick start](#quick-start) · [How it works](#how-it-works) · [Harnesses](#harnesses) · [Docs](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7) · [X](https://x.com/signetmemory)
 
 [English](README.md) · [Deutsch](README.de.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 

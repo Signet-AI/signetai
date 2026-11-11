@@ -27,6 +27,7 @@ export default defineConfig({
 			social: [
 				{ icon: "github", label: "GitHub", href: "https://github.com/Signet-AI/signetai" },
 				{ icon: "discord", label: "Discord", href: "https://discord.gg/pHa5scah9C" },
+				{ icon: "x.com", label: "X", href: "https://x.com/signetmemory" },
 			],
 			head: [
 				{

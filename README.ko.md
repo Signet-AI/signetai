@@ -13,7 +13,7 @@ Signet은 AI 에이전트에 공유 메모리를 제공합니다. 메모리, 시
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="Apache-2.0 라이선스"></a>
 <a href="https://docs.signetai.sh/benchmarking/#current-longmemeval-score"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97.6% 정답 정확도"></a>
 
-[빠른 시작](#빠른-시작) · [작동 방식](#작동-방식) · [Harnesses](#harnesses) · [문서](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7)
+[빠른 시작](#빠른-시작) · [작동 방식](#작동-방식) · [Harnesses](#harnesses) · [문서](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7) · [X](https://x.com/signetmemory)
 
 [English](README.md) · [Deutsch](README.de.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
