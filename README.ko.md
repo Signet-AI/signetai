@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=de16dbc216af698ec2db226ca9d155d541f86ae4 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=8dee924f14d1e9f3a1aa61ec8bb8ab2d886eb0bd Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 > [!CAUTION]
 > **사기 경고: Signet에는 토큰이나 코인이 없습니다.** Signet이라는 이름을 사용하는 모든 토큰과 코인은 이 프로젝트와 아무런 관련이 없습니다. Signet을 지원한다고 여기고 구매하지 마세요.
 
