@@ -13,7 +13,7 @@ Signet gibt deinen KI-Agenten ein gemeinsames Gedächtnis. Damit speicherst, syn
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="Apache-2.0-Lizenz"></a>
 <a href="https://docs.signetai.sh/benchmarking/#current-longmemeval-score"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97,6 % Antwortgenauigkeit"></a>
 
-[Schnellstart](#schnellstart) · [Wie es funktioniert](#wie-es-funktioniert) · [Harnesses](#harnesses) · [Dokumentation](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7)
+[Schnellstart](#schnellstart) · [Wie es funktioniert](#wie-es-funktioniert) · [Harnesses](#harnesses) · [Dokumentation](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7) · [X](https://x.com/signetmemory)
 
 [English](README.md) · [Deutsch](README.de.md) · [한국어](README.ko.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
 
