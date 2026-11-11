@@ -187,9 +187,11 @@ signet update install
 signet sync
 ```
 
-`signet update channel stable` moves you to the stable track; `signet update install` installs the latest stable release, currently 1.0.1. Auto-update doesn't install a new major version, so existing installs, including nightly ones, need this step once to reach 1.0. `signet sync` re-registers your configured harnesses, which rewrites their connector files so the ones that hold your API key are readable only by you. It skips connectors that aren’t configured and only warns if one fails, so check its output for warnings, and remove or `chmod 600` key-bearing files left by connectors you no longer use. Follow any restart instructions printed by the updater, then check `signet status`. See [upgrading](https://docs.signetai.sh/upgrading/) for details.
+`signet update channel stable` moves you to the stable track; `signet update install` installs the latest stable release, currently 1.0.1. Auto-update doesn't install a new major version, so existing installs, including nightly ones, need this step once to reach 1.0. Follow any restart instructions printed by the updater, then check `signet status`. See [upgrading](https://docs.signetai.sh/upgrading/) for details.
 
-**Already on 1.0.0?** With automatic updates on, you get 1.0.1 on your own. Otherwise run `signet update install` and `signet daemon restart`. Either way, run `signet sync` once afterward.
+`signet sync` re-registers your configured harnesses and rewrites their connector files. If your connectors use a Signet API key, set `SIGNET_API_KEY` in the same shell before you run it. Sync takes the key from your environment, so without it some connectors are rewritten without their key and stop authenticating, and files that still hold the key aren’t tightened. On macOS and Linux, sync makes key-bearing files readable only by you; on Windows it doesn’t change who can read them, so restrict those files yourself. Sync also skips connectors that aren’t configured and only warns when one fails. Check its output, then look over key-bearing connector files and their backups, such as OpenClaw’s `.signet-backup`, and remove or lock down any that other accounts can read.
+
+**Already on 1.0.0?** With automatic updates on, you get 1.0.1 on your own. Otherwise run `signet update install` and `signet daemon restart`. Either way, run `signet sync` once afterward, as described above.
 
 **Rotate your API key if others share your machine.** `signet sync` tightens file permissions, but it can’t revoke a key someone may already have copied. If you use a Signet API key and other people have accounts on the same machine, replace that key after updating.
 
