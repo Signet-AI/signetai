@@ -34,7 +34,7 @@ Wall time divides by pods: 4 H200 pods take ~31 h, 8 take ~16 h, and the total c
 ```
 lme balance                       balance and running pods
 lme gpus                          price and stock for H200/B200/H100/L40S...
-lme up NAME                       create pod, push kit, start bootstrap (model + vLLM + Signet build, ~25 min)
+lme up NAME                       create pod (rejecting hosts whose GPU fails a CUDA call or that download slowly), push kit, start bootstrap (~10-25 min)
 lme ready NAME                    bootstrap progress
 lme serve NAME                    start vLLM + usage proxies + telemetry + watchdog, run smoke test
 lme pilot NAME                    12 questions (2 per type); then: lme tokens NAME pilot12

@@ -111,6 +111,7 @@ export type RoutingThinkingBudgetField = (typeof ROUTING_THINKING_BUDGET_FIELDS)
 export interface RoutingLocalThinkingConfig {
 	readonly format: RoutingLocalThinkingFormat;
 	readonly budgetTokens?: number;
+	readonly planningBudgetTokens?: number;
 	readonly budgetField?: RoutingThinkingBudgetField;
 	readonly chatTemplateKwargs?: Readonly<Record<string, unknown>>;
 }
@@ -680,6 +681,7 @@ export function parseLocalThinkingConfig(raw: unknown): RoutingLocalThinkingConf
 	const format = asString(raw.format);
 	if (!format || !(ROUTING_LOCAL_THINKING_FORMATS as readonly string[]).includes(format)) return undefined;
 	const budgetTokens = asPositiveInt(raw.budgetTokens ?? raw.budget_tokens);
+	const planningBudgetTokens = asPositiveInt(raw.planningBudgetTokens ?? raw.planning_budget_tokens);
 	const budgetFieldRaw = asString(raw.budgetField ?? raw.budget_field);
 	const budgetField =
 		budgetFieldRaw && (ROUTING_THINKING_BUDGET_FIELDS as readonly string[]).includes(budgetFieldRaw)
@@ -689,6 +691,7 @@ export function parseLocalThinkingConfig(raw: unknown): RoutingLocalThinkingConf
 	return {
 		format: format as RoutingLocalThinkingFormat,
 		...(budgetTokens !== undefined ? { budgetTokens } : {}),
+		...(budgetTokens !== undefined && planningBudgetTokens !== undefined ? { planningBudgetTokens } : {}),
 		...(budgetField ? { budgetField } : {}),
 		...(isRecord(kwargsRaw) ? { chatTemplateKwargs: { ...kwargsRaw } } : {}),
 	};

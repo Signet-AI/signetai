@@ -234,6 +234,44 @@ Model fields:
 | `costTier` | string | `low`, `medium`, or `high` |
 | `averageLatencyMs` | number | Optional routing latency hint |
 
+### Local thinking budgets
+
+Local OpenAI-compatible targets can configure `thinking` independently of the
+model's context window. For a server that accepts chat-template controls:
+
+```yaml
+inference:
+  targets:
+    local:
+      executor: openai-compatible
+      endpoint: http://127.0.0.1:8000/v1
+      thinking:
+        format: chat-template
+        budgetTokens: 2000
+        planningBudgetTokens: 8000
+        budgetField: thinking_token_budget
+        chatTemplateKwargs:
+          enable_thinking: { $var: thinking.enabled }
+      models:
+        default:
+          model: local-model
+          reasoning: medium
+```
+
+`budgetTokens` sets the normal per-request thinking budget. The optional
+`planningBudgetTokens` requires `budgetTokens` and applies to the next agent
+turn after `search_evidence` delivers at least 64,000 content characters.
+Subsequent filing turns return to the normal budget. The worker also resets
+that state when a prompt ends, is aborted, or changes models; a reused session
+does not inherit the planning budget from an earlier prompt.
+
+Planning is opt-in and requires reasoning to be enabled. Internally, a target
+with planning configured uses `medium` for normal calls and `high` for the
+planning turn, mapped to the two numeric budgets above. Without
+`planningBudgetTokens`, thinking behavior is unchanged. Both budgets are
+clamped to leave answer room within the call's output limit; increasing a
+thinking budget does not increase that limit.
+
 ### inference.policies
 
 Named routing policies that agents and workloads reference.

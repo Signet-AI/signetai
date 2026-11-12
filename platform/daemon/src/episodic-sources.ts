@@ -812,6 +812,8 @@ interface EpisodicSourceSearchParams {
 	readonly candidateRefs?: readonly EpisodicSourceCandidateRef[];
 }
 
+export const MAX_EPISODIC_SOURCE_SCAN = 101;
+
 export function searchEpisodicSources(db: ReadDb, params: EpisodicSourceSearchParams): EpisodicSourceRecord[] {
 	return selectEpisodicSourceRefs(db, params)
 		.map((row) => readEpisodicSource(db, { agentId: params.agentId, from: `${row.kind}:${row.id}` }))
@@ -823,7 +825,8 @@ function selectEpisodicSourceRefs(
 	params: EpisodicSourceSearchParams,
 ): Array<{ readonly kind: EpisodicSourceKind; readonly id: string }> {
 	const query = params.query.trim();
-	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 51));
+	const limit =
+		params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), MAX_EPISODIC_SOURCE_SCAN));
 	const terms = query === "" ? [] : episodicQueryTerms(query);
 	const matchScore = (column: string): string =>
 		query === ""

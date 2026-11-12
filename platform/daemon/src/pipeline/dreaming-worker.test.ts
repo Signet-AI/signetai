@@ -659,6 +659,56 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
+	it("sizes a pass's scopes by the Dreaming route's context window when it reports one", async () => {
+		const now = new Date().toISOString();
+		for (const agent of ["win-a", "win-b", "win-c"]) {
+			db.prepare(
+				`INSERT INTO agents (id, name, read_policy, created_at, updated_at) VALUES (?, ?, 'isolated', ?, ?)`,
+			).run(agent, agent, now, now);
+			db.prepare(
+				`INSERT INTO session_transcripts (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+				 VALUES (?, ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
+			).run(`s-${agent}`, agent, `${agent} owns ${"ledger ".repeat(4_000)}`);
+		}
+		const sweeps: string[][] = [];
+		const run = async (contextWindow: number | undefined) => {
+			const seen: string[] = [];
+			const worker = startDreamingWorker(
+				accessor,
+				defaultCfg({ tokenThreshold: 100, backfillOnFirstRun: true, maxPassTokens: 200_000 }),
+				agentsDir,
+				"default",
+				{
+					checkIntervalMs: 20,
+					executorFactory: () => ({
+						async contextWindow() {
+							return contextWindow;
+						},
+						async run(input: { prompt: string }) {
+							seen.push("pass");
+							return { summary: "fixture" };
+						},
+					}),
+				},
+			);
+			try {
+				await waitFor(() => seen.length > 0, 3_000);
+			} finally {
+				worker.stop();
+			}
+			const pass = db.prepare("SELECT scope_key FROM dreaming_passes ORDER BY rowid DESC LIMIT 1").get() as {
+				scope_key: string;
+			};
+			sweeps.push(pass.scope_key.split(","));
+		};
+
+		await run(undefined);
+		await run(40_000);
+
+		expect(sweeps[0]).toEqual(["win-a", "win-b", "win-c"]);
+		expect(sweeps[1]).toHaveLength(1);
+	});
+
 	it("bounds a scheduled content sweep to one pass budget of backlogged scopes and leaves out idle ones", async () => {
 		const now = new Date().toISOString();
 		for (const agent of ["hay-a", "hay-b", "hay-c"]) {

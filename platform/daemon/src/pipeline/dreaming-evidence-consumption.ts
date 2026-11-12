@@ -739,7 +739,7 @@ export function pendingDreamingEvidenceContinuations(
 	kind?: EpisodicSourceKind,
 ): readonly EpisodicSourceRecord[] {
 	if (!tableExists(db, "dreaming_evidence_consumption")) return [];
-	const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 50);
+	const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 100);
 	const transcriptUpdatedAt = tableHasColumn(db, "session_transcripts", "updated_at") ? "st.updated_at" : "NULL";
 	const transcriptCompletedAt = tableHasColumn(db, "session_transcripts", "completed_at") ? "st.completed_at" : "NULL";
 	const transcriptSourceId = tableHasColumn(db, "session_transcripts", "source_id") ? "st.source_id" : "NULL";

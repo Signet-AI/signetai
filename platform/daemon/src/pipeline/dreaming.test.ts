@@ -43,7 +43,11 @@ import {
 	selectDreamingPassMode,
 	shouldTriggerDreaming,
 } from "./dreaming";
-import { dreamingEvidencePageChars, searchDreamingEvidenceInDb } from "./dreaming-capabilities";
+import {
+	dreamingEvidencePageChars,
+	dreamingEvidencePageCharsForWindow,
+	searchDreamingEvidenceInDb,
+} from "./dreaming-capabilities";
 import { selectDreamingCheckMode } from "./dreaming-worker";
 import {
 	enqueueDreamingAttentionInTx,
@@ -268,6 +272,15 @@ async function invokeDreamingTool(
 	const parsed: unknown = JSON.parse(first.text);
 	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error(`Invalid ${name} result`);
 	return parsed as Record<string, unknown>;
+}
+
+function estimatedEvidenceTokens(pages: readonly Record<string, unknown>[]): number {
+	return pages
+		.flatMap((page) => (page.items ?? []) as Array<{ content: string }>)
+		.reduce(
+			(total, { content }) => total + (content.length + 3 * (content.match(/[\u0080-\uffff]/g)?.length ?? 0)) / 4,
+			0,
+		);
 }
 
 async function reviewDreamingEvidence(
@@ -2813,6 +2826,342 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		);
 	});
 
+	it("delivers a whole backlog in one page when the agent's context window holds it", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `haystack-${i}`, `Session ${i} line.\n`.repeat(500));
+		const backlogChars = Number(
+			(db.prepare("SELECT SUM(LENGTH(content)) AS n FROM session_transcripts").get() as { n: number }).n,
+		);
+		expect(backlogChars).toBeGreaterThan(400_000);
+		const pageFor = async (contextWindow: number): Promise<Record<string, unknown>> => {
+			let page: Record<string, unknown> = {};
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						input.onSessionInfo?.({ model: "local-model", contextWindow });
+						page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+						return { summary: "Read one page" };
+					},
+				},
+				defaultCfg({ maxInputTokens: 128_000 }),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				"incremental",
+			);
+			return page;
+		};
+		const whole = await pageFor(262_144);
+		const wholeItems = whole.items as Array<{ content: string; contentHasNext: boolean }>;
+		expect(wholeItems).toHaveLength(48);
+		expect(wholeItems.every((item) => item.contentHasNext === false)).toBe(true);
+		expect(whole.hasMore).toBe(false);
+		expect(dreamingEvidencePageCharsForWindow(262_144)).toBe(565_144);
+		expect(dreamingEvidencePageCharsForWindow(128_000)).toBe(243_200);
+		expect(dreamingEvidencePageCharsForWindow(16_000)).toBe(16_000);
+	});
+
+	it("asks for a planning turn after a large evidence page, not after a small one", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `haystack-${i}`, `Session ${i} line.\n`.repeat(500));
+		const details: unknown[] = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "local-model", contextWindow: 262_144 });
+					const tool = input.tools.find((candidate) => candidate.name === "search_evidence");
+					if (!tool) throw new Error("Missing search_evidence");
+					details.push((await tool.execute("page", { agentId: AGENT })).details);
+					details.push((await tool.execute("lookup", { agentId: AGENT, query: "Session 3" })).details);
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(details[0]).toMatchObject({ nextTurnThinking: "planning" });
+		expect(details[1]).not.toHaveProperty("nextTurnThinking");
+	});
+
+	it("bounds everything one pass drains by its context window, across scopes", async () => {
+		const other = "second-haystack";
+		for (let i = 0; i < 48; i++) {
+			seedTranscript(db, `first-${i}`, `First ${i} line.\n`.repeat(500));
+			seedTranscript(db, `second-${i}`, `Second ${i} line.\n`.repeat(500), undefined, other);
+		}
+		const pages: Array<Record<string, unknown>> = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "local-model", contextWindow: 262_144 });
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+					pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: other }));
+					return { summary: "Read two scopes" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT, other],
+			"incremental",
+		);
+		const delivered = pages
+			.flatMap((page) => (page.items ?? []) as Array<{ content: string }>)
+			.reduce((sum, item) => sum + item.content.length, 0);
+		expect((pages[0]?.items as unknown[]).length).toBe(48);
+		expect(delivered).toBeLessThanOrEqual(565_144);
+	});
+
+	it("charges sequential CJK scope drains against one pass evidence allowance", async () => {
+		const scopes = ["kanji-a", "kanji-b", "kanji-c", "kanji-d"];
+		for (const scope of scopes) seedTranscript(db, scope, "記憶の断片。".repeat(100_000), undefined, scope);
+		const pages: Record<string, unknown>[] = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ contextWindow: 262_144 });
+					for (const scope of scopes)
+						pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: scope }));
+					return { summary: "Read bounded CJK evidence" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			memoryHeadRoot,
+			AGENT,
+			scopes,
+			"incremental",
+		);
+		expect(estimatedEvidenceTokens(pages)).toBeGreaterThan(100_000);
+		expect(estimatedEvidenceTokens(pages)).toBeLessThanOrEqual(141_286);
+		expect(pages[0]?.hasMore).toBe(true);
+		for (const page of pages.slice(1)) expect(page).toMatchObject({ items: [], deliveryClosed: true, hasMore: false });
+	});
+
+	it.each([false, true])(
+		"serializes parallel ASCII drains sharing a pass allowance (same scope: %s)",
+		async (sameScope: boolean) => {
+			const scopes = sameScope ? [AGENT, AGENT] : ["parallel-a", "parallel-b"];
+			for (const scope of new Set(scopes))
+				seedTranscript(db, scope, "Ordinary English evidence. ".repeat(30_000), undefined, scope);
+			let pages: Record<string, unknown>[] = [];
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						input.onSessionInfo?.({ contextWindow: 262_144 });
+						pages = await Promise.all(
+							scopes.map((scope) => invokeDreamingTool(input, "search_evidence", { agentId: scope })),
+						);
+						return { summary: "Read parallel bounded evidence" };
+					},
+				},
+				defaultCfg({ maxInputTokens: 128_000 }),
+				memoryHeadRoot,
+				AGENT,
+				scopes,
+				"incremental",
+			);
+			expect(estimatedEvidenceTokens(pages)).toBeGreaterThan(100_000);
+			expect(estimatedEvidenceTokens(pages)).toBeLessThanOrEqual(141_286);
+		},
+	);
+
+	it("budgets the actual mixed ASCII-prefix/CJK-tail fragments and their next-pass continuation", async () => {
+		const prefix = "simple prose ".repeat(17_000);
+		const content = prefix + "記憶".repeat(300_000);
+		seedArtifact(db, "mixed-density.md", content, "mixed-v1", "2026-08-01T00:00:00.000Z");
+		const passes: Record<string, unknown>[][] = [];
+		for (let pass = 0; pass < 2; pass++) {
+			const pages: Record<string, unknown>[] = [];
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						input.onSessionInfo?.({ contextWindow: 262_144 });
+						pages.push(await readAndReviewEvidence(input, { agentId: AGENT }));
+						pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+						return { summary: "Reviewed bounded mixed evidence" };
+					},
+				},
+				defaultCfg({ maxInputTokens: 128_000 }),
+				memoryHeadRoot,
+				AGENT,
+				[AGENT],
+				"incremental",
+			);
+			passes.push(pages);
+		}
+		for (const pages of passes) {
+			expect(estimatedEvidenceTokens(pages)).toBeGreaterThan(100_000);
+			expect(estimatedEvidenceTokens(pages)).toBeLessThanOrEqual(141_286);
+			expect(pages[1]).toMatchObject({ items: [], hasMore: false, deliveryClosed: true });
+		}
+		const first = ((passes[0]?.[0]?.items ?? []) as Array<{ content: string; contentOffset: number }>)[0];
+		const resumed = (
+			(passes[1]?.[0]?.items ?? []) as Array<{ content: string; contentOffset: number; reviewedChars: number }>
+		)[0];
+		expect(first?.content).toContain("記憶");
+		expect(first?.contentOffset).toBe(0);
+		expect(resumed?.contentOffset).toBeGreaterThan(prefix.length);
+		expect(resumed?.contentOffset).toBeLessThan(first?.content.length ?? 0);
+		expect(resumed?.reviewedChars).toBe(200);
+		for (const item of [first, resumed]) {
+			expect(item?.content).toBe(
+				content.slice(item?.contentOffset, (item?.contentOffset ?? 0) + (item?.content.length ?? 0)),
+			);
+		}
+	});
+
+	it.each(["x".repeat(20_000), "記憶".repeat(20_000)])(
+		"enforces tiny maxPassTokens and its remaining allowance below page floors (%#)",
+		async (content: string) => {
+			seedTranscript(db, "tiny-first", "a".repeat(80), undefined, "tiny-first");
+			seedTranscript(db, "tiny-rest", content, undefined, "tiny-rest");
+			const pages: Record<string, unknown>[] = [];
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						input.onSessionInfo?.({ contextWindow: 262_144 });
+						for (const scope of ["tiny-first", "tiny-rest", "tiny-rest"])
+							pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: scope }));
+						return { summary: "Read tiny evidence allowance" };
+					},
+				},
+				defaultCfg({ maxInputTokens: 128_000, maxPassTokens: 100 }),
+				memoryHeadRoot,
+				AGENT,
+				["tiny-first", "tiny-rest"],
+				"incremental",
+			);
+			expect(estimatedEvidenceTokens([pages[0] ?? {}])).toBe(20);
+			expect(estimatedEvidenceTokens([pages[1] ?? {}])).toBe(80);
+			expect(estimatedEvidenceTokens(pages)).toBe(100);
+			expect(pages[1]?.hasMore).toBe(true);
+			expect(pages[2]).toMatchObject({ items: [], hasMore: false, deliveryClosed: true });
+		},
+	);
+
+	it("closes delivery when the remaining allowance cannot buy new continuation text", async () => {
+		seedArtifact(db, "continuation.md", "記憶".repeat(1_000), "v1", "2026-08-01T00:00:00.000Z");
+		const source = searchEpisodicSources(db as unknown as ReadDb, { agentId: AGENT, query: "", limit: 1 })[0];
+		if (source === undefined) throw new Error("Missing continuation source");
+		db.prepare(
+			"INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES ('previous-pass', ?, 'incremental', 'completed')",
+		).run(AGENT);
+		db.prepare(
+			`INSERT INTO dreaming_evidence_consumption
+			 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
+			  delivered_offset, source_length, pass_id, updated_at, cursor_basis)
+			 VALUES (?, ?, ?, ?, '', ?, 300, 2000, 'previous-pass', ?, 'review')`,
+		).run(
+			AGENT,
+			source.kind,
+			source.id,
+			source.capturedAt,
+			source.sourceRevision ?? source.capturedAt,
+			source.capturedAt,
+		);
+		seedArtifact(db, "fresh.md", "Newer ASCII evidence.", "v1", "2026-08-02T00:00:00.000Z");
+		const pages: Record<string, unknown>[] = [];
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					for (let call = 0; call < 2; call++)
+						pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT }));
+					return { summary: "No usable evidence allowance" };
+				},
+			},
+			defaultCfg({ maxPassTokens: 100 }),
+			memoryHeadRoot,
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		for (const page of pages) expect(page).toMatchObject({ ok: true, items: [], hasMore: false, deliveryClosed: true });
+		expect(estimatedEvidenceTokens(pages)).toBe(0);
+	});
+
+	it("falls back to the input budget when a later session reports no window", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `haystack-${i}`, `Session ${i} line.\n`.repeat(500));
+		let page: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "large-window", contextWindow: 262_144 });
+					input.onSessionInfo?.({ model: "fallback-target" });
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const items = page.items as Array<{ content: string }>;
+		expect(items.reduce((sum, item) => sum + item.content.length, 0)).toBeLessThanOrEqual(32_000);
+		expect(page.hasMore).toBe(true);
+	});
+
+	it("counts non-ASCII evidence as denser than four characters per token", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `kanji-${i}`, `記憶の断片${i}。`.repeat(800));
+		let page: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "local-model", contextWindow: 262_144 });
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const items = page.items as Array<{ content: string }>;
+		const estimatedTokens = items.reduce(
+			(sum, item) => sum + [...item.content].reduce((n, char) => n + (char.charCodeAt(0) > 0x7f ? 1 : 0.25), 0),
+			0,
+		);
+		expect(estimatedTokens).toBeLessThanOrEqual(565_144 / 4 + 500);
+		expect(page.hasMore).toBe(true);
+	});
+
+	it("never delivers a page larger than the pass's remaining evidence budget", async () => {
+		for (let i = 0; i < 48; i++) seedTranscript(db, `haystack-${i}`, `Session ${i} line.\n`.repeat(500));
+		let page: Record<string, unknown> = {};
+		await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					input.onSessionInfo?.({ model: "local-model", contextWindow: 262_144 });
+					page = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT });
+					return { summary: "Read one page" };
+				},
+			},
+			defaultCfg({ maxInputTokens: 128_000, maxPassTokens: 20_000 }),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		const items = page.items as Array<{ content: string }>;
+		expect(items.reduce((sum, item) => sum + item.content.length, 0)).toBeLessThanOrEqual(80_000);
+		expect(page.hasMore).toBe(true);
+	});
+
 	it("sizes evidence pages from the Dreaming input budget", async () => {
 		expect(dreamingEvidencePageChars(128_000)).toBe(32_000);
 		expect(dreamingEvidencePageChars(8_000)).toBe(16_000);
@@ -3856,28 +4205,28 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(second.deliveryClosed).toBeUndefined();
 	});
 
-	it("closes delivery once a pass has been delivered its token budget, even for one large scope", async () => {
+	it("spends a sentence-boundary remainder before closing a pass at its token budget", async () => {
 		seedTranscript(db, "big-a", "Ines maintains the on-call rota. ".repeat(40));
 		seedTranscript(db, "big-b", "Briar owns the release process. ".repeat(40));
-		let first: Record<string, unknown> = {};
-		let second: Record<string, unknown> = {};
+		const pages: Record<string, unknown>[] = [];
 		await runDreamingAgentPass(
 			accessor,
 			{
 				async run(input) {
-					first = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT, limit: 1 });
-					second = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT, limit: 1 });
+					for (let call = 0; call < 3; call++)
+						pages.push(await invokeDreamingTool(input, "search_evidence", { agentId: AGENT, limit: 1 }));
 					return { summary: "Budgeted pass" };
 				},
 			},
 			defaultCfg({ timeout: 300_000, maxPassTokens: 100 }),
-			"/tmp",
+			memoryHeadRoot,
 			AGENT,
 			[AGENT],
 			"incremental",
 		);
-		expect((first.items as unknown[]).length).toBe(1);
-		expect(second).toMatchObject({ ok: true, items: [], hasMore: false, deliveryClosed: true });
+		expect(pages.slice(0, 2).every((page) => Array.isArray(page.items) && page.items.length === 1)).toBe(true);
+		expect(estimatedEvidenceTokens(pages)).toBe(100);
+		expect(pages[2]).toMatchObject({ ok: true, items: [], hasMore: false, deliveryClosed: true });
 	});
 
 	it("keeps delivering while the delivered evidence stays under the pass token budget", async () => {
