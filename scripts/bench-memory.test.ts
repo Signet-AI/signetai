@@ -24,6 +24,8 @@ import {
 	setBenchDreamingTimeout,
 	benchDreamingTimeoutMs,
 	setBenchDreamingThinking,
+	benchDreamingPolicies,
+	setBenchDreamingPolicies,
 } from "./bench-memory";
 
 const workspaces: string[] = [];
@@ -183,6 +185,24 @@ describe("MemoryBench launcher", () => {
 		expect(() => benchDreamingTimeoutMs({ SIGNET_BENCH_DREAMING_TIMEOUT_MS: "3600000" })).toThrow(
 			"from 30000 to 1800000",
 		);
+	});
+
+	test("writes Dreaming pass policies from a file only when asked", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
+		setBenchDreamingPolicies(dir, benchDreamingPolicies({}));
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).memory.dreaming).toEqual({ enabled: true });
+		const file = join(dir, "policies.json");
+		await writeFile(file, JSON.stringify({ combined: "File decisions only.\n", hygiene: "Merge duplicates." }));
+		setBenchDreamingPolicies(dir, benchDreamingPolicies({ SIGNET_BENCH_DREAMING_POLICIES_FILE: file }));
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).memory.dreaming).toEqual({
+			enabled: true,
+			policies: { combined: "File decisions only.\n", hygiene: "Merge duplicates." },
+		});
+		await writeFile(file, JSON.stringify({ compact: "x" }));
+		expect(() => benchDreamingPolicies({ SIGNET_BENCH_DREAMING_POLICIES_FILE: file })).toThrow("unknown pass type");
+		await writeFile(file, JSON.stringify({ content: " " }));
+		expect(() => benchDreamingPolicies({ SIGNET_BENCH_DREAMING_POLICIES_FILE: file })).toThrow("non-empty text");
 	});
 
 	test("sets the Dreaming model context window only when asked", async () => {

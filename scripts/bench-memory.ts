@@ -392,6 +392,36 @@ export function setBenchDreamingThinking(agentsDir: string, thinking: Record<str
 	writeFileSync(path, stringifyYaml(config));
 }
 
+export function benchDreamingPolicies(env: NodeJS.ProcessEnv = process.env): Record<string, string> | undefined {
+	const file = env.SIGNET_BENCH_DREAMING_POLICIES_FILE?.trim();
+	if (file === undefined || file === "") return undefined;
+	const parsed: unknown = JSON.parse(readFileSync(file, "utf8"));
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("SIGNET_BENCH_DREAMING_POLICIES_FILE must hold a JSON object of pass type to policy text");
+	}
+	const policies: Record<string, string> = {};
+	for (const [type, text] of Object.entries(parsed)) {
+		if (type !== "hygiene" && type !== "content" && type !== "combined") {
+			throw new Error(`SIGNET_BENCH_DREAMING_POLICIES_FILE has an unknown pass type: ${type}`);
+		}
+		if (typeof text !== "string" || !text.trim()) {
+			throw new Error(`SIGNET_BENCH_DREAMING_POLICIES_FILE needs non-empty text for ${type}`);
+		}
+		policies[type] = text;
+	}
+	return policies;
+}
+
+export function setBenchDreamingPolicies(agentsDir: string, policies: Record<string, string> | undefined): void {
+	if (policies === undefined) return;
+	const path = join(agentsDir, "agent.yaml");
+	const config = parseYaml(readFileSync(path, "utf8")) as Record<string, unknown>;
+	const memory = (config.memory ?? {}) as Record<string, unknown>;
+	const dreaming = (memory.dreaming ?? {}) as Record<string, unknown>;
+	config.memory = { ...memory, dreaming: { ...dreaming, policies } };
+	writeFileSync(path, stringifyYaml(config));
+}
+
 export function benchDreamingContextWindow(env: NodeJS.ProcessEnv = process.env): number | undefined {
 	const raw = env.SIGNET_BENCH_DREAMING_CONTEXT_WINDOW?.trim();
 	if (raw === undefined || raw === "") return undefined;
@@ -605,6 +635,7 @@ async function main(): Promise<void> {
 		setBenchDreamingTimeout(agentsDir, benchDreamingTimeoutMs());
 		setBenchDreamingThinking(agentsDir, benchDreamingThinking());
 		setBenchDreamingContextWindow(agentsDir, benchDreamingContextWindow());
+		setBenchDreamingPolicies(agentsDir, benchDreamingPolicies());
 		mkdirSync(join(agentsDir, ".daemon", "logs"), { recursive: true });
 		daemon = spawn(process.execPath, ["platform/daemon/src/daemon.ts"], {
 			cwd: repoRoot,

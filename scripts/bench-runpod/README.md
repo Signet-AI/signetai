@@ -39,7 +39,7 @@ lme ready NAME                    bootstrap progress
 lme serve NAME                    start vLLM + usage proxies + telemetry + watchdog, run smoke test
 lme pilot NAME                    12 questions (2 per type); then: lme tokens NAME pilot12
 lme run NAME RUN SELECTION        SELECTION: --full | --sample K | --limit N | --shard I/N | --ids FILE | --resume
-          [--dream-conc N] [--max-hours H]
+          [--dream-conc N] [--max-hours H] [--policies POD_FILE]
 lme supermemory NAME RUN SEL      Supermemory baseline (SEL: --sample K | --shard I/N | --ids FILE; max ~200 questions)
 lme status NAME [RUN] [--backlog] progress, passes, vLLM rates, per-system usage, RAM, watchdog
 lme tokens NAME RUN [--pods N]    token/cache/cost report per system + 500-question projection
@@ -80,6 +80,8 @@ for i in 1 2 3 4; do ./lme run h$i lme500-s$i --shard $i/4 --max-hours 40; done
 ./lme watch h1 & ./lme watch h2 & ./lme watch h3 & ./lme watch h4 &
 ./lme merge lme500-s1 lme500-s2 lme500-s3 lme500-s4
 ```
+
+Dreaming pass policies for a run: `--policies /path/on/pod.json` takes a JSON object mapping `hygiene`, `content` and `combined` to policy text and writes it to the run's `memory.dreaming.policies`; pass types it leaves out keep the built-in default. The file is copied with the run and its hash recorded in the run meta, so an A/B of two policies is two runs on one pod with different files. Copy the file onto the pod with `lme exec`.
 
 Pod died or hit `--max-hours`? Runs are resumable: `./lme start h1 && ./lme run h1 lme500 --resume`.
 

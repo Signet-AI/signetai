@@ -2,7 +2,7 @@
 set -u
 source /workspace/kit/pod/env.sh
 run=$1; shift
-conc=$DREAM_CONC; sel=(); resume=0; hours=""
+conc=$DREAM_CONC; sel=(); resume=0; hours=""; policies=""
 case " $* " in *" --resume "*) qids_keep=1 ;; *) qids_keep=0; rm -f /workspace/runs/$run.qids ;; esac
 while [ $# -gt 0 ]; do
   case $1 in
@@ -18,11 +18,17 @@ while [ $# -gt 0 ]; do
     --max-hours) hours=$2; shift 2 ;;
     --resume) resume=1; shift ;;
     --dream-conc) conc=$2; shift 2 ;;
+    --policies) policies=$2; shift 2 ;;
     *) echo "unknown arg $1"; exit 2 ;;
   esac
 done
 if [ $resume = 1 ] && [ ${#sel[@]} -gt 0 ]; then echo "a resumed run keeps the questions it started with; drop the selection"; exit 2; fi
 if [ ${#sel[@]} -gt 0 ] && [ "${sel[0]}" = --question-ids-file ] && [ ! -s /workspace/runs/$run.qids ]; then echo "empty question id list; refusing (an empty filter could run all 500)"; exit 2; fi
+if [ -n "$policies" ]; then
+  [ $resume = 1 ] && { echo "a resumed run keeps the policies it started with; drop --policies"; exit 2; }
+  python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,dict) and d and all(k in ('hygiene','content','combined') and isinstance(v,str) and v.strip() for k,v in d.items())" "$policies" \
+    || { echo "bad --policies file $policies (want a JSON object of hygiene/content/combined to non-empty text)"; exit 2; }
+fi
 curl -sf localhost:$PORT_SIGNET_DREAM/v1/models >/dev/null || { echo "inference stack not serving; run serve first"; exit 1; }
 pgrep -f "runs/$run.cmd.sh" >/dev/null && { echo "run $run already active"; exit 1; }
 phase=(--concurrency-ingest 32 --concurrency-indexing 32 --concurrency-search 128 --concurrency-answer 256 --concurrency-evaluate 256)
@@ -38,10 +44,12 @@ else
   args=(run "${sel[@]}" "${phase[@]}")
 fi
 rm -f /workspace/runs/$run.exit /workspace/runs/$run.collected /workspace/runs/$run.pulled
+if [ $resume = 0 ]; then rm -f /workspace/runs/$run.policies.json; [ -n "$policies" ] && cp "$policies" /workspace/runs/$run.policies.json; fi
+policy_sha=$( [ -f /workspace/runs/$run.policies.json ] && sha256sum /workspace/runs/$run.policies.json | cut -c1-12 || echo default)
 nq=$( [ -f /workspace/runs/$run.qids ] && wc -l < /workspace/runs/$run.qids || { [ ${#sel[@]} -eq 0 ] && [ $resume = 0 ] && echo 500 || echo "?"; })
 [ $resume = 1 ] && redir=">>" || redir=">"
 eval "cat $redir /workspace/runs/$run.meta" <<EOF
-{"run":"$run","system":"signet-dreaming","start":$(date +%s),"resume":$resume,"dream_conc":$conc,"selection":"${sel[*]}","questions_in_ids_file":"$nq","commit":"$(git -C $SIGNET_DIR rev-parse --short HEAD)","ref":"$SIGNET_REF","gpu":"$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)","cost_per_hr":$COST_PER_HR,"pod":"${RUNPOD_POD_ID:-}"}
+{"run":"$run","system":"signet-dreaming","start":$(date +%s),"resume":$resume,"dream_conc":$conc,"policies":"$policy_sha","selection":"${sel[*]}","questions_in_ids_file":"$nq","commit":"$(git -C $SIGNET_DIR rev-parse --short HEAD)","ref":"$SIGNET_REF","gpu":"$(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)","cost_per_hr":$COST_PER_HR,"pod":"${RUNPOD_POD_ID:-}"}
 EOF
 date +%s > /workspace/kit/state/last_activity
 if [ -n "$hours" ]; then echo $(( $(date +%s) + $(python3 -c "print(int(float('$hours')*3600))") )) > /workspace/kit/state/deadline.$run; echo "deadline: ${hours}h"
@@ -70,6 +78,7 @@ export SIGNET_BENCH_KEEP_WORKSPACE=1
 export SIGNET_BENCH_DREAMING_WAIT_SECS=604800
 export SIGNET_BENCH_CAPTURE_WAIT_SECS=28800
 export SIGNET_BENCH_REQUEST_TIMEOUT_MS=300000
+[ -f /workspace/runs/$run.policies.json ] && export SIGNET_BENCH_DREAMING_POLICIES_FILE=/workspace/runs/$run.policies.json
 bun scripts/bench-memory.ts --workspace $WS_ROOT/$run-ws $(printf '%q ' "${args[@]}")
 rc=\$?
 echo "{\\"event\\":\\"exit\\",\\"t\\":\$(date +%s),\\"rc\\":\\"\$rc\\"}" >> /workspace/runs/$run.meta
