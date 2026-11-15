@@ -253,6 +253,10 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 				resolveReady();
 				break;
 			case "released":
+				if (msg.error !== undefined) {
+					lastError = `Worker failed to release its session: ${msg.error}`;
+					logger.warn("native-embedding", "Worker failed to release its session", { error: msg.error });
+				}
 				resolveReleased();
 				break;
 			case "status":
