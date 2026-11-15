@@ -231,6 +231,7 @@ function DreamingPolicies({ store }: { store: AgentConfigStore }) {
 				setFailed(true);
 				return;
 			}
+			setFailed(false);
 			setDefaults(status.config.defaultPolicies);
 			setProblems(status.config.policyProblems);
 		});
@@ -250,6 +251,11 @@ function DreamingPolicies({ store }: { store: AgentConfigStore }) {
 	const other = Object.entries(problems).filter(([key]) => !fieldKeys.includes(key));
 	return (
 		<>
+			{failed && (
+				<p className="settings-row-description">
+					Could not refresh policy status from the daemon. The notes below may be out of date.
+				</p>
+			)}
 			{other.map(([key, problem]) => (
 				<p key={key} className="settings-row-description">{`${key} ${problem}.`}</p>
 			))}
