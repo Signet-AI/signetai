@@ -203,6 +203,12 @@ describe("MemoryBench launcher", () => {
 		expect(() => benchDreamingPolicies({ SIGNET_BENCH_DREAMING_POLICIES_FILE: file })).toThrow("unknown pass type");
 		await writeFile(file, JSON.stringify({ content: " " }));
 		expect(() => benchDreamingPolicies({ SIGNET_BENCH_DREAMING_POLICIES_FILE: file })).toThrow("non-empty text");
+		await writeFile(file, JSON.stringify({ content: "x".repeat(64_000) }));
+		expect(benchDreamingPolicies({ SIGNET_BENCH_DREAMING_POLICIES_FILE: file })?.content).toHaveLength(64_000);
+		await writeFile(file, JSON.stringify({ content: "x".repeat(64_001) }));
+		expect(() => benchDreamingPolicies({ SIGNET_BENCH_DREAMING_POLICIES_FILE: file })).toThrow(
+			"more than 64,000 characters",
+		);
 	});
 
 	test("sets the Dreaming model context window only when asked", async () => {
