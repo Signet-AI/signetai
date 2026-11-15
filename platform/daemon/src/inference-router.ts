@@ -35,6 +35,7 @@ import { type ResolvedInferenceCredential, createRoutingProvider } from "./infer
 import { logger } from "./logger";
 import { loadMemoryConfig } from "./memory-config";
 import { createDreamingAcpxMcpConfig } from "./pipeline/acpx-dreaming-mcp";
+import { bindDreamingPassTools } from "./pipeline/dreaming-pass-tools";
 import {
 	type PiAgentSession,
 	PiProviderDeadlineError,
@@ -1181,6 +1182,7 @@ export class InferenceRouter {
 				}
 				const startedAt = Date.now();
 				let mcpConfig: ReturnType<typeof createDreamingAcpxMcpConfig> | undefined;
+				let releasePassTools: (() => Promise<void>) | undefined;
 				try {
 					const target = loaded.value.config.targets[parsed.value.targetId];
 					if (target?.executor === "acpx") {
@@ -1188,6 +1190,11 @@ export class InferenceRouter {
 							throw new Error("ACPX agent target requires the scoped Signet MCP binding");
 						}
 						mcpConfig = createDreamingAcpxMcpConfig(opts.acpxMcp);
+						releasePassTools = bindDreamingPassTools({
+							passId: opts.acpxMcp.passId,
+							agentId: opts.acpxMcp.agentId,
+							tools,
+						});
 					}
 					const provider = await this.createProvider(
 						loaded.value,
@@ -1343,6 +1350,7 @@ export class InferenceRouter {
 					attempts.push({ targetRef, ok: false, durationMs: Date.now() - startedAt, error: message });
 					if (error instanceof PiAgentSessionTimeoutError || error instanceof PiProviderDeadlineError) break;
 				} finally {
+					if (releasePassTools) await releasePassTools();
 					mcpConfig?.dispose();
 				}
 			}

@@ -875,6 +875,16 @@ agent scope. Requires `modify` permission.
 }
 ```
 
+`passId` is optional. A request that names a pass is served by that running
+pass's own tools: the same capability set, agent scopes, write caps, evidence
+cursor, and tool-call trace an in-process agent gets. The daemon binds those
+tools while an ACPX agent runs the pass, and only for the pass's own agent.
+The response is `409` when the pass is not accepting tool calls, `404` for a
+capability the pass does not expose, and `403` for another agent's credential
+or a scope the pass does not allow. A `passId` that is not a non-empty string
+is rejected with `400`. A request without `passId` runs outside any pass and
+cannot use `review_evidence`, `runbook_write`, or `memory_head_commit`.
+
 `input` must satisfy the selected capability's schema from `GET /api/dream/tools`.
 For example, `search_entities` accepts `query`, `type`, `limit`, and `offset`;
 `apply_ontology_ops` accepts a cited `operations` batch. Its schema is a
