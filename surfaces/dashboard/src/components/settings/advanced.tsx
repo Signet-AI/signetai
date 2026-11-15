@@ -13,7 +13,7 @@ import {
 	setPipelinePaused,
 	useAgentConfig,
 } from "@/lib/agent-config";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ConfigFields } from "./config-fields";
 import { SettingRow, SettingSelect, SettingsGroup } from "./controls";
@@ -225,8 +225,11 @@ function DreamingPolicies({ store }: { store: AgentConfigStore }) {
 	const [defaults, setDefaults] = useState<DreamPolicies | null>(null);
 	const [problems, setProblems] = useState<Readonly<Record<string, string>>>({});
 	const [failed, setFailed] = useState(false);
+	const latest = useRef(0);
 	const refresh = useCallback(() => {
+		const request = ++latest.current;
 		void api.getDreamStatus().then((status) => {
+			if (request !== latest.current) return;
 			if (!status?.config.defaultPolicies) {
 				setFailed(true);
 				return;
