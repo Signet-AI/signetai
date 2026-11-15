@@ -446,7 +446,7 @@ describe("embedding-worker-handle", () => {
 		}
 	});
 
-	it("writes the exit guard's failure and timeout warnings to the log file during a real process exit", () => {
+	it("writes the exit guard's warnings to the log file at a real process exit, after the logger was already shut down", () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-metal-exit-"));
 		try {
 			for (const [failed, expected] of [
@@ -479,6 +479,8 @@ describe("embedding-worker-handle", () => {
 								return worker;
 							},
 						});
+						const { logger } = await import(${JSON.stringify(new URL("./logger.ts", import.meta.url).href)});
+						logger.shutdown();
 						process.exit(0);
 						`,
 					],
