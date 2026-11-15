@@ -84,7 +84,7 @@ ${script}
 	);
 }
 
-describe("Dreaming tool calls from an out-of-process ACPX agent", () => {
+describe("A Dreaming pass run by an out-of-process ACPX agent", () => {
 	let dir = "";
 	let previous: string | undefined;
 	let server: ReturnType<typeof Bun.serve> | undefined;
@@ -122,7 +122,10 @@ describe("Dreaming tool calls from an out-of-process ACPX agent", () => {
 					},
 				);
 				if (!result.ok) throw new Error(result.error.message);
-				return { summary: "Reviewed the queued evidence" };
+				return {
+					summary: "Reviewed the queued evidence",
+					usage: result.value.attempts.find((attempt) => attempt.ok)?.usage ?? null,
+				};
 			},
 		};
 	}
@@ -214,6 +217,54 @@ console.log("dreaming agent completed");`,
 			db.prepare("SELECT status FROM dreaming_passes WHERE id = ?").get(pass.passId),
 		);
 		expect(row).toEqual({ status: "completed" });
+	}, 30_000);
+
+	async function passTokens(passId: string): Promise<unknown> {
+		return getDbAccessor().withReadDbAsync((db) =>
+			db
+				.prepare(
+					`SELECT status, tokens_consumed AS consumed, tokens_input AS input, tokens_output AS output,
+					        tokens_cache_read AS cacheRead, tokens_cache_write AS cacheWrite
+					 FROM dreaming_passes WHERE id = ?`,
+				)
+				.get(passId),
+		);
+	}
+
+	it("records the token usage the ACPX agent reports instead of the prompt size", async () => {
+		await seedTranscript();
+		writeAcpxAgent(
+			dir,
+			`console.error("[acpx] tokens: input=1200000 output=34000 cache_read=900000 cache_write=6000 total=2140000");
+console.log("dreaming agent completed");`,
+		);
+
+		const pass = await runDreamingAgentPass(getDbAccessor(), executor(), CONFIG, dir, AGENT, [AGENT], "incremental");
+
+		expect(await passTokens(pass.passId)).toEqual({
+			status: "completed",
+			consumed: 2_140_000,
+			input: 1_200_000,
+			output: 34_000,
+			cacheRead: 900_000,
+			cacheWrite: 6_000,
+		});
+	}, 30_000);
+
+	it("leaves the token counts unknown when the ACPX agent reports no usage", async () => {
+		await seedTranscript();
+		writeAcpxAgent(dir, `console.log("dreaming agent completed");`);
+
+		const pass = await runDreamingAgentPass(getDbAccessor(), executor(), CONFIG, dir, AGENT, [AGENT], "incremental");
+
+		expect(await passTokens(pass.passId)).toEqual({
+			status: "completed",
+			consumed: null,
+			input: null,
+			output: null,
+			cacheRead: null,
+			cacheWrite: null,
+		});
 	}, 30_000);
 
 	it("releases the pass binding when the agent exits with an error", async () => {

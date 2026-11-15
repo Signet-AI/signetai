@@ -3,6 +3,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { LlmGenerateResult } from "@signet/core";
 import {
 	LlmConcurrencySemaphore,
 	SemaphoreTimeoutError,
@@ -614,6 +615,84 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
 		expect(await acpxFailure("quiet", `printf '%s\\n' '${answer}'\nexit 1`)).toBe(
 			"codex via ACPX exited 1: no error output",
 		);
+	});
+
+	async function acpxResult(format: "json" | "quiet", script: string): Promise<LlmGenerateResult> {
+		const root = join(tmpdir(), `signet-acpx-usage-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-usage.sh");
+		writeFileSync(bin, `#!/usr/bin/env bash\ncat >/dev/null\n${script}\n`);
+		chmodSync(bin, 0o755);
+		try {
+			const provider = createAcpxProvider({ agent: "codex", bin, format, hooks: "disabled" });
+			if (!provider.generateWithUsage) throw new Error("ACPX provider does not report usage");
+			return await provider.generateWithUsage("hello", { timeoutMs: 2000 });
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	}
+
+	const reported = {
+		inputTokens: 1200,
+		outputTokens: 340,
+		cacheReadTokens: 5000,
+		cacheCreationTokens: 60,
+		totalTokens: 6600,
+		totalCost: null,
+		totalDurationMs: null,
+		accountingProvenance: "provider_reported",
+	};
+
+	it("returns the token usage a quiet ACPX run reports on stderr", async () => {
+		expect(
+			await acpxResult(
+				"quiet",
+				"printf 'answer\\n'\nprintf '[acpx] tokens: input=1200 output=340 cache_read=5000 cache_write=60 total=6600\\n' >&2",
+			),
+		).toEqual({ text: "answer", usage: reported });
+		expect(await acpxResult("quiet", "printf 'answer\\n'\nprintf '[acpx] tokens: output=340\\n' >&2")).toEqual({
+			text: "answer",
+			usage: { ...reported, inputTokens: null, cacheReadTokens: null, cacheCreationTokens: null, totalTokens: null },
+		});
+	});
+
+	it("returns the token usage a JSON ACPX run reports on its final result", async () => {
+		const chunk =
+			'{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"answer"}}}}';
+		const camel =
+			'{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn","usage":{"inputTokens":1200,"outputTokens":340,"cachedReadTokens":5000,"cachedWriteTokens":60,"totalTokens":6600}}}';
+		const snake =
+			'{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn","usage":{"input_tokens":1200,"output_tokens":340,"cache_read_input_tokens":5000,"cache_creation_input_tokens":60,"total_tokens":6600}}}';
+
+		expect(await acpxResult("json", `printf '%s\\n' '${chunk}' '${camel}'`)).toEqual({
+			text: "answer",
+			usage: reported,
+		});
+		expect(await acpxResult("json", `printf '%s\\n' '${chunk}' '${snake}'`)).toEqual({
+			text: "answer",
+			usage: reported,
+		});
+	});
+
+	it("returns no usage when an ACPX run reports none or reports counts that are not token counts", async () => {
+		const chunk =
+			'{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"answer"}}}}';
+		const context =
+			'{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"usage_update","size":200000,"used":90000}}}';
+		const bare = '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}';
+		const invalid =
+			'{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn","usage":{"inputTokens":-5,"outputTokens":1.5,"totalTokens":"6600"}}}';
+
+		expect(await acpxResult("quiet", "printf 'answer\\n'")).toEqual({ text: "answer", usage: null });
+		expect(await acpxResult("quiet", "printf 'answer\\n'\nprintf '[acpx] tokens: total=1.5 input=-5\\n' >&2")).toEqual({
+			text: "answer",
+			usage: null,
+		});
+		expect(await acpxResult("json", `printf '%s\\n' '${chunk}' '${context}' '${bare}'`)).toEqual({
+			text: "answer",
+			usage: null,
+		});
+		expect(await acpxResult("json", `printf '%s\\n' '${chunk}' '${invalid}'`)).toEqual({ text: "answer", usage: null });
 	});
 
 	it("injects a tool-denying OpenCode profile and defaults sterile runs to JSON", async () => {

@@ -632,6 +632,11 @@ backlog has not been measured, the cached measurement was invalidated, or the
 measurement expired. The status endpoint does not perform an unbounded token
 scan to populate this field.
 
+A pass's `tokensConsumed` is the total token count its inference target
+reported for the pass. It is `null` when the target reported no usage. A pass
+recorded by an earlier release without reported usage holds an estimate of its
+prompt size instead.
+
 The status response also includes `reviewedEvidence`, containing immutable
 source revisions that a completed pass fully inspected and intentionally found
 to contain no durable fact. These rows are excluded from scan-first backlog

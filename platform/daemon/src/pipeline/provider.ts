@@ -1237,6 +1237,7 @@ interface AcpxParsedJsonOutput {
 	readonly sessionId?: string;
 	readonly stopReason?: string;
 	readonly usage?: string;
+	readonly tokens: LlmUsage | null;
 }
 
 interface AcpxAttemptDiagnostics {
@@ -1286,11 +1287,52 @@ function extractAcpxStopReason(event: AcpxJsonEvent): string | undefined {
 	);
 }
 
+const ACPX_USAGE_KEYS = {
+	input: ["inputTokens", "input_tokens"],
+	output: ["outputTokens", "output_tokens"],
+	cache_read: ["cachedReadTokens", "cacheReadInputTokens", "cache_read_input_tokens"],
+	cache_write: ["cachedWriteTokens", "cacheCreationInputTokens", "cache_creation_input_tokens"],
+	total: ["totalTokens", "total_tokens"],
+} as const;
+
+type AcpxUsageLabel = keyof typeof ACPX_USAGE_KEYS;
+
+function acpxTokenCount(value: unknown): number | null {
+	return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function acpxUsage(read: (label: AcpxUsageLabel) => number | null): LlmUsage | null {
+	const usage = {
+		inputTokens: read("input"),
+		outputTokens: read("output"),
+		cacheReadTokens: read("cache_read"),
+		cacheCreationTokens: read("cache_write"),
+		totalTokens: read("total"),
+	};
+	if (Object.values(usage).every((count) => count === null)) return null;
+	return { ...usage, totalCost: null, totalDurationMs: null, accountingProvenance: "provider_reported" };
+}
+
+function acpxUsageRecord(event: AcpxJsonEvent): AcpxJsonEvent | undefined {
+	const usage = (nestedAcpxRecord(event, "result") ?? event).usage;
+	return isJsonRecord(usage) ? usage : undefined;
+}
+
+function acpxJsonUsage(event: AcpxJsonEvent): LlmUsage | null {
+	const usage = acpxUsageRecord(event);
+	if (!usage) return null;
+	return acpxUsage((label) => {
+		for (const key of ACPX_USAGE_KEYS[label]) {
+			const count = acpxTokenCount(usage[key]);
+			if (count !== null) return count;
+		}
+		return null;
+	});
+}
+
 function extractAcpxUsage(event: AcpxJsonEvent): string | undefined {
-	const result = nestedAcpxRecord(event, "result");
-	const usage = (result ?? event).usage;
-	if (!isJsonRecord(usage)) return undefined;
-	return JSON.stringify(usage).slice(0, 300);
+	const usage = acpxUsageRecord(event);
+	return usage ? JSON.stringify(usage).slice(0, 300) : undefined;
 }
 
 function isAcpxSideEffectEvent(event: AcpxJsonEvent): boolean {
@@ -1317,6 +1359,7 @@ function parseAcpxJsonOutput(
 	let sessionId: string | undefined;
 	let stopReason: string | undefined;
 	let usage: string | undefined;
+	let tokens: LlmUsage | null = null;
 	const lines = stdout
 		.split(/\r?\n/)
 		.map((line) => line.trim())
@@ -1346,6 +1389,7 @@ function parseAcpxJsonOutput(
 			finalSeen = true;
 			stopReason ??= extractAcpxStopReason(parsed);
 			usage ??= extractAcpxUsage(parsed);
+			tokens ??= acpxJsonUsage(parsed);
 			const candidate = extractAcpxTextCandidate(parsed);
 			if (candidate?.trim()) {
 				finalText = candidate;
@@ -1367,6 +1411,7 @@ function parseAcpxJsonOutput(
 		...(sessionId ? { sessionId } : {}),
 		...(stopReason ? { stopReason } : {}),
 		...(usage ? { usage } : {}),
+		tokens,
 	};
 }
 
@@ -1447,6 +1492,15 @@ function quietUsage(stderr: string): string | undefined {
 	return stderr.match(/^\[acpx\] tokens: (.+)$/m)?.[1]?.slice(0, 300);
 }
 
+function acpxQuietUsage(stderr: string): LlmUsage | null {
+	const line = quietUsage(stderr);
+	if (!line) return null;
+	return acpxUsage((label) => {
+		const count = line.match(new RegExp(`(?:^| )${label}=(\\d+)(?: |$)`))?.[1];
+		return count === undefined ? null : acpxTokenCount(Number(count));
+	});
+}
+
 function formatEmptyResponseError(
 	agent: string,
 	diagnostics: AcpxAttemptDiagnostics,
@@ -1473,12 +1527,12 @@ function runAcpxAttempt(
 	remainingMs: number,
 	signal: AbortSignal | undefined,
 	onCleanup?: (cleanup: Promise<void>) => void,
-): Promise<string> {
+): Promise<LlmGenerateResult> {
 	const { bin, args, cwd } = buildAcpxCommand(config, remainingMs);
 	const outputFormat = resolveAcpxFormat(config);
 	const runId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 	const startedAt = performance.now();
-	return new Promise<string>((resolve, reject) => {
+	return new Promise<LlmGenerateResult>((resolve, reject) => {
 		let stdout = "";
 		let stderr = "";
 		let settled = false;
@@ -1577,7 +1631,7 @@ function runAcpxAttempt(
 						);
 						return;
 					}
-					resolve(text);
+					resolve({ text, usage: parsed ? parsed.tokens : acpxQuietUsage(stderr) });
 				}, "none"),
 		);
 		if (!terminationError) child.stdin?.end(prompt);
@@ -1585,9 +1639,12 @@ function runAcpxAttempt(
 }
 
 export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
-	return {
+	const provider = {
 		name: `acpx:${config.agent}${config.model ? `:${config.model}` : ""}`,
 		async generate(prompt, opts): Promise<string> {
+			return (await provider.generateWithUsage(prompt, opts)).text;
+		},
+		async generateWithUsage(prompt, opts): Promise<LlmGenerateResult> {
 			const timeoutMs = opts?.timeoutMs ?? config.timeoutMs ?? 60_000;
 			const deadline = performance.now() + timeoutMs;
 			const signal = generateSignal(opts);
@@ -1673,5 +1730,6 @@ export function createAcpxProvider(config: AcpxProviderConfig): LlmProvider {
 				process.platform === "darwin" && configuredBin === "npx" ? resolveLaunchdExecutable("npx") : configuredBin;
 			return which(bin) !== null;
 		},
-	};
+	} satisfies LlmProvider;
+	return provider;
 }

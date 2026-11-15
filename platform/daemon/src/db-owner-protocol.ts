@@ -404,7 +404,7 @@ export interface DbOwnerDreamingPassFinalize {
 	readonly agentId: string;
 	readonly scopes: readonly string[];
 	readonly transcriptManifestEntries: readonly unknown[];
-	readonly tokensConsumed: number;
+	readonly tokensConsumed: number | null;
 	readonly inputTokens: number | null;
 	readonly outputTokens: number | null;
 	readonly cacheReadTokens: number | null;
