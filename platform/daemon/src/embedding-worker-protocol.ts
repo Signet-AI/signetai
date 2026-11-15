@@ -35,6 +35,7 @@ export interface EmbeddingWorkerStatus {
 
 export type WorkerToMainMessage =
 	| { readonly type: "ready" }
+	| { readonly type: "released" }
 	| { readonly type: "status"; readonly status: EmbeddingWorkerStatus }
 	| { readonly type: "embed_result"; readonly id: number; readonly vector: number[] }
 	| { readonly type: "embed_error"; readonly id: number; readonly error: string }

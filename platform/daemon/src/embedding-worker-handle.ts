@@ -18,7 +18,7 @@ import {
 
 const DEFAULT_MODEL_ID = "nomic-ai/nomic-embed-text-v1.5";
 const DEFAULT_DIMENSIONS = 768;
-const EXIT_RELEASE_TIMEOUT_MS = 2_000;
+const RELEASE_TIMEOUT_MS = 2_000;
 const READY_TIMEOUT_MS = 30_000;
 const INIT_TIMEOUT_MS = 90_000;
 const EMBED_TIMEOUT_MS = 15_000;
@@ -140,18 +140,18 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 				: (resolveEmbeddedWorkerPath("embedding-worker") ?? join(__dirname, "embedding-worker.ts"));
 	const workerOptions = { workerData: init, type: "module" } as const;
 	const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init, workerOptions);
-
-	// ONNX Runtime's WebGPU provider aborts the process when a session is still
-	// alive as static destructors run. An exit that skips stop() therefore asks
-	// the Metal worker to release its session and blocks, bounded, until it has.
 	const releaseBeforeExit = (): void => {
 		if (releaseSignal === null) return;
 		try {
 			worker.postMessage({ type: "shutdown" });
-			Atomics.wait(new Int32Array(releaseSignal), 0, 0, EXIT_RELEASE_TIMEOUT_MS);
+			Atomics.wait(new Int32Array(releaseSignal), 0, 0, RELEASE_TIMEOUT_MS);
 		} catch {}
 	};
 	if (releaseSignal !== null) process.once("exit", releaseBeforeExit);
+	let resolveReleased: () => void = () => {};
+	const released = new Promise<void>((resolve) => {
+		resolveReleased = resolve;
+	});
 
 	let nextId = 1;
 	const pending = new Map<number, PendingRpc>();
@@ -252,6 +252,9 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 				clearTimeout(readyTimer);
 				resolveReady();
 				break;
+			case "released":
+				resolveReleased();
+				break;
 			case "status":
 				status = msg.status;
 				if (msg.status.error) lastError = msg.status.error;
@@ -319,6 +322,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 
 	worker.on("exit", (code: number) => {
 		process.off("exit", releaseBeforeExit);
+		resolveReleased();
 		if (!stopped && !disabled && code !== 0) {
 			logger.warn("native-embedding", "Embedding worker exited unexpectedly", { code });
 		}
@@ -423,17 +427,27 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		async stop(): Promise<void> {
 			if (stopped) return;
 			stopped = true;
-			process.off("exit", releaseBeforeExit);
 			try {
 				worker.postMessage({ type: "shutdown" });
 			} catch {}
 			failAllPending(new Error("Native embedding provider shut down"));
+			if (releaseSignal !== null) {
+				let timer: ReturnType<typeof setTimeout> | undefined;
+				await Promise.race([
+					released,
+					new Promise<void>((resolve) => {
+						timer = setTimeout(resolve, RELEASE_TIMEOUT_MS);
+					}),
+				]);
+				clearTimeout(timer);
+			}
 			try {
 				const result = worker.terminate();
 				if (result && typeof (result as Promise<unknown>).then === "function") {
 					await result;
 				}
 			} catch {}
+			process.off("exit", releaseBeforeExit);
 			logger.info("native-embedding", "Provider shut down");
 		},
 	};
