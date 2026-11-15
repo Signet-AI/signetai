@@ -407,6 +407,9 @@ export function benchDreamingPolicies(env: NodeJS.ProcessEnv = process.env): Rec
 		if (typeof text !== "string" || !text.trim()) {
 			throw new Error(`SIGNET_BENCH_DREAMING_POLICIES_FILE needs non-empty text for ${type}`);
 		}
+		if (text.length > 64_000) {
+			throw new Error(`SIGNET_BENCH_DREAMING_POLICIES_FILE has more than 64,000 characters for ${type}`);
+		}
 		policies[type] = text;
 	}
 	return policies;
