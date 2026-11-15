@@ -7,6 +7,7 @@ import type {
 	DreamingCapabilityId,
 } from "./dreaming-capabilities";
 import { createDreamingCapabilities } from "./dreaming-capabilities";
+import { DreamingToolScopeError } from "./dreaming-pass-tools";
 
 export type { DreamingAgentEvidence } from "./dreaming-evidence";
 export type { DreamingCapabilityResult as DreamingAgentToolResult } from "./dreaming-capabilities";
@@ -28,7 +29,7 @@ export const DREAMING_CODEMODE_TOOL_IDS: ReadonlySet<DreamingCapabilityId> = new
 function scopedInput(value: unknown, allowed: ReadonlySet<string>): void {
 	if (typeof value !== "object" || value === null) return;
 	if ("agentId" in value && (typeof value.agentId !== "string" || !allowed.has(value.agentId)))
-		throw new Error("Tool agent scope must be one of this pass's agents");
+		throw new DreamingToolScopeError();
 	for (const item of Object.values(value)) scopedInput(item, allowed);
 }
 
@@ -74,7 +75,7 @@ export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams)
 						rawParams === null ||
 						(!("agentId" in rawParams) && !defaultsToSessionAgent)
 					)
-						throw new Error("Tool agent scope must be one of this pass's agents");
+						throw new DreamingToolScopeError();
 					scopedInput(rawParams, allowed);
 					const result = await capability.invoke(rawParams);
 					await params.onToolCall?.({

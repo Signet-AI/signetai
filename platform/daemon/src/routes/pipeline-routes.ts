@@ -47,6 +47,7 @@ import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
 import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreaming-token-cache";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
+import { callDreamingPassTool } from "../pipeline/dreaming-pass-tools";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
 import { AlreadyRunningError, type DreamingSchedulerStatus } from "../pipeline/dreaming-worker.js";
 import { getSseDiagnosticsSnapshot, openBoundedSse } from "../sse-stream.js";
@@ -579,7 +580,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:582",
+				"routes/pipeline-routes.ts:583",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -900,7 +901,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:903",
+						"routes/pipeline-routes.ts:904",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
@@ -985,21 +986,40 @@ export function registerPipelineRoutes(app: Hono): void {
 		const body = asRecord(raw);
 		const scopedAgent = resolveScopedDreamAgent(c, body);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const input = asRecord(body.input);
+		const requestedInputAgent = readString(input, "agentId");
+		const foreign = requestedInputAgent !== undefined && requestedInputAgent !== scopedAgent.agentId;
+		const scopeError = { error: "Dreaming capability agent scope does not match the credential" };
+		const passId = readString(body, "passId");
+		if (passId === undefined && body.passId !== undefined) {
+			return c.json({ error: "passId must be a non-empty string" }, 400);
+		}
+		if (passId !== undefined) {
+			if (foreign) return c.json(scopeError, 403);
+			const outcome = await callDreamingPassTool({
+				passId,
+				agentId: scopedAgent.agentId,
+				capabilityId: c.req.param("capability"),
+				input,
+			});
+			if (outcome.kind === "inactive") return c.json({ error: "Dreaming pass is not accepting tool calls" }, 409);
+			if (outcome.kind === "forbidden") return c.json(scopeError, 403);
+			if (outcome.kind === "unknown") return c.json({ error: "Unknown Dreaming capability" }, 404);
+			return c.json(
+				{ ...outcome.result, agentId: scopedAgent.agentId },
+				outcome.result.ok ? 200 : outcome.result.retryable === true ? 503 : 400,
+			);
+		}
 		const capability = getDreamingCapability(
 			{
 				accessor: getDbAccessor(),
 				agentId: scopedAgent.agentId,
 				actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "dreaming-client",
-				passId: readString(body, "passId") ?? undefined,
 			},
 			c.req.param("capability"),
 		);
 		if (!capability) return c.json({ error: "Unknown Dreaming capability" }, 404);
-		const input = asRecord(body.input);
-		const requestedInputAgent = readString(input, "agentId");
-		if (requestedInputAgent !== undefined && requestedInputAgent !== scopedAgent.agentId) {
-			return c.json({ error: "Dreaming capability agent scope does not match the credential" }, 403);
-		}
+		if (foreign) return c.json(scopeError, 403);
 		const result = await capability.invoke({ ...input, agentId: scopedAgent.agentId });
 		return c.json({ ...result, agentId: scopedAgent.agentId }, result.ok ? 200 : result.retryable === true ? 503 : 400);
 	});
