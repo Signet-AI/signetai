@@ -742,6 +742,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				surprisal: cfg.dreaming.surprisal,
 				policies: cfg.dreaming.policies,
 				defaultPolicies: DEFAULT_DREAMING_POLICIES,
+				policyProblems: cfg.dreamingPolicyProblems,
 			},
 			passes,
 			attention,

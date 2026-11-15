@@ -16,6 +16,7 @@ import {
 	loadDreamingConfig,
 	loadMemoryConfig,
 	loadPipelineConfig,
+	retiredDreamingIdentityFiles,
 } from "./memory-config";
 import { DEFAULT_DREAMING_POLICIES } from "./pipeline/dreaming-policies";
 
@@ -71,6 +72,41 @@ describe("loadDreamingConfig", () => {
 		expect(
 			loadDreamingConfig({ memory: { dreaming: { policies: { combined: "x".repeat(64_000) } } } }).policies.combined,
 		).toHaveLength(64_000);
+	});
+
+	it("reports each policy entry that is not in use", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-dreaming-policy-"));
+		tmpDirs.push(dir);
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`memory:\n  dreaming:\n    policies:\n      hygiene: "   "\n      content: 42\n      combined: "${"x".repeat(64_001)}"\n      hygeine: Misspelled.\n`,
+		);
+		expect(loadMemoryConfig(dir).dreamingPolicyProblems).toEqual({
+			"dreaming.policies.content": "is not text; the content pass uses its default policy",
+			"dreaming.policies.combined": "is longer than 64,000 characters; the combined pass uses its default policy",
+			"dreaming.policies.hygeine": "is not a pass type (hygiene, content, combined); it is ignored",
+		});
+		writeFileSync(join(dir, "agent.yaml"), "memory:\n  dreaming:\n    policies: Not a mapping.\n");
+		expect(loadMemoryConfig(dir).dreamingPolicyProblems).toEqual({
+			"dreaming.policies": "must be a mapping of pass type to policy text; every pass uses its default policy",
+		});
+		writeFileSync(join(dir, "agent.yaml"), "memory:\n  dreaming:\n    policies:\n      content: File decisions.\n");
+		expect(loadMemoryConfig(dir).dreamingPolicyProblems).toEqual({});
+	});
+
+	it("finds identity entries that still use the retired dreaming kind", () => {
+		expect(retiredDreamingIdentityFiles({})).toEqual([]);
+		expect(
+			retiredDreamingIdentityFiles({
+				identity: {
+					special: [
+						{ path: "HEARTBEAT.md", kind: "heartbeat" },
+						{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4000 },
+						{ kind: "dreaming" },
+					],
+				},
+			}),
+		).toEqual(["DREAMING.md", "(no path)"]);
 	});
 
 	it("defaults dreaming off and preserves an explicit enable", () => {

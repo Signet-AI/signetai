@@ -13,7 +13,7 @@ import {
 	setPipelinePaused,
 	useAgentConfig,
 } from "@/lib/agent-config";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { ConfigFields } from "./config-fields";
 import { SettingRow, SettingSelect, SettingsGroup } from "./controls";
@@ -160,16 +160,20 @@ function DreamingPolicyEditor({
 	title,
 	desc,
 	fallback,
+	problem,
+	onSaved,
 }: {
 	store: AgentConfigStore;
 	type: DreamPassType;
 	title: string;
 	desc: string;
 	fallback: string;
+	problem: string | undefined;
+	onSaved: () => void;
 }) {
 	const path = ["memory", "dreaming", "policies", type];
 	const raw = getPath(store.agent, path);
-	const configured = typeof raw === "string" && raw.trim() && raw.length <= 64_000 ? raw : null;
+	const configured = typeof raw === "string" && raw.trim() ? raw : null;
 	const saved = configured ?? fallback;
 	const [text, setText] = useState(saved);
 	useEffect(() => setText(saved), [saved]);
@@ -178,14 +182,18 @@ function DreamingPolicyEditor({
 			store.aDel(path);
 			setText(fallback);
 		} else store.aSetStr(path, value);
-		void store.save();
+		void store.save().then((saved) => {
+			if (saved) onSaved();
+		});
 	};
 
 	return (
 		<div className="flex flex-col gap-2 py-2">
 			<div className="min-w-0">
 				<div className="settings-row-title">{title}</div>
-				<div className="settings-row-description">{configured === null ? `${desc} Using the default.` : desc}</div>
+				<div className="settings-row-description">
+					{problem ? `${desc} This policy ${problem}.` : configured === null ? `${desc} Using the default.` : desc}
+				</div>
 			</div>
 			<textarea
 				aria-label={title}
@@ -215,13 +223,19 @@ function DreamingPolicyEditor({
 
 function DreamingPolicies({ store }: { store: AgentConfigStore }) {
 	const [defaults, setDefaults] = useState<DreamPolicies | null>(null);
+	const [problems, setProblems] = useState<Readonly<Record<string, string>>>({});
 	const [failed, setFailed] = useState(false);
-	useEffect(() => {
+	const refresh = useCallback(() => {
 		void api.getDreamStatus().then((status) => {
-			if (status?.config.defaultPolicies) setDefaults(status.config.defaultPolicies);
-			else setFailed(true);
+			if (!status?.config.defaultPolicies) {
+				setFailed(true);
+				return;
+			}
+			setDefaults(status.config.defaultPolicies);
+			setProblems(status.config.policyProblems);
 		});
 	}, []);
+	useEffect(() => refresh(), [refresh]);
 
 	if (!defaults) {
 		return (
@@ -232,10 +246,22 @@ function DreamingPolicies({ store }: { store: AgentConfigStore }) {
 			</p>
 		);
 	}
+	const fieldKeys = DREAMING_POLICY_FIELDS.map((field) => `dreaming.policies.${field.type}`);
+	const other = Object.entries(problems).filter(([key]) => !fieldKeys.includes(key));
 	return (
 		<>
+			{other.map(([key, problem]) => (
+				<p key={key} className="settings-row-description">{`${key} ${problem}.`}</p>
+			))}
 			{DREAMING_POLICY_FIELDS.map((field) => (
-				<DreamingPolicyEditor key={field.type} store={store} {...field} fallback={defaults[field.type]} />
+				<DreamingPolicyEditor
+					key={field.type}
+					store={store}
+					{...field}
+					fallback={defaults[field.type]}
+					problem={problems[`dreaming.policies.${field.type}`]}
+					onSaved={refresh}
+				/>
 			))}
 		</>
 	);

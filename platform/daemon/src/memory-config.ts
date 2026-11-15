@@ -111,34 +111,53 @@ function isDreamingPassType(value: string): value is DreamingPassType {
 	return DREAMING_PASS_TYPES.some((type) => type === value);
 }
 
-function loadDreamingPolicies(raw: unknown): DreamingPolicies {
+interface DreamingPolicyRead {
+	readonly policies: DreamingPolicies;
+	readonly problems: Readonly<Record<string, string>>;
+}
+
+function readDreamingPolicies(memory: unknown): DreamingPolicyRead {
 	const policies: Record<DreamingPassType, string> = { ...DEFAULT_DREAMING_POLICIES };
-	if (raw === undefined || raw === null) return policies;
+	const problems: Record<string, string> = {};
+	const dreaming = isRecord(memory) ? memory.dreaming : undefined;
+	const raw = isRecord(dreaming) ? dreaming.policies : undefined;
+	if (raw === undefined || raw === null) return { policies, problems };
 	if (!isRecord(raw)) {
-		logger.warn(
-			"config",
-			"dreaming.policies must be a mapping of pass type to policy text; using the default policies",
-		);
-		return policies;
+		problems["dreaming.policies"] = "must be a mapping of pass type to policy text; every pass uses its default policy";
+		return { policies, problems };
 	}
 	for (const [key, value] of Object.entries(raw)) {
 		if (!isDreamingPassType(key)) {
-			logger.warn(
-				"config",
-				`dreaming.policies.${key} is not a pass type (${DREAMING_PASS_TYPES.join(", ")}); ignoring it`,
-			);
+			problems[`dreaming.policies.${key}`] = `is not a pass type (${DREAMING_PASS_TYPES.join(", ")}); it is ignored`;
 			continue;
 		}
 		if (value === undefined || value === null) continue;
-		if (typeof value !== "string" || value.length > MAX_DREAMING_POLICY_CHARS) {
-			logger.warn(
-				"config",
-				`dreaming.policies.${key} must be text of at most ${MAX_DREAMING_POLICY_CHARS} characters; using the default ${key} policy`,
-			);
+		if (typeof value !== "string") {
+			problems[`dreaming.policies.${key}`] = `is not text; the ${key} pass uses its default policy`;
+			continue;
+		}
+		if (value.length > MAX_DREAMING_POLICY_CHARS) {
+			problems[`dreaming.policies.${key}`] =
+				`is longer than ${MAX_DREAMING_POLICY_CHARS.toLocaleString("en-US")} characters; the ${key} pass uses its default policy`;
 			continue;
 		}
 		if (value.trim()) policies[key] = value;
 	}
+	return { policies, problems };
+}
+
+export function retiredDreamingIdentityFiles(yaml: Record<string, unknown>): readonly string[] {
+	const identity = yaml.identity;
+	const special = isRecord(identity) ? identity.special : undefined;
+	if (!Array.isArray(special)) return [];
+	return special.flatMap((entry) =>
+		isRecord(entry) && entry.kind === "dreaming" ? [typeof entry.path === "string" ? entry.path : "(no path)"] : [],
+	);
+}
+
+function loadDreamingPolicies(memory: unknown): DreamingPolicies {
+	const { policies, problems } = readDreamingPolicies(memory);
+	for (const [key, problem] of Object.entries(problems)) logger.warn("config", `${key} ${problem}`);
 	return policies;
 }
 
@@ -332,6 +351,7 @@ export interface ResolvedMemoryConfig {
 	search: MemorySearchConfig;
 	pipelineV2: ResolvedPipelineV2Config;
 	dreaming: DreamingConfig;
+	dreamingPolicyProblems: Readonly<Record<string, string>>;
 	auth: AuthConfig;
 }
 
@@ -1114,7 +1134,7 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 			treeLeafSize: clampWarn("surprisal.treeLeafSize", surprisal?.treeLeafSize, 2, 64, defaultSurprisal.treeLeafSize),
 			minScore: clampWarn("surprisal.minScore", surprisal?.minScore, 0, 1, defaultSurprisal.minScore),
 		},
-		policies: loadDreamingPolicies(raw.policies),
+		policies: loadDreamingPolicies(mem),
 	};
 }
 export function graphWriteCaps(cfg: ResolvedMemoryConfig): {
@@ -1139,6 +1159,7 @@ export function loadMemoryConfig(agentsDir: string): ResolvedMemoryConfig {
 			auth: config.auth,
 			pipelineV2: loadPipelineConfig(config.yaml),
 			dreaming: loadDreamingConfig(config.yaml),
+			dreamingPolicyProblems: readDreamingPolicies(config.yaml.memory).problems,
 		};
 	} catch (error) {
 		throw new MemoryConfigValidationError(

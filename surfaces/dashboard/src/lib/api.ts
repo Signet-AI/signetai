@@ -875,6 +875,7 @@ export interface DreamStatus {
 		timeout: number;
 		policies: DreamPolicies;
 		defaultPolicies: DreamPolicies;
+		policyProblems: Readonly<Record<string, string>>;
 	};
 	passes: DreamPass[];
 	attention: DreamAttention[];
