@@ -22,6 +22,7 @@ if (!process.env.SIGNET_ADVANCED_POLICIES_CHILD) {
 	let config = "";
 	let dreamStatusAvailable = true;
 	let saveFailures = 0;
+	let statusDelays: number[] = [];
 	const defaultPolicies = {
 		hygiene: "Default hygiene policy.\n",
 		content: "Default content policy.\n",
@@ -44,16 +45,21 @@ if (!process.env.SIGNET_ADVANCED_POLICIES_CHILD) {
 				config = JSON.parse(String(init?.body)).content as string;
 				return Response.json({ success: true });
 			}
-			if (url.endsWith("/api/dream/status") && method === "GET")
-				return dreamStatusAvailable
+			if (url.endsWith("/api/dream/status") && method === "GET") {
+				const response = dreamStatusAvailable
 					? Response.json({ config: { policies: defaultPolicies, defaultPolicies, policyProblems: problems() } })
 					: new Response("unavailable", { status: 503 });
+				const delay = statusDelays.shift() ?? 0;
+				if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+				return response;
+			}
 			return new Response("not found", { status: 404 });
 		}) as typeof fetch;
 	});
 	beforeEach(() => {
 		dreamStatusAvailable = true;
 		saveFailures = 0;
+		statusDelays = [];
 		config = "memory:\n  dreaming:\n    enabled: true\n";
 	});
 	afterAll(() => {
@@ -168,6 +174,26 @@ if (!process.env.SIGNET_ADVANCED_POLICIES_CHILD) {
 			}
 		},
 	);
+
+	test("a slower, older policy status cannot replace a newer one", async () => {
+		config = "memory:\n  dreaming:\n    enabled: true\n    policies:\n      content: 42\n";
+		await mount();
+		try {
+			expect(document.body.textContent).toContain("is not text");
+			statusDelays = [300, 0];
+			await type("Hygiene pass policy", "Keep everything.\n");
+			await act(async () => button("Hygiene pass policy", "Save").click());
+			await settle();
+			await act(async () => button("Content pass policy", "Reset to default").click());
+			await act(async () => new Promise((resolve) => setTimeout(resolve, 450)));
+			await settle();
+			expect(config).not.toContain("content:");
+			expect(statusDelays).toEqual([]);
+			expect(document.body.textContent).not.toContain("is not text");
+		} finally {
+			await unmount();
+		}
+	});
 
 	test("blank text saved over a non-text value shows the default again", async () => {
 		config = "memory:\n  dreaming:\n    enabled: true\n    policies:\n      content: 42\n";

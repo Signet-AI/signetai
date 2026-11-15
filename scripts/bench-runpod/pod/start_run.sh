@@ -18,7 +18,7 @@ while [ $# -gt 0 ]; do
     --max-hours) hours=$2; shift 2 ;;
     --resume) resume=1; shift ;;
     --dream-conc) conc=$2; shift 2 ;;
-    --policies) policies=$2; shift 2 ;;
+    --policies) [ -n "${2:-}" ] || { echo "--policies needs a file"; exit 2; }; policies=$2; shift 2 ;;
     *) echo "unknown arg $1"; exit 2 ;;
   esac
 done
