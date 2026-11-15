@@ -1409,6 +1409,39 @@ async function waitForAcpxRetry(
 	});
 }
 
+const ACPX_EXIT_MEANINGS: Readonly<Record<number, string | undefined>> = {
+	2: "usage error",
+	3: "timeout",
+	4: "no session found",
+	5: "permission denied",
+};
+
+function acpxJsonErrorMessage(stdout: string): string | undefined {
+	const lines = stdout.split(/\r?\n/);
+	for (let index = lines.length - 1; index >= 0; index -= 1) {
+		const line = lines[index] ?? "";
+		if (!line.includes('"error"')) continue;
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (!isJsonRecord(parsed) || !isJsonRecord(parsed.error)) continue;
+		const data = parsed.error.data;
+		const details = isJsonRecord(data) ? acpxStringField(data, "details")?.trim() : undefined;
+		const message = details || acpxStringField(parsed.error, "message")?.trim();
+		if (message) return message;
+	}
+	return undefined;
+}
+
+function acpxFailureDetail(code: number | null, format: AcpxOutputFormat, stdout: string, stderr: string): string {
+	const reported = (format === "json" ? acpxJsonErrorMessage(stdout) : undefined) ?? stderr.trim();
+	const detail = reported || (code === null ? undefined : ACPX_EXIT_MEANINGS[code]) || "no error output";
+	return detail.slice(0, 300);
+}
+
 function quietUsage(stderr: string): string | undefined {
 	return stderr.match(/^\[acpx\] tokens: (.+)$/m)?.[1]?.slice(0, 300);
 }
@@ -1503,7 +1536,11 @@ function runAcpxAttempt(
 						return;
 					}
 					if (code !== 0) {
-						reject(new Error(`${config.agent} via ACPX exited ${code}: ${stderr.slice(0, 300)}`));
+						reject(
+							new Error(
+								`${config.agent} via ACPX exited ${code}: ${acpxFailureDetail(code, outputFormat, stdout, stderr)}`,
+							),
+						);
 						return;
 					}
 					let text: string | undefined;
