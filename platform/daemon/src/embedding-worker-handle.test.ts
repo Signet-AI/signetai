@@ -5,7 +5,13 @@ import {
 	type EmbeddingWorkerLike,
 	createEmbeddingWorkerHandle,
 } from "./embedding-worker-handle";
-import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
+import {
+	type EmbeddingWorkerInit,
+	type MainToWorkerMessage,
+	RELEASE_SIGNAL_FAILED,
+	RELEASE_SIGNAL_RELEASED,
+	type WorkerToMainMessage,
+} from "./embedding-worker-protocol";
 const flush = (): Promise<void> => Bun.sleep(0);
 
 interface FakeWorkerListeners {
@@ -400,6 +406,35 @@ describe("embedding-worker-handle", () => {
 		expect(process.listenerCount("exit")).toBe(exitListeners + 1);
 		crashed.emitExit(1);
 		expect(process.listenerCount("exit")).toBe(exitListeners);
+	});
+
+	it("reads the release outcome in the exit guard and reports a failed release", async () => {
+		for (const [outcome, expected] of [
+			[RELEASE_SIGNAL_RELEASED, null],
+			[RELEASE_SIGNAL_FAILED, "Worker failed to release its session before exit"],
+		] as const) {
+			const worker = new FakeWorker();
+			let signal: SharedArrayBuffer | undefined;
+			const handle = await createEmbeddingWorkerHandle({
+				task: "rerank",
+				device: "metal",
+				wasmAssetDir: null,
+				transformersRuntimeAssetPath: null,
+				embeddingWorkerPath: "/fake/embedding-worker.js",
+				workerFactory: (_path, init) => {
+					signal = init.releaseSignal;
+					return worker;
+				},
+			});
+			handles.push(handle);
+			if (signal === undefined) throw new Error("Metal worker init carried no release signal");
+			Atomics.store(new Int32Array(signal), 0, outcome);
+			const guard = process.listeners("exit").at(-1) as () => void;
+			guard();
+			expect(worker.posted).toEqual([{ type: "shutdown" }]);
+			expect(handle.getLastError()).toBe(expected);
+			worker.emitExit(0);
+		}
 	});
 
 	it("does not add a release signal or exit guard for CPU and CUDA workers", async () => {

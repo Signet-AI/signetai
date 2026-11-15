@@ -3,11 +3,13 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { resolveDefaultBasePath } from "@signet/core";
-import type {
-	EmbeddingWorkerInit,
-	EmbeddingWorkerStatus,
-	MainToWorkerMessage,
-	WorkerToMainMessage,
+import {
+	type EmbeddingWorkerInit,
+	type EmbeddingWorkerStatus,
+	type MainToWorkerMessage,
+	RELEASE_SIGNAL_FAILED,
+	RELEASE_SIGNAL_RELEASED,
+	type WorkerToMainMessage,
 } from "./embedding-worker-protocol";
 import { logger } from "./logger";
 import {
@@ -144,7 +146,16 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		if (releaseSignal === null) return;
 		try {
 			worker.postMessage({ type: "shutdown" });
-			Atomics.wait(new Int32Array(releaseSignal), 0, 0, RELEASE_TIMEOUT_MS);
+			const signal = new Int32Array(releaseSignal);
+			Atomics.wait(signal, 0, 0, RELEASE_TIMEOUT_MS);
+			const outcome = Atomics.load(signal, 0);
+			if (outcome !== RELEASE_SIGNAL_RELEASED) {
+				lastError =
+					outcome === RELEASE_SIGNAL_FAILED
+						? "Worker failed to release its session before exit"
+						: `Worker did not release its session within ${RELEASE_TIMEOUT_MS}ms of exit`;
+				logger.warn("native-embedding", lastError);
+			}
 		} catch {}
 	};
 	if (releaseSignal !== null) process.once("exit", releaseBeforeExit);
