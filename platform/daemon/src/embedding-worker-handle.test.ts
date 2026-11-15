@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { WorkerOptions } from "node:worker_threads";
 import {
 	type EmbeddingWorkerFactory,
@@ -12,6 +12,7 @@ import {
 	RELEASE_SIGNAL_RELEASED,
 	type WorkerToMainMessage,
 } from "./embedding-worker-protocol";
+import { logger } from "./logger";
 const flush = (): Promise<void> => Bun.sleep(0);
 
 interface FakeWorkerListeners {
@@ -412,7 +413,9 @@ describe("embedding-worker-handle", () => {
 		for (const [outcome, expected] of [
 			[RELEASE_SIGNAL_RELEASED, null],
 			[RELEASE_SIGNAL_FAILED, "Worker failed to release its session before exit"],
+			[0, "Worker did not release its session within 2000ms of exit"],
 		] as const) {
+			const flushed = spyOn(logger, "shutdown").mockImplementation(() => {});
 			const worker = new FakeWorker();
 			let signal: SharedArrayBuffer | undefined;
 			const handle = await createEmbeddingWorkerHandle({
@@ -433,6 +436,8 @@ describe("embedding-worker-handle", () => {
 			guard();
 			expect(worker.posted).toEqual([{ type: "shutdown" }]);
 			expect(handle.getLastError()).toBe(expected);
+			expect(flushed).toHaveBeenCalledTimes(expected === null ? 0 : 1);
+			flushed.mockRestore();
 			worker.emitExit(0);
 		}
 	});

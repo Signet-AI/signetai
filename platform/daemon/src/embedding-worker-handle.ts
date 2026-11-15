@@ -155,6 +155,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 						? "Worker failed to release its session before exit"
 						: `Worker did not release its session within ${RELEASE_TIMEOUT_MS}ms of exit`;
 				logger.warn("native-embedding", lastError);
+				logger.shutdown();
 			}
 		} catch {}
 	};
