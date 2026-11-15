@@ -146,7 +146,13 @@ import {
 } from "./lifecycle";
 import { closeInferenceProviderResolver, initInferenceProviderResolver } from "./llm";
 import { logger } from "./logger";
-import { type ResolvedMemoryConfig, graphWriteCaps, loadMemoryConfig, readRuntimeConfig } from "./memory-config";
+import {
+	type ResolvedMemoryConfig,
+	graphWriteCaps,
+	loadMemoryConfig,
+	readRuntimeConfig,
+	retiredDreamingIdentityFiles,
+} from "./memory-config";
 import { registerGlobalMiddleware } from "./middleware";
 import {
 	type NativeMemoryBridgeHandle,
@@ -2444,7 +2450,12 @@ async function main() {
 		return;
 	}
 	try {
-		readRuntimeConfig(AGENTS_DIR);
+		for (const path of retiredDreamingIdentityFiles(readRuntimeConfig(AGENTS_DIR).yaml)) {
+			logger.warn(
+				"config",
+				`identity.special lists ${path} with the retired kind "dreaming"; it is ignored. Dreaming instructions are set per pass type under memory.dreaming.policies.`,
+			);
+		}
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : "invalid runtime configuration";
 		console.error(`Signet cannot start: ${detail}`);

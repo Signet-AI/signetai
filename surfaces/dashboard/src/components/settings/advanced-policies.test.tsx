@@ -46,7 +46,7 @@ if (!process.env.SIGNET_ADVANCED_POLICIES_CHILD) {
 			}
 			if (url.endsWith("/api/dream/status") && method === "GET")
 				return dreamStatusAvailable
-					? Response.json({ config: { policies: defaultPolicies, defaultPolicies } })
+					? Response.json({ config: { policies: defaultPolicies, defaultPolicies, policyProblems: problems() } })
 					: new Response("unavailable", { status: 503 });
 			return new Response("not found", { status: 404 });
 		}) as typeof fetch;
@@ -60,6 +60,18 @@ if (!process.env.SIGNET_ADVANCED_POLICIES_CHILD) {
 		globalThis.fetch = originalFetch;
 		restore();
 	});
+
+	const problems = () => {
+		const found: Record<string, string> = {};
+		if (/content: (42|\{)/.test(config))
+			found["dreaming.policies.content"] = "is not text; the content pass uses its default policy";
+		if (config.length > 64_000)
+			found["dreaming.policies.combined"] =
+				"is longer than 64,000 characters; the combined pass uses its default policy";
+		if (config.includes("hygeine:"))
+			found["dreaming.policies.hygeine"] = "is not a pass type (hygiene, content, combined); it is ignored";
+		return found;
+	};
 
 	const settle = async () => {
 		for (let i = 0; i < 5; i += 1) await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
@@ -144,7 +156,9 @@ if (!process.env.SIGNET_ADVANCED_POLICIES_CHILD) {
 			await mount();
 			try {
 				expect(editor("Content pass policy").value).toBe(defaultPolicies.content);
-				expect(document.body.textContent).toContain("file claims. Using the default.");
+				expect(document.body.textContent).toContain(
+					"file claims. This policy is not text; the content pass uses its default policy.",
+				);
 				expect(button("Content pass policy", "Reset to default").disabled).toBe(false);
 				await act(async () => button("Content pass policy", "Reset to default").click());
 				await settle();
@@ -164,6 +178,27 @@ if (!process.env.SIGNET_ADVANCED_POLICIES_CHILD) {
 			await settle();
 			expect(config).not.toContain("content:");
 			expect(editor("Content pass policy").value).toBe(defaultPolicies.content);
+		} finally {
+			await unmount();
+		}
+	});
+
+	test("a policy the daemon is not using says why until it is fixed", async () => {
+		config = `memory:\n  dreaming:\n    enabled: true\n    policies:\n      combined: "${"x".repeat(64_001)}"\n      hygeine: Misspelled.\n`;
+		await mount();
+		try {
+			expect(editor("Combined pass policy").value).toHaveLength(64_001);
+			expect(document.body.textContent).toContain(
+				"This policy is longer than 64,000 characters; the combined pass uses its default policy.",
+			);
+			expect(document.body.textContent).toContain(
+				"dreaming.policies.hygeine is not a pass type (hygiene, content, combined); it is ignored.",
+			);
+			await type("Combined pass policy", "Do both, briefly.\n");
+			await act(async () => button("Combined pass policy", "Save").click());
+			await settle();
+			expect(document.body.textContent).not.toContain("longer than 64,000 characters");
+			expect(document.body.textContent).toContain("which do both.Do both, briefly.");
 		} finally {
 			await unmount();
 		}

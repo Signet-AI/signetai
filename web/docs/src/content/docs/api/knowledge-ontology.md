@@ -491,10 +491,17 @@ memory:
 - A configured policy replaces the default for its pass type. Pass types you
   do not set keep the default.
 - A blank value keeps the default. A value that is not text, or is longer than
-  64,000 characters, keeps the default and logs a warning. An unknown pass type
-  key is ignored with a warning.
-- The daemon reads the policy when each pass starts, so an edit applies to the
-  next pass without a restart.
+  64,000 characters, keeps the default. An unknown pass type key is ignored.
+  The daemon logs a warning for each and reports it in
+  `config.policyProblems` from `GET /api/dream/status`, which the dashboard
+  shows next to the policy.
+- The daemon reads the policies and `enabled` when each pass starts, so an edit
+  applies to the next pass without a restart. Other Dreaming settings, such as
+  `tokenThreshold`, `timeout`, and `maxConcurrentPasses`, are read when the
+  daemon starts and need a restart.
+- `DREAMING.md` and `kind: dreaming` identity entries are retired. The daemon
+  ignores them and logs a warning at startup when `identity.special` still
+  lists one.
 - A policy cannot change the tools, their descriptions, or the write gate.
   Citation, scope, and provenance checks apply to every pass.
 - After the policy, the daemon appends the pass's agent scopes when there is
@@ -528,7 +535,10 @@ when none is fresh. With `measure=1` the route runs the bounded backlog probe:
 an exact count when at most 50 sources are waiting, `null` when more are.
 
 `config.policies` holds the policy each pass type runs under, and
-`config.defaultPolicies` holds the built-in ones.
+`config.defaultPolicies` holds the built-in ones. `config.policyProblems` maps
+each `agent.yaml` policy entry that is not in use, such as
+`dreaming.policies.content`, to the reason; it is empty when every entry is in
+use.
 
 **Response**
 
@@ -568,7 +578,8 @@ an exact count when at most 50 sources are waiting, `null` when more are.
       "hygiene": "You are a bounded Signet maintenance agent. ...",
       "content": "You are a bounded Signet maintenance agent. ...",
       "combined": "You are a bounded Signet maintenance agent. ..."
-    }
+    },
+    "policyProblems": {}
   },
   "passes": [
     {

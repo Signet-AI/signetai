@@ -589,6 +589,7 @@ const demoDreamStatus: DreamStatus = {
 		timeout: 540,
 		policies: demoDreamPolicies,
 		defaultPolicies: demoDreamPolicies,
+		policyProblems: {},
 	},
 	passes: [
 		{
