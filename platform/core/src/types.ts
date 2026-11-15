@@ -118,7 +118,7 @@ export interface AgentManifest {
 		session_budget?: number;
 		decay_rate?: number;
 		pipelineV2?: Partial<PipelineV2Config>;
-		dreaming?: Partial<DreamingConfig>;
+		dreaming?: Partial<Omit<DreamingConfig, "policies">> & { readonly policies?: Partial<DreamingPolicies> };
 	};
 	trust?: {
 		verification: "none" | "erc8128" | "gpg" | "did" | "registry";

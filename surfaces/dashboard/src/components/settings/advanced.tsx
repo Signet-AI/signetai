@@ -174,8 +174,10 @@ function DreamingPolicyEditor({
 	const [text, setText] = useState(saved);
 	useEffect(() => setText(saved), [saved]);
 	const commit = (value: string) => {
-		if (!value.trim() || value === fallback) store.aDel(path);
-		else store.aSetStr(path, value);
+		if (!value.trim() || value === fallback) {
+			store.aDel(path);
+			setText(fallback);
+		} else store.aSetStr(path, value);
 		void store.save();
 	};
 
@@ -195,10 +197,15 @@ function DreamingPolicyEditor({
 				className="min-h-[220px] w-full resize-y rounded-[var(--control-radius)] border border-[var(--border)] bg-[var(--card)] p-3 font-mono text-[12px] leading-relaxed text-[var(--foreground)]"
 			/>
 			<div className="flex items-center gap-2">
-				<Button size="compact" disabled={!store.ready || text === saved} onClick={() => commit(text)}>
+				<Button size="compact" disabled={!store.ready || (text === saved && !store.dirty)} onClick={() => commit(text)}>
 					Save
 				</Button>
-				<Button size="compact" variant="ghost" disabled={!store.ready || raw === undefined} onClick={() => commit("")}>
+				<Button
+					size="compact"
+					variant="ghost"
+					disabled={!store.ready || (raw === undefined && !store.dirty)}
+					onClick={() => commit("")}
+				>
 					Reset to default
 				</Button>
 			</div>
