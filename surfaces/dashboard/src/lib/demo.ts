@@ -563,6 +563,12 @@ const demoSecrets: { secrets: string[]; provider: string } = {
 	provider: "local",
 };
 
+const demoDreamPolicies: DreamStatus["config"]["policies"] = {
+	hygiene: "Work the attention queue: inspect each flagged target, then archive, merge, or keep it.\n",
+	content: "File what new evidence establishes as settled fact, with an exact quote for every claim.\n",
+	combined: "Work the attention queue first, then file what new evidence establishes.\n",
+};
+
 const demoDreamStatus: DreamStatus = {
 	worker: { running: false, active: false, activeAgentId: null },
 	scheduler: null,
@@ -581,6 +587,8 @@ const demoDreamStatus: DreamStatus = {
 		maxInputTokens: 60000,
 		maxOutputTokens: 16000,
 		timeout: 540,
+		policies: demoDreamPolicies,
+		defaultPolicies: demoDreamPolicies,
 	},
 	passes: [
 		{

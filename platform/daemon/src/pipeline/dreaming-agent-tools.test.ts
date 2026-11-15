@@ -9,6 +9,7 @@ import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { ownerRun, ownerReadOne } from "../db-owner-sql";
 import { DREAMING_CAPABILITY_IDS, getDreamingCapabilityManifest } from "./dreaming-capabilities";
 import { MEMORY_HEAD_MAX_TOKENS } from "../memory-head";
+import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 
 describe("dreaming-agent-tools", () => {
 	let dir = "";
@@ -147,6 +148,7 @@ describe("dreaming-agent-tools", () => {
 			maxOutputTokens: 16000,
 			timeout: 30000,
 			backfillOnFirstRun: true,
+			policies: DEFAULT_DREAMING_POLICIES,
 		};
 		let passId = "";
 		const runPass = (entries: readonly Record<string, unknown>[]) =>
@@ -204,6 +206,7 @@ describe("dreaming-agent-tools", () => {
 			maxOutputTokens: 16000,
 			timeout: 30000,
 			backfillOnFirstRun: true,
+			policies: DEFAULT_DREAMING_POLICIES,
 		};
 		const support = [{ source_ref: "memory:head-evidence", quote: "Meeting is Tuesday." }];
 		const runPass = (retry: boolean) =>
@@ -268,6 +271,7 @@ describe("dreaming-agent-tools", () => {
 			maxOutputTokens: 16000,
 			timeout: 30000,
 			backfillOnFirstRun: true,
+			policies: DEFAULT_DREAMING_POLICIES,
 		};
 		const runPass = (commits: readonly Record<string, unknown>[]) =>
 			runDreamingAgentPass(
@@ -318,6 +322,7 @@ describe("dreaming-agent-tools", () => {
 			maxOutputTokens: 16000,
 			timeout: 30000,
 			backfillOnFirstRun: true,
+			policies: DEFAULT_DREAMING_POLICIES,
 		};
 		let passId = "";
 		const runPass = (behavior: "commit" | "stale" | "missing" | "fail-finalization-after-head-commit") =>

@@ -474,6 +474,34 @@ Detect duplicate same-agent entities and optionally write merge proposals.
 Dreaming is a periodic knowledge-graph consolidation process that uses a
 smart model to merge, prune, and enrich the entity graph.
 
+Each pass type runs under a policy prompt: `hygiene` for
+`incremental-hygiene` passes, `content` for `incremental-content` passes, and
+`combined` for `incremental` and `compact` passes. Signet ships a default
+policy for each. To replace one, set it under `memory.dreaming.policies` in
+`agent.yaml`, or edit it under Settings → Advanced → Dreaming in the dashboard:
+
+```yaml
+memory:
+  dreaming:
+    policies:
+      content: |
+        File claims only for decisions and shipped changes.
+```
+
+- A configured policy replaces the default for its pass type. Pass types you
+  do not set keep the default.
+- A blank value keeps the default. A value that is not text, or is longer than
+  64,000 characters, keeps the default and logs a warning. An unknown pass type
+  key is ignored with a warning.
+- The daemon reads the policy when each pass starts, so an edit applies to the
+  next pass without a restart.
+- A policy cannot change the tools, their descriptions, or the write gate.
+  Citation, scope, and provenance checks apply to every pass.
+- After the policy, the daemon appends the pass's agent scopes when there is
+  more than one, the codemode note when `codemode` is on, a directed
+  instruction when one was given, the pass history, pending attention, and the
+  current time.
+
 ### GET /api/dream/status
 
 Return the current dreaming worker state, configuration, recent passes,
@@ -493,6 +521,9 @@ episodic evidence. Requires `admin` permission.
 `episodicTokensPending` normally reports the last measurement, which is `null`
 when none is fresh. With `measure=1` the route runs the bounded backlog probe:
 an exact count when at most 50 sources are waiting, `null` when more are.
+
+`config.policies` holds the policy each pass type runs under, and
+`config.defaultPolicies` holds the built-in ones.
 
 **Response**
 
@@ -522,7 +553,17 @@ an exact count when at most 50 sources are waiting, `null` when more are.
     "maxOutputTokens": null,
     "maxConcurrentPasses": 2,
     "codemode": false,
-    "timeout": 300000
+    "timeout": 300000,
+    "policies": {
+      "hygiene": "You are a bounded Signet maintenance agent. ...",
+      "content": "File claims only for decisions and shipped changes.\n",
+      "combined": "You are a bounded Signet maintenance agent. ..."
+    },
+    "defaultPolicies": {
+      "hygiene": "You are a bounded Signet maintenance agent. ...",
+      "content": "You are a bounded Signet maintenance agent. ...",
+      "combined": "You are a bounded Signet maintenance agent. ..."
+    }
   },
   "passes": [
     {

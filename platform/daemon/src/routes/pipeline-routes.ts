@@ -45,6 +45,7 @@ import {
 } from "../pipeline/dreaming-live-events";
 import { getFeedbackTelemetry } from "../pipeline/aspect-feedback.js";
 import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
+import { DEFAULT_DREAMING_POLICIES } from "../pipeline/dreaming-policies";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreaming-token-cache";
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { callDreamingPassTool } from "../pipeline/dreaming-pass-tools";
@@ -738,6 +739,8 @@ export function registerPipelineRoutes(app: Hono): void {
 				codemode: cfg.dreaming.codemode,
 				timeout: cfg.dreaming.timeout,
 				surprisal: cfg.dreaming.surprisal,
+				policies: cfg.dreaming.policies,
+				defaultPolicies: DEFAULT_DREAMING_POLICIES,
 			},
 			passes,
 			attention,

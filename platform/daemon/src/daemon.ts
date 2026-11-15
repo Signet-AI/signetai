@@ -1927,6 +1927,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 									!live.pipelineV2.mutationsFrozen
 								);
 							},
+							policies: () => loadMemoryConfig(AGENTS_DIR).dreaming.policies,
 							inferenceAvailable: async (agentId) =>
 								(await router.explain({ agentId, operation: "memory_extraction" })).ok,
 							acpxMcp: {

@@ -1,5 +1,6 @@
 import { TELEMETRY_CONSENT_PATH, readTelemetryConsent } from "@signet/core/telemetry-consent";
 import { Button } from "@/components/ui/button";
+import { type DreamPassType, type DreamPolicies, api } from "@/lib/api";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -11,7 +12,7 @@ import {
 	setPipelinePaused,
 	useAgentConfig,
 } from "@/lib/agent-config";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ConfigFields } from "./config-fields";
 import { SettingRow, SettingSelect, SettingsGroup } from "./controls";
@@ -130,6 +131,103 @@ function TelemetrySettings({ store }: { store: AgentConfigStore }) {
 					This only changes anonymous telemetry. Your memories, configuration, and local Signet data are not deleted.
 				</div>
 			</ConfirmationDialog>
+		</>
+	);
+}
+
+const DREAMING_POLICY_FIELDS: ReadonlyArray<{ type: DreamPassType; title: string; desc: string }> = [
+	{
+		type: "hygiene",
+		title: "Hygiene pass policy",
+		desc: "Instructions for passes that work the attention queue: archives, merges, and kept records.",
+	},
+	{
+		type: "content",
+		title: "Content pass policy",
+		desc: "Instructions for passes that read new evidence and file claims.",
+	},
+	{
+		type: "combined",
+		title: "Combined pass policy",
+		desc: "Instructions for manual, backfill, and compact passes, which do both.",
+	},
+];
+
+function DreamingPolicyEditor({
+	store,
+	type,
+	title,
+	desc,
+	fallback,
+}: {
+	store: AgentConfigStore;
+	type: DreamPassType;
+	title: string;
+	desc: string;
+	fallback: string;
+}) {
+	const path = ["memory", "dreaming", "policies", type];
+	const configured = store.aStr(path);
+	const saved = configured.trim() ? configured : fallback;
+	const [text, setText] = useState(saved);
+	useEffect(() => setText(saved), [saved]);
+	const commit = (value: string) => {
+		if (!value.trim() || value === fallback) store.aDel(path);
+		else store.aSetStr(path, value);
+		void store.save();
+	};
+
+	return (
+		<div className="flex flex-col gap-2 py-2">
+			<div className="min-w-0">
+				<div className="settings-row-title">{title}</div>
+				<div className="settings-row-description">{saved === fallback ? `${desc} Using the default.` : desc}</div>
+			</div>
+			<textarea
+				aria-label={title}
+				value={text}
+				disabled={!store.ready}
+				maxLength={64_000}
+				spellCheck={false}
+				onChange={(e) => setText(e.target.value)}
+				className="min-h-[220px] w-full resize-y rounded-[var(--control-radius)] border border-[var(--border)] bg-[var(--card)] p-3 font-mono text-[12px] leading-relaxed text-[var(--foreground)]"
+			/>
+			<div className="flex items-center gap-2">
+				<Button size="compact" disabled={!store.ready || text === saved} onClick={() => commit(text)}>
+					Save
+				</Button>
+				<Button size="compact" variant="ghost" disabled={!store.ready || saved === fallback} onClick={() => commit("")}>
+					Reset to default
+				</Button>
+			</div>
+		</div>
+	);
+}
+
+function DreamingPolicies({ store }: { store: AgentConfigStore }) {
+	const [defaults, setDefaults] = useState<DreamPolicies | null>(null);
+	const [failed, setFailed] = useState(false);
+	useEffect(() => {
+		void api.getDreamStatus().then((status) => {
+			if (status?.config.defaultPolicies) setDefaults(status.config.defaultPolicies);
+			else setFailed(true);
+		});
+	}, []);
+
+	if (!defaults) {
+		return (
+			<p className="settings-row-description">
+				{failed
+					? "Could not load the default pass policies from the daemon. Reload to retry."
+					: "Loading pass policies…"}
+			</p>
+		);
+	}
+	return (
+		<>
+			{DREAMING_POLICY_FIELDS.map((field) => (
+				<DreamingPolicyEditor key={field.type} store={store} {...field} fallback={defaults[field.type]} />
+			))}
 		</>
 	);
 }
@@ -433,6 +531,7 @@ export function AdvancedSection() {
 						},
 					]}
 				/>
+				<DreamingPolicies store={store} />
 			</SettingsGroup>
 
 			<SettingsGroup title="Embeddings extras">

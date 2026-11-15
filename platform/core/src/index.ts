@@ -95,6 +95,7 @@ export {
 	TELEMETRY_INSTALL_CHANNELS,
 	ACCOUNTING_PROVENANCES,
 	summarizeAccountingProvenance,
+	DREAMING_PASS_TYPES,
 } from "./types";
 export type {
 	Agent,
@@ -172,6 +173,8 @@ export type {
 	PipelineHintsConfig,
 	DreamingSurprisalConfig,
 	DreamingConfig,
+	DreamingPassType,
+	DreamingPolicies,
 	ModelRegistryEntry,
 } from "./types";
 export {

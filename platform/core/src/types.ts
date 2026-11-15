@@ -454,6 +454,10 @@ export interface DreamingSurprisalConfig {
 	readonly minScore: number;
 }
 
+export const DREAMING_PASS_TYPES = ["hygiene", "content", "combined"] as const;
+export type DreamingPassType = (typeof DREAMING_PASS_TYPES)[number];
+export type DreamingPolicies = Readonly<Record<DreamingPassType, string>>;
+
 export interface DreamingConfig {
 	readonly enabled: boolean;
 	readonly tokenThreshold: number;
@@ -466,6 +470,7 @@ export interface DreamingConfig {
 	readonly codemode: boolean;
 	readonly backfillOnFirstRun: boolean;
 	readonly surprisal?: DreamingSurprisalConfig;
+	readonly policies: DreamingPolicies;
 }
 
 export const MEMORY_TYPES = [

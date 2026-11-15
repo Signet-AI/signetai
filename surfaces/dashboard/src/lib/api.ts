@@ -840,6 +840,9 @@ export interface DreamQuality {
 	};
 }
 
+export type DreamPassType = "hygiene" | "content" | "combined";
+export type DreamPolicies = Readonly<Record<DreamPassType, string>>;
+
 export interface DreamStatus {
 	worker: { running: boolean; active: boolean; activeAgentId: string | null };
 	scheduler: {
@@ -862,6 +865,8 @@ export interface DreamStatus {
 		maxInputTokens: number;
 		maxOutputTokens: number | null;
 		timeout: number;
+		policies: DreamPolicies;
+		defaultPolicies: DreamPolicies;
 	};
 	passes: DreamPass[];
 	attention: DreamAttention[];

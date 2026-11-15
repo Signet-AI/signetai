@@ -10,6 +10,7 @@ import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from 
 import { searchEpisodicSources } from "../episodic-sources";
 import { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } from "../transcript-capture-worker";
 import { getDreamingToolCalls, runDreamingAgentPass } from "./dreaming";
+import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 
 interface GateSession {
 	readonly id: string;
@@ -51,6 +52,7 @@ function defaultCfg(): DreamingConfig {
 		maxOutputTokens: 16_000,
 		timeout: 300_000,
 		backfillOnFirstRun: true,
+		policies: DEFAULT_DREAMING_POLICIES,
 	};
 }
 
