@@ -229,7 +229,7 @@ printf 'ok\\n'
 		writeFileSync(
 			bin,
 			`#!/usr/bin/env bash
-printf '%s\n' "$(date +%s%3N)" >> ${JSON.stringify(timesPath)}
+printf '%s\n' "$(( $(date +%s%N) / 1000000 ))" >> ${JSON.stringify(timesPath)}
 count=0
 [[ -f ${JSON.stringify(countPath)} ]] && count=$(cat ${JSON.stringify(countPath)})
 count=$((count + 1))
