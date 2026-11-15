@@ -12,7 +12,13 @@ import {
 	scoreInGroups,
 } from "./cross-encoder-buckets";
 import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
-import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
+import {
+	type EmbeddingWorkerInit,
+	type MainToWorkerMessage,
+	RELEASE_SIGNAL_FAILED,
+	RELEASE_SIGNAL_RELEASED,
+	type WorkerToMainMessage,
+} from "./embedding-worker-protocol";
 const TRANSFORMERS_LOG_LEVEL_NONE = 50;
 interface TransformersEnv {
 	logLevel?: number;
@@ -496,15 +502,20 @@ async function handleShutdown(): Promise<void> {
 			await initPromise;
 		} catch {}
 	}
+	let releaseError: string | null = null;
 	if (embedFn?.dispose) {
 		try {
 			await embedFn.dispose();
-		} catch {}
+		} catch (error) {
+			releaseError = error instanceof Error ? error.message : String(error);
+		}
 	}
 	if (rerankModel?.dispose) {
 		try {
 			await rerankModel.dispose();
-		} catch {}
+		} catch (error) {
+			releaseError = error instanceof Error ? error.message : String(error);
+		}
 	}
 	embedFn = null;
 	rerankFn = null;
@@ -514,9 +525,9 @@ async function handleShutdown(): Promise<void> {
 	initError = null;
 	if (init.releaseSignal) {
 		const released = new Int32Array(init.releaseSignal);
-		Atomics.store(released, 0, 1);
+		Atomics.store(released, 0, releaseError === null ? RELEASE_SIGNAL_RELEASED : RELEASE_SIGNAL_FAILED);
 		Atomics.notify(released, 0);
-		post({ type: "released" });
+		post({ type: "released", ...(releaseError !== null ? { error: releaseError } : {}) });
 	}
 }
 

@@ -381,8 +381,9 @@ describe("embedding-worker-handle", () => {
 		expect(worker.posted).toEqual([{ type: "shutdown" }]);
 		expect(worker.terminated).toBe(false);
 		expect(process.listenerCount("exit")).toBe(exitListeners + 1);
-		worker.emit({ type: "released" });
+		worker.emit({ type: "released", error: "dispose failed" });
 		await stopping;
+		expect(handle.getLastError()).toBe("Worker failed to release its session: dispose failed");
 		expect(worker.terminated).toBe(true);
 		expect(process.listenerCount("exit")).toBe(exitListeners);
 

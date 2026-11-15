@@ -3,7 +3,12 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
-import type { EmbeddingWorkerInit, EmbeddingWorkerStatus, WorkerToMainMessage } from "./embedding-worker-protocol";
+import {
+	type EmbeddingWorkerInit,
+	type EmbeddingWorkerStatus,
+	RELEASE_SIGNAL_FAILED,
+	type WorkerToMainMessage,
+} from "./embedding-worker-protocol";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -90,7 +95,10 @@ describe("embedding worker status", () => {
 		expect(last?.initializing).toBe(false);
 	});
 
-	function recordingRuntime(dir: string, options: { loadDelayMs: number; score: number }): string {
+	function recordingRuntime(
+		dir: string,
+		options: { loadDelayMs: number; score: number; disposeFails?: boolean },
+	): string {
 		const path = join(dir, "runtime.mjs");
 		writeFileSync(
 			path,
@@ -103,7 +111,10 @@ export const AutoModelForSequenceClassification = {
 		await new Promise((resolve) => setTimeout(resolve, ${options.loadDelayMs}));
 		record("loaded");
 		const model = async () => ({ logits: { data: [${options.score}], dims: [1, 1] } });
-		model.dispose = async () => record("disposed");
+		model.dispose = async () => {
+			if (${options.disposeFails === true}) throw new Error("dispose failed");
+			record("disposed");
+		};
 		return model;
 	},
 };
@@ -180,6 +191,36 @@ export const pipeline = async () => { throw new Error("unused"); };
 			);
 			expect(afterRelease.error).toBe("Embedding worker is shutting down");
 			expect(events(dir)).toEqual(["loaded", "disposed"]);
+		} finally {
+			await worker.terminate();
+		}
+	});
+
+	it("reports a failed disposal instead of acknowledging a confirmed release", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-embedding-release-failed-"));
+		dirs.push(dir);
+		const releaseSignal = new SharedArrayBuffer(4);
+		const init: EmbeddingWorkerInit = {
+			cacheDir: dir,
+			wasmDir: null,
+			transformersRuntimePath: recordingRuntime(dir, { loadDelayMs: 0, score: 0.5, disposeFails: true }),
+			modelId: "test/model",
+			expectedDimensions: 4,
+			task: "rerank",
+			releaseSignal,
+		};
+		const worker = new Worker(join(import.meta.dir, "embedding-worker.ts"), { workerData: init });
+		try {
+			const released = await new Promise<Extract<WorkerToMainMessage, { type: "released" }>>((resolve, reject) => {
+				worker.on("error", reject);
+				worker.on("message", (msg: WorkerToMainMessage) => {
+					if (msg.type === "ready") worker.postMessage({ type: "checkAvailable", id: 1 });
+					if (msg.type === "check_result") worker.postMessage({ type: "shutdown" });
+					if (msg.type === "released") resolve(msg);
+				});
+			});
+			expect(released.error).toBe("dispose failed");
+			expect(Atomics.load(new Int32Array(releaseSignal), 0)).toBe(RELEASE_SIGNAL_FAILED);
 		} finally {
 			await worker.terminate();
 		}

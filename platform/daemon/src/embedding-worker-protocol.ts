@@ -1,3 +1,6 @@
+export const RELEASE_SIGNAL_RELEASED = 1;
+export const RELEASE_SIGNAL_FAILED = 2;
+
 export interface EmbeddingWorkerInit {
 	readonly cacheDir: string;
 	readonly wasmDir: string | null;
@@ -35,7 +38,7 @@ export interface EmbeddingWorkerStatus {
 
 export type WorkerToMainMessage =
 	| { readonly type: "ready" }
-	| { readonly type: "released" }
+	| { readonly type: "released"; readonly error?: string }
 	| { readonly type: "status"; readonly status: EmbeddingWorkerStatus }
 	| { readonly type: "embed_result"; readonly id: number; readonly vector: number[] }
 	| { readonly type: "embed_error"; readonly id: number; readonly error: string }
