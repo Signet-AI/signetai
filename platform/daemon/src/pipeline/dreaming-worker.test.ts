@@ -1087,6 +1087,30 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
+	it("records no pass when the policy cannot be read", async () => {
+		let executorCalls = 0;
+		const executorFactory = (): DreamingAgentExecutor => ({
+			async run(_input: Parameters<DreamingAgentExecutor["run"]>[0]) {
+				executorCalls += 1;
+				return { summary: "Should not run" };
+			},
+		});
+		const worker = startDreamingWorker(accessor, defaultCfg({ tokenThreshold: 100_000 }), agentsDir, "default", {
+			executorFactory,
+			policies: () => {
+				throw new Error("agent.yaml: invalid YAML syntax");
+			},
+		});
+		try {
+			await expect(worker.trigger("compact", "default")).rejects.toThrow("invalid YAML syntax");
+			await waitFor(() => !worker.running, 2_000);
+			expect(executorCalls).toBe(0);
+			expect(db.prepare("SELECT COUNT(*) AS count FROM dreaming_passes").get()).toEqual({ count: 0 });
+		} finally {
+			worker.stop();
+		}
+	});
+
 	it("keeps the check loop alive when a scheduled pass fails (#1198)", async () => {
 		db.prepare(
 			`INSERT INTO session_transcripts

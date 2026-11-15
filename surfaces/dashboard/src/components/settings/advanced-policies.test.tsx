@@ -131,6 +131,24 @@ if (!process.env.SIGNET_ADVANCED_POLICIES_CHILD) {
 		}
 	});
 
+	test.each(["42", "{ toString: bad }"])(
+		"a non-text policy value shows the default it falls back to: %s",
+		async (value) => {
+			config = `memory:\n  dreaming:\n    enabled: true\n    policies:\n      content: ${value}\n`;
+			await mount();
+			try {
+				expect(editor("Content pass policy").value).toBe(defaultPolicies.content);
+				expect(document.body.textContent).toContain("file claims. Using the default.");
+				expect(button("Content pass policy", "Reset to default").disabled).toBe(false);
+				await act(async () => button("Content pass policy", "Reset to default").click());
+				await settle();
+				expect(config).not.toContain("content:");
+			} finally {
+				await unmount();
+			}
+		},
+	);
+
 	test("pass policies are not editable until the daemon supplies the defaults", async () => {
 		dreamStatusAvailable = false;
 		await mount();

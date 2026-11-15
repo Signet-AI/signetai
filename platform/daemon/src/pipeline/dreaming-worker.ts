@@ -518,18 +518,20 @@ export function startDreamingWorker(
 			}),
 		};
 		runningPasses.add(entry);
-		const passId = (async () => {
+		const prepared = (async () => {
+			const config = options.policies ? { ...cfg, policies: options.policies() } : cfg;
 			const id = options.ownerMaintenance
 				? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode)
 				: await createDreamingPass(accessor, runAgentId, mode);
 			entry.passId = id;
-			return id;
+			return { id, config };
 		})();
-		const result = passId.then((id) =>
+		const passId = prepared.then(({ id }) => id);
+		const result = prepared.then(({ id, config }) =>
 			runDreamingAgentPass(
 				accessor,
 				reportToolCalls(executorForAgent(runAgentId), () => resolveToolCall(true)),
-				options.policies ? { ...cfg, policies: options.policies() } : cfg,
+				config,
 				agentsDir,
 				runAgentId,
 				scopes,
