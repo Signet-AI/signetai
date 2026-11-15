@@ -1414,6 +1414,7 @@ const ACPX_EXIT_MEANINGS: Readonly<Record<number, string | undefined>> = {
 	3: "timeout",
 	4: "no session found",
 	5: "permission denied",
+	130: "interrupted",
 };
 
 function acpxJsonErrorMessage(stdout: string): string | undefined {

@@ -598,6 +598,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
 		expect(await acpxFailure("json", `printf '%s\\n' '${denied}'\nexit 5`)).toBe(
 			"codex via ACPX exited 5: permission denied",
 		);
+		expect(await acpxFailure("quiet", "exit 130")).toBe("codex via ACPX exited 130: interrupted");
 		expect(await acpxFailure("quiet", "exit 1")).toBe("codex via ACPX exited 1: no error output");
 	});
 
