@@ -26,7 +26,7 @@ if [ $resume = 1 ] && [ ${#sel[@]} -gt 0 ]; then echo "a resumed run keeps the q
 if [ ${#sel[@]} -gt 0 ] && [ "${sel[0]}" = --question-ids-file ] && [ ! -s /workspace/runs/$run.qids ]; then echo "empty question id list; refusing (an empty filter could run all 500)"; exit 2; fi
 if [ -n "$policies" ]; then
   [ $resume = 1 ] && { echo "a resumed run keeps the policies it started with; drop --policies"; exit 2; }
-  python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,dict) and d and all(k in ('hygiene','content','combined') and isinstance(v,str) and v.strip() and len(v) <= 64000 for k,v in d.items())" "$policies" \
+  python3 -c "import json,sys; d=json.load(open(sys.argv[1])); assert isinstance(d,dict) and d and all(k in ('hygiene','content','combined') and isinstance(v,str) and v.strip() and len(v.encode('utf-16-le')) // 2 <= 64000 for k,v in d.items())" "$policies" \
     || { echo "bad --policies file $policies (want a JSON object of hygiene/content/combined to non-empty text of at most 64,000 characters)"; exit 2; }
 fi
 curl -sf localhost:$PORT_SIGNET_DREAM/v1/models >/dev/null || { echo "inference stack not serving; run serve first"; exit 1; }

@@ -537,8 +537,10 @@ an exact count when at most 50 sources are waiting, `null` when more are.
 `config.policies` holds the policy each pass type runs under, and
 `config.defaultPolicies` holds the built-in ones. `config.policyProblems` maps
 each `agent.yaml` policy entry that is not in use, such as
-`dreaming.policies.content`, to the reason; it is empty when every entry is in
-use.
+`dreaming.policies.content`, to the reason. It lists entries that are not
+text, are over 64,000 characters, or name an unknown pass type, and is empty
+when there are none. A null or blank entry keeps the default without a
+problem.
 
 **Response**
 

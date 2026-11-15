@@ -204,6 +204,24 @@ if (!process.env.SIGNET_ADVANCED_POLICIES_CHILD) {
 		}
 	});
 
+	test("a failed status refresh after a save marks the policy notes as possibly stale", async () => {
+		config = `memory:\n  dreaming:\n    enabled: true\n    policies:\n      combined: "${"x".repeat(64_001)}"\n`;
+		await mount();
+		try {
+			expect(document.body.textContent).toContain("longer than 64,000 characters");
+			dreamStatusAvailable = false;
+			await type("Combined pass policy", "Do both, briefly.\n");
+			await act(async () => button("Combined pass policy", "Save").click());
+			await settle();
+			expect(config).toContain("Do both, briefly.");
+			expect(document.body.textContent).toContain(
+				"Could not refresh policy status from the daemon. The notes below may be out of date.",
+			);
+		} finally {
+			await unmount();
+		}
+	});
+
 	test("a failed save can be retried", async () => {
 		saveFailures = 1;
 		await mount();
