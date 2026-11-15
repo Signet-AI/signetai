@@ -157,6 +157,7 @@ subscription-backed CLI session, or gateway.
 | `command` | object | Command executor config with `bin`, optional `args`, `cwd`, and `env` |
 | `agent` | string | For `executor: acpx`, the ACPX adapter command to run, for example `codex`, `claude` for Claude Code, `opencode`, or `kimi` for Kimi CLI. Signet normalizes legacy `claude-code` values to ACPX's `claude` command. |
 | `acpxVersion` / `version` | string | Optional ACPX package version. Defaults to Signet's pinned ACPX version |
+| `bin` | string | For ACPX, the launcher to run. Defaults to `npx`, which fetches the pinned ACPX package. Set it to an installed `acpx` binary to skip the fetch |
 | `mode` | string | Optional ACPX execution mode. Defaults to one-shot exec |
 | `cwd` | string | Optional working directory for harness execution |
 | `session` | string | Optional ACPX session identifier when a persistent session is desired |
@@ -194,18 +195,17 @@ inference:
           toolUse: true
 ```
 
-Direct Codex CLI targets use the `codex` binary in the daemon runtime. The Docker image includes the CLI;
-mount a logged-in Codex config directory only when you opt into this executor:
+The `codex`, `claude-code`, `opencode`, `kimi`, and `command` executors are retired. The daemon rejects
+a target that names one of them, and the error gives the ACPX form to use instead.
 
-```bash
-SIGNET_CODEX_HOME="$HOME/.codex" docker compose -f compose.yml -f compose.codex.yml up -d
-```
+A Codex target in the ACPX form:
 
 ```yaml
 inference:
   targets:
     codex-cli:
-      executor: codex
+      executor: acpx
+      agent: codex
       models:
         default:
           model: gpt-5.4-mini
@@ -216,9 +216,47 @@ inference:
       taskClass: memory_extraction
 ```
 
-Signet marks the target unavailable unless `codex --version` works and either `CODEX_HOME/auth.json`
-is mounted or `OPENAI_API_KEY` is present. The auth cache is copied into a sterile temporary home for
-each call; the mounted Codex config stays read-only.
+An ACPX target is available only when its launcher is on the daemon's `PATH`. The launcher is `npx`
+unless the target sets `bin`.
+
+#### ACPX target for Dreaming
+
+A Dreaming pass reaches an ACPX agent's tools through an MCP server named `signet_dreaming`. The
+daemon attaches it for the length of the pass. The target must let the agent call those tools.
+
+```yaml
+inference:
+  defaultPolicy: dreaming
+  targets:
+    dreaming-claude:
+      executor: acpx
+      agent: claude
+      permissions: deny-all
+      hooks: disabled
+      terminal: false
+      allowedTools:
+        - mcp__signet_dreaming
+      models:
+        default:
+          model: haiku
+  policies:
+    dreaming:
+      mode: strict
+      defaultTargets:
+        - dreaming-claude/default
+  workloads:
+    memoryExtraction:
+      policy: dreaming
+```
+
+- `hooks: disabled` gives the agent an empty tool list unless `allowedTools` is set. With an empty
+  list the agent cannot call the Dreaming tools, and the pass completes without reading any evidence.
+- `mcp__signet_dreaming` is Claude Code's name for every tool of the `signet_dreaming` server.
+- With the tools allowed, Claude Code does not ask for permission to call them. The pass works with
+  `permissions: deny-all`, so `approve-all` is not needed.
+
+This target was checked with Claude Code through ACPX 0.12.0. Other agents name MCP tools
+differently, and their `allowedTools` entry has not been checked.
 
 Model fields:
 
