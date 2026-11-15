@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { WorkerOptions } from "node:worker_threads";
 import {
 	type EmbeddingWorkerFactory,
@@ -441,6 +445,52 @@ describe("embedding-worker-handle", () => {
 			worker.emitExit(0);
 		}
 	});
+
+	it("writes the exit guard's failure and timeout warnings to the log file during a real process exit", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-metal-exit-"));
+		try {
+			for (const [failed, expected] of [
+				[true, "Worker failed to release its session before exit"],
+				[false, "Worker did not release its session within 2000ms of exit"],
+			] as const) {
+				const logFile = join(dir, `${failed ? "failed" : "timeout"}.log`);
+				const child = spawnSync(
+					process.execPath,
+					[
+						"-e",
+						`
+						const { createEmbeddingWorkerHandle } = await import(${JSON.stringify(new URL("./embedding-worker-handle.ts", import.meta.url).href)});
+						let signal;
+						const worker = {
+							on() {},
+							postMessage() {
+								if (${failed}) Atomics.store(new Int32Array(signal), 0, 2);
+							},
+							terminate() { return 0; },
+						};
+						await createEmbeddingWorkerHandle({
+							task: "rerank",
+							device: "metal",
+							wasmAssetDir: null,
+							transformersRuntimeAssetPath: null,
+							embeddingWorkerPath: "/fake/embedding-worker.js",
+							workerFactory: (_path, init) => {
+								signal = init.releaseSignal;
+								return worker;
+							},
+						});
+						process.exit(0);
+						`,
+					],
+					{ encoding: "utf8", timeout: 20_000, env: { ...process.env, SIGNET_LOG_FILE: logFile, SIGNET_PATH: dir } },
+				);
+				expect(child.status).toBe(0);
+				expect(readFileSync(logFile, "utf8")).toContain(expected);
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
 
 	it("does not add a release signal or exit guard for CPU and CUDA workers", async () => {
 		const exitListeners = process.listenerCount("exit");
