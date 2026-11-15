@@ -22,6 +22,7 @@ import {
 } from "./source-artifact-graph";
 import { purgeSourceOwnedRows } from "./source-purge";
 import { txIngestEnvelope } from "./transactions";
+import { DEFAULT_DREAMING_POLICIES } from "./pipeline/dreaming-policies";
 
 it("routes transcript source purge through the DB owner boundary", () => {
 	const source = readFileSync(new URL("./source-purge.ts", import.meta.url), "utf8");
@@ -37,6 +38,7 @@ const DREAMING_CONFIG: DreamingConfig = {
 	maxOutputTokens: 1_000,
 	timeout: 30_000,
 	backfillOnFirstRun: true,
+	policies: DEFAULT_DREAMING_POLICIES,
 };
 
 function seedLegacyTranscriptMigrations(db: { prepare(sql: string): { run(): unknown } }): void {

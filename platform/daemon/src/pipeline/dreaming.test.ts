@@ -9,17 +9,15 @@ import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { runDbOwnerDomainOperation } from "../db-owner-runtime";
 import type { DreamingAgentExecutor } from "./dreaming";
+import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 import { executeMemoryHead } from "../memory-head-owner";
 import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "../telemetry";
 import { countTokens, resetTokenizerStats, tokenizerStats } from "../pipeline/tokenizer";
 import {
-	DREAMING_AGENT_PROMPT,
 	dreamingPassClock,
 	dreamingPassPrompt,
-	DREAMING_CONTENT_AGENT_PROMPT,
 	DREAMING_FAILURE_HALT_THRESHOLD,
 	DREAMING_HALT_COOLDOWN_MS,
-	DREAMING_HYGIENE_AGENT_PROMPT,
 	type DreamingState,
 	type DreamingEpisodicBacklogProbe,
 	_testParseEpisodicCursor,
@@ -91,6 +89,7 @@ function defaultCfg(overrides?: Partial<DreamingConfig>): DreamingConfig {
 		maxOutputTokens: 16_000,
 		timeout: 300_000,
 		backfillOnFirstRun: true,
+		policies: DEFAULT_DREAMING_POLICIES,
 		...overrides,
 	};
 }
@@ -589,7 +588,7 @@ describe("Dreaming", () => {
 		expect(result.summary).toBe("Done");
 		expect(
 			prompt.startsWith(
-				`${dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
+				`${dreamingPassPrompt(DEFAULT_DREAMING_POLICIES.combined, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
 			),
 		).toBe(true);
 		const firstDelivery = (await getDreamingToolCalls(accessor, AGENT, result.passId)).find(
@@ -2095,7 +2094,7 @@ describe("Dreaming", () => {
 		expect(result.summary).toBe("Reviewed due claim");
 		expect(
 			prompt.startsWith(
-				`${dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
+				`${dreamingPassPrompt(DEFAULT_DREAMING_POLICIES.combined, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
 			),
 		).toBe(true);
 		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(1);
@@ -2220,7 +2219,7 @@ describe("Dreaming", () => {
 		);
 		expect(
 			prompt.startsWith(
-				`${dreamingPassPrompt(DREAMING_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
+				`${dreamingPassPrompt(DEFAULT_DREAMING_POLICIES.combined, "(no earlier passes)", "none pending")}\n\n<current_time>\nIt is now `,
 			),
 		).toBe(true);
 		expect(toolNames).toEqual(
@@ -2769,7 +2768,7 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		expect(
 			prompt.startsWith(
 				`${dreamingPassPrompt(
-					DREAMING_AGENT_PROMPT,
+					DEFAULT_DREAMING_POLICIES.combined,
 					"0+1|Deferred the deployment review until an owner is confirmed.",
 					"none pending",
 				)}\n\n<current_time>`,
@@ -4361,7 +4360,7 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 			[AGENT],
 			"incremental-hygiene",
 		);
-		expect(hygienePrompt.startsWith(`${DREAMING_HYGIENE_AGENT_PROMPT}\n\n<pass_history>`)).toBe(true);
+		expect(hygienePrompt.startsWith(`${DEFAULT_DREAMING_POLICIES.hygiene}\n\n<pass_history>`)).toBe(true);
 		expect(hygienePrompt).toContain('{"scope":"default","kind":"hygiene","more":false');
 		expect(hygienePrompt).toContain('"subjectRef":"entity:legacy-husk"');
 		expect(hygienePrompt).not.toContain("find new evidence since the cutoff");
@@ -4388,12 +4387,61 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 		);
 		expect(
 			contentPrompt.startsWith(
-				`${dreamingPassPrompt(DREAMING_CONTENT_AGENT_PROMPT, "(no earlier passes)", "none pending")}\n\n<current_time>`,
+				`${dreamingPassPrompt(DEFAULT_DREAMING_POLICIES.content, "(no earlier passes)", "none pending")}\n\n<current_time>`,
 			),
 		).toBe(true);
 		expect(contentPrompt).not.toContain("Work the pending hygiene records listed in <pending_attention>");
 		expect(contentPrompt).toContain("kind=surprisal");
 		expect(contentPrompt).toContain("never cite attention:<id>");
+	});
+
+	it("runs each pass type under its configured policy instead of the default", async () => {
+		const policies = {
+			hygiene: "Custom hygiene policy.\n",
+			content: "Custom content policy.\n",
+			combined: "Custom combined policy.\n",
+		};
+		const cfg = defaultCfg({ policies });
+		accessor.withWriteTx((tx) => {
+			enqueueDreamingAttentionInTx(tx, {
+				agentId: AGENT,
+				kind: "hygiene",
+				subjectRef: "entity:policy-husk",
+			});
+		});
+		seedSummary(db, "policy-evidence", "Evidence for the configured content policy.", 8);
+		const prompts = new Map<string, string>();
+		for (const mode of ["incremental-hygiene", "incremental-content", "compact"] as const) {
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						prompts.set(mode, input.prompt);
+						if (mode === "incremental-content") {
+							await commitDreamingTestHead(input, {
+								sourceRef: "summary:policy-evidence",
+								text: "Evidence for the configured content policy.",
+							});
+						}
+						return { summary: "Ran under the configured policy" };
+					},
+				},
+				cfg,
+				"/tmp",
+				AGENT,
+				[AGENT],
+				mode,
+			);
+		}
+
+		expect(prompts.get("incremental-hygiene")?.startsWith(`${policies.hygiene}\n\n<pass_history>`)).toBe(true);
+		expect(prompts.get("incremental-content")?.startsWith(`${policies.content}\n\n<pass_history>`)).toBe(true);
+		expect(prompts.get("compact")?.startsWith(`${policies.combined}\n\n<pass_history>`)).toBe(true);
+		for (const prompt of prompts.values()) {
+			expect(prompt).not.toContain("You are a bounded Signet maintenance agent");
+			expect(prompt).toContain("<pending_attention>");
+			expect(prompt).toContain("<current_time>");
+		}
 	});
 
 	it("does not advance the evidence cursor for a surprisal-only content pass", async () => {
@@ -4443,7 +4491,11 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 	});
 
 	it("requires bounded Markdown runbook summaries in every pass mode (#1226)", () => {
-		for (const prompt of [DREAMING_AGENT_PROMPT, DREAMING_HYGIENE_AGENT_PROMPT, DREAMING_CONTENT_AGENT_PROMPT]) {
+		for (const prompt of [
+			DEFAULT_DREAMING_POLICIES.combined,
+			DEFAULT_DREAMING_POLICIES.hygiene,
+			DEFAULT_DREAMING_POLICIES.content,
+		]) {
 			expect(prompt).toContain("specific entity-named change manifest");
 			expect(prompt).toContain("## Updated, ## Created, ## Deferred, ## No-op");
 			expect(prompt).toContain("exact change");
@@ -4452,8 +4504,8 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 			expect(prompt).toContain("never use generic categories");
 			expect(prompt).toContain("max 2000 chars");
 		}
-		expect(DREAMING_AGENT_PROMPT).toContain("kind=surprisal");
-		expect(DREAMING_HYGIENE_AGENT_PROMPT).toContain("Leave kind=surprisal records pending");
+		expect(DEFAULT_DREAMING_POLICIES.combined).toContain("kind=surprisal");
+		expect(DEFAULT_DREAMING_POLICIES.hygiene).toContain("Leave kind=surprisal records pending");
 	});
 
 	it("does not advance the evidence watermark for hygiene-only work (#1098)", async () => {
@@ -4688,9 +4740,9 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 
 describe("Dreaming runbook structure (#1211)", () => {
 	const runbooks = [
-		["combined", DREAMING_AGENT_PROMPT],
-		["hygiene", DREAMING_HYGIENE_AGENT_PROMPT],
-		["content", DREAMING_CONTENT_AGENT_PROMPT],
+		["combined", DEFAULT_DREAMING_POLICIES.combined],
+		["hygiene", DEFAULT_DREAMING_POLICIES.hygiene],
+		["content", DEFAULT_DREAMING_POLICIES.content],
 	] as const;
 
 	for (const [name, prompt] of runbooks) {
@@ -4712,7 +4764,7 @@ describe("Dreaming runbook structure (#1211)", () => {
 	}
 
 	it("rejects fragment claims wherever claims are filed (#1210)", () => {
-		for (const prompt of [DREAMING_AGENT_PROMPT, DREAMING_CONTENT_AGENT_PROMPT]) {
+		for (const prompt of [DEFAULT_DREAMING_POLICIES.combined, DEFAULT_DREAMING_POLICIES.content]) {
 			expect(prompt).toContain("complete statement");
 			expect(prompt).toContain("SHIP-WITH-FIXES");
 			expect(prompt).toContain("Root cause confirmed.");
@@ -4720,13 +4772,15 @@ describe("Dreaming runbook structure (#1211)", () => {
 	});
 
 	it("keeps the focused-mode boundaries and names the mid-stream blocker (#1098, #1140)", () => {
-		expect(DREAMING_HYGIENE_AGENT_PROMPT).not.toContain("find new evidence since the cutoff");
-		expect(DREAMING_CONTENT_AGENT_PROMPT).not.toContain(
+		expect(DEFAULT_DREAMING_POLICIES.hygiene).not.toContain("find new evidence since the cutoff");
+		expect(DEFAULT_DREAMING_POLICIES.content).not.toContain(
 			"Work the pending hygiene records listed in <pending_attention>",
 		);
-		expect(DREAMING_AGENT_PROMPT).toContain("find new evidence since the cutoff");
-		expect(DREAMING_AGENT_PROMPT).toContain("Work the pending hygiene records listed in <pending_attention>");
-		for (const prompt of [DREAMING_AGENT_PROMPT, DREAMING_CONTENT_AGENT_PROMPT]) {
+		expect(DEFAULT_DREAMING_POLICIES.combined).toContain("find new evidence since the cutoff");
+		expect(DEFAULT_DREAMING_POLICIES.combined).toContain(
+			"Work the pending hygiene records listed in <pending_attention>",
+		);
+		for (const prompt of [DEFAULT_DREAMING_POLICIES.combined, DEFAULT_DREAMING_POLICIES.content]) {
 			expect(prompt).toContain("transcript still mid-stream");
 			expect(prompt).toContain("re-verified blocker");
 		}

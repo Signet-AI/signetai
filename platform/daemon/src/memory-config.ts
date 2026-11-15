@@ -9,7 +9,10 @@ import {
 	DEFAULT_TELEMETRY_FLUSH_INTERVAL_MS,
 	DEFAULT_TELEMETRY_POSTHOG_API_KEY,
 	DEFAULT_TELEMETRY_POSTHOG_HOST,
+	DREAMING_PASS_TYPES,
 	type DreamingConfig,
+	type DreamingPassType,
+	type DreamingPolicies,
 	LOOPBACK_HOST,
 	NETWORK_MODES,
 	type NetworkMode,
@@ -24,6 +27,7 @@ import { type AuthConfig, parseAuthConfig } from "./auth";
 import type { EmbeddingCostRates } from "./embedding-cost";
 import { MAX_LLM_CONCURRENCY } from "./llm-concurrency-limits";
 import { logger } from "./logger";
+import { DEFAULT_DREAMING_POLICIES } from "./pipeline/dreaming-policies";
 
 export interface EmbeddingConfig {
 	provider: "native" | "llama-cpp" | "ollama" | "openai" | "none";
@@ -98,7 +102,45 @@ export const DEFAULT_DREAMING: DreamingConfig = {
 	codemode: false,
 	backfillOnFirstRun: true,
 	surprisal: DEFAULT_DREAMING_SURPRISAL,
+	policies: DEFAULT_DREAMING_POLICIES,
 };
+
+const MAX_DREAMING_POLICY_CHARS = 64_000;
+
+function isDreamingPassType(value: string): value is DreamingPassType {
+	return DREAMING_PASS_TYPES.some((type) => type === value);
+}
+
+function loadDreamingPolicies(raw: unknown): DreamingPolicies {
+	const policies: Record<DreamingPassType, string> = { ...DEFAULT_DREAMING_POLICIES };
+	if (raw === undefined || raw === null) return policies;
+	if (!isRecord(raw)) {
+		logger.warn(
+			"config",
+			"dreaming.policies must be a mapping of pass type to policy text; using the default policies",
+		);
+		return policies;
+	}
+	for (const [key, value] of Object.entries(raw)) {
+		if (!isDreamingPassType(key)) {
+			logger.warn(
+				"config",
+				`dreaming.policies.${key} is not a pass type (${DREAMING_PASS_TYPES.join(", ")}); ignoring it`,
+			);
+			continue;
+		}
+		if (value === undefined || value === null) continue;
+		if (typeof value !== "string" || value.length > MAX_DREAMING_POLICY_CHARS) {
+			logger.warn(
+				"config",
+				`dreaming.policies.${key} must be text of at most ${MAX_DREAMING_POLICY_CHARS} characters; using the default ${key} policy`,
+			);
+			continue;
+		}
+		if (value.trim()) policies[key] = value;
+	}
+	return policies;
+}
 
 class PipelineConfigValidationError extends Error {
 	constructor(message: string) {
@@ -1072,6 +1114,7 @@ export function loadDreamingConfig(yaml: Record<string, unknown>): DreamingConfi
 			treeLeafSize: clampWarn("surprisal.treeLeafSize", surprisal?.treeLeafSize, 2, 64, defaultSurprisal.treeLeafSize),
 			minScore: clampWarn("surprisal.minScore", surprisal?.minScore, 0, 1, defaultSurprisal.minScore),
 		},
+		policies: loadDreamingPolicies(raw.policies),
 	};
 }
 export function graphWriteCaps(cfg: ResolvedMemoryConfig): {

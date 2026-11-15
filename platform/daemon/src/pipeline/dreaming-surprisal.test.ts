@@ -10,6 +10,7 @@ import {
 	rankDreamingSurprisal,
 	selectDreamingSurprisalInDb,
 } from "./dreaming-surprisal";
+import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 
 const CONFIG = {
 	enabled: true,
@@ -29,6 +30,7 @@ const DREAMING_CONFIG: DreamingConfig = {
 	maxInputTokens: 32_000,
 	maxOutputTokens: 16_000,
 	backfillOnFirstRun: false,
+	policies: DEFAULT_DREAMING_POLICIES,
 	surprisal: CONFIG,
 };
 

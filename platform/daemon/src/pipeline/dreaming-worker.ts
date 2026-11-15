@@ -1,5 +1,5 @@
 import type { DreamingPassLiveOptions } from "./dreaming";
-import type { DreamingConfig } from "@signet/core";
+import type { DreamingConfig, DreamingPolicies } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { ownerQueryAll, ownerQueryOne } from "../db-owner-maintenance";
@@ -167,6 +167,7 @@ export interface DreamingWorkerOptions {
 	readonly historyCompleterFactory?: (agentId: string) => DreamingHistoryCompleter;
 	readonly checkIntervalMs?: number;
 	readonly enabled?: () => boolean;
+	readonly policies?: () => DreamingPolicies;
 	readonly inferenceAvailable?: (agentId: string) => Promise<boolean>;
 	readonly acpxMcp?: {
 		readonly daemonUrl: string;
@@ -528,7 +529,7 @@ export function startDreamingWorker(
 			runDreamingAgentPass(
 				accessor,
 				reportToolCalls(executorForAgent(runAgentId), () => resolveToolCall(true)),
-				cfg,
+				options.policies ? { ...cfg, policies: options.policies() } : cfg,
 				agentsDir,
 				runAgentId,
 				scopes,

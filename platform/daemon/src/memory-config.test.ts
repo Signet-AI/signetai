@@ -17,6 +17,7 @@ import {
 	loadMemoryConfig,
 	loadPipelineConfig,
 } from "./memory-config";
+import { DEFAULT_DREAMING_POLICIES } from "./pipeline/dreaming-policies";
 
 const tmpDirs: string[] = [];
 
@@ -29,6 +30,49 @@ afterEach(() => {
 });
 
 describe("loadDreamingConfig", () => {
+	it("uses the built-in policy for every pass type that is not configured", () => {
+		expect(loadDreamingConfig({}).policies).toEqual(DEFAULT_DREAMING_POLICIES);
+		expect(loadDreamingConfig({ memory: { dreaming: { enabled: true } } }).policies).toEqual(DEFAULT_DREAMING_POLICIES);
+		expect(
+			loadDreamingConfig({ memory: { dreaming: { policies: { content: "File only decisions.\n" } } } }).policies,
+		).toEqual({ ...DEFAULT_DREAMING_POLICIES, content: "File only decisions.\n" });
+	});
+
+	it("reads a pass-type policy written as a YAML block in agent.yaml", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-dreaming-policy-"));
+		tmpDirs.push(dir);
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			"memory:\n  dreaming:\n    policies:\n      hygiene: |\n        Archive only exact duplicates.\n        Keep everything else.\n",
+		);
+		expect(loadMemoryConfig(dir).dreaming.policies).toEqual({
+			...DEFAULT_DREAMING_POLICIES,
+			hygiene: "Archive only exact duplicates.\nKeep everything else.\n",
+		});
+	});
+
+	it("keeps the built-in policy for blank, malformed, oversized, and unknown policy entries", () => {
+		const policies = loadDreamingConfig({
+			memory: {
+				dreaming: {
+					policies: {
+						hygiene: "   \n",
+						content: 42,
+						combined: "x".repeat(64_001),
+						hygeine: "Misspelled pass type.",
+					},
+				},
+			},
+		}).policies;
+		expect(policies).toEqual(DEFAULT_DREAMING_POLICIES);
+		expect(loadDreamingConfig({ memory: { dreaming: { policies: "Not a mapping." } } }).policies).toEqual(
+			DEFAULT_DREAMING_POLICIES,
+		);
+		expect(
+			loadDreamingConfig({ memory: { dreaming: { policies: { combined: "x".repeat(64_000) } } } }).policies.combined,
+		).toHaveLength(64_000);
+	});
+
 	it("defaults dreaming off and preserves an explicit enable", () => {
 		expect(loadDreamingConfig({}).enabled).toBe(false);
 		expect(loadDreamingConfig({ memory: { dreaming: { enabled: true } } }).enabled).toBe(true);

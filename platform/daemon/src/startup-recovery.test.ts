@@ -8,6 +8,7 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { createDbOwnerClient } from "./db-owner-client";
 import { startDreamingWorker } from "./pipeline/dreaming-worker";
 import { getStartupRecoveryCompletion, runStartupRecovery, runStartupRecoveryAsync } from "./startup-recovery";
+import { DEFAULT_DREAMING_POLICIES } from "./pipeline/dreaming-policies";
 
 let agentsDir = "";
 
@@ -77,6 +78,7 @@ function dreamingConfig(): DreamingConfig {
 		maxOutputTokens: 16_000,
 		timeout: 300_000,
 		backfillOnFirstRun: false,
+		policies: DEFAULT_DREAMING_POLICIES,
 	};
 }
 
