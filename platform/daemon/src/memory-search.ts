@@ -1876,8 +1876,11 @@ function scoreTemporalTopicEvidence(query: string, content: string): number {
 	return Math.min(TEMPORAL_TOPIC_SCORE_CAP, 0.35 + coverage * 0.4 + density * 0.1);
 }
 function nativeRerankRuntime(reranker: ResolvedMemoryConfig["pipelineV2"]["reranker"]): NativeRerankRuntime {
-	if (reranker.device === "cpu") {
-		return { device: "cpu", ...(reranker.onnxRuntimePath ? { onnxRuntimePath: reranker.onnxRuntimePath } : {}) };
+	if (reranker.device === "cpu" || reranker.device === "metal") {
+		return {
+			device: reranker.device,
+			...(reranker.onnxRuntimePath ? { onnxRuntimePath: reranker.onnxRuntimePath } : {}),
+		};
 	}
 	if (reranker.device !== "cuda") return { device: "default" };
 	return {

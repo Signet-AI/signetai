@@ -45,3 +45,21 @@ export function cudaSupportProblem(gpus: readonly NvidiaGpu[], platform: string)
 	}
 	return null;
 }
+
+export function detectAppleChip(platform: string, run: typeof spawnSync = spawnSync): string | null {
+	if (platform !== "darwin-arm64") return null;
+	try {
+		const result = run("sysctl", ["-n", "machdep.cpu.brand_string"], { encoding: "utf8", timeout: 10_000 });
+		if (result.status !== 0 || typeof result.stdout !== "string") return null;
+		return result.stdout.trim() || null;
+	} catch {
+		return null;
+	}
+}
+
+export function metalSupportProblem(platform: string): string | null {
+	if (platform !== "darwin-arm64") {
+		return `the Metal accelerator is available on Apple silicon Macs only (this is ${platform})`;
+	}
+	return null;
+}

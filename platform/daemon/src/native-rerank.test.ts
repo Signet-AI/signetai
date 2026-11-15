@@ -19,7 +19,7 @@ const seenDeadlines: number[] = [];
 let creationError: Error | null = null;
 
 function fakeHandle(options: EmbeddingHandleOptions): EmbeddingWorkerHandle {
-	const cuda = options.device === "cuda";
+	const cuda = options.device !== undefined;
 	const cudaWorks = cuda && options.onnxRuntimePath?.includes("working") === true;
 	const state: FakeHandleState = { initialized: !cuda || cudaWorks, lastError: null, disabled: false, reranks: 0 };
 	return {
@@ -49,7 +49,7 @@ function fakeHandle(options: EmbeddingHandleOptions): EmbeddingWorkerHandle {
 		getLastError: () => state.lastError,
 		isPermanentlyDisabled: () => state.disabled,
 		stop: async () => {
-			stopped.push(cuda ? "cuda" : "default");
+			stopped.push(options.device ?? "default");
 		},
 	};
 }
@@ -119,6 +119,28 @@ describe("nativeRerank runtime selection", () => {
 
 		expect(created.map((options) => options.device ?? "default")).toEqual(["cuda"]);
 		expect(nativeRerankActiveDevice()).toBe("cuda");
+	});
+
+	it("passes the Metal device and runtime path to the cross-encoder worker, without CUDA libraries", async () => {
+		const runtime = { device: "metal" as const, onnxRuntimePath: "/opt/ort-working/node_modules/onnxruntime-node" };
+		expect(await nativeRerank("model", "q", ["a", "b"], runtime)).toEqual([100, 101]);
+		expect(created[0]).toMatchObject({
+			task: "rerank",
+			device: "metal",
+			onnxRuntimePath: "/opt/ort-working/node_modules/onnxruntime-node",
+		});
+		expect(created[0]?.cudaLibraryPaths).toBeUndefined();
+		expect(created[0]?.runtime).toBeUndefined();
+		expect(nativeRerankActiveDevice()).toBe("metal");
+	});
+
+	it("falls back to the default runtime when the Metal worker cannot initialize", async () => {
+		const runtime = { device: "metal" as const, onnxRuntimePath: "/opt/ort/node_modules/onnxruntime-node" };
+		await expect(nativeRerank("model", "q", ["a", "b"], runtime)).rejects.toThrow(/loading/);
+		expect(await nativeRerank("model", "q", ["a", "b"], runtime)).toEqual([0, 1]);
+		expect(nativeRerankActiveDevice()).toBe("default");
+		expect(created.map((options) => options.device ?? "default")).toEqual(["metal", "default"]);
+		expect(stopped).toEqual(["metal"]);
 	});
 
 	it("uses the default runtime without CUDA settings when the device is default", async () => {

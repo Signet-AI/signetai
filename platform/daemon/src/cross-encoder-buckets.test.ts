@@ -1,6 +1,8 @@
 import { describe, expect, it } from "bun:test";
 import {
 	CUDA_MAX_GROUP_TOKENS,
+	METAL_COST_PROFILE,
+	METAL_MAX_GROUP_TOKENS,
 	RerankDeadlineError,
 	pairLengths,
 	planLengthBuckets,
@@ -24,6 +26,18 @@ describe("cross-encoder length buckets", () => {
 		expect(groups.flat()).toHaveLength(200);
 		for (const group of groups) expect(group.length * 500).toBeLessThanOrEqual(CUDA_MAX_GROUP_TOKENS);
 		expect(planLengthBuckets([CUDA_MAX_GROUP_TOKENS + 1])).toEqual([[0]]);
+	});
+
+	it("batches short memories on Metal but leaves long excerpts in small runs", () => {
+		const short = planLengthBuckets(new Array<number>(20).fill(40), METAL_COST_PROFILE);
+		expect(short).toHaveLength(1);
+		const mixed = planLengthBuckets([...new Array<number>(16).fill(60), 480, 500, 490, 510, 505], METAL_COST_PROFILE);
+		expect(mixed.flat()).toHaveLength(21);
+		expect(mixed[0]).toHaveLength(16);
+		for (const group of mixed.slice(1)) {
+			expect(group.length * 510).toBeLessThanOrEqual(METAL_MAX_GROUP_TOKENS);
+		}
+		expect(mixed.length).toBeGreaterThan(2);
 	});
 
 	it("covers every document exactly once", () => {

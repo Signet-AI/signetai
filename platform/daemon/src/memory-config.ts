@@ -747,8 +747,10 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			device: (() => {
 				const v = rerankerRaw?.device;
 				if (v === undefined) return d.reranker.device;
-				if (v === "default" || v === "cuda" || v === "cpu") return v;
-				throw new PipelineConfigValidationError('memory.pipelineV2.reranker.device must be "default", "cpu" or "cuda"');
+				if (v === "default" || v === "cuda" || v === "cpu" || v === "metal") return v;
+				throw new PipelineConfigValidationError(
+					'memory.pipelineV2.reranker.device must be "default", "cpu", "cuda" or "metal"',
+				);
 			})(),
 			onnxRuntimePath: absoluteConfigPath(rerankerRaw?.onnxRuntimePath, "memory.pipelineV2.reranker.onnxRuntimePath"),
 			cudaLibraryPaths: (() => {

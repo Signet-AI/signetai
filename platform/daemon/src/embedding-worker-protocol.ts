@@ -6,7 +6,8 @@ export interface EmbeddingWorkerInit {
 	readonly expectedDimensions: number;
 	readonly remoteHostOverride?: string;
 	readonly task?: "embed" | "rerank";
-	readonly device?: "cuda";
+	readonly device?: "cuda" | "metal";
+	readonly releaseSignal?: SharedArrayBuffer;
 	readonly runtime?: "onnxruntime";
 	readonly onnxRuntimePath?: string;
 	readonly onnxRuntimeModulePath?: string;
