@@ -799,6 +799,14 @@ export interface DreamPass {
 	mutationsFailed: number | null;
 	summary: string | null;
 	error: string | null;
+	policyHash: string | null;
+	policySource: "default" | "custom" | null;
+}
+
+export interface DreamPassPolicy {
+	hash: string;
+	source: "default" | "custom";
+	text: string;
 }
 
 export interface DreamAttention {
@@ -1098,6 +1106,10 @@ export const api = {
 	getDreamPassTools: (passId: string) =>
 		getJSON<{ agentId: string; passId: string; items: DreamToolCall[] }>(
 			`/api/dream/passes/${encodeURIComponent(passId)}/tools`,
+		),
+	getDreamPassPolicy: (passId: string) =>
+		getJSON<{ agentId: string; passId: string; policy: DreamPassPolicy | null }>(
+			`/api/dream/passes/${encodeURIComponent(passId)}/policy`,
 		),
 	getBoardTopics: () => getJSON<{ topics: BoardTopic[]; count: number }>("/api/board/topics?scope=all"),
 	getBoardThreads: (query: BoardThreadQuery = {}) =>

@@ -16,6 +16,7 @@ import {
 	type DreamingPassFocus,
 	createDreamingPass,
 	createDreamingPassThroughOwner,
+	dreamingPassPolicy,
 	dreamingFocusOfMode,
 	enqueueDreamingHygieneAttention,
 	enqueueDreamingSurprisalAttention,
@@ -520,9 +521,10 @@ export function startDreamingWorker(
 		runningPasses.add(entry);
 		const prepared = (async () => {
 			const config = options.policies ? { ...cfg, policies: options.policies() } : cfg;
+			const policy = dreamingPassPolicy(config.policies, mode);
 			const id = options.ownerMaintenance
-				? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode)
-				: await createDreamingPass(accessor, runAgentId, mode);
+				? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode, policy)
+				: await createDreamingPass(accessor, runAgentId, mode, policy);
 			entry.passId = id;
 			return { id, config };
 		})();

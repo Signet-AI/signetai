@@ -2673,7 +2673,7 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 190,
+      "line": 191,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync((db) => getQueueHealth(db).status !== \"healthy\", {",
       "category": "hot-path",
@@ -2681,7 +2681,7 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 240,
+      "line": 241,
       "api": "withReadDbAsync",
       "source": ": await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2689,7 +2689,7 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 298,
+      "line": 299,
       "api": "withReadDbAsync",
       "source": ": accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, [\"hygiene\"]), {",
       "category": "hot-path",
@@ -2697,7 +2697,7 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 318,
+      "line": 319,
       "api": "withReadDbAsync",
       "source": ": accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3680,7 +3680,7 @@
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 134,
+      "line": 135,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -3688,28 +3688,28 @@
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 367,
+      "line": 368,
       "api": "existsSync",
       "source": "if (existsSync(p)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 368,
+      "line": 369,
       "api": "readFileSync",
       "source": "const yaml = parseSimpleYaml(readFileSync(p, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 409,
+      "line": 410,
       "api": "existsSync",
       "source": "memoryDb: existsSync(MEMORY_DB),",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 468,
+      "line": 469,
       "api": "readFileSync",
       "source": "soulContent = readFileSync(soulPath, \"utf-8\").slice(0, 500);",
       "category": "hot-path"

@@ -163,8 +163,11 @@ function createScopeDelayOwner(owner: DbOwnerClient): ScopeDelayOwner {
 				currentPassCreateJobId = handle.job.id;
 				currentPassCreateResult = "pending";
 				const resultIndex = passCreateResults.push("pending") - 1;
-				if (request.kind === "query") {
-					const passId = request.statement.params?.[0];
+				if (request.kind === "transaction") {
+					const insert = request.transaction.statements.find((statement) =>
+						statement.sql.includes("INSERT INTO dreaming_passes"),
+					);
+					const passId = insert?.params?.[0];
 					if (typeof passId === "string") passCreateIds.push(passId);
 				}
 				void handle.result.then(

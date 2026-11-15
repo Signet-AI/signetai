@@ -98,6 +98,31 @@ describe("Dreaming live routes", () => {
 		expect(crossAgentResponse.status).toBe(404);
 	});
 
+	it("returns the policy a pass ran under to its own agent only", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("INSERT INTO dreaming_policies (hash, text, created_at) VALUES ('policy-a', ?, 'now')").run(
+				"File decisions only.",
+			);
+			db.prepare("UPDATE dreaming_passes SET policy_hash = 'policy-a', policy_source = 'custom'").run();
+			db.prepare(
+				`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
+				 VALUES ('legacy-pass-a', 'agent-a', 'compact', 'completed', '2026-08-04 00:00:00', '2026-08-04 00:00:00')`,
+			).run();
+		});
+		const app = createPipelineApp();
+
+		const response = await app.request("/api/dream/passes/live-pass-a/policy");
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual({
+			agentId: "agent-a",
+			passId: "live-pass-a",
+			policy: { hash: "policy-a", source: "custom", text: "File decisions only." },
+		});
+		expect(await (await app.request("/api/dream/passes/legacy-pass-a/policy")).json()).toMatchObject({ policy: null });
+		expect((await app.request("/api/dream/passes/live-pass-b/policy")).status).toBe(404);
+		expect((await app.request("/api/dream/passes/missing/policy")).status).toBe(404);
+	});
+
 	it("completes active lookup and known-pass attach beyond the original five-second client deadline", async () => {
 		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
 		process.env.SIGNET_DB_OWNER_WORKER = "0";

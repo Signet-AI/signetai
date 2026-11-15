@@ -28,6 +28,7 @@ import {
 	getDreamingReviewedEvidence,
 	getDreamingPasses,
 	getDreamingPass,
+	getDreamingPassPolicy,
 	getActiveDreamingPasses,
 	getDreamingQualityReport,
 	getDreamingState,
@@ -581,7 +582,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:583",
+				"routes/pipeline-routes.ts:584",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -873,6 +874,15 @@ export function registerPipelineRoutes(app: Hono): void {
 			passId,
 			items: await getDreamingToolCalls(getDbAccessor(), scopedAgent.agentId, passId),
 		});
+	});
+	app.get("/api/dream/passes/:passId/policy", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const passId = c.req.param("passId").trim();
+		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
+		const found = await getDreamingPassPolicy(getDbAccessor(), scopedAgent.agentId, passId);
+		if (!found) return c.json({ error: "Dreaming pass not found" }, 404);
+		return c.json({ agentId: scopedAgent.agentId, passId, policy: found.policy });
 	});
 	app.get("/api/dream/quality", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);

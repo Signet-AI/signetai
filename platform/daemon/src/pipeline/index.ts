@@ -39,6 +39,7 @@ export {
 	getDreamingState,
 	getDreamingPasses,
 	getDreamingPass,
+	getDreamingPassPolicy,
 	getActiveDreamingPasses,
 	recordDreamingFailure,
 	requestDreamingEvidenceRequeue,

@@ -501,6 +501,11 @@ memory:
   more than one, the codemode note when `codemode` is on, a directed
   instruction when one was given, the pass history, pending attention, and the
   current time.
+- Each pass records the policy it ran under: `policySource` is `default` or
+  `custom`, and `policyHash` is the SHA-256 of the policy text. The text is
+  stored once per distinct policy and returned by
+  `GET /api/dream/passes/:passId/policy`. The dashboard shows it in the pass
+  details. Passes from before this record have `null` for both fields.
 
 ### GET /api/dream/status
 
@@ -577,7 +582,9 @@ an exact count when at most 50 sources are waiting, `null` when more are.
       "mutationsSkipped": 3,
       "mutationsFailed": 1,
       "summary": "Merged 3 duplicate entities, pruned 5 junk attributes",
-      "error": null
+      "error": null,
+      "policyHash": "5be07c19a3d2f640…",
+      "policySource": "custom"
     }
   ],
   "exclusions": [
@@ -837,6 +844,24 @@ Return the local, ordered Pi capability trace for one Dreaming pass: every
 tool's input, output, success result, and latency. The route is agent-scoped
 and requires `admin` permission. It is intended for reviewing whether the
 agent searched graph or episodic evidence before proposing semantic writes.
+
+### GET /api/dream/passes/:passId/policy
+
+Return the policy one Dreaming pass ran under. The route is agent-scoped and
+requires `admin` permission. It returns `404` when the pass does not exist for
+the resolved agent, and `policy: null` for a pass recorded before policies were.
+
+```json
+{
+  "agentId": "default",
+  "passId": "pass-uuid",
+  "policy": {
+    "hash": "5be07c19a3d2f640…",
+    "source": "custom",
+    "text": "File claims only for decisions and shipped changes.\n"
+  }
+}
+```
 
 ### GET /api/dream/quality
 
