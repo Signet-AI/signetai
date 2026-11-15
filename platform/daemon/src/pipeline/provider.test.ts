@@ -555,6 +555,66 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
 		}
 	});
 
+	async function acpxFailure(format: "json" | "quiet", script: string): Promise<string> {
+		const root = join(tmpdir(), `signet-acpx-failure-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		mkdirSync(root, { recursive: true });
+		const bin = join(root, "fake-acpx-failure.sh");
+		writeFileSync(bin, `#!/usr/bin/env bash\ncat >/dev/null\n${script}\n`);
+		chmodSync(bin, 0o755);
+		try {
+			await createAcpxProvider({ agent: "codex", bin, format, hooks: "disabled" }).generate("hello", {
+				timeoutMs: 2000,
+			});
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+		throw new Error("ACPX fixture did not fail");
+	}
+
+	it("reports the agent's own error when a JSON run writes it to stdout", async () => {
+		const update =
+			'{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"partial answer"}}}}';
+		const plain = '{"jsonrpc":"2.0","id":null,"error":{"code":-32000,"message":"Authentication required"}}';
+		const detailed =
+			'{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"Internal error","data":{"acpxCode":"RUNTIME","details":"Model gpt-x is not available for this account"}}}';
+
+		expect(await acpxFailure("json", `printf '%s\\n' '${update}' '${plain}'\nexit 1`)).toBe(
+			"codex via ACPX exited 1: Authentication required",
+		);
+		expect(await acpxFailure("json", `printf '%s\\n' '${plain}' '${detailed}'\nexit 1`)).toBe(
+			"codex via ACPX exited 1: Model gpt-x is not available for this account",
+		);
+		expect(await acpxFailure("json", `printf '%s\\n' '${plain}'\nprintf 'warning on stderr\\n' >&2\nexit 1`)).toBe(
+			"codex via ACPX exited 1: Authentication required",
+		);
+	});
+
+	it("names the documented exit code when a failed run reports no error", async () => {
+		const denied =
+			'{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"toolCall":{"toolCallId":"call-1","title":"shell"}}}';
+
+		expect(await acpxFailure("json", `printf '%s\\n' '${denied}'\nexit 5`)).toBe(
+			"codex via ACPX exited 5: permission denied",
+		);
+		expect(await acpxFailure("quiet", "exit 1")).toBe("codex via ACPX exited 1: no error output");
+	});
+
+	it("keeps the assistant text of a failed quiet run out of the error", async () => {
+		const answer = '{"error":{"message":"private assistant text"}}';
+
+		expect(
+			await acpxFailure(
+				"quiet",
+				`printf '%s\\n' '${answer}'\nprintf '[acpx] error: RUNTIME agent crashed\\n' >&2\nexit 1`,
+			),
+		).toBe("codex via ACPX exited 1: [acpx] error: RUNTIME agent crashed");
+		expect(await acpxFailure("quiet", `printf '%s\\n' '${answer}'\nexit 1`)).toBe(
+			"codex via ACPX exited 1: no error output",
+		);
+	});
+
 	it("injects a tool-denying OpenCode profile and defaults sterile runs to JSON", async () => {
 		const root = join(tmpdir(), `signet-acpx-opencode-profile-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		mkdirSync(root, { recursive: true });
