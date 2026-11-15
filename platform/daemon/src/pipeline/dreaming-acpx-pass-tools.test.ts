@@ -8,6 +8,7 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { getOrCreateInferenceRouter, resetInferenceRouterForTests } from "../inference-router";
 import { registerPipelineRoutes } from "../routes/pipeline-routes";
 import { type DreamingAgentExecutor, runDreamingAgentPass } from "./dreaming";
+import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 
 const AGENT = "default";
 const CONFIG: DreamingConfig = {
@@ -20,6 +21,7 @@ const CONFIG: DreamingConfig = {
 	backfillOnFirstRun: true,
 	maxConcurrentPasses: 1,
 	codemode: false,
+	policies: DEFAULT_DREAMING_POLICIES,
 };
 
 interface ToolReply {
