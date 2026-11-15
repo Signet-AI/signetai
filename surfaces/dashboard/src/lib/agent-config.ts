@@ -4,7 +4,7 @@ import { type ApiReadResult, api, getJSONResult } from "@/lib/api";
 
 type YamlObject = Record<string, unknown>;
 
-function getPath(obj: YamlObject, path: readonly string[]): unknown {
+export function getPath(obj: YamlObject, path: readonly string[]): unknown {
 	let cur: unknown = obj;
 	for (const key of path) {
 		if (cur == null || typeof cur !== "object" || Array.isArray(cur)) return undefined;

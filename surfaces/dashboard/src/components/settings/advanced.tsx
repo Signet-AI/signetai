@@ -6,6 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import {
 	type AgentConfigStore,
 	dreamingBlockedBy,
+	getPath,
 	pv2MaintenanceMode,
 	pv2ToggleValue,
 	pv2ToggleWriteForm,
@@ -167,8 +168,9 @@ function DreamingPolicyEditor({
 	fallback: string;
 }) {
 	const path = ["memory", "dreaming", "policies", type];
-	const configured = store.aStr(path);
-	const saved = configured.trim() ? configured : fallback;
+	const raw = getPath(store.agent, path);
+	const configured = typeof raw === "string" && raw.trim() && raw.length <= 64_000 ? raw : null;
+	const saved = configured ?? fallback;
 	const [text, setText] = useState(saved);
 	useEffect(() => setText(saved), [saved]);
 	const commit = (value: string) => {
@@ -181,7 +183,7 @@ function DreamingPolicyEditor({
 		<div className="flex flex-col gap-2 py-2">
 			<div className="min-w-0">
 				<div className="settings-row-title">{title}</div>
-				<div className="settings-row-description">{saved === fallback ? `${desc} Using the default.` : desc}</div>
+				<div className="settings-row-description">{configured === null ? `${desc} Using the default.` : desc}</div>
 			</div>
 			<textarea
 				aria-label={title}
@@ -196,7 +198,7 @@ function DreamingPolicyEditor({
 				<Button size="compact" disabled={!store.ready || text === saved} onClick={() => commit(text)}>
 					Save
 				</Button>
-				<Button size="compact" variant="ghost" disabled={!store.ready || saved === fallback} onClick={() => commit("")}>
+				<Button size="compact" variant="ghost" disabled={!store.ready || raw === undefined} onClick={() => commit("")}>
 					Reset to default
 				</Button>
 			</div>
