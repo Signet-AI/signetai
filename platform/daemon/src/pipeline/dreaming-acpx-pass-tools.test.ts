@@ -18,6 +18,8 @@ const CONFIG: DreamingConfig = {
 	maxOutputTokens: 16_000,
 	timeout: 60_000,
 	backfillOnFirstRun: true,
+	maxConcurrentPasses: 1,
+	codemode: false,
 };
 
 interface ToolReply {
