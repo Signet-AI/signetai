@@ -13,11 +13,6 @@ export const CUDA_COST_PROFILE: RerankCostProfile = {
 	msPerTokenSquared: 0.0000128,
 	maxGroupTokens: CUDA_MAX_GROUP_TOKENS,
 };
-
-// Fitted to mxbai-rerank-xsmall-v1 (fp32) on an Apple M6 through ONNX Runtime's
-// WebGPU provider, batches of 1-20 by 16-512 tokens. Metal runs get slower per
-// document as they grow, so the cap keeps one run near a quarter second and the
-// deadline check between runs responsive.
 export const METAL_MAX_GROUP_TOKENS = 2_048;
 
 export const METAL_COST_PROFILE: RerankCostProfile = {

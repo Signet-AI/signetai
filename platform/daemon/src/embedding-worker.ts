@@ -94,6 +94,7 @@ let rerankModel: RerankModel | null = null;
 let initPromise: Promise<void> | null = null;
 let initError: string | null = null;
 let modelCached = false;
+let shuttingDown = false;
 
 function snapshot() {
 	return {
@@ -226,6 +227,7 @@ function loadNativePairTokenizer(modelId: string): NativePairTokenizer | null {
 }
 
 async function ensureInitialized(): Promise<void> {
+	if (shuttingDown) throw new Error("Embedding worker is shutting down");
 	if (embedFn || rerankFn) return;
 	if (initPromise) return initPromise;
 	initPromise = doInit();
@@ -296,7 +298,6 @@ async function doInit(): Promise<void> {
 			const model = await transformers.AutoModelForSequenceClassification.from_pretrained(init.modelId, {
 				dtype: precision,
 				...(cuda ? { device: "cuda" as const } : {}),
-				// ONNX Runtime reaches Metal through its WebGPU provider (Dawn's Metal backend).
 				...(metal ? { device: "webgpu" as const } : {}),
 				...(nativeCpuRerank
 					? {
@@ -361,8 +362,17 @@ async function doInit(): Promise<void> {
 						),
 					deadlineAt,
 				);
-			const warmup = await score("test", ["test"]);
-			if (warmup.length !== 1 || !Number.isFinite(warmup[0])) throw new Error("Cross-encoder warmup returned no score");
+			try {
+				const warmup = await score("test", ["test"]);
+				if (warmup.length !== 1 || !Number.isFinite(warmup[0])) {
+					throw new Error("Cross-encoder warmup returned no score");
+				}
+			} catch (error) {
+				try {
+					await model.dispose?.();
+				} catch {}
+				throw error;
+			}
 			rerankModel = model;
 			rerankFn = score;
 			modelCached = true;
@@ -480,6 +490,12 @@ async function handleCheckAvailable(id: number): Promise<void> {
 }
 
 async function handleShutdown(): Promise<void> {
+	shuttingDown = true;
+	if (initPromise) {
+		try {
+			await initPromise;
+		} catch {}
+	}
 	if (embedFn?.dispose) {
 		try {
 			await embedFn.dispose();
@@ -500,6 +516,7 @@ async function handleShutdown(): Promise<void> {
 		const released = new Int32Array(init.releaseSignal);
 		Atomics.store(released, 0, 1);
 		Atomics.notify(released, 0);
+		post({ type: "released" });
 	}
 }
 

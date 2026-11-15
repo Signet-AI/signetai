@@ -358,7 +358,7 @@ describe("embedding-worker-handle", () => {
 		expect(initCaptures[0].wasmDir).toBe(fakeWasmDir);
 		expect(initCaptures[0].transformersRuntimePath).toBe(fakeTransformersPath);
 	});
-	it("gives a Metal worker a release signal and keeps an exit guard only while the worker is alive", async () => {
+	it("waits for a Metal worker to release its session before terminating it, keeping the exit guard until then", async () => {
 		const exitListeners = process.listenerCount("exit");
 		const initCaptures: EmbeddingWorkerInit[] = [];
 		const worker = new FakeWorker();
@@ -376,8 +376,14 @@ describe("embedding-worker-handle", () => {
 		expect(initCaptures[0]?.device).toBe("metal");
 		expect(initCaptures[0]?.releaseSignal).toBeInstanceOf(SharedArrayBuffer);
 		expect(process.listenerCount("exit")).toBe(exitListeners + 1);
-		await handle.stop();
+		const stopping = handle.stop();
+		await flush();
 		expect(worker.posted).toEqual([{ type: "shutdown" }]);
+		expect(worker.terminated).toBe(false);
+		expect(process.listenerCount("exit")).toBe(exitListeners + 1);
+		worker.emit({ type: "released" });
+		await stopping;
+		expect(worker.terminated).toBe(true);
 		expect(process.listenerCount("exit")).toBe(exitListeners);
 
 		const crashed = new FakeWorker();
