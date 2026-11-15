@@ -1835,7 +1835,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 		const summary = executorResult.summary?.trim() || "Agentic Dreaming pass completed";
 		const attribution = executorResult.attribution ?? null;
 		const usage = executorResult.usage ?? null;
-		const tokensConsumed = usage?.totalTokens ?? countTokens(passPrompt);
+		const tokensConsumed = usage?.totalTokens ?? null;
 		const nextWatermarkByScope = new Map<string, string | null>();
 		for (const scope of scopes) {
 			const previous =

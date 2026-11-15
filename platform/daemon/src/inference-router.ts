@@ -1206,13 +1206,18 @@ export class InferenceRouter {
 					);
 					if (!isPiAgentSessionProvider(provider)) {
 						if (opts?.persistentSessionKey) throw new Error("Persistent dashboard chat requires a Pi agent target");
-						const generated = await provider.generate(prompt, {
-							timeoutMs: opts?.timeoutMs,
-							maxTokens: opts?.maxTokens,
-						});
-						if (!generated.trim()) throw new Error("ACPX agent returned no completion");
+						const call = { timeoutMs: opts?.timeoutMs, maxTokens: opts?.maxTokens };
+						const generated = provider.generateWithUsage
+							? await provider.generateWithUsage(prompt, call)
+							: { text: await provider.generate(prompt, call), usage: null };
+						if (!generated.text.trim()) throw new Error("ACPX agent returned no completion");
 						this.clearObservedRuntimeState(loaded.value, targetRef);
-						attempts.push({ targetRef, ok: true, durationMs: Date.now() - startedAt, usage: null });
+						attempts.push({
+							targetRef,
+							ok: true,
+							durationMs: Date.now() - startedAt,
+							usage: generated.usage,
+						});
 						return {
 							ok: true,
 							value: {
