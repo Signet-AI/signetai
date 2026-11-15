@@ -10,7 +10,6 @@ import agentsTemplate from "../../../../cli/templates/AGENTS.md.template?raw";
 import soulTemplate from "../../../../cli/templates/SOUL.md.template?raw";
 import identityTemplate from "../../../../cli/templates/IDENTITY.md.template?raw";
 import userTemplate from "../../../../cli/templates/USER.md.template?raw";
-import dreamingTemplate from "../../../../cli/templates/DREAMING.md.template?raw";
 import heartbeatTemplate from "../../../../cli/templates/HEARTBEAT.md.template?raw";
 import bootstrapTemplate from "../../../../cli/templates/BOOTSTRAP.md.template?raw";
 
@@ -19,11 +18,10 @@ const TEMPLATES: Record<string, string> = {
 	"SOUL.md": soulTemplate,
 	"IDENTITY.md": identityTemplate,
 	"USER.md": userTemplate,
-	"DREAMING.md": dreamingTemplate,
 	"HEARTBEAT.md": heartbeatTemplate,
 	"BOOTSTRAP.md": bootstrapTemplate,
 };
-const MANAGED_FILES = new Set(["MEMORY.md", "DREAMING.md", "BOOTSTRAP.md"]);
+const MANAGED_FILES = new Set(["MEMORY.md", "BOOTSTRAP.md"]);
 const FILES = Object.values(IDENTITY_FILES).filter((file) => !MANAGED_FILES.has(file.path));
 export interface IdentityDraft {
 	name: string;

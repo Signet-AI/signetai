@@ -26,7 +26,7 @@ const openclawRuntimeSchema = z.enum(OPENCLAW_RUNTIME_CHOICES);
 
 const identityModeSchema = z.enum(IDENTITY_MODES);
 const identityPresetSchema = z.enum(Object.keys(IDENTITY_PRESETS) as [IdentityPresetName, ...IdentityPresetName[]]);
-const identitySessionKindSchema = z.enum(["dreaming", "heartbeat", "bootstrap"]);
+const identitySessionKindSchema = z.enum(["heartbeat", "bootstrap"]);
 
 const identityContextFileSchema = z.strictObject({
 	path: z.string(),

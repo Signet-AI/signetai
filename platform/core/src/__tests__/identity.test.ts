@@ -15,7 +15,9 @@ import {
 	resolvePromptSubmitTimeoutMs,
 	resolveSessionStartTimeoutMs,
 	resolveStartupIdentityFiles,
+	resolveSpecialIdentityFiles,
 } from "../identity";
+import { IDENTITY_PRESETS } from "../identity-spec";
 import { parseRuntimeYaml, parseSimpleYaml } from "../yaml";
 
 const TMP = join(tmpdir(), `signet-identity-test-${Date.now()}`);
@@ -134,7 +136,7 @@ describe("readStaticIdentity", () => {
 		expect(result).toContain("## Working Memory");
 	});
 
-	test("minimal preset loads only AGENTS.md during startup and leaves DREAMING.md special-session only", () => {
+	test("minimal preset ignores a retired dreaming special entry", () => {
 		writeFileSync(
 			join(TMP, "agent.yaml"),
 			"identity:\n  preset: minimal\n  startup:\n    load:\n      - path: AGENTS.md\n        role: operating_instructions\n        budget: 12000\n  special:\n    - path: DREAMING.md\n      kind: dreaming\n      role: dreaming_prompt\n      budget: 4000\n",
@@ -144,6 +146,7 @@ describe("readStaticIdentity", () => {
 		writeFileSync(join(TMP, "SOUL.md"), "soul");
 
 		expect(resolveStartupIdentityFiles(TMP).map((entry) => entry.path)).toEqual(["AGENTS.md"]);
+		expect(resolveSpecialIdentityFiles(TMP, "dreaming" as never)).toEqual([]);
 		const result = readStaticIdentity(TMP);
 		expect(result).toContain("agents");
 		expect(result).not.toContain("dreaming");
@@ -185,6 +188,12 @@ describe("readStaticIdentity", () => {
 		const result = readStaticIdentity(TMP) ?? "";
 		expect(result.indexOf("## About Your User")).toBeLessThan(result.indexOf("## Agent Instructions"));
 	});
+});
+
+test("presets have no dreaming special entry", () => {
+	for (const preset of Object.values(IDENTITY_PRESETS)) {
+		expect(preset.special.some((entry) => (entry.kind as string) === "dreaming")).toBe(false);
+	}
 });
 
 describe("managed identity health", () => {

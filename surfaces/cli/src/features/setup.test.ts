@@ -438,6 +438,7 @@ memory:
 		mkdirSync(basePath, { recursive: true });
 		writeIdentityTemplates(templatesPath);
 		writeFileSync(join(basePath, "IDENTITY.md"), "# Existing Agent\n");
+		writeFileSync(join(basePath, "DREAMING.md"), "user content");
 		writeFileSync(join(basePath, "AGENTS.md"), "# Existing instructions\n");
 
 		const deps = stubDeps({
@@ -452,6 +453,7 @@ memory:
 			allowUnprotectedWorkspace: true,
 		});
 
+		expect(readFileSync(join(basePath, "DREAMING.md"), "utf-8")).toBe("user content");
 		expect(JSON.parse(readFileSync(join(basePath, "workspace-layout.json"), "utf-8")).version).toBe(2);
 		expect(existsSync(join(basePath, "data", "signet.db"))).toBe(true);
 		expect(existsSync(join(basePath, "runtime", "plugins", "registry-v1.json"))).toBe(true);
@@ -700,7 +702,7 @@ memory:
 		expect(detectedHarnessesForExistingSetup(detection, [])).toContain("forge");
 	});
 
-	it("writes minimal identity preset with DREAMING.md as special-session file", async () => {
+	it("writes minimal identity preset without a dreaming special file", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-ni-minimal-identity-"));
 		const basePath = join(root, "agents");
 		const templatesPath = join(root, "templates");
@@ -723,10 +725,10 @@ memory:
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("preset: minimal");
 		expect(agentYaml).toContain("path: AGENTS.md");
-		expect(agentYaml).toContain("path: DREAMING.md");
-		expect(agentYaml).toContain("kind: dreaming");
+		expect(agentYaml).not.toContain("path: DREAMING.md");
+		expect(agentYaml).not.toContain("kind: dreaming");
 		expect(existsSync(join(basePath, "AGENTS.md"))).toBe(true);
-		expect(existsSync(join(basePath, "DREAMING.md"))).toBe(true);
+		expect(existsSync(join(basePath, "DREAMING.md"))).toBe(false);
 		expect(existsSync(join(basePath, "SOUL.md"))).toBe(false);
 	});
 
@@ -805,7 +807,7 @@ memory:
 
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("preset: custom");
-		for (const name of ["AGENTS.md", "DREAMING.md"]) {
+		for (const name of ["AGENTS.md"]) {
 			expect(agentYaml).toContain(`path: ${name}`);
 			expect(existsSync(join(basePath, name))).toBe(true);
 		}
@@ -839,7 +841,7 @@ memory:
 		expect(agentYaml).toContain("memory:");
 		expect(agentYaml).toContain("secrets:");
 		expect(agentYaml).not.toContain("preset:");
-		for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "DREAMING.md"]) {
+		for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]) {
 			expect(existsSync(join(basePath, name))).toBe(false);
 		}
 		expect(existsSync(join(basePath, "data", "signet.db"))).toBe(true);
@@ -873,7 +875,6 @@ memory:
 			"USER.md",
 			"MEMORY.md",
 			"HEARTBEAT.md",
-			"DREAMING.md",
 			"BOOTSTRAP.md",
 		]) {
 			expect(agentYaml).toContain(`path: ${name}`);
@@ -1055,7 +1056,7 @@ describe("setupWizard headless plan path", () => {
 			identityMode: "managed",
 			identityPreset: "minimal",
 			startupIdentityFiles: [{ path: "AGENTS.md" }],
-			specialIdentityFiles: [{ path: "DREAMING.md", kind: "dreaming" }],
+			specialIdentityFiles: [],
 			...overrides,
 		};
 		writeFileSync(planPath, JSON.stringify(plan));
