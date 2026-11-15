@@ -299,7 +299,7 @@ function readIdentityEntryList(value: unknown): IdentityContextFileEntry[] {
 function readSpecialIdentityEntry(value: unknown): IdentitySpecialFileEntry | null {
 	const record = readRecord(value);
 	const kind = typeof record.kind === "string" ? record.kind : "";
-	if (kind !== "dreaming" && kind !== "heartbeat" && kind !== "bootstrap") return null;
+	if (kind !== "heartbeat" && kind !== "bootstrap") return null;
 	const entry = readIdentityEntry(value);
 	if (!entry) return null;
 	return { ...entry, kind };

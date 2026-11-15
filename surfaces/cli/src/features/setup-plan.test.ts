@@ -250,7 +250,7 @@ describe("setupPlanSchema", () => {
 			specialIdentityFiles: [...IDENTITY_PRESETS.openclaw.special],
 		});
 		const parsed = parseSetupPlan(plan);
-		expect(parsed.specialIdentityFiles.some((entry) => entry.kind === "dreaming")).toBe(true);
+		expect(parsed.specialIdentityFiles.some((entry) => (entry.kind as string) === "dreaming")).toBe(false);
 	});
 });
 

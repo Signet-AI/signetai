@@ -138,13 +138,13 @@ This means:
 The dreaming agent is not an anonymous data processor. It is the same
 agent taking time to reflect on its own experiences. It receives the
 startup identity/context selected by the active identity preset, then
-receives `DREAMING.md` as the dreaming task prompt. For example:
+uses a policy prompt for the pass. For example:
 
 - Minimal startup: `AGENTS.md`
 - Hermes startup: `SOUL.md`, then `AGENTS.md` / Hermes project context
 - OpenClaw startup: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`,
   and `MEMORY.md`
-- Special dreaming prompt: `DREAMING.md` appended only for dreaming sessions
+- Each hygiene, content, and combined pass uses a policy prompt configured under `memory.dreaming.policies` in `agent.yaml`, defaulting to the built-in policy.
 
 This matters because memory consolidation requires judgment about
 *what matters to this agent and this user*. An isolated worker can't
@@ -205,10 +205,7 @@ The dreaming agent receives (via normal session-start hook):
 3. **Current entity graph snapshot** — all entities with their aspects
    and attributes, plus relationship edges. This is the agent's view
    of existing long-term memory.
-4. **`DREAMING.md` task prompt** — the special-session prompt telling
-   the agent to reflect on the sessions and update the graph. It is not
-   loaded in normal startup context; it is appended only for dreaming
-   sessions.
+4. **Pass policy** — Each hygiene, content, and combined pass uses a policy prompt configured under `memory.dreaming.policies` in `agent.yaml`, defaulting to the built-in policy.
 
 ### Self-Improvement Loop
 
