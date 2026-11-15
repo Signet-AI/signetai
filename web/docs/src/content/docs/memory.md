@@ -219,6 +219,14 @@ post-processing:
     links against, including all cuDNN 9 sub-libraries (about 2.9 GB installed,
     fetched member by member from NuGet and PyPI and checked against pinned
     SHA-256 hashes), and runs the cross-encoder on the GPU in full precision.
+  - `signet accelerate metal` (Apple silicon Macs) runs the cross-encoder on
+    the GPU through Metal in full precision. It installs nothing beyond the
+    native ONNX runtime above, whose macOS build already contains the
+    Metal-backed GPU provider. Candidates of similar length share one GPU
+    run, which is where it gains over the CPU: on an Apple M6, the rerank
+    stage for 10 short memories took 24 to 37 ms against 79 to 150 ms on the
+    native CPU runtime, while candidates of several hundred tokens each run
+    at about CPU speed. Embeddings use the native CPU runtime, as with `cpu`.
   - `signet accelerate off` returns to WebAssembly; `signet accelerate`
     alone shows the detected GPU and the active runtimes. CPU-runtime status
     verifies pinned hashes. CUDA status checks that every pinned provider and
@@ -253,7 +261,7 @@ post-processing:
   memory:
     pipelineV2:
       reranker:
-        device: cuda            # or cpu
+        device: cuda            # or cpu, or metal on Apple silicon
         onnxRuntimePath: /path/to/onnxruntime-node
         cudaLibraryPaths:
           - /path/to/cuda12/lib
@@ -264,7 +272,7 @@ post-processing:
   compiled binary refuses a different version. `cudaLibraryPaths` lists
   directories of CUDA 12 shared libraries to load before the CUDA provider,
   so no system-wide CUDA 12 install or `LD_LIBRARY_PATH` is needed. If the
-  CUDA or native CPU worker cannot start, recall falls back to the default
+  CUDA, Metal or native CPU worker cannot start, recall falls back to the default
   runtime and logs why. When the `@signet/native` addon is present, the
   cross-encoder tokenizes query and candidate pairs natively and caches each
   candidate's tokens.

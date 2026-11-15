@@ -10,13 +10,20 @@ import {
 	installCudaRuntime,
 	readAccelerationStatus,
 } from "../features/accelerate/index.js";
-import { cudaSupportProblem, detectNvidiaGpus } from "../features/accelerate/detect.js";
+import {
+	cudaSupportProblem,
+	detectAppleChip,
+	detectNvidiaGpus,
+	metalSupportProblem,
+} from "../features/accelerate/detect.js";
 import { ONNXRUNTIME_NODE_VERSION, platformKey } from "../features/accelerate/manifest.js";
 
 interface AccelerateDeps {
 	readonly AGENTS_DIR: string;
 	readonly fetchFromDaemon: DaemonFetch;
 }
+
+const DEVICE_LABELS: Readonly<Record<string, string>> = { cpu: "native CPU", cuda: "CUDA", metal: "Metal" };
 
 interface RecallProbe {
 	readonly results?: readonly unknown[];
@@ -30,15 +37,33 @@ async function printStatus(deps: AccelerateDeps, json: boolean): Promise<void> {
 	const status = await readAccelerationStatus(deps.AGENTS_DIR);
 	const gpus = detectNvidiaGpus();
 	const cudaProblem = cudaSupportProblem(gpus, status.platform);
+	const appleChip = detectAppleChip(status.platform);
+	const metalProblem = metalSupportProblem(status.platform);
 	if (json) {
-		console.log(JSON.stringify({ ...status, gpus, cudaAvailable: cudaProblem === null, cudaProblem }, null, 2));
+		console.log(
+			JSON.stringify(
+				{
+					...status,
+					gpus,
+					appleChip,
+					cudaAvailable: cudaProblem === null,
+					cudaProblem,
+					metalAvailable: metalProblem === null,
+					metalProblem,
+				},
+				null,
+				2,
+			),
+		);
 		return;
 	}
+	const gpuNames = [
+		...gpus.map((gpu) => `${gpu.name} (driver ${gpu.driver}, ${gpu.memoryMiB} MiB)`),
+		...(appleChip !== null ? [`${appleChip} (Metal)`] : []),
+	];
 	console.log(chalk.bold("\n  Recall acceleration\n"));
 	console.log(`  Platform            ${status.platform}`);
-	console.log(
-		`  GPU                 ${gpus.length > 0 ? gpus.map((gpu) => `${gpu.name} (driver ${gpu.driver}, ${gpu.memoryMiB} MiB)`).join("; ") : "none detected"}`,
-	);
+	console.log(`  GPU                 ${gpuNames.length > 0 ? gpuNames.join("; ") : "none detected"}`);
 	console.log(
 		`  Native runtime      ${status.cpuRuntimeInstalled ? chalk.green(`installed (onnxruntime ${ONNXRUNTIME_NODE_VERSION})`) : chalk.dim("not installed")}`,
 	);
@@ -46,13 +71,19 @@ async function printStatus(deps: AccelerateDeps, json: boolean): Promise<void> {
 		`  CUDA libraries      ${status.cudaFilesPresent ? chalk.green("installed") : chalk.dim(cudaProblem ? `unavailable: ${cudaProblem}` : "not installed")}`,
 	);
 	console.log(
+		`  Metal               ${metalProblem === null ? chalk.green("available (uses the native runtime)") : chalk.dim(`unavailable: ${metalProblem}`)}`,
+	);
+	console.log(
 		`  Embeddings          ${status.embeddingRuntime === "onnxruntime" ? "native ONNX runtime" : "WebAssembly (default)"}`,
 	);
 	console.log(
-		`  Cross-encoder       ${status.rerankerDevice === "default" ? "WebAssembly (default)" : status.rerankerDevice === "cpu" ? "native CPU" : "CUDA"}`,
+		`  Cross-encoder       ${status.rerankerDevice === "default" ? "WebAssembly (default)" : (DEVICE_LABELS[status.rerankerDevice] ?? status.rerankerDevice)}`,
 	);
 	console.log(chalk.dim(`\n  Files: ${status.paths.root}`));
-	console.log(chalk.dim("  Run `signet accelerate cpu` or `signet accelerate cuda`, then `signet restart`.\n"));
+	const gpuMode = metalProblem === null ? "metal" : "cuda";
+	console.log(
+		chalk.dim(`  Run \`signet accelerate cpu\` or \`signet accelerate ${gpuMode}\`, then \`signet restart\`.\n`),
+	);
 }
 
 function updateConfig(deps: AccelerateDeps, mode: AccelerationMode): ReturnType<typeof applyAccelerationConfig> | null {
@@ -78,6 +109,15 @@ async function enable(deps: AccelerateDeps, mode: Exclude<AccelerationMode, "off
 			return;
 		}
 	}
+	if (mode === "metal") {
+		const problem = metalSupportProblem(platform);
+		if (problem) {
+			console.error(chalk.red(`  Cannot enable Metal: ${problem}.`));
+			console.error(chalk.dim("  `signet accelerate cpu` installs the native CPU runtime instead."));
+			process.exitCode = 1;
+			return;
+		}
+	}
 	const paths = acceleratorPaths(deps.AGENTS_DIR);
 	const spinner = ora("Preparing").start();
 	let received = 0;
@@ -97,7 +137,9 @@ async function enable(deps: AccelerateDeps, mode: Exclude<AccelerationMode, "off
 		const cpu = await installCpuRuntime(paths, events, platform);
 		if (mode === "cuda") await installCudaRuntime(paths, events, platform);
 		spinner.succeed(
-			cpu === "present" && mode === "cpu" ? "Native runtime already installed" : "Runtime files installed and verified",
+			cpu === "present" && mode !== "cuda"
+				? "Native runtime already installed"
+				: "Runtime files installed and verified",
 		);
 	} catch (error) {
 		spinner.fail(error instanceof Error ? error.message : String(error));
@@ -106,7 +148,7 @@ async function enable(deps: AccelerateDeps, mode: Exclude<AccelerationMode, "off
 	}
 	const change = updateConfig(deps, mode);
 	if (change === null) return;
-	console.log(chalk.green(`  Updated ${change.file}: cross-encoder on ${mode === "cuda" ? "CUDA" : "native CPU"}.`));
+	console.log(chalk.green(`  Updated ${change.file}: cross-encoder on ${DEVICE_LABELS[mode]}.`));
 	if (change.embeddingSkipped) console.log(chalk.dim(`  Embeddings unchanged: ${change.embeddingSkipped}.`));
 	if (change.embeddingRuntimeChanged) {
 		console.log(
@@ -178,7 +220,7 @@ async function verify(deps: AccelerateDeps, timeoutMs: number): Promise<void> {
 export function registerAccelerateCommands(program: Command, deps: AccelerateDeps): void {
 	const accelerate = program
 		.command("accelerate")
-		.description("Install and enable native or CUDA acceleration for recall")
+		.description("Install and enable native, CUDA or Metal acceleration for recall")
 		.option("--json", "Output status as JSON")
 		.action((opts: { json?: boolean }) => printStatus(deps, opts.json === true));
 	accelerate
@@ -194,6 +236,10 @@ export function registerAccelerateCommands(program: Command, deps: AccelerateDep
 		.command("cuda")
 		.description("Run the cross-encoder on an NVIDIA GPU (installs ONNX Runtime CUDA and CUDA 12 libraries)")
 		.action(async () => enable(deps, "cuda"));
+	accelerate
+		.command("metal")
+		.description("Run the cross-encoder on the Apple silicon GPU through Metal (uses the native ONNX runtime)")
+		.action(async () => enable(deps, "metal"));
 	accelerate
 		.command("off")
 		.description("Return to the default WebAssembly runtime")

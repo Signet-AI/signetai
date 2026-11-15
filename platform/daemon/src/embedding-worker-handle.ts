@@ -18,6 +18,7 @@ import {
 
 const DEFAULT_MODEL_ID = "nomic-ai/nomic-embed-text-v1.5";
 const DEFAULT_DIMENSIONS = 768;
+const EXIT_RELEASE_TIMEOUT_MS = 2_000;
 const READY_TIMEOUT_MS = 30_000;
 const INIT_TIMEOUT_MS = 90_000;
 const EMBED_TIMEOUT_MS = 15_000;
@@ -51,7 +52,7 @@ export interface EmbeddingHandleOptions {
 	readonly wasmAssetDir?: string | null;
 	readonly transformersRuntimeAssetPath?: string | null;
 	readonly task?: "embed" | "rerank";
-	readonly device?: "cuda";
+	readonly device?: "cuda" | "metal";
 	readonly runtime?: "onnxruntime";
 	readonly onnxRuntimePath?: string;
 	readonly cudaLibraryPaths?: readonly string[];
@@ -101,6 +102,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 			? opts.transformersRuntimeAssetPath
 			: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime");
 
+	const releaseSignal = opts.device === "metal" ? new SharedArrayBuffer(4) : null;
 	const init: EmbeddingWorkerInit = {
 		cacheDir,
 		wasmDir,
@@ -110,10 +112,11 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		...(opts.remoteHostOverride ? { remoteHostOverride: opts.remoteHostOverride } : {}),
 		...(opts.task ? { task: opts.task } : {}),
 		...(opts.device ? { device: opts.device } : {}),
+		...(releaseSignal !== null ? { releaseSignal } : {}),
 		...(opts.runtime ? { runtime: opts.runtime } : {}),
 		...(opts.onnxRuntimePath ? { onnxRuntimePath: opts.onnxRuntimePath } : {}),
 		...(() => {
-			if (opts.device !== "cuda" && opts.runtime !== "onnxruntime") return {};
+			if (opts.device === undefined && opts.runtime !== "onnxruntime") return {};
 			const modulePath = resolveEmbeddedWorkerPath("onnxruntime-node-runtime");
 			return modulePath ? { onnxRuntimeModulePath: modulePath } : {};
 		})(),
@@ -137,6 +140,18 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 				: (resolveEmbeddedWorkerPath("embedding-worker") ?? join(__dirname, "embedding-worker.ts"));
 	const workerOptions = { workerData: init, type: "module" } as const;
 	const worker = (opts.workerFactory ?? createNodeWorker)(workerPath, init, workerOptions);
+
+	// ONNX Runtime's WebGPU provider aborts the process when a session is still
+	// alive as static destructors run. An exit that skips stop() therefore asks
+	// the Metal worker to release its session and blocks, bounded, until it has.
+	const releaseBeforeExit = (): void => {
+		if (releaseSignal === null) return;
+		try {
+			worker.postMessage({ type: "shutdown" });
+			Atomics.wait(new Int32Array(releaseSignal), 0, 0, EXIT_RELEASE_TIMEOUT_MS);
+		} catch {}
+	};
+	if (releaseSignal !== null) process.once("exit", releaseBeforeExit);
 
 	let nextId = 1;
 	const pending = new Map<number, PendingRpc>();
@@ -303,6 +318,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 	});
 
 	worker.on("exit", (code: number) => {
+		process.off("exit", releaseBeforeExit);
 		if (!stopped && !disabled && code !== 0) {
 			logger.warn("native-embedding", "Embedding worker exited unexpectedly", { code });
 		}
@@ -407,6 +423,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		async stop(): Promise<void> {
 			if (stopped) return;
 			stopped = true;
+			process.off("exit", releaseBeforeExit);
 			try {
 				worker.postMessage({ type: "shutdown" });
 			} catch {}

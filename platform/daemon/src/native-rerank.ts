@@ -4,7 +4,7 @@ import { nativeEmbeddingAssetPaths } from "./native-embedding";
 
 const RECREATE_AFTER_FAILURE_MS = 300_000;
 
-export type NativeRerankDevice = "default" | "cuda" | "cpu";
+export type NativeRerankDevice = "default" | "cuda" | "cpu" | "metal";
 
 export interface NativeRerankRuntime {
 	readonly device: NativeRerankDevice;
@@ -43,12 +43,17 @@ function createHandle(modelId: string, runtime: NativeRerankRuntime): Promise<Em
 					...(runtime.onnxRuntimePath ? { onnxRuntimePath: runtime.onnxRuntimePath } : {}),
 					...(runtime.cudaLibraryPaths?.length ? { cudaLibraryPaths: runtime.cudaLibraryPaths } : {}),
 				}
-			: runtime.device === "cpu"
+			: runtime.device === "metal"
 				? {
-						runtime: "onnxruntime" as const,
+						device: "metal" as const,
 						...(runtime.onnxRuntimePath ? { onnxRuntimePath: runtime.onnxRuntimePath } : {}),
 					}
-				: {}),
+				: runtime.device === "cpu"
+					? {
+							runtime: "onnxruntime" as const,
+							...(runtime.onnxRuntimePath ? { onnxRuntimePath: runtime.onnxRuntimePath } : {}),
+						}
+					: {}),
 	});
 }
 

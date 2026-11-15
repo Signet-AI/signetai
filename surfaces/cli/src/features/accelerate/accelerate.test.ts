@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseSimpleYaml } from "@signet/core";
-import { cudaSupportProblem, parseNvidiaSmi } from "./detect.js";
+import { cudaSupportProblem, detectAppleChip, metalSupportProblem, parseNvidiaSmi } from "./detect.js";
 import { acceleratorPaths, applyAccelerationConfig, readAccelerationStatus } from "./index.js";
 import { CUDA_LIBRARIES, CUDA_PROVIDER, ONNXRUNTIME_NODE_VERSION, ONNXRUNTIME_PLATFORM_FILES } from "./manifest.js";
 
@@ -70,6 +70,17 @@ describe("GPU detection", () => {
 		expect(cudaSupportProblem([], "linux-x64")).toMatch(/no NVIDIA GPU/);
 		expect(cudaSupportProblem(parseNvidiaSmi("Tesla T4, 470.82.01, 15360"), "linux-x64")).toMatch(/older than 525/);
 	});
+
+	it("gates Metal on Apple silicon and names the chip only there", () => {
+		expect(metalSupportProblem("darwin-arm64")).toBeNull();
+		expect(metalSupportProblem("darwin-x64")).toMatch(/Apple silicon Macs only/);
+		expect(metalSupportProblem("linux-x64")).toMatch(/Apple silicon Macs only/);
+		const sysctl = (() => ({ status: 0, stdout: "Apple M6\n" })) as unknown as Parameters<typeof detectAppleChip>[1];
+		expect(detectAppleChip("darwin-arm64", sysctl)).toBe("Apple M6");
+		expect(detectAppleChip("linux-x64", sysctl)).toBeNull();
+		const failing = (() => ({ status: 1, stdout: "" })) as unknown as Parameters<typeof detectAppleChip>[1];
+		expect(detectAppleChip("darwin-arm64", failing)).toBeNull();
+	});
 });
 
 describe("acceleration config", () => {
@@ -110,6 +121,21 @@ describe("acceleration config", () => {
 		expect(off.embeddingRuntimeChanged).toBe(true);
 	});
 
+	it("runs the Metal cross-encoder on the native runtime without CUDA library paths", () => {
+		const dir = workspace(base);
+		const paths = acceleratorPaths(dir);
+		applyAccelerationConfig(dir, "cuda", paths);
+		const change = applyAccelerationConfig(dir, "metal", paths);
+		const yaml = readYaml(dir);
+		expect(change.rerankerDevice).toBe("metal");
+		expect(yaml.memory.pipelineV2.reranker).toMatchObject({ device: "metal", onnxRuntimePath: paths.ortPackageDir });
+		expect(yaml.memory.pipelineV2.reranker.cudaLibraryPaths).toBeUndefined();
+		expect(yaml.embedding).toMatchObject({ runtime: "onnxruntime", onnxRuntimePath: paths.ortPackageDir });
+		applyAccelerationConfig(dir, "off", paths);
+		expect(readYaml(dir).memory.pipelineV2.reranker.device).toBe("default");
+		expect(readYaml(dir).memory.pipelineV2.reranker.onnxRuntimePath).toBeUndefined();
+	});
+
 	it("enables CPU and CUDA without replacing user-owned runtime paths across off", () => {
 		const dir = workspace(base);
 		const paths = acceleratorPaths(dir);
@@ -118,7 +144,7 @@ describe("acceleration config", () => {
 			join(dir, "agent.yaml"),
 			`embedding:\n  provider: native\n  onnxRuntimePath: /opt/ort-embedding\nmemory:\n  pipelineV2:\n    reranker:\n      onnxRuntimePath: ${rerankerPath}\n`,
 		);
-		for (const mode of ["cpu", "cuda", "off"] as const) {
+		for (const mode of ["cpu", "cuda", "metal", "off"] as const) {
 			applyAccelerationConfig(dir, mode, paths);
 			const yaml = readYaml(dir);
 			expect(yaml.embedding.onnxRuntimePath).toBe("/opt/ort-embedding");

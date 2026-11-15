@@ -1032,6 +1032,15 @@ describe("loadPipelineConfig", () => {
 		});
 	}
 
+	it("accepts the Metal reranker device with its runtime path", () => {
+		const result = loadPipelineConfig({
+			memory: { pipelineV2: { reranker: { device: "metal", onnxRuntimePath: "/opt/ort/onnxruntime-node" } } },
+		});
+		expect(result.reranker.device).toBe("metal");
+		expect(result.reranker.onnxRuntimePath).toBe("/opt/ort/onnxruntime-node");
+		expect(result.reranker.cudaLibraryPaths).toEqual([]);
+	});
+
 	it("rejects unknown reranker devices and relative runtime paths instead of ignoring them", () => {
 		expect(() => loadPipelineConfig({ memory: { pipelineV2: { reranker: { device: "gpu" } } } })).toThrow(
 			/reranker\.device/,

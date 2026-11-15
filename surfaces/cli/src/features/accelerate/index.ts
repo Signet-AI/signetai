@@ -21,7 +21,7 @@ import {
 	platformKey,
 } from "./manifest.js";
 
-export type AccelerationMode = "cpu" | "cuda" | "off";
+export type AccelerationMode = "cpu" | "cuda" | "metal" | "off";
 
 export interface AcceleratorPaths {
 	readonly root: string;

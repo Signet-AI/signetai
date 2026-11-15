@@ -3,7 +3,14 @@ import { createRequire } from "node:module";
 import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
-import { RerankDeadlineError, pairLengths, planLengthBuckets, scoreInGroups } from "./cross-encoder-buckets";
+import {
+	CUDA_COST_PROFILE,
+	METAL_COST_PROFILE,
+	RerankDeadlineError,
+	pairLengths,
+	planLengthBuckets,
+	scoreInGroups,
+} from "./cross-encoder-buckets";
 import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
 const TRANSFORMERS_LOG_LEVEL_NONE = 50;
@@ -35,7 +42,7 @@ interface PretrainedLoader<T> {
 		model: string,
 		opts?: {
 			dtype?: "q8" | "fp32";
-			device?: "cuda" | "cpu";
+			device?: "cuda" | "cpu" | "webgpu";
 			session_options?: { intraOpNumThreads: number; interOpNumThreads: number };
 			progress_callback?: (progress: { status: string; progress?: number; file?: string }) => void;
 		},
@@ -238,9 +245,18 @@ async function doInit(): Promise<void> {
 
 		mkdirSync(init.cacheDir, { recursive: true });
 		const cuda = init.task === "rerank" && init.device === "cuda";
+		const metal = init.task === "rerank" && init.device === "metal";
 		const nativeEmbedding = init.task !== "rerank" && init.runtime === "onnxruntime";
-		const nativeCpuRerank = init.task === "rerank" && !cuda && init.runtime === "onnxruntime";
+		const nativeCpuRerank = init.task === "rerank" && !cuda && !metal && init.runtime === "onnxruntime";
 		if (cuda) await prepareNativeOnnxRuntime("CUDA cross-encoder");
+		if (metal) {
+			if (process.platform !== "darwin" || process.arch !== "arm64") {
+				throw new Error(
+					`The Metal cross-encoder runs on Apple silicon Macs only (this is ${process.platform}-${process.arch})`,
+				);
+			}
+			await prepareNativeOnnxRuntime("Metal cross-encoder");
+		}
 		if (nativeCpuRerank) await prepareNativeOnnxRuntime("native ONNX runtime cross-encoder");
 		if (nativeEmbedding) await prepareNativeOnnxRuntime("native ONNX runtime embedding");
 		transformers = await loadTransformers();
@@ -271,8 +287,8 @@ async function doInit(): Promise<void> {
 			}
 		};
 		if (init.task === "rerank") {
-			const precision = cuda ? "fp32" : "q8";
-			const deviceLabel = cuda ? ", CUDA" : nativeCpuRerank ? ", native CPU" : "";
+			const precision = cuda || metal ? "fp32" : "q8";
+			const deviceLabel = cuda ? ", CUDA" : metal ? ", Metal" : nativeCpuRerank ? ", native CPU" : "";
 			log("info", `Initializing cross-encoder ${init.modelId} (${precision}${deviceLabel})`, {
 				cachePath: init.cacheDir,
 			});
@@ -280,6 +296,8 @@ async function doInit(): Promise<void> {
 			const model = await transformers.AutoModelForSequenceClassification.from_pretrained(init.modelId, {
 				dtype: precision,
 				...(cuda ? { device: "cuda" as const } : {}),
+				// ONNX Runtime reaches Metal through its WebGPU provider (Dawn's Metal backend).
+				...(metal ? { device: "webgpu" as const } : {}),
 				...(nativeCpuRerank
 					? {
 							device: "cpu" as const,
@@ -327,9 +345,10 @@ async function doInit(): Promise<void> {
 				const width = logits.dims.at(-1) ?? 1;
 				return documents.map((_, index) => Number(logits.data[index * width + width - 1]));
 			};
+			const costProfile = cuda ? CUDA_COST_PROFILE : metal ? METAL_COST_PROFILE : null;
 			const planGroups = (query: string, documents: readonly string[]): number[][] =>
-				cuda && pairTokenizer !== null && nativeInputs !== null
-					? planLengthBuckets(pairLengths(pairTokenizer.encodePairs(query, [...documents])))
+				costProfile !== null && pairTokenizer !== null && nativeInputs !== null
+					? planLengthBuckets(pairLengths(pairTokenizer.encodePairs(query, [...documents])), costProfile)
 					: documents.map((_, index) => [index]);
 			const score = (query: string, documents: readonly string[], deadlineAt?: number): Promise<number[]> =>
 				scoreInGroups(
@@ -347,7 +366,9 @@ async function doInit(): Promise<void> {
 			rerankModel = model;
 			rerankFn = score;
 			modelCached = true;
-			log("info", "Cross-encoder ready", { device: cuda ? "cuda" : nativeCpuRerank ? "cpu" : "default" });
+			log("info", "Cross-encoder ready", {
+				device: cuda ? "cuda" : metal ? "metal" : nativeCpuRerank ? "cpu" : "default",
+			});
 			pushStatus();
 			return;
 		}
@@ -475,6 +496,11 @@ async function handleShutdown(): Promise<void> {
 	modelCached = false;
 	initPromise = null;
 	initError = null;
+	if (init.releaseSignal) {
+		const released = new Int32Array(init.releaseSignal);
+		Atomics.store(released, 0, 1);
+		Atomics.notify(released, 0);
+	}
 }
 
 port.on("message", (msg: MainToWorkerMessage) => {

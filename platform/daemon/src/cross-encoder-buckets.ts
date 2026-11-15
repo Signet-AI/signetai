@@ -1,7 +1,31 @@
-const CUDA_RUN_OVERHEAD_MS = 5.3;
-const CUDA_MS_PER_TOKEN = 0.00249;
-const CUDA_MS_PER_TOKEN_SQUARED = 0.0000128;
+export interface RerankCostProfile {
+	readonly runOverheadMs: number;
+	readonly msPerToken: number;
+	readonly msPerTokenSquared: number;
+	readonly maxGroupTokens: number;
+}
+
 export const CUDA_MAX_GROUP_TOKENS = 16_384;
+
+export const CUDA_COST_PROFILE: RerankCostProfile = {
+	runOverheadMs: 5.3,
+	msPerToken: 0.00249,
+	msPerTokenSquared: 0.0000128,
+	maxGroupTokens: CUDA_MAX_GROUP_TOKENS,
+};
+
+// Fitted to mxbai-rerank-xsmall-v1 (fp32) on an Apple M6 through ONNX Runtime's
+// WebGPU provider, batches of 1-20 by 16-512 tokens. Metal runs get slower per
+// document as they grow, so the cap keeps one run near a quarter second and the
+// deadline check between runs responsive.
+export const METAL_MAX_GROUP_TOKENS = 2_048;
+
+export const METAL_COST_PROFILE: RerankCostProfile = {
+	runOverheadMs: 7.8,
+	msPerToken: 0.0261,
+	msPerTokenSquared: 0.000168,
+	maxGroupTokens: METAL_MAX_GROUP_TOKENS,
+};
 
 export function pairLengths(batch: {
 	readonly attentionMask: readonly number[];
@@ -18,7 +42,10 @@ export function pairLengths(batch: {
 	return lengths;
 }
 
-export function planLengthBuckets(lengths: readonly number[]): number[][] {
+export function planLengthBuckets(
+	lengths: readonly number[],
+	profile: RerankCostProfile = CUDA_COST_PROFILE,
+): number[][] {
 	const order = lengths.map((length, index) => ({ length, index })).sort((a, b) => a.length - b.length);
 	const count = order.length;
 	const best = new Array<number>(count + 1).fill(Number.POSITIVE_INFINITY);
@@ -26,10 +53,10 @@ export function planLengthBuckets(lengths: readonly number[]): number[][] {
 	best[0] = 0;
 	for (let end = 1; end <= count; end++) {
 		const padded = order[end - 1]?.length ?? 0;
-		const perDocument = CUDA_MS_PER_TOKEN * padded + CUDA_MS_PER_TOKEN_SQUARED * padded * padded;
+		const perDocument = profile.msPerToken * padded + profile.msPerTokenSquared * padded * padded;
 		for (let start = 0; start < end; start++) {
-			if (end - start > 1 && (end - start) * padded > CUDA_MAX_GROUP_TOKENS) continue;
-			const cost = (best[start] ?? 0) + CUDA_RUN_OVERHEAD_MS + (end - start) * perDocument;
+			if (end - start > 1 && (end - start) * padded > profile.maxGroupTokens) continue;
+			const cost = (best[start] ?? 0) + profile.runOverheadMs + (end - start) * perDocument;
 			if (cost < (best[end] ?? Number.POSITIVE_INFINITY)) {
 				best[end] = cost;
 				cut[end] = start;

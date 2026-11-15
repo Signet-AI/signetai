@@ -358,4 +358,61 @@ describe("embedding-worker-handle", () => {
 		expect(initCaptures[0].wasmDir).toBe(fakeWasmDir);
 		expect(initCaptures[0].transformersRuntimePath).toBe(fakeTransformersPath);
 	});
+	it("gives a Metal worker a release signal and keeps an exit guard only while the worker is alive", async () => {
+		const exitListeners = process.listenerCount("exit");
+		const initCaptures: EmbeddingWorkerInit[] = [];
+		const worker = new FakeWorker();
+		const handle = await createEmbeddingWorkerHandle({
+			task: "rerank",
+			device: "metal",
+			wasmAssetDir: null,
+			transformersRuntimeAssetPath: null,
+			embeddingWorkerPath: "/fake/embedding-worker.js",
+			workerFactory: (_path, init) => {
+				initCaptures.push(init);
+				return worker;
+			},
+		});
+		expect(initCaptures[0]?.device).toBe("metal");
+		expect(initCaptures[0]?.releaseSignal).toBeInstanceOf(SharedArrayBuffer);
+		expect(process.listenerCount("exit")).toBe(exitListeners + 1);
+		await handle.stop();
+		expect(worker.posted).toEqual([{ type: "shutdown" }]);
+		expect(process.listenerCount("exit")).toBe(exitListeners);
+
+		const crashed = new FakeWorker();
+		const second = await createEmbeddingWorkerHandle({
+			task: "rerank",
+			device: "metal",
+			wasmAssetDir: null,
+			transformersRuntimeAssetPath: null,
+			embeddingWorkerPath: "/fake/embedding-worker.js",
+			workerFactory: () => crashed,
+		});
+		handles.push(second);
+		expect(process.listenerCount("exit")).toBe(exitListeners + 1);
+		crashed.emitExit(1);
+		expect(process.listenerCount("exit")).toBe(exitListeners);
+	});
+
+	it("does not add a release signal or exit guard for CPU and CUDA workers", async () => {
+		const exitListeners = process.listenerCount("exit");
+		const initCaptures: EmbeddingWorkerInit[] = [];
+		for (const device of [undefined, "cuda"] as const) {
+			const handle = await createEmbeddingWorkerHandle({
+				task: "rerank",
+				...(device ? { device } : {}),
+				wasmAssetDir: null,
+				transformersRuntimeAssetPath: null,
+				embeddingWorkerPath: "/fake/embedding-worker.js",
+				workerFactory: (_path, init) => {
+					initCaptures.push(init);
+					return new FakeWorker();
+				},
+			});
+			handles.push(handle);
+		}
+		expect(initCaptures.map((init) => init.releaseSignal)).toEqual([undefined, undefined]);
+		expect(process.listenerCount("exit")).toBe(exitListeners);
+	});
 });
