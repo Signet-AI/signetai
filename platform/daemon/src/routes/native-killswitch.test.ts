@@ -1,10 +1,12 @@
-import { afterEach, describe, expect, it, mock } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { LOOPBACK_HOST } from "@signet/core";
 import { fetchEmbedding, setNativeFallbackProvider } from "../embedding-fetch";
 import { checkEmbeddingProvider } from "./utils";
 
 const originalFetch = globalThis.fetch;
 const realNativeEmbedding = { ...(await import("../native-embedding")) };
+
+beforeEach(() => setNativeFallbackProvider(null));
 
 afterEach(() => {
 	globalThis.fetch = originalFetch;
