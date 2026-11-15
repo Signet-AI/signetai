@@ -49,6 +49,8 @@ const DREAM_STATUS = {
 			mutationsFailed: 0,
 			summary: "# Summary\n\n- A long dreaming summary must remain readable.",
 			error: null,
+			policyHash: "5be07c19a3d2f640aa",
+			policySource: "custom" as const,
 		},
 	],
 	attention: [],
@@ -80,6 +82,13 @@ beforeAll(async () => {
 		const url = String(input);
 		if (url.endsWith("/api/dream/status")) {
 			return new Response(JSON.stringify(fixtureStatus), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		}
+		if (url.includes("/api/dream/passes/pass-1/policy")) {
+			const policy = { hash: "5be07c19a3d2f640aa", source: "custom", text: "File decisions only." };
+			return new Response(JSON.stringify({ agentId: "default", passId: "pass-1", policy }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
@@ -123,7 +132,18 @@ describe("dreaming summary layout", () => {
 				details?.click();
 				await new Promise((resolve) => setTimeout(resolve, 0));
 			});
-			expect(document.querySelector('[role="dialog"]')?.textContent).toContain("attention_list");
+			const dialog = document.querySelector('[role="dialog"]');
+			expect(dialog?.textContent).toContain("attention_list");
+			expect(dialog?.textContent).toContain("Policy — custom 5be07c19");
+			expect(dialog?.textContent).not.toContain("File decisions only.");
+			const show = Array.from(dialog?.querySelectorAll("button") ?? []).find(
+				(button) => button.textContent === "show policy",
+			);
+			await act(async () => {
+				show?.click();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
+			expect(document.querySelector('[role="dialog"]')?.textContent).toContain("File decisions only.");
 		} finally {
 			await act(async () => {
 				root.unmount();

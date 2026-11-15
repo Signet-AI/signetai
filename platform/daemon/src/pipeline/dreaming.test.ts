@@ -27,6 +27,7 @@ import {
 	getDreamingEpisodicTokenBacklog,
 	getDreamingEpisodicTokenBacklogInDb,
 	getDreamingEvidenceExclusions,
+	getDreamingPassPolicy,
 	getDreamingPasses,
 	getDreamingState,
 	getDreamingToolCalls,
@@ -4442,6 +4443,49 @@ It is now Monday, 2026-10-05 18:42 America/Denver (GMT-06:00). Use this for what
 			expect(prompt).toContain("<pending_attention>");
 			expect(prompt).toContain("<current_time>");
 		}
+	});
+
+	it("records the policy each pass ran under", async () => {
+		const combined = "Custom combined policy.\n";
+		const run = async (cfg: DreamingConfig, mode: "compact" | "incremental-hygiene") =>
+			(
+				await runDreamingAgentPass(
+					accessor,
+					{
+						async run() {
+							return { summary: "Recorded" };
+						},
+					},
+					cfg,
+					"/tmp",
+					AGENT,
+					[AGENT],
+					mode,
+				)
+			).passId;
+		const first = await run(defaultCfg({ policies: { ...DEFAULT_DREAMING_POLICIES, combined } }), "compact");
+		const second = await run(defaultCfg({ policies: { ...DEFAULT_DREAMING_POLICIES, combined } }), "compact");
+		const hygiene = await run(defaultCfg(), "incremental-hygiene");
+
+		const passes = new Map((await getDreamingPasses(accessor, AGENT, 10)).map((pass) => [pass.id, pass]));
+		expect(passes.get(first)?.policySource).toBe("custom");
+		expect(passes.get(second)?.policyHash).toBe(passes.get(first)?.policyHash ?? "");
+		expect(passes.get(hygiene)?.policySource).toBe("default");
+		expect(passes.get(hygiene)?.policyHash).not.toBe(passes.get(first)?.policyHash ?? "");
+		expect(db.prepare("SELECT COUNT(*) AS count FROM dreaming_policies").get()).toEqual({ count: 2 });
+
+		expect(await getDreamingPassPolicy(accessor, AGENT, first)).toEqual({
+			policy: { hash: passes.get(first)?.policyHash ?? "", source: "custom", text: combined },
+		});
+		expect((await getDreamingPassPolicy(accessor, AGENT, hygiene))?.policy?.text).toBe(
+			DEFAULT_DREAMING_POLICIES.hygiene,
+		);
+		expect(await getDreamingPassPolicy(accessor, "other-agent", first)).toBeNull();
+		expect(await getDreamingPassPolicy(accessor, AGENT, "missing")).toBeNull();
+		db.prepare(
+			"INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at) VALUES ('legacy', ?, 'compact', 'completed', 'now', 'now')",
+		).run(AGENT);
+		expect(await getDreamingPassPolicy(accessor, AGENT, "legacy")).toEqual({ policy: null });
 	});
 
 	it("does not advance the evidence cursor for a surprisal-only content pass", async () => {

@@ -415,7 +415,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(171);
+			expect(applied.version).toBe(172);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -2363,6 +2363,33 @@ describe("migration framework", () => {
 		]);
 		expect(() => db.exec("INSERT INTO dependency_history_compaction_state (id) VALUES (2)")).toThrow();
 		expect(() => db.exec("UPDATE dependency_history_compaction_state SET cursor_rowid = -1")).toThrow();
+	});
+
+	test("migration 172 records the policy each Dreaming pass ran under", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.exec("DROP TABLE dreaming_policies");
+		db.exec("ALTER TABLE dreaming_passes DROP COLUMN policy_hash");
+		db.exec("ALTER TABLE dreaming_passes DROP COLUMN policy_source");
+		db.prepare("DELETE FROM schema_migrations WHERE version = 172").run();
+		db.exec(
+			"INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at) VALUES ('old', 'default', 'compact', 'completed', '2026-11-01', '2026-11-01')",
+		);
+		runMigrations(db);
+		runMigrations(db);
+
+		expect(db.query("SELECT policy_hash, policy_source FROM dreaming_passes WHERE id = 'old'").get()).toEqual({
+			policy_hash: null,
+			policy_source: null,
+		});
+		db.exec("INSERT INTO dreaming_policies (hash, text, created_at) VALUES ('h1', 'File decisions only.', 'now')");
+		db.exec(
+			"INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at, policy_hash, policy_source) VALUES ('new', 'default', 'compact', 'running', 'now', 'now', 'h1', 'custom')",
+		);
+		expect(() => db.exec("UPDATE dreaming_passes SET policy_source = 'edited' WHERE id = 'new'")).toThrow();
+		expect(() =>
+			db.exec("INSERT INTO dreaming_policies (hash, text, created_at) VALUES ('h1', 'other', 'now')"),
+		).toThrow();
 	});
 
 	test("migration 171 creates wake claims and message board tables idempotently", () => {

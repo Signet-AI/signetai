@@ -387,6 +387,8 @@ function PassDetailDialog({ pass, onClose }: { pass: DreamPass; onClose: () => v
 						</p>
 					)}
 
+					{pass.policySource && <PassPolicy pass={pass} />}
+
 					{mutations.length > 0 && <MutationsList mutations={mutations} nameMap={nameMap} />}
 
 					{tools.loading && !tools.data ? (
@@ -424,6 +426,35 @@ function PassDetailDialog({ pass, onClose }: { pass: DreamPass; onClose: () => v
 		</Dialog>
 	);
 }
+function PassPolicy({ pass }: { pass: DreamPass }) {
+	const [open, setOpen] = useState(false);
+	const policy = useAsync(() => (open ? api.getDreamPassPolicy(pass.id) : Promise.resolve(null)), {
+		key: open ? `dream-policy:${pass.id}` : undefined,
+		deps: [pass.id, open],
+	});
+	const text = policy.data?.policy?.text;
+	return (
+		<div className="flex flex-col gap-1.5">
+			<span className="font-mono text-[9px] uppercase tracking-[0.08em] text-muted-foreground/70">
+				Policy — {pass.policySource === "default" ? "default" : `custom ${pass.policyHash?.slice(0, 8) ?? ""}`}
+			</span>
+			{!open ? (
+				<Button variant="ghost" size="sm" className="self-start" onClick={() => setOpen(true)}>
+					show policy
+				</Button>
+			) : text ? (
+				<pre className="m-0 max-h-[320px] overflow-y-auto whitespace-pre-wrap break-words border-b border-border py-2 font-mono text-[10.5px] leading-relaxed text-muted-foreground">
+					{text}
+				</pre>
+			) : (
+				<span className="font-mono text-[10.5px] text-muted-foreground">
+					{policy.error ?? (policy.loading ? "loading policy…" : "Policy text not recorded.")}
+				</span>
+			)}
+		</div>
+	);
+}
+
 function MutationsList({
 	mutations,
 	nameMap,

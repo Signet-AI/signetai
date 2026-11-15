@@ -1,8 +1,15 @@
 import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
-import type { AccountingProvenance, DreamingConfig, LlmCacheRequestAccounting, LlmUsage } from "@signet/core";
+import type {
+	AccountingProvenance,
+	DreamingConfig,
+	DreamingPolicies,
+	LlmCacheRequestAccounting,
+	LlmUsage,
+} from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import type {
+	DbOwnerStatement,
 	DbOwnerDreamingEpisodicBacklog,
 	DbOwnerDreamingEpisodicBacklogExists,
 	DbOwnerDreamingEpisodicBacklogProbe,
@@ -47,6 +54,7 @@ import { normalizePipelineCause, recordPipelineOperation } from "../pipeline-ope
 import { getActiveTelemetry } from "../telemetry";
 import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
+import { DEFAULT_DREAMING_POLICIES } from "./dreaming-policies";
 import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
 import { DREAMING_CAPABILITY_IDS, dreamingEvidencePageChars, listDreamingAttention } from "./dreaming-capabilities";
@@ -272,6 +280,8 @@ export interface DreamingPassRow {
 	readonly mutationsFailed: number | null;
 	readonly summary: string | null;
 	readonly error: string | null;
+	readonly policyHash: string | null;
+	readonly policySource: "default" | "custom" | null;
 }
 
 export interface DreamingWorkloadDiagnostics {
@@ -536,19 +546,52 @@ function nextEvidenceWatermark(surfaced: string, previous: string | null, cutoff
 	return timestampMillis(capped) > timestampMillis(previous) ? capped : previous;
 }
 
-export async function createDreamingPass(accessor: DbAccessor, agentId: string, mode: DreamingMode): Promise<string> {
+export interface DreamingPassPolicy {
+	readonly text: string;
+	readonly source: "default" | "custom";
+}
+
+export function dreamingPassPolicy(policies: DreamingPolicies, mode: DreamingMode): DreamingPassPolicy {
+	const type = dreamingFocusOfMode(mode) ?? "combined";
+	const text = policies[type];
+	return { text, source: text === DEFAULT_DREAMING_POLICIES[type] ? "default" : "custom" };
+}
+
+function createDreamingPassStatements(
+	id: string,
+	agentId: string,
+	mode: DreamingMode,
+	policy: DreamingPassPolicy,
+): DbOwnerStatement[] {
+	const hash = createHash("sha256").update(policy.text).digest("hex");
+	return [
+		ownerRunStatement(
+			`INSERT INTO dreaming_policies (hash, text, created_at)
+			 VALUES (?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+			 ON CONFLICT(hash) DO NOTHING`,
+			[hash, policy.text],
+		),
+		ownerRunStatement(
+			`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at, policy_hash, policy_source)
+			 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'), ?, ?)
+			 ON CONFLICT(id) DO NOTHING`,
+			[id, agentId, mode, hash, policy.source],
+		),
+	];
+}
+
+export async function createDreamingPass(
+	accessor: DbAccessor,
+	agentId: string,
+	mode: DreamingMode,
+	policy: DreamingPassPolicy,
+): Promise<string> {
 	const id = randomUUID();
 	await ownerTransaction(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.pass.create",
-		[
-			ownerRunStatement(
-				`INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
-				 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))`,
-				[id, agentId, mode],
-			),
-		],
-		{ deadlineMs: 10_000, estimatedWorkUnits: 1 },
+		createDreamingPassStatements(id, agentId, mode, policy),
+		{ deadlineMs: 10_000, estimatedWorkUnits: 2 },
 	);
 	dreamingLiveEvents.startPass({ passId: id, agentId, mode });
 	return id;
@@ -558,28 +601,21 @@ export async function createDreamingPassThroughOwner(
 	maintenance: DbOwnerMaintenance,
 	agentId: string,
 	mode: DreamingMode,
+	policy: DreamingPassPolicy,
 ): Promise<string> {
 	const id = randomUUID();
 	const request = {
-		kind: "query" as const,
-		statement: {
-			sql: `INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
-			 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))
-			 ON CONFLICT(id) DO NOTHING`,
-			params: [id, agentId, mode],
-			result: "run" as const,
-		},
+		kind: "transaction" as const,
+		transaction: { statements: createDreamingPassStatements(id, agentId, mode, policy) },
 	};
 	let creationMayHaveCommitted = false;
 	for (;;) {
 		try {
-			await runOwnerJob<{ readonly changes: number }>(
-				maintenance.owner,
-				request,
-				"dreaming.pass.create",
-				"maintenance",
-				{ deadlineMs: 10_000, estimatedWorkUnits: 1, waitForOwnerCompletionOnDeadline: true },
-			);
+			await runOwnerJob<readonly unknown[]>(maintenance.owner, request, "dreaming.pass.create", "maintenance", {
+				deadlineMs: 10_000,
+				estimatedWorkUnits: 2,
+				waitForOwnerCompletionOnDeadline: true,
+			});
 			dreamingLiveEvents.startPass({ passId: id, agentId, mode });
 			return id;
 		} catch (error) {
@@ -643,7 +679,8 @@ export async function getDreamingPasses(
 		        mutations_applied AS mutationsApplied,
 		        mutations_skipped AS mutationsSkipped,
 		        mutations_failed AS mutationsFailed,
-		        summary, error
+		        summary, error,
+		        policy_hash AS policyHash, policy_source AS policySource
 		 FROM dreaming_passes
 		 WHERE agent_id = ?
 		 ORDER BY created_at DESC
@@ -651,6 +688,37 @@ export async function getDreamingPasses(
 		[agentId, limit],
 		{ deadlineMs: 30_000, estimatedWorkUnits: Math.max(1, Math.min(limit, 100)) },
 	);
+}
+
+export interface DreamingPassPolicyRecord {
+	readonly hash: string;
+	readonly source: "default" | "custom";
+	readonly text: string;
+}
+
+export async function getDreamingPassPolicy(
+	accessor: DbAccessor,
+	agentId: string,
+	passId: string,
+): Promise<{ readonly policy: DreamingPassPolicyRecord | null } | null> {
+	const row = await ownerQueryOne<{
+		readonly hash: string | null;
+		readonly source: "default" | "custom" | null;
+		readonly text: string | null;
+	}>(
+		await getDbOwnerForAccessor(accessor),
+		"dreaming.pass.policy",
+		`SELECT pass.policy_hash AS hash, pass.policy_source AS source, policy.text AS text
+		 FROM dreaming_passes pass
+		 LEFT JOIN dreaming_policies policy ON policy.hash = pass.policy_hash
+		 WHERE pass.agent_id = ? AND pass.id = ?
+		 LIMIT 1`,
+		[agentId, passId],
+		{ deadlineMs: 10_000, estimatedWorkUnits: 1 },
+	);
+	if (row == null) return null;
+	if (row.hash === null || row.source === null || row.text === null) return { policy: null };
+	return { policy: { hash: row.hash, source: row.source, text: row.text } };
 }
 
 export interface DreamingPassScope extends DreamingPassRow {
@@ -671,7 +739,8 @@ function dreamingPassSelect(includeAgent = false): string {
 				mutations_applied AS mutationsApplied,
 				mutations_skipped AS mutationsSkipped,
 				mutations_failed AS mutationsFailed,
-				summary, error
+				summary, error,
+				policy_hash AS policyHash, policy_source AS policySource
 			 FROM dreaming_passes`;
 }
 
@@ -1454,11 +1523,12 @@ export async function runDreamingAgentPass(
 	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
 	for (const scope of scopes) invalidateDreamingEpisodicTokenBacklog(scope);
+	const policy = dreamingPassPolicy(cfg.policies, mode);
 	const passId =
 		existingPassId ??
 		(await (ownerMaintenance
-			? createDreamingPassThroughOwner(ownerMaintenance, agentId, mode)
-			: createDreamingPass(accessor, agentId, mode)));
+			? createDreamingPassThroughOwner(ownerMaintenance, agentId, mode, policy)
+			: createDreamingPass(accessor, agentId, mode, policy)));
 	const live = liveOptions?.hub ?? dreamingLiveEvents;
 	live.startPass({ passId, agentId, mode });
 	live.publish(passId, "lifecycle", { phase: "preparing", mode });
@@ -1468,9 +1538,8 @@ export async function runDreamingAgentPass(
 	let applied = 0;
 	let failed = 0;
 	try {
-		const policy = cfg.policies[dreamingFocusOfMode(mode) ?? "combined"];
 		const basePrompt =
-			scopes.length > 1 ? `${policy}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>` : policy;
+			scopes.length > 1 ? `${policy.text}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>` : policy.text;
 		const toolPrompt = cfg.codemode ? `${basePrompt}\n\n${DREAMING_CODEMODE_PROMPT}` : basePrompt;
 		const prompt = liveOptions?.userRequest
 			? `${toolPrompt}
