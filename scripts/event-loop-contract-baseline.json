@@ -3418,14 +3418,14 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1437,
+      "line": 1466,
       "api": "existsSync",
       "source": "if (!existsSync(getCurrentMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1444,
+      "line": 1473,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb(",
       "category": "hot-path",
@@ -3433,7 +3433,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1474,
+      "line": 1503,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -3441,7 +3441,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1587,
+      "line": 1616,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -5284,21 +5284,21 @@
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 954,
+      "line": 956,
       "api": "existsSync",
       "source": "if (replacements.size === 0 || !existsSync(jsonlPath)) return Promise.resolve(0);",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 1038,
+      "line": 1040,
       "api": "renameSync",
       "source": "renameSync(tmpPath, jsonlPath);",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 1043,
+      "line": 1045,
       "api": "rmSync",
       "source": "rmSync(tmpPath, { force: true });",
       "category": "hot-path"

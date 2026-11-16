@@ -1,3 +1,4 @@
+import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,7 +20,9 @@ const infoMock = mock((_cat: string, _msg: string, _data?: Record<string, unknow
 const warnMock = mock((..._args: unknown[]) => {});
 const errorMock = mock((..._args: unknown[]) => {});
 const hybridRecallMock = mock(async (..._args: Parameters<PromptDeps["hybridRecall"]>) => ({ results: [] }));
-const fetchEmbeddingMock = mock(async (..._args: Parameters<PromptDeps["fetchEmbedding"]>) => null);
+const fetchEmbeddingMock = mock(
+	async (..._args: Parameters<PromptDeps["fetchEmbedding"]>): ReturnType<PromptDeps["fetchEmbedding"]> => null,
+);
 const searchTemporalFallbackMock = mock(() => []);
 
 const { loadMemoryConfig: realLoadMemoryConfig } = await import("./memory-config");
@@ -83,7 +86,7 @@ function makeDeps(overrides: Partial<PromptDeps> = {}): PromptDeps {
 }
 
 function seedEntityContext(): void {
-	getDbAccessor().withWriteTx((db) => {
+	getSyncDbAccessor().withWriteTx((db) => {
 		const now = "2026-05-27T00:00:00.000Z";
 		db.prepare(
 			`INSERT INTO entities
@@ -265,7 +268,7 @@ describe("handleUserPromptSubmit entity context", () => {
 		seedEntityContext();
 		const events: Array<{ event: string; properties: Record<string, unknown> }> = [];
 		setActiveTelemetry({
-			record(event, properties) {
+			record(event: string, properties: Record<string, unknown>) {
 				events.push({ event, properties: { ...properties } });
 			},
 		} as never);
@@ -434,7 +437,7 @@ describe("handleUserPromptSubmit entity context", () => {
 	});
 
 	it("uses structured path terms to select zero-confidence curated attributes", async () => {
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entities
@@ -475,7 +478,7 @@ describe("handleUserPromptSubmit entity context", () => {
 
 	it("normalizes possessive entity matches to the dominant canonical entity", async () => {
 		seedEntityContext();
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entities
@@ -535,7 +538,7 @@ describe("handleUserPromptSubmit entity context", () => {
 	});
 
 	it("does not treat generic plural ontology nouns as possessive entity mentions", async () => {
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entities
@@ -588,7 +591,7 @@ describe("handleUserPromptSubmit entity context", () => {
 	});
 
 	it("ignores disallowed entity types for prompt context", async () => {
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entities
@@ -627,7 +630,7 @@ describe("handleUserPromptSubmit entity context", () => {
 	});
 
 	it("ignores generic role-label person entities for prompt context", async () => {
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entities
@@ -665,7 +668,7 @@ describe("handleUserPromptSubmit entity context", () => {
 
 	it("does not inject broad general uncategorized entity attributes", async () => {
 		seedEntityContext();
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entity_aspects
@@ -701,7 +704,7 @@ describe("handleUserPromptSubmit entity context", () => {
 
 	it("strips all selected entity terms from semantic attribute queries", async () => {
 		seedEntityContext();
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entities
@@ -738,7 +741,7 @@ describe("handleUserPromptSubmit entity context", () => {
 	});
 
 	it("requires lexical support for generic prompt context semantic hits", async () => {
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entities
@@ -783,7 +786,7 @@ describe("handleUserPromptSubmit entity context", () => {
 
 	it("ignores low-quality generic entity collisions when a stronger entity is present", async () => {
 		seedEntityContext();
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entities
@@ -823,7 +826,7 @@ describe("handleUserPromptSubmit entity context", () => {
 	});
 
 	it("prefers the longest non-overlapping entity span", async () => {
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			for (const [id, name, canonical, mentions] of [
 				["entity-claude-code-connector", "Claude Code connector", "claude code connector", 8],
@@ -868,7 +871,7 @@ describe("handleUserPromptSubmit entity context", () => {
 
 	it("keeps semantic attribute scoring scoped to the current agent", async () => {
 		seedEntityContext();
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
@@ -897,7 +900,7 @@ describe("handleUserPromptSubmit entity context", () => {
 
 	it("ignores mismatched embedding dimensions for semantic attribute scoring", async () => {
 		seedEntityContext();
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			db.prepare("DELETE FROM embeddings WHERE id = ?").run("emb-preferences-pen");
 			db.prepare(
 				`INSERT INTO embeddings
@@ -948,7 +951,7 @@ describe("handleUserPromptSubmit entity context", () => {
 	});
 
 	it("does not match short entity names as ordinary prompt tokens", async () => {
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			const now = "2026-05-27T00:00:00.000Z";
 			db.prepare(
 				`INSERT INTO entities

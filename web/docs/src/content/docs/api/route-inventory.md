@@ -140,6 +140,7 @@ generated runtime route dump.
 |--------|------|--------|
 | GET | `/api/harnesses/:id/health` | platform/daemon/src/routes/connectors-routes.ts |
 | GET | `/api/hooks/transcript-capture/:jobId` | platform/daemon/src/routes/hooks-routes.ts |
+| POST | `/api/hooks/stop` | platform/daemon/src/routes/hooks-routes.ts |
 | POST | `/api/hooks/skill-invocation` | platform/daemon/src/routes/hooks-routes.ts |
 | GET | `/api/memories/curator-slices` | platform/daemon/src/routes/memory-routes.ts |
 | POST | `/api/memories/:id/tombstone` | platform/daemon/src/routes/memory-routes.ts |

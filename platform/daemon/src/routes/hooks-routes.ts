@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { aggregateRecall, parseAggregateRecallBudget, readAggregateRecallBudgetInput } from "../aggregate-recall";
 import { checkScope, requirePermission, requireRateLimit } from "../auth";
@@ -825,78 +827,105 @@ export function __setStopAdmissionForTests(admission: ConcurrencyAdmission | nul
 }
 
 function registerStop(app: Hono): void {
-	app.post("/api/hooks/stop", async (c) => {
-		if (isInternalCall(c)) return c.json({ recorded: false });
-		try {
-			const body = await readOptionalJsonObject(c);
-			if (body === null) return c.json({ error: "invalid request body" }, 400);
-			const harness = parseOptionalString(body.harness);
-			if (!harness) return c.json({ error: "harness is required" }, 400);
-			const sessionKey = parseOptionalString(body.sessionKey) ?? parseOptionalString(body.sessionId);
-			if (!sessionKey) return c.json({ error: "sessionKey is required" }, 400);
-			if (body.lastAssistantMessage !== undefined && typeof body.lastAssistantMessage !== "string") {
-				return c.json({ error: "lastAssistantMessage must be a string" }, 400);
-			}
-			const lastAssistantMessage = body.lastAssistantMessage ?? "";
-			if (lastAssistantMessage.length > MAX_STOP_REPLY_CHARS) {
-				return c.json({ error: `lastAssistantMessage exceeds ${MAX_STOP_REPLY_CHARS} characters` }, 413);
-			}
-			const runtimePath = resolveRuntimePath(c, { runtimePath: parseOptionalString(body.runtimePath) });
-			const scope = resolveScopedAgentId(
-				c,
-				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey }),
-				"default",
-			);
-			if (scope.error) return c.json({ error: scope.error }, 403);
-			const agentId = scope.agentId;
-			const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, {
-				requireExisting: false,
-				context: "sessionKey",
-			});
-			if (bindingError) return c.json({ error: bindingError }, 403);
-			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
-			if (denied) return denied;
-			stampHarness(harness);
-			const claimedBy = getSessionPath(sessionKey, agentId);
-			if (runtimePath && claimedBy && claimedBy !== runtimePath) {
-				return c.json({ recorded: false, skipped: true, duplicateRuntimePath: true, claimedBy } satisfies StopResponse);
-			}
-			if (getEndedSession(sessionKey, agentId)) {
-				return c.json({ recorded: false, skipped: true, sessionEnded: true } satisfies StopResponse);
-			}
-			if (isSessionBypassed(sessionKey, agentId)) {
-				return c.json({ recorded: false, bypassed: true } satisfies StopResponse);
-			}
-
+	app.post(
+		"/api/hooks/stop",
+		async (c, next) => {
 			if (!stopAdmission.acquire()) {
 				c.header("Retry-After", "1");
 				return c.json({ error: `Too many concurrent stop hooks (max ${STOP_MAX_IN_FLIGHT}); retry shortly` }, 503);
 			}
 			try {
+				await next();
+			} finally {
+				stopAdmission.release();
+			}
+		},
+		bodyLimit({ maxSize: 2 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) }),
+		async (c) => {
+			if (isInternalCall(c)) return c.json({ recorded: false });
+			try {
+				const body = await readOptionalJsonObject(c);
+				if (body === null) return c.json({ error: "invalid request body" }, 400);
+				const harness = parseOptionalString(body.harness);
+				if (!harness) return c.json({ error: "harness is required" }, 400);
+				const sessionKey = parseOptionalString(body.sessionKey) ?? parseOptionalString(body.sessionId);
+				if (!sessionKey) return c.json({ error: "sessionKey is required" }, 400);
+				if (body.lastAssistantMessage !== undefined && typeof body.lastAssistantMessage !== "string") {
+					return c.json({ error: "lastAssistantMessage must be a string" }, 400);
+				}
+				const lastAssistantMessage = body.lastAssistantMessage ?? "";
+				if (lastAssistantMessage.length > MAX_STOP_REPLY_CHARS) {
+					return c.json({ error: `lastAssistantMessage exceeds ${MAX_STOP_REPLY_CHARS} characters` }, 413);
+				}
+				const runtimePath = resolveRuntimePath(c, { runtimePath: parseOptionalString(body.runtimePath) });
+				const scope = resolveScopedAgentId(
+					c,
+					resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey }),
+					"default",
+				);
+				if (scope.error) return c.json({ error: scope.error }, 403);
+				const agentId = scope.agentId;
+				const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, {
+					requireExisting: false,
+					context: "sessionKey",
+				});
+				if (bindingError) return c.json({ error: bindingError }, 403);
+				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+				if (denied) return denied;
+				stampHarness(harness);
+				const claimedBy = getSessionPath(sessionKey, agentId);
+				if (claimedBy && claimedBy !== runtimePath) {
+					return c.json({
+						recorded: false,
+						skipped: true,
+						duplicateRuntimePath: true,
+						claimedBy,
+					} satisfies StopResponse);
+				}
+				if (getEndedSession(sessionKey, agentId)) {
+					return c.json({ recorded: false, skipped: true, sessionEnded: true } satisfies StopResponse);
+				}
+				if (isSessionBypassed(sessionKey, agentId)) {
+					return c.json({ recorded: false, bypassed: true } satisfies StopResponse);
+				}
+
+				const project = resolveScopedProject(c, parseOptionalString(body.cwd));
+				if (project.error) return c.json({ error: project.error }, 403);
+				if (shouldEnforceAuthScope(c) && c.get("auth")?.claims?.scope?.project) {
+					const existing = await dbOwnerQuery<{ project: string | null } | null>(
+						ownerStatement(
+							"SELECT project FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+							[sessionKey, agentId],
+							"get",
+						),
+						{ operation: "transcripts.stop.scope", lane: "read" },
+					);
+					if (existing && existing.project !== project.project) {
+						return c.json({ error: "session transcript is outside the project scope" }, 403);
+					}
+				}
 				return c.json(
 					await handleStop({
 						harness,
 						sessionKey,
 						agentId,
-						cwd: parseOptionalString(body.cwd),
+						cwd: project.project,
 						lastAssistantMessage,
 					}),
 				);
-			} finally {
-				stopAdmission.release();
+			} catch (e) {
+				if (isRetryableWritePressure(e)) {
+					logger.warn("hooks", "Stop hook deferred by write pressure; caller should retry", {
+						error: e instanceof Error ? e.message : String(e),
+					});
+					c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
+					return c.json({ error: "Write pressure; retry the stop hook", retryable: true }, 503);
+				}
+				logger.error("hooks", "Stop hook failed", e as Error);
+				return c.json({ error: "Hook execution failed" }, 500);
 			}
-		} catch (e) {
-			if (isRetryableWritePressure(e)) {
-				logger.warn("hooks", "Stop hook deferred by write pressure; caller should retry", {
-					error: e instanceof Error ? e.message : String(e),
-				});
-				c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
-				return c.json({ error: "Write pressure; retry the stop hook", retryable: true }, 503);
-			}
-			logger.error("hooks", "Stop hook failed", e as Error);
-			return c.json({ error: "Hook execution failed" }, 500);
-		}
-	});
+		},
+	);
 }
 
 const SESSION_END_WAKE_GRACE_MS = 2_000;

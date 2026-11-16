@@ -1,6 +1,8 @@
+import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import * as fs from "node:fs/promises";
+import * as syncFs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -386,13 +388,20 @@ await appendCanonicalTranscriptTurns({
 		const huge = "x".repeat(2 * 1024 * 1024);
 		await appendLiveTurns(root, [{ role: "user", content: huge }]);
 		await appendLiveTurns(root, [{ role: "assistant", content: "Done." }]);
-		const parse = spyOn(JSON, "parse");
+		const reads = spyOn(syncFs, "readSync");
+		const fullReads = spyOn(syncFs, "readFileSync");
 		try {
 			await appendLiveTurns(root, [{ role: "assistant", content: "Done." }]);
-			const parsedLengths = parse.mock.calls.map(([text]) => (typeof text === "string" ? text.length : 0));
-			expect(Math.max(0, ...parsedLengths)).toBeLessThan(huge.length);
+			const bytes = reads.mock.calls.reduce(
+				(total, args: readonly unknown[]) => total + (typeof args[3] === "number" ? args[3] : 0),
+				0,
+			);
+			expect(bytes).toBeGreaterThan(0);
+			expect(bytes).toBeLessThan(huge.length);
+			expect(fullReads.mock.calls.some(([path]) => path === canonicalTranscriptPath(root, "claude-code"))).toBe(false);
 		} finally {
-			parse.mockRestore();
+			reads.mockRestore();
+			fullReads.mockRestore();
 		}
 
 		expect(readSessionRecords(canonicalTranscriptPath(root, "claude-code")).map(([role]) => role)).toEqual([
@@ -1864,7 +1873,7 @@ describe("backfill replaces live-only sessions", () => {
 
 	function initTranscriptDb(root: string): void {
 		initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
-		getDbAccessor().withWriteTx((db) => {
+		getSyncDbAccessor().withWriteTx((db) => {
 			db.exec(
 				`CREATE TABLE IF NOT EXISTS session_transcripts (
 					session_key TEXT NOT NULL,
@@ -1931,7 +1940,7 @@ describe("backfill replaces live-only sessions", () => {
 			transcript: "User: markdown prompt\nAssistant: markdown reply",
 		});
 
-		getDbAccessor().withWriteTx((db) =>
+		getSyncDbAccessor().withWriteTx((db) =>
 			db
 				.prepare(
 					`INSERT INTO session_transcripts (
@@ -2191,7 +2200,7 @@ describe("backfill replaces live-only sessions", () => {
 	test("backfills one agent's DB transcripts without paging through every other agent's rows", async () => {
 		const root = makeRoot("agent-scoped-db-backfill");
 		initTranscriptDb(root);
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		getSyncDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const insert = db.prepare(
 				`INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at)
 				 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -2217,7 +2226,7 @@ describe("backfill replaces live-only sessions", () => {
 				"2026-09-20",
 			);
 		});
-		const accessor = getDbAccessor();
+		const accessor = getSyncDbAccessor();
 		const reads = spyOn(accessor, "withReadDb");
 		try {
 			await ensureCanonicalTranscriptHistory(root, "agent-a");
@@ -2246,7 +2255,7 @@ describe("backfill replaces live-only sessions", () => {
 			sourceFormat: "normalized",
 			transcript: "User: question\nAssistant: reply",
 		});
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
+		getSyncDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) =>
 			db
 				.prepare(
 					`INSERT INTO session_transcripts (session_key, content, harness, project, agent_id, created_at, updated_at)

@@ -1,3 +1,4 @@
+import { getSyncDbAccessor } from "../legacy-sync/db-accessor-sync";
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -88,7 +89,7 @@ const TEST_TELEMETRY_CONFIG = {
 	memorySearchQaEnabled: false,
 } as const;
 function ensureTelemetryTables(): void {
-	getDbAccessor().withWriteTx((db) => {
+	getSyncDbAccessor().withWriteTx((db) => {
 		db.prepare("CREATE TABLE IF NOT EXISTS telemetry_install (id TEXT PRIMARY KEY, created_at TEXT NOT NULL)").run();
 		db.prepare(
 			`CREATE TABLE IF NOT EXISTS telemetry_events (
@@ -576,7 +577,7 @@ describe("db accessor pragmas", () => {
 		createMemoryDb();
 		closeDbAccessor();
 		initDbAccessor(join(TEST_DIR, "memory", "memories.db"));
-		const timeout = getDbAccessor().withReadDb((db) => {
+		const timeout = getSyncDbAccessor().withReadDb((db) => {
 			const row = db.prepare("PRAGMA busy_timeout").get() as { timeout?: number } | undefined;
 			return row?.timeout ?? 0;
 		});
@@ -724,7 +725,7 @@ describe("handleSessionStart", () => {
 		db.prepare("UPDATE memories SET superseded_by = ? WHERE id = ?").run(currentId, oldId);
 		db.close();
 
-		const result = await handleSessionStart({ harness: "codex", prompt: "When does Marigold deploy?" });
+		const result = await handleSessionStart({ harness: "codex" });
 		expect(result.inject).toContain("Project Marigold deploys on Thursdays.");
 		expect(result.inject).not.toContain("Project Marigold deploys on Tuesdays.");
 	});
@@ -848,9 +849,9 @@ describe("handleSessionStart", () => {
 		expect(first.stableSystemPrompt).not.toContain("Current Date & Time");
 		expect(first.dynamicContext).toContain("[memory active");
 		expect(first.dynamicContext).not.toContain("Current Date & Time");
-		expect(first.inject).toBe(
-			createPromptContext([first.stableSystemPrompt, first.dynamicContext].join("\n"))?.serialized,
-		);
+		const context = createPromptContext([first.stableSystemPrompt, first.dynamicContext].join("\n"));
+		if (!context) throw new Error("expected prompt context");
+		expect(first.inject).toBe(context.serialized);
 	});
 
 	test.serial("keeps tokenizer encodes off the event loop for a populated recall pool (#1114)", async () => {
@@ -1002,12 +1003,12 @@ hooks:
 	});
 	test.serial("session-start injection does not advance access_count/last_accessed", async () => {
 		createMemoryDb([{ content: "Injected startup memory", importance: 0.9 }]);
-		const injectedId = getDbAccessor().withReadDb(
+		const injectedId = getSyncDbAccessor().withReadDb(
 			(db) =>
 				(db.prepare("SELECT id FROM memories WHERE content = ?").get("Injected startup memory") as { id: string }).id,
 		);
 
-		const before = getDbAccessor().withReadDb(
+		const before = getSyncDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT access_count, last_accessed FROM memories WHERE id = ?").get(injectedId) as {
 					access_count: number;
@@ -1021,7 +1022,7 @@ hooks:
 		expect(result.memories.length).toBe(1);
 		expect(result.inject).toContain("Injected startup memory");
 
-		const after = getDbAccessor().withReadDb(
+		const after = getSyncDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT access_count, last_accessed FROM memories WHERE id = ?").get(injectedId) as {
 					access_count: number;
@@ -1879,12 +1880,20 @@ describe("direct transcript regressions", () => {
 			expect(
 				db
 					.prepare(
-						"SELECT session_key, agent_id FROM session_transcripts WHERE session_key IN (?, ?) ORDER BY session_key",
+						"SELECT session_key, agent_id, content FROM session_transcripts WHERE session_key IN (?, ?) ORDER BY session_key",
 					)
 					.all("fresh-agent-prompt-session", "fresh-agent-stop-session"),
 			).toEqual([
-				{ session_key: "fresh-agent-prompt-session", agent_id: "fresh-prompt-agent" },
-				{ session_key: "fresh-agent-stop-session", agent_id: "fresh-stop-agent" },
+				{
+					session_key: "fresh-agent-prompt-session",
+					agent_id: "fresh-prompt-agent",
+					content: "User: first prompt of a new agent",
+				},
+				{
+					session_key: "fresh-agent-stop-session",
+					agent_id: "fresh-stop-agent",
+					content: "Assistant: first reply of a new agent",
+				},
 			]);
 		} finally {
 			db.close();
@@ -3152,7 +3161,7 @@ describe("memory-lineage", () => {
 			transcript: "User: preserve historical terminal provenance\nAssistant: direct evidence remains lossless.",
 			summaryStatus: "not_requested" as const,
 		};
-		const existing = await ensureCanonicalManifest({ ...params, summaryStatus: "skipped" });
+		const existing = await ensureCanonicalManifest(params);
 		const manifestPath = join(TEST_DIR, existing.path.replace(`${TEST_DIR}/`, ""));
 		writeFileSync(
 			manifestPath,
@@ -3562,7 +3571,7 @@ describe("handleSessionStart multi-agent identity", () => {
 			upsertSessionTranscript(staleKey, staleContent, "hermes-agent", null, "default", staleAt);
 			upsertSessionTranscript(freshKey, freshContent, "hermes-agent", null, "default", new Date(now).toISOString());
 			upsertSessionTranscript(doneKey, doneContent, "hermes-agent", null, "default", staleAt);
-			getDbAccessor().withWriteTx((db) => {
+			getSyncDbAccessor().withWriteTx((db) => {
 				db.prepare("UPDATE session_transcripts SET completed_at = ? WHERE session_key = ? AND agent_id = ?").run(
 					staleAt,
 					doneKey,
@@ -3572,7 +3581,7 @@ describe("handleSessionStart multi-agent identity", () => {
 
 			const result = await hooks.sweepStaleSessions({ staleOlderThanMs: 24 * 60 * 60 * 1000 });
 			expect(result).toEqual({ closed: 1, skipped: 0, totalMatching: 1 });
-			const rows = getDbAccessor().withReadDb(
+			const rows = getSyncDbAccessor().withReadDb(
 				(db) =>
 					db
 						.prepare("SELECT session_key, completed_at FROM session_transcripts WHERE session_key IN (?, ?, ?)")
@@ -3743,14 +3752,14 @@ describe("writeMemoryMd", () => {
 				error: "Legacy synthesis writer disabled; curated memory head is authoritative",
 			});
 
-			const row = getDbAccessor().withReadDb((db) => {
+			const row = getSyncDbAccessor().withReadDb((db) => {
 				return db
 					.prepare("SELECT agent_id, content, revision FROM memory_md_heads WHERE agent_id = ?")
 					.get("agent-b") as { agent_id: string; content: string; revision: number } | undefined;
 			});
 			expect(row).toBeNull();
 
-			const defaultCount = getDbAccessor().withReadDb((db) => {
+			const defaultCount = getSyncDbAccessor().withReadDb((db) => {
 				const found = db.prepare("SELECT COUNT(*) as n FROM memory_md_heads WHERE agent_id = 'default'").get() as {
 					n: number;
 				};

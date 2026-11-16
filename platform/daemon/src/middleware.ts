@@ -57,7 +57,8 @@ export function registerGlobalMiddleware(app: Hono): void {
 		onError: (c) => c.json({ error: "payload too large" }, 413),
 	});
 	app.use("*", (c, next) =>
-		c.req.method === "PUT" && /^\/api\/sources\/imports\/[^/]+\/files\/[^/]+$/.test(c.req.path)
+		(c.req.method === "PUT" && /^\/api\/sources\/imports\/[^/]+\/files\/[^/]+$/.test(c.req.path)) ||
+		(c.req.method === "POST" && c.req.path === "/api/hooks/stop")
 			? next()
 			: limitBody(c, next),
 	);
