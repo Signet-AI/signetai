@@ -3,6 +3,7 @@ import { logger } from "./logger";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
 import {
 	appendCanonicalTranscriptTurns,
+	canonicalSessionText,
 	inferTranscriptSourceFormat,
 	writeCanonicalTranscriptSnapshot,
 } from "./transcript-jsonl";
@@ -19,9 +20,9 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly capturedAt?: string;
 	readonly transcriptPath?: string;
 	readonly preserveExistingSession?: boolean;
-}): Promise<boolean> {
+}): Promise<string | null> {
 	if (!params.transcriptPath) await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	return writeCanonicalTranscriptSnapshot({
+	const records = await writeCanonicalTranscriptSnapshot({
 		basePath: params.basePath,
 		agentId: params.agentId,
 		harness: params.harness,
@@ -42,6 +43,8 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 				sourceTurns,
 			}),
 	});
+	if (!records) return null;
+	return records.some((record) => record.source_format === "live") ? canonicalSessionText(records) : params.transcript;
 }
 
 export async function appendCanonicalLiveTranscriptTurns(params: {

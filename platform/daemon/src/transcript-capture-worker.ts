@@ -537,7 +537,7 @@ async function processTranscriptCaptureJob(
 		return captureResult(await writeCaptureAudit(basePath, job, resolved), resolved);
 	}
 	const sourceBacked = Boolean(job.transcriptPath);
-	const canonicalWasWritten = await writeCanonicalTranscriptFromSnapshot({
+	const indexedTranscript = await writeCanonicalTranscriptFromSnapshot({
 		basePath,
 		agentId: job.agentId,
 		harness: job.harness,
@@ -550,7 +550,7 @@ async function processTranscriptCaptureJob(
 		transcriptPath: job.transcriptPath ?? undefined,
 		preserveExistingSession: resolved.sessionCompleted || job.previouslyCompleted,
 	});
-	if (!canonicalWasWritten) {
+	if (indexedTranscript === null) {
 		throw new CanonicalTranscriptMismatchError(
 			`canonical transcript mismatch: retained JSONL is richer or divergent for session ${job.sessionKey ?? job.sessionId}`,
 		);
@@ -598,7 +598,7 @@ async function processTranscriptCaptureJob(
 		capturedAt: job.capturedAt,
 		startedAt: null,
 		endedAt: job.endedAt,
-		transcript: resolved.transcript,
+		transcript: indexedTranscript,
 		manifestPath: canonicalTranscriptRelativePath(job.harness),
 	});
 	const auditPath = await writeCaptureAudit(basePath, job, resolved);
