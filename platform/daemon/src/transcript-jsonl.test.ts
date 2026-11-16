@@ -1454,6 +1454,63 @@ await writeCanonicalTranscriptSnapshot({
 		expect(records.map((record) => record.content)).toEqual(expected);
 	});
 
+	test("notifies legacy replacement only after asynchronous directory sync", async () => {
+		const root = makeRoot("legacy-directory-sync");
+		const sourcePath = join(root, "session.jsonl");
+		const path = writeLegacyRecords(root, sourcePath, [
+			["user", "question"],
+			["unknown", "second line"],
+			["assistant", "answer"],
+		]);
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const replacements: Array<[number, number]> = [];
+		const open = fs.open;
+		const opening = spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof open>) => {
+			const handle = await open(...args);
+			if (args[0] === dirname(path)) {
+				const sync = handle.sync.bind(handle);
+				spyOn(handle, "sync").mockImplementation(async () => {
+					entered.resolve();
+					await release.promise;
+					await sync();
+				});
+			}
+			return handle;
+		});
+		const writing = writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			sourcePath,
+			preserveExistingSession: true,
+			transcript: "User: question\nsecond line\nAssistant: answer",
+			onLegacySessionReplaced: (legacyTurns, sourceTurns) => replacements.push([legacyTurns, sourceTurns]),
+		});
+		try {
+			await Promise.race([
+				entered.promise,
+				writing.then(() => {
+					throw new Error("Snapshot completed before its directory sync");
+				}),
+			]);
+			expect(readSessionRecords(path).map(([, content]) => content)).toEqual(["question\nsecond line", "answer"]);
+			expect(replacements).toEqual([]);
+			release.resolve();
+			expect(await writing).toHaveLength(2);
+			expect(replacements).toEqual([[3, 2]]);
+		} finally {
+			release.resolve();
+			try {
+				await writing;
+			} finally {
+				opening.mockRestore();
+			}
+		}
+	});
+
 	test("keeps the exact comparison for collapsed one-line records without a split continuation line", async () => {
 		const root = makeRoot("legacy-layout-unproven");
 		const sourcePath = join(root, "session.jsonl");
