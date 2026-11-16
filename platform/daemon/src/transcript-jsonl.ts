@@ -211,73 +211,91 @@ async function mergeSourceWithLiveTurns(
 	const root: LiveTurnIndex = { children: new Map(), positions: [], offset: 0 };
 	const matches = new Map<ExistingSessionTurn, LiveTurnIndex>();
 	let work = 0;
+	const checkpoint = async (): Promise<void> => {
+		if (++work % 256 === 0) await yieldToEventLoop();
+	};
 	for (const turn of existing) {
+		await checkpoint();
 		if (!turn.live) continue;
 		let node = root;
 		for (const word of [turn.role, ...collapseTurnWhitespace(turn.content).split(" ")]) {
 			const child = node.children.get(word) ?? { children: new Map(), positions: [], offset: 0 };
 			node.children.set(word, child);
 			node = child;
-			if (++work % 256 === 0) await yieldToEventLoop();
+			await checkpoint();
 		}
 		matches.set(turn, node);
 	}
 	for (const [index, turn] of incoming.entries()) {
+		await checkpoint();
 		let node = root.children.get(turn.role);
 		if (!node) continue;
 		for (const word of collapseTurnWhitespace(turn.content).split(" ")) {
 			node = node.children.get(word);
 			if (!node) break;
 			node.positions.push(index);
-			if (++work % 256 === 0) await yieldToEventLoop();
+			await checkpoint();
 		}
-		if (++work % 256 === 0) await yieldToEventLoop();
 	}
 	const merged: MergedSessionTurn[] = [];
 	let pending: ExistingSessionTurn[] = [];
 	let cursor = 0;
-	const takeSourceUntil = (end: number): void => {
+	const takeSourceUntil = async (end: number): Promise<void> => {
 		for (; cursor < end; cursor++) {
+			await checkpoint();
 			const turn = incoming[cursor];
 			if (turn) merged.push({ kind: "source", turn });
 		}
 	};
-	const flushPending = (): void => {
-		for (const turn of pending) merged.push({ kind: "live", turn });
+	const flushPending = async (): Promise<void> => {
+		for (const turn of pending) {
+			await checkpoint();
+			merged.push({ kind: "live", turn });
+		}
 		pending = [];
 	};
 	let end: number | undefined;
-	const searchEndAfter = (position: number): number => {
+	const searchEndAfter = async (position: number): Promise<number> => {
 		let next = position + 1;
-		while (existing[next]?.live) next++;
+		while (existing[next]?.live) {
+			await checkpoint();
+			next++;
+		}
 		const anchor = existing[next];
 		if (!anchor) return incoming.length;
 		let index = cursor;
-		while (index < incoming.length && !sameTurn(anchor, incoming[index])) index++;
+		while (index < incoming.length && !sameTurn(anchor, incoming[index])) {
+			await checkpoint();
+			index++;
+		}
 		return index;
 	};
 	for (const [position, turn] of existing.entries()) {
+		await checkpoint();
 		if (!turn.live) {
 			end = undefined;
 			if (!sameTurn(turn, incoming[cursor])) return null;
-			flushPending();
-			takeSourceUntil(cursor + 1);
+			await flushPending();
+			await takeSourceUntil(cursor + 1);
 			continue;
 		}
-		end ??= searchEndAfter(position);
+		end ??= await searchEndAfter(position);
 		const index = matches.get(turn);
-		while (index && (index.positions[index.offset] ?? incoming.length) < cursor) index.offset++;
+		while (index && (index.positions[index.offset] ?? incoming.length) < cursor) {
+			await checkpoint();
+			index.offset++;
+		}
 		const match = index?.positions[index.offset];
 		if (match === undefined || match >= end) {
 			pending.push(turn);
 			continue;
 		}
-		takeSourceUntil(match);
-		flushPending();
-		takeSourceUntil(match + 1);
+		await takeSourceUntil(match);
+		await flushPending();
+		await takeSourceUntil(match + 1);
 	}
-	takeSourceUntil(incoming.length);
-	flushPending();
+	await takeSourceUntil(incoming.length);
+	await flushPending();
 	return merged;
 }
 
