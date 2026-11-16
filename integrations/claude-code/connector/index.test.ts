@@ -312,28 +312,48 @@ describe("ClaudeCodeConnector user hooks", () => {
 			{ hooks: [{ type: "command", command: "my-wrapper hook wake -H claude-code" }] },
 			{ hooks: [{ type: "command", command: "my-signet hook session-start -H claude-code" }] },
 			{ hooks: [{ type: "command", command: "signet hook custom -H claude-code" }] },
+			{ hooks: [{ type: "command", command: "echo /tmp/signet hook wake -H claude-code" }] },
+			{ hooks: [{ type: "command", command: 'echo "/opt/my tools/signet" hook wake -H claude-code' }] },
+			{ hooks: [{ type: "command", command: "echo '/opt/my tools/signet' hook wake -H claude-code" }] },
+			{ hooks: [{ type: "command", command: '"/opt/wrapper" "/opt/signet/bin/signet.js" hook wake -H claude-code' }] },
 		];
 		writeSettings({ hooks: { Stop: lookalikes } });
 		const connector = new ClaudeCodeConnector();
 		await connector.install(tmpRoot);
-		expect(readHooks().Stop?.slice(0, 3)).toEqual(lookalikes);
+		expect(readHooks().Stop?.slice(0, lookalikes.length)).toEqual(lookalikes);
 		await connector.uninstall();
 		expect(readHooks().Stop).toEqual(lookalikes);
 	});
 
-	it("matches the Windows and quoted-path command forms of Signet hooks", async () => {
-		const windowsGroup = {
-			hooks: [{ type: "command", command: '"C:\\node.exe" "C:\\signet\\bin\\signet.js" hook wake -H claude-code' }],
-		};
-		const quotedGroup = {
-			hooks: [
-				{ type: "command", command: '"/opt/my tools/signet" hook session-start -H claude-code --project "$(pwd)"' },
-			],
-		};
-		writeSettings({ hooks: { Stop: [windowsGroup, quotedGroup, userGroup("Stop")] } });
-		await new ClaudeCodeConnector().uninstall();
-		expect(readHooks().Stop).toEqual([userGroup("Stop")]);
-	});
+	for (const executable of [
+		"signet",
+		"/opt/signet",
+		'"/opt/my tools/signet"',
+		"'/opt/my tools/signet'",
+		'"C:\\node.exe" "C:\\signet\\bin\\signet.js"',
+		'"C:\\Program Files\\Bun\\bun.exe" "C:\\signet\\bin\\signet.js"',
+	]) {
+		it(`detects, replaces and removes hooks invoked with ${executable}`, async () => {
+			const command = `${executable} hook session-start -H claude-code --project "$(pwd)"`;
+			const settings = {
+				hooks: {
+					SessionStart: [userGroup("SessionStart"), { hooks: [{ type: "command", command }] }],
+				},
+			};
+			writeSettings(settings);
+			const connector = new ClaudeCodeConnector();
+			expect(connector.isInstalled()).toBe(true);
+			await connector.install(tmpRoot);
+			await connector.install(tmpRoot);
+			expect(commands(readHooks().SessionStart).filter((value) => value.includes("hook session-start"))).toHaveLength(
+				1,
+			);
+			writeSettings(settings);
+			await connector.uninstall();
+			expect(readHooks().SessionStart).toEqual([userGroup("SessionStart")]);
+			expect(connector.isInstalled()).toBe(false);
+		});
+	}
 
 	it("keeps a user hook that shares a group with a Signet hook", async () => {
 		const signetEntry = { type: "command", command: 'signet hook session-start -H claude-code --project "$(pwd)"' };
@@ -342,8 +362,18 @@ describe("ClaudeCodeConnector user hooks", () => {
 		const connector = new ClaudeCodeConnector();
 		await connector.install(tmpRoot);
 		expect(readHooks().SessionStart?.[0]).toEqual({ matcher: "startup", hooks: [userEntry] });
+		writeSettings({ hooks: { SessionStart: [{ matcher: "startup", hooks: [userEntry, signetEntry] }] } });
 		await connector.uninstall();
 		expect(readHooks().SessionStart).toEqual([{ matcher: "startup", hooks: [userEntry] }]);
+	});
+
+	it("removes only the Signet MCP registration when settings.json is absent", async () => {
+		const path = join(tmpRoot, ".claude.json");
+		const other = { command: "other-mcp", args: [] };
+		writeFileSync(path, JSON.stringify({ mcpServers: { signet: { command: "signet-mcp" }, other }, model: "opus" }));
+		const result = await new ClaudeCodeConnector().uninstall();
+		expect(result.filesRemoved).toEqual([]);
+		expect(JSON.parse(readFileSync(path, "utf-8"))).toEqual({ mcpServers: { other }, model: "opus" });
 	});
 
 	const operations = {

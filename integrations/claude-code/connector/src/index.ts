@@ -33,7 +33,7 @@ export interface SessionContext {
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
 
 const SIGNET_HOOK_COMMAND =
-	/(?:^|[\\/"])signet(?:\.js)?"? hook (session-start|user-prompt-submit|notifications|pre-compaction|session-end|wake) -H claude-code(?:\s|$)/;
+	/^(?:("[^"]+"|'[^']+'|[^\s"';&|<>`$()]+) )?("[^"]+"|'[^']+'|[^\s"';&|<>`$()]+) hook (session-start|user-prompt-submit|notifications|pre-compaction|session-end|wake) -H claude-code(?:\s|$)/;
 
 function readClaudeSettings(path: string): Record<string, unknown> {
 	if (!existsSync(path)) return {};
@@ -53,7 +53,16 @@ function readClaudeSettings(path: string): Record<string, unknown> {
 
 function signetHookName(hook: unknown): string | undefined {
 	const command = isJsonObject(hook) ? hook.command : undefined;
-	return typeof command === "string" ? SIGNET_HOOK_COMMAND.exec(command)?.[1] : undefined;
+	if (typeof command !== "string") return undefined;
+	const match = SIGNET_HOOK_COMMAND.exec(command);
+	if (!match) return undefined;
+	const executable = match[2]?.replace(/^(['"])(.*)\1$/, "$2") ?? "";
+	if (!/(?:^|[\\/])signet(?:\.js)?$/.test(executable)) return undefined;
+	const runtime = match[1]?.replace(/^(['"])(.*)\1$/, "$2");
+	if (runtime !== undefined && (!/(?:^|[\\/])(?:node|bun)(?:\.exe)?$/.test(runtime) || !executable.endsWith(".js"))) {
+		return undefined;
+	}
+	return match[3];
 }
 
 function innerHooks(group: unknown): unknown[] | undefined {
@@ -64,14 +73,13 @@ function innerHooks(group: unknown): unknown[] | undefined {
 function stripSignetGroups(groups: unknown[]): unknown[] {
 	const kept: unknown[] = [];
 	for (const group of groups) {
-		const inner = innerHooks(group);
-		if (!inner) {
+		if (!isJsonObject(group) || !Array.isArray(group.hooks)) {
 			kept.push(group);
 			continue;
 		}
-		const rest = inner.filter((hook) => signetHookName(hook) === undefined);
-		if (rest.length === inner.length) kept.push(group);
-		else if (rest.length > 0) kept.push({ ...(group as object), hooks: rest });
+		const rest = group.hooks.filter((hook) => signetHookName(hook) === undefined);
+		if (rest.length === group.hooks.length) kept.push(group);
+		else if (rest.length > 0) kept.push({ ...group, hooks: rest });
 	}
 	return kept;
 }
@@ -223,6 +231,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 	async uninstall(): Promise<UninstallResult> {
 		const settingsPath = this.getConfigPath();
 		if (!existsSync(settingsPath)) {
+			this.removeMcpServer();
 			return { filesRemoved: [] };
 		}
 
