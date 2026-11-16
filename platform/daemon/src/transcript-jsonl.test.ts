@@ -997,7 +997,10 @@ describe("backfill OOM regression (#587)", () => {
 				}
 				await rm(...args);
 			});
-			const writing = writeSourceSnapshot(root, ["User: seed", "Assistant: new answer"]);
+			const writing = writeSourceSnapshot(
+				root,
+				stage === "cleanup" ? ["User: seed"] : ["User: seed", "Assistant: new answer"],
+			);
 			let appending: Promise<unknown> | undefined;
 			try {
 				await Promise.race([
@@ -1026,13 +1029,30 @@ describe("backfill OOM regression (#587)", () => {
 			}
 			expect(readSessionRecords(path)).toEqual([
 				["user", "seed", "jsonl"],
-				["assistant", "new answer", "jsonl"],
+				...(stage === "sync" ? [["assistant", "new answer", "jsonl"] as [string, string, string]] : []),
 				["user", "queued prompt", "live"],
 			]);
 			expect(existsSync(`${path}.snapshot-tmp`)).toBe(false);
 			expect(existsSync(`${path}.lock`)).toBe(false);
 		},
 	);
+
+	test("does not remove the temporary name after publishing a snapshot", async () => {
+		const root = makeRoot("published-temp");
+		await writeSourceSnapshot(root, ["User: seed"]);
+		const path = canonicalTranscriptPath(root, "claude-code");
+		const removing = spyOn(fs, "rm");
+		try {
+			await writeSourceSnapshot(root, ["User: seed", "Assistant: new answer"]);
+			expect(removing.mock.calls.some(([target]) => target === `${path}.snapshot-tmp`)).toBe(false);
+			expect(readSessionRecords(path)).toEqual([
+				["user", "seed", "jsonl"],
+				["assistant", "new answer", "jsonl"],
+			]);
+		} finally {
+			removing.mockRestore();
+		}
+	});
 
 	test("recovers a cancelled snapshot owner without publishing its temporary output", async () => {
 		const root = makeRoot("cancelled-snapshot-owner");
