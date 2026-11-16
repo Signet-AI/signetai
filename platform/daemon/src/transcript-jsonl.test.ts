@@ -843,7 +843,7 @@ describe("backfill OOM regression (#587)", () => {
 		expect(records.map((record) => record.content)).toEqual(['run {\n    "a": 1\n}  please', "done"]);
 	});
 
-	test("extends a completed session stored with legacy collapsed whitespace", async () => {
+	test.each([false, true])("restores legacy whitespace with appended source turns: %s", async (extend) => {
 		const root = makeRoot("extend-legacy-whitespace");
 		const sourcePath = join(root, "session.jsonl");
 		const jsonlPath = writeLegacyRecords(root, sourcePath, [
@@ -852,6 +852,7 @@ describe("backfill OOM regression (#587)", () => {
 			["assistant", "done"],
 		]);
 		const replacements: Array<[number, number]> = [];
+		const expected = [' run  {  "a": 1 }\tplease  \nthen  report', "done", ...(extend ? ["one more turn"] : [])];
 
 		const replaced = await writeCanonicalTranscriptSnapshot({
 			basePath: root,
@@ -861,21 +862,20 @@ describe("backfill OOM regression (#587)", () => {
 			sourceFormat: "jsonl",
 			sourcePath,
 			preserveExistingSession: true,
-			transcript: 'User:  run  {  "a": 1 }\tplease  \nthen  report\nAssistant: done\nUser: one more turn',
-			onLegacySessionReplaced: (legacyTurns, sourceTurns) => replacements.push([legacyTurns, sourceTurns]),
+			transcript: `User:  run  {  "a": 1 }\tplease  \nthen  report\nAssistant: done${extend ? "\nUser: one more turn" : ""}`,
+			onLegacySessionReplaced: (legacyTurns, sourceTurns) => {
+				replacements.push([legacyTurns, sourceTurns]);
+				expect(readSessionRecords(jsonlPath).map(([, content]) => content)).toEqual(expected);
+			},
 		});
 
 		expect(replaced).toBe(true);
-		expect(replacements).toEqual([[3, 3]]);
+		expect(replacements).toEqual([[3, extend ? 3 : 2]]);
 		const records = readFileSync(jsonlPath, "utf8")
 			.trim()
 			.split("\n")
 			.map((line) => JSON.parse(line) as { content: string });
-		expect(records.map((record) => record.content)).toEqual([
-			' run  {  "a": 1 }\tplease  \nthen  report',
-			"done",
-			"one more turn",
-		]);
+		expect(records.map((record) => record.content)).toEqual(expected);
 	});
 
 	test("keeps the exact comparison for collapsed one-line records without a split continuation line", async () => {
@@ -906,6 +906,21 @@ describe("backfill OOM regression (#587)", () => {
 			["user", "A"],
 			["assistant", "B"],
 		]);
+	});
+
+	test("preserves whitespace-only stored turns when the source omits them", async () => {
+		const root = makeRoot("whitespace-only-stored-turn");
+		const sourcePath = join(root, "session.jsonl");
+		const jsonlPath = writeLegacyRecords(root, sourcePath, [
+			["user", "A"],
+			["unknown", "second line"],
+			["assistant", " "],
+			["user", "B"],
+		]);
+		const original = readFileSync(jsonlPath, "utf8");
+
+		expect(await writeSourceSnapshot(root, ["User: A", "second line", "User: B"], true)).toBe(false);
+		expect(readFileSync(jsonlPath, "utf8")).toBe(original);
 	});
 
 	test("still preserves a completed session when the replacement differs beyond whitespace", async () => {

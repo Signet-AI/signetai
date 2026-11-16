@@ -738,7 +738,6 @@ export function writeCanonicalTranscriptSnapshot(
 				rmSync(tmpPath, { force: true });
 				return false;
 			}
-			if (incomingReplacesLegacy) input.onLegacySessionReplaced?.(existingSessionTurns.length, next.length);
 			for (const r of next) {
 				writeSync(fd, `${JSON.stringify(r)}\n`);
 			}
@@ -748,6 +747,7 @@ export function writeCanonicalTranscriptSnapshot(
 			renameSync(tmpPath, path);
 			fsyncDirectory(path);
 			sessionSeqIndexes.delete(path);
+			if (incomingReplacesLegacy) input.onLegacySessionReplaced?.(existingSessionTurns.length, next.length);
 			return true;
 		} catch (error) {
 			if (fd !== null) closeSync(fd);
@@ -756,6 +756,7 @@ export function writeCanonicalTranscriptSnapshot(
 		}
 	});
 }
+
 export function appendCanonicalTranscriptTurns(
 	input: TranscriptIdentity & { readonly turns: readonly TranscriptTurn[] },
 ): Promise<string | null> {

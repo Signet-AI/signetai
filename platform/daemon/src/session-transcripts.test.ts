@@ -146,9 +146,9 @@ describe("canonical transcript backfill of legacy records", () => {
 		);
 	}
 
-	function insertTranscriptRow(root: string, sessionKey: string, content: string): void {
+	async function insertTranscriptRow(root: string, sessionKey: string, content: string): Promise<void> {
 		initDbAccessor(join(root, "memory", "memories.db"), { agentsDir: root });
-		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
+		await getDbAccessor().withWriteTxAsync((db) => {
 			db.exec(
 				`CREATE TABLE IF NOT EXISTS session_transcripts (
 					session_key TEXT NOT NULL,
@@ -181,7 +181,7 @@ describe("canonical transcript backfill of legacy records", () => {
 	it("settles the marker when legacy records match the DB row they were written from", async () => {
 		const root = makeRoot();
 		writeCollapsedLegacyRecords(root, "legacy-db-session", collapsedLegacyTurns);
-		insertTranscriptRow(root, "legacy-db-session", originalLegacyTranscript);
+		await insertTranscriptRow(root, "legacy-db-session", originalLegacyTranscript);
 
 		await ensureCanonicalTranscriptHistory(root, "default");
 
@@ -202,7 +202,7 @@ describe("canonical transcript backfill of legacy records", () => {
 	it("withholds the marker when a DB row is a whitespace-poorer copy of a current-format record", async () => {
 		const root = makeRoot();
 		writeTranscriptArtifact(root, "fresh-session", "User:  fresh   prompt\nAssistant: fresh\treply  ");
-		insertTranscriptRow(root, "fresh-session", "User: fresh prompt\nAssistant: fresh reply");
+		await insertTranscriptRow(root, "fresh-session", "User: fresh prompt\nAssistant: fresh reply");
 
 		await ensureCanonicalTranscriptHistory(root, "default");
 
