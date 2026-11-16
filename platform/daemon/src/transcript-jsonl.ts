@@ -816,6 +816,7 @@ export function writeCanonicalTranscriptSnapshot(
 		}
 
 		const handle = await open(tmpPath, "w");
+		let renamed = false;
 		let pending = "";
 		const emit = async (text: string): Promise<void> => {
 			pending += `${text}\n`;
@@ -881,15 +882,16 @@ export function writeCanonicalTranscriptSnapshot(
 			await handle.sync();
 			await handle.close();
 			await rename(tmpPath, path);
-			await syncPath(dirname(path));
+			renamed = true;
 			sessionSeqIndexes.delete(path);
+			await syncPath(dirname(path));
 			if (incomingReplacesLegacy) input.onLegacySessionReplaced?.(existingSessionTurns.length, next.length);
 			return records;
 		} finally {
 			try {
 				await handle.close();
 			} finally {
-				await rm(tmpPath, { force: true });
+				if (!renamed) await rm(tmpPath, { force: true });
 			}
 		}
 	});
