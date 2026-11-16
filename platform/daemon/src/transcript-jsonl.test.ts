@@ -1111,7 +1111,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: 'User: run { "a": 1 } please\nAssistant: done\nUser: one more turn',
 		});
 
-		expect(replaced).toBe(false);
+		expect(replaced).toBeNull();
 		const records = readFileSync(canonicalTranscriptPath(root, "claude-code"), "utf8")
 			.trim()
 			.split("\n")
@@ -1145,7 +1145,7 @@ describe("backfill OOM regression (#587)", () => {
 			},
 		});
 
-		expect(replaced).toBe(true);
+		expect(replaced).not.toBeNull();
 		expect(replacements).toEqual([[3, extend ? 3 : 2]]);
 		const records = readFileSync(jsonlPath, "utf8")
 			.trim()
@@ -1173,7 +1173,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: A\n  Assistant: B\nUser: C",
 		});
 
-		expect(replaced).toBe(false);
+		expect(replaced).toBeNull();
 		const records = readFileSync(jsonlPath, "utf8")
 			.trim()
 			.split("\n")
@@ -1195,7 +1195,7 @@ describe("backfill OOM regression (#587)", () => {
 		]);
 		const original = readFileSync(jsonlPath, "utf8");
 
-		expect(await writeSourceSnapshot(root, ["User: A", "second line", "User: B"], true)).toBe(false);
+		expect(await writeSourceSnapshot(root, ["User: A", "second line", "User: B"], true)).toBeNull();
 		expect(readFileSync(jsonlPath, "utf8")).toBe(original);
 	});
 
@@ -1223,7 +1223,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: run  it  now\nAssistant: done\nUser: one more turn",
 		});
 
-		expect(replaced).toBe(false);
+		expect(replaced).toBeNull();
 		expect(readFileSync(canonicalTranscriptPath(root, "claude-code"), "utf8")).toContain('"content":"run it please"');
 	});
 
@@ -1271,7 +1271,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: run  the checks\nSystem: hook ok\n\nthen report\nAssistant: done\nUser: one more turn",
 		});
 
-		expect(replaced).toBe(true);
+		expect(replaced).not.toBeNull();
 		const records = readFileSync(jsonlPath, "utf8")
 			.trim()
 			.split("\n")
@@ -1300,7 +1300,7 @@ describe("backfill OOM regression (#587)", () => {
 			transcript: "User: run the checks\nthen skip the report\nAssistant: done\nUser: one more turn",
 		});
 
-		expect(replaced).toBe(false);
+		expect(replaced).toBeNull();
 		expect(readFileSync(jsonlPath, "utf8")).toContain('"content":"then report"');
 	});
 
