@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
 
 export type TranscriptRole = "user" | "assistant" | "unknown";
@@ -197,13 +198,41 @@ type MergedSessionTurn =
 	| { readonly kind: "source"; readonly turn: CanonicalTranscriptRecord }
 	| { readonly kind: "live"; readonly turn: ExistingSessionTurn };
 
-function mergeSourceWithLiveTurns(
+interface LiveTurnIndex {
+	readonly children: Map<string, LiveTurnIndex>;
+	readonly positions: number[];
+	offset: number;
+}
+
+async function mergeSourceWithLiveTurns(
 	existing: readonly ExistingSessionTurn[],
 	incoming: readonly CanonicalTranscriptRecord[],
-): readonly MergedSessionTurn[] | null {
-	const collapsed: string[] = [];
-	const collapsedAt = (index: number): string =>
-		(collapsed[index] ??= collapseTurnWhitespace(incoming[index]?.content ?? ""));
+): Promise<readonly MergedSessionTurn[] | null> {
+	const root: LiveTurnIndex = { children: new Map(), positions: [], offset: 0 };
+	const matches = new Map<ExistingSessionTurn, LiveTurnIndex>();
+	let work = 0;
+	for (const turn of existing) {
+		if (!turn.live) continue;
+		let node = root;
+		for (const word of [turn.role, ...collapseTurnWhitespace(turn.content).split(" ")]) {
+			const child = node.children.get(word) ?? { children: new Map(), positions: [], offset: 0 };
+			node.children.set(word, child);
+			node = child;
+			if (++work % 256 === 0) await yieldToEventLoop();
+		}
+		matches.set(turn, node);
+	}
+	for (const [index, turn] of incoming.entries()) {
+		let node = root.children.get(turn.role);
+		if (!node) continue;
+		for (const word of collapseTurnWhitespace(turn.content).split(" ")) {
+			node = node.children.get(word);
+			if (!node) break;
+			node.positions.push(index);
+			if (++work % 256 === 0) await yieldToEventLoop();
+		}
+		if (++work % 256 === 0) await yieldToEventLoop();
+	}
 	const merged: MergedSessionTurn[] = [];
 	let pending: ExistingSessionTurn[] = [];
 	let cursor = 0;
@@ -235,16 +264,11 @@ function mergeSourceWithLiveTurns(
 			takeSourceUntil(cursor + 1);
 			continue;
 		}
-		const content = collapseTurnWhitespace(turn.content);
-		const extended = `${content} `;
 		end ??= searchEndAfter(position);
-		let match = -1;
-		for (let index = cursor; index < end && match < 0; index++) {
-			if (incoming[index]?.role !== turn.role) continue;
-			const source = collapsedAt(index);
-			if (source === content || source.startsWith(extended)) match = index;
-		}
-		if (match < 0) {
+		const index = matches.get(turn);
+		while (index && (index.positions[index.offset] ?? incoming.length) < cursor) index.offset++;
+		const match = index?.positions[index.offset];
+		if (match === undefined || match >= end) {
 			pending.push(turn);
 			continue;
 		}
@@ -300,8 +324,9 @@ function makeRecord(input: TranscriptIdentity, turn: TranscriptTurn, seq: number
 
 export function transcriptTextToTurns(transcript: string): TranscriptTurn[] {
 	const turns: TranscriptTurn[] = [];
-	for (const [index, line] of normalizeLf(transcript).split("\n").entries()) {
-		if (index === normalizeLf(transcript).split("\n").length - 1 && line.length === 0) continue;
+	const lines = normalizeLf(transcript).split("\n");
+	for (const [index, line] of lines.entries()) {
+		if (index === lines.length - 1 && line.length === 0) continue;
 		const match = line.match(/^(User|Human|Assistant)\s*:(.*)$/i);
 		if (match) {
 			const role = match[1]?.toLowerCase() === "assistant" ? "assistant" : "user";
@@ -799,9 +824,11 @@ export function writeCanonicalTranscriptSnapshot(
 			const merged =
 				unchangedSession || incomingExtendsExisting || incomingReplacesLegacy || !input.sourcePath
 					? null
-					: mergeSourceWithLiveTurns(existingSessionTurns, next);
+					: await mergeSourceWithLiveTurns(existingSessionTurns, next);
 			const refused =
-				!incomingExtendsExisting && !incomingReplacesLegacy && (input.sourcePath ? merged === null : input.preserveExistingSession);
+				!incomingExtendsExisting &&
+				!incomingReplacesLegacy &&
+				(input.sourcePath ? merged === null : input.preserveExistingSession);
 			const records = merged
 				? merged.flatMap((entry, index) => {
 						const seq = index + 1;
