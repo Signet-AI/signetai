@@ -3,7 +3,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { LlmGenerateResult } from "@signet/core";
+import type { LlmGenerateResult, LlmUsage } from "@signet/core";
 import {
 	LlmConcurrencySemaphore,
 	SemaphoreTimeoutError,
@@ -632,7 +632,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"stopReason":"end_turn"}}'
 		}
 	}
 
-	const reported = {
+	const reported: LlmUsage = {
 		inputTokens: 1200,
 		outputTokens: 340,
 		cacheReadTokens: 5000,
