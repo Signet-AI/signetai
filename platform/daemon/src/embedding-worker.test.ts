@@ -6,12 +6,16 @@ import { Worker } from "node:worker_threads";
 import type { EmbeddingWorkerInit, WorkerToMainMessage } from "./embedding-worker-protocol";
 
 const FAKE_RUNTIME = `
+import { strictEqual } from "node:assert";
 export const env = { backends: { onnx: {} } };
 export const AutoTokenizer = {
-	from_pretrained: async () => (texts, opts) => ({
-		rows: texts.map((query, index) => query + "|" + opts.text_pair[index]),
-		padding: opts.padding,
-	}),
+	from_pretrained: async () => (texts, opts) => {
+		strictEqual(opts.padding, false);
+		return {
+			rows: texts.map((query, index) => query + "|" + opts.text_pair[index]),
+			padding: opts.padding,
+		};
+	},
 };
 export const AutoModelForSequenceClassification = {
 	from_pretrained: async () => async (inputs) => {
