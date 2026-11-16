@@ -308,8 +308,15 @@ describe("transcript capture worker", () => {
 					| { content: string }
 					| undefined,
 		);
-		expect(artifact?.content).toContain("cancelled prompt");
-		expect(artifact?.content).toContain("second answer");
+		expect(artifact?.content).toBe(
+			[
+				"User: first question",
+				"Assistant: first answer",
+				"User: cancelled prompt",
+				"User: second question",
+				"Assistant: second answer",
+			].join("\n"),
+		);
 	});
 
 	it("clears recoverable legacy payloads without deleting the job", async () => {

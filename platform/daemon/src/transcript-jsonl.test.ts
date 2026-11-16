@@ -748,6 +748,37 @@ describe("backfill OOM regression (#587)", () => {
 		]);
 	});
 
+	test("bounds prefix checks when live turns do not match a large source", async () => {
+		const root = makeRoot("bounded-live-merge");
+		const live = Array.from({ length: 80 }, (_, index) => ({
+			role: "user" as const,
+			content: `missing ${index}`,
+		}));
+		const source = Array.from({ length: 160 }, (_, index) => `User: source ${index}`);
+		await appendLiveTurns(root, live);
+		const startsWith = String.prototype.startsWith;
+		let checks = 0;
+		const prefix = spyOn(String.prototype, "startsWith").mockImplementation(function (
+			this: string,
+			search: string,
+			position?: number,
+		): boolean {
+			if (startsWith.call(search, "missing ")) checks++;
+			return startsWith.call(this, search, position);
+		});
+		let records: Awaited<ReturnType<typeof writeSourceSnapshot>>;
+		try {
+			records = await writeSourceSnapshot(root, source, true);
+		} finally {
+			prefix.mockRestore();
+		}
+		expect(records?.map((record) => record.content)).toEqual([
+			...source.map((line) => line.slice("User: ".length)),
+			...live.map((turn) => turn.content),
+		]);
+		expect(checks).toBeLessThanOrEqual(source.length + live.length);
+	});
+
 	test("keeps the project of a live turn that the source does not contain", async () => {
 		const root = makeRoot("live-kept-project");
 		await appendCanonicalTranscriptTurns({
