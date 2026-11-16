@@ -811,7 +811,7 @@ export function writeCanonicalTranscriptSnapshot(
 			await rm(tmpPath, { force: true });
 			await appendIndexedRecords(path, entries, next);
 			await syncPath(path);
-			if (entries.size === 0) await syncPath(dirname(path));
+			await syncPath(dirname(path));
 			return next;
 		}
 

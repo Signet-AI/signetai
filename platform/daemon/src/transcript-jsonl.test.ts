@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -874,6 +875,219 @@ describe("backfill OOM regression (#587)", () => {
 			"seed answer",
 		]);
 		expect(existsSync(`${jsonlPath}.snapshot-tmp`)).toBe(false);
+	});
+
+	test.each([false, true])(
+		"syncs a new-session directory before accepting capture (existing file: %s)",
+		async (existing: boolean) => {
+			const root = makeRoot(`append-directory-sync-${existing}`);
+			if (existing) await writeSourceSnapshot(root, ["User: seed"], undefined, "seed");
+			const path = canonicalTranscriptPath(root, "claude-code");
+			const failure = new Error("injected directory sync failure");
+			const open = fs.open;
+			let syncs = 0;
+			const opening = spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof open>) => {
+				const handle = await open(...args);
+				if (args[0] === dirname(path)) {
+					const sync = handle.sync.bind(handle);
+					spyOn(handle, "sync").mockImplementation(async () => {
+						syncs++;
+						if (syncs === 1) throw failure;
+						await sync();
+					});
+				}
+				return handle;
+			});
+			try {
+				await expect(writeSourceSnapshot(root, ["User: question", "Assistant: answer"])).rejects.toBe(failure);
+				expect(syncs).toBe(1);
+				const before = readFileSync(path, "utf8");
+				expect(await writeSourceSnapshot(root, ["User: question", "Assistant: answer"])).toHaveLength(2);
+				expect(syncs).toBe(2);
+				expect(readFileSync(path, "utf8")).toBe(before);
+				expect(existsSync(`${path}.snapshot-tmp`)).toBe(false);
+				expect(existsSync(`${path}.lock`)).toBe(false);
+			} finally {
+				opening.mockRestore();
+			}
+		},
+	);
+
+	test.each(["write", "sync", "close", "rename"] as const)(
+		"preserves the original and cleans temporary output after a snapshot %s failure",
+		async (stage: "write" | "sync" | "close" | "rename") => {
+			const root = makeRoot(`snapshot-${stage}-failure`);
+			await writeSourceSnapshot(root, ["User: seed"]);
+			const path = canonicalTranscriptPath(root, "claude-code");
+			const before = readFileSync(path, "utf8");
+			const failure = new Error(`injected ${stage} failure`);
+			const open = fs.open;
+			const rename = fs.rename;
+			let injected = false;
+			const fail = (): void => {
+				expect(readFileSync(`${path}.snapshot-tmp`, "utf8")).toContain("new answer");
+				expect(existsSync(`${path}.lock`)).toBe(true);
+				injected = true;
+				throw failure;
+			};
+			const opening = spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof open>) => {
+				const handle = await open(...args);
+				if (args[0] !== `${path}.snapshot-tmp`) return handle;
+				if (stage === "write") {
+					const write = handle.writeFile.bind(handle);
+					spyOn(handle, "writeFile").mockImplementation(async (...args: Parameters<typeof write>) => {
+						await write(...args);
+						fail();
+					});
+				}
+				if (stage === "sync") spyOn(handle, "sync").mockImplementation(async () => fail());
+				if (stage === "close") {
+					const close = handle.close.bind(handle);
+					spyOn(handle, "close").mockImplementation(async () => {
+						await close();
+						if (!injected) fail();
+					});
+				}
+				return handle;
+			});
+			const renaming = spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof rename>) => {
+				if (stage === "rename" && args[0] === `${path}.snapshot-tmp`) fail();
+				await rename(...args);
+			});
+			try {
+				await expect(writeSourceSnapshot(root, ["User: seed", "Assistant: new answer"])).rejects.toBe(failure);
+				expect(injected).toBe(true);
+				expect(readFileSync(path, "utf8")).toBe(before);
+				expect(existsSync(`${path}.snapshot-tmp`)).toBe(false);
+				expect(existsSync(`${path}.lock`)).toBe(false);
+			} finally {
+				opening.mockRestore();
+				renaming.mockRestore();
+			}
+			expect(await writeSourceSnapshot(root, ["User: seed", "Assistant: new answer"])).toHaveLength(2);
+		},
+	);
+
+	test.each(["sync", "cleanup"] as const)(
+		"holds the transcript lock across asynchronous %s",
+		async (stage: "sync" | "cleanup") => {
+			const root = makeRoot(`async-lock-${stage}`);
+			await writeSourceSnapshot(root, ["User: seed"]);
+			const path = canonicalTranscriptPath(root, "claude-code");
+			const entered = Promise.withResolvers<void>();
+			const release = Promise.withResolvers<void>();
+			const open = fs.open;
+			const rm = fs.rm;
+			const opening = spyOn(fs, "open").mockImplementation(async (...args: Parameters<typeof open>) => {
+				const handle = await open(...args);
+				if (stage === "sync" && args[0] === `${path}.snapshot-tmp`) {
+					const sync = handle.sync.bind(handle);
+					spyOn(handle, "sync").mockImplementation(async () => {
+						entered.resolve();
+						await release.promise;
+						await sync();
+					});
+				}
+				return handle;
+			});
+			const removing = spyOn(fs, "rm").mockImplementation(async (...args: Parameters<typeof rm>) => {
+				if (stage === "cleanup" && args[0] === `${path}.snapshot-tmp`) {
+					entered.resolve();
+					await release.promise;
+				}
+				await rm(...args);
+			});
+			const writing = writeSourceSnapshot(root, ["User: seed", "Assistant: new answer"]);
+			let appending: Promise<unknown> | undefined;
+			try {
+				await Promise.race([
+					entered.promise,
+					writing.then(() => {
+						throw new Error(`Snapshot completed without awaiting asynchronous ${stage}`);
+					}),
+				]);
+				expect(existsSync(`${path}.lock`)).toBe(true);
+				let appended = false;
+				appending = appendLiveTurns(root, [{ role: "user", content: "queued prompt" }]).then(() => {
+					appended = true;
+				});
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				expect(appended).toBe(false);
+				expect(readFileSync(path, "utf8")).not.toContain("queued prompt");
+			} finally {
+				release.resolve();
+				try {
+					await writing;
+					await appending;
+				} finally {
+					opening.mockRestore();
+					removing.mockRestore();
+				}
+			}
+			expect(readSessionRecords(path)).toEqual([
+				["user", "seed", "jsonl"],
+				["assistant", "new answer", "jsonl"],
+				["user", "queued prompt", "live"],
+			]);
+			expect(existsSync(`${path}.snapshot-tmp`)).toBe(false);
+			expect(existsSync(`${path}.lock`)).toBe(false);
+		},
+	);
+
+	test("recovers a cancelled snapshot owner without publishing its temporary output", async () => {
+		const root = makeRoot("cancelled-snapshot-owner");
+		await writeSourceSnapshot(root, ["User: seed"]);
+		const path = canonicalTranscriptPath(root, "claude-code");
+		const before = readFileSync(path, "utf8");
+		const moduleUrl = new URL("./transcript-jsonl.ts", import.meta.url).href;
+		const worker = join(root, "snapshot-worker.mjs");
+		writeFileSync(
+			worker,
+			`
+import { spyOn } from "bun:test";
+import * as fs from "node:fs/promises";
+import { writeCanonicalTranscriptSnapshot } from ${JSON.stringify(moduleUrl)};
+const open = fs.open;
+spyOn(fs, "open").mockImplementation(async (...args) => {
+  const handle = await open(...args);
+  if (args[0] === ${JSON.stringify(`${path}.snapshot-tmp`)}) {
+    spyOn(handle, "sync").mockImplementation(async () => {
+      console.log("snapshot-sync-paused");
+      await new Promise(() => {});
+    });
+  }
+  return handle;
+});
+setInterval(() => {}, 100);
+await writeCanonicalTranscriptSnapshot({
+  basePath: ${JSON.stringify(root)},
+  agentId: "default", harness: "claude-code", sessionKey: "session-1",
+  sourceFormat: "jsonl", sourcePath: ${JSON.stringify(join(root, "session-1.jsonl"))},
+  transcript: "User: seed\\nAssistant: cancelled answer",
+});
+`,
+		);
+		const child = Bun.spawn([process.execPath, worker], { stdout: "pipe", stderr: "pipe", timeout: 3000 });
+		const output = child.stdout.getReader();
+		try {
+			const ready = await output.read();
+			expect(new TextDecoder().decode(ready.value)).toContain("snapshot-sync-paused");
+			expect(existsSync(`${path}.lock`)).toBe(true);
+			expect(readFileSync(`${path}.snapshot-tmp`, "utf8")).toContain("cancelled answer");
+			expect(readFileSync(path, "utf8")).toBe(before);
+		} finally {
+			child.kill();
+			await child.exited;
+			output.releaseLock();
+		}
+		expect(await new Response(child.stderr).text()).toBe("");
+		expect(await writeSourceSnapshot(root, ["User: seed", "Assistant: recovered answer"])).toHaveLength(2);
+		expect(readSessionRecords(path)).toEqual([
+			["user", "seed", "jsonl"],
+			["assistant", "recovered answer", "jsonl"],
+		]);
+		expect(existsSync(`${path}.snapshot-tmp`)).toBe(false);
+		expect(existsSync(`${path}.lock`)).toBe(false);
 	});
 
 	test("keeps the project of a live turn that the source does not contain", async () => {
