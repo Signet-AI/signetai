@@ -38,7 +38,7 @@ Likewise, the prompt-submit hook uses the resolved `SIGNET_PROMPT_SUBMIT_TIMEOUT
 
 The `Stop` hook never delays, blocks, or continues a turn. It records the reply that ends each turn, which Claude Code passes as `last_assistant_message`. Claude Code runs it in the background, and [`signet hook stop`](/cli/integrations-security/#signet-hook) prints nothing.
 
-Because the hook runs in the background, a reply can be recorded after the next prompt. A successful SessionEnd import of the complete source transcript restores source order. `claude -p` stops unfinished async hooks on exit, so its last reply can be missing until source capture recovers it. Disabling SessionEnd removes that recovery path.
+Because the hook runs in the background, a reply can be recorded after the next prompt. A successful SessionEnd import of the complete source transcript restores source order in the canonical JSONL file. The `session_transcripts` row appends imported content after its live content and may retain both orders. `claude -p` stops unfinished async hooks on exit, so its last reply can be missing until source capture recovers it. Disabling SessionEnd removes that recovery path.
 
 `Stop` fires only for the main agent. The connector does not register `SubagentStop`, which also fires for subagents and for internal agents such as prompt suggestions and `/btw`, whose replies are not main-session turns.
 
