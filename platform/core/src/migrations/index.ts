@@ -173,6 +173,7 @@ import { up as dreamingEvidenceReviewCursor } from "./169-dreaming-evidence-revi
 import { up as dependencyHistoryCompactionState } from "./170-dependency-history-compaction-state";
 import { up as agentWakeAndMessageBoard } from "./171-agent-wake-and-message-board";
 import { up as dreamingPassPolicy } from "./172-dreaming-pass-policy";
+import { up as memoryArtifactNativePathIndex } from "./173-memory-artifact-native-path-index";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1585,6 +1586,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "dreaming_passes", column: "policy_source" },
 			],
 		},
+	},
+	{
+		version: 173,
+		name: "memory-artifact-native-path-index",
+		up: memoryArtifactNativePathIndex,
+		artifacts: { indexes: ["idx_memory_artifacts_native_paths"] },
 	},
 ];
 function checksum(m: Migration): string {

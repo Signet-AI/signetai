@@ -20,6 +20,7 @@ import {
 	dbOwnerSourceNativeMemoryIndex,
 	ownerStatement,
 } from "./db-owner-runtime";
+import type { DbOwnerStatement } from "./db-owner-protocol";
 import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "./episodic-sources";
 import { hasDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
@@ -876,34 +877,39 @@ async function resolveNativeSourceFailures(agentId: string, sourceKey: string, s
 	);
 }
 
+export function activeNativeArtifactPathsStatement(source: NativeMemorySource, agentId: string): DbOwnerStatement {
+	const rootPrefix = `${normalizedRoot(source.root)}/`;
+	const kinds = source.files.map((file) => file.kind);
+	const scope = `agent_id = ? AND harness = ? AND source_kind IN (${kinds.map(() => "?").join(", ")})`;
+	return ownerStatement(
+		`SELECT source_path FROM memory_artifacts
+		 WHERE ${scope} AND source_id = ? AND is_deleted = 0
+		 UNION ALL
+		 SELECT source_path FROM memory_artifacts
+		 WHERE ${scope} AND source_id IS NULL AND source_path >= ? AND source_path < ? AND is_deleted = 0`,
+		[
+			agentId,
+			source.harness,
+			...kinds,
+			source.sourceId ?? "",
+			agentId,
+			source.harness,
+			...kinds,
+			rootPrefix,
+			prefixUpperBound(rootPrefix),
+		],
+		"all",
+	);
+}
+
 async function activeNativeArtifactPaths(
 	source: NativeMemorySource,
 	agentId: string,
 	signal?: AbortSignal,
 ): Promise<string[]> {
-	const rootPrefix = `${normalizedRoot(source.root)}/`;
 	try {
 		const rows = await dbOwnerQuery<readonly { readonly source_path: string }[]>(
-			ownerStatement(
-				`SELECT source_path FROM memory_artifacts
-				 WHERE agent_id = ?
-				   AND harness = ?
-				   AND (
-					   source_id = ?
-					   OR (source_id IS NULL AND source_path >= ? AND source_path < ?)
-				   )
-				   AND source_kind IN (${source.files.map(() => "?").join(", ")})
-				   AND COALESCE(is_deleted, 0) = 0`,
-				[
-					agentId,
-					source.harness,
-					source.sourceId ?? "",
-					rootPrefix,
-					prefixUpperBound(rootPrefix),
-					...source.files.map((file) => file.kind),
-				],
-				"all",
-			),
+			activeNativeArtifactPathsStatement(source, agentId),
 			{ operation: "sources.active-artifact-paths", lane: "read", signal },
 		);
 		return rows.map((row) => row.source_path);
