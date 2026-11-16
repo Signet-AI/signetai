@@ -265,6 +265,53 @@ describe("transcript capture worker", () => {
 		expect(canonical).not.toContain('"source_format":"live"');
 	});
 
+	it("indexes the live prompts that the source capture keeps", async () => {
+		const sourcePath = join(dir, "kept-live.jsonl");
+		for (const userMessage of ["first question", "cancelled prompt", "second question"]) {
+			await appendCanonicalLiveTranscriptTurns({
+				basePath: dir,
+				agentId: "agent-a",
+				harness: "pi",
+				sessionKey: "kept-live",
+				project: "/repo",
+				userMessage,
+			});
+		}
+		writeFileSync(
+			sourcePath,
+			"User: first question\nAssistant: first answer\nUser: second question\nAssistant: second answer\n",
+			"utf8",
+		);
+
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "kept-live",
+			sessionId: "kept-live",
+			project: "/repo",
+			transcript: "",
+			rawTranscript: "",
+			transcriptPath: sourcePath,
+			capturedAt: "2026-06-20T10:01:00.000Z",
+			endedAt: "2026-06-20T10:01:00.000Z",
+		});
+		if (!id) throw new Error("expected source capture job");
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+
+		expect(await getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id)).toMatchObject({ status: "completed" });
+		const canonical = readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8");
+		expect(canonical).toContain('"content":"cancelled prompt"');
+		expect(canonical).toContain('"content":"second answer"');
+		const artifact = await getDbAccessor().withReadDbAsync(
+			(db) =>
+				db.prepare("SELECT content FROM memory_artifacts WHERE source_kind = 'transcript' LIMIT 1").get() as
+					| { content: string }
+					| undefined,
+		);
+		expect(artifact?.content).toContain("cancelled prompt");
+		expect(artifact?.content).toContain("second answer");
+	});
+
 	it("clears recoverable legacy payloads without deleting the job", async () => {
 		const sourcePath = join(dir, "legacy.jsonl");
 		writeFileSync(sourcePath, "User: recoverable\n", "utf8");

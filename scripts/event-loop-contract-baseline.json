@@ -5165,156 +5165,142 @@
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 284,
+      "line": 338,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 285,
+      "line": 339,
       "api": "statSync",
       "source": "const size = statSync(path).size;",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 310,
+      "line": 364,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return;",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 311,
+      "line": 365,
       "api": "statSync",
       "source": "const size = statSync(path).size;",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 334,
+      "line": 388,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 336,
+      "line": 390,
       "api": "appendFileSync",
       "source": "appendFileSync(",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 361,
+      "line": 415,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(join(path, \"owner.json\"), \"utf8\")) as { readonly pid?: unknown };",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 370,
+      "line": 424,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(join(path, \"owner.json\"), \"utf8\")) as { readonly token?: unknown };",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 390,
+      "line": 444,
       "api": "statSync",
       "source": "return now - statSync(path).mtimeMs > LOCK_DEAD_OWNER_STALE_MS;",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 401,
+      "line": 455,
       "api": "mkdirSync",
       "source": "mkdirSync(lockPath);",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 402,
+      "line": 456,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 415,
+      "line": 469,
       "api": "rmSync",
       "source": "rmSync(lockPath, { recursive: true, force: true });",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 425,
+      "line": 479,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(join(lockPath, \"owner.json\"), \"utf8\")) as { readonly token?: unknown };",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 430,
+      "line": 484,
       "api": "rmSync",
       "source": "rmSync(lockPath, { recursive: true, force: true });",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 434,
+      "line": 488,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 482,
+      "line": 536,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return null;",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 483,
+      "line": 537,
       "api": "statSync",
       "source": "const stat = statSync(path);",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 581,
+      "line": 635,
       "api": "existsSync",
       "source": "if (!existsSync(path)) {",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 654,
+      "line": 720,
       "api": "existsSync",
       "source": "if (!existsSync(path)) {",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 655,
+      "line": 721,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
-      "line": 672,
-      "api": "rmSync",
-      "source": "rmSync(tmpPath, { force: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
-      "line": 722,
-      "api": "rmSync",
-      "source": "rmSync(tmpPath, { force: true });",
       "category": "hot-path"
     },
     {
@@ -5326,35 +5312,42 @@
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 747,
-      "api": "renameSync",
-      "source": "renameSync(tmpPath, path);",
-      "category": "hot-path"
-    },
-    {
-      "path": "transcript-jsonl.ts",
-      "line": 754,
+      "line": 834,
       "api": "rmSync",
       "source": "rmSync(tmpPath, { force: true });",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 805,
+      "line": 843,
+      "api": "renameSync",
+      "source": "renameSync(tmpPath, path);",
+      "category": "hot-path"
+    },
+    {
+      "path": "transcript-jsonl.ts",
+      "line": 850,
+      "api": "rmSync",
+      "source": "rmSync(tmpPath, { force: true });",
+      "category": "hot-path"
+    },
+    {
+      "path": "transcript-jsonl.ts",
+      "line": 901,
       "api": "existsSync",
       "source": "if (replacements.size === 0 || !existsSync(jsonlPath)) return Promise.resolve(0);",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 889,
+      "line": 985,
       "api": "renameSync",
       "source": "renameSync(tmpPath, jsonlPath);",
       "category": "hot-path"
     },
     {
       "path": "transcript-jsonl.ts",
-      "line": 894,
+      "line": 990,
       "api": "rmSync",
       "source": "rmSync(tmpPath, { force: true });",
       "category": "hot-path"
