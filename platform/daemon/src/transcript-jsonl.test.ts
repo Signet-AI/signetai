@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writ
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import * as timers from "node:timers/promises";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
@@ -777,6 +778,36 @@ describe("backfill OOM regression (#587)", () => {
 			...live.map((turn) => turn.content),
 		]);
 		expect(checks).toBeLessThanOrEqual(source.length + live.length);
+	});
+
+	test("yields across unmatched source roles and non-live anchors", async () => {
+		const root = makeRoot("yield-source-anchors");
+		await appendLiveTurns(root, [{ role: "user", content: "match" }]);
+		await appendCanonicalTranscriptTurns({
+			basePath: root,
+			agentId: "default",
+			harness: "claude-code",
+			sessionKey: "session-1",
+			sourceFormat: "jsonl",
+			turns: [{ role: "user", content: "anchor" }],
+		});
+		const source = [
+			...Array.from({ length: 2_048 }, (_, index) => `Assistant: answer ${index}`),
+			"User: match",
+			"User: anchor",
+		];
+		const yields = spyOn(timers, "setImmediate");
+		try {
+			const records = await writeSourceSnapshot(root, source, true);
+			expect(records?.map((record) => record.content)).toEqual([
+				...Array.from({ length: 2_048 }, (_, index) => `answer ${index}`),
+				"match",
+				"anchor",
+			]);
+			expect(yields).toHaveBeenCalled();
+		} finally {
+			yields.mockRestore();
+		}
 	});
 
 	test("keeps the project of a live turn that the source does not contain", async () => {
