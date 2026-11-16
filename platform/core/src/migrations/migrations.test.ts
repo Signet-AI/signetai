@@ -415,7 +415,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(172);
+			expect(applied.version).toBe(173);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -2363,6 +2363,83 @@ describe("migration framework", () => {
 		]);
 		expect(() => db.exec("INSERT INTO dependency_history_compaction_state (id) VALUES (2)")).toThrow();
 		expect(() => db.exec("UPDATE dependency_history_compaction_state SET cursor_rowid = -1")).toThrow();
+	});
+
+	test("migration 173 indexes active artifact paths for the native path lookup only, on an upgraded database", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		const index = "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_memory_artifacts_native_paths'";
+		expect(db.query(index).get()).toEqual({ name: "idx_memory_artifacts_native_paths" });
+
+		db.exec("DROP INDEX idx_memory_artifacts_native_paths");
+		db.prepare("DELETE FROM schema_migrations WHERE version = 173").run();
+		const insert = db.prepare(
+			`INSERT INTO memory_artifacts (
+				agent_id, source_path, source_sha256, source_kind, session_id, session_token,
+				harness, captured_at, content, updated_at, source_id, is_deleted
+			) VALUES (?, ?, ?, 'source_obsidian_markdown', ?, ?, 'obsidian', 'now', 'body', 'now', ?, ?)`,
+		);
+		insert.run("default", "/vault/kept.md", "sha-kept", "s1", "t1", "vault", 0);
+		insert.run("default", "/vault/deleted.md", "sha-deleted", "s2", "t2", "vault", 1);
+		insert.run("default", "/vault/legacy.md", "sha-legacy", "s3", "t3", null, 0);
+		insert.run("other", "/vault/kept.md", "sha-other", "s4", "t4", "vault", 0);
+		expect(hasPendingMigrations(db)).toBe(true);
+		runMigrations(db);
+		runMigrations(db);
+
+		expect(db.query(index).get()).toEqual({ name: "idx_memory_artifacts_native_paths" });
+		expect(
+			db
+				.query(
+					"SELECT agent_id, source_path, source_id, is_deleted FROM memory_artifacts ORDER BY agent_id, source_path",
+				)
+				.all(),
+		).toEqual([
+			{ agent_id: "default", source_path: "/vault/deleted.md", source_id: "vault", is_deleted: 1 },
+			{ agent_id: "default", source_path: "/vault/kept.md", source_id: "vault", is_deleted: 0 },
+			{ agent_id: "default", source_path: "/vault/legacy.md", source_id: null, is_deleted: 0 },
+			{ agent_id: "other", source_path: "/vault/kept.md", source_id: "vault", is_deleted: 0 },
+		]);
+		const scope = "agent_id = 'default' AND harness = 'obsidian' AND source_kind = 'source_obsidian_markdown'";
+		const active = (): unknown =>
+			db
+				.query(
+					`SELECT source_path FROM memory_artifacts INDEXED BY idx_memory_artifacts_native_paths
+					 WHERE ${scope} AND is_deleted = 0
+					 ORDER BY source_path`,
+				)
+				.all();
+		expect(active()).toEqual([{ source_path: "/vault/kept.md" }, { source_path: "/vault/legacy.md" }]);
+		for (const where of [
+			scope,
+			`${scope} AND COALESCE(is_deleted, 0) = 0`,
+			"agent_id = 'default' AND source_id = 'vault' AND is_deleted = 0",
+			"is_deleted = 0",
+		]) {
+			expect(() =>
+				db
+					.query(`SELECT source_path FROM memory_artifacts INDEXED BY idx_memory_artifacts_native_paths WHERE ${where}`)
+					.all(),
+			).toThrow();
+		}
+		const column = db.query(
+			"SELECT \"notnull\" AS required FROM pragma_table_info('memory_artifacts') WHERE name = 'is_deleted'",
+		);
+		expect(column.get()).toEqual({ required: 1 });
+		const sibling = db
+			.query(
+				`EXPLAIN QUERY PLAN SELECT COUNT(*) AS n FROM memory_artifacts
+				 WHERE agent_id = 'default' AND source_id = 'vault' AND COALESCE(is_deleted, 0) = 0`,
+			)
+			.all() as ReadonlyArray<{ detail: string }>;
+		expect(sibling.map((row) => row.detail).join(" ")).not.toContain("idx_memory_artifacts_native_paths");
+
+		db.exec("UPDATE memory_artifacts SET is_deleted = 1 WHERE agent_id = 'default' AND source_path = '/vault/kept.md'");
+		expect(active()).toEqual([{ source_path: "/vault/legacy.md" }]);
+		db.exec(
+			"UPDATE memory_artifacts SET is_deleted = 0 WHERE agent_id = 'default' AND source_path = '/vault/deleted.md'",
+		);
+		expect(active()).toEqual([{ source_path: "/vault/deleted.md" }, { source_path: "/vault/legacy.md" }]);
 	});
 
 	test("migration 172 records the policy each Dreaming pass ran under", () => {

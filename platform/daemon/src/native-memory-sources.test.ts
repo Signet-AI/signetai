@@ -11,6 +11,7 @@ import { buildObsidianSourceChunks, resetObsidianSourceEmbeddingBackoff } from "
 import { indexExternalMemoryArtifact } from "./memory-lineage";
 import type { NativeMemoryBridgeOptions } from "./native-memory-sources";
 import {
+	activeNativeArtifactPathsStatement,
 	claudeCodeNativeMemorySource,
 	codexNativeMemorySource,
 	hermesNativeMemorySource,
@@ -782,6 +783,62 @@ describe("native memory sources", () => {
 			expect(indexed).toBe(true);
 		} finally {
 			await handle.close();
+		}
+	});
+
+	it("lists a source's active artifact paths by seeking its own entries in an index of active rows", async () => {
+		const codexRoot = join(dir, ".codex");
+		const codexFile = join(codexRoot, "memories", "memory_summary.md");
+		mkdirSync(join(codexRoot, "memories"), { recursive: true });
+		const codexGone = join(codexRoot, "memories", "rollout_summaries", "2026-04-22-gone.md");
+		mkdirSync(join(codexRoot, "memories", "rollout_summaries"), { recursive: true });
+		writeFileSync(codexFile, "Codex remembered the covering index.\n");
+		writeFileSync(codexGone, "thread_id: gone\n\nCodex remembered a rollout that was removed.\n");
+		const vault = join(dir, "vault");
+		const note = join(vault, "note.md");
+		const noteGone = join(vault, "gone.md");
+		mkdirSync(vault, { recursive: true });
+		writeFileSync(note, "# Note\n\nThe vault remembered the covering index.\n");
+		writeFileSync(noteGone, "# Gone\n\nThe vault remembered a note that was removed.\n");
+		const sources = [
+			{ source: codexNativeMemorySource(codexRoot), file: codexFile, gone: codexGone },
+			{ source: obsidianNativeMemorySource(vault), file: note, gone: noteGone },
+		];
+		for (const { source, file, gone } of sources) {
+			expect(await indexNativeMemoryFile(source, file, "agent-plan")).toBe(true);
+			expect(await indexNativeMemoryFile(source, gone, "agent-plan")).toBe(true);
+			await removeNativeMemoryFile(source, gone, "agent-plan");
+		}
+		const deleted = await dbOwnerQuery<readonly { readonly source_path: string }[]>(
+			ownerStatement(
+				"SELECT source_path FROM memory_artifacts WHERE agent_id = ? AND is_deleted = 1 ORDER BY source_path",
+				["agent-plan"],
+				"all",
+			),
+			{ operation: "test.active-artifact-paths.deleted", lane: "read" },
+		);
+		expect(deleted).toEqual([{ source_path: codexGone }, { source_path: noteGone }]);
+
+		for (const analyzed of [false, true]) {
+			if (analyzed) await getDbAccessor().withWriteTxAsync((db) => db.exec("ANALYZE"));
+			for (const { source, file } of sources) {
+				const statement = activeNativeArtifactPathsStatement(source, "agent-plan");
+				const rows = await dbOwnerQuery<readonly { readonly source_path: string }[]>(statement, {
+					operation: "test.active-artifact-paths.rows",
+					lane: "read",
+				});
+				expect(rows).toEqual([{ source_path: file }]);
+				const plan = await dbOwnerQuery<readonly { readonly detail: string }[]>(
+					ownerStatement(`EXPLAIN QUERY PLAN ${statement.sql}`, statement.params, "all"),
+					{ operation: "test.active-artifact-paths.plan", lane: "read" },
+				);
+				const reads = plan.map((row) => row.detail).filter((detail) => detail.includes("memory_artifacts"));
+				expect(reads.length).toBeGreaterThan(0);
+				for (const detail of reads) {
+					expect(detail).toContain("USING COVERING INDEX idx_memory_artifacts_native_paths");
+					expect(detail).toContain("source_id=?");
+				}
+			}
 		}
 	});
 
