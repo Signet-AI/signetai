@@ -913,14 +913,16 @@ export function appendCanonicalTranscriptTurns(
 	if (turns.length === 0) return Promise.resolve(null);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	return withTranscriptFileLock(path, async () => {
-		if (hasTrailingTurns(readTailRecords(path, tailScanBytes(turns)), input, turns)) return path;
-		const entries = await loadSessionSeqIndex(path);
-		let seq = lastSessionSeq(entries, input);
-		const next = turns
-			.map((turn) => makeRecord(input, turn, ++seq))
-			.filter((record): record is CanonicalTranscriptRecord => record !== null);
-		if (next.length === 0) return null;
-		await appendIndexedRecords(path, entries, next);
+		if (!hasTrailingTurns(readTailRecords(path, tailScanBytes(turns)), input, turns)) {
+			const entries = await loadSessionSeqIndex(path);
+			let seq = lastSessionSeq(entries, input);
+			const next = turns
+				.map((turn) => makeRecord(input, turn, ++seq))
+				.filter((record): record is CanonicalTranscriptRecord => record !== null);
+			await appendIndexedRecords(path, entries, next);
+		}
+		await syncPath(path);
+		await syncPath(dirname(path));
 		return path;
 	});
 }

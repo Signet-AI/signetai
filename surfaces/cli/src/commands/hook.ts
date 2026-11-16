@@ -647,7 +647,12 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const deadline = now() + STOP_TIMEOUT_MS;
 			const request = { method: "POST", headers: legacyHookHeaders(), body: JSON.stringify(body) };
 			for (let attempt = 1; ; attempt++) {
-				const res = await deps.fetchDaemonResult("/api/hooks/stop", { ...request, timeout: deadline - now() });
+				const remaining = deadline - now();
+				if (remaining <= 0) {
+					process.stderr.write(formatHookFailure("stop", { reason: "timeout" }));
+					return;
+				}
+				const res = await deps.fetchDaemonResult("/api/hooks/stop", { ...request, timeout: remaining });
 				if (res.ok) return;
 				const busy = res.reason === "http" && res.status === 503;
 				if (busy && attempt < STOP_MAX_ATTEMPTS && deadline - now() > STOP_RETRY_SLEEP_MS) {

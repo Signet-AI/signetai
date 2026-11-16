@@ -993,6 +993,7 @@ describe("hook stop", () => {
 		replies: StopResult | StopResult[] = { ok: true, data: { recorded: true } },
 		attemptMs = 0,
 		sleepAdvanceMs?: number,
+		now?: () => number,
 	) {
 		const queue = Array.isArray(replies) ? [...replies] : [replies];
 		let clock = 1_000_000;
@@ -1024,7 +1025,7 @@ describe("hook stop", () => {
 					return (queue.length > 1 ? queue.shift() : queue[0]) as never;
 				}) as never,
 				readStaticIdentity: () => null,
-				now: () => clock,
+				now: now ?? (() => clock),
 				sleep: async (ms: number) => {
 					sleeps.push(ms);
 					clock += sleepAdvanceMs ?? ms;
@@ -1146,6 +1147,20 @@ describe("hook stop", () => {
 
 		expect(run.calls).toHaveLength(1);
 		expect(run.sleeps).toEqual([]);
+	});
+
+	test("checks the same positive budget it passes to each stop request", async () => {
+		const ticks = [0, 0, 0, 9_999, 10_000];
+		const run = await runStop(
+			payload,
+			{ ok: false, reason: "http", status: 503 },
+			0,
+			undefined,
+			() => ticks.shift() ?? 10_000,
+		);
+		expect(run.calls).toHaveLength(1);
+		expect(run.calls.every((call) => (call.timeout ?? 0) > 0)).toBe(true);
+		expect(run.stderr.join("")).toContain("timed out");
 	});
 
 	test("stops without another attempt when the clock passes the deadline during the retry sleep", async () => {

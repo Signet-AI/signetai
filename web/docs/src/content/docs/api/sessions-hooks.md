@@ -170,17 +170,23 @@ to the session's live transcript: the canonical JSONL transcript first, then the
 transcript's project. `agentId` follows the same scope and session-binding
 rules as the other hooks.
 
-**Response**: `{ "recorded": true }` when the reply was appended. A retried
-call with the same reply records it once. The daemon skips the write and
-returns `recorded: false` with `skipped: true` when the other runtime path owns
-the session (`duplicateRuntimePath`, `claimedBy`) or the session has ended
+**Response**: `{ "recorded": true }` once the reply's evidence has been synced
+and its stored transcript updated. Consecutive retries are deduplicated within
+a bounded transcript tail. A retry after a new turn, or after other sessions
+write beyond that tail, can append duplicate evidence; this is not an
+exactly-once API. The daemon skips the write and returns `recorded: false` with
+`skipped: true` when a claimed session has a different, missing, or invalid
+runtime path (`duplicateRuntimePath`, `claimedBy`) or the session has ended
 (`sessionEnded`), and with `bypassed: true` when the session is bypassed.
 
 **Errors**
 
 - `400`: missing `harness` or `sessionKey`, or a non-string `lastAssistantMessage`.
-- `403`: an agent scope or session-binding violation.
-- `413`: `lastAssistantMessage` longer than 262,144 characters.
+- `403`: an agent scope, project scope, or session-binding violation. A
+  project-restricted token must match both `cwd` and the stored transcript's
+  project. An omitted `cwd` uses the token's project.
+- `413`: `lastAssistantMessage` longer than 262,144 characters, or an encoded
+  request body larger than 2 MiB. Admission precedes body buffering.
 - `503`: more than 8 stop calls in flight (`Retry-After: 1`), or database write
   pressure (`retryable: true` and a `Retry-After` header).
 
