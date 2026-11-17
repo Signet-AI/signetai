@@ -183,16 +183,7 @@ export interface RecallResponse {
 	readonly sources?: Readonly<Record<string, string>>;
 }
 
-export interface RememberResult {
-	readonly id: string;
-	readonly type: string;
-	readonly tags: string | null;
-	readonly pinned: boolean;
-	readonly importance: number;
-	readonly content: string;
-	readonly embedded?: boolean;
-	readonly deduped?: boolean;
-}
+export type { RememberResult } from "@signet/core";
 
 export interface MemoryListResponse {
 	readonly memories: readonly MemoryRecord[];

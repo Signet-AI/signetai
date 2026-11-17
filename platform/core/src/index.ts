@@ -294,6 +294,12 @@ export {
 	type HybridSearchOptions,
 } from "./search";
 export {
+	parseRememberResponse,
+	type RememberResult,
+	type SingleRememberResult,
+	type ChunkedRememberResult,
+} from "./remember";
+export {
 	applyRecallScoreThreshold,
 	buildRecallRequestBody,
 	buildRememberRequestBody,

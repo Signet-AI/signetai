@@ -178,18 +178,20 @@ export async function rememberContent(
 	content: string,
 	options: {
 		critical?: boolean;
+		project?: string;
 		tags?: string[];
 		agentId?: string;
 		reviewAfter?: string;
 	} = {},
 ): Promise<void> {
-	const { critical = false, tags = [], agentId, reviewAfter } = options;
+	const { critical = false, tags = [], agentId, reviewAfter, project } = options;
 
 	await postDaemon(
 		daemonUrl,
 		"/api/hooks/remember",
 		buildRememberRequestBody(content, {
 			harness: HARNESS,
+			project,
 			pinned: critical,
 			tags,
 			agentId,
@@ -480,7 +482,7 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			const { content, critical, tags } = parseRememberArgs(args);
 
 			try {
-				await rememberContent(daemonUrl, content, { critical, tags, agentId });
+				await rememberContent(daemonUrl, content, { critical, tags, agentId, project: currentSessionRef(ctx).project });
 				const pinned = critical ? " (pinned)" : "";
 				ctx.ui.notify(`Memory saved${pinned}: "${content.substring(0, 50)}..."`, "success");
 			} catch (error) {
@@ -836,7 +838,7 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				}),
 			),
 		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			const healthy = await checkDaemonHealth(daemonUrl);
 			if (!healthy) {
 				return {
@@ -850,7 +852,7 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 				const critical = Boolean(params.critical);
 				const tags = Array.isArray(params.tags) ? params.tags.filter((t): t is string => typeof t === "string") : [];
 
-				await rememberContent(daemonUrl, content, { critical, tags, agentId });
+				await rememberContent(daemonUrl, content, { critical, tags, agentId, project: currentSessionRef(ctx).project });
 
 				const pinned = critical ? " (pinned/critical)" : "";
 				return {

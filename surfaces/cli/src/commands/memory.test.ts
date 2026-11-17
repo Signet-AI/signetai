@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Command } from "commander";
 import { registerMemoryCommands } from "./memory";
 
@@ -9,6 +9,39 @@ afterEach(() => {
 });
 
 describe("registerMemoryCommands remember", () => {
+	test.each([
+		{ chunked: true, chunk_count: 2, ids: ["chunk-one", "chunk-two"], group_id: "group-one", deduped: false },
+		{ chunked: true, chunk_count: 2, ids: ["chunk-one", "chunk-two"], group_id: "group-one", deduped: true },
+		{ id: "existing-memory", deduped: true },
+	])("prints saved IDs and preserves dedupe without inventing embedding status: %j", async (data) => {
+		const output: string[] = [];
+		const stderr = spyOn(process.stderr, "write").mockImplementation((chunk) => {
+			output.push(String(chunk));
+			return true;
+		});
+		console.log = (line?: unknown): void => {
+			output.push(String(line ?? ""));
+		};
+		try {
+			const program = new Command();
+			registerMemoryCommands(program, {
+				ensureDaemonForSecrets: async () => true,
+				secretApiCall: async () => ({
+					ok: true,
+					data,
+				}),
+			});
+			await program.parseAsync(["node", "test", "remember", "Long content"]);
+			for (const id of data.ids ?? [data.id]) expect(output.join("\n")).toContain(id);
+			if (data.group_id) expect(output.join("\n")).toContain(data.group_id);
+			expect(output.join("\n")).not.toContain("unknown");
+			expect(output.join("\n")).not.toContain("no embedding");
+			if (data.deduped) expect(output.join("\n")).toContain("Already saved");
+		} finally {
+			stderr.mockRestore();
+		}
+	});
+
 	test("omits prospective recall hints when not provided", async () => {
 		let capturedBody: unknown;
 		const program = new Command();
@@ -63,6 +96,23 @@ describe("registerMemoryCommands remember", () => {
 			who: "user",
 			hints: ["What did Avery say about Signet recall?", "Can Signet recall be useful from the terminal?"],
 		});
+	});
+
+	test("forwards an explicit project without inferring one from content", async () => {
+		const bodies: unknown[] = [];
+		const program = new Command();
+		registerMemoryCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, _path, body) => {
+				bodies.push(body);
+				return { ok: true, data: { id: "mem-project" } };
+			},
+		});
+		program.exitOverride();
+		await program.parseAsync(["node", "test", "remember", "Work on project beta"]);
+		await program.parseAsync(["node", "test", "remember", "Work on project beta", "--project", "alpha"]);
+		expect(bodies[0]).not.toHaveProperty("project");
+		expect(bodies[1]).toMatchObject({ project: "alpha" });
 	});
 
 	test("forwards explicit temporal memory fields", async () => {

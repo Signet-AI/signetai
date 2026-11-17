@@ -421,6 +421,63 @@ interface HandlerMap {
 }
 
 describe("SignetPiExtension", () => {
+	it("saves explicit command and tool memories under the session project, not daemon cwd", async () => {
+		const bodies: unknown[] = [];
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				if (new URL(req.url).pathname === "/health") return new Response(null, { status: 200 });
+				bodies.push(await req.json());
+				return Response.json({ id: "memory" });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+		const commands = new Map<string, import("./src/types").PiCommandHandler>();
+		const tools = new Map<string, import("./src/types").PiToolDefinition>();
+		const ui = {
+			notify(): void {},
+			setStatus(): void {},
+			theme: {
+				fg(_color: string, text: string): string {
+					return text;
+				},
+			},
+		};
+		SignetPiExtension({
+			ui,
+			on(): void {},
+			registerFlag(): void {},
+			getFlag(): unknown {
+				return undefined;
+			},
+			registerCommand(name, definition): void {
+				commands.set(name, definition);
+			},
+			registerTool(definition): void {
+				tools.set(definition.name, definition);
+			},
+		});
+		const ctx = {
+			cwd: "/work/project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-project", cwd: "/work/session-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-project",
+			},
+			ui,
+		};
+		const command = commands.get("remember");
+		const tool = tools.get("signet_remember");
+		if (!command || !tool) throw new Error("remember surfaces missing");
+		await command.handler("project beta decisions", ctx);
+		await tool.execute("call", { content: "project beta decisions" }, new AbortController().signal, () => {}, ctx);
+		expect(bodies).toHaveLength(2);
+		for (const body of bodies) expect(body).toMatchObject({ project: "/work/project" });
+	});
+
 	afterEach(() => {
 		for (const server of servers.splice(0)) {
 			server.stop();
