@@ -3449,7 +3449,7 @@
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 353,
+      "line": 354,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
