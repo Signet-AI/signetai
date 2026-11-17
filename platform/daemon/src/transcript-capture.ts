@@ -106,11 +106,4 @@ export function formatLivePromptTranscript(userMessage: string, lastAssistantMes
 		.join("\n");
 }
 
-export function appendLivePromptTranscript(previous: string | undefined, liveTranscript: string): string {
-	const current = liveTranscript.trim();
-	if (!previous || previous.trim().length === 0) return current;
-
-	const stored = previous.trimEnd();
-	if (stored.endsWith(current)) return stored;
-	return `${stored}\n${current}`;
-}
+export { appendLivePromptTranscript } from "./session-transcripts";

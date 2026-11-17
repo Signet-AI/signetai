@@ -105,6 +105,11 @@ Construction failure, malformed protocol input, owner exit, deadline abandonment
 - `close()` sends shutdown and is idempotent.
 
 No callback receives a database handle. No synchronous SQLite symbol is exported by the client or the recall seam. The owner module is the sanctioned synchronous site.
+
+## Session transcript writes
+
+Async transcript upserts and live appends submit `session_transcript_write` on the foreground write lane. The payload carries the resolved agent, exact session key, transcript text, project, and an optional `append` flag; it never carries a callback or an abort signal. The owner calls the canonical `writeSessionTranscriptRow` inside one transaction, including the existing-content read and trailing-text deduplication for appends. The result is `written`, `skipped`, or `conflict`. Cancellation stays on the client, and an unavailable owner never falls back to a daemon-side write.
+
 ## FTS and Dreaming maintenance
 
 `db-owner-maintenance.ts` owns bounded FTS repair and backfill. Startup creates only the canonical FTS schema and triggers, then submits keyset-paginated chunks to the maintenance lane. Each chunk uses a durable `db_owner_maintenance_checkpoints` row and one atomic batch that advances the cursor and inserts the matching anti-join rows. The checkpoint is the resume contract after an owner crash. Tokenizer rebuilds recreate the schema in the owner before chunking; they never perform a full synchronous backfill on the daemon event loop. A backfill invocation also has a total wall-clock budget, total estimated work-unit budget, and cooperative `AbortSignal`; when any budget is exhausted it returns `running` with the durable checkpoint for a later invocation.
