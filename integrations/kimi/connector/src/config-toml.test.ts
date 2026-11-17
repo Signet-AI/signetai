@@ -71,6 +71,12 @@ function readMcpJson(): Record<string, unknown> {
 }
 
 describe("KimiConnector.install — config.toml hook registration", () => {
+	test("rejects unreadable existing hook configuration without rewriting it", async () => {
+		writeFileSync(configPath, "[broken");
+		await expect(connector().install(tempHome)).rejects.toThrow("Cannot read existing Signet hook launcher");
+		expect(readFileSync(configPath, "utf-8")).toBe("[broken");
+		expect(existsSync(mcpPath)).toBe(false);
+	});
 	test("creates config.toml with three [[hooks]] entries when file does not exist", async () => {
 		await connector().install(tempHome);
 
