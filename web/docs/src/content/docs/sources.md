@@ -293,14 +293,18 @@ They descend only into directories that can contain configured matches and do no
 follow file or directory symlinks. Each worker page examines at most 64 pending
 paths, including directories, independently of how many files match. Empty,
 incomplete pages preserve the remaining traversal frontier for restart. Directory
-listings advance by at most 4,096 entries per page, yielding after a 100 ms work
-slice between filesystem operations. Checkpoints store directory resume markers
+listings deliver at most 4,096 entries per page, yielding after a 100 ms work
+slice between iterator operations. Checkpoints store directory resume markers
 instead of every pending child path. Matching names are sorted in worker-local
 runs and merged in deterministic name order; normal paging enumerates a directory
 once. After a worker restart, its listing cache is rebuilt in bounded pages and
 resumes after the last emitted name without replaying completed files. Legacy
 path-string checkpoints remain supported. A fixed 30-second deadline still stops
 stalled filesystem I/O.
+
+Bun 1.4.2 buffers an entire directory on the first iterator read. The delivery
+budget does not bound that underlying enumeration, so a slow, wide directory
+can still hit the hard deadline before returning its first checkpoint.
 
 On macOS, a protected source path denied with `EACCES` is reported as a
 permission issue instead of a transient filesystem failure. The source health
