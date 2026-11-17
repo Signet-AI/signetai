@@ -7,6 +7,11 @@ import {
 	BENCH_CREDENTIAL_ENV,
 	attachBenchCredential,
 	buildMemoryBenchArgs,
+	captureOpenRouterSnapshot,
+	openRouterApiBaseUrl,
+	openRouterSnapshotModels,
+	openRouterSnapshotNeeded,
+	writeOpenRouterSnapshot,
 	benchUsesSubscription,
 	benchDreamingCodemode,
 	benchDreamingConcurrency,
@@ -356,6 +361,112 @@ describe("MemoryBench launcher", () => {
 		} finally {
 			if (previousRunId !== undefined) process.env.SIGNET_BENCH_RUN_ID = previousRunId;
 			else delete process.env.SIGNET_BENCH_RUN_ID;
+		}
+	});
+
+	test("captures an OpenRouter price snapshot without leaking key material", async () => {
+		const requests: { url: string; authorization: string | null }[] = [];
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch: async (request) => {
+				const url = new URL(request.url);
+				requests.push({ url: url.pathname, authorization: request.headers.get("authorization") });
+				if (url.pathname.endsWith("/key")) {
+					return Response.json({
+						data: {
+							label: "bench-key",
+							hash: "sk-or-v1-secret",
+							usage: 12.5,
+							usage_daily: 3.25,
+							limit: 100,
+							limit_remaining: 87.5,
+							rate_limits: { requests: 1 },
+						},
+					});
+				}
+				return Response.json({
+					data: {
+						id: "deepseek/deepseek-v4.1-flash-1017",
+						endpoints: [
+							{
+								provider_name: "DeepInfra",
+								tag: "fp8",
+								quantization: "fp8",
+								context_length: 163840,
+								pricing: { prompt: "0.0000002", completion: "0.0000008" },
+								supported_parameters: ["temperature"],
+							},
+							42,
+						],
+					},
+				});
+			},
+		});
+		const root = await workspace();
+		try {
+			const baseUrl = `http://127.0.0.1:${server.port}/api/v1`;
+			expect(openRouterApiBaseUrl({ SIGNET_BENCH_OPENROUTER_BASE_URL: baseUrl })).toBe(baseUrl);
+			expect(openRouterApiBaseUrl({})).toBe("https://openrouter.ai/api/v1");
+			expect(openRouterSnapshotModels({}, "zai-coding-cn")).toEqual([]);
+			expect(
+				openRouterSnapshotModels(
+					{ SIGNET_BENCH_ANSWERING_MODEL: "openrouter:a/b", SIGNET_BENCH_JUDGE: "openrouter:c/d" },
+					"zai-coding-cn",
+				),
+			).toEqual(["a/b", "c/d"]);
+			expect(openRouterSnapshotNeeded({}, "zai-coding-cn")).toBe(false);
+			expect(openRouterSnapshotNeeded({}, "openrouter")).toBe(true);
+
+			const snapshot = await captureOpenRouterSnapshot(baseUrl, "or-test-key", ["a/b"]);
+			const startPath = writeOpenRouterSnapshot(root, "start", snapshot);
+			const endPath = writeOpenRouterSnapshot(root, "end", snapshot);
+
+			expect(requests.every((request) => request.authorization === "Bearer or-test-key")).toBe(true);
+			const start = JSON.parse(await readFile(startPath, "utf8")) as Record<string, unknown>;
+			expect(start.timestamp).toBeString();
+			expect(start.key).toEqual({ usage: 12.5, usage_daily: 3.25, limit: 100, limit_remaining: 87.5 });
+			expect(start.endpoints).toEqual({
+				"a/b": [
+					{
+						provider_name: "DeepInfra",
+						tag: "fp8",
+						quantization: "fp8",
+						context_length: 163840,
+						pricing: { prompt: "0.0000002", completion: "0.0000008" },
+					},
+				],
+			});
+			const startText = await readFile(startPath, "utf8");
+			expect(startText).not.toContain("bench-key");
+			expect(startText).not.toContain("sk-or-v1-secret");
+			expect(startText).not.toContain("or-test-key");
+			expect(await readFile(endPath, "utf8")).toEqual(startText);
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	test("records snapshot fetch failures as errors instead of aborting", async () => {
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch: () => new Response("nope", { status: 500 }),
+		});
+		const root = await workspace();
+		try {
+			const snapshot = await captureOpenRouterSnapshot(`http://127.0.0.1:${server.port}/api/v1`, "or-test-key", [
+				"a/b",
+			]);
+			const path = writeOpenRouterSnapshot(root, "end", snapshot);
+			const written = JSON.parse(await readFile(path, "utf8")) as {
+				key: { error?: string };
+				endpoints: Record<string, { error?: string }>;
+			};
+			expect(written.key.error).toContain("failed with 500");
+			expect(written.endpoints["a/b"]?.error).toContain("failed with 500");
+		} finally {
+			server.stop(true);
 		}
 	});
 

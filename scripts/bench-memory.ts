@@ -592,6 +592,110 @@ export function buildMemoryBenchArgs(
 	return [command, ...defaults, ...args];
 }
 
+export interface OpenRouterEndpointSnapshot {
+	readonly provider_name?: string;
+	readonly tag?: string;
+	readonly quantization?: string;
+	readonly context_length?: number;
+	readonly pricing?: Record<string, unknown>;
+}
+
+export interface OpenRouterSnapshot {
+	readonly timestamp: string;
+	readonly key: Record<string, number> | { readonly error: string };
+	readonly endpoints: Record<string, readonly OpenRouterEndpointSnapshot[] | { readonly error: string }>;
+}
+
+export function openRouterApiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
+	return env.SIGNET_BENCH_OPENROUTER_BASE_URL?.trim() || openRouterBaseUrl;
+}
+
+export function openRouterSnapshotModels(env: NodeJS.ProcessEnv, providerFamily: string): string[] {
+	const models = new Set<string>();
+	if (providerFamily === "openrouter") models.add(resolveBenchModel(env).model);
+	for (const name of ["SIGNET_BENCH_ANSWERING_MODEL", "SIGNET_BENCH_JUDGE"]) {
+		const raw = env[name]?.trim();
+		if (raw?.startsWith("openrouter:")) models.add(raw.slice("openrouter:".length));
+	}
+	return [...models];
+}
+
+export function openRouterSnapshotNeeded(env: NodeJS.ProcessEnv, providerFamily: string): boolean {
+	return providerFamily === "openrouter" || openRouterSnapshotModels(env, providerFamily).length > 0;
+}
+
+function snapshotErrorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+async function fetchOpenRouterKeyStatus(baseUrl: string, apiKey: string): Promise<Record<string, number>> {
+	const response = await fetch(`${baseUrl}/key`, { headers: { authorization: `Bearer ${apiKey}` } });
+	if (!response.ok) throw new Error(`GET ${baseUrl}/key failed with ${response.status} ${response.statusText}`);
+	const body = (await response.json()) as { data?: unknown };
+	if (typeof body.data !== "object" || body.data === null) {
+		throw new Error("OpenRouter key status response had no data object");
+	}
+	const numeric: Record<string, number> = {};
+	for (const [name, value] of Object.entries(body.data)) {
+		if (typeof value === "number" && Number.isFinite(value)) numeric[name] = value;
+	}
+	return numeric;
+}
+
+async function fetchOpenRouterEndpoints(
+	baseUrl: string,
+	apiKey: string,
+	modelId: string,
+): Promise<OpenRouterEndpointSnapshot[]> {
+	const response = await fetch(`${baseUrl}/models/${encodeURIComponent(modelId)}/endpoints`, {
+		headers: { authorization: `Bearer ${apiKey}` },
+	});
+	if (!response.ok) throw new Error(`GET ${baseUrl}/models/${modelId}/endpoints failed with ${response.status}`);
+	const body = (await response.json()) as { data?: { endpoints?: unknown } };
+	const endpoints = body.data?.endpoints;
+	if (!Array.isArray(endpoints)) throw new Error(`OpenRouter endpoints response for ${modelId} had no endpoint list`);
+	const snapshots: OpenRouterEndpointSnapshot[] = [];
+	for (const entry of endpoints) {
+		if (typeof entry !== "object" || entry === null) continue;
+		const endpoint = entry as Record<string, unknown>;
+		snapshots.push({
+			provider_name: typeof endpoint.provider_name === "string" ? endpoint.provider_name : undefined,
+			tag: typeof endpoint.tag === "string" ? endpoint.tag : undefined,
+			quantization: typeof endpoint.quantization === "string" ? endpoint.quantization : undefined,
+			context_length: typeof endpoint.context_length === "number" ? endpoint.context_length : undefined,
+			pricing: typeof endpoint.pricing === "object" && endpoint.pricing !== null ? endpoint.pricing : undefined,
+		});
+	}
+	return snapshots;
+}
+
+export async function captureOpenRouterSnapshot(
+	baseUrl: string,
+	apiKey: string,
+	modelIds: readonly string[],
+): Promise<OpenRouterSnapshot> {
+	const key = await fetchOpenRouterKeyStatus(baseUrl, apiKey).catch((error: unknown) => {
+		console.warn(`OpenRouter key status snapshot failed: ${snapshotErrorMessage(error)}`);
+		return { error: snapshotErrorMessage(error) };
+	});
+	const endpoints: OpenRouterSnapshot["endpoints"] = {};
+	for (const modelId of modelIds) {
+		endpoints[modelId] = await fetchOpenRouterEndpoints(baseUrl, apiKey, modelId).catch((error: unknown) => {
+			console.warn(`OpenRouter endpoint snapshot for ${modelId} failed: ${snapshotErrorMessage(error)}`);
+			return { error: snapshotErrorMessage(error) };
+		});
+	}
+	return { timestamp: new Date().toISOString(), key, endpoints };
+}
+
+export function writeOpenRouterSnapshot(root: string, stage: "start" | "end", snapshot: OpenRouterSnapshot): string {
+	const dir = join(root, "openrouter");
+	mkdirSync(dir, { recursive: true });
+	const path = join(dir, `${stage}.json`);
+	writeFileSync(path, `${JSON.stringify(snapshot, null, 2)}\n`);
+	return path;
+}
+
 function defaultedDevSample(raw: string[], full: boolean): boolean {
 	const command = getMemoryBenchCommand(raw);
 	const args = command === raw[0] ? raw.slice(1) : raw;
@@ -645,6 +749,8 @@ async function main(): Promise<void> {
 		SIGNET_BENCH_PROJECT: process.env.SIGNET_BENCH_PROJECT || "memorybench",
 	};
 	const setupArgs = buildSetupArgs(agentsDir, port, model);
+	const snapshotModels = openRouterSnapshotModels(process.env, model.providerFamily);
+	const snapshotNeeded = openRouterSnapshotNeeded(process.env, model.providerFamily);
 
 	console.log(`MemoryBench workspace: ${root}`);
 	console.log(`Isolated Signet daemon: ${baseUrl} (dashboard at ${baseUrl}/)`);
@@ -662,6 +768,14 @@ async function main(): Promise<void> {
 	console.log(`Workspace setup: bun ${setupArgs.join(" ")}`);
 	console.log(`MemoryBench command: bun src/index.ts ${memorybenchArgs.join(" ")}`);
 
+	if (snapshotNeeded) {
+		const snapshot = await captureOpenRouterSnapshot(
+			openRouterApiBaseUrl(),
+			resolveBenchApiKey(process.env, "openrouter"),
+			snapshotModels,
+		);
+		console.log(`OpenRouter snapshot: ${writeOpenRouterSnapshot(root, "start", snapshot)}`);
+	}
 	if (parsed.dryRun) {
 		if (!parsed.keepWorkspace) await rm(root, { recursive: true, force: true });
 		return;
@@ -714,6 +828,14 @@ async function main(): Promise<void> {
 		if (daemon && daemon.exitCode === null) {
 			daemon.kill("SIGTERM");
 			await new Promise((resolveKill) => daemon?.once("exit", resolveKill));
+		}
+		if (snapshotNeeded) {
+			const snapshot = await captureOpenRouterSnapshot(
+				openRouterApiBaseUrl(),
+				resolveBenchApiKey(process.env, "openrouter"),
+				snapshotModels,
+			);
+			console.log(`OpenRouter snapshot: ${writeOpenRouterSnapshot(root, "end", snapshot)}`);
 		}
 		if (parsed.keepWorkspace) {
 			console.log(`Kept MemoryBench workspace: ${root}`);
