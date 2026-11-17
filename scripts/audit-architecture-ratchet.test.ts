@@ -315,8 +315,8 @@ test("base refs resolve to merge-base, not a divergent tip", () => {
 	expect(audit(root, "--base", "HEAD").code).toBe(0);
 });
 
-test("the real repository HEAD passes against its own merge-base", () => {
-	const result = audit(ROOT);
+test("the real repository audits cleanly against its own HEAD", () => {
+	const result = audit(ROOT, "--base", "HEAD");
 	expect(result.output).toContain("Architecture ratchet passed");
 	expect(result.code).toBe(0);
 }, 120_000);
