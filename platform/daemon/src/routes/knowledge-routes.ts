@@ -24,6 +24,7 @@ import {
 	listEntityGroups,
 	listKnowledgeEntities,
 	resolveNamedEntity,
+	MAX_CONSTELLATION_ATTRIBUTES,
 } from "../knowledge-graph";
 import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
 import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
@@ -367,7 +368,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					updated_at: string;
 				}>;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:352" },
+			{ siteToken: "routes/knowledge-routes.ts:353" },
 		);
 		return c.json({ items: rows, count: rows.length });
 	});
@@ -399,6 +400,11 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				limit: parseNavigationLimit(c.req.query("limit"), 150, 1000),
 				maxAspectsPerEntity: parseNavigationLimit(c.req.query("max_aspects_per_entity"), 6, 25),
 				maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 250),
+				maxAttributes: parseNavigationLimit(
+					c.req.query("max_attributes"),
+					MAX_CONSTELLATION_ATTRIBUTES,
+					MAX_CONSTELLATION_ATTRIBUTES,
+				),
 				dependencyLimit: parseNavigationLimit(c.req.query("dependency_limit"), 500, 2000),
 				assertionLimit: parseNavigationLimit(c.req.query("assertion_limit"), 250, 1000),
 				backlogProbe,
@@ -538,7 +544,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:534" },
+			{ siteToken: "routes/knowledge-routes.ts:540" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -627,7 +633,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: rows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:551" },
+			{ siteToken: "routes/knowledge-routes.ts:557" },
 		);
 	});
 
@@ -652,7 +658,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, agentId: scopedAgent.agentId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:653" },
+			{ siteToken: "routes/knowledge-routes.ts:659" },
 		);
 		return c.json(result);
 	});
