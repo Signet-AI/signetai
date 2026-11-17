@@ -541,7 +541,19 @@ function isContinuationCommand(command: string, args: string[]): boolean {
 	);
 }
 
-function buildMemoryBenchArgs(raw: string[], full: boolean, profile: ParsedArgs["profile"], reset: boolean): string[] {
+function selectedBenchmark(args: string[]): string {
+	for (let i = 0; i < args.length; i++) {
+		if (args[i] === "-b" || args[i] === "--benchmark") return args[i + 1] ?? "longmemeval";
+	}
+	return "longmemeval";
+}
+
+export function buildMemoryBenchArgs(
+	raw: string[],
+	full: boolean,
+	profile: ParsedArgs["profile"],
+	reset: boolean,
+): string[] {
 	const command = getMemoryBenchCommand(raw);
 	const args = command === raw[0] ? raw.slice(1) : raw;
 
@@ -549,7 +561,7 @@ function buildMemoryBenchArgs(raw: string[], full: boolean, profile: ParsedArgs[
 
 	const runId =
 		process.env.SIGNET_BENCH_RUN_ID ||
-		`signet-${profile}-longmemeval-${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z")}`;
+		`signet-${profile}-${selectedBenchmark(args)}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z")}`;
 
 	const provider =
 		profile === "supermemory-parity"

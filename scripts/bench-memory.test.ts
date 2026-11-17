@@ -6,6 +6,7 @@ import { parse as parseYaml } from "yaml";
 import {
 	BENCH_CREDENTIAL_ENV,
 	attachBenchCredential,
+	buildMemoryBenchArgs,
 	benchUsesSubscription,
 	benchDreamingCodemode,
 	benchDreamingConcurrency,
@@ -336,6 +337,26 @@ describe("MemoryBench launcher", () => {
 		const mismatch = pinnedBunMismatch("bun@1.4.2", "1.3.8", "/home/u/node_modules/bun/bin/bun.exe");
 		expect(mismatch).toContain("pinned Bun 1.4.2");
 		expect(mismatch).toContain("Bun 1.3.8 at /home/u/node_modules/bun/bin/bun.exe");
+	});
+
+	test("names the default run id after the selected benchmark", () => {
+		const previousRunId = process.env.SIGNET_BENCH_RUN_ID;
+		delete process.env.SIGNET_BENCH_RUN_ID;
+		try {
+			const shortFlag = buildMemoryBenchArgs(["run", "-b", "locomo"], false, "dreaming", true);
+			expect(shortFlag[shortFlag.indexOf("-r") + 1]).toContain("-locomo-");
+			expect(shortFlag.join(" ")).toContain("-b locomo");
+
+			const defaultBenchmark = buildMemoryBenchArgs(["run"], false, "dreaming", true);
+			expect(defaultBenchmark[defaultBenchmark.indexOf("-r") + 1]).toContain("-longmemeval-");
+			expect(defaultBenchmark.join(" ")).toContain("-b longmemeval");
+
+			const longFlag = buildMemoryBenchArgs(["run", "--benchmark", "beam-1m"], false, "dreaming", true);
+			expect(longFlag[longFlag.indexOf("-r") + 1]).toContain("-beam-1m-");
+		} finally {
+			if (previousRunId !== undefined) process.env.SIGNET_BENCH_RUN_ID = previousRunId;
+			else delete process.env.SIGNET_BENCH_RUN_ID;
+		}
 	});
 
 	test("loads the bench env file without overriding values already set", async () => {
