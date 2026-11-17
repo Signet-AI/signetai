@@ -6,6 +6,7 @@ import { readSessionFileSnapshot } from "@signet/pi-extension-base";
 import { PI_LIFECYCLE_CONFIG } from "./src/lifecycle.js";
 import {
 	HIDDEN_CLOCK_CUSTOM_TYPE,
+	HIDDEN_CONTEXT_CUSTOM_TYPE,
 	HIDDEN_RECALL_CUSTOM_TYPE,
 	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
 } from "./src/types.js";
@@ -48,6 +49,11 @@ describe("readSessionFileSnapshot", () => {
 					type: "custom_message",
 					customType: HIDDEN_CLOCK_CUSTOM_TYPE,
 					content: "Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)",
+				}),
+				JSON.stringify({
+					type: "custom_message",
+					customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
+					content: "Persisted context is not user evidence",
 				}),
 				JSON.stringify({
 					type: "message",

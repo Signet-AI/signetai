@@ -16,6 +16,7 @@ export const PROMPT_SUBMIT_TIMEOUT_ENV = "SIGNET_PROMPT_SUBMIT_TIMEOUT";
 export const HIDDEN_RECALL_CUSTOM_TYPE = "signet-pi-hidden-recall";
 export const HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE = "signet-pi-session-context";
 export const HIDDEN_CLOCK_CUSTOM_TYPE = "signet-pi-clock-context";
+export const HIDDEN_CONTEXT_CUSTOM_TYPE = "signet-pi-context";
 
 export interface PreCompactionResult {
 	readonly guidelines?: string;
@@ -35,7 +36,15 @@ export interface PiBeforeAgentStartEvent {
 	readonly systemPrompt: string;
 }
 
+export interface PiCustomMessage {
+	readonly customType: string;
+	readonly content: string;
+	readonly display: boolean;
+	readonly details?: unknown;
+}
+
 export interface PiBeforeAgentStartResult {
+	readonly message?: PiCustomMessage;
 	readonly systemPrompt?: string;
 }
 
@@ -130,6 +139,10 @@ export interface PiFlagDefinition {
 
 export interface PiExtensionApi {
 	readonly ui: PiUI;
+	sendMessage(
+		message: PiCustomMessage,
+		options?: { readonly triggerTurn?: boolean; readonly deliverAs?: "steer" | "followUp" | "nextTurn" },
+	): void;
 	sendUserMessage?(content: string, options?: { readonly deliverAs?: "steer" | "followUp" }): unknown;
 	on(event: "session_start", handler: (event: unknown, ctx: PiExtensionContext) => unknown): void;
 	on(event: "session_switch", handler: (event: PiSessionSwitchEvent, ctx: PiExtensionContext) => unknown): void;
