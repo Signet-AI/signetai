@@ -36,7 +36,9 @@ function readHookLauncher(path: string): ResolvedCommand | undefined {
 			const launcher = parseHookLauncher(hook.command);
 			if (launcher) return launcher;
 		}
-	} catch {}
+	} catch {
+		throw new Error(`Cannot read existing Signet hook launcher from ${path}`);
+	}
 	return undefined;
 }
 

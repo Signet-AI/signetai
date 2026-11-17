@@ -65,6 +65,9 @@ already broken container-only or bare launcher.
 MCP registration uses the matching stdio entry for a JavaScript launcher, or
 sets `SIGNET_MCP_STDIO_WORKER=1` for a native Signet launcher. Recognized existing
 MCP arguments and noncredential environment values are retained together.
+Malformed existing Codex or Kimi configuration is rejected rather than rewritten
+using a discovered launcher. A corrupt generated Codex MCP cache produces a
+warning and its launcher is rediscovered; the cache is not user configuration.
 
 Connectors that persist a daemon key (Codex, Kimi, pi, Oh My Pi, Muse Code,
 ForgeCode, OpenCode, and Hermes Agent) probe the target daemon's `/api/mode` once

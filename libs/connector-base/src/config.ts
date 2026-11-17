@@ -23,9 +23,5 @@ export function readManagedTrimmedEnv(name: string): string | undefined {
 
 export function isExistingFile(path: string | undefined): path is string {
 	if (!path) return false;
-	try {
-		return statSync(path).isFile();
-	} catch {
-		return false;
-	}
+	return statSync(path, { throwIfNoEntry: false })?.isFile() ?? false;
 }

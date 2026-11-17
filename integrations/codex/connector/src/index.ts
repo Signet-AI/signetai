@@ -857,18 +857,20 @@ function readExistingMcp(path: string): ResolvedCommand | undefined {
 		const config = parseToml(readFileSync(path, "utf-8"));
 		return isJsonObject(config.mcp_servers) ? readMcpLauncher(config.mcp_servers.signet) : undefined;
 	} catch {
-		return undefined;
+		throw new Error(`Cannot read existing Signet MCP launcher from ${path}`);
 	}
 }
 
-function readPluginMcp(home: string): ResolvedCommand | undefined {
+function readPluginMcp(home: string, warnings: string[]): ResolvedCommand | undefined {
 	const path = join(home, ".tmp", "signet-plugin-marketplace", "plugins", "signet", ".mcp.json");
+	if (!existsSync(path)) return undefined;
 	try {
 		const config: unknown = JSON.parse(readFileSync(path, "utf-8"));
 		return isJsonObject(config) && isJsonObject(config.mcpServers)
 			? readMcpLauncher(config.mcpServers.signet)
 			: undefined;
 	} catch {
+		warnings.push(`Could not read existing Signet MCP launcher from ${path}; rediscovering the generated launcher.`);
 		return undefined;
 	}
 }
@@ -1478,7 +1480,7 @@ export class CodexConnector extends BaseConnector {
 		const configPath = this.getConfigPath();
 		const runtime = this.resolveCodexDesktopNode();
 		const existingHooks = readHooksFile(this.getHooksJsonPath());
-		const existingMcp = readExistingMcp(configPath) ?? readPluginMcp(codexHome);
+		const existingMcp = readExistingMcp(configPath) ?? readPluginMcp(codexHome, warnings);
 		const existingCli =
 			existingHookLauncher(existingHooks) ??
 			existingHookLauncher(

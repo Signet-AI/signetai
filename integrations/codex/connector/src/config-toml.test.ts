@@ -1675,6 +1675,24 @@ describe("CodexConnector.install — launcher and auth", () => {
 		}
 	});
 
+	test("rejects unreadable existing MCP configuration without rewriting it", async () => {
+		writeFileSync(configPath, "[broken");
+		await expect(connector().install(tempHome)).rejects.toThrow("Cannot read existing Signet MCP launcher");
+		expect(readFileSync(configPath, "utf-8")).toBe("[broken");
+	});
+
+	test("reports a corrupt generated MCP cache and rediscovers its launcher", async () => {
+		const path = join(codexDir, ".tmp", "signet-plugin-marketplace", "plugins", "signet", ".mcp.json");
+		mkdirSync(join(path, ".."), { recursive: true });
+		writeFileSync(path, "{broken");
+		const result = await connector().install(tempHome);
+		expect(result.success).toBe(true);
+		expect(result.warnings?.join("\n")).toContain("Could not read existing Signet MCP launcher");
+		expect(Bun.TOML.parse(readFileSync(configPath, "utf-8"))).toMatchObject({
+			mcp_servers: { signet: { command: "signet-mcp" } },
+		});
+	});
+
 	test("keeps the host launcher instead of the container executable", async () => {
 		process.execPath = "/app/bin/signet";
 		Reflect.deleteProperty(process.env, "SIGNET_CLI_PATH");
