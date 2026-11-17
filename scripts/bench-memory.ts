@@ -203,11 +203,22 @@ const BENCH_ACCOUNT = "memorybench";
 const ZAI_CODING_ENDPOINT = "https://open.bigmodel.cn/api/coding/paas/v4";
 
 export function resolveBenchModel(env: NodeJS.ProcessEnv = process.env): BenchModelConfig {
+	const providerFamily = env.SIGNET_BENCH_DREAMING_PROVIDER_FAMILY?.trim() || "zai-coding-cn";
+	const openrouter = providerFamily === "openrouter";
 	return {
-		model: env.SIGNET_BENCH_DREAMING_MODEL?.trim() || "glm-5.3-flash",
-		endpoint: env.SIGNET_BENCH_DREAMING_ENDPOINT?.trim() || ZAI_CODING_ENDPOINT,
-		providerFamily: env.SIGNET_BENCH_DREAMING_PROVIDER_FAMILY?.trim() || "zai-coding-cn",
+		model:
+			env.SIGNET_BENCH_DREAMING_MODEL?.trim() || (openrouter ? "deepseek/deepseek-v4.1-flash-1017" : "glm-5.3-flash"),
+		endpoint: env.SIGNET_BENCH_DREAMING_ENDPOINT?.trim() || (openrouter ? openRouterBaseUrl : ZAI_CODING_ENDPOINT),
+		providerFamily,
 	};
+}
+
+export function benchApiKeyEnv(providerFamily: string): string {
+	return providerFamily === "openrouter" ? "OPENROUTER_API_KEY" : "ZAI_API_KEY";
+}
+
+export function resolveBenchApiKey(env: NodeJS.ProcessEnv, providerFamily: string): string {
+	return env[BENCH_CREDENTIAL_ENV]?.trim() || env[benchApiKeyEnv(providerFamily)]?.trim() || "";
 }
 
 export function buildSetupArgs(agentsDir: string, port: number, model: BenchModelConfig): string[] {
@@ -392,6 +403,38 @@ export function setBenchDreamingThinking(agentsDir: string, thinking: Record<str
 	writeFileSync(path, stringifyYaml(config));
 }
 
+export function benchDreamingOpenRouter(env: NodeJS.ProcessEnv = process.env): Record<string, unknown> | undefined {
+	const raw = env.SIGNET_BENCH_DREAMING_OPENROUTER?.trim();
+	if (raw === undefined || raw === "") return undefined;
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		throw new Error("SIGNET_BENCH_DREAMING_OPENROUTER must be a JSON object");
+	}
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+		throw new Error("SIGNET_BENCH_DREAMING_OPENROUTER must be a JSON object");
+	}
+	for (const key of Object.keys(parsed)) {
+		if (key !== "reasoning" && key !== "provider") {
+			throw new Error(`SIGNET_BENCH_DREAMING_OPENROUTER has an unknown key: ${key}`);
+		}
+	}
+	return parsed as Record<string, unknown>;
+}
+
+export function setBenchDreamingOpenRouter(agentsDir: string, openrouter: Record<string, unknown> | undefined): void {
+	if (openrouter === undefined) return;
+	const path = join(agentsDir, "agent.yaml");
+	const config = parseYaml(readFileSync(path, "utf8")) as Record<string, unknown>;
+	const inference = config.inference as Record<string, unknown> | undefined;
+	const targets = inference?.targets as Record<string, Record<string, unknown>> | undefined;
+	const target = inference?.defaultPolicy === "background" ? targets?.background : undefined;
+	if (!target) throw new Error("Signet setup did not write the expected background inference target");
+	target.openrouter = { ...(target.openrouter as Record<string, unknown> | undefined), ...openrouter };
+	writeFileSync(path, stringifyYaml(config));
+}
+
 export function benchDreamingPolicies(env: NodeJS.ProcessEnv = process.env): Record<string, string> | undefined {
 	const file = env.SIGNET_BENCH_DREAMING_POLICIES_FILE?.trim();
 	if (file === undefined || file === "") return undefined;
@@ -566,10 +609,10 @@ async function main(): Promise<void> {
 	const agentsDir = join(root, "agents");
 	mkdirSync(home, { recursive: true });
 	const model = resolveBenchModel();
-	const apiKey = process.env.SIGNET_BENCH_DREAMING_API_KEY?.trim() || process.env.ZAI_API_KEY?.trim() || "";
+	const apiKey = resolveBenchApiKey(process.env, model.providerFamily);
 	if (!apiKey && !isLocalEndpoint(model.endpoint) && !benchUsesSubscription(model.providerFamily)) {
 		throw new Error(
-			`The benchmark daemon needs an API key for ${model.endpoint}; set ZAI_API_KEY in memorybench/.env or SIGNET_BENCH_DREAMING_API_KEY`,
+			`The benchmark daemon needs an API key for ${model.endpoint}; set ${BENCH_CREDENTIAL_ENV} or ${benchApiKeyEnv(model.providerFamily)} in memorybench/.env`,
 		);
 	}
 
@@ -637,6 +680,7 @@ async function main(): Promise<void> {
 		setBenchDreamingMaxOutputTokens(agentsDir, benchDreamingMaxOutputTokens());
 		setBenchDreamingTimeout(agentsDir, benchDreamingTimeoutMs());
 		setBenchDreamingThinking(agentsDir, benchDreamingThinking());
+		setBenchDreamingOpenRouter(agentsDir, benchDreamingOpenRouter());
 		setBenchDreamingContextWindow(agentsDir, benchDreamingContextWindow());
 		setBenchDreamingPolicies(agentsDir, benchDreamingPolicies());
 		mkdirSync(join(agentsDir, ".daemon", "logs"), { recursive: true });
