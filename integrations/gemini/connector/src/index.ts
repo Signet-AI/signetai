@@ -20,6 +20,7 @@ import {
 	isJsonObject,
 	isSignetGeneratedFile,
 	resolveSignetMcpCommand,
+	readMcpLauncher,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
 import { expandHome, hasValidIdentity, loadIdentityMode } from "@signet/core";
@@ -200,31 +201,14 @@ export class GeminiConnector extends BaseConnector {
 
 	private registerMcpServer(geminiHome: string): string | null {
 		const settingsPath = join(geminiHome, "settings.json");
-		const mcp = resolveSignetMcpCommand();
-		const signet = { command: mcp.command, args: [...mcp.args], ...(mcp.env ? { env: { ...mcp.env } } : {}) };
-
-		if (existsSync(settingsPath)) {
-			const settings = readGeminiSettings(settingsPath);
-			if (!settings) {
-				return settingsPath;
-			}
-
-			const existingMcp = isJsonObject(settings.mcpServers) ? (settings.mcpServers as JsonObject) : {};
-			settings.mcpServers = {
-				...existingMcp,
-				signet,
-			};
-
-			atomicWriteJson(settingsPath, settings);
-			return null;
-		}
-
-		const settings: JsonObject = {
-			mcpServers: {
-				signet,
-			},
+		const settings = existsSync(settingsPath) ? readGeminiSettings(settingsPath) : {};
+		if (!settings) return settingsPath;
+		const servers = isJsonObject(settings.mcpServers) ? settings.mcpServers : {};
+		const mcp = resolveSignetMcpCommand(readMcpLauncher(servers.signet));
+		settings.mcpServers = {
+			...servers,
+			signet: { command: mcp.command, args: [...mcp.args], ...(mcp.env ? { env: { ...mcp.env } } : {}) },
 		};
-
 		mkdirSync(geminiHome, { recursive: true });
 		atomicWriteJson(settingsPath, settings);
 		return null;

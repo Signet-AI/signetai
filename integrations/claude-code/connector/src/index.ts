@@ -10,6 +10,14 @@ import {
 	isJsonObject,
 	isSignetGeneratedFile,
 	resolveSignetMcpCommand,
+	resolveSignetCliCommand,
+	parseHookLauncher,
+	isSignetCliLauncher,
+	readMcpLauncher,
+	renderCommand,
+	mcpFromCli,
+	cliFromMcp,
+	type ResolvedCommand,
 } from "@signet/connector-base";
 import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
 
@@ -33,9 +41,6 @@ export interface SessionContext {
 
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
 
-const SIGNET_HOOK_COMMAND =
-	/^(?:("[^"]+"|'[^']+'|[^\s"';&|<>`$()]+) )?("[^"]+"|'[^']+'|[^\s"';&|<>`$()]+) hook (session-start|user-prompt-submit|notifications|pre-compaction|session-end|wake|stop) -H claude-code(?:\s|$)/;
-
 function readClaudeSettings(path: string): Record<string, unknown> {
 	if (!existsSync(path)) return {};
 	let parsed: unknown;
@@ -55,15 +60,23 @@ function readClaudeSettings(path: string): Record<string, unknown> {
 function signetHookName(hook: unknown): string | undefined {
 	const command = isJsonObject(hook) ? hook.command : undefined;
 	if (typeof command !== "string") return undefined;
-	const match = SIGNET_HOOK_COMMAND.exec(command);
-	if (!match) return undefined;
-	const executable = match[2]?.replace(/^(['"])(.*)\1$/, "$2") ?? "";
-	if (!/(?:^|[\\/])signet(?:\.js)?$/.test(executable)) return undefined;
-	const runtime = match[1]?.replace(/^(['"])(.*)\1$/, "$2");
-	if (runtime !== undefined && (!/(?:^|[\\/])(?:node|bun)(?:\.exe)?$/.test(runtime) || !executable.endsWith(".js"))) {
+	const match =
+		/ hook (session-start|user-prompt-submit|notifications|pre-compaction|session-end|wake|stop) -H claude-code(?:\s|$)/.exec(
+			command,
+		);
+	if (!match || !isSignetCliLauncher(parseHookLauncher(command))) return undefined;
+	return match[1];
+}
+
+function readClaudeMcpSettings(): Record<string, unknown> | undefined {
+	const path = join(homedir(), ".claude.json");
+	if (!existsSync(path)) return {};
+	try {
+		const config: unknown = JSON.parse(readFileSync(path, "utf-8"));
+		return isJsonObject(config) ? config : undefined;
+	} catch {
 		return undefined;
 	}
-	return match[3];
 }
 
 function innerHooks(group: unknown): unknown[] | undefined {
@@ -208,7 +221,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 		if (strippedAgentsPath !== null) {
 			filesWritten.push(strippedAgentsPath);
 		}
-		this.configureHooks(settingsPath, settings);
+		this.configureHooks(settingsPath, settings, readClaudeMcpSettings());
 		filesWritten.push(settingsPath);
 		const staleClaude = join(homedir(), ".claude", "CLAUDE.md");
 		try {
@@ -302,7 +315,11 @@ export class ClaudeCodeConnector extends BaseConnector {
 
 		return { success: dispatched, memoriesExtracted: 0 };
 	}
-	private configureHooks(settingsPath: string, settings: Record<string, unknown>): void {
+	private configureHooks(
+		settingsPath: string,
+		settings: Record<string, unknown>,
+		mcpConfig: Record<string, unknown> | undefined,
+	): void {
 		mkdirSync(join(homedir(), ".claude"), { recursive: true });
 
 		const hooksConfig = this.config.hooks || {
@@ -312,14 +329,15 @@ export class ClaudeCodeConnector extends BaseConnector {
 			sessionEnd: true,
 			stop: true,
 		};
-		let signetCmd = "signet";
-		if (process.platform === "win32") {
-			const cliEntry = process.argv[1] || "";
-			const signetJs = join(cliEntry, "..", "..", "bin", "signet.js");
-			if (existsSync(signetJs)) {
-				signetCmd = `"${process.execPath}" "${signetJs}"`;
-			}
-		}
+		const existing = isJsonObject(settings.hooks)
+			? Object.values(settings.hooks)
+					.flatMap((groups) => (Array.isArray(groups) ? groups.flatMap((group) => innerHooks(group) ?? []) : []))
+					.find((hook) => signetHookName(hook) !== undefined)
+			: undefined;
+		const launcher =
+			isJsonObject(existing) && typeof existing.command === "string" ? parseHookLauncher(existing.command) : undefined;
+		const servers = isJsonObject(mcpConfig?.mcpServers) ? mcpConfig.mcpServers : {};
+		const signetCmd = renderCommand(resolveSignetCliCommand(launcher ?? cliFromMcp(readMcpLauncher(servers.signet))));
 		const pwdExpr = process.platform === "win32" ? "%CD%" : "$(pwd)";
 
 		const hooks: Record<string, unknown[]> = {};
@@ -416,23 +434,13 @@ export class ClaudeCodeConnector extends BaseConnector {
 		settings.hooks = nonEmpty(merged);
 
 		atomicWriteJson(settingsPath, settings);
-		this.registerMcpServer();
+		this.registerMcpServer(mcpConfig, launcher);
 	}
-	private registerMcpServer(): void {
+	private registerMcpServer(config: Record<string, unknown> | undefined, launcher?: ResolvedCommand): void {
+		if (!config) return;
 		const claudeJsonPath = join(homedir(), ".claude.json");
-
-		let config: Record<string, unknown> = {};
-		if (existsSync(claudeJsonPath)) {
-			try {
-				config = JSON.parse(readFileSync(claudeJsonPath, "utf-8"));
-			} catch {
-				return;
-			}
-		}
-
-		const mcp = resolveSignetMcpCommand();
-
-		const existingMcp = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
+		const existingMcp = isJsonObject(config.mcpServers) ? config.mcpServers : {};
+		const mcp = resolveSignetMcpCommand(readMcpLauncher(existingMcp.signet) ?? mcpFromCli(launcher));
 		config.mcpServers = {
 			...existingMcp,
 			signet: {

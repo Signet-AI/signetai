@@ -1,5 +1,6 @@
 import { spawnSyncHidden as spawnSync } from "@signet/core";
 import { createHash } from "node:crypto";
+import { parse as parseToml } from "smol-toml";
 import {
 	existsSync,
 	mkdirSync,
@@ -12,7 +13,7 @@ import {
 	type Dirent,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
@@ -20,7 +21,15 @@ import {
 	atomicWriteJson,
 	readTrimmedEnv,
 	resolveRemoteDaemonUrl,
-	resolveSignetApiKey,
+	resolveInstallApiKey,
+	type ResolvedCommand,
+	isJsonObject,
+	parseHookLauncher,
+	isSignetCliLauncher,
+	mcpFromCli,
+	cliFromMcp,
+	quoteCommandArg,
+	readMcpLauncher,
 	resolveSignetCliCommand,
 	resolveSignetMcpCommand,
 	writeConfigText,
@@ -76,19 +85,6 @@ interface NativePluginCommandResult {
 	readonly filesWritten: readonly string[];
 	readonly warning?: string;
 }
-function resolveSignetEntry(): string | null {
-	const wrapperDir = readTrimmedEnv("SIGNET_WRAPPER_DIR") ?? readTrimmedEnv("SIGNET_DIR");
-	const candidates = [
-		wrapperDir ? join(wrapperDir, "bin", "signet.js") : null,
-		join(dirname(process.execPath), "..", "bin", "signet.js"),
-		process.argv[1],
-	];
-	for (const entry of candidates) {
-		if (entry && basename(entry) === "signet.js" && existsSync(entry)) return entry;
-	}
-	return null;
-}
-
 function isExistingFile(path: string): boolean {
 	try {
 		return statSync(path).isFile();
@@ -97,47 +93,14 @@ function isExistingFile(path: string): boolean {
 	}
 }
 
-function isScriptRuntime(path: string): boolean {
-	if (!isExistingFile(path)) return false;
-	return /^(?:node|bun)(?:\.exe)?$/i.test(basename(path));
+function resolveSignetArgs(runtime: string | null = null, existing?: ResolvedCommand): string[] {
+	const launcher = resolveSignetCliCommand(existing, runtime);
+	return [launcher.command, ...launcher.args];
 }
 
-function isNativeSignetBinary(path: string): boolean {
-	if (!isExistingFile(path)) return false;
-	return /^(?:signet|signet\.exe)$/i.test(basename(path));
-}
-
-function resolveSignetNativeBinary(): string | null {
-	const wrapperDir = readTrimmedEnv("SIGNET_WRAPPER_DIR");
-	const signetDir = readTrimmedEnv("SIGNET_DIR");
-	const binaryName = process.platform === "win32" ? "signet.exe" : "signet";
-	const roots = [...new Set([wrapperDir, signetDir].filter((root): root is string => Boolean(root)))];
-	const candidates = [
-		readTrimmedEnv("SIGNET_CLI_PATH"),
-		process.execPath,
-		...roots.flatMap((root) => [join(root, "native", binaryName), join(root, "bin", binaryName)]),
-	];
-	for (const candidate of candidates) {
-		if (candidate && isNativeSignetBinary(candidate)) return candidate;
-	}
-	return null;
-}
-
-function resolveSignetArgs(runtime: string | null = null): string[] {
-	const explicitCli = readTrimmedEnv("SIGNET_CLI_PATH");
-	if (explicitCli && isExistingFile(explicitCli)) return [explicitCli];
-	const entry = resolveSignetEntry();
-	const scriptRuntime = runtime ?? (isScriptRuntime(process.execPath) ? process.execPath : null);
-	if (scriptRuntime && entry) return [scriptRuntime, entry];
-	const nativeBinary = resolveSignetNativeBinary();
-	if (nativeBinary) return [nativeBinary];
-	const resolved = resolveSignetCliCommand();
-	return [resolved.command, ...resolved.args];
-}
-function resolveSignetMcp(runtime: string | null = null): SignetMcpConfig {
+function resolveSignetMcp(runtime: string | null = null, existing?: ResolvedCommand, apiKey?: string): SignetMcpConfig {
 	const remoteDaemonUrl = resolveRemoteDaemonUrl();
 	if (remoteDaemonUrl) {
-		const apiKey = readAuthTokenEnv();
 		return {
 			url: `${remoteDaemonUrl}/mcp`,
 			startupTimeoutSec: 10,
@@ -145,15 +108,7 @@ function resolveSignetMcp(runtime: string | null = null): SignetMcpConfig {
 			...(apiKey ? { httpHeaders: { Authorization: `Bearer ${apiKey}` } } : {}),
 		};
 	}
-	const entry = resolveSignetEntry();
-	const mcpEntry = entry ? join(dirname(entry), "..", "dist", "mcp-stdio.js") : null;
-	const scriptRuntime = runtime ?? (isScriptRuntime(process.execPath) ? process.execPath : null);
-	if (scriptRuntime && mcpEntry && existsSync(mcpEntry)) return { command: scriptRuntime, args: [mcpEntry] };
-	const nativeBinary = resolveSignetNativeBinary();
-	if (nativeBinary) {
-		return { command: nativeBinary, args: [], env: { SIGNET_MCP_STDIO_WORKER: "1" } };
-	}
-	return resolveSignetMcpCommand();
+	return resolveSignetMcpCommand(existing, runtime);
 }
 
 const CODEX_RUNTIME_SCAN_DEPTH = 8;
@@ -422,8 +377,9 @@ function codexPluginBundleFiles(
 	mcp: SignetMcpConfig,
 	remoteDaemonUrl: string | null,
 	windowsHookCommand: string | null,
+	apiKey?: string,
 ): CodexPluginBundleFile[] {
-	const hookFile = buildHooksFile([...signetArgs], remoteDaemonUrl, windowsHookCommand);
+	const hookFile = buildHooksFile([...signetArgs], remoteDaemonUrl, windowsHookCommand, process.platform, apiKey);
 	const mcpServer =
 		"url" in mcp
 			? {
@@ -555,6 +511,7 @@ export function writeCodexPluginBundle(input: {
 	readonly mcp?: SignetMcpConfig;
 	readonly remoteDaemonUrl?: string | null;
 	readonly windowsHookCommand?: string | null;
+	readonly apiKey?: string;
 }): CodexPluginBundleResult {
 	const marketplaceRoot = join(input.codexHome, ".tmp", "signet-plugin-marketplace");
 	const pluginRoot = join(marketplaceRoot, "plugins", CODEX_PLUGIN_NAME);
@@ -563,13 +520,14 @@ export function writeCodexPluginBundle(input: {
 	const remoteDaemonUrl = input.remoteDaemonUrl ?? resolveRemoteDaemonUrl();
 	const windowsHookCommand =
 		input.windowsHookCommand === undefined
-			? writeWindowsHookWrapper(input.codexHome, signetArgs, remoteDaemonUrl)
+			? writeWindowsHookWrapper(input.codexHome, signetArgs, remoteDaemonUrl, input.apiKey)
 			: input.windowsHookCommand;
 	for (const file of codexPluginBundleFiles(
 		signetArgs,
 		input.mcp ?? resolveSignetMcp(),
 		remoteDaemonUrl,
 		windowsHookCommand,
+		input.apiKey,
 	)) {
 		const path = join(marketplaceRoot, file.relativePath);
 		mkdirSync(join(path, ".."), { recursive: true });
@@ -630,20 +588,6 @@ function shellQuote(value: string): string {
 	return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
-function shellCommandArg(value: string, platform: NodeJS.Platform = process.platform): string {
-	if (/^[A-Za-z0-9_./\\:@+=,-]+$/.test(value)) return value;
-	if (platform === "win32") {
-		const escaped = value.replace(/[%^&|<>!"]/g, (character) => {
-			if (character === "%") return "%%";
-			if (character === "!") return "^!";
-			if (character === '"') return '^"';
-			return `^${character}`;
-		});
-		return `"${escaped}"`;
-	}
-	return shellQuote(value);
-}
-
 function cmdEnvQuote(value: string): string {
 	return value.replace(/[%^"&|<>!]/g, (character) => {
 		if (character === "%") return "%%";
@@ -699,16 +643,12 @@ function codexCommandInvocation(
 	return { command, args: [...args], env: environment };
 }
 
-function readAuthTokenEnv(): string | undefined {
-	return resolveSignetApiKey();
-}
-
 function withRemoteDaemonEnv(
 	command: string,
 	remoteDaemonUrl: string | null,
 	platform: NodeJS.Platform = process.platform,
+	apiKey?: string,
 ): string {
-	const apiKey = readAuthTokenEnv();
 	if (!remoteDaemonUrl && !apiKey) return command;
 	if (platform === "win32") {
 		const vars = [
@@ -728,10 +668,9 @@ function writeWindowsHookWrapper(
 	codexHome: string,
 	signetArgs: readonly string[],
 	remoteDaemonUrl: string | null,
+	apiKey?: string,
 ): string | null {
 	if (process.platform !== "win32") return null;
-
-	const apiKey = readAuthTokenEnv();
 	const wrapperRoot = join(codexHome, ".tmp", "signet-plugin-marketplace", "runtime");
 	const identity = JSON.stringify({ signetArgs, remoteDaemonUrl });
 	const digest = createHash("sha256").update(identity).digest("hex").slice(0, 16);
@@ -764,23 +703,30 @@ export function buildHooksFile(
 	remoteDaemonUrl: string | null = resolveRemoteDaemonUrl(),
 	windowsHookCommand: string | null = null,
 	platform: NodeJS.Platform = process.platform,
+	apiKey?: string,
 ): HooksFile {
 	const cmd = (subcommand: string, secs: number, codexJson = true, extraArgs: readonly string[] = []): MatcherGroup => {
 		const hookArgs = ["hook", subcommand, "-H", "codex", ...extraArgs, ...(codexJson ? ["--codex-json"] : [])];
 		const args = [...signetArgs, ...hookArgs];
 		const command = withRemoteDaemonEnv(
-			args.map((arg) => shellCommandArg(arg, platform)).join(" "),
+			args.map((arg) => quoteCommandArg(arg, platform)).join(" "),
 			remoteDaemonUrl,
 			platform,
+			apiKey,
 		);
 		const commandWindows =
 			platform === "win32"
 				? windowsHookCommand
 					? [
-							shellCommandArg(windowsHookCommand, "win32"),
-							...hookArgs.map((arg) => shellCommandArg(arg, "win32")),
+							quoteCommandArg(windowsHookCommand, "win32"),
+							...hookArgs.map((arg) => quoteCommandArg(arg, "win32")),
 						].join(" ")
-					: withRemoteDaemonEnv(args.map((arg) => shellCommandArg(arg, "win32")).join(" "), remoteDaemonUrl, "win32")
+					: withRemoteDaemonEnv(
+							args.map((arg) => quoteCommandArg(arg, "win32")).join(" "),
+							remoteDaemonUrl,
+							"win32",
+							apiKey,
+						)
 				: undefined;
 		return {
 			hooks: [
@@ -840,6 +786,11 @@ function escapeRegExp(value: string): string {
 }
 
 function isSignetHookCommand(cmd: string): boolean {
+	if (
+		isSignetCliLauncher(parseHookLauncher(cmd)) &&
+		SIGNET_HOOK_SUBCOMMANDS.some((subcommand) => cmd.includes(` hook ${subcommand} `))
+	)
+		return true;
 	let normalized = cmd.trim().replace(/\s+/g, " ");
 	for (let i = 0; i < 2; i++) {
 		normalized = normalized.replace(/^(?:SIGNET_DAEMON_URL|SIGNET_API_KEY)=(?:'[^']*'|"[^"]*"|\S+)\s+/i, "");
@@ -891,50 +842,41 @@ function isSignetMatcherGroup(group: unknown): boolean {
 	return hooksArr.some(isSignetHookHandler);
 }
 
-function commandExecutable(command: string): string | null {
-	let normalized = command.trim();
-	for (let i = 0; i < 2; i++) {
-		normalized = normalized.replace(/^(?:SIGNET_DAEMON_URL|SIGNET_API_KEY)=(?:'[^']*'|"[^"]*"|\S+)\s+/i, "");
-		normalized = normalized.replace(/^set "(?:SIGNET_DAEMON_URL|SIGNET_API_KEY)=[^"]*" && /i, "");
-	}
-	const match = normalized.match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
-	return match?.[1] ?? match?.[2] ?? match?.[3] ?? null;
-}
-
-function hasMissingRuntime(command: string): boolean {
-	const executable = commandExecutable(command);
-	return Boolean(executable && /[\\/]/.test(executable) && !existsSync(executable));
-}
-
-function hasMissingSignetRuntime(file: HooksFile | null, configPath: string): boolean {
+function existingHookLauncher(file: HooksFile | null): ResolvedCommand | undefined {
 	for (const groups of Object.values(file?.hooks ?? {})) {
 		if (!Array.isArray(groups)) continue;
 		for (const group of groups) {
-			if (typeof group !== "object" || group === null || !Array.isArray(group.hooks)) continue;
+			if (!isJsonObject(group) || !Array.isArray(group.hooks)) continue;
 			for (const handler of group.hooks) {
-				for (const command of [handler?.command, handler?.commandWindows]) {
-					if (typeof command === "string" && isSignetHookCommand(command) && hasMissingRuntime(command)) {
-						return true;
-					}
-				}
+				if (!isSignetHookHandler(handler)) continue;
+				const command = handler.command;
+				if (isSignetHookCommand(command)) return parseHookLauncher(command);
 			}
 		}
 	}
+	return undefined;
+}
 
-	if (!existsSync(configPath)) return false;
-	let inSignetMcpSection = false;
-	for (const line of readFileSync(configPath, "utf-8").split("\n")) {
-		const trimmed = line.trim();
-		if (trimmed === "[mcp_servers.signet]") {
-			inSignetMcpSection = true;
-			continue;
-		}
-		if (inSignetMcpSection && trimmed.startsWith("[")) break;
-		if (!inSignetMcpSection) continue;
-		const command = trimmed.match(/^command\s*=\s*['"]([^'"]+)['"]/)?.[1];
-		if (typeof command === "string") return hasMissingRuntime(command);
+function readExistingMcp(path: string): ResolvedCommand | undefined {
+	if (!existsSync(path)) return undefined;
+	try {
+		const config = parseToml(readFileSync(path, "utf-8"));
+		return isJsonObject(config.mcp_servers) ? readMcpLauncher(config.mcp_servers.signet) : undefined;
+	} catch {
+		return undefined;
 	}
-	return false;
+}
+
+function readPluginMcp(home: string): ResolvedCommand | undefined {
+	const path = join(home, ".tmp", "signet-plugin-marketplace", "plugins", "signet", ".mcp.json");
+	try {
+		const config: unknown = JSON.parse(readFileSync(path, "utf-8"));
+		return isJsonObject(config) && isJsonObject(config.mcpServers)
+			? readMcpLauncher(config.mcpServers.signet)
+			: undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 function isLegacySignetMatcherGroup(group: unknown): boolean {
@@ -1436,6 +1378,7 @@ export class CodexConnector extends BaseConnector {
 		configsPatched: string[],
 		warnings: string[],
 		windowsHookCommand: string | null = null,
+		apiKey?: string,
 	): void {
 		const hooksPath = this.getHooksJsonPath();
 		const existing = readHooksFile(hooksPath);
@@ -1445,7 +1388,13 @@ export class CodexConnector extends BaseConnector {
 			const cleaned = removeSignetEntries(migrated);
 			const hasHooks = cleaned.hooks && Object.keys(cleaned.hooks).length > 0;
 			if (hasHooks) {
-				const signet = buildHooksFile(signetArgs, resolveRemoteDaemonUrl(), windowsHookCommand);
+				const signet = buildHooksFile(
+					signetArgs,
+					resolveRemoteDaemonUrl(),
+					windowsHookCommand,
+					process.platform,
+					apiKey,
+				);
 				const merged: HooksFile = { ...cleaned };
 				merged.hooks = { ...(cleaned.hooks as Record<string, MatcherGroup[]>) };
 				for (const key of HOOK_EVENT_KEYS) {
@@ -1456,11 +1405,20 @@ export class CodexConnector extends BaseConnector {
 				writeHooksFile(hooksPath, merged);
 				warnings.push("Merged Signet hooks into existing hooks.json — existing hooks preserved");
 			} else {
-				const signet = buildHooksFile(signetArgs, resolveRemoteDaemonUrl(), windowsHookCommand);
+				const signet = buildHooksFile(
+					signetArgs,
+					resolveRemoteDaemonUrl(),
+					windowsHookCommand,
+					process.platform,
+					apiKey,
+				);
 				writeHooksFile(hooksPath, { ...cleaned, hooks: signet.hooks });
 			}
 		} else {
-			writeHooksFile(hooksPath, buildHooksFile(signetArgs, resolveRemoteDaemonUrl(), windowsHookCommand));
+			writeHooksFile(
+				hooksPath,
+				buildHooksFile(signetArgs, resolveRemoteDaemonUrl(), windowsHookCommand, process.platform, apiKey),
+			);
 		}
 		filesWritten.push(hooksPath);
 
@@ -1523,19 +1481,21 @@ export class CodexConnector extends BaseConnector {
 		mkdirSync(codexHome, { recursive: true });
 
 		const configPath = this.getConfigPath();
-		const staleRuntime = hasMissingSignetRuntime(readHooksFile(this.getHooksJsonPath()), configPath);
 		const runtime = this.resolveCodexDesktopNode();
-		const signetArgs = resolveSignetArgs(runtime);
+		const existingHooks = readHooksFile(this.getHooksJsonPath());
+		const existingMcp = readExistingMcp(configPath) ?? readPluginMcp(codexHome);
+		const existingCli =
+			existingHookLauncher(existingHooks) ??
+			existingHookLauncher(
+				readHooksFile(join(codexHome, ".tmp", "signet-plugin-marketplace", "plugins", "signet", "hooks", "hooks.json")),
+			) ??
+			cliFromMcp(existingMcp);
+		const signetArgs = resolveSignetArgs(runtime, existingCli);
 		const remoteDaemonUrl = resolveRemoteDaemonUrl();
-		const windowsHookCommand = writeWindowsHookWrapper(codexHome, signetArgs, remoteDaemonUrl);
-		const mcp = resolveSignetMcp(runtime);
-		if (staleRuntime) {
-			warnings.push(
-				runtime
-					? "Detected a missing Signet Codex runtime path; refreshed only Signet-owned hooks and MCP configuration."
-					: "Detected a missing Signet Codex runtime path; no replacement Codex runtime was found, so Signet commands use the PATH fallback.",
-			);
-		}
+		const auth = await resolveInstallApiKey();
+		if (auth.warning) warnings.push(auth.warning);
+		const windowsHookCommand = writeWindowsHookWrapper(codexHome, signetArgs, remoteDaemonUrl, auth.apiKey);
+		const mcp = resolveSignetMcp(runtime, existingMcp ?? mcpFromCli(existingCli), auth.apiKey);
 		const nativePluginSupported = this.supportsNativePluginInstall();
 
 		if (nativePluginSupported) {
@@ -1545,6 +1505,7 @@ export class CodexConnector extends BaseConnector {
 				mcp,
 				remoteDaemonUrl,
 				windowsHookCommand,
+				apiKey: auth.apiKey,
 			});
 			filesWritten.push(...bundle.filesWritten);
 			if (unpatchConfigToml(this.getConfigPath()) && !configsPatched.includes(this.getConfigPath())) {
@@ -1564,7 +1525,14 @@ export class CodexConnector extends BaseConnector {
 				if (this.nativePluginProvidesHooks()) {
 					this.removeCompatibilityHooks(configsPatched);
 				} else {
-					this.installCompatibilityHooks(signetArgs, filesWritten, configsPatched, warnings, windowsHookCommand);
+					this.installCompatibilityHooks(
+						signetArgs,
+						filesWritten,
+						configsPatched,
+						warnings,
+						windowsHookCommand,
+						auth.apiKey,
+					);
 					warnings.push(
 						"Codex plugin support detected, but lifecycle hooks still require the compatibility hooks.json path in this Codex version",
 					);
@@ -1585,7 +1553,7 @@ export class CodexConnector extends BaseConnector {
 			}
 		}
 		if (windowsHookCommand && !filesWritten.includes(windowsHookCommand)) filesWritten.push(windowsHookCommand);
-		this.installCompatibilityHooks(signetArgs, filesWritten, configsPatched, warnings, windowsHookCommand);
+		this.installCompatibilityHooks(signetArgs, filesWritten, configsPatched, warnings, windowsHookCommand, auth.apiKey);
 		const skillsResult = this.symlinkSkills(expandedBasePath, codexHome);
 		if (!skillsResult) {
 			warnings.push("Failed to symlink skills directory");

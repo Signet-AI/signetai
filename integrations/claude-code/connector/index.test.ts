@@ -273,15 +273,22 @@ describe("ClaudeCodeConnector user hooks", () => {
 		(groups ?? []).flatMap((g) =>
 			((g as { hooks?: Array<{ command?: unknown }> }).hooks ?? []).map((h) => String(h.command)),
 		);
-	const userCommand = (event: string) => `echo mine-${event}`;
-	const userGroup = (event: string) => ({ matcher: "*", hooks: [{ type: "command", command: userCommand(event) }] });
+	const userCommand = (event: string) => (event === "PreToolUse" ? "rtk hook claude" : `other-tool ${event}`);
+	const userGroup = (event: string) => ({
+		matcher: event === "PreToolUse" ? "Bash" : "*",
+		hooks: [{ type: "command", command: userCommand(event) }],
+	});
 
 	const writeSettings = (settings: Record<string, unknown>) => {
 		mkdirSync(join(tmpRoot, ".claude"), { recursive: true });
 		writeFileSync(settingsFile(), JSON.stringify(settings), "utf-8");
 	};
+	const userGroups = (event: string) =>
+		event === "PreToolUse"
+			? [userGroup(event), { matcher: "Bash", hooks: [{ type: "command", command: "caveman-blocks hook" }] }]
+			: [userGroup(event)];
 	const writeUserHooks = () =>
-		writeSettings({ hooks: Object.fromEntries(events.map((event) => [event, [userGroup(event)]])), model: "opus" });
+		writeSettings({ hooks: Object.fromEntries(events.map((event) => [event, userGroups(event)])), model: "opus" });
 
 	it("keeps user hooks on every event across repeated installs", async () => {
 		writeUserHooks();
@@ -292,7 +299,7 @@ describe("ClaudeCodeConnector user hooks", () => {
 		const hooks = readHooks();
 		for (const event of events) {
 			const cmds = commands(hooks[event]);
-			expect(hooks[event]?.[0]).toEqual(userGroup(event));
+			expect(hooks[event]?.slice(0, userGroups(event).length)).toEqual(userGroups(event));
 			expect(cmds.filter((c) => c === userCommand(event))).toHaveLength(1);
 			expect(cmds.some((c) => c.includes("-H claude-code"))).toBe(true);
 			expect(new Set(cmds).size).toBe(cmds.length);
@@ -307,7 +314,7 @@ describe("ClaudeCodeConnector user hooks", () => {
 		const settings = JSON.parse(readFileSync(settingsFile(), "utf-8"));
 		expect(settings.model).toBe("opus");
 		for (const event of events) {
-			expect(settings.hooks[event]).toEqual([userGroup(event)]);
+			expect(settings.hooks[event]).toEqual(userGroups(event));
 		}
 	});
 
@@ -382,7 +389,9 @@ describe("ClaudeCodeConnector user hooks", () => {
 			expect(commands(readHooks().SessionStart).filter((value) => value.includes("hook session-start"))).toHaveLength(
 				1,
 			);
-			expect(commands(readHooks().Stop).filter((value) => value.startsWith("signet hook stop "))).toHaveLength(1);
+			expect(
+				commands(readHooks().Stop).filter((value) => value.replace(/['"]/g, "") === stop.replace(/['"]/g, "")),
+			).toHaveLength(1);
 			expect(readHooks().Stop?.[0]).toEqual({ matcher: "*", hooks: [userStop] });
 			writeSettings(settings);
 			await connector.uninstall();
@@ -391,6 +400,69 @@ describe("ClaudeCodeConnector user hooks", () => {
 			expect(connector.isInstalled()).toBe(false);
 		});
 	}
+
+	for (const [mcp, cli] of [
+		[{ command: "/host/bin/signet", args: [], env: { SIGNET_MCP_STDIO_WORKER: "1" } }, "/host/bin/signet"],
+		[
+			{ command: "/host/bin/node", args: ["/host/package/dist/mcp-stdio.js"] },
+			"/host/bin/node /host/package/bin/signet.js",
+		],
+	] as const) {
+		it(`uses the existing MCP launcher when hooks are absent: ${cli}`, async () => {
+			writeFileSync(join(tmpRoot, ".claude.json"), JSON.stringify({ mcpServers: { signet: mcp } }));
+			await new ClaudeCodeConnector().install(tmpRoot);
+			expect(commands(readHooks().SessionStart)).toHaveLength(2);
+			expect(commands(readHooks().SessionStart).every((cmd) => cmd.startsWith(`${cli} hook `))).toBe(true);
+			expect(JSON.parse(readFileSync(join(tmpRoot, ".claude.json"), "utf-8")).mcpServers.signet).toMatchObject(mcp);
+		});
+	}
+
+	it("executes an override with spaces and quotes without relying on PATH", async () => {
+		const launcher = join(tmpRoot, "My 'Tools", "signet");
+		const output = join(tmpRoot, "argv.json");
+		mkdirSync(join(launcher, ".."), { recursive: true });
+		writeFileSync(launcher, `#!/bin/sh\nprintf '%s\\n' "$@" > '${output}'\n`, { mode: 0o755 });
+		writeSettings({
+			hooks: {
+				SessionStart: [{ hooks: [{ type: "command", command: "/host/bin/signet hook session-start -H claude-code" }] }],
+			},
+		});
+		const previous = process.env.SIGNET_HOOK_COMMAND;
+		const executable = process.execPath;
+		try {
+			process.execPath = "/app/bin/signet";
+			process.env.SIGNET_HOOK_COMMAND = launcher;
+			const connector = new ClaudeCodeConnector();
+			await connector.install(tmpRoot);
+			await connector.install(tmpRoot);
+			const start = commands(readHooks().SessionStart).filter((cmd) => cmd.includes("hook session-start"));
+			expect(start).toHaveLength(1);
+			expect(start[0]).toContain("My '");
+			const child = Bun.spawnSync(["/bin/sh", "-c", start[0] ?? "exit 1"], {
+				env: { PATH: "/usr/bin:/bin" },
+				cwd: tmpRoot,
+			});
+			expect(child.exitCode).toBe(0);
+			expect(readFileSync(output, "utf-8").split("\n")).toEqual([
+				"hook",
+				"session-start",
+				"-H",
+				"claude-code",
+				"--project",
+				tmpRoot,
+				"",
+			]);
+			Reflect.deleteProperty(process.env, "SIGNET_HOOK_COMMAND");
+			await connector.install(tmpRoot);
+			expect(commands(readHooks().SessionStart).filter((cmd) => cmd.includes("hook session-start"))).toHaveLength(1);
+			await connector.uninstall();
+			expect(readHooks()).toBeUndefined();
+		} finally {
+			process.execPath = executable;
+			if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_HOOK_COMMAND");
+			if (previous !== undefined) process.env.SIGNET_HOOK_COMMAND = previous;
+		}
+	});
 
 	it("keeps a user hook that shares a group with a Signet hook", async () => {
 		const signetEntry = { type: "command", command: 'signet hook session-start -H claude-code --project "$(pwd)"' };

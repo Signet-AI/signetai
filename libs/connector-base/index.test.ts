@@ -27,6 +27,7 @@ import {
 	readTrimmedEnv,
 	removeManagedExtensionFile,
 	resolveRemoteDaemonUrl,
+	resolveInstallApiKey,
 	resolveSignetCliCommand,
 	resolveSignetDaemonUrl,
 	resolveSignetMcpCommand,
@@ -233,6 +234,34 @@ describe("packaged Signet command resolution", () => {
 		console.warn = originalWarn;
 	});
 
+	it("keeps launcher arguments and MCP environment ahead of container discovery", () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-command-precedence-"));
+		const native = join(dir, "signet");
+		writeFileSync(native, "fixture");
+		process.execPath = native;
+		const host = { command: "/host/Tools/signet", args: [], env: { SIGNET_MCP_STDIO_WORKER: "1", CUSTOM: "keep" } };
+		expect(resolveSignetMcpCommand(host)).toEqual(host);
+		expect(resolveSignetCliCommand({ command: "/host/node", args: ["/host/signetai/bin/signet.js"] })).toEqual({
+			command: "/host/node",
+			args: ["/host/signetai/bin/signet.js"],
+		});
+		const previous = process.env.SIGNET_HOOK_COMMAND;
+		try {
+			process.env.SIGNET_HOOK_COMMAND = '["/override/My Tools/node","/override/signetai/bin/signet.js"]';
+			expect(resolveSignetCliCommand(host)).toEqual({
+				command: "/override/My Tools/node",
+				args: ["/override/signetai/bin/signet.js"],
+			});
+			expect(resolveSignetMcpCommand(host)).toEqual({
+				command: "/override/My Tools/node",
+				args: ["/override/signetai/dist/mcp-stdio.js"],
+			});
+		} finally {
+			if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_HOOK_COMMAND");
+			if (previous !== undefined) process.env.SIGNET_HOOK_COMMAND = previous;
+		}
+	});
+
 	it("uses bare commands outside Windows", () => {
 		process.platform = "darwin";
 
@@ -333,6 +362,31 @@ describe("parseLenientJsonObject", () => {
 		expect(() => parseLenientJsonObject("{ invalid", { label: "OpenCode config" })).toThrow(
 			/^Invalid OpenCode config at offset \d+ \([A-Za-z]+\)$/,
 		);
+	});
+});
+
+describe("install-time auth probing", () => {
+	it.each(["timeout", "invalid"])("omits credentials and explains an undetermined mode: %s", async (failure) => {
+		const server = Bun.serve({
+			port: 0,
+			fetch: (): Response | Promise<Response> =>
+				failure === "timeout" ? new Promise<Response>(() => {}) : Response.json({ requiresAuth: "false" }),
+		});
+		const key = process.env.SIGNET_API_KEY;
+		try {
+			process.env.SIGNET_DAEMON_URL = server.url.origin;
+			process.env.SIGNET_API_KEY = "sig_sk_probe_fixture_not_a_secret";
+			const start = performance.now();
+			const auth = await resolveInstallApiKey();
+			expect(auth.apiKey).toBeUndefined();
+			expect(auth.warning).toContain("SIGNET_API_KEY was omitted");
+			expect(auth.warning).toContain("rerun signet sync");
+			expect(performance.now() - start).toBeLessThan(2500);
+		} finally {
+			server.stop(true);
+			if (key === undefined) Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+			if (key !== undefined) process.env.SIGNET_API_KEY = key;
+		}
 	});
 });
 

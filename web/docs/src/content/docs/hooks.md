@@ -25,6 +25,45 @@ Hooks are HTTP endpoints exposed by the Signet [Daemon](/daemon/). Harnesses cal
 
 ---
 
+## Installed hook and MCP launchers
+
+Claude Code, Codex, and Gemini installation and `signet sync` resolve launchers
+in this order:
+
+1. `SIGNET_HOOK_COMMAND`, when set.
+2. The Signet launcher already registered in that harness's hooks or MCP entry.
+3. Package/runtime discovery, with the running executable as the last resort.
+
+Existing launchers are retained even when their paths are not visible inside the
+installer's container. Sync preserves other tools' hook groups and MCP servers.
+Command arguments and the MCP worker environment are preserved together.
+
+For a container-exported CLI, set the host-visible wrapper path explicitly:
+
+```bash
+SIGNET_HOOK_COMMAND='/host/bin/signet' signet sync
+```
+
+The value is an executable path, not a shell expression. Do not add shell quotes
+inside it; paths containing spaces or quotes are escaped when hooks are written.
+For a JavaScript installation requiring a runtime, use a JSON argument array:
+
+```bash
+SIGNET_HOOK_COMMAND='["/host/bin/node","/host/signetai/bin/signet.js"]' signet sync
+```
+
+MCP registration uses the matching stdio entry for a JavaScript launcher, or sets
+`SIGNET_MCP_STDIO_WORKER=1` for a native Signet launcher. The override is not
+checked against the installer's filesystem. Use it to replace an already broken
+container-only or bare launcher; otherwise sync retains the existing launcher.
+
+Codex probes the target daemon's `/api/mode` once during installation, with a
+one-second timeout. It writes an API key only when `requiresAuth` is `true` and
+removes stale Signet-owned key prefixes when regenerating hooks. A missing URL
+or a loopback address does not imply that auth is disabled. If the probe fails,
+Codex omits the key and prints a warning: check `SIGNET_DAEMON_URL`, start or
+reconnect the daemon, and rerun `signet sync`.
+
 ## Cache-stable prompt context
 
 The session-start response separates prompt context into two fields:
