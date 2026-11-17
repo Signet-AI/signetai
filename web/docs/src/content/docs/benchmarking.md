@@ -167,6 +167,28 @@ Reports record API-reported token usage for answering, judging, extraction,
 and observed Dreaming passes, plus a list-price cost estimate where model
 pricing is known. See `memorybench/README.md` for the field reference.
 
+## Answering and judging through OpenRouter
+
+Prefix a model alias with `openrouter:` to route answering and judging through
+OpenRouter, for example `openrouter:openai/gpt-4o-2024-08-06`. OpenRouter
+models send Chat Completions with temperature 0 and use `OPENROUTER_API_KEY`;
+`OPENROUTER_BASE_URL` overrides the endpoint (default
+`https://openrouter.ai/api/v1`).
+
+`MEMORYBENCH_OPENROUTER_MODELS` is a JSON object keyed by OpenRouter model id
+that sets per-model routing:
+
+```bash
+MEMORYBENCH_OPENROUTER_MODELS='{"openai/gpt-4.1-mini":{"reasoning":{"enabled":false},"provider":{"allow_fallbacks":true},"maxTokens":2048}}'
+```
+
+Each entry accepts `provider` (OpenRouter routing preferences), `reasoning`
+(OpenRouter reasoning settings), and `maxTokens`. The checkpoint and report
+record the alias and the settings each model ran with.
+
+The BEAM `paper` profile accepts `openrouter:openai/gpt-4.1-mini` as judge.
+LoCoMo ingests each conversation once and shares it across its questions.
+
 ## Two-stage local model workflow
 
 For local tuning, keep extraction cheap and reserve the stronger model for the
