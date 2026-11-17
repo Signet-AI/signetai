@@ -19,6 +19,7 @@ import type {
 	LlmProvider,
 	LlmUsage,
 	RoutingLocalThinkingConfig,
+	RoutingOpenRouterProviderConfig,
 } from "@signet/core";
 import { logger } from "../logger";
 import {
@@ -85,6 +86,7 @@ export interface PiModelProviderConfig {
 	readonly defaultTimeoutMs?: number;
 	readonly name?: string;
 	readonly thinking?: RoutingLocalThinkingConfig;
+	readonly openRouterRouting?: RoutingOpenRouterProviderConfig;
 }
 export class PiProviderDeadlineError extends Error {
 	readonly timeoutMs: number;
@@ -261,6 +263,23 @@ function availabilityProbeHeaders(api: Api, apiKey: string | undefined): Record<
 	return { ...auth, "anthropic-version": "2023-06-01" };
 }
 
+function openRouterRoutingCompat(
+	routing: RoutingOpenRouterProviderConfig,
+): NonNullable<OpenAICompletionsCompat["openRouterRouting"]> {
+	const sort = typeof routing.sort === "string" ? routing.sort : routing.sort ? { ...routing.sort } : undefined;
+	return {
+		...(routing.order ? { order: [...routing.order] } : {}),
+		...(routing.only ? { only: [...routing.only] } : {}),
+		...(routing.ignore ? { ignore: [...routing.ignore] } : {}),
+		...(routing.allow_fallbacks !== undefined ? { allow_fallbacks: routing.allow_fallbacks } : {}),
+		...(routing.require_parameters !== undefined ? { require_parameters: routing.require_parameters } : {}),
+		...(routing.data_collection !== undefined ? { data_collection: routing.data_collection } : {}),
+		...(routing.quantizations ? { quantizations: [...routing.quantizations] } : {}),
+		...(sort !== undefined ? { sort } : {}),
+		...(routing.max_price ? { max_price: { ...routing.max_price } } : {}),
+	};
+}
+
 export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 	const timeoutMs = config.defaultTimeoutMs ?? 60_000;
 	void timeoutMs;
@@ -321,7 +340,11 @@ export function resolvePiModel(config: PiModelProviderConfig): ResolvedModel {
 				contextWindow: config.contextWindow ?? 128_000,
 				maxTokens: config.maxTokens ?? 4096,
 				headers: {},
-				compat: { ...LOCAL_COMPAT, thinkingFormat: "openrouter" },
+				compat: {
+					...LOCAL_COMPAT,
+					thinkingFormat: "openrouter",
+					...(config.openRouterRouting ? { openRouterRouting: openRouterRoutingCompat(config.openRouterRouting) } : {}),
+				},
 			};
 			return { piModel, apiKey, label: `openrouter:${config.model}` };
 		}

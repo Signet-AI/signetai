@@ -96,8 +96,26 @@ export interface RoutingOpenRouterReasoningConfig {
 	readonly maxTokens?: number;
 }
 
+export interface RoutingOpenRouterMaxPriceConfig {
+	readonly prompt?: number;
+	readonly completion?: number;
+}
+
+export interface RoutingOpenRouterProviderConfig {
+	readonly order?: readonly string[];
+	readonly only?: readonly string[];
+	readonly ignore?: readonly string[];
+	readonly allow_fallbacks?: boolean;
+	readonly require_parameters?: boolean;
+	readonly data_collection?: "allow" | "deny";
+	readonly quantizations?: readonly string[];
+	readonly sort?: string | { readonly by?: string; readonly partition?: string | null };
+	readonly max_price?: RoutingOpenRouterMaxPriceConfig;
+}
+
 export interface RoutingOpenRouterConfig {
 	readonly reasoning?: RoutingOpenRouterReasoningConfig;
+	readonly provider?: RoutingOpenRouterProviderConfig;
 }
 
 export const ROUTING_LOCAL_THINKING_FORMATS = ["qwen-chat-template", "chat-template", "qwen"] as const;
@@ -659,18 +677,140 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 	};
 }
 
-function parseOpenRouterConfig(raw: unknown): RoutingOpenRouterConfig | undefined {
+function asStrictBool(value: unknown): boolean | undefined {
+	return typeof value === "boolean" ? value : undefined;
+}
+
+function asStrictStringArray(value: unknown): readonly string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const items: string[] = [];
+	for (const item of value) {
+		if (typeof item !== "string" || item === "") return undefined;
+		items.push(item);
+	}
+	return items.length > 0 ? items : undefined;
+}
+
+const ROUTING_OPENROUTER_QUANTIZATIONS: ReadonlySet<string> = new Set([
+	"fp32",
+	"fp16",
+	"bf16",
+	"fp8",
+	"fp6",
+	"int8",
+	"int4",
+	"fp4",
+]);
+
+function parseOpenRouterQuantizations(value: unknown): readonly string[] | undefined {
+	const items = asStrictStringArray(value);
+	if (!items) return undefined;
+	return items.every((item) => ROUTING_OPENROUTER_QUANTIZATIONS.has(item)) ? items : undefined;
+}
+
+function asOpenRouterPrice(value: unknown): number | undefined {
+	if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? value : undefined;
+	if (typeof value === "string") {
+		const parsed = Number(value.trim());
+		return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+	}
+	return undefined;
+}
+
+function parseOpenRouterMaxPrice(value: unknown): RoutingOpenRouterMaxPriceConfig | null | undefined {
+	if (value === undefined) return undefined;
+	if (!isRecord(value)) return null;
+	const prompt = asOpenRouterPrice(value.prompt);
+	const completion = asOpenRouterPrice(value.completion);
+	if (
+		(value.prompt !== undefined && prompt === undefined) ||
+		(value.completion !== undefined && completion === undefined)
+	) {
+		return null;
+	}
+	const price: RoutingOpenRouterMaxPriceConfig = {
+		...(prompt !== undefined ? { prompt } : {}),
+		...(completion !== undefined ? { completion } : {}),
+	};
+	return Object.keys(price).length > 0 ? price : undefined;
+}
+
+function parseOpenRouterSort(value: unknown): RoutingOpenRouterProviderConfig["sort"] | undefined {
+	if (typeof value === "string") return value === "" ? undefined : value;
+	if (!isRecord(value)) return undefined;
+	const by = typeof value.by === "string" && value.by !== "" ? value.by : undefined;
+	if (value.by !== undefined && by === undefined) return undefined;
+	const partitionRaw = value.partition;
+	const partition: string | null | undefined =
+		partitionRaw === null ? null : typeof partitionRaw === "string" && partitionRaw !== "" ? partitionRaw : undefined;
+	if (value.partition !== undefined && value.partition !== null && partition === undefined) return undefined;
+	const sort: { by?: string; partition?: string | null } = {
+		...(by !== undefined ? { by } : {}),
+		...(partition !== undefined ? { partition } : {}),
+	};
+	return Object.keys(sort).length > 0 ? sort : undefined;
+}
+
+function parseOpenRouterProvider(raw: unknown): RoutingOpenRouterProviderConfig | null | undefined {
+	if (raw === undefined) return undefined;
+	if (!isRecord(raw)) return null;
+	const order = asStrictStringArray(raw.order);
+	const only = asStrictStringArray(raw.only);
+	const ignore = asStrictStringArray(raw.ignore);
+	const allowFallbacksRaw = raw.allowFallbacks ?? raw.allow_fallbacks;
+	const allowFallbacks = asStrictBool(allowFallbacksRaw);
+	const requireParametersRaw = raw.requireParameters ?? raw.require_parameters;
+	const requireParameters = asStrictBool(requireParametersRaw);
+	const dataCollectionRaw = raw.dataCollection ?? raw.data_collection;
+	const dataCollection = dataCollectionRaw === "allow" || dataCollectionRaw === "deny" ? dataCollectionRaw : undefined;
+	const quantizations = parseOpenRouterQuantizations(raw.quantizations);
+	const sort = raw.sort === undefined ? undefined : parseOpenRouterSort(raw.sort);
+	const maxPriceRaw = raw.maxPrice ?? raw.max_price;
+	const maxPrice = parseOpenRouterMaxPrice(maxPriceRaw);
+	if (
+		(raw.order !== undefined && order === undefined) ||
+		(raw.only !== undefined && only === undefined) ||
+		(raw.ignore !== undefined && ignore === undefined) ||
+		(allowFallbacksRaw !== undefined && allowFallbacks === undefined) ||
+		(requireParametersRaw !== undefined && requireParameters === undefined) ||
+		(dataCollectionRaw !== undefined && dataCollection === undefined) ||
+		(raw.quantizations !== undefined && quantizations === undefined) ||
+		(raw.sort !== undefined && sort === undefined) ||
+		(maxPriceRaw !== undefined && maxPrice === null)
+	) {
+		return null;
+	}
+	const provider: RoutingOpenRouterProviderConfig = {
+		...(order ? { order } : {}),
+		...(only ? { only } : {}),
+		...(ignore ? { ignore } : {}),
+		...(allowFallbacks !== undefined ? { allow_fallbacks: allowFallbacks } : {}),
+		...(requireParameters !== undefined ? { require_parameters: requireParameters } : {}),
+		...(dataCollection !== undefined ? { data_collection: dataCollection } : {}),
+		...(quantizations ? { quantizations } : {}),
+		...(sort !== undefined ? { sort } : {}),
+		...(maxPrice ? { max_price: maxPrice } : {}),
+	};
+	return Object.keys(provider).length > 0 ? provider : undefined;
+}
+
+function parseOpenRouterConfig(raw: unknown): RoutingOpenRouterConfig | null | undefined {
 	if (!isRecord(raw)) return undefined;
 	const nested = isRecord(raw.openrouter) ? raw.openrouter : raw;
 	const reasoningRaw = isRecord(nested.reasoning) ? nested.reasoning : undefined;
-	if (!reasoningRaw) return undefined;
-	const enabled = asBool(reasoningRaw.enabled);
-	const maxTokens = asNonNegativeInt(reasoningRaw.maxTokens ?? reasoningRaw.max_tokens);
+	const provider = parseOpenRouterProvider(nested.provider);
+	if (provider === null) return null;
+	const enabled = reasoningRaw ? asBool(reasoningRaw.enabled) : undefined;
+	const maxTokens = reasoningRaw ? asNonNegativeInt(reasoningRaw.maxTokens ?? reasoningRaw.max_tokens) : undefined;
 	const reasoning = {
 		...(enabled !== undefined ? { enabled } : {}),
 		...(maxTokens !== undefined ? { maxTokens } : {}),
 	};
-	return Object.keys(reasoning).length > 0 ? { reasoning } : undefined;
+	const config: RoutingOpenRouterConfig = {
+		...(Object.keys(reasoning).length > 0 ? { reasoning } : {}),
+		...(provider ? { provider } : {}),
+	};
+	return Object.keys(config).length > 0 ? config : undefined;
 }
 
 const LOCAL_THINKING_EXECUTORS: ReadonlySet<string> = new Set(["openai-compatible", "llama-cpp", "ollama"]);
@@ -708,7 +848,9 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 	if (Object.keys(models).length === 0) return null;
 	const acpx = executor === "acpx" ? parseAcpxConfig(raw) : undefined;
 	if (executor === "acpx" && !acpx) return null;
-	const openrouter = executor === "openrouter" ? parseOpenRouterConfig(raw) : undefined;
+	const openrouterParsed = executor === "openrouter" ? parseOpenRouterConfig(raw) : undefined;
+	if (openrouterParsed === null) return null;
+	const openrouter = openrouterParsed ?? undefined;
 	const thinking = LOCAL_THINKING_EXECUTORS.has(executor) ? parseLocalThinkingConfig(raw.thinking) : undefined;
 	const endpoint = asString(raw.endpoint ?? raw.baseUrl ?? raw.base_url);
 	return {
