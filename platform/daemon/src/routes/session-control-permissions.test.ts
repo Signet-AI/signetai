@@ -1,5 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Hono } from "hono";
@@ -71,7 +80,7 @@ function bearer(
 beforeAll(async () => {
 	agentsDir = mkdtempSync(join(tmpdir(), "signet-session-control-"));
 	mkdirSync(join(agentsDir, "memory"), { recursive: true });
-	mkdirSync(join(agentsDir, ".daemon"), { recursive: true });
+	mkdirSync(join(agentsDir, ".daemon", "logs"), { recursive: true });
 	writeFileSync(join(agentsDir, ".daemon", "auth-secret"), "test-secret-key-32-bytes-min!!!!");
 	process.env.SIGNET_PATH = agentsDir;
 	appFactory = (await import("hono")).Hono;
@@ -115,6 +124,373 @@ afterAll(async () => {
 });
 
 describe("session control permissions in team mode", () => {
+	it("deletes an owning agent's transcript, fences capture, and supports idempotent admin hard purge", async () => {
+		const { dbOwnerQuery } = await import("../db-owner-runtime");
+		const jsonl = await import("../transcript-jsonl");
+		const key = "delete-session";
+		await transcripts.upsertSessionTranscriptAsync(key, "User: private evidence", "pi", "proj-a", "agent-a");
+		await jsonl.appendCanonicalTranscriptTurns({
+			basePath: agentsDir,
+			sessionKey: key,
+			agentId: "agent-a",
+			harness: "pi",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "private evidence" }],
+		});
+		await jsonl.appendCanonicalTranscriptTurns({
+			basePath: agentsDir,
+			sessionKey: "keep-session",
+			agentId: "agent-a",
+			harness: "pi",
+			sourceFormat: "live",
+			turns: [{ role: "user", content: "unrelated evidence" }],
+		});
+		await dbOwnerQuery(
+			{
+				sql: "INSERT INTO memories (id,content,type,source_id,source_type,agent_id,created_at,updated_at) VALUES ('delete-summary','private derived summary','session_summary',?,'pi','agent-a',datetime('now'),datetime('now'))",
+				params: [key],
+				result: "run",
+			},
+			{ operation: "test.seed", lane: "write" },
+		);
+		tracker.claimSession(key, "plugin", "agent-a", "pi");
+		const app = teamApp();
+		const url = `http://localhost/api/sessions/${key}/transcript`;
+		expect(
+			(await app.request(url, { method: "DELETE", headers: bearer("agent", { scope: { agent: "agent-b" } }) })).status,
+		).toBe(403);
+		expect((await app.request(`${url}?purge=hard`, { method: "DELETE", headers: bearer("agent") })).status).toBe(403);
+		const deleted = await app.request(url, { method: "DELETE", headers: bearer("agent") });
+		expect(deleted.status).toBe(200);
+		expect(await deleted.json()).toMatchObject({
+			status: "deleted",
+			sessionKey: key,
+			agentId: "agent-a",
+			pendingCleanup: [],
+		});
+		expect(tracker.isSessionBypassed(key, "agent-a")).toBe(true);
+		tracker.unbypassSession(key, "agent-a");
+		const late = await app.request("http://localhost/api/hooks/stop", {
+			method: "POST",
+			headers: bearer("agent"),
+			body: JSON.stringify({
+				harness: "pi",
+				sessionKey: key,
+				agentId: "agent-a",
+				runtimePath: "plugin",
+				lastAssistantMessage: "Late private evidence",
+			}),
+		});
+		expect(late.status).toBe(200);
+		expect(await late.json()).toMatchObject({ recorded: false, bypassed: true });
+		expect(await transcripts.upsertSessionTranscriptAsync(key, "User: late upload", "pi", "proj-a", "agent-a")).toBe(
+			false,
+		);
+		expect(
+			await jsonl.appendCanonicalTranscriptTurns({
+				basePath: agentsDir,
+				sessionKey: key,
+				agentId: "agent-a",
+				harness: "pi",
+				sourceFormat: "live",
+				turns: [{ role: "user", content: "late upload" }],
+			}),
+		).toBe(false);
+		const bytes = readFileSync(jsonl.canonicalTranscriptPath(agentsDir, "pi"), "utf8");
+		expect(bytes).not.toContain("private evidence");
+		expect(bytes).not.toContain("late upload");
+		expect(bytes).toContain("unrelated evidence");
+		const summary = await dbOwnerQuery(
+			{ sql: "SELECT is_deleted FROM memories WHERE id = 'delete-summary'", result: "get" },
+			{ operation: "test.read", lane: "read" },
+		);
+		expect(summary).toEqual({ is_deleted: 1 });
+		expect((await app.request(url, { method: "DELETE", headers: bearer("agent") })).status).toBe(200);
+		expect((await app.request(`${url}?purge=hard`, { method: "DELETE", headers: bearer("admin") })).status).toBe(200);
+		expect(
+			await dbOwnerQuery(
+				{ sql: "SELECT id FROM memories WHERE id = 'delete-summary'", result: "get" },
+				{ operation: "test.read", lane: "read" },
+			),
+		).toBeNull();
+		expect(
+			await dbOwnerQuery(
+				{ sql: "SELECT id FROM memory_history WHERE memory_id = 'delete-summary'", result: "get" },
+				{ operation: "test.read", lane: "read" },
+			),
+		).toBeNull();
+		tracker.releaseSession(key, "agent-a");
+	});
+
+	it("keeps project-limited and read-only transcript deletion fail closed", async () => {
+		await transcripts.upsertSessionTranscriptAsync(
+			"delete-project",
+			"User: project evidence",
+			"pi",
+			"proj-a",
+			"agent-a",
+		);
+		const app = teamApp();
+		const url = "http://localhost/api/sessions/delete-project/transcript";
+		expect((await app.request(url, { method: "DELETE", headers: bearer("readonly") })).status).toBe(403);
+		expect(
+			(
+				await app.request(url, {
+					method: "DELETE",
+					headers: bearer("agent", { scope: { agent: "agent-a", project: "proj-b" } }),
+				})
+			).status,
+		).toBe(403);
+		expect((await app.request(`${url}?agent_id=agent-b`, { method: "DELETE", headers: bearer("agent") })).status).toBe(
+			403,
+		);
+		expect((await app.request(`${url}?purge=invalid`, { method: "DELETE", headers: bearer("agent") })).status).toBe(
+			400,
+		);
+		expect(
+			(
+				await app.request(`${url}?agent_id=agent-a`, {
+					method: "DELETE",
+					headers: { ...bearer("agent"), "x-signet-agent-id": "agent-b" },
+				})
+			).status,
+		).toBe(403);
+		expect((await app.request(`${url}?agent_id=agent-a`, { headers: bearer("agent") })).status).toBe(200);
+	});
+
+	it("redacts only the deleted session's upload ranges across chunk boundaries", async () => {
+		const { dbOwnerQuery } = await import("../db-owner-runtime");
+		const { createJob } = await import("../transcript-import-store");
+		const { uploadTranscriptStream, sealTranscriptUpload, readTranscriptBytes } = await import(
+			"../transcript-import-bytes"
+		);
+		const scope = { agentId: "agent-a", jobId: "delete-upload", fileId: "delete-file", generation: 0 };
+		await createJob({
+			jobId: scope.jobId,
+			agentId: scope.agentId,
+			files: [{ id: scope.fileId, name: "sessions.jsonl" }],
+		});
+		const removed = Buffer.from(
+			`${JSON.stringify({ session: "delete-upload-session", content: "private".repeat(12_000) })}\n`,
+		);
+		const kept = Buffer.from(
+			`${JSON.stringify({ session: "keep-upload-session", content: "unrelated conversation" })}\n`,
+		);
+		const bytes = Buffer.concat([removed, kept]);
+		await uploadTranscriptStream(
+			scope,
+			bytes.length,
+			(async function* () {
+				yield bytes;
+			})(),
+		);
+		await sealTranscriptUpload(scope);
+		await dbOwnerQuery(
+			{
+				sql: "INSERT INTO source_import_records (id,job_id,file_id,source_id,agent_id,ordinal,line_number,byte_offset,byte_length,raw_hash,status,canonical_key) SELECT 'delete-record',job_id,id,source_id,agent_id,0,1,0,?,'hash','imported','delete-upload-session' FROM source_import_files WHERE agent_id = ? AND id = ?",
+				params: [removed.length, scope.agentId, scope.fileId],
+				result: "run",
+			},
+			{ operation: "test.seed", lane: "write" },
+		);
+		await transcripts.upsertSessionTranscriptAsync("delete-upload-session", "User: private", "pi", "proj-a", "agent-a");
+		const response = await teamApp().request("http://localhost/api/sessions/delete-upload-session/transcript", {
+			method: "DELETE",
+			headers: bearer("agent"),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ counts: { uploadedBytes: removed.length }, pendingCleanup: [] });
+		const retained = await readTranscriptBytes(scope, 0, bytes.length);
+		expect(Buffer.from(retained).subarray(removed.length)).toEqual(kept);
+		expect(Buffer.from(retained).toString()).not.toContain("private");
+		expect(
+			await dbOwnerQuery(
+				{ sql: "SELECT status,rejection_code FROM source_import_records WHERE id = 'delete-record'", result: "get" },
+				{ operation: "test.read", lane: "read" },
+			),
+		).toEqual({ status: "rejected", rejection_code: "session_transcript_deleted" });
+	});
+
+	it("purges all attributable memory batches and summary ancestors without touching other sessions", async () => {
+		const { dbOwnerQuery } = await import("../db-owner-runtime");
+		await transcripts.upsertSessionTranscriptAsync("delete-graph", "User: derived evidence", "pi", "proj-a", "agent-a");
+		await dbOwnerQuery(
+			{
+				sql: "WITH RECURSIVE n(v) AS (VALUES(0) UNION ALL SELECT v+1 FROM n WHERE v<104) INSERT INTO memories (id,content,type,source_id,source_type,agent_id,created_at,updated_at) SELECT 'delete-batch-'||v,'derived evidence '||v,'session_summary','delete-graph','pi','agent-a',datetime('now'),datetime('now') FROM n",
+				result: "run",
+			},
+			{ operation: "test.seed", lane: "write" },
+		);
+		await dbOwnerQuery(
+			{
+				sql: "INSERT INTO memories (id,content,type,agent_id,created_at,updated_at) VALUES ('delete-derived','derived semantic memory','fact','agent-a',datetime('now'),datetime('now')),('keep-derived','unrelated memory','fact','agent-a',datetime('now'),datetime('now'))",
+				result: "run",
+			},
+			{ operation: "test.seed", lane: "write" },
+		);
+		await dbOwnerQuery(
+			{
+				sql: "INSERT INTO derived_memory_sources (derived_memory_id,source_kind,source_id,agent_id,created_at) VALUES ('delete-derived','transcript','delete-graph','agent-a',datetime('now'))",
+				result: "run",
+			},
+			{ operation: "test.seed", lane: "write" },
+		);
+		await dbOwnerQuery(
+			{
+				sql: "INSERT INTO embeddings (id,content_hash,vector,dimensions,source_type,source_id,chunk_text,created_at,agent_id) VALUES ('delete-vector','hash',zeroblob(4),1,'memory','delete-derived','derived semantic memory',datetime('now'),'agent-a')",
+				result: "run",
+			},
+			{ operation: "test.seed", lane: "write" },
+		);
+		for (const [id, key, depth] of [
+			["delete-leaf", "delete-graph", 0],
+			["delete-parent", "parent-session", 1],
+			["keep-leaf", "keep-graph", 0],
+		])
+			await dbOwnerQuery(
+				{
+					sql: "INSERT INTO session_summaries (id,content,kind,depth,session_key,agent_id,earliest_at,latest_at,created_at) VALUES (?,'summary','session',?,?,'agent-a',datetime('now'),datetime('now'),datetime('now'))",
+					params: [id, depth, key],
+					result: "run",
+				},
+				{ operation: "test.seed", lane: "write" },
+			);
+		await dbOwnerQuery(
+			{
+				sql: "INSERT INTO session_summary_children (parent_id,child_id,ordinal) VALUES ('delete-parent','delete-leaf',0)",
+				result: "run",
+			},
+			{ operation: "test.seed", lane: "write" },
+		);
+		const response = await teamApp().request("http://localhost/api/sessions/delete-graph/transcript", {
+			method: "DELETE",
+			headers: bearer("agent"),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({
+			counts: { memories: 106, summaries: 2, embeddings: 1 },
+			pendingCleanup: [],
+		});
+		expect(
+			await dbOwnerQuery(
+				{
+					sql: "SELECT id FROM memories WHERE id IN ('delete-derived','keep-derived') AND is_deleted = 0",
+					result: "all",
+				},
+				{ operation: "test.read", lane: "read" },
+			),
+		).toEqual([{ id: "keep-derived" }]);
+		expect(
+			await dbOwnerQuery(
+				{ sql: "SELECT id FROM embeddings WHERE id = 'delete-vector'", result: "get" },
+				{ operation: "test.read", lane: "read" },
+			),
+		).toBeNull();
+		expect(
+			await dbOwnerQuery(
+				{
+					sql: "SELECT id FROM session_summaries WHERE id IN ('delete-leaf','delete-parent','keep-leaf')",
+					result: "all",
+				},
+				{ operation: "test.read", lane: "read" },
+			),
+		).toEqual([{ id: "keep-leaf" }]);
+	});
+
+	it("removes retained capture payloads, audit previews, and legacy artifacts and fences later artifact writers", async () => {
+		const { dbOwnerQuery } = await import("../db-owner-runtime");
+		const { writeTranscriptAudit } = await import("../transcript-audit");
+		const { writeTranscriptArtifact } = await import("../memory-lineage");
+		const key = "delete-artifacts";
+		await transcripts.upsertSessionTranscriptAsync(key, "User: private artifact", "pi", "proj-a", "agent-a");
+		const capture = {
+			agentId: "agent-a",
+			sessionKey: key,
+			sessionId: key,
+			project: "proj-a",
+			harness: "pi",
+			capturedAt: "2026-11-17T00:00:00.000Z",
+			startedAt: null,
+			endedAt: null,
+			transcript: "User: private artifact",
+		};
+		const artifact = await writeTranscriptArtifact(capture);
+		const auditInput = {
+			basePath: agentsDir,
+			agentId: "agent-a",
+			sessionKey: key,
+			sessionId: key,
+			sourceIdentity: key,
+			sourcePath: null,
+			sourceSha256: null,
+			sourceSizeBytes: null,
+			sourceFormat: null,
+			preview: "private audit evidence",
+		};
+		const audit = await writeTranscriptAudit(auditInput);
+		const legacy = join(agentsDir, "memory", "legacy--transcript.md");
+		writeFileSync(
+			legacy,
+			`---\nkind: transcript\nagent_id: agent-a\nsession_key: ${key}\n---\nprivate legacy evidence`,
+		);
+		await dbOwnerQuery(
+			{
+				sql: "INSERT INTO transcript_capture_jobs (id,agent_id,harness,session_key,session_id,transcript,raw_transcript,captured_at,created_at,updated_at) VALUES ('delete-capture','agent-a','pi',?,?,'private payload','private raw payload',datetime('now'),datetime('now'),datetime('now'))",
+				params: [key, key],
+				result: "run",
+			},
+			{ operation: "test.seed", lane: "write" },
+		);
+		const response = await teamApp().request(`http://localhost/api/sessions/${key}/transcript`, {
+			method: "DELETE",
+			headers: bearer("agent"),
+		});
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ counts: { captureJobs: 1 }, pendingCleanup: [] });
+		expect(existsSync(join(agentsDir, artifact.transcriptPath))).toBe(false);
+		expect(existsSync(legacy)).toBe(false);
+		expect(readFileSync(audit.latestPath, "utf8")).not.toContain("private audit evidence");
+		expect(
+			await dbOwnerQuery(
+				{ sql: "SELECT id FROM transcript_capture_jobs WHERE id = 'delete-capture'", result: "get" },
+				{ operation: "test.read", lane: "read" },
+			),
+		).toBeNull();
+		await expect(writeTranscriptArtifact(capture)).rejects.toThrow("Session transcript deleted");
+		await expect(writeTranscriptAudit(auditInput)).rejects.toThrow("Session transcript deleted");
+	});
+
+	it("reports unsafe pending cleanup without touching a symlink target and finishes on retry", async () => {
+		const { writeTranscriptArtifact } = await import("../memory-lineage");
+		const key = "delete-pending";
+		await transcripts.upsertSessionTranscriptAsync(key, "User: pending evidence", "pi", "proj-a", "agent-a");
+		const artifact = await writeTranscriptArtifact({
+			agentId: "agent-a",
+			sessionKey: key,
+			sessionId: key,
+			project: "proj-a",
+			harness: "pi",
+			capturedAt: "2026-11-17T00:00:00.000Z",
+			startedAt: null,
+			endedAt: null,
+			transcript: "User: pending evidence",
+		});
+		const managed = join(agentsDir, artifact.transcriptPath);
+		const unrelated = join(agentsDir, "unrelated.md");
+		writeFileSync(unrelated, "unrelated evidence");
+		unlinkSync(managed);
+		symlinkSync(unrelated, managed);
+		const url = `http://localhost/api/sessions/${key}/transcript`;
+		const pending = await teamApp().request(url, { method: "DELETE", headers: bearer("agent") });
+		expect(pending.status).toBe(202);
+		expect(await pending.json()).toMatchObject({ pendingCleanup: ["transcript_bytes"] });
+		expect(readFileSync(unrelated, "utf8")).toBe("unrelated evidence");
+		unlinkSync(managed);
+		const retry = await teamApp().request(url, { method: "DELETE", headers: bearer("agent") });
+		expect(retry.status).toBe(200);
+		expect(await retry.json()).toMatchObject({ pendingCleanup: [] });
+	});
+
 	it("denies bypass and renew to read-only credentials", async () => {
 		const bypass = await teamApp().request("http://localhost/api/sessions/sess-a/bypass?agent_id=agent-a", {
 			method: "POST",

@@ -479,6 +479,23 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(getHits("/api/hooks/session-start")).toBe(1);
 	});
 
+	it("treats chunked remember responses as saved groups", async () => {
+		globalThis.fetch = Object.assign(
+			async (): Promise<Response> =>
+				Response.json({ chunked: true, chunk_count: 2, ids: ["part-one", "part-two"], group_id: "group-one" }),
+			{ preconnect(): void {} },
+		);
+		expect(await memoryStore("long memory", { daemonUrl: "http://daemon.test" })).toBe("group-one");
+		const { api, tools } = createMockApi();
+		signetPlugin.register(api);
+		const tool = tools.find((tool) => tool.name === "memory_store");
+		if (!tool) throw new Error("memory_store missing");
+		const result = await tool.execute("store", { content: "long memory" });
+		expect(JSON.stringify(result)).toContain("part-one");
+		expect(JSON.stringify(result)).toContain("part-two");
+		expect(JSON.stringify(result)).toContain("group-one");
+	});
+
 	it("forwards memory_store tags as request metadata", async () => {
 		const id = await memoryStore("save this", {
 			daemonUrl: "http://daemon.test",

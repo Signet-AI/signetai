@@ -18,7 +18,12 @@ let createToken: typeof import("../auth").createToken;
 let state: typeof import("./state.js");
 
 interface MemoryListBody {
-	readonly memories: ReadonlyArray<{ readonly id: string; readonly agent_id: string; readonly content: string }>;
+	readonly memories: ReadonlyArray<{
+		readonly id: string;
+		readonly agent_id: string;
+		readonly content: string;
+		readonly project: string | null;
+	}>;
 	readonly stats: { readonly total: number; readonly withEmbeddings: number; readonly critical: number };
 	readonly error?: string;
 }
@@ -63,12 +68,13 @@ function seedMemory(
 		readonly embedded?: boolean;
 		readonly contentHash?: string;
 		readonly content?: string;
+		readonly project?: string;
 	} = {},
 ): void {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
-			`INSERT INTO memories (id, type, content, content_hash, importance, created_at, updated_at, updated_by, agent_id, visibility)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 'test', ?, ?)`,
+			`INSERT INTO memories (id, type, content, content_hash, importance, created_at, updated_at, updated_by, agent_id, visibility, project)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 'test', ?, ?, ?)`,
 		).run(
 			id,
 			options.type ?? "fact",
@@ -79,6 +85,7 @@ function seedMemory(
 			NOW,
 			agentId,
 			options.visibility ?? "global",
+			options.project ?? null,
 		);
 		if (options.embedded) {
 			db.prepare(
@@ -131,7 +138,7 @@ beforeEach(() => {
 	seedAgent("gamma", "shared");
 	seedAgent("team-a", "group", "crew");
 	seedAgent("team-b", "group", "crew");
-	seedMemory("alpha-global", "alpha", { importance: 0.95, embedded: true });
+	seedMemory("alpha-global", "alpha", { importance: 0.95, embedded: true, project: "alpha-project" });
 	seedMemory("alpha-private", "alpha", { visibility: "private", type: "decision" });
 	seedMemory("beta-global", "beta", { importance: 0.95, embedded: true });
 	seedMemory("beta-private", "beta", { visibility: "private" });
@@ -156,6 +163,8 @@ describe("GET /api/memories agent scope", () => {
 		expect(status).toBe(200);
 		expect(ids(body)).toEqual(["alpha-global", "alpha-private"]);
 		expect(body.memories.every((memory) => memory.agent_id === "alpha")).toBe(true);
+		expect(body.memories.find((memory) => memory.id === "alpha-global")?.project).toBe("alpha-project");
+		expect(body.memories.find((memory) => memory.id === "alpha-private")?.project).toBeNull();
 		expect(body.stats).toEqual({ total: 2, withEmbeddings: 1, critical: 1 });
 	});
 

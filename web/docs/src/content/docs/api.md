@@ -104,6 +104,18 @@ Mutations blocked by the kill switch return `503`.
 | [Telemetry and logs API](/api/telemetry-logs/) | Analytics, telemetry, log, and MCP endpoints. |
 | [Additional route inventory](/api/route-inventory/) | Support, dashboard, repair, marketplace, and runtime routes not expanded in the main API reference. |
 
+## Memory and transcript lifecycle
+
+`GET /api/memories` includes each row's stored `project` (`string` or `null`).
+Explicit remember clients pass project metadata rather than inferring it from
+content. Remember responses can be single memories or chunk groups; see
+[Memory write lifecycle](/api/memory/write-lifecycle/).
+
+`DELETE /api/sessions/:key/transcript` deletes the owning agent's transcript
+and fences future capture and reimport. Normal deletion requires `forget`;
+`?purge=hard` additionally requires `admin` and permanently removes derived
+memories and their history. See [Sessions and hooks](/api/sessions-hooks/).
+
 ## Maintenance
 
 Route details live in `docs/api/` so the root API page stays readable. When

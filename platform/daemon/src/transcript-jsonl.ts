@@ -21,6 +21,9 @@ import { createInterface } from "node:readline";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
 
+import { rewriteContainedTranscriptFile } from "./transcript-import-safe-fs";
+import { isTranscriptFileDeleted } from "./transcript-deletion-fence";
+
 export type TranscriptRole = "user" | "assistant" | "unknown";
 export type TranscriptSourceFormat = "jsonl" | "markdown" | "db" | "live" | "normalized";
 
@@ -499,9 +502,13 @@ function lockCanBeReaped(path: string, now: number): boolean {
 	}
 }
 
-async function acquireTranscriptFileLock(path: string): Promise<{ readonly lockPath: string; readonly token: string }> {
+async function acquireTranscriptFileLock(
+	path: string,
+	deadlineAt?: number,
+): Promise<{ readonly lockPath: string; readonly token: string }> {
 	const lockPath = `${path}.lock`;
 	while (true) {
+		if (deadlineAt !== undefined && Date.now() >= deadlineAt) throw new Error("Transcript lock deadline");
 		const token = randomUUID();
 		try {
 			mkdirSync(lockPath);
@@ -536,9 +543,13 @@ function releaseTranscriptFileLock(lockPath: string, token: string): void {
 	rmSync(lockPath, { recursive: true, force: true });
 }
 
-export async function withTranscriptFileLock<T>(path: string, write: () => T | Promise<T>): Promise<T> {
+export async function withTranscriptFileLock<T>(
+	path: string,
+	write: () => T | Promise<T>,
+	deadlineAt?: number,
+): Promise<T> {
 	mkdirSync(dirname(path), { recursive: true });
-	const lock = await acquireTranscriptFileLock(path);
+	const lock = await acquireTranscriptFileLock(path, deadlineAt);
 
 	try {
 		return await write();
@@ -809,6 +820,7 @@ export function writeCanonicalTranscriptSnapshot(
 	if (turns.length === 0) return Promise.resolve(null);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	return withTranscriptFileLock(path, async () => {
+		if (await isTranscriptFileDeleted(input)) return null;
 		const next = turns
 			.map((turn, index) => makeRecord(input, turn, index + 1))
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
@@ -913,6 +925,7 @@ export function appendCanonicalTranscriptTurns(
 	if (turns.length === 0) return Promise.resolve(false);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	return withTranscriptFileLock(path, async () => {
+		if (await isTranscriptFileDeleted(input)) return false;
 		const appended = !hasTrailingTurns(readTailRecords(path, tailScanBytes(turns)), input, turns);
 		if (appended) {
 			const entries = await loadSessionSeqIndex(path);
@@ -938,6 +951,7 @@ export function appendCanonicalTranscriptSnapshotIfMissing(
 	const key = sessionSeqCacheKey(input);
 	if (knownSessionKeys?.has(key)) return Promise.resolve(path);
 	return withTranscriptFileLock(path, async () => {
+		if (await isTranscriptFileDeleted(input)) return null;
 		const entries = await loadSessionSeqIndex(path);
 		if (entries.has(key)) return path;
 		const next = turns
@@ -948,6 +962,57 @@ export function appendCanonicalTranscriptSnapshotIfMissing(
 		knownSessionKeys?.add(key);
 		return path;
 	});
+}
+
+export async function removeCanonicalTranscriptSession(
+	path: string,
+	input: { readonly basePath: string; readonly agentId: string; readonly sessionKey: string },
+	deadline: number,
+): Promise<number> {
+	return withTranscriptFileLock(
+		path,
+		async () => {
+			let records = 0;
+			await rewriteContainedTranscriptFile(input.basePath, path, async (source, output) => {
+				const stream = source.createReadStream({
+					encoding: "utf8",
+					autoClose: false,
+					signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+				});
+				const lines = createInterface({ input: stream, crlfDelay: Number.POSITIVE_INFINITY });
+				try {
+					for await (const line of lines) {
+						if (Date.now() >= deadline) throw new Error("Transcript delete deadline");
+						let value: unknown;
+						try {
+							value = JSON.parse(line);
+						} catch {
+							value = null;
+						}
+						if (
+							typeof value === "object" &&
+							value !== null &&
+							"agent_id" in value &&
+							value.agent_id === input.agentId &&
+							(("session_key" in value && value.session_key === input.sessionKey) ||
+								("session_id" in value && value.session_id === input.sessionKey))
+						) {
+							records++;
+							continue;
+						}
+						await output.writeFile(`${line}\n`);
+					}
+				} finally {
+					lines.close();
+					stream.destroy();
+				}
+				return records > 0;
+			});
+			if (records) sessionSeqIndexes.delete(path);
+			return records;
+		},
+		deadline,
+	);
 }
 
 export function rewriteReplacingLiveOnlySessions(
@@ -1013,7 +1078,7 @@ export function rewriteReplacingLiveOnlySessions(
 							continue;
 						}
 						const entry = effectiveReplacements.get(key);
-						if (!entry) {
+						if (!entry || (await isTranscriptFileDeleted(entry.identity))) {
 							writeSync(fd, `${line}\n`);
 							continue;
 						}

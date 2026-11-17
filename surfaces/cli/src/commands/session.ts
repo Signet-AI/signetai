@@ -17,6 +17,53 @@ export function registerSessionCommands(program: Command, deps: SessionDeps): vo
 	const session = program.command("session").description("Search transcripts and manage active sessions");
 
 	session
+		.command("delete-transcript <session-key>")
+		.description("Delete a session transcript and its attributable derived state")
+		.option("--agent <name>", "Owning agent ID")
+		.option("--project <project>", "Restrict deletion to this project")
+		.option("--hard-purge", "Permanently purge derived memories and history (admin only)", false)
+		.option("--json", "Output the deletion result as JSON", false)
+		.action(
+			async (
+				key: string,
+				options: {
+					readonly agent?: string;
+					readonly project?: string;
+					readonly hardPurge?: boolean;
+					readonly json?: boolean;
+				},
+			): Promise<void> => {
+				const query = new URLSearchParams();
+				if (options.agent) query.set("agent_id", options.agent);
+				if (options.project) query.set("project", options.project);
+				if (options.hardPurge) query.set("purge", "hard");
+				const data = await deps.fetchFromDaemon<{
+					readonly status?: string;
+					readonly pendingCleanup?: readonly string[];
+					readonly counts?: Readonly<Record<string, number>>;
+					readonly error?: string;
+				}>(`/api/sessions/${encodeURIComponent(key)}/transcript${query.size ? `?${query}` : ""}`, {
+					method: "DELETE",
+					timeout: 65_000,
+				});
+				if (!data || data.error || data.status !== "deleted") {
+					console.error(chalk.red(data?.error ?? "Failed to delete transcript"));
+					process.exitCode = 1;
+					return;
+				}
+				if (options.json) console.log(JSON.stringify(data, null, 2));
+				if (data.pendingCleanup?.length) {
+					console.error(
+						chalk.yellow(`Cleanup pending: ${data.pendingCleanup.join(", ")}. Retry the same delete command.`),
+					);
+					process.exitCode = 2;
+					return;
+				}
+				if (!options.json) console.log(`Deleted transcript ${key}: ${JSON.stringify(data.counts ?? {})}`);
+			},
+		);
+
+	session
 		.command("search <query>")
 		.description("Search active or completed session transcripts")
 		.option("--session-key <key>", "Specific transcript session key to search")

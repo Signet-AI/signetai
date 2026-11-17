@@ -1,3 +1,5 @@
+import { withTranscriptFileLock } from "./transcript-jsonl";
+import { transcriptDeletionFencePath } from "./transcript-deletion-fence";
 import { stat } from "node:fs/promises";
 import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
@@ -167,6 +169,9 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
 			applyVectorRepairBatch(db as never, request.input),
 		);
+	}
+	if (request.kind === "session_transcript_delete") {
+		throw new Error("Transcript deletion requires the database owner process");
 	}
 	if (request.kind === "session_transcript_write") {
 		const { writeSessionTranscriptRow } = await import("./session-transcripts");
@@ -498,6 +503,21 @@ export async function dbOwnerQuery<Row = unknown>(
 		owner,
 		{ kind: "query", statement },
 		{ ...options, lane: options.lane ?? "read" },
+	);
+}
+
+export async function dbOwnerDeleteSessionTranscript(
+	input: import("./session-transcript-delete").SessionTranscriptDeleteInput,
+): Promise<import("./session-transcript-delete").SessionTranscriptDeleteResult> {
+	return withTranscriptFileLock(
+		transcriptDeletionFencePath(input),
+		async () =>
+			submitWithAdmission(
+				await getDbOwner(),
+				{ kind: "session_transcript_delete", input },
+				{ operation: "transcripts.delete", lane: "write", deadlineMs: 60_000, estimatedWorkUnits: 100 },
+			),
+		Date.now() + 60_000,
 	);
 }
 

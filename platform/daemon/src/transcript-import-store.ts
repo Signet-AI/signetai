@@ -23,7 +23,7 @@ export interface ImportStore {
 export async function prepareTranscriptRetry(jobId: string, agentId: string, generation: number): Promise<boolean> {
 	const rows = await dbOwnerQuery<Array<{ id: string }>>(
 		{
-			sql: "SELECT r.id FROM source_import_records r JOIN source_import_jobs j ON j.id = r.job_id AND j.agent_id = r.agent_id WHERE j.id = ? AND j.agent_id = ? AND j.generation = ? AND j.state = 'queued' AND j.retry_requested = 1 AND r.id > j.retry_cursor AND r.status = 'rejected' AND r.rejection_code NOT IN ('schema_invalid','malformed','oversized_record','canonical_batch_too_large','conversation_identity_conflict') ORDER BY r.id LIMIT 25",
+			sql: "SELECT r.id FROM source_import_records r JOIN source_import_jobs j ON j.id = r.job_id AND j.agent_id = r.agent_id WHERE j.id = ? AND j.agent_id = ? AND j.generation = ? AND j.state = 'queued' AND j.retry_requested = 1 AND r.id > j.retry_cursor AND r.status = 'rejected' AND r.rejection_code NOT IN ('schema_invalid','malformed','oversized_record','canonical_batch_too_large','conversation_identity_conflict','session_transcript_deleted') ORDER BY r.id LIMIT 25",
 			params: [jobId, agentId, generation],
 			result: "all",
 			readonly: true,

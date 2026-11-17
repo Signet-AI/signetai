@@ -31,7 +31,11 @@ export interface CompletedTranscriptCommit extends CompletedTranscriptEvidence {
 	readonly canonicalKey: string;
 }
 
-export type TranscriptCommitOutcome = "imported" | "duplicate" | "conversation_identity_conflict";
+export type TranscriptCommitOutcome =
+	| "imported"
+	| "duplicate"
+	| "conversation_identity_conflict"
+	| "session_transcript_deleted";
 export interface TranscriptCommitResult {
 	readonly outcome: TranscriptCommitOutcome;
 	readonly canonicalId: string;
@@ -127,7 +131,8 @@ export function commitTranscriptImportBatchInTx(
 		if (row.status !== "pending") throw new Error("import record is not pending");
 		const result = commitCompletedTranscriptBatchInTx(db, [item])[0];
 		if (!result) throw new Error("missing transcript commit outcome");
-		const rejected = result.outcome === "conversation_identity_conflict";
+		const rejected =
+			result.outcome === "conversation_identity_conflict" || result.outcome === "session_transcript_deleted";
 		db.prepare(
 			"UPDATE source_import_records SET status = ?, canonical_id = ?, canonical_key = ?, external_identity = ?, conversation_fingerprint = ?, rejection_code = ?, attempt_count = attempt_count + 1, updated_at = datetime('now') WHERE id = ? AND job_id = ? AND agent_id = ?",
 		).run(
@@ -322,6 +327,19 @@ export function commitCompletedTranscriptBatchInTx(
 		throw new RangeError("canonical_batch_too_large");
 	const results: TranscriptCommitResult[] = [];
 	for (const commit of commits) {
+		if (
+			db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_transcript_deletions'").get() &&
+			db
+				.prepare("SELECT 1 FROM session_transcript_deletions WHERE agent_id = ? AND session_key = ?")
+				.get(commit.agentId, commit.canonicalKey)
+		) {
+			results.push({
+				outcome: "session_transcript_deleted",
+				canonicalId: commit.canonicalId,
+				sessionKey: commit.canonicalKey,
+			});
+			continue;
+		}
 		const existing = db
 			.prepare(
 				"SELECT conversation_fingerprint, canonical_id, canonical_key, state FROM transcript_import_conversations WHERE agent_id = ? AND external_identity = ?",

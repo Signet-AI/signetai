@@ -23,6 +23,7 @@ Options:
 | `-t, --tags <tags>` | Comma-separated tags |
 | `-i, --importance <n>` | Importance score, 0-1 (default: 0.7) |
 | `--critical` | Mark as critical/pinned |
+| `--project <project>` | Store an explicit project; no project is inferred from content or CLI cwd |
 | `--occurred-at <iso>` | Event time this memory is about |
 | `--observed-at <iso>` | Observation time this memory records |
 | `--source-created-at <iso>` | Source-system creation time for this memory |
@@ -38,6 +39,23 @@ Output:
 ```
 
 ---
+
+Chunked saves print the group ID and every chunk ID. A duplicate is labeled
+`Already saved`. Embedding status is shown only when the daemon supplies it.
+
+## `signet session delete-transcript`
+
+```bash
+signet session delete-transcript <session-key> --agent <agent-id>
+signet session delete-transcript <session-key> --agent <agent-id> --hard-purge --json
+```
+
+Deletes the session transcript through the daemon and stops future capture.
+Normal deletion soft-deletes attributable memories. `--hard-purge` also
+permanently removes those memories and their history and requires admin
+permission in team mode. `--project <project>` restricts the target project.
+Cleanup still pending is reported with exit code `2`; retry the same command
+with the same flags. A completed deletion returns exit code `0`.
 
 ## `signet recall`
 

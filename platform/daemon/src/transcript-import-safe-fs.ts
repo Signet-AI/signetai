@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { lstat, open, opendir, rm } from "node:fs/promises";
+import { lstat, open, opendir, rename, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
@@ -24,6 +25,12 @@ type DarwinFileSystem = {
 		) => number;
 		readonly openat: (dirfd: number, path: ReturnType<typeof ptr>, flags: number, mode: number) => number;
 		readonly unlinkat: (dirfd: number, path: ReturnType<typeof ptr>, flags: number) => number;
+		readonly renameat: (
+			fromfd: number,
+			from: ReturnType<typeof ptr>,
+			tofd: number,
+			to: ReturnType<typeof ptr>,
+		) => number;
 	};
 };
 
@@ -39,6 +46,7 @@ function loadDarwinFileSystem(): DarwinFileSystem | null {
 			getdirentries: { args: ["i32", "ptr", "i32", "ptr"], returns: "i32" },
 			openat: { args: ["i32", "cstring", "i32", "i32"], returns: "i32" },
 			unlinkat: { args: ["i32", "cstring", "i32"], returns: "i32" },
+			renameat: { args: ["i32", "cstring", "i32", "cstring"], returns: "i32" },
 		}) as unknown as DarwinFileSystem;
 	} catch {
 		darwinFileSystem = null;
@@ -200,6 +208,62 @@ export async function openContainedTranscriptFile(
 		await closeQuietly(parent);
 	}
 }
+export async function rewriteContainedTranscriptFile(
+	root: string,
+	candidate: string,
+	write: (source: FileHandle, target: FileHandle) => Promise<boolean>,
+): Promise<void> {
+	const parts = containedParts(root, candidate);
+	const name = parts.pop();
+	if (name === undefined) throw new UnsafeManagedTranscriptPathError("managed file path is empty");
+	const parent = await openContainedDirectory(root, parts);
+	const temporary = `.delete-${randomUUID()}.rewrite-tmp`;
+	let renamed = false;
+	let created = false;
+	try {
+		const source = await openContainedChild(parent, name, fsConstants.O_RDONLY | NOFOLLOW);
+		try {
+			const target = await openContainedChild(
+				parent,
+				temporary,
+				fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | NOFOLLOW,
+				0o600,
+			);
+			created = true;
+			try {
+				if (!(await write(source, target))) return;
+				await target.sync();
+			} finally {
+				await target.close();
+			}
+		} finally {
+			await source.close();
+		}
+		if (process.platform === "darwin") {
+			const api = loadDarwinFileSystem();
+			if (!api) throw new Error("Darwin descriptor filesystem unavailable");
+			if (
+				api.symbols.renameat(parent.fd, ptr(Buffer.from(`${temporary}\0`)), parent.fd, ptr(Buffer.from(`${name}\0`))) <
+				0
+			)
+				throw darwinError("renameat", api);
+		}
+		if (process.platform !== "darwin")
+			await rename(descriptorPath(parent.fd, temporary), descriptorPath(parent.fd, name));
+		renamed = true;
+		await parent.sync();
+	} finally {
+		if (created && !renamed) {
+			if (process.platform !== "darwin") await rm(descriptorPath(parent.fd, temporary), { force: true });
+			if (process.platform === "darwin") {
+				const api = loadDarwinFileSystem();
+				if (api) api.symbols.unlinkat(parent.fd, ptr(Buffer.from(`${temporary}\0`)), 0);
+			}
+		}
+		await parent.close();
+	}
+}
+
 export async function removeContainedTranscriptPath(
 	root: string,
 	candidate: string,

@@ -37,7 +37,11 @@ function mockDaemon(responseOverride?: (req: RecordedRequest) => unknown): { ser
 			};
 			recorded.push(entry);
 
-			const responseBody = responseOverride ? responseOverride(entry) : { ok: true };
+			const responseBody = responseOverride
+				? responseOverride(entry)
+				: entry.path === "/api/memory/remember"
+					? { id: "memory" }
+					: { ok: true };
 			return Response.json(responseBody);
 		},
 	});
@@ -66,12 +70,32 @@ afterEach(() => {
 });
 
 describe("SignetClient", () => {
+	test("remember rejects an incomplete chunked response instead of claiming a memory ID", async () => {
+		const { client } = mockDaemon(() => ({ chunked: true, chunk_count: 2, ids: ["only-one"], group_id: "group" }));
+		await expect(client.remember("long memory")).rejects.toThrow("Invalid chunked remember response");
+	});
+
+	test("remember returns chunked IDs and project writes through its public contract", async () => {
+		const { client } = mockDaemon(() => ({
+			chunked: true,
+			chunk_count: 2,
+			ids: ["part-one", "part-two"],
+			group_id: "group",
+		}));
+		const result = await client.remember("long memory", { project: "workspace" });
+		expect(result.chunked).toBe(true);
+		if (!result.chunked) throw new Error("Expected chunked response");
+		expect(result.ids).toEqual(["part-one", "part-two"]);
+		expect(result.group_id).toBe("group");
+		expect(lastRequest().body).toMatchObject({ project: "workspace" });
+	});
+
 	test("uses IPv4 loopback for the implicit daemon URL", async () => {
 		const originalFetch = globalThis.fetch;
 		let requestedUrl = "";
 		globalThis.fetch = async (input) => {
 			requestedUrl = String(input);
-			return Response.json({ ok: true });
+			return Response.json({ id: "memory" });
 		};
 
 		try {

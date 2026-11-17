@@ -10,6 +10,53 @@ afterEach(() => {
 	console.error = prevError;
 });
 
+describe("registerSessionCommands delete-transcript", () => {
+	test("requests scoped admin hard purge and reports pending cleanup honestly", async () => {
+		const lines: string[] = [];
+		const errors: string[] = [];
+		console.log = (line?: unknown): void => {
+			lines.push(String(line ?? ""));
+		};
+		console.error = (line?: unknown): void => {
+			errors.push(String(line ?? ""));
+		};
+		let path = "";
+		let options: (RequestInit & { timeout?: number }) | undefined;
+		const program = new Command().exitOverride();
+		registerSessionCommands(program, {
+			fetchFromDaemon: async (target, opts) => {
+				path = target;
+				options = opts;
+				return { status: "deleted", pendingCleanup: ["transcript_bytes"], counts: { transcripts: 1 } };
+			},
+		});
+		const previous = process.exitCode;
+		try {
+			await program.parseAsync([
+				"node",
+				"test",
+				"session",
+				"delete-transcript",
+				"session:one/two",
+				"--agent",
+				"alpha",
+				"--project",
+				"alpha-project",
+				"--hard-purge",
+				"--json",
+			]);
+			expect(path).toBe("/api/sessions/session%3Aone%2Ftwo/transcript?agent_id=alpha&project=alpha-project&purge=hard");
+			expect(options?.method).toBe("DELETE");
+			expect(options?.timeout).toBe(65_000);
+			expect(lines.join("\n")).toContain("transcript_bytes");
+			expect(errors.join("\n")).toContain("Cleanup pending");
+			expect(process.exitCode).toBe(2);
+		} finally {
+			process.exitCode = previous ?? 0;
+		}
+	});
+});
+
 describe("registerSessionCommands search", () => {
 	test("posts transcript search request and prints json response", async () => {
 		const lines: string[] = [];

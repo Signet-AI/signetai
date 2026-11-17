@@ -1,3 +1,5 @@
+import type { SqliteStatement as OwnerSqliteStatement } from "./db-accessor";
+import { deleteSessionTranscript } from "./session-transcript-delete";
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -52,11 +54,8 @@ interface SqliteRunResult {
 	readonly lastInsertRowid?: number | bigint;
 }
 
-interface SqliteStatement {
+interface SqliteStatement extends OwnerSqliteStatement {
 	finalize?(): void;
-	all(...params: readonly unknown[]): unknown[];
-	get(...params: readonly unknown[]): unknown;
-	run(...params: readonly unknown[]): SqliteRunResult;
 }
 
 interface SqliteDatabase {
@@ -1179,6 +1178,9 @@ export function runDbOwnerWorker(): void {
 				} catch {}
 				throw error;
 			}
+		}
+		if (job.request.kind === "session_transcript_delete") {
+			return await deleteSessionTranscript(db, job.request.input, (operation) => withBusyRetry(operation, context));
 		}
 		if (job.request.kind === "agent_remove") {
 			db.exec("BEGIN IMMEDIATE");

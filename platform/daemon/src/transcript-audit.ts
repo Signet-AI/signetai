@@ -1,6 +1,8 @@
 import { mkdir, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { withTranscriptFileLock } from "./transcript-jsonl";
+import { isTranscriptFileDeleted, transcriptDeletionFencePath } from "./transcript-deletion-fence";
 import { resolveWorkspaceLayout } from "@signet/core";
 import { resolveDefaultBasePath } from "@signet/core";
 
@@ -47,33 +49,40 @@ export async function writeTranscriptAudit(params: {
 	readonly preview?: string;
 	readonly capturedAt?: string;
 }): Promise<TranscriptAuditWrite> {
-	const basePath = params.basePath ?? process.env.SIGNET_PATH ?? resolveDefaultBasePath();
-	const dir = getTranscriptAuditDir(basePath);
-	await mkdir(dir, { recursive: true });
-	const fileName = `${auditToken(params.agentId, params.sourceIdentity, params.sourceSha256)}.json`;
-	if (!isSafeAuditName(fileName)) throw new Error("invalid transcript audit file name");
-	const latestPath = join(dir, fileName);
-	const tempPath = `${latestPath}.${process.pid}.${randomUUID()}.tmp`;
-	const record = {
-		schema: "signet.transcript-audit.v2",
-		agent_id: params.agentId,
-		source_identity: params.sourceIdentity,
-		source_path: params.sourcePath,
-		source_sha256: params.sourceSha256,
-		source_size_bytes: params.sourceSizeBytes,
-		source_format: params.sourceFormat,
-		session_id: params.sessionId,
-		session_key: params.sessionKey,
-		captured_at: params.capturedAt ?? null,
-		preview: boundedPreview(params.preview),
-	};
-	try {
-		await writeFile(tempPath, `${JSON.stringify(record)}\n`, "utf8");
-		await rename(tempPath, latestPath);
-	} finally {
-		await unlink(tempPath).catch(() => undefined);
-	}
-	return { latestPath };
+	return withTranscriptFileLock(
+		transcriptDeletionFencePath({ ...params, sessionKey: params.sessionKey ?? params.sessionId }),
+		async () => {
+			if (await isTranscriptFileDeleted(params)) throw new Error("Session transcript deleted");
+			const basePath = params.basePath ?? process.env.SIGNET_PATH ?? resolveDefaultBasePath();
+			const dir = getTranscriptAuditDir(basePath);
+			await mkdir(dir, { recursive: true });
+			const fileName = `${auditToken(params.agentId, params.sourceIdentity, params.sourceSha256)}.json`;
+			if (!isSafeAuditName(fileName)) throw new Error("invalid transcript audit file name");
+			const latestPath = join(dir, fileName);
+			const tempPath = `${latestPath}.${process.pid}.${randomUUID()}.tmp`;
+			const record = {
+				schema: "signet.transcript-audit.v2",
+				agent_id: params.agentId,
+				source_identity: params.sourceIdentity,
+				source_path: params.sourcePath,
+				source_sha256: params.sourceSha256,
+				source_size_bytes: params.sourceSizeBytes,
+				source_format: params.sourceFormat,
+				session_id: params.sessionId,
+				session_key: params.sessionKey,
+				captured_at: params.capturedAt ?? null,
+				preview: boundedPreview(params.preview),
+			};
+			try {
+				await writeFile(tempPath, `${JSON.stringify(record)}\n`, "utf8");
+				await rename(tempPath, latestPath);
+			} finally {
+				await unlink(tempPath).catch(() => undefined);
+			}
+			return { latestPath };
+		},
+		Date.now() + 60_000,
+	);
 }
 
 export async function pruneTranscriptAudit(basePath?: string): Promise<{ removedFiles: number; removedBytes: number }> {

@@ -1,3 +1,4 @@
+import { isTranscriptFileDeleted } from "./transcript-deletion-fence";
 import { logger } from "./logger";
 import type { PersistedSessionClaim, SessionClaimStore } from "./session-claims";
 import {
@@ -333,6 +334,13 @@ export function unbypassSession(sessionKey: string, agentId = "default"): void {
 		logger.debug("session-tracker", "Session bypass removed", { sessionKey: key });
 	}
 }
+export async function isSessionBypassedAsync(sessionKey: string, agentId: string): Promise<boolean> {
+	if (isSessionBypassed(sessionKey, agentId)) return true;
+	if (!(await isTranscriptFileDeleted({ sessionKey: normalizeSessionKey(sessionKey), agentId }))) return false;
+	bypassSession(sessionKey, { allowUnknown: true }, agentId);
+	return true;
+}
+
 export function isSessionBypassed(sessionKey: string, agentId = "default"): boolean {
 	const key = normalizeSessionKey(sessionKey);
 	const mapKey = scopedSessionKey(key, agentId);

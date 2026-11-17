@@ -1,5 +1,13 @@
+import { txDeleteMemoryTemporalEdges } from "./temporal-edges";
+import { txDecrementEntityMentions } from "./pipeline/graph-transactions";
 import type { WriteDb } from "./db-accessor";
-import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import {
+	syncVecDeleteByEmbeddingIds,
+	syncVecDeleteBySourceExceptHash,
+	syncVecDeleteBySourceId,
+	syncVecInsert,
+	vectorToBlob,
+} from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
@@ -503,6 +511,52 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 		contentChanged,
 	};
 }
+export function txDeleteMemoryEmbeddings(db: WriteDb, memoryId: string): number {
+	const rows = db
+		.prepare("SELECT id FROM embeddings WHERE source_type = 'memory' AND source_id = ?")
+		.all<{ id: string }>(memoryId);
+	if (
+		!syncVecDeleteByEmbeddingIds(
+			db,
+			rows.map((row) => row.id),
+		)
+	)
+		throw new Error("Memory vector cleanup failed");
+	return db.prepare("DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ? RETURNING id").all(memoryId)
+		.length;
+}
+
+export function txPurgeMemory(db: WriteDb, input: ForgetMemoryTxInput): boolean {
+	const forgotten = txForgetMemory(db, { ...input, force: true });
+	if (forgotten.status === "not_found") return false;
+	txDeleteMemoryEmbeddings(db, input.memoryId);
+	const mentions = db
+		.prepare("SELECT entity_id FROM memory_entity_mentions WHERE memory_id = ?")
+		.all<{ entity_id: string }>(input.memoryId);
+	db.prepare("DELETE FROM memory_entity_mentions WHERE memory_id = ?").run(input.memoryId);
+	txDecrementEntityMentions(db, { entityIds: mentions.map((row) => row.entity_id) });
+	for (const [table, column] of [
+		["memory_history", "memory_id"],
+		["memory_jobs", "memory_id"],
+		["memory_hints", "memory_id"],
+		["document_memories", "memory_id"],
+		["session_memories", "memory_id"],
+		["session_summary_memories", "memory_id"],
+		["path_feedback_events", "memory_id"],
+		["legacy_markdown_chunks", "memory_id"],
+		["aggregate_memory_sources", "aggregate_memory_id"],
+		["aggregate_memory_sources", "source_memory_id"],
+		["aggregate_evidence_sources", "aggregate_memory_id"],
+		["derived_memory_sources", "derived_memory_id"],
+		["memories_cold", "memory_id"],
+		["entity_attributes", "memory_id"],
+	])
+		db.prepare(`DELETE FROM ${table} WHERE ${column} = ?`).run(input.memoryId);
+	txDeleteMemoryTemporalEdges(db, [input.memoryId]);
+	db.prepare("DELETE FROM memories WHERE id = ?").run(input.memoryId);
+	return true;
+}
+
 export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetMemoryTxResult {
 	const existing = db
 		.prepare(

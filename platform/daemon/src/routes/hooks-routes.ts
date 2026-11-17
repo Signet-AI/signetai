@@ -92,6 +92,7 @@ import {
 	getSessionPath,
 	hasSession,
 	isSessionBypassed,
+	isSessionBypassedAsync,
 	markSessionEnded,
 	normalizeSessionKey,
 	releaseSession,
@@ -335,10 +336,10 @@ function hookContextDefaults(...candidates: readonly (string | undefined)[]): Ag
 	return undefined;
 }
 
-function checkBypass(body?: { sessionKey?: string; sessionId?: string; agentId?: string }): boolean {
+async function checkBypass(body?: { sessionKey?: string; sessionId?: string; agentId?: string }): Promise<boolean> {
 	const key = body?.sessionKey ?? body?.sessionId;
 	if (!key) return false;
-	return isSessionBypassed(key, resolveAgentId({ agentId: body?.agentId, sessionKey: key }));
+	return isSessionBypassedAsync(key, resolveAgentId({ agentId: body?.agentId, sessionKey: key }));
 }
 
 interface HookNotificationContext {
@@ -500,7 +501,7 @@ function registerSessionStart(app: Hono): void {
 				autoConnectGraphiq(parseOptionalString(body.project));
 			} catch {}
 
-			if (checkBypass(body)) {
+			if (await checkBypass(body)) {
 				return c.json({ inject: "", stableSystemPrompt: "", dynamicContext: "", memories: [], bypassed: true });
 			}
 
@@ -624,7 +625,7 @@ function registerUserPromptSubmit(app: Hono): void {
 
 			stampHarness(body.harness);
 
-			if (checkBypass(body)) {
+			if (await checkBypass(body)) {
 				return c.json({ inject: "", dynamicContext: "", memoryCount: 0, bypassed: true });
 			}
 
@@ -684,7 +685,7 @@ function registerNotifications(app: Hono): void {
 				context: "sessionKey",
 			});
 			if (sessionError) return c.json({ error: sessionError }, 403);
-			if (sessionKey && isSessionBypassed(sessionKey, scopedAgent.agentId)) {
+			if (sessionKey && (await isSessionBypassedAsync(sessionKey, scopedAgent.agentId))) {
 				return c.json({ inject: "", bypassed: true });
 			}
 
@@ -739,7 +740,7 @@ function registerDirectMessageWake(app: Hono): void {
 			context: "sessionKey",
 		});
 		if (sessionError) return c.json({ error: sessionError }, 403);
-		if (isSessionBypassed(sessionKey, scopedAgent.agentId)) {
+		if (await isSessionBypassedAsync(sessionKey, scopedAgent.agentId)) {
 			return c.json({ wake: false, reason: "bypassed", retryAfterMs: 300_000 });
 		}
 
@@ -885,7 +886,7 @@ function registerStop(app: Hono): void {
 				if (getEndedSession(sessionKey, agentId)) {
 					return c.json({ recorded: false, skipped: true, sessionEnded: true } satisfies StopResponse);
 				}
-				if (isSessionBypassed(sessionKey, agentId)) {
+				if (await isSessionBypassedAsync(sessionKey, agentId)) {
 					return c.json({ recorded: false, bypassed: true } satisfies StopResponse);
 				}
 
@@ -971,7 +972,7 @@ function registerSessionEnd(app: Hono): void {
 			});
 			if (duplicate) return c.json(duplicate);
 
-			if (sessionKey && isSessionBypassed(sessionKey, agentId)) {
+			if (sessionKey && (await isSessionBypassedAsync(sessionKey, agentId))) {
 				markSessionEnded(sessionKey, runtimePath, agentId);
 				removeAgentPresence(sessionKey);
 				return c.json({ memoriesSaved: 0, bypassed: true });
@@ -1138,7 +1139,7 @@ function registerCheckpointExtract(app: Hono): void {
 
 			stampHarness(body.harness);
 
-			if (isSessionBypassed(body.sessionKey, agentId)) {
+			if (await isSessionBypassedAsync(body.sessionKey, agentId)) {
 				return c.json({ skipped: true });
 			}
 
@@ -1175,7 +1176,7 @@ function registerRemember(app: Hono): void {
 			);
 			if (conflict) return conflict;
 
-			if (checkBypass(body)) {
+			if (await checkBypass(body)) {
 				return c.json({ success: true, memories: [], bypassed: true });
 			}
 
@@ -1228,7 +1229,7 @@ function registerRecall(app: Hono): void {
 				);
 				if (conflict) return conflict;
 
-				if (checkBypass(body)) {
+				if (await checkBypass(body)) {
 					c.header("x-signet-operation-skipped", "1");
 					return c.json(emptyHookRecallResponse(body.query, { bypassed: true }));
 				}
@@ -1392,7 +1393,7 @@ function registerPreCompaction(app: Hono): void {
 			);
 			if (duplicate) return c.json(duplicate);
 
-			if (checkBypass(body)) {
+			if (await checkBypass(body)) {
 				return c.json({ instructions: "", bypassed: true });
 			}
 
@@ -1459,7 +1460,7 @@ function registerCompactionComplete(app: Hono): void {
 			);
 			if (duplicate) return c.json(duplicate);
 
-			if (checkBypass(body)) {
+			if (await checkBypass(body)) {
 				return c.json({ success: true, bypassed: true });
 			}
 

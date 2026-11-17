@@ -90,6 +90,12 @@ curl -fsS "$SIGNET_DAEMON_URL/api/auth/whoami" \
 
 A scope can restrict a credential by agent, project, or user. Use the narrowest role and scope that a remote client needs. Admin credentials bypass normal scope restrictions, so keep them short-lived and tightly controlled.
 
+
+Transcript deletion requires `forget` permission for the resolved owning agent.
+`DELETE /api/sessions/:key/transcript?purge=hard` requires `admin` and permanently
+removes attributable memories and their history. An agent credential cannot
+request hard purge. See [Transcript deletion](/api/sessions-hooks/#delete-a-transcript).
+
 ## Password login configuration
 
 Password login is enabled when one of these is available: `SIGNET_ADMIN_PASSWORD`, `SIGNET_ADMIN_PASSWORD_HASH`, or `auth.login.password.passwordHash` in `agent.yaml`. The default username is `admin`; set `SIGNET_ADMIN_USERNAME` or `auth.login.password.username` to change it. Persist a `pbkdf2-sha256$...` hash rather than a plaintext password.

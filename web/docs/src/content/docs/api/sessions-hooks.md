@@ -7,6 +7,60 @@ Harness hook and session lifecycle endpoints.
 
 [Back to HTTP API overview](/api/).
 
+## Delete a transcript
+
+### DELETE /api/sessions/:key/transcript
+
+Delete one resolved agent's session transcript. Send `agent_id` or
+`x-signet-agent-id`, or use a credential scoped to that agent. Cross-agent
+and project-scope conflicts fail closed (`403`); a session with neither an
+owned transcript nor an owned live session returns `404`. A previous deletion
+remains an idempotent target. Optional `project` restricts the target project.
+
+Normal deletion requires `forget` permission and uses its rate limit. It
+removes the transcript row, extraction cursor, queued capture payloads, retained
+uploaded byte ranges, audit previews, legacy artifacts, and canonical JSONL
+records for that session only. Other sessions sharing a
+file survive. Transcript-derived memories are soft-deleted through the memory
+lifecycle; attributable summary nodes and their dependent summary ancestors
+are removed. Capture is bypassed automatically. A durable deletion fence
+prevents late capture, recovery, and normalized reimport from restoring the
+same agent/session key, including after a restart.
+
+Add `?purge=hard` to permanently remove attributable memories and their history.
+Hard purge requires `admin` permission and uses the admin rate limit in team
+and authenticated hybrid mode; local mode is trusted. Retrying a hard purge
+requires the same explicit flag and admin permission. No other `purge` value
+is accepted. Neither mode deletes the harness's original external files or
+user-managed backups, and hard purge is not secure erasure of SQLite free pages.
+
+The database owner performs deletion, with bounded database batches and a
+45-second cleanup budget. File rewrites use the canonical transcript lock and
+preserve unrelated sessions. `200` means all required cleanup completed;
+`202` means capture is fenced but cleanup remains. Retry the same DELETE with
+the same flags. Unsafe managed paths, unavailable legacy upload bytes, or a
+cleanup deadline are reported as pending, never as complete deletion.
+
+```json
+{
+  "status": "deleted",
+  "sessionKey": "session-uuid",
+  "agentId": "alice",
+  "hard": false,
+  "counts": { "transcripts": 1, "cursors": 1, "records": 4, "memories": 2 },
+  "pendingCleanup": []
+}
+```
+
+`counts` reports work completed by this request, not lifetime totals. Keys are
+present only when that kind of cleanup ran. `pendingCleanup` identifies
+`derived_state` or `transcript_bytes`. Historical soft-deleted
+memory content remains inspectable by its normal authorized history paths;
+only hard purge removes it permanently.
+
+The CLI client is `signet session delete-transcript <key> --agent <id>`;
+add `--hard-purge` for hard purge or `--json` for the full result.
+
 ## Hooks
 
 Hook endpoints integrate with AI harness session lifecycle events. They are

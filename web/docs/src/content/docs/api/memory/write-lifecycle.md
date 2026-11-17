@@ -38,6 +38,10 @@ read scope in every auth mode: this list, `GET /memory/search`,
 `GET /memory/similar`, and `GET /api/embeddings`. Only the list, the timeline,
 and `GET /memory/search` accept `all`.
 
+List rows include `project` as a string or `null`; older memories without a
+recorded project remain `null`. This field does not change read scope, filters,
+pagination, or stats.
+
 Listed `content` goes through [credential redaction](#credential-redaction).
 `GET /api/memory/:id` returns the stored content.
 
@@ -79,7 +83,8 @@ Dreaming projections.
       "source_type": "manual",
       "pinned": 0,
       "type": "preference",
-      "agent_id": "default"
+      "agent_id": "default",
+      "project": null
     }
   ],
   "stats": {
@@ -130,7 +135,20 @@ Body-level fields override prefix-parsed values.
 }
 ```
 
-Only `content` is required.
+Only `content` is required. An explicit `project` is stored unchanged. Omission
+keeps the project unset unless the credential supplies a project scope; Signet
+does not infer it from memory text or the daemon's working directory. The CLI
+accepts `signet remember --project <project>`, and Pi command and tool writes
+send the resolved session project.
+
+Chunked writes return `{chunked: true, chunk_count, ids, group_id}` instead of
+`id`. Deduplicated writes add `deduped: true` and may omit embedding status.
+Missing `embedded` means unknown, not a failed write or a missing embedding.
+The CLI prints every chunk ID and the group ID. SDK callers must discriminate
+on `result.chunked`; OpenCode and OpenClaw tools expose the complete chunk
+result. The OpenClaw `memoryStore` string-returning helper returns the group ID
+for chunked writes.
+
 
 `type` is optional. When it is present, the memory is stored with that type,
 trimmed of surrounding whitespace. When it is missing or `null`, the daemon

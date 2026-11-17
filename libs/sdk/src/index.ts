@@ -1,4 +1,4 @@
-import { resolveSignetDaemonUrl } from "@signet/core";
+import { parseRememberResponse, resolveSignetDaemonUrl } from "@signet/core";
 import { buildRecallRequestBody } from "@signet/core/recall";
 import { SignetClientP2 } from "./client-p2.js";
 import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
@@ -109,6 +109,8 @@ export class SignetClient extends SignetClientHelpers {
 			readonly importance?: number;
 			readonly tags?: string;
 			readonly who?: string;
+			readonly project?: string;
+			readonly agentId?: string;
 			readonly pinned?: boolean;
 			readonly sourceType?: string;
 			readonly sourceId?: string;
@@ -124,10 +126,12 @@ export class SignetClient extends SignetClientHelpers {
 			readonly runtimePath?: string;
 		},
 	): Promise<RememberResult> {
-		return this.transport.post<RememberResult>("/api/memory/remember", {
-			content,
-			...opts,
-		});
+		return parseRememberResponse(
+			await this.transport.post<unknown>("/api/memory/remember", {
+				content,
+				...opts,
+			}),
+		);
 	}
 
 	async recall(query: string, opts?: SdkRecallOptions): Promise<RecallResponse> {

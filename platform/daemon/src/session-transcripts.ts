@@ -634,6 +634,13 @@ export function writeSessionTranscriptRow(
 	const { sessionKey, transcript, harness, project, agentId, capturedAt } = input;
 	if (sessionKey.trim().length === 0 || transcript.trim().length === 0) return "skipped";
 	if (!tableExistsInDatabase(db, "session_transcripts")) return "skipped";
+	if (
+		tableExistsInDatabase(db, "session_transcript_deletions") &&
+		db
+			.prepare("SELECT 1 FROM session_transcript_deletions WHERE agent_id = ? AND session_key = ?")
+			.get(agentId, sessionKey)
+	)
+		return "skipped";
 	if (input.sameProjectOnly) {
 		const owner = db
 			.prepare(
@@ -788,7 +795,7 @@ export function markSessionTranscriptCompleted(
 		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
-		}, "session-transcripts.ts:788");
+		}, "session-transcripts.ts:795");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript completion marker failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -851,7 +858,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				completedAt: row.completed_at ?? null,
 				contentHash: row.content_hash ?? null,
 			};
-		}, "session-transcripts.ts:820");
+		}, "session-transcripts.ts:827");
 	} catch {
 		return undefined;
 	}
@@ -919,7 +926,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ siteToken: "session-transcripts.ts:917", operation: "transcripts.lookup", signal },
+			{ siteToken: "session-transcripts.ts:924", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;
@@ -949,7 +956,7 @@ export function getSessionTranscriptContent(
 				| { content: string }
 				| undefined;
 			return row?.content;
-		}, "session-transcripts.ts:940");
+		}, "session-transcripts.ts:947");
 	} catch {
 		return undefined;
 	}
@@ -997,7 +1004,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:973");
+		}, "session-transcripts.ts:980");
 	} catch {
 		return [];
 	}
@@ -1045,7 +1052,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:1028");
+		}, "session-transcripts.ts:1035");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -1088,7 +1095,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:1073");
+						}, "session-transcripts.ts:1080");
 
 					const hits = rows
 						.map((row) => ({
@@ -1158,7 +1165,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1137");
+			}, "session-transcripts.ts:1144");
 
 		return rows
 			.map((row) => ({

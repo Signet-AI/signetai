@@ -1,3 +1,4 @@
+import { up as sessionTranscriptDeletions } from "./174-session-transcript-deletions";
 import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
 import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
 import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
@@ -1592,6 +1593,16 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "memory-artifact-native-path-index",
 		up: memoryArtifactNativePathIndex,
 		artifacts: { indexes: ["idx_memory_artifacts_native_paths"] },
+	},
+	{
+		version: 174,
+		name: "session-transcript-deletions",
+		up: sessionTranscriptDeletions,
+		artifacts: {
+			tables: ["session_transcript_deletions", "session_transcript_deleted_memories"],
+			columns: [{ table: "source_import_records", column: "redacted_bytes" }],
+			indexes: ["idx_source_import_records_session"],
+		},
 	},
 ];
 function checksum(m: Migration): string {

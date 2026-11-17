@@ -218,6 +218,10 @@ export interface DbOwnerTranscriptBulkCommit {
 	};
 }
 export type DbOwnerRequest =
+	| {
+			readonly kind: "session_transcript_delete";
+			readonly input: import("./session-transcript-delete").SessionTranscriptDeleteInput;
+	  }
 	| { readonly kind: "memory_head"; readonly request: import("./memory-head").MemoryHeadRequest }
 	| { readonly kind: "initialize"; readonly agentsDir?: string }
 	| { readonly kind: "query"; readonly statement: DbOwnerStatement }

@@ -1,10 +1,11 @@
 import type { Hono } from "hono";
 import { resolveAgentId } from "../agent-id.js";
-import { requirePermission } from "../auth";
+import { requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { buildBlackBoxSession, listBlackBoxSessions } from "../black-box.js";
 import { listAgentPresence, touchAgentPresence } from "../cross-agent.js";
+import { dbOwnerDeleteSessionTranscript } from "../db-owner-runtime";
 import { getDbAccessor } from "../db-accessor.js";
-import { logger } from "../logger.js";
+import { loadMemoryConfig } from "../memory-config";
 import {
 	type RuntimePath,
 	bypassSession,
@@ -18,9 +19,10 @@ import { getSessionTranscriptContent, getStoredSessionTranscriptInfo } from "../
 import { searchSessionTranscripts } from "../subagent-context.js";
 import { expandTemporalNode } from "../temporal-expand.js";
 import { clampGitSyncIntervalSeconds } from "./git-config.js";
-import { authConfig } from "./state.js";
+import { getCurrentAgentsDir, authConfig, authForgetLimiter, authAdminLimiter } from "./state.js";
 import {
 	parseOptionalString,
+	resolveMutationActor,
 	readOptionalJsonObject,
 	resolveScopedAgentId,
 	resolveScopedProject,
@@ -103,6 +105,13 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		return requirePermission("recall", authConfig)(c, next);
 	});
 	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c, next) => {
+		if (c.req.method === "DELETE")
+			return requirePermissionWithRateLimit(
+				c.req.query("purge") === "hard" ? "admin" : "forget",
+				c.req.query("purge") === "hard" ? "admin" : "forget",
+				c.req.query("purge") === "hard" ? authAdminLimiter : authForgetLimiter,
+				authConfig,
+			)(c, next);
 		return requirePermission("recall", authConfig)(c, next);
 	});
 	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c, next) => {
@@ -186,9 +195,48 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 					project: scopedProject.project,
 					limit,
 				}),
-			"routes/session-routes.ts:178",
+			"routes/session-routes.ts:187",
 		);
 		return c.json({ query, hits, count: hits.length });
+	});
+
+	app.delete("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c) => {
+		const key = normalizeSessionKey(c.req.param("key"));
+		if (!key || key.length > 512) return c.json({ error: "Invalid session key" }, 400);
+		const purge = c.req.query("purge");
+		if (purge !== undefined && purge !== "hard") return c.json({ error: "purge must be hard or omitted" }, 400);
+		const queryAgent = c.req.query("agent_id");
+		const headerAgent = c.req.header("x-signet-agent-id");
+		if (queryAgent && headerAgent && queryAgent.trim() !== headerAgent.trim())
+			return c.json({ error: "Conflicting agent identity" }, 403);
+		const scopedAgent = resolveScopedAgentId(c, queryAgent ?? headerAgent);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const scopedProject = resolveScopedProject(c, c.req.query("project"));
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		const binding = await validateSessionControl(c, key, scopedAgent.agentId, {
+			context: "session",
+			project: scopedProject.project,
+		});
+		if (binding) return c.json({ error: binding }, 403);
+		const basePath = getCurrentAgentsDir();
+		if (loadMemoryConfig(basePath).pipelineV2.mutationsFrozen)
+			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		const active = listLiveSessions(scopedAgent.agentId).some((session) => session.key === key);
+		if (active) bypassSession(key, { allowUnknown: true }, scopedAgent.agentId);
+		const result = await dbOwnerDeleteSessionTranscript({
+			basePath,
+			sessionKey: key,
+			agentId: scopedAgent.agentId,
+			project: scopedProject.project,
+			hard: purge === "hard",
+			changedBy: resolveMutationActor(c).changedBy,
+			active,
+		});
+		if (result.status === "not_found") return c.json({ error: "Transcript not found" }, 404);
+		if (result.status === "forbidden")
+			return c.json({ error: "Session deletion is outside the authorized scope or purge mode" }, 403);
+		bypassSession(key, { allowUnknown: true }, scopedAgent.agentId);
+		return c.json(result, result.pendingCleanup.length ? 202 : 200);
 	});
 
 	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", (c) => {
@@ -372,7 +420,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:372",
+			"routes/session-routes.ts:420",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -423,7 +471,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:382");
+		}, "routes/session-routes.ts:430");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {

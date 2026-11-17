@@ -136,6 +136,12 @@ A browser session lasts `auth.sessionTokenTtlSeconds`, and never longer than the
 - After too many failed sign-ins, the form counts down until it accepts another attempt.
 - **Sign out of this browser**, in the topbar menu, ends the session in that browser only.
 
+
+Transcript deletion requires `forget` permission for the resolved owning agent.
+`DELETE /api/sessions/:key/transcript?purge=hard` requires `admin` and permanently
+removes attributable memories and their history. An agent credential cannot
+request hard purge. See [Transcript deletion](/api/sessions-hooks/#delete-a-transcript).
+
 ## Remove someone's access
 
 Revoke their key in **Settings → API keys**, or from the CLI:

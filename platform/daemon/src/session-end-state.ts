@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import { resolveAgentId } from "./agent-id";
+import { normalizeSessionKey } from "./session-key";
+export { normalizeSessionKey } from "./session-key";
 
 const sessionEndSeen = new Map<string, number>();
 const SESSION_END_SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -23,13 +25,6 @@ export function normalizeSessionBoundaryReason(reason: unknown): string | null {
 	if (typeof reason !== "string") return null;
 	const normalized = reason.trim().toLowerCase();
 	return SESSION_BOUNDARY_REASONS.has(normalized) ? normalized : null;
-}
-export function normalizeSessionKey(sessionKey: string): string {
-	const trimmed = sessionKey.trim();
-	if (trimmed.startsWith("session:")) {
-		return trimmed.slice("session:".length);
-	}
-	return trimmed;
 }
 
 function sessionEndDedupeKey(identity: SessionEndIdentity): string | null {

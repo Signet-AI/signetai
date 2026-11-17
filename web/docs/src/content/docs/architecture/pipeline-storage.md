@@ -264,7 +264,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `173-memory-artifact-native-path-index.ts`.
+`schema_migrations_audit`. The latest migration is `174-session-transcript-deletions.ts`.
 
 ### Evidence and semantic state
 
@@ -285,6 +285,11 @@ session, and request identifiers.
 **`session_transcripts`** stores the canonical retained conversation index. Its
 current lifecycle fields include completion and content-hash metadata, in
 addition to session, harness, project, agent, content, and timestamps.
+
+**`session_transcript_deletions`** retains agent/session deletion fences, purge
+mode, cleanup paths, and completion state without transcript content.
+**`session_transcript_deleted_memories`** retains attributable memory IDs so an
+admin can upgrade a previous soft deletion to hard purge.
 
 **`memory_artifacts`** indexes canonical Markdown history, including source path,
 content hash, artifact kind, session identity, project, harness, timing, and
