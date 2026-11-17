@@ -226,6 +226,29 @@ from the exact owner modules listed by `bun run audit:database-ownership`.
 Type-only SQLite imports remain valid. New runtime owners require an explicit
 architecture change rather than a directory-wide exception.
 
+**Architecture ratchet:** `bun run audit:ratchet` compares committed `HEAD` to
+its merge-base with `origin/main` (`--base <ref>` selects another base ref).
+Per-file counts of raw SQL, swallowed errors, and unchecked request/database
+casts may only decrease. Git-detected renames and copies share their source's
+count, so a copy cannot duplicate debt. New files start at zero; an existing
+destination keeps its own count. There is no generated baseline to update.
+
+Raw SQL has two parts. SQL text is allowed only in the owner files listed in
+the script and in numbered core migrations and their registry. Raw owner
+requests (`ownerReadAll`, `ownerReadOne`, `ownerRun`, `ownerBatch`, and
+`query`/`transaction`/`batch` request kinds) and legacy accessor calls
+(`withReadDb`, `withWriteTx`, `LEGACY_SYNC_DB_ACCESS` markers) count in every
+file, owner files included. Transport modules are not owners merely because the
+worker imports them.
+
+Use core's `attempt` or `attemptAsync` for deliberate expected misses rather
+than adding an empty catch. Only those helpers' own catches are exempt.
+The audit is syntactic: field-level casts such as `row.id as string` are out
+of scope, and `.all`/`.get`/`.run`/`.values` assertions are conservatively
+classified as database boundaries. Retired paths are recorded in
+`scripts/retired-paths.json`; they cannot reappear or be referenced by tracked
+files outside Markdown, `docs/`, and the retirement registry.
+
 **Agent identity:** Harness names describe provenance; they are not fallback
 agent IDs. `bun run audit:agent-identity` rejects implicit `hermes-agent`
 fallbacks while preserving explicit harness labels and comparisons.

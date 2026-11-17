@@ -192,12 +192,14 @@ function count(path: string, content: string): CountsWithDetails {
 		const bindings = clause?.namedBindings;
 		if (bindings && ts.isNamedImports(bindings))
 			for (const element of bindings.elements) {
-				if (swallowName.test(element.name.text)) swallowing.add(element.name.text);
+				if (swallowName.test(element.name.text) || swallowName.test(element.propertyName?.text ?? ""))
+					swallowing.add(element.name.text);
 			}
 	}
 	const collect = (node: ts.Node): void => {
 		if (
 			ts.isFunctionDeclaration(node) &&
+			node.parent === source &&
 			node.name &&
 			node.body &&
 			(swallowName.test(node.name.text) || swallowed(node.body))
@@ -210,7 +212,8 @@ function count(path: string, content: string): CountsWithDetails {
 					(ts.isArrowFunction(init) || ts.isFunctionExpression(init)) &&
 					(swallowName.test(node.name.text) || swallowed(init.body)) &&
 					ts.isVariableDeclarationList(node.parent) &&
-					node.parent.flags & ts.NodeFlags.Const
+					node.parent.flags & ts.NodeFlags.Const &&
+					node.parent.parent.parent === source
 				)
 					swallowing.add(node.name.text);
 				const original = name(init);

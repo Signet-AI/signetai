@@ -440,6 +440,25 @@ test("callback evasions are counted", () => {
 	});
 });
 
+test("named callbacks resolve aliased imports and module-scope declarations only", () => {
+	const root = fixture({ "README.md": "base" });
+	write(
+		root,
+		FILE,
+		`import { noop as discard } from "x";
+const quiet = () => {};
+function first() { const handleError = () => {}; work().catch(handleError); }
+function second() { const handleError = (error) => { throw error; }; work().catch(handleError); }
+work().catch(discard); work().catch(quiet);`,
+	);
+	commit(root);
+	const base = git(root, "rev-parse", "origin/main");
+	expect(audit(root)).toEqual({
+		code: 1,
+		output: `Architecture ratchet failed against ${base}:\nfile\tcategory\tbase -> head\n${FILE}\tswallowed-error\t0 -> 2\n`,
+	});
+});
+
 test("request JSON annotations and satisfies are counted", () => {
 	const root = fixture({ "README.md": "base" });
 	write(root, FILE, `const a: Body = await c.req.json().catch(handle); const b = (await req.json()) satisfies Body;`);
