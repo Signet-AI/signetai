@@ -745,6 +745,7 @@ Phase ordering based on hard dependencies and integration contracts.
 ## Spec Registry
 
 Legend:
+- `draft`: proposed design awaiting maintainer review
 - `planning`: design in progress
 - `approved`: accepted design, pending or partial implementation
 - `complete`: delivered baseline or merged strategy
@@ -752,6 +753,7 @@ Legend:
 
 | ID | Status | Path | Hard Depends On | Blocks | Notes |
 |---|---|---|---|---|---|
+| `session-store-routing-and-transfer` | draft | `docs/specs/drafts/session-store-routing-and-transfer.md` | - | - | Issue #2177: frozen connector session bindings, daemon-owned evidence transfer with verified source cleanup, and optional personal-side read-through recall; integrates with organization mode #2061. |
 | `memory-pipeline-v2` | complete | `docs/specs/complete/memory-pipeline-plan.md` | - | `session-continuity-protocol`, `procedural-memory-plan`, `knowledge-architecture-schema`, `predictive-memory-scorer`, `signet-runtime` | Model selection for extraction and session synthesis is owned by the canonical inference workload; retired pipeline provider fields are rejected rather than resolved locally. |
 | `session-continuity-protocol` | complete | `docs/specs/complete/session-continuity-protocol.md` | `memory-pipeline-v2` | `knowledge-architecture-schema`, `predictive-memory-scorer` | |
 | `prompt-context-contract` | complete | `docs/specs/complete/prompt-context-contract.md` | `session-continuity-protocol`, `signet-runtime` | - | Deterministic, hash-addressed memory injection across harnesses; injected context stays outside canonical transcripts and provider output fences are scrubbed. |

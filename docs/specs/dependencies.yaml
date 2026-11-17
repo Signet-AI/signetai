@@ -1,7 +1,25 @@
 version: 3
-updated_at: "2026-08-10"
+updated_at: "2026-11-17"
 
 specs:
+  - id: session-store-routing-and-transfer
+    status: draft
+    path: docs/specs/drafts/session-store-routing-and-transfer.md
+    hard_depends_on: []
+    soft_depends_on:
+      - explicit-recall-surface-alignment
+      - jsonl-transcript-source-of-truth
+      - multi-agent-support
+    blocks: []
+    informed_by:
+      - https://github.com/Signet-AI/signetai/issues/2177
+      - https://github.com/Signet-AI/signetai/issues/2061
+    success_criteria:
+      - "Every connector operation uses one frozen, authorized session store binding"
+      - "A resumable daemon-owned transfer verifies target evidence before source cleanup"
+      - "Optional personal-side recall labels origins without persisting personal results in a team store"
+    decision: null
+
   - id: memory-pipeline-v2
     status: complete
     path: docs/specs/complete/memory-pipeline-plan.md
