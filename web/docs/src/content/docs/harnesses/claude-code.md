@@ -36,7 +36,7 @@ The default daemon session-start budget is 15 seconds, so the default installed 
 
 Likewise, the prompt-submit hook uses the resolved `SIGNET_PROMPT_SUBMIT_TIMEOUT` plus two seconds. Existing settings are not changed until setup or connector installation runs again.
 
-The `Stop` hook never delays, blocks, or continues a turn. It records the reply that ends each turn, which Claude Code passes as `last_assistant_message`. Claude Code runs it in the background, and [`signet hook stop`](/cli/integrations-security/#signet-hook) prints nothing.
+The `Stop` hook never delays, blocks, or continues a turn. It records the reply that ends each turn, which Claude Code passes as `last_assistant_message`. Claude Code runs it in the background, and [`signet hook stop`](/cli/integrations-security/#signet-hook) writes no stdout. Failures are reported on stderr.
 
 Because the hook runs in the background, a reply can be recorded after the next prompt. A successful SessionEnd import of the complete source transcript restores source order in the canonical JSONL file. The `session_transcripts` row appends imported content after its live content and may retain both orders. `claude -p` stops unfinished async hooks on exit, so its last reply can be missing until source capture recovers it. Disabling SessionEnd removes that recovery path.
 

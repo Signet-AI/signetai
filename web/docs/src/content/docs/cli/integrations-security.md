@@ -222,9 +222,10 @@ When hook payloads are provided over stdin, the CLI now prefers canonical
 provided, while still carrying legacy `userPrompt` compatibility fields.
 `signet hook session-end` forwards both stdin `transcript_path` /
 `transcriptPath` and inline `transcript` content for lossless capture.
-`signet hook stop` prints nothing, because Claude Code reads Stop hook output
-as a decision. It reads `last_assistant_message` and `cwd` from stdin, skips
-the daemon call when the payload has no session or no reply, and stops waiting
+`signet hook stop` writes no stdout, because Claude Code reads Stop hook output
+as a decision. Failures are reported on stderr. It reads `last_assistant_message`
+and `cwd` from stdin, skips the daemon call when the payload has no session or
+no reply, and stops waiting
 for the daemon after 10 seconds. On an HTTP 503 it tries again, up to 3 attempts
 one second apart, within that limit. It does not retry timeouts or other errors.
 `signet hook compaction-complete` also forwards stdin `cwd` as the fallback

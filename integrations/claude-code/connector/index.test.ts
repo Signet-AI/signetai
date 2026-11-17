@@ -366,9 +366,12 @@ describe("ClaudeCodeConnector user hooks", () => {
 	]) {
 		it(`detects, replaces and removes hooks invoked with ${executable}`, async () => {
 			const command = `${executable} hook session-start -H claude-code --project "$(pwd)"`;
+			const stop = `${executable} hook stop -H claude-code`;
+			const userStop = { type: "command", command: "my-wrapper hook stop -H claude-code" };
 			const settings = {
 				hooks: {
 					SessionStart: [userGroup("SessionStart"), { hooks: [{ type: "command", command }] }],
+					Stop: [{ matcher: "*", hooks: [userStop, { type: "command", command: stop }] }],
 				},
 			};
 			writeSettings(settings);
@@ -379,9 +382,12 @@ describe("ClaudeCodeConnector user hooks", () => {
 			expect(commands(readHooks().SessionStart).filter((value) => value.includes("hook session-start"))).toHaveLength(
 				1,
 			);
+			expect(commands(readHooks().Stop).filter((value) => value.startsWith("signet hook stop "))).toHaveLength(1);
+			expect(readHooks().Stop?.[0]).toEqual({ matcher: "*", hooks: [userStop] });
 			writeSettings(settings);
 			await connector.uninstall();
 			expect(readHooks().SessionStart).toEqual([userGroup("SessionStart")]);
+			expect(readHooks().Stop).toEqual([{ matcher: "*", hooks: [userStop] }]);
 			expect(connector.isInstalled()).toBe(false);
 		});
 	}

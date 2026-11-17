@@ -1775,6 +1775,81 @@ describe("direct transcript regressions", () => {
 		});
 	});
 
+	test.serial("preserves a Stop reply missing from a source snapshot until a later snapshot matches it", async () => {
+		createMemoryDb([]);
+		const { writeCanonicalTranscriptFromSnapshot } = await import("./transcript-capture");
+		const sessionKey = "claude-stop-source-snapshot";
+		const message = "Stop-only reply.\n\nKeep its paragraph spacing.";
+		const project = "/source-project";
+		expect(
+			await handleStop({
+				harness: "claude-code",
+				sessionKey,
+				agentId: "default",
+				cwd: project,
+				lastAssistantMessage: message,
+			}),
+		).toEqual({ recorded: true });
+		const original = canonicalSessionRecords("claude-code", sessionKey)[0];
+		const transcriptPath = join(TEST_DIR, "stop-source.jsonl");
+		const snapshot = async (transcript: string) => {
+			writeFileSync(transcriptPath, transcript);
+			return await writeCanonicalTranscriptFromSnapshot({
+				basePath: TEST_DIR,
+				agentId: "default",
+				harness: "claude-code",
+				sessionKey,
+				project,
+				transcriptPath,
+				rawTranscript: transcript,
+				transcript,
+			});
+		};
+		const source = "User: source prompt\nAssistant: source reply";
+		expect(await snapshot(source)).toBe(`${source}\nAssistant: ${message}`);
+		const retained = canonicalSessionRecords("claude-code", sessionKey);
+		expect(retained.map((record) => [record.role, record.content, record.seq])).toEqual([
+			["user", "source prompt", 1],
+			["assistant", "source reply", 2],
+			["assistant", message, 3],
+		]);
+		expect(retained[2]).toMatchObject({
+			agent_id: "default",
+			project,
+			source_format: "live",
+			captured_at: original?.captured_at,
+		});
+		expect(retained[2]?.source_path).toBeUndefined();
+
+		const complete = `${source}\nAssistant: ${message}`;
+		expect(await snapshot(complete)).toBe(complete);
+		const matched = canonicalSessionRecords("claude-code", sessionKey);
+		expect(matched).toHaveLength(3);
+		expect(matched[2]).toMatchObject({
+			role: "assistant",
+			content: message,
+			source_format: "markdown",
+			source_path: transcriptPath,
+		});
+		expect(matched.some((record) => record.source_format === "live")).toBe(false);
+		expect(await snapshot(complete)).toBe(complete);
+		expect(canonicalSessionRecords("claude-code", sessionKey)).toEqual(matched);
+
+		await handleStop({
+			harness: "claude-code",
+			sessionKey,
+			agentId: "default",
+			lastAssistantMessage: "After the snapshot.",
+		});
+		expect(canonicalSessionRecords("claude-code", sessionKey).map((record) => record.seq)).toEqual([1, 2, 3, 4]);
+		const stored = await getDbAccessor().withReadDbAsync((db) =>
+			db
+				.prepare("SELECT content, project FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get(sessionKey, "default"),
+		);
+		expect(stored).toEqual({ content: `Assistant: ${message}\nAssistant: After the snapshot.`, project });
+	});
+
 	test.serial("records nothing for a turn-end reply without text", async () => {
 		createMemoryDb([]);
 
