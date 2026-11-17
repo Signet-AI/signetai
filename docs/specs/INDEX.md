@@ -9,9 +9,6 @@ that defines how approved specs compose into a coherent system. If we are
 deciding what ships next, this file is the first stop. If we are building
 a spec, this file defines how it connects to everything else.
 
-Source of truth for dependency metadata:
-- `docs/specs/dependencies.yaml`
-
 Conceptual north stars:
 - `web/docs/src/content/docs/knowledge-architecture.md`
 - `web/docs/src/content/docs/north-star-ontology.md`
@@ -432,10 +429,8 @@ cannot suppress them. This is a hard retrieval invariant.
 
 ### Ontology Governance Workflow <-> INDEX / CI
 
-- Any ontology-impacting schema PR must update: spec file, `dependencies.yaml`,
-  and this index registry in the same change.
-- CI contract checks block merge on ID/status/path drift between INDEX and
-  dependencies metadata.
+- Any ontology-impacting schema PR must update the spec file and this index
+  registry in the same change.
 - Medium/high-risk ontology changes require explicit compatibility and rollback
   notes before promotion from planning to approved.
 
@@ -966,10 +961,9 @@ team bandwidth allows.
 
 ## Dependency Tracking Rules
 
-1. Every new spec gets a stable ID and entry in `dependencies.yaml`.
-2. If a spec introduces a new hard dependency, update both:
-   - `docs/specs/dependencies.yaml`
-   - this file's registry and graph if the dependency is on the critical path.
+1. Every new spec gets a stable ID.
+2. If a spec introduces a new hard dependency, update this file's registry and
+   graph if the dependency is on the critical path.
 3. Hard dependency means: implementation work should not merge ahead of the
    dependency unless explicitly marked partial/spike.
 4. Soft dependency means: work can run in parallel, but interfaces must be
@@ -977,8 +971,3 @@ team bandwidth allows.
 5. Cross-cutting invariants (above) override individual spec decisions.
    If a spec contradicts an invariant, the spec must be updated.
 
-Validation command:
-- `bun scripts/spec-deps-check.ts`
-- Script: `scripts/spec-deps-check.ts`
-- Checks: unknown IDs, hard-dependency cycles, missing spec paths,
-  and `INDEX.md` <-> `dependencies.yaml` drift (ID/status/path).
