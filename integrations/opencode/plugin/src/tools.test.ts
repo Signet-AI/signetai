@@ -1,8 +1,43 @@
 import { describe, expect, test } from "bun:test";
+import { createDaemonClient } from "./daemon-client.js";
 import type { DaemonClient } from "./daemon-client.js";
 import { createTools } from "./tools.js";
 
 describe("createTools", () => {
+	test.each([false, true])("both remember tools report every chunk and group (deduped=%s)", async (deduped) => {
+		const server = Bun.serve({
+			port: 0,
+			fetch: () =>
+				Response.json({ chunked: true, chunk_count: 2, ids: ["part-one", "part-two"], group_id: "group-one", deduped }),
+		});
+		try {
+			const tools = createTools(createDaemonClient(`http://127.0.0.1:${server.port}`));
+			for (const name of ["memory_store", "remember"]) {
+				const tool = tools[name];
+				if (!tool) throw new Error("Remember tool missing");
+				const result = await tool.execute(
+					{ content: "long memory" },
+					{
+						sessionID: "session",
+						messageID: "message",
+						agent: "agent",
+						directory: "/project",
+						worktree: "/project",
+						abort: new AbortController().signal,
+						metadata(): void {},
+						async ask(): Promise<void> {},
+					},
+				);
+				expect(result).toContain("part-one");
+				expect(result).toContain("part-two");
+				expect(result).toContain("group-one");
+				expect(result).toContain(`"deduped":${deduped}`);
+			}
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	test("memory_search uses canonical defaults, bounds, and scope serialization", async () => {
 		const captured: unknown[] = [];
 		const client = {

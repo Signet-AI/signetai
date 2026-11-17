@@ -4,6 +4,7 @@ import {
 	buildRememberRequestBody,
 	formatRecallText,
 	parseRecallPayload,
+	parseRememberResponse,
 } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
@@ -39,6 +40,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("-i, --importance <n>", "Importance (0-1)", Number.parseFloat, 0.7)
 		.option("--critical", "Mark as critical (pinned)", false)
 		.option("--agent <name>", "Agent ID to associate with this memory")
+		.option("--project <project>", "Project to associate with this memory")
 		.option("--hint <hint>", "Prospective recall hint (repeatable)", collectHint)
 		.option("--occurred-at <iso>", "Event time this memory is about")
 		.option("--observed-at <iso>", "Observation time this memory records")
@@ -61,6 +63,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					importance: options.importance,
 					pinned: options.critical,
 					agentId: options.agent,
+					project: options.project,
 					hints: options.hint,
 					occurredAt: options.occurredAt,
 					observedAt: options.observedAt,
@@ -79,13 +82,22 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 				process.exit(1);
 			}
 
-			const result = typeof data === "object" && data !== null ? data : {};
-			const id = typeof result.id === "string" ? result.id : "unknown";
+			const result = parseRememberResponse(data);
+			const label = result.deduped ? "Already saved" : "Saved";
+			if (result.chunked) {
+				spinner.succeed(`${label} ${result.chunk_count} chunks: ${chalk.cyan(result.group_id)}`);
+				for (const id of result.ids) console.log(`  ${chalk.cyan(id)}`);
+				return;
+			}
 			const pinned = result.pinned === true;
-			const embedded = result.embedded === true;
-			const tags = typeof result.tags === "string" ? result.tags : undefined;
-			const embedStatus = embedded ? chalk.dim(" (embedded)") : chalk.yellow(" (no embedding)");
-			spinner.succeed(`Saved memory: ${chalk.cyan(id)}${embedStatus}`);
+			const tags = result.tags;
+			const embedStatus =
+				result.embedded === undefined
+					? ""
+					: result.embedded
+						? chalk.dim(" (embedded)")
+						: chalk.yellow(" (no embedding)");
+			spinner.succeed(`${label} memory: ${chalk.cyan(result.id)}${embedStatus}`);
 
 			if (pinned) {
 				console.log(chalk.dim("  Marked as critical"));

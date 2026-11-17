@@ -157,6 +157,7 @@ export interface RecallRequestOptions {
 export type RecallSurface = "explicit_api" | "tool_call" | "prompt_injection" | "dashboard" | "other";
 
 export interface RememberRequestOptions {
+	readonly project?: string;
 	readonly type?: string;
 	readonly importance?: number;
 	readonly tags?: string | readonly string[];
@@ -457,6 +458,7 @@ export function buildRememberRequestBody(
 ): Record<string, unknown> {
 	return withDefined({
 		content,
+		project: options.project,
 		type: options.type,
 		importance: options.importance,
 		tags: normalizeRememberTags(options.tags),

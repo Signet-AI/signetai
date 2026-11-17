@@ -3,6 +3,8 @@ import {
 	applyRecallScoreThreshold,
 	buildRecallRequestBody,
 	buildRememberRequestBody,
+	parseRememberResponse,
+	type RememberResult,
 	formatRecallText,
 } from "@signet/core";
 import type { DaemonClient } from "./daemon-client.js";
@@ -90,8 +92,8 @@ async function storeMemory(
 		readonly pinned?: boolean;
 		readonly review_after?: string;
 	},
-): Promise<{ readonly offline: true } | { readonly offline: false; readonly id?: string; readonly memoryId?: string }> {
-	const result = await client.post<{ readonly id?: string; readonly memoryId?: string }>(
+): Promise<{ readonly offline: true } | { readonly offline: false; readonly result: RememberResult }> {
+	const result = await client.post<unknown>(
 		"/api/memory/remember",
 		buildRememberRequestBody(args.content, {
 			type: args.type,
@@ -105,7 +107,7 @@ async function storeMemory(
 		WRITE_TIMEOUT,
 	);
 
-	return result === null ? { offline: true } : { offline: false, ...result };
+	return result === null ? { offline: true } : { offline: false, result: parseRememberResponse(result) };
 }
 
 export function createTools(client: DaemonClient, agentId?: string): Record<string, ReturnType<typeof tool>> {
@@ -145,8 +147,9 @@ export function createTools(client: DaemonClient, agentId?: string): Record<stri
 			async execute(args): Promise<string> {
 				const result = await storeMemory(client, agentId, args);
 				if (result.offline) return DAEMON_OFFLINE_MSG;
-				const id = result.id ?? result.memoryId;
-				return id ? `Memory saved${args.pinned ? " (pinned)" : ""} (id: ${id})` : "Memory saved.";
+				return result.result.chunked
+					? JSON.stringify(result.result)
+					: `Memory saved${args.pinned ? " (pinned)" : ""} (id: ${result.result.id})`;
 			},
 		}),
 
@@ -276,8 +279,9 @@ export function createTools(client: DaemonClient, agentId?: string): Record<stri
 			async execute(args): Promise<string> {
 				const result = await storeMemory(client, agentId, args);
 				if (result.offline) return DAEMON_OFFLINE_MSG;
-				const id = result.id ?? result.memoryId;
-				return id ? `Saved${args.pinned ? " (pinned)" : ""}: ${args.content.slice(0, 50)}` : "Saved.";
+				return result.result.chunked
+					? JSON.stringify(result.result)
+					: `Saved${args.pinned ? " (pinned)" : ""}: ${args.content.slice(0, 50)}`;
 			},
 		}),
 

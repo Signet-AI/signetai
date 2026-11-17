@@ -991,9 +991,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const whereSql = `WHERE COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}${type ? " AND m.type = ?" : ""}`;
 			const whereArgs = [...scope.args, ...(type ? [type] : [])];
 
-			const memories = await dbOwnerQuery<Array<{ content: string }>>(
+			const memories = await dbOwnerQuery<Array<{ content: string; project: string | null }>>(
 				{
-					sql: `SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type, m.agent_id
+					sql: `SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type, m.agent_id, m.project
 					 FROM memories m
 					 ${whereSql}
 					 ORDER BY m.created_at DESC

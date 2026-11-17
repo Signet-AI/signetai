@@ -6,6 +6,8 @@ import {
 	applyRecallScoreThreshold,
 	buildRecallRequestBody,
 	buildRememberRequestBody,
+	parseRememberResponse,
+	type RememberResult,
 	formatRecallText,
 	parseRecallPayload,
 	readStaticIdentity,
@@ -613,20 +615,24 @@ export async function sessionSearch(
 	});
 }
 
-export async function memoryStore(
-	content: string,
-	options: {
-		daemonUrl?: string;
-		type?: string;
-		importance?: number;
-		tags?: string | readonly string[];
-		who?: string;
-		reviewAfter?: string;
-		agentId?: string;
-	} = {},
-): Promise<string | null> {
+export interface MemoryStoreOptions {
+	readonly daemonUrl?: string;
+	readonly type?: string;
+	readonly importance?: number;
+	readonly tags?: string | readonly string[];
+	readonly who?: string;
+	readonly reviewAfter?: string;
+	readonly agentId?: string;
+}
+
+export async function memoryStore(content: string, options: MemoryStoreOptions = {}): Promise<string | null> {
+	const result = await storeMemoryResult(content, options);
+	return result ? (result.chunked ? result.group_id : result.id) : null;
+}
+
+async function storeMemoryResult(content: string, options: MemoryStoreOptions): Promise<RememberResult | null> {
 	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const result = await daemonFetch<{ id?: string; memoryId?: string }>(daemonUrl, "/api/memory/remember", {
+	const result = await daemonFetch<unknown>(daemonUrl, "/api/memory/remember", {
 		method: "POST",
 		body: buildRememberRequestBody(content, {
 			type: options.type,
@@ -638,7 +644,7 @@ export async function memoryStore(
 		}),
 		timeout: WRITE_TIMEOUT,
 	});
-	return result?.id || result?.memoryId || null;
+	return result === null ? null : parseRememberResponse(result);
 }
 
 export async function memoryGet(
@@ -1426,15 +1432,17 @@ const signetPlugin = {
 							tags?: string;
 						};
 						try {
-							const id = await memoryStore(content, {
+							const saved = await storeMemoryResult(content, {
 								...opts,
 								type,
 								importance,
 								tags,
 								agentId: readString(toolCtx.agentId),
 							});
-							if (id) {
-								return textResult(`Memory saved successfully (id: ${id})`, { id });
+							if (saved) {
+								if (saved.chunked)
+									return textResult(`Saved ${saved.chunk_count} chunks (group: ${saved.group_id})`, { ...saved });
+								return textResult(`Memory saved successfully (id: ${saved.id})`, { id: saved.id });
 							}
 							return textResult("Failed to save memory.", {
 								error: "no id returned",

@@ -37,7 +37,11 @@ function mockDaemon(responseOverride?: (req: RecordedRequest) => unknown): { ser
 			};
 			recorded.push(entry);
 
-			const responseBody = responseOverride ? responseOverride(entry) : { ok: true };
+			const responseBody = responseOverride
+				? responseOverride(entry)
+				: entry.path === "/api/memory/remember"
+					? { id: "memory" }
+					: { ok: true };
 			return Response.json(responseBody);
 		},
 	});
@@ -66,12 +70,48 @@ afterEach(() => {
 });
 
 describe("SignetClient", () => {
+	test.each([
+		{ chunked: true, chunk_count: 2, ids: ["only-one"], group_id: "group" },
+		{ chunked: true, chunk_count: 0, ids: [], group_id: "group" },
+		{ chunked: true, chunk_count: 1, ids: [""], group_id: "group" },
+		{ chunked: true, chunk_count: 1, ids: ["part"], group_id: "" },
+	])("remember rejects an incomplete chunked response: %j", async (response) => {
+		const { client } = mockDaemon(() => response);
+		await expect(client.remember("long memory")).rejects.toThrow("Invalid chunked remember response");
+	});
+
+	test.each([false, true])("remember returns chunked IDs and project writes (deduped=%s)", async (deduped) => {
+		const { client } = mockDaemon(() => ({
+			chunked: true,
+			chunk_count: 2,
+			ids: ["part-one", "part-two"],
+			group_id: "group",
+			deduped,
+		}));
+		const result = await client.remember("long memory", { project: "workspace" });
+		expect(result.chunked).toBe(true);
+		if (!result.chunked) throw new Error("Expected chunked response");
+		expect(result.ids).toEqual(["part-one", "part-two"]);
+		expect(result.group_id).toBe("group");
+		expect(result.deduped).toBe(deduped);
+		expect(lastRequest().body).toMatchObject({ project: "workspace" });
+	});
+
+	test("remember normalizes a legacy dedupe ID without inventing embedding status", async () => {
+		const { client } = mockDaemon(() => ({ memoryId: "existing", deduped: true }));
+		const result = await client.remember("existing memory");
+		if (result.chunked) throw new Error("Expected single memory");
+		expect(result.id).toBe("existing");
+		expect(result.deduped).toBe(true);
+		expect(result.embedded).toBeUndefined();
+	});
+
 	test("uses IPv4 loopback for the implicit daemon URL", async () => {
 		const originalFetch = globalThis.fetch;
 		let requestedUrl = "";
 		globalThis.fetch = async (input) => {
 			requestedUrl = String(input);
-			return Response.json({ ok: true });
+			return Response.json({ id: "memory" });
 		};
 
 		try {
