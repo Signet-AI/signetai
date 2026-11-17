@@ -1,3 +1,4 @@
+export { attempt, attemptAsync } from "./attempt";
 export { Signet } from "./signet";
 export { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
 export {
