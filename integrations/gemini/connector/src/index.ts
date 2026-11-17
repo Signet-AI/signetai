@@ -70,6 +70,7 @@ export class GeminiConnector extends BaseConnector {
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
+		resolveSignetMcpCommand();
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));

@@ -213,6 +213,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 		this.daemonUrl = config.daemonUrl || "http://127.0.0.1:3850";
 	}
 	async install(basePath: string): Promise<InstallResult> {
+		resolveSignetCliCommand();
 		const expandedBasePath = expandHome(basePath);
 		const settingsPath = this.getConfigPath();
 		const settings = readClaudeSettings(settingsPath);

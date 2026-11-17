@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
@@ -195,6 +195,23 @@ function writeHermesMemoryFixture(hermesRepo: string): void {
 		].join("\n"),
 	);
 }
+
+const authFetch = globalThis.fetch;
+let auth: ReturnType<typeof spyOn>;
+beforeEach(() => {
+	auth = spyOn(globalThis, "fetch").mockImplementation(
+		Object.assign(
+			(input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+				String(input).endsWith("/api/mode")
+					? Promise.resolve(Response.json({ requiresAuth: true }))
+					: authFetch(input, init),
+			{ preconnect: authFetch.preconnect },
+		),
+	);
+});
+afterEach(() => {
+	auth.mockRestore();
+});
 
 beforeEach(() => {
 	tmpRoot = realpathSync(mkdtempSync(join(tmpdir(), "signet-hermes-connector-")));
@@ -755,7 +772,7 @@ describe("HermesAgentConnector.install()", () => {
 		const hermesHome = join(tmpRoot, ".hermes");
 		process.env.HERMES_REPO = hermesRepo;
 		process.env.HERMES_HOME = hermesHome;
-		process.env.SIGNET_DAEMON_URL = "https://daemon.example.test:8443/api/ignored";
+		process.env.SIGNET_DAEMON_URL = "https://daemon.example.test:8443";
 		process.env.SIGNET_API_KEY = " sig_sk_hermes_test_secret \n";
 
 		const result = await new HermesAgentConnector().install(tmpRoot);
@@ -763,7 +780,7 @@ describe("HermesAgentConnector.install()", () => {
 		const envPath = join(hermesHome, ".env");
 		expect(result.configsPatched).toContain(envPath);
 		const envContent = await Bun.file(envPath).text();
-		expect(envContent).toContain("SIGNET_DAEMON_URL=https://daemon.example.test:8443/api/ignored");
+		expect(envContent).toContain("SIGNET_DAEMON_URL=https://daemon.example.test:8443");
 		expect(envContent).toContain("SIGNET_API_KEY=sig_sk_hermes_test_secret");
 		expect(envContent).toContain("SIGNET_TRUSTED_DAEMON_ORIGINS=https://daemon.example.test:8443");
 	});
@@ -891,6 +908,7 @@ describe("HermesAgentConnector.install()", () => {
 		const originalFetch = globalThis.fetch;
 		const calls: Array<{ url: string; init?: RequestInit }> = [];
 		globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			if (String(url).endsWith("/api/mode")) return Response.json({ requiresAuth: true });
 			calls.push({ url: String(url), init });
 			if (String(url).endsWith("/api/agents/dot")) {
 				return new Response(JSON.stringify({ error: "not found" }), { status: 404 });
@@ -931,6 +949,7 @@ describe("HermesAgentConnector.install()", () => {
 		const originalFetch = globalThis.fetch;
 		const calls: Array<{ url: string; init?: RequestInit }> = [];
 		globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			if (String(url).endsWith("/api/mode")) return Response.json({ requiresAuth: true });
 			calls.push({ url: String(url), init });
 			return new Response("unauthorized", { status: 401 });
 		}) as typeof fetch;

@@ -25,6 +25,7 @@
 	},
 	"dependencies": {
 		"@signet/connector-base": "1.0.1",
+		"smol-toml": "^1.9.1",
 		"@signet/core": "1.0.1"
 	},
 	"devDependencies": {

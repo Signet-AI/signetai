@@ -27,42 +27,53 @@ Hooks are HTTP endpoints exposed by the Signet [Daemon](/daemon/). Harnesses cal
 
 ## Installed hook and MCP launchers
 
-Claude Code, Codex, and Gemini installation and `signet sync` resolve launchers
-in this order:
+Connectors that register executable launchers (Claude Code, Codex, Gemini, Kimi,
+Muse Code, ForgeCode, and OpenCode) resolve them in this order:
 
-1. `SIGNET_HOOK_COMMAND`, when set.
-2. The Signet launcher already registered in that harness's hooks or MCP entry.
+1. `SIGNET_HOOK_COMMAND`, then `SIGNET_CLI_PATH`, when set.
+2. The recognized Signet launcher already registered in that harness's hooks or MCP entry.
 3. Package/runtime discovery, with the running executable as the last resort.
 
-Existing launchers are retained even when their paths are not visible inside the
-installer's container. Sync preserves other tools' hook groups and MCP servers.
-Command arguments and the MCP worker environment are preserved together.
+Existing host paths do not need to exist inside the installer's container.
+Recognized CLI launchers are a `signet` executable with no extra arguments, or
+`node`/`bun` with one `signet.js` path, including Windows executable forms. MCP
+entries must use `signet-mcp`, a Signet CLI with the MCP worker environment, or
+`node`/`bun` with Signet's JavaScript entry. Unrelated programs named in an MCP
+slot called `signet` are replaced, not retained as Signet launchers. Sync keeps
+other tools' hook groups and MCP servers.
 
 For a container-exported CLI, set the host-visible wrapper path explicitly:
 
 ```bash
-SIGNET_HOOK_COMMAND='/host/bin/signet' signet sync
+SIGNET_CLI_PATH='/host/bin/signet' signet sync
 ```
 
-The value is an executable path, not a shell expression. Do not add shell quotes
-inside it; paths containing spaces or quotes are escaped when hooks are written.
-For a JavaScript installation requiring a runtime, use a JSON argument array:
+`SIGNET_CLI_PATH` is one executable path. `SIGNET_HOOK_COMMAND` accepts an
+executable path without whitespace or a nonempty JSON argv array. Use JSON for
+paths containing spaces or for a JavaScript launcher requiring a runtime:
 
 ```bash
+SIGNET_HOOK_COMMAND='["/host/My Tools/signet"]' signet sync
 SIGNET_HOOK_COMMAND='["/host/bin/node","/host/signetai/bin/signet.js"]' signet sync
 ```
 
-MCP registration uses the matching stdio entry for a JavaScript launcher, or sets
-`SIGNET_MCP_STDIO_WORKER=1` for a native Signet launcher. The override is not
-checked against the installer's filesystem. Use it to replace an already broken
-container-only or bare launcher; otherwise sync retains the existing launcher.
+Neither override is a shell expression or checked against the installer's
+filesystem. `SIGNET_HOOK_COMMAND` wins when both are set. Invalid hook overrides
+fail before harness configuration is written. Use an override to replace an
+already broken container-only or bare launcher.
 
-Codex probes the target daemon's `/api/mode` once during installation, with a
-one-second timeout. It writes an API key only when `requiresAuth` is `true` and
-removes stale Signet-owned key prefixes when regenerating hooks. A missing URL
-or a loopback address does not imply that auth is disabled. If the probe fails,
-Codex omits the key and prints a warning: check `SIGNET_DAEMON_URL`, start or
-reconnect the daemon, and rerun `signet sync`.
+MCP registration uses the matching stdio entry for a JavaScript launcher, or
+sets `SIGNET_MCP_STDIO_WORKER=1` for a native Signet launcher. Recognized existing
+MCP arguments and noncredential environment values are retained together.
+
+Connectors that persist a daemon key (Codex, Kimi, pi, Oh My Pi, Muse Code,
+ForgeCode, OpenCode, and Hermes Agent) probe the target daemon's `/api/mode` once
+per installation, with a one-second timeout. They persist a key only when
+`requiresAuth` is `true`, and remove stale Signet-owned credentials otherwise.
+A missing URL or a loopback address does not imply that auth is disabled. If the
+probe fails, the connector omits the key and returns a warning: check
+`SIGNET_DAEMON_URL`, start or reconnect the daemon, and rerun `signet sync`.
+Runtime integrations can still read keys from their process environment.
 
 ## Cache-stable prompt context
 

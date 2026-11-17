@@ -18,7 +18,13 @@ import {
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { BaseConnector, type InstallResult, type UninstallResult, resolveSignetApiKey } from "@signet/connector-base";
+import {
+	BaseConnector,
+	type InstallResult,
+	type UninstallResult,
+	resolveSignetApiKey,
+	resolveInstallApiKey,
+} from "@signet/connector-base";
 import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1611,9 +1617,10 @@ export class HermesAgentConnector extends BaseConnector {
 	}
 
 	async install(basePath: string, options: HermesConnectorOptions = {}): Promise<InstallResult> {
+		const auth = await resolveInstallApiKey();
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
-		const warnings: string[] = [];
+		const warnings: string[] = auth.warning ? [auth.warning] : [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
 		const strippedAgentsPath = this.target?.profile ? null : this.stripLegacySignetBlock(expandedBasePath);
 		if (strippedAgentsPath !== null) {
@@ -1698,7 +1705,8 @@ export class HermesAgentConnector extends BaseConnector {
 					signetVars.SIGNET_AGENT_WORKSPACE = agentWorkspace;
 				}
 			}
-			const authToken = sanitizedAuthTokenEnv();
+			const authToken = auth.apiKey;
+			if (!authToken) envContent = envContent.replace(/^(?:SIGNET_API_KEY|SIGNET_TOKEN)=.*(?:\r?\n|$)/gm, "");
 			if (authToken) {
 				signetVars.SIGNET_API_KEY = authToken;
 				signetVars.SIGNET_TOKEN = authToken;

@@ -10,9 +10,10 @@ import {
 	buildSignetRuntimeEnv,
 	isJsonObject,
 	isSignetGeneratedFile,
-	readTrimmedEnv,
 	resolveRemoteDaemonUrl,
 	resolveSignetMcpCommand,
+	resolveInstallApiKey,
+	readMcpLauncher,
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
 import {
@@ -30,8 +31,7 @@ type JsonObject = Record<string, unknown>;
 const API_KEY_FILE_NAME = ".signet-api-key";
 
 function buildPluginBundle(apiKeyFilePath?: string): string {
-	const env = buildSignetRuntimeEnv();
-	if (apiKeyFilePath) Reflect.deleteProperty(env, "SIGNET_API_KEY");
+	const env = buildSignetRuntimeEnv({ apiKey: null });
 	const assignments = Object.entries(env).map(
 		([key, value]) => `process.env[${JSON.stringify(key)}] = ${JSON.stringify(value)};`,
 	);
@@ -105,6 +105,8 @@ export class OpenCodeConnector extends BaseConnector {
 		return `./${relative(opencodePath, this.getPluginFilePath(opencodePath)).replaceAll("\\", "/")}`;
 	}
 	async install(basePath: string): Promise<InstallResult> {
+		resolveSignetMcpCommand();
+		const auth = await resolveInstallApiKey();
 		const filesWritten: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
 		const daemonUrl = configuredDaemonUrl();
@@ -138,7 +140,7 @@ export class OpenCodeConnector extends BaseConnector {
 			mkdirSync(pluginsPath, { recursive: true });
 		}
 		this.migrateFromLegacy(opencodePath);
-		const apiKey = readTrimmedEnv("SIGNET_API_KEY") ?? readTrimmedEnv("SIGNET_TOKEN");
+		const apiKey = auth.apiKey;
 		const apiKeyFilePath = this.getApiKeyFilePath(opencodePath);
 		if (apiKey) {
 			atomicWriteText(apiKeyFilePath, `${apiKey}\n`, 0o600);
@@ -178,6 +180,7 @@ export class OpenCodeConnector extends BaseConnector {
 		return {
 			success: true,
 			message: "OpenCode integration installed successfully",
+			warnings: auth.warning ? [auth.warning] : [],
 			filesWritten,
 		};
 	}
@@ -321,9 +324,14 @@ export class OpenCodeConnector extends BaseConnector {
 	}
 
 	private registerMcpServer(opencodePath: string, daemonUrl?: string, apiKeyFile?: string): void {
-		this.removeMcpServer(opencodePath);
 		const configPath = this.getConfigPath();
-		this.readConfig(configPath);
+		const config = this.readConfig(configPath);
+		const servers = isJsonObject(config.mcp) ? config.mcp : {};
+		const entry = isJsonObject(servers.signet) ? servers.signet : {};
+		const command = Array.isArray(entry.command) ? entry.command : [];
+		const existing = readMcpLauncher({ command: command[0], args: command.slice(1), env: entry.environment });
+		const resolvedMcp = resolveSignetMcpCommand(existing);
+		this.removeMcpServer(opencodePath);
 
 		if (daemonUrl) {
 			writeConfigValue(configPath, ["mcp", "signet"], {
@@ -336,9 +344,8 @@ export class OpenCodeConnector extends BaseConnector {
 			return;
 		}
 
-		const resolvedMcp = resolveSignetMcpCommand();
 		const mcpCommand = [resolvedMcp.command, ...resolvedMcp.args];
-		const environment: Record<string, string> = { ...buildSignetRuntimeEnv(), ...resolvedMcp.env };
+		const environment: Record<string, string> = { ...buildSignetRuntimeEnv({ apiKey: null }), ...resolvedMcp.env };
 		if (apiKeyFile) environment.SIGNET_API_KEY = `{file:${apiKeyFile}}`;
 		writeConfigValue(configPath, ["mcp", "signet"], {
 			type: "local",

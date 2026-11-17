@@ -10,7 +10,7 @@ import {
 	managedExtensionFilePath,
 	removeManagedExtensionFile,
 	resolveSignetAgentId,
-	resolveSignetApiKey,
+	resolveInstallApiKey,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
 	writeManagedExtensionFile,
@@ -79,6 +79,7 @@ export class OhMyPiConnector extends BaseConnector {
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
+		const auth = await resolveInstallApiKey();
 		const filesWritten: string[] = [];
 		const expandedBasePath = expandHome(basePath || resolveSignetWorkspacePath());
 		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
@@ -109,7 +110,7 @@ export class OhMyPiConnector extends BaseConnector {
 			signetPath: expandedBasePath,
 			daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
 			agentId: resolveSignetAgentId(),
-			apiKey: resolveSignetApiKey(),
+			apiKey: auth.apiKey,
 		});
 		if (writeManagedExtensionFile(targetPath, managedContent)) {
 			filesWritten.push(targetPath);
@@ -130,6 +131,7 @@ export class OhMyPiConnector extends BaseConnector {
 			message:
 				filesWritten.length > 0 ? "Oh My Pi extension installed successfully" : "Oh My Pi extension already up to date",
 			filesWritten,
+			warnings: auth.warning ? [auth.warning] : [],
 		};
 	}
 

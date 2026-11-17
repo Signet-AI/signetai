@@ -46,6 +46,7 @@
 		"@signet/core": "workspace:*",
 		"@earendil-works/pi-ai": "0.99.1",
 		"@earendil-works/pi-tui": "0.84.4",
+		"@signet/connector-base": "workspace:*",
 		"@signet/connector-claude-code": "workspace:*",
 		"@signet/connector-codex": "workspace:*",
 		"@signet/connector-forge": "workspace:*",
