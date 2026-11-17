@@ -196,23 +196,23 @@ function count(path: string, content: string): CountsWithDetails {
 						? node.head.text + node.templateSpans.map((span) => ` ? ${span.literal.text}`).join("")
 						: "";
 			if (SQL.test(text)) sql.text++;
-			if (ts.isCallExpression(node)) {
-				const called = callName(node.expression);
-				if (RAW_HELPERS.has(called)) sql.helper++;
-				if (/^with(?:ReadDb|WriteTx|WriteDb)(?:Async)?$/.test(called)) sql.accessor++;
-			}
-			if (
-				ts.isObjectLiteralExpression(node) &&
-				node.properties.some(
-					(property) =>
-						ts.isPropertyAssignment(property) &&
-						name(property.name) === "kind" &&
-						ts.isStringLiteralLike(property.initializer) &&
-						/^(?:query|transaction|batch)$/.test(property.initializer.text),
-				)
-			)
-				sql.request++;
 		}
+		if (ts.isCallExpression(node)) {
+			const called = callName(node.expression);
+			if (RAW_HELPERS.has(called)) sql.helper++;
+			if (/^with(?:ReadDb|WriteTx|WriteDb)(?:Async)?$/.test(called)) sql.accessor++;
+		}
+		if (
+			ts.isObjectLiteralExpression(node) &&
+			node.properties.some(
+				(property) =>
+					ts.isPropertyAssignment(property) &&
+					name(property.name) === "kind" &&
+					ts.isStringLiteralLike(property.initializer) &&
+					/^(?:query|transaction|batch)$/.test(property.initializer.text),
+			)
+		)
+			sql.request++;
 		if (ts.isCatchClause(node) && !expectedMiss(path, node) && swallowed(node.block)) counts["swallowed-error"]++;
 		if (ts.isCallExpression(node)) {
 			if (callName(node.expression) === "catch") {
@@ -235,7 +235,7 @@ function count(path: string, content: string): CountsWithDetails {
 		ts.forEachChild(node, visit);
 	};
 	visit(source);
-	if (!owner(path)) sql.marker = [...content.matchAll(/@ts-expect-error\s+LEGACY_SYNC_DB_ACCESS\b/g)].length;
+	sql.marker = [...content.matchAll(/@ts-expect-error\s+LEGACY_SYNC_DB_ACCESS\b/g)].length;
 	counts["raw-sql"] = Object.values(sql).reduce((sum, value) => sum + value, 0);
 	return { counts, sql };
 }

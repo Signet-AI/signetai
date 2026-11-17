@@ -2,21 +2,21 @@
 	{
 		"path": "docs/specs/dependencies.yaml",
 		"reason": "Retire the spec dependency index; specs and INDEX.md remain authoritative.",
-		"retiredIn": "nicholai/architecture-ratchet"
+		"retiredIn": "2026-11-17"
 	},
 	{
 		"path": "scripts/spec-deps-check.ts",
 		"reason": "Remove validation of the retired spec dependency index.",
-		"retiredIn": "nicholai/architecture-ratchet"
+		"retiredIn": "2026-11-17"
 	},
 	{
 		"path": "scripts/sync-specs-to-project.ts",
 		"reason": "Remove project-board synchronization driven by the retired index.",
-		"retiredIn": "nicholai/architecture-ratchet"
+		"retiredIn": "2026-11-17"
 	},
 	{
 		"path": "scripts/sync-specs-to-project.test.ts",
 		"reason": "Remove tests for the retired project-board synchronizer.",
-		"retiredIn": "nicholai/architecture-ratchet"
+		"retiredIn": "2026-11-17"
 	}
 ]
