@@ -42,4 +42,69 @@ describe("getModelConfig", () => {
   it("rejects a local alias without a model id", () => {
     expect(() => getModelConfig("local:", {})).toThrow("missing a model id")
   })
+
+  it("routes openrouter: aliases to the openrouter provider", () => {
+    const cfg = getModelConfig("openrouter:openai/gpt-4o-2024-08-06")
+
+    expect(cfg.provider).toBe("openrouter")
+    expect(cfg.id).toBe("openai/gpt-4o-2024-08-06")
+    expect(cfg.displayName).toBe("openai/gpt-4o-2024-08-06 (openrouter)")
+    expect(cfg.supportsTemperature).toBe(true)
+    expect(cfg.defaultTemperature).toBe(0)
+    expect(cfg.maxTokensParam).toBe("maxTokens")
+    expect(cfg.defaultMaxTokens).toBe(1000)
+  })
+
+  it("rejects an openrouter alias without a model id", () => {
+    expect(() => getModelConfig("openrouter:", {})).toThrow("missing a model id")
+  })
+
+  it("reads per-model routing settings from MEMORYBENCH_OPENROUTER_MODELS", () => {
+    const cfg = getModelConfig("openrouter:openai/gpt-4o-2024-08-06", {
+      MEMORYBENCH_OPENROUTER_MODELS: JSON.stringify({
+        "openai/gpt-4o-2024-08-06": {
+          provider: { quantizations: ["fp8"], allow_fallbacks: true },
+          reasoning: { enabled: false },
+          maxTokens: 2048,
+        },
+      }),
+    })
+
+    expect(cfg.defaultMaxTokens).toBe(2048)
+    expect(cfg.openrouterSettings).toEqual({
+      provider: { quantizations: ["fp8"], allow_fallbacks: true },
+      reasoning: { enabled: false },
+    })
+  })
+
+  it("gives openrouter models absent from the settings map no extra settings", () => {
+    const cfg = getModelConfig("openrouter:openai/gpt-4o-2024-08-06", {
+      MEMORYBENCH_OPENROUTER_MODELS: JSON.stringify({ "other/model": {} }),
+    })
+
+    expect(cfg.defaultMaxTokens).toBe(1000)
+    expect(cfg.openrouterSettings).toBeUndefined()
+  })
+
+  it("rejects invalid MEMORYBENCH_OPENROUTER_MODELS config", () => {
+    const env = (value: string) => ({ MEMORYBENCH_OPENROUTER_MODELS: value })
+    expect(() => getModelConfig("openrouter:m", env("{not json"))).toThrow(
+      "MEMORYBENCH_OPENROUTER_MODELS is not valid JSON"
+    )
+    expect(() => getModelConfig("openrouter:m", env("[]"))).toThrow(
+      "must be a JSON object keyed by model id"
+    )
+    expect(() => getModelConfig("openrouter:m", env('{"m": 3}'))).toThrow(
+      "entry for m must be an object"
+    )
+    expect(() => getModelConfig("openrouter:m", env('{"m": {"quantizations": []}}'))).toThrow(
+      'unknown key "quantizations"'
+    )
+    expect(() => getModelConfig("openrouter:m", env('{"m": {"provider": 3}}'))).toThrow(
+      'non-object "provider"'
+    )
+    expect(() => getModelConfig("openrouter:m", env('{"m": {"maxTokens": 0}}'))).toThrow(
+      'invalid "maxTokens"'
+    )
+  })
 })

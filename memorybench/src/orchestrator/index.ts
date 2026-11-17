@@ -8,7 +8,7 @@ import { createBenchmark } from "../benchmarks"
 import { createJudge } from "../judges"
 import { CheckpointManager } from "./checkpoint"
 import { getProviderConfig } from "../utils/config"
-import { resolveModel } from "../utils/models"
+import { openRouterModelSettings, resolveModel } from "../utils/models"
 import { addUsage, emptyUsage } from "../utils/llm"
 import { logger } from "../utils/logger"
 import { runIngestPhase } from "./phases/ingest"
@@ -242,6 +242,7 @@ export class Orchestrator {
         answeringModel,
         { limit, sampling, concurrency, benchmarkConfig, status: "initializing" }
       )
+      checkpoint.openrouterModels = openRouterModelSettings([judgeModel, answeringModel])
       logger.info("Created checkpoint (initializing)")
     } else {
       effectiveBenchmarkConfig = resolveResumeBenchmarkConfig(

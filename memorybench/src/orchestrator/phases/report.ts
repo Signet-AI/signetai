@@ -368,6 +368,7 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
     dataSourceRunId: checkpoint.dataSourceRunId,
     judge: checkpoint.judge,
     answeringModel: checkpoint.answeringModel,
+    openrouterModels: checkpoint.openrouterModels,
     timestamp: new Date().toISOString(),
     summary: {
       totalQuestions,

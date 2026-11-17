@@ -2,7 +2,7 @@ import { createAnthropic } from "@ai-sdk/anthropic"
 import { createGoogleGenerativeAI } from "@ai-sdk/google"
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { generateText, type JSONValue, type LanguageModel, type LanguageModelUsage } from "ai"
-import { config, createConfiguredOpenAI } from "./config"
+import { config, createConfiguredOpenAI, openRouterHeaders } from "./config"
 import type { ModelConfig, ModelProvider } from "./models"
 
 export interface ModelUsage {
@@ -29,6 +29,7 @@ const CREDENTIAL_ENV: Record<ModelProvider, string> = {
   anthropic: "ANTHROPIC_API_KEY",
   google: "GOOGLE_API_KEY",
   zai: "ZAI_API_KEY",
+  openrouter: "OPENROUTER_API_KEY",
   local: "LOCAL_LLM_API_KEY",
 }
 
@@ -76,6 +77,8 @@ function credential(provider: ModelProvider): string {
       return config.googleApiKey
     case "zai":
       return config.zaiApiKey
+    case "openrouter":
+      return config.openrouterApiKey
     case "local":
       return config.localApiKey
   }
@@ -103,6 +106,14 @@ export function getLanguageModel(modelConfig: ModelConfig): LanguageModel {
         apiKey: config.zaiApiKey,
         baseURL: config.zaiBaseUrl,
       }).chatModel(modelConfig.id)
+    case "openrouter":
+      return createOpenAICompatible({
+        name: "openrouter",
+        apiKey: config.openrouterApiKey,
+        baseURL: config.openrouterBaseUrl,
+        includeUsage: true,
+        headers: openRouterHeaders(),
+      }).chatModel(modelConfig.id)
     case "local":
       return createOpenAICompatible({
         name: "local",
@@ -116,6 +127,15 @@ export function getLanguageModel(modelConfig: ModelConfig): LanguageModel {
 export function providerOptionsFor(
   modelConfig: ModelConfig
 ): Record<string, Record<string, JSONValue>> | undefined {
+  if (modelConfig.provider === "openrouter") {
+    const settings = modelConfig.openrouterSettings
+    if (!settings) return undefined
+    const options: Record<string, JSONValue> = {
+      ...(settings.provider ? { provider: settings.provider } : {}),
+      ...(settings.reasoning ? { reasoning: settings.reasoning } : {}),
+    }
+    return Object.keys(options).length > 0 ? { openrouter: options } : undefined
+  }
   if (modelConfig.provider === "local") {
     const effort = modelConfig.reasoningEffort
     const budget = modelConfig.thinkingBudgetTokens

@@ -3,6 +3,7 @@ import type { IngestResult } from "./provider"
 import type { ConcurrencyConfig } from "./concurrency"
 import type { BenchmarkConfig } from "./benchmark"
 import type { ModelUsage } from "../utils/llm"
+import type { OpenRouterModelSettings } from "../utils/models"
 
 export type PhaseStatus = "pending" | "in_progress" | "completed" | "failed"
 
@@ -153,6 +154,7 @@ export interface RunCheckpoint {
   concurrency?: ConcurrencyConfig
   benchmarkConfig?: BenchmarkConfig
   protocol?: Record<string, unknown>
+  openrouterModels?: Record<string, OpenRouterModelSettings>
   datasetIdentity?: Record<string, unknown>
   ingestUsage?: IngestUsage
   questions: Record<string, QuestionCheckpoint>
