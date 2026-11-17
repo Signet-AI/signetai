@@ -49,6 +49,29 @@ describe("memory views", () => {
 	});
 });
 
+describe("constellation scope", () => {
+	afterEach(() => vi.restoreAllMocks());
+
+	it("omits an unset scope and preserves explicit scopes", async () => {
+		const urls: string[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(
+			Object.assign(
+				async (input: RequestInfo | URL) => {
+					urls.push(String(input));
+					return new Response("{}", { status: 200 });
+				},
+				{ preconnect: globalThis.fetch.preconnect },
+			),
+		);
+		await api.getKnowledgeConstellation();
+		await api.getKnowledgeConstellation(48, 160, "all");
+		await api.getKnowledgeConstellation(48, 160, "agent one");
+		expect(urls[0]).not.toContain("agent_id=");
+		expect(urls[1]).toContain("agent_id=all");
+		expect(urls[2]).toContain("agent_id=agent%20one");
+	});
+});
+
 describe("viewsAllAgents", () => {
 	const renewal = {
 		kind: "signed-out",

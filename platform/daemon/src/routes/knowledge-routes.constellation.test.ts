@@ -250,6 +250,36 @@ describe("GET /api/knowledge/constellation agent scope", () => {
 		expect(graph.entities.map((entity) => `${entity.agentId}:${entity.id}`)).toEqual(["hook-a:entity-hook-a"]);
 	});
 
+	test("enforces the team credential constellation scope", async () => {
+		await seedIsolatedAgentEntities();
+		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");
+		reloadAuthState(dir);
+		try {
+			for (const role of ["agent", "admin"] as const) {
+				const app = new Hono();
+				app.use("*", async (c, next) => {
+					c.set("auth", {
+						authenticated: true,
+						claims: { sub: "key", role, scope: { agent: "haystack-a" }, iat: 0, exp: 4102444800 },
+					});
+					await next();
+				});
+				registerKnowledgeRoutes(app);
+				const own = await app.request("/api/knowledge/constellation");
+				expect(own.status).toBe(200);
+				expect((await own.json()).entities.map((entity: { agentId: string }) => entity.agentId)).toEqual([
+					"haystack-a",
+				]);
+				const all = await app.request("/api/knowledge/constellation?agent_id=all");
+				expect(all.status).toBe(role === "admin" ? 200 : 403);
+				if (role === "admin") expect((await all.json()).entities).toHaveLength(2);
+			}
+		} finally {
+			writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: local\n");
+			reloadAuthState(dir);
+		}
+	});
+
 	test("refuses an all-agents view without admin permission outside local mode", async () => {
 		await seedIsolatedAgentEntities();
 		writeFileSync(join(dir, "agent.yaml"), "auth:\n  mode: team\n");

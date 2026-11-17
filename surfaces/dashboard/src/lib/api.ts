@@ -1277,9 +1277,9 @@ export const api = {
 		}
 	},
 	getKnowledgeStats: () => getJSON<KnowledgeStats>("/api/knowledge/stats"),
-	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160, agentId = "all") =>
+	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160, agentId?: string) =>
 		getJSON<KnowledgeConstellation>(
-			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=4&dependency_limit=${dependencyLimit}&agent_id=${encodeURIComponent(agentId)}`,
+			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=4&dependency_limit=${dependencyLimit}${agentId ? `&agent_id=${encodeURIComponent(agentId)}` : ""}`,
 		),
 	getOntologyProposals: (status: "pending" | "applied" | "rejected" | "failed" = "pending", limit = 20) =>
 		getJSON<{ items: OntologyProposal[]; limit: number; offset: number }>(
