@@ -385,6 +385,67 @@ describe("local secrets provider", () => {
 		expect(result.stderr).not.toContain("sk-test-local");
 	});
 
+	test("execWithSecrets redacts a secret followed by any amount of output in one write", async () => {
+		const secret = "sk-straddle-0123";
+		await putSecret("OPENAI_API_KEY", secret);
+		const script = join(agentsDir, "straddle-secret.mjs");
+		writeFileSync(
+			script,
+			'process.stdout.write("X".repeat(10) + process.env.OPENAI_API_KEY + "Y".repeat(Number(process.argv[2])));\n',
+		);
+
+		for (let trailing = 0; trailing <= secret.length * 2 + 1; trailing++) {
+			const result = await execWithSecrets(`bun ${script} ${trailing}`, { OPENAI_API_KEY: "OPENAI_API_KEY" });
+			expect(result.code).toBe(0);
+			expect(result.stdout).toBe(`${"X".repeat(10)}[REDACTED]${"Y".repeat(trailing)}`);
+		}
+	});
+
+	test("execWithSecrets redacts secrets split across writes, including inside a UTF-8 character", async () => {
+		const secret = "pässwörd-✓-ünïcode";
+		await putSecret("OPENAI_API_KEY", secret);
+		const script = join(agentsDir, "chunked-secret.mjs");
+		writeFileSync(
+			script,
+			[
+				"const secret = process.env.OPENAI_API_KEY;",
+				'const bytes = Buffer.from("a" + secret + "b".repeat(20) + secret + secret + "c".repeat(5) + secret);',
+				"const sizes = [2, 3, 1, 7, 2, 30, 1, 1, 4, 19, 3];",
+				"let offset = 0;",
+				"for (let i = 0; offset < bytes.length; i++) {",
+				"	const end = Math.min(bytes.length, offset + sizes[i % sizes.length]);",
+				"	await new Promise((resolve) => process.stdout.write(bytes.subarray(offset, end), resolve));",
+				"	await new Promise((resolve) => setTimeout(resolve, 5));",
+				"	offset = end;",
+				"}",
+			].join("\n"),
+		);
+
+		const result = await execWithSecrets(`bun ${script}`, { OPENAI_API_KEY: "OPENAI_API_KEY" });
+
+		expect(result.code).toBe(0);
+		expect(result.stdout).toBe(`a[REDACTED]${"b".repeat(20)}[REDACTED][REDACTED]${"c".repeat(5)}[REDACTED]`);
+	});
+
+	test("execWithSecrets redacts a longer secret that starts with a shorter one", async () => {
+		await putSecret("SHORT_TOKEN", "sk-pre");
+		await putSecret("LONG_TOKEN", "sk-prefix-longer");
+		const script = join(agentsDir, "prefix-secret.mjs");
+		writeFileSync(
+			script,
+			[
+				"await new Promise((resolve) => process.stdout.write(process.env.LONG_TOKEN.slice(0, 6), resolve));",
+				"await new Promise((resolve) => setTimeout(resolve, 5));",
+				'process.stdout.write(process.env.LONG_TOKEN.slice(6) + " " + process.env.SHORT_TOKEN);',
+			].join("\n"),
+		);
+
+		const result = await execWithSecrets(`bun ${script}`, { SHORT_TOKEN: "SHORT_TOKEN", LONG_TOKEN: "LONG_TOKEN" });
+
+		expect(result.code).toBe(0);
+		expect(result.stdout).toBe("[REDACTED] [REDACTED]");
+	});
+
 	test("execWithSecrets times out bounded subprocesses", async () => {
 		await putSecret("OPENAI_API_KEY", "sk-timeout");
 		const script = join(agentsDir, "sleep-secret.mjs");

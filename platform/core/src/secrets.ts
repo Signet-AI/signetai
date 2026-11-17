@@ -953,34 +953,61 @@ export async function execWithSecrets(
 
 	const secretValues = Object.values(resolved);
 
-	function redact(text: string): string {
-		let out = text;
-		for (const val of secretValues) {
-			if (val.length > 0) {
-				out = out.replaceAll(val, "[REDACTED]");
-			}
-		}
-		return out;
-	}
-
 	function createStreamingRedactor(): { push: (text: string) => string; finish: () => string } {
-		const longestSecret = Math.max(0, ...secretValues.map((value) => value.length));
-		const overlap = Math.max(0, longestSecret * 2);
+		const patterns = [...new Set(secretValues.filter((value) => value.length > 0))].sort((a, b) => b.length - a.length);
+		const longest = patterns[0]?.length ?? 0;
 		let pending = "";
+
+		function partialAt(from: number, to: number): number {
+			for (let at = Math.max(from, pending.length - longest + 1); at <= to && at < pending.length; at++) {
+				const rest = pending.slice(at);
+				if (patterns.some((value) => value.length > rest.length && value.startsWith(rest))) return at;
+			}
+			return -1;
+		}
+
+		function drain(final: boolean): string {
+			const cursors = patterns.map((value) => ({ value, index: -1 }));
+			let out = "";
+			let at = 0;
+			while (at < pending.length) {
+				let start = pending.length;
+				let match = "";
+				for (const cursor of cursors) {
+					if (cursor.index < at) {
+						const index = pending.indexOf(cursor.value, at);
+						cursor.index = index === -1 ? Number.POSITIVE_INFINITY : index;
+					}
+					if (cursor.index < start) {
+						start = cursor.index;
+						match = cursor.value;
+					}
+				}
+				const hold = final ? -1 : partialAt(at, start);
+				if (hold !== -1) {
+					out += pending.slice(at, hold);
+					pending = pending.slice(hold);
+					return out;
+				}
+				if (match === "") {
+					out += pending.slice(at);
+					break;
+				}
+				out += `${pending.slice(at, start)}[REDACTED]`;
+				at = start + match.length;
+			}
+			pending = "";
+			return out;
+		}
+
 		return {
 			push(text: string): string {
-				if (overlap === 0) return text;
+				if (longest === 0) return text;
 				pending += text;
-				if (pending.length <= overlap) return "";
-				const emitLength = pending.length - overlap;
-				const emit = pending.slice(0, emitLength);
-				pending = pending.slice(emitLength);
-				return redact(emit);
+				return drain(false);
 			},
 			finish(): string {
-				const emit = pending;
-				pending = "";
-				return redact(emit);
+				return drain(true);
 			},
 		};
 	}
@@ -1060,11 +1087,13 @@ export async function execWithSecrets(
 			}
 		}
 
-		proc.stdout?.on("data", (d: Buffer) => {
-			[stdout, stdoutBytes] = appendRedactedOutput(stdout, stdoutBytes, stdoutRedactor.push(d.toString()), "stdout");
+		proc.stdout?.setEncoding("utf8");
+		proc.stderr?.setEncoding("utf8");
+		proc.stdout?.on("data", (d: string) => {
+			[stdout, stdoutBytes] = appendRedactedOutput(stdout, stdoutBytes, stdoutRedactor.push(d), "stdout");
 		});
-		proc.stderr?.on("data", (d: Buffer) => {
-			[stderr, stderrBytes] = appendRedactedOutput(stderr, stderrBytes, stderrRedactor.push(d.toString()), "stderr");
+		proc.stderr?.on("data", (d: string) => {
+			[stderr, stderrBytes] = appendRedactedOutput(stderr, stderrBytes, stderrRedactor.push(d), "stderr");
 		});
 
 		proc.on("close", (code) => {
