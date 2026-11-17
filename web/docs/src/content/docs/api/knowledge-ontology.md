@@ -691,6 +691,64 @@ leaves everything pending. The worker can run for pending attention even
 when no new episodic evidence has arrived, while normal failure backoff still
 applies.
 
+### GET /api/dream/evidence/coverage
+
+Report how much eligible episodic evidence Dreaming has delivered and reviewed
+in one agent scope, using the same eligibility enumeration and evidence cursor
+the pass pipeline uses. Read-only; reads run through the database owner.
+Requires `admin` permission.
+
+**Query parameters**
+
+| Parameter  | Type   | Required | Description                                  |
+|------------|--------|----------|----------------------------------------------|
+| `agentId`  | string | no       | Agent ID (default: daemon configured agent)  |
+| `agent_id` | string | no       | Alias for `agentId`                          |
+
+**Response**
+
+```json
+{
+  "agentId": "noam",
+  "sources": {
+    "eligible": 12,
+    "fullyReviewed": 10,
+    "partiallyReviewed": 1,
+    "neverDelivered": 1
+  },
+  "chars": {
+    "eligible": 48000,
+    "reviewed": 40000,
+    "unreviewed": 8000,
+    "consumedWithoutReview": 0,
+    "delivered": 44200,
+    "redelivered": 1400,
+    "consumedByCursorBasis": { "review": 40000 },
+    "stalledRows": 0
+  },
+  "dreamedFraction": 0.8333,
+  "redeliveryRatio": 0.0317,
+  "pendingContinuations": 1,
+  "openStalledAttention": 0,
+  "complete": true,
+  "byKind": {
+    "memory": { "sources": { "eligible": 4 }, "chars": { "eligible": 9000 } },
+    "artifact": { "sources": { "eligible": 3 }, "chars": { "eligible": 7000 } },
+    "transcript": { "sources": { "eligible": 5 }, "chars": { "eligible": 32000 } }
+  }
+}
+```
+
+`dreamedFraction` is `chars.reviewed / chars.eligible`, or `null` when no
+evidence is eligible. Eligible evidence is the episodic sources the pass
+pipeline itself enumerates; reviewed characters come from the evidence cursor,
+which only advances through review. `consumedByCursorBasis` splits consumed
+characters by `dreaming_evidence_consumption.cursor_basis`: a `delivery` basis
+is legacy consumption without a matching review and is never counted as
+reviewed. `stalledRows` counts sources with `stalled_passes > 0`.
+`complete` is false when a bound truncated the scan; the counts are then lower
+bounds.
+
 ### GET /api/dream/passes/active
 
 List the currently running passes in the resolved agent scope. This is the

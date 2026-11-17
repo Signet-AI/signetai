@@ -715,6 +715,17 @@ export function runDbOwnerWorker(): void {
 		);
 	}
 
+	async function executeDreamingEvidenceCoverage(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_evidence_coverage" }>,
+	): Promise<unknown> {
+		const { getDreamingEvidenceCoverageInDb } = await import("./pipeline/dreaming-evidence-coverage");
+		return getDreamingEvidenceCoverageInDb(
+			db as unknown as import("./db-accessor").ReadDb,
+			request.input.agentId,
+			request.input,
+		);
+	}
+
 	function executeSourceGraph(
 		request: Extract<
 			DbOwnerJob["request"],
@@ -1243,6 +1254,7 @@ export function runDbOwnerWorker(): void {
 			}
 		}
 		if (job.request.kind === "source_evidence_eligibility") return executeSourceEvidenceEligibility(job.request);
+		if (job.request.kind === "dreaming_evidence_coverage") return await executeDreamingEvidenceCoverage(job.request);
 		if (job.request.kind === "vector_search") return await executeVectorSearch(job.request.payload);
 		if (
 			job.request.kind === "source_graph_index" ||

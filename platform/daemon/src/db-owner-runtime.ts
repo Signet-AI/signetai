@@ -29,6 +29,7 @@ import type {
 	DbOwnerParameter,
 	DbOwnerRequest,
 	DbOwnerSourceEvidenceEligibility,
+	DbOwnerDreamingEvidenceCoverage,
 	DbOwnerSourceGraphFilePurge,
 	DbOwnerSourceGraphIndex,
 	DbOwnerSourceGraphPurge,
@@ -41,6 +42,7 @@ import type {
 	DbOwnerStatement,
 	DbOwnerWorkloadClass,
 } from "./db-owner-protocol";
+import type { DreamingEvidenceCoverage } from "./pipeline/dreaming-evidence-coverage";
 import { applyVectorRepairBatch } from "./vector-repair-owner";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
@@ -268,6 +270,7 @@ async function executeInlineOwnerRequest(
 		case "vacuum_conversion":
 		case "incremental_vacuum":
 		case "source_evidence_eligibility":
+		case "dreaming_evidence_coverage":
 		case "sleep":
 			throw new Error(`Unsupported inline owner request: ${request.kind}`);
 		default:
@@ -823,6 +826,18 @@ export async function dbOwnerSourceEvidenceEligibility(
 	return await submitWithAdmission<boolean>(
 		owner,
 		{ kind: "source_evidence_eligibility", input },
+		{ ...options, lane: "read" },
+	);
+}
+
+export async function dbOwnerDreamingEvidenceCoverage(
+	owner: DbOwnerClient,
+	input: DbOwnerDreamingEvidenceCoverage,
+	options: DbOwnerSqlOptions,
+): Promise<DreamingEvidenceCoverage> {
+	return await submitWithAdmission<DreamingEvidenceCoverage>(
+		owner,
+		{ kind: "dreaming_evidence_coverage", input },
 		{ ...options, lane: "read" },
 	);
 }

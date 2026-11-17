@@ -684,6 +684,7 @@ export function resolveStalledEvidenceAttentionInTx(db: WriteDb, passId: string,
 export interface DreamingEvidenceCursor {
 	readonly offset: number;
 	readonly stalledPasses: number;
+	readonly cursorBasis: string | null;
 }
 
 export function evidenceCursorForSource(
@@ -691,17 +692,22 @@ export function evidenceCursorForSource(
 	agentId: string,
 	source: EpisodicSourceRecord,
 ): DreamingEvidenceCursor {
-	if (!tableExists(db, "dreaming_evidence_consumption")) return { offset: 0, stalledPasses: 0 };
+	if (!tableExists(db, "dreaming_evidence_consumption")) return { offset: 0, stalledPasses: 0, cursorBasis: null };
 	const row = db
 		.prepare(
-			`SELECT delivered_offset AS deliveredOffset, stalled_passes AS stalledPasses FROM dreaming_evidence_consumption
-		 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
+			`SELECT delivered_offset AS deliveredOffset, stalled_passes AS stalledPasses, cursor_basis AS cursorBasis FROM dreaming_evidence_consumption
+	 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
 		)
 		.get(agentId, source.kind, source.id, source.capturedAt, sourceIdentity(source), sourceRevision(source)) as {
 		deliveredOffset: number;
 		stalledPasses: number;
+		cursorBasis: string | null;
 	} | null;
-	return { offset: Math.max(0, row?.deliveredOffset ?? 0), stalledPasses: row?.stalledPasses ?? 0 };
+	return {
+		offset: Math.max(0, row?.deliveredOffset ?? 0),
+		stalledPasses: row?.stalledPasses ?? 0,
+		cursorBasis: row?.cursorBasis ?? null,
+	};
 }
 
 export function deliveredOffsetForSource(db: ReadDb, agentId: string, source: EpisodicSourceRecord): number {
