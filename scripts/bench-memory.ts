@@ -312,6 +312,26 @@ export function setBenchDreamingConcurrency(agentsDir: string, passes: number): 
 	writeFileSync(path, stringifyYaml(config));
 }
 
+export function benchRecallTranscriptEvidenceLimit(env: NodeJS.ProcessEnv = process.env): number | undefined {
+	const raw = env.SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT?.trim();
+	if (raw === undefined || raw === "") return undefined;
+	const parsed = Number(raw);
+	if (!Number.isInteger(parsed) || parsed < 0 || parsed > 5) {
+		throw new Error("SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT must be an integer from 0 to 5");
+	}
+	return parsed;
+}
+
+export function setBenchRecallTranscriptEvidenceLimit(agentsDir: string, limit: number | undefined): void {
+	if (limit === undefined) return;
+	const path = join(agentsDir, "agent.yaml");
+	const config = parseYaml(readFileSync(path, "utf8")) as Record<string, unknown>;
+	const search = (config.search ?? {}) as Record<string, unknown>;
+	if (search.transcript_evidence_limit === limit) return;
+	config.search = { ...search, transcript_evidence_limit: limit };
+	writeFileSync(path, stringifyYaml(config));
+}
+
 export function benchDreamingCodemode(env: NodeJS.ProcessEnv = process.env): boolean | undefined {
 	const raw = env.SIGNET_BENCH_DREAMING_CODEMODE?.trim();
 	if (raw === undefined || raw === "") return undefined;
@@ -805,6 +825,7 @@ async function main(): Promise<void> {
 		setBenchDreamingCodemode(agentsDir, benchDreamingCodemode());
 		setBenchDreamingMaxOutputTokens(agentsDir, benchDreamingMaxOutputTokens());
 		setBenchDreamingTimeout(agentsDir, benchDreamingTimeoutMs());
+		setBenchRecallTranscriptEvidenceLimit(agentsDir, benchRecallTranscriptEvidenceLimit());
 		setBenchDreamingThinking(agentsDir, benchDreamingThinking());
 		setBenchDreamingOpenRouter(agentsDir, benchDreamingOpenRouter());
 		setBenchDreamingContextWindow(agentsDir, benchDreamingContextWindow());

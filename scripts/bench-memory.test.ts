@@ -36,7 +36,10 @@ import {
 	resolveBenchApiKey,
 	benchDreamingOpenRouter,
 	setBenchDreamingOpenRouter,
+	setBenchRecallTranscriptEvidenceLimit,
+	benchRecallTranscriptEvidenceLimit,
 } from "./bench-memory";
+import { loadMemoryConfig } from "../platform/daemon/src/memory-config";
 import { parseRoutingConfig } from "../platform/core/src/routing";
 
 const workspaces: string[] = [];
@@ -196,6 +199,35 @@ describe("MemoryBench launcher", () => {
 		expect(() => benchDreamingTimeoutMs({ SIGNET_BENCH_DREAMING_TIMEOUT_MS: "3600000" })).toThrow(
 			"from 30000 to 1800000",
 		);
+	});
+
+	test("writes the recall transcript evidence limit only when asked and the daemon reads it back", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
+		setBenchRecallTranscriptEvidenceLimit(dir, benchRecallTranscriptEvidenceLimit({}));
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).search).toBeUndefined();
+		setBenchRecallTranscriptEvidenceLimit(
+			dir,
+			benchRecallTranscriptEvidenceLimit({ SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT: "0" }),
+		);
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).search).toEqual({ transcript_evidence_limit: 0 });
+		setBenchRecallTranscriptEvidenceLimit(
+			dir,
+			benchRecallTranscriptEvidenceLimit({ SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT: "5" }),
+		);
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).search).toEqual({ transcript_evidence_limit: 5 });
+		setBenchRecallTranscriptEvidenceLimit(dir, benchRecallTranscriptEvidenceLimit({}));
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).search).toEqual({ transcript_evidence_limit: 5 });
+		expect(() => benchRecallTranscriptEvidenceLimit({ SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT: "6" })).toThrow(
+			"from 0 to 5",
+		);
+		expect(() => benchRecallTranscriptEvidenceLimit({ SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT: "-1" })).toThrow(
+			"from 0 to 5",
+		);
+		expect(() => benchRecallTranscriptEvidenceLimit({ SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT: "two" })).toThrow(
+			"from 0 to 5",
+		);
+		expect(loadMemoryConfig(dir).search.transcript_evidence_limit).toBe(5);
 	});
 
 	test("writes Dreaming pass policies from a file only when asked", async () => {
