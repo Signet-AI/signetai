@@ -89,7 +89,7 @@ describe("Signet recall source attribution", () => {
 
   it("buckets recall sources overall, per question type, and for correct answers", () => {
     const checkpoint = {
-      recallTranscriptEvidence: { limit: 2, source: "daemon-config" },
+      recallTranscriptEvidence: { limit: 2 },
       questions: {
         memoriesOnly: { phases: { search: { hitSources: ["memory"] } } },
         transcriptsOnly: { phases: { search: { hitSources: ["transcript-evidence"] } } },
@@ -107,7 +107,7 @@ describe("Signet recall source attribution", () => {
     ]
 
     expect(summarizeRecallSources(checkpoint, evaluations)).toEqual({
-      transcriptEvidenceLimit: { limit: 2, source: "daemon-config" },
+      transcriptEvidenceLimit: { limit: 2 },
       all: { questions: 5, memoriesOnly: 1, transcriptEvidenceOnly: 1, both: 1, none: 2 },
       correct: { questions: 3, memoriesOnly: 1, transcriptEvidenceOnly: 0, both: 1, none: 1 },
       byQuestionType: {
