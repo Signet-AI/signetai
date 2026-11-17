@@ -370,3 +370,22 @@ test("moving SQL out of the owner closure cannot carry its exemption", () => {
 	expect(result.code).toBe(1);
 	expect(result.output).toContain(`${FILE}\traw-sql\t0 -> 1`);
 });
+
+test("named owner handlers retain their SQL authority without exempting transports", () => {
+	const root = fixture({ "README.md": "base" });
+	for (const path of [
+		"platform/daemon/src/memory-search.ts",
+		"platform/daemon/src/pipeline/dreaming-capabilities.ts",
+		"platform/daemon/src/session-transcripts.ts",
+	]) {
+		write(root, path, cases[0].violation);
+	}
+	commit(root);
+	expect(audit(root).code).toBe(0);
+	const transport = "platform/daemon/src/db-owner-sql.ts";
+	write(root, transport, cases[0].violation);
+	commit(root);
+	const result = audit(root);
+	expect(result.code).toBe(1);
+	expect(result.output).toContain(`${transport}\traw-sql\t0 -> 1`);
+});
