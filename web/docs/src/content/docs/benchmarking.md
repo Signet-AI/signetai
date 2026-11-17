@@ -673,6 +673,7 @@ SIGNET_BENCH_DREAMING_CONCURRENCY=<n> Concurrent Dreaming passes for bulk ingest
 SIGNET_BENCH_DREAMING_CODEMODE=1     Run Dreaming with memory.dreaming.codemode on (0 forces it off; unset keeps the product default).
 SIGNET_BENCH_EMBEDDING_WAIT_SECS=<n> Max time to wait for Dreaming's derived memories to be embedded before retrieval, default 1800.
 SIGNET_BENCH_CAPTURE_WAIT_SECS=<n> Max time to wait for a question's transcript captures to finish during indexing, default 1800.
+SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT=<n> Writes search.transcript_evidence_limit to the workspace agent.yaml on every launch; integer 0-5 (0 disables transcript evidence); unset keeps the file unchanged.
 MEMORYBENCH_EXTRACTION_MODEL=<m>    Structured extraction model, default gpt-4o.
 MEMORYBENCH_EXTRACTION_MAX_TOKENS=<n> Markdown extraction cap, default 1200.
 MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS=<n> Structured JSON extraction cap, default 1800.
@@ -689,3 +690,10 @@ MemoryBench writes checkpoints and reports under `memorybench/data/runs/`.
 That directory is ignored by Git. Reports should be attached to PRs or release
 notes only when benchmark numbers are being used to justify a memory-system
 change.
+
+The `recallSources` report section attributes each question's retrieved hits
+to memories, transcript evidence (`supplementary: true` hits from the daemon's
+recall response), both, or none — overall, per question type, and for
+correctly answered questions only. It also records the run's
+`transcript_evidence_limit` and whether it was read from the daemon config
+(`daemon-config`) or the launcher env (`launcher-env`).
