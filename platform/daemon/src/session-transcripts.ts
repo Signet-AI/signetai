@@ -759,7 +759,7 @@ export function appendLivePromptTranscript(previous: string | undefined, liveTra
 	if (!previous || previous.trim().length === 0) return current;
 
 	const stored = previous.trimEnd();
-	if (stored.endsWith(current)) return stored;
+	if (stored === current || stored.endsWith(`\n${current}`)) return stored;
 	return `${stored}\n${current}`;
 }
 

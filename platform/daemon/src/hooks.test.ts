@@ -1903,6 +1903,30 @@ describe("direct transcript regressions", () => {
 		}
 	});
 
+	test.serial("keeps a Stop reply whose serialized text is only a suffix of the previous turn", async () => {
+		createMemoryDb([]);
+		const sessionKey = "claude-stop-suffix-reply";
+		for (const lastAssistantMessage of ["Mention Assistant: done", "done", "done"]) {
+			expect(
+				await handleStop({ harness: "claude-code", sessionKey, agentId: "default", lastAssistantMessage }),
+			).toEqual({ recorded: true });
+		}
+		expect(canonicalSessionRecords("claude-code", sessionKey).map((record) => [record.role, record.content])).toEqual([
+			["assistant", "Mention Assistant: done"],
+			["assistant", "done"],
+		]);
+		const { dbOwnerQuery, ownerStatement } = await import("./db-owner-runtime");
+		const stored = await dbOwnerQuery(
+			ownerStatement(
+				"SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+				[sessionKey, "default"],
+				"get",
+			),
+			{ operation: "test.stop.suffix.readback" },
+		);
+		expect(stored).toEqual({ content: "Assistant: Mention Assistant: done\nAssistant: done" });
+	});
+
 	test.serial("keeps every line when turn-end replies and a prompt overlap on one session", async () => {
 		createMemoryDb([]);
 		const sessionKey = "claude-overlapping-stop-session";
