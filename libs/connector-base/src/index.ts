@@ -17,7 +17,7 @@ import {
 	writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
 	type SymlinkOptions,
 	type SymlinkResult,
@@ -236,46 +236,18 @@ export type ResolvedCommand = {
 	readonly env?: Readonly<Record<string, string>>;
 };
 
-export const SIGNET_MCP_STDIO_WORKER_ENV = "SIGNET_MCP_STDIO_WORKER";
-
-function resolveRunningNativeSignetBinary(): string | null {
-	const executable = process.execPath;
-	if (!/^signet(?:\.exe)?$/i.test(basename(executable))) return null;
-	try {
-		return statSync(executable).isFile() ? executable : null;
-	} catch {
-		return null;
-	}
-}
-
-function resolvePackagedSignetCommand(
-	bareCommand: string,
-	scriptDirectory: "bin" | "dist",
-	scriptName: string,
-	warnOnFallback: boolean,
-): ResolvedCommand {
-	if (process.platform !== "win32") return { command: bareCommand, args: [] };
-
-	const cliEntry = process.argv[1] ?? "";
-	const scriptPath = join(cliEntry, "..", "..", scriptDirectory, scriptName);
-	if (cliEntry && existsSync(scriptPath)) return { command: process.execPath, args: [scriptPath] };
-
-	if (warnOnFallback) {
-		console.warn(
-			`[signet] Warning: could not resolve ${scriptName} from argv[1]="${cliEntry}". ` +
-				`MCP server config will use "${bareCommand}" which may fail on Windows without shell:true.`,
-		);
-	}
-	return { command: bareCommand, args: [] };
-}
-export function resolveSignetMcpCommand(): ResolvedCommand {
-	const nativeBinary = resolveRunningNativeSignetBinary();
-	if (nativeBinary) return { command: nativeBinary, args: [], env: { [SIGNET_MCP_STDIO_WORKER_ENV]: "1" } };
-	return resolvePackagedSignetCommand("signet-mcp", "dist", "mcp-stdio.js", true);
-}
-export function resolveSignetCliCommand(): ResolvedCommand {
-	return resolvePackagedSignetCommand("signet", "bin", "signet.js", false);
-}
+export {
+	SIGNET_MCP_STDIO_WORKER_ENV,
+	isSignetCliLauncher,
+	cliFromMcp,
+	mcpFromCli,
+	parseHookLauncher,
+	quoteCommandArg,
+	readMcpLauncher,
+	renderCommand,
+	resolveSignetCliCommand,
+	resolveSignetMcpCommand,
+} from "./launcher";
 
 export const MANAGED_DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
 export const MANAGED_AGENT_ID_DEFAULT = "default";
@@ -319,6 +291,23 @@ export function resolveSignetAgentId(): string {
 export function resolveSignetApiKey(): string | undefined {
 	return readManagedTrimmedEnv("SIGNET_API_KEY") ?? readManagedTrimmedEnv("SIGNET_TOKEN");
 }
+export async function resolveInstallApiKey(): Promise<{ readonly apiKey?: string; readonly warning?: string }> {
+	const url = resolveSignetDaemonUrl();
+	try {
+		const response = await fetch(`${url}/api/mode`, { signal: AbortSignal.timeout(1_000), redirect: "error" });
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		const mode: unknown = await response.json();
+		if (!isJsonObject(mode) || typeof mode.requiresAuth !== "boolean")
+			throw new Error("response has no boolean requiresAuth");
+		return mode.requiresAuth ? { apiKey: resolveSignetApiKey() } : {};
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		return {
+			warning: `Could not determine daemon auth requirement from ${url}/api/mode (${reason}); SIGNET_API_KEY was omitted. Check SIGNET_DAEMON_URL and daemon connectivity, then rerun signet sync.`,
+		};
+	}
+}
+
 export function buildSignetRuntimeEnv(opts: { readonly basePath?: string } = {}): Record<string, string> {
 	const env: Record<string, string> = {};
 	if (opts.basePath) env.SIGNET_PATH = opts.basePath;

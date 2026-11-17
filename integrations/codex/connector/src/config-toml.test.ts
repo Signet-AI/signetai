@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import { isJsonObject } from "@signet/connector-base";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -73,6 +75,30 @@ function hookStateHeader(event: string): string {
 	return `[hooks.state."${tomlBasicString(hooksPath)}:${event}:0:0"]`;
 }
 
+function expectStartTrust(): void {
+	const file = readHooksJson();
+	if (!isJsonObject(file.hooks) || !Array.isArray(file.hooks.SessionStart))
+		throw new Error("SessionStart hooks missing");
+	const group: unknown = file.hooks.SessionStart[0];
+	if (!isJsonObject(group) || !Array.isArray(group.hooks)) throw new Error("SessionStart group missing");
+	const handler: unknown = group.hooks[0];
+	if (!isJsonObject(handler)) throw new Error("SessionStart handler missing");
+	const command = process.platform === "win32" ? handler.commandWindows : handler.command;
+	if (typeof command !== "string") throw new Error("SessionStart command missing");
+	const digest = createHash("sha256")
+		.update(
+			JSON.stringify({ event_name: "session_start", hooks: [{ async: false, command, timeout: 20, type: "command" }] }),
+		)
+		.digest("hex");
+	const config: unknown = Bun.TOML.parse(readFileSync(configPath, "utf-8"));
+	if (!isJsonObject(config)) throw new Error("Codex config missing");
+	const hooks = config.hooks;
+	if (!isJsonObject(hooks) || !isJsonObject(hooks.state)) throw new Error("Hook trust state missing");
+	const state = hooks.state[`${hooksPath}:session_start:0:0`];
+	if (!isJsonObject(state)) throw new Error("SessionStart trust missing");
+	expect(state.trusted_hash).toBe(`sha256:${digest}`);
+}
+
 function selectedHookCommand(handler: Record<string, unknown>): string {
 	const command = process.platform === "win32" ? handler.commandWindows : handler.command;
 	if (typeof command !== "string") throw new Error("Expected a string Codex hook command");
@@ -142,6 +168,10 @@ let previousWrapperDir: string | undefined;
 let previousCodexHome: string | undefined;
 let previousArgvEntry: string | undefined;
 let previousExecPath: string;
+let previousCliPath: string | undefined;
+let previousHookCommand: string | undefined;
+let previousPort: string | undefined;
+let authServer: ReturnType<typeof Bun.serve>;
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -152,6 +182,9 @@ function restoreEnv(name: string, value: string | undefined): void {
 }
 
 beforeEach(() => {
+	previousPort = process.env.SIGNET_PORT;
+	authServer = Bun.serve({ port: 0, fetch: () => Response.json({ mode: "server", requiresAuth: true }) });
+	process.env.SIGNET_PORT = String(authServer.port);
 	previousSessionStartTimeout = process.env.SIGNET_SESSION_START_TIMEOUT;
 	previousFetchTimeout = process.env.SIGNET_FETCH_TIMEOUT;
 	previousPromptSubmitTimeout = process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
@@ -163,6 +196,10 @@ beforeEach(() => {
 	previousCodexHome = process.env.CODEX_HOME;
 	previousArgvEntry = process.argv[1];
 	previousExecPath = process.execPath;
+	previousCliPath = process.env.SIGNET_CLI_PATH;
+	previousHookCommand = process.env.SIGNET_HOOK_COMMAND;
+	Reflect.deleteProperty(process.env, "SIGNET_CLI_PATH");
+	Reflect.deleteProperty(process.env, "SIGNET_HOOK_COMMAND");
 	Reflect.deleteProperty(process.env, "SIGNET_SESSION_START_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_FETCH_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_PROMPT_SUBMIT_TIMEOUT");
@@ -180,6 +217,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	authServer.stop(true);
+	restoreEnv("SIGNET_PORT", previousPort);
 	restoreEnv("SIGNET_SESSION_START_TIMEOUT", previousSessionStartTimeout);
 	restoreEnv("SIGNET_FETCH_TIMEOUT", previousFetchTimeout);
 	restoreEnv("SIGNET_PROMPT_SUBMIT_TIMEOUT", previousPromptSubmitTimeout);
@@ -192,6 +231,8 @@ afterEach(() => {
 	if (previousArgvEntry === undefined) process.argv.splice(1, 1);
 	else process.argv[1] = previousArgvEntry;
 	process.execPath = previousExecPath;
+	restoreEnv("SIGNET_CLI_PATH", previousCliPath);
+	restoreEnv("SIGNET_HOOK_COMMAND", previousHookCommand);
 	rmSync(tempHome, { recursive: true, force: true });
 });
 
@@ -369,13 +410,13 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 	});
 
 	test("uses remote HTTP MCP URL when SIGNET_DAEMON_URL is configured", async () => {
-		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850";
+		process.env.SIGNET_DAEMON_URL = "http://daemon.example.test:3850";
 
 		await connector().install(tempHome);
 
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[mcp_servers.signet]");
-		expect(content).toContain("url = 'http://192.168.0.60:3850/mcp'");
+		expect(content).toContain("url = 'http://daemon.example.test:3850/mcp'");
 		expect(content).toContain("startup_timeout_sec = 10");
 		expect(content).toContain("tool_timeout_sec = 30");
 		expect(content).not.toContain("disabled_tools");
@@ -383,7 +424,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 	});
 
 	test("removes stale remote MCP auth header tables on reinstall without an API key", async () => {
-		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850";
+		process.env.SIGNET_DAEMON_URL = authServer.url.origin;
 		process.env.SIGNET_API_KEY = "sig_sk_codex_old_secret";
 
 		await connector().install(tempHome);
@@ -401,7 +442,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 	});
 
 	test.skipIf(process.platform === "win32")("keeps Codex files that hold the API key private", async () => {
-		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850";
+		process.env.SIGNET_DAEMON_URL = authServer.url.origin;
 		process.env.SIGNET_API_KEY = "sig_sk_codex_private_secret";
 		mkdirSync(join(configPath, ".."), { recursive: true });
 		writeFileSync(configPath, "model = 'gpt'\n", "utf-8");
@@ -416,7 +457,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 	});
 
 	test("still writes Codex lifecycle hooks when remote HTTP MCP is configured", async () => {
-		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850/";
+		process.env.SIGNET_DAEMON_URL = "http://daemon.example.test:3850/";
 
 		const result = await connector().install(tempHome);
 
@@ -440,22 +481,24 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 			}
 			const wrapper = result.filesWritten.find((path) => path.toLowerCase().endsWith(".cmd"));
 			expect(wrapper).toBeDefined();
-			expect(readFileSync(wrapper as string, "utf-8")).toContain('set "SIGNET_DAEMON_URL=http://192.168.0.60:3850"');
+			expect(readFileSync(wrapper as string, "utf-8")).toContain(
+				'set "SIGNET_DAEMON_URL=http://daemon.example.test:3850"',
+			);
 		} else {
 			expect(selectedHookCommand(startHandler)).toBe(
-				"SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook session-start -H codex --codex-json",
+				"SIGNET_DAEMON_URL='http://daemon.example.test:3850' signet hook session-start -H codex --codex-json",
 			);
 			expect(selectedHookCommand(promptHandler)).toBe(
-				"SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook user-prompt-submit -H codex --codex-json",
+				"SIGNET_DAEMON_URL='http://daemon.example.test:3850' signet hook user-prompt-submit -H codex --codex-json",
 			);
 			expect(selectedHookCommand(stopHandler)).toBe(
-				"SIGNET_DAEMON_URL='http://192.168.0.60:3850' signet hook session-end -H codex",
+				"SIGNET_DAEMON_URL='http://daemon.example.test:3850' signet hook session-end -H codex",
 			);
 		}
 	});
 
 	test("remote lifecycle hooks remain idempotent across repeated installs", async () => {
-		process.env.SIGNET_DAEMON_URL = "http://192.168.0.60:3850/";
+		process.env.SIGNET_DAEMON_URL = "http://daemon.example.test:3850/";
 
 		await connector().install(tempHome);
 		await connector().install(tempHome);
@@ -467,7 +510,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 	});
 
 	test("rejects unsafe remote daemon URLs before writing Codex config", async () => {
-		process.env.SIGNET_DAEMON_URL = 'http://192.168.0.60:3850/" && calc';
+		process.env.SIGNET_DAEMON_URL = 'http://daemon.example.test:3850/" && calc';
 
 		await expect(connector().install(tempHome)).rejects.toThrow("SIGNET_DAEMON_URL must point at the daemon origin");
 
@@ -1070,7 +1113,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(signetHandlers[0]?.timeout).toBe(20);
 	});
 
-	test("migrates a stale Codex Desktop MCP runtime path after a packaging update", async () => {
+	test("retains an existing MCP launcher not visible in the installer filesystem", async () => {
 		const appPath = join(tempHome, "Applications", "Codex.app");
 		const runtime = join(appPath, "Contents", "Resources", "runtime", "node", "bin", "node");
 		mkdirSync(join(runtime, ".."), { recursive: true });
@@ -1106,11 +1149,8 @@ describe("CodexConnector.install — hooks.json schema", () => {
 				expect(handler?.command).toContain(`${runtime} ${signetEntry}`);
 			}
 		}
-		expect(readFileSync(configPath, "utf-8")).toContain(`command = '${runtime}'`);
-		expect(readFileSync(configPath, "utf-8")).toContain(`args = ['${mcpEntry}']`);
-		expect(result.warnings).toContain(
-			"Detected a missing Signet Codex runtime path; refreshed only Signet-owned hooks and MCP configuration.",
-		);
+		expect(readFileSync(configPath, "utf-8")).toContain("command = '/old/Codex.app/Contents/Resources/node'");
+		expect(readFileSync(configPath, "utf-8")).toContain("args = ['/old/mcp-stdio.js']");
 	});
 
 	test("uses the wrapper entry when an optional native binary runs without postinstall", async () => {
@@ -1537,6 +1577,119 @@ describe("CodexConnector.uninstall — hooks.json cleanup", () => {
 		expect(remHooks.SessionStart).toBeUndefined();
 		expect(remHooks.UserPromptSubmit).toBeUndefined();
 		expect(remHooks.Stop).toBeUndefined();
+	});
+});
+
+describe("CodexConnector.install — launcher and auth", () => {
+	test.each([false, true, null])("persists credentials only when requiresAuth is true: %s", async (requiresAuth) => {
+		const key = "sig_sk_fixture_not_a_secret";
+		let probes = 0;
+		const server = Bun.serve({
+			port: 0,
+			fetch(req) {
+				if (new URL(req.url).pathname !== "/api/mode") return new Response(null, { status: 404 });
+				probes++;
+				return requiresAuth === null
+					? new Response("unavailable", { status: 503 })
+					: Response.json({ mode: requiresAuth ? "server" : "local", requiresAuth });
+			},
+		});
+		try {
+			process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+			process.env.SIGNET_API_KEY = key;
+			writeFileSync(
+				hooksPath,
+				JSON.stringify({
+					hooks: {
+						SessionStart: [
+							{
+								hooks: [
+									{
+										type: "command",
+										command: "SIGNET_API_KEY='stale-fixture' /host/bin/signet hook session-start -H codex",
+									},
+								],
+							},
+						],
+					},
+				}),
+			);
+			const result = await connector().install(tempHome);
+			const hooks = readFileSync(hooksPath, "utf-8");
+			expect(hooks).not.toContain("stale-fixture");
+			expect(hooks.includes(key)).toBe(requiresAuth === true);
+			expect(readFileSync(configPath, "utf-8").includes(key)).toBe(requiresAuth === true);
+			expect(probes).toBe(1);
+			expectStartTrust();
+			if (requiresAuth === null) expect(result.warnings?.join(" ")).toMatch(/auth.*undetermined|determine.*auth/i);
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	test("regenerates native plugin and Windows wrapper credentials from daemon mode", async () => {
+		let requiresAuth: boolean | null = true;
+		let probes = 0;
+		const server = Bun.serve({
+			port: 0,
+			fetch() {
+				probes++;
+				return requiresAuth === null
+					? new Response(null, { status: 503 })
+					: Response.json({ mode: "team", requiresAuth });
+			},
+		});
+		const platform = process.platform;
+		const key = "sig_sk_windows_fixture_not_a_secret";
+		try {
+			Reflect.set(process, "platform", "win32");
+			process.env.SIGNET_PORT = String(server.port);
+			process.env.SIGNET_API_KEY = key;
+			process.env.SIGNET_HOOK_COMMAND = "C:\\Host Tools\\signet.exe";
+			process.env.SIGNET_CODEX_FORCE_COMPAT_HOOKS = "1";
+			const install = nativePluginConnector();
+			for (const mode of [true, false, null]) {
+				requiresAuth = mode;
+				const result = await install.install(tempHome);
+				expectStartTrust();
+				const root = join(codexDir, ".tmp", "signet-plugin-marketplace", "plugins", "signet");
+				const hooks = readFileSync(join(root, "hooks", "hooks.json"), "utf-8");
+				const mcp = JSON.parse(readFileSync(join(root, ".mcp.json"), "utf-8"));
+				expect(mcp.mcpServers.signet.command).toBe("C:\\Host Tools\\signet.exe");
+				expect(mcp.mcpServers.signet.env.SIGNET_MCP_STDIO_WORKER).toBe("1");
+				expect(hooks.includes(key)).toBe(mode === true);
+				const wrapper = result.filesWritten.find((path) => path.endsWith(".cmd"));
+				if (!wrapper) throw new Error("Windows hook wrapper missing");
+				const script = readFileSync(wrapper, "utf-8");
+				expect(script).toContain('"C:\\Host Tools\\signet.exe"');
+				expect(script.includes(key)).toBe(mode === true);
+				expect(readFileSync(hooksPath, "utf-8").includes(key)).toBe(mode === true);
+				if (mode === null) expect(result.warnings?.join(" ")).toContain("HTTP 503");
+			}
+			expect(probes).toBe(3);
+		} finally {
+			Reflect.set(process, "platform", platform);
+			server.stop(true);
+		}
+	});
+
+	test("keeps the host launcher instead of the container executable", async () => {
+		process.execPath = "/app/bin/signet";
+		process.env.SIGNET_CLI_PATH = "/app/bin/signet";
+		writeFileSync(
+			hooksPath,
+			JSON.stringify({
+				hooks: {
+					SessionStart: [
+						{ hooks: [{ type: "command", command: "'/host/My Tools/signet' hook session-start -H codex" }] },
+					],
+				},
+			}),
+		);
+		await connector().install(tempHome);
+		await connector().install(tempHome);
+		expect(readFileSync(hooksPath, "utf-8")).toContain("'/host/My Tools/signet' hook session-start");
+		expect(readFileSync(hooksPath, "utf-8")).not.toContain("/app/bin/signet");
 	});
 });
 

@@ -163,7 +163,8 @@ async function configureHarnessHooks(
 		}
 		case "codex": {
 			const connector = new CodexConnector();
-			await connector.install(basePath);
+			const result = await connector.install(basePath);
+			for (const warning of result.warnings ?? []) console.warn(chalk.yellow(`  ${warning}`));
 			break;
 		}
 		case "kimi": {
