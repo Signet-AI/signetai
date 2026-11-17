@@ -262,6 +262,26 @@ test("owner SQL is exempt but casts and swallowed errors are not", () => {
 	expect(result.output).toContain("unchecked-cast\t0 -> 1");
 });
 
+test("owner files still ratchet raw owner-protocol and legacy accessor bypasses", () => {
+	const path = "platform/daemon/src/memory-search.ts";
+	const root = fixture({ [path]: 'export const sql = "SELECT id FROM memories";' });
+	write(
+		root,
+		path,
+		[
+			'export const sql = "SELECT id FROM memories";',
+			'export const more = "SELECT id FROM entities";',
+			"ownerReadAll(client, sql);",
+			'const request = { kind: "query" };',
+			"accessor.withWriteTx(work);",
+		].join("\n"),
+	);
+	commit(root);
+	const result = audit(root);
+	expect(result.code).toBe(1);
+	expect(result.output).toContain("raw-sql\t0 -> 3 (text=0, helper=1, request=1, accessor=1, marker=0)");
+});
+
 test("production scope excludes fixtures, tests, generated and non-runtime trees", () => {
 	const root = fixture({ "README.md": "base" });
 	const violation = cases.map(({ violation }) => violation).join("\n");
