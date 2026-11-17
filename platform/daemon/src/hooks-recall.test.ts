@@ -920,10 +920,10 @@ memory:
 		const response = await postStop(body);
 		expect(response.status).toBe(200);
 		expect(stopRecords(sessionKey)).toHaveLength(1);
-		expect(storedTranscript(sessionKey)).toEqual({ content: "Assistant: durable reply" });
+		expect(storedTranscript(sessionKey)).toBeNull();
 	});
 
-	it("answers a retryable 503 when write pressure blocks the stop hook row and records a retry once", async () => {
+	it("warns and preserves the projection gap when a retry finds evidence committed before write pressure", async () => {
 		const { DbOwnerAdmissionError } = await import("./db-owner-client");
 		const sessionKey = `claude-stop-pressure-${crypto.randomUUID()}`;
 		const body = { harness: "claude-code", sessionKey, lastAssistantMessage: "pressured reply" };
@@ -937,11 +937,24 @@ memory:
 		expect(await blocked.json()).toMatchObject({ retryable: true });
 		expect(storedTranscript(sessionKey)).toBeNull();
 
-		const retried = await postStop(body);
-		expect(retried.status).toBe(200);
-		expect(await retried.json()).toEqual({ recorded: true });
-		expect(storedTranscript(sessionKey)).toEqual({ content: "Assistant: pressured reply" });
-		expect(stopRecords(sessionKey)).toMatchObject([{ role: "assistant", content: "pressured reply" }]);
+		const evidence = stopRecords(sessionKey);
+		const { logger } = await import("./logger");
+		const warning = spyOn(logger, "warn");
+		try {
+			const retried = await postStop(body);
+			expect(retried.status).toBe(200);
+			expect(await retried.json()).toEqual({ recorded: true });
+			expect(warning).toHaveBeenCalledWith(
+				"hooks",
+				"Duplicate transcript evidence; projection append skipped and any prior gap remains",
+				{ sessionKey },
+			);
+		} finally {
+			warning.mockRestore();
+		}
+		expect(storedTranscript(sessionKey)).toBeNull();
+		expect(stopRecords(sessionKey)).toEqual(evidence);
+		expect(evidence).toMatchObject([{ role: "assistant", content: "pressured reply" }]);
 	});
 
 	it("fails the stop hook request when the transcript row write fails", async () => {

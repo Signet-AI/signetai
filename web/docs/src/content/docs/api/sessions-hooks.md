@@ -170,10 +170,15 @@ to the session's live transcript: the canonical JSONL transcript first, then the
 transcript's project. `agentId` follows the same scope and session-binding
 rules as the other hooks.
 
-**Response**: `{ "recorded": true }` once the reply's evidence has been synced
-and its stored transcript updated. Consecutive retries are deduplicated within
-a bounded transcript tail. A retry after a new turn, or after other sessions
-write beyond that tail, can append duplicate evidence; this is not an
+**Response**: `{ "recorded": true }` confirms the reply's canonical evidence
+has been synced. Newly appended evidence also updates the `session_transcripts`
+projection before returning success. Consecutive retries are deduplicated by
+whole structured records within a bounded transcript tail and skip the
+projection append. If evidence committed before an earlier projection failure,
+a retry can therefore succeed while the row still lacks the turn; a warning
+names the session without content. Source capture does not currently rebuild
+that row from canonical records. A retry after a new turn, or after other
+sessions write beyond that tail, can append duplicate evidence; this is not an
 exactly-once API. The daemon skips the write and returns `recorded: false` with
 `skipped: true` when a claimed session has a different, missing, or invalid
 runtime path (`duplicateRuntimePath`, `claimedBy`) or the session has ended
