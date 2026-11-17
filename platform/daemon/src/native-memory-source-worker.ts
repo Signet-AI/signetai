@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { lstat, opendir, readFile } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker, isMainThread, parentPort, threadId } from "node:worker_threads";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
+import { directoryCursor, encodeDirectoryCursor, NativeSourceDirectory } from "./native-source-directory";
 import { buildObsidianSourceChunks, type ObsidianSourceChunk } from "./obsidian-source-chunks";
 
 export interface NativeSourceWorkerPattern {
@@ -129,6 +130,8 @@ interface PendingScan {
 
 const NATIVE_SOURCE_WORKER_SCAN_DEADLINE_MS = 30_000;
 const NATIVE_SOURCE_WORKER_PATH_BUDGET = 64;
+const NATIVE_SOURCE_WORKER_ENTRY_BUDGET = 4_096;
+const NATIVE_SOURCE_WORKER_PAGE_SLICE_MS = 100;
 export const NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES = 3;
 export const NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 
@@ -212,7 +215,18 @@ function contentMetadata(content: string): Pick<NativeSourceWorkerFile, "content
 	};
 }
 
-async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
+async function scan(
+	command: ScanCommand,
+	directories: Map<string, NativeSourceDirectory>,
+): Promise<NativeSourceWorkerPage> {
+	const retained = new Set(command.frontier?.map((entry) => directoryCursor(entry)?.token));
+	for (const [token, directory] of directories) {
+		if (retained.has(token)) continue;
+		await directory.close();
+		directories.delete(token);
+	}
+	const deadline = performance.now() + NATIVE_SOURCE_WORKER_PAGE_SLICE_MS;
+	let enumerated = 0;
 	const pageSize = Math.max(1, Math.min(100, Math.trunc(command.pageSize)));
 	const frontier = [...(command.frontier ?? [command.source.root])];
 	const files: NativeSourceWorkerFile[] = [];
@@ -223,32 +237,59 @@ async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
 	while (
 		frontier.length > 0 &&
 		files.length + rejected.length < pageSize &&
-		examined < NATIVE_SOURCE_WORKER_PATH_BUDGET
+		examined < NATIVE_SOURCE_WORKER_PATH_BUDGET &&
+		enumerated < NATIVE_SOURCE_WORKER_ENTRY_BUDGET &&
+		(examined === 0 || performance.now() < deadline)
 	) {
-		examined++;
-		const path = frontier.pop();
-		if (path === undefined) break;
+		const pending = frontier.pop();
+		if (pending === undefined) break;
+		const cursor = directoryCursor(pending);
+		const path = cursor?.path ?? pending;
 		const kind = matchesPattern(command.source, path);
 		const directoryMatches = directoryMayMatch(command.source, path);
-		if (kind === null && !directoryMatches) continue;
+		if (kind === null && !directoryMatches) {
+			examined++;
+			continue;
+		}
 		try {
+			if (cursor !== null) {
+				if (!directoryMatches) continue;
+				let directory = directories.get(cursor.token);
+				if (directory === undefined || directory.path !== path || directory.read !== cursor.read) {
+					examined++;
+					if (!(await lstat(path)).isDirectory()) continue;
+					await directory?.close();
+					directories.delete(cursor.token);
+					directory = await NativeSourceDirectory.open(path, cursor.after);
+					directories.set(directory.token, directory);
+				}
+				if (!directory.complete) {
+					enumerated += await directory.enumerate(NATIVE_SOURCE_WORKER_ENTRY_BUDGET - enumerated, deadline, (entry) => {
+						if (entry.name === ".git" || entry.isSymbolicLink()) return false;
+						const child = join(path, entry.name);
+						if (entry.isDirectory()) return directoryMayMatch(command.source, child);
+						if (entry.isFile()) return matchesPattern(command.source, child) !== null;
+						return directoryMayMatch(command.source, child) || matchesPattern(command.source, child) !== null;
+					});
+				}
+				const name = directory.complete ? directory.next(cursor.after) : null;
+				if (!directory.complete || directory.hasNext) {
+					frontier.push(
+						encodeDirectoryCursor({ path, after: name ?? cursor.after, token: directory.token, read: directory.read }),
+					);
+				}
+				if (directory.complete && !directory.hasNext) directories.delete(directory.token);
+				if (name !== null) frontier.push(join(path, name));
+				if (!directory.complete) break;
+				continue;
+			}
+			examined++;
 			const info = await lstat(path);
 			if (info.isDirectory()) {
 				if (!directoryMatches) continue;
-				const directory = await opendir(path);
-				const entries: string[] = [];
-				for await (const entry of directory) {
-					if (entry.name === ".git" || entry.isSymbolicLink()) continue;
-					const child = join(path, entry.name);
-					const accepted = entry.isDirectory()
-						? directoryMayMatch(command.source, child)
-						: entry.isFile()
-							? matchesPattern(command.source, child) !== null
-							: directoryMayMatch(command.source, child) || matchesPattern(command.source, child) !== null;
-					if (accepted) entries.push(child);
-				}
-				entries.sort((left, right) => right.localeCompare(left));
-				frontier.push(...entries);
+				const directory = await NativeSourceDirectory.open(path, null);
+				directories.set(directory.token, directory);
+				frontier.push(encodeDirectoryCursor({ path, after: null, token: directory.token, read: 0 }));
 				continue;
 			}
 			if (!info.isFile() || kind === null) continue;
@@ -344,17 +385,17 @@ export function runNativeSourceWorker(): void {
 		}
 	};
 	send({ type: "ready", threadId });
+	const directories = new Map<string, NativeSourceDirectory>();
+	let operation = Promise.resolve();
 	port.on("message", (command: WorkerCommand) => {
-		send({ type: "scan_started", id: command.id });
-		void scan(command).then(
-			(result) => send({ type: "result", id: command.id, result }),
-			(error: unknown) =>
-				send({
-					type: "error",
-					id: command.id,
-					message: error instanceof Error ? error.message : String(error),
-				}),
-		);
+		operation = operation.then(async () => {
+			send({ type: "scan_started", id: command.id });
+			try {
+				send({ type: "result", id: command.id, result: await scan(command, directories) });
+			} catch (error) {
+				send({ type: "error", id: command.id, message: error instanceof Error ? error.message : String(error) });
+			}
+		});
 	});
 }
 

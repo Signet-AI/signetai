@@ -151,7 +151,9 @@ describe("native source worker", () => {
 			}
 			expect(page.complete).toBe(true);
 			expect(page.frontier).toEqual([]);
-			expect((await metadataPaths(instrumentation.stats)).sort()).toEqual(expected.sort());
+			const paths = await metadataPaths(instrumentation.stats);
+			expect([...new Set(paths)].sort()).toEqual(expected.sort());
+			expect(paths.filter((path) => path.endsWith("empty.md"))).toHaveLength(400);
 		} finally {
 			await worker.close();
 			await rm(root, { recursive: true, force: true });
@@ -206,6 +208,24 @@ describe("native source worker", () => {
 		expect(second.frontier).not.toContain(source.root);
 		expect(third.files).toEqual([]);
 		expect(third.complete).toBe(true);
+	});
+
+	it("restores legacy string frontiers without replaying completed files", async () => {
+		const { root, source } = await fixture();
+		const worker = createNativeSourceWorker();
+		try {
+			const page = await worker.scan({
+				source,
+				cursor: join(root, "b.md"),
+				frontier: [join(root, "nested")],
+				pageSize: 100,
+			});
+			expect(page.files.map((file) => file.content)).toEqual(["A"]);
+			expect(page.complete).toBe(true);
+		} finally {
+			await worker.close();
+			await rm(root, { recursive: true, force: true });
+		}
 	});
 
 	it("kills the isolated worker when cancellation is requested", async () => {
