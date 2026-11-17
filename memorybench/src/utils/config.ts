@@ -12,6 +12,8 @@ export interface Config {
   googleApiKey: string
   zaiApiKey: string
   zaiBaseUrl: string
+  openrouterApiKey: string
+  openrouterBaseUrl: string
   localBaseUrl: string
   localApiKey: string
 }
@@ -30,19 +32,19 @@ export const config: Config = {
   googleApiKey: process.env.GOOGLE_API_KEY || "",
   zaiApiKey: process.env.ZAI_API_KEY || "",
   zaiBaseUrl: process.env.ZAI_BASE_URL || ZAI_CODING_BASE_URL,
+  openrouterApiKey: process.env.OPENROUTER_API_KEY || "",
+  openrouterBaseUrl: process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1",
   localBaseUrl: process.env.LOCAL_LLM_BASE_URL || "http://127.0.0.1:8000/v1",
   localApiKey: process.env.LOCAL_LLM_API_KEY || "local",
 }
 
-function openRouterHeaders(baseUrl: string): Record<string, string> | undefined {
-  if (!baseUrl.toLowerCase().includes("openrouter.ai")) return undefined
-
+export function openRouterHeaders(): Record<string, string> {
   const headers: Record<string, string> = {}
   const referer = process.env.OPENROUTER_HTTP_REFERER || process.env.OPENROUTER_SITE_URL
   const title = process.env.OPENROUTER_APP_NAME || "Signet MemoryBench"
   if (referer) headers["HTTP-Referer"] = referer
   if (title) headers["X-Title"] = title
-  return Object.keys(headers).length > 0 ? headers : undefined
+  return headers
 }
 
 export function createConfiguredOpenAI(apiKey: string): ReturnType<typeof createOpenAI> {
@@ -50,8 +52,7 @@ export function createConfiguredOpenAI(apiKey: string): ReturnType<typeof create
   const options: OpenAIProviderSettings = { apiKey }
   if (baseURL) {
     options.baseURL = baseURL
-    const headers = openRouterHeaders(baseURL)
-    if (headers) options.headers = headers
+    if (baseURL.toLowerCase().includes("openrouter.ai")) options.headers = openRouterHeaders()
   }
   return createOpenAI(options)
 }

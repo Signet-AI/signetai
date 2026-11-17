@@ -21,6 +21,7 @@ import type {
 import type { ConcurrencyConfig } from "../types/concurrency"
 import type { BenchmarkConfig } from "../types/benchmark"
 import { PHASE_ORDER } from "../types/checkpoint"
+import type { OpenRouterModelSettings } from "../utils/models"
 import { logger } from "../utils/logger"
 
 const RUNS_DIR = "./data/runs"
@@ -135,6 +136,7 @@ export class CheckpointManager {
       status?: RunStatus
       concurrency?: ConcurrencyConfig
       benchmarkConfig?: BenchmarkConfig
+      openrouterModels?: Record<string, OpenRouterModelSettings>
     }
   ): RunCheckpoint {
     const checkpoint: RunCheckpoint = {
@@ -152,6 +154,7 @@ export class CheckpointManager {
       targetQuestionIds: options?.targetQuestionIds,
       concurrency: options?.concurrency,
       benchmarkConfig: options?.benchmarkConfig,
+      openrouterModels: options?.openrouterModels,
       questions: {},
     }
 

@@ -6,6 +6,7 @@ import { getModelConfig } from "./models"
 interface RecordedRequest {
   path: string
   authorization: string | null
+  title: string | null
   body: Record<string, unknown>
 }
 
@@ -14,6 +15,8 @@ const saved = {
   zaiBaseUrl: config.zaiBaseUrl,
   openaiApiKey: config.openaiApiKey,
   openaiBaseUrl: config.openaiBaseUrl,
+  openrouterApiKey: config.openrouterApiKey,
+  openrouterBaseUrl: config.openrouterBaseUrl,
   localApiKey: config.localApiKey,
   localBaseUrl: config.localBaseUrl,
 }
@@ -35,6 +38,7 @@ function serve(response: (request: RecordedRequest) => Response): {
       const recorded = {
         path: new URL(request.url).pathname,
         authorization: request.headers.get("authorization"),
+        title: request.headers.get("x-title"),
         body: (await request.json()) as Record<string, unknown>,
       }
       requests.push(recorded)
@@ -231,6 +235,66 @@ describe("local OpenAI-compatible transport", () => {
     try {
       await generateWithModel(getModelConfig("local:qwen3.8-27b", {}), "Capital of France?")
       expect(server.requests[0]!.body.chat_template_kwargs).toBeUndefined()
+    } finally {
+      server.stop()
+    }
+  })
+})
+
+describe("OpenRouter transport", () => {
+  it("sends Chat Completions with routing and reasoning settings as configured", async () => {
+    const server = serve(() => chatCompletion("Paris"))
+    config.openrouterBaseUrl = server.url.replace("/api/coding/paas/v4", "")
+    config.openrouterApiKey = "or-test-key"
+    try {
+      const result = await generateWithModel(
+        getModelConfig("openrouter:openai/gpt-4o-2024-08-06", {
+          MEMORYBENCH_OPENROUTER_MODELS: JSON.stringify({
+            "openai/gpt-4o-2024-08-06": {
+              provider: { quantizations: ["fp8", "bf16"], allow_fallbacks: true },
+              reasoning: { effort: "medium" },
+              maxTokens: 2048,
+            },
+          }),
+        }),
+        "Capital of France?"
+      )
+
+      expect(result.text).toBe("Paris")
+      expect(server.requests).toHaveLength(1)
+      const request = server.requests[0]!
+      expect(request.path).toBe("/chat/completions")
+      expect(request.authorization).toBe("Bearer or-test-key")
+      expect(request.title).toBe("Signet MemoryBench")
+      expect(request.body.model).toBe("openai/gpt-4o-2024-08-06")
+      expect(request.body.temperature).toBe(0)
+      expect(request.body.max_tokens).toBe(2048)
+      expect(request.body.provider).toEqual({ quantizations: ["fp8", "bf16"], allow_fallbacks: true })
+      expect(request.body.reasoning).toEqual({ effort: "medium" })
+      expect(result.usage).toEqual({
+        requests: 1,
+        unreportedRequests: 0,
+        inputTokens: 120,
+        outputTokens: 30,
+        reasoningTokens: 12,
+        cachedInputTokens: 20,
+      })
+    } finally {
+      server.stop()
+    }
+  })
+
+  it("omits routing settings and uses the default cap for unlisted models", async () => {
+    const server = serve(() => chatCompletion("Paris"))
+    config.openrouterBaseUrl = server.url.replace("/api/coding/paas/v4", "")
+    config.openrouterApiKey = "or-test-key"
+    try {
+      await generateWithModel(getModelConfig("openrouter:deepseek/deepseek-v4.1-flash-1017"), "x")
+
+      const body = server.requests[0]!.body
+      expect(body.provider).toBeUndefined()
+      expect(body.reasoning).toBeUndefined()
+      expect(body.max_tokens).toBe(1000)
     } finally {
       server.stop()
     }

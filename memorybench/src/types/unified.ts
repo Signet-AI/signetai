@@ -1,5 +1,6 @@
 import type { BenchmarkConfig, QualityReport } from "./benchmark"
 import type { ModelUsage } from "../utils/llm"
+import type { OpenRouterModelSettings } from "../utils/models"
 export interface QuestionTypeInfo {
   id: string
   alias: string
@@ -150,6 +151,7 @@ export interface BenchmarkResult {
   dataSourceRunId: string
   judge: string
   answeringModel: string
+  openrouterModels?: Record<string, OpenRouterModelSettings>
   timestamp: string
   summary: {
     totalQuestions: number
