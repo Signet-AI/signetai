@@ -33,6 +33,9 @@ import {
 	getDreamingQualityReport,
 	getDreamingState,
 	getDreamingToolCalls,
+} from "../pipeline";
+import { getDreamingEvidenceCoverage } from "../pipeline/dreaming-evidence-coverage";
+import {
 	getDreamingWorker,
 	getDreamingWorkloadDiagnostics,
 	getPipelineWorkerStatus,
@@ -693,6 +696,12 @@ export function registerPipelineRoutes(app: Hono): void {
 		return requirePermission("admin", authConfig)(c, next);
 	});
 
+	app.get("/api/dream/evidence/coverage", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const coverage = await getDreamingEvidenceCoverage(getDbAccessor(), scopedAgent.agentId);
+		return c.json(coverage);
+	});
 	app.get("/api/dream/status", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const accessor = getDbAccessor();

@@ -199,6 +199,12 @@ export interface DbOwnerSourceEvidenceEligibility {
 	readonly legacyObsidianRoot?: string;
 }
 
+export interface DbOwnerDreamingEvidenceCoverage {
+	readonly agentId: string;
+	readonly maxSources: number;
+	readonly maxPasses: number;
+}
+
 import type { CompletedTranscriptCommit } from "./transcript-import-commit";
 
 export interface DbOwnerTranscriptBulkCommit {
@@ -260,6 +266,7 @@ export type DbOwnerRequest =
 			readonly kind: "session_transcript_delete";
 			readonly input: import("./session-transcript-lifecycle").TranscriptDeleteInput;
 	  }
+	| { readonly kind: "dreaming_evidence_coverage"; readonly input: DbOwnerDreamingEvidenceCoverage }
 	| { readonly kind: "transcript_bulk_commit"; readonly input: DbOwnerTranscriptBulkCommit }
 	| {
 			readonly kind: "session_transcript_write";

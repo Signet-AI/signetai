@@ -60,6 +60,11 @@ import {
 	resolveImportedSourceAttentionInTx,
 } from "./dreaming-evidence-consumption";
 import { renderDreamingEvidence } from "./dreaming-evidence";
+import {
+	DREAMING_EVIDENCE_COVERAGE_MAX_PASSES,
+	DREAMING_EVIDENCE_COVERAGE_MAX_SOURCES,
+	getDreamingEvidenceCoverageInDb,
+} from "./dreaming-evidence-coverage";
 import { readEpisodicMemory, searchEpisodicSources, utcTimestampMs } from "../episodic-sources";
 import {
 	autoRequeueRepairedDreamingEvidence,
@@ -722,6 +727,40 @@ describe("Dreaming", () => {
 		).toBe(0);
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 	});
+
+	it("reports full evidence coverage after a real reviewing pass", async () => {
+		seedTranscript(db, "coverage-full", "A small transcript that Dreaming reviews once.");
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					await readAndReviewEvidence(input, { agentId: AGENT });
+					return { summary: "Done" };
+				},
+			},
+			defaultCfg(),
+			"/tmp",
+			AGENT,
+			[AGENT],
+			"incremental",
+		);
+		expect(result.summary).toBe("Done");
+		const coverage = getDreamingEvidenceCoverageInDb(db as unknown as ReadDb, AGENT, {
+			maxSources: DREAMING_EVIDENCE_COVERAGE_MAX_SOURCES,
+			maxPasses: DREAMING_EVIDENCE_COVERAGE_MAX_PASSES,
+		});
+		expect(coverage.agentId).toBe(AGENT);
+		expect(coverage.sources.eligible).toBe(1);
+		expect(coverage.sources.fullyReviewed).toBe(1);
+		expect(coverage.sources.partiallyReviewed).toBe(0);
+		expect(coverage.chars.reviewed).toBe(coverage.chars.eligible);
+		expect(coverage.chars.unreviewed).toBe(0);
+		expect(coverage.chars.consumedWithoutReview).toBe(0);
+		expect(coverage.chars.redelivered).toBe(0);
+		expect(coverage.dreamedFraction).toBe(1);
+		expect(coverage.pendingContinuations).toBe(0);
+		expect(coverage.complete).toBe(true);
+	}, 15_000);
 
 	it("terminalizes reviewed evidence after cross-pass fragments (#1712)", async () => {
 		seedTranscript(db, "reviewed-large", "x".repeat(40_000));

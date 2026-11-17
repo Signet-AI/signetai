@@ -2001,7 +2001,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 }
 const MAX_FAILURE_BACKOFF_MULTIPLIER = 6;
 const FAILURE_BACKOFF_BASE_MS = 5 * 60 * 1000;
-const DREAMING_EVIDENCE_KINDS = ["memory", "artifact", "transcript"] as const;
+export const DREAMING_EVIDENCE_KINDS = ["memory", "artifact", "transcript"] as const;
 
 function writeDreamingTranscriptManifestInTx(
 	db: WriteDb,
