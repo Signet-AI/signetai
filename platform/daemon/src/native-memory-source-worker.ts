@@ -128,6 +128,7 @@ interface PendingScan {
 }
 
 const NATIVE_SOURCE_WORKER_SCAN_DEADLINE_MS = 30_000;
+const NATIVE_SOURCE_WORKER_PATH_BUDGET = 64;
 export const NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES = 3;
 export const NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 
@@ -218,25 +219,39 @@ async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
 	const rejected: NativeSourceWorkerRejection[] = [];
 	const permissionDeniedPaths: string[] = [];
 	let nextCursor = command.cursor;
-	while (frontier.length > 0 && files.length + rejected.length < pageSize) {
+	let examined = 0;
+	while (
+		frontier.length > 0 &&
+		files.length + rejected.length < pageSize &&
+		examined < NATIVE_SOURCE_WORKER_PATH_BUDGET
+	) {
+		examined++;
 		const path = frontier.pop();
 		if (path === undefined) break;
+		const kind = matchesPattern(command.source, path);
+		const directoryMatches = directoryMayMatch(command.source, path);
+		if (kind === null && !directoryMatches) continue;
 		try {
 			const info = await lstat(path);
 			if (info.isDirectory()) {
-				if (!directoryMayMatch(command.source, path)) continue;
+				if (!directoryMatches) continue;
 				const directory = await opendir(path);
 				const entries: string[] = [];
 				for await (const entry of directory) {
-					if (entry.name !== ".git") entries.push(join(path, entry.name));
+					if (entry.name === ".git" || entry.isSymbolicLink()) continue;
+					const child = join(path, entry.name);
+					const accepted = entry.isDirectory()
+						? directoryMayMatch(command.source, child)
+						: entry.isFile()
+							? matchesPattern(command.source, child) !== null
+							: directoryMayMatch(command.source, child) || matchesPattern(command.source, child) !== null;
+					if (accepted) entries.push(child);
 				}
 				entries.sort((left, right) => right.localeCompare(left));
 				frontier.push(...entries);
 				continue;
 			}
-			if (!info.isFile()) continue;
-			const kind = matchesPattern(command.source, path);
-			if (kind === null) continue;
+			if (!info.isFile() || kind === null) continue;
 			const content = await readFile(path, "utf8");
 			if (!content.trim()) continue;
 			const chunks =
