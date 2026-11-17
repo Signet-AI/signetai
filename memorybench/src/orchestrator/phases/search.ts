@@ -38,6 +38,10 @@ export async function runSearchPhase(
 
   const concurrency = resolveConcurrency("search", checkpoint.concurrency, provider.concurrency)
 
+  if (!checkpoint.recallTranscriptEvidence) {
+    checkpoint.recallTranscriptEvidence = (await provider.recallTranscriptEvidenceLimit?.()) ?? undefined
+  }
+
   logger.info(`Searching ${pendingQuestions.length} questions (concurrency: ${concurrency})...`)
 
   await ConcurrentExecutor.execute(
@@ -64,6 +68,7 @@ export async function runSearchPhase(
         })
 
         const durationMs = Date.now() - startTime
+        const hitSources = results.map((result) => provider.classifyRecallSource?.(result) ?? "memory")
         const resultFile = join(resultsDir, `${question.questionId}.json`)
         const resultData = {
           questionId: question.questionId,
@@ -74,6 +79,7 @@ export async function runSearchPhase(
           timestamp: new Date().toISOString(),
           durationMs,
           results,
+          hitSources,
         }
 
         writeFileSync(resultFile, JSON.stringify(resultData, null, 2))
@@ -82,6 +88,7 @@ export async function runSearchPhase(
           status: "completed",
           resultFile,
           results,
+          hitSources,
           completedAt: new Date().toISOString(),
           durationMs,
         })

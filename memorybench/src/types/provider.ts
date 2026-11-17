@@ -57,9 +57,18 @@ export interface Provider {
   clear(containerTag: string): Promise<void>
   getIngestUsage?(): IngestUsage
   classifyResult?(result: unknown): RecallEvidenceKind
+  classifyRecallSource?(result: unknown): RecallSourceKind
+  recallTranscriptEvidenceLimit?(): Promise<RecallTranscriptEvidenceLimit | undefined>
 }
 
 export type RecallEvidenceKind = "derived" | "raw-evidence"
+
+export type RecallSourceKind = "memory" | "transcript-evidence"
+
+export interface RecallTranscriptEvidenceLimit {
+  limit: number
+  source: "daemon-config" | "launcher-env"
+}
 
 export type ProviderName =
   | "supermemory"

@@ -7,6 +7,8 @@ import type {
   EvaluationResult,
   LatencyStats,
   QuestionTypeStats,
+  RecallSourceStats,
+  RecallSources,
   RetrievalMetrics,
   RetrievalAggregates,
   RunUsage,
@@ -177,6 +179,45 @@ export function summarizeTranscriptReliance(
     ...(onlyWithTranscripts > 0
       ? { extraInputTokensPerRescuedAnswer: Math.round((productInput - derivedInput) / onlyWithTranscripts) }
       : {}),
+  }
+}
+
+function emptyRecallSourceStats(): RecallSourceStats {
+  return { questions: 0, memoriesOnly: 0, transcriptEvidenceOnly: 0, both: 0, none: 0 }
+}
+
+function bucketRecallSources(stats: RecallSourceStats, hitSources: string[] | undefined): void {
+  const memories = hitSources?.includes("memory") ?? false
+  const transcripts = hitSources?.includes("transcript-evidence") ?? false
+  stats.questions++
+  if (memories && transcripts) stats.both++
+  else if (transcripts) stats.transcriptEvidenceOnly++
+  else if (memories) stats.memoriesOnly++
+  else stats.none++
+}
+
+export function summarizeRecallSources(
+  checkpoint: RunCheckpoint,
+  evaluations: Array<{ questionId: string; questionType: string; correct: boolean }>
+): RecallSources | undefined {
+  if (evaluations.length === 0) return undefined
+  const all = emptyRecallSourceStats()
+  const correct = emptyRecallSourceStats()
+  const byType: Record<string, RecallSourceStats> = {}
+  for (const evaluation of evaluations) {
+    const hitSources = checkpoint.questions[evaluation.questionId]?.phases.search.hitSources
+    bucketRecallSources(all, hitSources)
+    if (evaluation.correct) bucketRecallSources(correct, hitSources)
+    byType[evaluation.questionType] ??= emptyRecallSourceStats()
+    bucketRecallSources(byType[evaluation.questionType]!, hitSources)
+  }
+  return {
+    ...(checkpoint.recallTranscriptEvidence
+      ? { transcriptEvidenceLimit: checkpoint.recallTranscriptEvidence }
+      : {}),
+    all,
+    correct,
+    byQuestionType: byType,
   }
 }
 
@@ -391,6 +432,14 @@ export function generateReport(benchmark: Benchmark, checkpoint: RunCheckpoint):
     datasetIdentity: checkpoint.datasetIdentity,
     usage: summarizeRunUsage(checkpoint, evaluatedIds),
     transcriptReliance: summarizeTranscriptReliance(checkpoint, evaluatedIds),
+    recallSources: summarizeRecallSources(
+      checkpoint,
+      evaluations.map((evaluation) => ({
+        questionId: evaluation.questionId,
+        questionType: evaluation.questionType,
+        correct: evaluation.label === "correct",
+      }))
+    ),
     memscore,
     memscoreComponents,
     retrieval: overallRetrieval,
@@ -510,6 +559,23 @@ export function printReport(result: BenchmarkResult): void {
       console.log(
         `  Cost per rescue:  ${reliance.extraInputTokensPerRescuedAnswer.toLocaleString()} extra input tokens per answer only transcripts got right`
       )
+    }
+  }
+
+  if (result.recallSources) {
+    const sources = result.recallSources
+    const format = (stats: RecallSourceStats): string =>
+      `${stats.memoriesOnly} memories-only, ${stats.transcriptEvidenceOnly} transcripts-only, ${stats.both} both, ${stats.none} none`
+    console.log("-".repeat(60))
+    console.log("\nRECALL SOURCES:")
+    if (sources.transcriptEvidenceLimit) {
+      const limit = sources.transcriptEvidenceLimit
+      console.log(`  Transcript limit: ${limit.limit} (from ${limit.source})`)
+    }
+    console.log(`  All:              ${format(sources.all)}`)
+    console.log(`  Correct:          ${format(sources.correct)}`)
+    for (const [type, stats] of Object.entries(sources.byQuestionType)) {
+      console.log(`  ${type}: ${format(stats)}`)
     }
   }
 
