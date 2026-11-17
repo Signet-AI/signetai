@@ -273,7 +273,6 @@ describe("session transcript live append", () => {
 				});
 			await Promise.all(replies.map(append));
 			await append("Assistant: retried");
-			await append("Assistant: retried");
 			await append("User: again");
 			await append("Assistant: retried");
 			const row = await dbOwnerQuery<{ content: string; project: string; agent_id: string }>(

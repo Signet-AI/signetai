@@ -41,7 +41,7 @@ function readSessionRecords(path: string): Array<[string, string, string]> {
 function appendLiveTurns(
 	root: string,
 	turns: Parameters<typeof appendCanonicalTranscriptTurns>[0]["turns"],
-): Promise<string | null> {
+): Promise<boolean> {
 	return appendCanonicalTranscriptTurns({
 		basePath: root,
 		agentId: "default",

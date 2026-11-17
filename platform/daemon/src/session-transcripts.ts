@@ -645,7 +645,7 @@ export function writeSessionTranscriptRow(
 	const existing =
 		input.append || input.preserveExistingContent ? readExactTranscriptContent(db, sessionKey, agentId) : undefined;
 	const retainedTranscript = input.append
-		? appendLivePromptTranscript(existing, transcript)
+		? [existing?.trimEnd(), transcript.trim()].filter((part) => part && part.trim().length > 0).join("\n")
 		: mergeTranscriptContent(existing ?? "", transcript);
 	const now = capturedAt ?? new Date().toISOString();
 	const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
@@ -754,15 +754,6 @@ function readExactTranscriptContent(db: WriteDb, sessionKey: string, agentId: st
 	return row?.content;
 }
 
-export function appendLivePromptTranscript(previous: string | undefined, liveTranscript: string): string {
-	const current = liveTranscript.trim();
-	if (!previous || previous.trim().length === 0) return current;
-
-	const stored = previous.trimEnd();
-	if (stored === current || stored.endsWith(`\n${current}`)) return stored;
-	return `${stored}\n${current}`;
-}
-
 function mergeTranscriptContent(existing: string, incoming: string): string {
 	if (existing.length === 0) return incoming;
 	if (incoming.length === 0 || existing === incoming || existing.includes(incoming)) return existing;
@@ -797,7 +788,7 @@ export function markSessionTranscriptCompleted(
 		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
-		}, "session-transcripts.ts:797");
+		}, "session-transcripts.ts:788");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript completion marker failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -860,7 +851,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				completedAt: row.completed_at ?? null,
 				contentHash: row.content_hash ?? null,
 			};
-		}, "session-transcripts.ts:829");
+		}, "session-transcripts.ts:820");
 	} catch {
 		return undefined;
 	}
@@ -928,7 +919,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ siteToken: "session-transcripts.ts:926", operation: "transcripts.lookup", signal },
+			{ siteToken: "session-transcripts.ts:917", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;
@@ -958,7 +949,7 @@ export function getSessionTranscriptContent(
 				| { content: string }
 				| undefined;
 			return row?.content;
-		}, "session-transcripts.ts:949");
+		}, "session-transcripts.ts:940");
 	} catch {
 		return undefined;
 	}
@@ -1006,7 +997,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:982");
+		}, "session-transcripts.ts:973");
 	} catch {
 		return [];
 	}
@@ -1054,7 +1045,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:1037");
+		}, "session-transcripts.ts:1028");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -1097,7 +1088,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:1082");
+						}, "session-transcripts.ts:1073");
 
 					const hits = rows
 						.map((row) => ({
@@ -1167,7 +1158,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1146");
+			}, "session-transcripts.ts:1137");
 
 		return rows
 			.map((row) => ({

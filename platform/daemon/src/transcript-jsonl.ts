@@ -908,12 +908,13 @@ export function writeCanonicalTranscriptSnapshot(
 
 export function appendCanonicalTranscriptTurns(
 	input: TranscriptIdentity & { readonly turns: readonly TranscriptTurn[] },
-): Promise<string | null> {
+): Promise<boolean> {
 	const turns = input.turns.filter((turn) => cleanTurnContent(turn.content).length > 0);
-	if (turns.length === 0) return Promise.resolve(null);
+	if (turns.length === 0) return Promise.resolve(false);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	return withTranscriptFileLock(path, async () => {
-		if (!hasTrailingTurns(readTailRecords(path, tailScanBytes(turns)), input, turns)) {
+		const appended = !hasTrailingTurns(readTailRecords(path, tailScanBytes(turns)), input, turns);
+		if (appended) {
 			const entries = await loadSessionSeqIndex(path);
 			let seq = lastSessionSeq(entries, input);
 			const next = turns
@@ -923,7 +924,7 @@ export function appendCanonicalTranscriptTurns(
 		}
 		await syncPath(path);
 		await syncPath(dirname(path));
-		return path;
+		return appended;
 	});
 }
 

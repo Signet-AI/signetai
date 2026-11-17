@@ -1625,7 +1625,7 @@ export async function handleUserPromptSubmit(
 
 	if (req.sessionKey && userMessage.trim().length > 0) {
 		try {
-			await transcriptCapture.appendCanonicalLiveTranscriptTurns({
+			const appended = await transcriptCapture.appendCanonicalLiveTranscriptTurns({
 				basePath: getAgentsDir(),
 				agentId,
 				harness: req.harness,
@@ -1634,14 +1634,19 @@ export async function handleUserPromptSubmit(
 				userMessage,
 				lastAssistantMessage: req.lastAssistantMessage,
 			});
-			const liveTranscript = transcriptCapture.formatLivePromptTranscript(userMessage, req.lastAssistantMessage);
-			await deps.appendSessionTranscriptAsync({
-				sessionKey: req.sessionKey,
-				agentId,
-				harness: req.harness,
-				project: req.project ?? null,
-				transcript: liveTranscript,
-			});
+			if (appended) {
+				await deps.appendSessionTranscriptAsync({
+					sessionKey: req.sessionKey,
+					agentId,
+					harness: req.harness,
+					project: req.project ?? null,
+					transcript: transcriptCapture.formatLivePromptTranscript(userMessage, req.lastAssistantMessage),
+				});
+			} else {
+				logger.warn("hooks", "Duplicate transcript evidence; projection append skipped and any prior gap remains", {
+					sessionKey: req.sessionKey,
+				});
+			}
 		} catch (error) {
 			logger.warn("hooks", "Prompt transcript append failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -1881,7 +1886,13 @@ async function appendLiveAssistantTurn(params: {
 }): Promise<boolean> {
 	const assistantLine = transcriptCapture.formatLiveAssistantTranscript(params.message);
 	if (!assistantLine) return false;
-	await transcriptCapture.appendCanonicalLiveAssistantTurn({ basePath: getAgentsDir(), ...params });
+	const appended = await transcriptCapture.appendCanonicalLiveAssistantTurn({ basePath: getAgentsDir(), ...params });
+	if (!appended) {
+		logger.warn("hooks", "Duplicate transcript evidence; projection append skipped and any prior gap remains", {
+			sessionKey: params.sessionKey,
+		});
+		return true;
+	}
 	await appendSessionTranscriptAsync({
 		sessionKey: params.sessionKey,
 		agentId: params.agentId,

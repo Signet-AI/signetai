@@ -1881,7 +1881,21 @@ describe("direct transcript regressions", () => {
 			handleStop({ harness: "claude-code", sessionKey, agentId: "default", lastAssistantMessage });
 
 		await stop("Done.");
+		const evidence = canonicalSessionRecords("claude-code", sessionKey);
+		const { dbOwnerQuery, ownerStatement } = await import("./db-owner-runtime");
+		const read = () =>
+			dbOwnerQuery(
+				ownerStatement(
+					"SELECT * FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+					[sessionKey, "default"],
+					"get",
+				),
+				{ operation: "test.stop.retry.readback" },
+			);
+		const projection = await read();
 		await stop("Done.");
+		expect(canonicalSessionRecords("claude-code", sessionKey)).toEqual(evidence);
+		expect(await read()).toEqual(projection);
 		await stop("Second reply.");
 		await handleUserPromptSubmit({ harness: "claude-code", sessionKey, userPrompt: "again please" });
 		await stop("Done.");
@@ -1906,13 +1920,13 @@ describe("direct transcript regressions", () => {
 	test.serial("keeps a Stop reply whose serialized text is only a suffix of the previous turn", async () => {
 		createMemoryDb([]);
 		const sessionKey = "claude-stop-suffix-reply";
-		for (const lastAssistantMessage of ["Mention Assistant: done", "done", "done"]) {
+		for (const lastAssistantMessage of ["Mention\nAssistant: done", "done"]) {
 			expect(
 				await handleStop({ harness: "claude-code", sessionKey, agentId: "default", lastAssistantMessage }),
 			).toEqual({ recorded: true });
 		}
 		expect(canonicalSessionRecords("claude-code", sessionKey).map((record) => [record.role, record.content])).toEqual([
-			["assistant", "Mention Assistant: done"],
+			["assistant", "Mention\nAssistant: done"],
 			["assistant", "done"],
 		]);
 		const { dbOwnerQuery, ownerStatement } = await import("./db-owner-runtime");
@@ -1924,7 +1938,7 @@ describe("direct transcript regressions", () => {
 			),
 			{ operation: "test.stop.suffix.readback" },
 		);
-		expect(stored).toEqual({ content: "Assistant: Mention Assistant: done\nAssistant: done" });
+		expect(stored).toEqual({ content: "Assistant: Mention\nAssistant: done\nAssistant: done" });
 	});
 
 	test.serial("keeps every line when turn-end replies and a prompt overlap on one session", async () => {

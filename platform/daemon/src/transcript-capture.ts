@@ -55,9 +55,9 @@ export async function appendCanonicalLiveTranscriptTurns(params: {
 	readonly project?: string | null;
 	readonly userMessage: string;
 	readonly lastAssistantMessage?: string;
-}): Promise<void> {
+}): Promise<boolean> {
 	await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	await appendCanonicalTranscriptTurns({
+	return appendCanonicalTranscriptTurns({
 		basePath: params.basePath,
 		agentId: params.agentId,
 		harness: params.harness,
@@ -80,9 +80,9 @@ export async function appendCanonicalLiveAssistantTurn(params: {
 	readonly sessionKey: string;
 	readonly project?: string | null;
 	readonly message: string;
-}): Promise<void> {
+}): Promise<boolean> {
 	await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	await appendCanonicalTranscriptTurns({
+	return appendCanonicalTranscriptTurns({
 		basePath: params.basePath,
 		agentId: params.agentId,
 		harness: params.harness,
@@ -105,5 +105,3 @@ export function formatLivePromptTranscript(userMessage: string, lastAssistantMes
 		.filter((turn) => turn.trim().length > 0)
 		.join("\n");
 }
-
-export { appendLivePromptTranscript } from "./session-transcripts";
