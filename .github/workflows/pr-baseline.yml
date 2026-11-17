@@ -40,8 +40,10 @@ jobs:
         run: bun run audit:database-ownership
       - name: Enforce agent identity provenance
         run: bun run audit:agent-identity
+      - name: Enforce merge-base architecture ratchet
+        run: bun run audit:ratchet
       - name: Test architecture guardrails
-        run: bun test scripts/strip-comments.test.ts scripts/check-production-comments.test.ts scripts/audit-database-ownership.test.ts scripts/audit-agent-identity.test.ts scripts/pr-baseline-workflow.test.ts
+        run: bun test scripts/strip-comments.test.ts scripts/check-production-comments.test.ts scripts/audit-database-ownership.test.ts scripts/audit-agent-identity.test.ts scripts/pr-baseline-workflow.test.ts scripts/audit-architecture-ratchet.test.ts platform/core/src/attempt.test.ts
 
   build:
     name: Production build, complete test suite, and workspace typecheck
