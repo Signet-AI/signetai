@@ -14,7 +14,7 @@ describe("createSessionState", () => {
 		const clock = "Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)";
 		state.queuePendingClock("session-1", clock);
 
-		const message = state.consumeHiddenInjectMessage("session-1");
+		const message = state.consumeHiddenInjectMessage("session-1", []);
 		expect(message).toEqual({
 			customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
 			display: false,
@@ -22,7 +22,7 @@ describe("createSessionState", () => {
 		});
 		state.queuePendingClock("session-1", "Current date/time: later");
 		expect(message?.content.endsWith(clock)).toBe(true);
-		const next = state.consumeHiddenInjectMessage("session-1");
+		const next = state.consumeHiddenInjectMessage("session-1", []);
 		expect(next?.content).toContain("third");
 		expect(next?.content).not.toContain("session context");
 		expect(next?.content).toContain("Current date/time: later");
@@ -34,15 +34,15 @@ describe("createSessionState", () => {
 
 		state.clearPendingClock("session-1");
 
-		expect(state.consumeHiddenInjectMessage("session-1")).toBeUndefined();
+		expect(state.consumeHiddenInjectMessage("session-1", [])).toBeUndefined();
 	});
 
 	it("does not consume another session's pending content", () => {
 		const state = createSessionState();
 		state.setPendingSessionContext("session-1", "private context");
-		expect(state.consumeHiddenInjectMessage(undefined)).toBeUndefined();
-		expect(state.consumeHiddenInjectMessage("session-2")).toBeUndefined();
-		expect(state.consumeHiddenInjectMessage("session-1")?.content).toContain("private context");
-		expect(state.consumeHiddenInjectMessage("session-1")).toBeUndefined();
+		expect(state.consumeHiddenInjectMessage(undefined, [])).toBeUndefined();
+		expect(state.consumeHiddenInjectMessage("session-2", [])).toBeUndefined();
+		expect(state.consumeHiddenInjectMessage("session-1", [])?.content).toContain("private context");
+		expect(state.consumeHiddenInjectMessage("session-1", [])).toBeUndefined();
 	});
 });
