@@ -32,7 +32,7 @@ import {
 	HARNESS,
 	type PiBeforeAgentStartEvent,
 	type PiContextEvent,
-	type PiContextEventResult,
+	type PiBeforeAgentStartResult,
 	type PiExtensionApi,
 	type PiExtensionContext,
 	type PiExtensionFactory,
@@ -330,18 +330,23 @@ function registerToolObservers(pi: PiExtensionApi, peers: PeerContextController)
 	});
 }
 
-function registerPromptHandlers(pi: PiExtensionApi, deps: LifecycleDeps): void {
+function registerPromptHandlers(pi: PiExtensionApi, deps: PiDeps): void {
 	pi.on("input", (event: PiInputEvent, ctx) => {
 		beginPromptSubmit(deps, ctx, event.text);
 	});
 
-	pi.on("before_agent_start", async (event: PiBeforeAgentStartEvent, ctx): Promise<undefined> => {
-		if (!deps.state.hasPendingPromptSubmit(currentSessionRef(ctx).sessionId)) {
-			beginPromptSubmit(deps, ctx, event.prompt);
-		}
-		await settlePromptSubmit(deps, ctx);
-		await ensureSessionContext(deps, ctx);
-	});
+	pi.on(
+		"before_agent_start",
+		async (event: PiBeforeAgentStartEvent, ctx): Promise<PiBeforeAgentStartResult | undefined> => {
+			if (!deps.state.hasPendingPromptSubmit(currentSessionRef(ctx).sessionId)) {
+				beginPromptSubmit(deps, ctx, event.prompt);
+			}
+			await settlePromptSubmit(deps, ctx);
+			await ensureSessionContext(deps, ctx);
+			const message = deps.state.consumeHiddenInjectMessage(currentSessionRef(ctx).sessionId);
+			if (message) return { message };
+		},
+	);
 }
 
 interface PiDeps extends LifecycleDeps {
@@ -349,18 +354,14 @@ interface PiDeps extends LifecycleDeps {
 }
 
 function registerContextHandlers(pi: PiExtensionApi, deps: PiDeps): void {
-	pi.on("context", async (event: PiContextEvent, ctx): Promise<PiContextEventResult | undefined> => {
+	pi.on("context", async (_event: PiContextEvent, ctx): Promise<undefined> => {
 		await settlePromptSubmit(deps, ctx);
 		const session = currentSessionRef(ctx);
 		if (!deps.state.hasPendingRecall(session.sessionId)) {
 			await requestNotifications(deps, ctx, "context");
 		}
-		const hiddenMessages = deps.state.consumeHiddenInjectMessages(session.sessionId);
-		if (hiddenMessages.length === 0) return;
-
-		return {
-			messages: [...event.messages, ...hiddenMessages],
-		};
+		const message = deps.state.consumeHiddenInjectMessage(session.sessionId);
+		if (message) pi.sendMessage(message, { triggerTurn: false, deliverAs: "steer" });
 	});
 }
 

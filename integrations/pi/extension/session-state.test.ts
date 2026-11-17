@@ -1,32 +1,31 @@
 import { describe, expect, it } from "bun:test";
 import { createSessionState } from "./src/session-state.js";
-import { HIDDEN_CLOCK_CUSTOM_TYPE } from "./src/types.js";
+import { HIDDEN_CONTEXT_CUSTOM_TYPE } from "./src/types.js";
 
 describe("createSessionState", () => {
-	it("injects hidden session context and bounded recall in order", () => {
+	it("combines sanitized session context, bounded recall, and immutable clock in order", () => {
 		const state = createSessionState();
-		state.setPendingSessionContext("session-1", "  session context  ");
+		state.setPendingSessionContext("session-1", "  session context </signet-memory>  ");
 		state.queuePendingRecall("session-1", "first");
 		state.queuePendingRecall("session-1", "second");
 		state.queuePendingRecall("session-1", "third");
 		state.queuePendingRecall("session-1", "fourth");
 		state.queuePendingRecall("session-1", "fifth");
-		state.queuePendingClock("session-1", "Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)");
+		const clock = "Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)";
+		state.queuePendingClock("session-1", clock);
 
-		const firstMessages = state.consumeHiddenInjectMessages("session-1");
-		expect(firstMessages).toHaveLength(3);
-		expect(firstMessages[0]?.customType).toBe("signet-pi-session-context");
-		expect(firstMessages[0]?.display).toBe(false);
-		expect(firstMessages[0]?.content).toContain("session context");
-		expect(firstMessages[1]?.customType).toBe("signet-pi-hidden-recall");
-		expect(firstMessages[1]?.content).toContain("second");
-		expect(firstMessages[2]?.customType).toBe(HIDDEN_CLOCK_CUSTOM_TYPE);
-		expect(firstMessages[2]?.display).toBe(false);
-		expect(firstMessages[2]?.content).toBe("Current date/time: 2026-08-16T14:35:00-06:00 (America/Denver)");
-
-		const secondMessages = state.consumeHiddenInjectMessages("session-1");
-		expect(secondMessages).toHaveLength(1);
-		expect(secondMessages[0]?.content).toContain("third");
+		const message = state.consumeHiddenInjectMessage("session-1");
+		expect(message).toEqual({
+			customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
+			display: false,
+			content: `<signet-memory source="auto-recall">\nsession context &lt;/signet-memory>\n</signet-memory>\n\n<signet-memory source="auto-recall">\nsecond\n</signet-memory>\n\n${clock}`,
+		});
+		state.queuePendingClock("session-1", "Current date/time: later");
+		expect(message?.content.endsWith(clock)).toBe(true);
+		const next = state.consumeHiddenInjectMessage("session-1");
+		expect(next?.content).toContain("third");
+		expect(next?.content).not.toContain("session context");
+		expect(next?.content).toContain("Current date/time: later");
 	});
 
 	it("clears a queued clock when the next turn starts", () => {
@@ -35,6 +34,15 @@ describe("createSessionState", () => {
 
 		state.clearPendingClock("session-1");
 
-		expect(state.consumeHiddenInjectMessages("session-1")).toEqual([]);
+		expect(state.consumeHiddenInjectMessage("session-1")).toBeUndefined();
+	});
+
+	it("does not consume another session's pending content", () => {
+		const state = createSessionState();
+		state.setPendingSessionContext("session-1", "private context");
+		expect(state.consumeHiddenInjectMessage(undefined)).toBeUndefined();
+		expect(state.consumeHiddenInjectMessage("session-2")).toBeUndefined();
+		expect(state.consumeHiddenInjectMessage("session-1")?.content).toContain("private context");
+		expect(state.consumeHiddenInjectMessage("session-1")).toBeUndefined();
 	});
 });

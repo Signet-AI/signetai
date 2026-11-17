@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { parseRecallPayload } from "@signet/core";
+import type { PiCustomMessage } from "./src/types.js";
 import SignetPiExtension, {
 	loadConfig,
 	parseRememberArgs,
@@ -984,7 +985,7 @@ describe("SignetPiExtension", () => {
 		expect(capturedBody.limit).toBe(10);
 	});
 
-	it("context injection end-to-end: session context and recall are delivered via context event", async () => {
+	it("keeps injected context append-only across requests in a prompt", async () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
@@ -996,11 +997,12 @@ describe("SignetPiExtension", () => {
 					});
 				}
 				if (path === "/api/hooks/user-prompt-submit") {
-					return Response.json({ dynamicContext: "[signet:recall]\n- Preferred language is TypeScript" });
+					return Response.json({
+						dynamicContext: "[signet:recall]\n- Preferred language is TypeScript",
+						clockContext: "Current date/time: 2026-10-14T17:22:54+00:00 (UTC)",
+					});
 				}
-				if (path === "/api/hooks/notifications") {
-					return Response.json({ inject: "peer-notification-content" });
-				}
+				if (path === "/api/hooks/notifications") return Response.json({});
 				return new Response("not found", { status: 404 });
 			},
 		});
@@ -1033,30 +1035,28 @@ describe("SignetPiExtension", () => {
 			},
 		};
 
-		await handlers.before_agent_start[0]?.({ prompt: "what is my preferred language?" }, ctx);
-		const result = await handlers.context[0]?.({ messages: [] }, ctx);
+		const history: unknown[] = [{ role: "user", content: "what is my preferred language?" }];
+		const start = await handlers.before_agent_start[0]?.({ prompt: "what is my preferred language?" }, ctx);
+		if (typeof start === "object" && start !== null && "message" in start) history.push(start.message);
+		const first = await handlers.context[0]?.({ messages: [...history] }, ctx);
+		const firstMessages =
+			typeof first === "object" && first !== null && "messages" in first ? first.messages : [...history];
+		const request = JSON.stringify(firstMessages);
+		history.push({ role: "assistant", content: "Checking preferences" }, { role: "toolResult", content: "TypeScript" });
+		const second = await handlers.context[0]?.({ messages: [...history] }, ctx);
+		const secondMessages =
+			typeof second === "object" && second !== null && "messages" in second ? second.messages : [...history];
 
-		expect(result).not.toBeUndefined();
-		const messages = (result as { messages: Array<{ customType?: string; content?: unknown }> }).messages;
-		expect(Array.isArray(messages)).toBe(true);
-
-		const sessionCtxMsg = messages.find((m) => m.customType === "signet-pi-session-context");
-		expect(typeof sessionCtxMsg?.content).toBe("string");
-		expect(sessionCtxMsg?.content as string).toContain("session-context-content");
-
-		const recallMsg = messages.find((m) => m.customType === "signet-pi-hidden-recall");
-		expect(typeof recallMsg?.content).toBe("string");
-		expect(recallMsg?.content as string).toContain("Preferred language is TypeScript");
-
-		const next = await handlers.context[0]?.({ messages }, ctx);
-		const nextMessages = (next as { messages: Array<{ customType?: string; content?: unknown }> }).messages;
-		const peerMessage = nextMessages.find(
-			(message) =>
-				message.customType === "signet-pi-hidden-recall" &&
-				typeof message.content === "string" &&
-				message.content.includes("peer-notification-content"),
-		);
-		expect(peerMessage).toBeDefined();
+		expect(JSON.stringify(secondMessages).startsWith(request.slice(0, -1))).toBe(true);
+		expect(request).toContain("session-context-content");
+		expect(request).toContain("Preferred language is TypeScript");
+		expect(request).toContain("Current date/time: 2026-10-14T17:22:54+00:00 (UTC)");
+		expect(start).toMatchObject({ message: { customType: "signet-pi-context", display: false } });
+		expect(first).toBeUndefined();
+		expect(second).toBeUndefined();
+		const restored: unknown = JSON.parse(JSON.stringify(history));
+		expect(await handlers.context[0]?.({ messages: restored }, ctx)).toBeUndefined();
+		expect(restored).toEqual(history);
 	});
 
 	it("input does not wait for prompt-submit and before_agent_start does not retry a failed submit", async () => {
@@ -1122,8 +1122,10 @@ describe("SignetPiExtension", () => {
 		expect(messages.some((message) => message.customType === "signet-pi-hidden-recall")).toBe(false);
 	});
 
-	it("delivers recall for a prompt submitted on input through the next context event", async () => {
+	it.each(["recall", "notification"])("persists late %s without a temporary request copy", async (source) => {
+		const delivered: Array<{ readonly message: PiCustomMessage; readonly options: unknown }> = [];
 		let promptSubmits = 0;
+		let polls = 0;
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
@@ -1131,9 +1133,15 @@ describe("SignetPiExtension", () => {
 				if (path === "/api/hooks/session-start") return Response.json({});
 				if (path === "/api/hooks/user-prompt-submit") {
 					promptSubmits += 1;
-					return Response.json({ dynamicContext: "[signet:recall]\n- Steered recall" });
+					return Response.json({
+						dynamicContext: "[signet:recall]\n- Steered recall",
+						clockContext: "Current date/time: late",
+					});
 				}
-				if (path === "/api/hooks/notifications") return Response.json({});
+				if (path === "/api/hooks/notifications") {
+					polls += 1;
+					return Response.json({ inject: polls === 1 && source === "notification" ? "Late peer notification" : "" });
+				}
 				return new Response("not found", { status: 404 });
 			},
 		});
@@ -1147,6 +1155,9 @@ describe("SignetPiExtension", () => {
 			},
 			registerCommand(_name: string, _opts: unknown) {},
 			registerTool(_opts: unknown) {},
+			sendMessage(message: PiCustomMessage, options: unknown): void {
+				delivered.push({ message, options });
+			},
 		};
 		SignetPiExtension(pi as never);
 		const ctx = {
@@ -1165,12 +1176,23 @@ describe("SignetPiExtension", () => {
 			},
 		};
 
-		await handlers.input[0]?.({ text: "steer toward the recalled fact" }, ctx);
-		const result = await handlers.context[0]?.({ messages: [] }, ctx);
-		const messages = (result as { messages: Array<{ customType?: string; content?: unknown }> }).messages;
-		const recall = messages.find((message) => message.customType === "signet-pi-hidden-recall");
-		expect(recall?.content as string).toContain("Steered recall");
-		expect(promptSubmits).toBe(1);
+		if (source === "recall") await handlers.input[0]?.({ text: "steer toward the recalled fact" }, ctx);
+		const history: unknown[] = [{ role: "user", content: "Already running" }];
+		const first = await handlers.context[0]?.({ messages: [...history] }, ctx);
+		expect(first).toBeUndefined();
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]?.options).toEqual({ triggerTurn: false, deliverAs: "steer" });
+		expect(delivered[0]?.message).toMatchObject({ customType: "signet-pi-context", display: false });
+		expect(delivered[0]?.message.content).toContain(source === "recall" ? "Steered recall" : "Late peer notification");
+		if (source === "recall") expect(delivered[0]?.message.content).toContain("Current date/time: late");
+		const request = JSON.stringify(history);
+		history.push({ role: "assistant", content: "Tool call" }, { role: "toolResult", content: "Done" });
+		for (const item of delivered) history.push(item.message);
+		const second = await handlers.context[0]?.({ messages: [...history] }, ctx);
+		expect(second).toBeUndefined();
+		expect(JSON.stringify(history).startsWith(request.slice(0, -1))).toBe(true);
+		expect(delivered).toHaveLength(1);
+		expect(promptSubmits).toBe(source === "recall" ? 1 : 0);
 	});
 
 	it("session_before_compact posts pre-compaction guidance with session metadata", async () => {

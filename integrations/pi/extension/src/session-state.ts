@@ -3,61 +3,39 @@ import {
 	type BaseSessionState,
 	BaseSessionStateStore,
 	sanitizeInject,
+	readTrimmedString,
 } from "@signet/pi-extension-base";
-import { readTrimmedString } from "@signet/pi-extension-base";
-import {
-	HIDDEN_CLOCK_CUSTOM_TYPE,
-	HIDDEN_RECALL_CUSTOM_TYPE,
-	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
-	type PiAgentMessage,
-} from "./types.js";
+import { HIDDEN_CONTEXT_CUSTOM_TYPE, type PiCustomMessage } from "./types.js";
 
-function createHiddenInjectMessage(customType: string, inject: string): PiAgentMessage {
-	return {
-		role: "custom",
-		customType,
-		display: false,
-		content: `<signet-memory source="auto-recall">\n${sanitizeInject(inject)}\n</signet-memory>`,
-		timestamp: Date.now(),
-	};
-}
-
-function createHiddenClockMessage(clockContext: string): PiAgentMessage {
-	return {
-		role: "custom",
-		customType: HIDDEN_CLOCK_CUSTOM_TYPE,
-		display: false,
-		content: clockContext,
-		timestamp: Date.now(),
-	};
+function fence(inject: string): string {
+	return `<signet-memory source="auto-recall">\n${sanitizeInject(inject)}\n</signet-memory>`;
 }
 
 export interface PiSessionState extends BaseSessionState {
-	consumeHiddenInjectMessages(sessionId: string | undefined): PiAgentMessage[];
+	consumeHiddenInjectMessage(sessionId: string | undefined): PiCustomMessage | undefined;
 }
 
 class PiSessionStateStore extends BaseSessionStateStore implements PiSessionState {
-	consumeHiddenInjectMessages(sessionId: string | undefined): PiAgentMessage[] {
-		if (!sessionId) return [];
+	consumeHiddenInjectMessage(sessionId: string | undefined): PiCustomMessage | undefined {
+		if (!sessionId) return;
 
-		const messages: PiAgentMessage[] = [];
-		const sessionInject = readTrimmedString(this.pendingSessionContext.get(sessionId));
-		if (sessionInject) {
-			messages.push(createHiddenInjectMessage(HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE, sessionInject));
-		}
+		const parts: string[] = [];
+		const session = readTrimmedString(this.pendingSessionContext.get(sessionId));
 		this.pendingSessionContext.delete(sessionId);
+		if (session) parts.push(fence(session));
 
-		const recallInject = this.consumePendingRecall(sessionId);
-		if (recallInject) {
-			messages.push(createHiddenInjectMessage(HIDDEN_RECALL_CUSTOM_TYPE, recallInject));
-		}
+		const recall = this.consumePendingRecall(sessionId);
+		if (recall) parts.push(fence(recall));
 
-		const clockContext = this.consumePendingClock(sessionId);
-		if (clockContext) {
-			messages.push(createHiddenClockMessage(clockContext));
-		}
+		const clock = this.consumePendingClock(sessionId);
+		if (clock) parts.push(clock);
+		if (parts.length === 0) return;
 
-		return messages;
+		return {
+			customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
+			display: false,
+			content: parts.join("\n\n"),
+		};
 	}
 }
 
