@@ -217,7 +217,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:hooks.session-transcript.project.read` (withReadDb)
 - `db:hooks.session-summary.memory.write` (withWriteTx)
 - `db:hooks.compaction.transcript-state.delete` (withWriteTx)
-- `routes/knowledge-routes.ts:353` (withReadDbAsync)
+- `routes/knowledge-routes.ts:354` (withReadDbAsync)
 - `routes/knowledge-routes.ts:540` (withReadDbAsync)
 - `routes/knowledge-routes.ts:557` (withReadDbAsync)
 - `routes/knowledge-routes.ts:659` (withReadDbAsync)

@@ -1,5 +1,6 @@
 import { redactCredentials } from "@signet/core";
 import type { Hono } from "hono";
+import { etag } from "hono/etag";
 
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { requirePermission } from "../auth";
@@ -368,7 +369,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					updated_at: string;
 				}>;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:353" },
+			{ siteToken: "routes/knowledge-routes.ts:354" },
 		);
 		return c.json({ items: rows, count: rows.length });
 	});
@@ -378,8 +379,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			status: getTraversalStatus(),
 		});
 	});
-
-	app.get("/api/knowledge/constellation", async (c) => {
+	app.get("/api/knowledge/constellation", etag(), async (c) => {
 		const requested = c.req.query("agent_id") ?? c.req.query("agentId");
 		const allAgents = requested === "all";
 		if (allAgents) {

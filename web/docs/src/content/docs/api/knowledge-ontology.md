@@ -139,6 +139,11 @@ alone multiply to millions of rows. The budget is spent breadth-first: every
 aspect receives its highest-ranked attribute before any aspect receives a
 second.
 
+Responses carry an `ETag` computed from the body. A request with a matching
+`If-None-Match` header receives `304 Not Modified` with no body, so a client
+polling an unchanged graph does not download or parse it again. The daemon
+still runs the read to compute the tag.
+
 `metadata.truncated` reports which bounds omitted rows that exist:
 `entities`, `aspects`, `attributes`, `dependencies`, and `assertions` are each
 `true` when that part of the response is incomplete.

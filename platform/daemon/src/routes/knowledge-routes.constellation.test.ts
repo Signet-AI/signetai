@@ -383,4 +383,25 @@ describe("GET /api/knowledge/constellation bounds", () => {
 		});
 		expect((await read("max_attributes_per_aspect=3&max_attributes=abc")).truncated.attributes).toBe(false);
 	});
+
+	test("revalidates an unchanged graph with its ETag and serves the new graph after a write", async () => {
+		await seedRankedFacts();
+		const app = new Hono();
+		registerKnowledgeRoutes(app);
+		const path = "/api/knowledge/constellation?agent_id=default";
+		const first = await app.request(path);
+		const tag = first.headers.get("ETag");
+		expect(first.status).toBe(200);
+		expect(tag).toBeTruthy();
+		const unchanged = await app.request(path, { headers: { "If-None-Match": tag ?? "" } });
+		expect(unchanged.status).toBe(304);
+		expect(await unchanged.text()).toBe("");
+		await runWriteTxAsync(getDbAccessor(), (db) => {
+			db.prepare("UPDATE entity_attributes SET content = 'changed' WHERE id = 'fact-a1'").run();
+		});
+		const changed = await app.request(path, { headers: { "If-None-Match": tag ?? "" } });
+		expect(changed.status).toBe(200);
+		expect(changed.headers.get("ETag")).not.toBe(tag);
+		expect(JSON.stringify(await changed.json())).toContain("changed");
+	});
 });
