@@ -170,6 +170,11 @@ describe("BEAM profiles", () => {
       "requires judge gpt-4.1-mini"
     )
     expect(() => paper.assertJudge(fakeJudge("gpt-4.1-mini", () => ""))).not.toThrow()
+    expect(() => paper.assertJudge(fakeJudge("openrouter:openai/gpt-4.1-mini", () => ""))).not
+      .toThrow()
+    expect(() => paper.assertJudge(fakeJudge("openrouter:openai/gpt-4o-2024-08-06", () => ""))).toThrow(
+      "requires judge gpt-4.1-mini"
+    )
     expect(() => customJudge.assertJudge(fakeJudge("glm-5.3-flash", () => ""))).not.toThrow()
   })
 

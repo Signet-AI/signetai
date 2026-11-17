@@ -38,6 +38,7 @@ export const BEAM_REFERENCE_COMMIT = "3e12035532eb85768f1a7cd779832b650c4b2ef9"
 export const BEAM_UPSTREAM_HARNESS =
   "supermemoryai/memorybench@1d03aa8f0dba08e329a0c7dd155ef0a0fe767870"
 export const BEAM_PAPER_JUDGE_MODEL = "gpt-4.1-mini"
+export const BEAM_OPENROUTER_PAPER_JUDGE_MODEL = "openai/gpt-4.1-mini"
 export const BEAM_PASS_THRESHOLD = 0.5
 export const BEAM_PAPER_TOP_K_VALUES = [5, 10, 15, 20] as const
 export const BEAM_DEFAULT_TOP_K = 5
@@ -238,10 +239,11 @@ export class BeamProtocol implements BenchmarkProtocol {
 
   assertJudge(judge: Judge): void {
     if (this.profile !== "paper") return
-    if (
-      judge.modelConfig.provider !== "openai" ||
-      judge.modelConfig.id !== BEAM_PAPER_JUDGE_MODEL
-    ) {
+    const config = judge.modelConfig
+    const accepted =
+      (config.provider === "openai" && config.id === BEAM_PAPER_JUDGE_MODEL) ||
+      (config.provider === "openrouter" && config.id === BEAM_OPENROUTER_PAPER_JUDGE_MODEL)
+    if (!accepted) {
       throw new Error(
         `The BEAM paper profile requires judge ${BEAM_PAPER_JUDGE_MODEL}; got ${judge.modelAlias}. Use --evaluation-profile custom-judge to score with a different judge (reported as beamRubricScore, not beamScore).`
       )
