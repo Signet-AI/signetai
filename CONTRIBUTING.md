@@ -221,10 +221,10 @@ architecture change rather than a directory-wide exception.
 
 **Architecture ratchet:** `bun run audit:ratchet` compares committed `HEAD` to
 its merge-base with `origin/main` (`--base <ref>` selects another base ref).
-Per-file counts of raw SQL outside the explicit owner closure, swallowed
-errors, and unchecked request/database casts may only decrease. New files
-start at zero; Git-detected renames and copies inherit their source's count.
-An existing destination always keeps its own count. There is no generated
+Counts of raw SQL outside the explicit owner closure, swallowed errors, and
+unchecked request/database casts may only decrease per origin group. Git-detected
+renames and copies share their source's baseline, so copies cannot duplicate debt.
+New files start at zero; an existing destination keeps its own baseline. There is no generated
 baseline to update. Owner files are listed in the script; numbered core
 migrations and their registry are also owner-side SQL. Transport modules are
 not owners merely because the worker imports them.
@@ -235,7 +235,7 @@ The audit is syntactic: field-level casts such as `row.id as string` are out
 of scope, and `.all`/`.get`/`.run`/`.values` assertions are conservatively
 classified as database boundaries. Retired paths are recorded in
 `scripts/retired-paths.json`; they cannot reappear or be referenced by tracked
-files outside `docs/` and the retirement registry.
+files outside Markdown, `docs/`, and the retirement registry.
 
 **Agent identity:** Harness names describe provenance; they are not fallback
 agent IDs. `bun run audit:agent-identity` rejects implicit `hermes-agent`

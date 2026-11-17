@@ -41,27 +41,16 @@ const SQL_OWNERS = [
 ] as const;
 const OWNERS: ReadonlySet<string> = new Set(SQL_OWNERS);
 const EXCLUDED = new Set([
-	".astro",
-	".git",
-	".svelte-kit",
-	".wrangler",
 	"__tests__",
-	"build",
-	"built",
-	"coverage",
-	"dist",
-	"fixtures",
-	"generated",
-	"memorybench",
-	"node_modules",
-	"references",
-	"target",
 	"test",
 	"tests",
 	"test-support",
 	"test-utils",
-	"web",
+	"fixtures",
+	"node_modules",
+	"dist",
 ]);
+const EXCLUDED_PATHS = new Set(["libs/sdk/src/generated/client.ts"]);
 const CATEGORIES = ["raw-sql", "swallowed-error", "unchecked-cast"] as const;
 type Category = (typeof CATEGORIES)[number];
 type Counts = Record<Category, number>;
@@ -94,6 +83,7 @@ function production(path: string): boolean {
 		/^(?:platform|surfaces|libs|integrations)\//.test(path) &&
 		/\.tsx?$/.test(path) &&
 		!/\.(?:test|bench|spec|d)\.tsx?$/.test(path) &&
+		!EXCLUDED_PATHS.has(path) &&
 		!path.split("/").some((part) => EXCLUDED.has(part))
 	);
 }
@@ -104,7 +94,15 @@ function owner(path: string): boolean {
 
 function unwrap(expression: ts.Expression): ts.Expression {
 	let node = expression;
-	while (ts.isParenthesizedExpression(node) || ts.isAwaitExpression(node)) node = node.expression;
+	while (
+		ts.isParenthesizedExpression(node) ||
+		ts.isAwaitExpression(node) ||
+		ts.isAsExpression(node) ||
+		ts.isSatisfiesExpression(node) ||
+		ts.isNonNullExpression(node) ||
+		ts.isTypeAssertionExpression(node)
+	)
+		node = node.expression;
 	return node;
 }
 
@@ -140,7 +138,9 @@ function swallowed(body: ts.ConciseBody): boolean {
 	if (!ts.isBlock(body)) return defaultValue(body) || logging(body);
 	return body.statements.every(
 		(statement) =>
-			(ts.isExpressionStatement(statement) && logging(statement.expression)) ||
+			(ts.isExpressionStatement(statement) &&
+				(logging(statement.expression) ||
+					(ts.isVoidExpression(statement.expression) && ts.isIdentifier(statement.expression.expression)))) ||
 			(ts.isReturnStatement(statement) && (statement.expression === undefined || defaultValue(statement.expression))),
 	);
 }
@@ -183,6 +183,50 @@ function count(path: string, content: string): CountsWithDetails {
 				aliases.set(element.name.text, element.propertyName?.text ?? element.name.text);
 		}
 	}
+	const swallowing = new Set<string>();
+	const swallowName = /^(?:noop|ignore|ignoreError|swallow)$/i;
+	for (const statement of source.statements) {
+		if (!ts.isImportDeclaration(statement)) continue;
+		const clause = statement.importClause;
+		if (clause?.name && swallowName.test(clause.name.text)) swallowing.add(clause.name.text);
+		const bindings = clause?.namedBindings;
+		if (bindings && ts.isNamedImports(bindings))
+			for (const element of bindings.elements) {
+				if (swallowName.test(element.name.text)) swallowing.add(element.name.text);
+			}
+	}
+	const collect = (node: ts.Node): void => {
+		if (
+			ts.isFunctionDeclaration(node) &&
+			node.name &&
+			node.body &&
+			(swallowName.test(node.name.text) || swallowed(node.body))
+		)
+			swallowing.add(node.name.text);
+		if (ts.isVariableDeclaration(node)) {
+			if (ts.isIdentifier(node.name) && node.initializer) {
+				const init = unwrap(node.initializer);
+				if (
+					(ts.isArrowFunction(init) || ts.isFunctionExpression(init)) &&
+					(swallowName.test(node.name.text) || swallowed(init.body)) &&
+					ts.isVariableDeclarationList(node.parent) &&
+					node.parent.flags & ts.NodeFlags.Const
+				)
+					swallowing.add(node.name.text);
+				const original = name(init);
+				if (original && RAW_HELPERS.has(aliases.get(original) ?? original))
+					aliases.set(node.name.text, aliases.get(original) ?? original);
+			}
+			if (ts.isObjectBindingPattern(node.name))
+				for (const element of node.name.elements) {
+					const original = name(element.propertyName ?? element.name);
+					if (original && RAW_HELPERS.has(original) && ts.isIdentifier(element.name))
+						aliases.set(element.name.text, original);
+				}
+		}
+		ts.forEachChild(node, collect);
+	};
+	collect(source);
 	const callName = (expression: ts.Expression): string => {
 		const value = name(unwrap(expression)) ?? "";
 		return aliases.get(value) ?? value;
@@ -215,14 +259,22 @@ function count(path: string, content: string): CountsWithDetails {
 			sql.request++;
 		if (ts.isCatchClause(node) && !expectedMiss(path, node) && swallowed(node.block)) counts["swallowed-error"]++;
 		if (ts.isCallExpression(node)) {
-			if (callName(node.expression) === "catch") {
-				const callback = node.arguments[0];
-				if (callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) && swallowed(callback.body))
+			const called = callName(node.expression);
+			const callback = called === "catch" ? node.arguments[0] : called === "then" ? node.arguments[1] : undefined;
+			if (callback) {
+				const value = unwrap(callback);
+				if (
+					((ts.isArrowFunction(value) || ts.isFunctionExpression(value)) && swallowed(value.body)) ||
+					(ts.isIdentifier(value) && swallowing.has(value.text))
+				)
 					counts["swallowed-error"]++;
 			}
 			if (/^ownerRead(?:All|One)$/.test(callName(node.expression)) && node.typeArguments?.length)
 				counts["unchecked-cast"]++;
 		}
+		if (ts.isVariableDeclaration(node) && node.type && node.initializer && requestJson(node.initializer))
+			counts["unchecked-cast"]++;
+		if (ts.isSatisfiesExpression(node) && requestJson(node.expression)) counts["unchecked-cast"]++;
 		if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
 			const constant =
 				ts.isTypeReferenceNode(node.type) && ts.isIdentifier(node.type.typeName) && node.type.typeName.text === "const";
@@ -304,6 +356,7 @@ function retiredPaths(after: ReadonlySet<string>): readonly string[] {
 			"--",
 			".",
 			":(exclude)docs/**",
+			":(exclude,glob)**/*.md",
 			`:(exclude)${registry}`,
 		]);
 		if (result.exitCode !== 0 && result.exitCode !== 1) throw new Error(result.stderr.toString().trim());
@@ -324,25 +377,37 @@ function main(): void {
 	const totals: Counts = { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 	const failures: string[] = [...retiredPaths(after)];
 	let files = 0;
+	const groups = new Map<string, { path: string; head: CountsWithDetails }[]>();
 	for (const path of after) {
 		if (!production(path)) continue;
 		files++;
 		const head = count(path, git("show", `HEAD:${path}`));
-		const source = before.has(path) ? path : (sources.get(path) ?? path);
+		const source = sources.get(path) ?? path;
+		const group = groups.get(source) ?? [];
+		group.push({ path, head });
+		groups.set(source, group);
+		for (const category of CATEGORIES) totals[category] += head.counts[category];
+	}
+	for (const [source, group] of groups) {
 		const previous =
 			before.has(source) && production(source)
-				? count(source, git("show", `${base}:${source}`))
-				: { counts: { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 } };
+				? count(source, git("show", `${base}:${source}`)).counts
+				: { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 		for (const category of CATEGORIES) {
-			totals[category] += head.counts[category];
-			if (head.counts[category] > previous.counts[category]) {
+			const head = group.reduce((sum, member) => sum + member.head.counts[category], 0);
+			if (head > previous[category]) {
+				const single = group.length === 1 ? group[0] : undefined;
 				const detail =
-					category === "raw-sql"
-						? ` (${Object.entries(head.sql)
+					single && category === "raw-sql"
+						? ` (${Object.entries(single.head.sql)
 								.map(([key, value]) => `${key}=${value}`)
 								.join(", ")})`
 						: "";
-				failures.push(`${path}\t${category}\t${previous.counts[category]} -> ${head.counts[category]}${detail}`);
+				const members =
+					group.length > 1
+						? ` [${group.map((member) => `${member.path}=${member.head.counts[category]}`).join(", ")}]`
+						: "";
+				failures.push(`${single?.path ?? source}\t${category}\t${previous[category]} -> ${head}${detail}${members}`);
 			}
 		}
 	}

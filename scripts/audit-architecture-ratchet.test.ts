@@ -99,7 +99,7 @@ for (const { category, violation } of cases) {
 			if (copied) write(root, target, violation);
 			else git(root, "mv", FILE, target);
 			commit(root);
-			expect(audit(root).code).toBe(0);
+			expect(audit(root).code).toBe(copied ? 1 : 0);
 		});
 	}
 
@@ -293,7 +293,6 @@ test("production scope excludes fixtures, tests, generated and non-runtime trees
 		"platform/daemon/src/test-support/example.ts",
 		"platform/daemon/src/fixtures/example.ts",
 		"platform/daemon/dist/example.ts",
-		"platform/daemon/src/generated/example.ts",
 		"web/example.ts",
 		"memorybench/example.ts",
 		"references/example.ts",
@@ -408,4 +407,90 @@ test("named owner handlers retain their SQL authority without exempting transpor
 	const result = audit(root);
 	expect(result.code).toBe(1);
 	expect(result.output).toContain(`${transport}\traw-sql\t0 -> 1`);
+});
+
+test("copies share one baseline", () => {
+	const root = fixture({ [FILE]: `${cases[1].violation}\n${cases[1].violation}` });
+	const target = "platform/daemon/src/copy.ts";
+	write(root, target, `${cases[1].violation}\n${cases[1].violation}`);
+	commit(root);
+	const base = git(root, "rev-parse", "origin/main");
+	expect(audit(root)).toEqual({
+		code: 1,
+		output: `Architecture ratchet failed against ${base}:\nfile\tcategory\tbase -> head\n${FILE}\tswallowed-error\t2 -> 4 [${target}=2, ${FILE}=2]\n`,
+	});
+});
+
+test("callback evasions are counted", () => {
+	const root = fixture({ "README.md": "base" });
+	write(
+		root,
+		FILE,
+		`import { noop } from "x";
+ const quiet = () => {}; function silence() { void error; }
+ work().catch(noop); work().catch(quiet); work().then(ok, silence);
+ work().catch(() => (null as X)); work().catch(() => ({} satisfies X));
+ work().catch(() => { return recover(); });`,
+	);
+	commit(root);
+	const base = git(root, "rev-parse", "origin/main");
+	expect(audit(root)).toEqual({
+		code: 1,
+		output: `Architecture ratchet failed against ${base}:\nfile\tcategory\tbase -> head\n${FILE}\tswallowed-error\t0 -> 5\n`,
+	});
+});
+
+test("request JSON annotations and satisfies are counted", () => {
+	const root = fixture({ "README.md": "base" });
+	write(root, FILE, `const a: Body = await c.req.json().catch(handle); const b = (await req.json()) satisfies Body;`);
+	commit(root);
+	const base = git(root, "rev-parse", "origin/main");
+	expect(audit(root)).toEqual({
+		code: 1,
+		output: `Architecture ratchet failed against ${base}:\nfile\tcategory\tbase -> head\n${FILE}\tunchecked-cast\t0 -> 2\n`,
+	});
+});
+
+test("local raw helper aliases are counted", () => {
+	const root = fixture({ "README.md": "base" });
+	write(
+		root,
+		FILE,
+		`const r = ownerRun; const { ownerReadAll: rr, ownerBatch } = x; r(); rr(); ownerBatch(); ns.ownerReadOne();`,
+	);
+	commit(root);
+	const base = git(root, "rev-parse", "origin/main");
+	expect(audit(root)).toEqual({
+		code: 1,
+		output: `Architecture ratchet failed against ${base}:\nfile\tcategory\tbase -> head\n${FILE}\traw-sql\t0 -> 4 (text=0, helper=4, request=0, accessor=0, marker=0)\n`,
+	});
+});
+
+test("generated production files are audited", () => {
+	const root = fixture({ "README.md": "base" });
+	const path = "platform/daemon/src/generated/example.ts";
+	write(root, path, cases[1].violation);
+	commit(root);
+	const base = git(root, "rev-parse", "origin/main");
+	expect(audit(root)).toEqual({
+		code: 1,
+		output: `Architecture ratchet failed against ${base}:\nfile\tcategory\tbase -> head\n${path}\tswallowed-error\t0 -> 1\n`,
+	});
+});
+
+test("markdown references are exempt but code references are not", () => {
+	const root = fixture({ "scripts/retired-paths.json": TOMBSTONES });
+	write(root, "nested/README.md", RETIRED);
+	commit(root);
+	const base = git(root, "rev-parse", "origin/main");
+	expect(audit(root)).toEqual({
+		code: 0,
+		output: `Architecture ratchet passed against ${base}: 0 files; raw-sql=0, swallowed-error=0, unchecked-cast=0\n`,
+	});
+	write(root, "config.yml", RETIRED);
+	commit(root);
+	expect(audit(root)).toEqual({
+		code: 1,
+		output: `Architecture ratchet failed against ${base}:\nfile\tcategory\tbase -> head\nconfig.yml references retired path: ${RETIRED}\n`,
+	});
 });
