@@ -42,7 +42,7 @@ describe("constellation display limits", () => {
 
 	test("matches the server entity bound and uses a finite total display bound", () => {
 		expect(MAX_CONSTELLATION_ENTITY_LIMIT).toBe(300);
-		expect(MAX_VISIBLE_CONSTELLATION_NODES).toBe(5_000);
+		expect(MAX_VISIBLE_CONSTELLATION_NODES).toBe(20_000);
 	});
 });
 

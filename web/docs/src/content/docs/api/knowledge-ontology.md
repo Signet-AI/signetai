@@ -118,7 +118,8 @@ signet knowledge hygiene
 
 Return the bounded graph overlay used by the dashboard Ontology constellation.
 Query parameters: `agent_id`, `limit`, `max_aspects_per_entity`,
-`max_attributes_per_aspect`, and `dependency_limit`. When `agent_id` is
+`max_attributes_per_aspect`, `max_attributes`, `dependency_limit`, and
+`assertion_limit`. When `agent_id` is
 omitted, the daemon uses the configured daemon agent ID (`SIGNET_AGENT_ID`, or
 `default`). The read includes the requested agent plus agents whose
 `read_policy` is `shared`, and clamps limits so dashboard navigation cannot
@@ -132,10 +133,25 @@ its owning `agentId`. The dashboard graph opens on all agents, colors each
 agent's entities, rings their aspects, claims, and evidence in the same color
 when more than one agent is shown, and offers a picker to show one agent.
 
-The dashboard entity limit is capped at 300, matching the server limit. The
-3D view also renders no more than 5,000 nodes at once and labels the view when
-that display cap is reached; this is a client rendering limit, not a claim that
-the returned graph is complete.
+`max_attributes` caps the attributes returned across the whole response
+(default and maximum `10000`), because the per-entity and per-aspect bounds
+alone multiply to millions of rows. The budget is spent breadth-first: every
+aspect receives its highest-ranked attribute before any aspect receives a
+second.
+
+`metadata.truncated` reports which bounds omitted rows that exist:
+`entities`, `aspects`, `attributes`, `dependencies`, and `assertions` are each
+`true` when that part of the response is incomplete.
+
+The dashboard requests 300 entities, matching the server limit, and a budget of
+6,000 attributes. It renders no more than 20,000 nodes at once and labels the
+view as limited when that display cap is reached or when `metadata.truncated`
+reports omitted rows.
+
+The dashboard saves the settled layout in the browser's IndexedDB, keyed by a
+digest of the dashboard scope. Later loads start from the saved positions,
+place new nodes beside their saved neighbors, and continue the simulation from
+its saved heat instead of laying out the graph from scratch.
 
 The route probes the Dreaming episodic backlog using the configured token
 threshold and tokenizes at most 50 entries (with one additional source row as

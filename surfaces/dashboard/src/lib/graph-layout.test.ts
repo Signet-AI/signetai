@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { layoutGraph } from "./graph-layout";
+import { graphLayout, layoutGraph } from "./graph-layout";
 import type { GraphSceneData, SceneNode } from "./graph-scene";
 import { capGraphSceneData } from "./constellation-display";
 
@@ -35,6 +35,28 @@ describe("2D ontology layout", () => {
 		expect(layout.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y))).toBe(true);
 		expect(JSON.stringify(branch)).toBe(original);
 		expect(layoutGraph(branch)).toEqual(layout);
+	});
+	test("resumes cached positions and seeds new nodes beside their cached neighbors", () => {
+		const cached = new Map([
+			["entity", { x: 400, y: -250 }],
+			["aspect", { x: 430, y: -220 }],
+			["other", { x: -900, y: 600 }],
+		]);
+		const layout = graphLayout(branch, cached);
+		const at = (id: string) => layout.nodes.find((node) => node.id === id);
+		expect(layout.reused).toBe(3);
+		for (const [id, position] of cached) expect(at(id)).toMatchObject(position);
+		const anchor = cached.get("aspect") ?? { x: 0, y: 0 };
+		for (const [id, hops] of [
+			["group", 1],
+			["slot", 2],
+			["value", 3],
+			["evidence", 4],
+		] as const) {
+			const node = at(id);
+			expect(Math.hypot((node?.x ?? 0) - anchor.x, (node?.y ?? 0) - anchor.y)).toBeLessThanOrEqual(24 * hops + 1e-9);
+		}
+		expect(graphLayout(branch).reused).toBe(0);
 	});
 	test("retains hierarchy anchors before leaf values when capped", () => {
 		const limited = capGraphSceneData({ ...branch, nodes: [...branch.nodes].reverse() }, 5);
