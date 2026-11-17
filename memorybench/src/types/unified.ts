@@ -1,5 +1,6 @@
 import type { BenchmarkConfig, QualityReport } from "./benchmark"
 import type { ModelUsage } from "../utils/llm"
+import type { RecallTranscriptEvidenceLimit } from "./provider"
 import type { OpenRouterModelSettings } from "../utils/models"
 export interface QuestionTypeInfo {
   id: string
@@ -144,6 +145,21 @@ export interface TranscriptReliance {
   extraInputTokensPerRescuedAnswer?: number
 }
 
+export interface RecallSourceStats {
+  questions: number
+  memoriesOnly: number
+  transcriptEvidenceOnly: number
+  both: number
+  none: number
+}
+
+export interface RecallSources {
+  transcriptEvidenceLimit?: RecallTranscriptEvidenceLimit
+  all: RecallSourceStats
+  correct: RecallSourceStats
+  byQuestionType: Record<string, RecallSourceStats>
+}
+
 export interface BenchmarkResult {
   provider: string
   benchmark: string
@@ -174,6 +190,7 @@ export interface BenchmarkResult {
   datasetIdentity?: Record<string, unknown>
   usage?: RunUsage
   transcriptReliance?: TranscriptReliance
+  recallSources?: RecallSources
   memscore?: string
   memscoreComponents?: { quality: number; latencyMs: number; contextTokens: number }
   retrieval?: RetrievalAggregates

@@ -1,9 +1,9 @@
 import { describe, expect, it } from "bun:test"
 import type { QuestionCheckpoint, RunCheckpoint } from "../types/checkpoint"
 import type { Provider } from "../types/provider"
-import { classifySignetRecallResult } from "../providers/signet"
+import { classifySignetRecallResult, classifySignetRecallSource } from "../providers/signet"
 import { splitDerivedEvidence } from "./phases/answer"
-import { summarizeTranscriptReliance } from "./phases/report"
+import { summarizeRecallSources, summarizeTranscriptReliance } from "./phases/report"
 import { emptyUsage } from "../utils/llm"
 
 describe("Signet recall evidence classification", () => {
@@ -75,6 +75,49 @@ function question(
     },
   }
 }
+
+describe("Signet recall source attribution", () => {
+  it("uses the daemon response fields to tell transcript evidence from memories", () => {
+    expect(classifySignetRecallSource({ id: "transcript:s1", supplementary: true, type: "transcript" })).toBe(
+      "transcript-evidence"
+    )
+    expect(classifySignetRecallSource({ id: "mem_1", type: "memory", supplementary: false })).toBe("memory")
+    expect(classifySignetRecallSource({ id: "mem_2", source: "sec" })).toBe("memory")
+    expect(classifySignetRecallSource({ type: "transcript" })).toBe("transcript-evidence")
+    expect(classifySignetRecallSource("plain string")).toBe("memory")
+  })
+
+  it("buckets recall sources overall, per question type, and for correct answers", () => {
+    const checkpoint = {
+      recallTranscriptEvidence: { limit: 2, source: "daemon-config" },
+      questions: {
+        memoriesOnly: { phases: { search: { hitSources: ["memory"] } } },
+        transcriptsOnly: { phases: { search: { hitSources: ["transcript-evidence"] } } },
+        bothSources: { phases: { search: { hitSources: ["memory", "transcript-evidence"] } } },
+        noHits: { phases: { search: { hitSources: [] } } },
+        untyped: { phases: { search: {} } },
+      },
+    } as unknown as RunCheckpoint
+    const evaluations = [
+      { questionId: "memoriesOnly", questionType: "single", correct: true },
+      { questionId: "transcriptsOnly", questionType: "single", correct: false },
+      { questionId: "bothSources", questionType: "multi", correct: true },
+      { questionId: "noHits", questionType: "multi", correct: false },
+      { questionId: "untyped", questionType: "multi", correct: true },
+    ]
+
+    expect(summarizeRecallSources(checkpoint, evaluations)).toEqual({
+      transcriptEvidenceLimit: { limit: 2, source: "daemon-config" },
+      all: { questions: 5, memoriesOnly: 1, transcriptEvidenceOnly: 1, both: 1, none: 2 },
+      correct: { questions: 3, memoriesOnly: 1, transcriptEvidenceOnly: 0, both: 1, none: 1 },
+      byQuestionType: {
+        single: { questions: 2, memoriesOnly: 1, transcriptEvidenceOnly: 1, both: 0, none: 0 },
+        multi: { questions: 3, memoriesOnly: 0, transcriptEvidenceOnly: 0, both: 1, none: 2 },
+      },
+    })
+    expect(summarizeRecallSources(checkpoint, [])).toBeUndefined()
+  })
+})
 
 describe("transcript reliance report", () => {
   it("buckets outcomes and measures the token cost transcripts add", () => {

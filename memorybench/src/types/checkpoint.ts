@@ -1,5 +1,5 @@
 import type { SearchResult, RetrievalMetrics } from "./unified"
-import type { IngestResult } from "./provider"
+import type { IngestResult, RecallSourceKind, RecallTranscriptEvidenceLimit } from "./provider"
 import type { ConcurrencyConfig } from "./concurrency"
 import type { BenchmarkConfig } from "./benchmark"
 import type { ModelUsage } from "../utils/llm"
@@ -48,6 +48,7 @@ export interface SearchPhaseCheckpoint {
   status: PhaseStatus
   resultFile?: string
   results?: SearchResult[]
+  hitSources?: RecallSourceKind[]
   resultCount?: number
   startedAt?: string
   completedAt?: string
@@ -157,6 +158,7 @@ export interface RunCheckpoint {
   openrouterModels?: Record<string, OpenRouterModelSettings>
   datasetIdentity?: Record<string, unknown>
   ingestUsage?: IngestUsage
+  recallTranscriptEvidence?: RecallTranscriptEvidenceLimit
   questions: Record<string, QuestionCheckpoint>
 }
 
