@@ -39,8 +39,9 @@ read scope in every auth mode: this list, `GET /memory/search`,
 and `GET /memory/search` accept `all`.
 
 List rows include `project` as a string or `null`; older memories without a
-recorded project remain `null`. This field does not change read scope, filters,
-pagination, or stats.
+recorded project remain `null`. Adding this response field does not change the
+existing query, filters, pagination, or stats. Project-scoped credentials still
+restrict both list results and stats to their project.
 
 Listed `content` goes through [credential redaction](#credential-redaction).
 `GET /api/memory/:id` returns the stored content.
@@ -135,11 +136,13 @@ Body-level fields override prefix-parsed values.
 }
 ```
 
-Only `content` is required. An explicit `project` is stored unchanged. Omission
-keeps the project unset unless the credential supplies a project scope; Signet
-does not infer it from memory text or the daemon's working directory. The CLI
-accepts `signet remember --project <project>`, and Pi command and tool writes
-send the resolved session project.
+Only `content` is required for an unscoped credential. An explicit `project` is
+stored unchanged; omission keeps it unset. Signet does not infer it from memory
+text, the daemon's working directory, or the credential. A non-admin credential
+scoped to project `A` must send `project: "A"`; omission or a different project
+returns `403` with `scope restricted to project 'A'`. The CLI accepts
+`signet remember --project <project>`, and Pi command and tool writes send the
+resolved session project.
 
 Chunked writes return `{chunked: true, chunk_count, ids, group_id}` instead of
 `id`. Deduplicated writes add `deduped: true` and may omit embedding status.
