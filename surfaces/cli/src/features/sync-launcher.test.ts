@@ -15,6 +15,9 @@ test.each([false, true, null])("sync writes host launchers and honors daemon aut
 		env[name] = path;
 	}
 	const home = env.HOME ?? root;
+	env.USERPROFILE = home;
+	env.HOMEDRIVE = home;
+	env.HOMEPATH = home;
 	env.SIGNET_PATH = workspace;
 	env.CODEX_HOME = join(home, ".codex");
 	env.SIGNET_CLI_PATH = "/app/bin/signet";

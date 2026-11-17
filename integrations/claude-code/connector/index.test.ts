@@ -417,52 +417,57 @@ describe("ClaudeCodeConnector user hooks", () => {
 		});
 	}
 
-	it("executes an override with spaces and quotes without relying on PATH", async () => {
-		const launcher = join(tmpRoot, "My 'Tools", "signet");
-		const output = join(tmpRoot, "argv.json");
-		mkdirSync(join(launcher, ".."), { recursive: true });
-		writeFileSync(launcher, `#!/bin/sh\nprintf '%s\\n' "$@" > '${output}'\n`, { mode: 0o755 });
-		writeSettings({
-			hooks: {
-				SessionStart: [{ hooks: [{ type: "command", command: "/host/bin/signet hook session-start -H claude-code" }] }],
-			},
-		});
-		const previous = process.env.SIGNET_HOOK_COMMAND;
-		const executable = process.execPath;
-		try {
-			process.execPath = "/app/bin/signet";
-			process.env.SIGNET_HOOK_COMMAND = launcher;
-			const connector = new ClaudeCodeConnector();
-			await connector.install(tmpRoot);
-			await connector.install(tmpRoot);
-			const start = commands(readHooks().SessionStart).filter((cmd) => cmd.includes("hook session-start"));
-			expect(start).toHaveLength(1);
-			expect(start[0]).toContain("My '");
-			const child = Bun.spawnSync(["/bin/sh", "-c", start[0] ?? "exit 1"], {
-				env: { PATH: "/usr/bin:/bin" },
-				cwd: tmpRoot,
+	it.skipIf(process.platform === "win32")(
+		"executes an override with spaces and quotes without relying on PATH",
+		async () => {
+			const launcher = join(tmpRoot, "My 'Tools", "signet");
+			const output = join(tmpRoot, "argv.json");
+			mkdirSync(join(launcher, ".."), { recursive: true });
+			writeFileSync(launcher, `#!/bin/sh\nprintf '%s\\n' "$@" > '${output}'\n`, { mode: 0o755 });
+			writeSettings({
+				hooks: {
+					SessionStart: [
+						{ hooks: [{ type: "command", command: "/host/bin/signet hook session-start -H claude-code" }] },
+					],
+				},
 			});
-			expect(child.exitCode).toBe(0);
-			expect(readFileSync(output, "utf-8").split("\n")).toEqual([
-				"hook",
-				"session-start",
-				"-H",
-				"claude-code",
-				"--project",
-				tmpRoot,
-				"",
-			]);
-			Reflect.deleteProperty(process.env, "SIGNET_HOOK_COMMAND");
-			await connector.install(tmpRoot);
-			expect(commands(readHooks().SessionStart).filter((cmd) => cmd.includes("hook session-start"))).toHaveLength(1);
-			await connector.uninstall();
-			expect(readHooks()).toBeUndefined();
-		} finally {
-			process.execPath = executable;
-			if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_HOOK_COMMAND");
-			if (previous !== undefined) process.env.SIGNET_HOOK_COMMAND = previous;
-		}
-	});
+			const previous = process.env.SIGNET_HOOK_COMMAND;
+			const executable = process.execPath;
+			try {
+				process.execPath = "/app/bin/signet";
+				process.env.SIGNET_HOOK_COMMAND = launcher;
+				const connector = new ClaudeCodeConnector();
+				await connector.install(tmpRoot);
+				await connector.install(tmpRoot);
+				const start = commands(readHooks().SessionStart).filter((cmd) => cmd.includes("hook session-start"));
+				expect(start).toHaveLength(1);
+				expect(start[0]).toContain("My '");
+				const child = Bun.spawnSync(["/bin/sh", "-c", start[0] ?? "exit 1"], {
+					env: { PATH: "/usr/bin:/bin" },
+					cwd: tmpRoot,
+				});
+				expect(child.exitCode).toBe(0);
+				expect(readFileSync(output, "utf-8").split("\n")).toEqual([
+					"hook",
+					"session-start",
+					"-H",
+					"claude-code",
+					"--project",
+					tmpRoot,
+					"",
+				]);
+				Reflect.deleteProperty(process.env, "SIGNET_HOOK_COMMAND");
+				await connector.install(tmpRoot);
+				expect(commands(readHooks().SessionStart).filter((cmd) => cmd.includes("hook session-start"))).toHaveLength(1);
+				await connector.uninstall();
+				expect(readHooks()).toBeUndefined();
+			} finally {
+				process.execPath = executable;
+				if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_HOOK_COMMAND");
+				if (previous !== undefined) process.env.SIGNET_HOOK_COMMAND = previous;
+			}
+		},
+	);
 
 	it("keeps a user hook that shares a group with a Signet hook", async () => {
 		const signetEntry = { type: "command", command: 'signet hook session-start -H claude-code --project "$(pwd)"' };
