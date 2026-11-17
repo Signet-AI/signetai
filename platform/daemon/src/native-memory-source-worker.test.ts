@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
@@ -23,7 +23,141 @@ async function fixture(): Promise<{
 	return { root, source: { root, files: [{ glob: "**/*.md", kind: "markdown" }] } };
 }
 
+async function instrument(root: string): Promise<{ readonly entry: string; readonly stats: string }> {
+	const entry = join(root, "worker.ts");
+	const stats = join(root, "stats.jsonl");
+	await writeFile(stats, "");
+	await writeFile(
+		entry,
+		[
+			'import { mock } from "bun:test";',
+			'import * as fs from "node:fs/promises";',
+			"const original = fs.lstat;",
+			`mock.module("node:fs/promises", () => ({ ...fs, lstat: async (...args) => { await fs.appendFile(${JSON.stringify(stats)}, JSON.stringify(String(args[0])) + "\\n"); return await original(...args); } }));`,
+			`await import(${JSON.stringify(join(import.meta.dir, "native-memory-source-worker.ts"))});`,
+		].join("\n"),
+	);
+	return { entry, stats };
+}
+
+async function metadataPaths(path: string): Promise<string[]> {
+	return (await readFile(path, "utf8"))
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line): string => {
+			const value: unknown = JSON.parse(line);
+			if (typeof value !== "string") throw new Error("Invalid metadata path");
+			return value;
+		});
+}
+
 describe("native source worker", () => {
+	it("admits sparse Claude memories without metadata reads for transcript siblings or restored noise", async () => {
+		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-sparse-"));
+		const source = {
+			root: join(root, "source"),
+			harness: "claude-code",
+			sourceId: "claude:test",
+			files: [
+				{ glob: "projects/*/memory/MEMORY.md", kind: "index" },
+				{ glob: "projects/*/memory/**/*.md", kind: "memory", excludeBasenames: ["MEMORY.md"] },
+			],
+		};
+		const expected: { path: string; kind: string; content: string; sourceId: string }[] = [];
+		const instrumentation = await instrument(root);
+		const worker = createNativeSourceWorker({ resolveEmbeddedPath: () => instrumentation.entry });
+		try {
+			for (let project = 0; project < 64; project++) {
+				const directory = join(source.root, "projects", `repo-${project}`);
+				await mkdir(join(directory, "subagents", "deep"), { recursive: true });
+				for (let session = 0; session < 64; session++) {
+					await writeFile(join(directory, `session-${session}.jsonl`), "transcript");
+				}
+				await writeFile(join(directory, "subagents", "deep", "noise.md"), "not memory");
+				if (project >= 59) continue;
+				await mkdir(join(directory, "memory"));
+				const path = join(directory, "memory", project === 0 ? "MEMORY.md" : "note.md");
+				const content = `memory ${project}`;
+				await writeFile(path, content);
+				expected.push({ path, content, kind: project === 0 ? "index" : "memory", sourceId: "claude:test" });
+			}
+			const files = [];
+			let page = await worker.scan({ source, cursor: null, pageSize: 100 });
+			files.push(...page.files);
+			for (let attempt = 0; !page.complete && attempt < 100; attempt++) {
+				page = await worker.scan({ source, cursor: page.nextCursor, frontier: page.frontier, pageSize: 100 });
+				files.push(...page.files);
+			}
+			expect(page.complete).toBe(true);
+			expect(
+				files
+					.map(({ path, content, kind, sourceId }) => ({ path, content, kind, sourceId }))
+					.sort((a, b) => a.path.localeCompare(b.path)),
+			).toEqual(expected.sort((a, b) => a.path.localeCompare(b.path)));
+			const restored = await worker.scan({
+				source,
+				cursor: page.nextCursor,
+				frontier: [join(source.root, "projects", "repo-0", "session-0.jsonl"), join(source.root, "plugins", "missing")],
+				pageSize: 100,
+			});
+			expect(restored.files).toEqual([]);
+			expect(restored.complete).toBe(true);
+			const paths = await metadataPaths(instrumentation.stats);
+			expect(paths.filter((path) => path.endsWith(".jsonl"))).toEqual([]);
+			expect(paths.filter((path) => path.includes("subagents") || path.includes("plugins"))).toEqual([]);
+		} finally {
+			await worker.close();
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	it("checkpoints zero-match traversal within a path budget and resumes across worker restarts", async () => {
+		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-budget-"));
+		const source = { root: join(root, "source"), files: [{ glob: "**/*.md", kind: "memory" }] };
+		const instrumentation = await instrument(root);
+		const expected = [source.root];
+		let worker = createNativeSourceWorker({ resolveEmbeddedPath: () => instrumentation.entry });
+		try {
+			for (let index = 0; index < 400; index++) {
+				const directory = join(source.root, `repo-${index}`);
+				await mkdir(directory, { recursive: true });
+				const path = join(directory, "empty.md");
+				await writeFile(path, " \n");
+				expected.push(directory, path);
+			}
+			let page = await worker.scan({ source, cursor: null, pageSize: 100 });
+			expect(page.files).toEqual([]);
+			expect(page.rejected).toEqual([]);
+			expect(page.scanned).toBe(0);
+			expect(page.nextCursor).toBeNull();
+			expect(page.complete).toBe(false);
+			expect(page.frontier.length).toBeGreaterThan(0);
+			let count = (await metadataPaths(instrumentation.stats)).length;
+			expect(count).toBeLessThanOrEqual(64);
+			for (let attempt = 0; !page.complete && attempt < 20; attempt++) {
+				await worker.close();
+				worker = createNativeSourceWorker({ resolveEmbeddedPath: () => instrumentation.entry });
+				const frontier = [...page.frontier];
+				page = await worker.scan({ source, cursor: page.nextCursor, frontier, pageSize: 100 });
+				expect(page.files).toEqual([]);
+				expect(page.rejected).toEqual([]);
+				expect(page.scanned).toBe(0);
+				expect(page.frontier).not.toEqual(frontier);
+				const next = (await metadataPaths(instrumentation.stats)).length;
+				expect(next - count).toBeGreaterThan(0);
+				expect(next - count).toBeLessThanOrEqual(64);
+				count = next;
+			}
+			expect(page.complete).toBe(true);
+			expect(page.frontier).toEqual([]);
+			expect((await metadataPaths(instrumentation.stats)).sort()).toEqual(expected.sort());
+		} finally {
+			await worker.close();
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
 	it("uses one in-process worker thread for a scan", async () => {
 		const { source } = await fixture();
 		let started = 0;
@@ -128,17 +262,61 @@ describe("native source worker", () => {
 		expect(page.files[0]?.chunks?.length).toBe(1);
 	});
 
-	it("derives Codex source IDs in the isolated worker", async () => {
-		const { root } = await fixture();
-		const worker = createNativeSourceWorker();
-		const page = await worker.scan({
-			source: { root, harness: "codex", files: [{ glob: "**/*.md", kind: "markdown" }] },
-			cursor: null,
-			pageSize: 1,
-		});
-		await worker.close();
-		expect(page.files[0]?.sourceId).toMatch(/^codex_native_memory:[0-9a-f]{16}$/);
+	it("prunes Codex sessions while preserving rollout files and source identity", async () => {
+		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-codex-"));
+		const source = {
+			root: join(root, "source"),
+			harness: "codex",
+			files: [
+				{ glob: "memories/MEMORY.md", kind: "registry" },
+				{ glob: "memories/rollout_summaries/*.jsonl", kind: "rollout" },
+			],
+		};
+		const instrumentation = await instrument(root);
+		const worker = createNativeSourceWorker({ resolveEmbeddedPath: () => instrumentation.entry });
+		try {
+			await mkdir(join(source.root, "memories", "rollout_summaries"), { recursive: true });
+			await mkdir(join(source.root, "sessions", "2026", "11", "17"), { recursive: true });
+			await writeFile(join(source.root, "memories", "MEMORY.md"), "registry");
+			await writeFile(join(source.root, "memories", "rollout_summaries", "rollout.jsonl"), "rollout");
+			await writeFile(join(source.root, "sessions", "2026", "11", "17", "session.jsonl"), "transcript");
+			const page = await worker.scan({ source, cursor: null, pageSize: 100 });
+			expect(page.files.map((file) => [file.path, file.kind, file.content])).toEqual([
+				[join(source.root, "memories", "MEMORY.md"), "registry", "registry"],
+				[join(source.root, "memories", "rollout_summaries", "rollout.jsonl"), "rollout", "rollout"],
+			]);
+			expect(page.files[0]?.sourceId).toMatch(/^codex_native_memory:[0-9a-f]{16}$/);
+			expect(page.files[1]?.sourceId).toBe(page.files[0]?.sourceId);
+			expect(page.complete).toBe(true);
+			expect((await metadataPaths(instrumentation.stats)).some((path) => path.includes("sessions"))).toBe(false);
+		} finally {
+			await worker.close();
+			await rm(root, { recursive: true, force: true });
+		}
 	});
+
+	it.skipIf(process.platform === "win32")(
+		"rejects matching file and directory symlinks, including restored paths",
+		async () => {
+			const { root, source } = await fixture();
+			const worker = createNativeSourceWorker();
+			try {
+				const file = join(root, "link.md");
+				const directory = join(root, "linked");
+				await symlink(join(root, "b.md"), file);
+				await symlink(join(root, "nested"), directory);
+				const page = await worker.scan({ source, cursor: null, pageSize: 100 });
+				expect(page.files.map((file) => file.content)).toEqual(["B", "A"]);
+				expect(page.complete).toBe(true);
+				const restored = await worker.scan({ source, cursor: null, frontier: [file, directory], pageSize: 100 });
+				expect(restored.files).toEqual([]);
+				expect(restored.complete).toBe(true);
+			} finally {
+				await worker.close();
+				await rm(root, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it(`returns a bounded item rejection for a descriptor larger than the ${NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES}-byte IPC bound`, async () => {
 		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-bound-"));

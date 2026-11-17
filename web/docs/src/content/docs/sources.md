@@ -288,6 +288,14 @@ source, so it reports neither healthy nor unhealthy, and the counts in that
 response are placeholders. Diagnostics read sources in bounded pages, so a
 large source does not exceed the database owner's per-result limit.
 
+Native memory source scans reject unrelated entries before reading file metadata.
+They descend only into directories that can contain configured matches and do not
+follow file or directory symlinks. Each worker page examines at most 64 pending
+paths, including directories, independently of how many files match. Empty,
+incomplete pages preserve the remaining traversal frontier for restart. Directory
+enumeration finishes before a checkpoint is returned; a fixed 30-second deadline
+still stops stalled filesystem I/O.
+
 On macOS, a protected source path denied with `EACCES` is reported as a
 permission issue instead of a transient filesystem failure. The source health
 response and dashboard show one actionable Full Disk Access instruction per
