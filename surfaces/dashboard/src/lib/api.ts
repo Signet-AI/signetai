@@ -126,6 +126,25 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 		return { data: null, error: "request failed", status: 0 };
 	}
 }
+let constellation: { readonly path: string; readonly etag: string; readonly data: KnowledgeConstellation } | undefined;
+async function getConstellation(path: string): Promise<KnowledgeConstellation | null> {
+	const known = constellation?.path === path ? constellation : undefined;
+	try {
+		const res = await dashboardFetch(`${API_BASE}${path}`, {
+			cache: "no-store",
+			headers: { Accept: "application/json", ...authHeaders(), ...(known ? { "If-None-Match": known.etag } : {}) },
+		});
+		if (res.status === 304 && known) return known.data;
+		const body: unknown = await res.json().catch(() => null);
+		if (!res.ok || typeof body !== "object" || body === null || "error" in body || !("entities" in body)) return null;
+		const data = body as KnowledgeConstellation;
+		const tag = res.headers.get("ETag");
+		constellation = tag ? { path, etag: tag, data } : undefined;
+		return data;
+	} catch {
+		return null;
+	}
+}
 
 async function postJSON<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T | null> {
 	return getJSON<T>(path, {
@@ -1279,7 +1298,7 @@ export const api = {
 	},
 	getKnowledgeStats: () => getJSON<KnowledgeStats>("/api/knowledge/stats"),
 	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160, agentId?: string, maxAttributes = 1000) =>
-		getJSON<KnowledgeConstellation>(
+		getConstellation(
 			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=25&max_attributes_per_aspect=250&max_attributes=${maxAttributes}&assertion_limit=1000&dependency_limit=${dependencyLimit}${agentId ? `&agent_id=${encodeURIComponent(agentId)}` : ""}`,
 		),
 	getOntologyProposals: (status: "pending" | "applied" | "rejected" | "failed" = "pending", limit = 20) =>

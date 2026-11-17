@@ -113,3 +113,18 @@ test("targeted invalidation preserves unrelated fresh reads and rejects only aff
 	);
 	expect(reads).toBe(0);
 });
+
+test("a refetch of equal data keeps the cached object and a changed refetch replaces it", async () => {
+	const cache = new QueryCache();
+	const first = await cache.fetch("sources", async () => ({ sources: [{ id: "a", indexed: 1 }] }), 30_000);
+	const equal = await cache.fetch("sources", async () => ({ sources: [{ id: "a", indexed: 1 }] }), 30_000, true);
+	expect(equal.data).toBe(first.data);
+	expect(cache.read("sources").data).toBe(first.data);
+	const same = first.data;
+	const reused = await cache.fetch("sources", async () => same, 30_000, true);
+	expect(reused.data).toBe(first.data);
+	const changed = await cache.fetch("sources", async () => ({ sources: [{ id: "a", indexed: 2 }] }), 30_000, true);
+	expect(changed.data).not.toBe(first.data);
+	expect(changed.data).toEqual({ sources: [{ id: "a", indexed: 2 }] });
+	expect(cache.read("sources").data).toBe(changed.data);
+});

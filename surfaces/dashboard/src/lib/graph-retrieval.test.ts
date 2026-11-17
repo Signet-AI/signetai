@@ -124,7 +124,13 @@ test("renderer batches retrieval, pauses following on wheel, and cancels pending
 		for (const callback of queued) callback(now);
 	};
 	try {
-		worker?.onmessage?.({ data: { nodes: nodes.map((node, index) => ({ ...node, x: index * 100, y: index * 100 })) } });
+		worker?.onmessage?.({
+			data: {
+				xy: Float64Array.from(nodes.flatMap((_, index) => [index * 100, index * 100])),
+				active: false,
+				origin: "fresh",
+			},
+		});
 		fit.mockClear();
 		const now = performance.now();
 		scene.setRetrieval(["one"], []);

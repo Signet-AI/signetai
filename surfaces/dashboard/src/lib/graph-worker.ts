@@ -10,7 +10,7 @@ export type GraphWorkerRequest =
 	| { type: "release"; id: string };
 export type LayoutOrigin = "cached" | "partial" | "fresh" | "unavailable";
 export interface GraphWorkerResponse {
-	nodes: LayoutNode[];
+	xy: Float64Array;
 	active: boolean;
 	origin: LayoutOrigin;
 }
@@ -29,7 +29,15 @@ let generation = 0;
 let lastSave = 0;
 let frame: ReturnType<typeof setTimeout> | undefined;
 let deadline: ReturnType<typeof setTimeout> | undefined;
-const publish = () => self.postMessage({ nodes, active: simulation.isActive(), origin });
+const publish = () => {
+	const xy = new Float64Array(nodes.length * 2);
+	for (const [index, node] of nodes.entries()) {
+		xy[index * 2] = node.x;
+		xy[index * 2 + 1] = node.y;
+	}
+	const response: GraphWorkerResponse = { xy, active: simulation.isActive(), origin };
+	self.postMessage(response, [xy.buffer]);
+};
 const save = (heat = simulation.heat()) => {
 	lastSave = performance.now();
 	if (!cacheKey || !nodes.length) return;

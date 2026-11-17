@@ -30,6 +30,11 @@ const data: GraphSceneData = {
 	],
 };
 
+const at = (value: GraphWorkerResponse, id: string) => {
+	const index = data.nodes.findIndex((node) => node.id === id);
+	return { x: value.xy[index * 2] ?? Number.NaN, y: value.xy[index * 2 + 1] ?? Number.NaN };
+};
+
 test("dragging crosses the worker boundary, moves connected nodes, and settles after release", async () => {
 	const worker = new Worker(new URL("./graph-worker.ts", import.meta.url).href);
 	const send = (request: GraphWorkerRequest) => worker.postMessage(request);
@@ -37,30 +42,28 @@ test("dragging crosses the worker boundary, moves connected nodes, and settles a
 		const initial = response(worker, () => true);
 		send({ type: "init", data });
 		const before = await initial;
-		const root = before.nodes.find((node) => node.id === "entity");
-		const aspect = before.nodes.find((node) => node.id === "aspect");
-		if (!root || !aspect) throw new Error("Missing graph branch");
+		expect(before.xy).toBeInstanceOf(Float64Array);
+		expect(before.xy).toHaveLength(data.nodes.length * 2);
+		const root = at(before, "entity");
+		const aspect = at(before, "aspect");
 		const x = root.x + 400,
 			y = root.y + 200;
 		const pinned = response(worker, (value) => {
-			const root = value.nodes.find((node) => node.id === "entity");
-			const linked = value.nodes.find((node) => node.id === aspect.id);
-			return (
-				!!root && !!linked && Math.abs(root.x - x) < 0.1 && Math.hypot(linked.x - aspect.x, linked.y - aspect.y) > 1
-			);
+			const pin = at(value, "entity");
+			const linked = at(value, "aspect");
+			return Math.abs(pin.x - x) < 0.1 && Math.hypot(linked.x - aspect.x, linked.y - aspect.y) > 1;
 		});
-		send({ type: "drag", id: root.id, x, y });
+		send({ type: "drag", id: "entity", x, y });
 		const dragged = await pinned;
-		const moved = dragged.nodes.find((node) => node.id === aspect.id);
-		expect(moved).toBeDefined();
-		expect(Math.hypot((moved?.x ?? aspect.x) - aspect.x, (moved?.y ?? aspect.y) - aspect.y)).toBeGreaterThan(1);
+		const moved = at(dragged, "aspect");
+		expect(Math.hypot(moved.x - aspect.x, moved.y - aspect.y)).toBeGreaterThan(1);
 		expect(dragged.active).toBe(true);
 		const settled = response(worker, (value) => !value.active);
-		send({ type: "release", id: root.id });
+		send({ type: "release", id: "entity" });
 		const after = await settled;
-		expect(after.nodes.find((node) => node.id === root.id)?.fx).toBeNull();
-		expect(after.nodes.every((node) => typeof node.fx !== "number" && typeof node.fy !== "number")).toBe(true);
-		expect(after.nodes.every((node) => Number.isFinite(node.x) && Number.isFinite(node.y))).toBe(true);
+		const released = at(after, "entity");
+		expect(Math.hypot(released.x - x, released.y - y)).toBeGreaterThan(1);
+		expect(Array.from(after.xy).every(Number.isFinite)).toBe(true);
 	} finally {
 		worker.terminate();
 	}
