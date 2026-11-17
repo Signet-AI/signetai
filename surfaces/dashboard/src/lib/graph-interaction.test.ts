@@ -60,7 +60,11 @@ test("selection follows the reference interaction model without moving the camer
 		target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
 	try {
 		worker?.onmessage?.({
-			data: { nodes: nodes.map((node, index) => ({ ...node, x: index * 100, y: index * 100 })), active: false },
+			data: {
+				xy: Float64Array.from(nodes.flatMap((_, index) => [index * 100, index * 100])),
+				active: false,
+				origin: "fresh",
+			},
 		});
 		fit.mockClear();
 		click(0, 0);

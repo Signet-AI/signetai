@@ -4,6 +4,7 @@ interface Entry {
 	updatedAt: number;
 	touchedAt: number;
 	bytes: number;
+	digest: number;
 }
 export interface QueryResult<T> {
 	data: T | null;
@@ -100,13 +101,23 @@ export class QueryCache {
 				this.failures.delete(key);
 				this.notifyStatus();
 				const updatedAt = this.now();
-				const bytes = new TextEncoder().encode(JSON.stringify(value)).byteLength;
+				const previous = this.entries.get(key);
+				if (previous && previous.value === value) {
+					previous.updatedAt = updatedAt;
+					previous.touchedAt = updatedAt;
+					for (const listener of this.listeners.get(key) ?? []) listener(false);
+					return { data: value, error: null, updatedAt };
+				}
+				const json = JSON.stringify(value);
+				const digest = json.length <= SHARED_PAYLOAD_CHARS ? hash(json) : Number.NaN;
+				const data = previous && previous.digest === digest ? (previous.value as T) : value;
+				const bytes = new TextEncoder().encode(json).byteLength;
 				if (bytes <= this.limits.entryBytes) {
-					this.entries.set(key, { value, updatedAt, touchedAt: updatedAt, bytes });
+					this.entries.set(key, { value: data, updatedAt, touchedAt: updatedAt, bytes, digest });
 					this.prune();
 					for (const listener of this.listeners.get(key) ?? []) listener(false);
 				}
-				return { data: value, error: null, updatedAt };
+				return { data, error: null, updatedAt };
 			})
 			.catch(
 				(error): QueryResult<T> => ({
@@ -132,6 +143,19 @@ export class QueryCache {
 			bytes -= entry.bytes;
 		}
 	}
+}
+const SHARED_PAYLOAD_CHARS = 256 * 1024;
+function hash(text: string): number {
+	let h1 = 0xdeadbeef;
+	let h2 = 0x41c6ce57;
+	for (let index = 0; index < text.length; index++) {
+		const code = text.charCodeAt(index);
+		h1 = Math.imul(h1 ^ code, 2654435761);
+		h2 = Math.imul(h2 ^ code, 1597334677);
+	}
+	h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+	h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+	return 4294967296 * (2097151 & h2) + (h1 >>> 0);
 }
 function readFailure(value: unknown): string | null {
 	if (value === null || value === undefined) return "Daemon data is unavailable.";

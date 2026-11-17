@@ -4,7 +4,7 @@ import { categoryColor, ENTITY_CATEGORIES, entityCategory } from "@/lib/entity-c
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchIcon, XIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { api, viewsAllAgents } from "@/lib/api";
 import { scopedQueryKey } from "@/lib/query-cache";
@@ -172,7 +172,10 @@ export function GraphView() {
 	const [sceneFailed, setSceneFailed] = useState(false);
 	const [sceneBuilt, setSceneBuilt] = useState(false);
 	const [isolated, setIsolated] = useState<string | null>(null);
-	const [zoomPercent, setZoomPercent] = useState(100);
+	const zoomRef = useRef<HTMLOutputElement>(null);
+	const showZoom = useCallback((percent: number) => {
+		if (zoomRef.current) zoomRef.current.textContent = `${percent}%`;
+	}, []);
 	const [hiddenFilters, setHiddenFilters] = useState<ReadonlySet<string>>(() => new Set());
 	const [searchQuery, setSearchQuery] = useState("");
 	const [searchOpen, setSearchOpen] = useState(false);
@@ -510,7 +513,7 @@ export function GraphView() {
 					() => setSceneFailed(true),
 					undefined,
 					setIsolated,
-					setZoomPercent,
+					showZoom,
 					scopedQueryKey(`constellation-layout:${agentScope}`),
 				);
 				sceneRef.current.setHiddenKinds(hiddenKindsRef.current);
@@ -524,7 +527,7 @@ export function GraphView() {
 		return () => {
 			cancelled = true;
 		};
-	}, [limitedScene, dataSig, agentScope]);
+	}, [limitedScene, dataSig, agentScope, showZoom]);
 	useEffect(
 		() => () => {
 			sceneRef.current?.dispose();
@@ -849,7 +852,9 @@ export function GraphView() {
 						</button>
 					</fieldset>
 					<fieldset className="graph-navigation graph-zoom" aria-label="Zoom">
-						<output aria-live="polite">{zoomPercent}%</output>
+						<output ref={zoomRef} aria-live="off">
+							100%
+						</output>
 						<button
 							type="button"
 							aria-label="Zoom out"

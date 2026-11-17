@@ -135,6 +135,10 @@ const MAX_SOURCE_LABELS = 20;
 const SOURCE_LABEL_ZOOM = 3;
 const BASE_ENTITY_LABELS = 12;
 const GLYPH_SCREEN_RADIUS = 2.4;
+const EDGE_BUCKETS = 40;
+const ALPHA_BUCKETS = 64;
+const DOT_SIDE = Math.sqrt(Math.PI);
+const DOT_DEVICE_RADIUS = 2;
 const RADIUS: Record<SceneNodeKind, number> = {
 	entity: 5,
 	source: 2.8,
@@ -181,6 +185,7 @@ function labelPriority(node: LayoutNode, active: LayoutNode | undefined): number
 }
 
 type Glyph = "circle" | "square" | "hexagon" | "diamond" | "triangle";
+type Shape = Glyph | "dot";
 
 const GLYPHS: Record<SceneNodeKind, { readonly shape: Glyph; readonly filled: boolean }> = {
 	entity: { shape: "circle", filled: true },
@@ -294,7 +299,7 @@ export function createGraphScene(
 	let parentOf = new Map<string, string>();
 	let childrenOf = new Map<string, LayoutNode[]>();
 	let percent = 0;
-	let targets = new Map<string, { x: number; y: number }>();
+	let targets: Float64Array | undefined;
 	let history: Array<{ x: number; y: number; t: number }> = [];
 	let drag:
 		| { id: number; x: number; y: number; startX: number; startY: number; moved: boolean; node?: LayoutNode }
@@ -302,6 +307,21 @@ export function createGraphScene(
 	let hiddenKinds = new Set<SceneNodeKind>();
 	let isolated: string | undefined;
 	let entityRank = new Map<string, number>();
+	let indexOf = new Map<string, number>();
+	let bodyIndex = new Int32Array(0);
+	let tints: [readonly string[], readonly string[]] = [[], []];
+	let edgeFrom = new Int32Array(0);
+	let edgeTo = new Int32Array(0);
+	let edgeLocal = new Uint8Array(0);
+	let edgeTint: [Int32Array, Int32Array] = [new Int32Array(0), new Int32Array(0)];
+	let palette: [readonly string[], readonly string[]] = [[], []];
+	let labelCandidates: number[] = [];
+	const labelLive = new Set<number>();
+	let reveal = new Float64Array(0);
+	let nodeAlpha = new Float64Array(0);
+	let ring = new Float64Array(0);
+	let labelAlpha = new Float64Array(0);
+	let visibility = new Float64Array(0);
 	const tint = (node: SceneNode, dark: boolean) => {
 		const colors = dark ? COLORS : LIGHT_COLORS;
 		if (node.kind === "constraint" || node.kind === "origin" || node.kind === "memory" || !node.category)
@@ -367,26 +387,37 @@ export function createGraphScene(
 		}
 		const blend = 1 - Math.exp(-Math.min(now - lastDraw, 32) / 180);
 		lastDraw = now;
-		const fade = (key: string, target: number, initial = 1) => {
-			const previous = emphasis.get(key) ?? initial;
+		const ease = (previous: number, target: number) => {
 			const value = Math.abs(previous - target) < 0.005 ? target : previous + (target - previous) * blend;
-			emphasis.set(key, value);
 			if (value !== target) highlighting = true;
 			return value;
 		};
+		const fade = (key: string, target: number, initial = 1) => {
+			const value = ease(emphasis.get(key) ?? initial, target);
+			emphasis.set(key, value);
+			return value;
+		};
+		const fadeAt = (values: Float64Array, index: number, target: number) => {
+			const value = ease(values[index] ?? 0, target);
+			values[index] = value;
+			return value;
+		};
 		let settling = false;
-		for (const node of nodes) {
-			const target = targets.get(node.id);
-			if (!target || drag?.node === node) continue;
-			const dx = target.x - node.x,
-				dy = target.y - node.y;
-			if (Math.abs(dx) + Math.abs(dy) > 0.1) {
-				node.x += dx * 0.35;
-				node.y += dy * 0.35;
-				settling = true;
-			} else {
-				node.x = target.x;
-				node.y = target.y;
+		if (targets) {
+			for (const [index, node] of nodes.entries()) {
+				if (drag?.node === node) continue;
+				const tx = targets[index * 2] ?? node.x;
+				const ty = targets[index * 2 + 1] ?? node.y;
+				const dx = tx - node.x,
+					dy = ty - node.y;
+				if (Math.abs(dx) + Math.abs(dy) > 0.1) {
+					node.x += dx * 0.35;
+					node.y += dy * 0.35;
+					settling = true;
+				} else {
+					node.x = tx;
+					node.y = ty;
+				}
 			}
 		}
 		const ratio = Math.min(devicePixelRatio || 1, 2);
@@ -394,6 +425,7 @@ export function createGraphScene(
 		context.clearRect(0, 0, width, height);
 		const dark = document.documentElement.classList.contains("dark");
 		const tone = dark ? "dark" : "light";
+		const shade = dark ? 1 : 0;
 		const foreground = dark ? "#f4f4f5" : "#18181b";
 		const active = (hover.active ? byId.get(hover.active) : undefined) ?? (retrieved.size ? undefined : selected);
 		const hovered = hover.active ? byId.get(hover.active) : undefined;
@@ -409,29 +441,41 @@ export function createGraphScene(
 		const level = detail();
 		const appear = fade("appear", 1, 0);
 		const dim = fade("dim", focus || retrieved.size ? 1 : 0, 0);
-		const visibility = new Map<string, number>();
-		for (const node of nodes) {
-			const reveal = fade(
-				`reveal:${node.id}`,
-				(active && node.cluster === active.cluster) || retrieved.has(node.id) || retrievedNeighbors.has(node.id)
+		const recalled = retrieved.size > 0;
+		const tierVisibility = [detailVisibility(0, level), detailVisibility(1, level), detailVisibility(2, level)];
+		for (const [index, node] of nodes.entries()) {
+			const revealed = fadeAt(
+				reveal,
+				index,
+				(active && node.cluster === active.cluster) ||
+					(recalled && (retrieved.has(node.id) || retrievedNeighbors.has(node.id)))
 					? 1
 					: 0,
-				0,
 			);
-			visibility.set(node.id, shown(node) ? Math.max(detailVisibility(tierOf(node.kind), level), reveal) : 0);
+			visibility[index] = shown(node) ? Math.max(tierVisibility[tierOf(node.kind)] ?? 1, revealed) : 0;
 		}
 		const z = viewport.zoom;
 		context.save();
 		context.translate(viewport.panX, viewport.panY);
 		context.scale(z, z);
-		const spokes = new Map<string, Array<{ from: LayoutNode; to: LayoutNode }>>();
-		const bridges = new Map<string, Array<{ from: LayoutNode; to: LayoutNode }>>();
+		const spokes = new Map<number, number[]>();
+		const bridges = new Map<number, number[]>();
 		const highlightedEdges: Array<{ key: string; from: LayoutNode; to: LayoutNode; dependency: boolean }> = [];
-		for (const { edge, from, to } of edges) {
-			const vis = Math.min(visibility.get(from.id) ?? 0, visibility.get(to.id) ?? 0);
+		const hoveredIndex = hovered ? (indexOf.get(hovered.id) ?? -1) : -1;
+		const focusIndex = focus ? (indexOf.get(focus.id) ?? -1) : -1;
+		const bridgeFade = 1 - 0.6 * smoothstep(1.5, 4, level);
+		const spokeBase = dark ? 0.22 : 0.2;
+		const dependencyBase = (dark ? 0.34 : 0.3) * bridgeFade;
+		const bridgeBase = (dark ? 0.12 : 0.1) * bridgeFade;
+		for (const [index, { edge, from, to }] of edges.entries()) {
+			const f = edgeFrom[index] ?? 0;
+			const t = edgeTo[index] ?? 0;
+			const vis = Math.min(visibility[f] ?? 0, visibility[t] ?? 0);
 			if (vis < 0.02) continue;
-			const touches = (node: LayoutNode | undefined) => !!node && (from.id === node.id || to.id === node.id);
-			const highlighted = active ? touches(hovered) || touches(focus) : retrieved.has(from.id) || retrieved.has(to.id);
+			const highlighted = active
+				? (hoveredIndex >= 0 && (f === hoveredIndex || t === hoveredIndex)) ||
+					(focusIndex >= 0 && (f === focusIndex || t === focusIndex))
+				: recalled && (retrieved.has(from.id) || retrieved.has(to.id));
 			if (highlighted) {
 				highlightedEdges.push({
 					key: `edge:${edge.from}:${edge.to}:${edge.kind}`,
@@ -441,38 +485,38 @@ export function createGraphScene(
 				});
 				continue;
 			}
-			const local = bodyOf(from) === bodyOf(to);
+			const local = edgeLocal[index] === 1;
 			const muted = relevant(from) && relevant(to) ? 1 : 1 - dim * 0.8;
-			const base = local
-				? dark
-					? 0.22
-					: 0.2
-				: (edge.kind === "depends_on" ? (dark ? 0.34 : 0.3) : dark ? 0.12 : 0.1) *
-					(1 - 0.6 * smoothstep(1.5, 4, level));
-			const bucket = Math.round(Math.min(1, base * vis * muted) * 40);
+			const base = local ? spokeBase : edge.kind === "depends_on" ? dependencyBase : bridgeBase;
+			const bucket = Math.round(Math.min(1, base * vis * muted) * EDGE_BUCKETS);
 			if (bucket <= 0) continue;
-			const target = local ? spokes : bridges;
-			const group = `${bucket}|${local ? tint(byId.get(bodyOf(from)) ?? from, dark) : BRIDGE[tone]}`;
-			const list = target.get(group);
-			if (list) list.push({ from, to });
-			else target.set(group, [{ from, to }]);
+			const groups = local ? spokes : bridges;
+			const group = (local ? (edgeTint[shade][index] ?? 0) : 0) * (EDGE_BUCKETS + 1) + bucket;
+			const list = groups.get(group);
+			if (list) list.push(index);
+			else groups.set(group, [index]);
 		}
-		const stroke = (groups: Map<string, Array<{ from: LayoutNode; to: LayoutNode }>>, w: number) => {
+		const stroke = (groups: Map<number, number[]>, w: number, local: boolean) => {
 			context.lineWidth = w / z;
 			for (const [group, list] of groups) {
-				const [bucket, color] = group.split("|");
-				context.strokeStyle = color ?? BRIDGE[tone];
-				context.globalAlpha = (Number(bucket) / 40) * appear;
+				const bucket = group % (EDGE_BUCKETS + 1);
+				context.strokeStyle = local
+					? (palette[shade][Math.floor(group / (EDGE_BUCKETS + 1))] ?? BRIDGE[tone])
+					: BRIDGE[tone];
+				context.globalAlpha = (bucket / EDGE_BUCKETS) * appear;
 				context.beginPath();
-				for (const { from, to } of list) {
+				for (const index of list) {
+					const from = nodes[edgeFrom[index] ?? 0];
+					const to = nodes[edgeTo[index] ?? 0];
+					if (!from || !to) continue;
 					context.moveTo(from.x, from.y);
 					context.lineTo(to.x, to.y);
 				}
 				context.stroke();
 			}
 		};
-		stroke(spokes, 0.75);
-		stroke(bridges, 1);
+		stroke(spokes, 0.75, true);
+		stroke(bridges, 1, false);
 		const accent = retrieved.size && !active ? RETRIEVAL[tone] : active ? tint(active, dark) : foreground;
 		context.strokeStyle = accent;
 		context.lineWidth = 1.4 / z;
@@ -492,21 +536,55 @@ export function createGraphScene(
 			context.stroke();
 		}
 		const surface = SURFACE[tone];
-		for (const node of nodes) {
-			const vis = visibility.get(node.id) ?? 0;
+		const glyphs = new Map<string, { color: string; alpha: number; outlined: boolean; members: number[] }>();
+		const radii = new Float64Array(nodes.length);
+		const shapes: Shape[] = [];
+		const marked: number[] = [];
+		for (const [index, node] of nodes.entries()) {
+			const vis = visibility[index] ?? 0;
 			if (vis < 0.02) continue;
 			const x = node.x * z + viewport.panX;
 			const y = node.y * z + viewport.panY;
 			if (x < -120 || x > width + 120 || y < -60 || y > height + 60) continue;
-			const alpha = fade(`node:${node.id}`, relevant(node) ? 1 : 1 - dim * 0.7) * vis * appear;
+			const alpha = fadeAt(nodeAlpha, index, relevant(node) ? 1 : 1 - dim * 0.7) * vis * appear;
 			const r = Math.min(Math.max(radius(node), screenRadius(node) / z), maxScreenRadius(node) / z);
-			const color = retrieved.has(node.id) ? RETRIEVAL[tone] : tint(node, dark);
-			context.globalAlpha = alpha;
+			const color = recalled && retrieved.has(node.id) ? RETRIEVAL[tone] : (tints[shade][index] ?? tint(node, dark));
 			const glyph = GLYPHS[node.kind];
 			const legible = r * z >= GLYPH_SCREEN_RADIUS;
+			const outlined = legible && !glyph.filled;
+			const bucket = Math.round(alpha * ALPHA_BUCKETS);
+			radii[index] = r;
+			shapes[index] = legible ? glyph.shape : r * z * ratio < DOT_DEVICE_RADIUS ? "dot" : "circle";
+			const ringed =
+				fadeAt(
+					ring,
+					index,
+					node.id === active?.id || node.id === focus?.id || (recalled && retrieved.has(node.id)) ? 1 : 0,
+				) > 0.005;
+			if (tierOf(node.kind) === 0 || ringed) marked.push(index);
+			if (bucket <= 0) continue;
+			const key = `${color}|${bucket}|${outlined ? 1 : 0}`;
+			const batch = glyphs.get(key);
+			if (batch) batch.members.push(index);
+			else glyphs.set(key, { color, alpha: bucket / ALPHA_BUCKETS, outlined, members: [index] });
+		}
+		for (const { color, alpha, outlined, members } of glyphs.values()) {
+			context.globalAlpha = alpha;
 			context.beginPath();
-			glyphPath(context, legible ? glyph.shape : "circle", node.x, node.y, r);
-			if (legible && !glyph.filled) {
+			for (const index of members) {
+				const node = nodes[index];
+				const r = radii[index] ?? 0;
+				const shape = shapes[index] ?? "dot";
+				if (!node) continue;
+				if (shape === "dot") {
+					const side = r * DOT_SIDE;
+					context.rect(node.x - side / 2, node.y - side / 2, side, side);
+					continue;
+				}
+				if (shape === "circle") context.moveTo(node.x + r, node.y);
+				glyphPath(context, shape, node.x, node.y, r);
+			}
+			if (outlined) {
 				context.fillStyle = surface;
 				context.fill();
 				context.strokeStyle = color;
@@ -516,6 +594,13 @@ export function createGraphScene(
 				context.fillStyle = color;
 				context.fill();
 			}
+		}
+		for (const index of marked) {
+			const node = nodes[index];
+			if (!node) continue;
+			const r = radii[index] ?? 0;
+			const alpha = (nodeAlpha[index] ?? 1) * (visibility[index] ?? 0) * appear;
+			const color = recalled && retrieved.has(node.id) ? RETRIEVAL[tone] : (tints[shade][index] ?? tint(node, dark));
 			if (tierOf(node.kind) === 0) {
 				context.strokeStyle = node.scopeColor ?? color;
 				context.globalAlpha = alpha * (node.scopeColor ? 0.9 : 0.45);
@@ -524,14 +609,10 @@ export function createGraphScene(
 				context.arc(node.x, node.y, r + 2.5 / z, 0, Math.PI * 2);
 				context.stroke();
 			}
-			const ring = fade(
-				`ring:${node.id}`,
-				node.id === active?.id || node.id === focus?.id || retrieved.has(node.id) ? 1 : 0,
-				0,
-			);
-			if (ring > 0.005) {
+			const ringed = ring[index] ?? 0;
+			if (ringed > 0.005) {
 				const reach = r + 6 / z;
-				context.globalAlpha = ring * appear;
+				context.globalAlpha = ringed * appear;
 				context.strokeStyle = retrieved.has(node.id) ? RETRIEVAL[tone] : foreground;
 				context.lineWidth = 1 / z;
 				context.setLineDash([3 / z, 3 / z]);
@@ -552,20 +633,38 @@ export function createGraphScene(
 		const occupied: Array<{ x: number; y: number; w: number; h: number }> = [];
 		const free = (x: number, y: number, w: number, h: number) =>
 			!occupied.some((box) => x < box.x + box.w + 6 && x + w + 6 > box.x && y < box.y + box.h && y + h > box.y);
-		const sourceCount = nodes.reduce((count, node) => count + (node.kind === "source" ? 1 : 0), 0);
+		const sourceCount = labelCandidates.reduce((count, index) => count + (nodes[index]?.kind === "source" ? 1 : 0), 0);
 		const labelSources = sourceCount <= MAX_SOURCE_LABELS || z >= overviewZoom * SOURCE_LABEL_ZOOM;
 		const entityBudget = Math.round(BASE_ENTITY_LABELS * level * level);
 		let sourceLabels = 0;
-		for (const node of [...nodes].sort((a, b) => labelPriority(b, active) - labelPriority(a, active))) {
-			if ((visibility.get(node.id) ?? 0) < 0.5) continue;
+		const candidates = new Set<number>([...labelCandidates, ...labelLive]);
+		for (const node of [active, hovered]) {
+			const index = node ? indexOf.get(node.id) : undefined;
+			if (index !== undefined) candidates.add(index);
+		}
+		if (recalled) {
+			for (const id of retrieved) {
+				const index = indexOf.get(id);
+				if (index !== undefined) candidates.add(index);
+			}
+		}
+		const ranked = [...candidates]
+			.sort((a, b) => a - b)
+			.flatMap((index) => nodes[index] ?? [])
+			.sort((a, b) => labelPriority(b, active) - labelPriority(a, active));
+		for (const node of ranked) {
+			const index = indexOf.get(node.id) ?? -1;
+			if ((visibility[index] ?? 0) < 0.5) continue;
 			const focused = node.id === active?.id || node.id === hovered?.id;
 			const visible =
 				focused ||
-				retrieved.has(node.id) ||
+				(recalled && retrieved.has(node.id)) ||
 				(node.kind === "entity" && (entityRank.get(node.id) ?? Number.POSITIVE_INFINITY) < entityBudget) ||
 				(node.kind === "source" && labelSources && sourceLabels < MAX_SOURCE_LABELS);
-			const labelAlpha = fade(`label:${node.id}`, visible ? 1 : 0, 0);
-			if (labelAlpha < 0.005) continue;
+			const shownAlpha = fadeAt(labelAlpha, index, visible ? 1 : 0);
+			if (shownAlpha > 0) labelLive.add(index);
+			else labelLive.delete(index);
+			if (shownAlpha < 0.005) continue;
 			const sx = node.x * z + viewport.panX;
 			const sy = node.y * z + viewport.panY;
 			const body = byId.get(bodyOf(node));
@@ -587,7 +686,7 @@ export function createGraphScene(
 			if (!focused && !free(x, y, w, h)) continue;
 			occupied.push({ x, y, w, h });
 			if (node.kind === "source") sourceLabels++;
-			context.globalAlpha = labelAlpha * (focused ? 1 : (emphasis.get(`node:${node.id}`) ?? 1)) * appear;
+			context.globalAlpha = shownAlpha * (focused ? 1 : (nodeAlpha[index] ?? 1)) * appear;
 			if (focused) {
 				context.beginPath();
 				pill(context, x, y, w, h);
@@ -732,18 +831,24 @@ export function createGraphScene(
 	const hittable = (node: LayoutNode) =>
 		shown(node) &&
 		(interactive(tierOf(node.kind), detail()) || (selected !== undefined && node.cluster === selected.cluster));
-	const hit = (x: number, y: number) =>
-		[...nodes]
-			.reverse()
-			.find(
-				(node) =>
-					hittable(node) &&
-					Math.hypot(node.x * viewport.zoom + viewport.panX - x, node.y * viewport.zoom + viewport.panY - y) <=
-						Math.max(8, radius(node) * viewport.zoom + 3),
-			);
+	const hit = (x: number, y: number) => {
+		for (let index = nodes.length - 1; index >= 0; index--) {
+			const node = nodes[index];
+			if (!node) continue;
+			const dx = node.x * viewport.zoom + viewport.panX - x;
+			const dy = node.y * viewport.zoom + viewport.panY - y;
+			const reach = Math.max(8, radius(node) * viewport.zoom + 3);
+			if (dx * dx + dy * dy <= reach * reach && hittable(node)) return node;
+		}
+		return undefined;
+	};
 	const release = () => {
 		if (!drag?.node || !drag.moved) return;
-		targets.set(drag.node.id, { x: drag.node.x, y: drag.node.y });
+		const index = indexOf.get(drag.node.id);
+		if (targets && index !== undefined) {
+			targets[index * 2] = drag.node.x;
+			targets[index * 2 + 1] = drag.node.y;
+		}
 		const request: GraphWorkerRequest = { type: "release", id: drag.node.id };
 		worker.postMessage(request);
 	};
@@ -942,8 +1047,9 @@ export function createGraphScene(
 		if (disposed) return;
 		clearTimeout(deadline);
 		canvas.setAttribute("aria-busy", "false");
+		const { xy } = event.data;
 		if (nodes.length) {
-			targets = new Map(event.data.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
+			targets = xy;
 			if (framing && !selected && !isolated && !retrieved.size) fit(nodes, false);
 			if (!event.data.active) framing = false;
 			invalidate();
@@ -951,8 +1057,18 @@ export function createGraphScene(
 		}
 		canvas.dataset.layout = event.data.origin;
 		framing = event.data.active;
-		nodes = event.data.nodes;
+		nodes = data.nodes.map((node, index) => ({ ...node, x: xy[index * 2] ?? 0, y: xy[index * 2 + 1] ?? 0 }));
 		byId = new Map(nodes.map((node) => [node.id, node]));
+		indexOf = new Map(nodes.map((node, index) => [node.id, index]));
+		bodyIndex = Int32Array.from(nodes, (node) => indexOf.get(bodyOf(node)) ?? 0);
+		tints = [nodes.map((node) => tint(node, false)), nodes.map((node) => tint(node, true))];
+		labelCandidates = nodes.flatMap((node, index) => (tierOf(node.kind) === 0 ? [index] : []));
+		labelLive.clear();
+		reveal = new Float64Array(nodes.length);
+		nodeAlpha = new Float64Array(nodes.length).fill(1);
+		ring = new Float64Array(nodes.length);
+		labelAlpha = new Float64Array(nodes.length);
+		visibility = new Float64Array(nodes.length);
 		const clusterSize = new Map<string, number>();
 		for (const node of nodes) clusterSize.set(node.cluster, (clusterSize.get(node.cluster) ?? 0) + 1);
 		entityRank = new Map(
@@ -966,6 +1082,30 @@ export function createGraphScene(
 				to = byId.get(edge.to);
 			return from && to ? [{ edge, from, to }] : [];
 		});
+		edgeFrom = Int32Array.from(edges, ({ from }) => indexOf.get(from.id) ?? 0);
+		edgeTo = Int32Array.from(edges, ({ to }) => indexOf.get(to.id) ?? 0);
+		edgeLocal = Uint8Array.from(edges, (_, index) =>
+			bodyIndex[edgeFrom[index] ?? 0] === bodyIndex[edgeTo[index] ?? 0] ? 1 : 0,
+		);
+		const colors = (shade: 0 | 1) => {
+			const list: string[] = [];
+			const slot = new Map<string, number>();
+			const indices = Int32Array.from(edges, (_, index) => {
+				const color = tints[shade][bodyIndex[edgeFrom[index] ?? 0] ?? 0] ?? BRIDGE.dark;
+				let at = slot.get(color);
+				if (at === undefined) {
+					at = list.length;
+					slot.set(color, at);
+					list.push(color);
+				}
+				return at;
+			});
+			return { list, indices };
+		};
+		const light = colors(0);
+		const dark = colors(1);
+		palette = [light.list, dark.list];
+		edgeTint = [light.indices, dark.indices];
 		parentOf = new Map();
 		childrenOf = new Map();
 		for (const { edge, from, to } of edges) {
