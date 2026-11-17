@@ -1918,6 +1918,13 @@ export interface ConstellationProposalSummary {
 	readonly appliedRecent: number;
 	readonly failedRecent: number;
 }
+export interface ConstellationTruncation {
+	readonly entities: boolean;
+	readonly aspects: boolean;
+	readonly attributes: boolean;
+	readonly dependencies: boolean;
+	readonly assertions: boolean;
+}
 
 export interface ConstellationGraph {
 	readonly entities: readonly ConstellationEntity[];
@@ -1927,6 +1934,7 @@ export interface ConstellationGraph {
 	readonly metadata: {
 		readonly dreaming: ConstellationDreamingSummary;
 		readonly proposals: ConstellationProposalSummary;
+		readonly truncated: ConstellationTruncation;
 	};
 }
 
@@ -1934,6 +1942,7 @@ export interface ConstellationGraphOptions {
 	readonly limit?: number;
 	readonly maxAspectsPerEntity?: number;
 	readonly maxAttributesPerAspect?: number;
+	readonly maxAttributes?: number;
 	readonly dependencyLimit?: number;
 	readonly assertionLimit?: number;
 	readonly backlogProbe?: DreamingEpisodicBacklogProbe;
@@ -2108,6 +2117,7 @@ function getConstellationProposalSummary(db: ReadDb, agentId: string): Constella
 		failedRecent: Math.max(0, failed?.n ?? 0),
 	};
 }
+export const MAX_CONSTELLATION_ATTRIBUTES = 10_000;
 
 export async function getKnowledgeGraphForConstellation(
 	accessor: DbAccessor,
@@ -2117,6 +2127,12 @@ export async function getKnowledgeGraphForConstellation(
 	const limit = boundedInteger(options.limit, 150, 1, 300);
 	const maxAspectsPerEntity = boundedInteger(options.maxAspectsPerEntity, 6, 1, 25);
 	const maxAttributesPerAspect = boundedInteger(options.maxAttributesPerAspect, 4, 1, 250);
+	const maxAttributes = boundedInteger(
+		options.maxAttributes,
+		MAX_CONSTELLATION_ATTRIBUTES,
+		1,
+		MAX_CONSTELLATION_ATTRIBUTES,
+	);
 	const dependencyLimit = boundedInteger(options.dependencyLimit, 500, 1, 2000);
 	const assertionLimit = boundedInteger(options.assertionLimit, 250, 1, 1000);
 
@@ -2175,9 +2191,20 @@ export async function getKnowledgeGraphForConstellation(
 				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC, e.id ASC
 				 LIMIT ?`,
 				)
-				.all(...visibleAgentIds, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, ...SOURCE_CLAIM_ENTITY_TYPES, limit) as Array<
-				Record<string, unknown>
-			>;
+				.all(
+					...visibleAgentIds,
+					...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES,
+					...SOURCE_CLAIM_ENTITY_TYPES,
+					limit + 1,
+				) as Array<Record<string, unknown>>;
+			const truncated = {
+				entities: entityRows.length > limit,
+				aspects: false,
+				attributes: false,
+				dependencies: false,
+				assertions: false,
+			};
+			entityRows.length = Math.min(entityRows.length, limit);
 
 			const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
 
@@ -2190,6 +2217,7 @@ export async function getKnowledgeGraphForConstellation(
 					metadata: {
 						dreaming: getConstellationDreamingSummary(db, agentId, options.backlogProbe),
 						proposals: getConstellationProposalSummary(db, agentId),
+						truncated,
 					},
 				};
 			}
@@ -2198,7 +2226,7 @@ export async function getKnowledgeGraphForConstellation(
 			const entityIdPlaceholders = placeholders(entityIds.length);
 			const aspectRows = db
 				.prepare(
-					`SELECT id, entity_id, name, weight, status, proposal_id
+					`SELECT id, entity_id, name, weight, status, proposal_id, rn
 				 FROM (
 				   SELECT id, entity_id, name, weight, status, proposal_id,
 				          ROW_NUMBER() OVER (
@@ -2228,7 +2256,7 @@ export async function getKnowledgeGraphForConstellation(
 				 WHERE rn <= ?
 				 ORDER BY entity_id ASC, weight DESC, name ASC, id ASC`,
 				)
-				.all(...visibleAgentIds, ...entityIds, maxAspectsPerEntity) as Array<Record<string, unknown>>;
+				.all(...visibleAgentIds, ...entityIds, maxAspectsPerEntity + 1) as Array<Record<string, unknown>>;
 
 			const aspectsByEntity = new Map<
 				string,
@@ -2245,8 +2273,11 @@ export async function getKnowledgeGraphForConstellation(
 			for (const row of aspectRows) {
 				const entityId = row.entity_id as string;
 				if (!entityIdSet.has(entityId)) continue;
+				if (Number(row.rn) > maxAspectsPerEntity) {
+					truncated.aspects = true;
+					continue;
+				}
 				const bucket = aspectsByEntity.get(entityId) ?? [];
-				if (bucket.length >= maxAspectsPerEntity) continue;
 				const aspectId = row.id as string;
 				aspectIds.push(aspectId);
 				bucket.push({
@@ -2268,7 +2299,7 @@ export async function getKnowledgeGraphForConstellation(
 						`SELECT id, aspect_id, content, kind, importance, confidence, memory_id, status,
 					        version, version_root_id, previous_attribute_id,
 					        group_key, claim_key, source_kind, source_id, source_path, source_root,
-					        proposal_id, proposal_evidence, claim_priority
+					        proposal_id, proposal_evidence, claim_priority, rn
 					 FROM (
 					   SELECT id, aspect_id, content, kind, importance, confidence, memory_id, status,
 					          version, version_root_id, previous_attribute_id,
@@ -2285,15 +2316,22 @@ export async function getKnowledgeGraphForConstellation(
 					   WHERE agent_id IN (${agentPlaceholders}) AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
 					 ) ranked_attributes
 					 WHERE rn <= ?
-					 ORDER BY aspect_id ASC, claim_priority ASC, importance DESC, id ASC`,
+					 ORDER BY rn ASC, aspect_id ASC
+					 LIMIT ?`,
 					)
-					.all(...visibleAgentIds, ...aspectIds, maxAttributesPerAspect) as Array<Record<string, unknown>>;
-
+					.all(...visibleAgentIds, ...aspectIds, maxAttributesPerAspect + 1, maxAttributes + 1) as Array<
+					Record<string, unknown>
+				>;
+				let kept = 0;
 				for (const row of attrRows) {
 					const aspectId = row.aspect_id as string;
 					if (!aspectIdSet.has(aspectId)) continue;
+					if (Number(row.rn) > maxAttributesPerAspect || kept >= maxAttributes) {
+						truncated.attributes = true;
+						continue;
+					}
+					kept++;
 					const bucket = attrsByAspect.get(aspectId) ?? [];
-					if (bucket.length >= maxAttributesPerAspect) continue;
 					bucket.push({
 						id: row.id as string,
 						content: row.content as string,
@@ -2364,7 +2402,9 @@ export async function getKnowledgeGraphForConstellation(
 				          id ASC
 				 LIMIT ?`,
 				)
-				.all(...visibleAgentIds, ...entityIds, ...entityIds, dependencyLimit) as Array<Record<string, unknown>>;
+				.all(...visibleAgentIds, ...entityIds, ...entityIds, dependencyLimit + 1) as Array<Record<string, unknown>>;
+			truncated.dependencies = depRows.length > dependencyLimit;
+			depRows.length = Math.min(depRows.length, dependencyLimit);
 
 			const dependencies: ConstellationDependency[] = depRows.map((row) => ({
 				sourceEntityId: row.source_entity_id as string,
@@ -2391,7 +2431,9 @@ export async function getKnowledgeGraphForConstellation(
 					 ORDER BY a.confidence DESC, a.asserted_at DESC, a.id ASC
 					 LIMIT ?`,
 					)
-					.all(...visibleAgentIds, ...entityIds, assertionLimit) as Array<Record<string, unknown>>;
+					.all(...visibleAgentIds, ...entityIds, assertionLimit + 1) as Array<Record<string, unknown>>;
+				truncated.assertions = assertionRows.length > assertionLimit;
+				assertionRows.length = Math.min(assertionRows.length, assertionLimit);
 			} catch (error) {
 				if (!(error instanceof Error) || !error.message.includes("no such table: epistemic_assertions")) throw error;
 			}
@@ -2448,6 +2490,7 @@ export async function getKnowledgeGraphForConstellation(
 				metadata: {
 					dreaming: getConstellationDreamingSummary(db, agentId, options.backlogProbe),
 					proposals: getConstellationProposalSummary(db, agentId),
+					truncated,
 				},
 			};
 		},

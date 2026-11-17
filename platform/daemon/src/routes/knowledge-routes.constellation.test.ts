@@ -294,3 +294,93 @@ describe("GET /api/knowledge/constellation agent scope", () => {
 		}
 	});
 });
+
+async function seedRankedFacts(): Promise<void> {
+	await runWriteTxAsync(getDbAccessor(), (db) => {
+		const now = "2026-09-23T00:00:00.000Z";
+		for (const [entity, mentions] of [
+			["entity-first", 9],
+			["entity-second", 1],
+		] as const) {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', ?, ?, ?)`,
+			).run(entity, entity, entity, mentions, now, now);
+		}
+		const aspect = db.prepare(
+			`INSERT INTO entity_aspects
+			 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+			 VALUES (?, 'entity-first', 'default', ?, ?, 1, ?, ?)`,
+		);
+		const fact = db.prepare(
+			`INSERT INTO entity_attributes
+			 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+			 VALUES (?, ?, 'default', 'attribute', ?, ?, 1, ?, 'active', ?, ?)`,
+		);
+		for (const name of ["a", "b"]) {
+			aspect.run(`aspect-${name}`, name, name, now, now);
+			for (const [rank, importance] of [0.9, 0.8, 0.7].entries()) {
+				const id = `fact-${name}${rank + 1}`;
+				fact.run(id, `aspect-${name}`, id, id, importance, now, now);
+			}
+		}
+	});
+}
+
+describe("GET /api/knowledge/constellation bounds", () => {
+	let dir = "";
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "signet-constellation-bounds-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+	});
+
+	afterEach(async () => {
+		await closeDbAccessor();
+		if (dir) rmSync(dir, { recursive: true, force: true });
+		dir = "";
+	});
+
+	const read = async (query: string) => {
+		const app = new Hono();
+		registerKnowledgeRoutes(app);
+		const response = await app.request(`/api/knowledge/constellation?agent_id=default&${query}`);
+		expect(response.status).toBe(200);
+		const body = (await response.json()) as {
+			entities: Array<{ id: string; aspects: Array<{ id: string; attributes: Array<{ id: string }> }> }>;
+			metadata: { truncated: Record<string, boolean> };
+		};
+		return {
+			facts: body.entities.flatMap((entity) =>
+				entity.aspects.map((aspect) => `${aspect.id}:${aspect.attributes.map((attr) => attr.id).join(",")}`),
+			),
+			entities: body.entities.map((entity) => entity.id),
+			truncated: body.metadata.truncated,
+		};
+	};
+
+	test("spends a total fact budget breadth-first and reports what it omitted", async () => {
+		await seedRankedFacts();
+		expect(await read("max_attributes_per_aspect=2&max_attributes=3")).toEqual({
+			facts: ["aspect-a:fact-a1,fact-a2", "aspect-b:fact-b1"],
+			entities: ["entity-first", "entity-second"],
+			truncated: { entities: false, aspects: false, attributes: true, dependencies: false, assertions: false },
+		});
+		expect(await read("limit=1&max_aspects_per_entity=1&max_attributes_per_aspect=250")).toMatchObject({
+			facts: ["aspect-a:fact-a1,fact-a2,fact-a3"],
+			entities: ["entity-first"],
+			truncated: { entities: true, aspects: true, attributes: false },
+		});
+	});
+
+	test("reports a complete graph when every bound has room", async () => {
+		await seedRankedFacts();
+		expect(await read("max_attributes_per_aspect=3&max_attributes=6")).toMatchObject({
+			facts: ["aspect-a:fact-a1,fact-a2,fact-a3", "aspect-b:fact-b1,fact-b2,fact-b3"],
+			truncated: { entities: false, aspects: false, attributes: false, dependencies: false, assertions: false },
+		});
+		expect((await read("max_attributes_per_aspect=3&max_attributes=abc")).truncated.attributes).toBe(false);
+	});
+});
