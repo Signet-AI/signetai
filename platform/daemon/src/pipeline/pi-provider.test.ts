@@ -661,3 +661,66 @@ describe("local thinking control", () => {
 		}
 	});
 });
+
+describe("OpenRouter provider routing", () => {
+	function recordingServer(): { url: string; bodies: Record<string, unknown>[]; stop: () => void } {
+		const bodies: Record<string, unknown>[] = [];
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch: async (request) => {
+				if (request.method === "POST") bodies.push((await request.json()) as Record<string, unknown>);
+				return new Response(
+					`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			},
+		});
+		return { url: `http://127.0.0.1:${server.port}/v1`, bodies, stop: () => server.stop(true) };
+	}
+
+	const routing = {
+		order: ["deepinfra", "together"],
+		only: ["deepinfra"],
+		ignore: ["lambda"],
+		allow_fallbacks: false,
+		require_parameters: true,
+		data_collection: "deny",
+		quantizations: ["fp8", "fp16"],
+		sort: "price",
+		max_price: { prompt: 0.5, completion: 1.5 },
+	} as const;
+
+	test("sends the configured provider routing as the request body's provider field", async () => {
+		const server = recordingServer();
+		try {
+			const provider = createPiModelProvider({
+				executor: "openrouter",
+				model: "deepseek/deepseek-v4.1-flash-1017",
+				baseUrl: server.url,
+				apiKey: "openrouter-test-key",
+				openRouterRouting: routing,
+			});
+			await expect(provider.generate("route this")).resolves.toBe("done");
+			expect(server.bodies[0]?.provider).toEqual(routing);
+		} finally {
+			server.stop();
+		}
+	});
+
+	test("omits the provider field from requests without configured routing", async () => {
+		const server = recordingServer();
+		try {
+			const provider = createPiModelProvider({
+				executor: "openrouter",
+				model: "deepseek/deepseek-v4.1-flash-1017",
+				baseUrl: server.url,
+				apiKey: "openrouter-test-key",
+			});
+			await expect(provider.generate("plain")).resolves.toBe("done");
+			expect("provider" in (server.bodies[0] ?? {})).toBe(false);
+		} finally {
+			server.stop();
+		}
+	});
+});

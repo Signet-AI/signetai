@@ -173,6 +173,8 @@ subscription-backed CLI session, or gateway.
 | `timeoutMs` | number | Per-call ACPX subprocess deadline |
 | `extraArgs` | array | Additional ACPX CLI args appended after Signet-managed args |
 | `privacy` | string | `remote_ok`, `restricted_remote`, or `local_only` |
+| `openrouter` | object | For `executor: openrouter`. `reasoning` takes `{ enabled, maxTokens }`. `provider` carries OpenRouter provider routing: `order`, `only`, `ignore`, `allowFallbacks`, `requireParameters`, `dataCollection`, `quantizations`, `sort`, and `maxPrice` with `prompt` and `completion`. Snake_case names such as `allow_fallbacks` and `max_price` are accepted too. An invalid `provider` block rejects the whole target |
+| `thinking` | object | For local executors (`openai-compatible`, `ollama`, `llama-cpp`). Chat-template thinking control |
 | `models` | map | Named model entries for this target |
 
 Example ACPX background target (see also `docs/ACP-INTEGRATION.md` for the architecture and current limitations):

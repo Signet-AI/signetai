@@ -113,6 +113,7 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 					}
 				: {}),
 			...(target.thinking ? { thinking: target.thinking } : {}),
+			...(target.openrouter?.provider ? { openRouterRouting: target.openrouter.provider } : {}),
 			name: `${target.executor}:${model.model}`,
 			defaultTimeoutMs: 60_000,
 		}),

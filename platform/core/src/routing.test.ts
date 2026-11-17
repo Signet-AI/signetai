@@ -699,6 +699,108 @@ describe("inference config + decision engine", () => {
 		});
 	});
 
+	it("parses OpenRouter provider routing in camelCase and snake_case", () => {
+		const camel = parseRoutingConfig({
+			inference: {
+				targets: {
+					flash: {
+						executor: "openrouter",
+						account: "openrouter-api",
+						openrouter: {
+							provider: {
+								order: ["deepinfra", "together"],
+								only: ["deepinfra"],
+								ignore: ["lambda"],
+								allowFallbacks: false,
+								requireParameters: true,
+								dataCollection: "deny",
+								quantizations: ["fp8", "fp16"],
+								sort: "price",
+								maxPrice: { prompt: 0.5, completion: "1.5" },
+							},
+						},
+						models: { default: { model: "deepseek/deepseek-v4.1-flash-1017" } },
+					},
+				},
+			},
+		});
+		expect(camel.ok).toBe(true);
+		if (!camel.ok) return;
+		expect(camel.value.targets.flash?.openrouter?.provider).toEqual({
+			order: ["deepinfra", "together"],
+			only: ["deepinfra"],
+			ignore: ["lambda"],
+			allow_fallbacks: false,
+			require_parameters: true,
+			data_collection: "deny",
+			quantizations: ["fp8", "fp16"],
+			sort: "price",
+			max_price: { prompt: 0.5, completion: 1.5 },
+		});
+
+		const snake = parseRoutingConfig({
+			inference: {
+				targets: {
+					flash: {
+						executor: "openrouter",
+						openrouter: {
+							provider: {
+								allow_fallbacks: true,
+								require_parameters: false,
+								data_collection: "allow",
+								sort: { by: "throughput", partition: null },
+							},
+						},
+						models: { default: { model: "deepseek/deepseek-v4.1-flash-1017" } },
+					},
+				},
+			},
+		});
+		expect(snake.ok).toBe(true);
+		if (!snake.ok) return;
+		expect(snake.value.targets.flash?.openrouter?.provider).toEqual({
+			allow_fallbacks: true,
+			require_parameters: false,
+			data_collection: "allow",
+			sort: { by: "throughput", partition: null },
+		});
+	});
+
+	it("rejects an invalid OpenRouter provider block by dropping the target", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					flash: {
+						executor: "openrouter",
+						openrouter: {
+							provider: {
+								quantizations: ["int3"],
+								maxPrice: { prompt: -1 },
+							},
+						},
+						models: { default: { model: "deepseek/deepseek-v4.1-flash-1017" } },
+					},
+					sorted: {
+						executor: "openrouter",
+						openrouter: { provider: { order: ["good", 7] } },
+						models: { default: { model: "deepseek/deepseek-v4.1-flash-1017" } },
+					},
+					typed: {
+						executor: "openrouter",
+						openrouter: { provider: "price" },
+						models: { default: { model: "deepseek/deepseek-v4.1-flash-1017" } },
+					},
+				},
+			},
+		});
+
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.flash).toBeUndefined();
+		expect(parsed.value.targets.sorted).toBeUndefined();
+		expect(parsed.value.targets.typed).toBeUndefined();
+	});
+
 	it("parses thinking controls on local OpenAI-compatible targets only", () => {
 		const parsed = parseRoutingConfig({
 			inference: {
