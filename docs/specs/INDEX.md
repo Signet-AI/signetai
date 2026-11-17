@@ -970,4 +970,3 @@ team bandwidth allows.
    locked before GA.
 5. Cross-cutting invariants (above) override individual spec decisions.
    If a spec contradicts an invariant, the spec must be updated.
-
