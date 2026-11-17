@@ -40,6 +40,15 @@ test("PR baseline runs architecture audits, the complete workspace suite, and ty
 	expect(source).not.toContain("  typecheck:\n");
 });
 
+test("architecture runs the merge-base ratchet and its boundary tests unconditionally", async () => {
+	const source = (await workflow()).split("\n  build:")[0] ?? "";
+	expect(source).toContain("  architecture:\n");
+	expect(source).toContain("fetch-depth: 0");
+	expect(source).toContain("run: bun run audit:ratchet");
+	expect(source).toContain("scripts/audit-architecture-ratchet.test.ts platform/core/src/attempt.test.ts");
+	expect(source).not.toContain("if:");
+});
+
 test("PR baseline leaves specialized acceptance and release work to owning workflows", async () => {
 	const source = await workflow();
 	for (const excluded of [
