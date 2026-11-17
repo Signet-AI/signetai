@@ -59,7 +59,8 @@ export interface PiContextEventResult {
 export interface PiSessionBeforeCompactEvent {
 	readonly type: "session_before_compact";
 	readonly preparation?: {
-		readonly messagesToSummarize?: ReadonlyArray<unknown>;
+		messagesToSummarize?: ReadonlyArray<PiAgentMessage>;
+		turnPrefixMessages?: ReadonlyArray<PiAgentMessage>;
 		readonly tokensBefore?: number;
 		readonly firstKeptEntryId?: string;
 	};

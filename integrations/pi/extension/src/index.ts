@@ -30,6 +30,7 @@ import { type PiSessionState, createSessionState } from "./session-state.js";
 import {
 	DAEMON_URL_DEFAULT,
 	HARNESS,
+	type PiAgentMessage,
 	type PiBeforeAgentStartEvent,
 	type PiContextEvent,
 	type PiBeforeAgentStartResult,
@@ -343,7 +344,10 @@ function registerPromptHandlers(pi: PiExtensionApi, deps: PiDeps): void {
 			}
 			await settlePromptSubmit(deps, ctx);
 			await ensureSessionContext(deps, ctx);
-			const message = deps.state.consumeHiddenInjectMessage(currentSessionRef(ctx).sessionId);
+			const message = deps.state.consumeHiddenInjectMessage(
+				currentSessionRef(ctx).sessionId,
+				ctx.sessionManager.getBranch() ?? ctx.sessionManager.getEntries() ?? [],
+			);
 			if (message) return { message };
 		},
 	);
@@ -360,13 +364,22 @@ function registerContextHandlers(pi: PiExtensionApi, deps: PiDeps): void {
 		if (!deps.state.hasPendingRecall(session.sessionId)) {
 			await requestNotifications(deps, ctx, "context");
 		}
-		const message = deps.state.consumeHiddenInjectMessage(session.sessionId);
-		if (message) pi.sendMessage(message, { triggerTurn: false, deliverAs: "steer" });
+		const message = deps.state.consumeHiddenInjectMessage(
+			session.sessionId,
+			ctx.sessionManager.getBranch() ?? ctx.sessionManager.getEntries() ?? [],
+		);
+		if (message) pi.sendMessage(message, { triggerTurn: false, deliverAs: "nextTurn" });
 	});
 }
 
 function registerCompactionHandlers(pi: PiExtensionApi, deps: LifecycleDeps): void {
 	pi.on("session_before_compact", async (event: PiSessionBeforeCompactEvent, ctx): Promise<undefined> => {
+		if (event.preparation) {
+			const evidence = (message: PiAgentMessage): boolean =>
+				message.role !== "custom" || !message.customType || !deps.config.excludedCustomTypes.has(message.customType);
+			event.preparation.messagesToSummarize = event.preparation.messagesToSummarize?.filter(evidence);
+			event.preparation.turnPrefixMessages = event.preparation.turnPrefixMessages?.filter(evidence);
+		}
 		await ensureSessionContext(deps, ctx);
 		const session = currentSessionRef(ctx);
 		await deps.client.post<PreCompactionResult>(

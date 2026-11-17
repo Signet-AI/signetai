@@ -985,7 +985,7 @@ describe("SignetPiExtension", () => {
 		expect(capturedBody.limit).toBe(10);
 	});
 
-	it("keeps injected context append-only across requests in a prompt", async () => {
+	it("keeps context append-only across requests and resumed session lifecycles", async () => {
 		const server = Bun.serve({
 			port: 0,
 			async fetch(req) {
@@ -1019,10 +1019,11 @@ describe("SignetPiExtension", () => {
 		};
 		SignetPiExtension(pi as never);
 
+		const entries: Array<{ type: string; customType: string }> = [];
 		const ctx = {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
-				getBranch: () => [],
+				getBranch: () => entries,
 				getEntries: () => [],
 				getHeader: () => ({ id: "session-pi-1", cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -1057,6 +1058,23 @@ describe("SignetPiExtension", () => {
 		const restored: unknown = JSON.parse(JSON.stringify(history));
 		expect(await handlers.context[0]?.({ messages: restored }, ctx)).toBeUndefined();
 		expect(restored).toEqual(history);
+		entries.push({ type: "custom_message", customType: "signet-pi-context" });
+		for (const event of ["session_start", "session_start", "session_switch", "session_fork"]) {
+			await handlers[event]?.[0]?.({}, ctx);
+			const resumed = await handlers.before_agent_start[0]?.({ prompt: "continue" }, ctx);
+			expect(JSON.stringify(resumed)).not.toContain("session-context-content");
+			expect(JSON.stringify(resumed)).toContain("Preferred language is TypeScript");
+		}
+		entries[0] = { type: "custom_message", customType: "signet-pi-session-context" };
+		await handlers.session_switch[0]?.({}, ctx);
+		expect(JSON.stringify(await handlers.before_agent_start[0]?.({ prompt: "legacy resume" }, ctx))).not.toContain(
+			"session-context-content",
+		);
+		entries.splice(0);
+		await handlers.session_fork[0]?.({}, ctx);
+		expect(JSON.stringify(await handlers.before_agent_start[0]?.({ prompt: "new fork" }, ctx))).toContain(
+			"session-context-content",
+		);
 	});
 
 	it("input does not wait for prompt-submit and before_agent_start does not retry a failed submit", async () => {
@@ -1122,7 +1140,7 @@ describe("SignetPiExtension", () => {
 		expect(messages.some((message) => message.customType === "signet-pi-hidden-recall")).toBe(false);
 	});
 
-	it.each(["recall", "notification"])("persists late %s without a temporary request copy", async (source) => {
+	it.each(["recall", "notification"])("defers late %s to the next prompt", async (source: string) => {
 		const delivered: Array<{ readonly message: PiCustomMessage; readonly options: unknown }> = [];
 		let promptSubmits = 0;
 		let polls = 0;
@@ -1181,21 +1199,18 @@ describe("SignetPiExtension", () => {
 		const first = await handlers.context[0]?.({ messages: [...history] }, ctx);
 		expect(first).toBeUndefined();
 		expect(delivered).toHaveLength(1);
-		expect(delivered[0]?.options).toEqual({ triggerTurn: false, deliverAs: "steer" });
+		expect(delivered[0]?.options).toEqual({ triggerTurn: false, deliverAs: "nextTurn" });
 		expect(delivered[0]?.message).toMatchObject({ customType: "signet-pi-context", display: false });
 		expect(delivered[0]?.message.content).toContain(source === "recall" ? "Steered recall" : "Late peer notification");
 		if (source === "recall") expect(delivered[0]?.message.content).toContain("Current date/time: late");
-		const request = JSON.stringify(history);
-		history.push({ role: "assistant", content: "Tool call" }, { role: "toolResult", content: "Done" });
-		for (const item of delivered) history.push(item.message);
+		history.push({ role: "assistant", content: "Final answer" });
 		const second = await handlers.context[0]?.({ messages: [...history] }, ctx);
 		expect(second).toBeUndefined();
-		expect(JSON.stringify(history).startsWith(request.slice(0, -1))).toBe(true);
 		expect(delivered).toHaveLength(1);
 		expect(promptSubmits).toBe(source === "recall" ? 1 : 0);
 	});
 
-	it("session_before_compact posts pre-compaction guidance with session metadata", async () => {
+	it("excludes Signet context from both compaction inputs and posts session metadata", async () => {
 		const requests: Array<{ path: string; body: unknown }> = [];
 		const server = Bun.serve({
 			port: 0,
@@ -1242,22 +1257,29 @@ describe("SignetPiExtension", () => {
 			},
 		};
 
-		const result = await handlers.session_before_compact[0]?.(
-			{
-				type: "session_before_compact",
-				preparation: {
-					messagesToSummarize: [{ id: 1 }, { id: 2 }, { id: 3 }],
-				},
-			},
-			ctx,
-		);
+		const user = { role: "user", content: "User-authored evidence" };
+		const other = { role: "custom", customType: "another-extension", content: "Other context" };
+		const injected = [
+			"signet-pi-context",
+			"signet-pi-session-context",
+			"signet-pi-hidden-recall",
+			"signet-pi-clock-context",
+		].map((customType) => ({ role: "custom", customType, content: "Recalled memory" }));
+		const preparation = {
+			messagesToSummarize: [user, ...injected, other],
+			turnPrefixMessages: [...injected, user],
+		};
+		const result = await handlers.session_before_compact[0]?.({ type: "session_before_compact", preparation }, ctx);
+		expect(preparation.messagesToSummarize).toEqual([user, other]);
+		expect(preparation.turnPrefixMessages).toEqual([user]);
+		expect(injected).toHaveLength(4);
 
 		expect(result).toBeUndefined();
 		expect(requests.map((req) => req.path)).toEqual(["/api/hooks/session-start", "/api/hooks/pre-compaction"]);
 		expect(requests[1]?.body).toMatchObject({
 			harness: "pi",
 			sessionKey: "session-pi-compact-1",
-			messageCount: 3,
+			messageCount: 2,
 			runtimePath: "plugin",
 		});
 	});
