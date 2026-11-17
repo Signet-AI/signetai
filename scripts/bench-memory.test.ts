@@ -26,7 +26,12 @@ import {
 	setBenchDreamingThinking,
 	benchDreamingPolicies,
 	setBenchDreamingPolicies,
+	benchApiKeyEnv,
+	resolveBenchApiKey,
+	benchDreamingOpenRouter,
+	setBenchDreamingOpenRouter,
 } from "./bench-memory";
+import { parseRoutingConfig } from "../platform/core/src/routing";
 
 const workspaces: string[] = [];
 
@@ -254,6 +259,75 @@ describe("MemoryBench launcher", () => {
 			codemode: true,
 		});
 		expect(() => benchDreamingCodemode({ SIGNET_BENCH_DREAMING_CODEMODE: "yes" })).toThrow("must be 1, 0");
+	});
+
+	test("runs Dreaming through the OpenRouter executor with the routing block", async () => {
+		const dir = await workspace();
+		await writeFile(join(dir, "agent.yaml"), setupAgentYaml);
+
+		expect(benchApiKeyEnv("openrouter")).toBe("OPENROUTER_API_KEY");
+		expect(benchApiKeyEnv("zai-coding-cn")).toBe("ZAI_API_KEY");
+		expect(resolveBenchApiKey({ SIGNET_BENCH_DREAMING_API_KEY: " dreaming-key " }, "openrouter")).toBe("dreaming-key");
+		expect(resolveBenchApiKey({ OPENROUTER_API_KEY: "or-key" }, "openrouter")).toBe("or-key");
+		expect(resolveBenchApiKey({ ZAI_API_KEY: "zai-key" }, "zai-coding-cn")).toBe("zai-key");
+		expect(resolveBenchApiKey({ OPENROUTER_API_KEY: "or-key", ZAI_API_KEY: "zai-key" }, "zai-coding-cn")).toBe(
+			"zai-key",
+		);
+
+		attachBenchCredential(dir, "openrouter");
+		const openrouter = benchDreamingOpenRouter({
+			SIGNET_BENCH_DREAMING_OPENROUTER: JSON.stringify({
+				reasoning: { enabled: true, max_tokens: 4096 },
+				provider: {
+					order: ["deepinfra", "together"],
+					allow_fallbacks: false,
+					data_collection: "deny",
+					quantizations: ["fp8", "fp16"],
+					sort: "price",
+					max_price: { prompt: 2, completion: 8 },
+				},
+			}),
+		});
+		setBenchDreamingOpenRouter(dir, openrouter);
+
+		const config = parseYaml(await readFile(join(dir, "agent.yaml"), "utf8"));
+		const target = config.inference.targets.background;
+		expect(target.executor).toBe("openrouter");
+		expect(target.endpoint).toBeUndefined();
+		expect(target.account).toBe("memorybench");
+		expect(target.openrouter).toEqual({
+			reasoning: { enabled: true, max_tokens: 4096 },
+			provider: {
+				order: ["deepinfra", "together"],
+				allow_fallbacks: false,
+				data_collection: "deny",
+				quantizations: ["fp8", "fp16"],
+				sort: "price",
+				max_price: { prompt: 2, completion: 8 },
+			},
+		});
+
+		const parsed = parseRoutingConfig(config);
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.value.targets.background?.openrouter).toEqual({
+			reasoning: { enabled: true, maxTokens: 4096 },
+			provider: {
+				order: ["deepinfra", "together"],
+				allow_fallbacks: false,
+				data_collection: "deny",
+				quantizations: ["fp8", "fp16"],
+				sort: "price",
+				max_price: { prompt: 2, completion: 8 },
+			},
+		});
+
+		expect(benchDreamingOpenRouter({})).toBeUndefined();
+		expect(() => benchDreamingOpenRouter({ SIGNET_BENCH_DREAMING_OPENROUTER: "nope" })).toThrow("JSON object");
+		expect(() => benchDreamingOpenRouter({ SIGNET_BENCH_DREAMING_OPENROUTER: "[1]" })).toThrow("JSON object");
+		expect(() =>
+			benchDreamingOpenRouter({ SIGNET_BENCH_DREAMING_OPENROUTER: JSON.stringify({ thinking: {} }) }),
+		).toThrow("unknown key");
 	});
 
 	test("refuses a Bun other than the one package.json pins", () => {
