@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -26,6 +26,23 @@ function restoreEnv(name: keyof typeof originalEnv): void {
 	}
 	delete process.env[name];
 }
+
+const authFetch = globalThis.fetch;
+let auth: ReturnType<typeof spyOn>;
+beforeEach(() => {
+	auth = spyOn(globalThis, "fetch").mockImplementation(
+		Object.assign(
+			(input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+				String(input).endsWith("/api/mode")
+					? Promise.resolve(Response.json({ requiresAuth: true }))
+					: authFetch(input, init),
+			{ preconnect: authFetch.preconnect },
+		),
+	);
+});
+afterEach(() => {
+	auth.mockRestore();
+});
 
 beforeEach(() => {
 	tmpRoot = mkdtempSync(join(tmpdir(), "signet-pi-connector-"));

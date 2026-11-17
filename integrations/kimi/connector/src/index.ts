@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parse as parseToml } from "smol-toml";
 import {
 	BaseConnector,
 	type InstallResult,
@@ -8,6 +9,15 @@ import {
 	atomicWriteJson,
 	keepSignetApiKeyFilePrivate,
 	resolveSignetMcpCommand,
+	resolveSignetCliCommand,
+	resolveInstallApiKey,
+	renderCommand,
+	parseHookLauncher,
+	readMcpLauncher,
+	cliFromMcp,
+	mcpFromCli,
+	isJsonObject,
+	type ResolvedCommand,
 	writeConfigText,
 } from "@signet/connector-base";
 import {
@@ -16,12 +26,18 @@ import {
 	resolveSessionStartTimeoutMs,
 	resolveSignetDaemonUrl,
 } from "@signet/core";
-function resolveSignetArgs(): string[] {
-	if (process.platform !== "win32") return ["signet"];
-	const entry = process.argv[1] || "";
-	const signetJs = join(entry, "..", "..", "bin", "signet.js");
-	if (existsSync(signetJs)) return [process.execPath, signetJs];
-	return ["signet"];
+function readHookLauncher(path: string): ResolvedCommand | undefined {
+	if (!existsSync(path)) return undefined;
+	try {
+		const config = parseToml(readFileSync(path, "utf-8"));
+		if (!Array.isArray(config.hooks)) return undefined;
+		for (const hook of config.hooks) {
+			if (!isJsonObject(hook) || typeof hook.command !== "string") continue;
+			const launcher = parseHookLauncher(hook.command);
+			if (launcher) return launcher;
+		}
+	} catch {}
+	return undefined;
 }
 
 export interface KimiMcpStdioConfig {
@@ -55,8 +71,11 @@ function cmdEnvQuote(value: string): string {
 	return value.replace(/[\^"&|<>]/g, "^$&");
 }
 
-function withRemoteDaemonEnv(command: string, remoteDaemonUrl: string | null): string {
-	const apiKey = readAuthTokenEnv();
+function withRemoteDaemonEnv(
+	command: string,
+	remoteDaemonUrl: string | null,
+	apiKey: string | null | undefined,
+): string {
 	if (!remoteDaemonUrl && !apiKey) return command;
 	if (process.platform === "win32") {
 		const vars = [
@@ -104,11 +123,16 @@ function resolveKimiPromptSubmitTimeoutSeconds(): number {
 export function buildKimiHookEntries(
 	signetArgs: readonly string[],
 	remoteDaemonUrl: string | null = resolveRemoteDaemonUrl(),
+	apiKey: string | null | undefined = readAuthTokenEnv(),
 ): KimiHookEntry[] {
 	const cmd = (subcommand: string, kimiJson: boolean): string =>
 		withRemoteDaemonEnv(
-			[...signetArgs, "hook", subcommand, "-H", "kimi", ...(kimiJson ? ["--kimi-json"] : [])].join(" "),
+			renderCommand({
+				command: signetArgs[0] ?? "signet",
+				args: [...signetArgs.slice(1), "hook", subcommand, "-H", "kimi", ...(kimiJson ? ["--kimi-json"] : [])],
+			}),
 			remoteDaemonUrl,
+			apiKey,
 		);
 	return [
 		{
@@ -289,9 +313,16 @@ export class KimiConnector extends BaseConnector {
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
+		const configPath = this.getConfigPath();
+		const mcpPath = this.getMcpJsonPath();
+		const existing = readMcpLauncher(readMcpJson(mcpPath)?.mcpServers?.signet);
+		const hook = readHookLauncher(configPath);
+		const launcher = resolveSignetCliCommand(hook ?? cliFromMcp(existing));
+		const mcp = resolveSignetMcpCommand(existing ?? mcpFromCli(hook));
+		const auth = await resolveInstallApiKey();
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
-		const warnings: string[] = [];
+		const warnings: string[] = auth.warning ? [auth.warning] : [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
 		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
 		if (strippedAgentsPath !== null) {
@@ -300,16 +331,19 @@ export class KimiConnector extends BaseConnector {
 
 		const kimiHome = this.getKimiHome();
 		mkdirSync(kimiHome, { recursive: true });
-		const configPath = this.getConfigPath();
-		if (patchConfigToml(configPath, buildKimiHookEntries(resolveSignetArgs()))) {
+		if (
+			patchConfigToml(
+				configPath,
+				buildKimiHookEntries([launcher.command, ...launcher.args], resolveRemoteDaemonUrl(), auth.apiKey ?? null),
+			)
+		) {
 			configsPatched.push(configPath);
 		}
 		const skillsResult = this.symlinkSkills(expandedBasePath, kimiHome);
 		if (skillsResult.errors.length > 0) {
 			warnings.push("Failed to symlink skills directory");
 		}
-		const mcpPath = this.getMcpJsonPath();
-		if (patchMcpJson(mcpPath, resolveSignetMcpCommand())) {
+		if (patchMcpJson(mcpPath, mcp)) {
 			configsPatched.push(mcpPath);
 		} else if (readMcpJson(mcpPath) === null) {
 			warnings.push(`Skipped MCP registration — could not parse ${mcpPath}`);

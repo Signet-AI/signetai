@@ -6,7 +6,6 @@ import {
 	type InstallResult,
 	MANAGED_AGENT_ID_DEFAULT,
 	MANAGED_DAEMON_URL_DEFAULT,
-	SIGNET_MCP_STDIO_WORKER_ENV,
 	type UninstallResult,
 	atomicWriteText,
 	isJsonObject,
@@ -14,6 +13,12 @@ import {
 	readTrimmedEnv,
 	resolveSignetAgentId,
 	resolveSignetApiKey,
+	resolveInstallApiKey,
+	parseHookLauncher,
+	readMcpLauncher,
+	cliFromMcp,
+	mcpFromCli,
+	type ResolvedCommand,
 	resolveSignetCliCommand,
 	resolveSignetDaemonUrl,
 	resolveSignetMcpCommand,
@@ -80,11 +85,13 @@ function shellArg(value: string): string {
 function defaultWorkspacePath(): string {
 	return join(homedir(), ".agents");
 }
-export function resolveMuseRuntimeEnv(workspace: string): MuseRuntimeEnv {
+export function resolveMuseRuntimeEnv(
+	workspace: string,
+	apiKey: string | null | undefined = resolveSignetApiKey(),
+): MuseRuntimeEnv {
 	const env: Record<string, string> = {};
 	const daemonUrl = resolveSignetDaemonUrl();
 	if (daemonUrl !== MANAGED_DAEMON_URL_DEFAULT) env.SIGNET_DAEMON_URL = daemonUrl;
-	const apiKey = resolveSignetApiKey();
 	if (apiKey) env.SIGNET_API_KEY = apiKey;
 	env.SIGNET_PATH = workspace;
 	for (const key of TIMEOUT_ENV_KEYS) {
@@ -93,10 +100,8 @@ export function resolveMuseRuntimeEnv(workspace: string): MuseRuntimeEnv {
 	}
 	return env;
 }
-export function resolveMuseSignetArgs(): string[] {
-	const mcp = resolveSignetMcpCommand();
-	if (mcp.env?.[SIGNET_MCP_STDIO_WORKER_ENV]) return [mcp.command];
-	const cli = resolveSignetCliCommand();
+export function resolveMuseSignetArgs(existing?: ResolvedCommand): string[] {
+	const cli = resolveSignetCliCommand(existing);
 	return [cli.command, ...cli.args];
 }
 
@@ -211,13 +216,13 @@ export function readMuseSettings(path: string): SettingsRead {
 	return { kind: "ok", value: parsed, hooks };
 }
 
-export function buildMuseMcpServer(env: MuseRuntimeEnv): MuseMcpServer {
-	const mcp = resolveSignetMcpCommand();
+export function buildMuseMcpServer(env: MuseRuntimeEnv, existing?: ResolvedCommand): MuseMcpServer {
+	const mcp = resolveSignetMcpCommand(existing);
 	return {
 		transport: "stdio",
 		command: mcp.command,
 		args: [...mcp.args],
-		env: { ...(mcp.env ?? {}), ...env },
+		env: Object.fromEntries(Object.entries({ ...mcp.env, ...env }).sort(([a], [b]) => a.localeCompare(b))),
 		mode: "optional",
 	};
 }
@@ -255,6 +260,8 @@ export class MuseCodeConnector extends BaseConnector {
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
+		resolveSignetCliCommand();
+		const auth = await resolveInstallApiKey();
 		const refuse = (message: string): InstallResult => ({ success: false, message, filesWritten: [] });
 		if (process.platform === "win32") {
 			return refuse("Muse Code integration is not supported on Windows yet: Muse runs hooks through PowerShell");
@@ -272,18 +279,23 @@ export class MuseCodeConnector extends BaseConnector {
 
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
-		const warnings: string[] = [];
+		const warnings: string[] = auth.warning ? [auth.warning] : [];
 		const stripped = this.stripLegacySignetBlock(workspace);
 		if (stripped !== null) filesWritten.push(stripped);
 
-		const env = resolveMuseRuntimeEnv(workspace);
+		const env = resolveMuseRuntimeEnv(workspace, auth.apiKey ?? null);
 		const current = settings.kind === "ok" ? settings.value : { schema_version: SETTINGS_SCHEMA_VERSION };
 		const hooks = settings.kind === "ok" ? settings.hooks : {};
 		const servers = isJsonObject(current.mcp_servers) ? current.mcp_servers : {};
+		const mcp = readMcpLauncher(servers.signet);
+		const launcher = Object.values(hooks)
+			.flatMap((groups) => groups.flatMap((group) => group.hooks))
+			.map((hook) => (typeof hook.command === "string" ? parseHookLauncher(hook.command) : undefined))
+			.find((value) => value !== undefined);
 		const next = {
 			...current,
-			hooks: mergeSignetMuseHooks(hooks, buildMuseHooks(resolveMuseSignetArgs(), env)),
-			mcp_servers: { ...servers, signet: buildMuseMcpServer(env) },
+			hooks: mergeSignetMuseHooks(hooks, buildMuseHooks(resolveMuseSignetArgs(launcher ?? cliFromMcp(mcp)), env)),
+			mcp_servers: { ...servers, signet: buildMuseMcpServer(env, mcp ?? mcpFromCli(launcher)) },
 		};
 		if (JSON.stringify(next) !== JSON.stringify(current)) {
 			writeMuseSettings(settingsPath, next);

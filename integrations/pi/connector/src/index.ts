@@ -10,7 +10,7 @@ import {
 	managedExtensionFilePath,
 	removeManagedExtensionFile,
 	resolveSignetAgentId,
-	resolveSignetApiKey,
+	resolveInstallApiKey,
 	resolveSignetDaemonUrl,
 	resolveSignetWorkspacePath,
 	writeManagedExtensionFile,
@@ -74,6 +74,7 @@ export class PiConnector extends BaseConnector {
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
+		const auth = await resolveInstallApiKey();
 		const filesWritten: string[] = [];
 		const agentDir = resolvePiAgentDir();
 		const targetPath = managedExtensionFilePath(agentDir, PI_MANAGED_FILENAME);
@@ -94,7 +95,7 @@ export class PiConnector extends BaseConnector {
 			signetPath: basePath || resolveSignetWorkspacePath(),
 			daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
 			agentId: resolveSignetAgentId(),
-			apiKey: resolveSignetApiKey(),
+			apiKey: auth.apiKey,
 		});
 		if (writeManagedExtensionFile(targetPath, managedContent)) {
 			filesWritten.push(targetPath);
@@ -112,6 +113,7 @@ export class PiConnector extends BaseConnector {
 			success: true,
 			message: filesWritten.length > 0 ? "pi extension installed successfully" : "pi extension already up to date",
 			filesWritten,
+			warnings: auth.warning ? [auth.warning] : [],
 		};
 	}
 

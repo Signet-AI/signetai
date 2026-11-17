@@ -22,7 +22,9 @@ import {
 	isSignetGeneratedFile,
 	readTrimmedEnv,
 	resolveRemoteDaemonUrl,
-	resolveSignetApiKey,
+	resolveInstallApiKey,
+	readMcpLauncher,
+	type ResolvedCommand,
 	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
@@ -65,20 +67,19 @@ function readMcpServers(config: JsonObject): JsonObject {
 	throw new Error("Forge MCP config field 'mcpServers' must be an object");
 }
 
-function buildMcpServer(basePath: string): ForgeMcpServer {
+function buildMcpServer(basePath: string, apiKey: string | undefined, existing?: ResolvedCommand): ForgeMcpServer {
 	const remoteDaemonUrl = resolveRemoteDaemonUrl();
 	if (remoteDaemonUrl) {
-		const apiKey = resolveSignetApiKey();
 		return {
 			url: `${remoteDaemonUrl}/mcp`,
 			...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
 		};
 	}
-	const mcp = resolveSignetMcpCommand();
+	const mcp = resolveSignetMcpCommand(existing);
 	return {
 		command: mcp.command,
 		...(mcp.args && mcp.args.length > 0 ? { args: mcp.args } : {}),
-		env: { ...buildSignetRuntimeEnv({ basePath }), ...mcp.env },
+		env: { ...buildSignetRuntimeEnv({ basePath, apiKey: apiKey ?? null }), ...mcp.env },
 	};
 }
 
@@ -105,6 +106,8 @@ export class ForgeConnector extends BaseConnector {
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
+		resolveSignetMcpCommand();
+		const auth = await resolveInstallApiKey();
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(getHomeDir(), ".agents"));
@@ -152,7 +155,7 @@ export class ForgeConnector extends BaseConnector {
 		}
 
 		try {
-			this.registerMcpServer(config, expandedBasePath);
+			this.registerMcpServer(config, expandedBasePath, auth.apiKey);
 			atomicWriteJson(this.getMcpConfigPath(), config);
 			configsPatched.push(this.getMcpConfigPath());
 		} catch (error) {
@@ -173,6 +176,7 @@ export class ForgeConnector extends BaseConnector {
 		return {
 			success: true,
 			message: "ForgeCode integration installed successfully",
+			warnings: auth.warning ? [auth.warning] : [],
 			filesWritten,
 			configsPatched,
 		};
@@ -269,9 +273,9 @@ export class ForgeConnector extends BaseConnector {
 		return targetPath;
 	}
 
-	private registerMcpServer(config: JsonObject, basePath: string): void {
+	private registerMcpServer(config: JsonObject, basePath: string, apiKey: string | undefined): void {
 		const servers = readMcpServers(config);
-		servers.signet = buildMcpServer(basePath);
+		servers.signet = buildMcpServer(basePath, apiKey, readMcpLauncher(servers.signet));
 		config.mcpServers = servers;
 	}
 

@@ -1,4 +1,6 @@
 import { randomBytes } from "node:crypto";
+import { isJsonObject, readManagedTrimmedEnv } from "./config";
+export { isJsonObject, isExistingFile, readTrimmedEnv, readManagedTrimmedEnv, type ResolvedCommand } from "./config";
 import {
 	chmodSync,
 	closeSync,
@@ -230,12 +232,6 @@ export function atomicWriteJson(path: string, data: unknown, indent: number | st
 	atomicWriteText(path, `${JSON.stringify(data, null, indent)}\n`);
 }
 
-export type ResolvedCommand = {
-	readonly command: string;
-	readonly args: readonly string[];
-	readonly env?: Readonly<Record<string, string>>;
-};
-
 export {
 	SIGNET_MCP_STDIO_WORKER_ENV,
 	isSignetCliLauncher,
@@ -251,23 +247,10 @@ export {
 
 export const MANAGED_DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
 export const MANAGED_AGENT_ID_DEFAULT = "default";
-export function isJsonObject(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 export function isChildOf(candidate: string, parent: string): boolean {
 	const rel = relative(parent, candidate);
 	return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
-export function readTrimmedEnv(name: string): string | undefined {
-	const value = process.env[name];
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim().replace(/[\r\n]+/g, "");
-	return trimmed.length > 0 ? trimmed : undefined;
-}
-export function readManagedTrimmedEnv(name: string): string | undefined {
-	return readTrimmedEnv(name);
-}
-
 function isExistingDirectory(path: string): boolean {
 	try {
 		return statSync(path).isDirectory();
@@ -308,11 +291,13 @@ export async function resolveInstallApiKey(): Promise<{ readonly apiKey?: string
 	}
 }
 
-export function buildSignetRuntimeEnv(opts: { readonly basePath?: string } = {}): Record<string, string> {
+export function buildSignetRuntimeEnv(
+	opts: { readonly basePath?: string; readonly apiKey?: string | null } = {},
+): Record<string, string> {
 	const env: Record<string, string> = {};
 	if (opts.basePath) env.SIGNET_PATH = opts.basePath;
 	const daemonUrl = readManagedTrimmedEnv("SIGNET_DAEMON_URL");
-	const apiKey = resolveSignetApiKey();
+	const apiKey = opts.apiKey === undefined ? resolveSignetApiKey() : opts.apiKey;
 	const agentId = readManagedTrimmedEnv("SIGNET_AGENT_ID");
 	if (daemonUrl) env.SIGNET_DAEMON_URL = resolveSignetDaemonUrl();
 	if (apiKey) env.SIGNET_API_KEY = apiKey;

@@ -14,6 +14,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveSignetCliCommand } from "@signet/connector-base";
 import { ClaudeCodeConnector } from "@signet/connector-claude-code";
 import { CodexConnector } from "@signet/connector-codex";
 import { ForgeConnector } from "@signet/connector-forge";
@@ -192,7 +193,8 @@ async function configureHarnessHooks(
 		}
 		case "opencode": {
 			const connector = new OpenCodeConnector();
-			await connector.install(basePath);
+			const result = await connector.install(basePath);
+			for (const warning of result.warnings ?? []) console.warn(chalk.yellow(`  ${warning}`));
 			break;
 		}
 		case "forge": {
@@ -209,12 +211,14 @@ async function configureHarnessHooks(
 		}
 		case "oh-my-pi": {
 			const connector = new OhMyPiConnector();
-			await connector.install(basePath);
+			const result = await connector.install(basePath);
+			for (const warning of result.warnings ?? []) console.warn(chalk.yellow(`  ${warning}`));
 			break;
 		}
 		case "pi": {
 			const connector = new PiConnector();
-			await connector.install(basePath);
+			const result = await connector.install(basePath);
+			for (const warning of result.warnings ?? []) console.warn(chalk.yellow(`  ${warning}`));
 			break;
 		}
 		case "openclaw": {
@@ -866,8 +870,9 @@ const healthDeps = {
 	signetLogo,
 };
 
-const runSyncTemplates = (basePath = AGENTS_DIR): Promise<void> =>
-	syncTemplates({
+const runSyncTemplates = (basePath = AGENTS_DIR): Promise<void> => {
+	resolveSignetCliCommand();
+	return syncTemplates({
 		agentsDir: basePath,
 		configureHarnessHooks,
 		getSkillsSourceDir,
@@ -877,6 +882,7 @@ const runSyncTemplates = (basePath = AGENTS_DIR): Promise<void> =>
 		syncNativeEmbeddingModel,
 		syncWorkspaceSourceRepo: syncWorkspaceSourceRepoAsync,
 	});
+};
 
 const daemonDeps = {
 	agentsDir: AGENTS_DIR,

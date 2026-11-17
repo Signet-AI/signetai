@@ -1,6 +1,5 @@
-import { existsSync, statSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { isJsonObject, readManagedTrimmedEnv, type ResolvedCommand } from "./index";
+import { dirname, join, win32 } from "node:path";
+import { isExistingFile, isJsonObject, readManagedTrimmedEnv, type ResolvedCommand } from "./config";
 
 export const SIGNET_MCP_STDIO_WORKER_ENV = "SIGNET_MCP_STDIO_WORKER";
 
@@ -20,7 +19,7 @@ export function parseHookLauncher(command: string): ResolvedCommand | undefined 
 	const clean = command
 		.trim()
 		.replace(
-			/^(?:(?:SIGNET_DAEMON_URL|SIGNET_API_KEY)=(?:'(?:[^']|'\\'')*'|"[^"]*"|\S+)\s+|set "(?:SIGNET_DAEMON_URL|SIGNET_API_KEY)=[^"]*" && )+/i,
+			/^(?:(?:SIGNET_DAEMON_URL|SIGNET_API_KEY|SIGNET_PATH|SIGNET_FETCH_TIMEOUT|SIGNET_SESSION_START_TIMEOUT|SIGNET_PROMPT_SUBMIT_TIMEOUT)=(?:'(?:[^']|'\\'')*'|"[^"]*"|\S+)\s+|set "(?:SIGNET_DAEMON_URL|SIGNET_API_KEY|SIGNET_PATH|SIGNET_FETCH_TIMEOUT|SIGNET_SESSION_START_TIMEOUT|SIGNET_PROMPT_SUBMIT_TIMEOUT)=[^"]*" && )+/i,
 			"",
 		);
 	const args: string[] = [];
@@ -29,6 +28,7 @@ export function parseHookLauncher(command: string): ResolvedCommand | undefined 
 	let started = false;
 	for (let i = 0; i < clean.length; i++) {
 		const char = clean.charAt(i);
+		if (!quote && /[$`;&|<>()]/.test(char)) return undefined;
 		if (char === "\\" && !quote && clean.charAt(i + 1) === "'") {
 			value += "'";
 			i++;
@@ -47,7 +47,8 @@ export function parseHookLauncher(command: string): ResolvedCommand | undefined 
 		if (!quote && /\s/.test(char)) {
 			if (started && value === "hook") {
 				const executable = args.shift();
-				return executable ? { command: executable, args } : undefined;
+				const launcher = executable ? { command: executable, args } : undefined;
+				return isSignetCliLauncher(launcher) ? launcher : undefined;
 			}
 			if (started) args.push(value);
 			value = "";
@@ -62,9 +63,9 @@ export function parseHookLauncher(command: string): ResolvedCommand | undefined 
 
 export function isSignetCliLauncher(launcher: ResolvedCommand | undefined): boolean {
 	if (!launcher) return false;
-	if (/^signet(?:\.(?:exe|cmd|bat|ps1))?$/i.test(basename(launcher.command))) return true;
+	if (/^signet(?:\.(?:exe|cmd|bat|ps1))?$/i.test(win32.basename(launcher.command))) return launcher.args.length === 0;
 	return (
-		/^(?:node|bun)(?:\.exe)?$/i.test(basename(launcher.command)) &&
+		/^(?:node|bun)(?:\.exe)?$/i.test(win32.basename(launcher.command)) &&
 		launcher.args.length === 1 &&
 		/(?:^|[\\/])signet\.js$/.test(launcher.args[0] ?? "")
 	);
@@ -80,35 +81,63 @@ export function readMcpLauncher(value: unknown): ResolvedCommand | undefined {
 			if (typeof val === "string" && key !== "SIGNET_API_KEY" && key !== "SIGNET_TOKEN") env[key] = val;
 		}
 	}
-	return { command: value.command, args, ...(Object.keys(env).length ? { env } : {}) };
+	const launcher = { command: value.command, args, ...(Object.keys(env).length ? { env } : {}) };
+	const name = win32.basename(launcher.command);
+	if (/^signet-mcp(?:\.exe)?$/i.test(name)) return launcher;
+	if (/^signet(?:\.(?:exe|cmd|bat|ps1))?$/i.test(name) && env.SIGNET_MCP_STDIO_WORKER === "1") return launcher;
+	if (
+		/^(?:node|bun)(?:\.exe)?$/i.test(name) &&
+		args.length === 1 &&
+		/(?:^|[\\/])(?:dist[\\/]mcp-stdio|signet)\.js$/.test(args[0] ?? "")
+	)
+		return launcher;
+	return undefined;
 }
 
 function override(): ResolvedCommand | undefined {
-	const command = readManagedTrimmedEnv("SIGNET_HOOK_COMMAND");
-	if (!command) return undefined;
-	if (!command.startsWith("[")) return { command, args: [] };
-	const parsed: unknown = JSON.parse(command);
-	if (!Array.isArray(parsed) || !parsed.every((arg): arg is string => typeof arg === "string") || !parsed[0]) {
-		throw new Error("SIGNET_HOOK_COMMAND must be an executable path or a nonempty JSON array of command and arguments");
+	const value = process.env.SIGNET_HOOK_COMMAND?.trim();
+	if (!value) {
+		const command = readManagedTrimmedEnv("SIGNET_CLI_PATH");
+		return command ? { command, args: [] } : undefined;
+	}
+	const message =
+		"SIGNET_HOOK_COMMAND must be an executable path without whitespace or a nonempty JSON argv array of command and arguments";
+	if (!value.startsWith("[")) {
+		if (/\s/.test(value)) throw new Error(message);
+		return { command: value, args: [] };
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(value);
+	} catch {
+		throw new Error(message);
+	}
+	if (!Array.isArray(parsed) || !parsed.every((arg): arg is string => typeof arg === "string") || !parsed[0]?.trim()) {
+		throw new Error(message);
 	}
 	return { command: parsed[0], args: parsed.slice(1) };
 }
 
-function basename(path: string): string {
-	return path.split(/[\\/]/).pop() ?? "";
-}
-
 export function cliFromMcp(launcher: ResolvedCommand | undefined): ResolvedCommand | undefined {
 	if (!launcher) return undefined;
-	if (launcher.env?.SIGNET_MCP_STDIO_WORKER === "1") return { command: launcher.command, args: launcher.args };
-	if (/signet-mcp(?:\.exe)?$/.test(launcher.command))
-		return { command: launcher.command.replace(/signet-mcp/, "signet"), args: launcher.args };
-	const script = launcher.args.findIndex((arg) => /dist[\\/]mcp-stdio\.js$/.test(arg));
-	if (script < 0) return undefined;
-	return {
+	if (
+		isSignetCliLauncher(launcher) &&
+		(launcher.env?.SIGNET_MCP_STDIO_WORKER === "1" ||
+			/^(?:node|bun)(?:\.exe)?$/i.test(win32.basename(launcher.command)))
+	) {
+		return { command: launcher.command, args: launcher.args };
+	}
+	if (/^signet-mcp(?:\.exe)?$/i.test(win32.basename(launcher.command))) {
+		const cli = { command: launcher.command.replace(/signet-mcp(\.exe)?$/i, "signet$1"), args: launcher.args };
+		return isSignetCliLauncher(cli) ? cli : undefined;
+	}
+	if (launcher.args.length !== 1 || !/(?:^|[\\/])dist[\\/]mcp-stdio\.js$/.test(launcher.args[0] ?? ""))
+		return undefined;
+	const cli = {
 		command: launcher.command,
-		args: launcher.args.map((arg, i) => (i === script ? arg.replace(/dist[\\/]mcp-stdio\.js$/, "bin/signet.js") : arg)),
+		args: launcher.args.map((arg) => arg.replace(/dist[\\/]mcp-stdio\.js$/, "bin/signet.js")),
 	};
+	return isSignetCliLauncher(cli) ? cli : undefined;
 }
 
 export function mcpFromCli(launcher: ResolvedCommand | undefined): ResolvedCommand | undefined {
@@ -124,18 +153,7 @@ export function mcpFromCli(launcher: ResolvedCommand | undefined): ResolvedComma
 	return { ...launcher, env: { ...launcher.env, SIGNET_MCP_STDIO_WORKER: "1" } };
 }
 
-function file(path: string | undefined): path is string {
-	if (!path) return false;
-	try {
-		return statSync(path).isFile();
-	} catch {
-		return false;
-	}
-}
-
 function discover(mcp: boolean, runtime?: string | null): ResolvedCommand {
-	const explicit = readManagedTrimmedEnv("SIGNET_CLI_PATH");
-	if (file(explicit)) return { command: explicit, args: [], ...(mcp ? { env: { SIGNET_MCP_STDIO_WORKER: "1" } } : {}) };
 	const roots = [readManagedTrimmedEnv("SIGNET_WRAPPER_DIR"), readManagedTrimmedEnv("SIGNET_DIR")].filter(
 		(root): root is string => Boolean(root),
 	);
@@ -144,16 +162,17 @@ function discover(mcp: boolean, runtime?: string | null): ResolvedCommand {
 		process.argv[1],
 		join(dirname(process.execPath), "..", "bin", "signet.js"),
 	];
-	const entry = entries.find((path) => path && basename(path) === "signet.js" && file(path));
+	const entry = entries.find((path) => path && win32.basename(path) === "signet.js" && isExistingFile(path));
 	const script = entry ? (mcp ? join(dirname(entry), "..", "dist", "mcp-stdio.js") : entry) : undefined;
-	const host = runtime ?? (/^(?:node|bun)(?:\.exe)?$/i.test(basename(process.execPath)) ? process.execPath : undefined);
-	if (host && script && existsSync(script)) return { command: host, args: [script] };
+	const host =
+		runtime ?? (/^(?:node|bun)(?:\.exe)?$/i.test(win32.basename(process.execPath)) ? process.execPath : undefined);
+	if (host && script && isExistingFile(script)) return { command: host, args: [script] };
 	const name = process.platform === "win32" ? "signet.exe" : "signet";
 	const candidates = [
 		...roots.flatMap((root) => [join(root, "native", name), join(root, "bin", name)]),
 		process.execPath,
 	];
-	const native = candidates.find((path) => /^signet(?:\.exe)?$/i.test(basename(path)) && file(path));
+	const native = candidates.find((path) => /^signet(?:\.exe)?$/i.test(win32.basename(path)) && isExistingFile(path));
 	if (native) return { command: native, args: [], ...(mcp ? { env: { SIGNET_MCP_STDIO_WORKER: "1" } } : {}) };
 	if (mcp && process.platform === "win32")
 		console.warn(
@@ -163,11 +182,11 @@ function discover(mcp: boolean, runtime?: string | null): ResolvedCommand {
 }
 
 export function resolveSignetCliCommand(existing?: ResolvedCommand, runtime?: string | null): ResolvedCommand {
-	return override() ?? existing ?? discover(false, runtime);
+	return override() ?? (isSignetCliLauncher(existing) ? existing : undefined) ?? discover(false, runtime);
 }
 
 export function resolveSignetMcpCommand(existing?: ResolvedCommand, runtime?: string | null): ResolvedCommand {
 	const configured = override();
 	if (configured) return mcpFromCli(configured) ?? configured;
-	return existing ?? discover(true, runtime);
+	return readMcpLauncher(existing) ?? discover(true, runtime);
 }

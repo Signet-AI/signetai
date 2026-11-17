@@ -350,6 +350,8 @@ describe("ClaudeCodeConnector user hooks", () => {
 			{ hooks: [{ type: "command", command: "my-wrapper hook wake -H claude-code" }] },
 			{ hooks: [{ type: "command", command: "my-signet hook session-start -H claude-code" }] },
 			{ hooks: [{ type: "command", command: "signet hook custom -H claude-code" }] },
+			{ hooks: [{ type: "command", command: "/usr/bin/signet -c custom hook session-start -H claude-code" }] },
+			{ hooks: [{ type: "command", command: "signet $(touch marker) hook session-start -H claude-code" }] },
 			{ hooks: [{ type: "command", command: "echo /tmp/signet hook wake -H claude-code" }] },
 			{ hooks: [{ type: "command", command: 'echo "/opt/my tools/signet" hook wake -H claude-code' }] },
 			{ hooks: [{ type: "command", command: "echo '/opt/my tools/signet' hook wake -H claude-code" }] },
@@ -417,6 +419,26 @@ describe("ClaudeCodeConnector user hooks", () => {
 		});
 	}
 
+	it.each(["node /x/signet.js", "[broken"])(
+		"rejects invalid overrides before changing config: %s",
+		async (override) => {
+			writeSettings({ hooks: { SessionStart: [{ hooks: [{ type: "command", command: "user-hook" }] }] } });
+			const settings = readFileSync(join(tmpRoot, ".claude", "settings.json"), "utf-8");
+			const agents = "before\n<!-- SIGNET:START -->\nmanaged\n<!-- SIGNET:END -->\nafter\n";
+			writeFileSync(join(tmpRoot, "AGENTS.md"), agents);
+			const previous = process.env.SIGNET_HOOK_COMMAND;
+			process.env.SIGNET_HOOK_COMMAND = override;
+			try {
+				await expect(new ClaudeCodeConnector().install(tmpRoot)).rejects.toThrow("SIGNET_HOOK_COMMAND must be");
+				expect(readFileSync(join(tmpRoot, ".claude", "settings.json"), "utf-8")).toBe(settings);
+				expect(readFileSync(join(tmpRoot, "AGENTS.md"), "utf-8")).toBe(agents);
+			} finally {
+				if (previous === undefined) Reflect.deleteProperty(process.env, "SIGNET_HOOK_COMMAND");
+				if (previous !== undefined) process.env.SIGNET_HOOK_COMMAND = previous;
+			}
+		},
+	);
+
 	it.skipIf(process.platform === "win32")(
 		"executes an override with spaces and quotes without relying on PATH",
 		async () => {
@@ -435,7 +457,7 @@ describe("ClaudeCodeConnector user hooks", () => {
 			const executable = process.execPath;
 			try {
 				process.execPath = "/app/bin/signet";
-				process.env.SIGNET_HOOK_COMMAND = launcher;
+				process.env.SIGNET_HOOK_COMMAND = JSON.stringify([launcher]);
 				const connector = new ClaudeCodeConnector();
 				await connector.install(tmpRoot);
 				await connector.install(tmpRoot);

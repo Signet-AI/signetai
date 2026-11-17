@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import {
 	chmodSync,
 	existsSync,
@@ -37,6 +37,23 @@ function writeIdentity(dir: string): void {
 function readJson(path: string): Record<string, unknown> {
 	return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
 }
+
+const authFetch = globalThis.fetch;
+let auth: ReturnType<typeof spyOn>;
+beforeEach(() => {
+	auth = spyOn(globalThis, "fetch").mockImplementation(
+		Object.assign(
+			(input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+				String(input).endsWith("/api/mode")
+					? Promise.resolve(Response.json({ requiresAuth: true }))
+					: authFetch(input, init),
+			{ preconnect: authFetch.preconnect },
+		),
+	);
+});
+afterEach(() => {
+	auth.mockRestore();
+});
 
 beforeEach(() => {
 	tmpRoot = mkdtempSync(join(tmpdir(), "signet-forge-test-"));

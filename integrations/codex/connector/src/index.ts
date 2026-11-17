@@ -30,6 +30,7 @@ import {
 	cliFromMcp,
 	quoteCommandArg,
 	readMcpLauncher,
+	isExistingFile,
 	resolveSignetCliCommand,
 	resolveSignetMcpCommand,
 	writeConfigText,
@@ -84,13 +85,6 @@ interface NativePluginCommandResult {
 	readonly success: boolean;
 	readonly filesWritten: readonly string[];
 	readonly warning?: string;
-}
-function isExistingFile(path: string): boolean {
-	try {
-		return statSync(path).isFile();
-	} catch {
-		return false;
-	}
 }
 
 function resolveSignetArgs(runtime: string | null = null, existing?: ResolvedCommand): string[] {
@@ -1468,6 +1462,7 @@ export class CodexConnector extends BaseConnector {
 	}
 
 	async install(basePath: string): Promise<InstallResult> {
+		resolveSignetCliCommand();
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
 		const warnings: string[] = [];

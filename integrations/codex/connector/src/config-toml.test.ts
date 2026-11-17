@@ -1134,7 +1134,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 
 		writeFileSync(
 			configPath,
-			"[mcp_servers.signet]\ncommand = '/old/Codex.app/Contents/Resources/node'\nargs = ['/old/mcp-stdio.js']\n",
+			"[mcp_servers.signet]\ncommand = '/old/Codex.app/Contents/Resources/node'\nargs = ['/old/package/dist/mcp-stdio.js']\n",
 		);
 
 		const result = await desktopRuntimeConnector(appPath, runtime).install(tempHome);
@@ -1144,13 +1144,15 @@ describe("CodexConnector.install — hooks.json schema", () => {
 			if (process.platform === "win32") {
 				const wrapper = result.filesWritten.find((path) => path.toLowerCase().endsWith(".cmd"));
 				expect(wrapper).toBeDefined();
-				expect(readFileSync(wrapper as string, "utf-8").replaceAll('"', "")).toContain(`${runtime} ${signetEntry}`);
+				expect(readFileSync(wrapper as string, "utf-8").replaceAll('"', "")).toContain(
+					"/old/Codex.app/Contents/Resources/node /old/package/bin/signet.js",
+				);
 			} else {
-				expect(handler?.command).toContain(`${runtime} ${signetEntry}`);
+				expect(handler?.command).toContain("/old/Codex.app/Contents/Resources/node /old/package/bin/signet.js");
 			}
 		}
 		expect(readFileSync(configPath, "utf-8")).toContain("command = '/old/Codex.app/Contents/Resources/node'");
-		expect(readFileSync(configPath, "utf-8")).toContain("args = ['/old/mcp-stdio.js']");
+		expect(readFileSync(configPath, "utf-8")).toContain("args = ['/old/package/dist/mcp-stdio.js']");
 	});
 
 	test("uses the wrapper entry when an optional native binary runs without postinstall", async () => {
@@ -1645,7 +1647,7 @@ describe("CodexConnector.install — launcher and auth", () => {
 			Reflect.set(process, "platform", "win32");
 			process.env.SIGNET_PORT = String(server.port);
 			process.env.SIGNET_API_KEY = key;
-			process.env.SIGNET_HOOK_COMMAND = "C:\\Host Tools\\signet.exe";
+			process.env.SIGNET_HOOK_COMMAND = JSON.stringify(["C:\\Host Tools\\signet.exe"]);
 			process.env.SIGNET_CODEX_FORCE_COMPAT_HOOKS = "1";
 			const install = nativePluginConnector();
 			for (const mode of [true, false, null]) {
@@ -1675,7 +1677,7 @@ describe("CodexConnector.install — launcher and auth", () => {
 
 	test("keeps the host launcher instead of the container executable", async () => {
 		process.execPath = "/app/bin/signet";
-		process.env.SIGNET_CLI_PATH = "/app/bin/signet";
+		Reflect.deleteProperty(process.env, "SIGNET_CLI_PATH");
 		writeFileSync(
 			hooksPath,
 			JSON.stringify({
@@ -1688,7 +1690,8 @@ describe("CodexConnector.install — launcher and auth", () => {
 		);
 		await connector().install(tempHome);
 		await connector().install(tempHome);
-		expect(readFileSync(hooksPath, "utf-8")).toContain("'/host/My Tools/signet' hook session-start");
+		const launcher = process.platform === "win32" ? '"/host/My Tools/signet"' : "'/host/My Tools/signet'";
+		expect(readFileSync(hooksPath, "utf-8")).toContain(JSON.stringify(`${launcher} hook session-start`).slice(1, -1));
 		expect(readFileSync(hooksPath, "utf-8")).not.toContain("/app/bin/signet");
 	});
 });

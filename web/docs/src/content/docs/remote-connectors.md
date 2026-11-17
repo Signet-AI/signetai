@@ -112,17 +112,19 @@ A `401 Unauthorized` response is expected for a remote request without a key.
 clients can check health and sign in; `whoami` answers `200` with
 `"authenticated": false`.
 
-The Codex connector checks `/api/mode` once at install or sync time, with a
-one-second timeout. It persists `SIGNET_API_KEY` in hooks, Windows wrappers, and
-MCP authentication headers only when `requiresAuth` is `true`. When it is
-`false`, regeneration removes stale Signet-owned credentials even if a key is
-still present in the installer's environment. If the check fails or returns an
-invalid response, the connector omits the key and warns you to check the daemon
-URL and connectivity, then rerun installation or `signet sync`.
+Connectors that persist daemon credentials check `/api/mode` once at install or
+sync time, with a one-second timeout. Codex, Kimi, pi, Oh My Pi, Muse Code,
+ForgeCode, OpenCode, and Hermes Agent persist a key only when `requiresAuth` is
+`true`. When it is `false`, regeneration removes stale Signet-owned credentials
+even if a key is still present in the installer's environment. If the check
+fails or returns an invalid response, the connector omits the key and warns you
+to check the daemon URL and connectivity, then rerun installation or `signet sync`.
 
 For container-exported launchers, see [Installed hook and MCP launchers](/hooks/#installed-hook-and-mcp-launchers).
-`SIGNET_HOOK_COMMAND` overrides the existing launcher without requiring that the
-host path exist inside the container.
+`SIGNET_HOOK_COMMAND` and `SIGNET_CLI_PATH` override an existing launcher without
+requiring the host path to exist inside the container. `SIGNET_HOOK_COMMAND`
+wins when both are set; use its JSON argv form for paths with whitespace or
+launchers requiring arguments.
 
 ## 3. Create a connector API key
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, spyOn } from "bun:test";
 import {
 	chmodSync,
 	lstatSync,
@@ -58,6 +58,23 @@ function commands(settings: Record<string, unknown>, event: string): string[] {
 function mcpEnv(settings: Record<string, unknown>): Record<string, string> {
 	return (settings.mcp_servers as Record<string, { env: Record<string, string> }>).signet.env;
 }
+
+const authFetch = globalThis.fetch;
+let auth: ReturnType<typeof spyOn>;
+beforeEach(() => {
+	auth = spyOn(globalThis, "fetch").mockImplementation(
+		Object.assign(
+			(input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+				String(input).endsWith("/api/mode")
+					? Promise.resolve(Response.json({ requiresAuth: true }))
+					: authFetch(input, init),
+			{ preconnect: authFetch.preconnect },
+		),
+	);
+});
+afterEach(() => {
+	auth.mockRestore();
+});
 
 beforeEach(() => {
 	saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
