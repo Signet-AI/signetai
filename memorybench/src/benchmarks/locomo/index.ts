@@ -205,6 +205,12 @@ export class LoCoMoBenchmark implements Benchmark {
     return this.sessionsMap.get(questionId) || []
   }
 
+  getIngestionGroupId(questionId: string): string {
+    const sampleId = this.questions.find((q) => q.questionId === questionId)?.metadata?.sampleId
+    if (typeof sampleId !== "string") throw new Error(`Unknown LoCoMo question: ${questionId}`)
+    return sampleId
+  }
+
   getGroundTruth(questionId: string): string {
     const question = this.questions.find((q) => q.questionId === questionId)
     return question?.groundTruth || ""
