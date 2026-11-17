@@ -77,6 +77,7 @@
 		"check:production-comments": "bun scripts/check-production-comments.ts",
 		"audit:database-ownership": "bun scripts/audit-database-ownership.ts",
 		"audit:agent-identity": "bun scripts/audit-agent-identity.ts",
+		"audit:ratchet": "bun scripts/audit-architecture-ratchet.ts",
 		"typecheck": "bun run --filter '*' typecheck",
 		"version:sync": "bun scripts/version-sync.ts",
 		"release:prepare": "bun scripts/release-prepare.ts",
