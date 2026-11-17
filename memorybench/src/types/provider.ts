@@ -67,7 +67,6 @@ export type RecallSourceKind = "memory" | "transcript-evidence"
 
 export interface RecallTranscriptEvidenceLimit {
   limit: number
-  source: "daemon-config" | "launcher-env"
 }
 
 export type ProviderName =

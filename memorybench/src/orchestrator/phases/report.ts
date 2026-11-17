@@ -569,8 +569,7 @@ export function printReport(result: BenchmarkResult): void {
     console.log("-".repeat(60))
     console.log("\nRECALL SOURCES:")
     if (sources.transcriptEvidenceLimit) {
-      const limit = sources.transcriptEvidenceLimit
-      console.log(`  Transcript limit: ${limit.limit} (from ${limit.source})`)
+      console.log(`  Transcript limit: ${sources.transcriptEvidenceLimit.limit}`)
     }
     console.log(`  All:              ${format(sources.all)}`)
     console.log(`  Correct:          ${format(sources.correct)}`)

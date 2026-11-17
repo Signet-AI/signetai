@@ -694,6 +694,6 @@ change.
 The `recallSources` report section attributes each question's retrieved hits
 to memories, transcript evidence (`supplementary: true` hits from the daemon's
 recall response), both, or none — overall, per question type, and for
-correctly answered questions only. It also records the run's
-`transcript_evidence_limit` and whether it was read from the daemon config
-(`daemon-config`) or the launcher env (`launcher-env`).
+correctly answered questions only. It also records the
+`transcript_evidence_limit` the launcher set for the run, or omits it when the
+run used the daemon default.

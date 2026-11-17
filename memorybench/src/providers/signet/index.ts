@@ -11,7 +11,6 @@ import type {
   RecallTranscriptEvidenceLimit,
   SearchOptions,
 } from "../../types/provider"
-import { parse as parseYaml } from "yaml"
 import type { UnifiedSession } from "../../types/unified"
 import type { DreamingPassUsage, IngestUsage } from "../../types/checkpoint"
 import { addUsage, assertModelCredentials, emptyUsage } from "../../utils/llm"
@@ -423,29 +422,10 @@ export class SignetProvider implements Provider {
   }
 
   async recallTranscriptEvidenceLimit(): Promise<RecallTranscriptEvidenceLimit | undefined> {
-    try {
-      const config = await this.request<{
-        files?: Array<{ name?: string; content?: string }>
-      }>("/api/config", { method: "GET" })
-      const agentYaml = config.files?.find((file) => file.name === "agent.yaml")?.content
-      if (agentYaml !== undefined) {
-        const parsed = parseYaml(agentYaml) as
-          | { search?: { transcript_evidence_limit?: unknown } }
-          | undefined
-        const limit = parsed?.search?.transcript_evidence_limit
-        if (typeof limit === "number" && Number.isInteger(limit) && limit >= 0) {
-          return { limit, source: "daemon-config" }
-        }
-      }
-    } catch {
-      logger.warn("Could not read the daemon config; falling back to the launcher environment")
-    }
     const raw = process.env.SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT?.trim()
-    if (raw !== undefined && raw !== "") {
-      const parsed = Number(raw)
-      if (Number.isInteger(parsed) && parsed >= 0) return { limit: parsed, source: "launcher-env" }
-    }
-    return undefined
+    if (raw === undefined || raw === "") return undefined
+    const limit = Number(raw)
+    return Number.isInteger(limit) && limit >= 0 ? { limit } : undefined
   }
 
   getIngestUsage(): IngestUsage {
