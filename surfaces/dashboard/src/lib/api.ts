@@ -460,6 +460,7 @@ export interface KnowledgeConstellation {
 	proposals: Array<{ id: string }>;
 	metadata: {
 		proposals: { pending: number };
+		truncated?: Partial<Record<"entities" | "aspects" | "attributes" | "dependencies" | "assertions", boolean>>;
 		dreaming?: {
 			episodicTokensPending: number | null;
 			episodicBacklogProbe?: KnowledgeConstellationBacklogProbe | null;
@@ -1277,9 +1278,9 @@ export const api = {
 		}
 	},
 	getKnowledgeStats: () => getJSON<KnowledgeStats>("/api/knowledge/stats"),
-	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160, agentId?: string) =>
+	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160, agentId?: string, maxAttributes = 1000) =>
 		getJSON<KnowledgeConstellation>(
-			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=4&dependency_limit=${dependencyLimit}${agentId ? `&agent_id=${encodeURIComponent(agentId)}` : ""}`,
+			`/api/knowledge/constellation?limit=${limit}&max_aspects_per_entity=25&max_attributes_per_aspect=250&max_attributes=${maxAttributes}&assertion_limit=1000&dependency_limit=${dependencyLimit}${agentId ? `&agent_id=${encodeURIComponent(agentId)}` : ""}`,
 		),
 	getOntologyProposals: (status: "pending" | "applied" | "rejected" | "failed" = "pending", limit = 20) =>
 		getJSON<{ items: OntologyProposal[]; limit: number; offset: number }>(

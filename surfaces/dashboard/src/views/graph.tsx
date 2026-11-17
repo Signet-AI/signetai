@@ -1,10 +1,13 @@
 import { MemoryChat } from "@/components/memory-chat";
 import { sourceDocumentTitle } from "@/lib/constellation-display";
+import { categoryColor, ENTITY_CATEGORIES, entityCategory } from "@/lib/entity-category";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTheme } from "next-themes";
 import { api, viewsAllAgents } from "@/lib/api";
+import { scopedQueryKey } from "@/lib/query-cache";
 import { useSession } from "@/lib/session";
 import { useAsync } from "@/lib/use-async";
 import { useView } from "@/lib/view-context";
@@ -17,9 +20,15 @@ import type {
 	SceneNode,
 	SceneNodeKind,
 } from "@/lib/graph-scene";
-import { capGraphSceneData, graphEvidenceRefs, MAX_VISIBLE_CONSTELLATION_NODES } from "@/lib/constellation-display";
+import {
+	capGraphSceneData,
+	graphEvidenceRefs,
+	MAX_CONSTELLATION_ENTITY_LIMIT,
+	MAX_VISIBLE_CONSTELLATION_NODES,
+} from "@/lib/constellation-display";
 
-const ENTITY_LIMIT = 150;
+const ENTITY_LIMIT = MAX_CONSTELLATION_ENTITY_LIMIT;
+const FACT_BUDGET = 6_000;
 const ALL_AGENTS = "all";
 
 const AGENT_COLORS = [
@@ -45,7 +54,8 @@ const FILTERS: ReadonlyArray<{
 	{ key: "entity", label: "Entities", kinds: ["entity"] },
 	{ key: "source", label: "Documents", kinds: ["source"] },
 	{ key: "aspect", label: "Aspects", kinds: ["aspect", "group"] },
-	{ key: "fact", label: "Facts", kinds: ["claimSlot", "attribute", "claim", "assertion"] },
+	{ key: "slot", label: "Claim slots", kinds: ["claimSlot"] },
+	{ key: "fact", label: "Facts", kinds: ["attribute", "claim", "assertion"] },
 	{ key: "constraint", label: "Constraints", kinds: ["constraint"] },
 	{ key: "evidence", label: "Evidence", kinds: ["origin", "memory"] },
 ];
@@ -106,9 +116,9 @@ export function GraphView() {
 	const [selectedAgent, setAgentScope] = useState(ALL_AGENTS);
 	const agentScope = canViewAll ? selectedAgent : undefined;
 	const graphQuery = useAsync(
-		() => api.getKnowledgeConstellation(entityLimit, Math.min(2000, entityLimit * 4), agentScope),
+		() => api.getKnowledgeConstellation(entityLimit, Math.min(2000, entityLimit * 4), agentScope, FACT_BUDGET),
 		{
-			key: `constellation:${entityLimit}:${Math.min(2000, entityLimit * 4)}:${agentScope}`,
+			key: `constellation:${entityLimit}:${Math.min(2000, entityLimit * 4)}:${FACT_BUDGET}:${agentScope}`,
 			intervalMs: 30_000,
 			deps: [entityLimit, agentScope],
 		},
@@ -140,9 +150,21 @@ export function GraphView() {
 			if (entity.agentId) counts.set(entity.agentId, (counts.get(entity.agentId) ?? 0) + 1);
 		return [...counts].sort(([a], [b]) => a.localeCompare(b));
 	}, [graphQuery.data]);
+	const entitiesByCategory = useMemo(() => {
+		const counts = new Map<string, number>();
+		for (const entity of graphQuery.data?.entities ?? []) {
+			const category = entityCategory(entity.entityType);
+			counts.set(category, (counts.get(category) ?? 0) + 1);
+		}
+		return ENTITY_CATEGORIES.flatMap((category) => {
+			const count = counts.get(category.key);
+			return count ? [{ ...category, count }] : [];
+		});
+	}, [graphQuery.data]);
 	const sources = useAsync(() => api.getSources(), { key: "sources", intervalMs: 30_000 }).data?.sources;
+	const resolvedDark = useTheme().resolvedTheme !== "light";
 	const [inspected, setInspected] = useState<SceneNode | null>(null);
-	const selectionRef = useRef<(node: SceneNode) => void>(() => {});
+	const selectionRef = useRef<(node: SceneNode | null) => void>(() => {});
 	const [legendOpen, setLegendOpen] = useState(false);
 	const [detail, setDetail] = useState<EntityDetail | null>(null);
 	const [responded, setResponded] = useState(false);
@@ -150,6 +172,7 @@ export function GraphView() {
 	const [sceneFailed, setSceneFailed] = useState(false);
 	const [sceneBuilt, setSceneBuilt] = useState(false);
 	const [isolated, setIsolated] = useState<string | null>(null);
+	const [zoomPercent, setZoomPercent] = useState(100);
 	const [hiddenFilters, setHiddenFilters] = useState<ReadonlySet<string>>(() => new Set());
 	const [searchQuery, setSearchQuery] = useState("");
 	const [searchOpen, setSearchOpen] = useState(false);
@@ -248,9 +271,10 @@ export function GraphView() {
 				});
 				addEdge(entity.id, aspect.id, "contains");
 				const groups = new Map<string, { id: string; count: number; weight: number }>();
+				const flat = aspect.attributes.every((attr) => (attr.groupKey ?? "general") === "general");
 				for (const attr of aspect.attributes) {
 					const groupKey = attr.groupKey ?? "general";
-					const groupId = `group:${aspect.id}:${groupKey}`;
+					const groupId = flat ? aspect.id : `group:${aspect.id}:${groupKey}`;
 					const group = groups.get(groupKey) ?? { id: groupId, count: 0, weight: 0 };
 					group.count += 1;
 					group.weight = Math.max(group.weight, attr.importance);
@@ -314,7 +338,7 @@ export function GraphView() {
 						if (originId && (attr.sourceId || attr.sourcePath)) addEdge(memoryId, originId, "evidenced_by");
 					} else if (originId) addEdge(attr.id, originId, "evidenced_by");
 				}
-				for (const [groupKey, group] of groups) {
+				for (const [groupKey, group] of flat ? [] : groups) {
 					addNode({
 						id: group.id,
 						label: humanize(groupKey),
@@ -379,10 +403,12 @@ export function GraphView() {
 			);
 		}
 		const entityAgents = new Map(entities.map((entity) => [entity.id, entity.agentId]));
+		const entityCategories = new Map(entities.map((entity) => [entity.id, entityCategory(entity.entityType)]));
 		const spansAgents = new Set(entityAgents.values()).size > 1;
 		for (const node of nodes) {
 			const owner = entityAgents.get(node.cluster);
-			if (owner && (spansAgents || node.kind === "entity")) node.scopeColor = agentColors.get(owner);
+			if (owner && spansAgents) node.scopeColor = agentColors.get(owner);
+			node.category = entityCategories.get(node.cluster);
 		}
 		for (const source of sources ?? []) {
 			addNode({
@@ -390,6 +416,7 @@ export function GraphView() {
 				label: source.name,
 				kind: "source",
 				cluster: "source",
+				category: "document",
 				weight: 1,
 				metric: `source · ${(source.stats?.indexed ?? 0).toLocaleString()} indexed`,
 			});
@@ -483,6 +510,8 @@ export function GraphView() {
 					() => setSceneFailed(true),
 					undefined,
 					setIsolated,
+					setZoomPercent,
+					scopedQueryKey(`constellation-layout:${agentScope}`),
 				);
 				sceneRef.current.setHiddenKinds(hiddenKindsRef.current);
 				builtSigRef.current = dataSig;
@@ -495,7 +524,7 @@ export function GraphView() {
 		return () => {
 			cancelled = true;
 		};
-	}, [limitedScene, dataSig]);
+	}, [limitedScene, dataSig, agentScope]);
 	useEffect(
 		() => () => {
 			sceneRef.current?.dispose();
@@ -538,6 +567,12 @@ export function GraphView() {
 	};
 
 	selectionRef.current = (node) => {
+		if (!node) {
+			setInspected(null);
+			setResponded(false);
+			setDetail(null);
+			return;
+		}
 		const entity = graphQuery.data?.entities.find((entity) => entity.id === node.cluster);
 		if (entity) inspectEntity(entity.id);
 		else {
@@ -551,7 +586,7 @@ export function GraphView() {
 		setInspected(null);
 		setResponded(false);
 		setDetail(null);
-		sceneRef.current?.resetView();
+		sceneRef.current?.clearSelection();
 	};
 
 	const sidebarOpen = chatOpen;
@@ -685,10 +720,11 @@ export function GraphView() {
 		return () => window.removeEventListener("keydown", onKey);
 	}, []);
 
+	const partial = Object.values(graphQuery.data?.metadata.truncated ?? {}).some(Boolean);
 	return (
 		<div className={cn("graph-view-root", sidebarPresented && "has-sidebar")}>
 			<div className="graph-viewport">
-				{limitedScene.capped && (
+				{(limitedScene.capped || partial) && (
 					<span className="graph-limit" role="status">
 						Limited view
 					</span>
@@ -722,6 +758,11 @@ export function GraphView() {
 						{graphQuery.data?.entities.length ?? 0} entities · {limitedScene.data.nodes.length.toLocaleString()} nodes ·{" "}
 						{limitedScene.data.edges.length.toLocaleString()} links
 					</span>
+					{partial && (
+						<span className="graph-key-limit" role="status">
+							The daemon returned part of the graph
+						</span>
+					)}
 					{limitedScene.capped && (
 						<span className="graph-key-limit" role="status">
 							Showing up to {MAX_VISIBLE_CONSTELLATION_NODES.toLocaleString()} nodes
@@ -749,7 +790,22 @@ export function GraphView() {
 							</button>
 						);
 					})}
-					{entitiesByAgent.length > 0 && (
+					{entitiesByCategory.length > 0 && (
+						<div className="graph-key-agents">
+							{entitiesByCategory.map((category) => (
+								<span key={category.key} className="lg-item">
+									<span
+										className="lg-dot"
+										style={{ background: categoryColor(category.key, resolvedDark) }}
+										aria-hidden="true"
+									/>
+									{category.label}
+									<span className="graph-key-count">{category.count.toLocaleString()}</span>
+								</span>
+							))}
+						</div>
+					)}
+					{entitiesByAgent.length > 1 && (
 						<div className="graph-key-agents">
 							{entitiesByAgent.map(([id, count]) => (
 								<span key={id} className="lg-item" style={{ color: agentColors.get(id) }}>
@@ -760,10 +816,11 @@ export function GraphView() {
 						</div>
 					)}
 					<div className="graph-key-help">
-						<span>Drag to pan</span>
-						<span>Scroll to zoom</span>
-						<span>Click to inspect · double-click to focus</span>
-						<span>Press / to find</span>
+						<span>Drag to pan · drag a node to move it</span>
+						<span>Scroll or pinch to zoom · double-click to zoom in</span>
+						<span>Click a node to select · click again or Esc to clear</span>
+						<span>Arrows move between related nodes</span>
+						<span>Z fit · C center · +/− zoom · / find</span>
 					</div>
 				</div>
 
@@ -772,14 +829,27 @@ export function GraphView() {
 					<fieldset className="graph-navigation" aria-label="Graph navigation">
 						<button
 							type="button"
-							aria-label="Zoom in"
+							title="Fit graph (Z)"
 							onClick={() => {
 								pauseAgent();
-								sceneRef.current?.zoom(1.3);
+								sceneRef.current?.fit();
 							}}
 						>
-							+
+							Fit <kbd>Z</kbd>
 						</button>
+						<button
+							type="button"
+							title="Center graph (C)"
+							onClick={() => {
+								pauseAgent();
+								sceneRef.current?.center();
+							}}
+						>
+							Center <kbd>C</kbd>
+						</button>
+					</fieldset>
+					<fieldset className="graph-navigation graph-zoom" aria-label="Zoom">
+						<output aria-live="polite">{zoomPercent}%</output>
 						<button
 							type="button"
 							aria-label="Zoom out"
@@ -792,14 +862,13 @@ export function GraphView() {
 						</button>
 						<button
 							type="button"
-							aria-label="Fit graph"
-							title="Fit graph"
+							aria-label="Zoom in"
 							onClick={() => {
 								pauseAgent();
-								sceneRef.current?.resetView();
+								sceneRef.current?.zoom(1.3);
 							}}
 						>
-							Fit
+							+
 						</button>
 					</fieldset>
 					{canViewAll && (
@@ -850,7 +919,12 @@ export function GraphView() {
 												onMouseDown={(event) => event.preventDefault()}
 												onClick={() => jumpTo(node)}
 											>
-												<span className="graph-search-dot" data-kind={node.kind} aria-hidden="true" />
+												<span
+													className="graph-search-dot"
+													data-kind={node.kind}
+													style={{ background: categoryColor(node.category ?? "other", resolvedDark) }}
+													aria-hidden="true"
+												/>
 												<span className="truncate">{node.label}</span>
 												<span className="graph-search-kind">{node.kind === "entity" ? "Entity" : "Document"}</span>
 											</button>

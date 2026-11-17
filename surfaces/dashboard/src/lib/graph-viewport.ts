@@ -112,6 +112,14 @@ export class ViewportState {
 		this.targetZoom = clamp(this.targetZoom, this.minZoom, ViewportState.MAX_ZOOM);
 	}
 
+	focusOn(worldX: number, worldY: number, zoom: number, width: number, height: number): void {
+		this.targetZoom = clamp(zoom, this.minZoom, ViewportState.MAX_ZOOM);
+		this.zoomAnchorX = width / 2;
+		this.zoomAnchorY = height / 2;
+		this.targetPanX = width / 2 - worldX * this.targetZoom;
+		this.targetPanY = height / 2 - worldY * this.targetZoom;
+	}
+
 	centerOn(worldX: number, worldY: number, width: number, height: number): void {
 		this.targetPanX = width / 2 - worldX * this.zoom;
 		this.targetPanY = height / 2 - worldY * this.zoom;

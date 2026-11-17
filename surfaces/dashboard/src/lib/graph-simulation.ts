@@ -11,15 +11,11 @@ const FORCE_CONFIG = {
 	centeringStrength: 0.06,
 	linkDistance: 300 / 3,
 	linkStrength: { docMemory: 0.35, version: 0.6, fallback: 0.05 },
-	preSettleTicks: 150,
-	densePreSettleTicks: 12,
 	settleMeanVelocity: 1 / 3,
 	settleMaxVelocity: 3 / 3,
 	settleStableTicks: 12,
 	settleMaxTicks: 360,
 };
-
-export const DENSE_GRAPH_STATIC_THRESHOLD = 1500;
 
 export class ForceSimulation {
 	private sim: d3.Simulation<GraphNode, GraphEdge> | null = null;
@@ -67,28 +63,23 @@ export class ForceSimulation {
 			this.sim.force("x", d3.forceX().strength(FORCE_CONFIG.centeringStrength));
 			this.sim.force("y", d3.forceY().strength(FORCE_CONFIG.centeringStrength));
 
-			this.sim.stop();
-			this.sim.alpha(1);
-			const preSettleTicks =
-				nodes.length > DENSE_GRAPH_STATIC_THRESHOLD ? FORCE_CONFIG.densePreSettleTicks : FORCE_CONFIG.preSettleTicks;
-			for (let i = 0; i < preSettleTicks; i++) this.sim.tick();
-
-			if (nodes.length > DENSE_GRAPH_STATIC_THRESHOLD) {
-				this.stop();
-			} else {
-				this.settle();
-			}
+			this.sim.alpha(0).stop();
 		} catch (e) {
 			console.error("ForceSimulation.init failed:", e);
 			this.destroy();
 		}
 	}
 
-	update(nodes: GraphNode[], edges: GraphEdge[]): void {
-		if (!this.sim) return;
-		this.sim.nodes(nodes);
-		const linkForce = this.sim.force<d3.ForceLink<GraphNode, GraphEdge>>("link");
-		if (linkForce) linkForce.links(edges);
+	tick(count: number): void {
+		this.sim?.tick(count);
+	}
+
+	cool(alpha: number): void {
+		if (alpha > FORCE_CONFIG.alphaMin) this.sim?.alphaTarget(0).alpha(alpha).restart();
+	}
+
+	heat(): number {
+		return this.sim?.alpha() ?? 0;
 	}
 
 	reheat(): void {

@@ -1,7 +1,7 @@
 import type { GraphSceneData } from "./graph-scene";
 
 export const MAX_CONSTELLATION_ENTITY_LIMIT = 300;
-export const MAX_VISIBLE_CONSTELLATION_NODES = 5_000;
+export const MAX_VISIBLE_CONSTELLATION_NODES = 20_000;
 
 export function graphEvidenceRefs(provenance: {
 	readonly memoryId?: string | null;
