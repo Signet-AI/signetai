@@ -4,7 +4,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { SearchIcon, XIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/api";
+import { api, viewsAllAgents } from "@/lib/api";
+import { useSession } from "@/lib/session";
 import { useAsync } from "@/lib/use-async";
 import { useView } from "@/lib/view-context";
 import { cn } from "@/lib/utils";
@@ -101,7 +102,9 @@ function provenanceLabel(
 }
 export function GraphView() {
 	const entityLimit = ENTITY_LIMIT;
-	const [agentScope, setAgentScope] = useState(ALL_AGENTS);
+	const canViewAll = viewsAllAgents(useSession());
+	const [selectedAgent, setAgentScope] = useState(ALL_AGENTS);
+	const agentScope = canViewAll ? selectedAgent : undefined;
 	const graphQuery = useAsync(
 		() => api.getKnowledgeConstellation(entityLimit, Math.min(2000, entityLimit * 4), agentScope),
 		{
@@ -799,20 +802,22 @@ export function GraphView() {
 							Fit
 						</button>
 					</fieldset>
-					<Select value={agentScope} onValueChange={setAgentScope}>
-						<SelectTrigger className="graph-agent-picker" aria-label="Show the graph for an agent">
-							<SelectValue />
-						</SelectTrigger>
-						<SelectContent className="graph-agent-options" position="popper" align="start" sideOffset={4}>
-							<SelectItem value={ALL_AGENTS}>All agents</SelectItem>
-							{agentIds.map((id) => (
-								<SelectItem key={id} value={id}>
-									<span className="lg-dot" style={{ background: agentColors.get(id) }} />
-									{agentName(id)}
-								</SelectItem>
-							))}
-						</SelectContent>
-					</Select>
+					{canViewAll && (
+						<Select value={agentScope} onValueChange={setAgentScope}>
+							<SelectTrigger className="graph-agent-picker" aria-label="Show the graph for an agent">
+								<SelectValue />
+							</SelectTrigger>
+							<SelectContent className="graph-agent-options" position="popper" align="start" sideOffset={4}>
+								<SelectItem value={ALL_AGENTS}>All agents</SelectItem>
+								{agentIds.map((id) => (
+									<SelectItem key={id} value={id}>
+										<span className="lg-dot" style={{ background: agentColors.get(id) }} />
+										{agentName(id)}
+									</SelectItem>
+								))}
+							</SelectContent>
+						</Select>
+					)}
 					<search className="graph-search">
 						<SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
 						<input
