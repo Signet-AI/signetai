@@ -1640,7 +1640,7 @@ export async function handleUserPromptSubmit(
 				agentId,
 				harness: req.harness,
 				project: req.project ?? null,
-				append: (existing) => transcriptCapture.appendLivePromptTranscript(existing, liveTranscript),
+				transcript: liveTranscript,
 			});
 		} catch (error) {
 			logger.warn("hooks", "Prompt transcript append failed", {
@@ -1887,7 +1887,7 @@ async function appendLiveAssistantTurn(params: {
 		agentId: params.agentId,
 		harness: params.harness,
 		project: params.project,
-		append: (existing) => transcriptCapture.appendLivePromptTranscript(existing, assistantLine),
+		transcript: assistantLine,
 	});
 	return true;
 }

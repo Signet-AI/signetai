@@ -1,8 +1,8 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { type DbAccessor, type WriteDb, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { type DbAccessor, closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	appendSessionTranscriptAsync,
 	ensureCanonicalTranscriptHistory,
@@ -237,7 +237,7 @@ describe("session transcript live append", () => {
 			agentId: "agent-a",
 			harness: "claude-code",
 			project: "/repo",
-			append: (existing) => `${existing}\nAssistant: second`,
+			transcript: "Assistant: second",
 		});
 
 		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
@@ -248,41 +248,76 @@ describe("session transcript live append", () => {
 		});
 	});
 
+	it("writes upserts and concurrent appends through the database owner without a local write", async () => {
+		const accessor = init();
+		const { dbOwnerQuery, getDbOwner, ownerStatement } = await import("./db-owner-runtime");
+		await dbOwnerQuery(ownerStatement("SELECT 1", [], "get"), { operation: "test.transcript.owner.ready" });
+		const owner = await getDbOwner();
+		expect(owner.health().pid).toBeGreaterThan(0);
+		expect(owner.health().pid).not.toBe(process.pid);
+		const local = spyOn(accessor, "withWriteTxAsync").mockImplementation(() => {
+			throw new Error("request-thread transcript write");
+		});
+		try {
+			expect(
+				await upsertSessionTranscriptAsync("owner-session", "User: first", "claude-code", "/repo", "agent-a"),
+			).toBe(true);
+			const replies = Array.from({ length: 8 }, (_, i) => `Assistant: concurrent ${i}`);
+			const append = (transcript: string) =>
+				appendSessionTranscriptAsync({
+					sessionKey: "owner-session",
+					agentId: "agent-a",
+					harness: "claude-code",
+					project: null,
+					transcript,
+				});
+			await Promise.all(replies.map(append));
+			await append("Assistant: retried");
+			await append("Assistant: retried");
+			await append("User: again");
+			await append("Assistant: retried");
+			const row = await dbOwnerQuery<{ content: string; project: string; agent_id: string }>(
+				ownerStatement(
+					"SELECT content, project, agent_id FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+					["owner-session", "agent-a"],
+					"get",
+				),
+				{ operation: "test.transcript.owner.readback" },
+			);
+			expect(row.agent_id).toBe("agent-a");
+			expect(row.project).toBe("/repo");
+			expect(row.content.split("\n").sort()).toEqual(
+				["User: first", ...replies, "Assistant: retried", "User: again", "Assistant: retried"].sort(),
+			);
+			expect(local).not.toHaveBeenCalled();
+		} finally {
+			local.mockRestore();
+		}
+	});
+
 	it("fails the append without overwriting the row when the in-transaction read fails", async () => {
 		const accessor = init();
 		await upsertSessionTranscriptAsync("live-session", "User: first", "claude-code", "/repo", "agent-a");
-		const failingRead: DbAccessor = {
-			...accessor,
-			withWriteTxAsync: (fn, options) =>
-				accessor.withWriteTxAsync(
-					(db) =>
-						fn(
-							new Proxy(db, {
-								get(target, property, receiver) {
-									if (property !== "prepare") return Reflect.get(target, property, receiver);
-									return (sql: string) => {
-										if (sql.includes("SELECT content FROM session_transcripts")) throw new Error("forced read failure");
-										return target.prepare(sql);
-									};
-								},
-							}) as WriteDb,
-						),
-					options,
-				),
-		};
-
-		await expect(
-			appendSessionTranscriptAsync(
-				{
+		const { dbOwnerQuery, ownerStatement } = await import("./db-owner-runtime");
+		const rename = (from: string, to: string) =>
+			dbOwnerQuery(ownerStatement(`ALTER TABLE session_transcripts RENAME COLUMN ${from} TO ${to}`, [], "run"), {
+				operation: "test.transcript.owner.rename",
+				lane: "write",
+			});
+		await rename("content", "unavailable_content");
+		try {
+			await expect(
+				appendSessionTranscriptAsync({
 					sessionKey: "live-session",
 					agentId: "agent-a",
 					harness: "claude-code",
 					project: "/repo",
-					append: (existing) => `${existing ?? ""}\nAssistant: second`.trim(),
-				},
-				failingRead,
-			),
-		).rejects.toThrow("forced read failure");
+					transcript: "Assistant: second",
+				}),
+			).rejects.toThrow("no such column: content");
+		} finally {
+			await rename("unavailable_content", "content");
+		}
 
 		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
 		expect(stored?.content).toBe("User: first");
@@ -297,7 +332,7 @@ describe("session transcript live append", () => {
 			agentId: "agent-a",
 			harness: "claude-code",
 			project: null,
-			append: (existing) => `${existing}\nAssistant: second`,
+			transcript: "Assistant: second",
 		});
 
 		const stored = await getStoredSessionTranscriptInfoAsync("live-session", "agent-a", accessor);
@@ -315,7 +350,7 @@ describe("session transcript live append", () => {
 			agentId: "agent-a",
 			harness: "oh-my-pi",
 			project: "/repo",
-			append: (existing) => [existing, "Assistant: second"].filter(Boolean).join("\n"),
+			transcript: "Assistant: second",
 		});
 
 		const rows = await accessor.withReadDbAsync(

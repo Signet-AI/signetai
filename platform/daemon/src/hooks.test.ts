@@ -2133,6 +2133,8 @@ describe("direct transcript regressions", () => {
 describe("handleUserPromptSubmit", () => {
 	test.serial("returns before a real slow provider settles and records the bounded outcome", async () => {
 		createMemoryDb();
+		const { upsertSessionTranscriptAsync } = await import("./session-transcripts");
+		expect(await upsertSessionTranscriptAsync("slow-provider", "User: prior turn", "test", null, "default")).toBe(true);
 		const providerWindows: Array<{
 			readonly startedAtMs: number;
 			readonly completedAtMs: number;

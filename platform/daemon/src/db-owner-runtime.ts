@@ -20,6 +20,7 @@ import {
 	withRegisteredDbOwnerMaintenance,
 } from "./db-owner-maintenance";
 import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
+import type { SessionTranscriptWriteInput, writeSessionTranscriptRow } from "./session-transcripts";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
 import type {
@@ -165,6 +166,12 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 	if (request.kind === "vector_repair") {
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
 			applyVectorRepairBatch(db as never, request.input),
+		);
+	}
+	if (request.kind === "session_transcript_write") {
+		const { writeSessionTranscriptRow } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
+			writeSessionTranscriptRow(db as WriteDb, request.input),
 		);
 	}
 	if (request.kind === "transcript_bulk_commit") {
@@ -491,6 +498,18 @@ export async function dbOwnerQuery<Row = unknown>(
 		owner,
 		{ kind: "query", statement },
 		{ ...options, lane: options.lane ?? "read" },
+	);
+}
+
+export async function dbOwnerWriteSessionTranscript(
+	owner: DbOwnerClient,
+	input: SessionTranscriptWriteInput,
+	options: DbOwnerSqlOptions,
+): Promise<ReturnType<typeof writeSessionTranscriptRow>> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_transcript_write", input },
+		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
 	);
 }
 

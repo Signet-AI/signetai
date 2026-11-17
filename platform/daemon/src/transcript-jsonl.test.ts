@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as timers from "node:timers/promises";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
 import {

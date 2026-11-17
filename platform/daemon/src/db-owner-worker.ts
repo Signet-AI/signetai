@@ -17,6 +17,7 @@ import { upsertMemoryArtifactInTx, type MemoryArtifactUpsertFields } from "./mem
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { applySourceSnapshotImportInTx } from "./source-snapshots";
 import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
+import type { writeSessionTranscriptRow } from "./session-transcripts";
 import { getDreamingHygieneCandidatesInDb } from "./knowledge-graph-hygiene";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 import { DREAMING_SURPRISAL_SELECTOR_VERSION, selectDreamingSurprisalInDb } from "./pipeline/dreaming-surprisal";
@@ -397,6 +398,22 @@ export function runDbOwnerWorker(): void {
 	function executeStatementWithoutTransaction(statement: DbOwnerStatement): SqliteRunResult {
 		const params = (statement.params ?? []).map(bindParameter);
 		return db.prepare(statement.sql).run(...params);
+	}
+
+	async function executeSessionTranscriptWrite(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "session_transcript_write" }>,
+		context: JobExecutionContext,
+	): Promise<ReturnType<typeof writeSessionTranscriptRow>> {
+		const { writeSessionTranscriptRow } = await import("./session-transcripts");
+		db.exec("BEGIN IMMEDIATE");
+		try {
+			const result = writeSessionTranscriptRow(db as never, request.input);
+			commit(context);
+			return result;
+		} catch (error) {
+			db.exec("ROLLBACK");
+			throw error;
+		}
 	}
 
 	function executeTranscriptBulkCommit(
@@ -1101,6 +1118,8 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request, context);
 		if (job.request.kind === "vector_repair") return executeVectorRepair(job.request, context);
 		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
+		if (job.request.kind === "session_transcript_write")
+			return await executeSessionTranscriptWrite(job.request, context);
 		if (job.request.kind === "dreaming_hygiene_attention") return executeDreamingHygieneAttention(job.request, context);
 		if (job.request.kind === "dreaming_surprisal_attention")
 			return executeDreamingSurprisalAttention(job.request, context);

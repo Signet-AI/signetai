@@ -886,15 +886,12 @@ memory:
 	});
 
 	async function withFailingTranscriptWrites<T>(failure: Error, run: () => Promise<T>): Promise<T> {
-		const accessor = getDbAccessor?.();
-		if (!accessor) throw new Error("db accessor not initialized");
-		const original = accessor.withWriteTxAsync;
-		accessor.withWriteTxAsync = (fn, options) =>
-			options?.operation?.startsWith("transcripts.") ? Promise.reject(failure) : original(fn, options);
+		const owner = await import("./db-owner-runtime");
+		const write = spyOn(owner, "dbOwnerWriteSessionTranscript").mockRejectedValue(failure);
 		try {
 			return await run();
 		} finally {
-			accessor.withWriteTxAsync = original;
+			write.mockRestore();
 		}
 	}
 
@@ -927,11 +924,14 @@ memory:
 	});
 
 	it("answers a retryable 503 when write pressure blocks the stop hook row and records a retry once", async () => {
-		const { DbWriteQueueFullError } = await import("./db-accessor");
+		const { DbOwnerAdmissionError } = await import("./db-owner-client");
 		const sessionKey = `claude-stop-pressure-${crypto.randomUUID()}`;
 		const body = { harness: "claude-code", sessionKey, lastAssistantMessage: "pressured reply" };
 
-		const blocked = await withFailingTranscriptWrites(new DbWriteQueueFullError(), () => postStop(body));
+		const blocked = await withFailingTranscriptWrites(
+			new DbOwnerAdmissionError("DB_OWNER_QUEUE_FULL", "owner queue is full"),
+			() => postStop(body),
+		);
 		expect(blocked.status).toBe(503);
 		expect(blocked.headers.get("Retry-After")).toBe("1");
 		expect(await blocked.json()).toMatchObject({ retryable: true });

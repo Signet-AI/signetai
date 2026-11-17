@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import { vectorToBlob } from "./db-helpers";
 import { handleUserPromptSubmit, formatPromptClockContext } from "./hooks";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
@@ -340,7 +340,7 @@ describe("handleUserPromptSubmit entity context", () => {
 				readonly agentId: string;
 				readonly harness: string;
 				readonly project: string | null;
-				readonly append: (existing: string | undefined) => string;
+				readonly transcript: string;
 			}) => {},
 		);
 
@@ -364,9 +364,7 @@ describe("handleUserPromptSubmit entity context", () => {
 			harness: "codex",
 			project: "/repo",
 		});
-		expect(appended?.append(undefined)).toBe("User: hi");
-		expect(appended?.append("Assistant: earlier")).toBe("Assistant: earlier\nUser: hi");
-		expect(appended?.append("Assistant: earlier\nUser: hi")).toBe("Assistant: earlier\nUser: hi");
+		expect(appended?.transcript).toBe("User: hi");
 		expect(result.inject).toBe("");
 	});
 
