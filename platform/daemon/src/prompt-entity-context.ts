@@ -195,14 +195,18 @@ function selectPromptEntityMatches(rows: readonly PromptEntityRow[], userMessage
 	return result;
 }
 
-const PROMPT_ENTITY_PAGE_ROWS = 250;
+const PROMPT_ENTITY_PAGE_ROWS = 128;
 const PROMPT_ENTITY_MAX_TEXT_BYTES = 256;
 
 type PromptEntityPageRow<Cursor> = PromptEntityRow & { readonly cursor: Cursor };
 
 const PROMPT_ENTITY_ELIGIBLE = `COALESCE(e.status, 'active') = 'active'
 		   AND LOWER(e.entity_type) IN ('person', 'project')
+		   AND LENGTH(CAST(e.id AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
 		   AND LENGTH(CAST(e.name AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}`;
+
+const PROMPT_ENTITY_COUNTS = `CAST(COALESCE(e.mentions, 0) AS INTEGER) AS mentions,
+		   CAST(COALESCE(e.pinned, 0) AS INTEGER) AS pinned`;
 
 const PROMPT_ENTITY_NAMES = `SELECT
 		   e.rowid AS cursor,
@@ -211,8 +215,7 @@ const PROMPT_ENTITY_NAMES = `SELECT
 		   COALESCE(e.entity_type, 'unknown') AS entity_type,
 		   COALESCE(e.canonical_name, LOWER(e.name)) AS matched_text,
 		   'name' AS match_source,
-		   COALESCE(e.mentions, 0) AS mentions,
-		   COALESCE(e.pinned, 0) AS pinned
+		   ${PROMPT_ENTITY_COUNTS}
 		 FROM entities e
 		 WHERE e.agent_id = ?
 		   AND e.rowid > ?
@@ -228,9 +231,8 @@ const PROMPT_ENTITY_ALIASES = `SELECT
 		   COALESCE(e.entity_type, 'unknown') AS entity_type,
 		   a.alias AS matched_text,
 		   'alias' AS match_source,
-		   COALESCE(e.mentions, 0) AS mentions,
-		   COALESCE(e.pinned, 0) AS pinned
-		 FROM entity_aliases a INDEXED BY idx_entity_aliases_active_unique
+		   ${PROMPT_ENTITY_COUNTS}
+		 FROM entity_aliases a
 		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
 		 WHERE a.agent_id = ?
 		   AND a.status = 'active'
