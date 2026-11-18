@@ -82,7 +82,8 @@ def run_cli(session, harness):
 
 
 def run_hermes(session):
-    sys.path.insert(0, os.path.join(args.hermes_home, "hermes-agent"))
+    harness_checkout = os.path.join(args.hermes_home, "hermes-agent")
+    sys.path.insert(0, harness_checkout)
     sys.path.insert(0, os.path.join(args.hermes_home, "plugins"))
     os.environ.clear()
     os.environ.update(ENV)
