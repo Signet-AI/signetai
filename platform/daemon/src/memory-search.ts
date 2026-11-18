@@ -2782,7 +2782,7 @@ export async function hybridRecall(
 								 WHERE id IN (${placeholders})`,
 							)
 							.all(...candidateIds) as Array<{ id: string; content: string }>,
-					{ siteToken: "db:recall.temporal-topic.content" },
+					{ siteToken: "db:recall.temporal-topic.content", signal: execution?.signal },
 				);
 				for (const row of contentRows) {
 					const score = scoreTemporalTopicEvidence(query, row.content);
@@ -2855,7 +2855,7 @@ export async function hybridRecall(
 									 WHERE id IN (${placeholders})`,
 								)
 								.all(...coverageIds) as Array<{ id: string; content: string }>,
-						{ siteToken: "db:recall.facet-coverage.content" },
+						{ siteToken: "db:recall.facet-coverage.content", signal: execution?.signal },
 					);
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
@@ -2899,7 +2899,7 @@ export async function hybridRecall(
 						id: string;
 						content: string;
 					}>,
-				{ siteToken: "db:recall.reranker.content" },
+				{ siteToken: "db:recall.reranker.content", signal: execution?.signal },
 			);
 			const contentMap = new Map(contentRows.map((r) => [r.id, r.content]));
 
@@ -2989,7 +2989,7 @@ export async function hybridRecall(
 						content: string;
 						type: string;
 					}>,
-				{ siteToken: "db:recall.dampening.metadata" },
+				{ siteToken: "db:recall.dampening.metadata", signal: execution?.signal },
 			);
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
 			const entities = new Map<string, Set<string>>();
@@ -3323,7 +3323,7 @@ export async function hybridRecall(
 						visibility: string | null;
 						scope: string | null;
 					}>,
-				{ siteToken: "db:recall.final-candidates.hydrate" },
+				{ siteToken: "db:recall.final-candidates.hydrate", signal: execution?.signal },
 			),
 	);
 

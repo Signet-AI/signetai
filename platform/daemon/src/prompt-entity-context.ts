@@ -199,7 +199,7 @@ const PROMPT_ENTITY_PAGE_ROWS = 1000;
 
 type PromptEntitySource = {
 	readonly operation: string;
-	readonly initial: number | string;
+	readonly initial: number;
 	readonly page: string;
 	readonly next: string;
 };
@@ -235,9 +235,9 @@ const PROMPT_ENTITY_SOURCES: readonly PromptEntitySource[] = [
 	},
 	{
 		operation: "user-prompt-submit.entity-aliases",
-		initial: "",
+		initial: 0,
 		page: `SELECT
-		   a.canonical_alias AS cursor,
+		   a.rowid AS cursor,
 		   e.id AS entity_id,
 		   e.name AS entity_name,
 		   COALESCE(e.entity_type, 'unknown') AS entity_type,
@@ -249,17 +249,17 @@ const PROMPT_ENTITY_SOURCES: readonly PromptEntitySource[] = [
 		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
 		 WHERE a.agent_id = ?
 		   AND a.status = 'active'
-		   AND a.canonical_alias > ?
+		   AND a.canonical_alias > COALESCE((SELECT canonical_alias FROM entity_aliases WHERE rowid = ?), '')
 		   AND COALESCE(e.status, 'active') = 'active'
 		   AND LOWER(e.entity_type) IN ('person', 'project')
 		 ORDER BY a.canonical_alias
 		 LIMIT ?`,
-		next: `SELECT a.canonical_alias AS cursor
+		next: `SELECT a.rowid AS cursor
 		 FROM entity_aliases a
 		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
 		 WHERE a.agent_id = ?
 		   AND a.status = 'active'
-		   AND a.canonical_alias > ?
+		   AND a.canonical_alias > COALESCE((SELECT canonical_alias FROM entity_aliases WHERE rowid = ?), '')
 		   AND COALESCE(e.status, 'active') = 'active'
 		   AND LOWER(e.entity_type) IN ('person', 'project')
 		 ORDER BY a.canonical_alias
@@ -294,7 +294,7 @@ export async function matchPromptEntities(
 		let after = source.initial;
 		let rows = PROMPT_ENTITY_PAGE_ROWS;
 		while (true) {
-			const page = await ownerReadAll<PromptEntityRow & { readonly cursor: number | string }>(
+			const page = await ownerReadAll<PromptEntityRow & { readonly cursor: number }>(
 				owner,
 				source.page,
 				[agentId, after, rows],
@@ -308,7 +308,7 @@ export async function matchPromptEntities(
 				continue;
 			}
 			if (page === null) {
-				const skipped = await ownerReadOne<{ readonly cursor: number | string }>(owner, source.next, [agentId, after], {
+				const skipped = await ownerReadOne<{ readonly cursor: number }>(owner, source.next, [agentId, after], {
 					operation: `${source.operation}.skip`,
 					deadlineMs: 5_000,
 					estimatedWorkUnits: 1,
@@ -319,6 +319,7 @@ export async function matchPromptEntities(
 					agentId,
 				});
 				after = skipped.cursor;
+				rows = PROMPT_ENTITY_PAGE_ROWS;
 				continue;
 			}
 			for (const row of page) {
@@ -327,6 +328,7 @@ export async function matchPromptEntities(
 			const last = page.at(-1);
 			if (!last || page.length < rows) break;
 			after = last.cursor;
+			rows = Math.min(PROMPT_ENTITY_PAGE_ROWS, rows * 2);
 		}
 	}
 	return selectPromptEntityMatches(candidates, userMessage);

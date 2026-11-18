@@ -157,6 +157,54 @@ describe("matchPromptEntities", () => {
 		expect(plan.some((detail) => detail.includes("TEMP B-TREE"))).toBe(false);
 	});
 
+	it("returns to full pages after skipping one oversized row", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const insert = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, ?, ?)`,
+			);
+			const huge = `Oversized ${"x".repeat(1_100_000)}`;
+			insert.run("ent-huge", huge, huge.toLowerCase(), now, now);
+			for (let index = 0; index < 5_000; index += 1) {
+				insert.run(`ent-normal-${index}`, `Normal Project ${index}`, `normal project ${index}`, now, now);
+			}
+			insert.run("ent-target", "Lanternfield", "lanternfield", now, now);
+		});
+		const owner = await getDbOwner(DB_PATH());
+		const submit = owner.submit.bind(owner);
+		let reads = 0;
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			if (options.operation.startsWith("user-prompt-submit.entity-names")) reads += 1;
+			return submit<Result>(request, options);
+		};
+		const matches = await matchPromptEntities(DB_PATH(), "default", "Where is Lanternfield now?").finally(() => {
+			owner.submit = submit;
+		});
+		expect(matches.map((match) => match.entityName)).toEqual(["Lanternfield"]);
+		expect(reads).toBeLessThan(40);
+	});
+
+	it("skips an alias whose ordering key alone exceeds the owner result limit", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const entity = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, ?, ?)`,
+			);
+			const alias = db.prepare(
+				`INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, status)
+				 VALUES (?, ?, 'default', ?, ?, 'active')`,
+			);
+			entity.run("ent-huge-alias", "Huge Alias Owner", "huge alias owner", now, now);
+			alias.run("alias-huge", "ent-huge-alias", "a".repeat(1_048_676), "a".repeat(1_048_676));
+			entity.run("ent-beacon", "Beacon Project", "beacon project", now, now);
+			alias.run("alias-beacon", "ent-beacon", "beaconharbor", "beaconharbor");
+		});
+		const matches = await matchPromptEntities(DB_PATH(), "default", "Has beaconharbor shipped?");
+		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Beacon Project", "alias"]]);
+	});
+
 	describe("promptPhraseSpan matches precomputed prompt terms", () => {
 		const promptTerms = ["tell", "me", "about", "nicholai", "and", "the", "signet", "project"];
 

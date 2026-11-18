@@ -630,4 +630,70 @@ describe("transcript evidence prefetch owner scheduling", () => {
 			owner.submit = submit;
 		}
 	});
+	it("admits no recall accessor reads after cancellation", async () => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+				 VALUES ('accessor-cancel-memory', 'Speyer tourism board phone number', 'fact', 'agent-a', datetime('now'), datetime('now'), 'test')`,
+			).run();
+		});
+		const owner = await getDbOwner();
+		const submit = owner.submit.bind(owner);
+		const accessor = getDbAccessor();
+		const read = accessor.withReadDbAsync.bind(accessor);
+		const cancellation = new AbortController();
+		const late: string[] = [];
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			const handle = submit<Result>(request, options);
+			if (options.operation !== "memory-search.authorize-candidates") return handle;
+			return {
+				...handle,
+				result: handle.result.then((value) => {
+					cancellation.abort(new Error("recall abandoned"));
+					return value;
+				}),
+			};
+		};
+		accessor.withReadDbAsync = (fn, options) =>
+			read((db) => {
+				if (cancellation.signal.aborted && String(options?.siteToken ?? "").startsWith("db:recall.")) {
+					late.push(String(options?.siteToken));
+				}
+				return fn(db);
+			}, options);
+		try {
+			const raw = loadMemoryConfig(directory);
+			const error = await hybridRecall(
+				{
+					query: "Speyer tourism board phone number",
+					limit: 3,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					trackRecallAccess: false,
+					claimRecallResults: false,
+					transcriptEvidence: false,
+				},
+				{
+					...raw,
+					search: { ...raw.search, rehearsal_enabled: false },
+					pipelineV2: {
+						...raw.pipelineV2,
+						graph: { ...raw.pipelineV2.graph, enabled: false },
+						reranker: { ...raw.pipelineV2.reranker, enabled: false },
+					},
+				},
+				async () => null,
+				{ signal: cancellation.signal },
+			).then(
+				() => null,
+				(reason: unknown) => reason,
+			);
+			expect(cancellation.signal.aborted).toBe(true);
+			expect(error instanceof Error ? error.message : null).toBe("recall abandoned");
+			expect(late).toEqual([]);
+		} finally {
+			owner.submit = submit;
+			accessor.withReadDbAsync = read;
+		}
+	});
 });
