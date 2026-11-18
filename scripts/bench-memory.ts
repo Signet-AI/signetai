@@ -730,7 +730,11 @@ async function fetchOpenRouterEndpoints(
 	apiKey: string,
 	modelId: string,
 ): Promise<OpenRouterEndpointSnapshot[]> {
-	const response = await fetch(`${baseUrl}/models/${encodeURIComponent(modelId)}/endpoints`, {
+	const modelPath = modelId
+		.split("/")
+		.map((segment) => encodeURIComponent(segment))
+		.join("/");
+	const response = await fetch(`${baseUrl}/models/${modelPath}/endpoints`, {
 		headers: { authorization: `Bearer ${apiKey}` },
 		signal: AbortSignal.timeout(OPENROUTER_SNAPSHOT_TIMEOUT_MS),
 	});

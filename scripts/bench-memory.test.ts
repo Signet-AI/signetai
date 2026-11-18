@@ -415,6 +415,30 @@ describe("MemoryBench launcher", () => {
 		);
 	});
 
+	test("fetches endpoints with each model path segment encoded separately", async () => {
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch: async (request) => {
+				const { pathname } = new URL(request.url);
+				if (pathname.includes("%2F")) return new Response("not found", { status: 404 });
+				if (!pathname.endsWith("/endpoints")) return Response.json({ data: { usage: 1 } });
+				return Response.json({ data: { endpoints: [{ provider_name: "DeepInfra" }] } });
+			},
+		});
+		try {
+			const snapshot = await captureOpenRouterSnapshot(`http://127.0.0.1:${server.port}/api/v1`, "or-test-key", [
+				"openai/gpt-4o",
+			]);
+			const endpointResult = snapshot.endpoints["openai/gpt-4o"];
+			if (!Array.isArray(endpointResult)) throw new Error("endpoint snapshot errored");
+			expect(endpointResult).toBeArrayOfSize(1);
+			expect(endpointResult[0]).toMatchObject({ provider_name: "DeepInfra" });
+		} finally {
+			server.stop(true);
+		}
+	});
+
 	test("detects snapshot models from judge and answering-model CLI args", () => {
 		const env = { SIGNET_BENCH_ANSWERING_MODEL: "openrouter:a/b" };
 		expect(openRouterSnapshotModels(env, "zai-coding-cn", ["run", "-j", "openrouter:c/d"])).toEqual(["a/b", "c/d"]);
