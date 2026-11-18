@@ -129,21 +129,18 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 let constellation: { readonly path: string; readonly etag: string; readonly data: KnowledgeConstellation } | undefined;
 async function getConstellation(path: string): Promise<KnowledgeConstellation | null> {
 	const known = constellation?.path === path ? constellation : undefined;
-	try {
-		const res = await dashboardFetch(`${API_BASE}${path}`, {
-			cache: "no-store",
-			headers: { Accept: "application/json", ...authHeaders(), ...(known ? { "If-None-Match": known.etag } : {}) },
-		});
-		if (res.status === 304 && known) return known.data;
-		const body: unknown = await res.json().catch(() => null);
-		if (!res.ok || typeof body !== "object" || body === null || "error" in body || !("entities" in body)) return null;
-		const data = body as KnowledgeConstellation;
-		const tag = res.headers.get("ETag");
-		constellation = tag ? { path, etag: tag, data } : undefined;
-		return data;
-	} catch {
-		return null;
-	}
+	const res = await dashboardFetch(`${API_BASE}${path}`, {
+		cache: "no-store",
+		headers: { Accept: "application/json", ...authHeaders(), ...(known ? { "If-None-Match": known.etag } : {}) },
+	});
+	if (res.status === 304 && known) return known.data;
+	if (!res.ok) return null;
+	const body: unknown = await res.json();
+	if (typeof body !== "object" || body === null || "error" in body || !("entities" in body)) return null;
+	const data = body as KnowledgeConstellation;
+	const tag = res.headers.get("ETag");
+	constellation = tag ? { path, etag: tag, data } : undefined;
+	return data;
 }
 
 async function postJSON<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T | null> {

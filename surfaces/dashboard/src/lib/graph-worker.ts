@@ -29,16 +29,18 @@ interface Channel {
 }
 
 const simulation = new ForceSimulation();
-const kernel: Promise<LayoutKernel | undefined> = fetch(new URL("./graph-layout.wasm", import.meta.url))
+const kernel: Promise<{ readonly kernel: LayoutKernel } | { readonly failure: unknown }> = fetch(
+	new URL("./graph-layout.wasm", import.meta.url),
+)
 	.then((response) => {
 		if (!response.ok) throw new Error(`HTTP ${response.status}`);
 		return response.arrayBuffer();
 	})
 	.then(loadLayoutKernel)
-	.catch((error: unknown) => {
-		console.warn("Graph layout kernel unavailable; laying out with d3-force:", error);
-		return undefined;
-	});
+	.then(
+		(loaded) => ({ kernel: loaded }),
+		(failure: unknown) => ({ failure }),
+	);
 let channel = self as unknown as Channel;
 let nodes: LayoutNode[] = [];
 let byId = new Map<string, LayoutNode>();
@@ -60,8 +62,10 @@ const publish = () => {
 const save = (heat = simulation.heat()) => {
 	lastSave = performance.now();
 	if (!cacheKey || !nodes.length) return;
-	writeLayout(cacheKey, nodes, heat).catch((error: unknown) => {
-		console.warn("Graph layout cache write failed:", error);
+	const key = cacheKey;
+	writeLayout(key, nodes, heat).catch((error: unknown) => {
+		if (cacheKey === key) cacheKey = undefined;
+		console.warn("Graph layout cache write failed; layout caching is off until the graph reloads:", error);
 	});
 };
 const stop = () => {
@@ -117,10 +121,12 @@ const receive = async (event: MessageEvent<GraphWorkerRequest>) => {
 		cacheKey = undefined;
 		const [cached, compiled] = await Promise.all([restore(request.layoutScope), kernel]);
 		if (current !== generation) return;
+		if ("failure" in compiled)
+			console.warn("Graph layout kernel unavailable; laying out with d3-force:", compiled.failure);
 		const layout = graphLayout(request.data, cached?.positions);
 		nodes = layout.nodes;
 		byId = new Map(nodes.map((node) => [node.id, node]));
-		simulation.init(nodes, layout.edges, compiled);
+		simulation.init(nodes, layout.edges, "kernel" in compiled ? compiled.kernel : undefined);
 		lastSave = performance.now();
 		const added = nodes.length - layout.reused;
 		origin = cached === null ? "unavailable" : !layout.reused ? "fresh" : added ? "partial" : "cached";
