@@ -12,6 +12,7 @@ export interface DbOwnerSqlOptions {
 	readonly workloadClass?: DbOwnerWorkloadClass;
 	readonly deadlineMs?: number;
 	readonly estimatedWorkUnits?: number;
+	readonly signal?: AbortSignal;
 }
 
 function parameter(value: unknown): DbOwnerParameter {
@@ -25,6 +26,8 @@ function parameter(value: unknown): DbOwnerParameter {
 }
 
 function submit<Result>(client: DbOwnerClient, request: DbOwnerRequest, options: DbOwnerSqlOptions): Promise<Result> {
+	const signal = options.signal;
+	if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("DB owner request was cancelled"));
 	const handle = client.submit<Result>(request, {
 		operation: options.operation,
 		lane: options.lane ?? "maintenance",
@@ -32,7 +35,10 @@ function submit<Result>(client: DbOwnerClient, request: DbOwnerRequest, options:
 		deadlineMs: options.deadlineMs ?? 30_000,
 		estimatedWorkUnits: options.estimatedWorkUnits,
 	});
-	return handle.result;
+	if (!signal) return handle.result;
+	const cancel = (): void => handle.cancel();
+	signal.addEventListener("abort", cancel, { once: true });
+	return handle.result.finally(() => signal.removeEventListener("abort", cancel));
 }
 
 export function ownerReadAll<Row extends object>(

@@ -20,6 +20,7 @@ import { vectorSearchThroughDbOwner } from "./db-owner-recall";
 import { ownerBytesFromHex, ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { getDbOwner, getDbRecallOwner } from "./db-owner-runtime";
 import { DB_OWNER_MAX_RESULT_BYTES, DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
+import type { EmbeddingFetchOptions } from "./embedding-fetch";
 import {
 	embeddingProfileFingerprint,
 	embeddingProfileFingerprintsEqual,
@@ -113,6 +114,7 @@ export interface RecallParams {
 	excludeAggregateRecallMemories?: boolean;
 	trackRecallAccess?: boolean;
 	telemetrySurface?: RecallSurface;
+	transcriptEvidence?: boolean;
 }
 
 export interface RecallTranscriptEvidenceMeta {
@@ -206,7 +208,12 @@ export interface AggregateRecallUsageStage extends Omit<LlmUsage, "accountingPro
 	readonly fallbackCount: number;
 }
 
-export type EmbedFn = (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null>;
+export type EmbedFn = (
+	text: string,
+	cfg: EmbeddingConfig,
+	role?: EmbeddingRole,
+	options?: EmbeddingFetchOptions,
+) => Promise<number[] | null>;
 
 export interface RecallStageTiming {
 	name: string;
@@ -2145,6 +2152,7 @@ export async function hybridRecall(
 		query = temporal.adjustedQuery;
 	}
 	transcriptEvidenceAllowed =
+		params.transcriptEvidence !== false &&
 		!temporal.meta &&
 		params.sourceOnly !== true &&
 		!hasMemoryOnlyFilters(params) &&
@@ -2192,7 +2200,9 @@ export async function hybridRecall(
 		const embeddingStart = performance.now();
 		let promise: Promise<number[] | null>;
 		try {
-			promise = Promise.resolve(embedFn(query, cfg.embedding, "query"));
+			promise = Promise.resolve(
+				embedFn(query, cfg.embedding, "query", execution?.signal ? { signal: execution.signal } : undefined),
+			);
 		} catch (e) {
 			promise = Promise.reject(e);
 		}

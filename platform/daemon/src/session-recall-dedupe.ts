@@ -25,6 +25,8 @@ export interface ApplyRecallDedupeOptions<T extends RecallDedupeItem> {
 	readonly claim: boolean;
 	readonly items: readonly T[];
 	readonly markRepeated?: (item: T) => T;
+	readonly signal?: AbortSignal;
+	readonly deadlineMs?: number;
 }
 
 export interface ClaimRecallItemsOptions<T extends RecallDedupeItem> {
@@ -33,6 +35,8 @@ export interface ClaimRecallItemsOptions<T extends RecallDedupeItem> {
 	readonly surface: string;
 	readonly mode: string;
 	readonly items: readonly T[];
+	readonly signal?: AbortSignal;
+	readonly deadlineMs?: number;
 }
 
 function normalizeSessionKey(sessionKey: string | null | undefined): string | null {
@@ -230,7 +234,7 @@ export function applyRecallDedupe<T extends RecallDedupeItem>(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return getDbAccessor().withWriteTx(
 			(db: import("./db-accessor").WriteDb) => applyRecallDedupeInTx(db, opts, sessionKey, agentId),
-			"session-recall-dedupe.ts:231",
+			"session-recall-dedupe.ts:235",
 		);
 	} catch (error) {
 		logger.warn("memory", "Recall dedupe failed open", {
@@ -253,7 +257,9 @@ export async function applyRecallDedupeAsync<T extends RecallDedupeItem>(
 	const agentId = normalizeAgentId(opts.agentId, sessionKey);
 	try {
 		return await getDbAccessor().withWriteTxAsync((db) => applyRecallDedupeInTx(db, opts, sessionKey, agentId), {
-			siteToken: "session-recall-dedupe.ts:255",
+			siteToken: "session-recall-dedupe.ts:259",
+			signal: opts.signal,
+			deadlineMs: opts.deadlineMs,
 		});
 	} catch (error) {
 		logger.warn("memory", "Recall dedupe failed open", {
@@ -297,7 +303,7 @@ export async function advanceRecallContextEpochAsync(input: {
 				const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
 				return { advanced: (changed?.count ?? 0) > 0, contextEpoch: next };
 			},
-			{ siteToken: "session-recall-dedupe.ts:288" },
+			{ siteToken: "session-recall-dedupe.ts:294" },
 		);
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
@@ -343,7 +349,7 @@ export function advanceRecallContextEpoch(input: {
 			).run(sessionKey, agentId, next, input.reason, input.sourceRef ?? null, new Date().toISOString());
 			const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
 			return { advanced: (changed?.count ?? 0) > 0, contextEpoch: next };
-		}, "session-recall-dedupe.ts:336");
+		}, "session-recall-dedupe.ts:342");
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
 			error: error instanceof Error ? error.message : String(error),

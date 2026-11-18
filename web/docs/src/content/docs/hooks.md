@@ -445,13 +445,17 @@ The hook listens for known ontology entities and active entity aliases. A
 direct entity hit is the gate: when the prompt names a known person or project,
 Signet runs the normal daemon recall (`hybridRecall`) with the prompt as the
 query and injects the results that clear `hooks.userPromptSubmit.minScore` into
-a compact `## Relevant Memory: <entity>` block. `maxInjectChars` caps the block.
-Each line keeps its memory or source ID.
+a compact `## Relevant Memory: <entity>` block. `maxInjectChars` caps the
+rendered block, header included. Each line keeps its memory or source ID. Raw
+transcript evidence is excluded from this recall.
 
 Injected results are claimed in the session's recall dedupe ledger for the
 current context epoch, so a memory is delivered at most once per session until
 the context resets (clear or compaction). A repeat entity hit that only finds
-already-delivered results returns an empty `inject`.
+already-delivered results returns an empty `inject`. If the claim cannot be
+recorded, because the ledger is unavailable or the prompt-submit deadline
+(`embedding.promptSubmitTimeoutMs`) passed while the claim was queued, nothing is
+injected; Signet never delivers a memory it has not recorded as delivered.
 
 When the prompt is low-signal, the hook skips automatic recall before entity
 matching and preserves the stable per-prompt context contract (an empty

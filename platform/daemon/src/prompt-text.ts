@@ -264,11 +264,36 @@ export function countPromptTermOverlap(text: string, promptTerms: ReadonlyArray<
 	return overlap;
 }
 
-const PROVENANCE_BLOCK = /\[([^[\]\n]{0,80}\bprovenance)\][\s\S]*?\[\/\1\]/gi;
+const PROVENANCE_TAG = /\[(\/?)([^[\]\n]{0,80}\bprovenance)\]/gi;
+
+type ProvenanceTag = { readonly start: number; readonly end: number; readonly name: string };
 
 export function stripProvenanceBlocks(text: string): string {
-	return text
-		.replace(PROVENANCE_BLOCK, "")
+	const opens: ProvenanceTag[] = [];
+	const closes = new Map<string, ProvenanceTag[]>();
+	for (const match of text.matchAll(PROVENANCE_TAG)) {
+		const start = match.index ?? 0;
+		const tag = { start, end: start + match[0].length, name: (match[2] ?? "").toLowerCase() };
+		if (match[1]) closes.set(tag.name, [...(closes.get(tag.name) ?? []), tag]);
+		else opens.push(tag);
+	}
+	const cursors = new Map<string, number>();
+	const kept: string[] = [];
+	let position = 0;
+	for (const open of opens) {
+		if (open.start < position) continue;
+		const candidates = closes.get(open.name) ?? [];
+		let cursor = cursors.get(open.name) ?? 0;
+		while ((candidates[cursor]?.start ?? Number.POSITIVE_INFINITY) < open.end) cursor++;
+		cursors.set(open.name, cursor);
+		const close = candidates[cursor];
+		if (!close) continue;
+		kept.push(text.slice(position, open.start));
+		position = close.end;
+	}
+	kept.push(text.slice(position));
+	return kept
+		.join("")
 		.replace(/\n{3,}/g, "\n\n")
 		.trim();
 }

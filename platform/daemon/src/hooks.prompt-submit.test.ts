@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { handleUserPromptSubmit, formatPromptClockContext } from "./hooks";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
 import { setActiveTelemetry } from "./telemetry";
@@ -276,8 +276,10 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 			recallMode: "automatic",
 			claimRecallResults: false,
 			trackRecallAccess: false,
+			transcriptEvidence: false,
 		});
 		expect(params?.project).toBeUndefined();
+		expect(hybridRecallMock.mock.calls[0]?.[3]?.signal).toBeInstanceOf(AbortSignal);
 		expect(result).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
 		expect(result.inject).toContain("## Relevant Memory: Signet");
 		expect(result.inject).toContain("- Prompt context comes from entity-gated recall. (mem-architecture)");
@@ -311,6 +313,95 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 		expect(first.inject).toContain("Prompt context comes from entity-gated recall.");
 		expect(second).toMatchObject({ inject: "", memoryCount: 0, engine: "deduped" });
 		expect(otherSession.inject).toContain("Prompt context comes from entity-gated recall.");
+	});
+
+	it("injects nothing when the delivery claim cannot be recorded", async () => {
+		seedEntityContext();
+		getSyncDbAccessor().withWriteTx((db) => {
+			db.exec("DROP TABLE session_recall_events");
+		});
+
+		const first = await submit("How should Signet architecture handle prompt context?", "session-claim-down");
+		const second = await submit("How should Signet architecture handle prompt context?", "session-claim-down");
+
+		for (const result of [first, second]) {
+			expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "claim-failed" });
+		}
+	});
+
+	it("keeps the rendered block, header included, within maxInjectChars", async () => {
+		seedEntityContext();
+		recallRows = ["alpha", "beta", "gamma"].map((name) => ({
+			id: `mem-${name}`,
+			content: `${name} Signet architecture detail`.padEnd(160, " x"),
+			score: 0.9,
+		}));
+
+		const result = await submit("How should Signet architecture handle prompt context?", "session-budget");
+
+		expect(result.memoryCount).toBe(2);
+		expect(result.dynamicContext.length).toBeLessThanOrEqual(500);
+	});
+
+	it("does not claim or inject when the deadline expires while the claim is queued", async () => {
+		seedEntityContext();
+		const busyWrites: Promise<void>[] = [];
+		const deps = makeDeps({
+			loadMemoryConfig: () => {
+				const cfg = realLoadMemoryConfig(agentsDir);
+				return { ...cfg, embedding: { ...cfg.embedding, promptSubmitTimeoutMs: 30 } };
+			},
+			matchPromptEntities: async () => [
+				{
+					entityId: "entity-signet",
+					entityName: "Signet",
+					entityType: "project",
+					matchedText: "signet",
+					matchSource: "name",
+					mentions: 10,
+				},
+			],
+			hybridRecall: (async () => {
+				for (let index = 0; index < 40; index += 1) {
+					busyWrites.push(
+						getDbAccessor().withWriteTxAsync(() => {
+							const until = performance.now() + 5;
+							while (performance.now() < until) {}
+						}),
+					);
+				}
+				return {
+					results: SIGNET_RECALL.map((row) => ({
+						...row,
+						source: "hybrid",
+						type: "fact",
+						pinned: false,
+						importance: 0.8,
+					})),
+				};
+			}) as unknown as PromptDeps["hybridRecall"],
+		});
+
+		const started = performance.now();
+		const result = await submit(
+			"How should Signet architecture handle prompt context?",
+			"session-claim-deadline",
+			deps,
+		);
+		const elapsed = performance.now() - started;
+		await Promise.allSettled(busyWrites);
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "provider-timeout" });
+		expect(elapsed).toBeLessThan(150);
+		expect(warnMock.mock.calls.some((call) => call[1] === "Prompt-submit recall claim failed; nothing injected")).toBe(
+			true,
+		);
+		const claims = getSyncDbAccessor().withReadDb((db) =>
+			db
+				.prepare("SELECT COUNT(*) AS count FROM session_recall_events WHERE session_key = ?")
+				.get("session-claim-deadline"),
+		);
+		expect(claims).toEqual({ count: 0 });
 	});
 
 	it("stays silent when the entity is known but no recall result clears the gate", async () => {

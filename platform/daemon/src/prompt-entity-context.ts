@@ -194,25 +194,13 @@ function selectPromptEntityMatches(rows: readonly PromptEntityRow[], userMessage
 	return result;
 }
 
-export async function matchPromptEntities(
-	memoryDbPath: string,
-	agentId: string,
-	userMessage: string,
-): Promise<readonly PromptEntityMatch[]> {
-	if (!existsSync(memoryDbPath)) return [];
-	const owner = await getDbOwner(memoryDbPath);
-	const tables = await ownerReadAll<{ readonly name: string }>(
-		owner,
-		`SELECT name FROM sqlite_master
-		 WHERE type = 'table'
-		   AND name IN ('entities', 'entity_aliases')`,
-		[],
-		{ operation: "user-prompt-submit.entity-tables", deadlineMs: 5_000, estimatedWorkUnits: 1 },
-	);
-	if (tables.length !== 2) return [];
-	const rows = await ownerReadAll<PromptEntityRow>(
-		owner,
-		`SELECT
+const PROMPT_ENTITY_PAGE_ROWS = 1000;
+
+const PROMPT_ENTITY_SOURCES = [
+	{
+		operation: "user-prompt-submit.entity-names",
+		sql: `SELECT
+		   e.rowid AS row_id,
 		   e.id AS entity_id,
 		   e.name AS entity_name,
 		   COALESCE(e.entity_type, 'unknown') AS entity_type,
@@ -224,8 +212,14 @@ export async function matchPromptEntities(
 		 WHERE e.agent_id = ?
 		   AND COALESCE(e.status, 'active') = 'active'
 		   AND LOWER(e.entity_type) IN ('person', 'project')
-		 UNION ALL
-		 SELECT
+		   AND e.rowid > ?
+		 ORDER BY e.rowid
+		 LIMIT ?`,
+	},
+	{
+		operation: "user-prompt-submit.entity-aliases",
+		sql: `SELECT
+		   a.rowid AS row_id,
 		   e.id AS entity_id,
 		   e.name AS entity_name,
 		   COALESCE(e.entity_type, 'unknown') AS entity_type,
@@ -238,9 +232,53 @@ export async function matchPromptEntities(
 		 WHERE a.agent_id = ?
 		   AND a.status = 'active'
 		   AND COALESCE(e.status, 'active') = 'active'
-		   AND LOWER(e.entity_type) IN ('person', 'project')`,
-		[agentId, agentId],
-		{ operation: "user-prompt-submit.entity-match", deadlineMs: 5_000, estimatedWorkUnits: 200 },
+		   AND LOWER(e.entity_type) IN ('person', 'project')
+		   AND a.rowid > ?
+		 ORDER BY a.rowid
+		 LIMIT ?`,
+	},
+] as const;
+
+export async function matchPromptEntities(
+	memoryDbPath: string,
+	agentId: string,
+	userMessage: string,
+	signal?: AbortSignal,
+): Promise<readonly PromptEntityMatch[]> {
+	if (!existsSync(memoryDbPath)) return [];
+	const owner = await getDbOwner(memoryDbPath);
+	const tables = await ownerReadAll<{ readonly name: string }>(
+		owner,
+		`SELECT name FROM sqlite_master
+		 WHERE type = 'table'
+		   AND name IN ('entities', 'entity_aliases')`,
+		[],
+		{ operation: "user-prompt-submit.entity-tables", deadlineMs: 5_000, estimatedWorkUnits: 1, signal },
 	);
-	return selectPromptEntityMatches(rows, userMessage);
+	if (tables.length !== 2) return [];
+	const promptTerms = promptEntityTerms(userMessage);
+	const candidates: PromptEntityRow[] = [];
+	for (const source of PROMPT_ENTITY_SOURCES) {
+		let after = 0;
+		while (true) {
+			const page = await ownerReadAll<PromptEntityRow & { readonly row_id: number }>(
+				owner,
+				source.sql,
+				[agentId, after, PROMPT_ENTITY_PAGE_ROWS],
+				{
+					operation: source.operation,
+					deadlineMs: 5_000,
+					estimatedWorkUnits: PROMPT_ENTITY_PAGE_ROWS,
+					signal,
+				},
+			);
+			for (const row of page) {
+				if (promptPhraseSpan(promptTerms, row.matched_text)) candidates.push(row);
+			}
+			const last = page.at(-1);
+			if (!last || page.length < PROMPT_ENTITY_PAGE_ROWS) break;
+			after = last.row_id;
+		}
+	}
+	return selectPromptEntityMatches(candidates, userMessage);
 }

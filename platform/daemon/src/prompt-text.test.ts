@@ -30,6 +30,15 @@ describe("prompt text helpers", () => {
 		expect(stripProvenanceBlocks("[Discord sender provenance] unclosed")).toBe("[Discord sender provenance] unclosed");
 	});
 
+	test("strips provenance in linear time on adversarial unmatched tags", () => {
+		const hostile = "[Discord sender provenance]".repeat(32_000);
+		const started = performance.now();
+		expect(stripProvenanceBlocks(hostile)).toBe(hostile);
+		expect(performance.now() - started).toBeLessThan(500);
+		const closed = `${"[Discord sender provenance]".repeat(5_000)}x[/Discord sender provenance]tail`;
+		expect(stripProvenanceBlocks(closed)).toBe("tail");
+	});
+
 	test("extracts substantive words without Discord mentions or stopwords", () => {
 		expect(extractSubstantiveWords("<@123> Please inspect KA-6 pre-compaction behavior now")).toEqual([
 			"ka-6",
