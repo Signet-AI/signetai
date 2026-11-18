@@ -22,13 +22,17 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 */
-import { categoryColor, type EntityCategory } from "./entity-category";
-import { glPainter } from "./graph-gl";
-import { GraphHoverIntent } from "./graph-hover";
-import { canvasPainter, PAINT_SHAPES, type PaintShape } from "./graph-paint";
-import { ViewportState } from "./graph-viewport";
-import type { GraphWorkerResponse, GraphWorkerRequest } from "./graph-worker";
-import type { LayoutNode } from "./graph-layout";
+import type { EntityCategory } from "./entity-category";
+import {
+	createGraphEngine,
+	ENGINE_KEYS,
+	type EngineInput,
+	type EngineOutput,
+	type GraphEngine,
+	nodeTint,
+} from "./graph-engine";
+import type { FontSource, RenderWorkerRequest } from "./graph-render-worker";
+import type { GraphWorkerRequest } from "./graph-worker";
 
 export type SceneNodeKind =
 	| "entity"
@@ -102,116 +106,40 @@ export interface GraphSceneHandle {
 	dispose(): void;
 }
 
-const COLORS: Record<SceneNodeKind, string> = {
-	entity: "#eef4ff",
-	source: "#8be0ff",
-	aspect: "#b9c8ff",
-	group: "#8197e8",
-	claimSlot: "#8197e8",
-	attribute: "#7aa2ff",
-	claim: "#93d9ff",
-	constraint: "#ff8fab",
-	assertion: "#a5b8ff",
-	origin: "#56679a",
-	memory: "#56679a",
-};
+const LABEL_FONT = "Schibsted Grotesk";
+const LABEL_WEIGHTS = new Set(["400", "500", "normal"]);
 
-const LIGHT_COLORS: Record<SceneNodeKind, string> = {
-	entity: "#16213f",
-	source: "#0369a1",
-	aspect: "#3b4fa0",
-	group: "#6274c0",
-	claimSlot: "#6274c0",
-	attribute: "#2f5bd3",
-	claim: "#0e7490",
-	constraint: "#be123c",
-	assertion: "#4256b8",
-	origin: "#94a3b8",
-	memory: "#94a3b8",
-};
-
-const RETRIEVAL = { dark: "#6ef2c0", light: "#059669" } as const;
-const SURFACE = { dark: "#101214", light: "#f5f7f9" } as const;
-const BRIDGE = { dark: "#a1a1aa", light: "#52525b" } as const;
-const MAX_SOURCE_LABELS = 20;
-const SOURCE_LABEL_ZOOM = 3;
-const BASE_ENTITY_LABELS = 12;
-const GLYPH_SCREEN_RADIUS = 2.4;
-const EDGE_BUCKETS = 40;
-const ALPHA_BUCKETS = 64;
-const DOT_DEVICE_RADIUS = 2;
-const RADIUS: Record<SceneNodeKind, number> = {
-	entity: 5,
-	source: 2.8,
-	aspect: 3.3,
-	group: 2.6,
-	claimSlot: 2.3,
-	attribute: 1.9,
-	claim: 2.1,
-	constraint: 2.4,
-	assertion: 2,
-	origin: 1.5,
-	memory: 1.5,
-};
-const MAX_FOCUS_ZOOM = 4;
-const FOCUS_REACH = 48;
-
-function tierOf(kind: SceneNodeKind): number {
-	if (kind === "entity" || kind === "source") return 0;
-	if (kind === "aspect" || kind === "group" || kind === "claimSlot") return 1;
-	return 2;
-}
-
-function smoothstep(edge0: number, edge1: number, value: number): number {
-	const t = Math.min(1, Math.max(0, (value - edge0) / (edge1 - edge0)));
-	return t * t * (3 - 2 * t);
-}
-
-function detailVisibility(tier: number, detail: number): number {
-	if (tier === 0) return 1;
-	if (tier === 1) return 0.75 + 0.25 * smoothstep(1, 1.8, detail);
-	return 0.55 + 0.45 * smoothstep(1.2, 2.4, detail);
-}
-
-function interactive(tier: number, detail: number): boolean {
-	if (tier === 0) return true;
-	return detail >= (tier === 1 ? 1.35 : 2);
-}
-
-function labelPriority(node: LayoutNode, active: LayoutNode | undefined): number {
-	if (node.id === active?.id) return 4;
-	if (node.kind === "entity") return 2 + node.weight;
-	if (node.kind === "source") return 1 + node.weight;
-	return node.weight;
-}
-
-const GLYPHS: Record<SceneNodeKind, { readonly shape: Exclude<PaintShape, "dot">; readonly filled: boolean }> = {
-	entity: { shape: "circle", filled: true },
-	source: { shape: "square", filled: true },
-	aspect: { shape: "hexagon", filled: true },
-	group: { shape: "hexagon", filled: false },
-	claimSlot: { shape: "diamond", filled: false },
-	attribute: { shape: "circle", filled: true },
-	claim: { shape: "diamond", filled: true },
-	constraint: { shape: "triangle", filled: true },
-	assertion: { shape: "circle", filled: false },
-	origin: { shape: "square", filled: false },
-	memory: { shape: "square", filled: false },
-};
-
-const SHAPE_INDEX = Object.fromEntries(PAINT_SHAPES.map((shape, index) => [shape, index])) as Record<
-	PaintShape,
-	number
->;
-
-function pill(context: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
-	const r = h / 2;
-	context.moveTo(x + r, y);
-	context.arcTo(x + w, y, x + w, y + h, r);
-	context.arcTo(x + w, y + h, x, y + h, r);
-	context.arcTo(x, y + h, x, y, r);
-	context.arcTo(x, y, x + w, y, r);
-	context.closePath();
+function fontSources(): FontSource[] {
+	const fonts: FontSource[] = [];
+	for (const sheet of Array.from(document.styleSheets)) {
+		let rules: CSSRuleList;
+		try {
+			rules = sheet.cssRules;
+		} catch {
+			continue;
+		}
+		for (const rule of Array.from(rules)) {
+			if (!(rule instanceof CSSFontFaceRule)) continue;
+			const family = rule.style.getPropertyValue("font-family").replace(/["']/g, "").trim();
+			const weight = rule.style.getPropertyValue("font-weight").trim() || "400";
+			if (family !== LABEL_FONT || !LABEL_WEIGHTS.has(weight)) continue;
+			const base = sheet.href ?? document.baseURI;
+			const source = rule.style
+				.getPropertyValue("src")
+				.replace(/url\((["']?)([^"')]+)\1\)/g, (_, _quote: string, url: string) => `url("${new URL(url, base).href}")`);
+			const range = rule.style.getPropertyValue("unicode-range").trim();
+			fonts.push({
+				family,
+				source,
+				descriptors: {
+					weight,
+					style: rule.style.getPropertyValue("font-style").trim() || "normal",
+					...(range ? { unicodeRange: range } : {}),
+				},
+			});
+		}
+	}
+	return fonts;
 }
 
 export function createGraphScene(
@@ -226,7 +154,6 @@ export function createGraphScene(
 ): GraphSceneHandle {
 	const canvas = document.createElement("canvas");
 	canvas.tabIndex = 0;
-	canvas.setAttribute("aria-busy", "true");
 	canvas.setAttribute(
 		"aria-label",
 		"Memory graph. Drag to pan, scroll to zoom, click a node to select it. With a node selected, arrow keys move between related nodes. Z fits, C centers, Escape clears the selection.",
@@ -235,98 +162,33 @@ export function createGraphScene(
 	const overlay = document.createElement("canvas");
 	overlay.setAttribute("aria-hidden", "true");
 	overlay.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;";
-	const gpu = glPainter(canvas);
-	const context = (gpu ? overlay : canvas).getContext("2d");
-	if (!context) throw new Error("Canvas is unavailable");
-	const painter = gpu ?? canvasPainter(context);
-	canvas.dataset.renderer = gpu ? "webgl2" : "canvas";
 	const tooltip = document.createElement("div");
 	tooltip.className = "graph-tooltip";
 	tooltip.hidden = true;
 	tooltip.setAttribute("role", "status");
-	const worker = new Worker(new URL("./graph-worker.ts", import.meta.url), { type: "module" });
-	container.append(canvas, ...(gpu ? [overlay] : []), tooltip);
-	let nodes: LayoutNode[] = [];
-	let overviewZoom = Number.POSITIVE_INFINITY;
-	let byId = new Map<string, LayoutNode>();
-	let edges: Array<{ edge: SceneEdge; from: LayoutNode; to: LayoutNode }> = [];
+	container.append(canvas, overlay, tooltip);
+	const byId = new Map(data.nodes.map((node) => [node.id, node]));
+	const simulation = new Worker(new URL("./graph-worker.ts", import.meta.url), { type: "module" });
+	let keys = new Set<string>(ENGINE_KEYS);
 	let width = 1;
 	let height = 1;
-	const viewport = new ViewportState();
-	let selected: LayoutNode | undefined;
-	const hover = new GraphHoverIntent();
-	const emphasis = new Map<string, number>();
-	let retrieved = new Set<string>();
-	let retrievedNeighbors = new Set<string>();
-	let pendingRetrieval: { ids: Set<string>; at: number } | undefined;
-	let followAgent = true;
-	let followDue = false;
-	let lastFollow = -Infinity;
-	let framing = true;
-	const pauseFollow = () => {
-		framing = false;
-		followAgent = false;
-		followDue = false;
-		viewport.cancelAnimation();
-		onUserNavigation?.();
-	};
-	let lastDraw = performance.now();
-	let frame = 0;
 	let disposed = false;
-	const pointers = new Map<number, { x: number; y: number }>();
-	let pinch: { distance: number; x: number; y: number } | undefined;
-	let dragged = false;
-	let parentOf = new Map<string, string>();
-	let childrenOf = new Map<string, LayoutNode[]>();
-	let percent = 0;
-	let targets: Float64Array | undefined;
-	let history: Array<{ x: number; y: number; t: number }> = [];
-	let drag:
-		| { id: number; x: number; y: number; startX: number; startY: number; moved: boolean; node?: LayoutNode }
-		| undefined;
-	let hiddenKinds = new Set<SceneNodeKind>();
-	let isolated: string | undefined;
-	let entityRank = new Map<string, number>();
-	let indexOf = new Map<string, number>();
-	let bodyIndex = new Int32Array(0);
-	let tints: [readonly string[], readonly string[]] = [[], []];
-	let edgeFrom = new Int32Array(0);
-	let edgeTo = new Int32Array(0);
-	let edgeLocal = new Uint8Array(0);
-	let edgeTint: [Int32Array, Int32Array] = [new Int32Array(0), new Int32Array(0)];
-	let palette: [readonly string[], readonly string[]] = [[], []];
-	let labelCandidates: number[] = [];
-	const labelLive = new Set<number>();
-	let reveal = new Float64Array(0);
-	let nodeAlpha = new Float64Array(0);
-	let ring = new Float64Array(0);
-	let labelAlpha = new Float64Array(0);
-	let visibility = new Float64Array(0);
-	let segments = new Float64Array(0);
-	let points = new Float64Array(0);
-	const tint = (node: SceneNode, dark: boolean) => {
-		const colors = dark ? COLORS : LIGHT_COLORS;
-		if (node.kind === "constraint" || node.kind === "origin" || node.kind === "memory" || !node.category)
-			return colors[node.kind];
-		return categoryColor(node.category, dark);
+	let failed = false;
+	const dark = () => document.documentElement.classList.contains("dark");
+	const fail = () => {
+		if (failed || disposed) return;
+		failed = true;
+		simulation.terminate();
+		renderer?.terminate();
+		onError?.();
 	};
-	const bodyOf = (node: SceneNode) => (node.cluster !== node.id && byId.has(node.cluster) ? node.cluster : node.id);
-	const radius = (node: SceneNode) =>
-		node.kind === "entity" ? 4 + 3 * Math.min(1, Math.max(0, node.weight)) : RADIUS[node.kind];
-	const screenRadius = (node: SceneNode) =>
-		node.kind === "entity" ? 3 + 2 * Math.min(1, Math.max(0, node.weight)) : node.kind === "source" ? 2.5 : 1.1;
-	const maxScreenRadius = (node: SceneNode) =>
-		node.kind === "entity" ? 8 : node.kind === "source" ? 5.5 : tierOf(node.kind) === 1 ? 7 : 6;
-	const detail = () => (Number.isFinite(overviewZoom) && overviewZoom > 0 ? viewport.zoom / overviewZoom : 1);
-	const shown = (node: LayoutNode) =>
-		!hiddenKinds.has(node.kind) && (!isolated || node.cluster === isolated || node.id === isolated);
-	const showTooltip = (node?: LayoutNode) => {
-		tooltip.hidden = !node;
-		if (!node) return;
+	const showTooltip = (node: SceneNode | undefined) => {
+		tooltip.hidden = true;
 		tooltip.replaceChildren();
+		if (!node) return;
 		const kind = document.createElement("span");
 		kind.className = "graph-tooltip-kind";
-		kind.style.color = tint(node, document.documentElement.classList.contains("dark"));
+		kind.style.color = nodeTint(node, dark());
 		kind.textContent =
 			node.kind === "origin" || node.kind === "memory"
 				? "Evidence"
@@ -339,606 +201,128 @@ export function createGraphScene(
 		meta.textContent = node.metric;
 		tooltip.append(kind, title, meta);
 	};
-	const draw = (now: number) => {
-		frame = 0;
+	const placeTooltip = (sx: number, sy: number, reach: number) => {
+		if (!tooltip.childElementCount) return;
+		tooltip.hidden = false;
+		const w = tooltip.offsetWidth;
+		const h = tooltip.offsetHeight;
+		const x =
+			sx + reach + w <= width - 8
+				? sx + reach
+				: sx - reach - w >= 8
+					? sx - reach - w
+					: Math.min(Math.max(8, sx - w / 2), width - w - 8);
+		const sideways = x === sx + reach || x === sx - reach - w;
+		const y = sideways
+			? Math.min(Math.max(8, sy - h / 2), height - h - 8)
+			: sy + reach + h <= height - 8
+				? sy + reach
+				: Math.max(8, sy - reach - h);
+		tooltip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+	};
+	const receive = (output: EngineOutput) => {
 		if (disposed) return;
-		const moving = viewport.tick();
-		let highlighting = hover.tick(now);
-		if (pendingRetrieval) {
-			highlighting = true;
-			if (now >= pendingRetrieval.at && nodes.length) {
-				retrieved = pendingRetrieval.ids;
-				retrievedNeighbors = new Set(
-					edges
-						.filter(({ from, to }) => retrieved.has(from.id) || retrieved.has(to.id))
-						.flatMap(({ from, to }) => [from.id, to.id]),
-				);
-				pendingRetrieval = undefined;
-				followDue = followAgent;
-				canvas.dataset.retrievedNodes = String(retrieved.size);
-			}
+		switch (output.type) {
+			case "select":
+				onSelect?.(output.id ? (byId.get(output.id) ?? null) : null);
+				break;
+			case "isolate":
+				onIsolate?.(output.cluster);
+				break;
+			case "zoom":
+				onZoom?.(output.percent);
+				break;
+			case "navigate":
+				onUserNavigation?.();
+				break;
+			case "hover":
+				showTooltip(output.id ? byId.get(output.id) : undefined);
+				break;
+			case "anchor":
+				placeTooltip(output.x, output.y, output.reach);
+				break;
+			case "cursor":
+				canvas.style.cursor = output.value;
+				break;
+			case "attribute":
+				canvas.setAttribute(output.name, output.value);
+				break;
+			case "keys":
+				keys = new Set(output.keys);
+				break;
+			case "error":
+				fail();
+				break;
 		}
-		if (followDue && followAgent) {
-			highlighting = true;
-			if (now - lastFollow >= 1000) {
-				const subset = nodes.filter((node) => retrieved.has(node.id) || retrievedNeighbors.has(node.id));
-				if (subset.length) fit(subset);
-				lastFollow = now;
-				followDue = false;
-			}
-		}
-		const blend = 1 - Math.exp(-Math.min(now - lastDraw, 32) / 180);
-		lastDraw = now;
-		const ease = (previous: number, target: number) => {
-			const value = Math.abs(previous - target) < 0.005 ? target : previous + (target - previous) * blend;
-			if (value !== target) highlighting = true;
-			return value;
-		};
-		const fade = (key: string, target: number, initial = 1) => {
-			const value = ease(emphasis.get(key) ?? initial, target);
-			emphasis.set(key, value);
-			return value;
-		};
-		const fadeAt = (values: Float64Array, index: number, target: number) => {
-			const value = ease(values[index] ?? 0, target);
-			values[index] = value;
-			return value;
-		};
-		let settling = false;
-		if (targets) {
-			for (const [index, node] of nodes.entries()) {
-				if (drag?.node === node) continue;
-				const tx = targets[index * 2] ?? node.x;
-				const ty = targets[index * 2 + 1] ?? node.y;
-				const dx = tx - node.x,
-					dy = ty - node.y;
-				if (Math.abs(dx) + Math.abs(dy) > 0.1) {
-					node.x += dx * 0.35;
-					node.y += dy * 0.35;
-					settling = true;
-				} else {
-					node.x = tx;
-					node.y = ty;
-				}
-			}
-		}
-		const ratio = Math.min(devicePixelRatio || 1, 2);
-		const dark = document.documentElement.classList.contains("dark");
-		const tone = dark ? "dark" : "light";
-		const shade = dark ? 1 : 0;
-		const foreground = dark ? "#f4f4f5" : "#18181b";
-		const active = (hover.active ? byId.get(hover.active) : undefined) ?? (retrieved.size ? undefined : selected);
-		const hovered = hover.active ? byId.get(hover.active) : undefined;
-		if (tooltip.dataset.node !== (hovered?.id ?? "")) {
-			showTooltip(hovered);
-			tooltip.dataset.node = hovered?.id ?? "";
-		}
-		const focus = retrieved.size ? undefined : selected;
-		const relevant = (node: LayoutNode) =>
-			focus
-				? node.id === focus.id || node.cluster === focus.cluster
-				: !retrieved.size || retrieved.has(node.id) || retrievedNeighbors.has(node.id);
-		const level = detail();
-		const appear = fade("appear", 1, 0);
-		const dim = fade("dim", focus || retrieved.size ? 1 : 0, 0);
-		const recalled = retrieved.size > 0;
-		const tierVisibility = [detailVisibility(0, level), detailVisibility(1, level), detailVisibility(2, level)];
-		for (const [index, node] of nodes.entries()) {
-			const revealed = fadeAt(
-				reveal,
-				index,
-				(active && node.cluster === active.cluster) ||
-					(recalled && (retrieved.has(node.id) || retrievedNeighbors.has(node.id)))
-					? 1
-					: 0,
-			);
-			visibility[index] = shown(node) ? Math.max(tierVisibility[tierOf(node.kind)] ?? 1, revealed) : 0;
-		}
-		const z = viewport.zoom;
-		painter.begin({ ratio, panX: viewport.panX, panY: viewport.panY, zoom: z }, width, height);
-		if (gpu) {
-			context.setTransform(ratio, 0, 0, ratio, 0, 0);
-			context.clearRect(0, 0, width, height);
-		}
-		const spokes = new Map<number, number[]>();
-		const bridges = new Map<number, number[]>();
-		const highlightedEdges: Array<{ key: string; from: LayoutNode; to: LayoutNode; dependency: boolean }> = [];
-		const hoveredIndex = hovered ? (indexOf.get(hovered.id) ?? -1) : -1;
-		const focusIndex = focus ? (indexOf.get(focus.id) ?? -1) : -1;
-		const bridgeFade = 1 - 0.6 * smoothstep(1.5, 4, level);
-		const spokeBase = dark ? 0.22 : 0.2;
-		const dependencyBase = (dark ? 0.34 : 0.3) * bridgeFade;
-		const bridgeBase = (dark ? 0.12 : 0.1) * bridgeFade;
-		for (const [index, { edge, from, to }] of edges.entries()) {
-			const f = edgeFrom[index] ?? 0;
-			const t = edgeTo[index] ?? 0;
-			const vis = Math.min(visibility[f] ?? 0, visibility[t] ?? 0);
-			if (vis < 0.02) continue;
-			const highlighted = active
-				? (hoveredIndex >= 0 && (f === hoveredIndex || t === hoveredIndex)) ||
-					(focusIndex >= 0 && (f === focusIndex || t === focusIndex))
-				: recalled && (retrieved.has(from.id) || retrieved.has(to.id));
-			if (highlighted) {
-				highlightedEdges.push({
-					key: `edge:${edge.from}:${edge.to}:${edge.kind}`,
-					from,
-					to,
-					dependency: edge.kind === "depends_on",
-				});
-				continue;
-			}
-			const local = edgeLocal[index] === 1;
-			const muted = relevant(from) && relevant(to) ? 1 : 1 - dim * 0.8;
-			const base = local ? spokeBase : edge.kind === "depends_on" ? dependencyBase : bridgeBase;
-			const bucket = Math.round(Math.min(1, base * vis * muted) * EDGE_BUCKETS);
-			if (bucket <= 0) continue;
-			const groups = local ? spokes : bridges;
-			const group = (local ? (edgeTint[shade][index] ?? 0) : 0) * (EDGE_BUCKETS + 1) + bucket;
-			const list = groups.get(group);
-			if (list) list.push(index);
-			else groups.set(group, [index]);
-		}
-		const stroke = (groups: Map<number, number[]>, w: number, local: boolean) => {
-			for (const [group, list] of groups) {
-				const bucket = group % (EDGE_BUCKETS + 1);
-				const color = local ? (palette[shade][Math.floor(group / (EDGE_BUCKETS + 1))] ?? BRIDGE[tone]) : BRIDGE[tone];
-				let count = 0;
-				for (const index of list) {
-					const from = nodes[edgeFrom[index] ?? 0];
-					const to = nodes[edgeTo[index] ?? 0];
-					if (!from || !to) continue;
-					segments[count * 4] = from.x;
-					segments[count * 4 + 1] = from.y;
-					segments[count * 4 + 2] = to.x;
-					segments[count * 4 + 3] = to.y;
-					count++;
-				}
-				painter.lines(segments, count, color, (bucket / EDGE_BUCKETS) * appear, w);
-			}
-		};
-		stroke(spokes, 0.75, true);
-		stroke(bridges, 1, false);
-		const accent = retrieved.size && !active ? RETRIEVAL[tone] : active ? tint(active, dark) : foreground;
-		for (const { key, from, to, dependency } of highlightedEdges) {
-			let arrow: number[] | undefined;
-			if (dependency) {
-				const angle = Math.atan2(to.y - from.y, to.x - from.x);
-				const tipX = to.x - Math.cos(angle) * (radius(to) + 3 / z);
-				const tipY = to.y - Math.sin(angle) * (radius(to) + 3 / z);
-				arrow = [
-					tipX - (Math.cos(angle - 0.5) * 6) / z,
-					tipY - (Math.sin(angle - 0.5) * 6) / z,
-					tipX,
-					tipY,
-					tipX - (Math.cos(angle + 0.5) * 6) / z,
-					tipY - (Math.sin(angle + 0.5) * 6) / z,
-				];
-			}
-			painter.highlight(from.x, from.y, to.x, to.y, arrow, accent, fade(key, 1, 0) * appear * 0.95, 1.4);
-		}
-		const surface = SURFACE[tone];
-		const glyphs = new Map<string, { color: string; alpha: number; outlined: boolean; members: number[] }>();
-		const radii = new Float64Array(nodes.length);
-		const shapes = new Uint8Array(nodes.length);
-		const marked: number[] = [];
-		for (const [index, node] of nodes.entries()) {
-			const vis = visibility[index] ?? 0;
-			if (vis < 0.02) continue;
-			const x = node.x * z + viewport.panX;
-			const y = node.y * z + viewport.panY;
-			if (x < -120 || x > width + 120 || y < -60 || y > height + 60) continue;
-			const alpha = fadeAt(nodeAlpha, index, relevant(node) ? 1 : 1 - dim * 0.7) * vis * appear;
-			const r = Math.min(Math.max(radius(node), screenRadius(node) / z), maxScreenRadius(node) / z);
-			const color = recalled && retrieved.has(node.id) ? RETRIEVAL[tone] : (tints[shade][index] ?? tint(node, dark));
-			const glyph = GLYPHS[node.kind];
-			const legible = r * z >= GLYPH_SCREEN_RADIUS;
-			const outlined = legible && !glyph.filled;
-			const bucket = Math.round(alpha * ALPHA_BUCKETS);
-			radii[index] = r;
-			shapes[index] = SHAPE_INDEX[legible ? glyph.shape : r * z * ratio < DOT_DEVICE_RADIUS ? "dot" : "circle"];
-			const ringed =
-				fadeAt(
-					ring,
-					index,
-					node.id === active?.id || node.id === focus?.id || (recalled && retrieved.has(node.id)) ? 1 : 0,
-				) > 0.005;
-			if (tierOf(node.kind) === 0 || ringed) marked.push(index);
-			if (bucket <= 0) continue;
-			const key = `${color}|${bucket}|${outlined ? 1 : 0}`;
-			const batch = glyphs.get(key);
-			if (batch) batch.members.push(index);
-			else glyphs.set(key, { color, alpha: bucket / ALPHA_BUCKETS, outlined, members: [index] });
-		}
-		const outline = { surface, width: 1.2 };
-		for (const { color, alpha, outlined, members } of glyphs.values()) {
-			let count = 0;
-			for (const index of members) {
-				const node = nodes[index];
-				if (!node) continue;
-				points[count * 4] = node.x;
-				points[count * 4 + 1] = node.y;
-				points[count * 4 + 2] = radii[index] ?? 0;
-				points[count * 4 + 3] = shapes[index] ?? 0;
-				count++;
-			}
-			painter.glyphs(points, count, color, alpha, outlined ? outline : undefined);
-		}
-		for (const index of marked) {
-			const node = nodes[index];
-			if (!node) continue;
-			const r = radii[index] ?? 0;
-			const alpha = (nodeAlpha[index] ?? 1) * (visibility[index] ?? 0) * appear;
-			const color = recalled && retrieved.has(node.id) ? RETRIEVAL[tone] : (tints[shade][index] ?? tint(node, dark));
-			if (tierOf(node.kind) === 0)
-				painter.ring(
-					node.x,
-					node.y,
-					r + 2.5 / z,
-					node.scopeColor ?? color,
-					alpha * (node.scopeColor ? 0.9 : 0.45),
-					1.25,
-				);
-			const ringed = ring[index] ?? 0;
-			if (ringed > 0.005)
-				painter.selection(
-					node.x,
-					node.y,
-					r + 6 / z,
-					retrieved.has(node.id) ? RETRIEVAL[tone] : foreground,
-					ringed * appear,
-				);
-		}
-		painter.end();
-		const occupied: Array<{ x: number; y: number; w: number; h: number }> = [];
-		const free = (x: number, y: number, w: number, h: number) =>
-			!occupied.some((box) => x < box.x + box.w + 6 && x + w + 6 > box.x && y < box.y + box.h && y + h > box.y);
-		const sourceCount = labelCandidates.reduce((count, index) => count + (nodes[index]?.kind === "source" ? 1 : 0), 0);
-		const labelSources = sourceCount <= MAX_SOURCE_LABELS || z >= overviewZoom * SOURCE_LABEL_ZOOM;
-		const entityBudget = Math.round(BASE_ENTITY_LABELS * level * level);
-		let sourceLabels = 0;
-		const candidates = new Set<number>([...labelCandidates, ...labelLive]);
-		for (const node of [active, hovered]) {
-			const index = node ? indexOf.get(node.id) : undefined;
-			if (index !== undefined) candidates.add(index);
-		}
-		if (recalled) {
-			for (const id of retrieved) {
-				const index = indexOf.get(id);
-				if (index !== undefined) candidates.add(index);
-			}
-		}
-		const ranked = [...candidates]
-			.sort((a, b) => a - b)
-			.flatMap((index) => nodes[index] ?? [])
-			.sort((a, b) => labelPriority(b, active) - labelPriority(a, active));
-		for (const node of ranked) {
-			const index = indexOf.get(node.id) ?? -1;
-			if ((visibility[index] ?? 0) < 0.5) continue;
-			const focused = node.id === active?.id || node.id === hovered?.id;
-			const visible =
-				focused ||
-				(recalled && retrieved.has(node.id)) ||
-				(node.kind === "entity" && (entityRank.get(node.id) ?? Number.POSITIVE_INFINITY) < entityBudget) ||
-				(node.kind === "source" && labelSources && sourceLabels < MAX_SOURCE_LABELS);
-			const shownAlpha = fadeAt(labelAlpha, index, visible ? 1 : 0);
-			if (shownAlpha > 0) labelLive.add(index);
-			else labelLive.delete(index);
-			if (shownAlpha < 0.005) continue;
-			const sx = node.x * z + viewport.panX;
-			const sy = node.y * z + viewport.panY;
-			const body = byId.get(bodyOf(node));
-			const centered = tierOf(node.kind) === 0;
-			const outward = !centered && body ? Math.sign(node.x - body.x) || 1 : 1;
-			const text = node.label.length > 30 ? `${node.label.slice(0, 29)}…` : node.label;
-			context.font = focused
-				? "500 12px 'Schibsted Grotesk', sans-serif"
-				: node.kind === "entity" || node.kind === "aspect"
-					? "500 11.5px 'Schibsted Grotesk', sans-serif"
-					: tierOf(node.kind) === 1
-						? "italic 10.5px 'Schibsted Grotesk', sans-serif"
-						: "10.5px 'Schibsted Grotesk', sans-serif";
-			const w = context.measureText(text).width + (focused ? 26 : 0);
-			const h = focused ? 22 : 14;
-			const x = centered ? sx - w / 2 : outward > 0 ? sx + radius(node) * z + 8 : sx - radius(node) * z - 8 - w;
-			const y = centered ? sy + radius(node) * z + 8 : sy - h / 2;
-			if (x < 0 || x + w > width || y < 55 || y + h > height - 100) continue;
-			if (!focused && !free(x, y, w, h)) continue;
-			occupied.push({ x, y, w, h });
-			if (node.kind === "source") sourceLabels++;
-			context.globalAlpha = shownAlpha * (focused ? 1 : (nodeAlpha[index] ?? 1)) * appear;
-			if (focused) {
-				context.beginPath();
-				pill(context, x, y, w, h);
-				context.fillStyle = dark ? "rgba(8, 12, 26, 0.88)" : "rgba(255, 255, 255, 0.94)";
-				context.fill();
-				context.strokeStyle = dark ? "rgba(170, 195, 255, 0.18)" : "rgba(22, 33, 63, 0.14)";
-				context.lineWidth = 1;
-				context.stroke();
-				context.beginPath();
-				context.arc(x + 11, y + h / 2, 3, 0, Math.PI * 2);
-				context.fillStyle = retrieved.has(node.id) ? RETRIEVAL[tone] : tint(node, dark);
-				context.fill();
-				context.fillStyle = foreground;
-				context.fillText(text, x + 19, y + h / 2 + 4);
-				continue;
-			}
-			context.lineJoin = "round";
-			context.lineWidth = 3;
-			context.strokeStyle = surface;
-			context.strokeText(text, x, y + 11);
-			context.fillStyle =
-				node.kind === "aspect" ? tint(node, dark) : tierOf(node.kind) === 0 ? foreground : dark ? "#a1a1aa" : "#52525b";
-			context.fillText(text, x, y + 11);
-		}
-		context.globalAlpha = 1;
-		const zoomed = Math.round(z * 100);
-		if (zoomed !== percent) {
-			percent = zoomed;
-			onZoom?.(zoomed);
-		}
-		if (hovered && !tooltip.hidden) {
-			const sx = hovered.x * z + viewport.panX;
-			const sy = hovered.y * z + viewport.panY;
-			const reach =
-				Math.min(Math.max(radius(hovered), screenRadius(hovered) / z), maxScreenRadius(hovered) / z) * z + 12;
-			const w = tooltip.offsetWidth;
-			const h = tooltip.offsetHeight;
-			const x =
-				sx + reach + w <= width - 8
-					? sx + reach
-					: sx - reach - w >= 8
-						? sx - reach - w
-						: Math.min(Math.max(8, sx - w / 2), width - w - 8);
-			const sideways = x === sx + reach || x === sx - reach - w;
-			const y = sideways
-				? Math.min(Math.max(8, sy - h / 2), height - h - 8)
-				: sy + reach + h <= height - 8
-					? sy + reach
-					: Math.max(8, sy - reach - h);
-			tooltip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
-		}
-		if (moving || settling || highlighting) invalidate();
 	};
-	const invalidate = () => {
-		if (!disposed && !frame) frame = requestAnimationFrame(draw);
-	};
-	const fit = (subset = nodes, animate = true) => {
-		const available = width;
-		const overview = subset === nodes;
-		const anchors = overview ? nodes.filter((node) => tierOf(node.kind) === 0 && shown(node)) : subset;
-		const framed = anchors.length ? anchors : subset;
-		const bounds = framed.map((node) => ({
-			x: node.x,
-			y: node.y,
-			size: radius(node) + 30,
-		}));
-		viewport.setMinZoomForNodes(
-			nodes.map((node) => ({ x: node.x, y: node.y, size: radius(node) })),
-			width,
-			height,
+	let renderer: Worker | undefined;
+	let engine: GraphEngine | undefined;
+	const offscreen = typeof OffscreenCanvas !== "undefined" && typeof canvas.transferControlToOffscreen === "function";
+	if (offscreen) {
+		const worker = new Worker(new URL("./graph-render-worker.ts", import.meta.url), { type: "module" });
+		renderer = worker;
+		const channel = new MessageChannel();
+		const connect: GraphWorkerRequest = { type: "connect", port: channel.port1 };
+		simulation.postMessage(connect, [channel.port1]);
+		const surface = canvas.transferControlToOffscreen();
+		const labels = overlay.transferControlToOffscreen();
+		worker.onmessage = (event: MessageEvent<EngineOutput>) => receive(event.data);
+		worker.onerror = fail;
+		const init: RenderWorkerRequest = {
+			type: "init",
+			canvas: surface,
+			overlay: labels,
+			simulation: channel.port2,
+			data,
+			layoutScope,
+			fonts: fontSources(),
+			timeOrigin: performance.timeOrigin,
+			setup: [{ type: "theme", dark: dark() }],
+		};
+		worker.postMessage(init, [surface, labels, channel.port2]);
+	} else {
+		engine = createGraphEngine(
+			{ canvas, overlay },
+			data,
+			simulation,
+			{
+				emit: receive,
+				frame: (callback) => requestAnimationFrame(callback),
+				cancel: (frame) => cancelAnimationFrame(frame),
+				now: () => performance.now(),
+			},
+			layoutScope,
 		);
-		viewport.fitToNodes(bounds, available, height, { animate });
-		if (overview) overviewZoom = viewport.restingZoom;
-		invalidate();
-	};
-	const center = () => {
-		const anchors = nodes.filter((node) => tierOf(node.kind) === 0 && shown(node));
-		if (!anchors.length) return;
-		const x = anchors.reduce((sum, node) => sum + node.x, 0) / anchors.length;
-		const y = anchors.reduce((sum, node) => sum + node.y, 0) / anchors.length;
-		viewport.centerOn(x, y, width, height);
-		invalidate();
-	};
-	const frameCluster = (node: LayoutNode) => {
-		const reach = FOCUS_REACH;
-		const target = Math.min(MAX_FOCUS_ZOOM, Math.min(width, height) / (reach * 2));
-		viewport.focusOn(node.x, node.y, Math.max(target, viewport.restingZoom), width, height);
-	};
-	const focusNode = (id: string) => {
-		selected = byId.get(id);
-		hover.clear();
-		if (!selected) return;
-		if (tierOf(selected.kind) === 0) frameCluster(selected);
-		else viewport.centerOn(selected.x, selected.y, width, height);
-		invalidate();
-	};
-	const clearSelection = () => {
-		selected = undefined;
-		invalidate();
-	};
-	const select = (node: LayoutNode | undefined) => {
-		selected = node;
-		onSelect?.(node ?? null);
-		invalidate();
-	};
-	const selectAndCenter = (node: LayoutNode | undefined) => {
-		if (!node) return;
-		select(node);
-		viewport.centerOn(node.x, node.y, width, height);
-	};
-	const isolate = (cluster: string | null) => {
-		isolated = cluster ?? undefined;
-		onIsolate?.(cluster);
-		hover.clear();
-		if (cluster) {
-			selected = byId.get(cluster);
-			fit(nodes.filter((node) => node.cluster === cluster || node.id === cluster));
-		} else {
-			fit();
-		}
-		invalidate();
-	};
-	const resetView = () => {
-		if (isolated) {
-			isolated = undefined;
-			onIsolate?.(null);
-		}
-		selected = undefined;
-		hover.clear();
-		showTooltip();
-		fit();
-		onSelect?.(null);
-	};
-	const zoom = (factor: number, x = width / 2, y = height / 2) => {
-		viewport.zoomTo(viewport.zoom * factor, x, y);
-		invalidate();
+		engine.input({ type: "theme", dark: dark() });
+	}
+	simulation.onerror = fail;
+	const send = (input: EngineInput) => {
+		if (disposed) return;
+		if (engine) engine.input(input);
+		else renderer?.postMessage({ type: "input", input } satisfies RenderWorkerRequest);
 	};
 	const point = (event: MouseEvent) => {
 		const rect = canvas.getBoundingClientRect();
 		return { x: event.clientX - rect.left, y: event.clientY - rect.top };
 	};
-	const hittable = (node: LayoutNode) =>
-		shown(node) &&
-		(interactive(tierOf(node.kind), detail()) || (selected !== undefined && node.cluster === selected.cluster));
-	const hit = (x: number, y: number) => {
-		for (let index = nodes.length - 1; index >= 0; index--) {
-			const node = nodes[index];
-			if (!node) continue;
-			const dx = node.x * viewport.zoom + viewport.panX - x;
-			const dy = node.y * viewport.zoom + viewport.panY - y;
-			const reach = Math.max(8, radius(node) * viewport.zoom + 3);
-			if (dx * dx + dy * dy <= reach * reach && hittable(node)) return node;
-		}
-		return undefined;
-	};
-	const release = () => {
-		if (!drag?.node || !drag.moved) return;
-		const index = indexOf.get(drag.node.id);
-		if (targets && index !== undefined) {
-			targets[index * 2] = drag.node.x;
-			targets[index * 2 + 1] = drag.node.y;
-		}
-		const request: GraphWorkerRequest = { type: "release", id: drag.node.id };
-		worker.postMessage(request);
-	};
-	const spread = () => {
-		const [a, b] = [...pointers.values()];
-		if (!a || !b) return undefined;
-		return { distance: Math.hypot(b.x - a.x, b.y - a.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-	};
+	const pointer = (phase: "down" | "move" | "up" | "cancel", event: PointerEvent) =>
+		send({ type: "pointer", phase, id: event.pointerId, ...point(event), t: performance.now() });
 	const down = (event: PointerEvent) => {
 		if (event.pointerType === "mouse" && event.button !== 0) return;
-		pauseFollow();
-		const p = point(event);
-		pointers.set(event.pointerId, p);
 		canvas.setPointerCapture(event.pointerId);
-		viewport.cancelAnimation();
-		if (pointers.size >= 2) {
-			release();
-			drag = undefined;
-			pinch = spread();
-			dragged = true;
-			return;
-		}
-		history = [{ ...p, t: performance.now() }];
-		dragged = false;
-		const node = hit(p.x, p.y);
-		drag = { id: event.pointerId, ...p, startX: p.x, startY: p.y, moved: false, node };
-		if (!node) canvas.style.cursor = "grabbing";
+		pointer("down", event);
 	};
-	const move = (event: PointerEvent) => {
-		const p = point(event);
-		if (pointers.has(event.pointerId)) pointers.set(event.pointerId, p);
-		if (pinch && pointers.size >= 2) {
-			const next = spread();
-			if (!next) return;
-			viewport.zoomImmediate(next.distance / Math.max(1, pinch.distance), next.x, next.y);
-			viewport.pan(next.x - pinch.x, next.y - pinch.y);
-			pinch = next;
-			invalidate();
-			return;
-		}
-		if (drag) {
-			if (drag.id !== event.pointerId) return;
-			if (!drag.moved && Math.hypot(p.x - drag.startX, p.y - drag.startY) < 4) return;
-			drag.moved = true;
-			dragged = true;
-			canvas.style.cursor = "grabbing";
-			if (drag.node) {
-				drag.node.x += (p.x - drag.x) / viewport.zoom;
-				drag.node.y += (p.y - drag.y) / viewport.zoom;
-				const request: GraphWorkerRequest = { type: "drag", id: drag.node.id, x: drag.node.x, y: drag.node.y };
-				worker.postMessage(request);
-			} else {
-				viewport.pan(p.x - drag.x, p.y - drag.y);
-				history.push({ ...p, t: performance.now() });
-				if (history.length > 4) history.shift();
-			}
-			drag.x = p.x;
-			drag.y = p.y;
-			invalidate();
-			return;
-		}
-		const node = hit(p.x, p.y);
-		hover.move(node?.id, performance.now());
-		canvas.style.cursor = node ? "grab" : "default";
-		invalidate();
-	};
+	const move = (event: PointerEvent) => pointer("move", event);
 	const up = (event: PointerEvent) => {
-		pointers.delete(event.pointerId);
 		if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
-		if (pinch) {
-			if (pointers.size < 2) pinch = undefined;
-			return;
-		}
-		if (!drag || drag.id !== event.pointerId) return;
-		release();
-		if (!drag.node && drag.moved && event.type !== "pointercancel") {
-			const newest = history[history.length - 1],
-				oldest = history[0];
-			if (newest && oldest) {
-				const dt = newest.t - oldest.t;
-				if (dt > 0 && dt < 200)
-					viewport.releaseWithVelocity(((newest.x - oldest.x) / dt) * 16, ((newest.y - oldest.y) / dt) * 16);
-			}
-		}
-		drag = undefined;
-		const p = point(event);
-		canvas.style.cursor = hit(p.x, p.y) ? "grab" : "default";
-		invalidate();
+		pointer(event.type === "pointercancel" ? "cancel" : "up", event);
 	};
-	const click = (event: MouseEvent) => {
-		if (dragged || event.detail > 1) return;
-		const p = point(event);
-		const node = hit(p.x, p.y);
-		select(node && node !== selected ? node : undefined);
-	};
-	const doubleClick = (event: MouseEvent) => {
-		const p = point(event);
-		pauseFollow();
-		zoom(1.5, p.x, p.y);
-	};
-	const leave = () => {
-		if (!drag) {
-			hover.clear();
-			invalidate();
-		}
-	};
+	const leave = () => send({ type: "leave" });
+	const click = (event: MouseEvent) => send({ type: "click", ...point(event), detail: event.detail });
+	const doubleClick = (event: MouseEvent) => send({ type: "dblclick", ...point(event) });
 	const wheel = (event: WheelEvent) => {
 		event.preventDefault();
-		pauseFollow();
-		const p = point(event);
-		if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
-			viewport.pan(-event.deltaX, 0);
-		} else {
-			viewport.zoomImmediate(event.deltaY > 0 ? 0.97 : 1.03, p.x, p.y);
-		}
-		invalidate();
-	};
-	const siblings = (node: LayoutNode) => {
-		const parent = parentOf.get(node.id);
-		if (parent) return (childrenOf.get(parent) ?? []).filter(shown);
-		return nodes
-			.filter((other) => tierOf(other.kind) === 0 && shown(other))
-			.sort(
-				(a, b) =>
-					(entityRank.get(a.id) ?? Number.POSITIVE_INFINITY) - (entityRank.get(b.id) ?? Number.POSITIVE_INFINITY),
-			);
-	};
-	const step = (node: LayoutNode, offset: number) => {
-		const list = siblings(node);
-		const index = list.indexOf(node);
-		return list[(index + offset + list.length) % list.length];
+		send({ type: "wheel", ...point(event), dx: event.deltaX, dy: event.deltaY });
 	};
 	const key = (event: KeyboardEvent) => {
 		const target = event.target;
@@ -951,27 +335,10 @@ export function createGraphScene(
 			(target instanceof Element && target.closest("input, textarea, select, [contenteditable], [role=textbox]"))
 		)
 			return;
-		const current = selected;
-		const parent = current ? byId.get(parentOf.get(current.id) ?? "") : undefined;
-		const child = current ? (childrenOf.get(current.id) ?? []).find(shown) : undefined;
-		const actions: Record<string, (() => void) | undefined> = {
-			z: () => fit(),
-			c: center,
-			"=": () => zoom(1.3),
-			"+": () => zoom(1.3),
-			"-": () => zoom(1 / 1.3),
-			_: () => zoom(1 / 1.3),
-			Escape: current ? () => select(undefined) : isolated ? () => isolate(null) : undefined,
-			ArrowUp: parent ? () => selectAndCenter(parent) : undefined,
-			ArrowDown: child ? () => selectAndCenter(child) : undefined,
-			ArrowRight: current ? () => selectAndCenter(step(current, 1)) : undefined,
-			ArrowLeft: current ? () => selectAndCenter(step(current, -1)) : undefined,
-		};
-		const action = actions[event.key.length === 1 ? event.key.toLowerCase() : event.key];
-		if (!action) return;
+		const name = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+		if (!keys.has(name)) return;
 		event.preventDefault();
-		pauseFollow();
-		action();
+		send({ type: "key", key: name });
 	};
 	canvas.addEventListener("pointerdown", down);
 	canvas.addEventListener("pointermove", move);
@@ -985,150 +352,33 @@ export function createGraphScene(
 	const resize = new ResizeObserver(() => {
 		width = Math.max(1, container.clientWidth);
 		height = Math.max(1, container.clientHeight);
-		const ratio = Math.min(devicePixelRatio || 1, 2);
-		for (const surface of [canvas, overlay]) {
-			surface.width = Math.round(width * ratio);
-			surface.height = Math.round(height * ratio);
-		}
-		if (followAgent && retrieved.size)
-			fit(nodes.filter((node) => retrieved.has(node.id) || retrievedNeighbors.has(node.id)));
-		else if (selected) focusNode(selected.id);
-		else fit();
-		if (frame) cancelAnimationFrame(frame);
-		draw(performance.now());
+		send({ type: "resize", width, height, ratio: Math.min(devicePixelRatio || 1, 2) });
 	});
 	resize.observe(container);
-	const theme = new MutationObserver(invalidate);
+	const theme = new MutationObserver(() => send({ type: "theme", dark: dark() }));
 	theme.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
-	const deadline = setTimeout(() => {
-		worker.terminate();
-		onError?.();
-	}, 15_000);
-	worker.onmessage = (event: MessageEvent<GraphWorkerResponse>) => {
-		if (disposed) return;
-		clearTimeout(deadline);
-		canvas.setAttribute("aria-busy", "false");
-		const { xy } = event.data;
-		if (nodes.length) {
-			targets = xy;
-			if (framing && !selected && !isolated && !retrieved.size) fit(nodes, false);
-			if (!event.data.active) framing = false;
-			invalidate();
-			return;
-		}
-		canvas.dataset.layout = event.data.origin;
-		framing = event.data.active;
-		nodes = data.nodes.map((node, index) => ({ ...node, x: xy[index * 2] ?? 0, y: xy[index * 2 + 1] ?? 0 }));
-		byId = new Map(nodes.map((node) => [node.id, node]));
-		indexOf = new Map(nodes.map((node, index) => [node.id, index]));
-		bodyIndex = Int32Array.from(nodes, (node) => indexOf.get(bodyOf(node)) ?? 0);
-		tints = [nodes.map((node) => tint(node, false)), nodes.map((node) => tint(node, true))];
-		labelCandidates = nodes.flatMap((node, index) => (tierOf(node.kind) === 0 ? [index] : []));
-		labelLive.clear();
-		reveal = new Float64Array(nodes.length);
-		nodeAlpha = new Float64Array(nodes.length).fill(1);
-		ring = new Float64Array(nodes.length);
-		labelAlpha = new Float64Array(nodes.length);
-		visibility = new Float64Array(nodes.length);
-		points = new Float64Array(nodes.length * 4);
-		const clusterSize = new Map<string, number>();
-		for (const node of nodes) clusterSize.set(node.cluster, (clusterSize.get(node.cluster) ?? 0) + 1);
-		entityRank = new Map(
-			nodes
-				.filter((node) => node.kind === "entity")
-				.sort((a, b) => b.weight - a.weight || (clusterSize.get(b.id) ?? 0) - (clusterSize.get(a.id) ?? 0))
-				.map((node, index) => [node.id, index]),
-		);
-		edges = data.edges.flatMap((edge) => {
-			const from = byId.get(edge.from),
-				to = byId.get(edge.to);
-			return from && to ? [{ edge, from, to }] : [];
-		});
-		segments = new Float64Array(edges.length * 4);
-		edgeFrom = Int32Array.from(edges, ({ from }) => indexOf.get(from.id) ?? 0);
-		edgeTo = Int32Array.from(edges, ({ to }) => indexOf.get(to.id) ?? 0);
-		edgeLocal = Uint8Array.from(edges, (_, index) =>
-			bodyIndex[edgeFrom[index] ?? 0] === bodyIndex[edgeTo[index] ?? 0] ? 1 : 0,
-		);
-		const colors = (shade: 0 | 1) => {
-			const list: string[] = [];
-			const slot = new Map<string, number>();
-			const indices = Int32Array.from(edges, (_, index) => {
-				const color = tints[shade][bodyIndex[edgeFrom[index] ?? 0] ?? 0] ?? BRIDGE.dark;
-				let at = slot.get(color);
-				if (at === undefined) {
-					at = list.length;
-					slot.set(color, at);
-					list.push(color);
-				}
-				return at;
-			});
-			return { list, indices };
-		};
-		const light = colors(0);
-		const dark = colors(1);
-		palette = [light.list, dark.list];
-		edgeTint = [light.indices, dark.indices];
-		parentOf = new Map();
-		childrenOf = new Map();
-		for (const { edge, from, to } of edges) {
-			if (edge.kind === "depends_on" || parentOf.has(to.id) || tierOf(to.kind) === 0) continue;
-			parentOf.set(to.id, from.id);
-			const list = childrenOf.get(from.id);
-			if (list) list.push(to);
-			else childrenOf.set(from.id, [to]);
-		}
-		fit(nodes, false);
-	};
-	worker.onerror = () => {
-		clearTimeout(deadline);
-		worker.terminate();
-		onError?.();
-	};
-	const request: GraphWorkerRequest = { type: "init", data, layoutScope };
-	worker.postMessage(request);
 	return {
-		setRetrieval: (nodeIds, evidenceRefs) => {
-			const matched = matchRetrievedNodes(data.nodes, nodeIds, evidenceRefs);
-			for (const id of pendingRetrieval?.ids ?? []) matched.add(id);
-			pendingRetrieval = { ids: matched, at: pendingRetrieval?.at ?? performance.now() + 180 };
-			invalidate();
-		},
-		clearRetrieval: () => {
-			pendingRetrieval = undefined;
-			retrieved.clear();
-			retrievedNeighbors.clear();
-			followDue = false;
-			canvas.dataset.retrievedNodes = "0";
-			invalidate();
-		},
-		setFollowAgent: (enabled) => {
-			followAgent = enabled;
-			if (enabled) lastFollow = -Infinity;
-			followDue = enabled && retrieved.size > 0;
-			if (!enabled) viewport.cancelAnimation();
-			invalidate();
-		},
-		focusNode,
-		resetView,
-		clearSelection,
-		fit: () => fit(),
-		center,
-		focusable: () => nodes.map((node) => node.id),
-		zoom,
-		setHiddenKinds: (kinds) => {
-			hiddenKinds = new Set(kinds);
-			invalidate();
-		},
-		isolate,
+		setRetrieval: (nodeIds, evidenceRefs) =>
+			send({ type: "retrieval", ids: [...matchRetrievedNodes(data.nodes, nodeIds, evidenceRefs)] }),
+		clearRetrieval: () => send({ type: "clearRetrieval" }),
+		setFollowAgent: (enabled) => send({ type: "follow", enabled }),
+		focusNode: (id) => send({ type: "focus", id }),
+		resetView: () => send({ type: "reset" }),
+		clearSelection: () => send({ type: "clearSelection" }),
+		fit: () => send({ type: "fit" }),
+		center: () => send({ type: "center" }),
+		focusable: () => data.nodes.map((node) => node.id),
+		zoom: (factor) => send({ type: "zoom", factor }),
+		setHiddenKinds: (kinds) => send({ type: "hidden", kinds }),
+		isolate: (cluster) => send({ type: "isolate", cluster }),
 		dispose: () => {
 			if (disposed) return;
+			engine?.dispose();
 			disposed = true;
-			clearTimeout(deadline);
-			worker.terminate();
+			renderer?.terminate();
+			simulation.terminate();
 			resize.disconnect();
 			theme.disconnect();
-			cancelAnimationFrame(frame);
 			canvas.removeEventListener("pointerdown", down);
 			canvas.removeEventListener("pointermove", move);
 			canvas.removeEventListener("pointerup", up);
@@ -1136,8 +386,8 @@ export function createGraphScene(
 			canvas.removeEventListener("pointerleave", leave);
 			canvas.removeEventListener("wheel", wheel);
 			canvas.removeEventListener("click", click);
-			window.removeEventListener("keydown", key);
 			canvas.removeEventListener("dblclick", doubleClick);
+			window.removeEventListener("keydown", key);
 			canvas.remove();
 			overlay.remove();
 			tooltip.remove();

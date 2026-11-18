@@ -96,6 +96,7 @@ test("renderer batches retrieval, pauses following on wheel, and cancels pending
 		},
 	);
 	globals("devicePixelRatio", 1);
+	globals("OffscreenCanvas", undefined);
 	globals("requestAnimationFrame", (callback: FrameRequestCallback) => {
 		frames.set(++frameId, callback);
 		return frameId;

@@ -31,6 +31,7 @@ test("selection follows the reference interaction model without moving the camer
 		},
 	);
 	globals("devicePixelRatio", 1);
+	globals("OffscreenCanvas", undefined);
 	globals("requestAnimationFrame", () => 1);
 	globals("cancelAnimationFrame", () => {});
 	const context = new Proxy({}, { get: (_, key) => (key === "measureText" ? () => ({ width: 20 }) : () => {}) });
