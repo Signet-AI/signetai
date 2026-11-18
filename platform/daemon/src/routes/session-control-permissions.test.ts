@@ -507,6 +507,7 @@ describe("session control permissions in team mode", () => {
 		expect(await updateTranscriptLifecycle({ agentId: "agent-a", sessionKey: "ttl-delete", action: "start" })).toEqual({
 			generation: 2,
 			bypassed: false,
+			lifecycleIntentSeq: expect.any(Number),
 		});
 	});
 

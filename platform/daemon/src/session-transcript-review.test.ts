@@ -1,9 +1,11 @@
-import { afterAll, beforeAll, expect, test, spyOn } from "bun:test";
+import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { resolveWorkspaceLayout } from "@signet/core";
+import { resolveWorkspaceLayout, runMigrations } from "@signet/core";
+import { Database } from "bun:sqlite";
+import { logger } from "./logger";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import * as runtime from "./db-owner-runtime";
 import { DbOwnerError } from "./db-owner-client";
@@ -21,15 +23,16 @@ import { writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
 import { canonicalTranscriptPath } from "./transcript-jsonl";
 import { writeSummaryArtifact } from "./memory-lineage";
 import { normalizeSessionTranscript } from "./transcript-normalization";
+import { redactTranscriptFileBatch } from "./session-transcript-files";
 
 let root = "";
-beforeAll(() => {
+beforeEach(() => {
 	root = mkdtempSync(join(tmpdir(), "transcript-review-"));
 	mkdirSync(join(root, "memory"));
 	process.env.SIGNET_PATH = root;
 	initDbAccessor(join(root, "memory", "memories.db"));
 });
-afterAll(async () => {
+afterEach(async () => {
 	await closeDbAccessor();
 	rmSync(root, { recursive: true, force: true });
 });
@@ -171,6 +174,161 @@ test.each([false, true])(
 	},
 );
 
+test("lease expiry returns retryable pending while a slow summary writer drains", async () => {
+	const key = "slow-summary";
+	await upsertSessionTranscriptAsync(key, "User: evidence", "codex", null, "review", "2020-01-01T00:00:00.000Z");
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<string>();
+	const writer = writeSummaryArtifact({
+		agentId: "review",
+		sessionKey: key,
+		sessionId: key,
+		project: null,
+		harness: "codex",
+		capturedAt: "2020-01-01T00:00:00.000Z",
+		startedAt: null,
+		endedAt: null,
+		summary: "slow summary",
+		provider: {
+			name: "test",
+			available: async () => true,
+			generate: async () => {
+				entered.resolve();
+				return release.promise;
+			},
+		},
+	});
+	await entered.promise;
+	try {
+		expect(
+			await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" }),
+		).toMatchObject({ status: "pending", pendingReason: expect.stringContaining("lease") });
+	} finally {
+		release.resolve("A slow summary was recorded.");
+		await writer;
+	}
+	expect(
+		await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" }),
+	).toMatchObject({ status: "complete" });
+}, 30_000);
+
+test("journal allocation follows the last owner high-water despite a backward clock", async () => {
+	const key = "owner-high-water";
+	await deleted(key, true);
+	const high = 8_000_000_000_000_000;
+	await getDbAccessor().withWriteTxAsync((db) =>
+		db
+			.prepare(
+				"UPDATE session_transcript_deletions SET lifecycle_intent_seq = ? WHERE agent_id = 'review' AND session_key = ?",
+			)
+			.run(high, key),
+	);
+	const status = await updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "status" });
+	expect(status).toMatchObject({ lifecycleIntentSeq: high });
+	const clock = spyOn(Date, "now").mockReturnValue(1);
+	const offline = spyOn(runtime, "dbOwnerTranscriptOperation").mockRejectedValueOnce(new Error("offline"));
+	try {
+		await expect(updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "end" })).rejects.toThrow(
+			"offline",
+		);
+	} finally {
+		clock.mockRestore();
+		offline.mockRestore();
+	}
+	expect(await updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "start" })).toMatchObject({
+		generation: 2,
+		bypassed: false,
+	});
+});
+
+test("completing deletion invalidates only DB-registered pending temps for the same file", async () => {
+	const path = join(root, "shared.jsonl");
+	const first = JSON.stringify({ agent_id: "review", session_key: "temp-a", content: "first" }) + "\n";
+	const second = JSON.stringify({ agent_id: "review", session_key: "temp-b", content: "second" }) + "\n";
+	writeFileSync(path, first + second);
+	const pending = await redactTranscriptFileBatch({
+		basePath: root,
+		path,
+		agentId: "review",
+		sessionKey: "temp-b",
+		generation: 1,
+		checkpoint: null,
+	});
+	const checkpoint = JSON.stringify(pending.checkpoint);
+	await getDbAccessor().withWriteTxAsync((db) => {
+		for (const key of ["temp-a", "temp-b"]) {
+			db.prepare(
+				"INSERT INTO session_transcript_deletions (agent_id,session_key,watermark,phase) VALUES ('review',?,'2020-01-01','files')",
+			).run(key);
+			db.prepare(
+				"INSERT INTO session_transcript_delete_files (agent_id,session_key,generation,path,checkpoint) VALUES ('review',?,1,?,?)",
+			).run(key, path, key === "temp-b" ? checkpoint : null);
+		}
+	});
+	expect(
+		await deleteSessionTranscript({ agentId: "review", sessionKey: "temp-a", hard: false, changedBy: "test" }),
+	).toMatchObject({ status: "complete" });
+	expect(readFileSync(path, "utf8")).toBe(second);
+	expect(readdirSync(root).filter((name) => name.includes(".delete-"))).toEqual([]);
+	expect(
+		await deleteSessionTranscript({ agentId: "review", sessionKey: "temp-b", hard: false, changedBy: "test" }),
+	).toMatchObject({ status: "complete" });
+	expect(readFileSync(path, "utf8")).toBe("");
+});
+
+test("an intent at or behind the owner high-water logs the hashed key and both sequences", () => {
+	const db = new Database(":memory:");
+	const warn = spyOn(logger, "warn").mockImplementation(() => {});
+	try {
+		runMigrations(db);
+		db.prepare(
+			"INSERT INTO session_transcript_deletions (agent_id,session_key,watermark,lifecycle_intent_seq) VALUES ('review','skip-intent','2020-01-01',42)",
+		).run();
+		updateTranscriptLifecycleInTx(db, {
+			agentId: "review",
+			sessionKey: "skip-intent",
+			action: "status",
+			intents: [{ seq: 41, action: "end", at: "2020-01-01" }],
+		});
+		expect(warn).toHaveBeenCalledWith("transcripts", expect.stringContaining("Skipped lifecycle intent"), {
+			keyHash: expect.stringMatching(/^[0-9a-f]{64}$/),
+			intentSeq: 41,
+			ownerSeq: 42,
+		});
+	} finally {
+		warn.mockRestore();
+		db.close();
+	}
+});
+
+test("receipt count remains authoritative when positional rows extend past its boundary", async () => {
+	const key = "receipt-count";
+	await upsertSessionTranscriptAsync(
+		key,
+		"User: first\nUser: second",
+		"codex",
+		null,
+		"review",
+		"2020-01-01T00:00:00.000Z",
+	);
+	await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
+	await updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "start" });
+	await getDbAccessor().withWriteTxAsync((db) =>
+		db
+			.prepare("INSERT INTO session_transcript_deleted_positions VALUES ('review',?,1,'row',3,'uncommitted-prefix')")
+			.run(key),
+	);
+	await upsertSessionTranscriptAsync(
+		key,
+		"User: first\nUser: second\nUser: fresh",
+		"codex",
+		null,
+		"review",
+		new Date().toISOString(),
+	);
+	expect((await getStoredSessionTranscriptInfoAsync(key, "review"))?.content).toBe("User: fresh");
+});
+
 test("partial deletion reimports the same source fingerprint and retains its new suffix", async () => {
 	const { signetExportV1Adapter } = await import("./transcript-import-adapter");
 	const { buildCompletedTranscriptCommit, commitCompletedTranscriptBatchInTx } = await import(
@@ -289,10 +447,9 @@ test("journaled lifecycle intent survives restart and a backward clock", () => {
 		await deleteSessionTranscript({ ...input, hard: false, changedBy: "test", live: { harness: "codex", project: null } });
 		const owner = await getDbOwnerForAccessor(getDbAccessor());
 		Date.now = () => clock() + 60_000;
-		await withTranscriptLifecycleIntents({ ...input, action: "end" }, async (intents) => {
-			Date.now = clock;
-			return dbOwnerTranscriptOperation(owner, { kind: "session_transcript_lifecycle", input: { ...input, action: "status", intents } }, { operation: "test.clock", deadlineMs: 2000 });
-		});`,
+		try { await withTranscriptLifecycleIntents({ ...input, action: "end" }, async () => { throw new Error("offline"); }); } catch (error) { if (error.message !== "offline") throw error; }
+		Date.now = clock;
+		await updateTranscriptLifecycle({ ...input, action: "status" });`,
 		`Date.now = () => clock() - 60_000;
 		try { await withTranscriptLifecycleIntents({ ...input, action: "start" }, async () => { Date.now = clock; throw new Error("offline"); }); } catch (error) { if (error.message !== "offline") throw error; }
 		Date.now = clock;
@@ -581,7 +738,7 @@ test("normal lifecycle sessions leave no intent journal files", async () => {
 		await updateTranscriptLifecycle({ agentId: "normal", sessionKey: `session-${i}`, action: "end" });
 	}
 	const directory = join(root, ".daemon", "transcript-lifecycle-intents");
-	expect(existsSync(directory) ? readdirSync(directory).filter((name) => name.endsWith(".json")) : []).toEqual([]);
+	expect(existsSync(directory) ? readdirSync(directory) : []).toEqual([]);
 });
 
 test("legacy session-id-only artifacts are discovered and removed only for the owning agent", async () => {
@@ -735,7 +892,7 @@ test("deletion completes beyond 65536 records without a hash receipt limit", asy
 		});
 	expect(result.status).toBe("complete");
 	expect(await getStoredSessionTranscriptInfoAsync("hash-budget", "review")).toBeUndefined();
-});
+}, 60_000);
 
 test.each([true, false])("reimport admits repeated new turns with replay=%s", async (replay) => {
 	const key = `resume-import-${replay}`;

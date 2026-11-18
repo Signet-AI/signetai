@@ -1,7 +1,7 @@
-import { withSessionArtifactLease } from "./session-artifact-lease";
+import { withSessionArtifactLease, SessionArtifactLeaseTimeoutError } from "./session-artifact-lease";
 import { resolveDefaultBasePath } from "@signet/core";
 import {
-	nextTranscriptLifecycleSequence,
+	rememberTranscriptLifecycleSequence,
 	withTranscriptLifecycleIntents,
 	type TranscriptLifecycleIntent,
 } from "./transcript-lifecycle-intents";
@@ -84,6 +84,7 @@ export async function restoreTranscriptBypasses(): Promise<void> {
 export interface TranscriptLifecycleResult {
 	readonly generation: number;
 	readonly bypassed: boolean;
+	readonly lifecycleIntentSeq: number;
 }
 
 export async function updateTranscriptLifecycle(
@@ -93,7 +94,7 @@ export async function updateTranscriptLifecycle(
 		const owner = await getDbOwnerForAccessor(getDbAccessor());
 		return dbOwnerTranscriptOperation<TranscriptLifecycleResult>(
 			owner,
-			{ kind: "session_transcript_lifecycle", input: { ...input, action: "status", intents } },
+			{ kind: "session_transcript_lifecycle", input: { ...input, intents } },
 			{ operation: "transcripts.lifecycle", deadlineMs: 2_000 },
 		);
 	});
@@ -183,7 +184,6 @@ export async function captureTranscriptOwned(
 }
 
 export interface TranscriptDeleteInput {
-	readonly lifecycleSeq?: number;
 	readonly generation?: number;
 	readonly basePath: string;
 	readonly sessionKey: string;
@@ -199,6 +199,7 @@ export type TranscriptDeleteResult =
 	| { readonly status: "conflict"; readonly generation: number }
 	| {
 			readonly status: "complete" | "pending";
+			readonly lifecycleIntentSeq: number;
 			readonly counts: Readonly<Record<string, number>>;
 			readonly retainedPinned: number;
 			readonly generation: number;
@@ -209,20 +210,27 @@ export type TranscriptDeleteResult =
 export async function deleteSessionTranscript(
 	input: Omit<TranscriptDeleteInput, "basePath">,
 	signal?: AbortSignal,
-): Promise<TranscriptDeleteResult> {
+): Promise<TranscriptDeleteResult | TranscriptCapturePending> {
 	const owner = await getDbOwnerForAccessor(getDbAccessor());
-	const result = await withSessionArtifactLease(input, true, async () =>
-		dbOwnerTranscriptOperation<TranscriptDeleteResult>(
-			owner,
-			{
-				kind: "session_transcript_delete",
-				input: { ...input, lifecycleSeq: await nextTranscriptLifecycleSequence(), basePath: resolveDefaultBasePath() },
-			},
-			{ operation: "transcripts.delete", lane: "write", deadlineMs: 10_000, signal },
-		),
-	);
-	if ((result.status === "complete" || result.status === "pending") && result.bypassed) {
-		bypassSession(input.sessionKey, { allowUnknown: true, untilEnd: true }, input.agentId);
+	try {
+		const result = await withSessionArtifactLease(input, true, async () =>
+			dbOwnerTranscriptOperation<TranscriptDeleteResult>(
+				owner,
+				{
+					kind: "session_transcript_delete",
+					input: { ...input, basePath: resolveDefaultBasePath() },
+				},
+				{ operation: "transcripts.delete", lane: "write", deadlineMs: 10_000, signal },
+			),
+		);
+		if (result.status === "complete" || result.status === "pending")
+			rememberTranscriptLifecycleSequence(result.lifecycleIntentSeq);
+		if ((result.status === "complete" || result.status === "pending") && result.bypassed) {
+			bypassSession(input.sessionKey, { allowUnknown: true, untilEnd: true }, input.agentId);
+		}
+		return result;
+	} catch (error) {
+		if (error instanceof SessionArtifactLeaseTimeoutError) return { status: "pending", pendingReason: error.message };
+		throw error;
 	}
-	return result;
 }

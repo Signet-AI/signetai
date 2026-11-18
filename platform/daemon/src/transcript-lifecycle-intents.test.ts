@@ -39,7 +39,7 @@ test.each(["{", JSON.stringify({ seq: 0, intents: [{ action: "invalid" }] })])(
 				let attempted = false;
 				await withTranscriptLifecycleIntents({ ...input, action }, async (intents) => {
 					attempted = true;
-					expect(intents.map((intent) => intent.action)).toEqual(action === "status" ? [] : [action]);
+					expect(intents).toEqual([]);
 					expect(files()).toEqual([]);
 				});
 				expect(attempted).toBe(true);
@@ -56,6 +56,33 @@ test.each(["{", JSON.stringify({ seq: 0, intents: [{ action: "invalid" }] })])(
 	},
 );
 
+test.each(["{", "null", "-1", '"bad"', "9007199254740991"])(
+	"invalid sequence is discarded once without blocking the owner: %s",
+	async (corrupt) => {
+		writeFileSync(join(directory, ".seq"), corrupt);
+		const warn = spyOn(logger, "warn").mockImplementation(() => {});
+		try {
+			for (const action of ["start", "end"] as const) {
+				let attempted = false;
+				await withTranscriptLifecycleIntents({ agentId: "a", sessionKey: "bad-seq", action }, async () => {
+					attempted = true;
+				});
+				expect(attempted).toBe(true);
+			}
+			expect(readdirSync(directory)).toEqual([]);
+			expect(warn).toHaveBeenCalledTimes(1);
+		} finally {
+			warn.mockRestore();
+		}
+	},
+);
+
+test("successful ordinary sessions leave the entire outbox empty", async () => {
+	for (const action of ["start", "end", "status"] as const)
+		await withTranscriptLifecycleIntents({ agentId: "a", sessionKey: "ordinary", action }, async () => {});
+	expect(readdirSync(directory)).toEqual([]);
+});
+
 test("owner success never writes an intent file; failure persists ordered intents until acknowledged", async () => {
 	const input = { agentId: "a", sessionKey: "outbox", action: "end" as const };
 	await expect(
@@ -69,7 +96,7 @@ test("owner success never writes an intent file; failure persists ordered intent
 	if (!file) throw new Error("Missing outbox");
 	expect(JSON.parse(readFileSync(join(directory, file), "utf8")).intents).toMatchObject([{ action: "end" }]);
 	await withTranscriptLifecycleIntents({ ...input, action: "start" }, async (intents) => {
-		expect(intents.map((intent) => intent.action)).toEqual(["end", "start"]);
+		expect(intents.map((intent) => intent.action)).toEqual(["end"]);
 		expect(files()).toHaveLength(1);
 	});
 	expect(files()).toEqual([]);
@@ -83,6 +110,23 @@ test("owner success never writes an intent file; failure persists ordered intent
 		}),
 	).rejects.toThrow("still unavailable");
 	expect(files()).toEqual([]);
+});
+
+test("a failure seeds the counter above the cached owner high-water when the clock moves back", async () => {
+	const input = { agentId: "a", sessionKey: "cached-floor", action: "end" as const };
+	const high = 8_000_000_000_000_000;
+	await withTranscriptLifecycleIntents(input, async () => ({ lifecycleIntentSeq: high }));
+	const clock = spyOn(Date, "now").mockReturnValue(1);
+	try {
+		await expect(
+			withTranscriptLifecycleIntents(input, async () => {
+				throw new Error("offline");
+			}),
+		).rejects.toThrow("offline");
+	} finally {
+		clock.mockRestore();
+	}
+	expect(JSON.parse(readFileSync(join(directory, ".seq"), "utf8"))).toBeGreaterThan(high);
 });
 
 test("orphan journal temps are reclaimed before failure-outbox admission", async () => {
