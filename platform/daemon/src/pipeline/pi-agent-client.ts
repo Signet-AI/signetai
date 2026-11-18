@@ -66,7 +66,7 @@ export async function createWorkerAgentSession(
 	let disposed = false;
 	let exited = false;
 	let prompt: { resolve: () => void; reject: (error: Error) => void } | undefined;
-	let cancel: { resolve: () => void; reject: (error: Error) => void } | undefined;
+	let cancel: { promise: Promise<void>; settle: (error?: Error) => void } | undefined;
 	let nextCancelId = 0;
 	let readyResolve: () => void = () => {};
 	let readyReject: (error: Error) => void = () => {};
@@ -85,7 +85,7 @@ export async function createWorkerAgentSession(
 		readyReject(error);
 		prompt?.reject(error);
 		prompt = undefined;
-		cancel?.reject(error);
+		cancel?.settle(error);
 		cancel = undefined;
 		controller.abort(error);
 	};
@@ -233,27 +233,34 @@ export async function createWorkerAgentSession(
 		},
 		async cancelTurn() {
 			controller.abort(new Error("Pi agent turn cancelled"));
+			if (cancel) return cancel.promise;
 			const id = ++nextCancelId;
-			await new Promise<void>((resolve, reject) => {
-				const settle = (error?: Error) => {
+			let settle: (error?: Error) => void = () => {};
+			const promise = new Promise<void>((resolve, reject) => {
+				settle = (error?: Error) => {
 					cancel = undefined;
 					clearTimeout(timer);
 					worker.off("message", acknowledge);
 					if (error) reject(error);
 					else resolve();
 				};
-				const timer = setTimeout(
-					() => settle(new Error("Pi agent cancellation timed out")),
-					PI_AGENT_CANCEL_ACK_TIMEOUT_MS,
-				);
-				const acknowledge = (message: PiAgentWorkerResponse) => {
-					if (message.type !== "aborted" || message.id !== id) return;
-					settle();
-				};
-				worker.on("message", acknowledge);
-				cancel = { resolve: () => settle(), reject: (error) => settle(error) };
-				send({ type: "cancel", id });
 			});
+			const timer = setTimeout(
+				() => settle(new Error("Pi agent cancellation timed out")),
+				PI_AGENT_CANCEL_ACK_TIMEOUT_MS,
+			);
+			const acknowledge = (message: PiAgentWorkerResponse) => {
+				if (message.type !== "aborted" || message.id !== id) return;
+				settle();
+			};
+			worker.on("message", acknowledge);
+			cancel = { promise, settle };
+			send({ type: "cancel", id });
+			try {
+				await promise;
+			} finally {
+				if (cancel?.promise === promise) cancel = undefined;
+			}
 			await Promise.allSettled(toolCalls);
 		},
 		abort: dispose,
