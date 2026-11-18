@@ -116,7 +116,6 @@ test("a new turn's cancel does not join a previous turn's pending cancel", async
 		{ workerPath: join(import.meta.dir, "pi-agent-fake-two-turns.mjs") },
 	);
 	const first = session.cancelTurn?.();
-	await new Promise((resolve) => setTimeout(resolve, 30));
 	await session.prompt?.("next turn");
 	expect(await settleWithin(session.cancelTurn?.(), 2000)).toBe("settled");
 	const firstOutcome = outcome(first);

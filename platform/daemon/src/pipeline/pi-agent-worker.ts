@@ -110,6 +110,7 @@ session.subscribe((event) => {
 });
 const waitForActiveRun = (run: number): Promise<boolean> => {
 	if (session.isStreaming) return Promise.resolve(true);
+	if (!running) return Promise.resolve(false);
 	return new Promise<boolean>((resolve) => {
 		let settled = false;
 		const waiter: RunStartWaiter = {
