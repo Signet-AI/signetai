@@ -156,6 +156,7 @@ async function runPi(): Promise<void> {
 	};
 	await fire("session_start", {});
 	const start = await delivered("context", { messages: [] });
+	history.push(...start.map((message) => ({ role: "custom", ...message })));
 	record(sessionId, 0, "session-start", start.map((message) => textOf(message.content)).join("\n"));
 	for (const [index, turn] of turns.entries()) {
 		history.push({ role: "user", content: turn });

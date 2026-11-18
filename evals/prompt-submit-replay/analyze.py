@@ -56,6 +56,8 @@ def memory_chars(text):
 
 def summarize(args, dump):
     summary = {}
+    with open(os.path.join(args.dir, "transcripts.json")) as handle:
+        lengths = {session: len(item["turns"]) for session, item in json.load(handle).items()}
     for run in args.runs:
         with open(os.path.join(args.dir, f"results-{run}.jsonl")) as handle:
             rows = [json.loads(line) for line in handle]
@@ -74,6 +76,9 @@ def summarize(args, dump):
                 if row["kind"] == "session-start":
                     dump.write(f"\n### session-start: plugin guidance present = {'session-start' in targets}\n")
                     continue
+                if row["kind"] != "prompt" or row["turn"] > lengths.get(session, row["turn"]):
+                    dump.write(f"\n### diagnostic {row['kind']} row {row['turn']}: not a user turn, excluded\n")
+                    continue
                 lines = memory_lines(row["text"])
                 injected_turns += 1 if lines else 0
                 plugin_turns += 1 if "user-prompt-submit" in targets else 0
@@ -85,7 +90,9 @@ def summarize(args, dump):
                     dump.write(f"- {line[2:200]}{' [REPEAT]' if seen[line] else ''}\n")
                     seen[line] += 1
             summary[(run, session)] = {
-                "turns": sum(1 for row in items if row["kind"] == "prompt"),
+                "turns": sum(
+                    1 for row in items if row["kind"] == "prompt" and row["turn"] <= lengths.get(session, row["turn"])
+                ),
                 "turnsWithMemory": injected_turns,
                 "memoryLinesDelivered": sum(seen.values()),
                 "uniqueLines": len(seen),

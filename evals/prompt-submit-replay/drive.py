@@ -98,7 +98,7 @@ def run_hermes(session):
         provider.queue_prefetch(turn, session_id=key)
         if provider._prefetch_thread:
             provider._prefetch_thread.join(timeout=30)
-    record(session, key, len(turns) + 1, "prompt", provider.prefetch("", session_id=key))
+    record(session, key, len(turns) + 1, "drain", provider.prefetch("", session_id=key))
     if hasattr(provider, "shutdown"):
         provider.shutdown()
 
