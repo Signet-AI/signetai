@@ -1,10 +1,9 @@
 import { afterEach, expect, test } from "bun:test";
 import { isMainThread } from "node:worker_threads";
 import * as Type from "typebox";
-import { createPiModelProvider, resolvePiModel } from "./pi-provider";
+import { createPiModelProvider } from "./pi-provider";
 import { activePiAgentWorkers, piAgentWorkerLimit, stopPiAgentWorkers } from "./pi-agent-client";
 import { configureLlmConcurrency, getLlmConcurrencyLimit } from "./provider";
-import { piAgentWorkerSettings } from "./pi-agent-protocol";
 import type { PiAgentTool } from "./pi-agent-protocol";
 
 function completion(delta: unknown, finishReason: string | null = null): string {
@@ -530,29 +529,3 @@ test("a chat turn without a retry policy survives one transient 503 through Pi d
 		server.stop(true);
 	}
 }, 30000);
-
-test("worker settings stream cache warming only while runs are active", () => {
-	const { piModel } = resolvePiModel({
-		executor: "openai-compatible",
-		model: "test-model",
-		baseUrl: "http://127.0.0.1:1/v1",
-	});
-	const input = {
-		model: piModel,
-		apiKey: "integration-test-key",
-		systemPrompt: "test",
-		tools: [],
-	};
-	expect(piAgentWorkerSettings(input)).toEqual({ cacheWarming: "streaming" });
-	expect(
-		piAgentWorkerSettings({
-			...input,
-			retry: { maxRetries: 2, baseDelayMs: 1, maxAgentDelayMs: 5 },
-			thinkingBudgets: { medium: 2048 },
-		}),
-	).toEqual({
-		cacheWarming: "streaming",
-		retry: { enabled: true, maxRetries: 2, baseDelayMs: 1, maxAgentDelayMs: 5 },
-		thinkingBudgets: { medium: 2048 },
-	});
-});

@@ -9,7 +9,7 @@ import {
 	createCodemodeExtension,
 } from "@earendil-works/pi-coding-agent";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { PI_AGENT_MAX_MESSAGE_BYTES, piAgentWorkerSettings } from "./pi-agent-protocol";
+import { PI_AGENT_MAX_MESSAGE_BYTES, PI_AGENT_RUN_START_TIMEOUT_MS, piAgentWorkerSettings } from "./pi-agent-protocol";
 import type { PiAgentWorkerInput, PiAgentWorkerRequest, PiAgentWorkerResponse } from "./pi-agent-protocol";
 
 const port = parentPort;
@@ -89,7 +89,6 @@ if (codemode) {
 	]);
 }
 let running = false;
-const CANCEL_RUN_START_TIMEOUT_MS = 5_000;
 const runStartWaiters = new Set<() => void>();
 session.subscribe((event) => {
 	if (event.type === "agent_start") {
@@ -110,7 +109,7 @@ const waitForActiveRun = async (): Promise<void> => {
 			runStartWaiters.delete(finish);
 			resolve();
 		};
-		const timer = setTimeout(finish, CANCEL_RUN_START_TIMEOUT_MS);
+		const timer = setTimeout(finish, PI_AGENT_RUN_START_TIMEOUT_MS);
 		runStartWaiters.add(finish);
 	});
 };
@@ -146,7 +145,7 @@ port.on("message", async (request: PiAgentWorkerRequest) => {
 			for (const { call } of queued.splice(0)) call.reject(new Error("Pi agent aborted"));
 			await waitForActiveRun();
 			await session.abort();
-			send({ type: "aborted" });
+			send(request.type === "cancel" ? { type: "aborted", id: request.id } : { type: "aborted" });
 			return;
 		}
 		if (running) throw new Error("Pi agent session already running");

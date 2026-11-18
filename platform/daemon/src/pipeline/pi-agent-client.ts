@@ -7,7 +7,11 @@ import type { AgentSessionEvent, SessionStats } from "@earendil-works/pi-coding-
 import type { Usage } from "@earendil-works/pi-ai";
 import { resolveEmbeddedWorkerPath } from "../native-runtime-assets";
 import type { PiAgentSession } from "./pi-provider";
-import { PI_AGENT_MAX_MESSAGE_BYTES, PI_CHAT_MAX_PERSISTENT_SESSIONS } from "./pi-agent-protocol";
+import {
+	PI_AGENT_CANCEL_ACK_TIMEOUT_MS,
+	PI_AGENT_MAX_MESSAGE_BYTES,
+	PI_CHAT_MAX_PERSISTENT_SESSIONS,
+} from "./pi-agent-protocol";
 import { getLlmConcurrencyLimit } from "./provider";
 import type { PiAgentTool, PiAgentWorkerInput, PiAgentWorkerRequest, PiAgentWorkerResponse } from "./pi-agent-protocol";
 
@@ -32,6 +36,7 @@ export async function createWorkerAgentSession(
 	input: PiAgentWorkerInput,
 	tools: readonly PiAgentTool[],
 	signal?: AbortSignal,
+	options?: { readonly workerPath?: string },
 ): Promise<PiAgentSession> {
 	if (!accepting) throw new Error("Pi agent worker admission closed");
 	if (signal?.aborted) throw new Error("Pi agent initialization cancelled");
@@ -41,7 +46,8 @@ export async function createWorkerAgentSession(
 	const directory = dirname(fileURLToPath(import.meta.url));
 	const bundled = join(directory, "pi-agent-worker.js");
 	const worker = new Worker(
-		resolveEmbeddedWorkerPath("pi-agent-worker") ??
+		options?.workerPath ??
+			resolveEmbeddedWorkerPath("pi-agent-worker") ??
 			(existsSync(bundled) ? bundled : join(directory, "pi-agent-worker.ts")),
 		{ workerData: JSON.parse(JSON.stringify(input)) },
 	);
@@ -58,6 +64,8 @@ export async function createWorkerAgentSession(
 	let executionThreadId = 0;
 	let disposed = false;
 	let prompt: { resolve: () => void; reject: (error: Error) => void } | undefined;
+	let cancel: { resolve: () => void; reject: (error: Error) => void } | undefined;
+	let nextCancelId = 0;
 	let readyResolve: () => void = () => {};
 	let readyReject: (error: Error) => void = () => {};
 	const ready = new Promise<void>((resolve, reject) => {
@@ -75,6 +83,8 @@ export async function createWorkerAgentSession(
 		readyReject(error);
 		prompt?.reject(error);
 		prompt = undefined;
+		cancel?.reject(error);
+		cancel = undefined;
 		controller.abort(error);
 	};
 	worker.on("message", (message: PiAgentWorkerResponse) => {
@@ -150,7 +160,7 @@ export async function createWorkerAgentSession(
 				const acknowledged = (message: PiAgentWorkerResponse) => {
 					if (message.type === "aborted") finish();
 				};
-				timer = setTimeout(finish, 1000);
+				timer = setTimeout(finish, PI_AGENT_CANCEL_ACK_TIMEOUT_MS);
 				worker.on("message", acknowledged);
 				worker.once("exit", finish);
 				worker.postMessage({ type: "abort" });
@@ -218,19 +228,26 @@ export async function createWorkerAgentSession(
 		},
 		async cancelTurn() {
 			controller.abort(new Error("Pi agent turn cancelled"));
+			const id = ++nextCancelId;
 			await new Promise<void>((resolve, reject) => {
-				const timer = setTimeout(() => {
-					worker.off("message", acknowledge);
-					reject(new Error("Pi agent cancellation timed out"));
-				}, 1000);
-				const acknowledge = (message: PiAgentWorkerResponse) => {
-					if (message.type !== "aborted") return;
+				const settle = (error?: Error) => {
+					cancel = undefined;
 					clearTimeout(timer);
 					worker.off("message", acknowledge);
-					resolve();
+					if (error) reject(error);
+					else resolve();
+				};
+				const timer = setTimeout(
+					() => settle(new Error("Pi agent cancellation timed out")),
+					PI_AGENT_CANCEL_ACK_TIMEOUT_MS,
+				);
+				const acknowledge = (message: PiAgentWorkerResponse) => {
+					if (message.type !== "aborted" || message.id !== id) return;
+					settle();
 				};
 				worker.on("message", acknowledge);
-				send({ type: "cancel" });
+				cancel = { resolve: () => settle(), reject: (error) => settle(error) };
+				send({ type: "cancel", id });
 			});
 			await Promise.allSettled(toolCalls);
 		},
