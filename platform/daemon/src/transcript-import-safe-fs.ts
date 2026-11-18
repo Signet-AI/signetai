@@ -2,8 +2,11 @@ import { constants as fsConstants } from "node:fs";
 import { lstat, open, opendir, rename, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
+import { createRequire } from "node:module";
 import { join, relative, resolve, sep } from "node:path";
-import { dlopen, ptr, read, toArrayBuffer } from "bun:ffi";
+import type { ptr } from "bun:ffi";
+
+const requireFfi: (id: string) => typeof import("bun:ffi") = createRequire(import.meta.url);
 
 const DESCRIPTOR_ROOT =
 	process.platform === "linux" ? "/proc/self/fd" : process.platform === "darwin" ? "/dev/fd" : undefined;
@@ -39,7 +42,7 @@ function loadDarwinFileSystem(): DarwinFileSystem | null {
 	if (process.platform !== "darwin") return null;
 	if (darwinFileSystem !== undefined) return darwinFileSystem;
 	try {
-		darwinFileSystem = dlopen("/usr/lib/libSystem.B.dylib", {
+		darwinFileSystem = requireFfi("bun:ffi").dlopen("/usr/lib/libSystem.B.dylib", {
 			__error: { args: [], returns: "ptr" },
 			close: { args: ["i32"], returns: "i32" },
 			getdirentries: { args: ["i32", "ptr", "i32", "ptr"], returns: "i32" },
@@ -54,7 +57,7 @@ function loadDarwinFileSystem(): DarwinFileSystem | null {
 }
 
 function darwinError(operation: string, api: DarwinFileSystem): NodeJS.ErrnoException {
-	const errno = read.i32(api.symbols.__error(), 0);
+	const errno = requireFfi("bun:ffi").read.i32(api.symbols.__error(), 0);
 	const code = Object.entries(osConstants.errno).find(([, value]) => value === errno)?.[0] ?? "EIO";
 	return Object.assign(new Error(`${operation} failed: ${code}`), { code, errno });
 }
@@ -62,7 +65,7 @@ function darwinError(operation: string, api: DarwinFileSystem): NodeJS.ErrnoExce
 function openAt(dirfd: number, path: string, flags: number, mode = 0): number {
 	const api = loadDarwinFileSystem();
 	if (!api) throw new Error("Darwin descriptor filesystem unavailable");
-	const fd = api.symbols.openat(dirfd, ptr(Buffer.from(`${path}\0`)), flags, mode);
+	const fd = api.symbols.openat(dirfd, requireFfi("bun:ffi").ptr(Buffer.from(`${path}\0`)), flags, mode);
 	if (fd < 0) throw darwinError("openat", api);
 	return fd;
 }
@@ -83,6 +86,7 @@ async function openContainedChild(parent: FileHandle, name: string, flags: numbe
 }
 
 function* readDarwinDirectory(fd: number, api: DarwinFileSystem): Generator<string> {
+	const { ptr, read, toArrayBuffer } = requireFfi("bun:ffi");
 	const buffer = new Uint8Array(DARWIN_DIRECTORY_BUFFER_BYTES);
 	const base = new BigInt64Array(1);
 	const bufferPointer = ptr(buffer);
@@ -220,6 +224,7 @@ export async function replaceContainedTranscriptFile(root: string, from: string,
 			if (process.platform === "darwin") {
 				const api = loadDarwinFileSystem();
 				if (!api) throw new Error("Darwin descriptor filesystem unavailable");
+				const { ptr } = requireFfi("bun:ffi");
 				if (
 					api.symbols.renameat(
 						source.fd,
@@ -254,6 +259,7 @@ export async function removeContainedTranscriptPath(
 		if (process.platform === "darwin") {
 			const api = loadDarwinFileSystem();
 			if (!api) throw new Error("Darwin descriptor filesystem unavailable");
+			const { ptr } = requireFfi("bun:ffi");
 			const flags = options.recursive ? 0x800 : 0;
 			if (api.symbols.unlinkat(parent.fd, ptr(Buffer.from(`${name}\0`)), flags) < 0) {
 				const error = darwinError("unlinkat", api);
