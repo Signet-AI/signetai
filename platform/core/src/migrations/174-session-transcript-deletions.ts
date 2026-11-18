@@ -18,7 +18,6 @@ export function up(db: MigrationDb): void {
 			blocked INTEGER NOT NULL DEFAULT 1,
 			ended INTEGER NOT NULL DEFAULT 0,
 			pending_start INTEGER NOT NULL DEFAULT 0,
-			lifecycle_seq INTEGER NOT NULL DEFAULT 0,
 			lifecycle_intent_seq INTEGER NOT NULL DEFAULT 0,
 			receipt_generation INTEGER NOT NULL DEFAULT 1,
 			harness TEXT,
@@ -32,9 +31,10 @@ export function up(db: MigrationDb): void {
 			agent_id TEXT NOT NULL,
 			session_key TEXT NOT NULL,
 			generation INTEGER NOT NULL,
+			origin TEXT NOT NULL,
 			record_count INTEGER NOT NULL,
 			record_hash TEXT NOT NULL,
-			PRIMARY KEY (agent_id, session_key, generation)
+			PRIMARY KEY (agent_id, session_key, generation, origin)
 		);
 		CREATE TABLE IF NOT EXISTS session_transcript_deleted_positions (
 			agent_id TEXT NOT NULL,
@@ -44,8 +44,8 @@ export function up(db: MigrationDb): void {
 			position INTEGER NOT NULL,
 			record_hash TEXT NOT NULL,
 			PRIMARY KEY (agent_id, session_key, generation, origin, position),
-			FOREIGN KEY (agent_id, session_key, generation)
-				REFERENCES session_transcript_deleted_prefixes(agent_id, session_key, generation) ON DELETE CASCADE
+			FOREIGN KEY (agent_id, session_key, generation, origin)
+				REFERENCES session_transcript_deleted_prefixes(agent_id, session_key, generation, origin) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS session_transcript_deleted_sources (
 			agent_id TEXT NOT NULL,
@@ -65,6 +65,7 @@ export function up(db: MigrationDb): void {
 			done INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY (agent_id, session_key, generation, path)
 		);
+		CREATE INDEX IF NOT EXISTS idx_session_delete_files_pending ON session_transcript_delete_files(path) WHERE done = 0 AND checkpoint IS NOT NULL;
 		CREATE INDEX IF NOT EXISTS idx_import_records_session_delete ON source_import_records(agent_id,canonical_key,redacted_bytes);
 		CREATE INDEX IF NOT EXISTS idx_memories_session_delete_source ON memories(agent_id,source_id);
 		CREATE INDEX IF NOT EXISTS idx_capture_jobs_session_delete ON transcript_capture_jobs(agent_id,session_key);
@@ -72,7 +73,7 @@ export function up(db: MigrationDb): void {
 			ON session_transcript_deleted_sources(agent_id, kind, id, outcome);
 	`);
 	const columns = db.prepare("PRAGMA table_info(session_transcript_deletions)").all();
-	for (const column of ["pending_start", "lifecycle_seq", "lifecycle_intent_seq"]) {
+	for (const column of ["pending_start", "lifecycle_intent_seq"]) {
 		if (!columns.some((row) => row.name === column))
 			db.exec(`ALTER TABLE session_transcript_deletions ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
 	}

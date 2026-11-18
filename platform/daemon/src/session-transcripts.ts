@@ -12,7 +12,11 @@ import { writeTranscriptAudit } from "./transcript-audit";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 import { txForgetMemory } from "./transactions";
 import { markDerivedMemoriesStaleForSourceInTx, linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
-import { redactTranscriptFileBatch, type TranscriptFileCheckpoint } from "./session-transcript-files";
+import {
+	redactTranscriptFileBatch,
+	removeTranscriptDeletionTemp,
+	type TranscriptFileCheckpoint,
+} from "./session-transcript-files";
 import { purgeMemoryEmbeddingsInTx, purgeMemoryInTx } from "./source-purge-tx";
 import { captureTranscriptOwned } from "./session-transcript-lifecycle";
 import type {
@@ -86,7 +90,7 @@ export function filterTranscriptMessagesInDb<T extends EvidenceTurn>(
 	if (!row) return turns;
 	const prefixes = prepareTypedStatement<{ generation: number; origin: string; record_count: number }>(
 		db,
-		"SELECT generation,origin,MAX(position) AS record_count FROM session_transcript_deleted_positions WHERE agent_id = ? AND session_key = ? GROUP BY generation,origin ORDER BY generation,origin",
+		"SELECT generation,origin,record_count FROM session_transcript_deleted_prefixes WHERE agent_id = ? AND session_key = ? ORDER BY generation,origin",
 	).all(input.agentId, normalizeSessionKey(key));
 	let offset = 0;
 	for (const generation of new Set(prefixes.map((prefix) => prefix.generation))) {
@@ -269,7 +273,6 @@ interface TranscriptDeletionRow {
 	readonly watermark: string;
 	readonly opened_at: string | null;
 	readonly pending_start: number;
-	readonly lifecycle_seq: number;
 	readonly lifecycle_intent_seq: number;
 }
 
@@ -321,11 +324,20 @@ export function updateTranscriptLifecycleInTx(
 			`SELECT agent_id,session_key FROM session_transcript_deletions WHERE blocked = 1 AND ended = 0 ${input.after ? "AND (agent_id,session_key) > (?,?)" : ""} ORDER BY agent_id,session_key LIMIT 100`,
 		).all(...(input.after ?? []));
 	let row = transcriptDeletion(db, input.agentId, input.sessionKey);
-	if (!row) return { generation: 0, bypassed: false };
+	if (!row) return { generation: 0, bypassed: false, lifecycleIntentSeq: 0 };
 	if (input.intents) {
 		if (input.intents.length > 1024) throw new Error("Too many transcript lifecycle intents");
 		for (const intent of input.intents) {
-			if (intent.seq <= row.lifecycle_intent_seq) continue;
+			if (intent.seq <= row.lifecycle_intent_seq) {
+				logger.warn("transcripts", "Skipped lifecycle intent behind owner high-water", {
+					keyHash: createHash("sha256")
+						.update(JSON.stringify([input.agentId, input.sessionKey]))
+						.digest("hex"),
+					intentSeq: intent.seq,
+					ownerSeq: row.lifecycle_intent_seq,
+				});
+				continue;
+			}
 			updateTranscriptLifecycleInTx(db, {
 				agentId: input.agentId,
 				sessionKey: input.sessionKey,
@@ -339,10 +351,13 @@ export function updateTranscriptLifecycleInTx(
 			row = current;
 		}
 	}
-	if (input.action !== "status")
+	if (input.action !== "status") {
+		const seq = Math.max(row.lifecycle_intent_seq, Date.now() * 1024) + 1;
 		db.prepare(
-			"UPDATE session_transcript_deletions SET lifecycle_seq = lifecycle_seq + 1 WHERE agent_id = ? AND session_key = ?",
-		).run(input.agentId, input.sessionKey);
+			"UPDATE session_transcript_deletions SET lifecycle_intent_seq = ? WHERE agent_id = ? AND session_key = ?",
+		).run(seq, input.agentId, input.sessionKey);
+		row = { ...row, lifecycle_intent_seq: seq };
+	}
 	if (input.action === "end")
 		db.prepare(
 			"UPDATE session_transcript_deletions SET ended = 1, pending_start = 0 WHERE agent_id = ? AND session_key = ?",
@@ -357,9 +372,13 @@ export function updateTranscriptLifecycleInTx(
 		db.prepare(
 			"UPDATE session_transcript_deletions SET generation = generation + 1, blocked = 0, ended = 0, opened_at = ? WHERE agent_id = ? AND session_key = ?",
 		).run(new Date().toISOString(), input.agentId, input.sessionKey);
-		return { generation: row.generation + 1, bypassed: false };
+		return { generation: row.generation + 1, bypassed: false, lifecycleIntentSeq: row.lifecycle_intent_seq };
 	}
-	return { generation: row.generation, bypassed: row.blocked === 1 && input.action !== "end" && row.ended === 0 };
+	return {
+		generation: row.generation,
+		bypassed: row.blocked === 1 && input.action !== "end" && row.ended === 0,
+		lifecycleIntentSeq: row.lifecycle_intent_seq,
+	};
 }
 
 export async function captureSessionTranscriptOwned(
@@ -426,6 +445,7 @@ function deletionResult(
 	const counts = deletionCounts(row.counts);
 	return {
 		status: row.phase === "complete" ? "complete" : "pending",
+		lifecycleIntentSeq: row.lifecycle_intent_seq,
 		counts,
 		retainedPinned: counts.retainedPinned ?? 0,
 		generation: row.receipt_generation,
@@ -482,11 +502,11 @@ export function deleteSessionTranscriptInTx(
 			live ? 0 : 1,
 		);
 		db.prepare(
-			"INSERT INTO session_transcript_deleted_prefixes (agent_id,session_key,generation,record_count,record_hash) VALUES (?,?,?,?,?)",
+			"INSERT INTO session_transcript_deleted_prefixes (agent_id,session_key,generation,origin,record_count,record_hash) VALUES (?,?,?,'row',?,?)",
 		).run(...scope, 0, transcriptPrefix([]));
 		db.prepare(
-			"UPDATE session_transcript_deletions SET lifecycle_seq = lifecycle_seq + 1, lifecycle_intent_seq = MAX(lifecycle_intent_seq, ?) WHERE agent_id = ? AND session_key = ?",
-		).run(input.lifecycleSeq ?? (previous?.lifecycle_intent_seq ?? 0) + 1, input.agentId, input.sessionKey);
+			"UPDATE session_transcript_deletions SET lifecycle_intent_seq = ? WHERE agent_id = ? AND session_key = ?",
+		).run(Math.max(previous?.lifecycle_intent_seq ?? 0, Date.now() * 1024) + 1, input.agentId, input.sessionKey);
 		for (const sourceKey of [input.sessionKey, `session:${input.sessionKey}`])
 			db.prepare(
 				"INSERT OR IGNORE INTO session_transcript_deleted_sources (agent_id,session_key,generation,kind,id) VALUES (?,?,?,'transcript',?)",
@@ -773,7 +793,7 @@ export async function deleteSessionTranscriptOwned(
 		const turns = evidenceTurns(stored?.harness ?? "unknown", stored?.content ?? "", stored?.content);
 		const receipt = prepareTypedStatement<{ record_count: number; record_hash: string }>(
 			db,
-			"SELECT record_count,record_hash FROM session_transcript_deleted_prefixes WHERE agent_id = ? AND session_key = ? AND generation = ?",
+			"SELECT record_count,record_hash FROM session_transcript_deleted_prefixes WHERE agent_id = ? AND session_key = ? AND generation = ? AND origin = 'row'",
 		).get(input.agentId, input.sessionKey, prefix.receipt_generation);
 		if (!receipt) throw new Error("Transcript prefix receipt disappeared");
 		let count = receipt.record_count;
@@ -782,14 +802,14 @@ export async function deleteSessionTranscriptOwned(
 			if (Date.now() >= deadlineAt - 350)
 				return { ...deletionResult(prefix), pendingReason: "Prefix receipt budget exhausted" };
 			await transact(() => {
-				for (const turn of turns.slice(count, count + 64)) {
+				for (const turn of turns.slice(count, count + 512)) {
 					hash = transcriptPrefix([turn], hash);
 					db.prepare(
 						"INSERT INTO session_transcript_deleted_positions (agent_id,session_key,generation,origin,position,record_hash) VALUES (?,?,?,'row',?,?)",
 					).run(input.agentId, input.sessionKey, prefix.receipt_generation, ++count, hash);
 				}
 				db.prepare(
-					"UPDATE session_transcript_deleted_prefixes SET record_count = ?,record_hash = ? WHERE agent_id = ? AND session_key = ? AND generation = ?",
+					"UPDATE session_transcript_deleted_prefixes SET record_count = ?,record_hash = ? WHERE agent_id = ? AND session_key = ? AND generation = ? AND origin = 'row'",
 				).run(count, hash, input.agentId, input.sessionKey, prefix.receipt_generation);
 			});
 			await new Promise<void>((resolve) => setImmediate(resolve));
@@ -832,11 +852,39 @@ export async function deleteSessionTranscriptOwned(
 				sessionKey: input.sessionKey,
 				generation: row.receipt_generation,
 				checkpoint: fileCheckpoint(file.checkpoint),
+				onReplace: async () => {
+					for (;;) {
+						if (Date.now() >= deadlineAt - 350) throw new Error("Owner temp invalidation budget exhausted");
+						const pending = prepareTypedStatement<{ agent_id: string; session_key: string; generation: number }>(
+							db,
+							"SELECT agent_id,session_key,generation FROM session_transcript_delete_files WHERE path = ? AND done = 0 AND checkpoint IS NOT NULL AND NOT (agent_id = ? AND session_key = ? AND generation = ?) LIMIT 64",
+						).all(file.path, input.agentId, input.sessionKey, row.receipt_generation);
+						for (const other of pending)
+							await removeTranscriptDeletionTemp({
+								basePath,
+								path: file.path,
+								agentId: other.agent_id,
+								sessionKey: other.session_key,
+								generation: other.generation,
+							});
+						await transact(() => {
+							for (const other of pending)
+								db.prepare(
+									"UPDATE session_transcript_delete_files SET checkpoint = NULL WHERE agent_id = ? AND session_key = ? AND generation = ? AND path = ?",
+								).run(other.agent_id, other.session_key, other.generation, file.path);
+						});
+						if (pending.length < 64) return;
+						await new Promise<void>((resolve) => setImmediate(resolve));
+					}
+				},
 				onPrefix:
 					file.path !== canonicalTranscriptPath(basePath, row.harness ?? "unknown")
 						? undefined
 						: async (positions, reset) => {
 								await transact(() => {
+									db.prepare(
+										"INSERT INTO session_transcript_deleted_prefixes (agent_id,session_key,generation,origin,record_count,record_hash) VALUES (?,?,?,?,0,?) ON CONFLICT(agent_id,session_key,generation,origin) DO NOTHING",
+									).run(input.agentId, input.sessionKey, row.receipt_generation, file.path, transcriptPrefix([]));
 									if (reset)
 										db.prepare(
 											"DELETE FROM session_transcript_deleted_positions WHERE agent_id = ? AND session_key = ? AND generation = ? AND origin = ?",
@@ -858,11 +906,12 @@ export async function deleteSessionTranscriptOwned(
 			await transact(() => {
 				if (file.path === canonicalTranscriptPath(basePath, row.harness ?? "unknown") && result.checkpoint?.ready)
 					db.prepare(
-						"INSERT INTO session_transcript_deleted_prefixes (agent_id,session_key,generation,record_count,record_hash) VALUES (?,?,?,?,?) ON CONFLICT(agent_id,session_key,generation) DO UPDATE SET record_count = excluded.record_count, record_hash = excluded.record_hash WHERE excluded.record_count > session_transcript_deleted_prefixes.record_count",
+						"INSERT INTO session_transcript_deleted_prefixes (agent_id,session_key,generation,origin,record_count,record_hash) VALUES (?,?,?,?,?,?) ON CONFLICT(agent_id,session_key,generation,origin) DO UPDATE SET record_count = excluded.record_count, record_hash = excluded.record_hash",
 					).run(
 						input.agentId,
 						input.sessionKey,
 						row.receipt_generation,
+						file.path,
 						result.checkpoint.prefixCount,
 						result.checkpoint.prefixHash,
 					);

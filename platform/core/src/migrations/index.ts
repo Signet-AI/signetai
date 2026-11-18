@@ -1607,6 +1607,7 @@ export const MIGRATIONS: readonly Migration[] = [
 				"session_transcript_delete_files",
 			],
 			indexes: [
+				"idx_session_delete_files_pending",
 				"idx_session_delete_source_lookup",
 				"idx_memories_session_delete_source",
 				"idx_capture_jobs_session_delete",
@@ -1615,7 +1616,8 @@ export const MIGRATIONS: readonly Migration[] = [
 			columns: [
 				{ table: "source_import_records", column: "redacted_bytes" },
 				{ table: "session_transcript_deletions", column: "pending_start" },
-				{ table: "session_transcript_deletions", column: "lifecycle_seq" },
+				{ table: "session_transcript_deletions", column: "lifecycle_intent_seq" },
+				{ table: "session_transcript_deleted_prefixes", column: "origin" },
 			],
 		},
 	},

@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test, spyOn } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+	type Dirent,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -11,6 +12,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import * as fs from "node:fs/promises";
 import { join } from "node:path";
 import {
 	redactTranscriptFileBatch,
@@ -93,39 +95,33 @@ async function firstBatch(): Promise<{ readonly checkpoint: TranscriptFileCheckp
 	return { checkpoint: result.checkpoint, expected: data.expected };
 }
 
-test("completing a deletion invalidates other pending temps for the same canonical path", async () => {
-	const first = record(AGENT, KEY, 20, 1);
-	const second = record(AGENT, "second", 20, 2);
-	const keep = record("agent-b", KEY, 20, 3);
-	writeFileSync(path, first + second + keep);
-	const pending = await redactTranscriptFileBatch({
-		basePath: root,
-		path: REL,
-		agentId: AGENT,
-		sessionKey: "second",
-		generation: 1,
-		checkpoint: null,
-	});
-	expect(tmpFiles()).toHaveLength(1);
-	expect(readFileSync(join(root, "transcripts", tmpFiles()[0] ?? ""), "utf8")).toContain(first);
-	await drain();
-	expect(tmpFiles()).toEqual([]);
-	expect(readFileSync(path, "utf8")).toBe(second + keep);
-	let checkpoint = pending.checkpoint;
-	for (let i = 0; i < 4; i++) {
-		const result = await redactTranscriptFileBatch({
-			basePath: root,
-			path: REL,
-			agentId: AGENT,
-			sessionKey: "second",
-			generation: 1,
-			checkpoint,
-		});
-		checkpoint = result.checkpoint;
-		if (result.done) break;
+test("unrelated directory entries cannot exhaust the replacement budget", async () => {
+	writeFileSync(path, record(AGENT, KEY, 20, 1) + record(AGENT, "keep", 20, 2));
+	for (let i = 0; i < 2048; i++) writeFileSync(join(root, "transcripts", `unrelated-${i}`), "keep");
+	const ready = await step(null);
+	expect(ready.checkpoint?.ready).toBe(true);
+	const opendir = fs.opendir;
+	const scan = spyOn(fs, "opendir").mockImplementation(
+		async (...args: Parameters<typeof fs.opendir>): ReturnType<typeof fs.opendir> => {
+			const directory = await opendir(...args);
+			const entries = directory[Symbol.asyncIterator].bind(directory);
+			directory[Symbol.asyncIterator] = async function* (): AsyncGenerator<Dirent, undefined> {
+				for await (const entry of entries()) {
+					await Bun.sleep(300);
+					yield entry;
+				}
+				return undefined;
+			};
+			return directory;
+		},
+	);
+	try {
+		expect((await step(ready.checkpoint)).done).toBe(true);
+	} finally {
+		scan.mockRestore();
 	}
-	expect(readFileSync(path, "utf8")).toBe(keep);
-	expect(tmpFiles()).toEqual([]);
+	expect(readFileSync(path, "utf8")).toBe(record(AGENT, "keep", 20, 2));
+	expect(readdirSync(join(root, "transcripts")).filter((name) => name.startsWith("unrelated-"))).toHaveLength(2048);
 });
 
 test("a removed output temp restarts the file instead of padding it with zeros", async () => {

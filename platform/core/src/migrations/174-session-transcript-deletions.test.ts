@@ -30,7 +30,7 @@ test("upgrades the real migrated schema idempotently without changing scoped evi
 			{ agent_id: "agent-b", generation: 1, phase: "evidence" },
 		]);
 		db.exec("PRAGMA foreign_keys = ON");
-		db.prepare("INSERT INTO session_transcript_deleted_prefixes VALUES ('agent-a','shared',1,1,'hash')").run();
+		db.prepare("INSERT INTO session_transcript_deleted_prefixes VALUES ('agent-a','shared',1,'row',1,'hash')").run();
 		db.prepare("INSERT INTO session_transcript_deleted_positions VALUES ('agent-a','shared',1,'row',1,'hash')").run();
 		db.prepare(
 			"DELETE FROM session_transcript_deleted_prefixes WHERE agent_id = 'agent-a' AND session_key = 'shared' AND generation = 1",

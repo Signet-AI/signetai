@@ -68,11 +68,11 @@ async function readJournal(path: string, keyHash: string): Promise<IntentJournal
 	}
 }
 
-async function writeJournal(path: string, journal: IntentJournal | number): Promise<void> {
+async function writeDurable(path: string, text: string): Promise<void> {
 	const tmp = `${path}.tmp`;
 	const file = await open(tmp, "w", 0o600);
 	try {
-		await file.writeFile(JSON.stringify(journal));
+		await file.writeFile(text);
 		await file.sync();
 	} finally {
 		await file.close();
@@ -86,32 +86,43 @@ async function writeJournal(path: string, journal: IntentJournal | number): Prom
 	}
 }
 
-export async function nextTranscriptLifecycleSequence(floor = 0): Promise<number> {
-	const path = join(resolveDefaultBasePath(), ".daemon", "transcript-lifecycle-intents", ".seq");
-	return withTranscriptFileLock(
-		join(dirname(path), ".admission"),
-		async () => {
-			const text = await readFile(path, "utf8").catch((error: unknown) => {
-				if (error instanceof Error && "code" in error && error.code === "ENOENT") return "0";
-				throw error;
-			});
-			const previous: unknown = JSON.parse(text);
-			if (
-				typeof previous !== "number" ||
-				!Number.isSafeInteger(previous) ||
-				previous < 0 ||
-				previous >= Number.MAX_SAFE_INTEGER
-			)
-				throw new Error("Invalid transcript lifecycle sequence");
-			const seq = Math.max(previous, floor) + 1;
-			await writeJournal(path, seq);
-			return seq;
-		},
-		{ timeoutMs: 250 },
-	);
+let ownerSequence = 0;
+
+export function rememberTranscriptLifecycleSequence(seq: number): void {
+	ownerSequence = Math.max(ownerSequence, seq);
 }
 
-export async function withTranscriptLifecycleIntents<T>(
+async function readSequence(path: string): Promise<number> {
+	const text = await readFile(path, "utf8").catch((error: unknown) => {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return "0";
+		throw error;
+	});
+	try {
+		const previous: unknown = JSON.parse(text);
+		if (
+			typeof previous === "number" &&
+			Number.isSafeInteger(previous) &&
+			previous >= 0 &&
+			previous < Number.MAX_SAFE_INTEGER
+		)
+			return previous;
+		throw new Error("Invalid transcript lifecycle sequence");
+	} catch {
+		await unlink(path).catch((error: unknown) => {
+			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+		});
+		logger.warn("transcripts", "Corrupt lifecycle sequence discarded; relying on owner high-water and clock");
+		return 0;
+	}
+}
+
+async function writeSequence(path: string, floor: number): Promise<number> {
+	const seq = Math.max(await readSequence(path), floor, ownerSequence, Date.now() * 1024) + 1;
+	await writeDurable(path, JSON.stringify(seq));
+	return seq;
+}
+
+export async function withTranscriptLifecycleIntents<T extends { readonly lifecycleIntentSeq: number } | void>(
 	input: { readonly agentId: string; readonly sessionKey: string; readonly action: "start" | "end" | "status" },
 	apply: (intents: readonly TranscriptLifecycleIntent[]) => Promise<T>,
 ): Promise<T> {
@@ -124,13 +135,14 @@ export async function withTranscriptLifecycleIntents<T>(
 		async () => {
 			const journal = await readJournal(path, token);
 			const intents = [...journal.intents];
-			const seq = input.action === "status" ? journal.seq : await nextTranscriptLifecycleSequence(journal.seq);
-			if (input.action !== "status") intents.push({ seq, action: input.action, at: new Date().toISOString() });
+			await readSequence(join(dirname(path), ".seq"));
 			let result: T;
 			try {
 				result = await apply(intents);
+				if (result) rememberTranscriptLifecycleSequence(result.lifecycleIntentSeq);
 			} catch (error) {
-				if (input.action === "status") throw error;
+				const action = input.action;
+				if (action === "status") throw error;
 				await withTranscriptFileLock(
 					join(dirname(path), ".admission"),
 					async () => {
@@ -152,14 +164,16 @@ export async function withTranscriptLifecycleIntents<T>(
 						}
 						if (temporaryCount > 0)
 							logger.warn("transcripts", "Removed orphan lifecycle intent temporary files", { count: temporaryCount });
-						if ((!existing && (count >= 256 || examined > 1024)) || intents.length > 1024) {
+						if ((!existing && (count >= 256 || examined > 1024)) || intents.length >= 1024) {
 							logger.warn("transcripts", "Lifecycle intent outbox full; relying on TTL finalization", {
 								agentId: input.agentId,
 								sessionKey: input.sessionKey,
 							});
 							return;
 						}
-						await writeJournal(path, { seq, intents });
+						const seq = await writeSequence(join(dirname(path), ".seq"), journal.seq);
+						intents.push({ seq, action, at: new Date().toISOString() });
+						await writeDurable(path, JSON.stringify({ seq, intents }));
 					},
 					{ timeoutMs: 250 },
 				);

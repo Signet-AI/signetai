@@ -1,8 +1,8 @@
 import { attempt } from "@signet/core";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, opendir } from "node:fs/promises";
-import { basename, dirname, resolve, relative, isAbsolute } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { dirname, resolve, relative, isAbsolute } from "node:path";
 import { parse } from "yaml";
 import {
 	openContainedTranscriptFile,
@@ -227,6 +227,33 @@ function decodeLine(value: string): LineState | null {
 	};
 }
 
+function deletionTemp(input: {
+	readonly path: string;
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly generation: number;
+}): string {
+	const token = createHash("sha256")
+		.update(JSON.stringify([input.agentId, input.sessionKey, input.generation]))
+		.digest("hex")
+		.slice(0, 32);
+	return `${input.path}.delete-${token}`;
+}
+
+export async function removeTranscriptDeletionTemp(input: {
+	readonly basePath: string;
+	readonly path: string;
+	readonly agentId: string;
+	readonly sessionKey: string;
+	readonly generation: number;
+}): Promise<void> {
+	await removeContainedTranscriptPath(
+		input.basePath,
+		deletionTemp({ ...input, path: resolve(input.basePath, input.path.split("#")[0] ?? input.path) }),
+		{ force: true },
+	);
+}
+
 export async function redactTranscriptFileBatch(input: {
 	readonly basePath: string;
 	readonly path: string;
@@ -234,6 +261,7 @@ export async function redactTranscriptFileBatch(input: {
 	readonly sessionKey: string;
 	readonly generation: number;
 	readonly checkpoint: TranscriptFileCheckpoint | null;
+	readonly onReplace?: () => Promise<void>;
 	readonly onPrefix?: (
 		positions: readonly { readonly position: number; readonly hash: string }[],
 		reset: boolean,
@@ -242,11 +270,7 @@ export async function redactTranscriptFileBatch(input: {
 	const path = resolve(input.basePath, input.path.split("#")[0] ?? input.path);
 	const rel = relative(resolve(input.basePath), path);
 	if (!rel || rel.startsWith("..") || isAbsolute(rel)) throw new Error("Transcript cleanup target escapes workspace");
-	const token = createHash("sha256")
-		.update(JSON.stringify([input.agentId, input.sessionKey, input.generation]))
-		.digest("hex")
-		.slice(0, 32);
-	const tmp = `${path}.delete-${token}`;
+	const tmp = deletionTemp({ ...input, path });
 	await mkdir(dirname(path), { recursive: true });
 	return withTranscriptFileLock(
 		path,
@@ -340,16 +364,7 @@ export async function redactTranscriptFileBatch(input: {
 					if (intact && resumable.ready && resumable.offset === stat.size) {
 						if (output.size > resumable.bytes) await target.truncate(resumable.bytes);
 						await target.sync();
-						const deadline = performance.now() + 250;
-						const prefix = `${basename(path)}.delete-`;
-						const directory = await opendir(dirname(path));
-						for await (const entry of directory) {
-							if (performance.now() >= deadline) throw new Error("Pending transcript temp cleanup budget exhausted");
-							if (entry.name.startsWith(prefix) && /^[0-9a-f]{32}$/.test(entry.name.slice(prefix.length))) {
-								const other = resolve(dirname(path), entry.name);
-								if (other !== tmp) await removeContainedTranscriptPath(input.basePath, other, { force: true });
-							}
-						}
+						await input.onReplace?.();
 						await replaceContainedTranscriptFile(input.basePath, tmp, path);
 						return { done: true, checkpoint: resumable };
 					}
@@ -435,8 +450,8 @@ export async function redactTranscriptFileBatch(input: {
 					await target.sync();
 					if (input.onPrefix) {
 						await input.onPrefix([], !intact);
-						for (let i = 0; i < positions.length; i += 64) {
-							await input.onPrefix(positions.slice(i, i + 64), false);
+						for (let i = 0; i < positions.length; i += 512) {
+							await input.onPrefix(positions.slice(i, i + 512), false);
 							await new Promise<void>((resolve) => setImmediate(resolve));
 						}
 					}

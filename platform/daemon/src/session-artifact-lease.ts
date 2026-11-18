@@ -10,6 +10,13 @@ interface Lease {
 const leases = new Map<string, Lease>();
 const held = new AsyncLocalStorage<ReadonlySet<string>>();
 
+export class SessionArtifactLeaseTimeoutError extends Error {
+	constructor() {
+		super("Session artifact lease deadline exceeded");
+		this.name = "SessionArtifactLeaseTimeoutError";
+	}
+}
+
 export async function withSessionArtifactLease<T>(
 	input: { readonly agentId: string; readonly sessionKey: string | null; readonly sessionId?: string },
 	exclusive: boolean,
@@ -18,7 +25,6 @@ export async function withSessionArtifactLease<T>(
 	const key = JSON.stringify([input.agentId, normalizeSessionKey(input.sessionKey ?? input.sessionId ?? "")]);
 	if (!exclusive && held.getStore()?.has(key)) return work();
 	const lease = leases.get(key) ?? { tail: Promise.resolve(), readers: new Set<Promise<void>>(), pending: 0 };
-	if (lease.pending >= 64) throw new Error("Session artifact lease queue is full");
 	leases.set(key, lease);
 	lease.pending++;
 	const done = Promise.withResolvers<void>();
@@ -30,7 +36,7 @@ export async function withSessionArtifactLease<T>(
 		await Promise.race([
 			ready,
 			new Promise<never>((_, reject) => {
-				timer = setTimeout(() => reject(new Error("Session artifact lease deadline exceeded")), 10_000);
+				timer = setTimeout(() => reject(new SessionArtifactLeaseTimeoutError()), 15_000);
 			}),
 		]);
 		clearTimeout(timer);

@@ -632,36 +632,51 @@ matches never remove interior or later turns. For example, deleting undated
 `[user:A, assistant:B]` fences a shorter replay `[user:A]`, but admits both turns
 of `[user:A, user:C]` because its two-record chain differs. Successive deletion
 receipts are checked in generation order against the remaining leading records.
-New live turns are not replayed snapshots. Receipts retain counts and chain
-hashes, not deleted content. Do not relabel historical records with a new timestamp.
+New live turns are not replayed snapshots. Receipts retain per-origin counts and chain
+hashes, not deleted content. The owner reads `N` from the prefix receipt, not
+by aggregating positional rows. Per-position hashes support shorter replays,
+live as long as their deletion generation, and are purged with that generation. Do not relabel historical records with a new timestamp.
 
 The hook-side lifecycle check is advisory on owner timeout or unavailability;
 it does not fail the harness. The owner is called first. Only failed start/end
 contacts create an intent outbox file, replayed in order on the next successful
-lifecycle contact and removed when drained. One bounded `.seq` metadata file
-persists ordering under the admission lock; sequences do not depend on wall-clock
-time or in-memory state. Normal contacts create no intent journals. The outbox holds at most 256 session
+lifecycle contact and removed when drained. The `.seq` counter is written only
+when a failed contact is journaled. Its next value is one greater than the maximum
+of the saved counter, journal sequence, cached owner high-water, and
+`Date.now() * 1024`. Every successful lifecycle contact returns the owner's
+high-water for the daemon's in-memory cache. Corrupt counters are discarded and
+logged once without blocking owner contact. Normal sessions leave the outbox
+directory empty. The outbox holds at most 256 session
 files and 1,024 intents per file. At capacity, Signet logs the rejected intent and
 relies on canonical TTL finalization. Normal sessions and failed status checks
 create no journal files. These files contain pending requests, not deletion
 state: only the database owner changes deletion state. Status checks do not clear user bypasses.
 Owner-side admission at each evidence write remains the enforcement point, so
-an advisory timeout does not reopen a deleted generation.
+an advisory timeout does not reopen a deleted generation. Losing `.seq`, a
+backward clock, and an owner outage across a restart together can still order an
+intent behind a later deletion. The owner logs skipped intents with the key hash,
+intent sequence, and owner high-water.
 
-The owner persists positional hashes in batches of 64, yielding between batches
+The owner persists positional hashes in batches of 512, yielding between batches
 and retaining the fenced transcript row until its hashes are durable. Other
 cleanup processes at most 64 database items, one uploaded-byte chunk, and four
 4 MiB file slices per request. Canonical cleanup carries a constant-size chain
-checkpoint and persists positional hashes in batches of 64; there is no
+checkpoint and persists positional hashes in batches of 512; there is no
 record-count deletion limit. Giant JSONL records stream
 across slices without being loaded whole. A missing, replaced, or shortened
 rewrite temp restarts that file from its beginning. Replacing the canonical file
-also removes other pending deletion temps for that path, so they restart from
+also removes other pending deletion temps registered in the database for that path, without
+scanning unrelated directory entries, so they restart from
 the redacted canonical file. Shared JSONL files are rewritten under the
 canonical transcript lock, preserving other sessions' records and concurrent
 appends. Only the session's recorded targets and its harness's canonical file
 are visited. The harness's original files and user backups remain after either
 mode. Hard purge does not securely erase SQLite free pages or storage media.
+
+Admitted artifact writers hold a session lease until their writes finish.
+Deletion waits up to 15 seconds (the summary LLM timeout plus five seconds) for
+that lease. Lease expiry returns `{ "status": "pending", "pendingReason": "..." }`
+without claiming deletion admission or completion; retry after the writer drains.
 
 A contended transcript lock returns `pending` after 250 ms instead of occupying
 the database owner indefinitely. The operation uses the remaining owner-job
