@@ -79,13 +79,22 @@ done
 curl -s "127.0.0.1:$PORT/health" | python3 -c "import json,sys;d=json.load(sys.stdin);print('health',d['status'],d['agentsDir'])"
 LOG=$(ls -t "$WS"/runtime/logs/signet-*.log | head -1)
 
+SETTLED=
 for _ in $(seq 1 180); do
-	if grep -a -q "Global integrity check passed" "$LOG"; then
-		LAST=$(grep -a "Incremental database integrity progress" "$LOG" | tail -1 | python3 -c "import sys,json,datetime;l=sys.stdin.read().strip();print(datetime.datetime.fromisoformat(json.loads(l)['timestamp'].replace('Z','+00:00')).timestamp() if l else 0)")
-		python3 -c "import time,sys;sys.exit(0 if time.time()-float('$LAST')>20 else 1)" && break
+	if grep -a -q "Global integrity check passed" "$LOG" && grep -a -q "Incremental database integrity progress" "$LOG"; then
+		LAST=$(grep -a "Incremental database integrity progress" "$LOG" | tail -1 | python3 -c "import sys,json,datetime;print(datetime.datetime.fromisoformat(json.loads(sys.stdin.read())['timestamp'].replace('Z','+00:00')).timestamp())")
+		if python3 -c "import time,sys;sys.exit(0 if time.time()-float('$LAST')>20 else 1)"; then
+			SETTLED=1
+			break
+		fi
 	fi
 	sleep 5
 done
+if [ -z "$SETTLED" ]; then
+	echo "startup maintenance did not settle within 15 minutes; see $LOG" >&2
+	cp "$LOG" "$DIR/daemon-log-$RUN-unsettled.log"
+	exit 1
+fi
 echo "startup maintenance settled"
 
 curl -s -X POST "127.0.0.1:$PORT/api/memory/recall" -H 'content-type: application/json' \

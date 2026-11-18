@@ -16,6 +16,7 @@ def parse_args():
     parser.add_argument("--agent-id", default="default")
     parser.add_argument("--signet", default=shutil.which("signet") or "signet")
     parser.add_argument("--hermes-home", default=os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
+    parser.add_argument("--hermes-repo", default=os.environ.get("HERMES_REPO"))
     return parser.parse_args()
 
 
@@ -37,13 +38,13 @@ ENV = {
 }
 with open(os.path.join(args.dir, "transcripts.json")) as handle:
     transcripts = json.load(handle)
-output = open(os.path.join(args.dir, f"results-{args.run}.jsonl"), "a")
+RESULTS = os.path.join(args.dir, f"results-{args.run}.jsonl")
 
 
 def record(session, key, turn, kind, text):
     row = {"run": args.run, "harness": session, "sessionKey": key, "turn": turn, "kind": kind, "text": text}
-    output.write(json.dumps(row, ensure_ascii=False) + "\n")
-    output.flush()
+    with open(RESULTS, "a") as output:
+        output.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
 def hook(command, payload):
@@ -82,7 +83,7 @@ def run_cli(session, harness):
 
 
 def run_hermes(session):
-    harness_checkout = os.path.join(args.hermes_home, "hermes-agent")
+    harness_checkout = args.hermes_repo or os.path.join(args.hermes_home, "hermes-agent")
     sys.path.insert(0, harness_checkout)
     sys.path.insert(0, os.path.join(args.hermes_home, "plugins"))
     os.environ.clear()
@@ -95,8 +96,8 @@ def run_hermes(session):
     for index, turn in enumerate(turns, 1):
         record(session, key, index, "prompt", provider.prefetch(turn, session_id=key))
         provider.queue_prefetch(turn, session_id=key)
-    if provider._prefetch_thread:
-        provider._prefetch_thread.join(timeout=30)
+        if provider._prefetch_thread:
+            provider._prefetch_thread.join(timeout=30)
     record(session, key, len(turns) + 1, "prompt", provider.prefetch("", session_id=key))
     if hasattr(provider, "shutdown"):
         provider.shutdown()

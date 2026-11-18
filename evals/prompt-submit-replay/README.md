@@ -6,7 +6,7 @@ It reports:
 
 - memory lines delivered more than once in a session;
 - prompt turns that carry plugin guidance targeted at `user-prompt-submit`, and whether each session received guidance targeted at `session-start` (some connectors deliver session-start context with the first prompt);
-- injected characters per prompt;
+- characters of injected memory per prompt, excluding plugin guidance;
 - dedupe-ledger claims and duplicates;
 - per-turn engine decisions and prompt-submit latency from the daemon log.
 

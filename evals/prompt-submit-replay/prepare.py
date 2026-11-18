@@ -48,7 +48,12 @@ def parse_args():
     parser.add_argument("--hermes-sessions", type=int, default=2)
     parser.add_argument("--hermes-session", action="append", default=[])
     parser.add_argument("--skip-snapshot", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.turns < 1:
+        parser.error("--turns must be at least 1")
+    if args.hermes_sessions < 0:
+        parser.error("--hermes-sessions must be 0 or more")
+    return args
 
 
 def source_layout(args):

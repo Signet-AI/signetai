@@ -6,6 +6,7 @@ import re
 import statistics
 
 MARKERS = ("## Relevant Entity Context", "## Relevant Memory:")
+PLUGIN_BLOCK = re.compile(r"<signet-plugin-context\b[\s\S]*?</signet-plugin-context>")
 PLUGIN = re.compile(r'<signet-plugin-context[^>]*\btarget="([a-z-]+)"')
 COLUMNS = (
     "turns",
@@ -15,9 +16,9 @@ COLUMNS = (
     "repeatDeliveries",
     "pluginGuidanceOnPrompts",
     "pluginGuidanceAtSessionStart",
-    "injectedChars",
+    "memoryChars",
 )
-TOTALS = ("turns", "turnsWithMemory", "memoryLinesDelivered", "repeatDeliveries", "pluginGuidanceOnPrompts", "injectedChars")
+TOTALS = ("turns", "turnsWithMemory", "memoryLinesDelivered", "repeatDeliveries", "pluginGuidanceOnPrompts", "memoryChars")
 
 
 def parse_args():
@@ -27,23 +28,28 @@ def parse_args():
     return parser.parse_args()
 
 
-def memory_lines(text):
+def memory_section(text):
+    text = PLUGIN_BLOCK.sub("", text)
     starts = [text.find(marker) for marker in MARKERS if marker in text]
     if not starts:
         return []
-    lines = []
+    section = []
     for line in text[min(starts) :].splitlines():
-        line = line.strip()
-        if line.startswith("- "):
-            lines.append(line)
-        elif line.startswith("## ") and not line.startswith(MARKERS) and not line.startswith("## Plugin Context"):
+        stripped = line.strip()
+        if stripped == "## Plugin Context":
+            continue
+        if stripped.startswith("## ") and not stripped.startswith(MARKERS):
             break
-    return lines
+        section.append(line)
+    return section
+
+
+def memory_lines(text):
+    return [line.strip() for line in memory_section(text) if line.strip().startswith("- ")]
 
 
 def memory_chars(text):
-    starts = [text.find(marker) for marker in MARKERS if marker in text]
-    return len(text[min(starts) :]) if starts else 0
+    return len("\n".join(memory_section(text)).strip())
 
 
 def summarize(args, dump):
@@ -84,7 +90,7 @@ def summarize(args, dump):
                 "repeatDeliveries": sum(seen.values()) - len(seen),
                 "pluginGuidanceOnPrompts": plugin_turns,
                 "pluginGuidanceAtSessionStart": start_guidance,
-                "injectedChars": chars,
+                "memoryChars": chars,
                 "sessionKey": items[0]["sessionKey"],
                 "repeatExamples": repeats[:3],
             }
@@ -95,7 +101,10 @@ def ledgers(args):
     claims = collections.defaultdict(list)
     for run in args.runs:
         path = os.path.join(args.dir, f"ledger-{run}.json")
-        text = open(path).read().strip() if os.path.exists(path) else ""
+        text = ""
+        if os.path.exists(path):
+            with open(path) as handle:
+                text = handle.read().strip()
         for row in json.loads(text) if text else []:
             if row["surface"] == "api.hooks.user-prompt-submit":
                 claims[row["session_key"]].append(row["item_id"])
@@ -163,4 +172,5 @@ def main():
         json.dump({f"{run}|{session}": item for (run, session), item in summary.items()}, handle, indent=1, ensure_ascii=False)
 
 
-main()
+if __name__ == "__main__":
+    main()

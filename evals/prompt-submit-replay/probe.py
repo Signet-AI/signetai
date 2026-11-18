@@ -20,6 +20,9 @@ with open(os.path.join(args.dir, f"candidates-{args.run}.jsonl"), "w") as output
     for session, item in transcripts.items():
         for index, turn in enumerate(item["turns"], 1):
             query = PROVENANCE.sub("", turn).strip()
+            if not query:
+                output.write(json.dumps({"session": session, "turn": index, "query": "", "skipped": "empty"}) + "\n")
+                continue
             body = json.dumps({"query": query, "agentId": args.agent_id, "limit": 5}).encode()
             request = urllib.request.Request(
                 f"http://127.0.0.1:{args.port}/api/memory/recall",
