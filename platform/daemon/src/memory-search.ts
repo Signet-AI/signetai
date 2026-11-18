@@ -2170,6 +2170,7 @@ export async function hybridRecall(
 		aggregate: params.aggregate === true,
 		excludeAggregateRecallMemories: params.excludeAggregateRecallMemories,
 		sessionKey: params.sessionKey,
+		transcriptEvidence: params.transcriptEvidence,
 	});
 	if (temporal.response) {
 		return await finish({ ...temporal.response, results: [...temporal.response.results] });

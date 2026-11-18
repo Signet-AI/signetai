@@ -88,6 +88,7 @@ export interface TemporalRecallParams extends MemorySearchFilterInput {
 	readonly policyGroup?: string | null;
 	readonly project?: string;
 	readonly sessionKey?: string;
+	readonly transcriptEvidence?: boolean;
 }
 
 export interface TemporalRecallResult {
@@ -547,13 +548,14 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		if (nonMemoryTemporalSelectorsSupported(params) && tableExists(db, "memory_artifacts")) {
 			const owner = temporalOwnerSql("agent_id", params);
 			const project = projectSql(params.project, "project");
+			const kinds = params.transcriptEvidence === false ? " AND source_kind != 'transcript'" : "";
 			if (temporalFacetAllowed(intent.facets, "captured")) {
 				const artifactRows = db
 					.prepare(
 						`SELECT rowid, source_path, source_kind, source_id, harness, project, content, captured_at, updated_at
 						 FROM memory_artifacts
 						 WHERE 1 = 1${owner.sql}
-						   AND COALESCE(is_deleted, 0) = 0
+						   AND COALESCE(is_deleted, 0) = 0${kinds}
 						   AND captured_at >= ?
 						   AND captured_at < ?${project.sql}
 						 ORDER BY captured_at DESC
@@ -601,7 +603,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 							        ${sourceAtExpr} AS source_at
 						 FROM memory_artifacts
 						 WHERE 1 = 1${owner.sql}
-						   AND COALESCE(is_deleted, 0) = 0
+						   AND COALESCE(is_deleted, 0) = 0${kinds}
 						   AND source_mtime_ms IS NOT NULL
 						   AND ${sourceAtExpr} >= ?
 						   AND ${sourceAtExpr} < ?${project.sql}
@@ -718,7 +720,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		return rows;
-	}, "temporal-recall.ts:446");
+	}, "temporal-recall.ts:447");
 }
 
 export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRecallResult {
