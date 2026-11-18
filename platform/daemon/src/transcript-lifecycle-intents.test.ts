@@ -26,7 +26,7 @@ beforeEach(() => {
 });
 
 test.each(["{", JSON.stringify({ seq: 0, intents: [{ action: "invalid" }] })])(
-	"corrupt journal is quarantined once without blocking owner contact: %s",
+	"corrupt journal is discarded once without blocking owner contact: %s",
 	async (corrupt) => {
 		const input = { agentId: "a", sessionKey: "corrupt" };
 		const token = createHash("sha256")
@@ -45,12 +45,11 @@ test.each(["{", JSON.stringify({ seq: 0, intents: [{ action: "invalid" }] })])(
 				expect(attempted).toBe(true);
 			}
 			expect(warn).toHaveBeenCalledTimes(1);
-			expect(warn).toHaveBeenCalledWith("transcripts", expect.stringContaining("quarantined"), { keyHash: token });
-			const quarantined = readdirSync(directory).filter((name) => name.includes("quarantine"));
-			expect(quarantined).toHaveLength(1);
-			const file = quarantined[0];
-			if (!file) throw new Error("Missing quarantine");
-			expect(readFileSync(join(directory, file), "utf8")).toBe(corrupt);
+			expect(warn).toHaveBeenCalledWith("transcripts", expect.stringContaining("discarded"), {
+				keyHash: token,
+				removed: true,
+			});
+			expect(readdirSync(directory)).toEqual([]);
 		} finally {
 			warn.mockRestore();
 		}
@@ -97,6 +96,33 @@ test("orphan journal temps are reclaimed before failure-outbox admission", async
 	).rejects.toThrow("owner unavailable");
 	expect(readdirSync(directory).filter((name) => name.endsWith(".json.tmp"))).toEqual([]);
 	expect(files()).toHaveLength(1);
+});
+
+test("orphan journal temps are reclaimed even when the outbox is full", async () => {
+	for (let i = 0; i < 300; i++) writeFileSync(join(directory, `pending-${i}.json`), "fixture");
+	for (let i = 0; i < 20; i++) writeFileSync(join(directory, `orphan-${i}.json.tmp`), "partial");
+	await expect(
+		withTranscriptLifecycleIntents({ agentId: "a", sessionKey: "full-temp", action: "end" }, async () => {
+			throw new Error("owner unavailable");
+		}),
+	).rejects.toThrow("owner unavailable");
+	expect(readdirSync(directory).filter((name) => name.endsWith(".json.tmp"))).toEqual([]);
+});
+
+test("an oversized outbox directory is scanned in bounded passes and fails closed", async () => {
+	for (let i = 0; i < 1100; i++) writeFileSync(join(directory, `foreign-${i}.bin`), "x");
+	const warn = spyOn(logger, "warn").mockImplementation(() => {});
+	try {
+		await expect(
+			withTranscriptLifecycleIntents({ agentId: "a", sessionKey: "bounded", action: "end" }, async () => {
+				throw new Error("owner unavailable");
+			}),
+		).rejects.toThrow("owner unavailable");
+		expect(files()).toEqual([]);
+		expect(warn).toHaveBeenCalledWith("transcripts", expect.stringContaining("outbox full"), expect.anything());
+	} finally {
+		warn.mockRestore();
+	}
 });
 
 test("a full failure outbox rejects new files but still tries the owner", async () => {

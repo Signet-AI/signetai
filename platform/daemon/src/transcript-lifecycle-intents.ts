@@ -58,9 +58,13 @@ async function readJournal(path: string, keyHash: string): Promise<IntentJournal
 		}
 		return { seq: value.seq, intents };
 	} catch {
-		await rename(path, `${path}.quarantine`);
-		logger.warn("transcripts", "Corrupt lifecycle intent journal quarantined; relying on TTL finalization", {
+		const removed = await unlink(path).then(
+			() => true,
+			(error: unknown) => error instanceof Error && "code" in error && error.code === "ENOENT",
+		);
+		logger.warn("transcripts", "Corrupt lifecycle intent journal discarded; relying on TTL finalization", {
 			keyHash,
+			removed,
 		});
 		return { seq: 0, intents: [] };
 	}
@@ -109,10 +113,12 @@ export async function withTranscriptLifecycleIntents<T>(
 					join(dirname(path), ".admission"),
 					async () => {
 						let count = 0;
+						let examined = 0;
 						let temporaryCount = 0;
 						let existing = false;
 						const directory = await opendir(dirname(path));
 						for await (const entry of directory) {
+							if (++examined > 1024) break;
 							if (entry.name.endsWith(".json.tmp")) {
 								await unlink(join(dirname(path), entry.name));
 								temporaryCount++;
@@ -121,11 +127,10 @@ export async function withTranscriptLifecycleIntents<T>(
 							if (!entry.name.endsWith(".json")) continue;
 							count++;
 							if (entry.name === `${token}.json`) existing = true;
-							if (count > 256) break;
 						}
 						if (temporaryCount > 0)
 							logger.warn("transcripts", "Removed orphan lifecycle intent temporary files", { count: temporaryCount });
-						if ((!existing && count >= 256) || intents.length > 1024) {
+						if ((!existing && (count >= 256 || examined > 1024)) || intents.length > 1024) {
 							logger.warn("transcripts", "Lifecycle intent outbox full; relying on TTL finalization", {
 								agentId: input.agentId,
 								sessionKey: input.sessionKey,
