@@ -91,8 +91,32 @@ if (codemode) {
 		"codemode",
 	]);
 }
-session.subscribe((event) => send({ type: "event", event }));
 let running = false;
+const CANCEL_RUN_START_TIMEOUT_MS = 5_000;
+const runStartWaiters = new Set<() => void>();
+session.subscribe((event) => {
+	if (event.type === "agent_start") {
+		const waiters = [...runStartWaiters];
+		runStartWaiters.clear();
+		for (const waiter of waiters) waiter();
+	}
+	send({ type: "event", event });
+});
+const waitForActiveRun = async (): Promise<void> => {
+	if (!running || session.isStreaming) return;
+	await new Promise<void>((resolve) => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			runStartWaiters.delete(finish);
+			resolve();
+		};
+		const timer = setTimeout(finish, CANCEL_RUN_START_TIMEOUT_MS);
+		runStartWaiters.add(finish);
+	});
+};
 port.on("message", async (request: PiAgentWorkerRequest) => {
 	try {
 		if (Buffer.byteLength(JSON.stringify(request)) > PI_AGENT_MAX_MESSAGE_BYTES)
@@ -123,6 +147,7 @@ port.on("message", async (request: PiAgentWorkerRequest) => {
 			for (const call of pending.values()) call.reject(new Error("Pi agent aborted"));
 			pending.clear();
 			for (const { call } of queued.splice(0)) call.reject(new Error("Pi agent aborted"));
+			await waitForActiveRun();
 			await session.abort();
 			send({ type: "aborted" });
 			return;
