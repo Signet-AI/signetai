@@ -810,6 +810,13 @@ function checkRecallCancellation(options?: RecallExecutionOptions): void {
 	}
 }
 
+function rethrowRecallCancellation(execution?: RecallExecutionOptions): (error: unknown) => never {
+	return (error) => {
+		checkRecallCancellation(execution);
+		throw error;
+	};
+}
+
 async function recallOwner(execution?: RecallExecutionOptions): Promise<DbOwnerClient> {
 	return cancellableOwner(await getDbOwner(getDbAccessorPath()), execution?.signal);
 }
@@ -2384,6 +2391,7 @@ export async function hybridRecall(
 			);
 			for (const [id, score] of candidates) structuredCandidateMap.set(id, score);
 		} catch (e) {
+			checkRecallCancellation(execution);
 			logger.warn("memory", "Structured path candidate search failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -2398,6 +2406,7 @@ export async function hybridRecall(
 					}),
 				);
 			} catch (e) {
+				checkRecallCancellation(execution);
 				logger.warn("memory", "Ontology claim candidate search failed (non-fatal)", {
 					error: e instanceof Error ? e.message : String(e),
 				});
@@ -2568,6 +2577,7 @@ export async function hybridRecall(
 											),
 									);
 								} catch (e) {
+									checkRecallCancellation(execution);
 									logger.warn("memory", "Traversal embedding re-scoring failed (non-fatal)", {
 										error: e instanceof Error ? e.message : String(e),
 									});
@@ -2645,6 +2655,7 @@ export async function hybridRecall(
 					scored.sort((a, b) => b.score - a.score);
 				}
 			} catch (e) {
+				checkRecallCancellation(execution);
 				logger.warn("memory", "Graph boost failed (non-fatal)", {
 					error: e instanceof Error ? e.message : String(e),
 				});
@@ -2714,6 +2725,7 @@ export async function hybridRecall(
 										)),
 									];
 								} catch (e) {
+									checkRecallCancellation(execution);
 									logger.warn("memory", "KA traversal candidate hydration failed (non-fatal)", {
 										error: e instanceof Error ? e.message : String(e),
 									});
@@ -2774,16 +2786,18 @@ export async function hybridRecall(
 			const candidateIds = scored.filter((row) => temporalCandidateSet.has(row.id)).map((row) => row.id);
 			if (candidateIds.length > 0) {
 				const placeholders = candidateIds.map(() => "?").join(", ");
-				const contentRows = await getDbAccessor().withReadDbAsync(
-					async (db) =>
-						db
-							.prepare(
-								`SELECT id, content FROM memories
+				const contentRows = await getDbAccessor()
+					.withReadDbAsync(
+						async (db) =>
+							db
+								.prepare(
+									`SELECT id, content FROM memories
 								 WHERE id IN (${placeholders})`,
-							)
-							.all(...candidateIds) as Array<{ id: string; content: string }>,
-					{ siteToken: "db:recall.temporal-topic.content", signal: execution?.signal },
-				);
+								)
+								.all(...candidateIds) as Array<{ id: string; content: string }>,
+						{ siteToken: "db:recall.temporal-topic.content", signal: execution?.signal },
+					)
+					.catch(rethrowRecallCancellation(execution));
 				for (const row of contentRows) {
 					const score = scoreTemporalTopicEvidence(query, row.content);
 					if (score <= 0) continue;
@@ -2792,6 +2806,7 @@ export async function hybridRecall(
 				}
 			}
 		} catch (e) {
+			checkRecallCancellation(execution);
 			logger.warn("memory", "Temporal topic evidence failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -2825,6 +2840,7 @@ export async function hybridRecall(
 					structuredEvidenceMap.set(id, score);
 				}
 			} catch (e) {
+				checkRecallCancellation(execution);
 				logger.warn("memory", "Structured path evidence failed (non-fatal)", {
 					error: e instanceof Error ? e.message : String(e),
 				});
@@ -2847,16 +2863,18 @@ export async function hybridRecall(
 				let contentMap = new Map<string, string>();
 				if (coverageIds.length > 0) {
 					const placeholders = coverageIds.map(() => "?").join(", ");
-					const contentRows = await getDbAccessor().withReadDbAsync(
-						async (db) =>
-							db
-								.prepare(
-									`SELECT id, content FROM memories
+					const contentRows = await getDbAccessor()
+						.withReadDbAsync(
+							async (db) =>
+								db
+									.prepare(
+										`SELECT id, content FROM memories
 									 WHERE id IN (${placeholders})`,
-								)
-								.all(...coverageIds) as Array<{ id: string; content: string }>,
-						{ siteToken: "db:recall.facet-coverage.content", signal: execution?.signal },
-					);
+									)
+									.all(...coverageIds) as Array<{ id: string; content: string }>,
+							{ siteToken: "db:recall.facet-coverage.content", signal: execution?.signal },
+						)
+						.catch(rethrowRecallCancellation(execution));
 					contentMap = new Map(contentRows.map((row) => [row.id, row.content]));
 				}
 
@@ -2867,6 +2885,7 @@ export async function hybridRecall(
 				}));
 			}
 		} catch (e) {
+			checkRecallCancellation(execution);
 			logger.warn("memory", "Structured evidence shaping failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -2888,19 +2907,21 @@ export async function hybridRecall(
 			const topForRerank = scored.slice(0, cfg.pipelineV2.reranker.topN);
 			const rerankIds = topForRerank.map((s) => s.id);
 			const rerankPlaceholders = rerankIds.map(() => "?").join(", ");
-			const contentRows = await getDbAccessor().withReadDbAsync(
-				async (db) =>
-					db
-						.prepare(
-							`SELECT id, content FROM memories
+			const contentRows = await getDbAccessor()
+				.withReadDbAsync(
+					async (db) =>
+						db
+							.prepare(
+								`SELECT id, content FROM memories
 							 WHERE id IN (${rerankPlaceholders})`,
-						)
-						.all(...rerankIds) as Array<{
-						id: string;
-						content: string;
-					}>,
-				{ siteToken: "db:recall.reranker.content", signal: execution?.signal },
-			);
+							)
+							.all(...rerankIds) as Array<{
+							id: string;
+							content: string;
+						}>,
+					{ siteToken: "db:recall.reranker.content", signal: execution?.signal },
+				)
+				.catch(rethrowRecallCancellation(execution));
 			const contentMap = new Map(contentRows.map((r) => [r.id, r.content]));
 
 			const candidates: RerankCandidate[] = topForRerank.map((s) => ({
@@ -2961,6 +2982,7 @@ export async function hybridRecall(
 			}
 			scored.sort((a, b) => b.score - a.score);
 		} catch (e) {
+			checkRecallCancellation(execution);
 			if (cfg.pipelineV2.reranker.useExtractionModel) {
 				logger.error("memory", "Reranker failed (fatal)", e as Error);
 				throw e;
@@ -2977,20 +2999,22 @@ export async function hybridRecall(
 		try {
 			const dampenIds = scored.map((s) => s.id);
 			const dampenPh = dampenIds.map(() => "?").join(", ");
-			const dampenRows = await getDbAccessor().withReadDbAsync(
-				async (db) =>
-					db
-						.prepare(
-							`SELECT id, content, type FROM memories
+			const dampenRows = await getDbAccessor()
+				.withReadDbAsync(
+					async (db) =>
+						db
+							.prepare(
+								`SELECT id, content, type FROM memories
 							 WHERE id IN (${dampenPh})`,
-						)
-						.all(...dampenIds) as Array<{
-						id: string;
-						content: string;
-						type: string;
-					}>,
-				{ siteToken: "db:recall.dampening.metadata", signal: execution?.signal },
-			);
+							)
+							.all(...dampenIds) as Array<{
+							id: string;
+							content: string;
+							type: string;
+						}>,
+					{ siteToken: "db:recall.dampening.metadata", signal: execution?.signal },
+				)
+				.catch(rethrowRecallCancellation(execution));
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
 			const entities = new Map<string, Set<string>>();
 			const degrees = new Map<string, number>();
@@ -3072,6 +3096,7 @@ export async function hybridRecall(
 			}
 			scored.sort((a, b) => b.score - a.score);
 		} catch (e) {
+			checkRecallCancellation(execution);
 			logger.warn("memory", "Dampening failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -3091,6 +3116,7 @@ export async function hybridRecall(
 			);
 			applyCurrentnessBias(scored, currentness);
 		} catch (e) {
+			checkRecallCancellation(execution);
 			logger.warn("memory", "Currentness shaping failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -3148,6 +3174,7 @@ export async function hybridRecall(
 								await graphOwnerReadAll<OwnerVectorRow>(sql, sqlParams, "memory-search.temporal-window-fill", pageRows),
 						);
 					} catch (e) {
+						checkRecallCancellation(execution);
 						logger.warn("memory", "Temporal window vector ordering failed (non-fatal)", {
 							error: e instanceof Error ? e.message : String(e),
 						});
@@ -3301,30 +3328,32 @@ export async function hybridRecall(
 	const rows = await timings.timeAsync(
 		"hydrate_memory_rows",
 		async () =>
-			await getDbAccessor().withReadDbAsync(
-				async (db) =>
-					db
-						.prepare(
-							`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
+			await getDbAccessor()
+				.withReadDbAsync(
+					async (db) =>
+						db
+							.prepare(
+								`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project, m.created_at, m.visibility, m.scope
         FROM memories m
         WHERE m.id IN (${placeholders})${currentMemorySql("m")}${filter.sql}`,
-						)
-						.all(...topIds, ...filter.args) as Array<{
-						id: string;
-						content: string;
-						source_id: string | null;
-						type: string;
-						tags: string | null;
-						pinned: number;
-						importance: number;
-						who: string;
-						project: string | null;
-						created_at: string;
-						visibility: string | null;
-						scope: string | null;
-					}>,
-				{ siteToken: "db:recall.final-candidates.hydrate", signal: execution?.signal },
-			),
+							)
+							.all(...topIds, ...filter.args) as Array<{
+							id: string;
+							content: string;
+							source_id: string | null;
+							type: string;
+							tags: string | null;
+							pinned: number;
+							importance: number;
+							who: string;
+							project: string | null;
+							created_at: string;
+							visibility: string | null;
+							scope: string | null;
+						}>,
+					{ siteToken: "db:recall.final-candidates.hydrate", signal: execution?.signal },
+				)
+				.catch(rethrowRecallCancellation(execution)),
 	);
 
 	const rowMap = new Map(rows.map((r) => [r.id, r]));
@@ -3471,6 +3500,7 @@ export async function hybridRecall(
 			const s = await summarizeRecallWithLlm(getLlmProvider(), query, summCandidates, summarizeLeft);
 			if (s) recallSummary = redactCredentials(s);
 		} catch (e) {
+			checkRecallCancellation(execution);
 			logger.warn("memory", "LLM summary failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -3580,6 +3610,7 @@ export async function hybridRecall(
 				});
 			}
 		} catch (e) {
+			checkRecallCancellation(execution);
 			logger.warn("memory", "Rationale linking failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -3638,6 +3669,7 @@ export async function hybridRecall(
 				}
 			}
 		} catch (e) {
+			checkRecallCancellation(execution);
 			logger.warn("memory", "Entity context fetch failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});
@@ -3680,6 +3712,7 @@ export async function hybridRecall(
 				});
 			}
 		} catch (e) {
+			checkRecallCancellation(execution);
 			logger.warn("memory", "Constructed context failed (non-fatal)", {
 				error: e instanceof Error ? e.message : String(e),
 			});

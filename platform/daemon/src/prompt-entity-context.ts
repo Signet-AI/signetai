@@ -245,24 +245,24 @@ const PROMPT_ENTITY_SOURCES: readonly PromptEntitySource[] = [
 		   'alias' AS match_source,
 		   COALESCE(e.mentions, 0) AS mentions,
 		   COALESCE(e.pinned, 0) AS pinned
-		 FROM entity_aliases a
+		 FROM entity_aliases a NOT INDEXED
 		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
 		 WHERE a.agent_id = ?
+		   AND a.rowid > ?
 		   AND a.status = 'active'
-		   AND a.canonical_alias > COALESCE((SELECT canonical_alias FROM entity_aliases WHERE rowid = ?), '')
 		   AND COALESCE(e.status, 'active') = 'active'
 		   AND LOWER(e.entity_type) IN ('person', 'project')
-		 ORDER BY a.canonical_alias
+		 ORDER BY a.rowid
 		 LIMIT ?`,
 		next: `SELECT a.rowid AS cursor
-		 FROM entity_aliases a
+		 FROM entity_aliases a NOT INDEXED
 		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
 		 WHERE a.agent_id = ?
+		   AND a.rowid > ?
 		   AND a.status = 'active'
-		   AND a.canonical_alias > COALESCE((SELECT canonical_alias FROM entity_aliases WHERE rowid = ?), '')
 		   AND COALESCE(e.status, 'active') = 'active'
 		   AND LOWER(e.entity_type) IN ('person', 'project')
-		 ORDER BY a.canonical_alias
+		 ORDER BY a.rowid
 		 LIMIT 1`,
 	},
 ];

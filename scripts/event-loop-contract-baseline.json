@@ -1972,41 +1972,41 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2777,
+      "line": 2790,
       "api": "withReadDbAsync",
-      "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
+      "source": ".withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:recall.temporal-topic.content"
     },
     {
       "path": "memory-search.ts",
-      "line": 2850,
+      "line": 2867,
       "api": "withReadDbAsync",
-      "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
+      "source": ".withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:recall.facet-coverage.content"
     },
     {
       "path": "memory-search.ts",
-      "line": 2891,
+      "line": 2911,
       "api": "withReadDbAsync",
-      "source": "const contentRows = await getDbAccessor().withReadDbAsync(",
+      "source": ".withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:recall.reranker.content"
     },
     {
       "path": "memory-search.ts",
-      "line": 2980,
+      "line": 3003,
       "api": "withReadDbAsync",
-      "source": "const dampenRows = await getDbAccessor().withReadDbAsync(",
+      "source": ".withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:recall.dampening.metadata"
     },
     {
       "path": "memory-search.ts",
-      "line": 3304,
+      "line": 3332,
       "api": "withReadDbAsync",
-      "source": "await getDbAccessor().withReadDbAsync(",
+      "source": ".withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:recall.final-candidates.hydrate"
     },
