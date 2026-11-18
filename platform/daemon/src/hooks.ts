@@ -1880,7 +1880,7 @@ const PROMPT_RECALL_SURFACE = "api.hooks.user-prompt-submit";
 type PromptEntityRecall = {
 	readonly entities: readonly PromptEntityMatch[];
 	readonly results: readonly RecallResult[];
-	readonly engine: "no-entity" | "no-recall-hit" | "entity-recall";
+	readonly engine: "no-entity" | "no-recall-hit" | "entity-recall" | "deduped";
 	readonly degradation?: NonNullable<RecallResponse["meta"]["degradation"]>;
 };
 
@@ -1923,7 +1923,7 @@ async function recallPromptEntityContext(
 	);
 	const results: RecallResult[] = [];
 	for (const row of recall.results) {
-		if (row.score < input.minScore) continue;
+		if (row.score < input.minScore || row.source === "llm_summary") continue;
 		const serialized = createPromptContext(buildPromptRecallInject(entities, [...results, row]))?.serialized ?? "";
 		if (serialized.length <= input.injectBudget) results.push(row);
 	}
@@ -1931,7 +1931,8 @@ async function recallPromptEntityContext(
 	return {
 		entities,
 		results,
-		engine: results.length > 0 ? "entity-recall" : "no-recall-hit",
+		engine:
+			results.length > 0 ? "entity-recall" : (recall.meta?.dedupe?.suppressed ?? 0) > 0 ? "deduped" : "no-recall-hit",
 		...(degradation ? { degradation } : {}),
 	};
 }
