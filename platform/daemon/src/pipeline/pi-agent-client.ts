@@ -275,11 +275,7 @@ export async function createWorkerAgentSession(
 			} catch (error) {
 				settle(error instanceof Error ? error : new Error("Pi agent cancellation failed"));
 			}
-			try {
-				await promise;
-			} finally {
-				cancels.delete(entry);
-			}
+			await promise;
 			await Promise.allSettled(toolCalls);
 		},
 		abort: dispose,

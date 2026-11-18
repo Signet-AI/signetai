@@ -501,6 +501,19 @@ test("stopping a chat turn retains its worker for the next turn", async () => {
 	}
 }, 10000);
 
+test("stopping an idle chat session acknowledges without waiting for a run", async () => {
+	const provider = createPiModelProvider({
+		executor: "openai-compatible",
+		model: "test-model",
+		baseUrl: "http://127.0.0.1:1/v1",
+	});
+	const session = await provider.createAgentSession([], { persistentSessionKey: "idle-cancel-test" });
+	const started = performance.now();
+	await session.abort();
+	expect(performance.now() - started).toBeLessThan(2500);
+	await session.dispose();
+}, 10000);
+
 test("a chat turn without a retry policy survives one transient 503 through Pi defaults", async () => {
 	let requests = 0;
 	const server = Bun.serve({
