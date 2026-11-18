@@ -1,0 +1,39 @@
+# Prompt-submit replay eval
+
+This eval replays real user prompts from your own harness sessions through the installed Signet connectors against two daemon builds. It measures what `user-prompt-submit` injects on each turn. Both daemons run on the same read-only snapshot of your workspace database.
+
+It reports:
+
+- memory lines delivered more than once in a session;
+- prompt turns that carry static plugin guidance;
+- injected characters per prompt;
+- dedupe-ledger claims and duplicates;
+- per-turn engine decisions and prompt-submit latency from the daemon log.
+
+## Privacy
+
+Every input and output is your private data: the database snapshot, the extracted prompts, and the injected memories. All of it is written to `runs/`, which is gitignored. Do not commit or share it.
+
+## Requirements
+
+- Python 3 with PyYAML, Bun, `sqlite3`, `curl`, `ss`, and `setsid`.
+- The connectors you want to replay, installed as usual: `signet` on `PATH` for Claude Code and Codex, the Hermes Signet plugin, the Pi extension, and the OpenCode plugin.
+- Two compiled daemon binaries, for example a baseline and a branch built with `bun scripts/build-native-bun.ts`. Use compiled binaries for both sides: only the compiled build loads the native ONNX runtime and the CUDA accelerator.
+
+## Run
+
+```bash
+cd evals/prompt-submit-replay
+python3 prepare.py
+./run.sh base 3871 /path/to/signet-base
+./run.sh branch 3872 /path/to/signet-branch
+python3 analyze.py base branch
+```
+
+`prepare.py` takes a read-only `VACUUM INTO` snapshot of `~/.agents/data/signet.db`. It writes a scratch `agent.yaml` from yours, with localhost networking, no harness sync, the memory pipeline paused, and Dreaming disabled. It copies your plugin registry, then picks the session window per harness that names the most known people and projects. Use `--hermes-session <id>` to force a specific Hermes session and `--dir` to write elsewhere.
+
+`run.sh` copies the snapshot into a fresh workspace, starts the daemon with `HOME` and `SIGNET_PATH` pointed inside `runs/`, and waits for startup integrity maintenance to settle. It warms recall, then replays every session through its connector. When the replay finishes, it exports the daemon log and the dedupe ledger and stops the daemon. Set `PROBE=1` to also record the top direct recall candidates per turn with `probe.py`. Each run starts from the same snapshot, so runs never see each other's writes.
+
+`analyze.py` prints the per-session table and totals, and writes `per-turn-evidence.md` and `summary.json` to `runs/`.
+
+Recall scores near `hooks.userPromptSubmit.minScore` can move between runs, because delivering a memory updates its access statistics. Compare the dedupe and plugin-guidance results across runs; treat single deliveries at the threshold as noise.
