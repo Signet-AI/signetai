@@ -38,8 +38,8 @@
 	},
 	"dependencies": {
 		"@1password/sdk": "^0.3.0",
-		"@earendil-works/pi-ai": "0.99.1",
-		"@earendil-works/pi-coding-agent": "0.99.1",
+		"@earendil-works/pi-ai": "1.5.2",
+		"@earendil-works/pi-coding-agent": "1.5.2",
 		"@firecrawl/anydoc": "0.1.7",
 		"@hono/node-server": "^2.1.0",
 		"@huggingface/transformers": "^4.2.0",
