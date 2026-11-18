@@ -600,10 +600,16 @@ function selectedBenchmark(args: string[]): string {
 	return "longmemeval";
 }
 
+function cliOptionValue(args: readonly string[], long: string, short: string): string | undefined {
+	const values = cliOptionValues(args, long, short);
+	return values.length > 0 ? values[values.length - 1] : undefined;
+}
+
 export function resolveBenchRunId(raw: string[], profile: BenchProfile): string {
 	const command = getMemoryBenchCommand(raw);
 	const args = command === raw[0] ? raw.slice(1) : raw;
 	return (
+		cliOptionValue(args, "--run-id", "-r") ||
 		process.env.SIGNET_BENCH_RUN_ID ||
 		`signet-${profile}-${selectedBenchmark(args)}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z")}`
 	);
@@ -614,13 +620,12 @@ export function buildMemoryBenchArgs(
 	full: boolean,
 	profile: ParsedArgs["profile"],
 	reset: boolean,
+	runId: string = resolveBenchRunId(raw, profile),
 ): string[] {
 	const command = getMemoryBenchCommand(raw);
 	const args = command === raw[0] ? raw.slice(1) : raw;
 
 	if (command !== "run" && command !== "ingest") return [command, ...args];
-
-	const runId = resolveBenchRunId(raw, profile);
 
 	const provider =
 		profile === "supermemory-parity"
@@ -777,13 +782,12 @@ export async function captureOpenRouterSnapshot(
 }
 
 export function openRouterSnapshotDir(runId: string): string {
-	return join(repoRoot, "memorybench", "data", "runs", runId, "openrouter");
+	return join(repoRoot, "memorybench", "data", "openrouter-snapshots", runId);
 }
 
 export function writeOpenRouterSnapshot(root: string, stage: "start" | "end", snapshot: OpenRouterSnapshot): string {
-	const dir = join(root, "openrouter");
-	mkdirSync(dir, { recursive: true });
-	const path = join(dir, `${stage}.json`);
+	mkdirSync(root, { recursive: true });
+	const path = join(root, `${stage}.json`);
 	writeFileSync(path, `${JSON.stringify(snapshot, null, 2)}\n`);
 	return path;
 }
@@ -825,7 +829,8 @@ async function main(): Promise<void> {
 	}
 
 	const usesDefaultSample = defaultedDevSample(parsed.passthrough, parsed.full);
-	const memorybenchArgs = buildMemoryBenchArgs(parsed.passthrough, parsed.full, parsed.profile, parsed.reset);
+	const runId = resolveBenchRunId(parsed.passthrough, parsed.profile);
+	const memorybenchArgs = buildMemoryBenchArgs(parsed.passthrough, parsed.full, parsed.profile, parsed.reset, runId);
 	const env = {
 		...process.env,
 		...(useOpenRouterIngest ? buildOpenRouterIngestEnv() : {}),
@@ -844,8 +849,9 @@ async function main(): Promise<void> {
 	const snapshotApiKey = openRouterSnapshotApiKey(process.env);
 	const snapshotModels = openRouterSnapshotModels(process.env, model.providerFamily, parsed.passthrough);
 	const snapshotNeeded = openRouterSnapshotNeeded(process.env, model.providerFamily, parsed.passthrough);
-	const snapshotDir = openRouterSnapshotDir(resolveBenchRunId(parsed.passthrough, parsed.profile));
+	const snapshotDir = openRouterSnapshotDir(runId);
 
+	console.log(`MemoryBench run: ${runId}`);
 	console.log(`MemoryBench workspace: ${root}`);
 	console.log(`Isolated Signet daemon: ${baseUrl} (dashboard at ${baseUrl}/)`);
 	console.log(`Inference: ${model.model} via ${model.endpoint} (${model.providerFamily})`);
