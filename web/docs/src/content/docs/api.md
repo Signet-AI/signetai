@@ -101,11 +101,18 @@ re-evaluation. See [transcript deletion](/api/sessions-hooks/#delete-apisessions
 for identity, live-session bypass, key-reuse, and retry semantics. Resumed keys
 drop only an exact replayed prefix, using the deleted generation's record count
 and ordered SHA-256 chain. Later identical turns and fresh snapshots that do not
-replay that prefix remain eligible. Usable record timestamps at or before the
-watermark are still dropped. Receipts retain counts and chain hashes, not removed
-content. Starts received during pending cleanup are applied when it completes.
+replay that prefix remain eligible. Records dated after the deletion watermark
+remain eligible even when they match the deleted prefix. Usable record timestamps
+at or before the watermark are still dropped. Receipts retain counts and chain
+hashes, not removed content. Starts received during pending cleanup are applied
+when it completes.
 A failure-only start/end intent outbox retries owner contact; it is not deletion
 state and drained files are removed.
+
+For harnesses whose snapshot records carry no timestamp, a lagging stored copy
+limits replay protection: records that existed in the harness file but had not
+yet been captured when deletion ran are not covered by the fence and can be
+captured again by the next generation.
 
 ## Reference sections
 

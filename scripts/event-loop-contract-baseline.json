@@ -4758,7 +4758,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 917,
+      "line": 918,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb(",
       "category": "hot-path",
@@ -4766,7 +4766,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 929,
+      "line": 930,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4774,28 +4774,28 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 971,
+      "line": 972,
       "api": "existsSync",
       "source": "if (!existsSync(memoryDir)) return 0;",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 977,
+      "line": 978,
       "api": "readdirSync",
       "source": "const files = readdirSync(memoryDir).filter((name) => name.endsWith(\"--transcript.md\"));",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 981,
+      "line": 982,
       "api": "readFileSync",
       "source": "const parsed = parseArtifactFrontmatter(readFileSync(path, \"utf8\"));",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1077,
+      "line": 1078,
       "api": "withReadDb",
       "source": "const rows = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4803,35 +4803,35 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1181,
+      "line": 1182,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as { readonly agent_id?: unknown };",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1243,
+      "line": 1244,
       "api": "existsSync",
       "source": "if (existsSync(markerPath) && markerMatches(markerPath, agentId)) return null;",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1254,
+      "line": 1255,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(markerPath), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1255,
+      "line": 1256,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1272,
+      "line": 1273,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4839,7 +4839,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1326,
+      "line": 1327,
       "api": "withWriteTx",
       "source": "return (accessor ?? getDbAccessor()).withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -4847,7 +4847,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1516,
+      "line": 1517,
       "api": "withWriteTx",
       "source": "return (accessor ?? getDbAccessor()).withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -4855,7 +4855,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1548,
+      "line": 1549,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4863,7 +4863,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1645,
+      "line": 1646,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -4871,7 +4871,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1668,
+      "line": 1669,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4879,7 +4879,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1701,
+      "line": 1702,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4887,7 +4887,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1756,
+      "line": 1757,
       "api": "withReadDb",
       "source": "const exactRows: TranscriptRow[] = getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4895,7 +4895,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1801,
+      "line": 1802,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -4903,7 +4903,7 @@
     },
     {
       "path": "session-transcripts.ts",
-      "line": 1865,
+      "line": 1866,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
       "category": "hot-path",

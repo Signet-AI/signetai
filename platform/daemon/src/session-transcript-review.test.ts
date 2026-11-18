@@ -466,6 +466,35 @@ test("legacy-only mixed provenance is marked stale without touching pinned memor
 	expect(rows[1]).toMatchObject({ pinned: 1, source_id: null, stale_at: null });
 });
 
+test("post-watermark records survive a matching deleted prefix", async () => {
+	const key = "fresh-dated-prefix";
+	const transcript = "User: hello\nAssistant: hi";
+	await upsertSessionTranscriptAsync(key, transcript, "claude-code", null, "review", "2020-01-01T00:00:00.000Z");
+	await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
+	await updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "start" });
+	const timestamp = new Date(Date.now() + 1000).toISOString();
+	const raw = [
+		{ role: "user", content: "hello", timestamp },
+		{ role: "assistant", content: "hi", timestamp },
+		{ role: "user", content: "more", timestamp },
+	]
+		.map((record) => JSON.stringify(record))
+		.join("\n");
+	await upsertSessionTranscriptAsync(
+		key,
+		normalizeSessionTranscript("claude-code", raw),
+		"claude-code",
+		null,
+		"review",
+		timestamp,
+		getDbAccessor(),
+		{ rawTranscript: raw },
+	);
+	expect((await getStoredSessionTranscriptInfoAsync(key, "review"))?.content).toBe(
+		"User: hello\nAssistant: hi\nUser: more",
+	);
+});
+
 test("record timestamps reject pre-watermark replay even when content has changed", async () => {
 	await deleted("resume-dated");
 	await updateTranscriptLifecycle({ agentId: "review", sessionKey: "resume-dated", action: "start" });
