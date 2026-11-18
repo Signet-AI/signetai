@@ -9,9 +9,14 @@ import { logger } from "./logger";
 import { indexCanonicalTranscriptJsonl } from "./memory-lineage";
 import { isNoiseSession } from "./session-noise";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
-import { getStoredSessionTranscriptInfoAsync, upsertSessionTranscriptAsync } from "./session-transcripts";
+import {
+	admitSessionTranscriptInDb,
+	getStoredSessionTranscriptInfoAsync,
+	upsertSessionTranscriptAsync,
+} from "./session-transcripts";
 import { normalizeSessionTranscript } from "./transcript-normalization";
-import { pruneTranscriptAudit, writeTranscriptAudit } from "./transcript-audit";
+import { pruneTranscriptAudit, type TranscriptAuditWrite } from "./transcript-audit";
+import { captureTranscriptOwned } from "./session-transcript-lifecycle";
 import { writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
 import {
 	canonicalTranscriptRelativePath,
@@ -260,10 +265,14 @@ export async function enqueueTranscriptCaptureJob(
 	const basePath = basePathFor(input.basePath);
 	const lockPath = sourceLockPath(basePath, input.agentId, sourceIdentity);
 	return await withTranscriptFileLock(lockPath, async () => {
-		let resolvedId = id;
+		let resolvedId: string | null = id;
 		await runWriteTxAsync(
 			dbAccessor,
 			(db) => {
+				if (!admitSessionTranscriptInDb(db, input)) {
+					resolvedId = null;
+					return;
+				}
 				const existing = db
 					.prepare(
 						`SELECT id, status, source_sha256, source_size_bytes, source_mtime_ms, completed_at
@@ -505,21 +514,24 @@ async function writeCaptureAudit(
 	basePath: string,
 	job: TranscriptCaptureJobRow,
 	resolved: ResolvedTranscript,
-): Promise<string> {
-	const audit = await writeTranscriptAudit({
-		basePath,
-		agentId: job.agentId,
-		sourceIdentity: job.sourceIdentity ?? `legacy:${job.id}`,
-		sourcePath: job.transcriptPath,
-		sourceSha256: resolved.sourceSha256,
-		sourceSizeBytes: resolved.sourceSizeBytes,
-		sourceFormat: resolved.sourceFormat,
-		sessionId: job.sessionId,
-		sessionKey: job.sessionKey,
-		preview: job.transcriptPath ? undefined : resolved.raw,
-		capturedAt: job.capturedAt,
+): Promise<string | null> {
+	const audit = await captureTranscriptOwned<TranscriptAuditWrite | null>({
+		kind: "audit",
+		input: {
+			basePath,
+			agentId: job.agentId,
+			sourceIdentity: job.sourceIdentity ?? `legacy:${job.id}`,
+			sourcePath: job.transcriptPath,
+			sourceSha256: resolved.sourceSha256,
+			sourceSizeBytes: resolved.sourceSizeBytes,
+			sourceFormat: resolved.sourceFormat,
+			sessionId: job.sessionId,
+			sessionKey: job.sessionKey,
+			preview: job.transcriptPath ? undefined : resolved.raw,
+			capturedAt: job.capturedAt,
+		},
 	});
-	return audit.latestPath;
+	return audit?.latestPath ?? null;
 }
 
 async function processTranscriptCaptureJob(

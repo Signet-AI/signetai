@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { admitSessionTranscriptInDb } from "./session-transcripts";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -585,6 +586,11 @@ export function upsertMemoryArtifactInTx(
 	fields: MemoryArtifactUpsertFields,
 	options: MemoryArtifactUpsertOptions = {},
 ): void {
+	if (
+		["transcript", "summary", "compaction", "manifest"].includes(fields.sourceKind) &&
+		!admitSessionTranscriptInDb(db, fields)
+	)
+		return;
 	const sql = options.conflictGuardSourceId
 		? `${MEMORY_ARTIFACT_UPSERT_SQL}\n\t\tWHERE memory_artifacts.source_id = excluded.source_id`
 		: MEMORY_ARTIFACT_UPSERT_SQL;

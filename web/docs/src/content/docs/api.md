@@ -88,6 +88,16 @@ Rate-limit rejections return `429`. Auth failures return `401`. Permission
 violations return `403`. Version conflicts and state violations return `409`.
 Mutations blocked by the kill switch return `503`.
 
+## Transcript deletion
+
+`DELETE /api/sessions/:key/transcript` removes an owning agent's transcript
+without creating a summary. It requires `forget` permission and returns a
+resumable `complete` or `pending` receipt with counts and a capture generation.
+`?purge=hard` requires an authenticated admin in team and hybrid modes. Pinned
+memories remain; memories with other evidence are retained for Dreaming
+re-evaluation. See [transcript deletion](/api/sessions-hooks/#delete-apisessionskeytranscript)
+for identity, live-session bypass, key-reuse, and retry semantics.
+
 ## Reference sections
 
 | Section | Contents |

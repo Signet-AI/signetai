@@ -248,6 +248,18 @@ export type DbOwnerRequest =
 	| { readonly kind: "source_artifact_upsert"; readonly input: DbOwnerSourceArtifactUpsert }
 	| { readonly kind: "source_artifact_upsert_batch"; readonly input: readonly DbOwnerSourceArtifactUpsert[] }
 	| { readonly kind: "source_evidence_eligibility"; readonly input: DbOwnerSourceEvidenceEligibility }
+	| {
+			readonly kind: "session_transcript_lifecycle";
+			readonly input: import("./session-transcript-lifecycle").TranscriptLifecycleInput;
+	  }
+	| {
+			readonly kind: "session_transcript_capture";
+			readonly input: import("./session-transcript-lifecycle").TranscriptCaptureInput;
+	  }
+	| {
+			readonly kind: "session_transcript_delete";
+			readonly input: import("./session-transcript-lifecycle").TranscriptDeleteInput;
+	  }
 	| { readonly kind: "transcript_bulk_commit"; readonly input: DbOwnerTranscriptBulkCommit }
 	| {
 			readonly kind: "session_transcript_write";

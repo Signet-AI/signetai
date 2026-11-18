@@ -1,5 +1,5 @@
 import { constants as fsConstants } from "node:fs";
-import { lstat, open, opendir, rm } from "node:fs/promises";
+import { lstat, open, opendir, rename, rm } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import { join, relative, resolve, sep } from "node:path";
@@ -24,6 +24,12 @@ type DarwinFileSystem = {
 		) => number;
 		readonly openat: (dirfd: number, path: ReturnType<typeof ptr>, flags: number, mode: number) => number;
 		readonly unlinkat: (dirfd: number, path: ReturnType<typeof ptr>, flags: number) => number;
+		readonly renameat: (
+			fromfd: number,
+			from: ReturnType<typeof ptr>,
+			tofd: number,
+			to: ReturnType<typeof ptr>,
+		) => number;
 	};
 };
 
@@ -39,6 +45,7 @@ function loadDarwinFileSystem(): DarwinFileSystem | null {
 			getdirentries: { args: ["i32", "ptr", "i32", "ptr"], returns: "i32" },
 			openat: { args: ["i32", "cstring", "i32", "i32"], returns: "i32" },
 			unlinkat: { args: ["i32", "cstring", "i32"], returns: "i32" },
+			renameat: { args: ["i32", "cstring", "i32", "cstring"], returns: "i32" },
 		}) as unknown as DarwinFileSystem;
 	} catch {
 		darwinFileSystem = null;
@@ -200,6 +207,40 @@ export async function openContainedTranscriptFile(
 		await closeQuietly(parent);
 	}
 }
+export async function replaceContainedTranscriptFile(root: string, from: string, to: string): Promise<void> {
+	const fromParts = containedParts(root, from);
+	const toParts = containedParts(root, to);
+	const fromName = fromParts.pop();
+	const toName = toParts.pop();
+	if (!fromName || !toName) throw new UnsafeManagedTranscriptPathError("managed file path is empty");
+	const source = await openContainedDirectory(root, fromParts);
+	try {
+		const target = await openContainedDirectory(root, toParts);
+		try {
+			if (process.platform === "darwin") {
+				const api = loadDarwinFileSystem();
+				if (!api) throw new Error("Darwin descriptor filesystem unavailable");
+				if (
+					api.symbols.renameat(
+						source.fd,
+						ptr(Buffer.from(`${fromName}\0`)),
+						target.fd,
+						ptr(Buffer.from(`${toName}\0`)),
+					) < 0
+				)
+					throw darwinError("renameat", api);
+			}
+			if (process.platform !== "darwin")
+				await rename(descriptorPath(source.fd, fromName), descriptorPath(target.fd, toName));
+			await target.sync();
+		} finally {
+			await target.close();
+		}
+	} finally {
+		await source.close();
+	}
+}
+
 export async function removeContainedTranscriptPath(
 	root: string,
 	candidate: string,

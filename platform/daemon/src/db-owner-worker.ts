@@ -1,9 +1,14 @@
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { Database as BunDatabase } from "bun:sqlite";
-import { activeVectorProjectionTable, findSqliteVecExtension, vectorSearchWithMetadata } from "@signet/core";
+import {
+	resolveWorkspaceLayout,
+	activeVectorProjectionTable,
+	findSqliteVecExtension,
+	vectorSearchWithMetadata,
+} from "@signet/core";
 import {
 	applyObsidianSourceStructureInTx,
 	applyObsidianSourceStructurePurgeInTx,
@@ -54,8 +59,8 @@ interface SqliteRunResult {
 
 interface SqliteStatement {
 	finalize?(): void;
-	all(...params: readonly unknown[]): unknown[];
-	get(...params: readonly unknown[]): unknown;
+	all<Row = unknown>(...params: readonly unknown[]): Row[];
+	get(...params: readonly unknown[]): Record<string, unknown> | undefined;
 	run(...params: readonly unknown[]): SqliteRunResult;
 }
 
@@ -137,6 +142,20 @@ export function runDbOwnerWorker(): void {
 	const parentPid = process.ppid;
 	let db = undefined as unknown as SqliteDatabase;
 	let parentWatch: ReturnType<typeof setInterval> | undefined;
+	let workspaceRoot: string | undefined;
+	function bindTranscriptWorkspace(candidate?: string): string {
+		if (!candidate) {
+			if (!workspaceRoot) throw new Error("Transcript operation requires an explicit workspace");
+			return workspaceRoot;
+		}
+		const layout = resolveWorkspaceLayout(candidate);
+		if (resolve(layout.database) !== resolve(ownerDbPath))
+			throw new Error("Transcript workspace does not match its database owner");
+		if (workspaceRoot && workspaceRoot !== layout.root)
+			throw new Error("Transcript workspace changed within one owner");
+		workspaceRoot = layout.root;
+		return workspaceRoot;
+	}
 	const closeAndExit = (code: number): never => {
 		if (parentWatch !== undefined) clearInterval(parentWatch);
 		try {
@@ -1117,6 +1136,25 @@ export function runDbOwnerWorker(): void {
 			return executeBatch(job.request.statements, job.request.requireChanges === true, context);
 		if (job.request.kind === "source_snapshot_import") return executeSourceSnapshotImport(job.request, context);
 		if (job.request.kind === "vector_repair") return executeVectorRepair(job.request, context);
+		if (job.request.kind === "session_transcript_lifecycle") {
+			const { updateTranscriptLifecycleInTx } = await import("./session-transcripts");
+			const input = job.request.input;
+			return withBusyRetry(() => updateTranscriptLifecycleInTx(db, input), context);
+		}
+		if (job.request.kind === "session_transcript_capture") {
+			const { captureSessionTranscriptOwned } = await import("./session-transcripts");
+			const root = bindTranscriptWorkspace(job.request.input.input.basePath);
+			const result = await captureSessionTranscriptOwned(db, job.request.input, root);
+			context.committed = true;
+			return result;
+		}
+		if (job.request.kind === "session_transcript_delete") {
+			const { deleteSessionTranscriptOwned } = await import("./session-transcripts");
+			const root = bindTranscriptWorkspace(job.request.input.basePath);
+			return await deleteSessionTranscriptOwned(db, job.request.input, root, (operation) =>
+				withBusyRetry(operation, context),
+			);
+		}
 		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
 		if (job.request.kind === "session_transcript_write")
 			return await executeSessionTranscriptWrite(job.request, context);

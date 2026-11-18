@@ -545,6 +545,80 @@ Both raw keys (`abc123`) and prefixed keys (`session:abc123`) are accepted.
 
 Returns `404` if no transcript exists for that session and agent scope.
 
+### DELETE /api/sessions/:key/transcript
+
+Delete a session's stored transcript without writing a session summary. Requires
+`forget` permission. The session must belong to the resolved agent and project.
+Unknown keys and keys outside that scope both return `404` without changing
+capture state.
+
+Query parameters:
+
+- `agent_id`: the owning agent. `agentId` and `x-signet-agent-id` are accepted
+  aliases, but conflicting aliases and malformed identities return `400`.
+- `project`: optional additional restriction. A credential's project scope is
+  always enforced, even when this parameter is omitted.
+- `purge=hard`: hard-delete eligible derived memories and their history,
+  embeddings, and search projections. In team and hybrid modes this requires an
+  authenticated admin credential, including on localhost. Omit it for existing
+  soft-forget behavior. Other values return `400`.
+
+Outside local mode, identity must be explicit in the request or in the
+credential's agent scope; an unscoped credential does not default to `default`.
+The route uses the existing forget rate limit; hard purge also uses the admin
+rate limit.
+
+```json
+{
+  "status": "complete",
+  "counts": {
+    "transcripts": 1,
+    "memories": 2,
+    "retainedMixed": 1,
+    "retainedPinned": 1,
+    "records": 12,
+    "filePathsCleaned": 1
+  },
+  "retainedPinned": 1,
+  "generation": 1,
+  "bypassed": true
+}
+```
+
+Counts are cumulative for this deletion generation. Omitted categories are zero.
+Other categories include `artifacts`, `summaries`, `captureJobs`, `sourceEdges`,
+`embeddings`, and `uploadedBytes`. `filePathsCleaned` counts recorded targets
+that have been cleaned or are already absent, not files removed in full.
+
+A memory is deleted only when all its evidence sources belong to this session.
+For memories with other sources, only the removed session's source edges are
+detached; the memory is marked stale and queued for Dreaming re-evaluation.
+Pinned memories are retained in both modes and reported in `retainedPinned`.
+
+The database owner records a generation and deletion watermark before cleanup.
+Capture retries, recovery, canonical backfills, snapshots, and imports cannot
+restore the deleted generation. A live session remains bypassed until it ends,
+including across daemon restarts. Normal session-end hooks and canonical TTL
+finalization end the bypass. Attempting to disable that bypass returns
+`409`. A later explicit session start with the same key opens a new generation
+for new live turns. Whole-session snapshots and imports of a deleted key remain
+rejected: they cannot establish that an old prefix was not replayed. The daemon
+uses new live turns rather than re-reading the harness's historical transcript.
+
+Cleanup processes at most 64 database items, one uploaded-byte chunk, and four
+4 MiB file slices per request. Shared JSONL files are rewritten under the
+canonical transcript lock, preserving other sessions' records and concurrent
+appends. Only the session's recorded targets and its harness's canonical file
+are visited; external harness originals are not deleted.
+
+A contended transcript lock returns `pending` after 250 ms instead of occupying
+the database owner indefinitely. If work remains, retry the same DELETE to
+resume its durable checkpoints. A `pendingReason` explains a blocked file cleanup,
+including unsafe paths or unsupported descriptor-filesystem operations. Do not
+treat pending as completion. A retry after completion returns `200` with the
+same receipt and counts. An admin can retry a completed soft deletion with
+`purge=hard` to purge its eligible soft-deleted memories.
+
 ### GET /api/sessions/blackbox
 
 List sessions with replayable Black Box evidence for the requesting agent.

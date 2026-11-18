@@ -2,6 +2,7 @@ import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
+import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
 import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
@@ -482,6 +483,13 @@ function registerSessionStart(app: Hono): void {
 					);
 				}
 			}
+
+			if (body.sessionKey)
+				await updateTranscriptLifecycle({
+					agentId: scopedAgent.agentId,
+					sessionKey: normalizeSessionKey(body.sessionKey),
+					action: "start",
+				});
 
 			upsertAgentPresence({
 				sessionKey: parseOptionalString(body.sessionKey),
@@ -971,7 +979,10 @@ function registerSessionEnd(app: Hono): void {
 			});
 			if (duplicate) return c.json(duplicate);
 
+			if (sessionKey)
+				await updateTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "status" });
 			if (sessionKey && isSessionBypassed(sessionKey, agentId)) {
+				await updateTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "end" });
 				markSessionEnded(sessionKey, runtimePath, agentId);
 				removeAgentPresence(sessionKey);
 				return c.json({ memoriesSaved: 0, bypassed: true });
@@ -986,6 +997,7 @@ function registerSessionEnd(app: Hono): void {
 						? consumeSessionEndWake(agentId, sessionKey)
 						: wasWokenSince(agentId, sessionKey, wakeSince));
 				if (sessionKey && !woken) {
+					await updateTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "end" });
 					markSessionEnded(sessionKey, runtimePath, agentId);
 					removeAgentPresence(sessionKey);
 				}
