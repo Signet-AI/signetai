@@ -25,6 +25,7 @@ import {
 	loadEnvFile,
 	pinnedBunMismatch,
 	resolveBenchModel,
+	resolveBenchRunId,
 	setBenchDreamingCodemode,
 	setBenchDreamingConcurrency,
 	setBenchDreamingContextWindow,
@@ -409,10 +410,33 @@ describe("MemoryBench launcher", () => {
 		}
 	});
 
-	test("writes snapshots under the memorybench run directory", () => {
-		expect(openRouterSnapshotDir("run-1").endsWith(join("memorybench", "data", "runs", "run-1", "openrouter"))).toBe(
-			true,
-		);
+	test("writes snapshots outside the memorybench run directory", () => {
+		const dir = openRouterSnapshotDir("run-1");
+		expect(dir.endsWith(join("memorybench", "data", "openrouter-snapshots", "run-1"))).toBe(true);
+		expect(dir.includes(join("memorybench", "data", "runs"))).toBe(false);
+	});
+
+	test("resolves the run id once across flags, env, and default", () => {
+		const previousRunId = process.env.SIGNET_BENCH_RUN_ID;
+		delete process.env.SIGNET_BENCH_RUN_ID;
+		try {
+			expect(resolveBenchRunId(["run", "-r", "flag-run"], "dreaming")).toBe("flag-run");
+			expect(resolveBenchRunId(["run", "--run-id", "long-run"], "dreaming")).toBe("long-run");
+			expect(resolveBenchRunId(["run", "--run-id=eq-run"], "dreaming")).toBe("eq-run");
+			expect(resolveBenchRunId(["run", "-r=eq-short"], "dreaming")).toBe("eq-short");
+			expect(resolveBenchRunId(["run", "-r", "flag-run"], "dreaming")).toBe("flag-run");
+			process.env.SIGNET_BENCH_RUN_ID = "env-run";
+			expect(resolveBenchRunId(["run"], "dreaming")).toBe("env-run");
+			expect(resolveBenchRunId(["run", "-r", "flag-run"], "dreaming")).toBe("flag-run");
+			delete process.env.SIGNET_BENCH_RUN_ID;
+			const args = buildMemoryBenchArgs(["run", "-r", "flag-run"], false, "dreaming", true, "one-run");
+			expect(args[args.indexOf("-r") + 1]).toBe("flag-run");
+			const defaulted = buildMemoryBenchArgs(["run", "-b", "locomo"], false, "dreaming", true, "one-run");
+			expect(defaulted[defaulted.indexOf("-r") + 1]).toBe("one-run");
+		} finally {
+			if (previousRunId !== undefined) process.env.SIGNET_BENCH_RUN_ID = previousRunId;
+			else delete process.env.SIGNET_BENCH_RUN_ID;
+		}
 	});
 
 	test("fetches endpoints with each model path segment encoded separately", async () => {
