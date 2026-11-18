@@ -17,6 +17,13 @@ AGENT_ID=${REPLAY_AGENT_ID:-default}
 DIR=$(realpath -m "${REPLAY_DIR:-$HERE/runs}")
 WS=$DIR/ws
 
+mkdir -p "$DIR"
+exec 9> "$DIR/.replay.lock"
+if ! flock -n 9; then
+	echo "another replay is using $DIR" >&2
+	exit 1
+fi
+
 if ss -tln | grep -q ":$PORT "; then
 	echo "port $PORT is already in use" >&2
 	exit 1
@@ -40,7 +47,7 @@ SANDBOX=$DIR/home
 env "${UNSET[@]}" HOME="$SANDBOX" XDG_CONFIG_HOME="$SANDBOX/.config" XDG_DATA_HOME="$SANDBOX/.local/share" \
 	XDG_STATE_HOME="$SANDBOX/.local/state" XDG_CACHE_HOME="$SANDBOX/.cache" HERMES_HOME="$SANDBOX/.hermes" \
 	SIGNET_DAEMON_ENTRYPOINT=1 SIGNET_PATH="$WS" SIGNET_PORT="$PORT" SIGNET_HOST=127.0.0.1 SIGNET_TELEMETRY_OPTOUT=1 \
-	setsid "$BIN" > "$DIR/daemon-$RUN.log" 2>&1 &
+	setsid "$BIN" > "$DIR/daemon-$RUN.log" 2>&1 9>&- &
 DAEMON=$!
 DRIVER=
 step() {
@@ -72,11 +79,19 @@ trap "exit 143" TERM
 trap "exit 130" INT
 trap "exit 129" HUP
 
+HEALTHY=
 for _ in $(seq 1 120); do
-	curl -s -m 2 "127.0.0.1:$PORT/health" | grep -q '"healthy"' && break
+	if curl -s -m 2 "127.0.0.1:$PORT/health" | grep -q '"healthy"'; then
+		HEALTHY=1
+		break
+	fi
 	sleep 2
 done
-curl -s "127.0.0.1:$PORT/health" | python3 -c "import json,sys;d=json.load(sys.stdin);print('health',d['status'],d['agentsDir'])"
+if [ -z "$HEALTHY" ]; then
+	echo "daemon did not report healthy within 4 minutes; see $DIR/daemon-$RUN.log" >&2
+	exit 1
+fi
+curl -s -m 10 "127.0.0.1:$PORT/health" | python3 -c "import json,sys;d=json.load(sys.stdin);print('health',d['status'],d['agentsDir'])"
 LOG=$(ls -t "$WS"/runtime/logs/signet-*.log | head -1)
 
 SETTLED=
@@ -97,7 +112,7 @@ if [ -z "$SETTLED" ]; then
 fi
 echo "startup maintenance settled"
 
-curl -s -X POST "127.0.0.1:$PORT/api/memory/recall" -H 'content-type: application/json' \
+curl -s -f -m 120 -X POST "127.0.0.1:$PORT/api/memory/recall" -H 'content-type: application/json' \
 	-d "{\"query\":\"warm up the embedder and reranker\",\"agentId\":\"$AGENT_ID\",\"limit\":5}" > /dev/null
 sleep 2
 grep -a -o '"Cross-encoder ready","data":{[^}]*}' "$LOG" | tail -1 || echo "no cross-encoder line in the daemon log"
@@ -114,8 +129,8 @@ if [ -n "${PROBE:-}" ]; then
 fi
 
 stop
-trap - EXIT TERM INT HUP
-cat $(ls -tr "$WS"/runtime/logs/signet-*.log) > "$DIR/daemon-log-$RUN.ndjson"
+cat "$WS"/runtime/logs/signet-*.log > "$DIR/daemon-log-$RUN.ndjson"
 sqlite3 -readonly -json "$WS/data/signet.db" "SELECT session_key, agent_id, context_epoch, item_kind, item_id, surface, mode, created_at FROM session_recall_events WHERE session_key LIKE '$RUN-%'" > "$DIR/ledger-$RUN.json"
 rm -rf "$WS" "$DIR/step-$RUN.log"
+trap - EXIT TERM INT HUP
 echo "$RUN finished: $(wc -l < "$DIR/results-$RUN.jsonl") records"
