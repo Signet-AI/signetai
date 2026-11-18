@@ -41,8 +41,17 @@ def parse_args():
     return parser.parse_args()
 
 
+def source_database(args):
+    layout_path = os.path.join(args.agents, "workspace-layout.json")
+    layout = json.load(open(layout_path)) if os.path.exists(layout_path) else {}
+    override = (layout.get("overrides") or {}).get("database")
+    if override:
+        return override if os.path.isabs(override) else os.path.join(args.agents, override)
+    return os.path.join(args.agents, "data", "signet.db")
+
+
 def snapshot(args):
-    source = os.path.join(args.agents, "data", "signet.db")
+    source = source_database(args)
     target = os.path.join(args.dir, "pristine.db")
     if os.path.exists(target):
         os.remove(target)
@@ -63,7 +72,8 @@ def workspace_config(args):
     config.pop("auth", None)
     with open(os.path.join(args.dir, "agent.yaml"), "w") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
-    shutil.copyfile(os.path.join(args.agents, "workspace-layout.json"), os.path.join(args.dir, "workspace-layout.json"))
+    with open(os.path.join(args.dir, "workspace-layout.json"), "w") as handle:
+        json.dump({"version": 2, "overrides": {}}, handle, indent=2)
     registry = os.path.join(args.agents, "runtime", "plugins", "registry-v1.json")
     if os.path.exists(registry):
         shutil.copyfile(registry, os.path.join(args.dir, "plugin-registry.json"))
