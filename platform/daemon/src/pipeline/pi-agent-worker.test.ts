@@ -34,6 +34,7 @@ test("the real Pi loop runs in a worker and invokes only supplied tools in the d
 		port: 0,
 		hostname: "127.0.0.1",
 		async fetch(request) {
+			if (request.method !== "POST") return new Response("", { status: 405 });
 			const body = await request.json();
 			announcedTools = body.tools;
 			requests++;
@@ -352,6 +353,7 @@ test("chat leases preserve the real Pi session, native tool history, and refresh
 		port: 0,
 		hostname: "127.0.0.1",
 		async fetch(request) {
+			if (request.method !== "POST") return new Response("", { status: 405 });
 			const body = await request.json();
 			requests.push(body);
 			const last = body.messages.at(-1);
