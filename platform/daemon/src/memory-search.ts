@@ -17,7 +17,7 @@ import { normalizeAndHashContent } from "./content-normalization";
 import { getDbAccessor, getDbAccessorPath, runWriteTxAsync } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
 import { vectorSearchThroughDbOwner } from "./db-owner-recall";
-import { ownerBytesFromHex, ownerReadAll, ownerReadOne } from "./db-owner-sql";
+import { cancellableOwner, ownerBytesFromHex, ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { getDbOwner, getDbRecallOwner } from "./db-owner-runtime";
 import { DB_OWNER_MAX_RESULT_BYTES, DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
 import type { EmbeddingFetchOptions } from "./embedding-fetch";
@@ -404,6 +404,7 @@ async function applyRehearsalBoost(
 	scored: Array<{ id: string; score: number; source: string }>,
 	search: MemorySearchConfig,
 	freshness: { readonly enabled: boolean; readonly nowMs: number },
+	execution?: RecallExecutionOptions,
 ): Promise<void> {
 	const rehearsalEnabled = search.rehearsal_enabled && search.rehearsal_weight > 0;
 	const freshnessEnabled = freshness.enabled && search.temporal_prior_weight > 0;
@@ -417,7 +418,7 @@ async function applyRehearsalBoost(
 			readonly last_accessed: string | null;
 			readonly created_at: string;
 		}>(
-			await getDbOwner(getDbAccessorPath()),
+			await recallOwner(execution),
 			`SELECT id, access_count, last_accessed, created_at
 			 FROM memories
 			 WHERE id IN (${placeholders})`,
@@ -485,6 +486,7 @@ async function readLexicalFallbackThroughOwner(
 	keywordQuery: string,
 	filter: FilterClause,
 	resultLimit: number,
+	execution?: RecallExecutionOptions,
 ): Promise<ReadonlyArray<{ id: string; matches: number }>> {
 	const terms = lexicalFallbackTerms(keywordQuery);
 	if (terms.length === 0) return [];
@@ -493,7 +495,7 @@ async function readLexicalFallbackThroughOwner(
 	const args = terms.map((term) => `%${escapeLike(term.toLowerCase())}%`);
 	const match = terms.length <= 3 ? like.join(" AND ") : like.join(" OR ");
 	return await ownerReadAll<{ id: string; matches: number }>(
-		await getDbOwner(getDbAccessorPath()),
+		await recallOwner(execution),
 		`WITH fallback_scan AS MATERIALIZED (
 			SELECT m.*
 			FROM memories m
@@ -521,10 +523,11 @@ async function authorizeScoredCandidates(
 	scored: ReadonlyArray<{ id: string; score: number; source: string }>,
 	filter: FilterClause,
 	authorizationOwner?: DbOwnerClient,
+	execution?: RecallExecutionOptions,
 ): Promise<Array<{ id: string; score: number; source: string }>> {
 	const ids = [...new Set(scored.map((row) => row.id))];
 	if (ids.length === 0) return [];
-	const owner = authorizationOwner ?? (await getDbOwner(getDbAccessorPath()));
+	const owner = authorizationOwner ?? (await recallOwner(execution));
 	const allowed = new Set<string>();
 	for (let offset = 0; offset < ids.length; offset += 400) {
 		const batch = ids.slice(offset, offset + 400);
@@ -564,7 +567,7 @@ async function findAuthorizedVectorCandidates(
 ): Promise<AuthorizedVectorCandidates> {
 	const maxWork = Math.min(DB_OWNER_MAX_WORK_UNITS, 10_000);
 	const targetCount = Math.min(cfg.search.top_k, maxWork);
-	const owner = await getDbRecallOwner(getDbAccessorPath());
+	const owner = cancellableOwner(await getDbRecallOwner(getDbAccessorPath()), execution?.signal);
 	const discovered = new Set<string>();
 	const authorized = new Map<string, { readonly id: string; readonly score: number }>();
 	let usedWork = 0;
@@ -613,11 +616,15 @@ async function findAuthorizedVectorCandidates(
 	return { results, completeness, searchedWindow };
 }
 
-async function loadObservedScores(ids: readonly string[], agentId: string): Promise<Map<string, number>> {
+async function loadObservedScores(
+	ids: readonly string[],
+	agentId: string,
+	execution?: RecallExecutionOptions,
+): Promise<Map<string, number>> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
 	const rows = await ownerReadAll<{ memory_id: string; score: number }>(
-		await getDbOwner(getDbAccessorPath()),
+		await recallOwner(execution),
 		`SELECT memory_id, AVG(agent_relevance_score) AS score
 		 FROM session_memories
 		 WHERE agent_id = ?
@@ -648,7 +655,11 @@ function shortenCurrentnessContent(content: string): string {
 	return oneLine.length > 240 ? `${oneLine.slice(0, 237)}...` : oneLine;
 }
 
-async function loadCurrentnessInfo(ids: readonly string[], agentId: string): Promise<Map<string, CurrentnessInfo>> {
+async function loadCurrentnessInfo(
+	ids: readonly string[],
+	agentId: string,
+	execution?: RecallExecutionOptions,
+): Promise<Map<string, CurrentnessInfo>> {
 	if (ids.length === 0) return new Map();
 	const placeholders = ids.map(() => "?").join(", ");
 	const rows = await ownerReadAll<{
@@ -657,7 +668,7 @@ async function loadCurrentnessInfo(ids: readonly string[], agentId: string): Pro
 		status: string;
 		replacement_content: string | null;
 	}>(
-		await getDbOwner(getDbAccessorPath()),
+		await recallOwner(execution),
 		`SELECT
 			 ea.memory_id,
 			 ea.content,
@@ -799,6 +810,10 @@ function checkRecallCancellation(options?: RecallExecutionOptions): void {
 	}
 }
 
+async function recallOwner(execution?: RecallExecutionOptions): Promise<DbOwnerClient> {
+	return cancellableOwner(await getDbOwner(getDbAccessorPath()), execution?.signal);
+}
+
 function ownerVectorFromHex(value: unknown): Float32Array | null {
 	if (typeof value !== "string" || !/^(?:[0-9A-Fa-f]{2})*$/.test(value)) return null;
 	const bytes = ownerBytesFromHex(value);
@@ -854,8 +869,11 @@ function recallQueryVectorIsValid(query: Float32Array, expectedDimensions: numbe
 	return query.length === expectedDimensions && query.length > 0 && query.every(Number.isFinite);
 }
 
-async function activeEmbeddingProfileIsKnown(embedding: EmbeddingConfig): Promise<boolean> {
-	const owner = await getDbOwner(getDbAccessorPath());
+async function activeEmbeddingProfileIsKnown(
+	embedding: EmbeddingConfig,
+	execution?: RecallExecutionOptions,
+): Promise<boolean> {
+	const owner = await recallOwner(execution);
 	let row: EmbeddingIndexStateRow | null;
 	try {
 		row = await ownerReadOne<EmbeddingIndexStateRow>(
@@ -969,7 +987,7 @@ export async function buildSourceChunkVectorHits(
 	if (!queryVec || limit <= 0 || project) return outcome("complete", 0);
 	if (!recallQueryVectorIsValid(queryVec, embedding.dimensions)) return outcome("unavailable");
 
-	const profileCompatible = await activeEmbeddingProfileIsKnown(embedding);
+	const profileCompatible = await activeEmbeddingProfileIsKnown(embedding, execution);
 	if (!profileCompatible) {
 		logger.warn(
 			"memory",
@@ -978,7 +996,7 @@ export async function buildSourceChunkVectorHits(
 		return outcome("unavailable");
 	}
 
-	const owner = await getDbOwner(getDbAccessorPath());
+	const owner = await recallOwner(execution);
 	const embeddingColumns = await ownerReadAll<{ readonly name: string }>(owner, "PRAGMA table_info(embeddings)", [], {
 		operation: "memory-search.source-chunk-schema",
 		workloadClass: "foreground",
@@ -1557,7 +1575,7 @@ export async function prefetchTranscriptEvidence(
 	checkRecallCancellation(execution);
 	const fts = sanitizeFtsQuery(query);
 	if (fts.length === 0 || maxResults <= 0) return null;
-	const owner = await getDbOwner(getDbAccessorPath());
+	const owner = await recallOwner(execution);
 	const fetchLimit = maxResults + 2 * Math.max(0, resultLimit);
 	const rows = await readTranscriptEvidenceRows(
 		owner,
@@ -1597,7 +1615,7 @@ async function buildTranscriptEvidenceResults(
 	const represented = new Set(
 		existing.flatMap((row) => [row.session_id, row.source_id]).filter((id): id is string => !!id),
 	);
-	const owner = await getDbOwner(getDbAccessorPath());
+	const owner = await recallOwner(execution);
 	const fetchLimit = maxResults + represented.size;
 	const usablePrefetch =
 		prefetch !== null &&
@@ -1685,12 +1703,13 @@ async function buildNativeArtifactRecallHits(
 	params: RecallParams,
 	query: string,
 	existingSourceIds: ReadonlySet<string>,
+	execution?: RecallExecutionOptions,
 ): Promise<NativeArtifactRecallHit[]> {
 	const fts = sanitizeFtsQuery(query);
 	if (fts.length === 0) return [];
 
 	try {
-		const owner = await getDbOwner(getDbAccessorPath());
+		const owner = await recallOwner(execution);
 		const table = await ownerReadOne<{ readonly name: string }>(
 			owner,
 			"SELECT name FROM sqlite_master WHERE type='table' AND name='memory_artifacts_fts' LIMIT 1",
@@ -1918,7 +1937,7 @@ export async function hybridRecall(
 	const selectionDedupeEnabled = !!params.sessionKey?.trim() && params.includeRecalled !== true;
 	let graphOwner: DbOwnerClient | null = null;
 	const getGraphOwner = async (): Promise<DbOwnerClient> => {
-		graphOwner ??= await getDbOwner(getDbAccessorPath());
+		graphOwner ??= await recallOwner(execution);
 		return graphOwner;
 	};
 	const graphOwnerReadAll = async <Row extends object>(
@@ -2244,7 +2263,7 @@ export async function hybridRecall(
 			try {
 				ftsRows = [
 					...(await ownerReadAll<{ id: string; raw_score: number }>(
-						await getDbOwner(getDbAccessorPath()),
+						await recallOwner(execution),
 						`SELECT m.id, bm25(memories_fts) AS raw_score
 					 FROM memories_fts
 					 CROSS JOIN memories m ON memories_fts.rowid = m.rowid
@@ -2285,7 +2304,7 @@ export async function hybridRecall(
 				lexicalFallbackAttempted = true;
 				logger.warn("memory", "FTS index incomplete; using bounded LIKE lexical fallback");
 				addFtsScores(ftsRows);
-				const fallbackRows = await readLexicalFallbackThroughOwner(keywordQuery, filter, limit);
+				const fallbackRows = await readLexicalFallbackThroughOwner(keywordQuery, filter, limit, execution);
 				const fallbackTermCount = Math.max(1, lexicalFallbackTerms(keywordQuery).length);
 				for (const row of fallbackRows) {
 					const score = row.matches / fallbackTermCount;
@@ -2324,7 +2343,7 @@ export async function hybridRecall(
 				   ORDER BY raw_score LIMIT ?`;
 
 				const rows = await ownerReadAll<{ id: string; hint: string; raw_score: number }>(
-					await getDbOwner(getDbAccessorPath()),
+					await recallOwner(execution),
 					sql,
 					[keywordQuery, ...filter.args, cfg.search.top_k],
 					{
@@ -2410,7 +2429,7 @@ export async function hybridRecall(
 		return { focal, traversal };
 	});
 	primaryTraversalFetch.catch(() => undefined);
-	const embeddingProfileKnown = activeEmbeddingProfileIsKnown(cfg.embedding);
+	const embeddingProfileKnown = activeEmbeddingProfileIsKnown(cfg.embedding, execution);
 	embeddingProfileKnown.catch(() => undefined);
 	let queryVecF32: Float32Array | null = null;
 	try {
@@ -2746,7 +2765,7 @@ export async function hybridRecall(
 	}
 
 	if (scored.length > 0) {
-		scored = await authorizeScoredCandidates(scored, filter);
+		scored = await authorizeScoredCandidates(scored, filter, undefined, execution);
 	}
 	const structuredEvidenceMap = new Map(structuredCandidateMap);
 	const temporalTopicEvidenceMap = new Map<string, number>();
@@ -2857,7 +2876,7 @@ export async function hybridRecall(
 	}
 
 	await timings.timeAsync("rehearsal_boost", () =>
-		applyRehearsalBoost(scored, cfg.search, { enabled: freshnessIntent, nowMs: temporalNowMs }),
+		applyRehearsalBoost(scored, cfg.search, { enabled: freshnessIntent, nowMs: temporalNowMs }, execution),
 	);
 	let recallSummary: string | undefined;
 	let summarizeLeft = 0;
@@ -3068,6 +3087,7 @@ export async function hybridRecall(
 			currentness = await loadCurrentnessInfo(
 				scored.map((row) => row.id),
 				params.agentId ?? "default",
+				execution,
 			);
 			applyCurrentnessBias(scored, currentness);
 		} catch (e) {
@@ -3105,6 +3125,7 @@ export async function hybridRecall(
 		const observedScores = await loadObservedScores(
 			scored.map((row) => row.id),
 			params.agentId ?? "default",
+			execution,
 		);
 		scored.sort((a, b) => {
 			const aObserved = observedScores.get(a.id);
@@ -3140,7 +3161,7 @@ export async function hybridRecall(
 					.sort((a, b) => (similarity.get(b) ?? 0) - (similarity.get(a) ?? 0))
 					.slice(0, limit - scored.length)
 					.map((id, index) => ({ id, score: floor * (1 - (index + 1) / (limit * 2)), source: "temporal_window" }));
-				scored.push(...(await authorizeScoredCandidates(fill, filter)));
+				scored.push(...(await authorizeScoredCandidates(fill, filter, undefined, execution)));
 			}
 		}
 	});
@@ -3219,7 +3240,7 @@ export async function hybridRecall(
 			allowArtifactFallbacks && results.length < limit
 				? await timings.timeAsync(
 						"native_artifact_fallback",
-						async () => await buildNativeArtifactRecallHits(params, query, new Set()),
+						async () => await buildNativeArtifactRecallHits(params, query, new Set(), execution),
 					)
 				: [];
 		if (nativeHits.length > 0 && results.length < limit) {
@@ -3406,7 +3427,7 @@ export async function hybridRecall(
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
 		const nativeHits = allowArtifactFallbacks
 			? await timings.timeAsync("native_artifact_supplement", () =>
-					buildNativeArtifactRecallHits(params, query, existingSourceIds),
+					buildNativeArtifactRecallHits(params, query, existingSourceIds, execution),
 				)
 			: [];
 		const candidates = nativeHits.map((hit): RecallResult => {

@@ -3,6 +3,8 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, initDbAccessorAsync } from "./db-accessor";
+import type { DbOwnerJobHandle, DbOwnerRequest, DbOwnerSubmitOptions } from "./db-owner-client";
+import { getDbOwner } from "./db-owner-runtime";
 import { matchPromptEntities, promptPhraseSpan } from "./prompt-entity-context";
 
 let dir = "";
@@ -95,6 +97,64 @@ describe("matchPromptEntities", () => {
 		});
 		const matches = await matchPromptEntities(DB_PATH(), "default", "What is the status of Zephyrline?");
 		expect(matches.map((match) => match.entityName)).toEqual(["Zephyrline"]);
+	});
+
+	it("shrinks oversized owner pages instead of failing on long entity names", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const insert = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, ?, ?)`,
+			);
+			for (let index = 0; index < 1_000; index += 1) {
+				const name = `Long Project ${index} ${"descriptive words ".repeat(34)}`.trim();
+				insert.run(`ent-long-${index}`, name, name.toLowerCase(), now, now);
+			}
+			insert.run("ent-quillon", "Quillonbridge", "quillonbridge", now, now);
+		});
+		const matches = await matchPromptEntities(DB_PATH(), "default", "Is Quillonbridge shipping this week?");
+		expect(matches.map((match) => match.entityName)).toEqual(["Quillonbridge"]);
+	});
+
+	it("pages aliases through the active alias index", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const entity = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, ?, ?)`,
+			);
+			const alias = db.prepare(
+				`INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, status)
+				 VALUES (?, ?, 'default', ?, ?, 'active')`,
+			);
+			for (let index = 0; index < 2_500; index += 1) {
+				entity.run(`ent-alias-${index}`, `Aliased Project ${index}`, `aliased project ${index}`, now, now);
+				alias.run(`alias-${index}`, `ent-alias-${index}`, `harborlight${index}`, `harborlight${index}`);
+			}
+		});
+		const owner = await getDbOwner(DB_PATH());
+		const submit = owner.submit.bind(owner);
+		const statements: Array<{ readonly sql: string; readonly params: readonly unknown[] }> = [];
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			if (options.operation === "user-prompt-submit.entity-aliases" && request.kind === "query") {
+				statements.push({ sql: request.statement.sql, params: request.statement.params ?? [] });
+			}
+			return submit<Result>(request, options);
+		};
+		const matches = await matchPromptEntities(DB_PATH(), "default", "What did harborlight2499 ship?").finally(() => {
+			owner.submit = submit;
+		});
+		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Aliased Project 2499", "alias"]]);
+		expect(statements.length).toBeGreaterThan(1);
+		const statement = statements[0];
+		if (!statement) throw new Error("Expected the alias page query");
+		const plan = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(`EXPLAIN QUERY PLAN ${statement.sql}`)
+				.all(...(statement.params as Array<string | number>))
+				.map((row) => String((row as { detail: string }).detail)),
+		);
+		expect(plan.some((detail) => detail.includes("TEMP B-TREE"))).toBe(false);
 	});
 
 	describe("promptPhraseSpan matches precomputed prompt terms", () => {

@@ -274,8 +274,13 @@ export function stripProvenanceBlocks(text: string): string {
 	for (const match of text.matchAll(PROVENANCE_TAG)) {
 		const start = match.index ?? 0;
 		const tag = { start, end: start + match[0].length, name: (match[2] ?? "").toLowerCase() };
-		if (match[1]) closes.set(tag.name, [...(closes.get(tag.name) ?? []), tag]);
-		else opens.push(tag);
+		if (!match[1]) {
+			opens.push(tag);
+			continue;
+		}
+		const named = closes.get(tag.name);
+		if (named) named.push(tag);
+		else closes.set(tag.name, [tag]);
 	}
 	const cursors = new Map<string, number>();
 	const kept: string[] = [];

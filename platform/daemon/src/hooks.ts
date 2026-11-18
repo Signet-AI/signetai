@@ -1914,14 +1914,11 @@ async function recallPromptEntityContext(
 		deps.fetchEmbedding,
 		{ signal: input.signal },
 	);
-	let used = promptRecallHeader(entities).length;
 	const results: RecallResult[] = [];
 	for (const row of recall.results) {
 		if (row.score < input.minScore) continue;
-		const size = promptRecallLine(row).length + 1;
-		if (used + size > input.injectBudget) continue;
-		used += size;
-		results.push(row);
+		const serialized = createPromptContext(buildPromptRecallInject(entities, [...results, row]))?.serialized ?? "";
+		if (serialized.length <= input.injectBudget) results.push(row);
 	}
 	return { entities, results, engine: results.length > 0 ? "entity-recall" : "no-recall-hit" };
 }
