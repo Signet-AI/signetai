@@ -280,6 +280,15 @@ describe("dreaming evidence coverage", () => {
 		expect(coverage.fullyReviewed).toBe(true);
 	});
 
+	it("completes the scan when the source cap exactly matches eligible sources", () => {
+		for (const suffix of ["a", "b", "c"]) {
+			seedMemory(db, `mem-exact-${suffix}`, `2026-01-01 00:00:0${suffix === "a" ? 1 : suffix === "b" ? 2 : 3}`);
+		}
+		const coverage = getDreamingEvidenceCoverageInDb(db as unknown as ReadDb, AGENT, { ...BOUNDS, maxSources: 3 });
+		expect(coverage.sources.eligible).toBe(3);
+		expect(coverage.scanComplete).toBe(true);
+	});
+
 	it("reports drift when eligible sources outnumber the walked window", () => {
 		seedMemory(db, "mem-old", "2026-01-01 00:00:01");
 		seedMemory(db, "mem-new", "2026-01-01 00:00:02");
