@@ -1,7 +1,9 @@
 import { join } from "node:path";
 import { afterEach, expect, test } from "bun:test";
+import * as Type from "typebox";
 import { createWorkerAgentSession, stopPiAgentWorkers } from "./pi-agent-client";
 import { piAgentWorkerSettings } from "./pi-agent-protocol";
+import type { PiAgentTool } from "./pi-agent-protocol";
 import { resolvePiModel } from "./pi-provider";
 
 const { piModel } = resolvePiModel({
@@ -9,6 +11,28 @@ const { piModel } = resolvePiModel({
 	model: "test-model",
 	baseUrl: "http://127.0.0.1:1/v1",
 });
+const modelUpdate = { model: piModel, apiKey: "test-key", systemPrompt: "x", tools: [] };
+
+const settleWithin = async (pending: Promise<unknown> | undefined, ms: number): Promise<"settled" | "pending"> => {
+	if (!pending) return "settled";
+	let settled = false;
+	void pending.then(
+		() => (settled = true),
+		() => (settled = true),
+	);
+	await new Promise((resolve) => setTimeout(resolve, ms));
+	return settled ? "settled" : "pending";
+};
+
+const outcome = async (pending: Promise<unknown> | undefined): Promise<string> => {
+	if (!pending) return "resolved";
+	try {
+		await pending;
+		return "resolved";
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+};
 
 afterEach(async () => {
 	await stopPiAgentWorkers();
@@ -21,36 +45,136 @@ test("dispose resolves promptly after the worker has already exited", async () =
 		undefined,
 		{ workerPath: join(import.meta.dir, "pi-agent-fake-die.mjs") },
 	);
-	await expect(session.cancelTurn?.()).rejects.toThrow(/exited/);
+	expect(await outcome(session.cancelTurn?.())).toMatch(/exited/);
 	const start = Date.now();
 	await session.dispose();
 	expect(Date.now() - start).toBeLessThan(500);
 }, 20_000);
 
-test("cancel ignores stale and id-less aborted acks and waits for the matching id", async () => {
+test("cancel ignores stale and id-less aborted acks until its matching id arrives", async () => {
 	const session = await createWorkerAgentSession(
 		{ model: piModel, apiKey: "test-key", systemPrompt: "x", tools: [] },
 		[],
 		undefined,
 		{ workerPath: join(import.meta.dir, "pi-agent-fake-acks.mjs") },
 	);
-	const start = Date.now();
-	await session.cancelTurn?.();
-	expect(Date.now() - start).toBeGreaterThanOrEqual(250);
+	let delivered = () => {};
+	const barrier = new Promise<void>((resolve) => {
+		delivered = resolve;
+	});
+	session.subscribe((event) => {
+		if (event.type === "agent_start") delivered();
+	});
+	const cancelling = session.cancelTurn?.();
+	await barrier;
+	expect(await settleWithin(cancelling, 50)).toBe("pending");
+	await session.updateModel?.(modelUpdate);
+	expect(await outcome(cancelling)).toBe("resolved");
 	await session.dispose();
 }, 20_000);
 
-test("a second turn's cancel is not satisfied by the first turn's ack", async () => {
+test("a second turn's cancel is not satisfied by the first turn's stale ack", async () => {
 	const session = await createWorkerAgentSession(
 		{ model: piModel, apiKey: "test-key", systemPrompt: "x", tools: [] },
 		[],
 		undefined,
 		{ workerPath: join(import.meta.dir, "pi-agent-fake-stale.mjs") },
 	);
-	await session.cancelTurn?.();
+	expect(await outcome(session.cancelTurn?.())).toBe("resolved");
+	let delivered = () => {};
+	const barrier = new Promise<void>((resolve) => {
+		delivered = resolve;
+	});
+	session.subscribe((event) => {
+		if (event.type === "agent_start") delivered();
+	});
+	const cancelling = session.cancelTurn?.();
+	await barrier;
+	expect(await settleWithin(cancelling, 50)).toBe("pending");
+	await session.updateModel?.(modelUpdate);
+	expect(await outcome(cancelling)).toBe("resolved");
+	await session.dispose();
+}, 20_000);
+
+test("dispose does not accept a numbered cancel ack as its disposal ack", async () => {
+	const session = await createWorkerAgentSession(
+		{ model: piModel, apiKey: "test-key", systemPrompt: "x", tools: [] },
+		[],
+		undefined,
+		{ workerPath: join(import.meta.dir, "pi-agent-fake-dispose-ack.mjs") },
+	);
 	const start = Date.now();
-	await session.cancelTurn?.();
-	expect(Date.now() - start).toBeGreaterThanOrEqual(350);
+	await session.dispose();
+	expect(Date.now() - start).toBeGreaterThanOrEqual(200);
+}, 20_000);
+
+test("a new turn's cancel does not join a previous turn's pending cancel", async () => {
+	const session = await createWorkerAgentSession(
+		{ model: piModel, apiKey: "test-key", systemPrompt: "x", tools: [] },
+		[],
+		undefined,
+		{ workerPath: join(import.meta.dir, "pi-agent-fake-two-turns.mjs") },
+	);
+	const first = session.cancelTurn?.();
+	await new Promise((resolve) => setTimeout(resolve, 30));
+	await session.prompt?.("next turn");
+	expect(await settleWithin(session.cancelTurn?.(), 2000)).toBe("settled");
+	const firstOutcome = outcome(first);
+	await session.dispose();
+	expect(await firstOutcome).toMatch(/closed|exited/);
+}, 20_000);
+
+test("every concurrent cancel caller waits for in-flight host tool calls", async () => {
+	let releaseTool = () => {};
+	const toolGate = new Promise<void>((resolve) => {
+		releaseTool = resolve;
+	});
+	let toolDone = false;
+	const tools: PiAgentTool[] = [
+		{
+			name: "slow_tool",
+			label: "Slow",
+			description: "Slow tool",
+			parameters: Type.Object({}),
+			async execute() {
+				await toolGate;
+				toolDone = true;
+				return { content: [{ type: "text", text: "ok" }], details: {} };
+			},
+		},
+	];
+	const session = await createWorkerAgentSession(
+		{ model: piModel, apiKey: "test-key", systemPrompt: "x", tools },
+		tools,
+		undefined,
+		{ workerPath: join(import.meta.dir, "pi-agent-fake-tool-cancel.mjs") },
+	);
+	const first = session.cancelTurn?.();
+	const second = session.cancelTurn?.();
+	try {
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(await settleWithin(second, 50)).toBe("pending");
+	} finally {
+		releaseTool();
+	}
+	expect(await outcome(first)).toBe("resolved");
+	expect(await outcome(second)).toBe("resolved");
+	expect(toolDone).toBe(true);
+	await session.dispose();
+}, 20_000);
+
+test("cancelTurn reports the closed worker instead of leaving an abandoned cancel", async () => {
+	const session = await createWorkerAgentSession(
+		{ model: piModel, apiKey: "test-key", systemPrompt: "x", tools: [] },
+		[],
+		undefined,
+		{ workerPath: join(import.meta.dir, "pi-agent-fake-die.mjs") },
+	);
+	expect(await outcome(session.cancelTurn?.())).toMatch(/exited/);
+	const start = Date.now();
+	expect(await outcome(session.cancelTurn?.())).toMatch(/closed/);
+	expect(await outcome(session.cancelTurn?.())).toMatch(/closed/);
+	expect(Date.now() - start).toBeLessThan(3000);
 	await session.dispose();
 }, 20_000);
 

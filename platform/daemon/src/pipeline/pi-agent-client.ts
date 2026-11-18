@@ -66,8 +66,15 @@ export async function createWorkerAgentSession(
 	let disposed = false;
 	let exited = false;
 	let prompt: { resolve: () => void; reject: (error: Error) => void } | undefined;
-	let cancel: { promise: Promise<void>; settle: (error?: Error) => void } | undefined;
+	type PendingCancel = {
+		readonly id: number;
+		readonly turn: number;
+		readonly promise: Promise<void>;
+		settle: (error?: Error) => void;
+	};
+	const cancels = new Set<PendingCancel>();
 	let nextCancelId = 0;
+	let nextTurn = 0;
 	let readyResolve: () => void = () => {};
 	let readyReject: (error: Error) => void = () => {};
 	const ready = new Promise<void>((resolve, reject) => {
@@ -85,8 +92,8 @@ export async function createWorkerAgentSession(
 		readyReject(error);
 		prompt?.reject(error);
 		prompt = undefined;
-		cancel?.settle(error);
-		cancel = undefined;
+		for (const entry of cancels) entry.settle(error);
+		cancels.clear();
 		controller.abort(error);
 	};
 	worker.on("message", (message: PiAgentWorkerResponse) => {
@@ -162,7 +169,7 @@ export async function createWorkerAgentSession(
 						resolve();
 					};
 					const acknowledged = (message: PiAgentWorkerResponse) => {
-						if (message.type === "aborted") finish();
+						if (message.type === "aborted" && message.id === undefined) finish();
 					};
 					timer = setTimeout(finish, PI_AGENT_DISPOSE_ACK_TIMEOUT_MS);
 					worker.on("message", acknowledged);
@@ -195,6 +202,7 @@ export async function createWorkerAgentSession(
 	return {
 		async prompt(text) {
 			if (prompt || disposed) throw new Error("Pi agent session unavailable");
+			nextTurn += 1;
 			controller = new AbortController();
 			failure = undefined;
 			await new Promise<void>((resolve, reject) => {
@@ -233,18 +241,25 @@ export async function createWorkerAgentSession(
 		},
 		async cancelTurn() {
 			controller.abort(new Error("Pi agent turn cancelled"));
-			if (cancel) return cancel.promise;
+			const turn = nextTurn;
+			const joined = [...cancels].find((entry) => entry.turn === turn);
+			if (joined) {
+				await joined.promise;
+				await Promise.allSettled(toolCalls);
+				return;
+			}
 			const id = ++nextCancelId;
 			let settle: (error?: Error) => void = () => {};
 			const promise = new Promise<void>((resolve, reject) => {
 				settle = (error?: Error) => {
-					cancel = undefined;
+					cancels.delete(entry);
 					clearTimeout(timer);
 					worker.off("message", acknowledge);
 					if (error) reject(error);
 					else resolve();
 				};
 			});
+			const entry: PendingCancel = { id, turn, promise, settle };
 			const timer = setTimeout(
 				() => settle(new Error("Pi agent cancellation timed out")),
 				PI_AGENT_CANCEL_ACK_TIMEOUT_MS,
@@ -254,12 +269,16 @@ export async function createWorkerAgentSession(
 				settle();
 			};
 			worker.on("message", acknowledge);
-			cancel = { promise, settle };
-			send({ type: "cancel", id });
+			cancels.add(entry);
+			try {
+				send({ type: "cancel", id });
+			} catch (error) {
+				settle(error instanceof Error ? error : new Error("Pi agent cancellation failed"));
+			}
 			try {
 				await promise;
 			} finally {
-				if (cancel?.promise === promise) cancel = undefined;
+				cancels.delete(entry);
 			}
 			await Promise.allSettled(toolCalls);
 		},
