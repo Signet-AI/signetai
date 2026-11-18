@@ -128,7 +128,13 @@ function hasSelection(args: string[]): boolean {
 }
 
 function hasOption(args: string[], long: string, short?: string): boolean {
-	return args.some((arg) => arg === long || (short !== undefined && arg === short));
+	return args.some(
+		(arg) =>
+			arg === long ||
+			(short !== undefined && arg === short) ||
+			arg.startsWith(`${long}=`) ||
+			(short !== undefined && arg.startsWith(`${short}=`)),
+	);
 }
 
 async function findFreePort(): Promise<number> {
@@ -323,12 +329,17 @@ export function benchRecallTranscriptEvidenceLimit(env: NodeJS.ProcessEnv = proc
 }
 
 export function setBenchRecallTranscriptEvidenceLimit(agentsDir: string, limit: number | undefined): void {
-	if (limit === undefined) return;
 	const path = join(agentsDir, "agent.yaml");
 	const config = parseYaml(readFileSync(path, "utf8")) as Record<string, unknown>;
 	const search = (config.search ?? {}) as Record<string, unknown>;
-	if (search.transcript_evidence_limit === limit) return;
-	config.search = { ...search, transcript_evidence_limit: limit };
+	if (limit === undefined) {
+		if (!("transcript_evidence_limit" in search)) return;
+		const { transcript_evidence_limit: _stale, ...rest } = search;
+		if (Object.keys(rest).length > 0) config.search = rest;
+		else delete config.search;
+	} else if (search.transcript_evidence_limit !== limit) {
+		config.search = { ...search, transcript_evidence_limit: limit };
+	} else return;
 	writeFileSync(path, stringifyYaml(config));
 }
 
@@ -561,11 +572,41 @@ function isContinuationCommand(command: string, args: string[]): boolean {
 	);
 }
 
+function cliOptionValues(args: readonly string[], long: string, short: string): string[] {
+	const values: string[] = [];
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === undefined) continue;
+		if (arg === long || arg === short) {
+			const next = args[++i];
+			if (next !== undefined) values.push(next);
+		} else if (arg.startsWith(`${long}=`)) {
+			values.push(arg.slice(long.length + 1));
+		} else if (arg.startsWith(`${short}=`)) {
+			values.push(arg.slice(short.length + 1));
+		}
+	}
+	return values;
+}
+
 function selectedBenchmark(args: string[]): string {
 	for (let i = 0; i < args.length; i++) {
-		if (args[i] === "-b" || args[i] === "--benchmark") return args[i + 1] ?? "longmemeval";
+		const arg = args[i];
+		if (arg === undefined) continue;
+		if (arg === "-b" || arg === "--benchmark") return args[i + 1] ?? "longmemeval";
+		if (arg.startsWith("--benchmark=")) return arg.slice("--benchmark=".length);
+		if (arg.startsWith("-b=")) return arg.slice("-b=".length);
 	}
 	return "longmemeval";
+}
+
+export function resolveBenchRunId(raw: string[], profile: BenchProfile): string {
+	const command = getMemoryBenchCommand(raw);
+	const args = command === raw[0] ? raw.slice(1) : raw;
+	return (
+		process.env.SIGNET_BENCH_RUN_ID ||
+		`signet-${profile}-${selectedBenchmark(args)}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z")}`
+	);
 }
 
 export function buildMemoryBenchArgs(
@@ -579,9 +620,7 @@ export function buildMemoryBenchArgs(
 
 	if (command !== "run" && command !== "ingest") return [command, ...args];
 
-	const runId =
-		process.env.SIGNET_BENCH_RUN_ID ||
-		`signet-${profile}-${selectedBenchmark(args)}-${new Date().toISOString().replace(/[-:]/g, "").replace(/\..+$/, "Z")}`;
+	const runId = resolveBenchRunId(raw, profile);
 
 	const provider =
 		profile === "supermemory-parity"
@@ -630,26 +669,50 @@ export function openRouterApiBaseUrl(env: NodeJS.ProcessEnv = process.env): stri
 	return env.SIGNET_BENCH_OPENROUTER_BASE_URL?.trim() || openRouterBaseUrl;
 }
 
-export function openRouterSnapshotModels(env: NodeJS.ProcessEnv, providerFamily: string): string[] {
+const OPENROUTER_MODEL_PREFIX = "openrouter:";
+
+export function openRouterSnapshotApiKey(env: NodeJS.ProcessEnv): string {
+	return env.OPENROUTER_API_KEY?.trim() || "";
+}
+
+export function openRouterSnapshotModels(
+	env: NodeJS.ProcessEnv,
+	providerFamily: string,
+	args: readonly string[] = [],
+): string[] {
 	const models = new Set<string>();
 	if (providerFamily === "openrouter") models.add(resolveBenchModel(env).model);
 	for (const name of ["SIGNET_BENCH_ANSWERING_MODEL", "SIGNET_BENCH_JUDGE"]) {
 		const raw = env[name]?.trim();
-		if (raw?.startsWith("openrouter:")) models.add(raw.slice("openrouter:".length));
+		if (raw?.startsWith(OPENROUTER_MODEL_PREFIX)) models.add(raw.slice(OPENROUTER_MODEL_PREFIX.length));
+	}
+	for (const flag of [cliOptionValues(args, "--judge", "-j"), cliOptionValues(args, "--answering-model", "-m")]) {
+		for (const value of flag) {
+			if (value.startsWith(OPENROUTER_MODEL_PREFIX)) models.add(value.slice(OPENROUTER_MODEL_PREFIX.length));
+		}
 	}
 	return [...models];
 }
 
-export function openRouterSnapshotNeeded(env: NodeJS.ProcessEnv, providerFamily: string): boolean {
-	return providerFamily === "openrouter" || openRouterSnapshotModels(env, providerFamily).length > 0;
+export function openRouterSnapshotNeeded(
+	env: NodeJS.ProcessEnv,
+	providerFamily: string,
+	args: readonly string[] = [],
+): boolean {
+	return providerFamily === "openrouter" || openRouterSnapshotModels(env, providerFamily, args).length > 0;
 }
 
 function snapshotErrorMessage(error: unknown): string {
 	return error instanceof Error ? error.message : String(error);
 }
 
+const OPENROUTER_SNAPSHOT_TIMEOUT_MS = 15_000;
+
 async function fetchOpenRouterKeyStatus(baseUrl: string, apiKey: string): Promise<Record<string, number>> {
-	const response = await fetch(`${baseUrl}/key`, { headers: { authorization: `Bearer ${apiKey}` } });
+	const response = await fetch(`${baseUrl}/key`, {
+		headers: { authorization: `Bearer ${apiKey}` },
+		signal: AbortSignal.timeout(OPENROUTER_SNAPSHOT_TIMEOUT_MS),
+	});
 	if (!response.ok) throw new Error(`GET ${baseUrl}/key failed with ${response.status} ${response.statusText}`);
 	const body = (await response.json()) as { data?: unknown };
 	if (typeof body.data !== "object" || body.data === null) {
@@ -669,6 +732,7 @@ async function fetchOpenRouterEndpoints(
 ): Promise<OpenRouterEndpointSnapshot[]> {
 	const response = await fetch(`${baseUrl}/models/${encodeURIComponent(modelId)}/endpoints`, {
 		headers: { authorization: `Bearer ${apiKey}` },
+		signal: AbortSignal.timeout(OPENROUTER_SNAPSHOT_TIMEOUT_MS),
 	});
 	if (!response.ok) throw new Error(`GET ${baseUrl}/models/${modelId}/endpoints failed with ${response.status}`);
 	const body = (await response.json()) as { data?: { endpoints?: unknown } };
@@ -706,6 +770,10 @@ export async function captureOpenRouterSnapshot(
 		});
 	}
 	return { timestamp: new Date().toISOString(), key, endpoints };
+}
+
+export function openRouterSnapshotDir(runId: string): string {
+	return join(repoRoot, "memorybench", "data", "runs", runId, "openrouter");
 }
 
 export function writeOpenRouterSnapshot(root: string, stage: "start" | "end", snapshot: OpenRouterSnapshot): string {
@@ -769,8 +837,10 @@ async function main(): Promise<void> {
 		SIGNET_BENCH_PROJECT: process.env.SIGNET_BENCH_PROJECT || "memorybench",
 	};
 	const setupArgs = buildSetupArgs(agentsDir, port, model);
-	const snapshotModels = openRouterSnapshotModels(process.env, model.providerFamily);
-	const snapshotNeeded = openRouterSnapshotNeeded(process.env, model.providerFamily);
+	const snapshotApiKey = openRouterSnapshotApiKey(process.env);
+	const snapshotModels = openRouterSnapshotModels(process.env, model.providerFamily, parsed.passthrough);
+	const snapshotNeeded = openRouterSnapshotNeeded(process.env, model.providerFamily, parsed.passthrough);
+	const snapshotDir = openRouterSnapshotDir(resolveBenchRunId(parsed.passthrough, parsed.profile));
 
 	console.log(`MemoryBench workspace: ${root}`);
 	console.log(`Isolated Signet daemon: ${baseUrl} (dashboard at ${baseUrl}/)`);
@@ -788,17 +858,13 @@ async function main(): Promise<void> {
 	console.log(`Workspace setup: bun ${setupArgs.join(" ")}`);
 	console.log(`MemoryBench command: bun src/index.ts ${memorybenchArgs.join(" ")}`);
 
-	if (snapshotNeeded) {
-		const snapshot = await captureOpenRouterSnapshot(
-			openRouterApiBaseUrl(),
-			resolveBenchApiKey(process.env, "openrouter"),
-			snapshotModels,
-		);
-		console.log(`OpenRouter snapshot: ${writeOpenRouterSnapshot(root, "start", snapshot)}`);
-	}
 	if (parsed.dryRun) {
 		if (!parsed.keepWorkspace) await rm(root, { recursive: true, force: true });
 		return;
+	}
+	if (snapshotNeeded) {
+		const snapshot = await captureOpenRouterSnapshot(openRouterApiBaseUrl(), snapshotApiKey, snapshotModels);
+		console.log(`OpenRouter snapshot: ${writeOpenRouterSnapshot(snapshotDir, "start", snapshot)}`);
 	}
 
 	const runtimeMismatch = pinnedBunMismatch(
@@ -851,12 +917,12 @@ async function main(): Promise<void> {
 			await new Promise((resolveKill) => daemon?.once("exit", resolveKill));
 		}
 		if (snapshotNeeded) {
-			const snapshot = await captureOpenRouterSnapshot(
-				openRouterApiBaseUrl(),
-				resolveBenchApiKey(process.env, "openrouter"),
-				snapshotModels,
-			);
-			console.log(`OpenRouter snapshot: ${writeOpenRouterSnapshot(root, "end", snapshot)}`);
+			try {
+				const snapshot = await captureOpenRouterSnapshot(openRouterApiBaseUrl(), snapshotApiKey, snapshotModels);
+				console.log(`OpenRouter snapshot: ${writeOpenRouterSnapshot(snapshotDir, "end", snapshot)}`);
+			} catch (error) {
+				console.error(`OpenRouter end snapshot failed: ${snapshotErrorMessage(error)}`);
+			}
 		}
 		if (parsed.keepWorkspace) {
 			console.log(`Kept MemoryBench workspace: ${root}`);
