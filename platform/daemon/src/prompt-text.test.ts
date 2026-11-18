@@ -35,6 +35,10 @@ describe("prompt text helpers", () => {
 		const started = performance.now();
 		expect(stripProvenanceBlocks(hostile)).toBe(hostile);
 		expect(performance.now() - started).toBeLessThan(500);
+		const closes = "[/Discord sender provenance]".repeat(32_000);
+		const closesStarted = performance.now();
+		expect(stripProvenanceBlocks(closes)).toBe(closes);
+		expect(performance.now() - closesStarted).toBeLessThan(150);
 		const closed = `${"[Discord sender provenance]".repeat(5_000)}x[/Discord sender provenance]tail`;
 		expect(stripProvenanceBlocks(closed)).toBe("tail");
 	});

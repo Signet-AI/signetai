@@ -1,4 +1,4 @@
-import type { DbOwnerClient } from "./db-owner-client";
+import type { DbOwnerClient, DbOwnerJobHandle, DbOwnerSubmitOptions } from "./db-owner-client";
 import type { DbOwnerParameter, DbOwnerRequest, DbOwnerWorkloadClass } from "./db-owner-protocol";
 
 export interface DbOwnerRunResult {
@@ -12,7 +12,6 @@ export interface DbOwnerSqlOptions {
 	readonly workloadClass?: DbOwnerWorkloadClass;
 	readonly deadlineMs?: number;
 	readonly estimatedWorkUnits?: number;
-	readonly signal?: AbortSignal;
 }
 
 function parameter(value: unknown): DbOwnerParameter {
@@ -26,8 +25,6 @@ function parameter(value: unknown): DbOwnerParameter {
 }
 
 function submit<Result>(client: DbOwnerClient, request: DbOwnerRequest, options: DbOwnerSqlOptions): Promise<Result> {
-	const signal = options.signal;
-	if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("DB owner request was cancelled"));
 	const handle = client.submit<Result>(request, {
 		operation: options.operation,
 		lane: options.lane ?? "maintenance",
@@ -35,10 +32,38 @@ function submit<Result>(client: DbOwnerClient, request: DbOwnerRequest, options:
 		deadlineMs: options.deadlineMs ?? 30_000,
 		estimatedWorkUnits: options.estimatedWorkUnits,
 	});
-	if (!signal) return handle.result;
-	const cancel = (): void => handle.cancel();
-	signal.addEventListener("abort", cancel, { once: true });
-	return handle.result.finally(() => signal.removeEventListener("abort", cancel));
+	return handle.result;
+}
+
+function abortReason(signal: AbortSignal): Error {
+	return signal.reason instanceof Error ? signal.reason : new Error("DB owner request was cancelled");
+}
+
+export function cancellableOwner(owner: DbOwnerClient, signal: AbortSignal | undefined): DbOwnerClient {
+	if (!signal) return owner;
+	const cancellableSubmit = <Result>(
+		request: DbOwnerRequest,
+		options: DbOwnerSubmitOptions,
+	): DbOwnerJobHandle<Result> => {
+		if (signal.aborted) throw abortReason(signal);
+		const handle = owner.submit<Result>(request, options);
+		const cancel = (): void => handle.cancel();
+		const release = (): void => signal.removeEventListener("abort", cancel);
+		signal.addEventListener("abort", cancel, { once: true });
+		const result = handle.result.catch((error: unknown) => {
+			throw signal.aborted ? abortReason(signal) : error;
+		});
+		void result.then(release, release);
+		if (signal.aborted) cancel();
+		return { ...handle, result };
+	};
+	return new Proxy(owner, {
+		get(target, key) {
+			if (key === "submit") return cancellableSubmit;
+			const value: unknown = Reflect.get(target, key);
+			return typeof value === "function" ? value.bind(target) : value;
+		},
+	});
 }
 
 export function ownerReadAll<Row extends object>(

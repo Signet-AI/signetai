@@ -333,14 +333,14 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 		seedEntityContext();
 		recallRows = ["alpha", "beta", "gamma"].map((name) => ({
 			id: `mem-${name}`,
-			content: `${name} Signet architecture detail`.padEnd(160, " x"),
+			content: `${name} Signet architecture detail`.padEnd(210, " x"),
 			score: 0.9,
 		}));
 
 		const result = await submit("How should Signet architecture handle prompt context?", "session-budget");
 
-		expect(result.memoryCount).toBe(2);
-		expect(result.dynamicContext.length).toBeLessThanOrEqual(500);
+		expect(result.memoryCount).toBe(1);
+		expect(result.inject.length).toBeLessThanOrEqual(500);
 	});
 
 	it("does not claim or inject when the deadline expires while the claim is queued", async () => {

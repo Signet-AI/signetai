@@ -574,4 +574,60 @@ describe("transcript evidence prefetch owner scheduling", () => {
 		);
 		expect(signals).toEqual([cancellation.signal]);
 	});
+	it("submits no owner reads after recall is cancelled", async () => {
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+				 VALUES ('owner-cancel-memory', 'Speyer tourism board phone number', 'fact', 'agent-a', datetime('now'), datetime('now'), 'test')`,
+			).run();
+		});
+		const owner = await getDbOwner();
+		const submit = owner.submit.bind(owner);
+		const cancellation = new AbortController();
+		const late: string[] = [];
+		let cancelled = 0;
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			if (cancellation.signal.aborted) late.push(options.operation);
+			const handle = submit<Result>(request, options);
+			if (!cancellation.signal.aborted) cancellation.abort(new Error("recall abandoned"));
+			return {
+				...handle,
+				cancel: () => {
+					cancelled += 1;
+					handle.cancel();
+				},
+			};
+		};
+		try {
+			const raw = loadMemoryConfig(directory);
+			const error = await hybridRecall(
+				{
+					query: "Speyer tourism board phone number",
+					limit: 3,
+					agentId: "agent-a",
+					readPolicy: "isolated",
+					trackRecallAccess: false,
+					claimRecallResults: false,
+				},
+				{
+					...raw,
+					search: { ...raw.search, transcript_evidence_limit: 1 },
+					pipelineV2: {
+						...raw.pipelineV2,
+						reranker: { ...raw.pipelineV2.reranker, enabled: false },
+					},
+				},
+				async () => null,
+				{ signal: cancellation.signal },
+			).then(
+				() => null,
+				(reason: unknown) => reason,
+			);
+			expect(error instanceof Error ? error.message : null).toBe("recall abandoned");
+			expect(late).toEqual([]);
+			expect(cancelled).toBeGreaterThan(0);
+		} finally {
+			owner.submit = submit;
+		}
+	});
 });
