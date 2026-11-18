@@ -49,7 +49,7 @@ test.each(["{", JSON.stringify({ seq: 0, intents: [{ action: "invalid" }] })])(
 				keyHash: token,
 				removed: true,
 			});
-			expect(readdirSync(directory)).toEqual([]);
+			expect(readdirSync(directory).filter((name) => name !== ".seq")).toEqual([]);
 		} finally {
 			warn.mockRestore();
 		}

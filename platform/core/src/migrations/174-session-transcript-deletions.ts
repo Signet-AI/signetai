@@ -19,6 +19,7 @@ export function up(db: MigrationDb): void {
 			ended INTEGER NOT NULL DEFAULT 0,
 			pending_start INTEGER NOT NULL DEFAULT 0,
 			lifecycle_seq INTEGER NOT NULL DEFAULT 0,
+			lifecycle_intent_seq INTEGER NOT NULL DEFAULT 0,
 			receipt_generation INTEGER NOT NULL DEFAULT 1,
 			harness TEXT,
 			project TEXT,
@@ -34,6 +35,17 @@ export function up(db: MigrationDb): void {
 			record_count INTEGER NOT NULL,
 			record_hash TEXT NOT NULL,
 			PRIMARY KEY (agent_id, session_key, generation)
+		);
+		CREATE TABLE IF NOT EXISTS session_transcript_deleted_positions (
+			agent_id TEXT NOT NULL,
+			session_key TEXT NOT NULL,
+			generation INTEGER NOT NULL,
+			origin TEXT NOT NULL,
+			position INTEGER NOT NULL,
+			record_hash TEXT NOT NULL,
+			PRIMARY KEY (agent_id, session_key, generation, origin, position),
+			FOREIGN KEY (agent_id, session_key, generation)
+				REFERENCES session_transcript_deleted_prefixes(agent_id, session_key, generation) ON DELETE CASCADE
 		);
 		CREATE TABLE IF NOT EXISTS session_transcript_deleted_sources (
 			agent_id TEXT NOT NULL,
@@ -60,7 +72,7 @@ export function up(db: MigrationDb): void {
 			ON session_transcript_deleted_sources(agent_id, kind, id, outcome);
 	`);
 	const columns = db.prepare("PRAGMA table_info(session_transcript_deletions)").all();
-	for (const column of ["pending_start", "lifecycle_seq"]) {
+	for (const column of ["pending_start", "lifecycle_seq", "lifecycle_intent_seq"]) {
 		if (!columns.some((row) => row.name === column))
 			db.exec(`ALTER TABLE session_transcript_deletions ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
 	}

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { attempt } from "@signet/core";
 import { normalizeSessionTranscript } from "./transcript-normalization";
 import { upsertThreadHead } from "./thread-heads";
-import type { TranscriptTurn } from "./transcript-jsonl";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
@@ -45,7 +44,9 @@ import {
 	transcriptTextToTurns,
 } from "./transcript-jsonl";
 
-interface EvidenceTurn extends TranscriptTurn {
+interface EvidenceTurn {
+	readonly role: string;
+	readonly content: string;
 	readonly timestamp?: number;
 }
 
@@ -67,6 +68,44 @@ function evidenceTurns(harness: string, transcript: string, raw?: string): reado
 	return (records.length > 0 ? records : transcriptTextToTurns(transcript)).filter((turn) => turn.content.length > 0);
 }
 
+export function filterTranscriptMessagesInDb<T extends EvidenceTurn>(
+	db: ReadDb,
+	input: { readonly agentId: string; readonly sessionKey: string | null; readonly sessionId?: string | null },
+	turns: readonly T[],
+): readonly T[] {
+	const key = input.sessionKey ?? input.sessionId;
+	if (
+		!key ||
+		!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_transcript_deletions'").get()
+	)
+		return turns;
+	const row = prepareTypedStatement<{ watermark: string }>(
+		db,
+		"SELECT watermark FROM session_transcript_deletions WHERE agent_id = ? AND session_key = ?",
+	).get(input.agentId, normalizeSessionKey(key));
+	if (!row) return turns;
+	const prefixes = prepareTypedStatement<{ generation: number; origin: string; record_count: number }>(
+		db,
+		"SELECT generation,origin,MAX(position) AS record_count FROM session_transcript_deleted_positions WHERE agent_id = ? AND session_key = ? GROUP BY generation,origin ORDER BY generation,origin",
+	).all(input.agentId, normalizeSessionKey(key));
+	let offset = 0;
+	for (const generation of new Set(prefixes.map((prefix) => prefix.generation))) {
+		for (const prefix of prefixes.filter((prefix) => prefix.generation === generation)) {
+			const count = Math.min(turns.length - offset, prefix.record_count);
+			const receipt = prepareTypedStatement<{ record_hash: string }>(
+				db,
+				"SELECT record_hash FROM session_transcript_deleted_positions WHERE agent_id = ? AND session_key = ? AND generation = ? AND origin = ? AND position = ?",
+			).get(input.agentId, normalizeSessionKey(key), generation, prefix.origin, count);
+			if (receipt && transcriptPrefix(turns.slice(offset, offset + count)) === receipt.record_hash) {
+				offset += count;
+				break;
+			}
+		}
+	}
+	const watermark = Date.parse(row.watermark);
+	return turns.filter((turn, index) => (turn.timestamp === undefined ? index >= offset : turn.timestamp > watermark));
+}
+
 export function filterTranscriptRecordsInDb(
 	db: ReadDb,
 	input: {
@@ -78,37 +117,9 @@ export function filterTranscriptRecordsInDb(
 		readonly rawTranscript?: string;
 	},
 ): string {
-	const key = input.sessionKey ?? input.sessionId;
-	if (
-		!key ||
-		!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_transcript_deletions'").get()
-	)
-		return input.transcript;
-	const row = prepareTypedStatement<{ watermark: string }>(
-		db,
-		"SELECT watermark FROM session_transcript_deletions WHERE agent_id = ? AND session_key = ?",
-	).get(input.agentId, normalizeSessionKey(key));
-	if (!row) return input.transcript;
 	const turns = evidenceTurns(input.harness, input.transcript, input.rawTranscript);
-	const prefixes = prepareTypedStatement<{ record_count: number; record_hash: string }>(
-		db,
-		"SELECT record_count,record_hash FROM session_transcript_deleted_prefixes WHERE agent_id = ? AND session_key = ? ORDER BY generation",
-	).all(input.agentId, normalizeSessionKey(key));
-	let offset = 0;
-	for (const prefix of prefixes) {
-		const end = offset + prefix.record_count;
-		if (
-			prefix.record_count > 0 &&
-			turns.length >= end &&
-			transcriptPrefix(turns.slice(offset, end)) === prefix.record_hash
-		)
-			offset = end;
-	}
-	const watermark = Date.parse(row.watermark);
-	const kept = turns.filter((turn, index) =>
-		turn.timestamp === undefined ? index >= offset : turn.timestamp > watermark,
-	);
-	if (kept.length === turns.length && !input.rawTranscript) return input.transcript;
+	const kept = filterTranscriptMessagesInDb(db, input, turns);
+	if (kept === turns || (kept.length === turns.length && !input.rawTranscript)) return input.transcript;
 	return kept
 		.map((turn) =>
 			turn.role === "unknown" ? turn.content : `${turn.role === "user" ? "User" : "Assistant"}: ${turn.content}`,
@@ -168,7 +179,9 @@ export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummar
 
 	const table = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get();
 	if (!table) return true;
-	const nodeId = input.sessionKey ? `${input.sessionKey}:compaction:${Date.parse(input.now)}` : crypto.randomUUID();
+	const nodeId = input.sessionKey
+		? `${JSON.stringify([input.agentId, input.sessionKey])}:compaction:${Date.parse(input.now)}`
+		: crypto.randomUUID();
 	db.prepare(
 		`INSERT OR REPLACE INTO session_summaries (
 			id, project, depth, kind, content, token_count,
@@ -257,6 +270,7 @@ interface TranscriptDeletionRow {
 	readonly opened_at: string | null;
 	readonly pending_start: number;
 	readonly lifecycle_seq: number;
+	readonly lifecycle_intent_seq: number;
 }
 
 function transcriptDeletion(
@@ -311,21 +325,24 @@ export function updateTranscriptLifecycleInTx(
 	if (input.intents) {
 		if (input.intents.length > 1024) throw new Error("Too many transcript lifecycle intents");
 		for (const intent of input.intents) {
-			if (intent.seq <= row.lifecycle_seq) continue;
-			if (Date.parse(intent.at) >= Date.parse(row.watermark))
-				updateTranscriptLifecycleInTx(db, {
-					agentId: input.agentId,
-					sessionKey: input.sessionKey,
-					action: intent.action,
-				});
+			if (intent.seq <= row.lifecycle_intent_seq) continue;
+			updateTranscriptLifecycleInTx(db, {
+				agentId: input.agentId,
+				sessionKey: input.sessionKey,
+				action: intent.action,
+			});
 			db.prepare(
-				"UPDATE session_transcript_deletions SET lifecycle_seq = ? WHERE agent_id = ? AND session_key = ?",
+				"UPDATE session_transcript_deletions SET lifecycle_intent_seq = ? WHERE agent_id = ? AND session_key = ?",
 			).run(intent.seq, input.agentId, input.sessionKey);
 			const current = transcriptDeletion(db, input.agentId, input.sessionKey);
 			if (!current) throw new Error("Transcript lifecycle state disappeared");
 			row = current;
 		}
 	}
+	if (input.action !== "status")
+		db.prepare(
+			"UPDATE session_transcript_deletions SET lifecycle_seq = lifecycle_seq + 1 WHERE agent_id = ? AND session_key = ?",
+		).run(input.agentId, input.sessionKey);
 	if (input.action === "end")
 		db.prepare(
 			"UPDATE session_transcript_deletions SET ended = 1, pending_start = 0 WHERE agent_id = ? AND session_key = ?",
@@ -442,7 +459,6 @@ export function deleteSessionTranscriptInTx(
 	if (input.generation !== undefined && input.generation !== generation) return { status: "conflict", generation };
 	const scope = [input.agentId, input.sessionKey, generation];
 	if (previous?.receipt_generation !== generation) {
-		const turns = evidenceTurns(stored?.harness ?? "unknown", stored?.content ?? "", stored?.content);
 		const counts = { transcripts: Number(stored !== undefined) };
 		db.prepare("DELETE FROM session_extract_cursors WHERE agent_id = ? AND session_key = ?").run(
 			input.agentId,
@@ -452,7 +468,7 @@ export function deleteSessionTranscriptInTx(
 			"UPDATE transcript_import_conversations SET state = 'removed' WHERE agent_id = ? AND canonical_key = ?",
 		).run(input.agentId, input.sessionKey);
 		db.prepare(
-			"INSERT INTO session_transcript_deletions (agent_id,session_key,generation,receipt_generation,watermark,harness,project,hard,counts,ended,phase) VALUES (?,?,?,?,?,?,?,?,?,?,'evidence') ON CONFLICT(agent_id,session_key) DO UPDATE SET receipt_generation = excluded.receipt_generation, watermark = excluded.watermark, blocked = 1, ended = excluded.ended, pending_start = 0, phase = 'evidence', counts = excluded.counts, hard = excluded.hard, harness = excluded.harness, project = excluded.project",
+			"INSERT INTO session_transcript_deletions (agent_id,session_key,generation,receipt_generation,watermark,harness,project,hard,counts,ended,phase) VALUES (?,?,?,?,?,?,?,?,?,?,'prefix') ON CONFLICT(agent_id,session_key) DO UPDATE SET receipt_generation = excluded.receipt_generation, watermark = excluded.watermark, blocked = 1, ended = excluded.ended, pending_start = 0, phase = 'prefix', counts = excluded.counts, hard = excluded.hard, harness = excluded.harness, project = excluded.project",
 		).run(
 			input.agentId,
 			input.sessionKey,
@@ -467,11 +483,10 @@ export function deleteSessionTranscriptInTx(
 		);
 		db.prepare(
 			"INSERT INTO session_transcript_deleted_prefixes (agent_id,session_key,generation,record_count,record_hash) VALUES (?,?,?,?,?)",
-		).run(...scope, turns.length, transcriptPrefix(turns));
-		db.prepare("DELETE FROM session_transcripts WHERE agent_id = ? AND session_key = ?").run(
-			input.agentId,
-			input.sessionKey,
-		);
+		).run(...scope, 0, transcriptPrefix([]));
+		db.prepare(
+			"UPDATE session_transcript_deletions SET lifecycle_seq = lifecycle_seq + 1, lifecycle_intent_seq = MAX(lifecycle_intent_seq, ?) WHERE agent_id = ? AND session_key = ?",
+		).run(input.lifecycleSeq ?? (previous?.lifecycle_intent_seq ?? 0) + 1, input.agentId, input.sessionKey);
 		for (const sourceKey of [input.sessionKey, `session:${input.sessionKey}`])
 			db.prepare(
 				"INSERT OR IGNORE INTO session_transcript_deleted_sources (agent_id,session_key,generation,kind,id) VALUES (?,?,?,'transcript',?)",
@@ -490,6 +505,7 @@ export function deleteSessionTranscriptInTx(
 	};
 	let budget = Date.now() < deadlineAt - 100 ? 64 : 0;
 	let phase = row.phase;
+	if (phase === "prefix") return deletionResult(row);
 	if (phase === "evidence" && budget > 0) {
 		for (const [kind, table, column] of [
 			["artifact", "memory_artifacts", "source_path"],
@@ -748,6 +764,47 @@ export async function deleteSessionTranscriptOwned(
 ): Promise<TranscriptDeleteResult> {
 	const admitted = await transact(() => deleteSessionTranscriptInTx(db, input, basePath, deadlineAt));
 	if (admitted.status !== "pending") return admitted;
+	const prefix = transcriptDeletion(db, input.agentId, input.sessionKey);
+	if (prefix?.phase === "prefix") {
+		const stored = prepareTypedStatement<{ content: string; harness: string | null }>(
+			db,
+			"SELECT content,harness FROM session_transcripts WHERE agent_id = ? AND session_key = ?",
+		).get(input.agentId, input.sessionKey);
+		const turns = evidenceTurns(stored?.harness ?? "unknown", stored?.content ?? "", stored?.content);
+		const receipt = prepareTypedStatement<{ record_count: number; record_hash: string }>(
+			db,
+			"SELECT record_count,record_hash FROM session_transcript_deleted_prefixes WHERE agent_id = ? AND session_key = ? AND generation = ?",
+		).get(input.agentId, input.sessionKey, prefix.receipt_generation);
+		if (!receipt) throw new Error("Transcript prefix receipt disappeared");
+		let count = receipt.record_count;
+		let hash = receipt.record_hash;
+		while (count < turns.length) {
+			if (Date.now() >= deadlineAt - 350)
+				return { ...deletionResult(prefix), pendingReason: "Prefix receipt budget exhausted" };
+			await transact(() => {
+				for (const turn of turns.slice(count, count + 64)) {
+					hash = transcriptPrefix([turn], hash);
+					db.prepare(
+						"INSERT INTO session_transcript_deleted_positions (agent_id,session_key,generation,origin,position,record_hash) VALUES (?,?,?,'row',?,?)",
+					).run(input.agentId, input.sessionKey, prefix.receipt_generation, ++count, hash);
+				}
+				db.prepare(
+					"UPDATE session_transcript_deleted_prefixes SET record_count = ?,record_hash = ? WHERE agent_id = ? AND session_key = ? AND generation = ?",
+				).run(count, hash, input.agentId, input.sessionKey, prefix.receipt_generation);
+			});
+			await new Promise<void>((resolve) => setImmediate(resolve));
+		}
+		await transact(() => {
+			db.prepare("DELETE FROM session_transcripts WHERE agent_id = ? AND session_key = ?").run(
+				input.agentId,
+				input.sessionKey,
+			);
+			db.prepare(
+				"UPDATE session_transcript_deletions SET phase = 'evidence' WHERE agent_id = ? AND session_key = ?",
+			).run(input.agentId, input.sessionKey);
+			deleteSessionTranscriptInTx(db, input, basePath, deadlineAt);
+		});
+	}
 	for (let batch = 0; batch < 4; batch++) {
 		const row = transcriptDeletion(db, input.agentId, input.sessionKey);
 		if (!row) throw new Error("Deletion state disappeared");
@@ -775,6 +832,28 @@ export async function deleteSessionTranscriptOwned(
 				sessionKey: input.sessionKey,
 				generation: row.receipt_generation,
 				checkpoint: fileCheckpoint(file.checkpoint),
+				onPrefix:
+					file.path !== canonicalTranscriptPath(basePath, row.harness ?? "unknown")
+						? undefined
+						: async (positions, reset) => {
+								await transact(() => {
+									if (reset)
+										db.prepare(
+											"DELETE FROM session_transcript_deleted_positions WHERE agent_id = ? AND session_key = ? AND generation = ? AND origin = ?",
+										).run(input.agentId, input.sessionKey, row.receipt_generation, file.path);
+									for (const position of positions)
+										db.prepare(
+											"INSERT OR REPLACE INTO session_transcript_deleted_positions (agent_id,session_key,generation,origin,position,record_hash) VALUES (?,?,?,?,?,?)",
+										).run(
+											input.agentId,
+											input.sessionKey,
+											row.receipt_generation,
+											file.path,
+											position.position,
+											position.hash,
+										);
+								});
+							},
 			});
 			await transact(() => {
 				if (file.path === canonicalTranscriptPath(basePath, row.harness ?? "unknown") && result.checkpoint?.ready)

@@ -93,6 +93,41 @@ async function firstBatch(): Promise<{ readonly checkpoint: TranscriptFileCheckp
 	return { checkpoint: result.checkpoint, expected: data.expected };
 }
 
+test("completing a deletion invalidates other pending temps for the same canonical path", async () => {
+	const first = record(AGENT, KEY, 20, 1);
+	const second = record(AGENT, "second", 20, 2);
+	const keep = record("agent-b", KEY, 20, 3);
+	writeFileSync(path, first + second + keep);
+	const pending = await redactTranscriptFileBatch({
+		basePath: root,
+		path: REL,
+		agentId: AGENT,
+		sessionKey: "second",
+		generation: 1,
+		checkpoint: null,
+	});
+	expect(tmpFiles()).toHaveLength(1);
+	expect(readFileSync(join(root, "transcripts", tmpFiles()[0] ?? ""), "utf8")).toContain(first);
+	await drain();
+	expect(tmpFiles()).toEqual([]);
+	expect(readFileSync(path, "utf8")).toBe(second + keep);
+	let checkpoint = pending.checkpoint;
+	for (let i = 0; i < 4; i++) {
+		const result = await redactTranscriptFileBatch({
+			basePath: root,
+			path: REL,
+			agentId: AGENT,
+			sessionKey: "second",
+			generation: 1,
+			checkpoint,
+		});
+		checkpoint = result.checkpoint;
+		if (result.done) break;
+	}
+	expect(readFileSync(path, "utf8")).toBe(keep);
+	expect(tmpFiles()).toEqual([]);
+});
+
 test("a removed output temp restarts the file instead of padding it with zeros", async () => {
 	const { checkpoint, expected } = await firstBatch();
 	for (const name of tmpFiles()) rmSync(join(root, "transcripts", name));

@@ -72,8 +72,11 @@ export function chainTranscriptRecord(previous: string, role: string, contentHas
 	return createHash("sha256").update(Buffer.from(previous, "hex")).update(record).digest("hex");
 }
 
-export function transcriptPrefix(turns: readonly TranscriptTurn[]): string {
-	let hash = TRANSCRIPT_PREFIX_SEED;
+export function transcriptPrefix(
+	turns: readonly { readonly role: string; readonly content: string }[],
+	previous = TRANSCRIPT_PREFIX_SEED,
+): string {
+	let hash = previous;
 	for (const turn of turns) hash = chainTranscriptRecord(hash, turn.role, sha256(cleanTurnContent(turn.content)));
 	return hash;
 }

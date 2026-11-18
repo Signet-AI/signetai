@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { admitSessionTranscriptInDb } from "./session-transcripts";
-import { filterTranscriptRecordsInDb } from "./session-transcripts";
-import { transcriptTextToTurns } from "./transcript-jsonl";
+import { filterTranscriptMessagesInDb } from "./session-transcripts";
 import { type WriteDb, prepareTypedStatement } from "./db-accessor";
 import {
 	TRANSCRIPT_IMPORT_LIMITS,
@@ -393,29 +392,27 @@ export function commitCompletedTranscriptBatchInTx(
 		throw new RangeError("canonical_batch_too_large");
 	const results: TranscriptCommitResult[] = [];
 	for (const original of commits) {
-		let transcript = original.messages
-			.map((message) =>
-				message.role === "user"
-					? `User: ${message.content}`
-					: message.role === "assistant"
-						? `Assistant: ${message.content}`
-						: message.content,
-			)
-			.join("\n");
-		const full = transcript;
+		const serialize = (messages: CompletedTranscriptCommit["messages"]): string =>
+			messages
+				.map((message) =>
+					message.role === "user"
+						? `User: ${message.content}`
+						: message.role === "assistant"
+							? `Assistant: ${message.content}`
+							: message.content,
+				)
+				.join("\n");
+		const full = serialize(original.messages);
+		let messages = original.messages;
 		let admitted = true;
 		for (const sessionKey of new Set([original.canonicalKey, original.originalSessionKey ?? original.sessionKey])) {
 			if (!admitSessionTranscriptInDb(db, { agentId: original.agentId, sessionKey, capturedAt: original.capturedAt })) {
 				admitted = false;
 				break;
 			}
-			transcript = filterTranscriptRecordsInDb(db, {
-				agentId: original.agentId,
-				sessionKey,
-				harness: original.harness,
-				transcript,
-			});
+			messages = filterTranscriptMessagesInDb(db, { agentId: original.agentId, sessionKey }, messages);
 		}
+		const transcript = serialize(messages);
 		if (!admitted || !transcript.trim()) {
 			results.push({
 				outcome: "session_transcript_deleted",
@@ -429,7 +426,7 @@ export function commitCompletedTranscriptBatchInTx(
 				? original
 				: {
 						...original,
-						messages: transcriptTextToTurns(transcript),
+						messages,
 						contentHash: checksum(Buffer.from(transcript)),
 					};
 		const existing = db
@@ -440,7 +437,7 @@ export function commitCompletedTranscriptBatchInTx(
 			| { conversation_fingerprint: string; canonical_id: string; canonical_key: string; state: string }
 			| undefined;
 		if (existing) {
-			if (existing.conversation_fingerprint !== commit.contentHash) {
+			if (existing.conversation_fingerprint !== original.contentHash) {
 				results.push({
 					outcome: "conversation_identity_conflict",
 					canonicalId: existing.canonical_id,
@@ -490,7 +487,7 @@ export function commitCompletedTranscriptBatchInTx(
 			commit.agentId,
 			commit.externalIdentity,
 			commit.canonicalKey,
-			commit.contentHash,
+			original.contentHash,
 			commit.canonicalId,
 			commit.sourceId,
 			commit.sourceRecordId,
