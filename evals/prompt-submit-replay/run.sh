@@ -42,7 +42,22 @@ env "${UNSET[@]}" HOME="$SANDBOX" XDG_CONFIG_HOME="$SANDBOX/.config" XDG_DATA_HO
 	SIGNET_DAEMON_ENTRYPOINT=1 SIGNET_PATH="$WS" SIGNET_PORT="$PORT" SIGNET_HOST=127.0.0.1 SIGNET_TELEMETRY_OPTOUT=1 \
 	setsid "$BIN" > "$DIR/daemon-$RUN.log" 2>&1 &
 DAEMON=$!
+DRIVER=
+step() {
+	"$@" > "$DIR/step-$RUN.log" 2>&1 &
+	DRIVER=$!
+	local status=0
+	wait "$DRIVER" || status=$?
+	DRIVER=
+	tail -1 "$DIR/step-$RUN.log"
+	return "$status"
+}
 stop() {
+	if [ -n "$DRIVER" ]; then
+		kill -TERM "$DRIVER" 2>/dev/null || true
+		wait "$DRIVER" 2>/dev/null || true
+		DRIVER=
+	fi
 	kill -TERM -- "-$DAEMON" 2>/dev/null || return 0
 	for _ in $(seq 1 30); do
 		kill -0 -- "-$DAEMON" 2>/dev/null || break
@@ -81,15 +96,17 @@ grep -a -o '"Cross-encoder ready","data":{[^}]*}' "$LOG" | tail -1 || echo "no c
 for session in $(python3 -c "import json,sys;print(' '.join(json.load(open(sys.argv[1]))))" "$DIR/transcripts.json"); do
 	harness=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]]['harness'])" "$DIR/transcripts.json" "$session")
 	case $harness in
-		pi | opencode) REPLAY_DIR="$DIR" REPLAY_AGENT_ID="$AGENT_ID" REAL_HOME="$HOME" timeout 300 bun "$HERE/drive.ts" "$RUN" "$PORT" "$session" 2>&1 | tail -1 ;;
-		*) timeout 400 python3 "$HERE/drive.py" "$RUN" "$PORT" "$session" --dir "$DIR" --agent-id "$AGENT_ID" 2>&1 | tail -1 ;;
+		pi | opencode) step env REPLAY_DIR="$DIR" REPLAY_AGENT_ID="$AGENT_ID" REAL_HOME="$HOME" timeout 300 bun "$HERE/drive.ts" "$RUN" "$PORT" "$session" ;;
+		*) step timeout 400 python3 "$HERE/drive.py" "$RUN" "$PORT" "$session" --dir "$DIR" --agent-id "$AGENT_ID" ;;
 	esac
 done
-[ -n "${PROBE:-}" ] && python3 "$HERE/probe.py" "$RUN" "$PORT" --dir "$DIR" --agent-id "$AGENT_ID" 2>&1 | tail -1
+if [ -n "${PROBE:-}" ]; then
+	step timeout 1800 python3 "$HERE/probe.py" "$RUN" "$PORT" --dir "$DIR" --agent-id "$AGENT_ID"
+fi
 
 stop
 trap - EXIT TERM INT HUP
 cat $(ls -tr "$WS"/runtime/logs/signet-*.log) > "$DIR/daemon-log-$RUN.ndjson"
 sqlite3 -readonly -json "$WS/data/signet.db" "SELECT session_key, agent_id, context_epoch, item_kind, item_id, surface, mode, created_at FROM session_recall_events WHERE session_key LIKE '$RUN-%'" > "$DIR/ledger-$RUN.json"
-rm -rf "$WS"
+rm -rf "$WS" "$DIR/step-$RUN.log"
 echo "$RUN finished: $(wc -l < "$DIR/results-$RUN.jsonl") records"
