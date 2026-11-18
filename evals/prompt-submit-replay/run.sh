@@ -7,12 +7,13 @@ if [ $# -ne 3 ]; then
 fi
 RUN=$1
 PORT=$2
-if ! [[ $RUN =~ ^[A-Za-z0-9-]+$ && $PORT =~ ^[0-9]+$ ]]; then
-	echo "run name must be letters, digits, or dashes, and port must be a number" >&2
+if ! [[ $RUN =~ ^[A-Za-z0-9-]+$ && $PORT =~ ^[0-9]+$ && ${REPLAY_AGENT_ID:-default} =~ ^[A-Za-z0-9_-]+$ ]]; then
+	echo "run name must be letters, digits, or dashes; port must be a number; REPLAY_AGENT_ID must be letters, digits, dashes, or underscores" >&2
 	exit 2
 fi
 BIN=$(realpath "$3")
 HERE=$(cd "$(dirname "$0")" && pwd)
+AGENT_ID=${REPLAY_AGENT_ID:-default}
 DIR=$(realpath -m "${REPLAY_DIR:-$HERE/runs}")
 WS=$DIR/ws
 
@@ -70,18 +71,18 @@ done
 echo "startup maintenance settled"
 
 curl -s -X POST "127.0.0.1:$PORT/api/memory/recall" -H 'content-type: application/json' \
-	-d '{"query":"warm up the embedder and reranker","agentId":"default","limit":5}' > /dev/null
+	-d "{\"query\":\"warm up the embedder and reranker\",\"agentId\":\"$AGENT_ID\",\"limit\":5}" > /dev/null
 sleep 2
 grep -a -o '"Cross-encoder ready","data":{[^}]*}' "$LOG" | tail -1 || echo "no cross-encoder line in the daemon log"
 
 for session in $(python3 -c "import json,sys;print(' '.join(json.load(open(sys.argv[1]))))" "$DIR/transcripts.json"); do
 	harness=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]]['harness'])" "$DIR/transcripts.json" "$session")
 	case $harness in
-		pi | opencode) REPLAY_DIR="$DIR" REAL_HOME="$HOME" timeout 300 bun "$HERE/drive.ts" "$RUN" "$PORT" "$session" 2>&1 | tail -1 ;;
-		*) timeout 400 python3 "$HERE/drive.py" "$RUN" "$PORT" "$session" --dir "$DIR" 2>&1 | tail -1 ;;
+		pi | opencode) REPLAY_DIR="$DIR" REPLAY_AGENT_ID="$AGENT_ID" REAL_HOME="$HOME" timeout 300 bun "$HERE/drive.ts" "$RUN" "$PORT" "$session" 2>&1 | tail -1 ;;
+		*) timeout 400 python3 "$HERE/drive.py" "$RUN" "$PORT" "$session" --dir "$DIR" --agent-id "$AGENT_ID" 2>&1 | tail -1 ;;
 	esac
 done
-[ -n "${PROBE:-}" ] && python3 "$HERE/probe.py" "$RUN" "$PORT" --dir "$DIR" 2>&1 | tail -1
+[ -n "${PROBE:-}" ] && python3 "$HERE/probe.py" "$RUN" "$PORT" --dir "$DIR" --agent-id "$AGENT_ID" 2>&1 | tail -1
 
 stop
 trap - EXIT

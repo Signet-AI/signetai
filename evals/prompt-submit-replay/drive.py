@@ -13,6 +13,7 @@ def parse_args():
     parser.add_argument("port")
     parser.add_argument("session", help="transcripts.json key, for example claude-code, codex, or hermes-agent#2")
     parser.add_argument("--dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs"))
+    parser.add_argument("--agent-id", default="default")
     parser.add_argument("--signet", default=shutil.which("signet") or "signet")
     parser.add_argument("--hermes-home", default=os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")))
     return parser.parse_args()
@@ -29,6 +30,7 @@ ENV = {
     "XDG_STATE_HOME": os.path.join(SANDBOX_HOME, ".local", "state"),
     "XDG_CACHE_HOME": os.path.join(SANDBOX_HOME, ".cache"),
     "HERMES_HOME": os.path.join(SANDBOX_HOME, ".hermes"),
+    "SIGNET_AGENT_ID": args.agent_id,
     "SIGNET_DAEMON_URL": f"http://127.0.0.1:{args.port}",
     "SIGNET_PATH": os.path.join(args.dir, "ws"),
     "SIGNET_TELEMETRY_OPTOUT": "1",

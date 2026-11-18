@@ -11,6 +11,7 @@ const realHome = process.env.REAL_HOME ?? process.env.HOME ?? "";
 const sandboxHome = join(dir, "home");
 const opencodePlugin = process.env.OPENCODE_PLUGIN ?? join(realHome, ".config/opencode/plugins/signet.mjs");
 const piExtension = process.env.PI_EXTENSION ?? join(realHome, ".pi/agent/extensions/signet-pi.js");
+const agentId = process.env.REPLAY_AGENT_ID ?? "default";
 
 mkdirSync(sandboxHome, { recursive: true });
 for (const key of Object.keys(process.env)) {
@@ -23,6 +24,7 @@ Object.assign(process.env, {
 	XDG_STATE_HOME: join(sandboxHome, ".local/state"),
 	XDG_CACHE_HOME: join(sandboxHome, ".cache"),
 	HERMES_HOME: join(sandboxHome, ".hermes"),
+	SIGNET_AGENT_ID: agentId,
 	SIGNET_DAEMON_URL: `http://127.0.0.1:${port}`,
 	SIGNET_PATH: join(dir, "ws"),
 	SIGNET_TELEMETRY_OPTOUT: "1",
