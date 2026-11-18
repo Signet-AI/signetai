@@ -9,7 +9,7 @@ import {
 	createCodemodeExtension,
 } from "@earendil-works/pi-coding-agent";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { PI_AGENT_MAX_MESSAGE_BYTES } from "./pi-agent-protocol";
+import { PI_AGENT_MAX_MESSAGE_BYTES, piAgentWorkerSettings } from "./pi-agent-protocol";
 import type { PiAgentWorkerInput, PiAgentWorkerRequest, PiAgentWorkerResponse } from "./pi-agent-protocol";
 
 const port = parentPort;
@@ -28,10 +28,7 @@ runtime.registerProvider(input.model.provider, {
 	apiKey: input.apiKey,
 	models: [{ ...input.model }],
 });
-const settingsManager = SettingsManager.inMemory({
-	...(input.retry ? { retry: { enabled: true, ...input.retry } } : {}),
-	...(input.thinkingBudgets ? { thinkingBudgets: input.thinkingBudgets } : {}),
-});
+const settingsManager = SettingsManager.inMemory(piAgentWorkerSettings(input));
 const codemode = input.tools.some((tool) => tool.exposure === "codemode");
 const resourceLoader = new DefaultResourceLoader({
 	cwd: process.cwd(),
