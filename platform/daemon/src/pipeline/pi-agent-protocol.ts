@@ -1,5 +1,5 @@
 import type { Model, Api, ThinkingBudgets, ThinkingLevel, Usage } from "@earendil-works/pi-ai";
-import type { AgentSessionEvent, SessionStats, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { AgentSessionEvent, SessionStats, SettingsManager, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 export interface PiAgentTool
 	extends Pick<ToolDefinition, "name" | "label" | "description" | "parameters" | "exposure"> {
@@ -60,3 +60,10 @@ export type PiAgentWorkerResponse =
 
 export const PI_CHAT_MAX_PERSISTENT_SESSIONS = 3;
 export const PI_AGENT_MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
+type PiAgentWorkerSettingsInput = Parameters<typeof SettingsManager.inMemory>[0];
+
+export const piAgentWorkerSettings = (input: PiAgentWorkerInput): PiAgentWorkerSettingsInput => ({
+	...(input.retry ? { retry: { enabled: true, ...input.retry } } : {}),
+	cacheWarming: "streaming",
+	...(input.thinkingBudgets ? { thinkingBudgets: input.thinkingBudgets } : {}),
+});
