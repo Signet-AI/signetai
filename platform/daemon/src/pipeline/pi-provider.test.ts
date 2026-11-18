@@ -67,12 +67,12 @@ describe("pi provider catalog models", () => {
 	});
 
 	test("normalizes a pasted OpenAI chat-completions endpoint to Pi's base URL", () => {
-		const model = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4-flash");
+		const model = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4.1-flash");
 		expect(model).toBeDefined();
 		const resolved = resolvePiModel({
 			executor: "openai-compatible",
 			providerFamily: "opencode-go",
-			model: "deepseek-v4-flash",
+			model: "deepseek-v4.1-flash",
 			piModel: model as Model<Api>,
 			apiKey: "test-key",
 			baseUrl: "https://opencode.ai/zen/go/v1/chat/completions",
@@ -102,12 +102,12 @@ describe("pi provider catalog models", () => {
 			);
 		}) as unknown as typeof fetch;
 		try {
-			const model = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4-flash");
+			const model = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4.1-flash");
 			expect(model).toBeDefined();
 			const provider = createPiModelProvider({
 				executor: "openai-compatible",
 				providerFamily: "opencode-go",
-				model: "deepseek-v4-flash",
+				model: "deepseek-v4.1-flash",
 				piModel: model as Model<Api>,
 				apiKey: "test-key",
 			});
@@ -150,7 +150,7 @@ describe("pi provider catalog models", () => {
 			);
 		}) as unknown as typeof fetch;
 		try {
-			const openCodeModel = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4-flash");
+			const openCodeModel = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4.1-flash");
 			if (!openCodeModel) throw new Error("expected OpenCode Go catalog model");
 			const configuredOpenCodeModel = {
 				...openCodeModel,
@@ -162,7 +162,7 @@ describe("pi provider catalog models", () => {
 			const openCodeProvider = createPiModelProvider({
 				executor: "openai-compatible",
 				providerFamily: "opencode-go",
-				model: "deepseek-v4-flash",
+				model: "deepseek-v4.1-flash",
 				piModel: configuredOpenCodeModel,
 				apiKey: "test-key",
 			});
@@ -190,7 +190,7 @@ describe("pi provider catalog models", () => {
 			};
 			const endpointProvider = createPiModelProvider({
 				executor: "openai-compatible",
-				model: "deepseek-v4-flash",
+				model: "deepseek-v4.1-flash",
 				piModel: endpointModel,
 				apiKey: "test-key",
 			});

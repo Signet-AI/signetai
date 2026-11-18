@@ -514,6 +514,8 @@ printf 'never reached\\n'
 			globalThis.fetch = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
 				const url = String(input);
 				if (url.endsWith("/models") || url.endsWith("/props")) return new Response("not found", { status: 404 });
+				const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+				if (method !== "POST") return new Response(null, { status: 200 });
 				chatRequests++;
 				if (hangChatRequests) {
 					const signal = input instanceof Request ? input.signal : init?.signal;
