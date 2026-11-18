@@ -498,3 +498,34 @@ test("stopping a chat turn retains its worker for the next turn", async () => {
 		server.stop(true);
 	}
 }, 10000);
+
+test("a chat turn without a retry policy survives one transient 503 through Pi defaults", async () => {
+	let requests = 0;
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		async fetch() {
+			requests++;
+			if (requests === 1) return new Response("temporarily unavailable", { status: 503 });
+			const content = completion({ role: "assistant", content: "Recovered." }) + completion({}, "stop");
+			return new Response(`${content}data: [DONE]\n\n`, { headers: { "Content-Type": "text/event-stream" } });
+		},
+	});
+	try {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "test-model",
+			baseUrl: `http://127.0.0.1:${server.port}/v1`,
+		});
+		const session = await provider.createAgentSession([], { systemPrompt: "You are a chat agent." });
+		try {
+			await session.prompt("Say hi.");
+			expect(session.getFailureMessage()).toBeUndefined();
+			expect(requests).toBeGreaterThanOrEqual(2);
+		} finally {
+			await session.dispose();
+		}
+	} finally {
+		server.stop(true);
+	}
+}, 30000);
