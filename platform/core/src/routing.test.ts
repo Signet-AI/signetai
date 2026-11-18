@@ -1065,6 +1065,9 @@ describe("routing reference validation (#1005)", () => {
 		if (!("error" in parsed)) throw new Error("expected config parse failure");
 		expect(parsed.error.code).toBe("invalid-config");
 		expect(parsed.error.message).toContain('targets.dreaming.openrouter="dreaming"');
+		const issue = parsed.error.details?.issues?.[0] as { message: string } | undefined;
+		expect(issue?.message).toContain("every routed call returns invalid-config");
+		expect(issue?.message).not.toContain("dropped from routing");
 		expect(parsed.error.details?.issues).toHaveLength(1);
 	});
 
