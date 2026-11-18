@@ -422,6 +422,7 @@ export function readRecentEpisodicSources(
 	order: "newest" | "oldest" | "none" = "newest",
 	cursor?: EpisodicCursor | null,
 	candidateRefs?: readonly EpisodicSourceCandidateRef[],
+	includeRequeued = true,
 ): EpisodicSourceRecord[] {
 	const boundedLimit = limit === null ? -1 : Math.max(1, Math.min(Math.floor(limit), 500));
 	const newer = newerThan?.trim() || null;
@@ -474,11 +475,11 @@ export function readRecentEpisodicSources(
 			  AND dee.requeue_requested_at IS NOT NULL
 			  AND dee.resolved_at IS NULL
 		)`;
-	const memoryRequeue = requeuePredicate("memory", "id");
-	const artifactRequeue = requeuePredicate("artifact", "source_path");
-	const transcriptRequeue = requeuePredicate("transcript", "session_key");
-	const summaryRequeue = requeuePredicate("summary", "id");
-	const requeueArgs = hasExclusions ? [agentId] : [];
+	const memoryRequeue = includeRequeued ? requeuePredicate("memory", "id") : "0";
+	const artifactRequeue = includeRequeued ? requeuePredicate("artifact", "source_path") : "0";
+	const transcriptRequeue = includeRequeued ? requeuePredicate("transcript", "session_key") : "0";
+	const summaryRequeue = includeRequeued ? requeuePredicate("summary", "id") : "0";
+	const requeueArgs = hasExclusions && includeRequeued ? [agentId] : [];
 	const memories: EpisodicSourceRecord[] = wants("memory")
 		? db
 				.prepare(

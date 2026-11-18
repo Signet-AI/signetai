@@ -3,15 +3,21 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
 import type { ReadDb } from "../db-accessor";
 import {
+	DREAMING_EVIDENCE_COVERAGE_DEADLINE_MS,
 	DREAMING_EVIDENCE_COVERAGE_MAX_PASSES,
 	DREAMING_EVIDENCE_COVERAGE_MAX_SOURCES,
 	getDreamingEvidenceCoverageInDb,
 } from "./dreaming-evidence-coverage";
+import { readRecentEpisodicSources } from "../episodic-sources";
 
 const AGENT = "agent-a";
 const OTHER = "agent-b";
 const CONTENT = "a".repeat(120);
-const BOUNDS = { maxSources: DREAMING_EVIDENCE_COVERAGE_MAX_SOURCES, maxPasses: DREAMING_EVIDENCE_COVERAGE_MAX_PASSES };
+const BOUNDS = {
+	maxSources: DREAMING_EVIDENCE_COVERAGE_MAX_SOURCES,
+	maxPasses: DREAMING_EVIDENCE_COVERAGE_MAX_PASSES,
+	deadlineMs: DREAMING_EVIDENCE_COVERAGE_DEADLINE_MS,
+};
 
 function seedMemory(db: Database, id: string, capturedAt: string, agentId = AGENT, content = CONTENT): void {
 	db.prepare(
@@ -162,7 +168,8 @@ describe("dreaming evidence coverage", () => {
 		expect(coverage.chars.stalledRows).toBe(1);
 		expect(coverage.pendingContinuations).toBe(1);
 		expect(coverage.openStalledAttention).toBe(1);
-		expect(coverage.complete).toBe(true);
+		expect(coverage.scanComplete).toBe(true);
+		expect(coverage.fullyReviewed).toBe(false);
 		expect(coverage.dreamedFraction).toBeCloseTo(280 / 600, 12);
 		expect(coverage.byKind.memory).toEqual({
 			sources: { eligible: 5, fullyReviewed: 2, partiallyReviewed: 1, neverDelivered: 1 },
@@ -198,7 +205,8 @@ describe("dreaming evidence coverage", () => {
 		expect(coverage.sources.eligible).toBe(0);
 		expect(coverage.chars.eligible).toBe(0);
 		expect(coverage.dreamedFraction).toBeNull();
-		expect(coverage.complete).toBe(true);
+		expect(coverage.scanComplete).toBe(true);
+		expect(coverage.fullyReviewed).toBe(false);
 	});
 
 	it("marks coverage incomplete when the source bound truncates the scan", () => {
@@ -207,8 +215,67 @@ describe("dreaming evidence coverage", () => {
 		const coverage = getDreamingEvidenceCoverageInDb(db as unknown as ReadDb, AGENT, {
 			maxSources: 1,
 			maxPasses: DREAMING_EVIDENCE_COVERAGE_MAX_PASSES,
+			deadlineMs: DREAMING_EVIDENCE_COVERAGE_DEADLINE_MS,
 		});
 		expect(coverage.sources.eligible).toBe(1);
-		expect(coverage.complete).toBe(false);
+		expect(coverage.scanComplete).toBe(false);
+	});
+
+	it("counts each requeued source once even when it predates the cursor", () => {
+		const total = 150;
+		for (let i = 0; i < total; i += 1) {
+			seedMemory(db, `mem-rq-${i}`, `2026-01-01 00:00:${String(i % 60).padStart(2, "0")}`);
+			db.prepare(
+				`INSERT INTO dreaming_evidence_exclusions
+				 (agent_id, source_kind, source_id, reason, pass_id, requeue_requested_at, resolved_at)
+				 VALUES (?, 'memory', ?, 'coverage-fixture', 'fixture-pass', datetime('now'), NULL)`,
+			).run(AGENT, `mem-rq-${i}`);
+		}
+		const coverage = getDreamingEvidenceCoverageInDb(db as unknown as ReadDb, AGENT, BOUNDS);
+		expect(coverage.sources.eligible).toBe(total);
+		expect(coverage.scanComplete).toBe(true);
+	});
+
+	it("pages cursor-only source enumeration without repeating older requeued rows", () => {
+		const total = 150;
+		for (let i = 0; i < total; i += 1) {
+			seedMemory(
+				db,
+				`mem-page-${i}`,
+				`2026-01-01 00:${String(Math.floor(i / 60)).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}`,
+			);
+		}
+		const seen = new Set<string>();
+		let cursor: Parameters<typeof readRecentEpisodicSources>[6] | null = null;
+		for (let page = 0; page < 5; page += 1) {
+			const rows = readRecentEpisodicSources(
+				db as unknown as ReadDb,
+				AGENT,
+				100,
+				["memory"],
+				null,
+				"oldest",
+				cursor,
+				undefined,
+				false,
+			);
+			for (const row of rows) seen.add(row.id);
+			if (rows.length === 0) break;
+			const last = rows[rows.length - 1];
+			cursor = { capturedAt: last.capturedAt, kind: last.kind, id: last.id };
+		}
+		expect(seen.size).toBe(total);
+	});
+
+	it("reports fullyReviewed only for a fully reviewed, fully consumed scope", () => {
+		seedMemory(db, "mem-done", "2026-01-01 00:00:01");
+		seedPass(db, "pass-done");
+		seedConsumption(db, "mem-done", "2026-01-01 00:00:01", CONTENT.length, "review", { passId: "pass-done" });
+		const coverage = getDreamingEvidenceCoverageInDb(db as unknown as ReadDb, AGENT, BOUNDS);
+		expect(coverage.sources.fullyReviewed).toBe(1);
+		expect(coverage.chars.unreviewed).toBe(0);
+		expect(coverage.chars.consumedWithoutReview).toBe(0);
+		expect(coverage.scanComplete).toBe(true);
+		expect(coverage.fullyReviewed).toBe(true);
 	});
 });

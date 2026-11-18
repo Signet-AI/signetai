@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 import type { Context, Hono } from "hono";
 import { DbOwnerCancelledError } from "../db-owner-client";
-import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
+import { isAgentRegistered, resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import {
@@ -699,6 +699,9 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.get("/api/dream/evidence/coverage", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		if (!(await isAgentRegistered(scopedAgent.agentId))) {
+			return c.json({ error: `Agent not found: ${scopedAgent.agentId}` }, 404);
+		}
 		const coverage = await getDreamingEvidenceCoverage(getDbAccessor(), scopedAgent.agentId);
 		return c.json(coverage);
 	});

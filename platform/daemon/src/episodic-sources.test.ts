@@ -574,4 +574,49 @@ describe("episodic source selection", () => {
 		expect(pageTwo.map((source) => source.id)).not.toContain("sources/sentinel.md");
 		expect(pageTwo.map((source) => source.id)).toEqual(["sources/second.md"]);
 	});
+
+	it("re-delivers requeued sources older than the cursor within one bounded page, and cursor-only paging skips them", () => {
+		getDbAccessor().withWriteTx((db) => {
+			for (let i = 0; i < 120; i += 1) {
+				const at = `2026-08-01T${String(Math.floor(i / 60) + 10).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00.000Z`;
+				db.prepare(
+					`INSERT INTO memories (id, content, source_type, memory_kind, visibility, agent_id, created_at, updated_at)
+					 VALUES (?, ?, 'manual', 'episodic', 'normal', 'ant', ?, ?)`,
+				).run(`mem-requeue-${i}`, "requeued evidence", at, at);
+				db.prepare(
+					`INSERT INTO dreaming_evidence_exclusions
+					 (agent_id, source_kind, source_id, reason, pass_id, requeue_requested_at, resolved_at)
+					 VALUES ('ant', 'memory', ?, 'fixture', 'fixture-pass', datetime('now'), NULL)`,
+				).run(`mem-requeue-${i}`);
+			}
+		});
+
+		const cursor = { capturedAt: "2026-08-01T23:00:00.000Z", kind: "memory" as const, id: "zzz-last" };
+		const deliveryRead = (pageCursor: EpisodicCursor | null) =>
+			getDbAccessor().withReadDb((db) =>
+				readRecentEpisodicSources(db, "ant", 100, undefined, null, "oldest", pageCursor),
+			);
+		const first = deliveryRead(null);
+		expect(first.length).toBeLessThanOrEqual(100);
+		const ids = new Set(first.map((source) => source.id));
+		expect(ids.has("mem-requeue-0")).toBe(true);
+		const repeat = deliveryRead(cursor);
+		expect(repeat.map((source) => source.id)).toContain("mem-requeue-0");
+
+		const coverageRead = (pageCursor: EpisodicCursor | null) =>
+			getDbAccessor().withReadDb((db) =>
+				readRecentEpisodicSources(db, "ant", 100, undefined, null, "oldest", pageCursor, undefined, false),
+			);
+		const coverageFirst = coverageRead(null);
+		const coverageIds = new Set(coverageFirst.map((source) => source.id));
+		expect(coverageIds.has("mem-requeue-0")).toBe(true);
+		const coverageLast = coverageFirst[coverageFirst.length - 1];
+		if (!coverageLast) throw new Error("empty page");
+		const coverageSecond = coverageRead({
+			capturedAt: coverageLast.capturedAt,
+			kind: coverageLast.kind,
+			id: coverageLast.id,
+		});
+		for (const source of coverageSecond) expect(coverageIds.has(source.id)).toBe(false);
+	});
 });

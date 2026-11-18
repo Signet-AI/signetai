@@ -184,7 +184,17 @@ MEMORYBENCH_OPENROUTER_MODELS='{"openai/gpt-4.1-mini":{"reasoning":{"enabled":fa
 
 Each entry accepts `provider` (OpenRouter routing preferences), `reasoning`
 (OpenRouter reasoning settings), and `maxTokens`. The checkpoint and report
-record the alias and the settings each model ran with.
+record the alias, the settings each model ran with, and its effective
+`maxTokens`. An entry whose key matches no OpenRouter model the run uses
+(answering or judge) fails the run and names the key.
+
+The launcher records an OpenRouter price/spend snapshot (key status plus model
+endpoints) before and after each run under
+`memorybench/data/runs/<runId>/openrouter/{start,end}.json`. It authenticates
+with `OPENROUTER_API_KEY` only, follows `-j/--judge` and `-m/--answering-model`
+arguments (including `--flag=value` forms) as well as the env vars, uses a 15
+second fetch timeout, and is skipped on `--dry-run`. Snapshot fetch failures
+are recorded as errors and never mask the run's own result.
 
 The BEAM `paper` profile accepts `openrouter:openai/gpt-4.1-mini` as judge.
 LoCoMo ingests each conversation once and shares it across its questions.
@@ -673,7 +683,7 @@ SIGNET_BENCH_DREAMING_CONCURRENCY=<n> Concurrent Dreaming passes for bulk ingest
 SIGNET_BENCH_DREAMING_CODEMODE=1     Run Dreaming with memory.dreaming.codemode on (0 forces it off; unset keeps the product default).
 SIGNET_BENCH_EMBEDDING_WAIT_SECS=<n> Max time to wait for Dreaming's derived memories to be embedded before retrieval, default 1800.
 SIGNET_BENCH_CAPTURE_WAIT_SECS=<n> Max time to wait for a question's transcript captures to finish during indexing, default 1800.
-SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT=<n> Writes search.transcript_evidence_limit to the workspace agent.yaml on every launch; integer 0-5 (0 disables transcript evidence); unset keeps the file unchanged.
+SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT=<n> Writes search.transcript_evidence_limit to the workspace agent.yaml on every launch; integer 0-5 (0 disables transcript evidence); unset removes any stale key so the daemon default applies.
 MEMORYBENCH_EXTRACTION_MODEL=<m>    Structured extraction model, default gpt-4o.
 MEMORYBENCH_EXTRACTION_MAX_TOKENS=<n> Markdown extraction cap, default 1200.
 MEMORYBENCH_STRUCTURED_EXTRACTION_MAX_TOKENS=<n> Structured JSON extraction cap, default 1800.
@@ -693,7 +703,8 @@ change.
 
 The `recallSources` report section attributes each question's retrieved hits
 to memories, transcript evidence (`supplementary: true` hits from the daemon's
-recall response), both, or none — overall, per question type, and for
-correctly answered questions only. It also records the
+recall response), both, none, or unknown (questions with no recorded hit
+sources) — overall, per question type, and for correctly answered questions
+only. It also records the
 `transcript_evidence_limit` the launcher set for the run, or omits it when the
 run used the daemon default.

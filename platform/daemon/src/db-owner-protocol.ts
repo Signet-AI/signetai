@@ -199,11 +199,8 @@ export interface DbOwnerSourceEvidenceEligibility {
 	readonly legacyObsidianRoot?: string;
 }
 
-export interface DbOwnerDreamingEvidenceCoverage {
-	readonly agentId: string;
-	readonly maxSources: number;
-	readonly maxPasses: number;
-}
+export type DbOwnerDreamingEvidenceCoverage =
+	import("./pipeline/dreaming-evidence-coverage").DreamingEvidenceCoverageStepRequest;
 
 import type { CompletedTranscriptCommit } from "./transcript-import-commit";
 

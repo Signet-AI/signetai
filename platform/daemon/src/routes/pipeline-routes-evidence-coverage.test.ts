@@ -10,12 +10,12 @@ import { registerPipelineRoutes } from "./pipeline-routes";
 
 const originalAgentId = process.env.SIGNET_AGENT_ID;
 
-function createPipelineApp(role: TokenRole = "admin"): Hono {
+function createPipelineApp(role: TokenRole = "admin", agentScope = "agent-a"): Hono {
 	const app = new Hono();
 	const now = Math.floor(Date.now() / 1000);
 	const claims: TokenClaims = {
 		sub: "evidence-coverage-test-admin",
-		scope: { agent: "agent-a" },
+		scope: { agent: agentScope },
 		role,
 		iat: now,
 		exp: now + 3600,
@@ -28,6 +28,13 @@ function createPipelineApp(role: TokenRole = "admin"): Hono {
 	return app;
 }
 
+function registerAgent(db: { prepare(sql: string): { run(...args: unknown[]): unknown } }, agentId: string): void {
+	db.prepare(
+		`INSERT INTO agents (id, name, read_policy, created_at, updated_at) VALUES (?, ?, 'isolated', datetime('now'), datetime('now'))
+		 ON CONFLICT(id) DO NOTHING`,
+	).run(agentId, agentId);
+}
+
 describe("GET /api/dream/evidence/coverage", () => {
 	let agentsDir = "";
 
@@ -37,6 +44,8 @@ describe("GET /api/dream/evidence/coverage", () => {
 		initDbAccessor(join(agentsDir, "memory", "memories.db"), { agentsDir });
 		process.env.SIGNET_AGENT_ID = "agent-a";
 		getDbAccessor().withWriteTx((db) => {
+			registerAgent(db, "agent-a");
+			registerAgent(db, "agent-b");
 			for (const [id, agentId, offset] of [
 				["mem-reviewed", "agent-a", 120],
 				["mem-partial", "agent-a", 40],
@@ -64,7 +73,7 @@ describe("GET /api/dream/evidence/coverage", () => {
 		else process.env.SIGNET_AGENT_ID = originalAgentId;
 	});
 
-	it("reports scoped coverage totals", async () => {
+	it("reports scoped coverage totals for the caller's own agent", async () => {
 		const app = createPipelineApp();
 		const response = await app.request("/api/dream/evidence/coverage");
 		expect(response.status).toBe(200);
@@ -73,7 +82,8 @@ describe("GET /api/dream/evidence/coverage", () => {
 			sources: Record<string, number>;
 			chars: Record<string, number>;
 			dreamedFraction: number | null;
-			complete: boolean;
+			scanComplete: boolean;
+			fullyReviewed: boolean;
 			byKind: Record<string, { chars: Record<string, number> }>;
 		};
 		expect(coverage.agentId).toBe("agent-a");
@@ -86,7 +96,25 @@ describe("GET /api/dream/evidence/coverage", () => {
 		expect(coverage.chars.consumedWithoutReview).toBe(0);
 		expect(coverage.dreamedFraction).toBeCloseTo(160 / 240, 12);
 		expect(coverage.byKind.memory?.chars.eligible).toBe(240);
-		expect(coverage.complete).toBe(true);
+		expect(coverage.scanComplete).toBe(true);
+		expect(coverage.fullyReviewed).toBe(false);
+	});
+
+	it("returns 404 for an agent that is not registered", async () => {
+		const app = createPipelineApp();
+		const response = await app.request("/api/dream/evidence/coverage?agentId=agent-ghost");
+		expect(response.status).toBe(404);
+		const body = (await response.json()) as { error: string };
+		expect(body.error).toContain("agent-ghost");
+	});
+
+	it("lets an admin-scoped token read another agent's coverage, like GET /api/dream/status", async () => {
+		const app = createPipelineApp("admin", "agent-a");
+		const response = await app.request("/api/dream/evidence/coverage?agentId=agent-b");
+		expect(response.status).toBe(200);
+		const coverage = (await response.json()) as { agentId: string; sources: Record<string, number> };
+		expect(coverage.agentId).toBe("agent-b");
+		expect(coverage.sources.eligible).toBe(1);
 	});
 
 	it("rejects a scope the caller is not authorized for", async () => {

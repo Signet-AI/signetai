@@ -122,6 +122,22 @@ export async function getAgentScope(agentId: string): Promise<AgentScope> {
 	}
 }
 
+export async function isAgentRegistered(agentId: string): Promise<boolean> {
+	const id = normalizedAgentId(agentId);
+	try {
+		const owner = await getDbOwner(getDbAccessorPath());
+		const row = await ownerReadOne<{ readonly id: string }>(owner, "SELECT id FROM agents WHERE id = ?", [id], {
+			operation: "agent-scope.exists",
+			lane: "read",
+			deadlineMs: 5_000,
+			estimatedWorkUnits: 1,
+		});
+		return row !== null && row !== undefined;
+	} catch {
+		return false;
+	}
+}
+
 export async function ensureAgentRegistered(agentId: string): Promise<void> {
 	const id = normalizedAgentId(agentId);
 	const now = new Date().toISOString();
