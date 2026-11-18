@@ -83,7 +83,7 @@ test("the scene renders in a worker: canvases and the simulation port move there
 		expect(request.type).toBe("init");
 		expect(offscreen).toHaveLength(2);
 		expect(init?.transfer).toEqual([offscreen[0], offscreen[1], request.simulation]);
-		expect((connect?.message as { type: string }).type).toBe("connect");
+		expect((connect?.message as { type: string } | undefined)?.type).toBe("connect");
 		expect(connect?.transfer).toHaveLength(1);
 		expect(request.data.nodes).toHaveLength(2);
 
