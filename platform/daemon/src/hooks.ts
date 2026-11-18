@@ -1929,6 +1929,7 @@ async function appendSessionEndAssistantTurn(
 			message: req.lastAssistantMessage ?? "",
 		});
 	} catch (error) {
+		if (isRetryableWritePressure(error)) throw error;
 		logger.warn("hooks", "Session-end assistant transcript append failed", {
 			error: error instanceof Error ? error.message : String(error),
 			sessionKey,
@@ -2200,13 +2201,14 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 		return { skipped: true };
 	}
 	let transcript = "";
+	let rawTranscript = req.transcript;
 	let fromStore = false;
 	if (req.transcript) {
 		transcript = normalizeSessionTranscript(req.harness, req.transcript);
 	} else if (req.transcriptPath && existsSync(req.transcriptPath)) {
 		try {
-			const raw = readFileSync(req.transcriptPath, "utf-8");
-			transcript = normalizeSessionTranscript(req.harness, raw);
+			rawTranscript = readFileSync(req.transcriptPath, "utf-8");
+			transcript = normalizeSessionTranscript(req.harness, rawTranscript);
 		} catch {
 			logger.warn("hooks", "Could not read checkpoint transcript", {
 				path: req.transcriptPath,
@@ -2228,7 +2230,16 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 		const prev = (await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId))?.content;
 		if (!prev || transcript.length >= prev.length) {
 			try {
-				await upsertSessionTranscriptAsync(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
+				await upsertSessionTranscriptAsync(
+					req.sessionKey,
+					transcript,
+					req.harness,
+					req.project ?? null,
+					agentId,
+					new Date().toISOString(),
+					getDbAccessor(),
+					{ rawTranscript },
+				);
 			} catch (e) {
 				logger.warn("hooks", "Checkpoint transcript upsert failed (non-fatal)", {
 					error: e instanceof Error ? e.message : String(e),

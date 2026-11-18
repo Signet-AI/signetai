@@ -20,6 +20,7 @@ import {
 	withRegisteredDbOwnerMaintenance,
 } from "./db-owner-maintenance";
 import { commitTranscriptImportBatchInTx, purgeTranscriptImportSourceInTx } from "./transcript-import-commit";
+import type { CompactionSummaryInput } from "./session-transcripts";
 import type { SessionTranscriptWriteInput, writeSessionTranscriptRow } from "./session-transcripts";
 import { purgeSourceOwnedRowsInTx } from "./source-purge-tx";
 import { type AgentRemovalInput, type AgentRemovalResult, removeAgentInTx } from "./agent-removal";
@@ -182,27 +183,37 @@ async function executeInlineOwnerRequest(
 	if (request.kind === "session_transcript_capture") {
 		const { captureSessionTranscriptOwned } = await import("./session-transcripts");
 		return await invokeAccessor(accessor, "withReadDb", (db) =>
-			captureSessionTranscriptOwned(db, request.input, request.input.input.basePath ?? resolveSqliteAgentsDir()),
+			captureSessionTranscriptOwned(db, request.input, request.input.input.basePath),
 		);
 	}
 	if (request.kind === "session_transcript_delete") {
 		const { deleteSessionTranscriptOwned } = await import("./session-transcripts");
-		return await invokeAccessor(accessor, "withReadDb", (db) => {
-			if (!("exec" in db)) throw new Error("Transcript deletion requires owner write access");
-			return deleteSessionTranscriptOwned(
-				db,
-				request.input,
-				request.input.basePath,
-				(operation) => invokeAccessorAsync(accessor, "withWriteTxAsync", () => operation()),
-				deadlineAt,
-			);
-		});
+		const db = await invokeAccessorAsync(accessor, "withWriteDbAsync", (db) => db);
+		if (!("exec" in db)) throw new Error("Transcript deletion requires owner write access");
+		return deleteSessionTranscriptOwned(
+			db,
+			request.input,
+			request.input.basePath,
+			(operation) =>
+				invokeAccessorAsync(accessor, "withWriteTxAsync", (tx) => {
+					if (tx !== db) throw new Error("Transcript deletion write handle changed");
+					return operation();
+				}),
+			deadlineAt,
+		);
 	}
 	if (request.kind === "session_transcript_write") {
 		const { writeSessionTranscriptRow } = await import("./session-transcripts");
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
 			writeSessionTranscriptRow(db as WriteDb, request.input),
 		);
+	}
+	if (request.kind === "session_compaction_summary") {
+		const { commitCompactionSummaryInTx } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Compaction summary requires owner write access");
+			return commitCompactionSummaryInTx(db, request.input);
+		});
 	}
 	if (request.kind === "transcript_bulk_commit") {
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
@@ -544,6 +555,18 @@ export async function dbOwnerTranscriptOperation<Result>(
 	options: DbOwnerSqlOptions,
 ): Promise<Result> {
 	return await submitWithAdmission<Result>(owner, request, { ...options, lane: "write" });
+}
+
+export async function dbOwnerCommitCompactionSummary(
+	owner: DbOwnerClient,
+	input: CompactionSummaryInput,
+	options: DbOwnerSqlOptions,
+): Promise<boolean> {
+	return await submitWithAdmission(
+		owner,
+		{ kind: "session_compaction_summary", input },
+		{ ...options, lane: "write", workloadClass: "foreground", estimatedWorkUnits: 1 },
+	);
 }
 
 export async function dbOwnerWriteSessionTranscript(

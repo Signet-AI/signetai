@@ -1,9 +1,8 @@
-import type { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
-import { admitSessionTranscriptInDb } from "../session-transcripts";
+import { commitCompactionSummary } from "../session-transcript-lifecycle";
 import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../db-owner-client";
 
 import type { Hono } from "hono";
@@ -104,7 +103,6 @@ import {
 import { recordSkillInvocation } from "../skill-invocations";
 import { recordSkillsFromTranscript } from "../skill-transcript-scan";
 import { validateTemporalTimeOptions } from "../temporal-recall";
-import { upsertThreadHead } from "../thread-heads";
 import { getTranscriptCaptureJobStatus } from "../transcript-capture-worker";
 import { claimBoardActivityNotices } from "../board";
 import {
@@ -1016,15 +1014,17 @@ function registerSessionEnd(app: Hono): void {
 			try {
 				const result = await handleSessionEnd(body);
 				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
-				const woken =
+				const woken = (): boolean =>
 					sessionKey !== undefined &&
 					(body.harness === "codex"
 						? consumeSessionEndWake(agentId, sessionKey)
 						: wasWokenSince(agentId, sessionKey, wakeSince));
-				if (sessionKey && !woken) {
+				if (sessionKey && !woken()) {
 					await checkTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "end" });
-					markSessionEnded(sessionKey, runtimePath, agentId);
-					removeAgentPresence(sessionKey);
+					if (!woken()) {
+						markSessionEnded(sessionKey, runtimePath, agentId);
+						removeAgentPresence(sessionKey);
+					}
 				}
 				if (transcriptPath) {
 					setImmediate(() =>
@@ -1463,10 +1463,15 @@ function registerCompactionComplete(app: Hono): void {
 				cwd?: string;
 				agentId?: string;
 				runtimePath?: string;
+				capturedAt?: string;
 			};
 
 			if (!body.harness || !body.summary) {
 				return c.json({ error: "harness and summary are required" }, 400);
+			}
+			const capturedAt = parseOptionalString(body.capturedAt);
+			if (body.capturedAt !== undefined && (capturedAt === undefined || Number.isNaN(Date.parse(capturedAt)))) {
+				return c.json({ error: "capturedAt must be an ISO timestamp" }, 400);
 			}
 			const summary = normalizeMarkdownBody(body.summary);
 
@@ -1536,72 +1541,16 @@ function registerCompactionComplete(app: Hono): void {
 			});
 			const summaryId = noise ? null : crypto.randomUUID();
 			if (summaryId) {
-				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				const admitted = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
-					if (!admitSessionTranscriptInDb(db, { agentId, sessionKey: body.sessionKey ?? null, capturedAt: now }))
-						return false;
-					db.prepare(
-						`INSERT INTO memories (
-							id, content, type, importance, source_id, source_type,
-							who, tags, project, agent_id, created_at, updated_at, updated_by,
-							memory_kind
-						)
-						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-					).run(
-						summaryId,
-						summary,
-						"session_summary",
-						0.8,
-						body.sessionKey ?? null,
-						body.harness,
-						"system",
-						`session,summary,${body.harness}`,
-						project,
-						agentId,
-						now,
-						now,
-						"system",
-						null,
-					);
-
-					const table = db
-						.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
-						.get();
-					if (!table) return true;
-					const nodeId = body.sessionKey ? `${body.sessionKey}:compaction:${Date.parse(now)}` : crypto.randomUUID();
-					db.prepare(
-						`INSERT OR REPLACE INTO session_summaries (
-							id, project, depth, kind, content, token_count,
-							earliest_at, latest_at, session_key, harness,
-							agent_id, source_type, source_ref, meta_json, created_at
-						) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'compaction', ?, ?, ?)`,
-					).run(
-						nodeId,
-						project,
-						summary,
-						Math.ceil(summary.length / 4),
-						now,
-						now,
-						body.sessionKey ?? null,
-						body.harness,
-						agentId,
-						body.sessionKey ?? null,
-						JSON.stringify({ source: "compaction-complete" }),
-						now,
-					);
-					upsertThreadHead(db as unknown as Database, {
-						agentId,
-						nodeId,
-						content: summary,
-						latestAt: now,
-						project,
-						sessionKey: body.sessionKey ?? null,
-						sourceType: "compaction",
-						sourceRef: body.sessionKey ?? null,
-						harness: body.harness,
-					});
-					return true;
-				}, "db:hooks.session-summary.memory.write");
+				const admitted = await commitCompactionSummary(getDbAccessor(), {
+					agentId,
+					sessionKey: body.sessionKey ?? null,
+					harness: body.harness,
+					project,
+					summary,
+					summaryId,
+					now,
+					capturedAt,
+				});
 				if (!admitted) return c.json({ success: true, bypassed: true });
 
 				try {
@@ -1611,7 +1560,7 @@ function registerCompactionComplete(app: Hono): void {
 						sessionKey: body.sessionKey ?? null,
 						project,
 						harness: body.harness,
-						capturedAt: now,
+						capturedAt: capturedAt ?? now,
 						startedAt: null,
 						endedAt: null,
 						summary,

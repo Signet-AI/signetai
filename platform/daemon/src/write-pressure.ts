@@ -6,7 +6,8 @@ export function isRetryableWritePressure(error: unknown): boolean {
 		error instanceof Error &&
 		(error.name === "DbOwnerAdmissionError" ||
 			error.name === "TranscriptCaptureBacklogFullError" ||
-			error.name === "TranscriptCapturePendingError")
+			error.name === "TranscriptCapturePendingError" ||
+			error.name === "TranscriptLockTimeoutError")
 	);
 }
 

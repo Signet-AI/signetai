@@ -1,0 +1,322 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	truncateSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	redactTranscriptFileBatch,
+	type TranscriptFileBatch,
+	type TranscriptFileCheckpoint,
+} from "./session-transcript-files";
+
+const AGENT = "agent-a";
+const KEY = "target-session";
+const BATCH = 4 * 1024 * 1024;
+const REL = "transcripts/session.jsonl";
+
+let root = "";
+let path = "";
+
+beforeEach(() => {
+	root = mkdtempSync(join(tmpdir(), "transcript-files-"));
+	mkdirSync(join(root, "transcripts"));
+	path = join(root, REL);
+});
+
+afterEach(() => {
+	rmSync(root, { recursive: true, force: true });
+});
+
+function record(agent: string, key: string, filler: number, index: number): string {
+	return `${JSON.stringify({ agent_id: agent, session_key: key, session_id: key, index, content: "x".repeat(filler) })}\n`;
+}
+
+function step(checkpoint: TranscriptFileCheckpoint | null): Promise<TranscriptFileBatch> {
+	return redactTranscriptFileBatch({
+		basePath: root,
+		path: REL,
+		agentId: AGENT,
+		sessionKey: KEY,
+		generation: 1,
+		checkpoint,
+	});
+}
+
+async function drain(
+	start: TranscriptFileCheckpoint | null = null,
+	limit = 40,
+): Promise<TranscriptFileCheckpoint | null> {
+	let checkpoint = start;
+	for (let i = 0; i < limit; i++) {
+		const before = checkpoint?.offset ?? 0;
+		const result = await step(checkpoint);
+		if (result.checkpoint && result.checkpoint.inode === checkpoint?.inode)
+			expect(result.checkpoint.offset - before).toBeLessThanOrEqual(BATCH);
+		checkpoint = result.checkpoint;
+		if (result.done) return checkpoint;
+	}
+	throw new Error("cleanup did not finish");
+}
+
+function tmpFiles(): string[] {
+	return readdirSync(join(root, "transcripts")).filter((name) => name.includes(".delete-"));
+}
+
+function mixed(): { readonly content: string; readonly expected: string } {
+	let content = "";
+	let expected = "";
+	for (let i = 0; i < 6000; i++) {
+		const target = i % 3 === 0;
+		const line = record(AGENT, target ? KEY : "other-session", 900, i);
+		content += line;
+		if (!target) expected += line;
+	}
+	return { content, expected };
+}
+
+async function firstBatch(): Promise<{ readonly checkpoint: TranscriptFileCheckpoint; readonly expected: string }> {
+	const data = mixed();
+	writeFileSync(path, data.content);
+	const result = await step(null);
+	expect(result.done).toBe(false);
+	if (!result.checkpoint) throw new Error("missing checkpoint");
+	expect(result.checkpoint.ready).toBe(false);
+	return { checkpoint: result.checkpoint, expected: data.expected };
+}
+
+test("a removed output temp restarts the file instead of padding it with zeros", async () => {
+	const { checkpoint, expected } = await firstBatch();
+	for (const name of tmpFiles()) rmSync(join(root, "transcripts", name));
+	await drain(checkpoint);
+	expect(readFileSync(path, "utf8")).toBe(expected);
+	expect(tmpFiles()).toEqual([]);
+});
+
+test("a replaced output temp restarts the file instead of resuming into foreign bytes", async () => {
+	const { checkpoint, expected } = await firstBatch();
+	const [name] = tmpFiles();
+	if (!name) throw new Error("missing temp");
+	rmSync(join(root, "transcripts", name));
+	writeFileSync(join(root, "transcripts", name), "F".repeat(checkpoint.bytes + 4096));
+	await drain(checkpoint);
+	expect(readFileSync(path, "utf8")).toBe(expected);
+});
+
+test("a shortened output temp restarts the file instead of extending it", async () => {
+	const { checkpoint, expected } = await firstBatch();
+	const [name] = tmpFiles();
+	if (!name) throw new Error("missing temp");
+	truncateSync(join(root, "transcripts", name), Math.floor(checkpoint.bytes / 2));
+	await drain(checkpoint);
+	expect(readFileSync(path, "utf8")).toBe(expected);
+});
+
+test("a ready checkpoint never renames a shortened or missing output temp", async () => {
+	for (const damage of ["shorten", "remove"]) {
+		rmSync(path, { force: true });
+		const data = mixed();
+		writeFileSync(path, data.content);
+		let checkpoint: TranscriptFileCheckpoint | null = null;
+		for (let i = 0; i < 10; i++) {
+			const result = await step(checkpoint);
+			checkpoint = result.checkpoint;
+			if (checkpoint?.ready) break;
+		}
+		if (!checkpoint?.ready) throw new Error("never became ready");
+		const [name] = tmpFiles();
+		if (!name) throw new Error("missing temp");
+		if (damage === "shorten") truncateSync(join(root, "transcripts", name), checkpoint.bytes - 10);
+		if (damage === "remove") rmSync(join(root, "transcripts", name));
+		await drain(checkpoint);
+		expect(readFileSync(path, "utf8")).toBe(data.expected);
+		expect(tmpFiles()).toEqual([]);
+	}
+});
+
+test("a ready checkpoint ignores a temp of the right size but wrong identity", async () => {
+	const data = mixed();
+	writeFileSync(path, data.content);
+	let checkpoint: TranscriptFileCheckpoint | null = null;
+	for (let i = 0; i < 10; i++) {
+		checkpoint = (await step(checkpoint)).checkpoint;
+		if (checkpoint?.ready) break;
+	}
+	if (!checkpoint?.ready) throw new Error("never became ready");
+	const [name] = tmpFiles();
+	if (!name) throw new Error("missing temp");
+	rmSync(join(root, "transcripts", name));
+	writeFileSync(join(root, "transcripts", name), "F".repeat(checkpoint.bytes));
+	await drain(checkpoint);
+	expect(readFileSync(path, "utf8")).toBe(data.expected);
+});
+
+function giant(agent: string, key: string, size: number, metadata: "first" | "last"): string {
+	const head = `"agent_id":${JSON.stringify(agent)},"session_key":${JSON.stringify(key)},"session_id":${JSON.stringify(key)}`;
+	const body = `"content":"${"g".repeat(size)}"`;
+	return metadata === "first" ? `{${head},${body}}\n` : `{${body},${head}}\n`;
+}
+
+test("a giant record from another session is preserved byte for byte", async () => {
+	for (const metadata of ["first", "last"] as const) {
+		const before = record(AGENT, KEY, 50, 1) + record(AGENT, "other", 50, 2);
+		const after = record(AGENT, KEY, 50, 3) + record(AGENT, "other", 50, 4);
+		const big = giant(AGENT, "other", 6 * 1024 * 1024, metadata);
+		const foreign = giant("agent-b", KEY, 5 * 1024 * 1024, metadata);
+		writeFileSync(path, before + big + foreign + after);
+		const checkpoint = await drain();
+		expect(readFileSync(path, "utf8")).toBe(
+			record(AGENT, "other", 50, 2) + big + foreign + record(AGENT, "other", 50, 4),
+		);
+		expect(checkpoint?.records).toBe(2);
+	}
+});
+
+test("a giant owned record is dropped even when its metadata follows the content", async () => {
+	for (const metadata of ["first", "last"] as const) {
+		const keep = record(AGENT, "other", 50, 2);
+		writeFileSync(
+			path,
+			record(AGENT, KEY, 50, 1) +
+				giant(AGENT, `session:${KEY}`, 9 * 1024 * 1024, metadata) +
+				keep +
+				giant(AGENT, KEY, 4 * 1024 * 1024, metadata),
+		);
+		const checkpoint = await drain();
+		expect(readFileSync(path, "utf8")).toBe(keep);
+		expect(checkpoint?.records).toBe(3);
+		expect(tmpFiles()).toEqual([]);
+	}
+});
+
+test("a giant record spanning many batches survives a checkpoint round trip", async () => {
+	const keep = record(AGENT, "other", 50, 2);
+	const big = giant(AGENT, KEY, 10 * 1024 * 1024, "last");
+	writeFileSync(path, keep + big + keep);
+	let checkpoint: TranscriptFileCheckpoint | null = null;
+	for (let i = 0; i < 20; i++) {
+		const result: TranscriptFileBatch = await step(checkpoint);
+		checkpoint = result.checkpoint === null ? null : JSON.parse(JSON.stringify(result.checkpoint));
+		if (result.done) break;
+	}
+	expect(readFileSync(path, "utf8")).toBe(keep + keep);
+});
+
+test("nested or escaped lookalike metadata does not claim a record", async () => {
+	const decoys = [
+		`${JSON.stringify({ meta: { agent_id: AGENT, session_key: KEY }, agent_id: "agent-b", session_key: KEY })}\n`,
+		`${JSON.stringify({ content: `"agent_id":"${AGENT}","session_key":"${KEY}"`, agent_id: AGENT, session_key: "other" })}\n`,
+		`${JSON.stringify({ list: [{ agent_id: AGENT }], agent_id: AGENT, session_key: 7, session_id: KEY })}\n`,
+		"not json at all\n",
+		"\n",
+	];
+	const owned = `{"agent_id":"agent\\u002da","session\\u005fkey":null,"session_id":"session:${KEY}"}\n`;
+	writeFileSync(path, decoys.join("") + owned);
+	const checkpoint = await drain();
+	expect(readFileSync(path, "utf8")).toBe(decoys.join(""));
+	expect(checkpoint?.records).toBe(1);
+});
+
+test("a legacy markdown artifact with only session_id and agent_id is removed", async () => {
+	const artifact = join(root, "transcripts", "legacy.md");
+	writeFileSync(artifact, `---\nagent_id: ${AGENT}\nsession_id: ${KEY}\n---\nbody\n`);
+	const result = await redactTranscriptFileBatch({
+		basePath: root,
+		path: "transcripts/legacy.md",
+		agentId: AGENT,
+		sessionKey: KEY,
+		generation: 1,
+		checkpoint: null,
+	});
+	expect(result.done).toBe(true);
+	expect(existsSync(artifact)).toBe(false);
+});
+
+test("a legacy markdown artifact owned by another agent or key is left alone", async () => {
+	const artifact = join(root, "transcripts", "legacy.md");
+	for (const front of [
+		`agent_id: agent-b\nsession_id: ${KEY}`,
+		`agent_id: ${AGENT}\nsession_id: other`,
+		`session_id: ${KEY}`,
+	]) {
+		writeFileSync(artifact, `---\n${front}\n---\nbody\n`);
+		await expect(
+			redactTranscriptFileBatch({
+				basePath: root,
+				path: "transcripts/legacy.md",
+				agentId: AGENT,
+				sessionKey: KEY,
+				generation: 1,
+				checkpoint: null,
+			}),
+		).rejects.toThrow("ownership");
+		expect(existsSync(artifact)).toBe(true);
+	}
+});
+
+function sha(value: string): string {
+	return createHash("sha256").update(value).digest("hex");
+}
+
+async function collect(limit = 60): Promise<{ hashes: string[]; sizes: number[] }> {
+	const hashes: string[] = [];
+	const sizes: number[] = [];
+	let checkpoint: TranscriptFileCheckpoint | null = null;
+	for (let i = 0; i < limit; i++) {
+		const result: TranscriptFileBatch = await step(checkpoint);
+		const batch = result.recordHashes ?? [];
+		sizes.push(batch.length);
+		hashes.push(...batch);
+		checkpoint = result.checkpoint === null ? null : JSON.parse(JSON.stringify(result.checkpoint));
+		if (result.done) return { hashes, sizes };
+	}
+	throw new Error("cleanup did not finish");
+}
+
+test("a giant owned record returns its trailing top-level content hash exactly once", async () => {
+	const content = "g".repeat(9 * 1024 * 1024);
+	const known = sha(content);
+	const owned = `{"agent_id":"${AGENT}","session_key":"${KEY}","content":"${content}","source_sha256":"${known}"}\n`;
+	const decoys =
+		`${JSON.stringify({ agent_id: AGENT, session_key: "other", source_sha256: sha("foreign") })}\n` +
+		`${JSON.stringify({ agent_id: "agent-b", session_key: KEY, source_sha256: sha("agent-b") })}\n`;
+	const nested =
+		`${JSON.stringify({ agent_id: AGENT, session_key: KEY, meta: { source_sha256: sha("nested") }, content: `"source_sha256":"${sha("quoted")}"`, source_sha256: { value: sha("object") } })}\n` +
+		`${JSON.stringify({ agent_id: AGENT, session_key: KEY, content: "no hash here" })}\n` +
+		`${JSON.stringify({ agent_id: AGENT, session_key: KEY, source_sha256: "not-a-hash" })}\n`;
+	writeFileSync(path, decoys + owned + nested);
+	const { hashes } = await collect();
+	expect(hashes).toEqual([known]);
+	expect(readFileSync(path, "utf8")).toBe(decoys);
+});
+
+test("more than 256 owned hashes are returned across bounded batches", async () => {
+	const total = 700;
+	const expected: string[] = [];
+	let content = "";
+	let kept = "";
+	for (let i = 0; i < total; i++) {
+		const hash = sha(`record-${i}`);
+		expected.push(hash);
+		content += `${JSON.stringify({ agent_id: AGENT, session_key: KEY, index: i, source_sha256: hash })}\n`;
+		if (i % 50 === 0) {
+			const other = record(AGENT, "other", 20, i);
+			content += other;
+			kept += other;
+		}
+	}
+	writeFileSync(path, content);
+	const { hashes, sizes } = await collect();
+	expect(Math.max(...sizes)).toBeLessThanOrEqual(256);
+	expect(sizes.length).toBeGreaterThanOrEqual(3);
+	expect(hashes).toEqual(expected);
+	expect(readFileSync(path, "utf8")).toBe(kept);
+});

@@ -6,6 +6,78 @@ import { createDbOwnerClient } from "./db-owner-client";
 import type { TranscriptDeleteResult } from "./session-transcript-lifecycle";
 import { canonicalTranscriptPath, withTranscriptFileLock } from "./transcript-jsonl";
 
+test("capture admission does not put canonical file I/O in the serial owner queue", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-capture-admission-"));
+	mkdirSync(join(root, "memory"));
+	const owner = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
+	try {
+		await owner.start();
+		await owner.initialize(root);
+		await withTranscriptFileLock(canonicalTranscriptPath(root, "budget"), async () => {
+			const result = await owner.submit(
+				{
+					kind: "session_transcript_capture",
+					input: {
+						kind: "turns",
+						input: {
+							basePath: root,
+							agentId: "a",
+							sessionKey: "unrelated",
+							harness: "budget",
+							sourceFormat: "live",
+							capturedAt: new Date().toISOString(),
+							turns: [{ role: "user", content: "new" }],
+						},
+					},
+				},
+				{ operation: "test.capture-admission", lane: "write", deadlineMs: 150 },
+			).result;
+			expect(result).toMatchObject({ status: "admitted" });
+			expect(
+				await owner.submit(
+					{ kind: "query", statement: { sql: "SELECT 1 AS ready", result: "get", readonly: true } },
+					{ operation: "test.after-admission", lane: "read", deadlineMs: 150 },
+				).result,
+			).toEqual({ ready: 1 });
+		});
+	} finally {
+		await owner.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 15000);
+
+test("owner capture refuses a missing workspace instead of using its bound root", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-capture-workspace-"));
+	mkdirSync(join(root, "memory"));
+	const owner = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
+	try {
+		await owner.start();
+		await owner.initialize(root);
+		const input = {
+			basePath: root,
+			agentId: "a",
+			sessionKey: "missing-workspace",
+			harness: "budget",
+			sourceFormat: "live" as const,
+			turns: [{ role: "user" as const, content: "new" }],
+		};
+		await owner.submit(
+			{ kind: "session_transcript_capture", input: { kind: "turns", input } },
+			{ operation: "test.bind-workspace", lane: "write", deadlineMs: 1000 },
+		).result;
+		Reflect.deleteProperty(input, "basePath");
+		await expect(
+			owner.submit(
+				{ kind: "session_transcript_capture", input: { kind: "turns", input } },
+				{ operation: "test.capture-workspace", lane: "write", deadlineMs: 1000 },
+			).result,
+		).rejects.toThrow("explicit workspace");
+	} finally {
+		await owner.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 15000);
+
 test("queued transcript deletion uses the remaining owner deadline and resumes", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-delete-budget-"));
 	mkdirSync(join(root, "memory"));
@@ -40,22 +112,9 @@ test("queued transcript deletion uses the remaining owner deadline and resumes",
 			});
 		});
 		await ready;
+		const input = { basePath: root, agentId: "agent-a", sessionKey: "budget-delete", hard: false, changedBy: "test" };
 		const blocker = owner.submit(
-			{
-				kind: "session_transcript_capture",
-				input: {
-					kind: "turns",
-					input: {
-						basePath: root,
-						agentId: "agent-a",
-						sessionKey: "other-session",
-						harness: "budget",
-						sourceFormat: "live",
-						capturedAt: new Date().toISOString(),
-						turns: [{ role: "user", content: "other session" }],
-					},
-				},
-			},
+			{ kind: "session_transcript_delete", input },
 			{ operation: "test.blocker", lane: "write", deadlineMs: 5000 },
 		);
 		capture = blocker.result.catch((error: unknown) => error);
@@ -63,7 +122,6 @@ test("queued transcript deletion uses the remaining owner deadline and resumes",
 		while (owner.health().activeJobId !== blocker.job.id && Date.now() < until)
 			await new Promise((resolve) => setTimeout(resolve, 5));
 		expect(owner.health().activeJobId).toBe(blocker.job.id);
-		const input = { basePath: root, agentId: "agent-a", sessionKey: "budget-delete", hard: false, changedBy: "test" };
 		const result = await owner.submit<TranscriptDeleteResult>(
 			{ kind: "session_transcript_delete", input },
 			{ operation: "test.queued-delete", lane: "write", deadlineMs: 450 },

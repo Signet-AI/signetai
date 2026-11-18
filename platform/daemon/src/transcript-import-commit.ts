@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { admitSessionTranscriptInDb } from "./session-transcripts";
+import { filterTranscriptRecordsInDb } from "./session-transcripts";
 import { type WriteDb, prepareTypedStatement } from "./db-accessor";
 import {
 	TRANSCRIPT_IMPORT_LIMITS,
@@ -394,7 +395,18 @@ export function commitCompletedTranscriptBatchInTx(
 		if (
 			[commit.canonicalKey, commit.originalSessionKey ?? commit.sessionKey].some(
 				(sessionKey) =>
-					!admitSessionTranscriptInDb(db, { agentId: commit.agentId, sessionKey, capturedAt: commit.capturedAt }),
+					!admitSessionTranscriptInDb(db, { agentId: commit.agentId, sessionKey, capturedAt: commit.capturedAt }) ||
+					commit.messages.some(
+						(message) =>
+							message.content.length > 0 &&
+							filterTranscriptRecordsInDb(db, {
+								agentId: commit.agentId,
+								sessionKey,
+								harness: commit.harness,
+								transcript: message.content,
+								rawTranscript: JSON.stringify(message),
+							}) === "",
+					),
 			)
 		) {
 			results.push({

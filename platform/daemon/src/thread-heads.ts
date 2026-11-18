@@ -1,4 +1,9 @@
-import type { Database } from "bun:sqlite";
+interface ThreadHeadDb {
+	prepare(sql: string): {
+		get(...params: unknown[]): unknown;
+		run(...params: unknown[]): unknown;
+	};
+}
 
 export interface ThreadHeadSeed {
 	readonly agentId: string;
@@ -29,7 +34,7 @@ export function deriveThreadKey(input: {
 	readonly harness: string | null;
 }): string {
 	const project = input.project?.trim();
-	let sourceRef = input.sourceRef?.trim();
+	const sourceRef = input.sourceRef?.trim();
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
 
@@ -58,7 +63,7 @@ export function deriveThreadLabel(input: {
 	readonly harness: string | null;
 }): string {
 	const project = projectTag(input.project);
-	let sourceRef = input.sourceRef?.trim();
+	const sourceRef = input.sourceRef?.trim();
 	const sessionKey = input.sessionKey?.trim();
 	const harness = input.harness?.trim();
 
@@ -86,12 +91,12 @@ export function summarizeThreadContent(content: string, limit = 240): string {
 	return `${base.slice(0, Math.max(1, limit - 3)).trim()}...`;
 }
 
-function hasThreadHeadsTable(db: Database): boolean {
+function hasThreadHeadsTable(db: ThreadHeadDb): boolean {
 	const row = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_thread_heads'`).get();
 	return row !== undefined;
 }
 
-export function upsertThreadHead(db: Database, seed: ThreadHeadSeed): void {
+export function upsertThreadHead(db: ThreadHeadDb, seed: ThreadHeadSeed): void {
 	if (!hasThreadHeadsTable(db)) return;
 	const key = deriveThreadKey({
 		project: seed.project,

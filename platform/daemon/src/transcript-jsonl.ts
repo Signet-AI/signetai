@@ -551,8 +551,9 @@ function releaseTranscriptFileLock(lockPath: string, token: string): void {
 export async function withTranscriptFileLock<T>(
 	path: string,
 	write: () => T | Promise<T>,
-	options?: { readonly timeoutMs?: number },
+	options?: { readonly timeoutMs?: number; readonly lockHeld?: boolean },
 ): Promise<T> {
+	if (options?.lockHeld) return await write();
 	mkdirSync(dirname(path), { recursive: true });
 	const lock = await acquireTranscriptFileLock(path, options?.timeoutMs ?? 30_000);
 
@@ -820,7 +821,7 @@ export function writeCanonicalTranscriptSnapshot(
 		readonly transcript: string;
 		readonly onLegacySessionReplaced?: (legacyTurns: number, sourceTurns: number) => void;
 	},
-	options?: { readonly timeoutMs?: number },
+	options?: { readonly timeoutMs?: number; readonly lockHeld?: boolean },
 ): Promise<readonly CanonicalTranscriptRecord[] | null> {
 	const turns = transcriptTextToTurns(input.transcript);
 	if (turns.length === 0) return Promise.resolve(null);
@@ -926,7 +927,7 @@ export function writeCanonicalTranscriptSnapshot(
 
 export function appendCanonicalTranscriptTurns(
 	input: TranscriptIdentity & { readonly turns: readonly TranscriptTurn[] },
-	options?: { readonly timeoutMs?: number },
+	options?: { readonly timeoutMs?: number; readonly lockHeld?: boolean },
 ): Promise<boolean> {
 	const turns = input.turns.filter((turn) => cleanTurnContent(turn.content).length > 0);
 	if (turns.length === 0) return Promise.resolve(false);
@@ -951,7 +952,7 @@ export function appendCanonicalTranscriptTurns(
 export function appendCanonicalTranscriptSnapshotIfMissing(
 	input: TranscriptIdentity & { readonly transcript: string },
 	knownSessionKeys?: Set<string>,
-	options?: { readonly timeoutMs?: number },
+	options?: { readonly timeoutMs?: number; readonly lockHeld?: boolean },
 ): Promise<string | null> {
 	const turns = transcriptTextToTurns(input.transcript);
 	if (turns.length === 0) return Promise.resolve(null);
@@ -975,7 +976,7 @@ export function appendCanonicalTranscriptSnapshotIfMissing(
 export function rewriteReplacingLiveOnlySessions(
 	jsonlPath: string,
 	replacements: ReadonlyMap<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>,
-	options?: { readonly timeoutMs?: number },
+	options?: { readonly timeoutMs?: number; readonly lockHeld?: boolean },
 ): Promise<number> {
 	if (replacements.size === 0 || !existsSync(jsonlPath)) return Promise.resolve(0);
 	const write = async (): Promise<number> => {

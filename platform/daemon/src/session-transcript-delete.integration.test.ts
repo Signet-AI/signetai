@@ -6,7 +6,8 @@ import { createFreshWorkspaceV2 } from "@signet/core";
 import { buildHermeticEnvironment } from "../../../scripts/run-hermetic-tests";
 import { createToken, generateSecret } from "./auth/tokens";
 import { createDbOwnerClient } from "./db-owner-client";
-import { canonicalTranscriptPath } from "./transcript-jsonl";
+import type { TranscriptCaptureAdmission } from "./session-transcript-lifecycle";
+import { appendCanonicalTranscriptTurns, canonicalTranscriptPath } from "./transcript-jsonl";
 
 async function until(check: () => Promise<boolean>): Promise<void> {
 	const deadline = Date.now() + 30000;
@@ -68,7 +69,7 @@ test("real daemon retains pinned recall, restores bypass, and captures a reused 
 				},
 				{ operation: "test.seed-transcript", lane: "write", deadlineMs: 5000 },
 			).result;
-			await seed.submit(
+			const admission = await seed.submit<TranscriptCaptureAdmission>(
 				{
 					kind: "session_transcript_capture",
 					input: {
@@ -84,9 +85,22 @@ test("real daemon retains pinned recall, restores bypass, and captures a reused 
 						},
 					},
 				},
-				{ operation: "test.seed-canonical", lane: "write", deadlineMs: 5000 },
+				{ operation: "test.seed-canonical-admission", lane: "write", deadlineMs: 5000 },
 			).result;
+			if (
+				!admission ||
+				!("status" in admission) ||
+				admission.status !== "admitted" ||
+				admission.capture.kind !== "turns"
+			) {
+				throw new Error("Canonical seed was not admitted");
+			}
+			await appendCanonicalTranscriptTurns(admission.capture.input);
 		}
+		const seeded = readFileSync(canonicalTranscriptPath(workspace, "codex"), "utf8");
+		expect(seeded).toContain("old private quokka");
+		expect(seeded).toContain("other agent quokka");
+		expect(seeded).toContain("other session quokka");
 		await seed.submit(
 			{
 				kind: "batch",

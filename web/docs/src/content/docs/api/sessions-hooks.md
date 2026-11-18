@@ -363,7 +363,13 @@ session manifest.
 }
 ```
 
-`harness` and `summary` are required.
+`harness` and `summary` are required. Optional `capturedAt` is the evidence's
+original timestamp; malformed values return `400`. After deleting and reopening
+a key, compaction summaries require a timestamp after the deletion watermark
+and at or after the generation opening. Old or undated summaries are rejected
+without memory, temporal-node, or artifact-file writes. Undated summaries for
+never-deleted keys remain supported. Admission, the memory row, the temporal
+node, and its thread head commit together in the database owner.
 
 If `sessionKey` is present, the daemon uses it to preserve lineage:
 
@@ -609,19 +615,32 @@ restore the deleted generation. A live session remains bypassed until it ends,
 including across daemon restarts. Normal session-end hooks and canonical TTL
 finalization end the bypass. Attempting to disable that bypass returns
 `409`. A later explicit session start with the same key opens a new generation
-for new records. Owner-side admission uses the original capture timestamp, not
-whether the write is a live turn: snapshots, summaries, artifacts, and imports
-captured after the new generation opened are admitted, including deferred
-end-of-session capture after the session ends. Evidence at or before the deletion
-watermark, before the open generation, or without a capture timestamp remains
-rejected. Do not relabel historical records with a new capture timestamp.
+for new records. A start received during pending cleanup is remembered; its new
+generation opens when cleanup completes. Owner-side admission still requires an
+original capture timestamp after the watermark and at or after the new
+generation's opening, including deferred end-of-session capture. Within a
+resumed snapshot, each record's usable harness `timestamp` (or canonical
+`captured_at`) is checked separately: records at or before the deletion watermark
+are dropped, even if the snapshot was captured later. Undated records are
+dropped when their normalized content's SHA-256 matches a removed record in the
+same agent and session key. Receipts retain hashes, not deleted content, across
+key reuse. An intentionally repeated, undated turn with identical content is
+also dropped. Do not relabel historical records with a new timestamp.
 
 The hook-side lifecycle check is advisory on owner timeout or unavailability;
-it does not fail the harness. Owner-side admission at each evidence write remains
-the enforcement point, so this does not reopen a deleted generation.
+it does not fail the harness. Start/end intents are durably queued and replayed,
+in order and idempotently, on the next successful lifecycle contact. Only the
+database owner changes deletion state. Status checks do not clear user bypasses.
+Owner-side admission at each evidence write remains the enforcement point, so
+an advisory timeout does not reopen a deleted generation.
 
-Cleanup processes at most 64 database items, one uploaded-byte chunk, and four
-4 MiB file slices per request. Shared JSONL files are rewritten under the
+Cleanup processes at most 64 database items (including transcript-record hashes),
+one uploaded-byte chunk, and four 4 MiB file slices per request. Each file slice
+returns at most 256 canonical-record hashes. A scoped receipt retains at most
+65,536 distinct record hashes; exceeding that limit fails explicitly rather
+than discarding a fence or reporting completion. Giant JSONL records stream
+across slices without being loaded whole. A missing, replaced, or shortened
+rewrite temp restarts that file from its beginning. Shared JSONL files are rewritten under the
 canonical transcript lock, preserving other sessions' records and concurrent
 appends. Only the session's recorded targets and its harness's canonical file
 are visited. The harness's original files and user backups remain after either

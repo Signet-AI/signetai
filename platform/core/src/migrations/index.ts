@@ -1606,7 +1606,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				"idx_capture_jobs_session_delete",
 				"idx_import_records_session_delete",
 			],
-			columns: [{ table: "source_import_records", column: "redacted_bytes" }],
+			columns: [
+				{ table: "source_import_records", column: "redacted_bytes" },
+				{ table: "session_transcript_deletions", column: "pending_start" },
+				{ table: "session_transcript_deletions", column: "lifecycle_seq" },
+				{ table: "session_transcript_deletions", column: "hash_offset" },
+			],
 		},
 	},
 ];

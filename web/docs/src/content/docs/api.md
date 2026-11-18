@@ -98,7 +98,13 @@ admin role in team and hybrid modes. Optional `generation=N` makes retries fail
 with `409` if the capture generation changed. Pinned
 memories remain; memories with other evidence are retained for Dreaming
 re-evaluation. See [transcript deletion](/api/sessions-hooks/#delete-apisessionskeytranscript)
-for identity, live-session bypass, key-reuse, and retry semantics.
+for identity, live-session bypass, key-reuse, and retry semantics. Resumed keys
+admit records individually: usable record timestamps at or before the deletion
+watermark are dropped; undated records are rejected when their content hash
+matches deleted evidence in the same agent and key. Only hashes, not removed
+content, remain in the bounded deletion receipt. Starts received during pending
+cleanup are applied when cleanup completes, and timed-out start/end lifecycle
+intents are persisted for the next owner contact.
 
 ## Reference sections
 
