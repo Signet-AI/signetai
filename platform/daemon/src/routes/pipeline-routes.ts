@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 import type { Context, Hono } from "hono";
-import { DbOwnerCancelledError } from "../db-owner-client";
+import { DbOwnerCancelledError, DbOwnerError } from "../db-owner-client";
 import { isAgentRegistered, resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
@@ -699,7 +699,16 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.get("/api/dream/evidence/coverage", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		if (!(await isAgentRegistered(scopedAgent.agentId))) {
+		let registered: boolean;
+		try {
+			registered = await isAgentRegistered(scopedAgent.agentId);
+		} catch (error) {
+			if (error instanceof DbOwnerError && String(error.code).startsWith("DB_OWNER_")) {
+				return c.json({ error: error.message, code: String(error.code) }, 503);
+			}
+			throw error;
+		}
+		if (!registered) {
 			return c.json({ error: `Agent not found: ${scopedAgent.agentId}` }, 404);
 		}
 		const coverage = await getDreamingEvidenceCoverage(getDbAccessor(), scopedAgent.agentId);
