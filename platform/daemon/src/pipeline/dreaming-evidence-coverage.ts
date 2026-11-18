@@ -59,6 +59,8 @@ export interface DreamingEvidenceCoverageBounds {
 }
 
 const SOURCE_PAGE_ROWS = 100;
+const MAX_DELIVERY_RANGES_PER_ENTRY = 200;
+const SOURCE_PAGE_RESULT_BYTE_BUDGET = 512_000;
 const PASS_PAGE_ROWS = 100;
 const CLASSIFY_CHUNK_ROWS = 100;
 const CONTINUATIONS_LIMIT = 50;
@@ -511,7 +513,13 @@ class DreamingEvidenceCoverageWalk {
 			return;
 		}
 		if (result.step === "sources") {
+			let pageBytes = 0;
 			for (const entry of result.entries) {
+				pageBytes += JSON.stringify(entry).length;
+				if (pageBytes > SOURCE_PAGE_RESULT_BYTE_BUDGET) {
+					this.incomplete ??= "sources-result-budget";
+					break;
+				}
 				const key = `${entry.kind}\u0000${entry.id}`;
 				if (this.entries.has(key)) continue;
 				this.entries.set(key, {
@@ -547,6 +555,10 @@ class DreamingEvidenceCoverageWalk {
 				if (end <= start) continue;
 				entry.deliveredChars += end - start;
 				entry.deliveredRanges.push([start, end]);
+				if (entry.deliveredRanges.length > MAX_DELIVERY_RANGES_PER_ENTRY) {
+					entry.deliveredRanges = entry.deliveredRanges.slice(-MAX_DELIVERY_RANGES_PER_ENTRY);
+					this.incomplete ??= "delivery-ranges";
+				}
 			}
 			this.scannedPasses += result.seen;
 			this.passCreatedAt = result.afterCreatedAt;
