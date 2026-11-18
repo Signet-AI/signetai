@@ -42,7 +42,7 @@ import type {
 	DbOwnerStatement,
 	DbOwnerWorkloadClass,
 } from "./db-owner-protocol";
-import type { DreamingEvidenceCoverage } from "./pipeline/dreaming-evidence-coverage";
+import type { DreamingEvidenceCoverageStepResult } from "./pipeline/dreaming-evidence-coverage";
 import { applyVectorRepairBatch } from "./vector-repair-owner";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
@@ -834,8 +834,8 @@ export async function dbOwnerDreamingEvidenceCoverage(
 	owner: DbOwnerClient,
 	input: DbOwnerDreamingEvidenceCoverage,
 	options: DbOwnerSqlOptions,
-): Promise<DreamingEvidenceCoverage> {
-	return await submitWithAdmission<DreamingEvidenceCoverage>(
+): Promise<DreamingEvidenceCoverageStepResult> {
+	return await submitWithAdmission<DreamingEvidenceCoverageStepResult>(
 		owner,
 		{ kind: "dreaming_evidence_coverage", input },
 		{ ...options, lane: "read" },

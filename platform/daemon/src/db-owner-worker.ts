@@ -718,12 +718,8 @@ export function runDbOwnerWorker(): void {
 	async function executeDreamingEvidenceCoverage(
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_evidence_coverage" }>,
 	): Promise<unknown> {
-		const { getDreamingEvidenceCoverageInDb } = await import("./pipeline/dreaming-evidence-coverage");
-		return getDreamingEvidenceCoverageInDb(
-			db as unknown as import("./db-accessor").ReadDb,
-			request.input.agentId,
-			request.input,
-		);
+		const { scanDreamingEvidenceCoverageStep } = await import("./pipeline/dreaming-evidence-coverage");
+		return scanDreamingEvidenceCoverageStep(db as unknown as import("./db-accessor").ReadDb, request.input);
 	}
 
 	function executeSourceGraph(

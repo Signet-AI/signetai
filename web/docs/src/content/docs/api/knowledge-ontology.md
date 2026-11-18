@@ -730,7 +730,8 @@ Requires `admin` permission.
   "redeliveryRatio": 0.0317,
   "pendingContinuations": 1,
   "openStalledAttention": 0,
-  "complete": true,
+  "scanComplete": true,
+  "fullyReviewed": false,
   "byKind": {
     "memory": { "sources": { "eligible": 4 }, "chars": { "eligible": 9000 } },
     "artifact": { "sources": { "eligible": 3 }, "chars": { "eligible": 7000 } },
@@ -741,13 +742,23 @@ Requires `admin` permission.
 
 `dreamedFraction` is `chars.reviewed / chars.eligible`, or `null` when no
 evidence is eligible. Eligible evidence is the episodic sources the pass
-pipeline itself enumerates; reviewed characters come from the evidence cursor,
-which only advances through review. `consumedByCursorBasis` splits consumed
-characters by `dreaming_evidence_consumption.cursor_basis`: a `delivery` basis
-is legacy consumption without a matching review and is never counted as
-reviewed. `stalledRows` counts sources with `stalled_passes > 0`.
-`complete` is false when a bound truncated the scan; the counts are then lower
-bounds.
+pipeline itself enumerates (requeued evidence is counted once, by cursor
+paging); reviewed characters come from the evidence cursor, which only
+advances through review. `consumedByCursorBasis` splits consumed characters by
+`dreaming_evidence_consumption.cursor_basis`: a `delivery` basis is legacy
+consumption without a matching review and is never counted as reviewed.
+`stalledRows` counts sources with `stalled_passes > 0`.
+
+The scan walks the whole agent scope as a sequence of bounded database-owner
+jobs (100 sources, 100 passes, or 100 classifications per job) within an
+overall budget of 100,000 sources, 50,000 passes, and a two-minute deadline.
+`scanComplete` is false only when that budget or the deadline exhausted the
+scan; the counts are then lower bounds. `fullyReviewed` is true only when the
+scan completed, evidence was eligible, and every eligible character was either
+reviewed or never consumed without review. Requests for an agent ID that is
+not registered return 404. Like `GET /api/dream/status`, the route requires
+`admin` permission; an `admin` token may read any agent's coverage, while a
+scoped non-admin token can only read its own scope.
 
 ### GET /api/dream/passes/active
 

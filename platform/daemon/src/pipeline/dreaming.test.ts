@@ -61,6 +61,7 @@ import {
 } from "./dreaming-evidence-consumption";
 import { renderDreamingEvidence } from "./dreaming-evidence";
 import {
+	DREAMING_EVIDENCE_COVERAGE_DEADLINE_MS,
 	DREAMING_EVIDENCE_COVERAGE_MAX_PASSES,
 	DREAMING_EVIDENCE_COVERAGE_MAX_SOURCES,
 	getDreamingEvidenceCoverageInDb,
@@ -748,6 +749,7 @@ describe("Dreaming", () => {
 		const coverage = getDreamingEvidenceCoverageInDb(db as unknown as ReadDb, AGENT, {
 			maxSources: DREAMING_EVIDENCE_COVERAGE_MAX_SOURCES,
 			maxPasses: DREAMING_EVIDENCE_COVERAGE_MAX_PASSES,
+			deadlineMs: DREAMING_EVIDENCE_COVERAGE_DEADLINE_MS,
 		});
 		expect(coverage.agentId).toBe(AGENT);
 		expect(coverage.sources.eligible).toBe(1);
@@ -759,7 +761,8 @@ describe("Dreaming", () => {
 		expect(coverage.chars.redelivered).toBe(0);
 		expect(coverage.dreamedFraction).toBe(1);
 		expect(coverage.pendingContinuations).toBe(0);
-		expect(coverage.complete).toBe(true);
+		expect(coverage.scanComplete).toBe(true);
+		expect(coverage.fullyReviewed).toBe(true);
 	}, 15_000);
 
 	it("terminalizes reviewed evidence after cross-pass fragments (#1712)", async () => {
