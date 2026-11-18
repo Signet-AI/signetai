@@ -12,7 +12,7 @@ It reports:
 
 ## Privacy
 
-Every input and output is your private data: the database snapshot, the extracted prompts, and the injected memories. All of it is written to `runs/`, which is gitignored. Do not commit or share it.
+Every input and output is your private data: the database snapshot, the extracted prompts, and the injected memories. All of it is written to `runs/`, which is gitignored. If you pass `--dir` or `REPLAY_DIR`, choose a directory outside the repository. Do not commit or share the output.
 
 ## Requirements
 
@@ -30,9 +30,9 @@ python3 prepare.py
 python3 analyze.py base branch
 ```
 
-`prepare.py` takes a read-only `VACUUM INTO` snapshot of `~/.agents/data/signet.db`. It writes a scratch `agent.yaml` from yours, with localhost networking, no harness sync, the memory pipeline paused, and Dreaming disabled. It copies your plugin registry, then picks the session window per harness that names the most known people and projects. Use `--hermes-session <id>` to force a specific Hermes session and `--dir` to write elsewhere.
+`prepare.py` opens your workspace database read-only and takes a `VACUUM INTO` snapshot of it. It writes a scratch `agent.yaml` from yours, with localhost networking, no harness sync, the memory pipeline paused, and Dreaming disabled, plus a default workspace layout with no path overrides. It copies your plugin registry, then picks the session window per harness that names the most known people and projects. Use `--hermes-session <id>` to force a specific Hermes session and `--dir` to write elsewhere.
 
-`run.sh` copies the snapshot into a fresh workspace, starts the daemon with `HOME` and `SIGNET_PATH` pointed inside `runs/`, and waits for startup integrity maintenance to settle. It warms recall, then replays every session through its connector. When the replay finishes, it exports the daemon log and the dedupe ledger and stops the daemon. Set `PROBE=1` to also record the top direct recall candidates per turn with `probe.py`. Each run starts from the same snapshot, so runs never see each other's writes.
+`run.sh` copies the snapshot into a fresh, writable workspace and starts the daemon with `HOME` and `SIGNET_PATH` pointed inside `runs/`. The drivers also point `XDG_*` and `HERMES_HOME` inside `runs/` and drop any inherited Signet, Hermes, Pi, OpenCode, Claude, or Codex environment variables, so connector code loads from your installation but reads and writes only the sandbox. It then waits for startup integrity maintenance to settle. It warms recall, then replays every session through its connector. When the replay finishes, it exports the daemon log and the dedupe ledger and stops the daemon. Set `PROBE=1` to also record the top direct recall candidates per turn with `probe.py`. Each run starts from the same snapshot, so runs never see each other's writes.
 
 `analyze.py` prints the per-session table and totals, and writes `per-turn-evidence.md` and `summary.json` to `runs/`.
 

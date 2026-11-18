@@ -13,11 +13,20 @@ const opencodePlugin = process.env.OPENCODE_PLUGIN ?? join(realHome, ".config/op
 const piExtension = process.env.PI_EXTENSION ?? join(realHome, ".pi/agent/extensions/signet-pi.js");
 
 mkdirSync(sandboxHome, { recursive: true });
-process.env.HOME = sandboxHome;
-process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${port}`;
-process.env.SIGNET_PATH = join(dir, "ws");
-process.env.SIGNET_TELEMETRY_OPTOUT = "1";
-delete process.env.SIGNET_AGENT_ID;
+for (const key of Object.keys(process.env)) {
+	if (/^(SIGNET|HERMES|XDG|PI|OPENCODE|CLAUDE|CODEX)_/.test(key)) delete process.env[key];
+}
+Object.assign(process.env, {
+	HOME: sandboxHome,
+	XDG_CONFIG_HOME: join(sandboxHome, ".config"),
+	XDG_DATA_HOME: join(sandboxHome, ".local/share"),
+	XDG_STATE_HOME: join(sandboxHome, ".local/state"),
+	XDG_CACHE_HOME: join(sandboxHome, ".cache"),
+	HERMES_HOME: join(sandboxHome, ".hermes"),
+	SIGNET_DAEMON_URL: `http://127.0.0.1:${port}`,
+	SIGNET_PATH: join(dir, "ws"),
+	SIGNET_TELEMETRY_OPTOUT: "1",
+});
 
 const transcripts = JSON.parse(readFileSync(join(dir, "transcripts.json"), "utf8"));
 const turns: readonly string[] = transcripts[session]?.turns ?? [];

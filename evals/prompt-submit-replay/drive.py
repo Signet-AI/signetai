@@ -20,11 +20,17 @@ def parse_args():
 
 args = parse_args()
 SANDBOX_HOME = os.path.join(args.dir, "home")
+SANDBOXED = ("SIGNET_", "HERMES_", "XDG_", "PI_", "OPENCODE_", "CLAUDE_", "CODEX_")
 ENV = {
-    **{key: value for key, value in os.environ.items() if not key.startswith("SIGNET_")},
+    **{key: value for key, value in os.environ.items() if not key.startswith(SANDBOXED)},
+    "HOME": SANDBOX_HOME,
+    "XDG_CONFIG_HOME": os.path.join(SANDBOX_HOME, ".config"),
+    "XDG_DATA_HOME": os.path.join(SANDBOX_HOME, ".local", "share"),
+    "XDG_STATE_HOME": os.path.join(SANDBOX_HOME, ".local", "state"),
+    "XDG_CACHE_HOME": os.path.join(SANDBOX_HOME, ".cache"),
+    "HERMES_HOME": os.path.join(SANDBOX_HOME, ".hermes"),
     "SIGNET_DAEMON_URL": f"http://127.0.0.1:{args.port}",
     "SIGNET_PATH": os.path.join(args.dir, "ws"),
-    "HOME": SANDBOX_HOME,
     "SIGNET_TELEMETRY_OPTOUT": "1",
 }
 with open(os.path.join(args.dir, "transcripts.json")) as handle:
@@ -76,6 +82,7 @@ def run_cli(session, harness):
 def run_hermes(session):
     sys.path.insert(0, os.path.join(args.hermes_home, "hermes-agent"))
     sys.path.insert(0, os.path.join(args.hermes_home, "plugins"))
+    os.environ.clear()
     os.environ.update(ENV)
     provider = importlib.import_module("signet").SignetMemoryProvider()
     key = f"{args.run}-{session.replace('#', '-')}"
