@@ -420,6 +420,48 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 		expect(result.warnings?.some((warning) => warning.includes("fts_incomplete"))).toBe(true);
 	});
 
+	it("reports candidates recall suppressed as already delivered", async () => {
+		seedEntityContext();
+		const deps = makeDeps({
+			hybridRecall: (async () => ({
+				results: [],
+				meta: { dedupe: { enabled: true, contextEpoch: 1, suppressed: 1, repeatedReturned: 0 } },
+			})) as unknown as PromptDeps["hybridRecall"],
+		});
+
+		const result = await submit("How should Signet architecture handle prompt context?", "session-suppressed", deps);
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "deduped" });
+	});
+
+	it("injects source memories instead of an unattributed model summary", async () => {
+		seedEntityContext();
+		const deps = makeDeps({
+			hybridRecall: (async () => ({
+				results: [
+					{
+						id: "summary:0123456789ab",
+						content: "[model summary, verify against source memories] Signet uses entity-gated recall.",
+						score: 0.95,
+						source: "llm_summary",
+						type: "semantic",
+						pinned: false,
+						importance: 0.9,
+						supplementary: true,
+					},
+					...SIGNET_RECALL.map((row) => ({ ...row, source: "hybrid", type: "fact", pinned: false, importance: 0.8 })),
+				],
+			})) as unknown as PromptDeps["hybridRecall"],
+		});
+
+		const result = await submit("How should Signet architecture handle prompt context?", "session-summary", deps);
+
+		expect(result.engine).toBe("entity-recall");
+		expect(result.inject).toContain("Prompt context comes from entity-gated recall.");
+		expect(result.inject).not.toContain("summary:");
+		expect(result.inject).not.toContain("model summary");
+	});
+
 	it("injects nothing without a session to claim the delivery in", async () => {
 		seedEntityContext();
 
