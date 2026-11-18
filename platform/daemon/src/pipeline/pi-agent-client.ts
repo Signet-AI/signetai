@@ -15,6 +15,7 @@ import {
 import { getLlmConcurrencyLimit } from "./provider";
 import type { PiAgentTool, PiAgentWorkerInput, PiAgentWorkerRequest, PiAgentWorkerResponse } from "./pi-agent-protocol";
 
+const PI_AGENT_DISPOSE_ACK_TIMEOUT_MS = 1_000;
 const workers = new Set<Worker>();
 let accepting = true;
 const disposers = new Map<Worker, () => Promise<void>>();
@@ -63,6 +64,7 @@ export async function createWorkerAgentSession(
 	let sessionId = "";
 	let executionThreadId = 0;
 	let disposed = false;
+	let exited = false;
 	let prompt: { resolve: () => void; reject: (error: Error) => void } | undefined;
 	let cancel: { resolve: () => void; reject: (error: Error) => void } | undefined;
 	let nextCancelId = 0;
@@ -141,6 +143,7 @@ export async function createWorkerAgentSession(
 	worker.on("exit", (code) => {
 		workers.delete(worker);
 		disposed = true;
+		exited = true;
 		fail(new Error(`Pi agent worker exited (${code})`));
 	});
 	let disposal: Promise<void> | undefined;
@@ -149,22 +152,24 @@ export async function createWorkerAgentSession(
 			disposed = true;
 			fail(new Error("Pi agent session closed"));
 			listeners.clear();
-			await new Promise<void>((resolve) => {
-				let timer: ReturnType<typeof setTimeout>;
-				const finish = () => {
-					clearTimeout(timer);
-					worker.off("message", acknowledged);
-					worker.off("exit", finish);
-					resolve();
-				};
-				const acknowledged = (message: PiAgentWorkerResponse) => {
-					if (message.type === "aborted") finish();
-				};
-				timer = setTimeout(finish, PI_AGENT_CANCEL_ACK_TIMEOUT_MS);
-				worker.on("message", acknowledged);
-				worker.once("exit", finish);
-				worker.postMessage({ type: "abort" });
-			});
+			if (!exited) {
+				await new Promise<void>((resolve) => {
+					let timer: ReturnType<typeof setTimeout>;
+					const finish = () => {
+						clearTimeout(timer);
+						worker.off("message", acknowledged);
+						worker.off("exit", finish);
+						resolve();
+					};
+					const acknowledged = (message: PiAgentWorkerResponse) => {
+						if (message.type === "aborted") finish();
+					};
+					timer = setTimeout(finish, PI_AGENT_DISPOSE_ACK_TIMEOUT_MS);
+					worker.on("message", acknowledged);
+					worker.once("exit", finish);
+					worker.postMessage({ type: "abort" });
+				});
+			}
 			await worker.terminate();
 			await Promise.allSettled(toolCalls);
 			workers.delete(worker);
