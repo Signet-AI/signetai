@@ -677,10 +677,6 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 	};
 }
 
-function asStrictBool(value: unknown): boolean | undefined {
-	return typeof value === "boolean" ? value : undefined;
-}
-
 function asStrictStringArray(value: unknown): readonly string[] | undefined {
 	if (!Array.isArray(value)) return undefined;
 	const items: string[] = [];
@@ -758,9 +754,9 @@ function parseOpenRouterProvider(raw: unknown): RoutingOpenRouterProviderConfig 
 	const only = asStrictStringArray(raw.only);
 	const ignore = asStrictStringArray(raw.ignore);
 	const allowFallbacksRaw = raw.allowFallbacks ?? raw.allow_fallbacks;
-	const allowFallbacks = asStrictBool(allowFallbacksRaw);
+	const allowFallbacks = asBool(allowFallbacksRaw);
 	const requireParametersRaw = raw.requireParameters ?? raw.require_parameters;
-	const requireParameters = asStrictBool(requireParametersRaw);
+	const requireParameters = asBool(requireParametersRaw);
 	const dataCollectionRaw = raw.dataCollection ?? raw.data_collection;
 	const dataCollection = dataCollectionRaw === "allow" || dataCollectionRaw === "deny" ? dataCollectionRaw : undefined;
 	const quantizations = parseOpenRouterQuantizations(raw.quantizations);
@@ -1049,6 +1045,7 @@ export function parseRoutingConfig(raw: unknown): RouterResult<RoutingConfig> {
 	}
 
 	const accounts: Record<string, RoutingAccountConfig> = { ...base.accounts };
+	const invalidTargetIssues: RoutingValidationIssue[] = [];
 	if (isRecord(routingRaw.accounts)) {
 		for (const [accountId, accountRaw] of Object.entries(routingRaw.accounts)) {
 			const parsed = parseAccountConfig(accountRaw);
@@ -1065,7 +1062,22 @@ export function parseRoutingConfig(raw: unknown): RouterResult<RoutingConfig> {
 	if (targetsRaw) {
 		for (const [targetId, targetRaw] of Object.entries(targetsRaw)) {
 			const parsed = parseTargetConfig(targetRaw);
-			if (parsed) targets[targetId] = parsed;
+			if (parsed) {
+				targets[targetId] = parsed;
+				continue;
+			}
+			if (
+				isRecord(targetRaw) &&
+				asString(targetRaw.executor) === "openrouter" &&
+				parseOpenRouterConfig(targetRaw) === null
+			) {
+				invalidTargetIssues.push({
+					severity: "error",
+					field: `targets.${targetId}.openrouter`,
+					ref: targetId,
+					message: `Target "${targetId}" has an invalid openrouter config and was dropped from routing.`,
+				});
+			}
 		}
 	}
 
@@ -1146,11 +1158,11 @@ export function parseRoutingConfig(raw: unknown): RouterResult<RoutingConfig> {
 		...(Object.keys(workloads).length > 0 ? { workloads } : {}),
 	};
 
-	const issues = validateRoutingReferences(config);
+	const issues = [...invalidTargetIssues, ...validateRoutingReferences(config)];
 	const errors = issues.filter((issue) => issue.severity === "error");
 	if (errors.length > 0) {
 		const summary = errors.map((issue) => `${issue.field}="${issue.ref}"`).join("; ");
-		return err("invalid-config", `Routing config has ${errors.length} broken reference(s): ${summary}`, {
+		return err("invalid-config", `Routing config has ${errors.length} invalid entr(ies): ${summary}`, {
 			issues: errors,
 			warnings: issues.filter((issue) => issue.severity === "warning"),
 		});

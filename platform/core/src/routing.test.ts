@@ -766,7 +766,7 @@ describe("inference config + decision engine", () => {
 		});
 	});
 
-	it("rejects an invalid OpenRouter provider block by dropping the target", () => {
+	it("rejects an invalid OpenRouter provider block instead of dropping the target", () => {
 		const parsed = parseRoutingConfig({
 			inference: {
 				targets: {
@@ -794,11 +794,13 @@ describe("inference config + decision engine", () => {
 			},
 		});
 
-		expect(parsed.ok).toBe(true);
-		if (!parsed.ok) return;
-		expect(parsed.value.targets.flash).toBeUndefined();
-		expect(parsed.value.targets.sorted).toBeUndefined();
-		expect(parsed.value.targets.typed).toBeUndefined();
+		expect(parsed.ok).toBe(false);
+		if ("error" in parsed) {
+			const refs = (parsed.error.details?.issues as { ref: string }[]).map((issue) => issue.ref).sort();
+			expect(refs).toEqual(["flash", "sorted", "typed"]);
+			expect(parsed.error.message).toContain("targets.flash.openrouter");
+			expect(parsed.error.message).toContain("targets.typed.openrouter");
+		}
 	});
 
 	it("parses thinking controls on local OpenAI-compatible targets only", () => {
@@ -1035,6 +1037,34 @@ describe("routing reference validation (#1005)", () => {
 		if (!("error" in parsed)) throw new Error("expected config parse failure");
 		expect(parsed.error.code).toBe("invalid-config");
 		expect(parsed.error.message).toContain('defaultPolicy="background-acpx"');
+		expect(parsed.error.details?.issues).toHaveLength(1);
+	});
+
+	it("refuses to load when an openrouter target block is invalid instead of silently rerouting", () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				targets: {
+					dreaming: {
+						executor: "openrouter",
+						openrouter: { provider: { allowFallbacks: "yes" } },
+						models: { default: { model: "deepseek/deepseek-v4.1-flash-1017" } },
+					},
+					fallback: { executor: "ollama", models: { default: { model: "gemma" } } },
+				},
+				policies: {
+					background: {
+						mode: "automatic",
+						defaultTargets: [makeRoutingTargetRef("dreaming", "default")],
+						fallbackTargets: [makeRoutingTargetRef("fallback", "default")],
+					},
+				},
+				defaultPolicy: "background",
+			},
+		});
+		expect(parsed.ok).toBe(false);
+		if (!("error" in parsed)) throw new Error("expected config parse failure");
+		expect(parsed.error.code).toBe("invalid-config");
+		expect(parsed.error.message).toContain('targets.dreaming.openrouter="dreaming"');
 		expect(parsed.error.details?.issues).toHaveLength(1);
 	});
 
