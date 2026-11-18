@@ -9,6 +9,8 @@ import {
 	buildMemoryBenchArgs,
 	captureOpenRouterSnapshot,
 	openRouterApiBaseUrl,
+	openRouterSnapshotApiKey,
+	openRouterSnapshotDir,
 	openRouterSnapshotModels,
 	openRouterSnapshotNeeded,
 	writeOpenRouterSnapshot,
@@ -217,7 +219,7 @@ describe("MemoryBench launcher", () => {
 		);
 		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).search).toEqual({ transcript_evidence_limit: 5 });
 		setBenchRecallTranscriptEvidenceLimit(dir, benchRecallTranscriptEvidenceLimit({}));
-		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).search).toEqual({ transcript_evidence_limit: 5 });
+		expect(parseYaml(await readFile(join(dir, "agent.yaml"), "utf8")).search).toBeUndefined();
 		expect(() => benchRecallTranscriptEvidenceLimit({ SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT: "6" })).toThrow(
 			"from 0 to 5",
 		);
@@ -226,6 +228,10 @@ describe("MemoryBench launcher", () => {
 		);
 		expect(() => benchRecallTranscriptEvidenceLimit({ SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT: "two" })).toThrow(
 			"from 0 to 5",
+		);
+		setBenchRecallTranscriptEvidenceLimit(
+			dir,
+			benchRecallTranscriptEvidenceLimit({ SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT: "5" }),
 		);
 		expect(loadMemoryConfig(dir).search.transcript_evidence_limit).toBe(5);
 	});
@@ -376,6 +382,68 @@ describe("MemoryBench launcher", () => {
 		expect(mismatch).toContain("Bun 1.3.8 at /home/u/node_modules/bun/bin/bun.exe");
 	});
 
+	test("authenticates snapshot fetches with only OPENROUTER_API_KEY", async () => {
+		const seen: (string | null)[] = [];
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch: async (request) => {
+				seen.push(new URL(request.url).searchParams.get("none") ?? request.headers.get("authorization"));
+				return Response.json({ data: { usage: 1 } });
+			},
+		});
+		try {
+			expect(openRouterSnapshotApiKey({ OPENROUTER_API_KEY: "or-key" })).toBe("or-key");
+			expect(
+				openRouterSnapshotApiKey({ OPENROUTER_API_KEY: "or-key", SIGNET_BENCH_DREAMING_API_KEY: "dream-key" }),
+			).toBe("or-key");
+			expect(openRouterSnapshotApiKey({ SIGNET_BENCH_DREAMING_API_KEY: "dream-key" })).toBe("");
+			await captureOpenRouterSnapshot(
+				`http://127.0.0.1:${server.port}/api/v1`,
+				openRouterSnapshotApiKey({ OPENROUTER_API_KEY: "or-key", SIGNET_BENCH_DREAMING_API_KEY: "dream-key" }),
+				[],
+			);
+			expect(seen.every((authorization) => authorization === "Bearer or-key")).toBe(true);
+		} finally {
+			server.stop(true);
+		}
+	});
+
+	test("writes snapshots under the memorybench run directory", () => {
+		expect(openRouterSnapshotDir("run-1").endsWith(join("memorybench", "data", "runs", "run-1", "openrouter"))).toBe(
+			true,
+		);
+	});
+
+	test("detects snapshot models from judge and answering-model CLI args", () => {
+		const env = { SIGNET_BENCH_ANSWERING_MODEL: "openrouter:a/b" };
+		expect(openRouterSnapshotModels(env, "zai-coding-cn", ["run", "-j", "openrouter:c/d"])).toEqual(["a/b", "c/d"]);
+		expect(openRouterSnapshotModels(env, "zai-coding-cn", ["run", "--answering-model=openrouter:e/f"])).toEqual([
+			"a/b",
+			"e/f",
+		]);
+		expect(
+			openRouterSnapshotModels({}, "zai-coding-cn", ["run", "--judge=openrouter:g/h", "-m=openrouter:i/j"]),
+		).toEqual(["g/h", "i/j"]);
+		expect(openRouterSnapshotModels({}, "zai-coding-cn", ["run", "-j", "glm-5.3-flash"])).toEqual([]);
+		expect(openRouterSnapshotNeeded({}, "zai-coding-cn", ["run", "--judge", "openrouter:c/d"])).toBe(true);
+		expect(openRouterSnapshotNeeded({}, "zai-coding-cn", ["run", "--judge", "glm-5.3-flash"])).toBe(false);
+	});
+
+	test("removes a stale recall evidence limit when the env is unset", async () => {
+		const root = await workspace();
+		const agentsDir = join(root, "agents");
+		await Bun.write(join(agentsDir, "agent.yaml"), setupAgentYaml);
+		setBenchRecallTranscriptEvidenceLimit(agentsDir, 3);
+		expect((parseYaml(await Bun.file(join(agentsDir, "agent.yaml")).text()) as { search?: unknown }).search).toEqual({
+			transcript_evidence_limit: 3,
+		});
+		setBenchRecallTranscriptEvidenceLimit(agentsDir, undefined);
+		expect(
+			(parseYaml(await Bun.file(join(agentsDir, "agent.yaml")).text()) as { search?: unknown }).search,
+		).toBeUndefined();
+	});
+
 	test("names the default run id after the selected benchmark", () => {
 		const previousRunId = process.env.SIGNET_BENCH_RUN_ID;
 		delete process.env.SIGNET_BENCH_RUN_ID;
@@ -390,6 +458,10 @@ describe("MemoryBench launcher", () => {
 
 			const longFlag = buildMemoryBenchArgs(["run", "--benchmark", "beam-1m"], false, "dreaming", true);
 			expect(longFlag[longFlag.indexOf("-r") + 1]).toContain("-beam-1m-");
+
+			const equalsFlag = buildMemoryBenchArgs(["run", "--benchmark=locomo"], false, "dreaming", true);
+			expect(equalsFlag[equalsFlag.indexOf("-r") + 1]).toContain("-locomo-");
+			expect(equalsFlag.join(" ")).not.toContain("-b longmemeval");
 		} finally {
 			if (previousRunId !== undefined) process.env.SIGNET_BENCH_RUN_ID = previousRunId;
 			else delete process.env.SIGNET_BENCH_RUN_ID;
