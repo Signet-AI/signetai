@@ -2980,7 +2980,7 @@
     },
     {
       "path": "prompt-entity-context.ts",
-      "line": 280,
+      "line": 257,
       "api": "existsSync",
       "source": "if (!existsSync(memoryDbPath)) return [];",
       "category": "hot-path"

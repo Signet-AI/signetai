@@ -197,75 +197,52 @@ function selectPromptEntityMatches(rows: readonly PromptEntityRow[], userMessage
 
 const PROMPT_ENTITY_PAGE_ROWS = 1000;
 
-type PromptEntitySource = {
-	readonly operation: string;
-	readonly initial: number;
-	readonly page: string;
-	readonly next: string;
+type PromptEntityPageRow = {
+	readonly cursor: number;
+	readonly entity_id: string;
+	readonly entity_name: string;
+	readonly entity_type: string;
+	readonly name_text: string;
+	readonly aliases: string;
+	readonly mentions: number;
+	readonly pinned: number;
 };
 
-const PROMPT_ENTITY_SOURCES: readonly PromptEntitySource[] = [
-	{
-		operation: "user-prompt-submit.entity-names",
-		initial: 0,
-		page: `SELECT
+const PROMPT_ENTITY_FILTER = `FROM entities e
+		 WHERE e.agent_id = ?
+		   AND e.rowid > ?
+		   AND COALESCE(e.status, 'active') = 'active'
+		   AND LOWER(e.entity_type) IN ('person', 'project')
+		 ORDER BY e.rowid`;
+
+const PROMPT_ENTITY_PAGE = `SELECT
 		   e.rowid AS cursor,
 		   e.id AS entity_id,
 		   e.name AS entity_name,
 		   COALESCE(e.entity_type, 'unknown') AS entity_type,
-		   COALESCE(e.canonical_name, LOWER(e.name)) AS matched_text,
-		   'name' AS match_source,
+		   COALESCE(e.canonical_name, LOWER(e.name)) AS name_text,
+		   (SELECT json_group_array(a.alias)
+		      FROM entity_aliases a
+		     WHERE a.agent_id = e.agent_id
+		       AND a.entity_id = e.id
+		       AND a.status = 'active') AS aliases,
 		   COALESCE(e.mentions, 0) AS mentions,
 		   COALESCE(e.pinned, 0) AS pinned
-		 FROM entities e
-		 WHERE e.agent_id = ?
-		   AND e.rowid > ?
-		   AND COALESCE(e.status, 'active') = 'active'
-		   AND LOWER(e.entity_type) IN ('person', 'project')
-		 ORDER BY e.rowid
-		 LIMIT ?`,
-		next: `SELECT e.rowid AS cursor
-		 FROM entities e
-		 WHERE e.agent_id = ?
-		   AND e.rowid > ?
-		   AND COALESCE(e.status, 'active') = 'active'
-		   AND LOWER(e.entity_type) IN ('person', 'project')
-		 ORDER BY e.rowid
-		 LIMIT 1`,
-	},
-	{
-		operation: "user-prompt-submit.entity-aliases",
-		initial: 0,
-		page: `SELECT
-		   a.rowid AS cursor,
-		   e.id AS entity_id,
-		   e.name AS entity_name,
-		   COALESCE(e.entity_type, 'unknown') AS entity_type,
-		   a.alias AS matched_text,
-		   'alias' AS match_source,
-		   COALESCE(e.mentions, 0) AS mentions,
-		   COALESCE(e.pinned, 0) AS pinned
-		 FROM entity_aliases a NOT INDEXED
-		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
-		 WHERE a.agent_id = ?
-		   AND a.rowid > ?
-		   AND a.status = 'active'
-		   AND COALESCE(e.status, 'active') = 'active'
-		   AND LOWER(e.entity_type) IN ('person', 'project')
-		 ORDER BY a.rowid
-		 LIMIT ?`,
-		next: `SELECT a.rowid AS cursor
-		 FROM entity_aliases a NOT INDEXED
-		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
-		 WHERE a.agent_id = ?
-		   AND a.rowid > ?
-		   AND a.status = 'active'
-		   AND COALESCE(e.status, 'active') = 'active'
-		   AND LOWER(e.entity_type) IN ('person', 'project')
-		 ORDER BY a.rowid
-		 LIMIT 1`,
-	},
-];
+		 ${PROMPT_ENTITY_FILTER}
+		 LIMIT ?`;
+
+const PROMPT_ENTITY_NEXT = `SELECT e.rowid AS cursor
+		 ${PROMPT_ENTITY_FILTER}
+		 LIMIT 1`;
+
+function promptEntityRows(row: PromptEntityPageRow): PromptEntityRow[] {
+	const parsed: unknown = JSON.parse(row.aliases);
+	const aliases = Array.isArray(parsed) ? parsed.filter((alias): alias is string => typeof alias === "string") : [];
+	return [
+		{ ...row, matched_text: row.name_text, match_source: "name" },
+		...aliases.map((alias) => ({ ...row, matched_text: alias, match_source: "alias" as const })),
+	];
+}
 
 function resultTooLarge(error: unknown): boolean {
 	return typeof error === "object" && error !== null && "code" in error && error.code === "DB_OWNER_RESULT_TOO_LARGE";
@@ -290,46 +267,42 @@ export async function matchPromptEntities(
 	if (tables.length !== 2) return [];
 	const promptTerms = promptEntityTerms(userMessage);
 	const candidates: PromptEntityRow[] = [];
-	for (const source of PROMPT_ENTITY_SOURCES) {
-		let after = source.initial;
-		let rows = PROMPT_ENTITY_PAGE_ROWS;
-		while (true) {
-			const page = await ownerReadAll<PromptEntityRow & { readonly cursor: number }>(
-				owner,
-				source.page,
-				[agentId, after, rows],
-				{ operation: source.operation, deadlineMs: 5_000, estimatedWorkUnits: rows },
-			).catch((error: unknown) => {
-				if (resultTooLarge(error)) return null;
-				throw error;
-			});
-			if (page === null && rows > 1) {
-				rows = Math.ceil(rows / 2);
-				continue;
-			}
-			if (page === null) {
-				const skipped = await ownerReadOne<{ readonly cursor: number }>(owner, source.next, [agentId, after], {
-					operation: `${source.operation}.skip`,
-					deadlineMs: 5_000,
-					estimatedWorkUnits: 1,
-				});
-				if (!skipped) break;
-				logger.warn("hooks", "Skipped a prompt entity row larger than the DB owner result limit", {
-					operation: source.operation,
-					agentId,
-				});
-				after = skipped.cursor;
-				rows = PROMPT_ENTITY_PAGE_ROWS;
-				continue;
-			}
-			for (const row of page) {
-				if (promptPhraseSpan(promptTerms, row.matched_text)) candidates.push(row);
-			}
-			const last = page.at(-1);
-			if (!last || page.length < rows) break;
-			after = last.cursor;
-			rows = Math.min(PROMPT_ENTITY_PAGE_ROWS, rows * 2);
+	let after = 0;
+	let rows = PROMPT_ENTITY_PAGE_ROWS;
+	while (true) {
+		const page = await ownerReadAll<PromptEntityPageRow>(owner, PROMPT_ENTITY_PAGE, [agentId, after, rows], {
+			operation: "user-prompt-submit.entities",
+			deadlineMs: 5_000,
+			estimatedWorkUnits: rows,
+		}).catch((error: unknown) => {
+			if (resultTooLarge(error)) return null;
+			throw error;
+		});
+		if (page === null && rows > 1) {
+			rows = Math.ceil(rows / 2);
+			continue;
 		}
+		if (page === null) {
+			const skipped = await ownerReadOne<{ readonly cursor: number }>(owner, PROMPT_ENTITY_NEXT, [agentId, after], {
+				operation: "user-prompt-submit.entities.skip",
+				deadlineMs: 5_000,
+				estimatedWorkUnits: 1,
+			});
+			if (!skipped) break;
+			logger.warn("hooks", "Skipped a prompt entity row larger than the DB owner result limit", { agentId });
+			after = skipped.cursor;
+			rows = PROMPT_ENTITY_PAGE_ROWS;
+			continue;
+		}
+		for (const row of page) {
+			for (const candidate of promptEntityRows(row)) {
+				if (promptPhraseSpan(promptTerms, candidate.matched_text)) candidates.push(candidate);
+			}
+		}
+		const last = page.at(-1);
+		if (!last || page.length < rows) break;
+		after = last.cursor;
+		rows = Math.min(PROMPT_ENTITY_PAGE_ROWS, rows * 2);
 	}
 	return selectPromptEntityMatches(candidates, userMessage);
 }

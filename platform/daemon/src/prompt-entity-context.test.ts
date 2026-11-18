@@ -116,7 +116,7 @@ describe("matchPromptEntities", () => {
 		expect(matches.map((match) => match.entityName)).toEqual(["Quillonbridge"]);
 	});
 
-	it("pages aliases by rowid without a per-page sort", async () => {
+	it("pages entities with their aliases without a per-page sort", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			const entity = db.prepare(
@@ -136,7 +136,7 @@ describe("matchPromptEntities", () => {
 		const submit = owner.submit.bind(owner);
 		const statements: Array<{ readonly sql: string; readonly params: readonly unknown[] }> = [];
 		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
-			if (options.operation === "user-prompt-submit.entity-aliases" && request.kind === "query") {
+			if (options.operation === "user-prompt-submit.entities" && request.kind === "query") {
 				statements.push({ sql: request.statement.sql, params: request.statement.params ?? [] });
 			}
 			return submit<Result>(request, options);
@@ -147,7 +147,7 @@ describe("matchPromptEntities", () => {
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Aliased Project 2499", "alias"]]);
 		expect(statements.length).toBeGreaterThan(1);
 		const statement = statements[0];
-		if (!statement) throw new Error("Expected the alias page query");
+		if (!statement) throw new Error("Expected the entity page query");
 		const plan = getDbAccessor().withReadDb((db) =>
 			db
 				.prepare(`EXPLAIN QUERY PLAN ${statement.sql}`)
@@ -175,7 +175,7 @@ describe("matchPromptEntities", () => {
 		const submit = owner.submit.bind(owner);
 		let reads = 0;
 		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
-			if (options.operation.startsWith("user-prompt-submit.entity-names")) reads += 1;
+			if (options.operation.startsWith("user-prompt-submit.entities")) reads += 1;
 			return submit<Result>(request, options);
 		};
 		const matches = await matchPromptEntities(DB_PATH(), "default", "Where is Lanternfield now?").finally(() => {
@@ -185,7 +185,7 @@ describe("matchPromptEntities", () => {
 		expect(reads).toBeLessThan(40);
 	});
 
-	it("keeps paging aliases when the page boundary row is replaced between pages", async () => {
+	it("keeps paging when the page boundary entity is replaced between pages", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			const entity = db.prepare(
@@ -208,7 +208,7 @@ describe("matchPromptEntities", () => {
 		let pages = 0;
 		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
 			const handle = submit<Result>(request, options);
-			if (options.operation !== "user-prompt-submit.entity-aliases") return handle;
+			if (options.operation !== "user-prompt-submit.entities") return handle;
 			pages += 1;
 			if (pages !== 1) return handle;
 			return {
@@ -217,10 +217,14 @@ describe("matchPromptEntities", () => {
 					const rows = value as unknown as Array<{ readonly cursor: number }>;
 					const boundary = rows.at(-1)?.cursor;
 					getDbAccessor().withWriteTx((db) => {
-						db.prepare("DELETE FROM entity_aliases WHERE rowid = ?").run(boundary);
+						const id = db.prepare("SELECT id FROM entities WHERE rowid = ?").get(boundary) as { id: string };
 						db.prepare(
-							`INSERT INTO entity_aliases (rowid, id, entity_id, agent_id, alias, canonical_alias, status)
-							 VALUES (?, 'alias-replacement', 'ent-churn-0', 'default', 'zzzz replacement', 'zzzz replacement', 'active')`,
+							"UPDATE entity_aliases SET alias = 'zzzz replacement', canonical_alias = 'zzzz replacement' WHERE entity_id = ?",
+						).run(id.id);
+						db.prepare("DELETE FROM entities WHERE rowid = ?").run(boundary);
+						db.prepare(
+							`INSERT INTO entities (rowid, id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+							 VALUES (?, 'ent-replacement', 'Zzzz Replacement', 'zzzz replacement', 'project', 'default', 1, datetime('now'), datetime('now'))`,
 						).run(boundary);
 					});
 					return value;
@@ -234,7 +238,53 @@ describe("matchPromptEntities", () => {
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Night Harbor", "alias"]]);
 	});
 
-	it("skips an alias whose ordering key alone exceeds the owner result limit", async () => {
+	it("does not scan other agents' aliases when paging", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const entity = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', ?, 1, ?, ?)`,
+			);
+			const alias = db.prepare(
+				`INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, status)
+				 VALUES (?, ?, ?, ?, ?, 'active')`,
+			);
+			entity.run("ent-other", "Other Project", "other project", "other-agent", now, now);
+			for (let index = 0; index < 20_000; index += 1) {
+				alias.run(`alias-other-${index}`, "ent-other", "other-agent", `otheralias${index}`, `otheralias${index}`);
+			}
+			entity.run("ent-mine", "Lantern Quay", "lantern quay", "default", now, now);
+			alias.run("alias-mine", "ent-mine", "default", "quaylighthouse", "quaylighthouse");
+		});
+		const owner = await getDbOwner(DB_PATH());
+		const submit = owner.submit.bind(owner);
+		const statements: Array<{ readonly sql: string; readonly params: readonly unknown[] }> = [];
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			if (/^user-prompt-submit\.entit(ies|y-names|y-aliases)$/.test(options.operation) && request.kind === "query") {
+				statements.push({ sql: request.statement.sql, params: request.statement.params ?? [] });
+			}
+			return submit<Result>(request, options);
+		};
+		const matches = await matchPromptEntities(DB_PATH(), "default", "Is quaylighthouse still docked?").finally(() => {
+			owner.submit = submit;
+		});
+		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Lantern Quay", "alias"]]);
+		expect(statements.length).toBeGreaterThan(0);
+		const plans = getDbAccessor().withReadDb((db) =>
+			statements.map((statement) =>
+				db
+					.prepare(`EXPLAIN QUERY PLAN ${statement.sql}`)
+					.all(...(statement.params as Array<string | number>))
+					.map((row) => String((row as { detail: string }).detail)),
+			),
+		);
+		for (const plan of plans) {
+			expect(plan.filter((detail) => /SCAN|PRIMARY KEY/.test(detail))).toEqual([]);
+			expect(plan.some((detail) => detail.includes("agent_id=?"))).toBe(true);
+		}
+	});
+
+	it("skips an entity whose aliases alone exceed the owner result limit", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			const entity = db.prepare(

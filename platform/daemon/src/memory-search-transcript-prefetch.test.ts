@@ -719,6 +719,7 @@ describe("transcript evidence prefetch owner scheduling", () => {
 					}),
 				};
 			};
+			const warn = spyOn(logger, "warn");
 			try {
 				const raw = loadMemoryConfig(directory);
 				const error = await hybridRecall(
@@ -748,7 +749,9 @@ describe("transcript evidence prefetch owner scheduling", () => {
 				);
 				expect(cancellation.signal.aborted).toBe(true);
 				expect(error instanceof Error ? error.message : null).toBe("late-stage abort");
+				expect(warn.mock.calls.map((call) => call[1]).filter((message) => message.includes("(non-fatal)"))).toEqual([]);
 			} finally {
+				warn.mockRestore();
 				owner.submit = submit;
 			}
 		},
