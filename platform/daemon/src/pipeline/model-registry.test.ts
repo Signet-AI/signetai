@@ -58,8 +58,12 @@ describe("static model registry", () => {
 			["openrouter", "openrouter"],
 		] as const) {
 			const available = new Set(getBuiltinModels(sdkProvider).map((model) => model.id));
-			expect(PIPELINE_MODEL_CATALOG[provider].every((preset) => available.has(preset.value))).toBe(true);
+			const piBacked = PIPELINE_MODEL_CATALOG[provider].filter((preset) => preset.source === "provider");
+			expect(piBacked.every((preset) => available.has(preset.value))).toBe(true);
 		}
+		expect(PIPELINE_MODEL_CATALOG.codex.map((preset) => preset.value)).toEqual(
+			expect.arrayContaining(["gpt-5.5", "gpt-5.3-codex-spark"]),
+		);
 	});
 
 	it("keeps refresh API-compatible without changing the static catalog", async () => {
