@@ -32,6 +32,11 @@ bun run build
 bun test
 ```
 
+The build needs a Rust toolchain from [rustup](https://rustup.rs). Native
+accelerators build with it, and the dashboard's graph layout compiles to
+WebAssembly from `surfaces/app`; its build adds the `wasm32-unknown-unknown`
+target through rustup when it is missing.
+
 `bun install` also installs the tracked Git hooks for the current worktree through
 the `prepare` script. Run `bun run hooks:install` explicitly when re-enabling
 them after changing worktrees or Git configuration.
