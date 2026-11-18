@@ -5,11 +5,20 @@ import os
 import re
 import shutil
 import sqlite3
+import subprocess
 import sys
 
 import yaml
 
 HOME = os.path.expanduser("~")
+LAYOUT_MODULE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "platform", "core", "src", "workspace-layout.ts"
+)
+LAYOUT_SCRIPT = """
+import { findExistingWorkspaceDatabase, resolveWorkspaceLayout } from %s;
+const root = process.argv[1];
+console.log(JSON.stringify({ database: findExistingWorkspaceDatabase(root), runtime: resolveWorkspaceLayout(root).runtime }));
+"""
 SKIP_PREFIXES = (
     "<environment_context",
     "<user_instructions",
@@ -41,17 +50,17 @@ def parse_args():
     return parser.parse_args()
 
 
-def source_database(args):
-    layout_path = os.path.join(args.agents, "workspace-layout.json")
-    layout = json.load(open(layout_path)) if os.path.exists(layout_path) else {}
-    override = (layout.get("overrides") or {}).get("database")
-    if override:
-        return override if os.path.isabs(override) else os.path.join(args.agents, override)
-    return os.path.join(args.agents, "data", "signet.db")
+def source_layout(args):
+    script = LAYOUT_SCRIPT % json.dumps(os.path.realpath(LAYOUT_MODULE))
+    result = subprocess.run(["bun", "-e", script, args.agents], capture_output=True, text=True, check=True)
+    layout = json.loads(result.stdout)
+    if not layout["database"]:
+        raise SystemExit(f"no workspace database found under {args.agents}")
+    return layout
 
 
-def snapshot(args):
-    source = source_database(args)
+def snapshot(args, layout):
+    source = layout["database"]
     target = os.path.join(args.dir, "pristine.db")
     if os.path.exists(target):
         os.remove(target)
@@ -61,7 +70,7 @@ def snapshot(args):
     print(f"snapshot: {target} ({os.path.getsize(target) // 1_000_000} MB)", file=sys.stderr)
 
 
-def workspace_config(args):
+def workspace_config(args, layout):
     with open(os.path.join(args.agents, "agent.yaml")) as handle:
         config = yaml.safe_load(handle)
     config["harnesses"] = []
@@ -74,7 +83,7 @@ def workspace_config(args):
         yaml.safe_dump(config, handle, sort_keys=False)
     with open(os.path.join(args.dir, "workspace-layout.json"), "w") as handle:
         json.dump({"version": 2, "overrides": {}}, handle, indent=2)
-    registry = os.path.join(args.agents, "runtime", "plugins", "registry-v1.json")
+    registry = os.path.join(layout["runtime"], "plugins", "registry-v1.json")
     if os.path.exists(registry):
         shutil.copyfile(registry, os.path.join(args.dir, "plugin-registry.json"))
 
@@ -245,9 +254,10 @@ def extract(args):
 def main():
     args = parse_args()
     os.makedirs(args.dir, exist_ok=True)
+    layout = source_layout(args)
     if not args.skip_snapshot:
-        snapshot(args)
-    workspace_config(args)
+        snapshot(args, layout)
+    workspace_config(args, layout)
     extract(args)
 
 
