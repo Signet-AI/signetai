@@ -1804,6 +1804,9 @@ export async function handleUserPromptSubmit(
 			startedAt: start,
 			engine,
 		});
+		const recallWarnings = recall.degradation
+			? [...(warnings ?? []), `Prompt recall was incomplete (${recall.degradation}); matching memories may be missing.`]
+			: warnings;
 		recordRecallOutcome({
 			surface: "prompt_injection",
 			resultCount: delivered.length,
@@ -1823,7 +1826,7 @@ export async function handleUserPromptSubmit(
 					memoryCount: 0,
 					queryTerms: keywordTerms.join(" ") || undefined,
 					engine,
-					warnings,
+					warnings: recallWarnings,
 				},
 				deps.logger,
 			);
@@ -1845,7 +1848,7 @@ export async function handleUserPromptSubmit(
 				memoryCount: delivered.length,
 				queryTerms: keywordTerms.join(" ") || undefined,
 				engine,
-				warnings,
+				warnings: recallWarnings,
 			},
 			deps.logger,
 		);
@@ -1878,6 +1881,7 @@ type PromptEntityRecall = {
 	readonly entities: readonly PromptEntityMatch[];
 	readonly results: readonly RecallResult[];
 	readonly engine: "no-entity" | "no-recall-hit" | "entity-recall";
+	readonly degradation?: NonNullable<RecallResponse["meta"]["degradation"]>;
 };
 
 async function recallPromptEntityContext(
@@ -1923,7 +1927,13 @@ async function recallPromptEntityContext(
 		const serialized = createPromptContext(buildPromptRecallInject(entities, [...results, row]))?.serialized ?? "";
 		if (serialized.length <= input.injectBudget) results.push(row);
 	}
-	return { entities, results, engine: results.length > 0 ? "entity-recall" : "no-recall-hit" };
+	const degradation = recall.meta?.degradation;
+	return {
+		entities,
+		results,
+		engine: results.length > 0 ? "entity-recall" : "no-recall-hit",
+		...(degradation ? { degradation } : {}),
+	};
 }
 
 function promptRecallHeader(entities: readonly PromptEntityMatch[]): string {
