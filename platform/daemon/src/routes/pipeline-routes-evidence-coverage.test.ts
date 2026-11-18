@@ -10,6 +10,7 @@ import { authConfig } from "./state";
 import { registerPipelineRoutes } from "./pipeline-routes";
 
 const originalAgentId = process.env.SIGNET_AGENT_ID;
+const realAgentId = { ...(await import("../agent-id.js")) };
 
 function createPipelineApp(role: TokenRole = "admin", agentScope = "agent-a"): Hono {
 	const app = new Hono();
@@ -134,9 +135,8 @@ describe("GET /api/dream/evidence/coverage", () => {
 	});
 
 	it("maps an owner failure during agent lookup to 503 instead of 404", async () => {
-		const actualAgentId = await import("../agent-id.js");
 		mock.module("../agent-id.js", () => ({
-			...actualAgentId,
+			...realAgentId,
 			isAgentRegistered: async () => {
 				throw new DbOwnerDiedError();
 			},
@@ -148,7 +148,7 @@ describe("GET /api/dream/evidence/coverage", () => {
 			const body = (await response.json()) as { error: string; code: string };
 			expect(body.code).toBe("DB_OWNER_DIED");
 		} finally {
-			mock.restore();
+			mock.module("../agent-id.js", () => realAgentId);
 		}
 	});
 });
