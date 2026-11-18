@@ -113,6 +113,7 @@ async function runPi(): Promise<void> {
 	if (!isPiExtension(extension)) throw new Error(`${piExtension} has no default export`);
 	const handlers = new Map<string, Handler[]>();
 	const sent: Message[] = [];
+	const history: unknown[] = [];
 	const api = new Proxy(
 		{
 			on(name: string, fn: Handler): void {
@@ -138,6 +139,7 @@ async function runPi(): Promise<void> {
 			getSessionName: () => undefined,
 			getEntries: () => [],
 			getBranch: () => [],
+			buildSessionContext: () => ({ messages: history }),
 		},
 	};
 	const fire = async (name: string, event: unknown): Promise<unknown[]> => {
@@ -156,13 +158,15 @@ async function runPi(): Promise<void> {
 	const start = await delivered("context", { messages: [] });
 	record(sessionId, 0, "session-start", start.map((message) => textOf(message.content)).join("\n"));
 	for (const [index, turn] of turns.entries()) {
+		history.push({ role: "user", content: turn });
 		await fire("input", { text: turn, source: "interactive" });
 		const injected = [
 			...(await delivered("before_agent_start", { prompt: turn, systemPrompt: "" })),
 			...(await delivered("context", { messages: [] })),
 		];
+		history.push(...injected.map((message) => ({ role: "custom", ...message })));
 		const text = injected
-			.filter((message) => message.customType === "signet-pi-hidden-recall")
+			.filter((message) => message.customType?.startsWith("signet-pi-"))
 			.map((message) => textOf(message.content))
 			.join("\n");
 		record(sessionId, index + 1, "prompt", text);

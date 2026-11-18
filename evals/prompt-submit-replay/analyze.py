@@ -38,6 +38,8 @@ def memory_section(text):
         stripped = line.strip()
         if stripped == "## Plugin Context":
             continue
+        if stripped.startswith("</signet-"):
+            break
         if stripped.startswith("## ") and not stripped.startswith(MARKERS):
             break
         section.append(line)
