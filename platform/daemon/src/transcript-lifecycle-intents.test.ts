@@ -1,0 +1,70 @@
+import { afterAll, beforeAll, beforeEach, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { withTranscriptLifecycleIntents } from "./transcript-lifecycle-intents";
+
+let root = "";
+let directory = "";
+const previous = process.env.SIGNET_PATH;
+beforeAll(() => {
+	root = mkdtempSync(join(tmpdir(), "transcript-intents-"));
+	directory = join(root, ".daemon", "transcript-lifecycle-intents");
+	mkdirSync(directory, { recursive: true });
+	process.env.SIGNET_PATH = root;
+});
+afterAll(() => {
+	if (previous === undefined) delete process.env.SIGNET_PATH;
+	else process.env.SIGNET_PATH = previous;
+	rmSync(root, { recursive: true, force: true });
+});
+const files = (): string[] => readdirSync(directory).filter((name) => name.endsWith(".json"));
+beforeEach(() => {
+	for (const file of files()) rmSync(join(directory, file));
+});
+
+test("owner success never writes an intent file; failure persists ordered intents until acknowledged", async () => {
+	const input = { agentId: "a", sessionKey: "outbox", action: "end" as const };
+	await expect(
+		withTranscriptLifecycleIntents(input, async () => {
+			expect(files()).toEqual([]);
+			throw new Error("owner unavailable");
+		}),
+	).rejects.toThrow("owner unavailable");
+	expect(files()).toHaveLength(1);
+	const file = files()[0];
+	if (!file) throw new Error("Missing outbox");
+	expect(JSON.parse(readFileSync(join(directory, file), "utf8")).intents).toMatchObject([{ action: "end" }]);
+	await withTranscriptLifecycleIntents({ ...input, action: "start" }, async (intents) => {
+		expect(intents.map((intent) => intent.action)).toEqual(["end", "start"]);
+		expect(files()).toHaveLength(1);
+	});
+	expect(files()).toEqual([]);
+	await withTranscriptLifecycleIntents(input, async () => {
+		expect(files()).toEqual([]);
+	});
+	expect(files()).toEqual([]);
+	await expect(
+		withTranscriptLifecycleIntents({ ...input, action: "status" }, async () => {
+			throw new Error("still unavailable");
+		}),
+	).rejects.toThrow("still unavailable");
+	expect(files()).toEqual([]);
+});
+
+test("a full failure outbox rejects new files but still tries the owner", async () => {
+	for (let i = 0; i < 256; i++) writeFileSync(join(directory, `pending-${i}.json`), "fixture");
+	let attempted = false;
+	try {
+		await expect(
+			withTranscriptLifecycleIntents({ agentId: "a", sessionKey: "overflow", action: "end" }, async () => {
+				attempted = true;
+				throw new Error("owner unavailable");
+			}),
+		).rejects.toThrow("owner unavailable");
+		expect(attempted).toBe(true);
+		expect(files()).toHaveLength(256);
+	} finally {
+		for (let i = 0; i < 256; i++) rmSync(join(directory, `pending-${i}.json`));
+	}
+});

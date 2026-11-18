@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { admitSessionTranscriptInDb } from "./session-transcripts";
 import { filterTranscriptRecordsInDb } from "./session-transcripts";
+import { transcriptTextToTurns } from "./transcript-jsonl";
 import { type WriteDb, prepareTypedStatement } from "./db-accessor";
 import {
 	TRANSCRIPT_IMPORT_LIMITS,
@@ -391,31 +392,46 @@ export function commitCompletedTranscriptBatchInTx(
 	if (transcriptCommitBatchBytes(commits) > TRANSCRIPT_IMPORT_LIMITS.maxCanonicalBatchBytes)
 		throw new RangeError("canonical_batch_too_large");
 	const results: TranscriptCommitResult[] = [];
-	for (const commit of commits) {
-		if (
-			[commit.canonicalKey, commit.originalSessionKey ?? commit.sessionKey].some(
-				(sessionKey) =>
-					!admitSessionTranscriptInDb(db, { agentId: commit.agentId, sessionKey, capturedAt: commit.capturedAt }) ||
-					commit.messages.some(
-						(message) =>
-							message.content.length > 0 &&
-							filterTranscriptRecordsInDb(db, {
-								agentId: commit.agentId,
-								sessionKey,
-								harness: commit.harness,
-								transcript: message.content,
-								rawTranscript: JSON.stringify(message),
-							}) === "",
-					),
+	for (const original of commits) {
+		let transcript = original.messages
+			.map((message) =>
+				message.role === "user"
+					? `User: ${message.content}`
+					: message.role === "assistant"
+						? `Assistant: ${message.content}`
+						: message.content,
 			)
-		) {
+			.join("\n");
+		const full = transcript;
+		let admitted = true;
+		for (const sessionKey of new Set([original.canonicalKey, original.originalSessionKey ?? original.sessionKey])) {
+			if (!admitSessionTranscriptInDb(db, { agentId: original.agentId, sessionKey, capturedAt: original.capturedAt })) {
+				admitted = false;
+				break;
+			}
+			transcript = filterTranscriptRecordsInDb(db, {
+				agentId: original.agentId,
+				sessionKey,
+				harness: original.harness,
+				transcript,
+			});
+		}
+		if (!admitted || !transcript.trim()) {
 			results.push({
 				outcome: "session_transcript_deleted",
-				canonicalId: commit.canonicalId,
-				sessionKey: commit.canonicalKey,
+				canonicalId: original.canonicalId,
+				sessionKey: original.canonicalKey,
 			});
 			continue;
 		}
+		const commit =
+			transcript === full
+				? original
+				: {
+						...original,
+						messages: transcriptTextToTurns(transcript),
+						contentHash: checksum(Buffer.from(transcript)),
+					};
 		const existing = db
 			.prepare(
 				"SELECT conversation_fingerprint, canonical_id, canonical_key, state FROM transcript_import_conversations WHERE agent_id = ? AND external_identity = ?",

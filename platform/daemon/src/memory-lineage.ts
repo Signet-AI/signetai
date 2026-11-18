@@ -592,7 +592,7 @@ export function upsertMemoryArtifactInTx(
 	)
 		return false;
 	const sql = options.conflictGuardSourceId
-		? `${MEMORY_ARTIFACT_UPSERT_SQL}\n\t\tWHERE memory_artifacts.source_id = excluded.source_id`
+		? `${MEMORY_ARTIFACT_UPSERT_SQL}\n		WHERE memory_artifacts.source_id = excluded.source_id`
 		: MEMORY_ARTIFACT_UPSERT_SQL;
 	db.prepare(sql).run(
 		fields.agentId,
@@ -676,13 +676,6 @@ function artifactFieldsFromFrontmatter(
 	};
 }
 
-export class ArtifactNotAdmittedError extends Error {
-	constructor() {
-		super("Session transcript deletion rejects this artifact");
-		this.name = "ArtifactNotAdmittedError";
-	}
-}
-
 function upsertArtifactRowInTx(
 	db: Database,
 	path: string,
@@ -691,14 +684,9 @@ function upsertArtifactRowInTx(
 	sourceMtimeMs = statSync(path).mtimeMs,
 	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
 ): void {
-	const admitted = upsertMemoryArtifactInTx(
-		db,
-		artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options),
-		{
-			conflictGuardSourceId: false,
-		},
-	);
-	if (!admitted) throw new ArtifactNotAdmittedError();
+	upsertMemoryArtifactInTx(db, artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options), {
+		conflictGuardSourceId: false,
+	});
 }
 
 async function requireArtifactAdmission(seed: {
@@ -708,21 +696,7 @@ async function requireArtifactAdmission(seed: {
 	readonly capturedAt: string;
 }): Promise<void> {
 	const admitted = await runWriteTxAsync(getDbAccessor(), (db) => admitSessionTranscriptInDb(db, seed));
-	if (!admitted) throw new ArtifactNotAdmittedError();
-}
-
-async function indexCreatedArtifact(
-	path: string,
-	created: boolean,
-	frontmatter: Record<string, unknown>,
-	body: string,
-): Promise<void> {
-	try {
-		await upsertArtifactRow(path, frontmatter, body);
-	} catch (error) {
-		if (created && error instanceof ArtifactNotAdmittedError) rmSync(path, { force: true });
-		throw error;
-	}
+	if (!admitted) throw new Error("Session transcript deletion rejects this artifact");
 }
 
 async function upsertArtifactRow(
@@ -1318,7 +1292,7 @@ async function ensureManifestRecord(seed: {
 	if (!manifest) {
 		throw new Error(`Failed to create manifest ${path}`);
 	}
-	await indexCreatedArtifact(path, true, manifest.frontmatter, manifest.body);
+	await upsertArtifactRow(path, manifest.frontmatter, manifest.body);
 	return manifest;
 }
 
@@ -1597,9 +1571,6 @@ export async function writeTranscriptArtifact(params: {
 		quality: "fallback" as const,
 		generatedAt: new Date().toISOString(),
 	};
-	const created = !existsSync(
-		artifactPath(manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt, sessionToken, "transcript"),
-	);
 	const fullPath = writeImmutableArtifact({
 		kind: "transcript",
 		agentId: params.agentId,
@@ -1618,7 +1589,7 @@ export async function writeTranscriptArtifact(params: {
 		replaceExisting: params.replaceExisting,
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-	await indexCreatedArtifact(fullPath, created, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
 	await updateManifest(manifest.path, (frontmatter) => {
 		const existingSummaryStatus = manifestValue(frontmatter, "summary_status");
 		const terminalSummaryStatus =
@@ -1661,7 +1632,6 @@ export async function writeSummaryArtifact(params: {
 	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = normalizeMarkdownBody(params.summary);
 	const sentence = await resolveMemorySentence(body, params.project, params.harness, "summary", params.provider);
-	const created = !existsSync(artifactPath(capturedAt, sessionToken, "summary"));
 	const fullPath = writeImmutableArtifact({
 		kind: "summary",
 		agentId: params.agentId,
@@ -1679,7 +1649,7 @@ export async function writeSummaryArtifact(params: {
 		body,
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-	await indexCreatedArtifact(fullPath, created, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
 	await updateManifest(manifest.path, (frontmatter) => ({
 		...frontmatter,
 		summary_path: relativePath(fullPath),
@@ -1709,7 +1679,6 @@ export async function writeCompactionArtifact(params: {
 	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = normalizeMarkdownBody(params.summary);
 	const sentence = await resolveMemorySentence(body, params.project, params.harness, "compaction", params.provider);
-	const created = !existsSync(artifactPath(capturedAt, sessionToken, "compaction"));
 	const fullPath = writeImmutableArtifact({
 		kind: "compaction",
 		agentId: params.agentId,
@@ -1727,7 +1696,7 @@ export async function writeCompactionArtifact(params: {
 		body,
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-	await indexCreatedArtifact(fullPath, created, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
 	await updateManifest(manifest.path, (frontmatter) => ({
 		...frontmatter,
 		compaction_path: relativePath(fullPath),

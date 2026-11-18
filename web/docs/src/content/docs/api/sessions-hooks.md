@@ -621,24 +621,29 @@ original capture timestamp after the watermark and at or after the new
 generation's opening, including deferred end-of-session capture. Within a
 resumed snapshot, each record's usable harness `timestamp` (or canonical
 `captured_at`) is checked separately: records at or before the deletion watermark
-are dropped, even if the snapshot was captured later. Undated records are
-dropped when their normalized content's SHA-256 matches a removed record in the
-same agent and session key. Receipts retain hashes, not deleted content, across
-key reuse. An intentionally repeated, undated turn with identical content is
-also dropped. Do not relabel historical records with a new timestamp.
+are dropped, even if the snapshot was captured later. For each deleted generation,
+the owner retains the normalized record count and an ordered SHA-256 chain. If a
+snapshot or import starts with that exact prefix, only those leading records are
+dropped. A different prefix is admitted subject to the timestamp cutoff; content
+matches never remove interior or later turns. New live turns are not replayed
+snapshots. Receipts retain counts and chain hashes, not deleted content. Do not
+relabel historical records with a new timestamp.
 
 The hook-side lifecycle check is advisory on owner timeout or unavailability;
-it does not fail the harness. Start/end intents are durably queued and replayed,
-in order and idempotently, on the next successful lifecycle contact. Only the
-database owner changes deletion state. Status checks do not clear user bypasses.
+it does not fail the harness. The owner is called first. Only failed start/end
+contacts create an intent outbox file, replayed in order on the next successful
+lifecycle contact and removed when drained. The outbox holds at most 256 session
+files and 1,024 intents per file. At capacity, Signet logs the rejected intent and
+relies on canonical TTL finalization. Normal sessions and failed status checks
+create no journal files. These files contain pending requests, not deletion
+state: only the database owner changes deletion state. Status checks do not clear user bypasses.
 Owner-side admission at each evidence write remains the enforcement point, so
 an advisory timeout does not reopen a deleted generation.
 
-Cleanup processes at most 64 database items (including transcript-record hashes),
-one uploaded-byte chunk, and four 4 MiB file slices per request. Each file slice
-returns at most 256 canonical-record hashes. A scoped receipt retains at most
-65,536 distinct record hashes; exceeding that limit fails explicitly rather
-than discarding a fence or reporting completion. Giant JSONL records stream
+The transcript row is hashed once at deletion admission. Cleanup processes at
+most 64 database items, one uploaded-byte chunk, and four 4 MiB file slices per
+request. Canonical cleanup carries a constant-size prefix chain rather than a
+per-record hash worklist; there is no record-count deletion limit. Giant JSONL records stream
 across slices without being loaded whole. A missing, replaced, or shortened
 rewrite temp restarts that file from its beginning. Shared JSONL files are rewritten under the
 canonical transcript lock, preserving other sessions' records and concurrent

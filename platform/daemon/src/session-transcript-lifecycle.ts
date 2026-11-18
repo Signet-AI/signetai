@@ -1,9 +1,7 @@
 import { resolveDefaultBasePath } from "@signet/core";
 import { withTranscriptLifecycleIntents, type TranscriptLifecycleIntent } from "./transcript-lifecycle-intents";
 import { getDbAccessor } from "./db-accessor";
-import { dbOwnerTranscriptOperation, dbOwnerCommitCompactionSummary, getDbOwnerForAccessor } from "./db-owner-runtime";
-import type { DbAccessor } from "./db-accessor";
-import type { CompactionSummaryInput } from "./session-transcripts";
+import { dbOwnerTranscriptOperation, getDbOwnerForAccessor } from "./db-owner-runtime";
 import { bypassSession, unbypassSession } from "./session-tracker";
 import type { writeTranscriptAudit } from "./transcript-audit";
 import {
@@ -98,12 +96,6 @@ export async function updateTranscriptLifecycle(
 	if (!result.bypassed && result.generation > 0)
 		unbypassSession(input.sessionKey, input.agentId, input.action === "status" ? "deletion" : true);
 	return result;
-}
-
-export async function commitCompactionSummary(accessor: DbAccessor, input: CompactionSummaryInput): Promise<boolean> {
-	return await dbOwnerCommitCompactionSummary(await getDbOwnerForAccessor(accessor), input, {
-		operation: "hooks.session-summary.memory.write",
-	});
 }
 
 export interface TranscriptCapturePending {

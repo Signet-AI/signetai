@@ -63,6 +63,21 @@ function updateTranscriptDigest(hash: Hash, turn: TranscriptTurn): void {
 	hash.update(`${role.length}:`).update(role).update(`${content.length}:`).update(content);
 }
 
+export const TRANSCRIPT_PREFIX_SEED = "0".repeat(64);
+
+export function chainTranscriptRecord(previous: string, role: string, contentHash: string): string {
+	const record = createHash("sha256")
+		.update(JSON.stringify([role, contentHash]))
+		.digest();
+	return createHash("sha256").update(Buffer.from(previous, "hex")).update(record).digest("hex");
+}
+
+export function transcriptPrefix(turns: readonly TranscriptTurn[]): string {
+	let hash = TRANSCRIPT_PREFIX_SEED;
+	for (const turn of turns) hash = chainTranscriptRecord(hash, turn.role, sha256(cleanTurnContent(turn.content)));
+	return hash;
+}
+
 export function digestTranscriptTurns(turns: ReadonlyArray<TranscriptTurn>): string {
 	const hash = createHash("sha256");
 	for (const turn of turns) updateTranscriptDigest(hash, turn);

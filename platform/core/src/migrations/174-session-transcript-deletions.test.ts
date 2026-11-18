@@ -8,7 +8,7 @@ test("upgrades the real migrated schema idempotently without changing scoped evi
 	try {
 		runMigrations(db);
 		db.exec(
-			"DROP INDEX idx_import_records_session_delete; ALTER TABLE source_import_records DROP COLUMN redacted_bytes; DROP TABLE session_transcript_delete_files; DROP TABLE session_transcript_deleted_sources; DROP TABLE session_transcript_deletions; DELETE FROM schema_migrations WHERE version = 174",
+			"DROP INDEX idx_import_records_session_delete; ALTER TABLE source_import_records DROP COLUMN redacted_bytes; DROP TABLE session_transcript_delete_files; DROP TABLE session_transcript_deleted_prefixes; DROP TABLE session_transcript_deleted_sources; DROP TABLE session_transcript_deletions; DELETE FROM schema_migrations WHERE version = 174",
 		);
 		db.prepare(
 			"INSERT INTO session_transcripts (session_key,agent_id,content,harness,project,created_at) VALUES ('shared','agent-a','User: original','codex','project-a',datetime('now')), ('shared','agent-b','User: other','codex','project-b',datetime('now'))",
@@ -30,6 +30,34 @@ test("upgrades the real migrated schema idempotently without changing scoped evi
 			{ agent_id: "agent-b", generation: 1, phase: "evidence" },
 		]);
 		expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+	} finally {
+		db.close();
+	}
+});
+
+test("repairs nullable legacy memory provenance required by transcript deletion", () => {
+	const db = new Database(":memory:");
+	try {
+		runMigrations(db);
+		db.exec(
+			"DROP INDEX idx_memories_session_delete_source; ALTER TABLE memories DROP COLUMN source_id; ALTER TABLE memories DROP COLUMN source_type",
+		);
+		db.prepare(
+			"INSERT INTO memories (id,content,agent_id,created_at,updated_at) VALUES ('legacy','kept evidence','legacy-agent',datetime('now'),datetime('now'))",
+		).run();
+		up(db);
+		up(db);
+		expect(db.prepare("SELECT agent_id,content,source_id,source_type FROM memories WHERE id='legacy'").get()).toEqual({
+			agent_id: "legacy-agent",
+			content: "kept evidence",
+			source_id: null,
+			source_type: null,
+		});
+		expect(
+			db
+				.prepare("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_memories_session_delete_source'")
+				.get(),
+		).toEqual({ name: "idx_memories_session_delete_source" });
 	} finally {
 		db.close();
 	}

@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { open, readFile, rename } from "node:fs/promises";
+import { open, readFile, rename, unlink, opendir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
+import { logger } from "./logger";
 import { withTranscriptFileLock } from "./transcript-jsonl";
 
 export interface TranscriptLifecycleIntent {
@@ -9,6 +10,8 @@ export interface TranscriptLifecycleIntent {
 	readonly action: "start" | "end";
 	readonly at: string;
 }
+
+let lastSeq = 0;
 
 interface IntentJournal {
 	readonly seq: number;
@@ -86,15 +89,42 @@ export async function withTranscriptLifecycleIntents<T>(
 		async () => {
 			const journal = await readJournal(path);
 			const intents = [...journal.intents];
-			const seq = journal.seq + Number(input.action !== "status");
-			if (input.action !== "status") {
-				if (intents.length >= 1024)
-					throw new Error("Transcript lifecycle intent journal is full; retry after owner recovery");
-				intents.push({ seq, action: input.action, at: new Date().toISOString() });
-				await writeJournal(path, { seq, intents });
+			const seq = Math.max(lastSeq + 1, journal.seq + 1, Date.now() * 1024);
+			lastSeq = seq;
+			if (input.action !== "status") intents.push({ seq, action: input.action, at: new Date().toISOString() });
+			let result: T;
+			try {
+				result = await apply(intents);
+			} catch (error) {
+				if (input.action === "status") throw error;
+				await withTranscriptFileLock(
+					join(dirname(path), ".admission"),
+					async () => {
+						let count = 0;
+						let existing = false;
+						const directory = await opendir(dirname(path));
+						for await (const entry of directory) {
+							if (!entry.name.endsWith(".json")) continue;
+							count++;
+							if (entry.name === `${token}.json`) existing = true;
+							if (count > 256) break;
+						}
+						if ((!existing && count >= 256) || intents.length > 1024) {
+							logger.warn("transcripts", "Lifecycle intent outbox full; relying on TTL finalization", {
+								agentId: input.agentId,
+								sessionKey: input.sessionKey,
+							});
+							return;
+						}
+						await writeJournal(path, { seq, intents });
+					},
+					{ timeoutMs: 250 },
+				);
+				throw error;
 			}
-			const result = await apply(intents);
-			if (intents.length > 0) await writeJournal(path, { seq, intents: [] });
+			await unlink(path).catch((error: unknown) => {
+				if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+			});
 			return result;
 		},
 		{ timeoutMs: 250 },

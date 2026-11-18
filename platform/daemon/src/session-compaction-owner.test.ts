@@ -71,6 +71,8 @@ describe("compaction summary admission follows the evidence timestamp", () => {
 	it("rejects delayed and undated summaries after key reuse and accepts a fresh one", async () => {
 		const key = "reuse-key";
 		await deleteCompletely(key);
+		expect((await compact({ sessionKey: key, summary: "blocked before reuse" })).status).toBe(200);
+		expect(await stored("blocked before reuse")).toEqual({ memories: 0, nodes: 0 });
 		await updateTranscriptLifecycle({ agentId: "default", sessionKey: key, action: "start" });
 
 		const delayed = await compact({

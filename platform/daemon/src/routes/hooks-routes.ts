@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
-import { commitCompactionSummary } from "../session-transcript-lifecycle";
+import { commitCompactionSummary } from "../session-transcripts";
 import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../db-owner-client";
 
 import type { Hono } from "hono";
