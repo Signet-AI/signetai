@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import { parseRoutingConfig } from "@signet/core";
 import { createRoutingProvider } from "./inference-provider-factory";
+import { logger } from "./logger";
 
 function codexConfig(model = "gpt-6-luna") {
 	const parsed = parseRoutingConfig({
@@ -61,7 +62,7 @@ describe("inference provider factory", () => {
 						executor: "openai-compatible",
 						account: "gateway",
 						endpoint: "https://opencode.ai/zen/go",
-						models: { default: { model: "deepseek-v4-flash", reasoning: "low" } },
+						models: { default: { model: "deepseek-v4.1-flash", reasoning: "low" } },
 					},
 				},
 			},
@@ -88,7 +89,7 @@ describe("inference provider factory", () => {
 			expect(provider.telemetryAttribution).toEqual({
 				executor: "openai-compatible",
 				provider: "opencode-go",
-				model: "deepseek-v4-flash",
+				model: "deepseek-v4.1-flash",
 				locality: "remote",
 			});
 			await expect(provider.generate("test")).resolves.toBe("done");
@@ -97,6 +98,43 @@ describe("inference provider factory", () => {
 		} finally {
 			globalThis.fetch = originalFetch;
 		}
+	});
+
+	test("warns once when a custom target names a missing catalog model", async () => {
+		const parsed = parseRoutingConfig({
+			inference: {
+				accounts: { gateway: { kind: "api", providerFamily: "opencode-go", credentialRef: "TEST_KEY" } },
+				targets: {
+					gateway: {
+						executor: "openai-compatible",
+						account: "gateway",
+						endpoint: "https://opencode.ai/zen/go",
+						models: { default: { model: "deepseek-v4-flash", reasoning: "low" } },
+					},
+				},
+			},
+		});
+		if (!parsed.ok) throw new Error(parsed.error.message);
+		const warnings: string[] = [];
+		const originalWarn = logger.warn;
+		logger.warn = ((_category: unknown, message: unknown) => {
+			warnings.push(String(message));
+		}) as typeof logger.warn;
+		try {
+			await createRoutingProvider({
+				config: parsed.value,
+				targetId: "gateway",
+				modelId: "default",
+				async resolveCredential() {
+					return { apiKey: "test-key" };
+				},
+			});
+		} finally {
+			logger.warn = originalWarn;
+		}
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("deepseek-v4-flash");
+		expect(warnings[0]).toContain("opencode-go");
 	});
 
 	test("does not probe a local server's context window for plain completions", async () => {
