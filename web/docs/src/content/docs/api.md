@@ -99,12 +99,13 @@ with `409` if the capture generation changed. Pinned
 memories remain; memories with other evidence are retained for Dreaming
 re-evaluation. See [transcript deletion](/api/sessions-hooks/#delete-apisessionskeytranscript)
 for identity, live-session bypass, key-reuse, and retry semantics. Resumed keys
-admit records individually: usable record timestamps at or before the deletion
-watermark are dropped; undated records are rejected when their content hash
-matches deleted evidence in the same agent and key. Only hashes, not removed
-content, remain in the bounded deletion receipt. Starts received during pending
-cleanup are applied when cleanup completes, and timed-out start/end lifecycle
-intents are persisted for the next owner contact.
+drop only an exact replayed prefix, using the deleted generation's record count
+and ordered SHA-256 chain. Later identical turns and fresh snapshots that do not
+replay that prefix remain eligible. Usable record timestamps at or before the
+watermark are still dropped. Receipts retain counts and chain hashes, not removed
+content. Starts received during pending cleanup are applied when it completes.
+A failure-only start/end intent outbox retries owner contact; it is not deletion
+state and drained files are removed.
 
 ## Reference sections
 

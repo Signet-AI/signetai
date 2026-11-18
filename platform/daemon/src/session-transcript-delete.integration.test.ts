@@ -187,6 +187,9 @@ test("real daemon retains pinned recall, restores bypass, and captures a reused 
 		expect(await (await request("/api/sessions/runtime-delete/transcript?agent_id=agent-a", "DELETE")).json()).toEqual(
 			receipt,
 		);
+		expect(
+			(await request("/api/sessions/runtime-delete/bypass?agent_id=agent-a", "POST", { enabled: false })).status,
+		).toBe(409);
 		const recall = await request("/api/memory/recall", "POST", {
 			query: "quokka retention",
 			agentId: "agent-a",

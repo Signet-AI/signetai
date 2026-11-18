@@ -129,7 +129,10 @@ test("queued transcript deletion uses the remaining owner deadline and resumes",
 		expect(result).toMatchObject({ status: "pending", generation: 1 });
 		release();
 		await held;
-		await capture;
+		expect(await capture).toMatchObject({
+			status: "pending",
+			pendingReason: expect.stringContaining("transcript lock"),
+		});
 		const resumed = await owner.submit<TranscriptDeleteResult>(
 			{ kind: "session_transcript_delete", input },
 			{ operation: "test.resume-delete", lane: "write", deadlineMs: 5000 },

@@ -266,25 +266,20 @@ function sha(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
 }
 
-async function collect(limit = 60): Promise<{ hashes: string[]; sizes: number[] }> {
-	const hashes: string[] = [];
-	const sizes: number[] = [];
+async function collect(): Promise<TranscriptFileCheckpoint | null> {
 	let checkpoint: TranscriptFileCheckpoint | null = null;
-	for (let i = 0; i < limit; i++) {
+	for (let i = 0; i < 60; i++) {
 		const result: TranscriptFileBatch = await step(checkpoint);
-		const batch = result.recordHashes ?? [];
-		sizes.push(batch.length);
-		hashes.push(...batch);
 		checkpoint = result.checkpoint === null ? null : JSON.parse(JSON.stringify(result.checkpoint));
-		if (result.done) return { hashes, sizes };
+		if (result.done) return checkpoint;
 	}
 	throw new Error("cleanup did not finish");
 }
 
-test("a giant owned record returns its trailing top-level content hash exactly once", async () => {
+test("a giant canonical record contributes once to the positional prefix", async () => {
 	const content = "g".repeat(9 * 1024 * 1024);
 	const known = sha(content);
-	const owned = `{"agent_id":"${AGENT}","session_key":"${KEY}","content":"${content}","source_sha256":"${known}"}\n`;
+	const owned = `{"agent_id":"${AGENT}","session_key":"${KEY}","content":"${content}","source_sha256":"${known}","role":"user"}\n`;
 	const decoys =
 		`${JSON.stringify({ agent_id: AGENT, session_key: "other", source_sha256: sha("foreign") })}\n` +
 		`${JSON.stringify({ agent_id: "agent-b", session_key: KEY, source_sha256: sha("agent-b") })}\n`;
@@ -293,20 +288,27 @@ test("a giant owned record returns its trailing top-level content hash exactly o
 		`${JSON.stringify({ agent_id: AGENT, session_key: KEY, content: "no hash here" })}\n` +
 		`${JSON.stringify({ agent_id: AGENT, session_key: KEY, source_sha256: "not-a-hash" })}\n`;
 	writeFileSync(path, decoys + owned + nested);
-	const { hashes } = await collect();
-	expect(hashes).toEqual([known]);
+	const checkpoint = await collect();
+	const leaf = createHash("sha256")
+		.update(JSON.stringify(["user", known]))
+		.digest();
+	expect(checkpoint?.prefixCount).toBe(1);
+	expect(checkpoint?.prefixHash).toBe(createHash("sha256").update(Buffer.alloc(32)).update(leaf).digest("hex"));
 	expect(readFileSync(path, "utf8")).toBe(decoys);
 });
 
-test("more than 256 owned hashes are returned across bounded batches", async () => {
+test("a positional prefix preserves record order and multiplicity across cleanup", async () => {
 	const total = 700;
-	const expected: string[] = [];
+	let expected = Buffer.alloc(32);
 	let content = "";
 	let kept = "";
 	for (let i = 0; i < total; i++) {
 		const hash = sha(`record-${i}`);
-		expected.push(hash);
-		content += `${JSON.stringify({ agent_id: AGENT, session_key: KEY, index: i, source_sha256: hash })}\n`;
+		const leaf = createHash("sha256")
+			.update(JSON.stringify(["user", hash]))
+			.digest();
+		expected = createHash("sha256").update(expected).update(leaf).digest();
+		content += `${JSON.stringify({ agent_id: AGENT, session_key: KEY, index: i, role: "user", source_sha256: hash })}\n`;
 		if (i % 50 === 0) {
 			const other = record(AGENT, "other", 20, i);
 			content += other;
@@ -314,9 +316,8 @@ test("more than 256 owned hashes are returned across bounded batches", async () 
 		}
 	}
 	writeFileSync(path, content);
-	const { hashes, sizes } = await collect();
-	expect(Math.max(...sizes)).toBeLessThanOrEqual(256);
-	expect(sizes.length).toBeGreaterThanOrEqual(3);
-	expect(hashes).toEqual(expected);
+	const checkpoint = await collect();
+	expect(checkpoint?.prefixCount).toBe(total);
+	expect(checkpoint?.prefixHash).toBe(expected.toString("hex"));
 	expect(readFileSync(path, "utf8")).toBe(kept);
 });

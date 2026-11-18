@@ -9,7 +9,7 @@ import {
 	removeContainedTranscriptPath,
 	replaceContainedTranscriptFile,
 } from "./transcript-import-safe-fs";
-import { withTranscriptFileLock } from "./transcript-jsonl";
+import { withTranscriptFileLock, chainTranscriptRecord, TRANSCRIPT_PREFIX_SEED } from "./transcript-jsonl";
 import { normalizeSessionKey } from "./session-end-state";
 
 export interface TranscriptFileCheckpoint {
@@ -21,18 +21,18 @@ export interface TranscriptFileCheckpoint {
 	readonly records: number;
 	readonly ready: boolean;
 	readonly line: string | null;
+	readonly prefixCount: number;
+	readonly prefixHash: string;
 }
 
 export interface TranscriptFileBatch {
 	readonly done: boolean;
 	readonly checkpoint: TranscriptFileCheckpoint | null;
-	readonly recordHashes?: readonly string[];
 }
 
 const BATCH_BYTES = 4 * 1024 * 1024;
 const MAX_TOKEN = 8192;
-const NAMES = ["agent_id", "session_key", "session_id", "source_sha256"];
-const MAX_HASHES = 256;
+const NAMES = ["agent_id", "session_key", "session_id", "source_sha256", "role"];
 const HASH = /^[0-9a-f]{64}$/;
 const ABSENT = 0;
 const NULLISH = 1;
@@ -306,6 +306,8 @@ export async function redactTranscriptFileBatch(input: {
 							records: 1,
 							ready: true,
 							line: null,
+							prefixCount: 0,
+							prefixHash: TRANSCRIPT_PREFIX_SEED,
 						},
 					};
 				}
@@ -348,6 +350,8 @@ export async function redactTranscriptFileBatch(input: {
 								records: 0,
 								ready: false,
 								line: null,
+								prefixCount: 0,
+								prefixHash: TRANSCRIPT_PREFIX_SEED,
 							};
 					const open = intact ? carried : null;
 					const buffer = Buffer.alloc(Math.min(BATCH_BYTES, stat.size - base.offset));
@@ -357,7 +361,8 @@ export async function redactTranscriptFileBatch(input: {
 						if (bytesRead === 0) break;
 						length += bytesRead;
 					}
-					const hashes: string[] = [];
+					let prefixCount = base.prefixCount;
+					let prefixHash = base.prefixHash;
 					const kept = Buffer.alloc(length);
 					let keptLength = 0;
 					let writeAt = base.bytes;
@@ -371,7 +376,10 @@ export async function redactTranscriptFileBatch(input: {
 						if (owns(scan, input.agentId, input.sessionKey)) {
 							records++;
 							const hash = scan.kinds[3] === TEXT ? scan.texts[3] : undefined;
-							if (hash !== undefined && HASH.test(hash)) hashes.push(hash);
+							if (hash !== undefined && HASH.test(hash) && scan.kinds[4] === TEXT) {
+								prefixHash = chainTranscriptRecord(prefixHash, scan.texts[4] ?? "unknown", hash);
+								prefixCount++;
+							}
 							if (continued) writeAt = lineOut;
 						}
 						if (!owns(scan, input.agentId, input.sessionKey)) {
@@ -383,17 +391,13 @@ export async function redactTranscriptFileBatch(input: {
 						segment = end;
 						lineOut = writeAt + keptLength;
 					};
-					let consumed = length;
+					const consumed = length;
 					while (cursor < length) {
 						const newline = buffer.indexOf(0x0a, cursor);
 						feed(scan, buffer, cursor, newline < 0 ? length : newline);
 						if (newline < 0) break;
 						finish(newline + 1);
 						cursor = newline + 1;
-						if (hashes.length >= MAX_HASHES) {
-							consumed = cursor;
-							break;
-						}
 					}
 					const eof = base.offset + consumed === stat.size;
 					let line: string | null = null;
@@ -415,7 +419,6 @@ export async function redactTranscriptFileBatch(input: {
 					await target.sync();
 					return {
 						done: false,
-						recordHashes: hashes,
 						checkpoint: {
 							inode: stat.ino,
 							device: stat.dev,
@@ -425,6 +428,8 @@ export async function redactTranscriptFileBatch(input: {
 							records,
 							ready: eof,
 							line,
+							prefixCount,
+							prefixHash,
 						},
 					};
 				} finally {

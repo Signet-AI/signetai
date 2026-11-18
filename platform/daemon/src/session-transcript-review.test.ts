@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test, spyOn } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -154,6 +154,86 @@ test("a resumed snapshot stores only new undated records in the row and canonica
 	expect(records).toContain("new reply");
 });
 
+test("positional replay removes only the deleted prefix, not repeated new turns", async () => {
+	for (const replay of [true, false]) {
+		const key = `repeated-ok-${replay}`;
+		await upsertSessionTranscriptAsync(key, "User: old\nUser: ok", "codex", null, "review", "2020-01-01T00:00:00.000Z");
+		await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
+		await updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "start" });
+		const transcript = replay ? "User: old\nUser: ok\nUser: ok" : "User: ok";
+		await upsertSessionTranscriptAsync(key, transcript, "codex", null, "review", new Date().toISOString());
+		expect((await getStoredSessionTranscriptInfoAsync(key, "review"))?.content).toBe("User: ok");
+		expect(
+			await writeCanonicalTranscriptFromSnapshot({
+				basePath: root,
+				agentId: "review",
+				harness: "codex",
+				sessionKey: key,
+				rawTranscript: transcript,
+				transcript,
+				capturedAt: new Date().toISOString(),
+			}),
+		).toBe("User: ok");
+	}
+});
+
+test("successive deletions retain positional receipts without rejecting new live duplicates", async () => {
+	const key = "successive-prefix";
+	const lifecycle = (action: "start" | "end") =>
+		updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action });
+	await upsertSessionTranscriptAsync(key, "User: first", "codex", null, "review", "2020-01-01T00:00:00.000Z");
+	await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
+	expect(await lifecycle("start")).toMatchObject({ generation: 2 });
+	await upsertSessionTranscriptAsync(
+		key,
+		"User: first\nAssistant: second",
+		"codex",
+		null,
+		"review",
+		new Date().toISOString(),
+	);
+	await lifecycle("end");
+	const { appendCanonicalLiveTranscriptTurns } = await import("./transcript-capture");
+	expect(
+		await appendCanonicalLiveTranscriptTurns({
+			basePath: root,
+			agentId: "review",
+			sessionKey: key,
+			harness: "codex",
+			userMessage: "late after end",
+		}),
+	).toBe(false);
+	await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
+	expect(await lifecycle("start")).toMatchObject({ generation: 3 });
+	await upsertSessionTranscriptAsync(
+		key,
+		"User: first\nAssistant: second\nUser: first",
+		"codex",
+		null,
+		"review",
+		new Date().toISOString(),
+	);
+	expect((await getStoredSessionTranscriptInfoAsync(key, "review"))?.content).toBe("User: first");
+	expect(
+		await appendCanonicalLiveTranscriptTurns({
+			basePath: root,
+			agentId: "review",
+			sessionKey: key,
+			harness: "codex",
+			userMessage: "first",
+		}),
+	).toBe(true);
+});
+
+test("normal lifecycle sessions leave no intent journal files", async () => {
+	for (let i = 0; i < 5; i++) {
+		await updateTranscriptLifecycle({ agentId: "normal", sessionKey: `session-${i}`, action: "start" });
+		await updateTranscriptLifecycle({ agentId: "normal", sessionKey: `session-${i}`, action: "end" });
+	}
+	const directory = join(root, ".daemon", "transcript-lifecycle-intents");
+	expect(existsSync(directory) ? readdirSync(directory).filter((name) => name.endsWith(".json")) : []).toEqual([]);
+});
+
 test("legacy session-id-only artifacts are discovered and removed only for the owning agent", async () => {
 	const path = join(root, "legacy-only.md");
 	writeFileSync(path, "---\nagent_id: review\nsession_id: legacy-only\n---\nUser: legacy evidence\n");
@@ -230,7 +310,7 @@ test("inline transcript deletion uses the write handle rather than the read faca
 	expect(await getStoredSessionTranscriptInfoAsync("inline-write", "review")).toBeUndefined();
 });
 
-test("canonical-only records leave scoped hashes that reject undated replay", async () => {
+test("canonical-only records leave a scoped positional prefix that rejects replay", async () => {
 	const identity = {
 		basePath: root,
 		agentId: "canonical-owner",
@@ -280,8 +360,8 @@ test("canonical-only records leave scoped hashes that reject undated replay", as
 	);
 });
 
-test("deletion hashes records in bounded resumable owner batches", async () => {
-	const transcript = Array.from({ length: 200 }, (_, i) => `User: bounded record ${i}`).join("\n");
+test("deletion completes beyond 65536 records without a hash receipt limit", async () => {
+	const transcript = Array.from({ length: 65537 }, (_, i) => `User: bounded record ${i}`).join("\n");
 	await upsertSessionTranscriptAsync(
 		"hash-budget",
 		transcript,
@@ -296,15 +376,6 @@ test("deletion hashes records in bounded resumable owner batches", async () => {
 		hard: false,
 		changedBy: "test",
 	});
-	expect(result.status).toBe("pending");
-	const hashes = await getDbAccessor().withReadDbAsync((db) =>
-		db
-			.prepare(
-				"SELECT id FROM session_transcript_deleted_sources WHERE agent_id='review' AND session_key='hash-budget' AND kind='record_hash'",
-			)
-			.all(),
-	);
-	expect(hashes.length).toBeLessThanOrEqual(64);
 	for (let i = 0; result.status === "pending" && i < 20; i++)
 		result = await deleteSessionTranscript({
 			agentId: "review",
@@ -316,33 +387,42 @@ test("deletion hashes records in bounded resumable owner batches", async () => {
 	expect(await getStoredSessionTranscriptInfoAsync("hash-budget", "review")).toBeUndefined();
 });
 
-test("reimport cannot replay an undated deleted record after key reuse", async () => {
-	await deleted("resume-import");
-	await updateTranscriptLifecycle({ agentId: "review", sessionKey: "resume-import", action: "start" });
+test.each([true, false])("reimport admits repeated new turns with replay=%s", async (replay) => {
+	const key = `resume-import-${replay}`;
+	await upsertSessionTranscriptAsync(
+		key,
+		"User: old\nUser: ok",
+		"claude-code",
+		null,
+		"review",
+		"2020-01-01T00:00:00.000Z",
+	);
+	await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
+	await updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "start" });
 	const { signetExportV1Adapter } = await import("./transcript-import-adapter");
 	const { buildCompletedTranscriptCommit, commitCompletedTranscriptBatchInTx } = await import(
 		"./transcript-import-commit"
 	);
+	const messages = (replay ? ["old", "ok", "ok"] : ["ok"]).map((content) => ({ role: "user", content }));
 	const commit = buildCompletedTranscriptCommit(
 		signetExportV1Adapter.parse({
 			source: "signet",
-			id: "replayed-conversation",
+			id: key,
 			harness: "claude-code",
 			agent_id: "review",
-			session_key: "resume-import",
+			session_key: key,
 			project: null,
 			timestamp: new Date().toISOString(),
-			message_count: 2,
-			messages: [
-				{ role: "user", content: "deleted turn" },
-				{ role: "assistant", content: "new imported turn" },
-			],
+			message_count: messages.length,
+			messages,
 		}),
-		{ agentId: "review", sourceId: "fixture-source", sourceRecordId: "fixture-record" },
+		{ agentId: "review", sourceId: "fixture-source", sourceRecordId: `fixture-record-${replay}` },
 	);
 	const result = await getDbAccessor().withWriteTxAsync((db) => commitCompletedTranscriptBatchInTx(db, [commit]));
-	expect(result).toMatchObject([{ outcome: "session_transcript_deleted" }]);
-	expect(await getStoredSessionTranscriptInfoAsync(commit.canonicalKey, "review")).toBeUndefined();
+	expect(result).toMatchObject([{ outcome: "imported" }]);
+	expect((await getStoredSessionTranscriptInfoAsync(commit.canonicalKey, "review"))?.content).toBe(
+		JSON.stringify([{ role: "user", content: "ok" }]),
+	);
 });
 
 test("legacy-only mixed provenance is marked stale without touching pinned memories", async () => {

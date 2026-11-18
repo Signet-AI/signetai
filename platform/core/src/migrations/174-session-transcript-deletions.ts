@@ -23,7 +23,6 @@ export function up(db: MigrationDb): void {
 			ended INTEGER NOT NULL DEFAULT 0,
 			pending_start INTEGER NOT NULL DEFAULT 0,
 			lifecycle_seq INTEGER NOT NULL DEFAULT 0,
-			hash_offset INTEGER NOT NULL DEFAULT 0,
 			receipt_generation INTEGER NOT NULL DEFAULT 1,
 			harness TEXT,
 			project TEXT,
@@ -31,6 +30,14 @@ export function up(db: MigrationDb): void {
 			phase TEXT NOT NULL DEFAULT 'evidence',
 			counts TEXT NOT NULL DEFAULT '{}',
 			PRIMARY KEY (agent_id, session_key)
+		);
+		CREATE TABLE IF NOT EXISTS session_transcript_deleted_prefixes (
+			agent_id TEXT NOT NULL,
+			session_key TEXT NOT NULL,
+			generation INTEGER NOT NULL,
+			record_count INTEGER NOT NULL,
+			record_hash TEXT NOT NULL,
+			PRIMARY KEY (agent_id, session_key, generation)
 		);
 		CREATE TABLE IF NOT EXISTS session_transcript_deleted_sources (
 			agent_id TEXT NOT NULL,
@@ -57,7 +64,7 @@ export function up(db: MigrationDb): void {
 			ON session_transcript_deleted_sources(agent_id, kind, id, outcome);
 	`);
 	const columns = db.prepare("PRAGMA table_info(session_transcript_deletions)").all();
-	for (const column of ["pending_start", "lifecycle_seq", "hash_offset"]) {
+	for (const column of ["pending_start", "lifecycle_seq"]) {
 		if (!columns.some((row) => row.name === column))
 			db.exec(`ALTER TABLE session_transcript_deletions ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
 	}

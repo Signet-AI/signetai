@@ -1599,7 +1599,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "session-transcript-deletions",
 		up: sessionTranscriptDeletions,
 		artifacts: {
-			tables: ["session_transcript_deletions", "session_transcript_deleted_sources", "session_transcript_delete_files"],
+			tables: [
+				"session_transcript_deletions",
+				"session_transcript_deleted_prefixes",
+				"session_transcript_deleted_sources",
+				"session_transcript_delete_files",
+			],
 			indexes: [
 				"idx_session_delete_source_lookup",
 				"idx_memories_session_delete_source",
@@ -1610,7 +1615,6 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "source_import_records", column: "redacted_bytes" },
 				{ table: "session_transcript_deletions", column: "pending_start" },
 				{ table: "session_transcript_deletions", column: "lifecycle_seq" },
-				{ table: "session_transcript_deletions", column: "hash_offset" },
 			],
 		},
 	},
