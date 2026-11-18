@@ -29,7 +29,7 @@ export interface PiAgentWorkerInput {
 export type PiAgentWorkerRequest =
 	| { readonly type: "prompt"; readonly text: string }
 	| { readonly type: "abort" }
-	| { readonly type: "cancel" }
+	| { readonly type: "cancel"; readonly id: number }
 	| { readonly type: "configure"; readonly model: Model<Api>; readonly apiKey: string }
 	| {
 			readonly type: "tool-result";
@@ -55,11 +55,14 @@ export type PiAgentWorkerResponse =
 			readonly failure?: string;
 	  }
 	| { readonly type: "error"; readonly message: string }
-	| { readonly type: "aborted" }
+	| { readonly type: "aborted"; readonly id?: number }
 	| { readonly type: "configured" };
 
 export const PI_CHAT_MAX_PERSISTENT_SESSIONS = 3;
 export const PI_AGENT_MAX_MESSAGE_BYTES = 2 * 1024 * 1024;
+export const PI_AGENT_RUN_START_TIMEOUT_MS = 5_000;
+export const PI_AGENT_CANCEL_ACK_TIMEOUT_MS = PI_AGENT_RUN_START_TIMEOUT_MS + 2_000;
+
 type PiAgentWorkerSettingsInput = Parameters<typeof SettingsManager.inMemory>[0];
 
 export const piAgentWorkerSettings = (input: PiAgentWorkerInput): PiAgentWorkerSettingsInput => ({
