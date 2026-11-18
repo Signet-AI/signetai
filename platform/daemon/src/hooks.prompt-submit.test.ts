@@ -405,6 +405,57 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 		expect(claims).toEqual({ count: 0 });
 	});
 
+	it("rolls back a claim that acquires the write lock after the deadline", async () => {
+		seedEntityContext();
+		const holder = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`const { Database } = require("bun:sqlite");
+const db = new Database(${JSON.stringify(memoryDbPath)});
+db.exec("PRAGMA busy_timeout = 5000");
+for await (const _ of Bun.stdin.stream()) {
+	db.exec("BEGIN IMMEDIATE");
+	console.log("locked");
+	Bun.sleepSync(400);
+	db.exec("COMMIT");
+	break;
+}`,
+			],
+			{ stdin: "pipe", stdout: "pipe", stderr: "inherit" },
+		);
+		const lines = holder.stdout.getReader();
+		const deps = makeDeps({
+			loadMemoryConfig: () => {
+				const cfg = realLoadMemoryConfig(agentsDir);
+				return { ...cfg, embedding: { ...cfg.embedding, promptSubmitTimeoutMs: 150 } };
+			},
+			hybridRecall: (async () => {
+				holder.stdin.write("lock\n");
+				holder.stdin.flush();
+				await lines.read();
+				return {
+					results: SIGNET_RECALL.map((row) => ({
+						...row,
+						source: "hybrid",
+						type: "fact",
+						pinned: false,
+						importance: 0.8,
+					})),
+				};
+			}) as unknown as PromptDeps["hybridRecall"],
+		});
+
+		const result = await submit("How should Signet architecture handle prompt context?", "session-late-lock", deps);
+		await holder.exited;
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "provider-timeout" });
+		const claims = getSyncDbAccessor().withReadDb((db) =>
+			db.prepare("SELECT COUNT(*) AS count FROM session_recall_events WHERE session_key = ?").get("session-late-lock"),
+		);
+		expect(claims).toEqual({ count: 0 });
+	});
+
 	it("reports degraded recall instead of a plain miss", async () => {
 		seedEntityContext();
 		const deps = makeDeps({

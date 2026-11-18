@@ -1768,16 +1768,17 @@ export async function handleUserPromptSubmit(
 						mode: "automatic",
 						items: recall.results,
 						signal: controller.signal,
-						deadlineMs: Math.max(1, deadlineAt - Date.now()),
+						deadlineAt,
 					})
 				: null;
 		clearTimeout(deadlineTimer);
 		const claimFailed = claimed?.meta.failedOpen === true;
+		const deadlineExpired = controller.signal.aborted || Date.now() >= deadlineAt;
 		if (claimFailed) {
 			deps.logger.warn("memory", "Prompt-submit recall claim failed; nothing injected", {
 				sessionKey: req.sessionKey,
 				agentId,
-				deadlineExpired: controller.signal.aborted,
+				deadlineExpired,
 			});
 		}
 		const unclaimed = claimed !== null && !claimFailed && !claimed.meta.enabled;
@@ -1788,7 +1789,7 @@ export async function handleUserPromptSubmit(
 				: unclaimed
 					? "no-session"
 					: claimFailed
-						? controller.signal.aborted
+						? deadlineExpired
 							? "provider-timeout"
 							: "claim-failed"
 						: recall.results.length > 0

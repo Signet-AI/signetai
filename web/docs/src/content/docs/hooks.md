@@ -456,8 +456,8 @@ current context epoch, so a memory is delivered at most once per session until
 the context resets (clear or compaction). A repeat entity hit that only finds
 already-delivered results returns an empty `inject` with `engine: "deduped"`. If the claim cannot be
 recorded, because the ledger is unavailable or the prompt-submit deadline
-(`embedding.promptSubmitTimeoutMs`) passed while the claim was queued, nothing is
-injected; Signet never delivers a memory it has not recorded as delivered. A
+(`embedding.promptSubmitTimeoutMs`) passed before the claim committed, the claim
+rolls back and nothing is injected; Signet never delivers a memory it has not recorded as delivered. A
 request without a `sessionKey` has no ledger to claim in, so it injects nothing.
 If recall runs degraded, the response adds a `warnings` entry naming the
 degradation.
