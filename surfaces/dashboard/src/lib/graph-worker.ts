@@ -7,7 +7,8 @@ import type { GraphSceneData } from "./graph-scene";
 export type GraphWorkerRequest =
 	| { type: "init"; data: GraphSceneData; layoutScope?: string }
 	| { type: "drag"; id: string; x: number; y: number }
-	| { type: "release"; id: string };
+	| { type: "release"; id: string }
+	| { type: "connect"; port: MessagePort };
 export type LayoutOrigin = "cached" | "partial" | "fresh" | "unavailable";
 export interface GraphWorkerResponse {
 	xy: Float64Array;
@@ -20,7 +21,13 @@ const LAYOUT_BUDGET_MS = 30_000;
 const DRAG_BUDGET_MS = 8_000;
 const SAVE_INTERVAL_MS = 2_000;
 
+interface Channel {
+	postMessage(message: GraphWorkerResponse, transfer: Transferable[]): void;
+	onmessage: ((event: MessageEvent<GraphWorkerRequest>) => void) | null;
+}
+
 const simulation = new ForceSimulation();
+let channel = self as unknown as Channel;
 let nodes: LayoutNode[] = [];
 let byId = new Map<string, LayoutNode>();
 let origin: LayoutOrigin = "fresh";
@@ -36,7 +43,7 @@ const publish = () => {
 		xy[index * 2 + 1] = node.y;
 	}
 	const response: GraphWorkerResponse = { xy, active: simulation.isActive(), origin };
-	self.postMessage(response, [xy.buffer]);
+	channel.postMessage(response, [xy.buffer]);
 };
 const save = (heat = simulation.heat()) => {
 	lastSave = performance.now();
@@ -83,8 +90,13 @@ const restore = async (scope: string | undefined): Promise<CachedLayout | undefi
 		return null;
 	}
 };
-self.onmessage = async (event: MessageEvent<GraphWorkerRequest>) => {
+const receive = async (event: MessageEvent<GraphWorkerRequest>) => {
 	const request = event.data;
+	if (request.type === "connect") {
+		channel = request.port as unknown as Channel;
+		channel.onmessage = receive;
+		return;
+	}
 	if (request.type === "init") {
 		const current = ++generation;
 		clearTimeout(frame);
@@ -125,3 +137,4 @@ self.onmessage = async (event: MessageEvent<GraphWorkerRequest>) => {
 	simulation.settle();
 	animate();
 };
+self.onmessage = receive;

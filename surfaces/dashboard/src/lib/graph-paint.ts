@@ -1,3 +1,5 @@
+export type Context2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+
 export interface PaintView {
 	readonly ratio: number;
 	readonly panX: number;
@@ -34,7 +36,7 @@ export interface GraphPainter {
 	end(): void;
 }
 
-function hexagon(context: CanvasRenderingContext2D, x: number, y: number, r: number): void {
+function hexagon(context: Context2D, x: number, y: number, r: number): void {
 	for (let side = 0; side < 6; side++) {
 		const angle = (Math.PI / 3) * side + Math.PI / 6;
 		const px = x + Math.cos(angle) * r;
@@ -45,7 +47,7 @@ function hexagon(context: CanvasRenderingContext2D, x: number, y: number, r: num
 	context.closePath();
 }
 
-function glyphPath(context: CanvasRenderingContext2D, shape: PaintShape, x: number, y: number, r: number): void {
+function glyphPath(context: Context2D, shape: PaintShape, x: number, y: number, r: number): void {
 	if (shape === "dot") {
 		const side = r * DOT_SIDE;
 		context.rect(x - side / 2, y - side / 2, side, side);
@@ -68,7 +70,7 @@ function glyphPath(context: CanvasRenderingContext2D, shape: PaintShape, x: numb
 	}
 }
 
-export function canvasPainter(context: CanvasRenderingContext2D): GraphPainter {
+export function canvasPainter(context: Context2D): GraphPainter {
 	let z = 1;
 	return {
 		begin(view, width, height) {
