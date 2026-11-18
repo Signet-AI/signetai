@@ -537,7 +537,10 @@ printf 'never reached\\n'
 			workerServer = Bun.serve({
 				port: 0,
 				hostname: "127.0.0.1",
-				fetch: (request) => globalThis.fetch(request.url, { method: request.method, signal: request.signal }),
+				fetch: (request: Request) =>
+					request.method === "POST"
+						? globalThis.fetch(request.url, { method: request.method, signal: request.signal })
+						: new Response("", { status: 405 }),
 			});
 			writeFileSync(
 				join(dir, "agent.yaml"),
@@ -696,7 +699,10 @@ printf 'never reached\\n'
 			workerServer = Bun.serve({
 				port: 0,
 				hostname: "127.0.0.1",
-				fetch: (request) => globalThis.fetch(request.url, { method: request.method, signal: request.signal }),
+				fetch: (request: Request) =>
+					request.method === "POST"
+						? globalThis.fetch(request.url, { method: request.method, signal: request.signal })
+						: new Response("", { status: 405 }),
 			});
 			writeFileSync(
 				join(dir, "agent.yaml"),
