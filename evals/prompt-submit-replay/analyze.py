@@ -4,6 +4,7 @@ import json
 import os
 import re
 import statistics
+import sys
 
 MARKERS = ("## Relevant Entity Context", "## Relevant Memory:")
 PLUGIN_BLOCK = re.compile(r"<signet-plugin-context\b[\s\S]*?</signet-plugin-context>")
@@ -54,12 +55,31 @@ def memory_chars(text):
     return len("\n".join(memory_section(text)).strip())
 
 
+def run_dir(args, run):
+    return os.path.join(args.dir, f"run-{run}")
+
+
+def check_runs(args):
+    info = os.stat(args.dir)
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        sys.exit(f"{args.dir} must be owned by you and closed to other users (chmod 700)")
+    digests = {}
+    for run in args.runs:
+        marker = os.path.join(run_dir(args, run), "complete.json")
+        if not os.path.exists(marker):
+            sys.exit(f"{run} has no completed run in {run_dir(args, run)}; rerun run.sh")
+        with open(marker) as handle:
+            digests[run] = json.load(handle)["transcriptsSha256"]
+    if len(set(digests.values())) > 1:
+        sys.exit(f"runs replayed different transcripts: {digests}")
+
+
 def summarize(args, dump):
     summary = {}
-    with open(os.path.join(args.dir, "transcripts.json")) as handle:
-        lengths = {session: len(item["turns"]) for session, item in json.load(handle).items()}
     for run in args.runs:
-        with open(os.path.join(args.dir, f"results-{run}.jsonl")) as handle:
+        with open(os.path.join(run_dir(args, run), "transcripts.json")) as handle:
+            lengths = {session: len(item["turns"]) for session, item in json.load(handle).items()}
+        with open(os.path.join(run_dir(args, run), f"results-{run}.jsonl")) as handle:
             rows = [json.loads(line) for line in handle]
         sessions = collections.defaultdict(list)
         for row in rows:
@@ -109,7 +129,7 @@ def summarize(args, dump):
 def ledgers(args):
     claims = collections.defaultdict(list)
     for run in args.runs:
-        path = os.path.join(args.dir, f"ledger-{run}.json")
+        path = os.path.join(run_dir(args, run), f"ledger-{run}.json")
         text = ""
         if os.path.exists(path):
             with open(path) as handle:
@@ -124,7 +144,7 @@ def daemon_decisions(args):
     engines = collections.defaultdict(collections.Counter)
     latency = collections.defaultdict(list)
     for run in args.runs:
-        path = os.path.join(args.dir, f"daemon-log-{run}.ndjson")
+        path = os.path.join(run_dir(args, run), f"daemon-log-{run}.ndjson")
         if not os.path.exists(path):
             continue
         with open(path, errors="ignore") as handle:
@@ -145,6 +165,8 @@ def daemon_decisions(args):
 
 def main():
     args = parse_args()
+    os.umask(0o077)
+    check_runs(args)
     with open(os.path.join(args.dir, "per-turn-evidence.md"), "w") as dump:
         summary = summarize(args, dump)
     claims = ledgers(args)

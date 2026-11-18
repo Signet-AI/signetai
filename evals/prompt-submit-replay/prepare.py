@@ -259,7 +259,11 @@ def extract(args):
 
 def main():
     args = parse_args()
-    os.makedirs(args.dir, exist_ok=True)
+    os.umask(0o077)
+    os.makedirs(args.dir, mode=0o700, exist_ok=True)
+    info = os.stat(args.dir)
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        sys.exit(f"{args.dir} must be owned by you and closed to other users (chmod 700)")
     layout = source_layout(args)
     if not args.skip_snapshot:
         snapshot(args, layout)
