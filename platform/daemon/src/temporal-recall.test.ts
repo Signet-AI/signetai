@@ -122,6 +122,47 @@ describe("temporal recall", () => {
 		expect(isolated.response?.results.map((row) => row.subject_id)).toEqual(["owner-doc"]);
 	});
 
+	it("leaves raw transcript artifacts out when transcript evidence is disabled", () => {
+		getDbAccessor().withWriteTx((db) => {
+			const artifact = db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, session_id, session_key, session_token,
+				  project, harness, captured_at, content, updated_at, is_deleted)
+				 VALUES ('default', ?, ?, ?, 'session-a', 'session-a', 'token-a', NULL, 'pi', ?, ?, ?, 0)`,
+			);
+			artifact.run(
+				"transcripts/pi.jsonl",
+				"sha-transcript",
+				"transcript",
+				"2026-08-01T10:00:00.000Z",
+				"raw transcript turn",
+				"2026-08-01T10:00:00.000Z",
+			);
+			artifact.run(
+				"sources/note.md",
+				"sha-note",
+				"source_obsidian_markdown",
+				"2026-08-01T11:00:00.000Z",
+				"source note",
+				"2026-08-01T11:00:00.000Z",
+			);
+		});
+		const time = {
+			start: "2026-08-01T00:00:00.000Z",
+			end: "2026-08-02T00:00:00.000Z",
+			facets: ["captured"] as const,
+			mode: "timeline" as const,
+		};
+		const kinds = (transcriptEvidence?: boolean): readonly (string | undefined)[] =>
+			(
+				resolveTemporalRecall({ query: "", time, limit: 10, agentId: "default", transcriptEvidence }).response
+					?.results ?? []
+			).map((row) => row.type);
+
+		expect(kinds()).toEqual(["source_obsidian_markdown", "transcript"]);
+		expect(kinds(false)).toEqual(["source_obsidian_markdown"]);
+	});
+
 	it("widens an empty day filter, then falls back to unfiltered ranking instead of returning nothing", () => {
 		const createdAt = new Date(2026, 2, 19, 15, 0, 0).toISOString();
 		getDbAccessor().withWriteTx((db) => {
