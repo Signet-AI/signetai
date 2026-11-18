@@ -346,6 +346,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 	it("does not claim or inject when the deadline expires while the claim is queued", async () => {
 		seedEntityContext();
 		const busyWrites: Promise<void>[] = [];
+		let recallStarted = 0;
 		const deps = makeDeps({
 			loadMemoryConfig: () => {
 				const cfg = realLoadMemoryConfig(agentsDir);
@@ -362,6 +363,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 				},
 			],
 			hybridRecall: (async () => {
+				recallStarted = performance.now();
 				for (let index = 0; index < 40; index += 1) {
 					busyWrites.push(
 						getDbAccessor().withWriteTxAsync(() => {
@@ -382,13 +384,12 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 			}) as unknown as PromptDeps["hybridRecall"],
 		});
 
-		const started = performance.now();
 		const result = await submit(
 			"How should Signet architecture handle prompt context?",
 			"session-claim-deadline",
 			deps,
 		);
-		const elapsed = performance.now() - started;
+		const elapsed = performance.now() - recallStarted;
 		await Promise.allSettled(busyWrites);
 
 		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "provider-timeout" });
