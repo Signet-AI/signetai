@@ -303,6 +303,33 @@ describe("matchPromptEntities", () => {
 		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Saltmarsh Project", "alias"]]);
 	});
 
+	it("ignores entity and alias values stored as blobs", async () => {
+		const now = new Date().toISOString();
+		const blob = (seed: number): Uint8Array => new Uint8Array(256).fill(65 + (seed % 26));
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, ?, ?)`,
+			).run(blob(0), blob(1), blob(2), now, now);
+			const alias = db.prepare(
+				`INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, status)
+				 VALUES (?, ?, 'default', ?, ?, 'active')`,
+			);
+			for (let index = 0; index < 160; index += 1) {
+				const value = new Uint8Array(256).fill(65 + (index % 26));
+				value[0] = index;
+				alias.run(`alias-blob-${index}`, blob(0), value, value);
+			}
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('ent-marrow', 'Marrow Project', 'marrow project', 'project', 'default', 1, ?, ?)`,
+			).run(now, now);
+			alias.run("alias-marrow", "ent-marrow", "marrowbeacon", "marrowbeacon");
+		});
+		const matches = await matchPromptEntities(DB_PATH(), "default", "Is marrowbeacon lit?");
+		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Marrow Project", "alias"]]);
+	});
+
 	it("does not fail on oversized entity ids or non-numeric mention counts", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {

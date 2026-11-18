@@ -202,6 +202,8 @@ type PromptEntityPageRow<Cursor> = PromptEntityRow & { readonly cursor: Cursor }
 
 const PROMPT_ENTITY_ELIGIBLE = `COALESCE(e.status, 'active') = 'active'
 		   AND LOWER(e.entity_type) IN ('person', 'project')
+		   AND TYPEOF(e.id) = 'text'
+		   AND TYPEOF(e.name) = 'text'
 		   AND LENGTH(CAST(e.id AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
 		   AND LENGTH(CAST(e.name AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}`;
 
@@ -220,6 +222,7 @@ const PROMPT_ENTITY_NAMES = `SELECT
 		 WHERE e.agent_id = ?
 		   AND e.rowid > ?
 		   AND ${PROMPT_ENTITY_ELIGIBLE}
+		   AND TYPEOF(COALESCE(e.canonical_name, LOWER(e.name))) = 'text'
 		   AND LENGTH(CAST(COALESCE(e.canonical_name, LOWER(e.name)) AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
 		 ORDER BY e.rowid
 		 LIMIT ?`;
@@ -237,6 +240,8 @@ const PROMPT_ENTITY_ALIASES = `SELECT
 		 WHERE a.agent_id = ?
 		   AND a.status = 'active'
 		   AND a.canonical_alias > ?
+		   AND TYPEOF(a.canonical_alias) = 'text'
+		   AND TYPEOF(a.alias) = 'text'
 		   AND LENGTH(CAST(a.canonical_alias AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
 		   AND LENGTH(CAST(a.alias AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
 		   AND ${PROMPT_ENTITY_ELIGIBLE}
