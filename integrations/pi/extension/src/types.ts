@@ -25,7 +25,9 @@ export interface PreCompactionResult {
 export type PiAgentMessage = BaseAgentMessage;
 export type PiSessionEntry = BaseSessionEntry;
 export type PiSessionHeader = BaseSessionHeader;
-export type ReadonlySessionManager = BaseReadonlySessionManager;
+export interface ReadonlySessionManager extends BaseReadonlySessionManager {
+	buildSessionContext(): { readonly messages: ReadonlyArray<PiAgentMessage> };
+}
 
 export interface PiInputEvent {
 	readonly text: string;

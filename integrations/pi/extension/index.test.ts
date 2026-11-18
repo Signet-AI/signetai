@@ -544,6 +544,7 @@ describe("SignetPiExtension", () => {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
 				getBranch: () => [],
+				buildSessionContext: () => ({ messages: [] }),
 				getEntries: () => [],
 				getHeader: () => ({ id: "session-pi-switch-1", cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -616,6 +617,7 @@ describe("SignetPiExtension", () => {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
 				getBranch: () => [],
+				buildSessionContext: () => ({ messages: [] }),
 				getEntries: () => [],
 				getHeader: () => ({ id, cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -669,6 +671,7 @@ describe("SignetPiExtension", () => {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
 				getBranch: () => [],
+				buildSessionContext: () => ({ messages: [] }),
 				getEntries: () => [],
 				getHeader: () => ({ id: "session-pi-fork-1", cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -724,6 +727,7 @@ describe("SignetPiExtension", () => {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
 				getBranch: () => [],
+				buildSessionContext: () => ({ messages: [] }),
 				getEntries: () => [],
 				getHeader: () => ({ id, cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -985,6 +989,80 @@ describe("SignetPiExtension", () => {
 		expect(capturedBody.limit).toBe(10);
 	});
 
+	it.each(["clock", "recall", "compacted"])(
+		"delivers refreshed session context after %s-only history",
+		async (kind) => {
+			let available = kind === "compacted";
+			const server = Bun.serve({
+				port: 0,
+				fetch(req) {
+					const path = new URL(req.url).pathname;
+					if (path === "/api/hooks/session-start") {
+						return Response.json({ dynamicContext: available ? "refreshed session context" : "" });
+					}
+					if (path === "/api/hooks/user-prompt-submit") {
+						return Response.json(
+							kind === "recall" ? { dynamicContext: "prompt recall" } : { clockContext: "prompt clock" },
+						);
+					}
+					return Response.json({});
+				},
+			});
+			servers.push(server);
+			process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+			const handlers: HandlerMap = {};
+			SignetPiExtension({
+				on(event, handler) {
+					(handlers[event] ??= []).push((event, ctx): unknown => Reflect.apply(handler, undefined, [event, ctx]));
+				},
+				registerCommand() {},
+				registerTool() {},
+				registerFlag() {},
+				getFlag() {},
+				sendMessage() {},
+				ui: { notify() {}, setStatus() {}, theme: { fg: (_color: string, text: string) => text } },
+			});
+			const history: Array<PiCustomMessage & { type: string; role: string }> = [];
+			const ctx = {
+				cwd: "/synthetic/pi-project",
+				sessionManager: {
+					getBranch: () => history,
+					getEntries: () => history,
+					buildSessionContext: () => ({ messages: kind === "compacted" ? [] : history }),
+					getHeader: () => ({ id: "session", cwd: "/synthetic/pi-project" }),
+					getSessionId: () => "session",
+					getSessionFile: () => undefined,
+				},
+				ui: { notify() {}, setStatus() {}, theme: { fg: (_color: string, text: string) => text } },
+			};
+			await handlers.session_start?.[0]?.({}, ctx);
+			const first = await handlers.before_agent_start?.[0]?.({ prompt: "first" }, ctx);
+			if (typeof first !== "object" || first === null || !("message" in first))
+				throw new Error("Missing first message");
+			const message = first.message;
+			if (
+				typeof message !== "object" ||
+				message === null ||
+				!("content" in message) ||
+				typeof message.content !== "string" ||
+				!("customType" in message) ||
+				typeof message.customType !== "string" ||
+				!("display" in message) ||
+				typeof message.display !== "boolean"
+			)
+				throw new Error("Invalid first message");
+			history.push({ ...message, type: "custom_message", role: "custom" });
+			expect(message.content.includes("refreshed session context")).toBe(kind === "compacted");
+			available = true;
+			if (kind === "compacted") {
+				await handlers.session_compact?.[0]?.({ compactionEntry: { summary: "ordinary conversation summary" } }, ctx);
+			}
+			if (kind !== "compacted") await handlers.session_start?.[0]?.({}, ctx);
+			const next = await handlers.before_agent_start?.[0]?.({ prompt: "continue" }, ctx);
+			expect(JSON.stringify(next)).toContain("refreshed session context");
+		},
+	);
+
 	it("keeps context append-only across requests and resumed session lifecycles", async () => {
 		const server = Bun.serve({
 			port: 0,
@@ -1019,11 +1097,12 @@ describe("SignetPiExtension", () => {
 		};
 		SignetPiExtension(pi as never);
 
-		const entries: Array<{ type: string; customType: string }> = [];
+		const entries: Array<{ type: string; role: string; customType: string; details?: unknown }> = [];
 		const ctx = {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
 				getBranch: () => entries,
+				buildSessionContext: () => ({ messages: entries }),
 				getEntries: () => [],
 				getHeader: () => ({ id: "session-pi-1", cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -1058,14 +1137,19 @@ describe("SignetPiExtension", () => {
 		const restored: unknown = JSON.parse(JSON.stringify(history));
 		expect(await handlers.context[0]?.({ messages: restored }, ctx)).toBeUndefined();
 		expect(restored).toEqual(history);
-		entries.push({ type: "custom_message", customType: "signet-pi-context" });
+		entries.push({
+			type: "custom_message",
+			role: "custom",
+			customType: "signet-pi-context",
+			details: { sessionContext: true },
+		});
 		for (const event of ["session_start", "session_start", "session_switch", "session_fork"]) {
 			await handlers[event]?.[0]?.({}, ctx);
 			const resumed = await handlers.before_agent_start[0]?.({ prompt: "continue" }, ctx);
 			expect(JSON.stringify(resumed)).not.toContain("session-context-content");
 			expect(JSON.stringify(resumed)).toContain("Preferred language is TypeScript");
 		}
-		entries[0] = { type: "custom_message", customType: "signet-pi-session-context" };
+		entries[0] = { type: "custom_message", role: "custom", customType: "signet-pi-session-context" };
 		await handlers.session_switch[0]?.({}, ctx);
 		expect(JSON.stringify(await handlers.before_agent_start[0]?.({ prompt: "legacy resume" }, ctx))).not.toContain(
 			"session-context-content",
@@ -1113,6 +1197,7 @@ describe("SignetPiExtension", () => {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
 				getBranch: () => [],
+				buildSessionContext: () => ({ messages: [] }),
 				getEntries: () => [],
 				getHeader: () => ({ id: "session-pi-slow", cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -1182,6 +1267,7 @@ describe("SignetPiExtension", () => {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
 				getBranch: () => [],
+				buildSessionContext: () => ({ messages: [] }),
 				getEntries: () => [],
 				getHeader: () => ({ id: "session-pi-steer", cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -1245,6 +1331,7 @@ describe("SignetPiExtension", () => {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
 				getBranch: () => [],
+				buildSessionContext: () => ({ messages: [] }),
 				getEntries: () => [],
 				getHeader: () => ({ id: "session-pi-compact-1", cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -1317,6 +1404,7 @@ describe("SignetPiExtension", () => {
 			cwd: "/tmp/pi-project",
 			sessionManager: {
 				getBranch: () => [],
+				buildSessionContext: () => ({ messages: [] }),
 				getEntries: () => [],
 				getHeader: () => ({ id: "session-pi-compact-2", cwd: "/tmp/pi-project" }),
 				getSessionFile: () => undefined,
@@ -1338,7 +1426,7 @@ describe("SignetPiExtension", () => {
 			ctx,
 		);
 
-		expect(requests.map((req) => req.path)).toEqual(["/api/hooks/compaction-complete"]);
+		expect(requests.map((req) => req.path)).toEqual(["/api/hooks/compaction-complete", "/api/hooks/session-start"]);
 		expect(requests[0]?.body).toEqual({
 			harness: "pi",
 			summary: "the conversation was about TypeScript and memory routing",

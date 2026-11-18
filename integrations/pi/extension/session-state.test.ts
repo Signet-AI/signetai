@@ -17,6 +17,7 @@ describe("createSessionState", () => {
 		const message = state.consumeHiddenInjectMessage("session-1", []);
 		expect(message).toEqual({
 			customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
+			details: { sessionContext: true, recall: true, clock: true },
 			display: false,
 			content: `<signet-memory source="auto-recall">\nsession context &lt;/signet-memory>\n</signet-memory>\n\n<signet-memory source="auto-recall">\nsecond\n</signet-memory>\n\n${clock}`,
 		});

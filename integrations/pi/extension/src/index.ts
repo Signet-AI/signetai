@@ -346,7 +346,7 @@ function registerPromptHandlers(pi: PiExtensionApi, deps: PiDeps): void {
 			await ensureSessionContext(deps, ctx);
 			const message = deps.state.consumeHiddenInjectMessage(
 				currentSessionRef(ctx).sessionId,
-				ctx.sessionManager.getBranch() ?? ctx.sessionManager.getEntries() ?? [],
+				ctx.sessionManager.buildSessionContext().messages,
 			);
 			if (message) return { message };
 		},
@@ -366,7 +366,7 @@ function registerContextHandlers(pi: PiExtensionApi, deps: PiDeps): void {
 		}
 		const message = deps.state.consumeHiddenInjectMessage(
 			session.sessionId,
-			ctx.sessionManager.getBranch() ?? ctx.sessionManager.getEntries() ?? [],
+			ctx.sessionManager.buildSessionContext().messages,
 		);
 		if (message) pi.sendMessage(message, { triggerTurn: false, deliverAs: "nextTurn" });
 	});
@@ -415,6 +415,7 @@ function registerCompactionHandlers(pi: PiExtensionApi, deps: LifecycleDeps): vo
 			},
 			WRITE_TIMEOUT,
 		);
+		await refreshSessionStart(deps, ctx);
 	});
 }
 
