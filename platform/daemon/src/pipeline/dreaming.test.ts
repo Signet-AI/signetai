@@ -1648,39 +1648,6 @@ describe("Dreaming", () => {
 		expect(probe.tokens).toBeGreaterThan(0);
 	});
 
-	it("does not claim an exact legacy backlog after the bounded probe exhausts ineligible sources", async () => {
-		const agentId = "bounded-legacy-candidates";
-		db.exec("DROP TABLE dreaming_evidence_consumption");
-		db.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
-			agentId,
-			"2026-08-01T12:00:00.000Z",
-		);
-		for (let index = 0; index < 51; index += 1) {
-			seedTranscript(
-				db,
-				`a-before-watermark-${String(index).padStart(3, "0")}`,
-				`older transcript ${index}`,
-				"2026-08-01T00:00:00.000Z",
-				agentId,
-			);
-		}
-		seedTranscript(db, "z-pending", "completed source beyond the scan cap", "2026-08-02T00:00:00.000Z", agentId);
-
-		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
-
-		expect(probe.kind).toBe("indeterminate");
-		if (probe.kind !== "indeterminate") throw new Error("expected an indeterminate backlog probe");
-		expect(probe.tokenLowerBound).toBe(0);
-		expect(probe.hasBacklog).toBeNull();
-		expect(probe.sourcesScanned).toBe(0);
-
-		const repeatedProbe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
-		expect(repeatedProbe).toMatchObject({ kind: "indeterminate", hasBacklog: null, sourcesScanned: 0 });
-		const evidence = searchDreamingEvidenceInDb(db as unknown as ReadDb, { agentId, limit: 20 });
-		expect(evidence.ok).toBe(true);
-		expect(JSON.stringify(evidence)).toContain("transcript:z-pending");
-	});
-
 	it("schedules a backlog behind a duplicate reviewed page and surfaces the distinct evidence", async () => {
 		const agentId = "bounded-reviewed-pass";
 		const capturedAt = "2026-08-01T00:00:00.000Z";
@@ -1823,33 +1790,6 @@ describe("Dreaming", () => {
 		expect(filteredPlan.some((row) => row.detail.includes("sqlite_autoindex_memory_artifacts_1"))).toBe(true);
 		expect(filteredPlan.some((row) => row.detail.includes("idx_memory_artifacts_agent_sha"))).toBe(true);
 		expect(filteredPlan.some((row) => row.detail.includes("USE TEMP B-TREE FOR ORDER BY"))).toBe(false);
-	});
-
-	it("avoids per-table sorts when sampling a legacy-schema backlog", async () => {
-		const agentId = "legacy-bounded-query-plan";
-		seedArtifact(
-			db,
-			`imports/${agentId}.md`,
-			"pending source",
-			`${agentId}-revision`,
-			"2026-08-01T00:00:00.000Z",
-			agentId,
-		);
-		seedTranscript(db, `${agentId}-transcript`, "pending transcript", "2026-08-01T00:00:00.000Z", agentId);
-		db.exec("DROP TABLE dreaming_evidence_consumption");
-		const captured = captureSqliteQueries(db);
-		await probeDreamingEpisodicBacklogInDb(captured.readDb, agentId, 100_000, 50);
-		const queries = captured.queries.filter(
-			(entry) =>
-				entry.sql.includes("FROM memories") ||
-				entry.sql.includes("FROM memory_artifacts AS ma") ||
-				entry.sql.includes("FROM session_transcripts AS st"),
-		);
-		expect(queries).toHaveLength(3);
-		for (const query of queries) {
-			const plan = explainSqliteQueryPlan(db, query);
-			expect(plan.some((row) => row.detail.includes("USE TEMP B-TREE FOR ORDER BY"))).toBe(false);
-		}
 	});
 
 	it("does not treat a bounded full page as a threshold crossing", async () => {

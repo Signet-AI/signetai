@@ -301,8 +301,6 @@ export function scanDreamingEvidenceCoverageStep(
 			null,
 			"oldest",
 			request.cursor,
-			undefined,
-			false,
 		);
 		const entries = page
 			.map((source) => {

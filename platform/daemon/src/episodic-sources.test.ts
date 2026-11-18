@@ -575,7 +575,7 @@ describe("episodic source selection", () => {
 		expect(pageTwo.map((source) => source.id)).toEqual(["sources/second.md"]);
 	});
 
-	it("re-delivers requeued sources older than the cursor within one bounded page, and cursor-only paging skips them", () => {
+	it("pages cursor-only past requeued rows so every page advances without repeats", () => {
 		getDbAccessor().withWriteTx((db) => {
 			for (let i = 0; i < 120; i += 1) {
 				const at = `2026-08-01T${String(Math.floor(i / 60) + 10).padStart(2, "0")}:${String(i % 60).padStart(2, "0")}:00.000Z`;
@@ -591,32 +591,20 @@ describe("episodic source selection", () => {
 			}
 		});
 
-		const cursor = { capturedAt: "2026-08-01T23:00:00.000Z", kind: "memory" as const, id: "zzz-last" };
-		const deliveryRead = (pageCursor: EpisodicCursor | null) =>
+		const page = (pageCursor: EpisodicCursor | null) =>
 			getDbAccessor().withReadDb((db) =>
 				readRecentEpisodicSources(db, "ant", 100, undefined, null, "oldest", pageCursor),
 			);
-		const first = deliveryRead(null);
-		expect(first.length).toBeLessThanOrEqual(100);
-		const ids = new Set(first.map((source) => source.id));
-		expect(ids.has("mem-requeue-0")).toBe(true);
-		const repeat = deliveryRead(cursor);
-		expect(repeat.map((source) => source.id)).toContain("mem-requeue-0");
-
-		const coverageRead = (pageCursor: EpisodicCursor | null) =>
-			getDbAccessor().withReadDb((db) =>
-				readRecentEpisodicSources(db, "ant", 100, undefined, null, "oldest", pageCursor, undefined, false),
-			);
-		const coverageFirst = coverageRead(null);
-		const coverageIds = new Set(coverageFirst.map((source) => source.id));
-		expect(coverageIds.has("mem-requeue-0")).toBe(true);
-		const coverageLast = coverageFirst[coverageFirst.length - 1];
-		if (!coverageLast) throw new Error("empty page");
-		const coverageSecond = coverageRead({
-			capturedAt: coverageLast.capturedAt,
-			kind: coverageLast.kind,
-			id: coverageLast.id,
-		});
-		for (const source of coverageSecond) expect(coverageIds.has(source.id)).toBe(false);
+		const first = page(null);
+		expect(first).toHaveLength(100);
+		const seen = new Set(first.map((source) => source.id));
+		const last = first[first.length - 1];
+		if (!last) throw new Error("empty page");
+		const second = page({ capturedAt: last.capturedAt, kind: last.kind, id: last.id });
+		const secondIds = second.map((source) => source.id);
+		for (const id of secondIds) expect(seen.has(id)).toBe(false);
+		expect(secondIds.length).toBeGreaterThan(0);
+		for (const id of secondIds) seen.add(id);
+		expect(seen.size).toBe(120);
 	});
 });

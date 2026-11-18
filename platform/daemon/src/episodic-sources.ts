@@ -422,7 +422,6 @@ export function readRecentEpisodicSources(
 	order: "newest" | "oldest" | "none" = "newest",
 	cursor?: EpisodicCursor | null,
 	candidateRefs?: readonly EpisodicSourceCandidateRef[],
-	includeRequeued = true,
 ): EpisodicSourceRecord[] {
 	const boundedLimit = limit === null ? -1 : Math.max(1, Math.min(Math.floor(limit), 500));
 	const newer = newerThan?.trim() || null;
@@ -455,31 +454,6 @@ export function readRecentEpisodicSources(
 	const memoryCandidate = candidateRefFilter(candidateRefs, "memory", "id");
 	const artifactCandidate = candidateRefFilter(candidateRefs, "artifact", "source_path");
 	const transcriptCandidate = candidateRefFilter(candidateRefs, "transcript", "st.session_key");
-	const hasExclusions = (() => {
-		try {
-			return Boolean(
-				db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_exclusions'").get(),
-			);
-		} catch {
-			return false;
-		}
-	})();
-	const requeuePredicate = (kind: EpisodicSourceKind, idColumn: string): string =>
-		!hasExclusions
-			? "0"
-			: `EXISTS (
-			SELECT 1 FROM dreaming_evidence_exclusions AS dee
-			WHERE dee.agent_id = ?
-			  AND dee.source_kind = '${kind}'
-			  AND dee.source_id = ${idColumn}
-			  AND dee.requeue_requested_at IS NOT NULL
-			  AND dee.resolved_at IS NULL
-		)`;
-	const memoryRequeue = includeRequeued ? requeuePredicate("memory", "id") : "0";
-	const artifactRequeue = includeRequeued ? requeuePredicate("artifact", "source_path") : "0";
-	const transcriptRequeue = includeRequeued ? requeuePredicate("transcript", "session_key") : "0";
-	const summaryRequeue = includeRequeued ? requeuePredicate("summary", "id") : "0";
-	const requeueArgs = hasExclusions && includeRequeued ? [agentId] : [];
 	const memories: EpisodicSourceRecord[] = wants("memory")
 		? db
 				.prepare(
@@ -493,12 +467,12 @@ export function readRecentEpisodicSources(
 				   -- Session summaries are retained in memories for ordinary recall,
 				   -- but their temporal-DAG node is the one canonical Dreaming input.
 				   AND COALESCE(type, '') != 'session_summary'
-				   AND (${memoryCursor.sql} OR ${memoryRequeue})
+				   AND ${memoryCursor.sql}
 				   ${memoryCandidate.sql}
 				 ${sourceOrder("created_at", "id")}
 				 LIMIT ?`,
 				)
-				.all(agentId, ...memoryCursor.args, ...requeueArgs, ...memoryCandidate.args, boundedLimit)
+				.all(agentId, ...memoryCursor.args, ...memoryCandidate.args, boundedLimit)
 				.map((row) => {
 					const memory = row as {
 						readonly id: string;
@@ -536,12 +510,12 @@ export function readRecentEpisodicSources(
 			 FROM memory_artifacts AS ma
 			 WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
 			   AND ${ARTIFACT_IS_DREAMING_INPUT}
-			   AND (${artifactCursor.sql} OR ${artifactRequeue})
+			   AND ${artifactCursor.sql}
 			   ${artifactCandidate.sql}
 			   ${sourceOrder("captured_at", "source_path")}
 			   LIMIT ?`,
 				)
-				.all(agentId, ...artifactCursor.args, ...requeueArgs, ...artifactCandidate.args, boundedLimit)
+				.all(agentId, ...artifactCursor.args, ...artifactCandidate.args, boundedLimit)
 				.map((row) => {
 					const artifact = row as {
 						readonly source_path: string;
@@ -586,12 +560,12 @@ export function readRecentEpisodicSources(
 				 FROM session_transcripts AS st
 				 WHERE st.agent_id = ?
 				   AND ${transcriptCompleted}
-				   AND (${transcriptCursor.sql} OR ${transcriptRequeue})
+				   AND ${transcriptCursor.sql}
 				   ${transcriptCandidate.sql}
 				 ${sourceOrder(transcriptTime, "st.session_key")}
 				 LIMIT ?`,
 				)
-				.all(agentId, ...transcriptCursor.args, ...requeueArgs, ...transcriptCandidate.args, boundedLimit)
+				.all(agentId, ...transcriptCursor.args, ...transcriptCandidate.args, boundedLimit)
 				.map((row) => {
 					const transcript = row as {
 						readonly session_key: string;
@@ -636,11 +610,11 @@ export function readRecentEpisodicSources(
 			 WHERE agent_id = ?
 			   AND depth = 0
 			   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
-			   AND (${summaryCursor.sql} OR ${summaryRequeue})
+			   AND ${summaryCursor.sql}
 			 ${sourceOrder("latest_at", "id")}
 			 LIMIT ?`,
 				)
-				.all(agentId, ...summaryCursor.args, ...requeueArgs, boundedLimit)
+				.all(agentId, ...summaryCursor.args, boundedLimit)
 				.map((row) => {
 					const summary = row as {
 						readonly id: string;
