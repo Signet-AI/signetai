@@ -696,4 +696,61 @@ describe("transcript evidence prefetch owner scheduling", () => {
 			accessor.withReadDbAsync = read;
 		}
 	});
+	it.each(["memory-search.authorize-candidates", "memory-search.observed-scores"])(
+		"rejects with the caller's cancellation reason when cancelled after %s",
+		async (operation) => {
+			await getDbAccessor().withWriteTxAsync((db) => {
+				db.prepare(
+					`INSERT INTO memories (id, content, type, agent_id, created_at, updated_at, updated_by)
+					 VALUES ('reason-memory', 'Speyer tourism board phone number', 'fact', 'agent-a', datetime('now'), datetime('now'), 'test')`,
+				).run();
+			});
+			const owner = await getDbOwner();
+			const submit = owner.submit.bind(owner);
+			const cancellation = new AbortController();
+			owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+				const handle = submit<Result>(request, options);
+				if (options.operation !== operation) return handle;
+				return {
+					...handle,
+					result: handle.result.then((value) => {
+						cancellation.abort(new Error("late-stage abort"));
+						return value;
+					}),
+				};
+			};
+			try {
+				const raw = loadMemoryConfig(directory);
+				const error = await hybridRecall(
+					{
+						query: "Speyer tourism board phone number",
+						limit: 3,
+						agentId: "agent-a",
+						readPolicy: "isolated",
+						trackRecallAccess: false,
+						claimRecallResults: false,
+						transcriptEvidence: false,
+					},
+					{
+						...raw,
+						search: { ...raw.search, rehearsal_enabled: false },
+						pipelineV2: {
+							...raw.pipelineV2,
+							graph: { ...raw.pipelineV2.graph, enabled: false },
+							reranker: { ...raw.pipelineV2.reranker, enabled: false },
+						},
+					},
+					async () => null,
+					{ signal: cancellation.signal },
+				).then(
+					() => null,
+					(reason: unknown) => reason,
+				);
+				expect(cancellation.signal.aborted).toBe(true);
+				expect(error instanceof Error ? error.message : null).toBe("late-stage abort");
+			} finally {
+				owner.submit = submit;
+			}
+		},
+	);
 });

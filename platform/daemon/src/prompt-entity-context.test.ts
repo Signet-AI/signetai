@@ -116,7 +116,7 @@ describe("matchPromptEntities", () => {
 		expect(matches.map((match) => match.entityName)).toEqual(["Quillonbridge"]);
 	});
 
-	it("pages aliases through the active alias index", async () => {
+	it("pages aliases by rowid without a per-page sort", async () => {
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			const entity = db.prepare(
@@ -183,6 +183,55 @@ describe("matchPromptEntities", () => {
 		});
 		expect(matches.map((match) => match.entityName)).toEqual(["Lanternfield"]);
 		expect(reads).toBeLessThan(40);
+	});
+
+	it("keeps paging aliases when the page boundary row is replaced between pages", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const entity = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, ?, ?)`,
+			);
+			const alias = db.prepare(
+				`INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, status)
+				 VALUES (?, ?, 'default', ?, ?, 'active')`,
+			);
+			for (let index = 0; index < 1_500; index += 1) {
+				entity.run(`ent-churn-${index}`, `Churn Project ${index}`, `churn project ${index}`, now, now);
+				alias.run(`alias-churn-${index}`, `ent-churn-${index}`, `churnalias${index}`, `churnalias${index}`);
+			}
+			entity.run("ent-nightharbor", "Night Harbor", "night harbor", now, now);
+			alias.run("alias-nightharbor", "ent-nightharbor", "nightharbor", "nightharbor");
+		});
+		const owner = await getDbOwner(DB_PATH());
+		const submit = owner.submit.bind(owner);
+		let pages = 0;
+		owner.submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
+			const handle = submit<Result>(request, options);
+			if (options.operation !== "user-prompt-submit.entity-aliases") return handle;
+			pages += 1;
+			if (pages !== 1) return handle;
+			return {
+				...handle,
+				result: handle.result.then((value) => {
+					const rows = value as unknown as Array<{ readonly cursor: number }>;
+					const boundary = rows.at(-1)?.cursor;
+					getDbAccessor().withWriteTx((db) => {
+						db.prepare("DELETE FROM entity_aliases WHERE rowid = ?").run(boundary);
+						db.prepare(
+							`INSERT INTO entity_aliases (rowid, id, entity_id, agent_id, alias, canonical_alias, status)
+							 VALUES (?, 'alias-replacement', 'ent-churn-0', 'default', 'zzzz replacement', 'zzzz replacement', 'active')`,
+						).run(boundary);
+					});
+					return value;
+				}),
+			};
+		};
+		const matches = await matchPromptEntities(DB_PATH(), "default", "Is nightharbor still docked?").finally(() => {
+			owner.submit = submit;
+		});
+		expect(pages).toBeGreaterThan(1);
+		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Night Harbor", "alias"]]);
 	});
 
 	it("skips an alias whose ordering key alone exceeds the owner result limit", async () => {
