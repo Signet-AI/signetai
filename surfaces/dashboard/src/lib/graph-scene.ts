@@ -23,7 +23,9 @@ SOFTWARE.
 
 */
 import { categoryColor, type EntityCategory } from "./entity-category";
+import { glPainter } from "./graph-gl";
 import { GraphHoverIntent } from "./graph-hover";
+import { canvasPainter, PAINT_SHAPES, type PaintShape } from "./graph-paint";
 import { ViewportState } from "./graph-viewport";
 import type { GraphWorkerResponse, GraphWorkerRequest } from "./graph-worker";
 import type { LayoutNode } from "./graph-layout";
@@ -137,7 +139,6 @@ const BASE_ENTITY_LABELS = 12;
 const GLYPH_SCREEN_RADIUS = 2.4;
 const EDGE_BUCKETS = 40;
 const ALPHA_BUCKETS = 64;
-const DOT_SIDE = Math.sqrt(Math.PI);
 const DOT_DEVICE_RADIUS = 2;
 const RADIUS: Record<SceneNodeKind, number> = {
 	entity: 5,
@@ -184,10 +185,7 @@ function labelPriority(node: LayoutNode, active: LayoutNode | undefined): number
 	return node.weight;
 }
 
-type Glyph = "circle" | "square" | "hexagon" | "diamond" | "triangle";
-type Shape = Glyph | "dot";
-
-const GLYPHS: Record<SceneNodeKind, { readonly shape: Glyph; readonly filled: boolean }> = {
+const GLYPHS: Record<SceneNodeKind, { readonly shape: Exclude<PaintShape, "dot">; readonly filled: boolean }> = {
 	entity: { shape: "circle", filled: true },
 	source: { shape: "square", filled: true },
 	aspect: { shape: "hexagon", filled: true },
@@ -201,34 +199,10 @@ const GLYPHS: Record<SceneNodeKind, { readonly shape: Glyph; readonly filled: bo
 	memory: { shape: "square", filled: false },
 };
 
-function glyphPath(context: CanvasRenderingContext2D, shape: Glyph, x: number, y: number, r: number): void {
-	if (shape === "circle") context.arc(x, y, r, 0, Math.PI * 2);
-	else if (shape === "square") context.rect(x - r * 0.85, y - r * 0.85, r * 1.7, r * 1.7);
-	else if (shape === "hexagon") hexagon(context, x, y, r * 1.1);
-	else if (shape === "diamond") {
-		context.moveTo(x, y - r * 1.25);
-		context.lineTo(x + r * 1.25, y);
-		context.lineTo(x, y + r * 1.25);
-		context.lineTo(x - r * 1.25, y);
-		context.closePath();
-	} else {
-		context.moveTo(x, y - r * 1.3);
-		context.lineTo(x + r * 1.2, y + r * 0.8);
-		context.lineTo(x - r * 1.2, y + r * 0.8);
-		context.closePath();
-	}
-}
-
-function hexagon(context: CanvasRenderingContext2D, x: number, y: number, r: number): void {
-	for (let side = 0; side < 6; side++) {
-		const angle = (Math.PI / 3) * side + Math.PI / 6;
-		const px = x + Math.cos(angle) * r;
-		const py = y + Math.sin(angle) * r;
-		if (side === 0) context.moveTo(px, py);
-		else context.lineTo(px, py);
-	}
-	context.closePath();
-}
+const SHAPE_INDEX = Object.fromEntries(PAINT_SHAPES.map((shape, index) => [shape, index])) as Record<
+	PaintShape,
+	number
+>;
 
 function pill(context: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
 	const r = h / 2;
@@ -258,14 +232,20 @@ export function createGraphScene(
 		"Memory graph. Drag to pan, scroll to zoom, click a node to select it. With a node selected, arrow keys move between related nodes. Z fits, C centers, Escape clears the selection.",
 	);
 	canvas.style.cssText = "width:100%;height:100%;display:block;touch-action:none;";
-	const context = canvas.getContext("2d");
+	const overlay = document.createElement("canvas");
+	overlay.setAttribute("aria-hidden", "true");
+	overlay.style.cssText = "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;";
+	const gpu = glPainter(canvas);
+	const context = (gpu ? overlay : canvas).getContext("2d");
 	if (!context) throw new Error("Canvas is unavailable");
+	const painter = gpu ?? canvasPainter(context);
+	canvas.dataset.renderer = gpu ? "webgl2" : "canvas";
 	const tooltip = document.createElement("div");
 	tooltip.className = "graph-tooltip";
 	tooltip.hidden = true;
 	tooltip.setAttribute("role", "status");
 	const worker = new Worker(new URL("./graph-worker.ts", import.meta.url), { type: "module" });
-	container.append(canvas, tooltip);
+	container.append(canvas, ...(gpu ? [overlay] : []), tooltip);
 	let nodes: LayoutNode[] = [];
 	let overviewZoom = Number.POSITIVE_INFINITY;
 	let byId = new Map<string, LayoutNode>();
@@ -322,6 +302,8 @@ export function createGraphScene(
 	let ring = new Float64Array(0);
 	let labelAlpha = new Float64Array(0);
 	let visibility = new Float64Array(0);
+	let segments = new Float64Array(0);
+	let points = new Float64Array(0);
 	const tint = (node: SceneNode, dark: boolean) => {
 		const colors = dark ? COLORS : LIGHT_COLORS;
 		if (node.kind === "constraint" || node.kind === "origin" || node.kind === "memory" || !node.category)
@@ -421,8 +403,6 @@ export function createGraphScene(
 			}
 		}
 		const ratio = Math.min(devicePixelRatio || 1, 2);
-		context.setTransform(ratio, 0, 0, ratio, 0, 0);
-		context.clearRect(0, 0, width, height);
 		const dark = document.documentElement.classList.contains("dark");
 		const tone = dark ? "dark" : "light";
 		const shade = dark ? 1 : 0;
@@ -455,9 +435,11 @@ export function createGraphScene(
 			visibility[index] = shown(node) ? Math.max(tierVisibility[tierOf(node.kind)] ?? 1, revealed) : 0;
 		}
 		const z = viewport.zoom;
-		context.save();
-		context.translate(viewport.panX, viewport.panY);
-		context.scale(z, z);
+		painter.begin({ ratio, panX: viewport.panX, panY: viewport.panY, zoom: z }, width, height);
+		if (gpu) {
+			context.setTransform(ratio, 0, 0, ratio, 0, 0);
+			context.clearRect(0, 0, width, height);
+		}
 		const spokes = new Map<number, number[]>();
 		const bridges = new Map<number, number[]>();
 		const highlightedEdges: Array<{ key: string; from: LayoutNode; to: LayoutNode; dependency: boolean }> = [];
@@ -497,48 +479,47 @@ export function createGraphScene(
 			else groups.set(group, [index]);
 		}
 		const stroke = (groups: Map<number, number[]>, w: number, local: boolean) => {
-			context.lineWidth = w / z;
 			for (const [group, list] of groups) {
 				const bucket = group % (EDGE_BUCKETS + 1);
-				context.strokeStyle = local
-					? (palette[shade][Math.floor(group / (EDGE_BUCKETS + 1))] ?? BRIDGE[tone])
-					: BRIDGE[tone];
-				context.globalAlpha = (bucket / EDGE_BUCKETS) * appear;
-				context.beginPath();
+				const color = local ? (palette[shade][Math.floor(group / (EDGE_BUCKETS + 1))] ?? BRIDGE[tone]) : BRIDGE[tone];
+				let count = 0;
 				for (const index of list) {
 					const from = nodes[edgeFrom[index] ?? 0];
 					const to = nodes[edgeTo[index] ?? 0];
 					if (!from || !to) continue;
-					context.moveTo(from.x, from.y);
-					context.lineTo(to.x, to.y);
+					segments[count * 4] = from.x;
+					segments[count * 4 + 1] = from.y;
+					segments[count * 4 + 2] = to.x;
+					segments[count * 4 + 3] = to.y;
+					count++;
 				}
-				context.stroke();
+				painter.lines(segments, count, color, (bucket / EDGE_BUCKETS) * appear, w);
 			}
 		};
 		stroke(spokes, 0.75, true);
 		stroke(bridges, 1, false);
 		const accent = retrieved.size && !active ? RETRIEVAL[tone] : active ? tint(active, dark) : foreground;
-		context.strokeStyle = accent;
-		context.lineWidth = 1.4 / z;
 		for (const { key, from, to, dependency } of highlightedEdges) {
-			context.globalAlpha = fade(key, 1, 0) * appear * 0.95;
-			context.beginPath();
-			context.moveTo(from.x, from.y);
-			context.lineTo(to.x, to.y);
+			let arrow: number[] | undefined;
 			if (dependency) {
 				const angle = Math.atan2(to.y - from.y, to.x - from.x);
 				const tipX = to.x - Math.cos(angle) * (radius(to) + 3 / z);
 				const tipY = to.y - Math.sin(angle) * (radius(to) + 3 / z);
-				context.moveTo(tipX - (Math.cos(angle - 0.5) * 6) / z, tipY - (Math.sin(angle - 0.5) * 6) / z);
-				context.lineTo(tipX, tipY);
-				context.lineTo(tipX - (Math.cos(angle + 0.5) * 6) / z, tipY - (Math.sin(angle + 0.5) * 6) / z);
+				arrow = [
+					tipX - (Math.cos(angle - 0.5) * 6) / z,
+					tipY - (Math.sin(angle - 0.5) * 6) / z,
+					tipX,
+					tipY,
+					tipX - (Math.cos(angle + 0.5) * 6) / z,
+					tipY - (Math.sin(angle + 0.5) * 6) / z,
+				];
 			}
-			context.stroke();
+			painter.highlight(from.x, from.y, to.x, to.y, arrow, accent, fade(key, 1, 0) * appear * 0.95, 1.4);
 		}
 		const surface = SURFACE[tone];
 		const glyphs = new Map<string, { color: string; alpha: number; outlined: boolean; members: number[] }>();
 		const radii = new Float64Array(nodes.length);
-		const shapes: Shape[] = [];
+		const shapes = new Uint8Array(nodes.length);
 		const marked: number[] = [];
 		for (const [index, node] of nodes.entries()) {
 			const vis = visibility[index] ?? 0;
@@ -554,7 +535,7 @@ export function createGraphScene(
 			const outlined = legible && !glyph.filled;
 			const bucket = Math.round(alpha * ALPHA_BUCKETS);
 			radii[index] = r;
-			shapes[index] = legible ? glyph.shape : r * z * ratio < DOT_DEVICE_RADIUS ? "dot" : "circle";
+			shapes[index] = SHAPE_INDEX[legible ? glyph.shape : r * z * ratio < DOT_DEVICE_RADIUS ? "dot" : "circle"];
 			const ringed =
 				fadeAt(
 					ring,
@@ -568,32 +549,19 @@ export function createGraphScene(
 			if (batch) batch.members.push(index);
 			else glyphs.set(key, { color, alpha: bucket / ALPHA_BUCKETS, outlined, members: [index] });
 		}
+		const outline = { surface, width: 1.2 };
 		for (const { color, alpha, outlined, members } of glyphs.values()) {
-			context.globalAlpha = alpha;
-			context.beginPath();
+			let count = 0;
 			for (const index of members) {
 				const node = nodes[index];
-				const r = radii[index] ?? 0;
-				const shape = shapes[index] ?? "dot";
 				if (!node) continue;
-				if (shape === "dot") {
-					const side = r * DOT_SIDE;
-					context.rect(node.x - side / 2, node.y - side / 2, side, side);
-					continue;
-				}
-				if (shape === "circle") context.moveTo(node.x + r, node.y);
-				glyphPath(context, shape, node.x, node.y, r);
+				points[count * 4] = node.x;
+				points[count * 4 + 1] = node.y;
+				points[count * 4 + 2] = radii[index] ?? 0;
+				points[count * 4 + 3] = shapes[index] ?? 0;
+				count++;
 			}
-			if (outlined) {
-				context.fillStyle = surface;
-				context.fill();
-				context.strokeStyle = color;
-				context.lineWidth = 1.2 / z;
-				context.stroke();
-			} else {
-				context.fillStyle = color;
-				context.fill();
-			}
+			painter.glyphs(points, count, color, alpha, outlined ? outline : undefined);
 		}
 		for (const index of marked) {
 			const node = nodes[index];
@@ -601,35 +569,26 @@ export function createGraphScene(
 			const r = radii[index] ?? 0;
 			const alpha = (nodeAlpha[index] ?? 1) * (visibility[index] ?? 0) * appear;
 			const color = recalled && retrieved.has(node.id) ? RETRIEVAL[tone] : (tints[shade][index] ?? tint(node, dark));
-			if (tierOf(node.kind) === 0) {
-				context.strokeStyle = node.scopeColor ?? color;
-				context.globalAlpha = alpha * (node.scopeColor ? 0.9 : 0.45);
-				context.lineWidth = 1.25 / z;
-				context.beginPath();
-				context.arc(node.x, node.y, r + 2.5 / z, 0, Math.PI * 2);
-				context.stroke();
-			}
+			if (tierOf(node.kind) === 0)
+				painter.ring(
+					node.x,
+					node.y,
+					r + 2.5 / z,
+					node.scopeColor ?? color,
+					alpha * (node.scopeColor ? 0.9 : 0.45),
+					1.25,
+				);
 			const ringed = ring[index] ?? 0;
-			if (ringed > 0.005) {
-				const reach = r + 6 / z;
-				context.globalAlpha = ringed * appear;
-				context.strokeStyle = retrieved.has(node.id) ? RETRIEVAL[tone] : foreground;
-				context.lineWidth = 1 / z;
-				context.setLineDash([3 / z, 3 / z]);
-				context.beginPath();
-				context.arc(node.x, node.y, reach, 0, Math.PI * 2);
-				context.stroke();
-				context.setLineDash([]);
-				context.beginPath();
-				for (let tick = 0; tick < 4; tick++) {
-					const angle = (Math.PI / 2) * tick + Math.PI / 4;
-					context.moveTo(node.x + Math.cos(angle) * (reach + 2 / z), node.y + Math.sin(angle) * (reach + 2 / z));
-					context.lineTo(node.x + Math.cos(angle) * (reach + 6 / z), node.y + Math.sin(angle) * (reach + 6 / z));
-				}
-				context.stroke();
-			}
+			if (ringed > 0.005)
+				painter.selection(
+					node.x,
+					node.y,
+					r + 6 / z,
+					retrieved.has(node.id) ? RETRIEVAL[tone] : foreground,
+					ringed * appear,
+				);
 		}
-		context.restore();
+		painter.end();
 		const occupied: Array<{ x: number; y: number; w: number; h: number }> = [];
 		const free = (x: number, y: number, w: number, h: number) =>
 			!occupied.some((box) => x < box.x + box.w + 6 && x + w + 6 > box.x && y < box.y + box.h && y + h > box.y);
@@ -1027,8 +986,10 @@ export function createGraphScene(
 		width = Math.max(1, container.clientWidth);
 		height = Math.max(1, container.clientHeight);
 		const ratio = Math.min(devicePixelRatio || 1, 2);
-		canvas.width = Math.round(width * ratio);
-		canvas.height = Math.round(height * ratio);
+		for (const surface of [canvas, overlay]) {
+			surface.width = Math.round(width * ratio);
+			surface.height = Math.round(height * ratio);
+		}
 		if (followAgent && retrieved.size)
 			fit(nodes.filter((node) => retrieved.has(node.id) || retrievedNeighbors.has(node.id)));
 		else if (selected) focusNode(selected.id);
@@ -1069,6 +1030,7 @@ export function createGraphScene(
 		ring = new Float64Array(nodes.length);
 		labelAlpha = new Float64Array(nodes.length);
 		visibility = new Float64Array(nodes.length);
+		points = new Float64Array(nodes.length * 4);
 		const clusterSize = new Map<string, number>();
 		for (const node of nodes) clusterSize.set(node.cluster, (clusterSize.get(node.cluster) ?? 0) + 1);
 		entityRank = new Map(
@@ -1082,6 +1044,7 @@ export function createGraphScene(
 				to = byId.get(edge.to);
 			return from && to ? [{ edge, from, to }] : [];
 		});
+		segments = new Float64Array(edges.length * 4);
 		edgeFrom = Int32Array.from(edges, ({ from }) => indexOf.get(from.id) ?? 0);
 		edgeTo = Int32Array.from(edges, ({ to }) => indexOf.get(to.id) ?? 0);
 		edgeLocal = Uint8Array.from(edges, (_, index) =>
@@ -1176,6 +1139,7 @@ export function createGraphScene(
 			window.removeEventListener("keydown", key);
 			canvas.removeEventListener("dblclick", doubleClick);
 			canvas.remove();
+			overlay.remove();
 			tooltip.remove();
 		},
 	};
