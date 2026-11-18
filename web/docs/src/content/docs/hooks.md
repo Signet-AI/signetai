@@ -447,7 +447,8 @@ Signet runs the normal daemon recall (`hybridRecall`) with the prompt as the
 query and injects the results that clear `hooks.userPromptSubmit.minScore` into
 a compact `## Relevant Memory: <entity>` block. `maxInjectChars` caps the
 rendered block, header included. Each line keeps its memory or source ID. Raw
-transcript evidence is excluded from this recall.
+transcript evidence is excluded from this recall. Entity names and aliases
+longer than 256 bytes are not matched.
 
 Injected results are claimed in the session's recall dedupe ledger for the
 current context epoch, so a memory is delivered at most once per session until
