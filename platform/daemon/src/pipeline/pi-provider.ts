@@ -242,7 +242,8 @@ function localAccountingForConfig(config: PiModelProviderConfig): AccountingProv
 function accountingProvenanceForConfig(config: PiModelProviderConfig, piModel: Model<Api>): AccountingProvenance {
 	const local = localAccountingForConfig(config);
 	if (local) return local;
-	const hasModelRates = Object.values(piModel.cost).some((rate) => Number.isFinite(rate) && rate > 0);
+	const rates = [piModel.cost.input, piModel.cost.output, piModel.cost.cacheRead, piModel.cost.cacheWrite];
+	const hasModelRates = rates.some((rate) => Number.isFinite(rate) && rate > 0);
 	return hasModelRates ? "locally_estimated" : "unavailable";
 }
 
