@@ -1003,10 +1003,12 @@ export function createGraphEngine(
 				zoom(1.5, message.x, message.y);
 				break;
 			case "key": {
-				const action = actions().get(message.key);
-				if (!action) break;
-				pauseFollow();
-				action();
+				for (const [name, action] of actions()) {
+					if (name !== message.key) continue;
+					pauseFollow();
+					action();
+					break;
+				}
 				break;
 			}
 			case "retrieval": {
