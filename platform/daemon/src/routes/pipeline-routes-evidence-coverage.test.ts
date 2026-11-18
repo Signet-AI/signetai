@@ -1,9 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import type { TokenClaims, TokenRole } from "../auth/types";
+import { DbOwnerDiedError } from "../db-owner-client";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { authConfig } from "./state";
 import { registerPipelineRoutes } from "./pipeline-routes";
@@ -129,6 +130,25 @@ describe("GET /api/dream/evidence/coverage", () => {
 			expect(body.error.length).toBeGreaterThan(0);
 		} finally {
 			(authConfig as { mode: typeof previousMode }).mode = previousMode;
+		}
+	});
+
+	it("maps an owner failure during agent lookup to 503 instead of 404", async () => {
+		const actualAgentId = await import("../agent-id.js");
+		mock.module("../agent-id.js", () => ({
+			...actualAgentId,
+			isAgentRegistered: async () => {
+				throw new DbOwnerDiedError();
+			},
+		}));
+		try {
+			const app = createPipelineApp();
+			const response = await app.request("/api/dream/evidence/coverage?agentId=agent-a");
+			expect(response.status).toBe(503);
+			const body = (await response.json()) as { error: string; code: string };
+			expect(body.code).toBe("DB_OWNER_DIED");
+		} finally {
+			mock.restore();
 		}
 	});
 });
