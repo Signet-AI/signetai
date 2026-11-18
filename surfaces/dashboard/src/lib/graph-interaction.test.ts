@@ -34,7 +34,9 @@ test("selection follows the reference interaction model without moving the camer
 	globals("requestAnimationFrame", () => 1);
 	globals("cancelAnimationFrame", () => {});
 	const context = new Proxy({}, { get: (_, key) => (key === "measureText" ? () => ({ width: 20 }) : () => {}) });
-	Object.defineProperty(dom.HTMLCanvasElement.prototype, "getContext", { value: () => context });
+	Object.defineProperty(dom.HTMLCanvasElement.prototype, "getContext", {
+		value: (type: string) => (type === "2d" ? context : null),
+	});
 	const fit = spyOn(ViewportState.prototype, "fitToNodes").mockImplementation(function (this: ViewportState) {
 		this.zoom = 1;
 		this.panX = 0;

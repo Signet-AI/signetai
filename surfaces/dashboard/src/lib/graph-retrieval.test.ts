@@ -102,7 +102,9 @@ test("renderer batches retrieval, pauses following on wheel, and cancels pending
 	});
 	globals("cancelAnimationFrame", (id: number) => frames.delete(id));
 	const context = new Proxy({}, { get: (_, key) => (key === "measureText" ? () => ({ width: 20 }) : () => {}) });
-	Object.defineProperty(dom.HTMLCanvasElement.prototype, "getContext", { value: () => context });
+	Object.defineProperty(dom.HTMLCanvasElement.prototype, "getContext", {
+		value: (type: string) => (type === "2d" ? context : null),
+	});
 	const fit = spyOn(ViewportState.prototype, "fitToNodes");
 	const manual = mock(() => {});
 	const nodes: SceneNode[] = [
