@@ -1780,17 +1780,20 @@ export async function handleUserPromptSubmit(
 				deadlineExpired: controller.signal.aborted,
 			});
 		}
-		const delivered = claimed && !claimFailed ? claimed.items : [];
+		const unclaimed = claimed !== null && !claimFailed && !claimed.meta.enabled;
+		const delivered = claimed && !claimFailed && !unclaimed ? claimed.items : [];
 		const engine =
 			delivered.length > 0
 				? "entity-recall"
-				: claimFailed
-					? controller.signal.aborted
-						? "provider-timeout"
-						: "claim-failed"
-					: recall.results.length > 0
-						? "deduped"
-						: recall.engine;
+				: unclaimed
+					? "no-session"
+					: claimFailed
+						? controller.signal.aborted
+							? "provider-timeout"
+							: "claim-failed"
+						: recall.results.length > 0
+							? "deduped"
+							: recall.engine;
 		recordUserPromptRecallTelemetry({
 			cfg,
 			agentId,

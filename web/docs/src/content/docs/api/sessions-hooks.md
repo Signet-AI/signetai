@@ -116,7 +116,7 @@ daemon recall with the prompt as the query; results that clear
 `hooks.userPromptSubmit.minScore` and fit `maxInjectChars` (measured on the
 rendered block) are claimed in the session recall dedupe ledger and injected
 once per session context epoch, so repeat prompts do not re-inject them. A
-failed or expired claim injects nothing. Low-signal prompts are admitted before
+failed or expired claim, or a request without a `sessionKey`, injects nothing. Low-signal prompts are admitted before
 automatic recall work, so they skip entity matching and recall while preserving
 session bookkeeping and the stable per-prompt context contract (an empty
 `inject`). Explicit recall is still available through `/api/memory/recall` and

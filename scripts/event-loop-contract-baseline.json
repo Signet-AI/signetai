@@ -1413,14 +1413,14 @@
     },
     {
       "path": "hooks.ts",
-      "line": 2269,
+      "line": 2272,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2271,
+      "line": 2274,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
