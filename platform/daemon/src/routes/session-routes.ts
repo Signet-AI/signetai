@@ -1,12 +1,10 @@
 import type { Hono } from "hono";
 import { resolveAgentId } from "../agent-id.js";
-import { requirePermission } from "../auth";
+import { requirePermission, requirePermissionWithRateLimit } from "../auth";
 import { buildBlackBoxSession, listBlackBoxSessions } from "../black-box.js";
-import { listAgentPresence, touchAgentPresence } from "../cross-agent.js";
+import { getAgentPresenceForSessionAgent, listAgentPresence, touchAgentPresence } from "../cross-agent.js";
 import { getDbAccessor } from "../db-accessor.js";
-import { logger } from "../logger.js";
 import {
-	type RuntimePath,
 	bypassSession,
 	getActiveSessions,
 	isSessionBypassed,
@@ -14,11 +12,12 @@ import {
 	renewSession,
 	unbypassSession,
 } from "../session-tracker.js";
+import { deleteSessionTranscript } from "../session-transcript-lifecycle";
 import { getSessionTranscriptContent, getStoredSessionTranscriptInfo } from "../session-transcripts.js";
 import { searchSessionTranscripts } from "../subagent-context.js";
 import { expandTemporalNode } from "../temporal-expand.js";
 import { clampGitSyncIntervalSeconds } from "./git-config.js";
-import { authConfig } from "./state.js";
+import { authConfig, authForgetLimiter, authAdminLimiter } from "./state.js";
 import {
 	parseOptionalString,
 	readOptionalJsonObject,
@@ -103,6 +102,8 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		return requirePermission("recall", authConfig)(c, next);
 	});
 	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c, next) => {
+		if (c.req.method === "DELETE")
+			return requirePermissionWithRateLimit("forget", "forget", authForgetLimiter, authConfig)(c, next);
 		return requirePermission("recall", authConfig)(c, next);
 	});
 	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c, next) => {
@@ -186,9 +187,53 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 					project: scopedProject.project,
 					limit,
 				}),
-			"routes/session-routes.ts:178",
+			"routes/session-routes.ts:179",
 		);
 		return c.json({ query, hits, count: hits.length });
+	});
+
+	app.delete("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c) => {
+		const purge = c.req.query("purge");
+		if (purge !== undefined && purge !== "hard") return c.json({ error: "purge must be hard or omitted" }, 400);
+		if (purge === "hard") {
+			if (authConfig.mode !== "local" && c.get("auth")?.claims?.role !== "admin")
+				return c.json({ error: "Admin credential required for hard purge" }, 403);
+			const denied = await requirePermissionWithRateLimit(
+				"admin",
+				"admin",
+				authAdminLimiter,
+				authConfig,
+			)(c, () => Promise.resolve());
+			if (denied) return denied;
+		}
+		const aliases = [c.req.query("agent_id"), c.req.query("agentId"), c.req.header("x-signet-agent-id")].filter(
+			(value) => value !== undefined,
+		);
+		if (aliases.some((value) => !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(value)) || new Set(aliases).size > 1)
+			return c.json({ error: "Invalid agent identity" }, 400);
+		const requested = aliases[0] ?? c.get("auth")?.claims?.scope?.agent;
+		if (requested !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$/.test(requested))
+			return c.json({ error: "Invalid agent identity" }, 400);
+		if (!requested && authConfig.mode !== "local") return c.json({ error: "Explicit agent identity is required" }, 400);
+		const agent = resolveScopedAgentId(c, requested, "default");
+		const project = resolveScopedProject(c, c.req.query("project"));
+		if (agent.error || project.error) return c.json({ error: "Transcript not found" }, 404);
+		const key = normalizeSessionKey(c.req.param("key"));
+		if (!key || key.length > 512) return c.json({ error: "Invalid session key" }, 400);
+		const presence = getAgentPresenceForSessionAgent(key, agent.agentId);
+		const result = await deleteSessionTranscript(
+			{
+				sessionKey: key,
+				agentId: agent.agentId,
+				project: project.project,
+				hard: purge === "hard",
+				changedBy: c.get("auth")?.claims?.sub ?? "local",
+				...(presence ? { live: { harness: presence.harness, project: presence.project ?? null } } : {}),
+			},
+			c.req.raw.signal,
+		);
+		if (result.status === "not_found") return c.json({ error: "Transcript not found" }, 404);
+		return c.json(result);
 	});
 
 	app.get("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", (c) => {
@@ -302,6 +347,8 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 			}
 		} else {
 			unbypassSession(key, scopedAgent.agentId);
+			if (isSessionBypassed(key, scopedAgent.agentId))
+				return c.json({ error: "Deleted transcript capture stays bypassed until session end" }, 409);
 		}
 		return c.json({ key, bypassed: enabled });
 	});
@@ -372,7 +419,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:372",
+			"routes/session-routes.ts:419",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -423,7 +470,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:382");
+		}, "routes/session-routes.ts:429");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {

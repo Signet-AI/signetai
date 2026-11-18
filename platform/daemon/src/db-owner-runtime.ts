@@ -168,6 +168,28 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 			applyVectorRepairBatch(db as never, request.input),
 		);
 	}
+	if (request.kind === "session_transcript_lifecycle") {
+		const { updateTranscriptLifecycleInTx } = await import("./session-transcripts");
+		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) => {
+			if (!("exec" in db)) throw new Error("Transcript lifecycle requires owner write access");
+			return updateTranscriptLifecycleInTx(db, request.input);
+		});
+	}
+	if (request.kind === "session_transcript_capture") {
+		const { captureSessionTranscriptOwned } = await import("./session-transcripts");
+		return await invokeAccessor(accessor, "withReadDb", (db) =>
+			captureSessionTranscriptOwned(db, request.input, request.input.input.basePath ?? resolveSqliteAgentsDir()),
+		);
+	}
+	if (request.kind === "session_transcript_delete") {
+		const { deleteSessionTranscriptOwned } = await import("./session-transcripts");
+		return await invokeAccessor(accessor, "withReadDb", (db) => {
+			if (!("exec" in db)) throw new Error("Transcript deletion requires owner write access");
+			return deleteSessionTranscriptOwned(db, request.input, request.input.basePath, (operation) =>
+				invokeAccessorAsync(accessor, "withWriteTxAsync", () => operation()),
+			);
+		});
+	}
 	if (request.kind === "session_transcript_write") {
 		const { writeSessionTranscriptRow } = await import("./session-transcripts");
 		return await invokeAccessorAsync(accessor, "withWriteTxAsync", (db) =>
@@ -499,6 +521,17 @@ export async function dbOwnerQuery<Row = unknown>(
 		{ kind: "query", statement },
 		{ ...options, lane: options.lane ?? "read" },
 	);
+}
+
+export async function dbOwnerTranscriptOperation<Result>(
+	owner: DbOwnerClient,
+	request: Extract<
+		DbOwnerRequest,
+		{ readonly kind: "session_transcript_delete" | "session_transcript_capture" | "session_transcript_lifecycle" }
+	>,
+	options: DbOwnerSqlOptions,
+): Promise<Result> {
+	return await submitWithAdmission<Result>(owner, request, { ...options, lane: "write" });
 }
 
 export async function dbOwnerWriteSessionTranscript(

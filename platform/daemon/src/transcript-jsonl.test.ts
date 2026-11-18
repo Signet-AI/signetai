@@ -7,9 +7,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as timers from "node:timers/promises";
-import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbAccessor, hasDbAccessor, initDbAccessor } from "./db-accessor";
+import { resolveWorkspaceLayout } from "@signet/core";
 import { logger } from "./logger";
-import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
+import { ensureCanonicalTranscriptHistory as backfillCanonicalTranscriptHistory } from "./session-transcripts";
 import {
 	appendCanonicalTranscriptSnapshotIfMissing,
 	appendCanonicalTranscriptTurns,
@@ -23,6 +24,11 @@ import {
 } from "./transcript-jsonl";
 
 const roots: string[] = [];
+
+function ensureCanonicalTranscriptHistory(root: string, agentId?: string): Promise<void> {
+	if (!hasDbAccessor()) initDbAccessor(resolveWorkspaceLayout(root).database, { agentsDir: root });
+	return backfillCanonicalTranscriptHistory(root, agentId);
+}
 
 function makeRoot(name: string): string {
 	const root = join(tmpdir(), `signet-transcript-jsonl-${name}-${process.pid}-${Date.now()}`);

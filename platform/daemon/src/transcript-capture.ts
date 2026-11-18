@@ -1,12 +1,7 @@
 import { stripInternalMemoryContext } from "@signet/core";
-import { logger } from "./logger";
+import { captureTranscriptOwned } from "./session-transcript-lifecycle";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
-import {
-	appendCanonicalTranscriptTurns,
-	canonicalSessionText,
-	inferTranscriptSourceFormat,
-	writeCanonicalTranscriptSnapshot,
-} from "./transcript-jsonl";
+import { type CanonicalTranscriptRecord, canonicalSessionText, inferTranscriptSourceFormat } from "./transcript-jsonl";
 
 export async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly basePath: string;
@@ -21,27 +16,23 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly transcriptPath?: string;
 	readonly preserveExistingSession?: boolean;
 }): Promise<string | null> {
+	const capturedAt = params.capturedAt ?? new Date().toISOString();
 	if (!params.transcriptPath) await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	const records = await writeCanonicalTranscriptSnapshot({
-		basePath: params.basePath,
-		agentId: params.agentId,
-		harness: params.harness,
-		sessionKey: params.sessionKey,
-		sessionId: params.sessionId,
-		project: params.project ?? null,
-		capturedAt: params.capturedAt,
-		sourceFormat: params.rawTranscript ? inferTranscriptSourceFormat(params.rawTranscript) : "normalized",
-		sourcePath: params.transcriptPath,
-		preserveExistingSession: params.preserveExistingSession,
-		transcript: stripInternalMemoryContext(params.transcript),
-		onLegacySessionReplaced: (legacyTurns, sourceTurns) =>
-			logger.info("transcripts", "Legacy canonical transcript session replaced by its richer source", {
-				harness: params.harness,
-				sessionKey: params.sessionKey,
-				sourcePath: params.transcriptPath,
-				legacyTurns,
-				sourceTurns,
-			}),
+	const records = await captureTranscriptOwned<readonly CanonicalTranscriptRecord[] | null>({
+		kind: "snapshot",
+		input: {
+			basePath: params.basePath,
+			agentId: params.agentId,
+			harness: params.harness,
+			sessionKey: params.sessionKey,
+			sessionId: params.sessionId,
+			project: params.project ?? null,
+			capturedAt,
+			sourceFormat: params.rawTranscript ? inferTranscriptSourceFormat(params.rawTranscript) : "normalized",
+			sourcePath: params.transcriptPath,
+			preserveExistingSession: params.preserveExistingSession,
+			transcript: stripInternalMemoryContext(params.transcript),
+		},
 	});
 	if (!records) return null;
 	return records.some((record) => record.source_format === "live") ? canonicalSessionText(records) : params.transcript;
@@ -56,20 +47,25 @@ export async function appendCanonicalLiveTranscriptTurns(params: {
 	readonly userMessage: string;
 	readonly lastAssistantMessage?: string;
 }): Promise<boolean> {
+	const capturedAt = new Date().toISOString();
 	await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	return appendCanonicalTranscriptTurns({
-		basePath: params.basePath,
-		agentId: params.agentId,
-		harness: params.harness,
-		sessionKey: params.sessionKey,
-		project: params.project ?? null,
-		sourceFormat: "live",
-		turns: [
-			...(params.lastAssistantMessage
-				? [{ role: "assistant" as const, content: stripInternalMemoryContext(params.lastAssistantMessage) }]
-				: []),
-			{ role: "user" as const, content: stripInternalMemoryContext(params.userMessage) },
-		],
+	return captureTranscriptOwned<boolean>({
+		kind: "turns",
+		input: {
+			basePath: params.basePath,
+			agentId: params.agentId,
+			harness: params.harness,
+			sessionKey: params.sessionKey,
+			project: params.project ?? null,
+			capturedAt,
+			sourceFormat: "live",
+			turns: [
+				...(params.lastAssistantMessage
+					? [{ role: "assistant" as const, content: stripInternalMemoryContext(params.lastAssistantMessage) }]
+					: []),
+				{ role: "user" as const, content: stripInternalMemoryContext(params.userMessage) },
+			],
+		},
 	});
 }
 
@@ -81,15 +77,20 @@ export async function appendCanonicalLiveAssistantTurn(params: {
 	readonly project?: string | null;
 	readonly message: string;
 }): Promise<boolean> {
+	const capturedAt = new Date().toISOString();
 	await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	return appendCanonicalTranscriptTurns({
-		basePath: params.basePath,
-		agentId: params.agentId,
-		harness: params.harness,
-		sessionKey: params.sessionKey,
-		project: params.project ?? null,
-		sourceFormat: "live",
-		turns: [{ role: "assistant", content: stripInternalMemoryContext(params.message) }],
+	return captureTranscriptOwned<boolean>({
+		kind: "turns",
+		input: {
+			basePath: params.basePath,
+			agentId: params.agentId,
+			harness: params.harness,
+			sessionKey: params.sessionKey,
+			project: params.project ?? null,
+			capturedAt,
+			sourceFormat: "live",
+			turns: [{ role: "assistant", content: stripInternalMemoryContext(params.message) }],
+		},
 	});
 }
 

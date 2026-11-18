@@ -499,9 +499,14 @@ function lockCanBeReaped(path: string, now: number): boolean {
 	}
 }
 
-async function acquireTranscriptFileLock(path: string): Promise<{ readonly lockPath: string; readonly token: string }> {
+async function acquireTranscriptFileLock(
+	path: string,
+	timeoutMs: number,
+): Promise<{ readonly lockPath: string; readonly token: string }> {
 	const lockPath = `${path}.lock`;
+	const deadline = performance.now() + timeoutMs;
 	while (true) {
+		if (performance.now() >= deadline) throw new Error("Timed out waiting for transcript lock");
 		const token = randomUUID();
 		try {
 			mkdirSync(lockPath);
@@ -536,9 +541,13 @@ function releaseTranscriptFileLock(lockPath: string, token: string): void {
 	rmSync(lockPath, { recursive: true, force: true });
 }
 
-export async function withTranscriptFileLock<T>(path: string, write: () => T | Promise<T>): Promise<T> {
+export async function withTranscriptFileLock<T>(
+	path: string,
+	write: () => T | Promise<T>,
+	options?: { readonly timeoutMs?: number },
+): Promise<T> {
 	mkdirSync(dirname(path), { recursive: true });
-	const lock = await acquireTranscriptFileLock(path);
+	const lock = await acquireTranscriptFileLock(path, options?.timeoutMs ?? 30_000);
 
 	try {
 		return await write();

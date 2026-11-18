@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { restoreTranscriptBypasses } from "./session-transcript-lifecycle";
 import type { PersistedSessionClaim, SessionClaimStore } from "./session-claims";
 import {
 	hasSessionEndTelemetry,
@@ -311,7 +312,7 @@ export function getEndedSession(sessionKey: string, agentId = "default"): EndedS
 }
 export function bypassSession(
 	sessionKey: string,
-	opts?: { readonly allowUnknown?: boolean; readonly ttlMs?: number },
+	opts?: { readonly allowUnknown?: boolean; readonly ttlMs?: number; readonly untilEnd?: boolean },
 	agentId = "default",
 ): boolean {
 	const key = normalizeSessionKey(sessionKey);
@@ -322,12 +323,18 @@ export function bypassSession(
 	}
 	const ttlMs = opts?.ttlMs;
 	const ttl = typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0 ? ttlMs : STALE_SESSION_MS;
-	bypassedSessions.set(mapKey, Date.now() + ttl);
+	bypassedSessions.set(
+		mapKey,
+		opts?.untilEnd || bypassedSessions.get(mapKey) === Number.MAX_SAFE_INTEGER
+			? Number.MAX_SAFE_INTEGER
+			: Date.now() + ttl,
+	);
 	logger.debug("session-tracker", "Session bypassed", { sessionKey: key });
 	return true;
 }
-export function unbypassSession(sessionKey: string, agentId = "default"): void {
+export function unbypassSession(sessionKey: string, agentId = "default", sessionEnded = false): void {
 	const key = normalizeSessionKey(sessionKey);
+	if (!sessionEnded && bypassedSessions.get(scopedSessionKey(key, agentId)) === Number.MAX_SAFE_INTEGER) return;
 	const removed = bypassedSessions.delete(scopedSessionKey(key, agentId));
 	if (removed) {
 		logger.debug("session-tracker", "Session bypass removed", { sessionKey: key });
@@ -394,7 +401,7 @@ export function renewSession(sessionKey: string, agentId = "default"): string | 
 	claim.expiresAt = Date.now() + STALE_SESSION_MS;
 	claimStore?.upsertActive(persistedClaim(key, claim));
 	const existing = bypassedSessions.get(mapKey);
-	if (existing !== undefined) {
+	if (existing !== undefined && existing !== Number.MAX_SAFE_INTEGER) {
 		bypassedSessions.set(mapKey, claim.expiresAt);
 	}
 	warnedSessions.delete(mapKey);
@@ -646,7 +653,9 @@ export async function restorePersistedSessionsAsync(): Promise<{
 }> {
 	if (!claimStore) return { active: 0, expired: 0, ended: 0 };
 	const rows = claimStore.listAsync ? await claimStore.listAsync() : claimStore.list();
-	return await restorePersistedSessionRowsAsync(rows);
+	const restored = await restorePersistedSessionRowsAsync(rows);
+	await restoreTranscriptBypasses();
+	return restored;
 }
 export function stopSessionCleanup(): void {
 	cleanupStarted = false;
