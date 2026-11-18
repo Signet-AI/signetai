@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+umask 077
 
 if [ $# -ne 3 ]; then
 	echo "usage: run.sh <run-name> <port> <signet-daemon-binary>" >&2
@@ -16,8 +17,14 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 AGENT_ID=${REPLAY_AGENT_ID:-default}
 DIR=$(realpath -m "${REPLAY_DIR:-$HERE/runs}")
 WS=$DIR/ws
+ATTEMPT=$DIR/attempt-$RUN
+FAILED=$DIR/failed-$RUN-$(date +%Y%m%dT%H%M%S)
 
 mkdir -p "$DIR"
+if [ "$(stat -c %u "$DIR")" != "$(id -u)" ] || (($(stat -c %#a "$DIR") & 077)); then
+	echo "$DIR must be owned by you and closed to other users (chmod 700)" >&2
+	exit 1
+fi
 exec 9> "$DIR/.replay.lock"
 if ! flock -n 9; then
 	echo "another replay is using $DIR" >&2
@@ -32,8 +39,9 @@ for file in pristine.db agent.yaml workspace-layout.json transcripts.json; do
 	[ -f "$DIR/$file" ] || { echo "missing $DIR/$file; run prepare.py first" >&2; exit 1; }
 done
 
-rm -rf "$WS" "$DIR/results-$RUN.jsonl"
-mkdir -p "$WS/data" "$WS/runtime/plugins" "$WS/runtime/logs" "$DIR/home"
+rm -rf "$WS" "$ATTEMPT"
+mkdir -p "$WS/data" "$WS/runtime/plugins" "$WS/runtime/logs" "$DIR/home" "$ATTEMPT"
+cp "$DIR/transcripts.json" "$ATTEMPT/transcripts.json"
 cp "$DIR/pristine.db" "$WS/data/signet.db"
 cp "$DIR/agent.yaml" "$WS/agent.yaml"
 cp "$DIR/workspace-layout.json" "$WS/workspace-layout.json"
@@ -47,16 +55,16 @@ SANDBOX=$DIR/home
 env "${UNSET[@]}" HOME="$SANDBOX" XDG_CONFIG_HOME="$SANDBOX/.config" XDG_DATA_HOME="$SANDBOX/.local/share" \
 	XDG_STATE_HOME="$SANDBOX/.local/state" XDG_CACHE_HOME="$SANDBOX/.cache" HERMES_HOME="$SANDBOX/.hermes" \
 	SIGNET_DAEMON_ENTRYPOINT=1 SIGNET_PATH="$WS" SIGNET_PORT="$PORT" SIGNET_HOST=127.0.0.1 SIGNET_TELEMETRY_OPTOUT=1 \
-	setsid "$BIN" > "$DIR/daemon-$RUN.log" 2>&1 9>&- &
+	setsid "$BIN" > "$ATTEMPT/daemon-$RUN.log" 2>&1 9>&- &
 DAEMON=$!
 DRIVER=
 step() {
-	"$@" > "$DIR/step-$RUN.log" 2>&1 &
+	"$@" > "$ATTEMPT/step.log" 2>&1 &
 	DRIVER=$!
 	local status=0
 	wait "$DRIVER" || status=$?
 	DRIVER=
-	tail -1 "$DIR/step-$RUN.log"
+	tail -1 "$ATTEMPT/step.log"
 	return "$status"
 }
 stop() {
@@ -74,7 +82,15 @@ stop() {
 	wait "$DAEMON" 2>/dev/null || true
 	while kill -0 -- "-$DAEMON" 2>/dev/null; do sleep 1; done
 }
-trap 'stop; rm -rf "$WS"' EXIT
+fail() {
+	stop
+	rm -rf "$WS"
+	if [ -d "$ATTEMPT" ]; then
+		mv "$ATTEMPT" "$FAILED"
+		echo "$RUN did not finish; its partial output is in $FAILED" >&2
+	fi
+}
+trap fail EXIT
 trap "exit 143" TERM
 trap "exit 130" INT
 trap "exit 129" HUP
@@ -88,7 +104,7 @@ for _ in $(seq 1 120); do
 	sleep 2
 done
 if [ -z "$HEALTHY" ]; then
-	echo "daemon did not report healthy within 4 minutes; see $DIR/daemon-$RUN.log" >&2
+	echo "daemon did not report healthy within 4 minutes; see daemon-$RUN.log" >&2
 	exit 1
 fi
 curl -s -m 10 "127.0.0.1:$PORT/health" | python3 -c "import json,sys;d=json.load(sys.stdin);print('health',d['status'],d['agentsDir'])"
@@ -106,8 +122,8 @@ for _ in $(seq 1 180); do
 	sleep 5
 done
 if [ -z "$SETTLED" ]; then
-	echo "startup maintenance did not settle within 15 minutes; see $LOG" >&2
-	cp "$LOG" "$DIR/daemon-log-$RUN-unsettled.log"
+	echo "startup maintenance did not settle within 15 minutes; see daemon-log-unsettled.log" >&2
+	cp "$LOG" "$ATTEMPT/daemon-log-unsettled.log"
 	exit 1
 fi
 echo "startup maintenance settled"
@@ -120,17 +136,22 @@ grep -a -o '"Cross-encoder ready","data":{[^}]*}' "$LOG" | tail -1 || echo "no c
 for session in $(python3 -c "import json,sys;print(' '.join(json.load(open(sys.argv[1]))))" "$DIR/transcripts.json"); do
 	harness=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]]['harness'])" "$DIR/transcripts.json" "$session")
 	case $harness in
-		pi | opencode) step env REPLAY_DIR="$DIR" REPLAY_AGENT_ID="$AGENT_ID" REAL_HOME="$HOME" timeout 300 bun "$HERE/drive.ts" "$RUN" "$PORT" "$session" ;;
-		*) step timeout 400 python3 "$HERE/drive.py" "$RUN" "$PORT" "$session" --dir "$DIR" --agent-id "$AGENT_ID" ;;
+		pi | opencode) step env REPLAY_DIR="$ATTEMPT" REPLAY_AGENT_ID="$AGENT_ID" REAL_HOME="$HOME" timeout 300 bun "$HERE/drive.ts" "$RUN" "$PORT" "$session" ;;
+		*) step timeout 400 python3 "$HERE/drive.py" "$RUN" "$PORT" "$session" --dir "$ATTEMPT" --agent-id "$AGENT_ID" ;;
 	esac
 done
 if [ -n "${PROBE:-}" ]; then
-	step timeout 1800 python3 "$HERE/probe.py" "$RUN" "$PORT" --dir "$DIR" --agent-id "$AGENT_ID"
+	step timeout 1800 python3 "$HERE/probe.py" "$RUN" "$PORT" --dir "$ATTEMPT" --agent-id "$AGENT_ID"
 fi
 
 stop
-cat "$WS"/runtime/logs/signet-*.log > "$DIR/daemon-log-$RUN.ndjson"
-sqlite3 -readonly -json "$WS/data/signet.db" "SELECT session_key, agent_id, context_epoch, item_kind, item_id, surface, mode, created_at FROM session_recall_events WHERE session_key LIKE '$RUN-%'" > "$DIR/ledger-$RUN.json"
-rm -rf "$WS" "$DIR/step-$RUN.log"
+cat "$WS"/runtime/logs/signet-*.log > "$ATTEMPT/daemon-log-$RUN.ndjson"
+sqlite3 -readonly -json "$WS/data/signet.db" "SELECT session_key, agent_id, context_epoch, item_kind, item_id, surface, mode, created_at FROM session_recall_events WHERE session_key LIKE '$RUN-%'" > "$ATTEMPT/ledger-$RUN.json"
+RECORDS=$(wc -l < "$ATTEMPT/results-$RUN.jsonl")
+rm -rf "$WS" "$ATTEMPT/step.log"
+python3 -c "import hashlib,json,sys;print(json.dumps({'run':sys.argv[1],'records':int(sys.argv[2]),'transcriptsSha256':hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest()}))" \
+	"$RUN" "$RECORDS" "$ATTEMPT/transcripts.json" > "$ATTEMPT/complete.json"
+rm -rf "$DIR/run-$RUN"
+mv "$ATTEMPT" "$DIR/run-$RUN"
 trap - EXIT TERM INT HUP
-echo "$RUN finished: $(wc -l < "$DIR/results-$RUN.jsonl") records"
+echo "$RUN finished: $RECORDS records in $DIR/run-$RUN"
