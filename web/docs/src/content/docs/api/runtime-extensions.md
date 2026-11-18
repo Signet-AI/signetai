@@ -471,7 +471,7 @@ prompt capability grant.
     {
       "id": "signet.secrets.credential-guidance",
       "pluginId": "signet.secrets",
-      "target": "user-prompt-submit",
+      "target": "session-start",
       "mode": "context",
       "priority": 420,
       "maxTokens": 80,

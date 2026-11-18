@@ -932,7 +932,7 @@ export interface BitwardenMigrationResult {
 }
 
 export type PluginLifecycleState = "installed" | "blocked" | "active" | "degraded" | "disabled";
-export type PluginPromptTarget = "system" | "session-start" | "user-prompt-submit";
+export type PluginPromptTarget = "system" | "session-start";
 export type PluginPromptMode = "append" | "context";
 
 export interface PluginHealth {
