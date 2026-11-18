@@ -1,8 +1,9 @@
 import type { Database } from "bun:sqlite";
+import { withSessionArtifactLease } from "./session-artifact-lease";
 import { admitSessionTranscriptInDb } from "./session-transcripts";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 import {
 	type LlmProvider,
@@ -683,8 +684,8 @@ function upsertArtifactRowInTx(
 	body: string,
 	sourceMtimeMs = statSync(path).mtimeMs,
 	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
-): void {
-	upsertMemoryArtifactInTx(db, artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options), {
+): boolean {
+	return upsertMemoryArtifactInTx(db, artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options), {
 		conflictGuardSourceId: false,
 	});
 }
@@ -706,9 +707,13 @@ async function upsertArtifactRow(
 	sourceMtimeMs = statSync(path).mtimeMs,
 	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
 ): Promise<void> {
-	await runWriteTxAsync(getDbAccessor(), (db) => {
-		upsertArtifactRowInTx(db as WriteDb as Database, path, frontmatter, body, sourceMtimeMs, options);
-	});
+	const admitted = await runWriteTxAsync(getDbAccessor(), (db) =>
+		upsertArtifactRowInTx(db as WriteDb as Database, path, frontmatter, body, sourceMtimeMs, options),
+	);
+	if (!admitted) {
+		await unlink(path);
+		throw new Error("Session transcript deletion rejects this artifact");
+	}
 }
 
 async function upsertSourceArtifactRow(
@@ -1362,11 +1367,13 @@ export async function ensureCanonicalManifest(seed: {
 	readonly startedAt: string | null;
 	readonly endedAt: string | null;
 }): Promise<ManifestState> {
-	const existing = await findExistingManifest(seed.agentId, seed.sessionId);
-	if (existing) return existing;
-	return await ensureManifestRecord({
-		...seed,
-		sessionToken: deriveSessionToken(seed.agentId, seed.sessionId),
+	return withSessionArtifactLease(seed, false, async () => {
+		const existing = await findExistingManifest(seed.agentId, seed.sessionId);
+		if (existing) return existing;
+		return await ensureManifestRecord({
+			...seed,
+			sessionToken: deriveSessionToken(seed.agentId, seed.sessionId),
+		});
 	});
 }
 
@@ -1528,21 +1535,31 @@ export async function updateManifest(
 	path: string,
 	mutate: (frontmatter: Record<string, unknown>) => Record<string, unknown>,
 ): Promise<ManifestState> {
-	const result = await mutateManifest(path, (current) => {
-		const next = mutate({ ...current.frontmatter });
-		const revision = typeof next.revision === "number" ? next.revision : current.revision;
-		next.revision = revision + 1;
-		next.updated_at = new Date().toISOString();
-		if (!("content_sha256" in next)) {
-			next.content_sha256 = hashNormalizedBody(current.body);
-		}
-		if (!("hash_scope" in next)) {
-			next.hash_scope = HASH_SCOPE;
-		}
-		return { frontmatter: next, body: current.body };
+	const manifest = await loadManifestAsync(path);
+	if (!manifest) throw new Error(`Manifest not found: ${path}`);
+	const agentId = manifestValue(manifest.frontmatter, "agent_id");
+	const sessionId = manifestValue(manifest.frontmatter, "session_id");
+	const capturedAt = manifestValue(manifest.frontmatter, "captured_at");
+	if (!agentId || !sessionId || !capturedAt) throw new Error("Manifest has no session identity");
+	const identity = { agentId, sessionId, sessionKey: manifestValue(manifest.frontmatter, "session_key"), capturedAt };
+	return withSessionArtifactLease(identity, false, async () => {
+		await requireArtifactAdmission(identity);
+		const result = await mutateManifest(path, (current) => {
+			const next = mutate({ ...current.frontmatter });
+			const revision = typeof next.revision === "number" ? next.revision : current.revision;
+			next.revision = revision + 1;
+			next.updated_at = new Date().toISOString();
+			if (!("content_sha256" in next)) {
+				next.content_sha256 = hashNormalizedBody(current.body);
+			}
+			if (!("hash_scope" in next)) {
+				next.hash_scope = HASH_SCOPE;
+			}
+			return { frontmatter: next, body: current.body };
+		});
+		if (!result) throw new Error(`Manifest not found: ${path}`);
+		return result;
 	});
-	if (!result) throw new Error(`Manifest not found: ${path}`);
-	return result;
 }
 
 function relativePath(path: string): string {
@@ -1562,56 +1579,58 @@ export async function writeTranscriptArtifact(params: {
 	readonly summaryStatus?: "pending" | "skipped" | "not_requested";
 	readonly replaceExisting?: boolean;
 }): Promise<{ readonly manifestPath: string; readonly transcriptPath: string }> {
-	await requireArtifactAdmission(params);
-	const manifest = await ensureCanonicalManifest(params);
-	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
-	const body = sanitizeTranscriptV1(params.transcript);
-	const sentence = {
-		text: fallbackSentence(body, params.project, params.harness, "transcript"),
-		quality: "fallback" as const,
-		generatedAt: new Date().toISOString(),
-	};
-	const fullPath = writeImmutableArtifact({
-		kind: "transcript",
-		agentId: params.agentId,
-		sessionId: params.sessionId,
-		sessionKey: params.sessionKey,
-		project: params.project,
-		harness: params.harness,
-		capturedAt: manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt,
-		startedAt: params.startedAt,
-		endedAt: params.endedAt,
-		sessionToken,
-		manifestPath: relativePath(manifest.path),
-		sourceNodeId: null,
-		memorySentence: sentence,
-		body,
-		replaceExisting: params.replaceExisting,
-	});
-	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
-	await updateManifest(manifest.path, (frontmatter) => {
-		const existingSummaryStatus = manifestValue(frontmatter, "summary_status");
-		const terminalSummaryStatus =
-			existingSummaryStatus === "completed" ||
-			existingSummaryStatus === "failed" ||
-			existingSummaryStatus === "skipped";
+	return withSessionArtifactLease(params, false, async () => {
+		await requireArtifactAdmission(params);
+		const manifest = await ensureCanonicalManifest(params);
+		const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
+		const body = sanitizeTranscriptV1(params.transcript);
+		const sentence = {
+			text: fallbackSentence(body, params.project, params.harness, "transcript"),
+			quality: "fallback" as const,
+			generatedAt: new Date().toISOString(),
+		};
+		const fullPath = writeImmutableArtifact({
+			kind: "transcript",
+			agentId: params.agentId,
+			sessionId: params.sessionId,
+			sessionKey: params.sessionKey,
+			project: params.project,
+			harness: params.harness,
+			capturedAt: manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt,
+			startedAt: params.startedAt,
+			endedAt: params.endedAt,
+			sessionToken,
+			manifestPath: relativePath(manifest.path),
+			sourceNodeId: null,
+			memorySentence: sentence,
+			body,
+			replaceExisting: params.replaceExisting,
+		});
+		const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
+		await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+		await updateManifest(manifest.path, (frontmatter) => {
+			const existingSummaryStatus = manifestValue(frontmatter, "summary_status");
+			const terminalSummaryStatus =
+				existingSummaryStatus === "completed" ||
+				existingSummaryStatus === "failed" ||
+				existingSummaryStatus === "skipped";
+			return {
+				...frontmatter,
+				transcript_path: relativePath(fullPath),
+				transcript_status: "completed",
+				canonical_transcript_path: params.harness ? canonicalTranscriptRelativePath(params.harness) : null,
+				summary_status: frontmatter.summary_path
+					? "completed"
+					: terminalSummaryStatus
+						? existingSummaryStatus
+						: (params.summaryStatus ?? frontmatter.summary_status ?? "not_requested"),
+			};
+		});
 		return {
-			...frontmatter,
-			transcript_path: relativePath(fullPath),
-			transcript_status: "completed",
-			canonical_transcript_path: params.harness ? canonicalTranscriptRelativePath(params.harness) : null,
-			summary_status: frontmatter.summary_path
-				? "completed"
-				: terminalSummaryStatus
-					? existingSummaryStatus
-					: (params.summaryStatus ?? frontmatter.summary_status ?? "not_requested"),
+			manifestPath: relativePath(manifest.path),
+			transcriptPath: relativePath(fullPath),
 		};
 	});
-	return {
-		manifestPath: relativePath(manifest.path),
-		transcriptPath: relativePath(fullPath),
-	};
 }
 
 export async function writeSummaryArtifact(params: {
@@ -1626,39 +1645,41 @@ export async function writeSummaryArtifact(params: {
 	readonly summary: string;
 	readonly provider?: LlmProvider | null;
 }): Promise<{ readonly manifestPath: string; readonly summaryPath: string }> {
-	await requireArtifactAdmission(params);
-	const manifest = await ensureCanonicalManifest(params);
-	const capturedAt = manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt;
-	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
-	const body = normalizeMarkdownBody(params.summary);
-	const sentence = await resolveMemorySentence(body, params.project, params.harness, "summary", params.provider);
-	const fullPath = writeImmutableArtifact({
-		kind: "summary",
-		agentId: params.agentId,
-		sessionId: params.sessionId,
-		sessionKey: params.sessionKey,
-		project: params.project,
-		harness: params.harness,
-		capturedAt,
-		startedAt: params.startedAt,
-		endedAt: params.endedAt,
-		sessionToken,
-		manifestPath: relativePath(manifest.path),
-		sourceNodeId: null,
-		memorySentence: sentence,
-		body,
+	return withSessionArtifactLease(params, false, async () => {
+		await requireArtifactAdmission(params);
+		const manifest = await ensureCanonicalManifest(params);
+		const capturedAt = manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt;
+		const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
+		const body = normalizeMarkdownBody(params.summary);
+		const sentence = await resolveMemorySentence(body, params.project, params.harness, "summary", params.provider);
+		const fullPath = writeImmutableArtifact({
+			kind: "summary",
+			agentId: params.agentId,
+			sessionId: params.sessionId,
+			sessionKey: params.sessionKey,
+			project: params.project,
+			harness: params.harness,
+			capturedAt,
+			startedAt: params.startedAt,
+			endedAt: params.endedAt,
+			sessionToken,
+			manifestPath: relativePath(manifest.path),
+			sourceNodeId: null,
+			memorySentence: sentence,
+			body,
+		});
+		const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
+		await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+		await updateManifest(manifest.path, (frontmatter) => ({
+			...frontmatter,
+			summary_path: relativePath(fullPath),
+			summary_status: "completed",
+		}));
+		return {
+			manifestPath: relativePath(manifest.path),
+			summaryPath: relativePath(fullPath),
+		};
 	});
-	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
-	await updateManifest(manifest.path, (frontmatter) => ({
-		...frontmatter,
-		summary_path: relativePath(fullPath),
-		summary_status: "completed",
-	}));
-	return {
-		manifestPath: relativePath(manifest.path),
-		summaryPath: relativePath(fullPath),
-	};
 }
 
 export async function writeCompactionArtifact(params: {
@@ -1673,39 +1694,41 @@ export async function writeCompactionArtifact(params: {
 	readonly summary: string;
 	readonly provider?: LlmProvider | null;
 }): Promise<{ readonly manifestPath: string; readonly compactionPath: string }> {
-	await requireArtifactAdmission(params);
-	const manifest = await ensureCanonicalManifest(params);
-	const capturedAt = params.capturedAt;
-	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
-	const body = normalizeMarkdownBody(params.summary);
-	const sentence = await resolveMemorySentence(body, params.project, params.harness, "compaction", params.provider);
-	const fullPath = writeImmutableArtifact({
-		kind: "compaction",
-		agentId: params.agentId,
-		sessionId: params.sessionId,
-		sessionKey: params.sessionKey,
-		project: params.project,
-		harness: params.harness,
-		capturedAt,
-		startedAt: params.startedAt,
-		endedAt: params.endedAt,
-		sessionToken,
-		manifestPath: relativePath(manifest.path),
-		sourceNodeId: null,
-		memorySentence: sentence,
-		body,
+	return withSessionArtifactLease(params, false, async () => {
+		await requireArtifactAdmission(params);
+		const manifest = await ensureCanonicalManifest(params);
+		const capturedAt = params.capturedAt;
+		const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
+		const body = normalizeMarkdownBody(params.summary);
+		const sentence = await resolveMemorySentence(body, params.project, params.harness, "compaction", params.provider);
+		const fullPath = writeImmutableArtifact({
+			kind: "compaction",
+			agentId: params.agentId,
+			sessionId: params.sessionId,
+			sessionKey: params.sessionKey,
+			project: params.project,
+			harness: params.harness,
+			capturedAt,
+			startedAt: params.startedAt,
+			endedAt: params.endedAt,
+			sessionToken,
+			manifestPath: relativePath(manifest.path),
+			sourceNodeId: null,
+			memorySentence: sentence,
+			body,
+		});
+		const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
+		await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+		await updateManifest(manifest.path, (frontmatter) => ({
+			...frontmatter,
+			compaction_path: relativePath(fullPath),
+			ended_at: params.endedAt,
+		}));
+		return {
+			manifestPath: relativePath(manifest.path),
+			compactionPath: relativePath(fullPath),
+		};
 	});
-	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
-	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
-	await updateManifest(manifest.path, (frontmatter) => ({
-		...frontmatter,
-		compaction_path: relativePath(fullPath),
-		ended_at: params.endedAt,
-	}));
-	return {
-		manifestPath: relativePath(manifest.path),
-		compactionPath: relativePath(fullPath),
-	};
 }
 
 function buildTemporalIndex(

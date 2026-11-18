@@ -1602,6 +1602,7 @@ export const MIGRATIONS: readonly Migration[] = [
 			tables: [
 				"session_transcript_deletions",
 				"session_transcript_deleted_prefixes",
+				"session_transcript_deleted_positions",
 				"session_transcript_deleted_sources",
 				"session_transcript_delete_files",
 			],

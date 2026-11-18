@@ -1,5 +1,10 @@
+import { withSessionArtifactLease } from "./session-artifact-lease";
 import { resolveDefaultBasePath } from "@signet/core";
-import { withTranscriptLifecycleIntents, type TranscriptLifecycleIntent } from "./transcript-lifecycle-intents";
+import {
+	nextTranscriptLifecycleSequence,
+	withTranscriptLifecycleIntents,
+	type TranscriptLifecycleIntent,
+} from "./transcript-lifecycle-intents";
 import { getDbAccessor } from "./db-accessor";
 import { dbOwnerTranscriptOperation, getDbOwnerForAccessor } from "./db-owner-runtime";
 import { bypassSession, unbypassSession } from "./session-tracker";
@@ -178,6 +183,7 @@ export async function captureTranscriptOwned(
 }
 
 export interface TranscriptDeleteInput {
+	readonly lifecycleSeq?: number;
 	readonly generation?: number;
 	readonly basePath: string;
 	readonly sessionKey: string;
@@ -205,10 +211,15 @@ export async function deleteSessionTranscript(
 	signal?: AbortSignal,
 ): Promise<TranscriptDeleteResult> {
 	const owner = await getDbOwnerForAccessor(getDbAccessor());
-	const result = await dbOwnerTranscriptOperation<TranscriptDeleteResult>(
-		owner,
-		{ kind: "session_transcript_delete", input: { ...input, basePath: resolveDefaultBasePath() } },
-		{ operation: "transcripts.delete", lane: "write", deadlineMs: 10_000, signal },
+	const result = await withSessionArtifactLease(input, true, async () =>
+		dbOwnerTranscriptOperation<TranscriptDeleteResult>(
+			owner,
+			{
+				kind: "session_transcript_delete",
+				input: { ...input, lifecycleSeq: await nextTranscriptLifecycleSequence(), basePath: resolveDefaultBasePath() },
+			},
+			{ operation: "transcripts.delete", lane: "write", deadlineMs: 10_000, signal },
+		),
 	);
 	if ((result.status === "complete" || result.status === "pending") && result.bypassed) {
 		bypassSession(input.sessionKey, { allowUnknown: true, untilEnd: true }, input.agentId);

@@ -2,12 +2,15 @@ import { afterAll, beforeAll, expect, test, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { spawnSync } from "node:child_process";
+import { resolveWorkspaceLayout } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import * as runtime from "./db-owner-runtime";
 import { DbOwnerError } from "./db-owner-client";
 import { deleteSessionTranscript, updateTranscriptLifecycle } from "./session-transcript-lifecycle";
 import {
 	admitSessionTranscriptInDb,
+	commitCompactionSummary,
 	getStoredSessionTranscriptInfoAsync,
 	updateTranscriptLifecycleInTx,
 	upsertSessionTranscriptAsync,
@@ -16,6 +19,7 @@ import {
 import { bypassSession, isSessionBypassed } from "./session-tracker";
 import { writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
 import { canonicalTranscriptPath } from "./transcript-jsonl";
+import { writeSummaryArtifact } from "./memory-lineage";
 import { normalizeSessionTranscript } from "./transcript-normalization";
 
 let root = "";
@@ -50,6 +54,352 @@ async function deleted(key: string, live = false): Promise<void> {
 		result = await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
 	expect(result.status).toBe("complete");
 }
+
+test("deletion waits for admitted summary writers before reporting completion", async () => {
+	const key = "blocked-summary";
+	await upsertSessionTranscriptAsync(key, "User: evidence", "codex", null, "review", "2020-01-01T00:00:00.000Z");
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<string>();
+	const writer = writeSummaryArtifact({
+		agentId: "review",
+		sessionKey: key,
+		sessionId: key,
+		project: null,
+		harness: "codex",
+		capturedAt: "2020-01-01T00:00:00.000Z",
+		startedAt: null,
+		endedAt: null,
+		summary: "private summary evidence",
+		provider: {
+			name: "test",
+			generate: async () => {
+				entered.resolve();
+				return release.promise;
+			},
+			available: async () => true,
+		},
+	}).then(
+		() => null,
+		(error: unknown) => error,
+	);
+	await entered.promise;
+	let completed = false;
+	const deletion = deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" }).then(
+		(result) => {
+			completed = result.status === "complete";
+			return result;
+		},
+	);
+	try {
+		await new Promise<void>((resolve) => setTimeout(resolve, 100));
+		expect(completed).toBe(false);
+	} finally {
+		release.resolve("Private summary evidence was recorded.");
+		await writer;
+		await deletion;
+	}
+	let result = await deletion;
+	for (let i = 0; result.status === "pending" && i < 20; i++)
+		result = await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
+	expect(result.status).toBe("complete");
+	const rows = await getDbAccessor().withReadDbAsync((db) =>
+		db.prepare("SELECT source_path FROM memory_artifacts WHERE agent_id = 'review' AND session_key = ?").all(key),
+	);
+	expect(rows).toEqual([]);
+	const files = readdirSync(resolveWorkspaceLayout(root).transcripts, { recursive: true }).filter(
+		(name): name is string => typeof name === "string" && name.endsWith(".md"),
+	);
+	for (const file of files)
+		expect(readFileSync(join(resolveWorkspaceLayout(root).transcripts, file), "utf8")).not.toContain(
+			"private summary evidence",
+		);
+});
+
+test.each([false, true])(
+	"shorter replay is fenced without blacklisting a divergent prefix, canonicalOnly=%s",
+	async (canonicalOnly) => {
+		const key = `short-replay-${canonicalOnly}`;
+		const identity = { basePath: root, agentId: "review", sessionKey: key, harness: `short-${canonicalOnly}` };
+		if (canonicalOnly) {
+			await writeCanonicalTranscriptFromSnapshot({
+				...identity,
+				transcript: "User: A\nAssistant: B",
+				rawTranscript: "User: A\nAssistant: B",
+				capturedAt: "2020-01-01T00:00:00.000Z",
+			});
+		} else {
+			await upsertSessionTranscriptAsync(
+				key,
+				"User: A\nAssistant: B",
+				identity.harness,
+				null,
+				"review",
+				"2020-01-01T00:00:00.000Z",
+			);
+		}
+		let result = await deleteSessionTranscript({
+			agentId: "review",
+			sessionKey: key,
+			hard: false,
+			changedBy: "test",
+			...(canonicalOnly ? { live: { harness: identity.harness, project: null } } : {}),
+		});
+		for (let i = 0; result.status === "pending" && i < 20; i++)
+			result = await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
+		expect(result.status).toBe("complete");
+		await updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "end" });
+		await updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "start" });
+		await upsertSessionTranscriptAsync(key, "User: A", identity.harness, null, "review", new Date().toISOString());
+		expect(await getStoredSessionTranscriptInfoAsync(key, "review")).toBeUndefined();
+		expect(
+			await writeCanonicalTranscriptFromSnapshot({
+				...identity,
+				transcript: "User: A",
+				rawTranscript: "User: A",
+				capturedAt: new Date().toISOString(),
+			}),
+		).toBeNull();
+		await upsertSessionTranscriptAsync(
+			key,
+			"User: A\nUser: C",
+			identity.harness,
+			null,
+			"review",
+			new Date().toISOString(),
+		);
+		expect((await getStoredSessionTranscriptInfoAsync(key, "review"))?.content).toBe("User: A\nUser: C");
+	},
+);
+
+test("partial deletion reimports the same source fingerprint and retains its new suffix", async () => {
+	const { signetExportV1Adapter } = await import("./transcript-import-adapter");
+	const { buildCompletedTranscriptCommit, commitCompletedTranscriptBatchInTx } = await import(
+		"./transcript-import-commit"
+	);
+	const commit = buildCompletedTranscriptCommit(
+		signetExportV1Adapter.parse({
+			source: "signet",
+			id: "partial-source",
+			agent_id: "review",
+			session_key: "partial-source",
+			harness: "codex",
+			project: null,
+			timestamp: new Date(Date.now() + 60_000).toISOString(),
+			message_count: 2,
+			messages: [
+				{ role: "user", content: "old" },
+				{ role: "assistant", content: "post-watermark turn" },
+			],
+		}),
+		{ agentId: "review", sourceId: "source-partial", sourceRecordId: "record-partial" },
+	);
+	const apply = () => getDbAccessor().withWriteTxAsync((db) => commitCompletedTranscriptBatchInTx(db, [commit]));
+	expect(await apply()).toMatchObject([{ outcome: "imported" }]);
+	await upsertSessionTranscriptAsync(
+		commit.canonicalKey,
+		"User: old",
+		"codex",
+		null,
+		"review",
+		"2020-01-01T00:00:00.000Z",
+	);
+	let result = await deleteSessionTranscript({
+		agentId: "review",
+		sessionKey: commit.canonicalKey,
+		hard: false,
+		changedBy: "test",
+	});
+	for (let i = 0; result.status === "pending" && i < 20; i++)
+		result = await deleteSessionTranscript({
+			agentId: "review",
+			sessionKey: commit.canonicalKey,
+			hard: false,
+			changedBy: "test",
+		});
+	expect(result.status).toBe("complete");
+	await updateTranscriptLifecycle({ agentId: "review", sessionKey: commit.canonicalKey, action: "start" });
+	expect(await apply()).toMatchObject([{ outcome: "imported" }]);
+	expect(
+		JSON.parse((await getStoredSessionTranscriptInfoAsync(commit.canonicalKey, "review"))?.content ?? "null"),
+	).toEqual([{ role: "assistant", content: "post-watermark turn" }]);
+	const identity = await getDbAccessor().withReadDbAsync((db) =>
+		db
+			.prepare(
+				"SELECT conversation_fingerprint,content_hash FROM transcript_import_conversations WHERE agent_id = ? AND external_identity = ?",
+			)
+			.get(commit.agentId, commit.externalIdentity),
+	);
+	expect(identity).toMatchObject({ conversation_fingerprint: commit.contentHash });
+	expect(identity).not.toMatchObject({ content_hash: commit.contentHash });
+});
+
+test("filtered imports preserve system tool unknown roles and literal User lines", async () => {
+	const key = "message-roles";
+	await upsertSessionTranscriptAsync(key, "User: old", "codex", null, "review", "2020-01-01T00:00:00.000Z");
+	await deleteSessionTranscript({ agentId: "review", sessionKey: key, hard: false, changedBy: "test" });
+	await updateTranscriptLifecycle({ agentId: "review", sessionKey: key, action: "start" });
+	const { signetExportV1Adapter } = await import("./transcript-import-adapter");
+	const { buildCompletedTranscriptCommit, commitCompletedTranscriptBatchInTx } = await import(
+		"./transcript-import-commit"
+	);
+	const kept = [
+		{ role: "assistant", content: "retained reply" },
+		{ role: "system", content: "system directive" },
+		{ role: "tool", content: "result\nUser: literal output" },
+		{ role: "unknown", content: "unclassified" },
+	];
+	const commit = buildCompletedTranscriptCommit(
+		signetExportV1Adapter.parse({
+			source: "signet",
+			id: key,
+			agent_id: "review",
+			session_key: key,
+			harness: "codex",
+			project: null,
+			timestamp: new Date().toISOString(),
+			message_count: 5,
+			messages: [{ role: "user", content: "old" }, ...kept],
+		}),
+		{ agentId: "review", sourceId: "source-roles", sourceRecordId: "record-roles" },
+	);
+	expect(
+		await getDbAccessor().withWriteTxAsync((db) => commitCompletedTranscriptBatchInTx(db, [commit])),
+	).toMatchObject([{ outcome: "imported" }]);
+	expect(
+		JSON.parse((await getStoredSessionTranscriptInfoAsync(commit.canonicalKey, "review"))?.content ?? "null"),
+	).toEqual(kept);
+});
+
+test("journaled lifecycle intent survives restart and a backward clock", () => {
+	const workspace = join(root, "restart-clock");
+	mkdirSync(join(workspace, "memory"), { recursive: true });
+	const module = (name: string): string => new URL(`./${name}.ts`, import.meta.url).href;
+	const setup = `
+		import { initDbAccessor, closeDbAccessor, getDbAccessor } from ${JSON.stringify(module("db-accessor"))};
+		import { deleteSessionTranscript, updateTranscriptLifecycle } from ${JSON.stringify(module("session-transcript-lifecycle"))};
+		import { upsertSessionTranscriptAsync } from ${JSON.stringify(module("session-transcripts"))};
+		import { withTranscriptLifecycleIntents } from ${JSON.stringify(module("transcript-lifecycle-intents"))};
+		import { dbOwnerTranscriptOperation, getDbOwnerForAccessor } from ${JSON.stringify(module("db-owner-runtime"))};
+		initDbAccessor(process.env.SIGNET_PATH + "/memory/memories.db");
+		const input = { agentId: "clock", sessionKey: "restart-clock" };
+		const clock = Date.now;
+	`;
+	const phases = [
+		`await upsertSessionTranscriptAsync(input.sessionKey, "User: old", "codex", null, input.agentId, "2020-01-01T00:00:00.000Z");
+		await deleteSessionTranscript({ ...input, hard: false, changedBy: "test", live: { harness: "codex", project: null } });
+		const owner = await getDbOwnerForAccessor(getDbAccessor());
+		Date.now = () => clock() + 60_000;
+		await withTranscriptLifecycleIntents({ ...input, action: "end" }, async (intents) => {
+			Date.now = clock;
+			return dbOwnerTranscriptOperation(owner, { kind: "session_transcript_lifecycle", input: { ...input, action: "status", intents } }, { operation: "test.clock", deadlineMs: 2000 });
+		});`,
+		`Date.now = () => clock() - 60_000;
+		try { await withTranscriptLifecycleIntents({ ...input, action: "start" }, async () => { Date.now = clock; throw new Error("offline"); }); } catch (error) { if (error.message !== "offline") throw error; }
+		Date.now = clock;
+		console.log(JSON.stringify(await updateTranscriptLifecycle({ ...input, action: "status" })));`,
+	];
+	for (const [index, phase] of phases.entries()) {
+		const child = spawnSync(
+			process.execPath,
+			["--eval", `${setup}${phase}\nawait closeDbAccessor(); process.exit(0);`],
+			{
+				env: { ...process.env, SIGNET_PATH: workspace },
+				encoding: "utf8",
+				timeout: 20_000,
+			},
+		);
+		expect(child.stderr).not.toContain("error:");
+		expect(child.status).toBe(0);
+		if (index === 1)
+			expect(JSON.parse(child.stdout.trim().split("\n").at(-1) ?? "null")).toMatchObject({
+				generation: 2,
+				bypassed: false,
+			});
+	}
+});
+
+test("a rejected final artifact upsert removes the file and surfaces rejection", async () => {
+	const key = "final-artifact-gate";
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<string>();
+	const writer = writeSummaryArtifact({
+		agentId: "review",
+		sessionKey: key,
+		sessionId: key,
+		project: null,
+		harness: "codex",
+		capturedAt: "2020-01-01T00:00:00.000Z",
+		startedAt: null,
+		endedAt: null,
+		summary: "final gate private summary",
+		provider: {
+			name: "test",
+			generate: async () => {
+				entered.resolve();
+				return release.promise;
+			},
+			available: async () => true,
+		},
+	}).then(
+		() => null,
+		(error: unknown) => error,
+	);
+	await entered.promise;
+	try {
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db
+				.prepare(
+					"INSERT INTO session_transcript_deletions (agent_id,session_key,watermark,phase) VALUES ('review',?,'2021-01-01T00:00:00.000Z','files')",
+				)
+				.run(key),
+		);
+	} finally {
+		release.resolve("The private summary was recorded.");
+	}
+	expect(await writer).toBeInstanceOf(Error);
+	const directory = resolveWorkspaceLayout(root).transcripts;
+	for (const file of readdirSync(directory, { recursive: true })) {
+		if (typeof file === "string" && file.endsWith(".md"))
+			expect(readFileSync(join(directory, file), "utf8")).not.toContain("final gate private summary");
+	}
+	expect(
+		await getDbAccessor().withReadDbAsync((db) =>
+			db
+				.prepare(
+					"SELECT source_path FROM memory_artifacts WHERE agent_id = 'review' AND session_key = ? AND source_kind = 'summary'",
+				)
+				.all(key),
+		),
+	).toEqual([]);
+});
+
+test("compaction summaries isolate agents sharing a key and timestamp", async () => {
+	const now = new Date().toISOString();
+	for (const agentId of ["summary-a", "summary-b"]) {
+		expect(
+			await commitCompactionSummary(getDbAccessor(), {
+				agentId,
+				sessionKey: "shared-compaction",
+				harness: "codex",
+				project: null,
+				summary: agentId,
+				summaryId: `memory-${agentId}`,
+				now,
+			}),
+		).toBe(true);
+	}
+	const rows = await getDbAccessor().withReadDbAsync((db) =>
+		db
+			.prepare(
+				"SELECT agent_id,content FROM session_summaries WHERE session_key = 'shared-compaction' ORDER BY agent_id",
+			)
+			.all(),
+	);
+	expect(rows).toEqual([
+		{ agent_id: "summary-a", content: "summary-a" },
+		{ agent_id: "summary-b", content: "summary-b" },
+	]);
+});
 
 test("pending deletion remembers an explicit start until cleanup completes", async () => {
 	await getDbAccessor().withWriteTxAsync(async (db) => {

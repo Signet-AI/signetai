@@ -1,8 +1,8 @@
 import { attempt } from "@signet/core";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir } from "node:fs/promises";
-import { dirname, resolve, relative, isAbsolute } from "node:path";
+import { mkdir, opendir } from "node:fs/promises";
+import { basename, dirname, resolve, relative, isAbsolute } from "node:path";
 import { parse } from "yaml";
 import {
 	openContainedTranscriptFile,
@@ -234,6 +234,10 @@ export async function redactTranscriptFileBatch(input: {
 	readonly sessionKey: string;
 	readonly generation: number;
 	readonly checkpoint: TranscriptFileCheckpoint | null;
+	readonly onPrefix?: (
+		positions: readonly { readonly position: number; readonly hash: string }[],
+		reset: boolean,
+	) => Promise<void>;
 }): Promise<TranscriptFileBatch> {
 	const path = resolve(input.basePath, input.path.split("#")[0] ?? input.path);
 	const rel = relative(resolve(input.basePath), path);
@@ -336,6 +340,16 @@ export async function redactTranscriptFileBatch(input: {
 					if (intact && resumable.ready && resumable.offset === stat.size) {
 						if (output.size > resumable.bytes) await target.truncate(resumable.bytes);
 						await target.sync();
+						const deadline = performance.now() + 250;
+						const prefix = `${basename(path)}.delete-`;
+						const directory = await opendir(dirname(path));
+						for await (const entry of directory) {
+							if (performance.now() >= deadline) throw new Error("Pending transcript temp cleanup budget exhausted");
+							if (entry.name.startsWith(prefix) && /^[0-9a-f]{32}$/.test(entry.name.slice(prefix.length))) {
+								const other = resolve(dirname(path), entry.name);
+								if (other !== tmp) await removeContainedTranscriptPath(input.basePath, other, { force: true });
+							}
+						}
 						await replaceContainedTranscriptFile(input.basePath, tmp, path);
 						return { done: true, checkpoint: resumable };
 					}
@@ -361,6 +375,7 @@ export async function redactTranscriptFileBatch(input: {
 						if (bytesRead === 0) break;
 						length += bytesRead;
 					}
+					const positions: { position: number; hash: string }[] = [];
 					let prefixCount = base.prefixCount;
 					let prefixHash = base.prefixHash;
 					const kept = Buffer.alloc(length);
@@ -379,6 +394,7 @@ export async function redactTranscriptFileBatch(input: {
 							if (hash !== undefined && HASH.test(hash) && scan.kinds[4] === TEXT) {
 								prefixHash = chainTranscriptRecord(prefixHash, scan.texts[4] ?? "unknown", hash);
 								prefixCount++;
+								positions.push({ position: prefixCount, hash: prefixHash });
 							}
 							if (continued) writeAt = lineOut;
 						}
@@ -417,6 +433,13 @@ export async function redactTranscriptFileBatch(input: {
 						written += result.bytesWritten;
 					}
 					await target.sync();
+					if (input.onPrefix) {
+						await input.onPrefix([], !intact);
+						for (let i = 0; i < positions.length; i += 64) {
+							await input.onPrefix(positions.slice(i, i + 64), false);
+							await new Promise<void>((resolve) => setImmediate(resolve));
+						}
+					}
 					return {
 						done: false,
 						checkpoint: {

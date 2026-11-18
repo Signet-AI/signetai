@@ -11,8 +11,6 @@ export interface TranscriptLifecycleIntent {
 	readonly at: string;
 }
 
-let lastSeq = 0;
-
 interface IntentJournal {
 	readonly seq: number;
 	readonly intents: readonly TranscriptLifecycleIntent[];
@@ -70,7 +68,7 @@ async function readJournal(path: string, keyHash: string): Promise<IntentJournal
 	}
 }
 
-async function writeJournal(path: string, journal: IntentJournal): Promise<void> {
+async function writeJournal(path: string, journal: IntentJournal | number): Promise<void> {
 	const tmp = `${path}.tmp`;
 	const file = await open(tmp, "w", 0o600);
 	try {
@@ -88,6 +86,31 @@ async function writeJournal(path: string, journal: IntentJournal): Promise<void>
 	}
 }
 
+export async function nextTranscriptLifecycleSequence(floor = 0): Promise<number> {
+	const path = join(resolveDefaultBasePath(), ".daemon", "transcript-lifecycle-intents", ".seq");
+	return withTranscriptFileLock(
+		join(dirname(path), ".admission"),
+		async () => {
+			const text = await readFile(path, "utf8").catch((error: unknown) => {
+				if (error instanceof Error && "code" in error && error.code === "ENOENT") return "0";
+				throw error;
+			});
+			const previous: unknown = JSON.parse(text);
+			if (
+				typeof previous !== "number" ||
+				!Number.isSafeInteger(previous) ||
+				previous < 0 ||
+				previous >= Number.MAX_SAFE_INTEGER
+			)
+				throw new Error("Invalid transcript lifecycle sequence");
+			const seq = Math.max(previous, floor) + 1;
+			await writeJournal(path, seq);
+			return seq;
+		},
+		{ timeoutMs: 250 },
+	);
+}
+
 export async function withTranscriptLifecycleIntents<T>(
 	input: { readonly agentId: string; readonly sessionKey: string; readonly action: "start" | "end" | "status" },
 	apply: (intents: readonly TranscriptLifecycleIntent[]) => Promise<T>,
@@ -101,8 +124,7 @@ export async function withTranscriptLifecycleIntents<T>(
 		async () => {
 			const journal = await readJournal(path, token);
 			const intents = [...journal.intents];
-			const seq = Math.max(lastSeq + 1, journal.seq + 1, Date.now() * 1024);
-			lastSeq = seq;
+			const seq = input.action === "status" ? journal.seq : await nextTranscriptLifecycleSequence(journal.seq);
 			if (input.action !== "status") intents.push({ seq, action: input.action, at: new Date().toISOString() });
 			let result: T;
 			try {

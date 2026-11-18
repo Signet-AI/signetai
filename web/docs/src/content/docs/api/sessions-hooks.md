@@ -622,17 +622,25 @@ generation's opening, including deferred end-of-session capture. Within a
 resumed snapshot, each record's usable harness `timestamp` (or canonical
 `captured_at`) is checked separately: records at or before the deletion watermark
 are dropped, even if the snapshot was captured later. For each deleted generation,
-the owner retains the normalized record count and an ordered SHA-256 chain. If a
-snapshot or import starts with that exact prefix, only those leading records are
-dropped. A different prefix is admitted subject to the timestamp cutoff; content
-matches never remove interior or later turns. New live turns are not replayed
-snapshots. Receipts retain counts and chain hashes, not deleted content. Do not
-relabel historical records with a new timestamp.
+the owner retains an ordered SHA-256 chain hash at every position. For a deleted
+prefix of length `N` and a replay of length `L`, it compares the first
+`k = min(L, N)` records with the stored hash at position `k`. Only a match removes
+those leading records, and only if they are undated or dated at or before the
+watermark. Dated records after the watermark survive even a matching prefix.
+A mismatch admits the entire prefix subject to the timestamp cutoff; content
+matches never remove interior or later turns. For example, deleting undated
+`[user:A, assistant:B]` fences a shorter replay `[user:A]`, but admits both turns
+of `[user:A, user:C]` because its two-record chain differs. Successive deletion
+receipts are checked in generation order against the remaining leading records.
+New live turns are not replayed snapshots. Receipts retain counts and chain
+hashes, not deleted content. Do not relabel historical records with a new timestamp.
 
 The hook-side lifecycle check is advisory on owner timeout or unavailability;
 it does not fail the harness. The owner is called first. Only failed start/end
 contacts create an intent outbox file, replayed in order on the next successful
-lifecycle contact and removed when drained. The outbox holds at most 256 session
+lifecycle contact and removed when drained. One bounded `.seq` metadata file
+persists ordering under the admission lock; sequences do not depend on wall-clock
+time or in-memory state. Normal contacts create no intent journals. The outbox holds at most 256 session
 files and 1,024 intents per file. At capacity, Signet logs the rejected intent and
 relies on canonical TTL finalization. Normal sessions and failed status checks
 create no journal files. These files contain pending requests, not deletion
@@ -640,12 +648,16 @@ state: only the database owner changes deletion state. Status checks do not clea
 Owner-side admission at each evidence write remains the enforcement point, so
 an advisory timeout does not reopen a deleted generation.
 
-The transcript row is hashed once at deletion admission. Cleanup processes at
-most 64 database items, one uploaded-byte chunk, and four 4 MiB file slices per
-request. Canonical cleanup carries a constant-size prefix chain rather than a
-per-record hash worklist; there is no record-count deletion limit. Giant JSONL records stream
+The owner persists positional hashes in batches of 64, yielding between batches
+and retaining the fenced transcript row until its hashes are durable. Other
+cleanup processes at most 64 database items, one uploaded-byte chunk, and four
+4 MiB file slices per request. Canonical cleanup carries a constant-size chain
+checkpoint and persists positional hashes in batches of 64; there is no
+record-count deletion limit. Giant JSONL records stream
 across slices without being loaded whole. A missing, replaced, or shortened
-rewrite temp restarts that file from its beginning. Shared JSONL files are rewritten under the
+rewrite temp restarts that file from its beginning. Replacing the canonical file
+also removes other pending deletion temps for that path, so they restart from
+the redacted canonical file. Shared JSONL files are rewritten under the
 canonical transcript lock, preserving other sessions' records and concurrent
 appends. Only the session's recorded targets and its harness's canonical file
 are visited. The harness's original files and user backups remain after either
