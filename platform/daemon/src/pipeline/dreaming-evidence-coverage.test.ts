@@ -315,4 +315,24 @@ describe("dreaming evidence coverage", () => {
 		if (count.step !== "count") throw new Error("expected a count step");
 		expect(count.eligible).toBe(2);
 	});
+
+	it("marks the scan incomplete when delivery ranges exceed the per-entry cap", () => {
+		seedMemory(db, "mem-many-ranges", "2026-01-01 00:00:01");
+		for (let index = 0; index < 205; index += 1) {
+			const passId = `pass-range-${index}`;
+			seedPass(db, passId);
+			seedDelivery(db, passId, "mem-many-ranges", "2026-01-01 00:00:01", index % 115, (index % 115) + 1);
+		}
+		const coverage = getDreamingEvidenceCoverageInDb(db as unknown as ReadDb, AGENT, BOUNDS);
+		expect(coverage.chars.redelivered).toBeGreaterThan(0);
+		expect(coverage.scanComplete).toBe(false);
+	});
+
+	it("keeps a page of large sources under the owner result budget", () => {
+		for (let index = 0; index < 100; index += 1) {
+			seedMemory(db, `mem-wide-${String(index).padStart(3, "0")}`.repeat(500), "2026-01-01 00:00:01");
+		}
+		const coverage = getDreamingEvidenceCoverageInDb(db as unknown as ReadDb, AGENT, BOUNDS);
+		expect(coverage.scanComplete).toBe(false);
+	});
 });
