@@ -31,8 +31,15 @@ cp "$DIR/agent.yaml" "$WS/agent.yaml"
 cp "$DIR/workspace-layout.json" "$WS/workspace-layout.json"
 [ -f "$DIR/plugin-registry.json" ] && cp "$DIR/plugin-registry.json" "$WS/runtime/plugins/registry-v1.json"
 
-env -u SIGNET_DAEMON_URL -u SIGNET_AGENT_ID HOME="$DIR/home" SIGNET_DAEMON_ENTRYPOINT=1 SIGNET_PATH="$WS" \
-	SIGNET_PORT="$PORT" SIGNET_HOST=127.0.0.1 SIGNET_TELEMETRY_OPTOUT=1 setsid "$BIN" > "$DIR/daemon-$RUN.log" 2>&1 &
+UNSET=()
+for name in $(compgen -e); do
+	case $name in SIGNET_* | HERMES_* | XDG_* | PI_* | OPENCODE_* | CLAUDE_* | CODEX_*) UNSET+=(-u "$name") ;; esac
+done
+SANDBOX=$DIR/home
+env "${UNSET[@]}" HOME="$SANDBOX" XDG_CONFIG_HOME="$SANDBOX/.config" XDG_DATA_HOME="$SANDBOX/.local/share" \
+	XDG_STATE_HOME="$SANDBOX/.local/state" XDG_CACHE_HOME="$SANDBOX/.cache" HERMES_HOME="$SANDBOX/.hermes" \
+	SIGNET_DAEMON_ENTRYPOINT=1 SIGNET_PATH="$WS" SIGNET_PORT="$PORT" SIGNET_HOST=127.0.0.1 SIGNET_TELEMETRY_OPTOUT=1 \
+	setsid "$BIN" > "$DIR/daemon-$RUN.log" 2>&1 &
 DAEMON=$!
 stop() {
 	kill -TERM -- "-$DAEMON" 2>/dev/null || return 0

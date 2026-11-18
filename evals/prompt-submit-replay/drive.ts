@@ -32,6 +32,19 @@ const transcripts = JSON.parse(readFileSync(join(dir, "transcripts.json"), "utf8
 const turns: readonly string[] = transcripts[session]?.turns ?? [];
 const out = join(dir, `results-${run}.jsonl`);
 
+const pinned = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("SIGNET_")));
+
+async function importConnector(path: string): Promise<Record<string, unknown>> {
+	const connector = await import(path);
+	const changed = Object.keys(process.env)
+		.filter((key) => key.startsWith("SIGNET_"))
+		.filter((key) => process.env[key] !== pinned[key]);
+	if (changed.length > 0) {
+		throw new Error(`${path} rebinds ${changed.join(", ")} at import; reinstall it without baked settings to replay`);
+	}
+	return connector;
+}
+
 function record(sessionKey: string, turn: number, kind: string, text: string): void {
 	appendFileSync(out, `${JSON.stringify({ run, harness: session, sessionKey, turn, kind, text })}\n`);
 }
@@ -51,7 +64,7 @@ function messagesOf(results: readonly unknown[]): Message[] {
 }
 
 async function runOpencode(): Promise<void> {
-	const plugin = await import(opencodePlugin);
+	const plugin = await importConnector(opencodePlugin);
 	const sessionID = `${run}-${session}`;
 	const hooks = await plugin.SignetPlugin({ directory: sandboxHome, client: {} });
 	const system: string[] = [];
@@ -71,7 +84,7 @@ async function runOpencode(): Promise<void> {
 }
 
 async function runPi(): Promise<void> {
-	const extension = await import(piExtension);
+	const extension = await importConnector(piExtension);
 	const handlers = new Map<string, Handler[]>();
 	const api = new Proxy(
 		{
