@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { getDbOwner } from "./db-owner-runtime";
-import { cancellableOwner, ownerReadAll, ownerReadOne } from "./db-owner-sql";
-import { logger } from "./logger";
+import type { DbOwnerClient } from "./db-owner-client";
+import { cancellableOwner, ownerReadAll } from "./db-owner-sql";
 
 export type PromptEntityMatch = {
 	readonly entityId: string;
@@ -195,57 +195,77 @@ function selectPromptEntityMatches(rows: readonly PromptEntityRow[], userMessage
 	return result;
 }
 
-const PROMPT_ENTITY_PAGE_ROWS = 1000;
+const PROMPT_ENTITY_PAGE_ROWS = 250;
+const PROMPT_ENTITY_MAX_TEXT_BYTES = 256;
 
-type PromptEntityPageRow = {
-	readonly cursor: number;
-	readonly entity_id: string;
-	readonly entity_name: string;
-	readonly entity_type: string;
-	readonly name_text: string;
-	readonly aliases: string;
-	readonly mentions: number;
-	readonly pinned: number;
-};
+type PromptEntityPageRow<Cursor> = PromptEntityRow & { readonly cursor: Cursor };
 
-const PROMPT_ENTITY_FILTER = `FROM entities e
-		 WHERE e.agent_id = ?
-		   AND e.rowid > ?
-		   AND COALESCE(e.status, 'active') = 'active'
+const PROMPT_ENTITY_ELIGIBLE = `COALESCE(e.status, 'active') = 'active'
 		   AND LOWER(e.entity_type) IN ('person', 'project')
-		 ORDER BY e.rowid`;
+		   AND LENGTH(CAST(e.name AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}`;
 
-const PROMPT_ENTITY_PAGE = `SELECT
+const PROMPT_ENTITY_NAMES = `SELECT
 		   e.rowid AS cursor,
 		   e.id AS entity_id,
 		   e.name AS entity_name,
 		   COALESCE(e.entity_type, 'unknown') AS entity_type,
-		   COALESCE(e.canonical_name, LOWER(e.name)) AS name_text,
-		   (SELECT json_group_array(a.alias)
-		      FROM entity_aliases a
-		     WHERE a.agent_id = e.agent_id
-		       AND a.entity_id = e.id
-		       AND a.status = 'active') AS aliases,
+		   COALESCE(e.canonical_name, LOWER(e.name)) AS matched_text,
+		   'name' AS match_source,
 		   COALESCE(e.mentions, 0) AS mentions,
 		   COALESCE(e.pinned, 0) AS pinned
-		 ${PROMPT_ENTITY_FILTER}
+		 FROM entities e
+		 WHERE e.agent_id = ?
+		   AND e.rowid > ?
+		   AND ${PROMPT_ENTITY_ELIGIBLE}
+		   AND LENGTH(CAST(COALESCE(e.canonical_name, LOWER(e.name)) AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		 ORDER BY e.rowid
 		 LIMIT ?`;
 
-const PROMPT_ENTITY_NEXT = `SELECT e.rowid AS cursor
-		 ${PROMPT_ENTITY_FILTER}
-		 LIMIT 1`;
+const PROMPT_ENTITY_ALIASES = `SELECT
+		   a.canonical_alias AS cursor,
+		   e.id AS entity_id,
+		   e.name AS entity_name,
+		   COALESCE(e.entity_type, 'unknown') AS entity_type,
+		   a.alias AS matched_text,
+		   'alias' AS match_source,
+		   COALESCE(e.mentions, 0) AS mentions,
+		   COALESCE(e.pinned, 0) AS pinned
+		 FROM entity_aliases a INDEXED BY idx_entity_aliases_active_unique
+		 JOIN entities e ON e.id = a.entity_id AND e.agent_id = a.agent_id
+		 WHERE a.agent_id = ?
+		   AND a.status = 'active'
+		   AND a.canonical_alias > ?
+		   AND LENGTH(CAST(a.canonical_alias AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		   AND LENGTH(CAST(a.alias AS BLOB)) <= ${PROMPT_ENTITY_MAX_TEXT_BYTES}
+		   AND ${PROMPT_ENTITY_ELIGIBLE}
+		 ORDER BY a.canonical_alias
+		 LIMIT ?`;
 
-function promptEntityRows(row: PromptEntityPageRow): PromptEntityRow[] {
-	const parsed: unknown = JSON.parse(row.aliases);
-	const aliases = Array.isArray(parsed) ? parsed.filter((alias): alias is string => typeof alias === "string") : [];
-	return [
-		{ ...row, matched_text: row.name_text, match_source: "name" },
-		...aliases.map((alias) => ({ ...row, matched_text: alias, match_source: "alias" as const })),
-	];
-}
-
-function resultTooLarge(error: unknown): boolean {
-	return typeof error === "object" && error !== null && "code" in error && error.code === "DB_OWNER_RESULT_TOO_LARGE";
+async function readPromptEntityPages<Cursor extends number | string>(
+	owner: DbOwnerClient,
+	sql: string,
+	operation: string,
+	agentId: string,
+	initial: Cursor,
+	visit: (row: PromptEntityRow) => void,
+): Promise<void> {
+	let after = initial;
+	while (true) {
+		const page = await ownerReadAll<PromptEntityPageRow<Cursor>>(
+			owner,
+			sql,
+			[agentId, after, PROMPT_ENTITY_PAGE_ROWS],
+			{
+				operation,
+				deadlineMs: 5_000,
+				estimatedWorkUnits: PROMPT_ENTITY_PAGE_ROWS,
+			},
+		);
+		for (const row of page) visit(row);
+		const last = page.at(-1);
+		if (!last || page.length < PROMPT_ENTITY_PAGE_ROWS) return;
+		after = last.cursor;
+	}
 }
 
 export async function matchPromptEntities(
@@ -267,42 +287,10 @@ export async function matchPromptEntities(
 	if (tables.length !== 2) return [];
 	const promptTerms = promptEntityTerms(userMessage);
 	const candidates: PromptEntityRow[] = [];
-	let after = 0;
-	let rows = PROMPT_ENTITY_PAGE_ROWS;
-	while (true) {
-		const page = await ownerReadAll<PromptEntityPageRow>(owner, PROMPT_ENTITY_PAGE, [agentId, after, rows], {
-			operation: "user-prompt-submit.entities",
-			deadlineMs: 5_000,
-			estimatedWorkUnits: rows,
-		}).catch((error: unknown) => {
-			if (resultTooLarge(error)) return null;
-			throw error;
-		});
-		if (page === null && rows > 1) {
-			rows = Math.ceil(rows / 2);
-			continue;
-		}
-		if (page === null) {
-			const skipped = await ownerReadOne<{ readonly cursor: number }>(owner, PROMPT_ENTITY_NEXT, [agentId, after], {
-				operation: "user-prompt-submit.entities.skip",
-				deadlineMs: 5_000,
-				estimatedWorkUnits: 1,
-			});
-			if (!skipped) break;
-			logger.warn("hooks", "Skipped a prompt entity row larger than the DB owner result limit", { agentId });
-			after = skipped.cursor;
-			rows = PROMPT_ENTITY_PAGE_ROWS;
-			continue;
-		}
-		for (const row of page) {
-			for (const candidate of promptEntityRows(row)) {
-				if (promptPhraseSpan(promptTerms, candidate.matched_text)) candidates.push(candidate);
-			}
-		}
-		const last = page.at(-1);
-		if (!last || page.length < rows) break;
-		after = last.cursor;
-		rows = Math.min(PROMPT_ENTITY_PAGE_ROWS, rows * 2);
-	}
+	const visit = (row: PromptEntityRow): void => {
+		if (promptPhraseSpan(promptTerms, row.matched_text)) candidates.push(row);
+	};
+	await readPromptEntityPages(owner, PROMPT_ENTITY_NAMES, "user-prompt-submit.entity-names", agentId, 0, visit);
+	await readPromptEntityPages(owner, PROMPT_ENTITY_ALIASES, "user-prompt-submit.entity-aliases", agentId, "", visit);
 	return selectPromptEntityMatches(candidates, userMessage);
 }
