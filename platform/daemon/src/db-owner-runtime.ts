@@ -41,8 +41,8 @@ import type {
 	DbOwnerSourceArtifactUpsert,
 	DbOwnerStatement,
 	DbOwnerWorkloadClass,
+	DbOwnerDreamingEvidenceCoverageResult,
 } from "./db-owner-protocol";
-import type { DreamingEvidenceCoverageStepResult } from "./pipeline/dreaming-evidence-coverage";
 import { applyVectorRepairBatch } from "./vector-repair-owner";
 import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
@@ -834,8 +834,8 @@ export async function dbOwnerDreamingEvidenceCoverage(
 	owner: DbOwnerClient,
 	input: DbOwnerDreamingEvidenceCoverage,
 	options: DbOwnerSqlOptions,
-): Promise<DreamingEvidenceCoverageStepResult> {
-	return await submitWithAdmission<DreamingEvidenceCoverageStepResult>(
+): Promise<DbOwnerDreamingEvidenceCoverageResult> {
+	return await submitWithAdmission<DbOwnerDreamingEvidenceCoverageResult>(
 		owner,
 		{ kind: "dreaming_evidence_coverage", input },
 		{ ...options, lane: "read" },

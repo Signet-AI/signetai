@@ -6,13 +6,22 @@ import {
 	readRecentEpisodicSources,
 } from "../episodic-sources";
 import { dbOwnerDreamingEvidenceCoverage, runDbOwnerDomainOperation } from "../db-owner-runtime";
+import type {
+	DbOwnerDreamingEvidenceCoverage,
+	DbOwnerDreamingEvidenceCoverageCursor,
+	DbOwnerDreamingEvidenceCoverageDeliveryRow,
+	DbOwnerDreamingEvidenceCoverageEntryInput,
+	DbOwnerDreamingEvidenceCoverageResult,
+} from "../db-owner-protocol";
 import { renderDreamingEvidence } from "./dreaming-evidence";
 import {
 	type DreamingEvidenceCursor,
-	STALLED_EVIDENCE_ATTENTION_SQL,
 	evidenceCursorForSource,
+	hasDreamingEvidenceReviewRow,
 	pendingDreamingEvidenceContinuations,
 	persistedEvidenceDeliveries,
+	readDreamingEvidencePassesPage,
+	readStalledEvidenceAttentionIds,
 } from "./dreaming-evidence-consumption";
 import { DREAMING_EVIDENCE_KINDS } from "./dreaming";
 
@@ -93,11 +102,9 @@ interface Accumulator {
 	readonly chars: MutableCharTotals;
 }
 
-interface CoveragePageCursor {
-	readonly capturedAt: string;
-	readonly kind: EpisodicSourceKind;
-	readonly id: string;
-}
+type CoveragePageCursor = DbOwnerDreamingEvidenceCoverageCursor;
+
+type CoverageEntryClassificationInput = DbOwnerDreamingEvidenceCoverageEntryInput;
 
 interface WalkEntry {
 	readonly kind: EpisodicSourceKind;
@@ -110,94 +117,10 @@ interface WalkEntry {
 	deliveredRanges: Array<readonly [number, number]>;
 }
 
-export interface CoverageEntryClassificationInput {
-	readonly kind: EpisodicSourceKind;
-	readonly id: string;
-	readonly capturedAt: string;
-	readonly entryId: string;
-	readonly revision: string;
-	readonly length: number;
-	readonly deliveredRanges: ReadonlyArray<readonly [number, number]>;
-}
+type DreamingEvidenceCoverageStepRequest = DbOwnerDreamingEvidenceCoverage;
+type DreamingEvidenceCoverageStepResult = DbOwnerDreamingEvidenceCoverageResult;
 
-export type DreamingEvidenceCoverageStepRequest =
-	| {
-			readonly step: "sources";
-			readonly agentId: string;
-			readonly cursor: CoveragePageCursor | null;
-			readonly limit: number;
-	  }
-	| {
-			readonly step: "passes";
-			readonly agentId: string;
-			readonly afterCreatedAt: string;
-			readonly afterPassId: string;
-			readonly limit: number;
-	  }
-	| {
-			readonly step: "classify";
-			readonly agentId: string;
-			readonly entries: readonly CoverageEntryClassificationInput[];
-	  }
-	| {
-			readonly step: "tails";
-			readonly agentId: string;
-			readonly afterAttentionId: string;
-			readonly attentionLimit: number;
-			readonly continuationsLimit: number;
-	  }
-	| {
-			readonly step: "count";
-			readonly agentId: string;
-			readonly bound: number;
-	  };
-
-export interface CoverageDeliveryRow {
-	readonly kind: EpisodicSourceKind;
-	readonly id: string;
-	readonly capturedAt: string;
-	readonly sourceEntryId: string;
-	readonly sourceRevision: string;
-	readonly start: number;
-	readonly end: number;
-}
-
-export type DreamingEvidenceCoverageStepResult =
-	| {
-			readonly step: "sources";
-			readonly entries: ReadonlyArray<
-				Pick<CoverageEntryClassificationInput, "kind" | "id" | "capturedAt" | "entryId" | "revision" | "length">
-			>;
-			readonly seen: number;
-			readonly cursor: CoveragePageCursor | null;
-			readonly exhausted: boolean;
-	  }
-	| {
-			readonly step: "passes";
-			readonly deliveries: readonly CoverageDeliveryRow[];
-			readonly afterCreatedAt: string;
-			readonly afterPassId: string;
-			readonly seen: number;
-			readonly exhausted: boolean;
-	  }
-	| {
-			readonly step: "classify";
-			readonly delta: Accumulator;
-			readonly byKind: Readonly<Record<string, Accumulator>>;
-	  }
-	| {
-			readonly step: "tails";
-			readonly pendingContinuations: number;
-			readonly continuationsTruncated: boolean;
-			readonly openStalledAttention: number;
-			readonly attentionTruncated: boolean;
-			readonly exhausted: boolean;
-			readonly afterAttentionId: string;
-	  }
-	| {
-			readonly step: "count";
-			readonly eligible: number | null;
-	  };
+type CoverageDeliveryRow = DbOwnerDreamingEvidenceCoverageDeliveryRow;
 
 export function dreamedFraction(reviewedChars: number, eligibleChars: number): number | null {
 	if (!(Number.isSafeInteger(reviewedChars) && reviewedChars >= 0)) return null;
@@ -249,21 +172,18 @@ function coveredChars(ranges: ReadonlyArray<readonly [number, number]>, length: 
 	return covered;
 }
 
-function hasReviewRow(db: ReadDb, agentId: string, entry: CoverageEntryClassificationInput): boolean {
-	return (
-		db
-			.prepare(
-				`SELECT 1 FROM dreaming_evidence_reviews
-		 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
-			)
-			.get(agentId, entry.kind, entry.id, entry.capturedAt, entry.entryId, entry.revision) != null
-	);
-}
-
 function classifyEntry(db: ReadDb, agentId: string, entry: CoverageEntryClassificationInput): Accumulator {
 	const result = emptyAccumulator();
 	const cursor: DreamingEvidenceCursor = evidenceCursorForSource(db, agentId, evidenceCursorSource(entry));
-	const reviewRow = hasReviewRow(db, agentId, entry);
+	const reviewRow = hasDreamingEvidenceReviewRow(
+		db,
+		agentId,
+		entry.kind,
+		entry.id,
+		entry.capturedAt,
+		entry.entryId,
+		entry.revision,
+	);
 	const reviewBased = reviewRow || cursor.cursorBasis === "review";
 	const reviewedChars = reviewBased ? Math.min(cursor.offset, entry.length) : 0;
 	const basisChars = Math.min(cursor.offset, entry.length);
@@ -342,22 +262,13 @@ export function scanDreamingEvidenceCoverageStep(
 		};
 	}
 	if (request.step === "passes") {
-		const passIds = db
-			.prepare(
-				`SELECT id, created_at AS createdAt FROM dreaming_passes
-		 WHERE agent_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))
-		 ORDER BY created_at ASC, id ASC LIMIT ?`,
-			)
-			.all(
-				request.agentId,
-				request.afterCreatedAt,
-				request.afterCreatedAt,
-				request.afterPassId,
-				request.limit,
-			) as Array<{
-			id: string;
-			createdAt: string;
-		}>;
+		const passIds = readDreamingEvidencePassesPage(
+			db,
+			request.agentId,
+			request.afterCreatedAt,
+			request.afterPassId,
+			request.limit,
+		);
 		const deliveries: CoverageDeliveryRow[] = [];
 		for (const pass of passIds) {
 			for (const delivery of persistedEvidenceDeliveries(db, pass.id)) {
@@ -402,16 +313,10 @@ export function scanDreamingEvidenceCoverageStep(
 	let openStalledAttention = 0;
 	let afterAttentionId = request.afterAttentionId;
 	let attentionTruncated = false;
-	const rows = db
-		.prepare(
-			`SELECT id FROM dreaming_attention
-		 WHERE agent_id = ? AND resolved_at IS NULL AND ${STALLED_EVIDENCE_ATTENTION_SQL} AND id > ?
-		 ORDER BY id ASC LIMIT ?`,
-		)
-		.all(request.agentId, afterAttentionId, request.attentionLimit) as Array<{ id: string }>;
+	const rows = readStalledEvidenceAttentionIds(db, request.agentId, afterAttentionId, request.attentionLimit);
 	openStalledAttention += rows.length;
 	if (rows.length >= request.attentionLimit) attentionTruncated = true;
-	if (rows.length > 0) afterAttentionId = rows[rows.length - 1].id;
+	if (rows.length > 0) afterAttentionId = rows[rows.length - 1] ?? request.afterAttentionId;
 	return {
 		step: "tails",
 		pendingContinuations: continuations.length,
