@@ -42,7 +42,6 @@ import {
 	type EpisodicCursor,
 	type EpisodicSourceRecord,
 	readEpisodicSource,
-	readRecentEpisodicSources,
 	searchEpisodicSources,
 	timestampMillis,
 	utcTimestampMs,
@@ -397,48 +396,6 @@ function deferredEvidenceKeys(value: unknown, primaryAgentId: string): ReadonlyS
 		keys.add(`${item.agentId}\u0000${item.sourceRef}`);
 	}
 	return keys;
-}
-
-function readDreamingState(db: ReadDb, agentId: string): DreamingState {
-	let row:
-		| {
-				consecutive_failures: number;
-				last_failure_at: string | null;
-				last_pass_at: string | null;
-				evidence_cursor: string | null;
-				last_pass_id: string | null;
-				last_pass_mode: string | null;
-		  }
-		| undefined;
-	try {
-		row = db
-			.prepare(
-				`SELECT consecutive_failures, last_failure_at,
-				        last_pass_at, evidence_cursor, last_pass_id, last_pass_mode
-				 FROM dreaming_state WHERE agent_id = ?`,
-			)
-			.get(agentId) as typeof row;
-	} catch {
-		row = undefined;
-	}
-	if (!row) {
-		return {
-			consecutiveFailures: 0,
-			lastFailureAt: null,
-			lastPassAt: null,
-			evidenceCursor: null,
-			lastPassId: null,
-			lastPassMode: null,
-		};
-	}
-	return {
-		consecutiveFailures: row.consecutive_failures,
-		lastFailureAt: row.last_failure_at,
-		lastPassAt: row.last_pass_at,
-		evidenceCursor: parseEpisodicCursor(row.evidence_cursor),
-		lastPassId: row.last_pass_id,
-		lastPassMode: row.last_pass_mode,
-	};
 }
 
 export async function getDreamingState(accessor: DbAccessor, agentId: string): Promise<DreamingState> {
@@ -957,23 +914,6 @@ export async function requestDreamingEvidenceRequeue(
 		{ deadlineMs: 30_000, estimatedWorkUnits: 2 },
 	);
 	return ownerChanges(result[0]) > 0;
-}
-
-function _fetchEpisodicEvidence(
-	db: ReadDb,
-	agentId: string,
-	since: string | null,
-	limit: number,
-	cursor: EpisodicCursor | null,
-): readonly EpisodicSourceRecord[] {
-	const sources = readRecentEpisodicSources(db, agentId, limit, DREAMING_EVIDENCE_KINDS, since, "oldest", cursor);
-	if (!cursor?.fragmentOffset || cursor.kind === null) return sources;
-	const resumed = readEpisodicSource(db, { agentId, from: `${cursor.kind}:${cursor.id}` });
-	if (!resumed) return sources;
-	return [resumed, ...sources.filter((source) => source.kind !== resumed.kind || source.id !== resumed.id)].slice(
-		0,
-		limit,
-	);
 }
 
 export function dreamingPassPrompt(prompt: string, history: string, attention: string): string {
@@ -2247,10 +2187,6 @@ function validDreamingBacklogEntry(
 			};
 }
 
-function sourceRecordKey(source: EpisodicSourceRecord): string {
-	return `${source.kind}:${source.id}`;
-}
-
 function backlogReadFromSources(
 	sources: readonly EpisodicSourceRecord[],
 	sourceLimit: number | null,
@@ -2285,56 +2221,18 @@ function withCandidateScanResult(
 function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimit: number | null): DreamingBacklogRead {
 	const candidateScan = sourceLimit === null ? null : scanEpisodicSourceCandidates(db, agentId, sourceLimit);
 	const candidateRefs = candidateScan?.refs;
-	const hasConsumption =
-		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_consumption'").get() !=
-		null;
-	if (hasConsumption) {
-		const queued = searchEpisodicSources(db, {
-			agentId,
-			query: "",
-			excludeDelivered: true,
-			limit: sourceLimit === null ? null : sourceLimit + 1,
-			order: sourceLimit === null ? "newest" : "none",
-			candidateRefs,
-		});
-		return withCandidateScanResult(
-			backlogReadFromSources(queued, sourceLimit, (source) => validDreamingBacklogEntry(db, agentId, source, true)),
-			candidateScan,
-		);
-	}
-
-	const state = readDreamingState(db, agentId);
-	const queued = readRecentEpisodicSources(
-		db,
+	const queued = searchEpisodicSources(db, {
 		agentId,
-		sourceLimit === null ? null : sourceLimit + 1,
-		DREAMING_EVIDENCE_KINDS,
-		state.evidenceCursor ? null : state.lastPassAt,
-		sourceLimit === null ? "newest" : "none",
-		state.evidenceCursor,
+		query: "",
+		excludeDelivered: true,
+		limit: sourceLimit === null ? null : sourceLimit + 1,
+		order: sourceLimit === null ? "newest" : "none",
 		candidateRefs,
-	);
-	const resumed =
-		state.evidenceCursor?.fragmentOffset !== undefined && state.evidenceCursor.kind !== null
-			? readEpisodicSource(db, { agentId, from: `${state.evidenceCursor.kind}:${state.evidenceCursor.id}` })
-			: null;
-	const resumedEntry =
-		resumed === null
-			? null
-			: validDreamingBacklogEntry(db, agentId, resumed, false, state.evidenceCursor?.fragmentOffset ?? 0);
-	const queuedSourceKeys = new Set(queued.map(sourceRecordKey));
-	const resumedIsQueued = resumed !== null && queuedSourceKeys.has(sourceRecordKey(resumed));
-	const resumedSource = resumedEntry !== null && resumed !== null && !resumedIsQueued ? resumed : null;
-	const resumedKey = resumedSource === null ? null : sourceRecordKey(resumedSource);
-	const availableSources = resumedSource === null ? queued : [resumedSource, ...queued];
-	const read = backlogReadFromSources(availableSources, sourceLimit, (source) => {
-		const offset =
-			resumedKey !== null && sourceRecordKey(source) === resumedKey
-				? (state.evidenceCursor?.fragmentOffset ?? 0)
-				: undefined;
-		return validDreamingBacklogEntry(db, agentId, source, false, offset);
 	});
-	return withCandidateScanResult(read, candidateScan);
+	return withCandidateScanResult(
+		backlogReadFromSources(queued, sourceLimit, (source) => validDreamingBacklogEntry(db, agentId, source, true)),
+		candidateScan,
+	);
 }
 export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string): Promise<number> {
 	const read = readDreamingEpisodicBacklogInDb(db, agentId, null);
