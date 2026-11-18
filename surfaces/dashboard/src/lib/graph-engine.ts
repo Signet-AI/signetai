@@ -903,6 +903,7 @@ export function createGraphEngine(
 			return;
 		}
 		attribute("data-layout", event.data.origin);
+		attribute("data-layout-engine", event.data.engine);
 		framing = event.data.active;
 		nodes = data.nodes.map((node, index) => ({ ...node, x: xy[index * 2] ?? 0, y: xy[index * 2 + 1] ?? 0 }));
 		byId = new Map(nodes.map((node) => [node.id, node]));
