@@ -9,7 +9,7 @@ import {
 	HIDDEN_CONTEXT_CUSTOM_TYPE,
 	HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE,
 	type PiCustomMessage,
-	type PiSessionEntry,
+	type PiAgentMessage,
 } from "./types.js";
 
 function fence(inject: string): string {
@@ -19,21 +19,26 @@ function fence(inject: string): string {
 export interface PiSessionState extends BaseSessionState {
 	consumeHiddenInjectMessage(
 		sessionId: string | undefined,
-		entries: ReadonlyArray<PiSessionEntry>,
+		messages: ReadonlyArray<PiAgentMessage>,
 	): PiCustomMessage | undefined;
 }
 
 class PiSessionStateStore extends BaseSessionStateStore implements PiSessionState {
 	consumeHiddenInjectMessage(
 		sessionId: string | undefined,
-		entries: ReadonlyArray<PiSessionEntry>,
+		messages: ReadonlyArray<PiAgentMessage>,
 	): PiCustomMessage | undefined {
 		if (!sessionId) return;
 		if (
-			entries.some(
-				(entry) =>
-					entry.type === "custom_message" &&
-					(entry.customType === HIDDEN_CONTEXT_CUSTOM_TYPE || entry.customType === HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE),
+			messages.some(
+				(message) =>
+					message.role === "custom" &&
+					(message.customType === HIDDEN_SESSION_CONTEXT_CUSTOM_TYPE ||
+						(message.customType === HIDDEN_CONTEXT_CUSTOM_TYPE &&
+							typeof message.details === "object" &&
+							message.details !== null &&
+							"sessionContext" in message.details &&
+							message.details.sessionContext === true)),
 			)
 		) {
 			this.clearPendingSessionContext(sessionId);
@@ -55,6 +60,7 @@ class PiSessionStateStore extends BaseSessionStateStore implements PiSessionStat
 			customType: HIDDEN_CONTEXT_CUSTOM_TYPE,
 			display: false,
 			content: parts.join("\n\n"),
+			details: { sessionContext: Boolean(session), recall: Boolean(recall), clock: Boolean(clock) },
 		};
 	}
 }

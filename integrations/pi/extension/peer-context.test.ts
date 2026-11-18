@@ -93,6 +93,7 @@ function setup() {
 		cwd: "/work/proj",
 		sessionManager: {
 			getBranch: () => [],
+			buildSessionContext: () => ({ messages: [] }),
 			getEntries: () => [],
 			getHeader: () => ({ id: "sess-1", cwd: "/work/proj" }),
 			getSessionFile: () => undefined,
