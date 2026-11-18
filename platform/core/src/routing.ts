@@ -1075,7 +1075,7 @@ export function parseRoutingConfig(raw: unknown): RouterResult<RoutingConfig> {
 					severity: "error",
 					field: `targets.${targetId}.openrouter`,
 					ref: targetId,
-					message: `Target "${targetId}" has an invalid openrouter config and was dropped from routing.`,
+					message: `Target "${targetId}" has an invalid openrouter config; the routing config fails and every routed call returns invalid-config until it is fixed.`,
 				});
 			}
 		}
