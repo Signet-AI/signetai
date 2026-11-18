@@ -117,6 +117,19 @@ export function assertSameIdentity(
   }
 }
 
+export function assertResumeOpenRouterSettings(
+  stored: RunCheckpoint["openrouterModels"],
+  judgeModel: string,
+  answeringModel: string,
+  env: NodeJS.ProcessEnv = process.env
+): void {
+  assertSameIdentity(
+    "OpenRouter model settings",
+    stored,
+    openRouterModelSettings([judgeModel, answeringModel], env)
+  )
+}
+
 export function storedTargetQuestionIds(
   targetQuestionIds: readonly string[] | undefined,
   allQuestions: readonly { readonly questionId: string }[]
@@ -274,6 +287,7 @@ export class Orchestrator {
     if (this.checkpointManager.exists(runId) && !isNewRun) {
       checkpoint = this.checkpointManager.load(runId)!
       assertSameIdentity("Benchmark protocol", checkpoint.protocol, benchmark.protocol?.identity)
+      assertResumeOpenRouterSettings(checkpoint.openrouterModels, judgeModel, answeringModel)
       assertSameIdentity(
         "Benchmark dataset",
         checkpoint.datasetIdentity,

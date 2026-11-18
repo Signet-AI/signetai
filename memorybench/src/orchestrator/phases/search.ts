@@ -38,9 +38,7 @@ export async function runSearchPhase(
 
   const concurrency = resolveConcurrency("search", checkpoint.concurrency, provider.concurrency)
 
-  if (!checkpoint.recallTranscriptEvidence) {
-    checkpoint.recallTranscriptEvidence = (await provider.recallTranscriptEvidenceLimit?.()) ?? undefined
-  }
+  checkpoint.recallTranscriptEvidence = (await provider.recallTranscriptEvidenceLimit?.()) ?? undefined
 
   logger.info(`Searching ${pendingQuestions.length} questions (concurrency: ${concurrency})...`)
 

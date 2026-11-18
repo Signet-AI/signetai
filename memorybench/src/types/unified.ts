@@ -151,6 +151,7 @@ export interface RecallSourceStats {
   transcriptEvidenceOnly: number
   both: number
   none: number
+  unknown: number
 }
 
 export interface RecallSources {
