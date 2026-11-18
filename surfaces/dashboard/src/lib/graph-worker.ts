@@ -1,7 +1,8 @@
 import { graphLayout } from "./graph-layout";
 import type { LayoutNode } from "./graph-layout";
 import { layoutCacheKey, readLayout, writeLayout, type CachedLayout } from "./graph-layout-cache";
-import { ForceSimulation } from "./graph-simulation";
+import { type LayoutKernel, loadLayoutKernel } from "./graph-layout-kernel";
+import { ForceSimulation, type LayoutEngine } from "./graph-simulation";
 import type { GraphSceneData } from "./graph-scene";
 
 export type GraphWorkerRequest =
@@ -14,6 +15,7 @@ export interface GraphWorkerResponse {
 	xy: Float64Array;
 	active: boolean;
 	origin: LayoutOrigin;
+	engine: LayoutEngine;
 }
 const FRESH_TICKS = 12;
 const NEW_NODE_HEAT = 0.1;
@@ -27,6 +29,16 @@ interface Channel {
 }
 
 const simulation = new ForceSimulation();
+const kernel: Promise<LayoutKernel | undefined> = fetch(new URL("./graph-layout.wasm", import.meta.url))
+	.then((response) => {
+		if (!response.ok) throw new Error(`HTTP ${response.status}`);
+		return response.arrayBuffer();
+	})
+	.then(loadLayoutKernel)
+	.catch((error: unknown) => {
+		console.warn("Graph layout kernel unavailable; laying out with d3-force:", error);
+		return undefined;
+	});
 let channel = self as unknown as Channel;
 let nodes: LayoutNode[] = [];
 let byId = new Map<string, LayoutNode>();
@@ -42,7 +54,7 @@ const publish = () => {
 		xy[index * 2] = node.x;
 		xy[index * 2 + 1] = node.y;
 	}
-	const response: GraphWorkerResponse = { xy, active: simulation.isActive(), origin };
+	const response: GraphWorkerResponse = { xy, active: simulation.isActive(), origin, engine: simulation.engine() };
 	channel.postMessage(response, [xy.buffer]);
 };
 const save = (heat = simulation.heat()) => {
@@ -103,12 +115,12 @@ const receive = async (event: MessageEvent<GraphWorkerRequest>) => {
 		clearTimeout(deadline);
 		frame = undefined;
 		cacheKey = undefined;
-		const cached = await restore(request.layoutScope);
+		const [cached, compiled] = await Promise.all([restore(request.layoutScope), kernel]);
 		if (current !== generation) return;
 		const layout = graphLayout(request.data, cached?.positions);
 		nodes = layout.nodes;
 		byId = new Map(nodes.map((node) => [node.id, node]));
-		simulation.init(nodes, layout.edges);
+		simulation.init(nodes, layout.edges, compiled);
 		lastSave = performance.now();
 		const added = nodes.length - layout.reused;
 		origin = cached === null ? "unavailable" : !layout.reused ? "fresh" : added ? "partial" : "cached";

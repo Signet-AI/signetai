@@ -5,8 +5,11 @@ WORKDIR /app
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends python3 make g++ \
+	&& apt-get install -y --no-install-recommends python3 make g++ curl ca-certificates \
 	&& rm -rf /var/lib/apt/lists/*
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+	| sh -s -- -y --profile minimal --target wasm32-unknown-unknown
 
 COPY package.json bun.lock bunfig.toml tsconfig.json biome.json ./
 COPY AGENTS.md CLAUDE.md LICENSE README.md ./

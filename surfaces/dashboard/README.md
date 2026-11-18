@@ -27,12 +27,23 @@ from the mockup are promoted to named tokens (`--hover-overlay`,
 Geist / Geist Mono are self-hosted via `@fontsource` so the sandboxed Electron
 renderer works offline.
 
+## Graph layout
+
+The constellation's force layout runs in `src/lib/graph-worker.ts`. Its forces
+come from the Rust crate `signet-app-model` in `surfaces/app`, compiled to
+`src/lib/graph-layout.wasm` (gitignored) by `bun run build:graph-layout`, which
+every dashboard build and dev server runs first. The wasm reproduces
+`d3-force` bit for bit; `src/lib/graph-layout-kernel.test.ts` checks that
+against `d3-force` step by step. If the wasm fails to load, the worker lays out
+with `d3-force` and the canvas reports `data-layout-engine="d3"`.
+
 ## Scripts
 
 ```bash
 bun install
-bun run dev        # Vite dev server (proxies /api, /health, /memory to the daemon)
-bun run build      # tsc --noEmit && vite build → build/index.html
+bun run dev                 # Vite dev server (proxies /api, /health, /memory to the daemon)
+bun run build               # graph layout wasm, tsc --noEmit, vite build → build/index.html
+bun run build:graph-layout  # compile surfaces/app to src/lib/graph-layout.wasm
 bun run typecheck  # tsc --noEmit
 bun run preview    # serve the production build
 ```

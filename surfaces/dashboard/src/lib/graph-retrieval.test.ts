@@ -132,6 +132,7 @@ test("renderer batches retrieval, pauses following on wheel, and cancels pending
 				xy: Float64Array.from(nodes.flatMap((_, index) => [index * 100, index * 100])),
 				active: false,
 				origin: "fresh",
+				engine: "d3",
 			},
 		});
 		fit.mockClear();

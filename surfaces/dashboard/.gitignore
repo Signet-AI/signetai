@@ -6,3 +6,4 @@ dist
 .vite
 .svelte-kit
 build-demo
+src/lib/graph-layout.wasm

@@ -67,6 +67,7 @@ test("selection follows the reference interaction model without moving the camer
 				xy: Float64Array.from(nodes.flatMap((_, index) => [index * 100, index * 100])),
 				active: false,
 				origin: "fresh",
+				engine: "d3",
 			},
 		});
 		fit.mockClear();

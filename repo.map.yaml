@@ -24,6 +24,8 @@ areas:
         name: "@signet/cli"
       - path: surfaces/dashboard
         name: "signet-dashboard"
+      - path: surfaces/app
+        name: "signet-app (Cargo workspace: graph layout for the dashboard)"
       - path: surfaces/desktop
         name: "@signet/desktop"
       - path: surfaces/tray
