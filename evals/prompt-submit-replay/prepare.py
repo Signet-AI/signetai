@@ -11,6 +11,7 @@ import sys
 import yaml
 
 HOME = os.path.expanduser("~")
+HERMES_HARNESS = "hermes-agent"
 LAYOUT_MODULE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "platform", "core", "src", "workspace-layout.ts"
 )
@@ -239,7 +240,7 @@ def extract(args):
         ("codex", codex_sessions(), 1),
         ("pi", pi_sessions(), 1),
         ("opencode", opencode_sessions(), 1),
-        ("hermes-agent", hermes_sessions(), args.hermes_sessions),
+        (HERMES_HARNESS, hermes_sessions(), args.hermes_sessions),
     ]
     transcripts = {}
     for harness, sessions, top in sources:
