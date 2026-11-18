@@ -7,6 +7,10 @@ if [ $# -ne 3 ]; then
 fi
 RUN=$1
 PORT=$2
+if ! [[ $RUN =~ ^[A-Za-z0-9-]+$ && $PORT =~ ^[0-9]+$ ]]; then
+	echo "run name must be letters, digits, or dashes, and port must be a number" >&2
+	exit 2
+fi
 BIN=$(realpath "$3")
 HERE=$(cd "$(dirname "$0")" && pwd)
 DIR=$(realpath -m "${REPLAY_DIR:-$HERE/runs}")
@@ -31,8 +35,14 @@ env -u SIGNET_DAEMON_URL -u SIGNET_AGENT_ID HOME="$DIR/home" SIGNET_DAEMON_ENTRY
 	SIGNET_PORT="$PORT" SIGNET_HOST=127.0.0.1 SIGNET_TELEMETRY_OPTOUT=1 setsid "$BIN" > "$DIR/daemon-$RUN.log" 2>&1 &
 DAEMON=$!
 stop() {
-	kill -TERM -- "-$DAEMON" 2>/dev/null || true
-	for _ in $(seq 1 30); do ss -tln | grep -q ":$PORT " || break; sleep 1; done
+	kill -TERM -- "-$DAEMON" 2>/dev/null || return 0
+	for _ in $(seq 1 30); do
+		kill -0 -- "-$DAEMON" 2>/dev/null || break
+		sleep 1
+	done
+	kill -KILL -- "-$DAEMON" 2>/dev/null || true
+	wait "$DAEMON" 2>/dev/null || true
+	while kill -0 -- "-$DAEMON" 2>/dev/null; do sleep 1; done
 }
 trap stop EXIT
 
@@ -69,6 +79,6 @@ done
 stop
 trap - EXIT
 cat $(ls -tr "$WS"/runtime/logs/signet-*.log) > "$DIR/daemon-log-$RUN.ndjson"
-sqlite3 -json "$WS/data/signet.db" "SELECT session_key, agent_id, context_epoch, item_kind, item_id, surface, mode, created_at FROM session_recall_events WHERE session_key LIKE '$RUN-%'" > "$DIR/ledger-$RUN.json"
+sqlite3 -readonly -json "$WS/data/signet.db" "SELECT session_key, agent_id, context_epoch, item_kind, item_id, surface, mode, created_at FROM session_recall_events WHERE session_key LIKE '$RUN-%'" > "$DIR/ledger-$RUN.json"
 rm -rf "$WS"
 echo "$RUN finished: $(wc -l < "$DIR/results-$RUN.jsonl") records"
