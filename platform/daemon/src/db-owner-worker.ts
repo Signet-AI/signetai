@@ -1151,8 +1151,12 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "session_transcript_delete") {
 			const { deleteSessionTranscriptOwned } = await import("./session-transcripts");
 			const root = bindTranscriptWorkspace(job.request.input.basePath);
-			return await deleteSessionTranscriptOwned(db, job.request.input, root, (operation) =>
-				withBusyRetry(operation, context),
+			return await deleteSessionTranscriptOwned(
+				db,
+				job.request.input,
+				root,
+				(operation) => withBusyRetry(operation, context),
+				context.deadlineAt,
 			);
 		}
 		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);

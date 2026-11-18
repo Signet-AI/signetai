@@ -102,8 +102,11 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		return requirePermission("recall", authConfig)(c, next);
 	});
 	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c, next) => {
-		if (c.req.method === "DELETE")
+		if (c.req.method === "DELETE") {
+			if (c.req.query("purge") === "hard")
+				return requirePermissionWithRateLimit("admin", "admin", authAdminLimiter, authConfig)(c, next);
 			return requirePermissionWithRateLimit("forget", "forget", authForgetLimiter, authConfig)(c, next);
+		}
 		return requirePermission("recall", authConfig)(c, next);
 	});
 	app.use("/api/sessions/:key{(?!summaries$)[^/]+}/bypass", async (c, next) => {
@@ -187,24 +190,24 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 					project: scopedProject.project,
 					limit,
 				}),
-			"routes/session-routes.ts:179",
+			"routes/session-routes.ts:182",
 		);
 		return c.json({ query, hits, count: hits.length });
 	});
 
 	app.delete("/api/sessions/:key{(?!summaries$)[^/]+}/transcript", async (c) => {
+		const requestedGeneration = c.req.query("generation");
+		const generation = requestedGeneration === undefined ? undefined : Number(requestedGeneration);
+		if (
+			requestedGeneration !== undefined &&
+			(!/^[1-9][0-9]*$/.test(requestedGeneration) || !Number.isSafeInteger(generation))
+		)
+			return c.json({ error: "generation must be a positive safe integer" }, 400);
 		const purge = c.req.query("purge");
 		if (purge !== undefined && purge !== "hard") return c.json({ error: "purge must be hard or omitted" }, 400);
 		if (purge === "hard") {
 			if (authConfig.mode !== "local" && c.get("auth")?.claims?.role !== "admin")
 				return c.json({ error: "Admin credential required for hard purge" }, 403);
-			const denied = await requirePermissionWithRateLimit(
-				"admin",
-				"admin",
-				authAdminLimiter,
-				authConfig,
-			)(c, () => Promise.resolve());
-			if (denied) return denied;
 		}
 		const aliases = [c.req.query("agent_id"), c.req.query("agentId"), c.req.header("x-signet-agent-id")].filter(
 			(value) => value !== undefined,
@@ -224,6 +227,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const result = await deleteSessionTranscript(
 			{
 				sessionKey: key,
+				generation,
 				agentId: agent.agentId,
 				project: project.project,
 				hard: purge === "hard",
@@ -233,6 +237,8 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 			c.req.raw.signal,
 		);
 		if (result.status === "not_found") return c.json({ error: "Transcript not found" }, 404);
+		if (result.status === "conflict")
+			return c.json({ error: "Transcript generation changed", generation: result.generation }, 409);
 		return c.json(result);
 	});
 
@@ -419,7 +425,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:419",
+			"routes/session-routes.ts:425",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -470,7 +476,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:429");
+		}, "routes/session-routes.ts:435");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {

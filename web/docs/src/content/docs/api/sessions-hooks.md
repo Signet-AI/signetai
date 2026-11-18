@@ -548,7 +548,11 @@ Returns `404` if no transcript exists for that session and agent scope.
 ### DELETE /api/sessions/:key/transcript
 
 Delete a session's stored transcript without writing a session summary. Requires
-`forget` permission. The session must belong to the resolved agent and project.
+`forget` permission in soft mode. Hard purge requires `admin` permission instead,
+plus an authenticated admin role in team and hybrid modes. Explicit permission
+lists are restrictive: `["admin"]` allows hard purge but not soft deletion;
+`["forget"]` allows soft deletion but not hard purge. The session must belong to
+the resolved agent and project.
 Unknown keys and keys outside that scope both return `404` without changing
 capture state.
 
@@ -558,6 +562,9 @@ Query parameters:
   aliases, but conflicting aliases and malformed identities return `400`.
 - `project`: optional additional restriction. A credential's project scope is
   always enforced, even when this parameter is omitted.
+- `generation`: optional positive safe integer. If it differs from the current
+  capture generation, return `409` with the current `generation`, without
+  changing evidence or bypass state. Omit it to target the current generation.
 - `purge=hard`: hard-delete eligible derived memories and their history,
   embeddings, and search projections. In team and hybrid modes this requires an
   authenticated admin credential, including on localhost. Omit it for existing
@@ -565,8 +572,7 @@ Query parameters:
 
 Outside local mode, identity must be explicit in the request or in the
 credential's agent scope; an unscoped credential does not default to `default`.
-The route uses the existing forget rate limit; hard purge also uses the admin
-rate limit.
+Soft deletion uses the forget rate limit; hard purge uses the admin rate limit.
 
 ```json
 {
@@ -593,7 +599,9 @@ that have been cleaned or are already absent, not files removed in full.
 A memory is deleted only when all its evidence sources belong to this session.
 For memories with other sources, only the removed session's source edges are
 detached; the memory is marked stale and queued for Dreaming re-evaluation.
-Pinned memories are retained in both modes and reported in `retainedPinned`.
+Pinned memories keep their content, freshness, and recall visibility in both
+modes. Only their links to removed evidence are detached; they are reported in
+`retainedPinned` and are not queued for re-evaluation by this operation.
 
 The database owner records a generation and deletion watermark before cleanup.
 Capture retries, recovery, canonical backfills, snapshots, and imports cannot
@@ -601,22 +609,34 @@ restore the deleted generation. A live session remains bypassed until it ends,
 including across daemon restarts. Normal session-end hooks and canonical TTL
 finalization end the bypass. Attempting to disable that bypass returns
 `409`. A later explicit session start with the same key opens a new generation
-for new live turns. Whole-session snapshots and imports of a deleted key remain
-rejected: they cannot establish that an old prefix was not replayed. The daemon
-uses new live turns rather than re-reading the harness's historical transcript.
+for new records. Owner-side admission uses the original capture timestamp, not
+whether the write is a live turn: snapshots, summaries, artifacts, and imports
+captured after the new generation opened are admitted, including deferred
+end-of-session capture after the session ends. Evidence at or before the deletion
+watermark, before the open generation, or without a capture timestamp remains
+rejected. Do not relabel historical records with a new capture timestamp.
+
+The hook-side lifecycle check is advisory on owner timeout or unavailability;
+it does not fail the harness. Owner-side admission at each evidence write remains
+the enforcement point, so this does not reopen a deleted generation.
 
 Cleanup processes at most 64 database items, one uploaded-byte chunk, and four
 4 MiB file slices per request. Shared JSONL files are rewritten under the
 canonical transcript lock, preserving other sessions' records and concurrent
 appends. Only the session's recorded targets and its harness's canonical file
-are visited; external harness originals are not deleted.
+are visited. The harness's original files and user backups remain after either
+mode. Hard purge does not securely erase SQLite free pages or storage media.
 
 A contended transcript lock returns `pending` after 250 ms instead of occupying
-the database owner indefinitely. If work remains, retry the same DELETE to
-resume its durable checkpoints. A `pendingReason` explains a blocked file cleanup,
+the database owner indefinitely. The operation uses the remaining owner-job
+budget, including time spent queued, and yields `pending` before starting a file
+batch that would consume the remaining budget. If work remains, retry the same
+DELETE with its `generation` to resume its durable checkpoints. A `pendingReason` explains a blocked file cleanup,
 including unsafe paths or unsupported descriptor-filesystem operations. Do not
 treat pending as completion. A retry after completion returns `200` with the
-same receipt and counts. An admin can retry a completed soft deletion with
+same receipt and counts while the capture generation is unchanged. After key
+reuse, a retry without `generation` targets the new generation; use the returned
+generation for safe retries. An admin can retry a completed soft deletion with
 `purge=hard` to purge its eligible soft-deleted memories.
 
 ### GET /api/sessions/blackbox

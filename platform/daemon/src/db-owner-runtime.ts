@@ -115,7 +115,11 @@ function unreachableInlineRequest(request: never): never {
 	throw new Error(`Unreachable inline DB owner request: ${String(request)}`);
 }
 
-async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerRequest): Promise<unknown> {
+async function executeInlineOwnerRequest(
+	accessor: DbAccessor,
+	request: DbOwnerRequest,
+	deadlineAt: number,
+): Promise<unknown> {
 	if (request.kind === "query") {
 		if (
 			request.statement.readonly === false ||
@@ -185,8 +189,12 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 		const { deleteSessionTranscriptOwned } = await import("./session-transcripts");
 		return await invokeAccessor(accessor, "withReadDb", (db) => {
 			if (!("exec" in db)) throw new Error("Transcript deletion requires owner write access");
-			return deleteSessionTranscriptOwned(db, request.input, request.input.basePath, (operation) =>
-				invokeAccessorAsync(accessor, "withWriteTxAsync", () => operation()),
+			return deleteSessionTranscriptOwned(
+				db,
+				request.input,
+				request.input.basePath,
+				(operation) => invokeAccessorAsync(accessor, "withWriteTxAsync", () => operation()),
+				deadlineAt,
 			);
 		});
 	}
@@ -271,7 +279,11 @@ function inlineOwner(accessor: DbAccessor): DbOwnerClient {
 			cancellation: "pending",
 			request,
 		};
-		return { job, result: executeInlineOwnerRequest(accessor, request) as Promise<Result>, cancel: () => undefined };
+		return {
+			job,
+			result: executeInlineOwnerRequest(accessor, request, job.deadlineAt) as Promise<Result>,
+			cancel: () => undefined,
+		};
 	};
 	return {
 		start: async () => undefined,

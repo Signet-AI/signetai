@@ -127,6 +127,8 @@ export function markDerivedMemoriesStaleForSourceInTx(
 		readonly sourceId: string;
 		readonly agentId: string;
 		readonly staleAt: string;
+		readonly derivedMemoryId?: string;
+		readonly preservePinned?: boolean;
 	},
 ): readonly string[] {
 	const sourceKind = required(input.sourceKind, "sourceKind");
@@ -143,9 +145,13 @@ export function markDerivedMemoriesStaleForSourceInTx(
 			   AND dms.source_id = ?
 			   AND derived.agent_id = ?
 			   AND derived.is_deleted = 0
-			   AND derived.stale_at IS NULL`,
+			   AND derived.stale_at IS NULL
+			   ${input.derivedMemoryId ? "AND derived.id = ?" : ""}
+			   ${input.preservePinned ? "AND derived.pinned = 0" : ""}`,
 		)
-		.all(agentId, sourceKind, sourceId, agentId) as Array<{ id: string }>;
+		.all(agentId, sourceKind, sourceId, agentId, ...(input.derivedMemoryId ? [input.derivedMemoryId] : [])) as Array<{
+		id: string;
+	}>;
 	if (ids.length === 0) return [];
 	db.prepare(
 		`UPDATE memories

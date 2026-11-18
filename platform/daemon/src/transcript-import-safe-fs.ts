@@ -71,7 +71,7 @@ async function duplicateDarwinDescriptor(fd: number, flags: number): Promise<Fil
 	const api = loadDarwinFileSystem();
 	if (!api) throw new Error("Darwin descriptor filesystem unavailable");
 	try {
-		return await open(descriptorPath(fd), flags & (fsConstants.O_WRONLY | fsConstants.O_RDWR));
+		return await open(descriptorPath(fd), flags & (fsConstants.O_WRONLY | fsConstants.O_RDWR | fsConstants.O_NONBLOCK));
 	} finally {
 		api.symbols.close(fd);
 	}

@@ -64,12 +64,14 @@ export async function redactTranscriptFileBatch(input: {
 	return withTranscriptFileLock(
 		path,
 		async () => {
-			const source = await openContainedTranscriptFile(input.basePath, path, constants.O_RDONLY).catch(
-				(error: unknown) => {
-					if (missing(error)) return null;
-					throw error;
-				},
-			);
+			const source = await openContainedTranscriptFile(
+				input.basePath,
+				path,
+				constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
+			).catch((error: unknown) => {
+				if (missing(error)) return null;
+				throw error;
+			});
 			if (!source) return { done: true, checkpoint: input.checkpoint };
 			try {
 				const stat = await source.stat();
@@ -134,10 +136,11 @@ export async function redactTranscriptFileBatch(input: {
 				const target = await openContainedTranscriptFile(
 					input.basePath,
 					tmp,
-					constants.O_RDWR | constants.O_CREAT,
+					constants.O_RDWR | constants.O_CREAT | constants.O_NONBLOCK | constants.O_NOFOLLOW,
 					0o600,
 				);
 				try {
+					if (!(await target.stat()).isFile()) throw new Error("Transcript cleanup output is not a regular file");
 					await target.truncate(checkpoint.bytes);
 					const buffer = Buffer.alloc(Math.min(4 * 1024 * 1024, stat.size - checkpoint.offset));
 					const { bytesRead } = await source.read(buffer, 0, buffer.length, checkpoint.offset);

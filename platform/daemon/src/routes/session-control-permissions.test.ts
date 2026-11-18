@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,10 +19,10 @@ let tracker: typeof import("../session-tracker");
 let transcripts: typeof import("../session-transcripts");
 let state: typeof import("./state.js");
 
-function writeAuthConfig(mode: "local" | "team"): void {
+function writeAuthConfig(mode: "local" | "team" | "hybrid"): void {
 	writeFileSync(
 		join(agentsDir, "agent.yaml"),
-		`auth:\n  mode: ${mode}\n  rateLimits:\n    forget:\n      windowMs: 60000\n      max: 30\n    modify:\n      windowMs: 60000\n      max: 60\n    batchForget:\n      windowMs: 60000\n      max: 5\n    admin:\n      windowMs: 60000\n      max: 10\n    recallLlm:\n      windowMs: 60000\n      max: 60\n`,
+		`embedding:\n  provider: none\nmemory:\n  pipelineV2:\n    reranker:\n      enabled: false\nauth:\n  mode: ${mode}\n  rateLimits:\n    forget:\n      windowMs: 60000\n      max: 30\n    modify:\n      windowMs: 60000\n      max: 60\n    batchForget:\n      windowMs: 60000\n      max: 5\n    admin:\n      windowMs: 60000\n      max: 10\n    recallLlm:\n      windowMs: 60000\n      max: 60\n`,
 	);
 }
 
@@ -89,6 +89,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
+	state.authForgetLimiter.reset();
+	state.authAdminLimiter.reset();
 	presence.clearAllPresence();
 	tracker.unbypassSession("sess-a", "agent-a");
 	tracker.releaseSession("sess-a", "agent-a");
@@ -138,6 +140,7 @@ describe("session control permissions in team mode", () => {
 				["delete-single", 0],
 				["delete-mixed", 0],
 				["delete-pinned", 1],
+				["delete-pinned-descendant", 1],
 				["delete-descendant", 0],
 			] as const) {
 				db.prepare(
@@ -147,8 +150,8 @@ describe("session control permissions in team mode", () => {
 					"INSERT INTO derived_memory_sources (derived_memory_id, source_kind, source_id, agent_id, created_at) VALUES (?, ?, ?, 'agent-a', datetime('now'))",
 				).run(
 					id,
-					id === "delete-descendant" ? "memory" : "transcript",
-					id === "delete-descendant" ? "delete-single" : "delete-lineage",
+					id.endsWith("descendant") ? "memory" : "transcript",
+					id.endsWith("descendant") ? "delete-single" : "delete-lineage",
 				);
 			}
 			db.prepare(
@@ -165,7 +168,7 @@ describe("session control permissions in team mode", () => {
 		expect(res.status).toBe(200);
 		expect(await res.json()).toMatchObject({
 			status: "complete",
-			retainedPinned: 1,
+			retainedPinned: 2,
 			counts: { memories: 2, retainedMixed: 1 },
 		});
 		const rows = await getDbAccessor().withReadDbAsync((db) =>
@@ -174,7 +177,8 @@ describe("session control permissions in team mode", () => {
 		expect(rows).toEqual([
 			{ id: "delete-descendant", is_deleted: 1, stale_at: expect.anything() },
 			{ id: "delete-mixed", is_deleted: 0, stale_at: expect.any(String) },
-			{ id: "delete-pinned", is_deleted: 0, stale_at: expect.any(String) },
+			{ id: "delete-pinned", is_deleted: 0, stale_at: null },
+			{ id: "delete-pinned-descendant", is_deleted: 0, stale_at: null },
 			{ id: "delete-single", is_deleted: 1, stale_at: null },
 		]);
 		const edges = await getDbAccessor().withReadDbAsync((db) =>
@@ -194,6 +198,24 @@ describe("session control permissions in team mode", () => {
 				.get(),
 		);
 		expect(review).toEqual({ kind: "evidence_requeue" });
+		const { hybridRecall } = await import("../memory-search");
+		const { loadMemoryConfig } = await import("../memory-config");
+		const cfg = loadMemoryConfig(agentsDir);
+		const recalled = await hybridRecall(
+			{ query: "delete-pinned", agentId: "agent-a", pinned: true, limit: 10 },
+			{ ...cfg, search: { ...cfg.search, min_score: 0 } },
+			async () => null,
+		);
+		expect(recalled.results.map((row) => row.id).sort()).toEqual(["delete-pinned", "delete-pinned-descendant"]);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db
+					.prepare(
+						"SELECT subject_ref FROM dreaming_attention WHERE subject_ref IN ('memory:delete-pinned','memory:delete-pinned-descendant')",
+					)
+					.all(),
+			),
+		).toEqual([]);
 	});
 
 	it("retains a memory whose explicit non-session source shares the deleted key", async () => {
@@ -378,6 +400,124 @@ describe("session control permissions in team mode", () => {
 		expect(canonical).not.toContain("still private");
 	});
 
+	it("indexes new-generation end snapshots and artifacts without replaying deleted evidence", async () => {
+		const { updateTranscriptLifecycle } = await import("../session-transcript-lifecycle");
+		const { writeCanonicalTranscriptFromSnapshot } = await import("../transcript-capture");
+		const { enqueueTranscriptCaptureJob, runTranscriptCaptureOnce } = await import("../transcript-capture-worker");
+		const { writeSummaryArtifact, writeCompactionArtifact } = await import("../memory-lineage");
+		const { getDbAccessor } = await import("../db-accessor");
+		const { hybridRecall } = await import("../memory-search");
+		const { loadMemoryConfig } = await import("../memory-config");
+		const identity = {
+			basePath: agentsDir,
+			agentId: "agent-a",
+			sessionKey: "snapshot-reuse",
+			sessionId: "snapshot-reuse",
+			harness: "codex",
+			project: "proj-a",
+		};
+		const before = new Date().toISOString();
+		await transcripts.upsertSessionTranscriptAsync(
+			identity.sessionKey,
+			"User: deleted quokka",
+			"codex",
+			"proj-a",
+			"agent-a",
+			before,
+		);
+		const deleted = await teamApp().request(
+			"http://localhost/api/sessions/snapshot-reuse/transcript?agent_id=agent-a",
+			{ method: "DELETE", headers: bearer("agent") },
+		);
+		expect(await deleted.json()).toMatchObject({ status: "complete", generation: 1 });
+		await Bun.sleep(2);
+		expect(await updateTranscriptLifecycle({ ...identity, action: "start" })).toMatchObject({ generation: 2 });
+		const capturedAt = new Date().toISOString();
+		const job = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			...identity,
+			transcript: "User: quokka telescope new evidence",
+			capturedAt,
+			endedAt: capturedAt,
+		});
+		expect(job).not.toBeNull();
+		await updateTranscriptLifecycle({ ...identity, action: "end" });
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), agentsDir)).toBe(true);
+		const summary = await writeSummaryArtifact({
+			...identity,
+			capturedAt,
+			startedAt: capturedAt,
+			endedAt: capturedAt,
+			summary: "quokka telescope summary",
+		});
+		await writeCompactionArtifact({
+			...identity,
+			capturedAt,
+			startedAt: capturedAt,
+			endedAt: capturedAt,
+			summary: "quokka telescope compaction",
+		});
+		const kinds = await getDbAccessor().withReadDbAsync((db) =>
+			db
+				.prepare(
+					"SELECT source_kind FROM memory_artifacts WHERE agent_id = 'agent-a' AND session_key = 'snapshot-reuse' ORDER BY source_kind",
+				)
+				.all(),
+		);
+		expect(kinds).toEqual(["compaction", "manifest", "summary", "transcript"].map((source_kind) => ({ source_kind })));
+		expect(await transcripts.getStoredSessionTranscriptInfoAsync(identity.sessionKey, identity.agentId)).toMatchObject({
+			content: "User: quokka telescope new evidence",
+		});
+		const cfg = loadMemoryConfig(agentsDir);
+		const recalled = await hybridRecall(
+			{ query: "quokka telescope", agentId: identity.agentId, limit: 20 },
+			{ ...cfg, search: { ...cfg.search, min_score: 0 } },
+			async () => null,
+		);
+		expect(recalled.results.some((row) => row.content.includes("quokka telescope"))).toBe(true);
+		expect(
+			await writeCanonicalTranscriptFromSnapshot({
+				...identity,
+				rawTranscript: "User: undated replay",
+				transcript: "User: undated replay",
+			}),
+		).toBeNull();
+		expect(
+			await writeCanonicalTranscriptFromSnapshot({
+				...identity,
+				rawTranscript: "User: deleted quokka",
+				transcript: "User: deleted quokka",
+				capturedAt: before,
+			}),
+		).toBeNull();
+		expect(
+			await transcripts.upsertSessionTranscriptAsync(
+				identity.sessionKey,
+				"User: deleted quokka",
+				"codex",
+				"proj-a",
+				"agent-a",
+				before,
+			),
+		).toBe(false);
+		const { readFileSync } = await import("node:fs");
+		const { reindexMemoryArtifacts } = await import("../memory-lineage");
+		const path = join(agentsDir, summary.summaryPath);
+		writeFileSync(path, readFileSync(path, "utf8").replace(/^captured_at:[^\n]*\n/m, ""));
+		await getDbAccessor().withWriteTxAsync((db) =>
+			db
+				.prepare("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = 'agent-a'")
+				.run(summary.summaryPath),
+		);
+		await reindexMemoryArtifacts("agent-a");
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db
+					.prepare("SELECT source_path FROM memory_artifacts WHERE source_path = ? AND agent_id = 'agent-a'")
+					.get(summary.summaryPath),
+			),
+		).toBeNull();
+	});
+
 	it("counts each resumed session generation and fences late turns after its end", async () => {
 		const { updateTranscriptLifecycle } = await import("../session-transcript-lifecycle");
 		const { appendCanonicalLiveTranscriptTurns } = await import("../transcript-capture");
@@ -406,6 +546,225 @@ describe("session control permissions in team mode", () => {
 			bypassed: false,
 		});
 		expect(await appendCanonicalLiveTranscriptTurns({ ...identity, userMessage: "third generation" })).toBe(true);
+	});
+
+	it("deletes prefixed compaction evidence only in the owning agent", async () => {
+		const { writeCompactionArtifact } = await import("../memory-lineage");
+		const { getDbAccessor } = await import("../db-accessor");
+		const key = "prefixed-compaction";
+		await transcripts.upsertSessionTranscriptAsync(key, "User: compaction evidence", "codex", "proj-a", "agent-a");
+		for (const agentId of ["agent-a", "agent-b"])
+			await writeCompactionArtifact({
+				agentId,
+				sessionId: `session:${key}`,
+				sessionKey: `session:${key}`,
+				project: "proj-a",
+				harness: "codex",
+				capturedAt: new Date().toISOString(),
+				startedAt: null,
+				endedAt: null,
+				summary: "prefixed summary evidence",
+			});
+		const url = `http://localhost/api/sessions/${key}/transcript?agent_id=agent-a`;
+		await teamApp().request(url, { method: "DELETE", headers: bearer("agent") });
+		const res = await teamApp().request(url, { method: "DELETE", headers: bearer("agent") });
+		expect(await res.json()).toMatchObject({ status: "complete", counts: { artifacts: 2 } });
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db
+					.prepare("SELECT agent_id,source_kind FROM memory_artifacts WHERE session_key IN (?,?) ORDER BY source_kind")
+					.all(key, `session:${key}`),
+			),
+		).toEqual([
+			{ agent_id: "agent-b", source_kind: "compaction" },
+			{ agent_id: "agent-b", source_kind: "manifest" },
+		]);
+	});
+
+	it("does not restore a deleted transcript from a delayed Dreaming finalization", async () => {
+		const { getDbAccessor } = await import("../db-accessor");
+		const { finalizeDreamingPassInDb } = await import("../pipeline/dreaming");
+		const key = "late-dreaming";
+		const capturedAt = new Date().toISOString();
+		await transcripts.upsertSessionTranscriptAsync(
+			key,
+			"User: delayed source",
+			"codex",
+			"proj-a",
+			"agent-a",
+			capturedAt,
+		);
+		await teamApp().request(`http://localhost/api/sessions/${key}/transcript?agent_id=agent-a`, {
+			method: "DELETE",
+			headers: bearer("agent"),
+		});
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"INSERT INTO dreaming_passes (id,agent_id,mode,status) VALUES ('late-pass','agent-a','full','running')",
+			).run();
+			finalizeDreamingPassInDb(db, {
+				passId: "late-pass",
+				agentId: "agent-a",
+				mode: "full",
+				scopes: ["agent-a"],
+				transcriptManifestEntries: [
+					{
+						scope: "agent-a",
+						content: "User: delayed source",
+						source: { id: key, completed: true, project: "proj-a", harness: "codex", capturedAt },
+					},
+				],
+				tokensConsumed: 0,
+				inputTokens: null,
+				outputTokens: null,
+				cacheReadTokens: null,
+				cacheCreationTokens: null,
+				peakContextTokens: null,
+				totalCost: null,
+				applied: 0,
+				failed: 0,
+				summary: "fixture",
+				rejectedEvidence: [],
+				memoryHeadCommitInput: null,
+				hasBacklogByScope: [],
+				nextWatermarkByScope: [],
+			});
+		});
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT id FROM session_summaries WHERE session_key = ? AND agent_id = 'agent-a'").all(key),
+			),
+		).toEqual([]);
+	});
+
+	it("does not restore a deleted session through a late compaction summary", async () => {
+		const { getDbAccessor } = await import("../db-accessor");
+		const key = "late-compaction";
+		await transcripts.upsertSessionTranscriptAsync(key, "User: compaction evidence", "codex", "proj-a", "agent-a");
+		await teamApp().request(`http://localhost/api/sessions/${key}/transcript?agent_id=agent-a`, {
+			method: "DELETE",
+			headers: bearer("agent"),
+		});
+		const res = await teamApp().request("http://localhost/api/hooks/compaction-complete", {
+			method: "POST",
+			headers: bearer("agent"),
+			body: JSON.stringify({
+				harness: "codex",
+				agentId: "agent-a",
+				sessionKey: key,
+				project: "proj-a",
+				runtimePath: "plugin",
+				summary: "private late summary",
+			}),
+		});
+		expect(res.status).toBe(200);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) => ({
+				memories: db.prepare("SELECT id FROM memories WHERE source_id = ?").all(key),
+				summaries: db.prepare("SELECT id FROM session_summaries WHERE session_key = ?").all(key),
+			})),
+		).toEqual({ memories: [], summaries: [] });
+	});
+
+	it.each([false, true])("keeps start and end hooks advisory on owner timeout (deleted: %s)", async (deleted) => {
+		const runtime = await import("../db-owner-runtime");
+		const { DbOwnerDeadlineError } = await import("../db-owner-client");
+		const { appendCanonicalLiveTranscriptTurns } = await import("../transcript-capture");
+		const key = `advisory-hook-${deleted}`;
+		await transcripts.upsertSessionTranscriptAsync(key, "User: deleted evidence", "codex", "proj-a", "agent-a");
+		if (deleted)
+			await teamApp().request(`http://localhost/api/sessions/${key}/transcript?agent_id=agent-a`, {
+				method: "DELETE",
+				headers: bearer("agent"),
+			});
+		const original = runtime.dbOwnerTranscriptOperation;
+		const unavailable = spyOn(runtime, "dbOwnerTranscriptOperation").mockImplementation(
+			async <Result>(...args: Parameters<typeof original>): Promise<Result> => {
+				if (args[1].kind === "session_transcript_lifecycle") throw new DbOwnerDeadlineError("advisory-test");
+				return await original<Result>(...args);
+			},
+		);
+		try {
+			const headers = bearer("agent");
+			const app = teamApp();
+			const body = {
+				agentId: "agent-a",
+				sessionKey: key,
+				harness: "codex",
+				runtimePath: "plugin",
+				project: "proj-a",
+				claimOnly: true,
+			};
+			const start = await app.request("http://localhost/api/hooks/session-start", {
+				method: "POST",
+				headers,
+				body: JSON.stringify(body),
+			});
+			expect(start.status).toBe(200);
+			expect(
+				await appendCanonicalLiveTranscriptTurns({ basePath: agentsDir, ...body, userMessage: "must stay private" }),
+			).toBe(!deleted);
+			const end = await app.request("http://localhost/api/hooks/session-end", {
+				method: "POST",
+				headers,
+				body: JSON.stringify({
+					...body,
+					claimOnly: undefined,
+					reason: "session_shutdown",
+					transcript: "User: must stay private",
+				}),
+			});
+			expect(end.status).toBe(200);
+			expect(Boolean(await transcripts.getStoredSessionTranscriptInfoAsync(key, "agent-a"))).toBe(!deleted);
+		} finally {
+			unavailable.mockRestore();
+		}
+	});
+
+	it("rejects stale generation DELETE retries without touching the reused key", async () => {
+		const { updateTranscriptLifecycle } = await import("../session-transcript-lifecycle");
+		const { getDbAccessor } = await import("../db-accessor");
+		const path = "http://localhost/api/sessions/generation-retry/transcript?agent_id=agent-a";
+		const app = teamApp();
+		const headers = bearer("agent");
+		await transcripts.upsertSessionTranscriptAsync(
+			"generation-retry",
+			"User: old generation",
+			"codex",
+			"proj-a",
+			"agent-a",
+		);
+		const first = await app.request(`${path}&generation=1`, { method: "DELETE", headers });
+		expect(await first.json()).toMatchObject({ status: "complete", generation: 1 });
+		await new Promise((resolve) => setTimeout(resolve, 2));
+		await updateTranscriptLifecycle({ agentId: "agent-a", sessionKey: "generation-retry", action: "start" });
+		await transcripts.appendSessionTranscriptAsync({
+			sessionKey: "generation-retry",
+			transcript: "User: current generation",
+			harness: "codex",
+			project: "proj-a",
+			agentId: "agent-a",
+		});
+		const before = await getDbAccessor().withReadDbAsync((db) =>
+			db.prepare("SELECT * FROM session_transcript_deletions WHERE session_key = 'generation-retry'").get(),
+		);
+		const stale = await app.request(`${path}&generation=1`, { method: "DELETE", headers });
+		expect(stale.status).toBe(409);
+		expect(await stale.json()).toMatchObject({ generation: 2 });
+		expect(await transcripts.getStoredSessionTranscriptInfoAsync("generation-retry", "agent-a")).toMatchObject({
+			content: "User: current generation",
+		});
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT * FROM session_transcript_deletions WHERE session_key = 'generation-retry'").get(),
+			),
+		).toEqual(before);
+		for (const generation of ["", "0", "-1", "1.5", "2junk", "9007199254740992"]) {
+			expect((await app.request(`${path}&generation=${generation}`, { method: "DELETE", headers })).status).toBe(400);
+		}
+		const current = await app.request(path, { method: "DELETE", headers });
+		expect(await current.json()).toMatchObject({ status: "complete", generation: 2 });
+		expect(await transcripts.getStoredSessionTranscriptInfoAsync("generation-retry", "agent-a")).toBeUndefined();
 	});
 
 	it("reopens a deleted live key after canonical TTL finalization", async () => {
@@ -445,6 +804,73 @@ describe("session control permissions in team mode", () => {
 		});
 	});
 
+	it("keeps a live session unbypassed when its project does not match", async () => {
+		const { getDbAccessor } = await import("../db-accessor");
+		const key = "rejected-live";
+		await transcripts.upsertSessionTranscriptAsync(key, "User: project evidence", "codex", "proj-a", "agent-a");
+		presence.upsertAgentPresence({
+			sessionKey: key,
+			agentId: "agent-a",
+			harness: "codex",
+			project: "proj-a",
+			runtimePath: "plugin",
+			provider: "codex",
+		});
+		const res = await teamApp().request(
+			`http://localhost/api/sessions/${key}/transcript?agent_id=agent-a&project=proj-b`,
+			{ method: "DELETE", headers: bearer("agent") },
+		);
+		expect(res.status).toBe(404);
+		expect(tracker.isSessionBypassed(key, "agent-a")).toBe(false);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT 1 FROM session_transcript_deletions WHERE session_key = ?").get(key),
+			),
+		).toBeNull();
+		expect(await transcripts.getStoredSessionTranscriptInfoAsync(key, "agent-a")).toMatchObject({
+			content: "User: project evidence",
+		});
+	});
+
+	it("tracks already-forgotten summary-only memories before removing their summary", async () => {
+		const { getDbAccessor } = await import("../db-accessor");
+		const key = "summary-only-delete";
+		await transcripts.upsertSessionTranscriptAsync(key, "User: summary evidence", "codex", "proj-a", "agent-a");
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				"INSERT INTO session_summaries (id,kind,session_key,agent_id,content,earliest_at,latest_at,created_at) VALUES ('only-summary','session',?,'agent-a','private summary',datetime('now'),datetime('now'),datetime('now'))",
+			).run(key);
+			db.prepare(
+				"INSERT INTO memories (id,content,agent_id,is_deleted,created_at,updated_at) VALUES ('already-forgotten','private memory','agent-a',1,datetime('now'),datetime('now'))",
+			).run();
+			db.prepare(
+				"INSERT INTO derived_memory_sources (derived_memory_id,source_kind,source_id,agent_id,created_at) VALUES ('already-forgotten','summary','only-summary','agent-a',datetime('now'))",
+			).run();
+		});
+		const url = `http://localhost/api/sessions/${key}/transcript?agent_id=agent-a`;
+		expect(await (await teamApp().request(url, { method: "DELETE", headers: bearer("agent") })).json()).toMatchObject({
+			status: "complete",
+			counts: { memories: 1, summaries: 1 },
+		});
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db
+					.prepare(
+						"SELECT outcome FROM session_transcript_deleted_sources WHERE kind = 'memory' AND id = 'already-forgotten'",
+					)
+					.get(),
+			),
+		).toEqual({ outcome: "deleted" });
+		expect(
+			await (await teamApp().request(`${url}&purge=hard`, { method: "DELETE", headers: bearer("admin") })).json(),
+		).toMatchObject({ status: "complete" });
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT 1 FROM memories WHERE id = 'already-forgotten'").get(),
+			),
+		).toBeNull();
+	});
+
 	it("keeps deletion admission fail closed without revealing another scope", async () => {
 		const { getDbAccessor } = await import("../db-accessor");
 		await transcripts.upsertSessionTranscriptAsync("scope-delete", "User: protected", "codex", "proj-a", "agent-a");
@@ -473,6 +899,73 @@ describe("session control permissions in team mode", () => {
 				db.prepare("SELECT 1 FROM session_transcript_deletions WHERE session_key = 'scope-delete'").get(),
 			),
 		).toBeNull();
+	});
+
+	it.each(["team", "hybrid"] as const)("honors explicit delete and hard-purge permissions in %s mode", async (mode) => {
+		writeAuthConfig(mode);
+		state.reloadAuthState(agentsDir);
+		try {
+			const app = teamApp();
+			for (const [index, permissions, hard, status] of [
+				[0, ["admin"], false, 403],
+				[1, ["admin"], true, 200],
+				[2, ["forget"], false, 200],
+				[3, ["forget"], true, 403],
+				[4, ["forget", "admin"], true, 200],
+			] as const) {
+				const key = `explicit-${mode}-${index}`;
+				await transcripts.upsertSessionTranscriptAsync(key, "User: permission evidence", "codex", "proj-a", "agent-a");
+				const res = await app.request(
+					`http://localhost/api/sessions/${key}/transcript?agent_id=agent-a${hard ? "&purge=hard" : ""}`,
+					{ method: "DELETE", headers: bearer("admin", { permissions }) },
+				);
+				expect({ permissions, hard, status: res.status }).toEqual({ permissions, hard, status });
+				expect(Boolean(await transcripts.getStoredSessionTranscriptInfoAsync(key, "agent-a"))).toBe(status !== 200);
+			}
+		} finally {
+			writeAuthConfig("team");
+			state.reloadAuthState(agentsDir);
+		}
+	});
+
+	it("requires explicit identity and an admin hard-purge credential in hybrid mode", async () => {
+		await transcripts.upsertSessionTranscriptAsync(
+			"hybrid-delete",
+			"User: hybrid evidence",
+			"codex",
+			"proj-a",
+			"agent-a",
+		);
+		writeAuthConfig("hybrid");
+		state.reloadAuthState(agentsDir);
+		try {
+			const app = teamApp();
+			const url = "http://localhost/api/sessions/hybrid-delete/transcript";
+			const local = { incoming: { socket: { remoteAddress: "127.0.0.1" } } };
+			expect((await app.request(url, { method: "DELETE" }, local)).status).toBe(400);
+			expect((await app.request(`${url}?agent_id=agent-a&purge=hard`, { method: "DELETE" }, local)).status).toBe(403);
+			expect((await app.request(`${url}?agent_id=agent-a`, { method: "DELETE" })).status).toBe(401);
+			expect(
+				(await app.request(`${url}?agent_id=agent-a&purge=hard`, { method: "DELETE", headers: bearer("agent") }, local))
+					.status,
+			).toBe(403);
+			expect(
+				(await app.request(`${url}?agent_id=agent-b`, { method: "DELETE", headers: bearer("agent") }, local)).status,
+			).toBe(404);
+			expect(await transcripts.getStoredSessionTranscriptInfoAsync("hybrid-delete", "agent-a")).toMatchObject({
+				content: "User: hybrid evidence",
+			});
+			const allowed = await app.request(
+				`${url}?agent_id=agent-a&purge=hard`,
+				{ method: "DELETE", headers: bearer("admin") },
+				local,
+			);
+			expect(allowed.status).toBe(200);
+			expect(await allowed.json()).toMatchObject({ status: "complete", counts: { transcripts: 1 } });
+		} finally {
+			writeAuthConfig("team");
+			state.reloadAuthState(agentsDir);
+		}
 	});
 
 	it("upgrades soft deletion to an admin purge against the migrated schema without deleting pinned memories", async () => {
@@ -527,6 +1020,108 @@ describe("session control permissions in team mode", () => {
 			pinned: { pinned: 1, is_deleted: 0 },
 			fts: [],
 		});
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"returns pending for a FIFO cleanup target without blocking the owner",
+		async () => {
+			const { canonicalTranscriptPath } = await import("../transcript-jsonl");
+			const { constants, openSync, closeSync, unlinkSync } = await import("node:fs");
+			const path = canonicalTranscriptPath(agentsDir, "fifo-harness");
+			mkdirSync(join(path, ".."), { recursive: true });
+			expect(Bun.spawnSync(["mkfifo", path]).exitCode).toBe(0);
+			await transcripts.upsertSessionTranscriptAsync(
+				"fifo-delete",
+				"User: FIFO evidence",
+				"fifo-harness",
+				"proj-a",
+				"agent-a",
+			);
+			let settled = false;
+			const request = Promise.resolve(
+				teamApp().request("http://localhost/api/sessions/fifo-delete/transcript?agent_id=agent-a", {
+					method: "DELETE",
+					headers: bearer("agent"),
+				}),
+			).then((res) => {
+				settled = true;
+				return res;
+			});
+			try {
+				await new Promise((resolve) => setTimeout(resolve, 800));
+				expect(settled).toBe(true);
+				expect(await (await request).json()).toMatchObject({
+					status: "pending",
+					pendingReason: expect.stringContaining("regular file"),
+				});
+			} finally {
+				const fd = openSync(path, constants.O_RDWR | constants.O_NONBLOCK);
+				await request;
+				closeSync(fd);
+				unlinkSync(path);
+			}
+		},
+	);
+
+	it("releases the database owner promptly when capture contends on a transcript lock", async () => {
+		const { appendCanonicalLiveTranscriptTurns } = await import("../transcript-capture");
+		const { withTranscriptFileLock, canonicalTranscriptPath } = await import("../transcript-jsonl");
+		const { getDbAccessor } = await import("../db-accessor");
+		const identity = {
+			basePath: agentsDir,
+			agentId: "agent-a",
+			sessionKey: "capture-lock",
+			harness: "capture-lock",
+			project: "proj-a",
+			userMessage: "retry this new turn",
+		};
+		await transcripts.upsertSessionTranscriptAsync(
+			identity.sessionKey,
+			"User: before lock",
+			identity.harness,
+			identity.project,
+			identity.agentId,
+		);
+		let release = (): void => {};
+		let acquired = (): void => {};
+		const ready = new Promise<void>((resolve) => {
+			acquired = resolve;
+		});
+		const held = withTranscriptFileLock(canonicalTranscriptPath(agentsDir, identity.harness), async () => {
+			acquired();
+			await new Promise<void>((resolve) => {
+				release = resolve;
+			});
+		});
+		await ready;
+		let settled = false;
+		const capture = appendCanonicalLiveTranscriptTurns(identity).then(
+			() => {
+				settled = true;
+				return "written";
+			},
+			(error: unknown) => {
+				settled = true;
+				return error;
+			},
+		);
+		try {
+			await new Promise((resolve) => setTimeout(resolve, 800));
+			expect(settled).toBe(true);
+			expect(await capture).toMatchObject({
+				name: "TranscriptCapturePendingError",
+				status: "pending",
+				message: "Timed out waiting for transcript lock",
+			});
+			expect(await getDbAccessor().withReadDbAsync((db) => db.prepare("SELECT 1 AS ready").get())).toEqual({
+				ready: 1,
+			});
+		} finally {
+			release();
+			await held;
+			await capture;
+		}
+		expect(await appendCanonicalLiveTranscriptTurns(identity)).toBe(true);
 	});
 
 	it("returns pending while a live writer holds its transcript lock and resumes afterward", async () => {
@@ -650,9 +1245,7 @@ describe("session control permissions in team mode", () => {
 		});
 		expect(start.status).toBe(200);
 		const reused = await getDbAccessor().withWriteTxAsync((db) =>
-			commitCompletedTranscriptBatchInTx(db, [
-				{ ...commit, sourceRecordId: "third-record", capturedAt: new Date().toISOString() },
-			]),
+			commitCompletedTranscriptBatchInTx(db, [{ ...commit, sourceRecordId: "third-record" }]),
 		);
 		expect(reused[0]?.outcome).toBe("session_transcript_deleted");
 		expect(await transcripts.getStoredSessionTranscriptInfoAsync(commit.canonicalKey, "agent-a")).toBeUndefined();

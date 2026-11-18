@@ -79,16 +79,40 @@ export async function updateTranscriptLifecycle(
 	return result;
 }
 
+export interface TranscriptCapturePending {
+	readonly status: "pending";
+	readonly pendingReason: string;
+}
+
+export class TranscriptCapturePendingError extends Error {
+	readonly status = "pending";
+	constructor(reason: string) {
+		super(reason);
+		this.name = "TranscriptCapturePendingError";
+	}
+}
+
 export async function captureTranscriptOwned<Result>(input: TranscriptCaptureInput): Promise<Result> {
 	const owner = await getDbOwnerForAccessor(getDbAccessor());
-	return await dbOwnerTranscriptOperation<Result>(
+	const result = await dbOwnerTranscriptOperation<Result>(
 		owner,
 		{ kind: "session_transcript_capture", input },
 		{ operation: "transcripts.capture", deadlineMs: 30_000 },
 	);
+	if (
+		typeof result === "object" &&
+		result !== null &&
+		"status" in result &&
+		result.status === "pending" &&
+		"pendingReason" in result &&
+		typeof result.pendingReason === "string"
+	)
+		throw new TranscriptCapturePendingError(result.pendingReason);
+	return result;
 }
 
 export interface TranscriptDeleteInput {
+	readonly generation?: number;
 	readonly basePath: string;
 	readonly sessionKey: string;
 	readonly agentId: string;
@@ -100,6 +124,7 @@ export interface TranscriptDeleteInput {
 
 export type TranscriptDeleteResult =
 	| { readonly status: "not_found" }
+	| { readonly status: "conflict"; readonly generation: number }
 	| {
 			readonly status: "complete" | "pending";
 			readonly counts: Readonly<Record<string, number>>;
@@ -119,7 +144,7 @@ export async function deleteSessionTranscript(
 		{ kind: "session_transcript_delete", input: { ...input, basePath: resolveDefaultBasePath() } },
 		{ operation: "transcripts.delete", lane: "write", deadlineMs: 10_000, signal },
 	);
-	if (result.status !== "not_found" && result.bypassed) {
+	if ((result.status === "complete" || result.status === "pending") && result.bypassed) {
 		bypassSession(input.sessionKey, { allowUnknown: true, untilEnd: true }, input.agentId);
 	}
 	return result;

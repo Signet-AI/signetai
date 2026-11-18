@@ -92,12 +92,15 @@ A scope can restrict a credential by agent, project, or user. Use the narrowest 
 
 ### Transcript deletion authorization
 
-`DELETE /api/sessions/:key/transcript` requires `forget` permission and an
+`DELETE /api/sessions/:key/transcript` requires `forget` permission in soft mode
+or `admin` permission for `?purge=hard`, and an
 explicit agent identity outside local mode. An agent-scoped credential supplies
 that identity; an unscoped credential must send it. Session ownership and project
 scope are checked before capture is bypassed or any evidence changes. Missing
 and out-of-scope sessions both return `404`. Hard purge (`?purge=hard`) requires
-an authenticated admin in both team and hybrid modes, including localhost.
+an authenticated admin role in both team and hybrid modes, including localhost.
+An admin credential restricted to `["admin"]` may hard-purge but may not soft-delete;
+a credential restricted to `["forget"]` may soft-delete but may not hard-purge.
 Pinned memories are retained in either mode. See the
 [API contract](/api/sessions-hooks/#delete-apisessionskeytranscript).
 

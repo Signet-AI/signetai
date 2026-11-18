@@ -1,5 +1,4 @@
 import { logger } from "./logger";
-import { restoreTranscriptBypasses } from "./session-transcript-lifecycle";
 import type { PersistedSessionClaim, SessionClaimStore } from "./session-claims";
 import {
 	hasSessionEndTelemetry,
@@ -653,9 +652,7 @@ export async function restorePersistedSessionsAsync(): Promise<{
 }> {
 	if (!claimStore) return { active: 0, expired: 0, ended: 0 };
 	const rows = claimStore.listAsync ? await claimStore.listAsync() : claimStore.list();
-	const restored = await restorePersistedSessionRowsAsync(rows);
-	await restoreTranscriptBypasses();
-	return restored;
+	return await restorePersistedSessionRowsAsync(rows);
 }
 export function stopSessionCleanup(): void {
 	cleanupStarted = false;

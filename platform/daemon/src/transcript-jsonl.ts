@@ -499,6 +499,13 @@ function lockCanBeReaped(path: string, now: number): boolean {
 	}
 }
 
+export class TranscriptLockTimeoutError extends Error {
+	constructor() {
+		super("Timed out waiting for transcript lock");
+		this.name = "TranscriptLockTimeoutError";
+	}
+}
+
 async function acquireTranscriptFileLock(
 	path: string,
 	timeoutMs: number,
@@ -506,7 +513,7 @@ async function acquireTranscriptFileLock(
 	const lockPath = `${path}.lock`;
 	const deadline = performance.now() + timeoutMs;
 	while (true) {
-		if (performance.now() >= deadline) throw new Error("Timed out waiting for transcript lock");
+		if (performance.now() >= deadline) throw new TranscriptLockTimeoutError();
 		const token = randomUUID();
 		try {
 			mkdirSync(lockPath);
@@ -813,11 +820,12 @@ export function writeCanonicalTranscriptSnapshot(
 		readonly transcript: string;
 		readonly onLegacySessionReplaced?: (legacyTurns: number, sourceTurns: number) => void;
 	},
+	options?: { readonly timeoutMs?: number },
 ): Promise<readonly CanonicalTranscriptRecord[] | null> {
 	const turns = transcriptTextToTurns(input.transcript);
 	if (turns.length === 0) return Promise.resolve(null);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
-	return withTranscriptFileLock(path, async () => {
+	const write = async (): Promise<readonly CanonicalTranscriptRecord[] | null> => {
 		const next = turns
 			.map((turn, index) => makeRecord(input, turn, index + 1))
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
@@ -912,16 +920,18 @@ export function writeCanonicalTranscriptSnapshot(
 				if (!renamed) await rm(tmpPath, { force: true });
 			}
 		}
-	});
+	};
+	return withTranscriptFileLock(path, write, options);
 }
 
 export function appendCanonicalTranscriptTurns(
 	input: TranscriptIdentity & { readonly turns: readonly TranscriptTurn[] },
+	options?: { readonly timeoutMs?: number },
 ): Promise<boolean> {
 	const turns = input.turns.filter((turn) => cleanTurnContent(turn.content).length > 0);
 	if (turns.length === 0) return Promise.resolve(false);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
-	return withTranscriptFileLock(path, async () => {
+	const write = async (): Promise<boolean> => {
 		const appended = !hasTrailingTurns(readTailRecords(path, tailScanBytes(turns)), input, turns);
 		if (appended) {
 			const entries = await loadSessionSeqIndex(path);
@@ -934,19 +944,21 @@ export function appendCanonicalTranscriptTurns(
 		await syncPath(path);
 		await syncPath(dirname(path));
 		return appended;
-	});
+	};
+	return withTranscriptFileLock(path, write, options);
 }
 
 export function appendCanonicalTranscriptSnapshotIfMissing(
 	input: TranscriptIdentity & { readonly transcript: string },
 	knownSessionKeys?: Set<string>,
+	options?: { readonly timeoutMs?: number },
 ): Promise<string | null> {
 	const turns = transcriptTextToTurns(input.transcript);
 	if (turns.length === 0) return Promise.resolve(null);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	const key = sessionSeqCacheKey(input);
 	if (knownSessionKeys?.has(key)) return Promise.resolve(path);
-	return withTranscriptFileLock(path, async () => {
+	const write = async (): Promise<string | null> => {
 		const entries = await loadSessionSeqIndex(path);
 		if (entries.has(key)) return path;
 		const next = turns
@@ -956,15 +968,17 @@ export function appendCanonicalTranscriptSnapshotIfMissing(
 		await appendIndexedRecords(path, entries, next);
 		knownSessionKeys?.add(key);
 		return path;
-	});
+	};
+	return withTranscriptFileLock(path, write, options);
 }
 
 export function rewriteReplacingLiveOnlySessions(
 	jsonlPath: string,
 	replacements: ReadonlyMap<string, { readonly identity: TranscriptIdentity; readonly transcript: string }>,
+	options?: { readonly timeoutMs?: number },
 ): Promise<number> {
 	if (replacements.size === 0 || !existsSync(jsonlPath)) return Promise.resolve(0);
-	return withTranscriptFileLock(jsonlPath, async () => {
+	const write = async (): Promise<number> => {
 		const healedKeys = new Set<string>();
 		const prescan = createInterface({
 			input: createReadStream(jsonlPath, { encoding: "utf8" }),
@@ -1055,7 +1069,8 @@ export function rewriteReplacingLiveOnlySessions(
 			rmSync(tmpPath, { force: true });
 			throw error;
 		}
-	});
+	};
+	return withTranscriptFileLock(jsonlPath, write, options);
 }
 
 export function inferTranscriptSourceFormat(raw: string): TranscriptSourceFormat {
