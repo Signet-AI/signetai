@@ -456,7 +456,8 @@ the context resets (clear or compaction). A repeat entity hit that only finds
 already-delivered results returns an empty `inject`. If the claim cannot be
 recorded, because the ledger is unavailable or the prompt-submit deadline
 (`embedding.promptSubmitTimeoutMs`) passed while the claim was queued, nothing is
-injected; Signet never delivers a memory it has not recorded as delivered.
+injected; Signet never delivers a memory it has not recorded as delivered. A
+request without a `sessionKey` has no ledger to claim in, so it injects nothing.
 
 When the prompt is low-signal, the hook skips automatic recall before entity
 matching and preserves the stable per-prompt context contract (an empty

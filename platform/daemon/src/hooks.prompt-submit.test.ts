@@ -404,6 +404,17 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 		expect(claims).toEqual({ count: 0 });
 	});
 
+	it("injects nothing without a session to claim the delivery in", async () => {
+		seedEntityContext();
+
+		const first = await submit("How should Signet architecture handle prompt context?", " ");
+		const second = await submit("How should Signet architecture handle prompt context?", " ");
+
+		for (const result of [first, second]) {
+			expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-session" });
+		}
+	});
+
 	it("stays silent when the entity is known but no recall result clears the gate", async () => {
 		seedEntityContext();
 		recallRows = [{ id: "mem-weak", content: "Weakly related marketing note.", score: 0.4 }];
