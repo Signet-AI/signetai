@@ -53,6 +53,9 @@ stop() {
 	while kill -0 -- "-$DAEMON" 2>/dev/null; do sleep 1; done
 }
 trap stop EXIT
+trap "exit 143" TERM
+trap "exit 130" INT
+trap "exit 129" HUP
 
 for _ in $(seq 1 120); do
 	curl -s -m 2 "127.0.0.1:$PORT/health" | grep -q '"healthy"' && break
@@ -85,7 +88,7 @@ done
 [ -n "${PROBE:-}" ] && python3 "$HERE/probe.py" "$RUN" "$PORT" --dir "$DIR" --agent-id "$AGENT_ID" 2>&1 | tail -1
 
 stop
-trap - EXIT
+trap - EXIT TERM INT HUP
 cat $(ls -tr "$WS"/runtime/logs/signet-*.log) > "$DIR/daemon-log-$RUN.ndjson"
 sqlite3 -readonly -json "$WS/data/signet.db" "SELECT session_key, agent_id, context_epoch, item_kind, item_id, surface, mode, created_at FROM session_recall_events WHERE session_key LIKE '$RUN-%'" > "$DIR/ledger-$RUN.json"
 rm -rf "$WS"
