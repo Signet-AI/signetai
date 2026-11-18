@@ -407,6 +407,8 @@ function filterSurfacesByCapabilities(
 	};
 }
 
+const RETIRED_CAPABILITIES = new Map([["prompt:contribute:user-prompt-submit", "prompt:contribute:session-start"]]);
+
 function parseStore(value: unknown): PluginRegistryStoreV1 {
 	if (!isRecord(value) || value.version !== 1 || !isRecord(value.plugins)) {
 		throw new Error("expected plugin registry version 1 with a plugins object");
@@ -419,7 +421,9 @@ function parseStore(value: unknown): PluginRegistryStoreV1 {
 		plugins[id] = {
 			...raw,
 			enabled: typeof raw.enabled === "boolean" ? raw.enabled : undefined,
-			grantedCapabilities: parseStringArray(raw.grantedCapabilities),
+			grantedCapabilities: parseStringArray(raw.grantedCapabilities)?.map(
+				(capability) => RETIRED_CAPABILITIES.get(capability) ?? capability,
+			),
 			installedAt: typeof raw.installedAt === "string" ? raw.installedAt : undefined,
 			updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : undefined,
 		};

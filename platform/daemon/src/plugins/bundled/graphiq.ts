@@ -12,7 +12,7 @@ const GRAPHIQ_CAPABILITIES = [
 	"code:doctor",
 	"code:dead-code",
 	"code:clear",
-	"prompt:contribute:user-prompt-submit",
+	"prompt:contribute:session-start",
 	"mcp:tool",
 	"cli:command",
 ] as const;
@@ -143,12 +143,12 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 	promptContributions: [
 		{
 			id: "signet.graphiq.code-retrieval-guidance",
-			target: "user-prompt-submit",
+			target: "session-start",
 			mode: "context",
 			priority: 430,
 			maxTokens: 100,
 			summary: "Advise agents to use GraphIQ for code structure and implementation context",
-			requiredCapabilities: ["prompt:contribute:user-prompt-submit"],
+			requiredCapabilities: ["prompt:contribute:session-start"],
 		},
 	],
 };
@@ -189,7 +189,7 @@ export const signetGraphiqManifest: PluginManifestV1 = {
 			"code:doctor": { summary: "Diagnose or repair active code index artifacts" },
 			"code:dead-code": { summary: "Detect unreachable code in indexed projects" },
 			"code:clear": { summary: "Delete the active index and create a fresh empty database" },
-			"prompt:contribute:user-prompt-submit": {
+			"prompt:contribute:session-start": {
 				summary: "Contribute bounded guidance for code retrieval decisions",
 			},
 			"mcp:tool": { summary: "Expose generic code retrieval MCP tools" },
@@ -200,7 +200,7 @@ export const signetGraphiqManifest: PluginManifestV1 = {
 		{
 			id: "signet.graphiq.code-retrieval-guidance",
 			pluginId: SIGNET_GRAPHIQ_PLUGIN_ID,
-			target: "user-prompt-submit",
+			target: "session-start",
 			mode: "context",
 			priority: 430,
 			maxTokens: 100,

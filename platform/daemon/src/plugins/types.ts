@@ -3,7 +3,7 @@ export type PluginRuntimeKindV1 = "bundled-module" | "sidecar" | "wasi" | "host-
 export type PluginTrustTierV1 = "core" | "verified" | "community" | "local-dev";
 export type PluginSourceV1 = "bundled" | "local" | "marketplace";
 export type PluginLifecycleStateV1 = "installed" | "blocked" | "active" | "degraded" | "disabled";
-export type PluginPromptTargetV1 = "system" | "session-start" | "user-prompt-submit";
+export type PluginPromptTargetV1 = "system" | "session-start";
 export type PluginPromptModeV1 = "append" | "context";
 export type PluginHealthStatusV1 = "healthy" | "degraded" | "unhealthy";
 

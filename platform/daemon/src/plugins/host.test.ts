@@ -118,9 +118,43 @@ describe("PluginHostV1", () => {
 		const diagnostics = host.diagnostics(SIGNET_SECRETS_PLUGIN_ID);
 		expect(diagnostics?.promptContributionDiagnostics[0]?.included).toBe(false);
 		expect(diagnostics?.promptContributionDiagnostics[0]?.missingCapabilities).toEqual([
-			"prompt:contribute:user-prompt-submit",
+			"prompt:contribute:session-start",
 		]);
 		expect(host.checkCapabilities(SIGNET_SECRETS_PLUGIN_ID, ["secrets:write"]).status).toBe("capability-missing");
+	});
+
+	test("translates the retired per-prompt contribution grant to session start", () => {
+		const path = makeStoragePath();
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(
+			path,
+			JSON.stringify({
+				version: 1,
+				plugins: {
+					[SIGNET_SECRETS_PLUGIN_ID]: {
+						enabled: true,
+						grantedCapabilities: ["secrets:list", "prompt:contribute:user-prompt-submit"],
+						installedAt: "2026-04-01T00:00:00.000Z",
+						updatedAt: "2026-04-01T00:00:00.000Z",
+					},
+				},
+			}),
+		);
+
+		const host = new PluginHostV1({
+			storagePath: path,
+			auditPath: null,
+			corePluginIds: [SIGNET_SECRETS_PLUGIN_ID],
+			now: () => new Date("2026-04-16T12:00:00.000Z"),
+		});
+		const record = host.discover(signetSecretsManifest, {
+			grantedCapabilities: signetSecretsManifest.capabilities,
+		});
+
+		expect(record.grantedCapabilities).toEqual(["prompt:contribute:session-start", "secrets:list"]);
+		expect(host.promptContributions({ target: "session-start" }).map((entry) => entry.id)).toEqual([
+			"signet.secrets.credential-guidance",
+		]);
 	});
 
 	test("preserves explicit empty persisted grants during discovery", () => {
@@ -167,12 +201,12 @@ describe("PluginHostV1", () => {
 				promptContributions: [
 					{
 						id: "signet.secrets.credential-guidance",
-						target: "user-prompt-submit",
+						target: "session-start",
 						mode: "context",
 						priority: 420,
 						maxTokens: 2,
 						summary: "Tiny prompt budget",
-						requiredCapabilities: ["prompt:contribute:user-prompt-submit"],
+						requiredCapabilities: ["prompt:contribute:session-start"],
 					},
 				],
 			},
@@ -180,7 +214,7 @@ describe("PluginHostV1", () => {
 				{
 					id: "signet.secrets.credential-guidance",
 					pluginId: SIGNET_SECRETS_PLUGIN_ID,
-					target: "user-prompt-submit",
+					target: "session-start",
 					mode: "context",
 					priority: 420,
 					maxTokens: 2,

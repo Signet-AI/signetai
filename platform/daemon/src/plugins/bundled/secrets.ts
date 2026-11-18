@@ -8,7 +8,7 @@ const SECRET_CAPABILITIES = [
 	"secrets:exec",
 	"secrets:providers:list",
 	"secrets:providers:configure",
-	"prompt:contribute:user-prompt-submit",
+	"prompt:contribute:session-start",
 	"mcp:tool",
 	"cli:command",
 	"dashboard:panel",
@@ -230,12 +230,12 @@ const surfaces: PluginSurfaceDeclarationsV1 = {
 	promptContributions: [
 		{
 			id: "signet.secrets.credential-guidance",
-			target: "user-prompt-submit",
+			target: "session-start",
 			mode: "context",
 			priority: 420,
 			maxTokens: 80,
 			summary: "Advise agents to keep reusable credentials in Signet Secrets",
-			requiredCapabilities: ["prompt:contribute:user-prompt-submit"],
+			requiredCapabilities: ["prompt:contribute:session-start"],
 		},
 	],
 };
@@ -278,7 +278,7 @@ export const signetSecretsManifest: PluginManifestV1 = {
 			"secrets:exec": { summary: "Resolve secrets only for daemon-owned command injection" },
 			"secrets:providers:list": { summary: "List configured compatibility secret providers" },
 			"secrets:providers:configure": { summary: "Configure compatibility secret providers" },
-			"prompt:contribute:user-prompt-submit": { summary: "Contribute bounded secret-safety guidance to prompt submit" },
+			"prompt:contribute:session-start": { summary: "Contribute bounded secret-safety guidance at session start" },
 			"mcp:tool": { summary: "Expose value-safe secret MCP tools" },
 			"cli:command": { summary: "Expose Signet secret CLI commands" },
 			"dashboard:panel": { summary: "Expose Secrets settings panel metadata" },
@@ -290,7 +290,7 @@ export const signetSecretsManifest: PluginManifestV1 = {
 		{
 			id: "signet.secrets.credential-guidance",
 			pluginId: SIGNET_SECRETS_PLUGIN_ID,
-			target: "user-prompt-submit",
+			target: "session-start",
 			mode: "context",
 			priority: 420,
 			maxTokens: 80,
