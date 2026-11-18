@@ -91,6 +91,7 @@ export interface ModifyMemoryTxResult {
 }
 
 export interface ForgetMemoryTxInput {
+	readonly preservePinnedDerived?: boolean;
 	memoryId: string;
 	reason: string;
 	changedBy: string;
@@ -227,12 +228,14 @@ function invalidateDerivedMemoriesForMemoryInTx(
 	memoryId: string,
 	agentId: string,
 	changedAt: string,
+	preservePinned = false,
 ): void {
 	markDerivedMemoriesStaleForSourceInTx(db, {
 		sourceKind: "memory",
 		sourceId: memoryId,
 		agentId,
 		staleAt: changedAt,
+		preservePinned,
 	});
 }
 export function txIngestEnvelope(db: WriteDb, mem: IngestEnvelope): string {
@@ -575,7 +578,13 @@ export function txForgetMemory(db: WriteDb, input: ForgetMemoryTxInput): ForgetM
 		input.changedAt,
 		input.memoryId,
 	);
-	invalidateDerivedMemoriesForMemoryInTx(db, input.memoryId, existing.agent_id ?? "default", input.changedAt);
+	invalidateDerivedMemoriesForMemoryInTx(
+		db,
+		input.memoryId,
+		existing.agent_id ?? "default",
+		input.changedAt,
+		input.preservePinnedDerived,
+	);
 
 	insertHistoryEvent(db, {
 		memoryId: input.memoryId,

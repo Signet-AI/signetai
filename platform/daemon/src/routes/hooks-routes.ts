@@ -3,6 +3,9 @@ import { existsSync } from "node:fs";
 import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
 import type { Context } from "hono";
 import { updateTranscriptLifecycle } from "../session-transcript-lifecycle";
+import { admitSessionTranscriptInDb } from "../session-transcripts";
+import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../db-owner-client";
+
 import type { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
@@ -137,6 +140,28 @@ import {
 	validateSessionControl,
 } from "./utils";
 import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../write-pressure";
+
+async function checkTranscriptLifecycle(input: Parameters<typeof updateTranscriptLifecycle>[0]): Promise<void> {
+	try {
+		await updateTranscriptLifecycle(input);
+	} catch (error) {
+		if (
+			!(
+				error instanceof DbOwnerDiedError ||
+				error instanceof DbOwnerAdmissionError ||
+				(error instanceof DbOwnerError &&
+					["DB_OWNER_DEADLINE", "DB_OWNER_CLOSED", "DB_OWNER_START_TIMEOUT", "DB_OWNER_WRITES_BLOCKED"].includes(
+						String(error.code),
+					))
+			)
+		)
+			throw error;
+		logger.warn("hooks", "Transcript lifecycle check unavailable; owner admission still enforces deletion", {
+			action: input.action,
+			error: error.message,
+		});
+	}
+}
 
 export function stampHarness(harness: string | undefined): void {
 	if (harness) {
@@ -485,7 +510,7 @@ function registerSessionStart(app: Hono): void {
 			}
 
 			if (body.sessionKey)
-				await updateTranscriptLifecycle({
+				await checkTranscriptLifecycle({
 					agentId: scopedAgent.agentId,
 					sessionKey: normalizeSessionKey(body.sessionKey),
 					action: "start",
@@ -980,9 +1005,9 @@ function registerSessionEnd(app: Hono): void {
 			if (duplicate) return c.json(duplicate);
 
 			if (sessionKey)
-				await updateTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "status" });
+				await checkTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "status" });
 			if (sessionKey && isSessionBypassed(sessionKey, agentId)) {
-				await updateTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "end" });
+				await checkTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "end" });
 				markSessionEnded(sessionKey, runtimePath, agentId);
 				removeAgentPresence(sessionKey);
 				return c.json({ memoriesSaved: 0, bypassed: true });
@@ -997,7 +1022,7 @@ function registerSessionEnd(app: Hono): void {
 						? consumeSessionEndWake(agentId, sessionKey)
 						: wasWokenSince(agentId, sessionKey, wakeSince));
 				if (sessionKey && !woken) {
-					await updateTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "end" });
+					await checkTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "end" });
 					markSessionEnded(sessionKey, runtimePath, agentId);
 					removeAgentPresence(sessionKey);
 				}
@@ -1512,7 +1537,9 @@ function registerCompactionComplete(app: Hono): void {
 			const summaryId = noise ? null : crypto.randomUUID();
 			if (summaryId) {
 				// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-				getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+				const admitted = getDbAccessor().withWriteTx((db: import("../db-accessor").WriteDb) => {
+					if (!admitSessionTranscriptInDb(db, { agentId, sessionKey: body.sessionKey ?? null, capturedAt: now }))
+						return false;
 					db.prepare(
 						`INSERT INTO memories (
 							id, content, type, importance, source_id, source_type,
@@ -1540,9 +1567,7 @@ function registerCompactionComplete(app: Hono): void {
 					const table = db
 						.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`)
 						.get();
-					if (!table) {
-						return;
-					}
+					if (!table) return true;
 					const nodeId = body.sessionKey ? `${body.sessionKey}:compaction:${Date.parse(now)}` : crypto.randomUUID();
 					db.prepare(
 						`INSERT OR REPLACE INTO session_summaries (
@@ -1575,7 +1600,9 @@ function registerCompactionComplete(app: Hono): void {
 						sourceRef: body.sessionKey ?? null,
 						harness: body.harness,
 					});
+					return true;
 				}, "db:hooks.session-summary.memory.write");
+				if (!admitted) return c.json({ success: true, bypassed: true });
 
 				try {
 					await writeCompactionArtifact({

@@ -141,10 +141,14 @@ A browser session lasts `auth.sessionTokenTtlSeconds`, and never longer than the
 An agent with `forget` permission can delete its own session transcript through
 `DELETE /api/sessions/:key/transcript`. Agent and project scope still apply;
 this does not grant access to another agent's sessions. Hard purge requires an
-admin credential. Pinned memories are retained, and memories backed by other
+admin credential with `admin` permission; it does not also require `forget`.
+Pinned memories remain recallable, and memories backed by other
 sessions keep their other source edges and are queued for Dreaming review.
 Follow the [API contract](/api/sessions-hooks/#delete-apisessionskeytranscript)
-until the response says `complete`; `pending` requires another DELETE.
+until the response says `complete`; `pending` requires another DELETE. Include
+the returned `generation` on retries to avoid deleting a reused session key.
+Harness originals and user backups remain in either mode. Hard purge does not
+securely erase SQLite free pages.
 
 ## Remove someone's access
 

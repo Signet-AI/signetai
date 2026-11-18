@@ -8,11 +8,13 @@ import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-comm
 import { writeTranscriptAudit, type TranscriptAuditWrite } from "./transcript-audit";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 import { txForgetMemory } from "./transactions";
+import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { redactTranscriptFileBatch, type TranscriptFileCheckpoint } from "./session-transcript-files";
 import { purgeMemoryEmbeddingsInTx, purgeMemoryInTx } from "./source-purge-tx";
 import { captureTranscriptOwned } from "./session-transcript-lifecycle";
 import type {
 	TranscriptCaptureInput,
+	TranscriptCapturePending,
 	TranscriptDeleteInput,
 	TranscriptDeleteResult,
 	TranscriptLifecycleInput,
@@ -25,6 +27,7 @@ import { normalizeSessionKey } from "./session-end-state";
 import { sanitizeFtsQuery } from "./memory-search";
 import {
 	type TranscriptIdentity,
+	TranscriptLockTimeoutError,
 	appendCanonicalTranscriptTurns,
 	writeCanonicalTranscriptSnapshot,
 	type TranscriptSessionKeyClassification,
@@ -121,9 +124,8 @@ export function admitSessionTranscriptInDb(
 		transcriptDeletion(db, input.agentId, key) ?? transcriptDeletion(db, input.agentId, normalizeSessionKey(key));
 	if (!row) return true;
 	return (
-		input.live === true &&
 		row.blocked === 0 &&
-		row.ended === 0 &&
+		(input.live !== true || row.ended === 0) &&
 		row.phase === "complete" &&
 		row.opened_at !== null &&
 		input.capturedAt !== undefined &&
@@ -168,28 +170,40 @@ export async function captureSessionTranscriptOwned(
 	| boolean
 	| string
 	| TranscriptAuditWrite
+	| TranscriptCapturePending
 > {
-	if (input.kind === "promotion") {
-		const replacements = new Map(
-			input.input.replacements
-				.filter((entry) => admitSessionTranscriptInDb(db, entry.identity))
-				.map((entry) => [sessionSeqCacheKey(entry.identity), entry]),
-		);
-		if (replacements.size > 0)
-			await rewriteReplacingLiveOnlySessions(canonicalTranscriptPath(basePath, input.input.harness), replacements);
-		return [...replacements.keys()];
+	try {
+		if (input.kind === "promotion") {
+			const replacements = new Map(
+				input.input.replacements
+					.filter((entry) => admitSessionTranscriptInDb(db, entry.identity))
+					.map((entry) => [sessionSeqCacheKey(entry.identity), entry]),
+			);
+			if (replacements.size > 0)
+				await rewriteReplacingLiveOnlySessions(canonicalTranscriptPath(basePath, input.input.harness), replacements, {
+					timeoutMs: 250,
+				});
+			return [...replacements.keys()];
+		}
+		if (
+			!admitSessionTranscriptInDb(db, {
+				...input.input,
+				live: input.kind === "turns" && input.input.sourceFormat === "live",
+			})
+		)
+			return input.kind === "turns" ? false : null;
+		if (input.kind === "audit") return await writeTranscriptAudit({ ...input.input, basePath });
+		if (input.kind === "backfill")
+			return await appendCanonicalTranscriptSnapshotIfMissing({ ...input.input, basePath }, undefined, {
+				timeoutMs: 250,
+			});
+		if (input.kind === "snapshot")
+			return await writeCanonicalTranscriptSnapshot({ ...input.input, basePath }, { timeoutMs: 250 });
+		return await appendCanonicalTranscriptTurns({ ...input.input, basePath }, { timeoutMs: 250 });
+	} catch (error) {
+		if (error instanceof TranscriptLockTimeoutError) return { status: "pending", pendingReason: error.message };
+		throw error;
 	}
-	if (
-		!admitSessionTranscriptInDb(db, {
-			...input.input,
-			live: input.kind === "turns" && input.input.sourceFormat === "live",
-		})
-	)
-		return input.kind === "turns" ? false : null;
-	if (input.kind === "audit") return await writeTranscriptAudit({ ...input.input, basePath });
-	if (input.kind === "backfill") return await appendCanonicalTranscriptSnapshotIfMissing({ ...input.input, basePath });
-	if (input.kind === "snapshot") return await writeCanonicalTranscriptSnapshot({ ...input.input, basePath });
-	return await appendCanonicalTranscriptTurns({ ...input.input, basePath });
 }
 
 function deletionCounts(value: string): Record<string, number> {
@@ -204,7 +218,9 @@ function deletionCounts(value: string): Record<string, number> {
 	);
 }
 
-function deletionResult(row: TranscriptDeletionRow): Exclude<TranscriptDeleteResult, { readonly status: "not_found" }> {
+function deletionResult(
+	row: TranscriptDeletionRow,
+): Extract<TranscriptDeleteResult, { readonly status: "complete" | "pending" }> {
 	const counts = deletionCounts(row.counts);
 	return {
 		status: row.phase === "complete" ? "complete" : "pending",
@@ -219,6 +235,7 @@ export function deleteSessionTranscriptInTx(
 	db: WriteDb,
 	input: TranscriptDeleteInput,
 	basePath: string,
+	deadlineAt: number,
 ): TranscriptDeleteResult {
 	const previous = transcriptDeletion(db, input.agentId, input.sessionKey);
 	const stored = prepareTypedStatement<{ harness: string | null; project: string | null }>(
@@ -237,6 +254,7 @@ export function deleteSessionTranscriptInTx(
 	const found = stored ?? previous ?? live;
 	if (!found || (input.project !== undefined && found.project !== input.project)) return { status: "not_found" };
 	const generation = previous?.generation ?? 1;
+	if (input.generation !== undefined && input.generation !== generation) return { status: "conflict", generation };
 	const scope = [input.agentId, input.sessionKey, generation];
 	if (previous?.receipt_generation !== generation) {
 		const counts = {
@@ -265,9 +283,10 @@ export function deleteSessionTranscriptInTx(
 			JSON.stringify(counts),
 			live ? 0 : 1,
 		);
-		db.prepare(
-			"INSERT OR IGNORE INTO session_transcript_deleted_sources (agent_id,session_key,generation,kind,id) VALUES (?,?,?,'transcript',?)",
-		).run(...scope, input.sessionKey);
+		for (const sourceKey of [input.sessionKey, `session:${input.sessionKey}`])
+			db.prepare(
+				"INSERT OR IGNORE INTO session_transcript_deleted_sources (agent_id,session_key,generation,kind,id) VALUES (?,?,?,'transcript',?)",
+			).run(...scope, sourceKey);
 	}
 	if (input.hard && previous?.hard === 0)
 		db.prepare(
@@ -280,17 +299,17 @@ export function deleteSessionTranscriptInTx(
 	const add = (key: string, value: number): void => {
 		counts[key] = (counts[key] ?? 0) + value;
 	};
-	let budget = 64;
+	let budget = Date.now() < deadlineAt - 100 ? 64 : 0;
 	let phase = row.phase;
-	if (phase === "evidence") {
+	if (phase === "evidence" && budget > 0) {
 		for (const [kind, table, column] of [
 			["artifact", "memory_artifacts", "source_path"],
 			["summary", "session_summaries", "id"],
 		]) {
 			const sources = prepareTypedStatement<{ id: string }>(
 				db,
-				`SELECT ${column} AS id FROM ${table} t WHERE t.agent_id = ? AND t.session_key = ? ${kind === "artifact" ? "AND t.source_kind IN ('transcript','summary','compaction','manifest')" : ""} AND NOT EXISTS (SELECT 1 FROM session_transcript_deleted_sources d WHERE d.agent_id = t.agent_id AND d.session_key = ? AND d.generation = ? AND d.kind = ? AND d.id = t.${column}) LIMIT ?`,
-			).all(input.agentId, input.sessionKey, input.sessionKey, generation, kind, budget);
+				`SELECT ${column} AS id FROM ${table} t WHERE t.agent_id = ? AND t.session_key IN (?, ?) ${kind === "artifact" ? "AND t.source_kind IN ('transcript','summary','compaction','manifest')" : ""} AND NOT EXISTS (SELECT 1 FROM session_transcript_deleted_sources d WHERE d.agent_id = t.agent_id AND d.session_key = ? AND d.generation = ? AND d.kind = ? AND d.id = t.${column}) LIMIT ?`,
+			).all(input.agentId, input.sessionKey, `session:${input.sessionKey}`, input.sessionKey, generation, kind, budget);
 			for (const source of sources) {
 				db.prepare(
 					"INSERT OR IGNORE INTO session_transcript_deleted_sources (agent_id,session_key,generation,kind,id) VALUES (?,?,?,?,?)",
@@ -307,7 +326,7 @@ export function deleteSessionTranscriptInTx(
 	}
 	const affected =
 		"SELECT kind,id FROM session_transcript_deleted_sources WHERE agent_id = ? AND session_key = ? AND generation = ? AND outcome = 'deleted'";
-	while (phase === "memories" && budget > 0) {
+	while (phase === "memories" && budget > 0 && Date.now() < deadlineAt - 100) {
 		const memory = prepareTypedStatement<{
 			id: string;
 			pinned: number;
@@ -323,13 +342,22 @@ export function deleteSessionTranscriptInTx(
 			WHERE d.agent_id = ? AND d.session_key = ? AND d.generation = ? AND d.outcome = 'deleted'
 			UNION ALL
 			SELECT m.id,m.pinned,m.source_id,m.source_type,m.type FROM memories m
-			WHERE m.agent_id = ? AND m.source_id = ? AND (m.type = 'session_summary' OR m.source_type IN ('transcript','session','session_summary','checkpoint'))
+			WHERE m.agent_id = ? AND m.source_id IN (?, ?) AND (m.type = 'session_summary' OR m.source_type IN ('transcript','session','session_summary','checkpoint'))
 			AND NOT EXISTS (SELECT 1 FROM session_transcript_deleted_sources d WHERE d.agent_id = m.agent_id AND d.session_key = ? AND d.generation = ? AND d.kind = 'memory' AND d.id = m.id)
 			UNION ALL
 			SELECT m.id,m.pinned,m.source_id,m.source_type,m.type FROM session_transcript_deleted_sources d JOIN memories m ON m.agent_id = d.agent_id AND m.id = d.id
 			WHERE d.agent_id = ? AND d.session_key = ? AND d.generation = ? AND d.kind = 'memory' AND d.outcome = 'deleted' AND ? = 1
 			LIMIT 1`,
-		).get(...scope, input.agentId, input.sessionKey, input.sessionKey, generation, ...scope, row.hard);
+		).get(
+			...scope,
+			input.agentId,
+			input.sessionKey,
+			`session:${input.sessionKey}`,
+			input.sessionKey,
+			generation,
+			...scope,
+			row.hard,
+		);
 		if (!memory) {
 			phase = "cleanup";
 			break;
@@ -361,19 +389,28 @@ export function deleteSessionTranscriptInTx(
 					memory.id,
 					input.agentId,
 				);
-			db.prepare("UPDATE memories SET stale_at = COALESCE(stale_at, ?) WHERE id = ? AND agent_id = ?").run(
-				row.watermark,
-				memory.id,
-				input.agentId,
-			);
-			enqueueDreamingAttentionInTx(db, {
-				agentId: input.agentId,
-				kind: "evidence_requeue",
-				subjectRef: `memory:${memory.id}`,
-				details: { reason: "source_removed", sourceRef: `transcript:${input.sessionKey}` },
-				priority: 60,
-				reopen: true,
-			});
+			if (outcome === "mixed") {
+				const sources = prepareTypedStatement<{ source_kind: string; source_id: string }>(
+					db,
+					`SELECT source_kind,source_id FROM derived_memory_sources WHERE agent_id = ? AND derived_memory_id = ? AND (source_kind,source_id) IN (${affected})`,
+				).all(input.agentId, memory.id, ...scope);
+				for (const source of sources)
+					markDerivedMemoriesStaleForSourceInTx(db, {
+						agentId: input.agentId,
+						sourceKind: source.source_kind,
+						sourceId: source.source_id,
+						staleAt: row.watermark,
+						derivedMemoryId: memory.id,
+					});
+				enqueueDreamingAttentionInTx(db, {
+					agentId: input.agentId,
+					kind: "evidence_requeue",
+					subjectRef: `memory:${memory.id}`,
+					details: { reason: "source_removed", sourceRef: `transcript:${input.sessionKey}` },
+					priority: 60,
+					reopen: true,
+				});
+			}
 			if (old?.outcome !== outcome) add(outcome === "pinned" ? "retainedPinned" : "retainedMixed", 1);
 		}
 		if (outcome === "deleted") {
@@ -381,6 +418,7 @@ export function deleteSessionTranscriptInTx(
 				memoryId: memory.id,
 				reason: "session transcript deleted",
 				force: false,
+				preservePinnedDerived: true,
 				changedBy: input.changedBy,
 				changedAt: row.watermark,
 				ctx: { actorType: "operator" },
@@ -416,6 +454,7 @@ export function deleteSessionTranscriptInTx(
 		).run(...scope, memory.id, outcome);
 		budget--;
 	}
+	if (Date.now() >= deadlineAt - 100) budget = 0;
 	if (phase === "cleanup" && budget > 0) {
 		const redacted = redactSessionTranscriptUploadBatchInTx(db, input.agentId, input.sessionKey);
 		if (redacted !== 0) {
@@ -426,8 +465,8 @@ export function deleteSessionTranscriptInTx(
 	if (phase === "cleanup" && budget > 0) {
 		const jobs = prepareTypedStatement<{ audit_path: string | null }>(
 			db,
-			"DELETE FROM transcript_capture_jobs WHERE id IN (SELECT id FROM transcript_capture_jobs WHERE agent_id = ? AND session_key = ? LIMIT ?) RETURNING audit_path",
-		).all(input.agentId, input.sessionKey, budget);
+			"DELETE FROM transcript_capture_jobs WHERE id IN (SELECT id FROM transcript_capture_jobs WHERE agent_id = ? AND session_key IN (?, ?) LIMIT ?) RETURNING audit_path",
+		).all(input.agentId, input.sessionKey, `session:${input.sessionKey}`, budget);
 		for (const job of jobs)
 			if (job.audit_path)
 				db.prepare(
@@ -442,8 +481,8 @@ export function deleteSessionTranscriptInTx(
 			if (budget === 0) break;
 			const items = prepareTypedStatement<{ id: string }>(
 				db,
-				`SELECT ${column} AS id FROM ${table} WHERE agent_id = ? AND session_key = ? ${table === "memory_artifacts" ? "AND source_kind IN ('transcript','summary','compaction','manifest')" : ""} LIMIT ?`,
-			).all(input.agentId, input.sessionKey, budget);
+				`SELECT ${column} AS id FROM ${table} WHERE agent_id = ? AND session_key IN (?, ?) ${table === "memory_artifacts" ? "AND source_kind IN ('transcript','summary','compaction','manifest')" : ""} LIMIT ?`,
+			).all(input.agentId, input.sessionKey, `session:${input.sessionKey}`, budget);
 			for (const item of items) {
 				if (table === "session_summaries") {
 					db.prepare("DELETE FROM session_summary_children WHERE parent_id = ? OR child_id = ?").run(item.id, item.id);
@@ -506,8 +545,9 @@ export async function deleteSessionTranscriptOwned(
 	input: TranscriptDeleteInput,
 	basePath: string,
 	transact: <T>(operation: () => T) => T | Promise<T>,
+	deadlineAt: number,
 ): Promise<TranscriptDeleteResult> {
-	const admitted = await transact(() => deleteSessionTranscriptInTx(db, input, basePath));
+	const admitted = await transact(() => deleteSessionTranscriptInTx(db, input, basePath, deadlineAt));
 	if (admitted.status !== "pending") return admitted;
 	for (let batch = 0; batch < 4; batch++) {
 		const row = transcriptDeletion(db, input.agentId, input.sessionKey);
@@ -525,6 +565,7 @@ export async function deleteSessionTranscriptOwned(
 			});
 			return deletionResult({ ...row, phase: "complete" });
 		}
+		if (Date.now() >= deadlineAt - 350) return { ...deletionResult(row), pendingReason: "Owner job budget exhausted" };
 		try {
 			const result = await redactTranscriptFileBatch({
 				basePath,
@@ -664,7 +705,7 @@ function tableExists(name: string): boolean {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		return getDbAccessor().withReadDb(
 			(db: import("./db-accessor").ReadDb) => tableExistsInDatabase(db, name),
-			"session-transcripts.ts:665",
+			"session-transcripts.ts:706",
 		);
 	} catch {
 		return false;
@@ -677,7 +718,7 @@ function sessionTranscriptsHasColumn(column: string): boolean {
 		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === column);
-		}, "session-transcripts.ts:677");
+		}, "session-transcripts.ts:718");
 	} catch {
 		return false;
 	}
@@ -845,7 +886,7 @@ async function backfillDatabaseTranscripts(
 						LIMIT ? OFFSET ?`;
 				const params = agentId ? [agentId, PAGE_SIZE, offset] : [PAGE_SIZE, offset];
 				return db.prepare(sql).all(...params) as unknown as StoredTranscriptBackfillRow[];
-			}, "session-transcripts.ts:825");
+			}, "session-transcripts.ts:866");
 			if (rows.length === 0) break;
 			for (const row of rows) {
 				const rowAgentId = row.agent_id?.trim() || "default";
@@ -1020,7 +1061,7 @@ function hasUpdatedAt(): boolean {
 		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === "updated_at");
-		}, "session-transcripts.ts:1020");
+		}, "session-transcripts.ts:1061");
 	} catch {
 		return false;
 	}
@@ -1076,7 +1117,7 @@ export function upsertSessionTranscript(
 				writeSessionTranscriptRow(db, { sessionKey, transcript, harness, project, agentId, capturedAt, ...options }) ===
 				"written"
 			);
-		}, "session-transcripts.ts:1074");
+		}, "session-transcripts.ts:1115");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript upsert failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -1263,7 +1304,7 @@ export function markSessionTranscriptCompleted(
 		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
-		}, "session-transcripts.ts:1263");
+		}, "session-transcripts.ts:1304");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript completion marker failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -1326,7 +1367,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				completedAt: row.completed_at ?? null,
 				contentHash: row.content_hash ?? null,
 			};
-		}, "session-transcripts.ts:1295");
+		}, "session-transcripts.ts:1336");
 	} catch {
 		return undefined;
 	}
@@ -1394,7 +1435,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ siteToken: "session-transcripts.ts:1392", operation: "transcripts.lookup", signal },
+			{ siteToken: "session-transcripts.ts:1433", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;
@@ -1424,7 +1465,7 @@ export function getSessionTranscriptContent(
 				| { content: string }
 				| undefined;
 			return row?.content;
-		}, "session-transcripts.ts:1415");
+		}, "session-transcripts.ts:1456");
 	} catch {
 		return undefined;
 	}
@@ -1472,7 +1513,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:1448");
+		}, "session-transcripts.ts:1489");
 	} catch {
 		return [];
 	}
@@ -1520,7 +1561,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:1503");
+		}, "session-transcripts.ts:1544");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -1563,7 +1604,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:1548");
+						}, "session-transcripts.ts:1589");
 
 					const hits = rows
 						.map((row) => ({
@@ -1633,7 +1674,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1612");
+			}, "session-transcripts.ts:1653");
 
 		return rows
 			.map((row) => ({

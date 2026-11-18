@@ -16,7 +16,7 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly transcriptPath?: string;
 	readonly preserveExistingSession?: boolean;
 }): Promise<string | null> {
-	const capturedAt = params.capturedAt ?? new Date().toISOString();
+	const capturedAt = params.capturedAt;
 	if (!params.transcriptPath) await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
 	const records = await captureTranscriptOwned<readonly CanonicalTranscriptRecord[] | null>({
 		kind: "snapshot",

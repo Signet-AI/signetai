@@ -228,6 +228,7 @@ import {
 } from "./runtime-pressure";
 import { flushPendingCheckpoints, initCheckpointFlush, pruneCheckpointsAsync } from "./session-checkpoints";
 import { createSessionClaimStore } from "./session-claims";
+import { restoreTranscriptBypasses } from "./session-transcript-lifecycle";
 import {
 	releaseAllSessions,
 	restorePersistedSessionsAsync,
@@ -2596,6 +2597,7 @@ async function main() {
 			}),
 		);
 		const restoredSessions = await restorePersistedSessionsAsync();
+		await restoreTranscriptBypasses();
 		if (restoredSessions.active > 0 || restoredSessions.expired > 0 || restoredSessions.ended > 0) {
 			logger.info("session-tracker", "Restored durable session lifecycle state", restoredSessions);
 		}

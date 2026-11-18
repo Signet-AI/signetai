@@ -4,7 +4,9 @@ export function isRetryableWritePressure(error: unknown): boolean {
 	if (error instanceof DbWriteQueueFullError || error instanceof WorkspaceMigrationRetryableError) return true;
 	return (
 		error instanceof Error &&
-		(error.name === "DbOwnerAdmissionError" || error.name === "TranscriptCaptureBacklogFullError")
+		(error.name === "DbOwnerAdmissionError" ||
+			error.name === "TranscriptCaptureBacklogFullError" ||
+			error.name === "TranscriptCapturePendingError")
 	);
 }
 

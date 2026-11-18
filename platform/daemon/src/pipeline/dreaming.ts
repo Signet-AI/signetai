@@ -1,4 +1,5 @@
 import type { Database } from "bun:sqlite";
+import { admitSessionTranscriptInDb } from "../session-transcripts";
 import { createHash, randomUUID } from "node:crypto";
 import type {
 	AccountingProvenance,
@@ -2036,7 +2037,16 @@ function writeDreamingTranscriptManifestInTx(
 	);
 	const now = new Date().toISOString();
 	for (const entry of params.entries) {
-		if (!entry.source.completed || entry.content.trim().length === 0) continue;
+		if (
+			!entry.source.completed ||
+			entry.content.trim().length === 0 ||
+			!admitSessionTranscriptInDb(db, {
+				agentId: entry.scope,
+				sessionKey: entry.source.id,
+				capturedAt: entry.source.capturedAt,
+			})
+		)
+			continue;
 		const content = entry.content.trim();
 		const contentHash = createHash("sha256").update(content).digest("hex");
 		const existing = db
