@@ -841,26 +841,27 @@ export function createGraphEngine(
 		const index = list.indexOf(node);
 		return list[(index + offset + list.length) % list.length];
 	};
-	const actions = (): Record<string, (() => void) | undefined> => {
+	const actions = (): Map<string, () => void> => {
 		const current = selected;
 		const parent = current ? byId.get(parentOf.get(current.id) ?? "") : undefined;
 		const child = current ? (childrenOf.get(current.id) ?? []).find(shown) : undefined;
-		return {
-			z: () => fit(),
-			c: center,
-			"=": () => zoom(1.3),
-			"+": () => zoom(1.3),
-			"-": () => zoom(1 / 1.3),
-			_: () => zoom(1 / 1.3),
-			Escape: current ? () => select(undefined) : isolated ? () => isolate(null) : undefined,
-			ArrowUp: parent ? () => selectAndCenter(parent) : undefined,
-			ArrowDown: child ? () => selectAndCenter(child) : undefined,
-			ArrowRight: current ? () => selectAndCenter(step(current, 1)) : undefined,
-			ArrowLeft: current ? () => selectAndCenter(step(current, -1)) : undefined,
-		};
+		const entries: Array<[string, (() => void) | undefined]> = [
+			["z", () => fit()],
+			["c", center],
+			["=", () => zoom(1.3)],
+			["+", () => zoom(1.3)],
+			["-", () => zoom(1 / 1.3)],
+			["_", () => zoom(1 / 1.3)],
+			["Escape", current ? () => select(undefined) : isolated ? () => isolate(null) : undefined],
+			["ArrowUp", parent ? () => selectAndCenter(parent) : undefined],
+			["ArrowDown", child ? () => selectAndCenter(child) : undefined],
+			["ArrowRight", current ? () => selectAndCenter(step(current, 1)) : undefined],
+			["ArrowLeft", current ? () => selectAndCenter(step(current, -1)) : undefined],
+		];
+		return new Map(entries.flatMap(([name, action]) => (action ? [[name, action] as const] : [])));
 	};
 	const announce = () => {
-		const available = Object.entries(actions()).flatMap(([name, action]) => (action ? [name] : []));
+		const available = [...actions().keys()];
 		const joined = available.join(" ");
 		if (joined === keys) return;
 		keys = joined;
@@ -1002,7 +1003,7 @@ export function createGraphEngine(
 				zoom(1.5, message.x, message.y);
 				break;
 			case "key": {
-				const action = actions()[message.key];
+				const action = actions().get(message.key);
 				if (!action) break;
 				pauseFollow();
 				action();
