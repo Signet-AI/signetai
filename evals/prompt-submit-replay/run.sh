@@ -67,7 +67,7 @@ stop() {
 	wait "$DAEMON" 2>/dev/null || true
 	while kill -0 -- "-$DAEMON" 2>/dev/null; do sleep 1; done
 }
-trap stop EXIT
+trap 'stop; rm -rf "$WS"' EXIT
 trap "exit 143" TERM
 trap "exit 130" INT
 trap "exit 129" HUP
