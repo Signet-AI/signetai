@@ -33,7 +33,8 @@ export interface PiInputEvent {
 	readonly text: string;
 }
 
-export interface PiBeforeAgentStartEvent {
+export interface PiBeforeAgentStartUserEvent {
+	readonly messageType: "user";
 	readonly prompt: string;
 	readonly systemPrompt: string;
 }
@@ -44,6 +45,13 @@ export interface PiCustomMessage {
 	readonly display: boolean;
 	readonly details?: unknown;
 }
+
+export interface PiBeforeAgentStartCustomEvent {
+	readonly messageType: "custom";
+	readonly message: unknown;
+}
+
+export type PiBeforeAgentStartEvent = PiBeforeAgentStartUserEvent | PiBeforeAgentStartCustomEvent;
 
 export interface PiBeforeAgentStartResult {
 	readonly message?: PiCustomMessage;

@@ -59,7 +59,7 @@ function registerPromptHandlers(pi: OmpExtensionApi, deps: OmpDeps): void {
 	});
 
 	pi.on("before_agent_start", async (event: OmpBeforeAgentStartEvent, ctx) => {
-		if (!deps.state.hasPendingPromptSubmit(currentSessionRef(ctx).sessionId)) {
+		if (event.messageType !== "custom" && !deps.state.hasPendingPromptSubmit(currentSessionRef(ctx).sessionId)) {
 			beginPromptSubmit(deps, ctx, event.prompt);
 		}
 		await settlePromptSubmit(deps, ctx);

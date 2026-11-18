@@ -39,9 +39,17 @@ export interface OmpInputEvent {
 	readonly text: string;
 }
 
-export interface OmpBeforeAgentStartEvent {
+export interface OmpBeforeAgentStartUserEvent {
+	readonly messageType: "user";
 	readonly prompt: string;
 }
+
+export interface OmpBeforeAgentStartCustomEvent {
+	readonly messageType: "custom";
+	readonly message: unknown;
+}
+
+export type OmpBeforeAgentStartEvent = OmpBeforeAgentStartUserEvent | OmpBeforeAgentStartCustomEvent;
 
 export interface OmpBeforeAgentStartResult {
 	readonly message?: OmpAgentMessage;

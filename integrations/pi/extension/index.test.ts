@@ -1161,6 +1161,58 @@ describe("SignetPiExtension", () => {
 		);
 	});
 
+	it("a custom-message run does not trigger user-prompt recall", async () => {
+		let promptSubmits = 0;
+		const server = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				const path = new URL(req.url).pathname;
+				if (path === "/api/hooks/session-start") return Response.json({ dynamicContext: "session-context-content" });
+				if (path === "/api/hooks/user-prompt-submit") {
+					promptSubmits += 1;
+					return Response.json({ dynamicContext: "[signet:recall]\n- should not be requested" });
+				}
+				if (path === "/api/hooks/notifications") return Response.json({});
+				return new Response("not found", { status: 404 });
+			},
+		});
+		servers.push(server);
+		process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${server.port}`;
+
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+			registerCommand(_name: string, _opts: unknown) {},
+			registerTool(_opts: unknown) {},
+		};
+		SignetPiExtension(pi as never);
+
+		const ctx = {
+			cwd: "/tmp/pi-project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-pi-custom", cwd: "/tmp/pi-project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-pi-custom",
+				buildSessionContext: () => ({ messages: [] }),
+			},
+			ui: {
+				notify: () => {},
+				setStatus: () => {},
+				theme: { fg: (_color: string, text: string) => text },
+			},
+		};
+
+		await handlers.before_agent_start[0]?.({ messageType: "custom", message: { role: "custom" } }, ctx);
+		expect(promptSubmits).toBe(0);
+
+		await handlers.before_agent_start[0]?.({ messageType: "user", prompt: "what changed?" }, ctx);
+		expect(promptSubmits).toBe(1);
+	});
+
 	it("input does not wait for prompt-submit and before_agent_start does not retry a failed submit", async () => {
 		let promptSubmits = 0;
 		let releasePromptSubmit: () => void = () => {};
