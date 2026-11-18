@@ -77,6 +77,26 @@ test.each(["{", "null", "-1", '"bad"', "9007199254740991"])(
 	},
 );
 
+test("an unremovable sequence entry never blocks owner contact", async () => {
+	mkdirSync(join(directory, ".seq", "child"), { recursive: true });
+	const warn = spyOn(logger, "warn").mockImplementation(() => {});
+	try {
+		for (const action of ["status", "start", "end"] as const) {
+			let attempted = false;
+			await withTranscriptLifecycleIntents({ agentId: "a", sessionKey: "dir-seq", action }, async () => {
+				attempted = true;
+			});
+			expect(attempted).toBe(true);
+		}
+		expect(warn).toHaveBeenCalledWith("transcripts", expect.stringContaining("sequence discarded"), {
+			removed: false,
+		});
+	} finally {
+		warn.mockRestore();
+		rmSync(join(directory, ".seq"), { recursive: true, force: true });
+	}
+});
+
 test("successful ordinary sessions leave the entire outbox empty", async () => {
 	for (const action of ["start", "end", "status"] as const)
 		await withTranscriptLifecycleIntents({ agentId: "a", sessionKey: "ordinary", action }, async () => {});

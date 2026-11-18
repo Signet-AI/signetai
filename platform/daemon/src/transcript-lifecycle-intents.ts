@@ -93,12 +93,8 @@ export function rememberTranscriptLifecycleSequence(seq: number): void {
 }
 
 async function readSequence(path: string): Promise<number> {
-	const text = await readFile(path, "utf8").catch((error: unknown) => {
-		if (error instanceof Error && "code" in error && error.code === "ENOENT") return "0";
-		throw error;
-	});
 	try {
-		const previous: unknown = JSON.parse(text);
+		const previous: unknown = JSON.parse(await readFile(path, "utf8"));
 		if (
 			typeof previous === "number" &&
 			Number.isSafeInteger(previous) &&
@@ -107,11 +103,15 @@ async function readSequence(path: string): Promise<number> {
 		)
 			return previous;
 		throw new Error("Invalid transcript lifecycle sequence");
-	} catch {
-		await unlink(path).catch((error: unknown) => {
-			if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+	} catch (error) {
+		if (error instanceof Error && "code" in error && error.code === "ENOENT") return 0;
+		const removed = await unlink(path).then(
+			() => true,
+			(cause: unknown) => cause instanceof Error && "code" in cause && cause.code === "ENOENT",
+		);
+		logger.warn("transcripts", "Corrupt lifecycle sequence discarded; relying on owner high-water and clock", {
+			removed,
 		});
-		logger.warn("transcripts", "Corrupt lifecycle sequence discarded; relying on owner high-water and clock");
 		return 0;
 	}
 }
