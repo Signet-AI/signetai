@@ -199,10 +199,129 @@ export interface DbOwnerSourceEvidenceEligibility {
 	readonly legacyObsidianRoot?: string;
 }
 
-export type DbOwnerDreamingEvidenceCoverage =
-	import("./pipeline/dreaming-evidence-coverage").DreamingEvidenceCoverageStepRequest;
-
 import type { CompletedTranscriptCommit } from "./transcript-import-commit";
+import type { EpisodicSourceKind } from "./episodic-sources";
+
+export interface DbOwnerDreamingEvidenceCoverageCursor {
+	readonly capturedAt: string;
+	readonly kind: EpisodicSourceKind;
+	readonly id: string;
+}
+
+export interface DbOwnerDreamingEvidenceCoverageEntryInput {
+	readonly kind: EpisodicSourceKind;
+	readonly id: string;
+	readonly capturedAt: string;
+	readonly entryId: string;
+	readonly revision: string;
+	readonly length: number;
+	readonly deliveredRanges: ReadonlyArray<readonly [number, number]>;
+}
+
+export interface DbOwnerDreamingEvidenceCoverageDeliveryRow {
+	readonly kind: EpisodicSourceKind;
+	readonly id: string;
+	readonly capturedAt: string;
+	readonly sourceEntryId: string;
+	readonly sourceRevision: string;
+	readonly start: number;
+	readonly end: number;
+}
+
+export interface DbOwnerDreamingEvidenceCoverageSourceTotals {
+	eligible: number;
+	fullyReviewed: number;
+	partiallyReviewed: number;
+	neverDelivered: number;
+}
+
+export interface DbOwnerDreamingEvidenceCoverageCharTotals {
+	eligible: number;
+	reviewed: number;
+	unreviewed: number;
+	consumedWithoutReview: number;
+	delivered: number;
+	redelivered: number;
+	consumedByCursorBasis: Record<string, number>;
+	stalledRows: number;
+}
+
+export interface DbOwnerDreamingEvidenceCoverageAccumulator {
+	readonly sources: DbOwnerDreamingEvidenceCoverageSourceTotals;
+	readonly chars: DbOwnerDreamingEvidenceCoverageCharTotals;
+}
+
+export type DbOwnerDreamingEvidenceCoverage =
+	| {
+			readonly step: "sources";
+			readonly agentId: string;
+			readonly cursor: DbOwnerDreamingEvidenceCoverageCursor | null;
+			readonly limit: number;
+	  }
+	| {
+			readonly step: "passes";
+			readonly agentId: string;
+			readonly afterCreatedAt: string;
+			readonly afterPassId: string;
+			readonly limit: number;
+	  }
+	| {
+			readonly step: "classify";
+			readonly agentId: string;
+			readonly entries: readonly DbOwnerDreamingEvidenceCoverageEntryInput[];
+	  }
+	| {
+			readonly step: "tails";
+			readonly agentId: string;
+			readonly afterAttentionId: string;
+			readonly attentionLimit: number;
+			readonly continuationsLimit: number;
+	  }
+	| {
+			readonly step: "count";
+			readonly agentId: string;
+			readonly bound: number;
+	  };
+
+export type DbOwnerDreamingEvidenceCoverageResult =
+	| {
+			readonly step: "sources";
+			readonly entries: ReadonlyArray<
+				Pick<
+					DbOwnerDreamingEvidenceCoverageEntryInput,
+					"kind" | "id" | "capturedAt" | "entryId" | "revision" | "length"
+				>
+			>;
+			readonly seen: number;
+			readonly cursor: DbOwnerDreamingEvidenceCoverageCursor | null;
+			readonly exhausted: boolean;
+	  }
+	| {
+			readonly step: "passes";
+			readonly deliveries: readonly DbOwnerDreamingEvidenceCoverageDeliveryRow[];
+			readonly afterCreatedAt: string;
+			readonly afterPassId: string;
+			readonly seen: number;
+			readonly exhausted: boolean;
+	  }
+	| {
+			readonly step: "classify";
+			readonly delta: DbOwnerDreamingEvidenceCoverageAccumulator;
+			readonly byKind: Readonly<Record<string, DbOwnerDreamingEvidenceCoverageAccumulator>>;
+	  }
+	| {
+			readonly step: "tails";
+			readonly pendingContinuations: number;
+			readonly continuationsTruncated: boolean;
+			readonly openStalledAttention: number;
+			readonly attentionTruncated: boolean;
+			readonly exhausted: boolean;
+			readonly afterAttentionId: string;
+	  }
+	| {
+			readonly step: "count";
+			readonly eligible: number | null;
+	  };
 
 export interface DbOwnerTranscriptBulkCommit {
 	readonly agentId: string;

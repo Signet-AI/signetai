@@ -643,6 +643,76 @@ export function recordDreamingEvidenceConsumptionInTx(
 export const STALLED_EVIDENCE_ATTENTION_SQL =
 	"(kind = 'evidence_requeue' AND json_valid(details_json) AND json_extract(details_json, '$.reason') = 'evidence-stalled')";
 
+export function hasDreamingEvidenceReviewRow(
+	db: ReadDb,
+	agentId: string,
+	kind: EpisodicSourceKind,
+	id: string,
+	capturedAt: string,
+	entryId: string,
+	revision: string,
+): boolean {
+	return (
+		db
+			.prepare(
+				`SELECT 1 FROM dreaming_evidence_reviews
+	 WHERE agent_id = ? AND source_kind = ? AND source_id = ? AND source_captured_at = ? AND source_entry_id = ? AND source_revision = ?`,
+			)
+			.get(agentId, kind, id, capturedAt, entryId, revision) != null
+	);
+}
+
+export interface DreamingEvidencePassRow {
+	readonly id: string;
+	readonly createdAt: string;
+}
+
+export function readDreamingEvidencePassesPage(
+	db: ReadDb,
+	agentId: string,
+	afterCreatedAt: string,
+	afterPassId: string,
+	limit: number,
+): readonly DreamingEvidencePassRow[] {
+	const rows: unknown[] = db
+		.prepare(
+			`SELECT id, created_at AS createdAt FROM dreaming_passes
+	 WHERE agent_id = ? AND (created_at > ? OR (created_at = ? AND id > ?))
+	 ORDER BY created_at ASC, id ASC LIMIT ?`,
+		)
+		.all(agentId, afterCreatedAt, afterCreatedAt, afterPassId, limit);
+	const passes: DreamingEvidencePassRow[] = [];
+	for (const row of rows) {
+		if (typeof row !== "object" || row === null) continue;
+		const record = row as Record<string, unknown>;
+		if (typeof record.id !== "string" || typeof record.createdAt !== "string") continue;
+		passes.push({ id: record.id, createdAt: record.createdAt });
+	}
+	return passes;
+}
+
+export function readStalledEvidenceAttentionIds(
+	db: ReadDb,
+	agentId: string,
+	afterAttentionId: string,
+	limit: number,
+): readonly string[] {
+	const rows: unknown[] = db
+		.prepare(
+			`SELECT id FROM dreaming_attention
+	 WHERE agent_id = ? AND resolved_at IS NULL AND ${STALLED_EVIDENCE_ATTENTION_SQL} AND id > ?
+	 ORDER BY id ASC LIMIT ?`,
+		)
+		.all(agentId, afterAttentionId, limit);
+	const ids: string[] = [];
+	for (const row of rows) {
+		if (typeof row !== "object" || row === null) continue;
+		const id = (row as Record<string, unknown>).id;
+		if (typeof id === "string") ids.push(id);
+	}
+	return ids;
+}
+
 const IMPORTED_SOURCE_ATTENTION_RAISED_AT_SQL =
 	"COALESCE(CASE WHEN json_valid(details_json) THEN json_extract(details_json, '$.raisedAt') END, created_at)";
 

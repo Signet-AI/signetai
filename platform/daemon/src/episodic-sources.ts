@@ -697,12 +697,13 @@ export function countEpisodicDreamingEvidenceSources(
 	const selected = (["memory", "artifact", "transcript", "summary"] as const)
 		.filter((kind) => wants.has(kind))
 		.map(() => agentId);
-	const row = db
+	const row: unknown = db
 		.prepare(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT kind, id FROM (
 	  ${branches.join(" UNION ALL ")}
 	) LIMIT ${boundedLimit + 1})`)
-		.get(...selected) as { readonly n: number } | undefined;
-	const eligible = row?.n ?? 0;
+		.get(...selected);
+	const counted = row !== null && typeof row === "object" && "n" in row ? (row as Record<string, unknown>).n : null;
+	const eligible = typeof counted === "number" ? counted : 0;
 	return { eligible, bounded: eligible <= boundedLimit };
 }
 

@@ -1,6 +1,7 @@
 import type { AgentRosterReadPolicy } from "@signet/core";
 import { registerDbAccessorCloseParticipant } from "./db-accessor-lifecycle";
 import { getDbAccessorPath } from "./db-accessor";
+import type { DbOwnerClient } from "./db-owner-client";
 import { getDbOwner } from "./db-owner-runtime";
 import { ownerReadOne, ownerRun } from "./db-owner-sql";
 
@@ -72,6 +73,20 @@ registerDbAccessorCloseParticipant({
 	order: 200,
 	close: () => invalidateAgentScopeCache(),
 });
+interface AgentScopeRow {
+	readonly read_policy: unknown;
+	readonly policy_group: unknown;
+}
+
+async function readAgentScopeRow(owner: DbOwnerClient, id: string): Promise<AgentScopeRow | null> {
+	return await ownerReadOne<AgentScopeRow>(owner, "SELECT read_policy, policy_group FROM agents WHERE id = ?", [id], {
+		operation: "agent-scope.read",
+		lane: "read",
+		deadlineMs: 5_000,
+		estimatedWorkUnits: 1,
+	});
+}
+
 export async function getAgentScope(agentId: string): Promise<AgentScope> {
 	const id = normalizedAgentId(agentId);
 	while (true) {
@@ -84,17 +99,7 @@ export async function getAgentScope(agentId: string): Promise<AgentScope> {
 			read = Promise.resolve()
 				.then(async () => {
 					const owner = await getDbOwner(getDbAccessorPath());
-					const row = await ownerReadOne<{ readonly read_policy: unknown; readonly policy_group: unknown }>(
-						owner,
-						"SELECT read_policy, policy_group FROM agents WHERE id = ?",
-						[id],
-						{
-							operation: "agent-scope.read",
-							lane: "read",
-							deadlineMs: 5_000,
-							estimatedWorkUnits: 1,
-						},
-					);
+					const row = await readAgentScopeRow(owner, id);
 					if (!row) return isolatedScope;
 					return {
 						readPolicy: parseReadPolicy(row.read_policy),
@@ -123,15 +128,9 @@ export async function getAgentScope(agentId: string): Promise<AgentScope> {
 }
 
 export async function isAgentRegistered(agentId: string): Promise<boolean> {
-	const id = normalizedAgentId(agentId);
 	const owner = await getDbOwner(getDbAccessorPath());
-	const row = await ownerReadOne<{ readonly id: string }>(owner, "SELECT id FROM agents WHERE id = ?", [id], {
-		operation: "agent-scope.exists",
-		lane: "read",
-		deadlineMs: 5_000,
-		estimatedWorkUnits: 1,
-	});
-	return row !== null && row !== undefined;
+	const row = await readAgentScopeRow(owner, normalizedAgentId(agentId));
+	return row !== null;
 }
 
 export async function ensureAgentRegistered(agentId: string): Promise<void> {
