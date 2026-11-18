@@ -210,6 +210,43 @@ describe("pi provider catalog models", () => {
 		}
 	});
 
+	test("labels a tier-only rate model as locally estimated and keeps its cost", () => {
+		const base = getModels("openrouter").find((candidate) => candidate.api === "openai-completions");
+		if (!base) throw new Error("expected OpenRouter catalog model");
+		const tieredModel: Model<Api> = {
+			...base,
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				tiers: [{ inputTokensAbove: 200_000, input: 2, output: 5, cacheRead: 0.4, cacheWrite: 0 }],
+			},
+		};
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "tiered-model",
+			baseUrl: "https://gateway.example.test/v1",
+			piModel: tieredModel,
+		});
+		const stats: SessionStats = {
+			sessionFile: undefined,
+			sessionId: "session",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 2,
+			tokens: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0, total: 4 },
+			cost: 0.5,
+		};
+		expect(provider.accountingProvenance).toBe("locally_estimated");
+		expect(mapSessionStatsToUsage(stats, 10, provider.accountingProvenance)).toMatchObject({
+			totalCost: 0.5,
+			accountingProvenance: "locally_estimated",
+		});
+	});
+
 	test("does not label a remote zero-rate model as provider-reported cost", () => {
 		const provider = createPiModelProvider({
 			executor: "openai-compatible",
