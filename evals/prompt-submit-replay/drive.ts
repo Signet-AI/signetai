@@ -3,6 +3,9 @@ import { join, resolve } from "node:path";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 type Message = { readonly customType?: string; readonly content?: unknown };
+type OpencodeHooks = Record<string, ((input: unknown, output: unknown) => Promise<unknown>) | undefined>;
+type OpencodePlugin = { readonly SignetPlugin: (input: unknown) => Promise<OpencodeHooks> };
+type PiExtension = { readonly default: (api: unknown) => void };
 
 const [run, port, session] = process.argv.slice(2);
 if (!run || !port || !session) throw new Error("usage: bun drive.ts <run> <port> <pi|opencode>");
@@ -36,7 +39,21 @@ const out = join(dir, `results-${run}.jsonl`);
 
 const pinned = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("SIGNET_")));
 
-async function importConnector(path: string): Promise<Record<string, unknown>> {
+function isOpencodePlugin(value: unknown): value is OpencodePlugin {
+	return (
+		typeof value === "object" && value !== null && "SignetPlugin" in value && typeof value.SignetPlugin === "function"
+	);
+}
+
+function isPiExtension(value: unknown): value is PiExtension {
+	return typeof value === "object" && value !== null && "default" in value && typeof value.default === "function";
+}
+
+function isMessage(value: unknown): value is Message {
+	return typeof value === "object" && value !== null;
+}
+
+async function importConnector(path: string): Promise<unknown> {
 	const connector = await import(path);
 	const changed = Object.keys(process.env)
 		.filter((key) => key.startsWith("SIGNET_"))
@@ -67,19 +84,25 @@ function messagesOf(results: readonly unknown[]): Message[] {
 
 async function runOpencode(): Promise<void> {
 	const plugin = await importConnector(opencodePlugin);
+	if (!isOpencodePlugin(plugin)) throw new Error(`${opencodePlugin} does not export SignetPlugin`);
 	const sessionID = `${run}-${session}`;
 	const hooks = await plugin.SignetPlugin({ directory: sandboxHome, client: {} });
 	const system: string[] = [];
+	const hook = (name: string) => {
+		const fn = hooks[name];
+		if (!fn) throw new Error(`${opencodePlugin} has no ${name} hook`);
+		return fn;
+	};
 	await hooks["experimental.chat.system.transform"]?.({ sessionID }, { system });
 	record(sessionID, 0, "session-start", system.join("\n"));
 	for (const [index, turn] of turns.entries()) {
 		const messageID = `${sessionID}-m${index + 1}`;
-		await hooks["chat.message"](
+		await hook("chat.message")(
 			{ sessionID, messageID },
 			{ message: { id: messageID }, parts: [{ type: "text", text: turn }] },
 		);
 		const messages = [{ info: { id: messageID, role: "user", sessionID }, parts: [{ type: "text", text: turn }] }];
-		await hooks["experimental.chat.messages.transform"]({}, { messages });
+		await hook("experimental.chat.messages.transform")({}, { messages });
 		const delivered = messages[0]?.parts[0]?.text ?? "";
 		record(sessionID, index + 1, "prompt", delivered.replace(turn.trim(), "").trim());
 	}
@@ -87,11 +110,16 @@ async function runOpencode(): Promise<void> {
 
 async function runPi(): Promise<void> {
 	const extension = await importConnector(piExtension);
+	if (!isPiExtension(extension)) throw new Error(`${piExtension} has no default export`);
 	const handlers = new Map<string, Handler[]>();
+	const sent: Message[] = [];
 	const api = new Proxy(
 		{
 			on(name: string, fn: Handler): void {
 				handlers.set(name, [...(handlers.get(name) ?? []), fn]);
+			},
+			sendMessage(message: Message): void {
+				sent.push(message);
 			},
 		},
 		{ get: (target, key) => (key in target ? Reflect.get(target, key) : () => undefined) },
@@ -117,13 +145,22 @@ async function runPi(): Promise<void> {
 		for (const fn of handlers.get(name) ?? []) results.push(await fn(event, ctx));
 		return results;
 	};
+	const delivered = async (name: string, event: unknown): Promise<Message[]> => {
+		const results = await fire(name, event);
+		const returned = results.flatMap((result) =>
+			result && typeof result === "object" && "message" in result && isMessage(result.message) ? [result.message] : [],
+		);
+		return [...messagesOf(results), ...returned, ...sent.splice(0)];
+	};
 	await fire("session_start", {});
-	const start = messagesOf(await fire("context", { messages: [] }));
+	const start = await delivered("context", { messages: [] });
 	record(sessionId, 0, "session-start", start.map((message) => textOf(message.content)).join("\n"));
 	for (const [index, turn] of turns.entries()) {
 		await fire("input", { text: turn, source: "interactive" });
-		await fire("before_agent_start", { prompt: turn, systemPrompt: "" });
-		const injected = messagesOf(await fire("context", { messages: [] }));
+		const injected = [
+			...(await delivered("before_agent_start", { prompt: turn, systemPrompt: "" })),
+			...(await delivered("context", { messages: [] })),
+		];
 		const text = injected
 			.filter((message) => message.customType === "signet-pi-hidden-recall")
 			.map((message) => textOf(message.content))
