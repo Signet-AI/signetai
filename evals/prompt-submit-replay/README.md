@@ -5,7 +5,7 @@ This eval replays real user prompts from your own harness sessions through the i
 It reports:
 
 - memory lines delivered more than once in a session;
-- prompt turns that carry static plugin guidance;
+- prompt turns that carry plugin guidance targeted at `user-prompt-submit`, and whether each session received guidance targeted at `session-start` (some connectors deliver session-start context with the first prompt);
 - injected characters per prompt;
 - dedupe-ledger claims and duplicates;
 - per-turn engine decisions and prompt-submit latency from the daemon log.

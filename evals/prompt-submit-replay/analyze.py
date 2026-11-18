@@ -6,7 +6,7 @@ import re
 import statistics
 
 MARKERS = ("## Relevant Entity Context", "## Relevant Memory:")
-PLUGIN = re.compile(r"signet-plugin-context|credential-guidance|Signet Secrets")
+PLUGIN = re.compile(r'<signet-plugin-context[^>]*\btarget="([a-z-]+)"')
 COLUMNS = (
     "turns",
     "turnsWithMemory",
@@ -58,14 +58,17 @@ def summarize(args, dump):
             seen = collections.Counter()
             repeats = []
             injected_turns = plugin_turns = chars = 0
+            start_guidance = False
             dump.write(f"\n## {run} / {session} ({items[0]['sessionKey']})\n")
             for row in items:
+                targets = PLUGIN.findall(row["text"])
+                start_guidance = start_guidance or "session-start" in targets
                 if row["kind"] == "session-start":
-                    dump.write(f"\n### session-start: plugin guidance present = {bool(PLUGIN.search(row['text']))}\n")
+                    dump.write(f"\n### session-start: plugin guidance present = {'session-start' in targets}\n")
                     continue
                 lines = memory_lines(row["text"])
                 injected_turns += 1 if lines else 0
-                plugin_turns += 1 if PLUGIN.search(row["text"]) else 0
+                plugin_turns += 1 if "user-prompt-submit" in targets else 0
                 chars += memory_chars(row["text"])
                 dump.write(f"\n### turn {row['turn']}: {len(lines)} memory lines\n")
                 for line in lines:
@@ -73,7 +76,6 @@ def summarize(args, dump):
                         repeats.append((row["turn"], line[:140]))
                     dump.write(f"- {line[2:200]}{' [REPEAT]' if seen[line] else ''}\n")
                     seen[line] += 1
-            start = next((row for row in items if row["kind"] == "session-start"), {"text": ""})
             summary[(run, session)] = {
                 "turns": sum(1 for row in items if row["kind"] == "prompt"),
                 "turnsWithMemory": injected_turns,
@@ -81,7 +83,7 @@ def summarize(args, dump):
                 "uniqueLines": len(seen),
                 "repeatDeliveries": sum(seen.values()) - len(seen),
                 "pluginGuidanceOnPrompts": plugin_turns,
-                "pluginGuidanceAtSessionStart": bool(PLUGIN.search(start["text"])),
+                "pluginGuidanceAtSessionStart": start_guidance,
                 "injectedChars": chars,
                 "sessionKey": items[0]["sessionKey"],
                 "repeatExamples": repeats[:3],
