@@ -108,11 +108,11 @@ describe("Signet recall source attribution", () => {
 
     expect(summarizeRecallSources(checkpoint, evaluations)).toEqual({
       transcriptEvidenceLimit: { limit: 2 },
-      all: { questions: 5, memoriesOnly: 1, transcriptEvidenceOnly: 1, both: 1, none: 2 },
-      correct: { questions: 3, memoriesOnly: 1, transcriptEvidenceOnly: 0, both: 1, none: 1 },
+      all: { questions: 5, memoriesOnly: 1, transcriptEvidenceOnly: 1, both: 1, none: 1, unknown: 1 },
+      correct: { questions: 3, memoriesOnly: 1, transcriptEvidenceOnly: 0, both: 1, none: 0, unknown: 1 },
       byQuestionType: {
-        single: { questions: 2, memoriesOnly: 1, transcriptEvidenceOnly: 1, both: 0, none: 0 },
-        multi: { questions: 3, memoriesOnly: 0, transcriptEvidenceOnly: 0, both: 1, none: 2 },
+        single: { questions: 2, memoriesOnly: 1, transcriptEvidenceOnly: 1, both: 0, none: 0, unknown: 0 },
+        multi: { questions: 3, memoriesOnly: 0, transcriptEvidenceOnly: 0, both: 1, none: 1, unknown: 1 },
       },
     })
     expect(summarizeRecallSources(checkpoint, [])).toBeUndefined()

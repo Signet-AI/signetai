@@ -11,6 +11,7 @@ export type ModelProvider =
 export interface OpenRouterModelSettings {
   provider?: Record<string, JSONValue>
   reasoning?: Record<string, JSONValue>
+  maxTokens?: number
 }
 
 export interface ModelPricing {
@@ -474,10 +475,27 @@ export function openRouterModelSettings(
   aliases: string[],
   env: NodeJS.ProcessEnv = process.env
 ): Record<string, OpenRouterModelSettings> {
+  const envSettings = readOpenRouterModelSettings(env)
+  const usedIds = new Set(
+    aliases
+      .filter((alias) => alias.toLowerCase().startsWith(OPENROUTER_PREFIX))
+      .map((alias) => alias.slice(OPENROUTER_PREFIX.length))
+  )
+  for (const id of Object.keys(envSettings)) {
+    if (!usedIds.has(id)) {
+      throw new Error(`${OPENROUTER_MODELS_ENV} has an entry for a model this run does not use: ${id}`)
+    }
+  }
   const used: Record<string, OpenRouterModelSettings> = {}
   for (const alias of aliases) {
-    const settings = getModelConfig(alias, env).openrouterSettings
-    if (settings && Object.keys(settings).length > 0) used[alias] = settings
+    const config = getModelConfig(alias, env)
+    if (config.provider !== "openrouter") continue
+    const settings = envSettings[config.id]
+    used[alias] = {
+      ...(settings?.provider ? { provider: settings.provider } : {}),
+      ...(settings?.reasoning ? { reasoning: settings.reasoning } : {}),
+      maxTokens: config.defaultMaxTokens,
+    }
   }
   return used
 }

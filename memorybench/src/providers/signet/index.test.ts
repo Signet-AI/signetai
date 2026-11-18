@@ -250,7 +250,7 @@ describe("Signet benchmark profiles", () => {
     )
     const recall = provider.calls.find((call) => call.path === "/api/memory/recall")
     const recallBody = JSON.parse(String(recall?.init.body))
-    expect(recallBody).toMatchObject({ agentId: "dreaming-gate-alpha" })
+    expect(recallBody).toMatchObject({ agentId: "dreaming-gate-alpha", trackRecallAccess: false })
     expect(recallBody).not.toHaveProperty("project")
     expect(recallBody).not.toHaveProperty("scope")
   })

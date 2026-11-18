@@ -425,7 +425,10 @@ export class SignetProvider implements Provider {
     const raw = process.env.SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT?.trim()
     if (raw === undefined || raw === "") return undefined
     const limit = Number(raw)
-    return Number.isInteger(limit) && limit >= 0 ? { limit } : undefined
+    if (!Number.isInteger(limit) || limit < 0 || limit > 5) {
+      throw new Error("SIGNET_BENCH_RECALL_TRANSCRIPT_EVIDENCE_LIMIT must be an integer from 0 to 5")
+    }
+    return { limit }
   }
 
   getIngestUsage(): IngestUsage {
@@ -629,6 +632,7 @@ export class SignetProvider implements Provider {
           ? {}
           : { scope: options.containerTag, project: this.project }),
         expand: true,
+        trackRecallAccess: false,
       }),
     })
 

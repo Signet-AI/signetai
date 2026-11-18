@@ -7,6 +7,7 @@ import type { IngestResult, Provider } from "../types/provider"
 import type { UnifiedQuestion, UnifiedSession } from "../types/unified"
 import { CheckpointManager } from "./checkpoint"
 import {
+  assertResumeOpenRouterSettings,
   assertSameIdentity,
   containerTagFor,
   mergeIngestUsage,
@@ -15,6 +16,7 @@ import {
 } from "./index"
 import { runIngestPhase } from "./phases/ingest"
 import { runIndexingPhase } from "./phases/indexing"
+import { runSearchPhase } from "./phases/search"
 import { emptyUsage } from "../utils/llm"
 
 const roots: string[] = []
@@ -160,6 +162,21 @@ describe("resume guards", () => {
     expect(() => assertSameIdentity("Protocol", undefined, { a: 2 })).not.toThrow()
   })
 
+  it("rejects resume when MEMORYBENCH_OPENROUTER_MODELS-derived settings changed", () => {
+    const stored = { "openrouter:used/model": { maxTokens: 2048 } }
+    const env = {
+      MEMORYBENCH_OPENROUTER_MODELS: JSON.stringify({ "used/model": { maxTokens: 2048 } }),
+    }
+    const changedEnv = {
+      MEMORYBENCH_OPENROUTER_MODELS: JSON.stringify({ "used/model": { maxTokens: 4096 } }),
+    }
+    expect(() => assertResumeOpenRouterSettings(stored, "openrouter:used/model", "gpt-4o", env)).not.toThrow()
+    expect(() =>
+      assertResumeOpenRouterSettings(stored, "openrouter:used/model", "gpt-4o", changedEnv)
+    ).toThrow("OpenRouter model settings changed")
+    expect(() => assertResumeOpenRouterSettings(undefined, "openrouter:used/model", "gpt-4o", env)).not.toThrow()
+  })
+
   it("adds harness usage and deduplicates dreaming passes across resumed processes", () => {
     const first = {
       harness: { ...emptyUsage(), requests: 2, inputTokens: 10 },
@@ -175,5 +192,26 @@ describe("resume guards", () => {
     const merged = mergeIngestUsage(first, second)
     expect(merged?.harness).toMatchObject({ requests: 3, inputTokens: 14 })
     expect(Object.keys(merged?.dreamingPasses ?? {})).toEqual(["p1", "p2"])
+  })
+
+  it("re-records the recall transcript evidence limit every time search runs", async () => {
+    const root = mkdtempSync(join(tmpdir(), "memorybench-search-evidence-"))
+    roots.push(root)
+    const manager = new CheckpointManager(root)
+    const checkpoint = manager.create("evidence-run", "recording", "fixture", "judge", "answer", {})
+    checkpoint.recallTranscriptEvidence = { limit: 1 }
+    manager.initQuestion(checkpoint, "q1", "tag-q1", {
+      question: "q1",
+      groundTruth: "",
+      questionType: "t",
+    })
+    manager.updatePhase(checkpoint, "q1", "indexing", { status: "completed" })
+    const provider = recordingProvider()
+    ;(provider.provider as { recallTranscriptEvidenceLimit?: () => Promise<{ limit: number }> })
+      .recallTranscriptEvidenceLimit = async () => ({ limit: 4 })
+
+    await runSearchPhase(provider.provider, benchmark(), checkpoint, manager, ["q1"])
+
+    expect(checkpoint.recallTranscriptEvidence).toEqual({ limit: 4 })
   })
 })

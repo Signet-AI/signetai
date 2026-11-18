@@ -183,7 +183,7 @@ export function summarizeTranscriptReliance(
 }
 
 function emptyRecallSourceStats(): RecallSourceStats {
-  return { questions: 0, memoriesOnly: 0, transcriptEvidenceOnly: 0, both: 0, none: 0 }
+  return { questions: 0, memoriesOnly: 0, transcriptEvidenceOnly: 0, both: 0, none: 0, unknown: 0 }
 }
 
 function bucketRecallSources(stats: RecallSourceStats, hitSources: string[] | undefined): void {
@@ -193,7 +193,8 @@ function bucketRecallSources(stats: RecallSourceStats, hitSources: string[] | un
   if (memories && transcripts) stats.both++
   else if (transcripts) stats.transcriptEvidenceOnly++
   else if (memories) stats.memoriesOnly++
-  else stats.none++
+  else if (hitSources) stats.none++
+  else stats.unknown++
 }
 
 export function summarizeRecallSources(
@@ -565,7 +566,7 @@ export function printReport(result: BenchmarkResult): void {
   if (result.recallSources) {
     const sources = result.recallSources
     const format = (stats: RecallSourceStats): string =>
-      `${stats.memoriesOnly} memories-only, ${stats.transcriptEvidenceOnly} transcripts-only, ${stats.both} both, ${stats.none} none`
+      `${stats.memoriesOnly} memories-only, ${stats.transcriptEvidenceOnly} transcripts-only, ${stats.both} both, ${stats.none} none${stats.unknown > 0 ? `, ${stats.unknown} unknown` : ""}`
     console.log("-".repeat(60))
     console.log("\nRECALL SOURCES:")
     if (sources.transcriptEvidenceLimit) {

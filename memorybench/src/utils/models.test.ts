@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { getModelConfig } from "./models"
+import { getModelConfig, openRouterModelSettings } from "./models"
 
 describe("getModelConfig", () => {
   it("omits temperature for local GGUF OpenAI-compatible models", () => {
@@ -106,5 +106,34 @@ describe("getModelConfig", () => {
     expect(() => getModelConfig("openrouter:m", env('{"m": {"maxTokens": 0}}'))).toThrow(
       'invalid "maxTokens"'
     )
+  })
+})
+
+describe("openRouterModelSettings", () => {
+  it("throws naming an entry whose model the run does not use", () => {
+    const env = {
+      MEMORYBENCH_OPENROUTER_MODELS: JSON.stringify({
+        "unused/model": { provider: { order: ["a"] } },
+        "used/model": { maxTokens: 2048 },
+      }),
+    }
+    expect(() => openRouterModelSettings(["openrouter:used/model"], env)).toThrow(
+      "MEMORYBENCH_OPENROUTER_MODELS has an entry for a model this run does not use: unused/model"
+    )
+    expect(() => openRouterModelSettings(["glm-5.3-flash"], env)).toThrow("unused/model")
+    expect(() =>
+      openRouterModelSettings(["openrouter:used/model", "openrouter:unused/model"], env)
+    ).not.toThrow()
+  })
+
+  it("records the effective maxTokens next to each used model's settings", () => {
+    const env = {
+      MEMORYBENCH_OPENROUTER_MODELS: JSON.stringify({ "used/model": { maxTokens: 2048 } }),
+    }
+    expect(openRouterModelSettings(["openrouter:used/model", "openrouter:other/model"], env)).toEqual({
+      "openrouter:used/model": { maxTokens: 2048 },
+      "openrouter:other/model": { maxTokens: 1000 },
+    })
+    expect(openRouterModelSettings(["glm-5.3-flash"], {})).toEqual({})
   })
 })
