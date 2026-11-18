@@ -110,7 +110,7 @@ function managedSourcePath(meta: string | null): string | null {
 	}
 }
 
-const ARTIFACT_IS_DREAMING_INPUT = `NOT (
+export const ARTIFACT_IS_DREAMING_INPUT = `NOT (
 	ma.source_kind = 'manifest'
 	OR (
 		ma.source_kind = 'transcript' AND ma.session_key IS NOT NULL
@@ -646,6 +646,66 @@ export function readRecentEpisodicSources(
 	if (order !== "none") sources.sort((a, b) => compareEpisodicSources(a, b, order));
 	return sources.slice(0, boundedLimit < 0 ? undefined : boundedLimit);
 }
+export interface DreamingEvidenceSourceCount {
+	readonly eligible: number;
+	readonly bounded: boolean;
+}
+
+export function countEpisodicDreamingEvidenceSources(
+	db: ReadDb,
+	agentId: string,
+	kinds: readonly EpisodicSourceKind[],
+	bound: number,
+): DreamingEvidenceSourceCount {
+	const branches: string[] = [];
+	const wants = new Set(kinds);
+	if (wants.has("memory")) {
+		branches.push(`SELECT 'memory' AS kind, id FROM memories
+		 WHERE agent_id = ?
+		   AND memory_kind = 'episodic'
+		   AND COALESCE(is_deleted, 0) = 0
+		   AND visibility != 'archived'
+		   AND scope IS NULL
+		   AND COALESCE(type, '') != 'session_summary'
+		   AND length(content) > 0`);
+	}
+	if (wants.has("artifact")) {
+		branches.push(`SELECT 'artifact' AS kind, ma.source_path AS id FROM memory_artifacts AS ma
+		 WHERE ma.agent_id = ?
+		   AND COALESCE(ma.is_deleted, 0) = 0
+		   AND length(ma.content) > 0
+		   AND ${ARTIFACT_IS_DREAMING_INPUT}`);
+	}
+	if (wants.has("transcript")) {
+		const completed = tableHasColumn(db, "session_transcripts", "completed_at")
+			? "session_transcripts.completed_at IS NOT NULL"
+			: "0";
+		branches.push(`SELECT 'transcript' AS kind, session_key AS id FROM session_transcripts
+		 WHERE agent_id = ?
+		   AND ${completed}
+		   AND length(content) > 0`);
+	}
+	if (wants.has("summary")) {
+		branches.push(`SELECT 'summary' AS kind, id FROM session_summaries
+		 WHERE agent_id = ?
+		   AND depth = 0
+		   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
+		   AND length(content) > 0`);
+	}
+	if (branches.length === 0) return { eligible: 0, bounded: true };
+	const boundedLimit = Math.max(1, Math.floor(bound));
+	const selected = (["memory", "artifact", "transcript", "summary"] as const)
+		.filter((kind) => wants.has(kind))
+		.map(() => agentId);
+	const row = db
+		.prepare(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT kind, id FROM (
+	  ${branches.join(" UNION ALL ")}
+	) LIMIT ${boundedLimit + 1})`)
+		.get(...selected) as { readonly n: number } | undefined;
+	const eligible = row?.n ?? 0;
+	return { eligible, bounded: eligible <= boundedLimit };
+}
+
 export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOptions): EpisodicSourceRecord | null {
 	const from = options.from.trim();
 	if (!from) return null;

@@ -696,7 +696,10 @@ applies.
 Report how much eligible episodic evidence Dreaming has delivered and reviewed
 in one agent scope, using the same eligibility enumeration and evidence cursor
 the pass pipeline uses. Read-only; reads run through the database owner.
-Requires `admin` permission.
+Requires `admin` permission. Read the report after Dreaming has drained its
+backlog and ingestion has stopped: a source that becomes eligible mid-scan may
+fall outside the walked cursor window, and the walk reports such drift by
+setting `scanComplete` to false.
 
 **Query parameters**
 
