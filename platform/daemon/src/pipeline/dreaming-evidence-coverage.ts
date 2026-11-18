@@ -1,5 +1,10 @@
 import type { DbAccessor, ReadDb } from "../db-accessor";
-import { type EpisodicSourceKind, type EpisodicSourceRecord, readRecentEpisodicSources } from "../episodic-sources";
+import {
+	type EpisodicSourceKind,
+	type EpisodicSourceRecord,
+	countEpisodicDreamingEvidenceSources,
+	readRecentEpisodicSources,
+} from "../episodic-sources";
 import { dbOwnerDreamingEvidenceCoverage, runDbOwnerDomainOperation } from "../db-owner-runtime";
 import { renderDreamingEvidence } from "./dreaming-evidence";
 import {
@@ -138,6 +143,11 @@ export type DreamingEvidenceCoverageStepRequest =
 			readonly afterAttentionId: string;
 			readonly attentionLimit: number;
 			readonly continuationsLimit: number;
+	  }
+	| {
+			readonly step: "count";
+			readonly agentId: string;
+			readonly bound: number;
 	  };
 
 export interface CoverageDeliveryRow {
@@ -180,6 +190,10 @@ export type DreamingEvidenceCoverageStepResult =
 			readonly attentionTruncated: boolean;
 			readonly exhausted: boolean;
 			readonly afterAttentionId: string;
+	  }
+	| {
+			readonly step: "count";
+			readonly eligible: number | null;
 	  };
 
 export function dreamedFraction(reviewedChars: number, eligibleChars: number): number | null {
@@ -376,6 +390,10 @@ export function scanDreamingEvidenceCoverageStep(
 		}
 		return { step: "classify", delta, byKind };
 	}
+	if (request.step === "count") {
+		const count = countEpisodicDreamingEvidenceSources(db, request.agentId, DREAMING_EVIDENCE_KINDS, request.bound);
+		return { step: "count", eligible: count.bounded ? count.eligible : null };
+	}
 	const continuations = pendingDreamingEvidenceContinuations(db, request.agentId, request.continuationsLimit);
 	let openStalledAttention = 0;
 	let afterAttentionId = request.afterAttentionId;
@@ -406,6 +424,7 @@ class DreamingEvidenceCoverageWalk {
 	sourceCursor: CoveragePageCursor | null = null;
 	private lastSourceLimit = 0;
 	sourcesDone = false;
+	countDone = false;
 	scannedSources = 0;
 	passCreatedAt = "";
 	passId = "";
@@ -479,10 +498,17 @@ class DreamingEvidenceCoverageWalk {
 				continuationsLimit: CONTINUATIONS_LIMIT,
 			};
 		}
+		if (!this.countDone) {
+			return { step: "count", agentId: this.agentId, bound: this.bounds.maxSources };
+		}
 		return null;
 	}
 
 	apply(result: DreamingEvidenceCoverageStepResult): void {
+		if (result.step === "count") {
+			this.applyCount(result);
+			return;
+		}
 		if (result.step === "sources") {
 			for (const entry of result.entries) {
 				const key = `${entry.kind}\u0000${entry.id}`;
@@ -545,6 +571,13 @@ class DreamingEvidenceCoverageWalk {
 		this.tailsAfterAttentionId = result.afterAttentionId;
 		if (result.exhausted) this.tailsDone = true;
 		if (result.continuationsTruncated) this.incomplete ??= "continuations-truncated";
+		return;
+	}
+
+	applyCount(result: Extract<DreamingEvidenceCoverageStepResult, { step: "count" }>): void {
+		this.countDone = true;
+		if (result.eligible === null) this.incomplete ??= "count-unbounded";
+		else if (result.eligible !== this.entries.size) this.incomplete ??= "source-drift";
 	}
 
 	entryInput(entry: WalkEntry): CoverageEntryClassificationInput {
@@ -564,7 +597,7 @@ class DreamingEvidenceCoverageWalk {
 	}
 
 	done(): boolean {
-		return this.sourcesDone && this.passesDone && this.classifyDone && this.tailsDone;
+		return this.sourcesDone && this.passesDone && this.classifyDone && this.tailsDone && this.countDone;
 	}
 
 	snapshot(): DreamingEvidenceCoverage {

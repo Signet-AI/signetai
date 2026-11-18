@@ -7,6 +7,7 @@ import {
 	DREAMING_EVIDENCE_COVERAGE_MAX_PASSES,
 	DREAMING_EVIDENCE_COVERAGE_MAX_SOURCES,
 	getDreamingEvidenceCoverageInDb,
+	scanDreamingEvidenceCoverageStep,
 } from "./dreaming-evidence-coverage";
 import { readRecentEpisodicSources } from "../episodic-sources";
 
@@ -277,5 +278,32 @@ describe("dreaming evidence coverage", () => {
 		expect(coverage.chars.consumedWithoutReview).toBe(0);
 		expect(coverage.scanComplete).toBe(true);
 		expect(coverage.fullyReviewed).toBe(true);
+	});
+
+	it("reports drift when eligible sources outnumber the walked window", () => {
+		seedMemory(db, "mem-old", "2026-01-01 00:00:01");
+		seedMemory(db, "mem-new", "2026-01-01 00:00:02");
+		const coverage = getDreamingEvidenceCoverageInDb(db as unknown as ReadDb, AGENT, { ...BOUNDS, maxSources: 1 });
+		expect(coverage.sources.eligible).toBe(1);
+		expect(coverage.scanComplete).toBe(false);
+	});
+
+	it("counts a source inserted after page one as drift against the fresh count", () => {
+		seedMemory(db, "mem-page-one", "2026-01-01 00:00:02");
+		const first = scanDreamingEvidenceCoverageStep(db as unknown as ReadDb, {
+			step: "sources",
+			agentId: AGENT,
+			cursor: null,
+			limit: 1,
+		});
+		expect(first.entries).toHaveLength(1);
+		seedMemory(db, "mem-late", "2026-01-01 00:00:01");
+		const count = scanDreamingEvidenceCoverageStep(db as unknown as ReadDb, {
+			step: "count",
+			agentId: AGENT,
+			bound: 1000,
+		});
+		if (count.step !== "count") throw new Error("expected a count step");
+		expect(count.eligible).toBe(2);
 	});
 });
