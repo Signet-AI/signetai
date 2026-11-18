@@ -1113,6 +1113,39 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		expect(signetHandlers[0]?.timeout).toBe(20);
 	});
 
+	test("migrates a stale Codex Desktop MCP runtime path after a packaging update", async () => {
+		const appPath = join(tempHome, "Applications", "Codex.app");
+		const runtime = join(appPath, "Contents", "Resources", "runtime", "node", "bin", "node");
+		mkdirSync(join(runtime, ".."), { recursive: true });
+		writeFileSync(runtime, "runtime fixture\n");
+		const packageRoot = join(tempHome, "signetai");
+		const signetEntry = join(packageRoot, "bin", "signet.js");
+		const mcpEntry = join(packageRoot, "dist", "mcp-stdio.js");
+		mkdirSync(join(signetEntry, ".."), { recursive: true });
+		mkdirSync(join(mcpEntry, ".."), { recursive: true });
+		writeFileSync(signetEntry, "");
+		writeFileSync(mcpEntry, "");
+		process.env.SIGNET_WRAPPER_DIR = packageRoot;
+		const old = join(tempHome, "old", "Codex.app", "node");
+		writeFileSync(configPath, buildMcpBlock({ command: old, args: [join(tempHome, "old", "dist", "mcp-stdio.js")] }));
+		writeFileSync(hooksPath, JSON.stringify(buildHooksFile([old, join(tempHome, "old", "bin", "signet.js")])));
+		const result = await desktopRuntimeConnector(appPath, runtime).install(tempHome);
+		expect(result.success).toBe(true);
+		const content = readFileSync(configPath, "utf-8");
+		expect(content).toContain(`command = '${runtime}'`);
+		expect(content).toContain(`args = ['${mcpEntry}']`);
+		if (process.platform === "win32") {
+			const wrapper = result.filesWritten.find((path) => path.toLowerCase().endsWith(".cmd"));
+			if (!wrapper) throw new Error("Windows hook wrapper missing");
+			expect(readFileSync(wrapper, "utf-8").replaceAll('"', "")).toContain(`${runtime} ${signetEntry}`);
+		}
+		if (process.platform !== "win32") {
+			const hooks = JSON.stringify(readHooksJson());
+			expect(hooks).toContain(`${runtime} ${signetEntry}`);
+			expect(hooks).not.toContain(old);
+		}
+	});
+
 	test("retains an existing MCP launcher not visible in the installer filesystem", async () => {
 		const appPath = join(tempHome, "Applications", "Codex.app");
 		const runtime = join(appPath, "Contents", "Resources", "runtime", "node", "bin", "node");
@@ -1675,10 +1708,17 @@ describe("CodexConnector.install — launcher and auth", () => {
 		}
 	});
 
-	test("rejects unreadable existing MCP configuration without rewriting it", async () => {
+	test("warns on malformed TOML and retains the prior text-patching behavior", async () => {
 		writeFileSync(configPath, "[broken");
-		await expect(connector().install(tempHome)).rejects.toThrow("Cannot read existing Signet MCP launcher");
-		expect(readFileSync(configPath, "utf-8")).toBe("[broken");
+		const result = await connector().install(tempHome);
+		expect(result.success).toBe(true);
+		expect(
+			result.warnings?.some((warning) => warning.includes("could not parse") && warning.includes(configPath)),
+		).toBe(true);
+		const content = readFileSync(configPath, "utf-8");
+		expect(content).toStartWith("[broken\n");
+		expect(content).toContain("[mcp_servers.signet]");
+		expect(readHooksJson().hooks).toBeDefined();
 	});
 
 	test("reports a corrupt generated MCP cache and rediscovers its launcher", async () => {
