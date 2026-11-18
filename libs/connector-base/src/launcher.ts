@@ -1,4 +1,5 @@
-import { dirname, join, win32 } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { dirname, isAbsolute, join, parse, win32 } from "node:path";
 import { isExistingFile, isJsonObject, readManagedTrimmedEnv, type ResolvedCommand } from "./config";
 
 export const SIGNET_MCP_STDIO_WORKER_ENV = "SIGNET_MCP_STDIO_WORKER";
@@ -143,7 +144,7 @@ export function cliFromMcp(launcher: ResolvedCommand | undefined): ResolvedComma
 export function mcpFromCli(launcher: ResolvedCommand | undefined): ResolvedCommand | undefined {
 	if (!launcher) return undefined;
 	const script = launcher.args.findIndex((arg) => /(?:^|[\\/])signet\.js$/.test(arg));
-	if (script >= 0)
+	if (script >= 0 && /(?:^|[\\/])bin[\\/]signet\.js$/.test(launcher.args[script] ?? ""))
 		return {
 			command: launcher.command,
 			args: launcher.args.map((arg, i) =>
@@ -181,12 +182,49 @@ function discover(mcp: boolean, runtime?: string | null): ResolvedCommand {
 	return { command: mcp ? "signet-mcp" : "signet", args: [] };
 }
 
+function launcherPathStatus(path: string): "present" | "missing" | "unverified" {
+	try {
+		if (statSync(path, { throwIfNoEntry: false })) return "present";
+	} catch {
+		return "unverified";
+	}
+	const root = parse(path).root;
+	const segments = path.slice(root.length).split(/[\\/]/).filter(Boolean);
+	return isAbsolute(path) && segments.length >= 2 && existsSync(join(root, ...segments.slice(0, 2)))
+		? "missing"
+		: "unverified";
+}
+
+function reuseLauncher(existing: ResolvedCommand | undefined, mcp: boolean, runtime?: string | null): ResolvedCommand {
+	if (!existing) return discover(mcp, runtime);
+	const paths = [
+		existing.command,
+		...(/^(?:node|bun)(?:\.exe)?$/i.test(win32.basename(existing.command)) ? existing.args : []),
+	];
+	const statuses = paths.map((path, index) =>
+		index === 0 && !/[\\/]/.test(path) ? "present" : launcherPathStatus(path),
+	);
+	if (statuses.includes("missing")) {
+		const replacement = discover(mcp, runtime);
+		console.warn(
+			`[signet] Warning: stale launcher ${renderCommand(existing)} was replaced with ${renderCommand(replacement)}.`,
+		);
+		return replacement;
+	}
+	if (statuses.includes("unverified")) {
+		console.warn(
+			`[signet] Warning: launcher ${renderCommand(existing)} could not be verified from this environment; keeping it. Set SIGNET_HOOK_COMMAND to override it.`,
+		);
+	}
+	return existing;
+}
+
 export function resolveSignetCliCommand(existing?: ResolvedCommand, runtime?: string | null): ResolvedCommand {
-	return override() ?? (isSignetCliLauncher(existing) ? existing : undefined) ?? discover(false, runtime);
+	return override() ?? reuseLauncher(isSignetCliLauncher(existing) ? existing : undefined, false, runtime);
 }
 
 export function resolveSignetMcpCommand(existing?: ResolvedCommand, runtime?: string | null): ResolvedCommand {
 	const configured = override();
 	if (configured) return mcpFromCli(configured) ?? configured;
-	return readMcpLauncher(existing) ?? discover(true, runtime);
+	return reuseLauncher(readMcpLauncher(existing), true, runtime);
 }

@@ -1,4 +1,7 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, parse } from "node:path";
 import {
 	cliFromMcp,
 	parseHookLauncher,
@@ -9,8 +12,10 @@ import {
 
 const keys = ["SIGNET_HOOK_COMMAND", "SIGNET_CLI_PATH", "SIGNET_DIR", "SIGNET_WRAPPER_DIR"];
 const saved = new Map<string, string | undefined>();
+let root: string;
 
 beforeEach(() => {
+	root = mkdtempSync(join(tmpdir(), "signet-launcher-"));
 	for (const key of keys) {
 		saved.set(key, process.env[key]);
 		Reflect.deleteProperty(process.env, key);
@@ -18,6 +23,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+	rmSync(root, { recursive: true, force: true });
 	for (const [key, value] of saved) {
 		if (value === undefined) Reflect.deleteProperty(process.env, key);
 		if (value !== undefined) process.env[key] = value;
@@ -68,16 +74,104 @@ test.each(["node /x/signet.js", "[broken", "[]", '["signet",1]'])(
 );
 
 test("explicit paths outrank existing launchers without a local existence check", () => {
-	process.env.SIGNET_CLI_PATH = "/unmounted/host/signet";
+	const command = join(root, "missing", "signet");
+	process.env.SIGNET_CLI_PATH = command;
 	const existing = { command: "/old/signet", args: [] };
-	expect(resolveSignetCliCommand(existing)).toEqual({ command: "/unmounted/host/signet", args: [] });
+	expect(resolveSignetCliCommand(existing)).toEqual({ command, args: [] });
 	expect(resolveSignetMcpCommand({ ...existing, env: { SIGNET_MCP_STDIO_WORKER: "1" } })).toEqual({
-		command: "/unmounted/host/signet",
+		command,
 		args: [],
 		env: { SIGNET_MCP_STDIO_WORKER: "1" },
 	});
-	process.env.SIGNET_HOOK_COMMAND = '["/preferred/node","/host/bin/signet.js"]';
-	expect(resolveSignetCliCommand(existing)).toEqual({ command: "/preferred/node", args: ["/host/bin/signet.js"] });
+	const runtime = join(root, "missing", "node");
+	const script = join(root, "missing", "bin", "signet.js");
+	process.env.SIGNET_HOOK_COMMAND = JSON.stringify([runtime, script]);
+	expect(resolveSignetCliCommand(existing)).toEqual({ command: runtime, args: [script] });
+});
+
+test.each([resolveSignetCliCommand, resolveSignetMcpCommand])(
+	"replaces stale nvm launchers only in a visible namespace: %p",
+	(resolve) => {
+		mkdirSync(join(root, "bin"), { recursive: true });
+		mkdirSync(join(root, "dist"), { recursive: true });
+		writeFileSync(join(root, "bin", "signet.js"), "");
+		writeFileSync(join(root, "dist", "mcp-stdio.js"), "");
+		process.env.SIGNET_WRAPPER_DIR = root;
+		const runtime = join(root, ".nvm", "versions", "old", "node");
+		const script = join(root, ".nvm", "versions", "old", "bin", "signet.js");
+		const warn = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			for (const present of ["neither", "runtime", "script"]) {
+				rmSync(join(root, ".nvm"), { recursive: true, force: true });
+				mkdirSync(join(script, ".."), { recursive: true });
+				if (present === "runtime") writeFileSync(runtime, "");
+				if (present === "script") writeFileSync(script, "");
+				warn.mockClear();
+				const existing = { command: runtime, args: [script] };
+				const replacement = resolve(undefined, process.execPath);
+				expect(resolve(existing, process.execPath)).toEqual(replacement);
+				expect(warn).toHaveBeenCalledTimes(1);
+				expect(warn.mock.calls[0]?.join(" ")).toContain(runtime);
+				expect(warn.mock.calls[0]?.join(" ")).toContain(replacement.command);
+				expect(warn.mock.calls[0]?.join(" ")).toContain(replacement.args[0] ?? "");
+			}
+		} finally {
+			warn.mockRestore();
+		}
+	},
+);
+
+test.each([resolveSignetCliCommand, resolveSignetMcpCommand])(
+	"keeps an invisible-root host launcher with one actionable warning: %p",
+	(resolve) => {
+		const base = parse(root).root;
+		const first = root.slice(base.length).split(/[\\/]/)[0] ?? "";
+		const missing = `signet-unmounted-${crypto.randomUUID()}`;
+		const warn = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			for (const command of [join(base, missing, "host", "signet"), join(base, first, missing, "signet")]) {
+				const existing = { command, args: [], env: { SIGNET_MCP_STDIO_WORKER: "1" } };
+				warn.mockClear();
+				expect(resolve(existing)).toEqual(existing);
+				expect(warn).toHaveBeenCalledTimes(1);
+				expect(warn.mock.calls[0]?.join(" ")).toContain("could not be verified from this environment");
+				expect(warn.mock.calls[0]?.join(" ")).toContain("SIGNET_HOOK_COMMAND");
+			}
+		} finally {
+			warn.mockRestore();
+		}
+	},
+);
+
+test.each([resolveSignetCliCommand, resolveSignetMcpCommand])(
+	"keeps valid existing launchers and bare commands without a warning: %p",
+	(resolve) => {
+		const runtime = join(root, "node");
+		const script = join(root, "signet.js");
+		writeFileSync(runtime, "");
+		writeFileSync(script, "");
+		const warn = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			for (const existing of [
+				{ command: runtime, args: [script] },
+				{ command: "signet", args: [], env: { SIGNET_MCP_STDIO_WORKER: "1" } },
+			])
+				expect(resolve(existing)).toEqual(existing);
+			expect(warn).not.toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
+	},
+);
+
+test("runs the MCP worker for an overridden signet.js outside bin", () => {
+	const script = join(root, "signet.js");
+	process.env.SIGNET_HOOK_COMMAND = JSON.stringify([process.execPath, script]);
+	expect(resolveSignetMcpCommand()).toEqual({
+		command: process.execPath,
+		args: [script],
+		env: { SIGNET_MCP_STDIO_WORKER: "1" },
+	});
 });
 
 test.each([

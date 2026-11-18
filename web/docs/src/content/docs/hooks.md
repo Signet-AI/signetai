@@ -35,6 +35,12 @@ Muse Code, ForgeCode, and OpenCode) resolve them in this order:
 3. Package/runtime discovery, with the running executable as the last resort.
 
 Existing host paths do not need to exist inside the installer's container.
+Sync replaces a missing executable or runtime script only when the path's first
+two directory segments exist locally, so it can verify the same filesystem
+namespace. It warns with the old and replacement launcher. If those segments
+are not visible, sync keeps the launcher and warns that it could not verify it
+from this environment; use `SIGNET_HOOK_COMMAND` to override it. Bare executable
+names are not file-checked.
 Recognized CLI launchers are a `signet` executable with no extra arguments, or
 `node`/`bun` with one `signet.js` path, including Windows executable forms. MCP
 entries must use `signet-mcp`, a Signet CLI with the MCP worker environment, or
@@ -62,12 +68,17 @@ filesystem. `SIGNET_HOOK_COMMAND` wins when both are set. Invalid hook overrides
 fail before harness configuration is written. Use an override to replace an
 already broken container-only or bare launcher.
 
-MCP registration uses the matching stdio entry for a JavaScript launcher, or
-sets `SIGNET_MCP_STDIO_WORKER=1` for a native Signet launcher. Recognized existing
-MCP arguments and noncredential environment values are retained together.
-Malformed existing Codex or Kimi configuration is rejected rather than rewritten
-using a discovered launcher. A corrupt generated Codex MCP cache produces a
-warning and its launcher is rediscovered; the cache is not user configuration.
+MCP registration uses the matching stdio entry for `bin/signet.js`, or sets
+`SIGNET_MCP_STDIO_WORKER=1` for other CLI launchers, including `signet.js` outside
+`bin/`. Recognized existing MCP arguments and noncredential environment values
+are retained together. On POSIX, Kimi uses the discovered runtime and
+`signet.js` path instead of bare `signet` when available.
+
+Unparseable Codex or Kimi TOML produces a warning and launcher discovery
+continues. Installation retains the existing text-based patching behavior:
+it preserves unrelated text and updates Signet-owned sections, but does not
+repair malformed TOML. File read errors still abort installation. A corrupt
+generated Codex MCP cache also warns and its launcher is rediscovered.
 
 Connectors that persist a daemon key (Codex, Kimi, pi, Oh My Pi, Muse Code,
 ForgeCode, OpenCode, and Hermes Agent) probe the target daemon's `/api/mode` once

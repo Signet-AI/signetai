@@ -26,10 +26,11 @@ import {
 	resolveSessionStartTimeoutMs,
 	resolveSignetDaemonUrl,
 } from "@signet/core";
-function readHookLauncher(path: string): ResolvedCommand | undefined {
+function readHookLauncher(path: string, warnings: string[]): ResolvedCommand | undefined {
 	if (!existsSync(path)) return undefined;
+	const content = readFileSync(path, "utf-8");
 	try {
-		const config = parseToml(readFileSync(path, "utf-8"));
+		const config = parseToml(content);
 		if (!Array.isArray(config.hooks)) return undefined;
 		for (const hook of config.hooks) {
 			if (!isJsonObject(hook) || typeof hook.command !== "string") continue;
@@ -37,7 +38,7 @@ function readHookLauncher(path: string): ResolvedCommand | undefined {
 			if (launcher) return launcher;
 		}
 	} catch {
-		throw new Error(`Cannot read existing Signet hook launcher from ${path}`);
+		warnings.push(`Signet could not parse ${path}; rediscovering the hook launcher.`);
 	}
 	return undefined;
 }
@@ -317,14 +318,15 @@ export class KimiConnector extends BaseConnector {
 	async install(basePath: string): Promise<InstallResult> {
 		const configPath = this.getConfigPath();
 		const mcpPath = this.getMcpJsonPath();
+		const warnings: string[] = [];
 		const existing = readMcpLauncher(readMcpJson(mcpPath)?.mcpServers?.signet);
-		const hook = readHookLauncher(configPath);
+		const hook = readHookLauncher(configPath, warnings);
 		const launcher = resolveSignetCliCommand(hook ?? cliFromMcp(existing));
 		const mcp = resolveSignetMcpCommand(existing ?? mcpFromCli(hook));
 		const auth = await resolveInstallApiKey();
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
-		const warnings: string[] = auth.warning ? [auth.warning] : [];
+		if (auth.warning) warnings.push(auth.warning);
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
 		const strippedAgentsPath = this.stripLegacySignetBlock(expandedBasePath);
 		if (strippedAgentsPath !== null) {
