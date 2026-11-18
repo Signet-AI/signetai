@@ -114,6 +114,8 @@ describe("matchPromptEntities", () => {
 		});
 		const matches = await matchPromptEntities(DB_PATH(), "default", "Is Quillonbridge shipping this week?");
 		expect(matches.map((match) => match.entityName)).toEqual(["Quillonbridge"]);
+		const longName = `Long Project 7 ${"descriptive words ".repeat(34)}`.trim();
+		expect(await matchPromptEntities(DB_PATH(), "default", `What is ${longName}?`)).toEqual([]);
 	});
 
 	it("reads full pages past a name larger than the owner result limit", async () => {
@@ -141,8 +143,8 @@ describe("matchPromptEntities", () => {
 			owner.submit = submit;
 		});
 		expect(matches.map((match) => match.entityName)).toEqual(["Lanternfield"]);
-		expect(reads).toBeGreaterThanOrEqual(20);
-		expect(reads).toBeLessThanOrEqual(22);
+		expect(reads).toBeGreaterThanOrEqual(40);
+		expect(reads).toBeLessThanOrEqual(42);
 	});
 
 	it("pages through agent-scoped index seeks without sorting or scanning other agents", async () => {
@@ -196,7 +198,7 @@ describe("matchPromptEntities", () => {
 			expect(plan.some((detail) => detail.includes("agent_id=?"))).toBe(true);
 		}
 		expect(statements.filter((statement) => statement.operation === "user-prompt-submit.entity-aliases").length).toBe(
-			3,
+			5,
 		);
 	});
 
@@ -275,6 +277,64 @@ describe("matchPromptEntities", () => {
 		const byAlias = await matchPromptEntities(DB_PATH(), "default", "Is quaylighthouse open?");
 		expect(byName.map((match) => [match.entityName, match.matchSource])).toEqual([["Lantern Quay", "name"]]);
 		expect(byAlias.map((match) => [match.entityName, match.matchSource])).toEqual([["Lantern Quay", "alias"]]);
+	});
+
+	it("keeps alias pages under the owner result limit when every text needs JSON escaping", async () => {
+		const now = new Date().toISOString();
+		const control = "\u0001".repeat(250);
+		getDbAccessor().withWriteTx((db) => {
+			const entity = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, ?, ?)`,
+			);
+			const alias = db.prepare(
+				`INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, status)
+				 VALUES (?, ?, 'default', ?, ?, 'active')`,
+			);
+			entity.run(`ent-${control}`, `Anchor${control}`, `anchor${control}`, now, now);
+			for (let index = 0; index < 400; index += 1) {
+				const text = `${String(index).padStart(3, "0")}${control}`;
+				alias.run(`alias-escape-${index}`, `ent-${control}`, text, text);
+			}
+			entity.run("ent-saltmarsh", "Saltmarsh Project", "saltmarsh project", now, now);
+			alias.run("alias-saltmarsh", "ent-saltmarsh", "saltmarshbeacon", "saltmarshbeacon");
+		});
+		const matches = await matchPromptEntities(DB_PATH(), "default", "Is saltmarshbeacon lit?");
+		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Saltmarsh Project", "alias"]]);
+	});
+
+	it("does not fail on oversized entity ids or non-numeric mention counts", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const insert = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', ?, ?, ?)`,
+			);
+			insert.run("x".repeat(1_100_000), "Anchor Point", "anchor point", 1, now, now);
+			insert.run("ent-tidewater", "Tidewater", "tidewater", "9".repeat(1_100_000), now, now);
+			insert.run("ent-kestrel", "Kestrelmoor", "kestrelmoor", 3, now, now);
+		});
+		const kestrel = await matchPromptEntities(DB_PATH(), "default", "Did Kestrelmoor ship?");
+		const tidewater = await matchPromptEntities(DB_PATH(), "default", "Did Tidewater ship?");
+		expect(kestrel.map((match) => match.entityName)).toEqual(["Kestrelmoor"]);
+		expect(tidewater.map((match) => match.entityName)).toEqual(["Tidewater"]);
+	});
+
+	it("still matches aliases when the active alias index is missing", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('ent-fen', 'Fen Project', 'fen project', 'project', 'default', 1, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO entity_aliases (id, entity_id, agent_id, alias, canonical_alias, status)
+				 VALUES ('alias-fen', 'ent-fen', 'default', 'fenlighthouse', 'fenlighthouse', 'active')`,
+			).run();
+			db.exec("DROP INDEX idx_entity_aliases_active_unique");
+		});
+		const matches = await matchPromptEntities(DB_PATH(), "default", "Is fenlighthouse open?");
+		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Fen Project", "alias"]]);
 	});
 
 	describe("promptPhraseSpan matches precomputed prompt terms", () => {
