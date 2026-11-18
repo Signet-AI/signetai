@@ -1,20 +1,31 @@
 import { resolveDefaultBasePath } from "@signet/core";
+import { withTranscriptLifecycleIntents, type TranscriptLifecycleIntent } from "./transcript-lifecycle-intents";
 import { getDbAccessor } from "./db-accessor";
-import { dbOwnerTranscriptOperation, getDbOwnerForAccessor } from "./db-owner-runtime";
+import { dbOwnerTranscriptOperation, dbOwnerCommitCompactionSummary, getDbOwnerForAccessor } from "./db-owner-runtime";
+import type { DbAccessor } from "./db-accessor";
+import type { CompactionSummaryInput } from "./session-transcripts";
 import { bypassSession, unbypassSession } from "./session-tracker";
 import type { writeTranscriptAudit } from "./transcript-audit";
-import type {
+import {
 	appendCanonicalTranscriptTurns,
 	writeCanonicalTranscriptSnapshot,
 	appendCanonicalTranscriptSnapshotIfMissing,
+	canonicalTranscriptPath,
+	rewriteReplacingLiveOnlySessions,
+	withTranscriptFileLock,
+	TranscriptLockTimeoutError,
+	sessionSeqCacheKey,
+	type CanonicalTranscriptRecord,
 } from "./transcript-jsonl";
 
-export type TranscriptCaptureInput =
+export type TranscriptCaptureInput = (
 	| { readonly kind: "audit"; readonly input: Parameters<typeof writeTranscriptAudit>[0] }
 	| { readonly kind: "backfill"; readonly input: Parameters<typeof appendCanonicalTranscriptSnapshotIfMissing>[0] }
 	| {
 			readonly kind: "snapshot";
-			readonly input: Omit<Parameters<typeof writeCanonicalTranscriptSnapshot>[0], "onLegacySessionReplaced">;
+			readonly input: Omit<Parameters<typeof writeCanonicalTranscriptSnapshot>[0], "onLegacySessionReplaced"> & {
+				readonly rawTranscript?: string;
+			};
 	  }
 	| { readonly kind: "turns"; readonly input: Parameters<typeof appendCanonicalTranscriptTurns>[0] }
 	| {
@@ -29,13 +40,20 @@ export type TranscriptCaptureInput =
 					readonly transcript: string;
 				}[];
 			};
-	  };
+	  }
+) & { readonly input: { readonly basePath: string } };
+
+export type TranscriptCaptureAdmission =
+	| { readonly status: "admitted"; readonly capture: Exclude<TranscriptCaptureInput, { readonly kind: "audit" }> }
+	| import("./transcript-audit").TranscriptAuditWrite
+	| null;
 
 export type TranscriptLifecycleInput =
 	| {
 			readonly agentId: string;
 			readonly sessionKey: string;
 			readonly action: "start" | "end" | "status";
+			readonly intents?: readonly TranscriptLifecycleIntent[];
 	  }
 	| { readonly action: "restore"; readonly after?: readonly [string, string] };
 
@@ -68,15 +86,24 @@ export interface TranscriptLifecycleResult {
 export async function updateTranscriptLifecycle(
 	input: Exclude<TranscriptLifecycleInput, { readonly action: "restore" }>,
 ): Promise<TranscriptLifecycleResult> {
-	const owner = await getDbOwnerForAccessor(getDbAccessor());
-	const result = await dbOwnerTranscriptOperation<TranscriptLifecycleResult>(
-		owner,
-		{ kind: "session_transcript_lifecycle", input },
-		{ operation: "transcripts.lifecycle", deadlineMs: 2_000 },
-	);
+	const result = await withTranscriptLifecycleIntents(input, async (intents) => {
+		const owner = await getDbOwnerForAccessor(getDbAccessor());
+		return dbOwnerTranscriptOperation<TranscriptLifecycleResult>(
+			owner,
+			{ kind: "session_transcript_lifecycle", input: { ...input, action: "status", intents } },
+			{ operation: "transcripts.lifecycle", deadlineMs: 2_000 },
+		);
+	});
 	if (result.bypassed) bypassSession(input.sessionKey, { allowUnknown: true, untilEnd: true }, input.agentId);
-	if (!result.bypassed && result.generation > 0) unbypassSession(input.sessionKey, input.agentId, true);
+	if (!result.bypassed && result.generation > 0)
+		unbypassSession(input.sessionKey, input.agentId, input.action === "status" ? "deletion" : true);
 	return result;
+}
+
+export async function commitCompactionSummary(accessor: DbAccessor, input: CompactionSummaryInput): Promise<boolean> {
+	return await dbOwnerCommitCompactionSummary(await getDbOwnerForAccessor(accessor), input, {
+		operation: "hooks.session-summary.memory.write",
+	});
 }
 
 export interface TranscriptCapturePending {
@@ -92,23 +119,70 @@ export class TranscriptCapturePendingError extends Error {
 	}
 }
 
-export async function captureTranscriptOwned<Result>(input: TranscriptCaptureInput): Promise<Result> {
+export function captureTranscriptOwned(
+	input: Extract<TranscriptCaptureInput, { kind: "audit" }>,
+): Promise<import("./transcript-audit").TranscriptAuditWrite | null>;
+export function captureTranscriptOwned(input: Extract<TranscriptCaptureInput, { kind: "turns" }>): Promise<boolean>;
+export function captureTranscriptOwned(
+	input: Extract<TranscriptCaptureInput, { kind: "snapshot" }>,
+): Promise<readonly CanonicalTranscriptRecord[] | null>;
+export function captureTranscriptOwned(
+	input: Extract<TranscriptCaptureInput, { kind: "backfill" }>,
+): Promise<string | null>;
+export function captureTranscriptOwned(
+	input: Extract<TranscriptCaptureInput, { kind: "promotion" }>,
+): Promise<readonly string[]>;
+export async function captureTranscriptOwned(
+	input: TranscriptCaptureInput,
+): Promise<
+	| import("./transcript-audit").TranscriptAuditWrite
+	| readonly CanonicalTranscriptRecord[]
+	| readonly string[]
+	| string
+	| boolean
+	| null
+> {
 	const owner = await getDbOwnerForAccessor(getDbAccessor());
-	const result = await dbOwnerTranscriptOperation<Result>(
-		owner,
-		{ kind: "session_transcript_capture", input },
-		{ operation: "transcripts.capture", deadlineMs: 30_000 },
-	);
-	if (
-		typeof result === "object" &&
-		result !== null &&
-		"status" in result &&
-		result.status === "pending" &&
-		"pendingReason" in result &&
-		typeof result.pendingReason === "string"
-	)
-		throw new TranscriptCapturePendingError(result.pendingReason);
-	return result;
+	const admit = async (): Promise<TranscriptCaptureAdmission> => {
+		return dbOwnerTranscriptOperation<TranscriptCaptureAdmission>(
+			owner,
+			{ kind: "session_transcript_capture", input },
+			{ operation: "transcripts.capture", deadlineMs: 2_000 },
+		);
+	};
+	if (input.kind === "audit") {
+		const result = await admit();
+		if (result === null || "latestPath" in result) return result;
+		throw new Error("Invalid transcript audit admission");
+	}
+	try {
+		return await withTranscriptFileLock(
+			canonicalTranscriptPath(input.input.basePath, input.input.harness),
+			async () => {
+				const admitted = await admit();
+				if (!admitted) return input.kind === "turns" ? false : input.kind === "promotion" ? [] : null;
+				if (!("capture" in admitted)) throw new Error("Invalid canonical transcript admission");
+				const capture = admitted.capture;
+				if (capture.kind === "turns") return appendCanonicalTranscriptTurns(capture.input, { lockHeld: true });
+				if (capture.kind === "snapshot") return writeCanonicalTranscriptSnapshot(capture.input, { lockHeld: true });
+				if (capture.kind === "backfill")
+					return appendCanonicalTranscriptSnapshotIfMissing(capture.input, undefined, { lockHeld: true });
+				const replacements = new Map(
+					capture.input.replacements.map((entry) => [sessionSeqCacheKey(entry.identity), entry]),
+				);
+				await rewriteReplacingLiveOnlySessions(
+					canonicalTranscriptPath(capture.input.basePath, capture.input.harness),
+					replacements,
+					{ lockHeld: true },
+				);
+				return [...replacements.keys()];
+			},
+			{ timeoutMs: 250 },
+		);
+	} catch (error) {
+		if (error instanceof TranscriptLockTimeoutError) throw new TranscriptCapturePendingError(error.message);
+		throw error;
+	}
 }
 
 export interface TranscriptDeleteInput {

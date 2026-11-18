@@ -143,11 +143,8 @@ export function runDbOwnerWorker(): void {
 	let db = undefined as unknown as SqliteDatabase;
 	let parentWatch: ReturnType<typeof setInterval> | undefined;
 	let workspaceRoot: string | undefined;
-	function bindTranscriptWorkspace(candidate?: string): string {
-		if (!candidate) {
-			if (!workspaceRoot) throw new Error("Transcript operation requires an explicit workspace");
-			return workspaceRoot;
-		}
+	function bindTranscriptWorkspace(candidate: string): string {
+		if (!candidate) throw new Error("Transcript operation requires an explicit workspace");
 		const layout = resolveWorkspaceLayout(candidate);
 		if (resolve(layout.database) !== resolve(ownerDbPath))
 			throw new Error("Transcript workspace does not match its database owner");
@@ -433,6 +430,14 @@ export function runDbOwnerWorker(): void {
 			db.exec("ROLLBACK");
 			throw error;
 		}
+	}
+
+	async function executeSessionCompactionSummary(
+		request: Extract<DbOwnerJob["request"], { readonly kind: "session_compaction_summary" }>,
+		context: JobExecutionContext,
+	): Promise<boolean> {
+		const { commitCompactionSummaryInTx } = await import("./session-transcripts");
+		return withBusyRetry(() => commitCompactionSummaryInTx(db, request.input), context);
 	}
 
 	function executeTranscriptBulkCommit(
@@ -1162,6 +1167,8 @@ export function runDbOwnerWorker(): void {
 		if (job.request.kind === "transcript_bulk_commit") return executeTranscriptBulkCommit(job.request, context);
 		if (job.request.kind === "session_transcript_write")
 			return await executeSessionTranscriptWrite(job.request, context);
+		if (job.request.kind === "session_compaction_summary")
+			return await executeSessionCompactionSummary(job.request, context);
 		if (job.request.kind === "dreaming_hygiene_attention") return executeDreamingHygieneAttention(job.request, context);
 		if (job.request.kind === "dreaming_surprisal_attention")
 			return executeDreamingSurprisalAttention(job.request, context);

@@ -1,7 +1,7 @@
 import { stripInternalMemoryContext } from "@signet/core";
 import { captureTranscriptOwned } from "./session-transcript-lifecycle";
 import { ensureCanonicalTranscriptHistory } from "./session-transcripts";
-import { type CanonicalTranscriptRecord, canonicalSessionText, inferTranscriptSourceFormat } from "./transcript-jsonl";
+import { canonicalSessionText, inferTranscriptSourceFormat } from "./transcript-jsonl";
 
 export async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly basePath: string;
@@ -18,7 +18,7 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 }): Promise<string | null> {
 	const capturedAt = params.capturedAt;
 	if (!params.transcriptPath) await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	const records = await captureTranscriptOwned<readonly CanonicalTranscriptRecord[] | null>({
+	const records = await captureTranscriptOwned({
 		kind: "snapshot",
 		input: {
 			basePath: params.basePath,
@@ -32,10 +32,11 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 			sourcePath: params.transcriptPath,
 			preserveExistingSession: params.preserveExistingSession,
 			transcript: stripInternalMemoryContext(params.transcript),
+			rawTranscript: params.rawTranscript,
 		},
 	});
 	if (!records) return null;
-	return records.some((record) => record.source_format === "live") ? canonicalSessionText(records) : params.transcript;
+	return canonicalSessionText(records);
 }
 
 export async function appendCanonicalLiveTranscriptTurns(params: {
@@ -49,7 +50,7 @@ export async function appendCanonicalLiveTranscriptTurns(params: {
 }): Promise<boolean> {
 	const capturedAt = new Date().toISOString();
 	await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	return captureTranscriptOwned<boolean>({
+	return captureTranscriptOwned({
 		kind: "turns",
 		input: {
 			basePath: params.basePath,
@@ -79,7 +80,7 @@ export async function appendCanonicalLiveAssistantTurn(params: {
 }): Promise<boolean> {
 	const capturedAt = new Date().toISOString();
 	await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	return captureTranscriptOwned<boolean>({
+	return captureTranscriptOwned({
 		kind: "turns",
 		input: {
 			basePath: params.basePath,

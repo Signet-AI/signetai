@@ -15,7 +15,7 @@ import {
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
 import { normalizeSessionTranscript } from "./transcript-normalization";
-import { pruneTranscriptAudit, type TranscriptAuditWrite } from "./transcript-audit";
+import { pruneTranscriptAudit } from "./transcript-audit";
 import { captureTranscriptOwned } from "./session-transcript-lifecycle";
 import { writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
 import {
@@ -515,7 +515,7 @@ async function writeCaptureAudit(
 	job: TranscriptCaptureJobRow,
 	resolved: ResolvedTranscript,
 ): Promise<string | null> {
-	const audit = await captureTranscriptOwned<TranscriptAuditWrite | null>({
+	const audit = await captureTranscriptOwned({
 		kind: "audit",
 		input: {
 			basePath,
@@ -580,7 +580,7 @@ async function processTranscriptCaptureJob(
 	if (!sourceBacked && job.sessionKey) {
 		await upsertSessionTranscriptAsync(
 			job.sessionKey,
-			resolved.transcript,
+			indexedTranscript,
 			job.harness,
 			job.project,
 			job.agentId,
@@ -592,7 +592,7 @@ async function processTranscriptCaptureJob(
 	if (sourceBacked && job.sessionKey && (!resolved.sessionCompleted || job.previouslyCompleted)) {
 		await upsertSessionTranscriptAsync(
 			job.sessionKey,
-			resolved.transcript,
+			indexedTranscript,
 			job.harness,
 			job.project,
 			job.agentId,

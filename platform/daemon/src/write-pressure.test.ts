@@ -19,3 +19,10 @@ describe("isRetryableWritePressure", () => {
 		expect(isRetryableWritePressure("queue full")).toBe(false);
 	});
 });
+
+describe("transcript lock timeout", () => {
+	it("is retryable write pressure", async () => {
+		const { TranscriptLockTimeoutError } = await import("./transcript-jsonl");
+		expect(isRetryableWritePressure(new TranscriptLockTimeoutError())).toBe(true);
+	});
+});

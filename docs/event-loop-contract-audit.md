@@ -4,23 +4,23 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 798 sites
-- Synchronous `withWriteTx()` sites: 56
+- Exact ledger inventory: 801 sites
+- Synchronous `withWriteTx()` sites: 55
 - Synchronous `withReadDb()` sites: 88
 - Async-named DB sites: 159
 - Async-named ON-PARENT DB sites: 157
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 495
-- Compile-visible legacy DB sites remaining: 144
-  - `withWriteTx`: 56
+- Synchronous filesystem/process sites: 499
+- Compile-visible legacy DB sites remaining: 143
+  - `withWriteTx`: 55
   - `withReadDb`: 88
 
-The 798-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 56 synchronous writes, 88 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 144 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 801-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 55 synchronous writes, 88 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 143 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 303
-- ON-PARENT callback execution: 301
+- Database accessor sites classified: 302
+- ON-PARENT callback execution: 300
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -215,7 +215,6 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/database-diagnostics.ts:266` (withReadDbAsync)
 - `routes/database-diagnostics.ts:305` (withReadDbAsync)
 - `db:hooks.session-transcript.project.read` (withReadDb)
-- `db:hooks.session-summary.memory.write` (withWriteTx)
 - `db:hooks.compaction.transcript-state.delete` (withWriteTx)
 - `routes/knowledge-routes.ts:354` (withReadDbAsync)
 - `routes/knowledge-routes.ts:540` (withReadDbAsync)
@@ -284,19 +283,19 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `session-recall-dedupe.ts:255` (withWriteTxAsync)
 - `session-recall-dedupe.ts:288` (withWriteTxAsync)
 - `session-recall-dedupe.ts:336` (withWriteTx)
-- `session-transcripts.ts:706` (withReadDb)
-- `session-transcripts.ts:718` (withReadDb)
-- `session-transcripts.ts:866` (withReadDb)
-- `session-transcripts.ts:1061` (withReadDb)
-- `session-transcripts.ts:1115` (withWriteTx)
-- `session-transcripts.ts:1304` (withWriteTx)
-- `session-transcripts.ts:1336` (withReadDb)
-- `session-transcripts.ts:1433` (withReadDbAsync)
-- `session-transcripts.ts:1456` (withReadDb)
-- `session-transcripts.ts:1489` (withReadDb)
-- `session-transcripts.ts:1544` (withReadDb)
-- `session-transcripts.ts:1589` (withReadDb)
-- `session-transcripts.ts:1653` (withReadDb)
+- `db:transcript.table.exists` (withReadDb)
+- `db:transcript.column.exists` (withReadDb)
+- `db:transcript.backfill.page` (withReadDb)
+- `db:transcript.updated-at.exists` (withReadDb)
+- `db:transcript.row.upsert` (withWriteTx)
+- `db:transcript.row.complete` (withWriteTx)
+- `db:transcript.info.read` (withReadDb)
+- `db:transcript.info.read-async` (withReadDbAsync)
+- `db:transcript.content.read` (withReadDb)
+- `db:transcript.stale.list` (withReadDb)
+- `db:transcript.search.exact` (withReadDb)
+- `db:transcript.search.fts` (withReadDb)
+- `db:transcript.search.like` (withReadDb)
 - `session-ttl-finalizer.ts:56` (withReadDbAsync)
 - `session-ttl-finalizer.ts:71` (withWriteTxAsync)
 - `skill-invocations.ts:48` (withWriteTx)
@@ -350,4 +349,4 @@ The converted async sites are distributed as follows: document-worker (18), drea
 
 The structural boundary makes statically-resolved imports from the production source tree impossible: TypeScript reports TS6059 before aliases or computed member calls can use the compatibility type. The production bundle also only starts from source entrypoints, so this compatibility module is not a shipped production artifact.
 
-A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 144 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 56 write and 88 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.
+A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 143 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 55 write and 88 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.

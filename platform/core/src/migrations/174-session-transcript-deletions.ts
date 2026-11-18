@@ -21,6 +21,9 @@ export function up(db: MigrationDb): void {
 			opened_at TEXT,
 			blocked INTEGER NOT NULL DEFAULT 1,
 			ended INTEGER NOT NULL DEFAULT 0,
+			pending_start INTEGER NOT NULL DEFAULT 0,
+			lifecycle_seq INTEGER NOT NULL DEFAULT 0,
+			hash_offset INTEGER NOT NULL DEFAULT 0,
 			receipt_generation INTEGER NOT NULL DEFAULT 1,
 			harness TEXT,
 			project TEXT,
@@ -53,4 +56,9 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_session_delete_source_lookup
 			ON session_transcript_deleted_sources(agent_id, kind, id, outcome);
 	`);
+	const columns = db.prepare("PRAGMA table_info(session_transcript_deletions)").all();
+	for (const column of ["pending_start", "lifecycle_seq", "hash_offset"]) {
+		if (!columns.some((row) => row.name === column))
+			db.exec(`ALTER TABLE session_transcript_deletions ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+	}
 }

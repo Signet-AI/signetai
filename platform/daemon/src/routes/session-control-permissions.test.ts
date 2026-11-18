@@ -1191,8 +1191,8 @@ describe("session control permissions in team mode", () => {
 				headers: bearer("agent"),
 			});
 		const first = await request();
-		expect(await first.json()).toMatchObject({ status: "pending", counts: { memories: 64 } });
-		expect(await (await request()).json()).toMatchObject({ status: "pending", counts: { memories: 128 } });
+		expect(await first.json()).toMatchObject({ status: "pending", counts: { memories: 63 } });
+		expect(await (await request()).json()).toMatchObject({ status: "pending", counts: { memories: 127 } });
 		const complete = await (await request()).json();
 		expect(complete).toMatchObject({ status: "complete", counts: { memories: 130 } });
 		expect(await (await request()).json()).toEqual(complete);

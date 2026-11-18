@@ -331,8 +331,14 @@ export function bypassSession(
 	logger.debug("session-tracker", "Session bypassed", { sessionKey: key });
 	return true;
 }
-export function unbypassSession(sessionKey: string, agentId = "default", sessionEnded = false): void {
+export function unbypassSession(
+	sessionKey: string,
+	agentId = "default",
+	sessionEnded: boolean | "deletion" = false,
+): void {
 	const key = normalizeSessionKey(sessionKey);
+	if (sessionEnded === "deletion" && bypassedSessions.get(scopedSessionKey(key, agentId)) !== Number.MAX_SAFE_INTEGER)
+		return;
 	if (!sessionEnded && bypassedSessions.get(scopedSessionKey(key, agentId)) === Number.MAX_SAFE_INTEGER) return;
 	const removed = bypassedSessions.delete(scopedSessionKey(key, agentId));
 	if (removed) {

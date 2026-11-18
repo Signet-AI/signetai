@@ -1,20 +1,23 @@
 import { createHash } from "node:crypto";
+import { attempt } from "@signet/core";
+import { normalizeSessionTranscript } from "./transcript-normalization";
+import { upsertThreadHead } from "./thread-heads";
+import type { TranscriptTurn } from "./transcript-jsonl";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
 import { extractAnchorTerms } from "./anchor-terms";
 import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor, prepareTypedStatement } from "./db-accessor";
 import { redactSessionTranscriptUploadBatchInTx } from "./transcript-import-commit";
-import { writeTranscriptAudit, type TranscriptAuditWrite } from "./transcript-audit";
+import { writeTranscriptAudit } from "./transcript-audit";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 import { txForgetMemory } from "./transactions";
-import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
+import { markDerivedMemoriesStaleForSourceInTx, linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
 import { redactTranscriptFileBatch, type TranscriptFileCheckpoint } from "./session-transcript-files";
 import { purgeMemoryEmbeddingsInTx, purgeMemoryInTx } from "./source-purge-tx";
 import { captureTranscriptOwned } from "./session-transcript-lifecycle";
 import type {
 	TranscriptCaptureInput,
-	TranscriptCapturePending,
 	TranscriptDeleteInput,
 	TranscriptDeleteResult,
 	TranscriptLifecycleInput,
@@ -27,20 +30,211 @@ import { normalizeSessionKey } from "./session-end-state";
 import { sanitizeFtsQuery } from "./memory-search";
 import {
 	type TranscriptIdentity,
-	TranscriptLockTimeoutError,
-	appendCanonicalTranscriptTurns,
-	writeCanonicalTranscriptSnapshot,
 	type TranscriptSessionKeyClassification,
-	appendCanonicalTranscriptSnapshotIfMissing,
 	canonicalTranscriptPath,
 	digestTranscriptTurns,
 	legacyTranscriptTurns,
 	readCanonicalTranscriptSessionKeys,
-	rewriteReplacingLiveOnlySessions,
 	sanitizeHarnessPath,
 	sessionSeqCacheKey,
 	transcriptTextToTurns,
 } from "./transcript-jsonl";
+
+interface EvidenceTurn extends TranscriptTurn {
+	readonly timestamp?: number;
+}
+
+function evidenceTurns(harness: string, transcript: string, raw?: string): readonly EvidenceTurn[] {
+	if (!raw) return transcriptTextToTurns(transcript);
+	const records: EvidenceTurn[] = [];
+	for (const line of raw.split(/\r?\n/)) {
+		const value: unknown = attempt(() => JSON.parse(line));
+		const candidates: readonly unknown[] = Array.isArray(value) ? value : [value];
+		for (const record of candidates) {
+			if (typeof record !== "object" || record === null || Array.isArray(record)) continue;
+			const stamp = "timestamp" in record ? record.timestamp : "captured_at" in record ? record.captured_at : undefined;
+			const timestamp = typeof stamp === "string" ? Date.parse(stamp) : typeof stamp === "number" ? stamp : Number.NaN;
+			const normalized = normalizeSessionTranscript(harness, JSON.stringify(record));
+			for (const turn of transcriptTextToTurns(normalized))
+				records.push({ ...turn, ...(Number.isFinite(timestamp) ? { timestamp } : {}) });
+		}
+	}
+	return records.length > 0 ? records : transcriptTextToTurns(transcript);
+}
+
+function contentHash(content: string): string {
+	return createHash("sha256").update(content).digest("hex");
+}
+
+function rememberDeletedTranscriptHashes(
+	db: WriteDb,
+	input: {
+		readonly agentId: string;
+		readonly sessionKey: string;
+		readonly generation: number;
+		readonly hashes: readonly string[];
+	},
+): void {
+	const existing = new Set(
+		prepareTypedStatement<{ id: string }>(
+			db,
+			"SELECT id FROM session_transcript_deleted_sources WHERE agent_id = ? AND session_key = ? AND kind = 'record_hash' LIMIT 65537",
+		)
+			.all(input.agentId, input.sessionKey)
+			.map((row) => row.id),
+	);
+	const hashes = new Set([...existing, ...input.hashes]);
+	if (hashes.size > 65536) throw new Error("Transcript deletion exceeds the 65536-record hash receipt limit");
+	const insert = db.prepare(
+		"INSERT OR IGNORE INTO session_transcript_deleted_sources (agent_id,session_key,generation,kind,id) VALUES (?,?,?,'record_hash',?)",
+	);
+	for (const hash of input.hashes) {
+		if (!/^[0-9a-f]{64}$/.test(hash)) throw new Error("Invalid deleted transcript record hash");
+		if (!existing.has(hash)) insert.run(input.agentId, input.sessionKey, input.generation, hash);
+	}
+}
+
+function rememberDeletedTranscriptRecords(
+	db: WriteDb,
+	input: {
+		readonly agentId: string;
+		readonly sessionKey: string;
+		readonly generation: number;
+		readonly transcript: string;
+		readonly offset: number;
+		readonly limit: number;
+	},
+): { readonly offset: number; readonly done: boolean; readonly processed: number } {
+	const turns = evidenceTurns("unknown", input.transcript, input.transcript);
+	if (turns.length > 65536) throw new Error("Transcript deletion exceeds the 65536-record hash receipt limit");
+	const batch = turns.slice(input.offset, input.offset + input.limit);
+	rememberDeletedTranscriptHashes(db, { ...input, hashes: batch.map((turn) => contentHash(turn.content)) });
+	return {
+		offset: input.offset + batch.length,
+		done: input.offset + batch.length >= turns.length,
+		processed: batch.length,
+	};
+}
+
+export function filterTranscriptRecordsInDb(
+	db: ReadDb,
+	input: {
+		readonly agentId: string;
+		readonly sessionKey: string | null;
+		readonly sessionId?: string | null;
+		readonly harness: string;
+		readonly transcript: string;
+		readonly rawTranscript?: string;
+	},
+): string {
+	const key = input.sessionKey ?? input.sessionId;
+	if (
+		!key ||
+		!db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_transcript_deletions'").get()
+	)
+		return input.transcript;
+	const row = prepareTypedStatement<{ watermark: string }>(
+		db,
+		"SELECT watermark FROM session_transcript_deletions WHERE agent_id = ? AND session_key = ?",
+	).get(input.agentId, normalizeSessionKey(key));
+	if (!row) return input.transcript;
+	const hash = db.prepare(
+		"SELECT 1 FROM session_transcript_deleted_sources WHERE agent_id = ? AND session_key = ? AND kind = 'record_hash' AND id = ? LIMIT 1",
+	);
+	const turns = evidenceTurns(input.harness, input.transcript, input.rawTranscript);
+	const kept = turns.filter((turn) =>
+		turn.timestamp !== undefined
+			? turn.timestamp > Date.parse(row.watermark)
+			: !hash.get(input.agentId, normalizeSessionKey(key), contentHash(turn.content)),
+	);
+	if (kept.length === turns.length && !input.rawTranscript) return input.transcript;
+	return kept
+		.map((turn) =>
+			turn.role === "unknown" ? turn.content : `${turn.role === "user" ? "User" : "Assistant"}: ${turn.content}`,
+		)
+		.join("\n");
+}
+
+export interface CompactionSummaryInput {
+	readonly agentId: string;
+	readonly sessionKey: string | null;
+	readonly harness: string;
+	readonly project: string | null;
+	readonly summary: string;
+	readonly summaryId: string;
+	readonly now: string;
+	readonly capturedAt?: string;
+}
+
+export function commitCompactionSummaryInTx(db: WriteDb, input: CompactionSummaryInput): boolean {
+	if (
+		!admitSessionTranscriptInDb(db, {
+			agentId: input.agentId,
+			sessionKey: input.sessionKey,
+			capturedAt: input.capturedAt,
+		})
+	)
+		return false;
+	db.prepare(
+		`INSERT INTO memories (
+			id, content, type, importance, source_id, source_type,
+			who, tags, project, agent_id, created_at, updated_at, updated_by,
+			memory_kind
+		)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	).run(
+		input.summaryId,
+		input.summary,
+		"session_summary",
+		0.8,
+		input.sessionKey,
+		input.harness,
+		"system",
+		`session,summary,${input.harness}`,
+		input.project,
+		input.agentId,
+		input.now,
+		input.now,
+		"system",
+		null,
+	);
+
+	const table = db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get();
+	if (!table) return true;
+	const nodeId = input.sessionKey ? `${input.sessionKey}:compaction:${Date.parse(input.now)}` : crypto.randomUUID();
+	db.prepare(
+		`INSERT OR REPLACE INTO session_summaries (
+			id, project, depth, kind, content, token_count,
+			earliest_at, latest_at, session_key, harness,
+			agent_id, source_type, source_ref, meta_json, created_at
+		) VALUES (?, ?, 0, 'session', ?, ?, ?, ?, ?, ?, ?, 'compaction', ?, ?, ?)`,
+	).run(
+		nodeId,
+		input.project,
+		input.summary,
+		Math.ceil(input.summary.length / 4),
+		input.now,
+		input.now,
+		input.sessionKey,
+		input.harness,
+		input.agentId,
+		input.sessionKey,
+		JSON.stringify({ source: "compaction-complete" }),
+		input.now,
+	);
+	upsertThreadHead(db, {
+		agentId: input.agentId,
+		nodeId,
+		content: input.summary,
+		latestAt: input.now,
+		project: input.project,
+		sessionKey: input.sessionKey,
+		sourceType: "compaction",
+		sourceRef: input.sessionKey,
+		harness: input.harness,
+	});
+	return true;
+}
 
 interface TranscriptRow {
 	readonly session_key: string;
@@ -94,6 +288,9 @@ interface TranscriptDeletionRow {
 	readonly hard: number;
 	readonly watermark: string;
 	readonly opened_at: string | null;
+	readonly pending_start: number;
+	readonly lifecycle_seq: number;
+	readonly hash_offset: number;
 }
 
 function transcriptDeletion(
@@ -143,13 +340,36 @@ export function updateTranscriptLifecycleInTx(
 			db,
 			`SELECT agent_id,session_key FROM session_transcript_deletions WHERE blocked = 1 AND ended = 0 ${input.after ? "AND (agent_id,session_key) > (?,?)" : ""} ORDER BY agent_id,session_key LIMIT 100`,
 		).all(...(input.after ?? []));
-	const row = transcriptDeletion(db, input.agentId, input.sessionKey);
+	let row = transcriptDeletion(db, input.agentId, input.sessionKey);
 	if (!row) return { generation: 0, bypassed: false };
+	if (input.intents) {
+		if (input.intents.length > 1024) throw new Error("Too many transcript lifecycle intents");
+		for (const intent of input.intents) {
+			if (intent.seq <= row.lifecycle_seq) continue;
+			if (Date.parse(intent.at) >= Date.parse(row.watermark))
+				updateTranscriptLifecycleInTx(db, {
+					agentId: input.agentId,
+					sessionKey: input.sessionKey,
+					action: intent.action,
+				});
+			db.prepare(
+				"UPDATE session_transcript_deletions SET lifecycle_seq = ? WHERE agent_id = ? AND session_key = ?",
+			).run(intent.seq, input.agentId, input.sessionKey);
+			const current = transcriptDeletion(db, input.agentId, input.sessionKey);
+			if (!current) throw new Error("Transcript lifecycle state disappeared");
+			row = current;
+		}
+	}
 	if (input.action === "end")
-		db.prepare("UPDATE session_transcript_deletions SET ended = 1 WHERE agent_id = ? AND session_key = ?").run(
+		db.prepare(
+			"UPDATE session_transcript_deletions SET ended = 1, pending_start = 0 WHERE agent_id = ? AND session_key = ?",
+		).run(input.agentId, input.sessionKey);
+	if (input.action === "start" && row.ended === 1 && row.phase !== "complete") {
+		db.prepare("UPDATE session_transcript_deletions SET pending_start = 1 WHERE agent_id = ? AND session_key = ?").run(
 			input.agentId,
 			input.sessionKey,
 		);
+	}
 	if (input.action === "start" && row.ended === 1 && row.phase === "complete") {
 		db.prepare(
 			"UPDATE session_transcript_deletions SET generation = generation + 1, blocked = 0, ended = 0, opened_at = ? WHERE agent_id = ? AND session_key = ?",
@@ -163,47 +383,55 @@ export async function captureSessionTranscriptOwned(
 	db: ReadDb,
 	input: TranscriptCaptureInput,
 	basePath: string,
-): Promise<
-	| readonly import("./transcript-jsonl").CanonicalTranscriptRecord[]
-	| readonly string[]
-	| null
-	| boolean
-	| string
-	| TranscriptAuditWrite
-	| TranscriptCapturePending
-> {
-	try {
-		if (input.kind === "promotion") {
-			const replacements = new Map(
-				input.input.replacements
-					.filter((entry) => admitSessionTranscriptInDb(db, entry.identity))
-					.map((entry) => [sessionSeqCacheKey(entry.identity), entry]),
-			);
-			if (replacements.size > 0)
-				await rewriteReplacingLiveOnlySessions(canonicalTranscriptPath(basePath, input.input.harness), replacements, {
-					timeoutMs: 250,
-				});
-			return [...replacements.keys()];
-		}
-		if (
-			!admitSessionTranscriptInDb(db, {
-				...input.input,
-				live: input.kind === "turns" && input.input.sourceFormat === "live",
-			})
-		)
-			return input.kind === "turns" ? false : null;
-		if (input.kind === "audit") return await writeTranscriptAudit({ ...input.input, basePath });
-		if (input.kind === "backfill")
-			return await appendCanonicalTranscriptSnapshotIfMissing({ ...input.input, basePath }, undefined, {
-				timeoutMs: 250,
-			});
-		if (input.kind === "snapshot")
-			return await writeCanonicalTranscriptSnapshot({ ...input.input, basePath }, { timeoutMs: 250 });
-		return await appendCanonicalTranscriptTurns({ ...input.input, basePath }, { timeoutMs: 250 });
-	} catch (error) {
-		if (error instanceof TranscriptLockTimeoutError) return { status: "pending", pendingReason: error.message };
-		throw error;
+): Promise<import("./session-transcript-lifecycle").TranscriptCaptureAdmission> {
+	if (input.kind === "promotion") {
+		const replacements = input.input.replacements
+			.filter((entry) => admitSessionTranscriptInDb(db, entry.identity))
+			.map((entry) => ({
+				...entry,
+				transcript: filterTranscriptRecordsInDb(db, { ...entry.identity, transcript: entry.transcript }),
+			}));
+		return { status: "admitted", capture: { ...input, input: { ...input.input, basePath, replacements } } };
 	}
+	if (
+		!admitSessionTranscriptInDb(db, {
+			...input.input,
+			live: input.kind === "turns" && input.input.sourceFormat === "live",
+		})
+	)
+		return null;
+	if (input.kind === "audit")
+		return writeTranscriptAudit({
+			...input.input,
+			preview:
+				input.input.preview === undefined
+					? undefined
+					: filterTranscriptRecordsInDb(db, {
+							...input.input,
+							harness: "unknown",
+							transcript: input.input.preview,
+							rawTranscript: input.input.preview,
+						}),
+			basePath,
+		});
+	if (input.kind === "turns") {
+		const turns = input.input.turns.filter(
+			(turn) =>
+				filterTranscriptRecordsInDb(db, {
+					...input.input,
+					transcript:
+						turn.role === "unknown" ? turn.content : `${turn.role === "user" ? "User" : "Assistant"}: ${turn.content}`,
+				}).length > 0,
+		);
+		return { status: "admitted", capture: { ...input, input: { ...input.input, basePath, turns } } };
+	}
+	return {
+		status: "admitted",
+		capture: {
+			...input,
+			input: { ...input.input, basePath, transcript: filterTranscriptRecordsInDb(db, input.input) },
+		},
+	};
 }
 
 function deletionCounts(value: string): Record<string, number> {
@@ -257,11 +485,7 @@ export function deleteSessionTranscriptInTx(
 	if (input.generation !== undefined && input.generation !== generation) return { status: "conflict", generation };
 	const scope = [input.agentId, input.sessionKey, generation];
 	if (previous?.receipt_generation !== generation) {
-		const counts = {
-			transcripts: db
-				.prepare("DELETE FROM session_transcripts WHERE agent_id = ? AND session_key = ? RETURNING session_key")
-				.all(input.agentId, input.sessionKey).length,
-		};
+		const counts = { transcripts: 0 };
 		db.prepare("DELETE FROM session_extract_cursors WHERE agent_id = ? AND session_key = ?").run(
 			input.agentId,
 			input.sessionKey,
@@ -270,7 +494,7 @@ export function deleteSessionTranscriptInTx(
 			"UPDATE transcript_import_conversations SET state = 'removed' WHERE agent_id = ? AND canonical_key = ?",
 		).run(input.agentId, input.sessionKey);
 		db.prepare(
-			"INSERT INTO session_transcript_deletions (agent_id,session_key,generation,receipt_generation,watermark,harness,project,hard,counts,ended) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(agent_id,session_key) DO UPDATE SET receipt_generation = excluded.receipt_generation, watermark = excluded.watermark, blocked = 1, ended = excluded.ended, phase = 'evidence', counts = excluded.counts, hard = excluded.hard, harness = excluded.harness, project = excluded.project",
+			"INSERT INTO session_transcript_deletions (agent_id,session_key,generation,receipt_generation,watermark,harness,project,hard,counts,ended,phase) VALUES (?,?,?,?,?,?,?,?,?,?,'records') ON CONFLICT(agent_id,session_key) DO UPDATE SET receipt_generation = excluded.receipt_generation, watermark = excluded.watermark, blocked = 1, ended = excluded.ended, pending_start = 0, hash_offset = 0, phase = 'records', counts = excluded.counts, hard = excluded.hard, harness = excluded.harness, project = excluded.project",
 		).run(
 			input.agentId,
 			input.sessionKey,
@@ -290,7 +514,7 @@ export function deleteSessionTranscriptInTx(
 	}
 	if (input.hard && previous?.hard === 0)
 		db.prepare(
-			"UPDATE session_transcript_deletions SET hard = 1, phase = 'memories' WHERE agent_id = ? AND session_key = ?",
+			"UPDATE session_transcript_deletions SET hard = 1, phase = CASE WHEN phase IN ('records','evidence') THEN phase ELSE 'memories' END WHERE agent_id = ? AND session_key = ?",
 		).run(input.agentId, input.sessionKey);
 	const row = transcriptDeletion(db, input.agentId, input.sessionKey);
 	if (!row) throw new Error("Deletion admission disappeared");
@@ -301,6 +525,31 @@ export function deleteSessionTranscriptInTx(
 	};
 	let budget = Date.now() < deadlineAt - 100 ? 64 : 0;
 	let phase = row.phase;
+	if (phase === "records" && budget > 0) {
+		const result = rememberDeletedTranscriptRecords(db, {
+			agentId: input.agentId,
+			sessionKey: input.sessionKey,
+			generation,
+			transcript: readExactTranscriptContent(db, input.sessionKey, input.agentId) ?? "",
+			offset: row.hash_offset,
+			limit: budget,
+		});
+		db.prepare("UPDATE session_transcript_deletions SET hash_offset = ? WHERE agent_id = ? AND session_key = ?").run(
+			result.offset,
+			input.agentId,
+			input.sessionKey,
+		);
+		budget -= result.processed;
+		if (result.done) {
+			add(
+				"transcripts",
+				db
+					.prepare("DELETE FROM session_transcripts WHERE agent_id = ? AND session_key = ? RETURNING session_key")
+					.all(input.agentId, input.sessionKey).length,
+			);
+			phase = "evidence";
+		}
+	}
 	if (phase === "evidence" && budget > 0) {
 		for (const [kind, table, column] of [
 			["artifact", "memory_artifacts", "source_path"],
@@ -308,7 +557,7 @@ export function deleteSessionTranscriptInTx(
 		]) {
 			const sources = prepareTypedStatement<{ id: string }>(
 				db,
-				`SELECT ${column} AS id FROM ${table} t WHERE t.agent_id = ? AND t.session_key IN (?, ?) ${kind === "artifact" ? "AND t.source_kind IN ('transcript','summary','compaction','manifest')" : ""} AND NOT EXISTS (SELECT 1 FROM session_transcript_deleted_sources d WHERE d.agent_id = t.agent_id AND d.session_key = ? AND d.generation = ? AND d.kind = ? AND d.id = t.${column}) LIMIT ?`,
+				`SELECT ${column} AS id FROM ${table} t WHERE t.agent_id = ? AND ${kind === "artifact" ? "COALESCE(NULLIF(t.session_key, ''),t.session_id)" : "t.session_key"} IN (?, ?) ${kind === "artifact" ? "AND t.source_kind IN ('transcript','summary','compaction','manifest')" : ""} AND NOT EXISTS (SELECT 1 FROM session_transcript_deleted_sources d WHERE d.agent_id = t.agent_id AND d.session_key = ? AND d.generation = ? AND d.kind = ? AND d.id = t.${column}) LIMIT ?`,
 			).all(input.agentId, input.sessionKey, `session:${input.sessionKey}`, input.sessionKey, generation, kind, budget);
 			for (const source of sources) {
 				db.prepare(
@@ -384,6 +633,13 @@ export function deleteSessionTranscriptInTx(
 			"SELECT outcome FROM session_transcript_deleted_sources WHERE agent_id = ? AND session_key = ? AND generation = ? AND kind = 'memory' AND id = ?",
 		).get(...scope, memory.id);
 		if (outcome !== "deleted") {
+			if (outcome === "mixed" && memory.source_id !== null && sourceKind !== null && !otherProvenance)
+				linkDerivedMemorySourcesInTx(db, {
+					agentId: input.agentId,
+					derivedMemoryId: memory.id,
+					sources: [{ sourceKind, sourceId: memory.source_id }],
+					createdAt: row.watermark,
+				});
 			if (memory.source_id !== null && !otherProvenance)
 				db.prepare("UPDATE memories SET source_id = NULL, source_type = NULL WHERE id = ? AND agent_id = ?").run(
 					memory.id,
@@ -481,7 +737,7 @@ export function deleteSessionTranscriptInTx(
 			if (budget === 0) break;
 			const items = prepareTypedStatement<{ id: string }>(
 				db,
-				`SELECT ${column} AS id FROM ${table} WHERE agent_id = ? AND session_key IN (?, ?) ${table === "memory_artifacts" ? "AND source_kind IN ('transcript','summary','compaction','manifest')" : ""} LIMIT ?`,
+				`SELECT ${column} AS id FROM ${table} WHERE agent_id = ? AND ${table === "memory_artifacts" ? "COALESCE(NULLIF(session_key, ''),session_id)" : "session_key"} IN (?, ?) ${table === "memory_artifacts" ? "AND source_kind IN ('transcript','summary','compaction','manifest')" : ""} LIMIT ?`,
 			).all(input.agentId, input.sessionKey, `session:${input.sessionKey}`, budget);
 			for (const item of items) {
 				if (table === "session_summaries") {
@@ -537,6 +793,7 @@ function fileCheckpoint(value: string | null): TranscriptFileCheckpoint | null {
 		bytes: parsed.bytes,
 		records: parsed.records,
 		ready: parsed.ready,
+		line: "line" in parsed && typeof parsed.line === "string" ? parsed.line : null,
 	};
 }
 
@@ -560,10 +817,12 @@ export async function deleteSessionTranscriptOwned(
 		if (!file) {
 			await transact(() => {
 				db.prepare(
-					"UPDATE session_transcript_deletions SET phase = 'complete' WHERE agent_id = ? AND session_key = ?",
-				).run(input.agentId, input.sessionKey);
+					"UPDATE session_transcript_deletions SET phase = 'complete', generation = generation + pending_start, blocked = CASE WHEN pending_start = 1 THEN 0 ELSE blocked END, ended = CASE WHEN pending_start = 1 THEN 0 ELSE ended END, opened_at = CASE WHEN pending_start = 1 THEN ? ELSE opened_at END, pending_start = 0 WHERE agent_id = ? AND session_key = ?",
+				).run(new Date().toISOString(), input.agentId, input.sessionKey);
 			});
-			return deletionResult({ ...row, phase: "complete" });
+			const completed = transcriptDeletion(db, input.agentId, input.sessionKey);
+			if (!completed) throw new Error("Completed deletion disappeared");
+			return deletionResult(completed);
 		}
 		if (Date.now() >= deadlineAt - 350) return { ...deletionResult(row), pendingReason: "Owner job budget exhausted" };
 		try {
@@ -576,6 +835,13 @@ export async function deleteSessionTranscriptOwned(
 				checkpoint: fileCheckpoint(file.checkpoint),
 			});
 			await transact(() => {
+				if (result.recordHashes?.length)
+					rememberDeletedTranscriptHashes(db, {
+						agentId: input.agentId,
+						sessionKey: input.sessionKey,
+						generation: row.receipt_generation,
+						hashes: result.recordHashes,
+					});
 				db.prepare(
 					"UPDATE session_transcript_delete_files SET checkpoint = ?, done = ? WHERE agent_id = ? AND session_key = ? AND generation = ? AND path = ?",
 				).run(
@@ -629,6 +895,7 @@ export interface StoredTranscriptInfo {
 }
 
 export interface SessionTranscriptUpsertOptions {
+	readonly rawTranscript?: string;
 	readonly completedAt?: string;
 	readonly preserveExistingContent?: boolean;
 	readonly signal?: AbortSignal;
@@ -705,7 +972,7 @@ function tableExists(name: string): boolean {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		return getDbAccessor().withReadDb(
 			(db: import("./db-accessor").ReadDb) => tableExistsInDatabase(db, name),
-			"session-transcripts.ts:706",
+			"db:transcript.table.exists",
 		);
 	} catch {
 		return false;
@@ -718,7 +985,7 @@ function sessionTranscriptsHasColumn(column: string): boolean {
 		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === column);
-		}, "session-transcripts.ts:718");
+		}, "db:transcript.column.exists");
 	} catch {
 		return false;
 	}
@@ -807,7 +1074,7 @@ async function backfillMarkdownTranscriptArtifacts(
 				liveOnlyReplacements.set(harness, replacements);
 				continue;
 			}
-			if (await captureTranscriptOwned<string | null>({ kind: "backfill", input })) {
+			if (await captureTranscriptOwned({ kind: "backfill", input })) {
 				markBackfillCanonical(classification, key, input.transcript);
 			}
 		} catch (error) {
@@ -826,7 +1093,7 @@ async function backfillMarkdownTranscriptArtifacts(
 			const entries = [...replacements.values()];
 			const first = entries[0];
 			if (!first) continue;
-			const admitted = await captureTranscriptOwned<readonly string[]>({
+			const admitted = await captureTranscriptOwned({
 				kind: "promotion",
 				input: { basePath, agentId: first.identity.agentId, harness, sessionKey: null, replacements: entries },
 			});
@@ -886,7 +1153,7 @@ async function backfillDatabaseTranscripts(
 						LIMIT ? OFFSET ?`;
 				const params = agentId ? [agentId, PAGE_SIZE, offset] : [PAGE_SIZE, offset];
 				return db.prepare(sql).all(...params) as unknown as StoredTranscriptBackfillRow[];
-			}, "session-transcripts.ts:866");
+			}, "db:transcript.backfill.page");
 			if (rows.length === 0) break;
 			for (const row of rows) {
 				const rowAgentId = row.agent_id?.trim() || "default";
@@ -924,7 +1191,7 @@ async function backfillDatabaseTranscripts(
 					liveOnlyReplacements.set(harness, replacements);
 					continue;
 				}
-				if (await captureTranscriptOwned<string | null>({ kind: "backfill", input })) {
+				if (await captureTranscriptOwned({ kind: "backfill", input })) {
 					markBackfillCanonical(classification, key, input.transcript);
 				}
 			}
@@ -936,7 +1203,7 @@ async function backfillDatabaseTranscripts(
 			const entries = [...replacements.values()];
 			const first = entries[0];
 			if (!first) continue;
-			const admitted = await captureTranscriptOwned<readonly string[]>({
+			const admitted = await captureTranscriptOwned({
 				kind: "promotion",
 				input: { basePath, agentId: first.identity.agentId, harness, sessionKey: null, replacements: entries },
 			});
@@ -1061,7 +1328,7 @@ function hasUpdatedAt(): boolean {
 		return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			return cols.some((col) => col.name === "updated_at");
-		}, "session-transcripts.ts:1061");
+		}, "db:transcript.updated-at.exists");
 	} catch {
 		return false;
 	}
@@ -1117,7 +1384,7 @@ export function upsertSessionTranscript(
 				writeSessionTranscriptRow(db, { sessionKey, transcript, harness, project, agentId, capturedAt, ...options }) ===
 				"written"
 			);
-		}, "session-transcripts.ts:1115");
+		}, "db:transcript.row.upsert");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript upsert failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -1142,7 +1409,8 @@ export function writeSessionTranscriptRow(
 	db: WriteDb,
 	input: SessionTranscriptWriteInput,
 ): "written" | "skipped" | "conflict" {
-	const { sessionKey, transcript, harness, project, agentId, capturedAt } = input;
+	const { sessionKey, harness, project, agentId, capturedAt } = input;
+	const transcript = filterTranscriptRecordsInDb(db, input);
 	if (sessionKey.trim().length === 0 || transcript.trim().length === 0) return "skipped";
 	if (!tableExistsInDatabase(db, "session_transcripts")) return "skipped";
 	if (!admitSessionTranscriptInDb(db, { ...input, live: input.append === true })) return "skipped";
@@ -1304,7 +1572,7 @@ export function markSessionTranscriptCompleted(
 		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
-		}, "session-transcripts.ts:1304");
+		}, "db:transcript.row.complete");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript completion marker failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -1367,7 +1635,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				completedAt: row.completed_at ?? null,
 				contentHash: row.content_hash ?? null,
 			};
-		}, "session-transcripts.ts:1336");
+		}, "db:transcript.info.read");
 	} catch {
 		return undefined;
 	}
@@ -1435,7 +1703,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ siteToken: "session-transcripts.ts:1433", operation: "transcripts.lookup", signal },
+			{ siteToken: "db:transcript.info.read-async", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;
@@ -1465,7 +1733,7 @@ export function getSessionTranscriptContent(
 				| { content: string }
 				| undefined;
 			return row?.content;
-		}, "session-transcripts.ts:1456");
+		}, "db:transcript.content.read");
 	} catch {
 		return undefined;
 	}
@@ -1513,7 +1781,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:1489");
+		}, "db:transcript.stale.list");
 	} catch {
 		return [];
 	}
@@ -1561,7 +1829,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:1544");
+		}, "db:transcript.search.exact");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -1604,7 +1872,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:1589");
+						}, "db:transcript.search.fts");
 
 					const hits = rows
 						.map((row) => ({
@@ -1674,7 +1942,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1653");
+			}, "db:transcript.search.like");
 
 		return rows
 			.map((row) => ({
