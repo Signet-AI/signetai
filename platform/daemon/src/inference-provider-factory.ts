@@ -13,6 +13,7 @@ import {
 	routingTelemetryAttribution,
 } from "@signet/core";
 import { discoverLocalContextWindow } from "./local-context-window";
+import { logger } from "./logger";
 import { type PiExecutorKind, createPiModelProvider } from "./pipeline/pi-provider";
 import type { AcpxHooksMode, StreamCapableLlmProvider } from "./pipeline/provider";
 import { createAcpxProvider } from "./pipeline/provider";
@@ -90,6 +91,17 @@ export async function createRoutingProvider(opts: CreateRoutingProviderOptions):
 
 	const credential = await opts.resolveCredential(account);
 	const piModel = catalogModel(providerFamily, model.model);
+	if (
+		!piModel &&
+		CUSTOM_PI_EXECUTORS.has(target.executor) &&
+		(getBuiltinProviders() as readonly string[]).includes(providerFamily)
+	) {
+		logger.warn(
+			"inference",
+			`Catalog model "${model.model}" is missing from provider "${providerFamily}"; catalog thinking and reasoning metadata will not be applied`,
+			{ target: opts.targetId, model: model.model },
+		);
+	}
 	if (!piModel && !CUSTOM_PI_EXECUTORS.has(target.executor)) {
 		throw new Error(`Unknown pi-ai model "${model.model}" for provider "${providerFamily}"`);
 	}
