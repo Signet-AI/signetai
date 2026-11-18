@@ -17,7 +17,7 @@ import {
 } from "@signet/core";
 import { emitLifecycleProvider } from "@signet/lifecycle-proof";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
-import { applyTokenBudget, selectWithBudgetSkippingOversized, selectWithEstimatedTokenBudget } from "./context-budget";
+import { applyTokenBudget, selectWithEstimatedTokenBudget } from "./context-budget";
 import {
 	clearContinuity,
 	consumeState,
@@ -1680,11 +1680,22 @@ export async function handleUserPromptSubmit(
 	recordRecallAttempt("prompt_injection");
 	promptRecallAttempted = true;
 	let providerStartedAtMs: number | null = null;
+	let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
 		const providerStartTime = Date.now();
 		providerStartedAtMs = providerStartTime;
+		const timeoutMs = cfg.embedding.promptSubmitTimeoutMs ?? 1000;
+		const deadlineAt = providerStartTime + timeoutMs;
 		const controller = new AbortController();
+		const timeoutMarker = Symbol("prompt-provider-timeout");
+		const expired = new Promise<typeof timeoutMarker>((resolve) => {
+			controller.signal.addEventListener("abort", () => resolve(timeoutMarker), { once: true });
+		});
+		deadlineTimer = setTimeout(
+			() => controller.abort(new Error("Prompt-submit recall exceeded its deadline")),
+			timeoutMs,
+		);
 		const providerOutcome = recallPromptEntityContext(deps, {
 			userMessage,
 			agentId,
@@ -1698,17 +1709,8 @@ export async function handleUserPromptSubmit(
 			(context) => ({ ok: true as const, context, completedAtMs: Date.now() }),
 			(error: unknown) => ({ ok: false as const, error, completedAtMs: Date.now() }),
 		);
-		const timeoutMarker = Symbol("prompt-provider-timeout");
-		let timeoutId: ReturnType<typeof setTimeout> | null = null;
-		const providerResult = await Promise.race([
-			providerOutcome,
-			new Promise<typeof timeoutMarker>((resolve) => {
-				timeoutId = setTimeout(() => resolve(timeoutMarker), cfg.embedding.promptSubmitTimeoutMs ?? 1000);
-			}),
-		]);
-		if (timeoutId !== null) clearTimeout(timeoutId);
+		const providerResult = await Promise.race([providerOutcome, expired]);
 		if (providerResult === timeoutMarker) {
-			controller.abort(new Error("Prompt-submit recall exceeded its deadline"));
 			const promptHandledAtMs = Date.now();
 			void providerOutcome.then((outcome) => {
 				emitLifecycleProvider({
@@ -1757,21 +1759,38 @@ export async function handleUserPromptSubmit(
 			promptHandledAtMs: providerStartTime,
 		});
 		const recall = providerResult.context;
-		const claimed = await claimRecallItemsAsync({
-			sessionKey: req.sessionKey,
-			agentId,
-			surface: PROMPT_RECALL_SURFACE,
-			mode: "automatic",
-			items: recall.results,
-		});
-		if (claimed.meta.failedOpen) {
-			deps.logger.warn("memory", "Prompt-submit recall claim failed open", {
+		const claimed =
+			recall.results.length > 0
+				? await claimRecallItemsAsync({
+						sessionKey: req.sessionKey,
+						agentId,
+						surface: PROMPT_RECALL_SURFACE,
+						mode: "automatic",
+						items: recall.results,
+						signal: controller.signal,
+						deadlineMs: Math.max(1, deadlineAt - Date.now()),
+					})
+				: null;
+		clearTimeout(deadlineTimer);
+		const claimFailed = claimed?.meta.failedOpen === true;
+		if (claimFailed) {
+			deps.logger.warn("memory", "Prompt-submit recall claim failed; nothing injected", {
 				sessionKey: req.sessionKey,
 				agentId,
+				deadlineExpired: controller.signal.aborted,
 			});
 		}
-		const delivered = claimed.items;
-		const engine = delivered.length > 0 ? "entity-recall" : recall.results.length > 0 ? "deduped" : recall.engine;
+		const delivered = claimed && !claimFailed ? claimed.items : [];
+		const engine =
+			delivered.length > 0
+				? "entity-recall"
+				: claimFailed
+					? controller.signal.aborted
+						? "provider-timeout"
+						: "claim-failed"
+					: recall.results.length > 0
+						? "deduped"
+						: recall.engine;
 		recordUserPromptRecallTelemetry({
 			cfg,
 			agentId,
@@ -1786,6 +1805,7 @@ export async function handleUserPromptSubmit(
 			surface: "prompt_injection",
 			resultCount: delivered.length,
 			delivery: delivered.length > 0 ? "injected" : "not_delivered",
+			...(claimFailed ? { error: true } : {}),
 		});
 		promptRecallOutcomeRecorded = true;
 		if (delivered.length === 0) {
@@ -1827,6 +1847,7 @@ export async function handleUserPromptSubmit(
 			deps.logger,
 		);
 	} catch (e) {
+		clearTimeout(deadlineTimer);
 		if (providerStartedAtMs !== null) {
 			emitLifecycleProvider({
 				startedAtMs: providerStartedAtMs,
@@ -1869,7 +1890,7 @@ async function recallPromptEntityContext(
 		readonly signal: AbortSignal;
 	},
 ): Promise<PromptEntityRecall> {
-	const entities = await deps.matchPromptEntities(getMemoryDbPath(), input.agentId, input.userMessage);
+	const entities = await deps.matchPromptEntities(getMemoryDbPath(), input.agentId, input.userMessage, input.signal);
 	if (entities.length === 0) return { entities, results: [], engine: "no-entity" };
 	const query = stripProvenanceBlocks(input.userMessage);
 	if (!query) return { entities, results: [], engine: "no-recall-hit" };
@@ -1887,22 +1908,34 @@ async function recallPromptEntityContext(
 			claimRecallResults: false,
 			trackRecallAccess: false,
 			telemetrySurface: "prompt_injection",
+			transcriptEvidence: false,
 		},
 		input.cfg,
 		deps.fetchEmbedding,
 		{ signal: input.signal },
 	);
-	const results = selectWithBudgetSkippingOversized(
-		recall.results.filter((row) => row.score >= input.minScore),
-		input.injectBudget,
-	);
+	let used = promptRecallHeader(entities).length;
+	const results: RecallResult[] = [];
+	for (const row of recall.results) {
+		if (row.score < input.minScore) continue;
+		const size = promptRecallLine(row).length + 1;
+		if (used + size > input.injectBudget) continue;
+		used += size;
+		results.push(row);
+	}
 	return { entities, results, engine: results.length > 0 ? "entity-recall" : "no-recall-hit" };
 }
 
+function promptRecallHeader(entities: readonly PromptEntityMatch[]): string {
+	return `## Relevant Memory: ${entities.map((entity) => entity.entityName).join(", ")}\n\n`;
+}
+
+function promptRecallLine(row: RecallResult): string {
+	return `- ${redactCredentials(row.content)} (${row.id})`;
+}
+
 function buildPromptRecallInject(entities: readonly PromptEntityMatch[], rows: readonly RecallResult[]): string {
-	const names = entities.map((entity) => entity.entityName).join(", ");
-	const lines = rows.map((row) => `- ${redactCredentials(row.content)} (${row.id})`);
-	return `## Relevant Memory: ${names}\n\n${lines.join("\n")}\n`;
+	return `${promptRecallHeader(entities)}${rows.map(promptRecallLine).join("\n")}\n`;
 }
 
 function isClearSessionStart(req: SessionStartRequest): boolean {

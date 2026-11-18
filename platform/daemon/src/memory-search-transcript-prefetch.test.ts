@@ -518,4 +518,60 @@ describe("transcript evidence prefetch owner scheduling", () => {
 			clock.mockRestore();
 		}
 	});
+	it("excludes transcript evidence when the caller opts out", async () => {
+		const raw = loadMemoryConfig(directory);
+		const cfg = {
+			...raw,
+			search: { ...raw.search, rehearsal_enabled: false, transcript_evidence_limit: 1 },
+			pipelineV2: {
+				...raw.pipelineV2,
+				graph: { ...raw.pipelineV2.graph, enabled: false },
+				reranker: { ...raw.pipelineV2.reranker, enabled: false },
+			},
+		};
+		const params = {
+			query: "Speyer tourism board phone number",
+			limit: 3,
+			agentId: "agent-a",
+			readPolicy: "isolated" as const,
+			trackRecallAccess: false,
+			claimRecallResults: false,
+		};
+		const included = await hybridRecall(params, cfg, async () => null);
+		const excluded = await hybridRecall({ ...params, transcriptEvidence: false }, cfg, async () => null);
+		expect(included.results.some((row) => row.source === "transcript")).toBe(true);
+		expect(excluded.results.some((row) => row.source === "transcript")).toBe(false);
+	});
+
+	it("forwards the recall cancellation signal to the query embedding", async () => {
+		const raw = loadMemoryConfig(directory);
+		const cancellation = new AbortController();
+		const signals: Array<AbortSignal | undefined> = [];
+		await hybridRecall(
+			{
+				query: "Speyer tourism board phone number",
+				limit: 3,
+				agentId: "agent-a",
+				readPolicy: "isolated",
+				trackRecallAccess: false,
+				claimRecallResults: false,
+				transcriptEvidence: false,
+			},
+			{
+				...raw,
+				search: { ...raw.search, rehearsal_enabled: false },
+				pipelineV2: {
+					...raw.pipelineV2,
+					graph: { ...raw.pipelineV2.graph, enabled: false },
+					reranker: { ...raw.pipelineV2.reranker, enabled: false },
+				},
+			},
+			async (_text, _cfg, _role, options) => {
+				signals.push(options?.signal);
+				return null;
+			},
+			{ signal: cancellation.signal },
+		);
+		expect(signals).toEqual([cancellation.signal]);
+	});
 });

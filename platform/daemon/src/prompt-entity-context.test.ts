@@ -80,6 +80,23 @@ describe("matchPromptEntities", () => {
 		expect(other.map((match) => match.entityName)).toEqual(["Compass"]);
 	});
 
+	it("pages the owner scan so a large ontology still matches", async () => {
+		const now = new Date().toISOString();
+		getDbAccessor().withWriteTx((db) => {
+			const insert = db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, ?, ?)`,
+			);
+			for (let index = 0; index < 7_000; index += 1) {
+				const name = `Filler Project Number ${index} With A Deliberately Long Descriptive Name`;
+				insert.run(`ent-filler-${index}`, name, name.toLowerCase(), now, now);
+			}
+			insert.run("ent-zephyr", "Zephyrline", "zephyrline", now, now);
+		});
+		const matches = await matchPromptEntities(DB_PATH(), "default", "What is the status of Zephyrline?");
+		expect(matches.map((match) => match.entityName)).toEqual(["Zephyrline"]);
+	});
+
 	describe("promptPhraseSpan matches precomputed prompt terms", () => {
 		const promptTerms = ["tell", "me", "about", "nicholai", "and", "the", "signet", "project"];
 
