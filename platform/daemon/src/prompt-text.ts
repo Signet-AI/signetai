@@ -264,6 +264,15 @@ export function countPromptTermOverlap(text: string, promptTerms: ReadonlyArray<
 	return overlap;
 }
 
+const PROVENANCE_BLOCK = /\[([^[\]\n]{0,80}\bprovenance)\][\s\S]*?\[\/\1\]/gi;
+
+export function stripProvenanceBlocks(text: string): string {
+	return text
+		.replace(PROVENANCE_BLOCK, "")
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+}
+
 export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyArray<{ content: string }>): boolean {
 	const anchors = extractAnchorTerms(stripUntrustedMetadata(query));
 	if (anchors.length === 0) return false;

@@ -4,6 +4,7 @@ import {
 	extractSubstantiveWords,
 	isLowSignalPrompt,
 	queryAnchorsMissingFromRecall,
+	stripProvenanceBlocks,
 	stripUntrustedMetadata,
 } from "./prompt-text";
 
@@ -14,6 +15,19 @@ describe("prompt text helpers", () => {
 		);
 
 		expect(cleaned).toBe("Can you reiterate the release checklist?");
+	});
+
+	test("strips paired provenance blocks and keeps other bracketed text", () => {
+		const message = [
+			"which still is best for the thumbnail? [draft] keep it",
+			"",
+			"[Discord sender provenance]",
+			'Gateway metadata for this message only.\n{"user_id":"903009565744971816","display_name":"Davane"}',
+			"[/Discord sender provenance]",
+		].join("\n");
+
+		expect(stripProvenanceBlocks(message)).toBe("which still is best for the thumbnail? [draft] keep it");
+		expect(stripProvenanceBlocks("[Discord sender provenance] unclosed")).toBe("[Discord sender provenance] unclosed");
 	});
 
 	test("extracts substantive words without Discord mentions or stopwords", () => {

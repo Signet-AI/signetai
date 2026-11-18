@@ -210,14 +210,14 @@ a pre-compaction summary:
 | `memoryLimit` | `5` | How many recent memories to include |
 | `summaryGuidelines` | built-in | Custom instructions for session summary |
 
-`hooks.userPromptSubmit` controls per-prompt entity current-view injection:
+`hooks.userPromptSubmit` controls per-prompt injection, which runs recall only after a direct entity hit:
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `enabled` | `true` | Enable per-prompt entity context injection |
-| `recallLimit` | `10` | Legacy field retained for config compatibility; prompt-submit no longer runs generic recall |
-| `maxInjectChars` | `500` | Prompt-time entity-context character budget |
-| `minScore` | `0.8` | Minimum attribute relevance score required before injecting current-view aspect context |
+| `enabled` | `true` | Enable entity-gated per-prompt recall injection |
+| `recallLimit` | `10` | Maximum recall results considered after an entity hit |
+| `maxInjectChars` | `500` | Prompt-time injection character budget |
+| `minScore` | `0.8` | Minimum recall score required before a result is injected |
 
 ## Environment Variables
 

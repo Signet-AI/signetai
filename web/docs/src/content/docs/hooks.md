@@ -438,25 +438,32 @@ where recency is `1 / (1 + age_in_days)`.
 **`POST /api/hooks/user-prompt-submit`**
 
 Called before each user turn is handed to the model. Prompt-submit does not run
-generic memory recall and does not inject fallback guidance when it cannot find
-a confident match.
+recall on every prompt and does not inject fallback guidance when it cannot
+find a confident match.
 
-The hook listens for known ontology entities and active entity aliases. When a
-prompt names one, the entity match scopes the search, then Signet scores that
-entity's current attributes against the remaining prompt. The highest-scoring
-attributes choose which aspects to inject into a compact
-`## Relevant Entity Context` block. `hooks.userPromptSubmit.minScore` gates
-attribute-driven aspect selection; `maxInjectChars` caps the block.
+The hook listens for known ontology entities and active entity aliases. A
+direct entity hit is the gate: when the prompt names a known person or project,
+Signet runs the normal daemon recall (`hybridRecall`) with the prompt as the
+query and injects the results that clear `hooks.userPromptSubmit.minScore` into
+a compact `## Relevant Memory: <entity>` block. `maxInjectChars` caps the block.
+Each line keeps its memory or source ID.
 
-When the prompt is low-signal, the hook skips automatic recall before embedding
-or entity-context work and preserves the stable per-prompt context contract
-(currently an empty `inject`). Session bookkeeping still runs, and explicit
-memory tools remain unaffected. Prompts that mention no known entity or alias,
-are ambiguous, or have no attribute that clears the confidence gate return an
-empty `inject` string. Literal aspect names alone do not select context. This
+Injected results are claimed in the session's recall dedupe ledger for the
+current context epoch, so a memory is delivered at most once per session until
+the context resets (clear or compaction). A repeat entity hit that only finds
+already-delivered results returns an empty `inject`.
+
+When the prompt is low-signal, the hook skips automatic recall before entity
+matching and preserves the stable per-prompt context contract (an empty
+`inject`). Session bookkeeping still runs, and explicit memory tools remain
+unaffected. Prompts that mention no known entity or alias, or whose recall
+results do not clear the confidence gate, return an empty `inject` string. This
 keeps the active agent loop trustable: absence of recalled context means Signet
 chose not to inject, not that the broader source substrate has no relevant
 evidence.
+
+Plugin prompt contributions are static text, so they render at session start
+(`system` or `session-start` targets) and never on individual prompts.
 
 Explicit recall remains available through `/api/memory/recall`, `signet_recall`,
 `memory_search`, and related MCP/CLI surfaces. Raw transcript search is

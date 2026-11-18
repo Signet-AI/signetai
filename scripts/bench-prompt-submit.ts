@@ -5,8 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db-accessor";
 import { handleUserPromptSubmit } from "../platform/daemon/src/hooks";
-import { loadMemoryConfig } from "../platform/daemon/src/memory-config";
-import { buildEntityPromptContext } from "../platform/daemon/src/prompt-entity-context";
+import { matchPromptEntities } from "../platform/daemon/src/prompt-entity-context";
 
 const iterations = positiveEnvInt("SIGNET_PROMPT_SUBMIT_BENCH_ITERS", 20);
 const embeddingDelayMs = positiveEnvInt("SIGNET_PROMPT_SUBMIT_BENCH_EMBED_MS", 10);
@@ -28,7 +27,7 @@ type BenchCase = {
 	readonly prompt: string;
 	readonly engine: string;
 	readonly submit: Stats;
-	readonly recall: Stats;
+	readonly gate: Stats;
 	readonly embeddingCalls: number;
 };
 
@@ -103,9 +102,8 @@ function seedWorkspace(): void {
 }
 
 async function runCase(label: string, prompt: string): Promise<BenchCase> {
-	const config = loadMemoryConfig(workspace);
 	const submitTimes: number[] = [];
-	const recallTimes: number[] = [];
+	const gateTimes: number[] = [];
 	let embeddingCalls = 0;
 	const fetchEmbedding = async (): Promise<number[]> => {
 		embeddingCalls++;
@@ -115,37 +113,24 @@ async function runCase(label: string, prompt: string): Promise<BenchCase> {
 	const quietLogger = { debug() {}, info() {}, warn() {}, error() {} } as never;
 
 	for (let i = 0; i < 2; i++) {
-		await buildEntityPromptContext({
-			userMessage: prompt,
-			agentId: "default",
-			minScore: 0.8,
-			injectBudget: 4000,
-			memoryDbPath: dbPath,
-			fetchEmbedding,
-			embedding: config.embedding,
-		});
+		await matchPromptEntities(dbPath, "default", prompt);
 		await handleUserPromptSubmit({ harness: "bench", userMessage: prompt }, { fetchEmbedding, logger: quietLogger });
 	}
 	embeddingCalls = 0;
 
 	let engine = "unknown";
 	for (let i = 0; i < iterations; i++) {
-		const recallStart = performance.now();
-		const recall = await buildEntityPromptContext({
-			userMessage: prompt,
-			agentId: "default",
-			minScore: 0.8,
-			injectBudget: 4000,
-			memoryDbPath: dbPath,
-			fetchEmbedding,
-			embedding: config.embedding,
-		});
-		recallTimes.push(performance.now() - recallStart);
-		engine = recall.engine;
+		const gateStart = performance.now();
+		await matchPromptEntities(dbPath, "default", prompt);
+		gateTimes.push(performance.now() - gateStart);
 
 		const submitStart = performance.now();
-		await handleUserPromptSubmit({ harness: "bench", userMessage: prompt }, { fetchEmbedding, logger: quietLogger });
+		const result = await handleUserPromptSubmit(
+			{ harness: "bench", userMessage: prompt },
+			{ fetchEmbedding, logger: quietLogger },
+		);
 		submitTimes.push(performance.now() - submitStart);
+		engine = result.engine ?? "none";
 	}
 
 	return {
@@ -153,7 +138,7 @@ async function runCase(label: string, prompt: string): Promise<BenchCase> {
 		prompt,
 		engine,
 		submit: stats(submitTimes),
-		recall: stats(recallTimes),
+		gate: stats(gateTimes),
 		embeddingCalls,
 	};
 }
@@ -163,7 +148,7 @@ function printCase(value: BenchCase): void {
 	console.log(`prompt: ${value.prompt}`);
 	console.log(`engine: ${value.engine} | embedding calls: ${value.embeddingCalls}`);
 	printStats("prompt-submit latency", value.submit);
-	printStats(`recall-stage timing (${value.engine})`, value.recall);
+	printStats("entity-gate timing", value.gate);
 }
 
 async function main(): Promise<void> {
