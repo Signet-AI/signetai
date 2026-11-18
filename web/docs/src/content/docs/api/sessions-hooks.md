@@ -120,9 +120,11 @@ failed or expired claim, or a request without a `sessionKey`, injects nothing. L
 automatic recall work, so they skip entity matching and recall while preserving
 session bookkeeping and the stable per-prompt context contract (an empty
 `inject`). Explicit recall is still available through `/api/memory/recall` and
-MCP/CLI recall tools, including for the same prompt. Unknown entities,
-ambiguous entity mentions, and prompts whose recall results do not clear
-`hooks.userPromptSubmit.minScore` return `inject: ""`.
+MCP/CLI recall tools, including for the same prompt. Unknown entities and
+prompts whose recall results do not clear `hooks.userPromptSubmit.minScore`
+return `inject: ""`. When recall runs degraded (for example, an incomplete
+keyword index or a failed graph traversal), the response adds a `warnings`
+entry naming the degradation.
 Raw transcript search is not injected on prompt-submit; use the dedicated
 `session_search` MCP/API surface when a caller needs transcript evidence.
 

@@ -404,6 +404,21 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 		expect(claims).toEqual({ count: 0 });
 	});
 
+	it("reports degraded recall instead of a plain miss", async () => {
+		seedEntityContext();
+		const deps = makeDeps({
+			hybridRecall: (async () => ({
+				results: [],
+				meta: { partial: true, degradation: "fts_incomplete" },
+			})) as unknown as PromptDeps["hybridRecall"],
+		});
+
+		const result = await submit("How should Signet architecture handle prompt context?", "session-degraded", deps);
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-recall-hit" });
+		expect(result.warnings?.some((warning) => warning.includes("fts_incomplete"))).toBe(true);
+	});
+
 	it("injects nothing without a session to claim the delivery in", async () => {
 		seedEntityContext();
 

@@ -458,6 +458,8 @@ recorded, because the ledger is unavailable or the prompt-submit deadline
 (`embedding.promptSubmitTimeoutMs`) passed while the claim was queued, nothing is
 injected; Signet never delivers a memory it has not recorded as delivered. A
 request without a `sessionKey` has no ledger to claim in, so it injects nothing.
+If recall runs degraded, the response adds a `warnings` entry naming the
+degradation.
 
 When the prompt is low-signal, the hook skips automatic recall before entity
 matching and preserves the stable per-prompt context contract (an empty
