@@ -71,3 +71,23 @@ test("piAgentWorkerSettings carries cacheWarming, retry passthrough, and omits a
 		cacheWarming: "streaming",
 	});
 });
+
+test("a concurrent cancelTurn joins the pending cancel and rejects with it on worker death", async () => {
+	const session = await createWorkerAgentSession(
+		{ model: piModel, apiKey: "test-key", systemPrompt: "x", tools: [] },
+		[],
+		undefined,
+		{ workerPath: join(import.meta.dir, "pi-agent-fake-silent-die.mjs") },
+	);
+	const first = session.cancelTurn?.();
+	await new Promise((resolve) => setTimeout(resolve, 10));
+	const second = session.cancelTurn?.();
+	const start = Date.now();
+	const results = await Promise.allSettled([first, second]);
+	expect(Date.now() - start).toBeLessThan(2000);
+	for (const result of results) {
+		expect(result.status).toBe("rejected");
+		if (result.status === "rejected") expect(String(result.reason)).toMatch(/exited/);
+	}
+	await session.dispose();
+}, 20_000);
