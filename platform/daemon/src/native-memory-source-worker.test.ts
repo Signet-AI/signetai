@@ -32,6 +32,8 @@ async function instrument(root: string): Promise<{ readonly entry: string; reado
 		[
 			'import { mock } from "bun:test";',
 			'import * as fs from "node:fs/promises";',
+			"const realFs = { ...fs };",
+			'process.on("exit", () => mock.module("node:fs/promises", () => realFs));',
 			"const original = fs.lstat;",
 			`mock.module("node:fs/promises", () => ({ ...fs, lstat: async (...args) => { await fs.appendFile(${JSON.stringify(stats)}, JSON.stringify(String(args[0])) + "\\n"); return await original(...args); } }));`,
 			`await import(${JSON.stringify(join(import.meta.dir, "native-memory-source-worker.ts"))});`,

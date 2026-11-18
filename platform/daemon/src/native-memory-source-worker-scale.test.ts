@@ -21,6 +21,8 @@ for (const [count, matching] of [
 			[
 				'import { mock } from "bun:test";',
 				'import * as fs from "node:fs/promises";',
+				"const realFs = { ...fs };",
+				'process.on("exit", () => mock.module("node:fs/promises", () => realFs));',
 				'import { appendFileSync } from "node:fs";',
 				'import { parentPort } from "node:worker_threads";',
 				"const original = fs.opendir;",
