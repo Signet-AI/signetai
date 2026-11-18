@@ -185,8 +185,9 @@ function discover(mcp: boolean, runtime?: string | null): ResolvedCommand {
 function launcherPathStatus(path: string): "present" | "missing" | "unverified" {
 	try {
 		if (statSync(path, { throwIfNoEntry: false })) return "present";
-	} catch {
-		return "unverified";
+	} catch (error) {
+		const code = error instanceof Error && "code" in error ? error.code : undefined;
+		if (code !== "ENOTDIR" && code !== "ELOOP") return "unverified";
 	}
 	const root = parse(path).root;
 	const segments = path.slice(root.length).split(/[\\/]/).filter(Boolean);

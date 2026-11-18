@@ -144,6 +144,23 @@ test.each([resolveSignetCliCommand, resolveSignetMcpCommand])(
 );
 
 test.each([resolveSignetCliCommand, resolveSignetMcpCommand])(
+	"keeps a launcher whose path cannot be inspected instead of aborting: %p",
+	(resolve) => {
+		const warn = spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			for (const command of [join(root, "bad\0name", "signet"), join(root, "x".repeat(300), "signet")]) {
+				const existing = { command, args: [], env: { SIGNET_MCP_STDIO_WORKER: "1" } };
+				warn.mockClear();
+				expect(resolve(existing)).toEqual(existing);
+				expect(warn.mock.calls[0]?.join(" ")).toContain("could not be verified from this environment");
+			}
+		} finally {
+			warn.mockRestore();
+		}
+	},
+);
+
+test.each([resolveSignetCliCommand, resolveSignetMcpCommand])(
 	"keeps valid existing launchers and bare commands without a warning: %p",
 	(resolve) => {
 		const runtime = join(root, "node");
