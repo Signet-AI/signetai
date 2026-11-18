@@ -89,28 +89,41 @@ if (codemode) {
 	]);
 }
 let running = false;
-const runStartWaiters = new Set<() => void>();
+let runId = 0;
+type RunStartWaiter = { readonly run: number; finish: (started: boolean) => void };
+const runStartWaiters = new Set<RunStartWaiter>();
+const releaseRunStartWaiters = (run: number, started: boolean): void => {
+	for (const waiter of [...runStartWaiters]) {
+		if (waiter.run !== run) continue;
+		runStartWaiters.delete(waiter);
+		waiter.finish(started);
+	}
+};
 session.subscribe((event) => {
 	if (event.type === "agent_start") {
-		const waiters = [...runStartWaiters];
-		runStartWaiters.clear();
-		for (const waiter of waiters) waiter();
+		for (const waiter of [...runStartWaiters]) {
+			runStartWaiters.delete(waiter);
+			waiter.finish(true);
+		}
 	}
 	send({ type: "event", event });
 });
-const waitForActiveRun = async (): Promise<void> => {
-	if (!running || session.isStreaming) return;
-	await new Promise<void>((resolve) => {
+const waitForActiveRun = (run: number): Promise<boolean> => {
+	if (session.isStreaming) return Promise.resolve(true);
+	return new Promise<boolean>((resolve) => {
 		let settled = false;
-		const finish = () => {
-			if (settled) return;
-			settled = true;
-			clearTimeout(timer);
-			runStartWaiters.delete(finish);
-			resolve();
+		const waiter: RunStartWaiter = {
+			run,
+			finish: (started: boolean) => {
+				if (settled) return;
+				settled = true;
+				clearTimeout(timer);
+				runStartWaiters.delete(waiter);
+				resolve(started);
+			},
 		};
-		const timer = setTimeout(finish, PI_AGENT_RUN_START_TIMEOUT_MS);
-		runStartWaiters.add(finish);
+		const timer = setTimeout(() => waiter.finish(session.isStreaming), PI_AGENT_RUN_START_TIMEOUT_MS);
+		runStartWaiters.add(waiter);
 	});
 };
 port.on("message", async (request: PiAgentWorkerRequest) => {
@@ -143,13 +156,15 @@ port.on("message", async (request: PiAgentWorkerRequest) => {
 			for (const call of pending.values()) call.reject(new Error("Pi agent aborted"));
 			pending.clear();
 			for (const { call } of queued.splice(0)) call.reject(new Error("Pi agent aborted"));
-			await waitForActiveRun();
-			await session.abort();
+			const target = runId;
+			const started = await waitForActiveRun(target);
+			if (started && running && runId === target) await session.abort();
 			send(request.type === "cancel" ? { type: "aborted", id: request.id } : { type: "aborted" });
 			return;
 		}
 		if (running) throw new Error("Pi agent session already running");
 		running = true;
+		const run = ++runId;
 		const previousStats = session.getSessionStats();
 		const firstMessage = session.messages.length;
 		try {
@@ -180,6 +195,7 @@ port.on("message", async (request: PiAgentWorkerRequest) => {
 			});
 		} finally {
 			running = false;
+			releaseRunStartWaiters(run, false);
 		}
 	} catch (error) {
 		send({ type: "error", message: error instanceof Error ? error.message : "Pi agent failed" });
