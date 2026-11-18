@@ -249,17 +249,7 @@ describe("dreaming evidence coverage", () => {
 		const seen = new Set<string>();
 		let cursor: Parameters<typeof readRecentEpisodicSources>[6] | null = null;
 		for (let page = 0; page < 5; page += 1) {
-			const rows = readRecentEpisodicSources(
-				db as unknown as ReadDb,
-				AGENT,
-				100,
-				["memory"],
-				null,
-				"oldest",
-				cursor,
-				undefined,
-				false,
-			);
+			const rows = readRecentEpisodicSources(db as unknown as ReadDb, AGENT, 100, ["memory"], null, "oldest", cursor);
 			for (const row of rows) seen.add(row.id);
 			if (rows.length === 0) break;
 			const last = rows[rows.length - 1];
@@ -305,6 +295,7 @@ describe("dreaming evidence coverage", () => {
 			cursor: null,
 			limit: 1,
 		});
+		if (first.step !== "sources") throw new Error("expected a sources step");
 		expect(first.entries).toHaveLength(1);
 		seedMemory(db, "mem-late", "2026-01-01 00:00:01");
 		const count = scanDreamingEvidenceCoverageStep(db as unknown as ReadDb, {
