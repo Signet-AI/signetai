@@ -3,119 +3,40 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, initDbAccessorAsync } from "./db-accessor";
-import type { EmbeddingConfig } from "./memory-config";
-import { buildEntityContextInject, buildEntityPromptContext, promptPhraseSpan } from "./prompt-entity-context";
+import { matchPromptEntities, promptPhraseSpan } from "./prompt-entity-context";
 
 let dir = "";
 let prev: string | undefined;
 
 const DB_PATH = (): string => join(dir, "memory", "memories.db");
 
-function seedEntityContext(): void {
+function seedEntities(): void {
 	const now = new Date().toISOString();
 	getDbAccessor().withWriteTx((db) => {
-		db.prepare(
-			`INSERT INTO entities (
-				id, name, canonical_name, entity_type, agent_id, pinned, pinned_at, mentions, created_at, updated_at
-			) VALUES (?, ?, ?, 'person', 'default', 1, ?, 50, ?, ?)`,
-		).run("ent-nicholai", "Nicholai", "nicholai", now, now, now);
-
-		db.prepare(
-			`INSERT INTO entities (
-				id, name, canonical_name, entity_type, agent_id, pinned, pinned_at, mentions, created_at, updated_at
-			) VALUES (?, ?, ?, 'project', 'default', 0, NULL, 10, ?, ?)`,
-		).run("ent-signet", "Signet", "signet", now, now);
-
-		db.prepare(
-			`INSERT INTO entity_aspects (
-				id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
-			) VALUES (?, ?, 'default', ?, ?, 0.9, ?, ?)`,
-		).run("asp-nicholai", "ent-nicholai", "background", "background", now, now);
-		db.prepare(
-			`INSERT INTO entity_aspects (
-				id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
-			) VALUES (?, ?, 'default', ?, ?, 0.9, ?, ?)`,
-		).run("asp-signet", "ent-signet", "overview", "overview", now, now);
-
-		for (const memory of [
-			{ id: "mem-nicholai", content: "Nicholai prefers source-first engineering" },
-			{ id: "mem-signet", content: "Signet is a portable memory layer for AI agents" },
-		]) {
+		for (const [id, name, canonical, type, agentId] of [
+			["ent-nicholai", "Nicholai", "nicholai", "person", "default"],
+			["ent-signet", "Signet", "signet", "project", "default"],
+			["ent-other-agent", "Compass", "compass", "project", "other-agent"],
+		] as const) {
 			db.prepare(
-				`INSERT INTO memories (
-					id, content, normalized_content, content_hash, who, project, type,
-					agent_id, visibility, created_at, updated_at, updated_by
-				) VALUES (?, ?, ?, ?, 'test', 'test', 'fact', 'default', 'private', ?, ?, 'test')`,
-			).run(memory.id, memory.content, memory.content.toLowerCase(), `hash-${memory.id}`, now, now);
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, 10, ?, ?)`,
+			).run(id, name, canonical, type, agentId, now, now);
 		}
-
 		db.prepare(
-			`INSERT INTO entity_attributes (
-				id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
-				confidence, importance, status, group_key, claim_key, created_at, updated_at
-			) VALUES (?, ?, 'default', ?, 'attribute', ?, ?, 0.9, 0.8, 'active', ?, ?, ?, ?)`,
-		).run(
-			"attr-nicholai",
-			"asp-nicholai",
-			"mem-nicholai",
-			"Prefers source-first engineering",
-			"prefers source-first engineering",
-			"background",
-			"identity",
-			now,
-			now,
-		);
-		db.prepare(
-			`INSERT INTO entity_attributes (
-				id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
-				confidence, importance, status, group_key, claim_key, created_at, updated_at
-			) VALUES (?, ?, 'default', ?, 'attribute', ?, ?, 0.9, 0.8, 'active', ?, ?, ?, ?)`,
-		).run(
-			"attr-signet",
-			"asp-signet",
-			"mem-signet",
-			"Portable memory layer for AI agents",
-			"portable memory layer for ai agents",
-			"overview",
-			"purpose",
-			now,
-			now,
-		);
-
-		for (const [id, sourceId] of [
-			["emb-nicholai", "mem-nicholai"],
-			["emb-signet", "mem-signet"],
-		]) {
-			db.prepare(
-				`INSERT INTO embeddings (
-					id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id
-				) VALUES (?, ?, ?, 2, 'memory', ?, ?, ?, 'default')`,
-			).run(id, `emb-hash-${id}`, Buffer.from(new Float32Array([0.5, 0.5]).buffer), sourceId, `${id} text`, now);
-		}
+			`INSERT INTO entity_aliases
+			 (id, entity_id, agent_id, alias, canonical_alias, confidence, source, status, created_at, updated_at)
+			 VALUES ('alias-signetai', 'ent-signet', 'default', 'SignetAI', 'signetai', 1, 'test', 'active', ?, ?)`,
+		).run(now, now);
 	});
 }
 
-describe("prompt entity context scaling (#1059)", () => {
-	it("formats prompt context without a dynamic wall-clock header", () => {
-		const first = buildEntityContextInject("", ["Memory one", "Memory two"]);
-		const second = buildEntityContextInject("", ["Memory one", "Memory two"]);
-
-		expect(first).toBe(second);
-		expect(first).toBe("\n\n## Relevant Entity Context\n\nMemory one\nMemory two\n");
-		expect(first).not.toContain("Current Date & Time");
-	});
-
+describe("matchPromptEntities", () => {
 	beforeAll(async () => {
 		prev = process.env.SIGNET_PATH;
 		dir = mkdtempSync(join(tmpdir(), "signet-prompt-entity-context-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
-		writeFileSync(
-			join(dir, "agent.yaml"),
-			`memory:
-  pipelineV2:
-    enabled: false
-`,
-		);
+		writeFileSync(join(dir, "agent.yaml"), "memory:\n  pipelineV2:\n    enabled: false\n");
 		process.env.SIGNET_PATH = dir;
 		await initDbAccessorAsync(DB_PATH(), { agentsDir: dir });
 	});
@@ -126,44 +47,37 @@ describe("prompt entity context scaling (#1059)", () => {
 			if (file.startsWith("memories.db")) rmSync(join(dir, "memory", file), { force: true });
 		}
 		initDbAccessor(DB_PATH(), { agentsDir: dir });
-		seedEntityContext();
+		seedEntities();
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 	});
 
 	afterAll(async () => {
 		await closeDbAccessor();
 		if (prev === undefined) {
-			delete process.env.SIGNET_PATH;
+			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
 			process.env.SIGNET_PATH = prev;
 		}
 		rmSync(dir, { recursive: true, force: true });
 	});
 
-	it("embeds the shared semantic query once instead of once per matched entity", async () => {
-		let embeddingCalls = 0;
-		const result = await buildEntityPromptContext({
-			userMessage: "Tell me about Nicholai and the Signet project",
-			agentId: "default",
-			minScore: 0.3,
-			injectBudget: 4000,
-			memoryDbPath: DB_PATH(),
-			fetchEmbedding: async () => {
-				embeddingCalls += 1;
-				return [0.5, 0.5];
-			},
-			embedding: { provider: "test", model: "test" } as EmbeddingConfig,
-		});
-		expect(embeddingCalls).toBe(1);
-		expect(result.engine).toBe("entity-context");
-		expect(result.lines.length).toBeGreaterThanOrEqual(2);
-		const joined = result.lines.join("\n");
-		expect(joined).toContain("Nicholai");
-		expect(joined).toContain("Signet");
-		expect(result.memoryCount).toBeGreaterThanOrEqual(2);
+	it("returns every directly named entity for the agent", async () => {
+		const matches = await matchPromptEntities(DB_PATH(), "default", "Tell me about Nicholai and the Signet project");
+		expect(matches.map((match) => match.entityName).sort()).toEqual(["Nicholai", "Signet"]);
+	});
+
+	it("resolves active aliases to the canonical entity", async () => {
+		const matches = await matchPromptEntities(DB_PATH(), "default", "How is SignetAI doing?");
+		expect(matches.map((match) => [match.entityName, match.matchSource])).toEqual([["Signet", "alias"]]);
+	});
+
+	it("never matches another agent's entities", async () => {
+		expect(await matchPromptEntities(DB_PATH(), "default", "What is Compass?")).toEqual([]);
+		const other = await matchPromptEntities(DB_PATH(), "other-agent", "What is Compass?");
+		expect(other.map((match) => match.entityName)).toEqual(["Compass"]);
 	});
 
 	describe("promptPhraseSpan matches precomputed prompt terms", () => {

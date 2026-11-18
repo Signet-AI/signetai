@@ -17,7 +17,7 @@ import {
 } from "@signet/core";
 import { emitLifecycleProvider } from "@signet/lifecycle-proof";
 import { ensureAgentRegistered, getAgentScope, resolveAgentId } from "./agent-id";
-import { applyTokenBudget, selectWithEstimatedTokenBudget } from "./context-budget";
+import { applyTokenBudget, selectWithBudgetSkippingOversized, selectWithEstimatedTokenBudget } from "./context-budget";
 import {
 	clearContinuity,
 	consumeState,
@@ -78,15 +78,12 @@ import {
 import { estimateTokens } from "./pipeline/tokenizer";
 import { getDefaultPluginHost } from "./plugins/index";
 import type { PluginPromptTargetV1 } from "./plugins/types";
-import {
-	type PromptEntityContextMemory,
-	buildEntityContextInject,
-	buildEntityPromptContext,
-} from "./prompt-entity-context";
+import { type PromptEntityMatch, matchPromptEntities } from "./prompt-entity-context";
 import {
 	buildRecallQueryShape,
 	isLowSignalPrompt,
 	queryAnchorsMissingFromRecall,
+	stripProvenanceBlocks,
 	stripUntrustedMetadata,
 } from "./prompt-text";
 import { recordRecallAttempt, recordRecallOutcome } from "./recall-telemetry";
@@ -146,7 +143,6 @@ import { type StructuralCandidateSource, type StructuralFeatures, getStructuralF
 import { assembleInheritedContextBlock, resolveParentSession } from "./subagent-context";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
 import { getActiveTelemetry } from "./telemetry";
-import { searchTemporalFallback } from "./temporal-fallback";
 import * as transcriptCapture from "./transcript-capture";
 import {
 	enqueueTranscriptCaptureJob,
@@ -1456,26 +1452,6 @@ function attachPromptContext<T extends { readonly inject: string }>(
 	};
 }
 
-function entityMemoryToRecallResult(memory: PromptEntityContextMemory): RecallResult {
-	return {
-		id: memory.id,
-		content: memory.content,
-		content_length: memory.content.length,
-		truncated: false,
-		score: memory.score,
-		source: memory.sourceKind ?? "entity_context",
-		...(memory.sourceId ? { source_id: memory.sourceId } : {}),
-		...(memory.sourcePath ? { source_path: memory.sourcePath } : {}),
-		type: "fact",
-		tags: null,
-		pinned: false,
-		importance: memory.importance,
-		who: "signet",
-		project: null,
-		created_at: new Date(0).toISOString(),
-	};
-}
-
 function recordUserPromptRecallTelemetry(input: {
 	readonly cfg: {
 		readonly pipelineV2: {
@@ -1486,13 +1462,13 @@ function recordUserPromptRecallTelemetry(input: {
 	readonly sessionKey: string | undefined;
 	readonly project: string | undefined;
 	readonly userMessage: string;
-	readonly memories: readonly PromptEntityContextMemory[];
+	readonly memories: readonly RecallResult[];
 	readonly startedAt: number;
 	readonly engine: string;
 }): void {
 	if (!input.cfg.pipelineV2.telemetry.memorySearchQaEnabled) return;
 	const response: RecallResponse = {
-		results: input.memories.map(entityMemoryToRecallResult),
+		results: [...input.memories],
 		query: input.userMessage,
 		method: "hybrid",
 		meta: {
@@ -1533,8 +1509,7 @@ type UserPromptSubmitDeps = {
 	readonly getExpiryWarning: typeof getExpiryWarning;
 	readonly hybridRecall: typeof hybridRecall;
 	readonly fetchEmbedding: typeof fetchEmbedding;
-	readonly buildEntityPromptContext: typeof buildEntityPromptContext;
-	readonly searchTemporalFallback: typeof searchTemporalFallback;
+	readonly matchPromptEntities: typeof matchPromptEntities;
 	readonly trackFtsHits: typeof trackFtsHits;
 };
 
@@ -1555,8 +1530,7 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 	getExpiryWarning,
 	hybridRecall,
 	fetchEmbedding,
-	buildEntityPromptContext,
-	searchTemporalFallback,
+	matchPromptEntities,
 	trackFtsHits,
 };
 
@@ -1708,24 +1682,22 @@ export async function handleUserPromptSubmit(
 	let providerStartedAtMs: number | null = null;
 	try {
 		const cfg = deps.loadMemoryConfig(getAgentsDir());
-		const injectBudget = submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars;
 		const providerStartTime = Date.now();
 		providerStartedAtMs = providerStartTime;
-		const providerOutcome = deps
-			.buildEntityPromptContext({
-				userMessage,
-				agentId,
-				minScore: resolveUserPromptMinScore(submitCfg.minScore),
-				injectBudget,
-				memoryDbPath: getMemoryDbPath(),
-				fetchEmbedding: deps.fetchEmbedding,
-				embedding: cfg.embedding,
-				sessionHash: hashSessionKey(req.sessionKey) ?? undefined,
-			})
-			.then(
-				(context) => ({ ok: true as const, context, completedAtMs: Date.now() }),
-				(error: unknown) => ({ ok: false as const, error, completedAtMs: Date.now() }),
-			);
+		const controller = new AbortController();
+		const providerOutcome = recallPromptEntityContext(deps, {
+			userMessage,
+			agentId,
+			sessionKey: req.sessionKey,
+			limit: submitCfg.recallLimit ?? 10,
+			minScore: resolveUserPromptMinScore(submitCfg.minScore),
+			injectBudget: submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars,
+			cfg,
+			signal: controller.signal,
+		}).then(
+			(context) => ({ ok: true as const, context, completedAtMs: Date.now() }),
+			(error: unknown) => ({ ok: false as const, error, completedAtMs: Date.now() }),
+		);
 		const timeoutMarker = Symbol("prompt-provider-timeout");
 		let timeoutId: ReturnType<typeof setTimeout> | null = null;
 		const providerResult = await Promise.race([
@@ -1736,6 +1708,7 @@ export async function handleUserPromptSubmit(
 		]);
 		if (timeoutId !== null) clearTimeout(timeoutId);
 		if (providerResult === timeoutMarker) {
+			controller.abort(new Error("Prompt-submit recall exceeded its deadline"));
 			const promptHandledAtMs = Date.now();
 			void providerOutcome.then((outcome) => {
 				emitLifecycleProvider({
@@ -1778,29 +1751,44 @@ export async function handleUserPromptSubmit(
 			);
 		}
 		if (!providerResult.ok) throw providerResult.error;
-		const entityContext = providerResult.context;
 		emitLifecycleProvider({
 			startedAtMs: providerStartTime,
 			completedAtMs: providerResult.completedAtMs,
 			promptHandledAtMs: providerStartTime,
 		});
-		if (entityContext.lines.length === 0) {
-			recordUserPromptRecallTelemetry({
-				cfg,
-				agentId,
+		const recall = providerResult.context;
+		const claimed = await claimRecallItemsAsync({
+			sessionKey: req.sessionKey,
+			agentId,
+			surface: PROMPT_RECALL_SURFACE,
+			mode: "automatic",
+			items: recall.results,
+		});
+		if (claimed.meta.failedOpen) {
+			deps.logger.warn("memory", "Prompt-submit recall claim failed open", {
 				sessionKey: req.sessionKey,
-				project: req.project,
-				userMessage,
-				memories: [],
-				startedAt: start,
-				engine: entityContext.engine,
+				agentId,
 			});
-			recordRecallOutcome({
-				surface: "prompt_injection",
-				resultCount: 0,
-				delivery: "not_delivered",
-			});
-			promptRecallOutcomeRecorded = true;
+		}
+		const delivered = claimed.items;
+		const engine = delivered.length > 0 ? "entity-recall" : recall.results.length > 0 ? "deduped" : recall.engine;
+		recordUserPromptRecallTelemetry({
+			cfg,
+			agentId,
+			sessionKey: req.sessionKey,
+			project: req.project,
+			userMessage,
+			memories: delivered,
+			startedAt: start,
+			engine,
+		});
+		recordRecallOutcome({
+			surface: "prompt_injection",
+			resultCount: delivered.length,
+			delivery: delivered.length > 0 ? "injected" : "not_delivered",
+		});
+		promptRecallOutcomeRecorded = true;
+		if (delivered.length === 0) {
 			return finalizeUserPromptSubmitSuccess(
 				req,
 				userMessage,
@@ -1811,32 +1799,18 @@ export async function handleUserPromptSubmit(
 					inject: "",
 					memoryCount: 0,
 					queryTerms: keywordTerms.join(" ") || undefined,
-					engine: entityContext.engine,
+					engine,
 					warnings,
 				},
 				deps.logger,
 			);
 		}
-		const memoryIds = entityContext.memories.map((memory) => memory.id);
-		deps.trackFtsHits(req.sessionKey, memoryIds, agentId);
-		recordUserPromptRecallTelemetry({
-			cfg,
+		deps.trackFtsHits(
+			req.sessionKey,
+			delivered.map((row) => row.id),
 			agentId,
-			sessionKey: req.sessionKey,
-			project: req.project,
-			userMessage,
-			memories: entityContext.memories,
-			startedAt: start,
-			engine: "entity-context",
-		});
-		const pluginContext = buildPluginPromptContributionSection("user-prompt-submit", deps.logger);
-		const inject = buildEntityContextInject(metadataHeader, entityContext.lines, pluginContext);
-		recordRecallOutcome({
-			surface: "prompt_injection",
-			resultCount: entityContext.memoryCount,
-			delivery: "injected",
-		});
-		promptRecallOutcomeRecorded = true;
+		);
+		const inject = buildPromptRecallInject(recall.entities, delivered);
 		return finalizeUserPromptSubmitSuccess(
 			req,
 			userMessage,
@@ -1845,9 +1819,9 @@ export async function handleUserPromptSubmit(
 				dynamicContext: inject,
 				clockContext,
 				inject,
-				memoryCount: entityContext.memoryCount,
+				memoryCount: delivered.length,
 				queryTerms: keywordTerms.join(" ") || undefined,
-				engine: "entity-context",
+				engine,
 				warnings,
 			},
 			deps.logger,
@@ -1872,6 +1846,63 @@ export async function handleUserPromptSubmit(
 			warnings,
 		};
 	}
+}
+
+const PROMPT_RECALL_SURFACE = "api.hooks.user-prompt-submit";
+
+type PromptEntityRecall = {
+	readonly entities: readonly PromptEntityMatch[];
+	readonly results: readonly RecallResult[];
+	readonly engine: "no-entity" | "no-recall-hit" | "entity-recall";
+};
+
+async function recallPromptEntityContext(
+	deps: UserPromptSubmitDeps,
+	input: {
+		readonly userMessage: string;
+		readonly agentId: string;
+		readonly sessionKey: string | undefined;
+		readonly limit: number;
+		readonly minScore: number;
+		readonly injectBudget: number;
+		readonly cfg: ReturnType<typeof loadMemoryConfig>;
+		readonly signal: AbortSignal;
+	},
+): Promise<PromptEntityRecall> {
+	const entities = await deps.matchPromptEntities(getMemoryDbPath(), input.agentId, input.userMessage);
+	if (entities.length === 0) return { entities, results: [], engine: "no-entity" };
+	const query = stripProvenanceBlocks(input.userMessage);
+	if (!query) return { entities, results: [], engine: "no-recall-hit" };
+	const scope = await deps.getAgentScope(input.agentId);
+	const recall = await deps.hybridRecall(
+		{
+			query,
+			limit: input.limit,
+			agentId: input.agentId,
+			readPolicy: scope.readPolicy,
+			policyGroup: scope.policyGroup,
+			sessionKey: input.sessionKey,
+			recallSurface: PROMPT_RECALL_SURFACE,
+			recallMode: "automatic",
+			claimRecallResults: false,
+			trackRecallAccess: false,
+			telemetrySurface: "prompt_injection",
+		},
+		input.cfg,
+		deps.fetchEmbedding,
+		{ signal: input.signal },
+	);
+	const results = selectWithBudgetSkippingOversized(
+		recall.results.filter((row) => row.score >= input.minScore),
+		input.injectBudget,
+	);
+	return { entities, results, engine: results.length > 0 ? "entity-recall" : "no-recall-hit" };
+}
+
+function buildPromptRecallInject(entities: readonly PromptEntityMatch[], rows: readonly RecallResult[]): string {
+	const names = entities.map((entity) => entity.entityName).join(", ");
+	const lines = rows.map((row) => `- ${redactCredentials(row.content)} (${row.id})`);
+	return `## Relevant Memory: ${names}\n\n${lines.join("\n")}\n`;
 }
 
 function isClearSessionStart(req: SessionStartRequest): boolean {

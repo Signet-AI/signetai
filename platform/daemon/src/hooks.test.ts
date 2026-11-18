@@ -2196,10 +2196,10 @@ describe("handleUserPromptSubmit", () => {
 				{ harness: "test", sessionKey: "slow-provider", userPrompt: "recall the slow provider test" },
 				{
 					loadMemoryConfig: () => timeoutConfig,
-					buildEntityPromptContext: async () => {
+					matchPromptEntities: async () => {
 						await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 						resolveProvider?.();
-						return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
+						return [];
 					},
 				} as never,
 			);

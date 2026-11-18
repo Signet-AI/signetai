@@ -1384,28 +1384,28 @@
     },
     {
       "path": "hooks.ts",
-      "line": 490,
+      "line": 486,
       "api": "existsSync",
       "source": "if (!existsSync(getMemoryDbPath())) return undefined;",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 578,
+      "line": 574,
       "api": "existsSync",
       "source": "if (!existsSync(getMemoryDbPath())) return [];",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 793,
+      "line": 789,
       "api": "existsSync",
       "source": "if (req.sessionKey && existsSync(getMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 796,
+      "line": 792,
       "api": "withReadDbAsync",
       "source": "const block = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -1413,14 +1413,14 @@
     },
     {
       "path": "hooks.ts",
-      "line": 2208,
+      "line": 2239,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2210,
+      "line": 2241,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
@@ -2980,23 +2980,9 @@
     },
     {
       "path": "prompt-entity-context.ts",
-      "line": 636,
+      "line": 202,
       "api": "existsSync",
-      "source": "if (!existsSync(memoryDbPath)) return { lines: [], memories: [], memoryCount: 0, engine: \"no-entity\" };",
-      "category": "hot-path"
-    },
-    {
-      "path": "prompt-entity-context.ts",
-      "line": 639,
-      "api": "withReadDb",
-      "source": "const matches: PromptEntityMatch[] = getDbAccessor().withReadDb(",
-      "category": "hot-path"
-    },
-    {
-      "path": "prompt-entity-context.ts",
-      "line": 663,
-      "api": "withReadDb",
-      "source": "return getDbAccessor().withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
+      "source": "if (!existsSync(memoryDbPath)) return [];",
       "category": "hot-path"
     },
     {

@@ -110,14 +110,18 @@ search; attribute relevance chooses which aspect context to inject.
 `userPrompt`, `lastAssistantMessage`, `transcriptPath`, and inline `transcript`
 are optional.
 
-Prompt-submit does not run generic memory recall and has no fallback injection.
-Low-signal prompts are admitted before automatic recall work, so they skip
-embedding and entity-context search while preserving session bookkeeping and
-preserving the stable per-prompt context contract (currently an empty
-`inject`). Explicit recall is still
-available through `/api/memory/recall` and MCP/CLI recall tools, including for
-the same prompt. Unknown entities, ambiguous entity mentions, and prompts
-where no attribute clears `hooks.userPromptSubmit.minScore` return `inject: ""`.
+Prompt-submit runs recall only after a direct entity hit and has no fallback
+injection. A prompt that names a known person or project triggers the normal
+daemon recall with the prompt as the query; results that clear
+`hooks.userPromptSubmit.minScore` are injected once per session context epoch
+and then claimed in the session recall dedupe ledger, so repeat prompts do not
+re-inject them. Low-signal prompts are admitted before
+automatic recall work, so they skip entity matching and recall while preserving
+session bookkeeping and the stable per-prompt context contract (an empty
+`inject`). Explicit recall is still available through `/api/memory/recall` and
+MCP/CLI recall tools, including for the same prompt. Unknown entities,
+ambiguous entity mentions, and prompts whose recall results do not clear
+`hooks.userPromptSubmit.minScore` return `inject: ""`.
 Raw transcript search is not injected on prompt-submit; use the dedicated
 `session_search` MCP/API surface when a caller needs transcript evidence.
 

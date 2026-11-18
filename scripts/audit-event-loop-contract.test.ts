@@ -385,15 +385,15 @@ test("the generated report describes the type boundary and transitional counts",
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const report = renderReport(baseline, { total: 152, withWriteTx: 59, withReadDb: 93 });
 	expect(report).toContain(`Exact ledger inventory: ${baseline.length} sites`);
-	expect(report).toContain("55 synchronous writes, 88 synchronous reads, and 159 async-named DB sites");
+	expect(report).toContain("55 synchronous writes, 86 synchronous reads, and 159 async-named DB sites");
 	expect(report).toContain("Async-named ON-PARENT DB sites: 157");
 	expect(report).toContain("Async-named OFF-PARENT DB sites: 2");
 	expect(report).not.toContain("async-named parent DB sites");
 	expect(report).toContain(
 		"The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
 	);
-	expect(report).toContain("Database accessor sites classified: 302");
-	expect(report).toContain("ON-PARENT callback execution: 300");
+	expect(report).toContain("Database accessor sites classified: 300");
+	expect(report).toContain("ON-PARENT callback execution: 298");
 	expect(report).toContain("OFF-PARENT callback execution: 2");
 	expect(report).toContain("- `db:recall.embedding.config.read` (withReadDbAsync)");
 	expect(report).toContain("- `db:recall.vector.search.read` (withReadDbAsync)");
