@@ -86,6 +86,11 @@ export function buildHermeticEnvironment(
 
 	const env: HermeticEnvironment = { ...baseEnv };
 	for (const key of CLEARED_ENV_KEYS) delete env[key];
+	const toolHome = baseEnv.HOME ?? baseEnv.USERPROFILE;
+	if (toolHome) {
+		env.RUSTUP_HOME = baseEnv.RUSTUP_HOME ?? join(toolHome, ".rustup");
+		env.CARGO_HOME = baseEnv.CARGO_HOME ?? join(toolHome, ".cargo");
+	}
 	env.HOME = home;
 	env.TMPDIR = temporary;
 	env.TMP = temporary;
