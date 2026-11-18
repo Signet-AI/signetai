@@ -104,9 +104,10 @@ export function filterTranscriptRecordsInDb(
 		)
 			offset = end;
 	}
-	const kept = turns
-		.slice(offset)
-		.filter((turn) => turn.timestamp === undefined || turn.timestamp > Date.parse(row.watermark));
+	const watermark = Date.parse(row.watermark);
+	const kept = turns.filter((turn, index) =>
+		turn.timestamp === undefined ? index >= offset : turn.timestamp > watermark,
+	);
 	if (kept.length === turns.length && !input.rawTranscript) return input.transcript;
 	return kept
 		.map((turn) =>

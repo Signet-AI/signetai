@@ -1,10 +1,6 @@
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {
-	const memoryColumns = db.prepare("PRAGMA table_info(memories)").all();
-	for (const column of ["source_id", "source_type"]) {
-		if (!memoryColumns.some((row) => row.name === column)) db.exec(`ALTER TABLE memories ADD COLUMN ${column} TEXT`);
-	}
 	if (
 		!db
 			.prepare("PRAGMA table_info(source_import_records)")

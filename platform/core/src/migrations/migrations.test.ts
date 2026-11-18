@@ -2125,6 +2125,8 @@ describe("migration framework", () => {
 				content TEXT NOT NULL,
 				confidence REAL DEFAULT 1.0,
 				importance REAL DEFAULT 0.5,
+				source_id TEXT,
+				source_type TEXT,
 				tags TEXT,
 				created_at TEXT NOT NULL,
 				updated_at TEXT NOT NULL,
