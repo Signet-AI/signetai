@@ -72,6 +72,47 @@ describe("SignetOhMyPiExtension", () => {
 		expect((result as { message: { content: string } }).message.content).toContain("peer notification");
 	});
 
+	it("a custom-message run does not trigger user-prompt recall", async () => {
+		const handlers: HandlerMap = {};
+		const pi = {
+			on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
+				(handlers[event] ??= []).push(handler);
+			},
+		};
+
+		const requestedUrls: string[] = [];
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL) => {
+				const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+				requestedUrls.push(url);
+				if (url.endsWith("/api/hooks/session-start")) return Response.json({ inject: "session context" });
+				if (url.endsWith("/api/hooks/user-prompt-submit")) throw new Error("user-prompt-submit must not run");
+				if (url.endsWith("/api/hooks/notifications")) return Response.json({});
+				throw new Error(`Unexpected fetch: ${url}`);
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		SignetOhMyPiExtension(pi as never);
+
+		const ctx = {
+			cwd: "/tmp/project",
+			sessionManager: {
+				getBranch: () => [],
+				getEntries: () => [],
+				getHeader: () => ({ id: "session-custom", cwd: "/tmp/project" }),
+				getSessionFile: () => undefined,
+				getSessionId: () => "session-custom",
+			},
+		};
+
+		const result = await handlers.before_agent_start[0]?.({ messageType: "custom", message: { role: "custom" } }, ctx);
+		expect(requestedUrls.some((url) => url.endsWith("/api/hooks/user-prompt-submit"))).toBe(false);
+		expect(requestedUrls.some((url) => url.endsWith("/api/hooks/session-start"))).toBe(true);
+		const message = (result as { message?: { customType?: string } } | undefined)?.message;
+		expect(message?.customType).toBe("signet-oh-my-pi-session-context");
+	});
+
 	it("submits the prompt once from input and settles it in before_agent_start", async () => {
 		const handlers: HandlerMap = {};
 		const pi = {

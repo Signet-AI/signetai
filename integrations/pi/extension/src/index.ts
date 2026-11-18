@@ -339,7 +339,7 @@ function registerPromptHandlers(pi: PiExtensionApi, deps: PiDeps): void {
 	pi.on(
 		"before_agent_start",
 		async (event: PiBeforeAgentStartEvent, ctx): Promise<PiBeforeAgentStartResult | undefined> => {
-			if (!deps.state.hasPendingPromptSubmit(currentSessionRef(ctx).sessionId)) {
+			if (event.messageType !== "custom" && !deps.state.hasPendingPromptSubmit(currentSessionRef(ctx).sessionId)) {
 				beginPromptSubmit(deps, ctx, event.prompt);
 			}
 			await settlePromptSubmit(deps, ctx);
