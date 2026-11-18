@@ -166,6 +166,7 @@ export type DreamingEvidenceCoverageStepResult =
 			readonly entries: ReadonlyArray<
 				Pick<CoverageEntryClassificationInput, "kind" | "id" | "capturedAt" | "entryId" | "revision" | "length">
 			>;
+			readonly seen: number;
 			readonly cursor: CoveragePageCursor | null;
 			readonly exhausted: boolean;
 	  }
@@ -333,6 +334,7 @@ export function scanDreamingEvidenceCoverageStep(
 		return {
 			step: "sources",
 			entries,
+			seen: page.length,
 			cursor: last ? { capturedAt: last.capturedAt, kind: last.kind, id: last.id } : null,
 			exhausted: page.length < request.limit,
 		};
@@ -454,7 +456,6 @@ class DreamingEvidenceCoverageWalk {
 			if (budget <= 0) {
 				this.sourcesDone = true;
 				this.passesDone = true;
-				this.incomplete ??= "source-budget";
 				return this.nextStep();
 			}
 			return {
@@ -525,7 +526,7 @@ class DreamingEvidenceCoverageWalk {
 				});
 				this.classifyQueue.push(key);
 			}
-			this.scannedSources += this.lastSourceLimit;
+			this.scannedSources += result.seen;
 			this.sourceCursor = result.cursor;
 			if (result.exhausted) this.sourcesDone = true;
 			return;
