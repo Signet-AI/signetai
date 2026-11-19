@@ -45,7 +45,10 @@ const PRELUDE = [
 	"        time.sleep(self.start_delay)",
 	"        submitted.append(['session_start', key] + (['claim'] if kw.get('claim_only') else []))",
 	"        return {'dynamicContext': 'start for ' + key}",
-	"    def notifications(self, key, hook, **kw): return {}",
+	"    notes = {}",
+	"    def notifications(self, key, hook, **kw):",
+	"        time.sleep(self.notes.get('delay', 0))",
+	"        return {'inject': self.notes.get('inject', '')}",
 	"p = sig.SignetMemoryProvider()",
 	"p._client = FakeClient()",
 	"p._session_key = 'sess-1'",
@@ -295,4 +298,37 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.old).toBe("");
 		expect(out.new).toBe("start for sess-2");
 	}, 20_000);
+
+	it("does not reclaim or clear an old session when its restart response arrives late", () => {
+		const out = py([
+			"import threading",
+			"FakeClient.delays = {'old question': 1.5}",
+			"FakeClient.responses = {'old question': {'sessionKnown': False}}",
+			"def boundary():",
+			"    time.sleep(0.5)",
+			"    p.on_session_switch('sess-2', reset=True)",
+			"threading.Thread(target=boundary).start()",
+			"old = p.prefetch('old question', session_id='sess-1')",
+			"new = p.prefetch('', session_id='sess-2')",
+			"print(json.dumps({'old': old, 'new': new, 'starts': [s for s in submitted if s[0] == 'session_start']}))",
+		]) as { old: string; new: string; starts: Array<string[]> };
+
+		expect(out.starts).toEqual([["session_start", "sess-2"]]);
+		expect(out.old).toBe("");
+		expect(out.new).toBe("start for sess-2");
+	}, 20_000);
+
+	it("keeps an undrained notification when a delayed refresh returns none", () => {
+		const out = py([
+			"import threading",
+			"FakeClient.notes = {'delay': 0.3, 'inject': ''}",
+			"p._notification_result = 'board note'",
+			"p._queue_notification_refresh('sync_turn')",
+			"for t in threading.enumerate():",
+			"    if t.name == 'signet-notify-sync_turn': t.join(5)",
+			"print(json.dumps(p.prefetch('', session_id='sess-1')))",
+		]) as string;
+
+		expect(out).toBe("board note");
+	});
 });
