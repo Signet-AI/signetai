@@ -805,7 +805,7 @@
     },
     {
       "path": "db-accessor.ts",
-      "line": 2703,
+      "line": 2712,
       "api": "withWriteTxAsync",
       "source": "return await accessor.withWriteTxAsync(fn, siteToken === undefined ? options : { ...options, siteToken });",
       "category": "hot-path"
@@ -924,7 +924,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1061,
+      "line": 1068,
       "api": "withReadDbAsync",
       "source": "const embedding = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -932,7 +932,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1094,
+      "line": 1101,
       "api": "withReadDbAsync",
       "source": "return await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -940,21 +940,21 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1104,
+      "line": 1111,
       "api": "writeFileSync",
       "source": "writeFileSync(startedMarker, \"started\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1105,
+      "line": 1112,
       "api": "existsSync",
       "source": "while (!existsSync(releaseMarker)) await new Promise((resolve) => setTimeout(resolve, 5));",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1278,
+      "line": 1286,
       "api": "writeFileSync",
       "source": "if (activeFile) writeFileSync(activeFile, `${Date.now()}\\n`);",
       "category": "hot-path"
@@ -2735,7 +2735,7 @@
     },
     {
       "path": "pipeline/pi-agent-client.ts",
-      "line": 45,
+      "line": 52,
       "api": "existsSync",
       "source": "(existsSync(bundled) ? bundled : join(directory, \"pi-agent-worker.ts\")),",
       "category": "hot-path"
@@ -3658,7 +3658,7 @@
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 136,
+      "line": 139,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -3666,28 +3666,28 @@
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 369,
+      "line": 372,
       "api": "existsSync",
       "source": "if (existsSync(p)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 370,
+      "line": 373,
       "api": "readFileSync",
       "source": "const yaml = parseSimpleYaml(readFileSync(p, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 411,
+      "line": 414,
       "api": "existsSync",
       "source": "memoryDb: existsSync(MEMORY_DB),",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 470,
+      "line": 473,
       "api": "readFileSync",
       "source": "soulContent = readFileSync(soulPath, \"utf-8\").slice(0, 500);",
       "category": "hot-path"

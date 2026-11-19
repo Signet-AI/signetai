@@ -2421,6 +2421,14 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			job.cancellation = "started";
 			writeActive = true;
 			updateQueueTelemetry();
+			const busyRow = job.deadlineAt === null ? null : writeConn.prepare("PRAGMA busy_timeout").get();
+			const busyTimeout =
+				typeof busyRow === "object" && busyRow !== null && "timeout" in busyRow && typeof busyRow.timeout === "number"
+					? busyRow.timeout
+					: null;
+			if (busyTimeout !== null && job.deadlineAt !== null) {
+				writeConn.exec(`PRAGMA busy_timeout = ${Math.max(1, Math.min(busyTimeout, Math.ceil(job.deadlineAt - now)))}`);
+			}
 			try {
 				job.resolve(
 					job.transactional
@@ -2442,6 +2450,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			} catch (err) {
 				job.reject(err);
 			} finally {
+				if (busyTimeout !== null) writeConn.exec(`PRAGMA busy_timeout = ${busyTimeout}`);
 				writeActive = false;
 			}
 			updateQueueTelemetry();
