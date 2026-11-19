@@ -435,8 +435,9 @@ export function startDreamingWorker(
 			);
 			await compactDreamingHistory(accessor, completer, runAgentId, scopeKey, { isActive: () => !stopped });
 		} catch (error) {
-			logger.warn("dreaming-worker", "Dreaming history compaction was not started", {
+			logger.warn("dreaming-worker", "Dreaming history compaction failed", {
 				agentId: runAgentId,
+				passId,
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
