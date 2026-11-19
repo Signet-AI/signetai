@@ -1,0 +1,41 @@
+name: App Rust
+
+on:
+  pull_request:
+    paths:
+      - "surfaces/app/**"
+      - ".github/workflows/app-rust.yml"
+  push:
+    branches: [main]
+    paths:
+      - "surfaces/app/**"
+      - ".github/workflows/app-rust.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: App Rust fmt and clippy
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: surfaces/app
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Install Rust components
+        run: |
+          rustup component add rustfmt clippy
+          rustup target add wasm32-unknown-unknown
+          rustc --version
+          cargo clippy --version
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy (native)
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Clippy (wasm32-unknown-unknown)
+        run: cargo clippy --locked --target wasm32-unknown-unknown -- -D warnings
