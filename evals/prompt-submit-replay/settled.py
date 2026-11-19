@@ -1,9 +1,15 @@
 import json
 import sys
 
-MIGRATION_STARTED = "Migration integrity verify attempt"
+MIGRATION_STARTED = ("Migration integrity verify", "Migration verification")
 MIGRATION_PASSED = "Global integrity check passed"
-MIGRATION_FAILED = ("Global integrity check FAILED", "Global integrity check failed")
+MIGRATION_FAILED = (
+    "Global integrity check FAILED",
+    "Global integrity check failed",
+    "Migration integrity verify setup rejected; retry cap reached",
+    "Migration integrity verify terminal state retained",
+    "Migration integrity verify continuation rejected",
+)
 SLICE = "Incremental database integrity slice complete"
 PENDING = ("running", "timed_out", "unavailable")
 DEGRADED = "degraded:integrity-unverified"
@@ -26,7 +32,7 @@ def main():
             message = str(record.get("message", ""))
             if message.startswith(MIGRATION_FAILED) or message == DEGRADED:
                 fail(f"migration integrity verification did not pass: {message}")
-            if message == MIGRATION_STARTED and migration is None:
+            if message.startswith(MIGRATION_STARTED) and migration is None:
                 migration = False
             if message.startswith(MIGRATION_PASSED):
                 migration = True
