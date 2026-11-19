@@ -159,10 +159,10 @@ describe("ClaudeCodeConnector.install — legacy SIGNET block migration", () => 
 
 const settingsFile = () => join(tmpRoot, ".claude", "settings.json");
 const readHooks = () => JSON.parse(readFileSync(settingsFile(), "utf-8")).hooks as Record<string, unknown[]>;
+const commandsOf = (groups: unknown[]) =>
+	groups.flatMap((g) => (g as { hooks: Array<Record<string, unknown>> }).hooks ?? []);
 
 describe("ClaudeCodeConnector wake hooks", () => {
-	const commandsOf = (groups: unknown[]) =>
-		groups.flatMap((g) => ((g as { hooks: Array<Record<string, unknown>> }).hooks ?? []).map((h) => h));
 	const stopHooksMatching = (hooks: Record<string, unknown[]>, pattern: RegExp) =>
 		commandsOf(hooks.Stop ?? []).filter((h) => pattern.test(String(h.command)));
 	const stopCapture = (hooks: Record<string, unknown[]>) => stopHooksMatching(hooks, /\bhook stop\b/);
@@ -264,6 +264,50 @@ describe("ClaudeCodeConnector wake hooks", () => {
 		await new ClaudeCodeConnector().install(tmpRoot);
 		await new ClaudeCodeConnector({ hooks: { sessionStart: false, stop: false } } as never).install(tmpRoot);
 		expect(readHooks().Stop).toBeUndefined();
+	});
+});
+
+describe("ClaudeCodeConnector hook timeouts", () => {
+	const budgetVars = ["SIGNET_SESSION_START_TIMEOUT", "SIGNET_FETCH_TIMEOUT", "SIGNET_PROMPT_SUBMIT_TIMEOUT"];
+	const savedBudgets = new Map<string, string | undefined>();
+	const timeoutsByHook = () =>
+		Object.fromEntries(
+			commandsOf(Object.values(readHooks()).flat())
+				.filter((h) => h.timeout !== undefined)
+				.map((h) => [/\bhook ([a-z-]+)/.exec(String(h.command))?.[1], h.timeout]),
+		);
+
+	beforeEach(() => {
+		for (const name of budgetVars) {
+			savedBudgets.set(name, process.env[name]);
+			Reflect.deleteProperty(process.env, name);
+		}
+	});
+
+	afterEach(() => {
+		for (const [name, value] of savedBudgets) {
+			if (value === undefined) Reflect.deleteProperty(process.env, name);
+			else process.env[name] = value;
+		}
+	});
+
+	it("writes every Signet hook timeout in seconds", async () => {
+		await new ClaudeCodeConnector().install(tmpRoot);
+		expect(timeoutsByHook()).toEqual({
+			"session-start": 17,
+			wake: 3600,
+			"user-prompt-submit": 7,
+			notifications: 3,
+			"pre-compaction": 3,
+			"session-end": 15,
+		});
+	});
+
+	it("rounds a millisecond budget plus the grace up to whole seconds", async () => {
+		process.env.SIGNET_SESSION_START_TIMEOUT = "20500";
+		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = "7500";
+		await new ClaudeCodeConnector().install(tmpRoot);
+		expect(timeoutsByHook()).toMatchObject({ "session-start": 23, "user-prompt-submit": 10 });
 	});
 });
 

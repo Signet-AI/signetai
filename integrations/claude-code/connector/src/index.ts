@@ -40,6 +40,8 @@ export interface SessionContext {
 }
 
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
+const SHORT_HOOK_TIMEOUT_SECONDS = 3;
+const SESSION_END_HOOK_TIMEOUT_SECONDS = 15;
 
 function readClaudeSettings(path: string): Record<string, unknown> {
 	if (!existsSync(path)) return {};
@@ -188,13 +190,17 @@ export function dispatchSessionEndFireAndForget(
 		return false;
 	}
 }
-function sessionStartHookTimeout(): number {
-	const raw = process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT;
-	return resolveSessionStartTimeoutMs(raw) + 2_000;
+function hookTimeoutSeconds(budgetMs: number): number {
+	return Math.ceil((budgetMs + 2_000) / 1_000);
 }
 
-function userPromptSubmitHookTimeout(): number {
-	return resolvePromptSubmitTimeoutMs(process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT) + 2_000;
+function sessionStartHookTimeoutSeconds(): number {
+	const raw = process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT;
+	return hookTimeoutSeconds(resolveSessionStartTimeoutMs(raw));
+}
+
+function userPromptSubmitHookTimeoutSeconds(): number {
+	return hookTimeoutSeconds(resolvePromptSubmitTimeoutMs(process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT));
 }
 export class ClaudeCodeConnector extends BaseConnector {
 	readonly name = "Claude Code";
@@ -356,7 +362,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 						{
 							type: "command",
 							command: `${signetCmd} hook session-start -H claude-code --project "${pwdExpr}"`,
-							timeout: sessionStartHookTimeout(),
+							timeout: sessionStartHookTimeoutSeconds(),
 						},
 						wakeHook,
 					],
@@ -371,7 +377,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 						{
 							type: "command",
 							command: `${signetCmd} hook user-prompt-submit -H claude-code --project "${pwdExpr}"`,
-							timeout: userPromptSubmitHookTimeout(),
+							timeout: userPromptSubmitHookTimeoutSeconds(),
 						},
 					],
 				},
@@ -385,7 +391,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 						{
 							type: "command",
 							command: `${signetCmd} hook notifications -H claude-code --hook PreToolUse --project "${pwdExpr}" --hook-json`,
-							timeout: 3000,
+							timeout: SHORT_HOOK_TIMEOUT_SECONDS,
 						},
 					],
 				},
@@ -399,7 +405,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 						{
 							type: "command",
 							command: `${signetCmd} hook pre-compaction -H claude-code --project "${pwdExpr}"`,
-							timeout: 3000,
+							timeout: SHORT_HOOK_TIMEOUT_SECONDS,
 						},
 					],
 				},
@@ -413,7 +419,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 						{
 							type: "command",
 							command: `${signetCmd} hook session-end -H claude-code`,
-							timeout: 15000,
+							timeout: SESSION_END_HOOK_TIMEOUT_SECONDS,
 						},
 					],
 				},
