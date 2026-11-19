@@ -417,7 +417,7 @@ db.exec("PRAGMA busy_timeout = 5000");
 for await (const _ of Bun.stdin.stream()) {
 	db.exec("BEGIN IMMEDIATE");
 	console.log("locked");
-	Bun.sleepSync(400);
+	Bun.sleepSync(2500);
 	db.exec("COMMIT");
 	break;
 }`,
@@ -446,7 +446,9 @@ for await (const _ of Bun.stdin.stream()) {
 			}) as unknown as PromptDeps["hybridRecall"],
 		});
 
+		const started = performance.now();
 		const result = await submit("How should Signet architecture handle prompt context?", "session-late-lock", deps);
+		const elapsed = performance.now() - started;
 		await holder.exited;
 
 		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "provider-timeout" });
@@ -454,7 +456,8 @@ for await (const _ of Bun.stdin.stream()) {
 			db.prepare("SELECT COUNT(*) AS count FROM session_recall_events WHERE session_key = ?").get("session-late-lock"),
 		);
 		expect(claims).toEqual({ count: 0 });
-	});
+		expect(elapsed).toBeLessThan(1500);
+	}, 10_000);
 
 	it("reports degraded recall instead of a plain miss", async () => {
 		seedEntityContext();

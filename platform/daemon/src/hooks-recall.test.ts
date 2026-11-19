@@ -177,6 +177,52 @@ memory:
 		}
 	});
 
+	it("delivers prompt recall again after compaction", async () => {
+		const sessionKey = `compaction-prompt-${crypto.randomUUID()}`;
+		const harness = "openclaw";
+		const now = new Date().toISOString();
+		const config = readFileSync(join(dir, "agent.yaml"), "utf8");
+		await getDbAccessor?.().withWriteTxAsync((db) => {
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-kestrel', 'Kestrel', 'kestrel', 'project', 'default', 10, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)
+				 VALUES ('kestrel-deploy', 'Kestrel deploys through the canary pipeline.', 'fact', 'default', 'test', ?, ?)`,
+			).run(now, now);
+		});
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`${config}hooks:\n  userPromptSubmit:\n    minScore: 0\n`.replace(
+				"embedding:\n  provider: none\n",
+				"embedding:\n  provider: none\n  promptSubmitTimeoutMs: 10000\n",
+			),
+		);
+		const hook = async (route: string, body: Record<string, unknown>): Promise<Record<string, unknown>> => {
+			const response = await app.request(`/api/hooks/${route}`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "x-signet-runtime-path": "plugin" },
+				body: JSON.stringify({ harness, sessionKey, ...body }),
+			});
+			expect(response.status).toBe(200);
+			return (await response.json()) as Record<string, unknown>;
+		};
+		const prompt = { userPrompt: "How does Kestrel deploy its pipeline?" };
+		try {
+			expect(await hook("user-prompt-submit", prompt)).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
+			expect(await hook("user-prompt-submit", prompt)).toMatchObject({ engine: "deduped", memoryCount: 0 });
+			expect(await hook("compaction-complete", { summary: "compaction summary" })).toMatchObject({
+				success: true,
+				contextEpoch: 1,
+			});
+			expect(await hook("user-prompt-submit", prompt)).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
+		} finally {
+			writeFileSync(join(dir, "agent.yaml"), config);
+			releaseSession?.(sessionKey);
+		}
+	}, 30_000);
+
 	it("labels partial FTS recall separately from provider outages", async () => {
 		setFtsIndexIncomplete(true);
 		try {

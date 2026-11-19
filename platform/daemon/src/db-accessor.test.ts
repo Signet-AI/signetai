@@ -1775,3 +1775,41 @@ describe("vec_embeddings schema repair", () => {
 		db.close(true);
 	});
 });
+
+describe("DbAccessor write deadlines", () => {
+	let dir = "";
+
+	afterEach(async () => {
+		await closeDbAccessor();
+		if (dir) rmSync(dir, { recursive: true, force: true });
+	});
+
+	test("bounds the write lock wait by the admission deadline", async () => {
+		const dbPath = tmpDbPath();
+		dir = join(dbPath, "..");
+		initDbAccessor(dbPath);
+		const holder = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`const { Database } = require("bun:sqlite");
+const db = new Database(${JSON.stringify(dbPath)});
+db.exec("BEGIN IMMEDIATE");
+console.log("locked");
+Bun.sleepSync(2500);
+db.exec("COMMIT");`,
+			],
+			{ stdout: "pipe", stderr: "inherit" },
+		);
+		await holder.stdout.getReader().read();
+		const started = performance.now();
+		const write = getDbAccessor().withWriteTxAsync((db) => db.prepare("SELECT 1").get(), { deadlineMs: 200 });
+
+		await expect(write).rejects.toThrow();
+		expect(performance.now() - started).toBeLessThan(1500);
+		await holder.exited;
+		expect(await getDbAccessor().withWriteTxAsync((db) => db.prepare("PRAGMA busy_timeout").get())).toEqual({
+			timeout: 5000,
+		});
+	}, 10_000);
+});
