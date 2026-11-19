@@ -1018,10 +1018,8 @@ class SignetMemoryProvider(MemoryProvider):
         if not self._client:
             return ""
 
-        if query:
-            submit = self._submit_prompt(query, self._await_turn_state(session_id))
-            if submit is None:
-                return ""
+        submit = self._submit_prompt(query, self._await_turn_state(session_id)) if query else None
+        if submit is not None:
             submit.join(timeout=_PROMPT_SUBMIT_WAIT_SECS)
             if submit.is_alive():
                 logger.warning(
@@ -1047,11 +1045,13 @@ class SignetMemoryProvider(MemoryProvider):
         with self._transcript_lock:
             self._transcript_lines.append(f"user: {_strip_internal_memory_context(query)}")
 
-    def _await_turn_state(self, session_id: str) -> str:
+    def _await_turn_state(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Wait for the previous turn's sync and any pending session switch.
 
-        Returns the session key the prompt belongs to: the one Hermes passed,
-        which is the provider's key once a pending switch has been applied.
+        Returns the session-bound inputs for this prompt, captured together,
+        or None when the session Hermes named is not the provider's started
+        session by the deadline. A previous turn that never synced (an
+        interrupted turn) only delays the prompt.
         """
         deadline = time.monotonic() + _TURN_SYNC_WAIT_SECS
         with self._turn_synced:
@@ -1062,14 +1062,28 @@ class SignetMemoryProvider(MemoryProvider):
             ):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    logger.warning(
-                        "Signet prompt submitted before Hermes finished syncing the previous turn "
-                        "or switching sessions; the previous reply may be missing from live evidence"
-                    )
                     break
                 self._turn_synced.wait(remaining)
+            if self._submit_closed:
+                return None
+            if not self._session_ready or (session_id and session_id != self._session_key):
+                logger.warning(
+                    "Signet did not submit this prompt: Hermes had not finished switching to session %s",
+                    session_id,
+                )
+                return None
+            if self._turn_pending:
+                logger.warning(
+                    "Signet submitted this prompt before Hermes synced the previous turn; "
+                    "the previous reply is missing from live evidence"
+                )
             self._turn_pending = True
-            return session_id or self._session_key
+            return {
+                "session_key": self._session_key,
+                "last_assistant": self._last_assistant_message,
+                "project": self._project,
+                "generation": self._prefetch_generation,
+            }
 
     def _release_turn(self) -> None:
         with self._turn_synced:
@@ -1080,23 +1094,22 @@ class SignetMemoryProvider(MemoryProvider):
         with self._turn_synced:
             self._session_key = session_key
             self._session_ready = False
-            self._turn_pending = False
 
     def _finish_session(self) -> None:
         with self._turn_synced:
             self._session_ready = True
             self._turn_synced.notify_all()
 
-    def _submit_prompt(self, query: str, session_key: str) -> Optional[threading.Thread]:
+    def _submit_prompt(self, query: str, state: Optional[Dict[str, Any]]) -> Optional[threading.Thread]:
         """Send the prompt to user-prompt-submit on a background thread."""
+        if state is None:
+            return None
         peer_context = self._peer_context()
         client = self._client
-        last_assistant = self._last_assistant_message
-        with self._prefetch_lock:
-            if self._submit_closed:
-                return None
-            project = self._project
-            generation = self._prefetch_generation
+        session_key = state["session_key"]
+        last_assistant = state["last_assistant"]
+        project = state["project"]
+        generation = state["generation"]
 
         def _run():
             try:
@@ -1144,9 +1157,15 @@ class SignetMemoryProvider(MemoryProvider):
 
         thread = threading.Thread(target=_run, daemon=True, name="signet-prompt-submit")
         with self._prefetch_lock:
+            if self._submit_closed:
+                return None
             self._submit_threads.add(thread)
+            try:
+                thread.start()
+            except RuntimeError:
+                self._submit_threads.discard(thread)
+                raise
             self._prefetch_thread = thread
-        thread.start()
         return thread
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
