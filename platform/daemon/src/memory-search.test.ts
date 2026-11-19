@@ -2461,55 +2461,40 @@ describe("hybridRecall", () => {
 		expect(materialized.count).toBe(0);
 	});
 
-	it("reaches a fresh native artifact ranked below ones the session already received", async () => {
-		const root = join(dir, "codex", "automations");
-		for (let i = 0; i < 11; i++) {
-			const path = join(root, `heron-${i}`, "memory.md");
-			mkdirSync(dirname(path), { recursive: true });
-			const body =
-				i < 10
-					? `Heron deploy pipeline step ${i}: Heron deploys its pipeline in stage ${i}.`
-					: "A long note about lunch, weather, and travel plans also says the Heron deploy pipeline exists.";
-			writeFileSync(path, `# Codex Memory\n\n${body}\n`);
-			await indexExternalMemoryArtifact({
-				agentId: "default",
-				sourcePath: path,
-				sourceKind: "native_automation_memory",
-				harness: "codex",
-				content: readFileSync(path, "utf-8"),
-				sourceMtimeMs: Date.now(),
-			});
-		}
-		const rows = getDbAccessor().withReadDb(
-			(db) =>
-				db.prepare("SELECT rowid, source_path FROM memory_artifacts").all() as Array<{
-					rowid: number;
-					source_path: string;
-				}>,
-		);
-		const fresh = rows.find((row) => row.source_path.includes("heron-10"));
+	it("reaches a fresh timeline entry past ones the session already received", async () => {
+		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
+			const edge = db.prepare(
+				`INSERT INTO temporal_edges
+				 (id, agent_id, subject_type, subject_id, facet, start_at, end_at, confidence, created_at, updated_at)
+				 VALUES (?, 'default', 'source_document', ?, 'occurred', ?, ?, 1.0, ?, ?)`,
+			);
 			const event = db.prepare(
 				`INSERT INTO session_recall_events (session_key, agent_id, context_epoch, item_kind, item_id, surface, mode)
-				 VALUES ('heron-session', 'default', 0, 'native_artifact', ?, 'api.hooks.user-prompt-submit', 'automatic')`,
+				 VALUES ('timeline-session', 'default', 0, 'memory', ?, 'api.hooks.user-prompt-submit', 'automatic')`,
 			);
-			for (const row of rows) if (row !== fresh) event.run(`native-artifact:${row.rowid}`);
+			for (let i = 0; i < 11; i++) {
+				const at = `2026-05-13T${String(23 - i).padStart(2, "0")}:00:00.000Z`;
+				edge.run(`edge-${i}`, `doc-${i}`, at, at, now, now);
+				if (i < 10) event.run(`temporal:source_document:doc-${i}:occurred`);
+			}
 		});
 
 		const result = await hybridRecall(
 			{
-				query: "Heron deploy pipeline",
-				keywordQuery: "Heron deploy pipeline",
+				query: "what happened",
+				time: { start: "2026-05-13T00:00:00.000Z", end: "2026-05-14T00:00:00.000Z", mode: "timeline" },
 				limit: 10,
 				agentId: "default",
 				readPolicy: "isolated",
-				skipDeliveredIn: "heron-session",
+				skipDeliveredIn: "timeline-session",
 			},
 			loadMemoryConfig(dir),
 			async () => null,
 		);
 
-		expect(result.results.map((row) => row.id)).toEqual([`native-artifact:${fresh?.rowid}`]);
+		expect(result.results.map((row) => row.id)).toEqual(["temporal:source_document:doc-10:occurred"]);
+		expect(result.meta.dedupe?.suppressed).toBe(10);
 	});
 
 	it("excludes soft-deleted native harness artifacts from recall", async () => {

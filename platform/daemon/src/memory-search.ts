@@ -1710,7 +1710,6 @@ async function buildTranscriptEvidenceResults(
 async function buildNativeArtifactRecallHits(
 	params: RecallParams,
 	query: string,
-	depth: number,
 	existingSourceIds: ReadonlySet<string>,
 	execution?: RecallExecutionOptions,
 ): Promise<NativeArtifactRecallHit[]> {
@@ -1733,7 +1732,7 @@ async function buildNativeArtifactRecallHits(
 		if (table == null) return [];
 
 		const agentId = params.agentId ?? "default";
-		const artifactLimit = Math.max(2, depth + existingSourceIds.size);
+		const artifactLimit = Math.max(2, Math.min(50, params.limit ?? 10) + existingSourceIds.size);
 		const artifactProject = params.project ? "AND (ma.project = ? OR ma.project IS NULL)" : "";
 		const artifactDates = dateBoundsSql("ma.captured_at", params);
 		const rows = await ownerReadAll<{
@@ -1927,12 +1926,14 @@ function nativeRerankRuntime(reranker: ResolvedMemoryConfig["pipelineV2"]["reran
 }
 export async function hybridRecall(
 	params: RecallParams,
-	baseCfg: ResolvedMemoryConfig,
+	cfg: ResolvedMemoryConfig,
 	embedFn: EmbedFn,
 	execution?: RecallExecutionOptions,
 ): Promise<RecallResponse> {
 	checkRecallCancellation(execution);
 	let query = params.query;
+	const limit = normalizeRecallLimit(params.limit);
+	const minScore = cfg.search.min_score;
 	const filter = buildFilterClause(params);
 	const needsPostFilter = params.scope !== undefined || !!params.project || !!params.agentId;
 	const timings = createRecallTimingCollector();
@@ -2011,12 +2012,6 @@ export async function hybridRecall(
 				).map((row) => `${String(row.item_kind)}\0${String(row.item_id)}`),
 			)
 		: null;
-	const requested = normalizeRecallLimit(params.limit);
-	const limit = requested + (delivered?.size ?? 0);
-	const cfg = delivered
-		? { ...baseCfg, search: { ...baseCfg.search, top_k: baseCfg.search.top_k + delivered.size } }
-		: baseCfg;
-	const minScore = cfg.search.min_score;
 	const suppressPreviouslyRecalledForSelection = <T extends RecallResult>(items: T[]): T[] => {
 		if (delivered) {
 			return items.filter((item) => {
@@ -2056,7 +2051,6 @@ export async function hybridRecall(
 	});
 	const finish = async (response: UntimedRecallResponse): Promise<RecallResponse> => {
 		checkRecallCancellation(execution);
-		if (response.results.length > requested) response.results = response.results.slice(0, requested);
 		let transcriptEvidence: RecallTranscriptEvidenceMeta | undefined;
 		if (transcriptEvidenceAllowed && params.agentId) {
 			const agentId = params.agentId;
@@ -2216,6 +2210,15 @@ export async function hybridRecall(
 		excludeAggregateRecallMemories: params.excludeAggregateRecallMemories,
 		sessionKey: params.sessionKey,
 		transcriptEvidence: params.transcriptEvidence,
+		...(delivered
+			? {
+					skip: (id: string) => {
+						if (!delivered.has(recallItemKey(id))) return false;
+						selectionSuppressedIds.add(id);
+						return true;
+					},
+				}
+			: {}),
 	});
 	if (temporal.response) {
 		return await finish({ ...temporal.response, results: [...temporal.response.results] });
@@ -3320,7 +3323,7 @@ export async function hybridRecall(
 			allowArtifactFallbacks && results.length < limit
 				? await timings.timeAsync(
 						"native_artifact_fallback",
-						async () => await buildNativeArtifactRecallHits(params, query, limit, new Set(), execution),
+						async () => await buildNativeArtifactRecallHits(params, query, new Set(), execution),
 					)
 				: [];
 		if (nativeHits.length > 0 && results.length < limit) {
@@ -3509,7 +3512,7 @@ export async function hybridRecall(
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
 		const nativeHits = allowArtifactFallbacks
 			? await timings.timeAsync("native_artifact_supplement", () =>
-					buildNativeArtifactRecallHits(params, query, limit, existingSourceIds, execution),
+					buildNativeArtifactRecallHits(params, query, existingSourceIds, execution),
 				)
 			: [];
 		const candidates = nativeHits.map((hit): RecallResult => {

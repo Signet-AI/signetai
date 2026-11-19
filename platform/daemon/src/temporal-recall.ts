@@ -89,6 +89,7 @@ export interface TemporalRecallParams extends MemorySearchFilterInput {
 	readonly project?: string;
 	readonly sessionKey?: string;
 	readonly transcriptEvidence?: boolean;
+	readonly skip?: (id: string) => boolean;
 }
 
 export interface TemporalRecallResult {
@@ -411,10 +412,14 @@ function shorten(content: string, maxChars: number): { content: string; truncate
 	};
 }
 
+function temporalRowId(row: RawTemporalRow): string {
+	return `temporal:${row.subject_type}:${row.subject_id}:${row.facet}`;
+}
+
 function toRecallRow(row: RawTemporalRow): TemporalRecallRow {
 	const shortened = shorten(redactCredentials(row.content), 900);
 	return {
-		id: `temporal:${row.subject_type}:${row.subject_id}:${row.facet}`,
+		id: temporalRowId(row),
 		content: shortened.content,
 		content_length: shortened.length,
 		truncated: shortened.truncated,
@@ -720,7 +725,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		return rows;
-	}, "temporal-recall.ts:447");
+	}, "temporal-recall.ts:452");
 }
 
 export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRecallResult {
@@ -798,6 +803,7 @@ function selectTemporalRows(
 		const key = `${row.subject_type}:${row.subject_id}:${row.facet}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
+		if (params.skip?.(temporalRowId(row))) continue;
 		deduped.push(row);
 		if (deduped.length >= rowLimit) break;
 	}

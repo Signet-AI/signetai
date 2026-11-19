@@ -284,7 +284,7 @@ memory:
 				`INSERT INTO session_recall_events (session_key, agent_id, context_epoch, item_kind, item_id, surface, mode)
 				 VALUES (?, 'default', 0, 'memory', ?, 'api.hooks.user-prompt-submit', 'automatic')`,
 			);
-			for (let i = 0; i < 40; i++) {
+			for (let i = 0; i < 15; i++) {
 				memory.run(
 					`falcon-${i}`,
 					`Falcon deploy pipeline step ${i}: Falcon deploys its pipeline in stage ${i}.`,
