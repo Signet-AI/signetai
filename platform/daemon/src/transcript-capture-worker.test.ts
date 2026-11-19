@@ -373,11 +373,14 @@ describe("transcript capture worker", () => {
 		expect(existsSync(canonical)).toBe(true);
 		const transcriptRows = getDbAccessor().withReadDb((db) =>
 			db
-				.prepare("SELECT source_path FROM memory_artifacts WHERE agent_id = ? AND source_kind = 'transcript'")
+				.prepare(
+					"SELECT source_path, manifest_path FROM memory_artifacts WHERE agent_id = ? AND source_kind = 'transcript'",
+				)
 				.all("agent-a"),
-		) as Array<{ source_path: string }>;
+		) as Array<{ source_path: string; manifest_path: string | null }>;
 		expect(transcriptRows).toHaveLength(1);
 		expect(transcriptRows[0].source_path).toStartWith("memory/pi/transcripts/transcript.jsonl#");
+		expect(transcriptRows[0].manifest_path).toBeNull();
 		expect(readdirSync(join(dir, "memory", "pi", "transcripts"))).toEqual(["transcript.jsonl"]);
 	});
 
@@ -583,8 +586,8 @@ describe("transcript capture worker", () => {
 		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), capture);
 		if (!id) throw new Error("expected restart capture job");
 		await writeCanonicalTranscriptFromSnapshot({ basePath: dir, ...capture });
-		const artifact = await writeTranscriptArtifact({ ...capture, startedAt: null, summaryStatus: "not_requested" });
-		await indexCanonicalTranscriptJsonl({ ...capture, startedAt: null, manifestPath: artifact.manifestPath });
+		await writeTranscriptArtifact({ ...capture, startedAt: null, summaryStatus: "not_requested" });
+		await indexCanonicalTranscriptJsonl({ ...capture, startedAt: null });
 		const beforeRecovery = getDbAccessor().withReadDb((db) =>
 			db
 				.prepare(

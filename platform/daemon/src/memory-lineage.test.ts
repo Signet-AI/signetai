@@ -1,11 +1,12 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { get_encoding } from "tiktoken/init";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	MEMORY_PROJECTION_MAX_TOKENS,
 	ensureCanonicalManifest,
+	indexCanonicalTranscriptJsonl,
 	indexExternalMemoryArtifact,
 	purgeCanonicalNoiseSessions,
 	purgeCanonicalNoiseSessionsOnce,
@@ -17,6 +18,7 @@ import {
 } from "./memory-lineage";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
+import { canonicalTranscriptPath } from "./transcript-jsonl";
 import { recordEmbeddingProviderFailure, resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
 
 const tok = get_encoding("cl100k_base");
@@ -859,38 +861,61 @@ describe("memory-lineage", () => {
 			expect(row).toBeNull();
 		});
 
-		it("clears stale memory_md_refs on manifests that drop out of the ledger", async () => {
-			await addSummary({ sessionId: "ref-a", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
-			await addSummary({ sessionId: "ref-b", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
-
-			await renderMemoryProjection("default");
-
-			const manifestRow = getDbAccessor().withReadDb(
+		it("projection is read-only and links the session's own manifest", async () => {
+			const stamp = new Date().toISOString();
+			const session = {
+				agentId: "default",
+				sessionId: "readonly-session",
+				sessionKey: "readonly-session",
+				project: "/home/nicholai/signet/signetai",
+				harness: "codex",
+				capturedAt: stamp,
+				startedAt: null,
+				endedAt: stamp,
+			};
+			await writeSummaryArtifact({ ...session, summary: "Kept the ledger projection read-only in memory-lineage.ts." });
+			const jsonl = canonicalTranscriptPath(undefined, "codex");
+			mkdirSync(dirname(jsonl), { recursive: true });
+			writeFileSync(jsonl, `${JSON.stringify({ schema: "signet.transcript.v1", session_key: "readonly-session" })}\n`);
+			await indexCanonicalTranscriptJsonl({ ...session, transcript: "User: keep the transcript\nAssistant: kept" });
+			const rows = getDbAccessor().withReadDb(
 				(db) =>
 					db
-						.prepare(
-							`SELECT source_path
-						 FROM memory_artifacts
-						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?`,
-						)
-						.get("default", "ref-b") as { source_path: string },
+						.prepare("SELECT source_kind, source_path, manifest_path FROM memory_artifacts WHERE session_id = ?")
+						.all("readonly-session") as Array<{
+						source_kind: string;
+						source_path: string;
+						manifest_path: string | null;
+					}>,
 			);
-			const manifestPath = join(dir, manifestRow.source_path);
-			const before = readFileSync(manifestPath, "utf8");
-			expect(before).toContain("Session Ledger");
-
-			getDbAccessor().withWriteTx((db) => {
-				db.prepare("DELETE FROM memory_artifacts WHERE session_id = ?").run("ref-b");
-			});
-
-			await renderMemoryProjection("default");
-
-			const after = readFileSync(manifestPath, "utf8");
-			expect(after).not.toContain("Session Ledger");
+			expect(rows.find((row) => row.source_kind === "transcript")?.manifest_path).toBeNull();
+			const manifest = join(dir, rows.find((row) => row.source_kind === "manifest")?.source_path ?? "");
+			const victim = join(dirname(dir), `${dir.split("/").pop()}-outside.txt`);
+			writeFileSync(victim, "outside the workspace\n");
+			const files = [jsonl, manifest, victim];
+			const before = files.map((file) => readFileSync(file, "utf8"));
+			const entries = (): string[] => [dirname(jsonl), join(dir, "memory")].flatMap((path) => readdirSync(path)).sort();
+			const listing = entries();
+			try {
+				for (const stored of [jsonl.slice(dir.length + 1), manifest, `../${victim.split("/").pop()}`, null]) {
+					getDbAccessor().withWriteTx((db) => {
+						db.prepare("UPDATE memory_artifacts SET manifest_path = ? WHERE session_id = ?").run(
+							stored,
+							"readonly-session",
+						);
+					});
+					const { content } = await renderMemoryProjection("default");
+					expect(files.map((file) => readFileSync(file, "utf8"))).toEqual(before);
+					expect(content).toContain(`[[${relative(dir, manifest)}|manifest]]`);
+				}
+				expect(entries()).toEqual(listing);
+			} finally {
+				rmSync(victim, { force: true });
+			}
 		});
 	});
 
-	it("isolates prevLedgerRefs across agents", async () => {
+	it("isolates ledger projections across agents", async () => {
 		const stamp = (minutesAgo: number): string => new Date(Date.now() - minutesAgo * 60_000).toISOString();
 
 		await writeSummaryArtifact({
@@ -941,20 +966,6 @@ describe("memory-lineage", () => {
 
 		const bobResult2 = await renderMemoryProjection("bob");
 		expect(bobResult2.content).toContain("bob-s1");
-
-		const bobManifest = getDbAccessor().withReadDb(
-			(db) =>
-				db
-					.prepare(
-						`SELECT source_path FROM memory_artifacts
-						 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?`,
-					)
-					.get("bob", "bob-s1") as { source_path: string } | null,
-		);
-		if (bobManifest) {
-			const content = readFileSync(join(dir, bobManifest.source_path), "utf8");
-			expect(content).toContain("Session Ledger");
-		}
 
 		expect(aliceResult2.content).not.toContain("bob-s1");
 		expect(bobResult2.content).not.toContain("alice-s1");

@@ -175,6 +175,7 @@ import { up as dependencyHistoryCompactionState } from "./170-dependency-history
 import { up as agentWakeAndMessageBoard } from "./171-agent-wake-and-message-board";
 import { up as dreamingPassPolicy } from "./172-dreaming-pass-policy";
 import { up as memoryArtifactNativePathIndex } from "./173-memory-artifact-native-path-index";
+import { up as memoryArtifactManifestPathRepair } from "./175-memory-artifact-manifest-path-repair";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1620,6 +1621,11 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "session_transcript_deleted_prefixes", column: "origin" },
 			],
 		},
+	},
+	{
+		version: 175,
+		name: "memory-artifact-manifest-path-repair",
+		up: memoryArtifactManifestPathRepair,
 	},
 ];
 function checksum(m: Migration): string {

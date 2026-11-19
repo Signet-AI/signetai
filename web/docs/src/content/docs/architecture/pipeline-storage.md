@@ -264,7 +264,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `174-session-transcript-deletions.ts`.
+`schema_migrations_audit`. The latest migration is `175-memory-artifact-manifest-path-repair.ts`.
 
 ### Evidence and semantic state
 
