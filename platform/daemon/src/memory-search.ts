@@ -1893,7 +1893,8 @@ function describeRecallGraphError(error: unknown): {
 function isRecallGraphDeadlineError(error: { readonly code: string | number | null }): boolean {
 	return error.code === "DB_OWNER_DEADLINE" || error.code === "DB_OWNER_CANCELLED";
 }
-const DELIVERED_LOOKUP_LIMIT = 200;
+const DELIVERED_LOOKUP_LIMIT = 10_000;
+const DELIVERED_PAGE_ROWS = 1_000;
 const TEMPORAL_TOPIC_SCORE_CAP = 0.85;
 
 function temporalTopicTokens(raw: string): string[] {
@@ -1985,33 +1986,39 @@ export async function hybridRecall(
 		}
 	};
 	const deliveredSession = selectionDedupeEnabled ? undefined : params.skipDeliveredIn?.trim();
-	const delivered = deliveredSession
-		? new Set(
-				(
-					await graphOwnerReadAll<{ readonly item_kind: unknown; readonly item_id: unknown }>(
-						`SELECT item_kind, item_id
-						 FROM session_recall_events
-						 WHERE session_key = ?
-						   AND agent_id = ?
-						   AND context_epoch = COALESCE(
-						     (SELECT MAX(context_epoch) FROM session_context_epochs WHERE session_key = ? AND agent_id = ?),
-						     0
-						   )
-						 ORDER BY created_at DESC
-						 LIMIT ?`,
-						[
-							deliveredSession,
-							params.agentId ?? "default",
-							deliveredSession,
-							params.agentId ?? "default",
-							DELIVERED_LOOKUP_LIMIT,
-						],
-						"recall.delivered",
-						DELIVERED_LOOKUP_LIMIT,
-					)
-				).map((row) => `${String(row.item_kind)}\0${String(row.item_id)}`),
-			)
-		: null;
+	const loadDelivered = async (sessionKey: string): Promise<Set<string>> => {
+		const agentId = params.agentId ?? "default";
+		const keys = new Set<string>();
+		let before = Number.MAX_SAFE_INTEGER;
+		while (keys.size < DELIVERED_LOOKUP_LIMIT) {
+			const page = await graphOwnerReadAll<{
+				readonly cursor: unknown;
+				readonly item_kind: unknown;
+				readonly item_id: unknown;
+			}>(
+				`SELECT rowid AS cursor, item_kind, item_id
+				 FROM session_recall_events
+				 WHERE session_key = ?
+				   AND agent_id = ?
+				   AND context_epoch = COALESCE(
+				     (SELECT MAX(context_epoch) FROM session_context_epochs WHERE session_key = ? AND agent_id = ?),
+				     0
+				   )
+				   AND rowid < ?
+				 ORDER BY rowid DESC
+				 LIMIT ?`,
+				[sessionKey, agentId, sessionKey, agentId, before, DELIVERED_PAGE_ROWS],
+				"recall.delivered",
+				DELIVERED_PAGE_ROWS,
+			);
+			for (const row of page) keys.add(`${String(row.item_kind)}\0${String(row.item_id)}`);
+			const cursor = page.at(-1)?.cursor;
+			if (page.length < DELIVERED_PAGE_ROWS || typeof cursor !== "number") return keys;
+			before = cursor;
+		}
+		return keys;
+	};
+	const delivered = deliveredSession ? await loadDelivered(deliveredSession) : null;
 	const suppressPreviouslyRecalledForSelection = <T extends RecallResult>(items: T[]): T[] => {
 		if (delivered) {
 			return items.filter((item) => {

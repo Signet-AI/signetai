@@ -799,13 +799,14 @@ function selectTemporalRows(
 		);
 	const deduped: RawTemporalRow[] = [];
 	const seen = new Set<string>();
+	let fresh = 0;
 	for (const row of rows) {
 		const key = `${row.subject_type}:${row.subject_id}:${row.facet}`;
 		if (seen.has(key)) continue;
 		seen.add(key);
-		if (params.skip?.(temporalRowId(row))) continue;
 		deduped.push(row);
-		if (deduped.length >= rowLimit) break;
+		if (params.skip?.(temporalRowId(row)) !== true) fresh++;
+		if (fresh >= rowLimit) break;
 	}
 	return deduped;
 }
@@ -815,7 +816,10 @@ function temporalResponse(
 	rows: readonly RawTemporalRow[],
 	meta: RecallTemporalMeta,
 ): TemporalRecallResult {
-	const results = rows.slice(0, params.limit).map(toRecallRow);
+	const results = rows
+		.filter((row) => params.skip?.(temporalRowId(row)) !== true)
+		.slice(0, params.limit)
+		.map(toRecallRow);
 	return {
 		response: {
 			results,

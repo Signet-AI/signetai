@@ -458,10 +458,12 @@ the context resets (clear or compaction). Session start, prompt submit, hook rec
 and harness; the project or working directory a connector sends does not change
 it. A session key or harness containing control characters has no ledger, so
 prompt submit injects nothing for it (`engine: "no-session"`). Recall drops
-memories the session already received (the latest 200 deliveries in the current
-epoch) while it selects candidates, so they do not use up `recallLimit`. Each
+memories the session already received (up to 10,000 deliveries in the current
+epoch, newest first) while it selects candidates, so they do not use up `recallLimit`. Each
 search lane still fetches its usual number of candidates; when the session has
-already received every match a lane found, the prompt gets nothing new. A repeat entity hit that only finds
+already received every match a lane found, the prompt gets nothing new. A date
+query keeps its date window even when the session already received everything
+in it; it does not widen to other dates. A repeat entity hit that only finds
 already-delivered results returns an empty `inject` with `engine: "deduped"`. If the claim cannot be
 recorded, because the ledger is unavailable or the prompt-submit deadline
 (`embedding.promptSubmitTimeoutMs`) passed before the claim committed, the claim

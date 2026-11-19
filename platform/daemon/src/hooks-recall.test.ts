@@ -293,6 +293,10 @@ memory:
 				);
 				event.run(`${sessionKey}\0openclaw`, `falcon-${i}`);
 			}
+			for (let i = 0; i < 250; i++) event.run(`${sessionKey}\0openclaw`, `unrelated-${i}`);
+			db.prepare(
+				"UPDATE session_recall_events SET created_at = datetime('now', '+1 hour') WHERE item_id LIKE 'unrelated-%'",
+			).run();
 			memory.run(
 				"falcon-fresh",
 				"A long note about lunch, weather, and travel plans also says the Falcon deploy pipeline exists.",

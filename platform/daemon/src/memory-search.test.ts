@@ -2497,6 +2497,61 @@ describe("hybridRecall", () => {
 		expect(result.meta.dedupe?.suppressed).toBe(10);
 	});
 
+	it("keeps a date window when the session already received everything in it", async () => {
+		getDbAccessor().withWriteTx((db) => {
+			const summary = db.prepare(
+				`INSERT INTO session_summaries (
+					id, project, depth, kind, content, token_count,
+					earliest_at, latest_at, session_key, harness,
+					agent_id, source_type, source_ref, meta_json, created_at
+				) VALUES (?, NULL, 0, 'session', ?, 12, ?, ?, ?, 'codex', 'default', 'summary', ?, NULL, ?)`,
+			);
+			summary.run(
+				"sum-13",
+				"Kestrel launch review notes.",
+				"2026-05-13T10:00:00.000Z",
+				"2026-05-13T11:00:00.000Z",
+				"s13",
+				"s13",
+				"2026-05-13T11:00:00.000Z",
+			);
+			summary.run(
+				"sum-12",
+				"Kestrel planning notes.",
+				"2026-05-12T10:00:00.000Z",
+				"2026-05-12T11:00:00.000Z",
+				"s12",
+				"s12",
+				"2026-05-12T11:00:00.000Z",
+			);
+		});
+		const recall = async (skipDeliveredIn?: string) =>
+			await hybridRecall(
+				{
+					query: "Kestrel 2026-05-13",
+					limit: 10,
+					agentId: "default",
+					readPolicy: "isolated",
+					...(skipDeliveredIn ? { skipDeliveredIn } : {}),
+				},
+				loadMemoryConfig(dir),
+				async () => null,
+			);
+		const first = await recall();
+		expect(first.results.map((row) => row.content)).toEqual(["Kestrel launch review notes."]);
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO session_recall_events (session_key, agent_id, context_epoch, item_kind, item_id, surface, mode)
+				 VALUES ('window-session', 'default', 0, 'memory', ?, 'api.hooks.user-prompt-submit', 'automatic')`,
+			).run(first.results[0]?.id);
+		});
+
+		const repeat = await recall("window-session");
+
+		expect(repeat.results).toEqual([]);
+		expect(repeat.meta.dedupe?.suppressed).toBe(1);
+	});
+
 	it("excludes soft-deleted native harness artifacts from recall", async () => {
 		const codexMemoryPath = join(dir, "codex", "automations", "smoke", "memory.md");
 		mkdirSync(join(dir, "codex", "automations", "smoke"), { recursive: true });
