@@ -945,37 +945,39 @@ class SignetMemoryProvider(MemoryProvider):
         with self._prefetch_lock:
             self._submit_closed = False
         self._begin_session(next_session_key)
-        self._host_session_key = str(kwargs.get("gateway_session_key") or self._session_key)
-        self._project = _resolve_agent_workspace(agent_id, kwargs)
-        self._remember_host_metadata(kwargs)
-        result = self._client.session_start(
-            self._session_key,
-            project=self._project,
-            context=self._peer_context(),
-        )
-        if result:
-            raw_stable_prompt = result.get("stableSystemPrompt") or result.get("inject", "")
-            stable_prompt = raw_stable_prompt if isinstance(raw_stable_prompt, str) else ""
-            dynamic_context = result.get("dynamicContext", "")
-            if stable_prompt:
-                with self._inject_lock:
-                    self._inject_cache = stable_prompt
-            with self._prefetch_lock:
-                self._prefetch_generation += 1
-                self._session_prefetch_result = dynamic_context if isinstance(dynamic_context, str) else ""
-                self._prefetch_result = ""
-                self._notification_result = ""
-            self._identity = result.get("identity")
-            self._warnings = result.get("warnings", [])
-            self._session_initialized = True
-            logger.debug(
-                "Signet session-start: %d chars inject, %d memories",
-                len(stable_prompt) + (len(dynamic_context) if isinstance(dynamic_context, str) else 0),
-                len(result.get("memories", [])),
+        try:
+            self._host_session_key = str(kwargs.get("gateway_session_key") or self._session_key)
+            self._project = _resolve_agent_workspace(agent_id, kwargs)
+            self._remember_host_metadata(kwargs)
+            result = self._client.session_start(
+                self._session_key,
+                project=self._project,
+                context=self._peer_context(),
             )
-        else:
-            logger.debug("Signet session-start returned no data")
-        self._finish_session()
+            if result:
+                raw_stable_prompt = result.get("stableSystemPrompt") or result.get("inject", "")
+                stable_prompt = raw_stable_prompt if isinstance(raw_stable_prompt, str) else ""
+                dynamic_context = result.get("dynamicContext", "")
+                if stable_prompt:
+                    with self._inject_lock:
+                        self._inject_cache = stable_prompt
+                with self._prefetch_lock:
+                    self._prefetch_generation += 1
+                    self._session_prefetch_result = dynamic_context if isinstance(dynamic_context, str) else ""
+                    self._prefetch_result = ""
+                    self._notification_result = ""
+                self._identity = result.get("identity")
+                self._warnings = result.get("warnings", [])
+                self._session_initialized = True
+                logger.debug(
+                    "Signet session-start: %d chars inject, %d memories",
+                    len(stable_prompt) + (len(dynamic_context) if isinstance(dynamic_context, str) else 0),
+                    len(result.get("memories", [])),
+                )
+            else:
+                logger.debug("Signet session-start returned no data")
+        finally:
+            self._finish_session()
         if agent_context in ("", "primary"):
             self._start_wake_waiter()
 
@@ -1018,8 +1020,10 @@ class SignetMemoryProvider(MemoryProvider):
         if not self._client:
             return ""
 
-        submit = self._submit_prompt(query, self._await_turn_state(session_id)) if query else None
-        if submit is not None:
+        if query:
+            submit = self._submit_prompt(query, self._await_turn_state(session_id))
+            if submit is None:
+                return ""
             submit.join(timeout=_PROMPT_SUBMIT_WAIT_SECS)
             if submit.is_alive():
                 logger.warning(
@@ -1241,7 +1245,6 @@ class SignetMemoryProvider(MemoryProvider):
                 and parent_session_id == previous_session_id
             )
         )
-        self._begin_session(new_session_id)
         self._host_session_key = str(kwargs.get("gateway_session_key") or new_session_id)
         self._session_initialized = False
         self._turn_count = 0
@@ -1263,6 +1266,7 @@ class SignetMemoryProvider(MemoryProvider):
         if not keep_peer_state:
             self._reset_peer_state()
         self._remember_host_metadata(kwargs)
+        self._begin_session(new_session_id)
         client = self._client
         if not client:
             self._finish_session()
@@ -1675,6 +1679,7 @@ class SignetMemoryProvider(MemoryProvider):
         """Call session-end hook to trigger memory extraction from transcript."""
         self._stop_wake_waiter()
         with self._prefetch_lock:
+            self._prefetch_generation += 1
             self._session_prefetch_result = ""
             self._prefetch_result = ""
             self._notification_result = ""
