@@ -1086,18 +1086,37 @@ and restricted ACPX bindings receive it from the daemon-owned pass context.
 **Pass history.** Each Dreaming pass starts with the scope's pass history in
 its prompt instead of reading recent pass logs: one line per earlier pass,
 oldest first, with older passes folded pairwise into coarser lines so the
-history stays within a fixed budget (about 24 KB) however many passes have
-run. Lines read `id+n|text`, covering passes `id` through `id+n-1`. After a
+history stays within a fixed budget (24,000 bytes) however many passes have
+run. Lines read `id+n|text`, covering passes `id` through `id+n-1`. The prompt
+shows only the coarsest line covering each stretch of passes, so building it
+reads a few lines per level of folding rather than the whole history. After a
 pass finishes, while it still holds its slot, the daemon asks the same
 Dreaming model, in a fresh request with no tools and no pass context, to
-compress that pass's stored record into one line of at most 512 bytes, and to
-merge the oldest pair of lines when the history outgrows its budget. Lines are
-stored in `dreaming_history_nodes` and derived from the pass records, which
-stay the verbatim source; a pass whose line could not be built is shown as not
-yet summarized and is retried after the next pass. History is kept per scope set: a pass sees
-only the history of passes whose scopes are all within its own, each shown
-under a `scopes=` heading when there is more than one, and `zoom_history`
-refuses lines outside the pass's scopes.
+merge two adjacent lines while that scope set's history is over the full
+24,000-byte budget, and otherwise to compress the next finished pass's stored record into one line of
+at most 512 bytes; a line still over 512 bytes after three attempts is cut at
+the limit, and longer lines stored before that rule are shown cut, ending in
+`…`. Lines are stored in `dreaming_history_nodes` and derived from the
+pass records, which stay the verbatim source. A pass appears in the history
+once its line is built; a pass whose line could not be built is retried the
+next time the history of the same scope set is compacted, after a later pass
+in that scope set. The merged pair is the one most overdue: each pair's age in
+passes, divided by the number of passes it covers, so old fine-grained lines
+merge before old coarse ones and a coarse line can wait while newer pass lines
+merge. If the lines do not fit the budget, the prompt shows the newest lines
+that fit and a first line saying how many older lines it left out. History is
+kept per scope set: a pass sees only the history of passes whose scopes are
+all within its own. The prompt omits the `scopes=` heading only when the one
+scope set with history is exactly the pass's own; otherwise each scope set is
+shown under a `scopes=` heading, whose value is what `zoom_history` takes to
+open its lines. The budget, headings included, is split equally between those
+scope sets, its own first. Each one shown gets at least 2,048 bytes, and a
+note names how many scope sets it left out when they do not all fit. A scope
+set whose heading alone leaves less than 2,048 bytes is always left out, so
+it does not crowd out the ones after it. Lines
+left out only because several scope sets share the budget stay out until the
+pass sees fewer scope sets: compaction does not merge for a share.
+`zoom_history` refuses lines outside the pass's scopes.
 
 ### POST /api/dream/trigger
 
