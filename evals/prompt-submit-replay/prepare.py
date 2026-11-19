@@ -14,6 +14,7 @@ import yaml
 
 HOME = os.path.expanduser("~")
 HERMES_HARNESS = "hermes-agent"
+HARNESS_DIRS = ("datasets", "home", "ws")
 DATASET_NAME = re.compile(r"[0-9a-f]{64}|\.staging-\d+")
 LAYOUT_MODULE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "platform", "core", "src", "workspace-layout.ts"
@@ -297,6 +298,8 @@ def publish(args, stage):
         json.dump({"dataset": dataset, "files": files}, handle, indent=1)
     datasets = os.path.join(args.dir, "datasets")
     target = os.path.join(datasets, dataset)
+    if os.path.islink(target):
+        os.remove(target)
     if os.path.exists(target):
         shutil.rmtree(stage)
     else:
@@ -307,8 +310,13 @@ def publish(args, stage):
     os.symlink(os.path.join("datasets", dataset), link)
     os.replace(link, os.path.join(args.dir, "dataset"))
     for name in os.listdir(datasets):
-        if name != dataset and DATASET_NAME.fullmatch(name):
-            shutil.rmtree(os.path.join(datasets, name))
+        path = os.path.join(datasets, name)
+        if name == dataset or not DATASET_NAME.fullmatch(name):
+            continue
+        if os.path.islink(path):
+            os.remove(path)
+        else:
+            shutil.rmtree(path)
     print(f"dataset {dataset[:12]} published in {target}", file=sys.stderr)
 
 
@@ -327,6 +335,9 @@ def check_dirs(args, layout):
     info = os.stat(replay)
     if info.st_uid != os.getuid() or info.st_mode & 0o077:
         sys.exit(f"{args.dir} must be owned by you and closed to other users (chmod 700)")
+    for name in HARNESS_DIRS:
+        if os.path.islink(os.path.join(replay, name)):
+            sys.exit(f"{os.path.join(args.dir, name)} is a symlink; the harness writes there, so it must be a real directory")
     live = os.stat(agents)
     if (info.st_dev, info.st_ino) == (live.st_dev, live.st_ino):
         sys.exit(f"{args.dir} is the workspace {args.agents}; choose a separate replay directory")
