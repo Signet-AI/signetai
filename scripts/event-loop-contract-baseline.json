@@ -1972,7 +1972,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2830,
+      "line": 2836,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",
@@ -1980,7 +1980,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2907,
+      "line": 2913,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",
@@ -1988,7 +1988,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2951,
+      "line": 2957,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",
@@ -1996,7 +1996,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 3043,
+      "line": 3049,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",
@@ -2004,7 +2004,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 3379,
+      "line": 3385,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",

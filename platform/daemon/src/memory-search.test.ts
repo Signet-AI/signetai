@@ -2461,6 +2461,57 @@ describe("hybridRecall", () => {
 		expect(materialized.count).toBe(0);
 	});
 
+	it("reaches a fresh native artifact ranked below ones the session already received", async () => {
+		const root = join(dir, "codex", "automations");
+		for (let i = 0; i < 11; i++) {
+			const path = join(root, `heron-${i}`, "memory.md");
+			mkdirSync(dirname(path), { recursive: true });
+			const body =
+				i < 10
+					? `Heron deploy pipeline step ${i}: Heron deploys its pipeline in stage ${i}.`
+					: "A long note about lunch, weather, and travel plans also says the Heron deploy pipeline exists.";
+			writeFileSync(path, `# Codex Memory\n\n${body}\n`);
+			await indexExternalMemoryArtifact({
+				agentId: "default",
+				sourcePath: path,
+				sourceKind: "native_automation_memory",
+				harness: "codex",
+				content: readFileSync(path, "utf-8"),
+				sourceMtimeMs: Date.now(),
+			});
+		}
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT rowid, source_path FROM memory_artifacts").all() as Array<{
+					rowid: number;
+					source_path: string;
+				}>,
+		);
+		const fresh = rows.find((row) => row.source_path.includes("heron-10"));
+		getDbAccessor().withWriteTx((db) => {
+			const event = db.prepare(
+				`INSERT INTO session_recall_events (session_key, agent_id, context_epoch, item_kind, item_id, surface, mode)
+				 VALUES ('heron-session', 'default', 0, 'native_artifact', ?, 'api.hooks.user-prompt-submit', 'automatic')`,
+			);
+			for (const row of rows) if (row !== fresh) event.run(`native-artifact:${row.rowid}`);
+		});
+
+		const result = await hybridRecall(
+			{
+				query: "Heron deploy pipeline",
+				keywordQuery: "Heron deploy pipeline",
+				limit: 10,
+				agentId: "default",
+				readPolicy: "isolated",
+				skipDeliveredIn: "heron-session",
+			},
+			loadMemoryConfig(dir),
+			async () => null,
+		);
+
+		expect(result.results.map((row) => row.id)).toEqual([`native-artifact:${fresh?.rowid}`]);
+	});
+
 	it("excludes soft-deleted native harness artifacts from recall", async () => {
 		const codexMemoryPath = join(dir, "codex", "automations", "smoke", "memory.md");
 		mkdirSync(join(dir, "codex", "automations", "smoke"), { recursive: true });
