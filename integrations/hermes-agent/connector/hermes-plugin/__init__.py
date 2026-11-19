@@ -749,6 +749,7 @@ class SignetMemoryProvider(MemoryProvider):
         self._prefetch_generation = 0
         self._turn_synced = threading.Condition(self._prefetch_lock)
         self._turn_pending = False
+        self._session_ready = True
         self._submit_threads: set = set()
         self._submit_closed = False
         self._turn_count = 0
@@ -942,9 +943,8 @@ class SignetMemoryProvider(MemoryProvider):
         if self._session_key and self._session_key != next_session_key:
             self._reset_peer_state()
         with self._prefetch_lock:
-            self._session_key = next_session_key
             self._submit_closed = False
-        self._release_turn()
+        self._begin_session(next_session_key)
         self._host_session_key = str(kwargs.get("gateway_session_key") or self._session_key)
         self._project = _resolve_agent_workspace(agent_id, kwargs)
         self._remember_host_metadata(kwargs)
@@ -975,6 +975,7 @@ class SignetMemoryProvider(MemoryProvider):
             )
         else:
             logger.debug("Signet session-start returned no data")
+        self._finish_session()
         if agent_context in ("", "primary"):
             self._start_wake_waiter()
 
@@ -1055,7 +1056,9 @@ class SignetMemoryProvider(MemoryProvider):
         deadline = time.monotonic() + _TURN_SYNC_WAIT_SECS
         with self._turn_synced:
             while not self._submit_closed and (
-                self._turn_pending or (session_id and session_id != self._session_key)
+                self._turn_pending
+                or not self._session_ready
+                or (session_id and session_id != self._session_key)
             ):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -1071,6 +1074,17 @@ class SignetMemoryProvider(MemoryProvider):
     def _release_turn(self) -> None:
         with self._turn_synced:
             self._turn_pending = False
+            self._turn_synced.notify_all()
+
+    def _begin_session(self, session_key: str) -> None:
+        with self._turn_synced:
+            self._session_key = session_key
+            self._session_ready = False
+            self._turn_pending = False
+
+    def _finish_session(self) -> None:
+        with self._turn_synced:
+            self._session_ready = True
             self._turn_synced.notify_all()
 
     def _submit_prompt(self, query: str, session_key: str) -> Optional[threading.Thread]:
@@ -1208,7 +1222,7 @@ class SignetMemoryProvider(MemoryProvider):
                 and parent_session_id == previous_session_id
             )
         )
-        self._session_key = new_session_id
+        self._begin_session(new_session_id)
         self._host_session_key = str(kwargs.get("gateway_session_key") or new_session_id)
         self._session_initialized = False
         self._turn_count = 0
@@ -1224,7 +1238,6 @@ class SignetMemoryProvider(MemoryProvider):
             self._session_prefetch_result = ""
             self._prefetch_result = ""
             self._notification_result = ""
-        self._release_turn()
 
         agent_id = self._agent_id
         self._project = _resolve_agent_workspace(agent_id, kwargs)
@@ -1233,6 +1246,7 @@ class SignetMemoryProvider(MemoryProvider):
         self._remember_host_metadata(kwargs)
         client = self._client
         if not client:
+            self._finish_session()
             return
 
         try:
@@ -1254,6 +1268,7 @@ class SignetMemoryProvider(MemoryProvider):
                 self._session_initialized = True
         except Exception as e:
             logger.debug("Signet session switch failed: %s", e)
+        self._finish_session()
         if self._message_injector is not None:
             self._start_wake_waiter()
 

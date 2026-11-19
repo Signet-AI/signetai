@@ -39,7 +39,11 @@ const PRELUDE = [
 	"        submitted.append([key, msg, kw.get('last_assistant_message')])",
 	"        time.sleep(self.delays.get(msg, 0))",
 	"        return {'inject': 'recall for ' + msg}",
-	"    def session_start(self, key, **kw): submitted.append(['session_start', key]); return {}",
+	"    start_delay = 0",
+	"    def session_start(self, key, **kw):",
+	"        time.sleep(self.start_delay)",
+	"        submitted.append(['session_start', key])",
+	"        return {'dynamicContext': 'start for ' + key}",
 	"    def notifications(self, key, hook, **kw): return {}",
 	"p = sig.SignetMemoryProvider()",
 	"p._client = FakeClient()",
@@ -95,16 +99,17 @@ describe("Hermes prompt recall timing", () => {
 			"print(json.dumps({'context': context, 'keys': [s[1] if s[0] == 'session_start' else s[0] for s in submitted]}))",
 		]) as { context: string; keys: string[] };
 
-		expect(out.context).toBe("recall for next question");
+		expect(out.context).toBe("start for sess-2\nrecall for next question");
 		expect(out.keys).toEqual(["sess-1", "sess-2", "sess-2"]);
 	}, 20_000);
 
-	it("submits a new session's first prompt only after Hermes applies the switch", () => {
+	it("submits a new session's first prompt only after its session start completes", () => {
 		const out = py([
 			"import threading",
 			"turn('old question', 'old answer')",
+			"FakeClient.start_delay = 0.5",
 			"def boundary():",
-			"    time.sleep(1)",
+			"    time.sleep(0.5)",
 			"    p.on_session_switch('sess-2', reset=True)",
 			"threading.Thread(target=boundary).start()",
 			"context = p.prefetch('new private question', session_id='sess-2')",
@@ -115,7 +120,7 @@ describe("Hermes prompt recall timing", () => {
 			["session_start", "sess-2"],
 			["sess-2", "new private question", ""],
 		]);
-		expect(out.context).toBe("recall for new private question");
+		expect(out.context).toBe("start for sess-2\nrecall for new private question");
 	});
 
 	it("sends the previous reply even when Hermes syncs it after the next turn starts", () => {
