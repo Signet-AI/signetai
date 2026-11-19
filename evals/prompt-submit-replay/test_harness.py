@@ -124,6 +124,20 @@ class PrepareTest(Scratch):
         self.assertIn("overlaps workspace path", result.stderr)
         self.assertTrue(os.path.exists(os.path.join(moved, "signet.db")))
 
+    def test_refuses_a_symlinked_datasets_directory(self):
+        replay = os.path.join(self.root, "out")
+        os.makedirs(replay, mode=0o700)
+        elsewhere = os.path.join(self.root, "elsewhere")
+        victim = os.path.join(elsewhere, "a" * 64)
+        os.makedirs(victim)
+        with open(os.path.join(victim, "keep.txt"), "w") as handle:
+            handle.write("user data")
+        os.symlink(elsewhere, os.path.join(replay, "datasets"))
+        result = self.prepare(replay)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is a symlink", result.stderr)
+        self.assertTrue(os.path.exists(os.path.join(victim, "keep.txt")))
+
     def test_publication_prunes_only_harness_datasets(self):
         replay = os.path.join(self.root, "out")
         self.assertEqual(self.prepare(replay).returncode, 0)
