@@ -130,7 +130,7 @@ import {
 	markSessionStartDedupe,
 	pruneSessionStartDedupe,
 	resetSessionStartDedupe,
-	sessionStartRecallKey,
+	recallSessionKey,
 } from "./session-start-state";
 import { getExpiryWarning } from "./session-tracker";
 import {
@@ -668,7 +668,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			clearRawSessionStartDedupeKey(sessionKey);
 			clearContinuity(sessionKey);
 			await advanceRecallContextEpochAsync({
-				sessionKey: sessionStartRecallKey(req),
+				sessionKey: recallSessionKey(req),
 				agentId,
 				reason: "session-clear",
 				sourceRef: sessionKey,
@@ -980,7 +980,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		memories = [...predictedMemories, ...memories];
 	}
 
-	const sessionStartRecallSessionKey = sessionStartRecallKey(req);
+	const sessionStartRecallSessionKey = recallSessionKey(req);
 	const sessionStartDedupe = await applyRecallDedupeAsync({
 		sessionKey: sessionStartRecallSessionKey,
 		agentId,
@@ -1700,7 +1700,7 @@ export async function handleUserPromptSubmit(
 		const providerOutcome = recallPromptEntityContext(deps, {
 			userMessage,
 			agentId,
-			sessionKey: req.sessionKey,
+			sessionKey: recallSessionKey(req) ?? undefined,
 			project: scope.project,
 			limit: submitCfg.recallLimit ?? 10,
 			minScore: resolveUserPromptMinScore(submitCfg.minScore),
@@ -1764,7 +1764,7 @@ export async function handleUserPromptSubmit(
 		const claimed =
 			recall.results.length > 0
 				? await claimRecallItemsAsync({
-						sessionKey: req.sessionKey,
+						sessionKey: recallSessionKey(req),
 						agentId,
 						surface: PROMPT_RECALL_SURFACE,
 						mode: "automatic",
@@ -2036,7 +2036,7 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		clearSessionStartDedupe(req);
 		clearRawSessionStartDedupeKey(sessionKey);
 		await advanceRecallContextEpochAsync({
-			sessionKey: sessionStartRecallKey(req),
+			sessionKey: recallSessionKey(req),
 			agentId,
 			reason: "session-clear",
 			sourceRef: sessionKey ?? null,

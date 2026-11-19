@@ -11,8 +11,6 @@ export type SessionStartIdentity = {
 	readonly sessionId?: string;
 };
 
-export type SessionStartRecallIdentity = Omit<SessionStartIdentity, "agentId">;
-
 function sessionStartDedupeKey(req: SessionStartIdentity): string | null {
 	const sessionKey = req.sessionKey || req.sessionId;
 	if (!sessionKey) return null;
@@ -24,10 +22,13 @@ function sessionStartDedupeKey(req: SessionStartIdentity): string | null {
 	].join("\0");
 }
 
-export function sessionStartRecallKey(req: SessionStartRecallIdentity): string | null {
-	const sessionKey = req.sessionKey || req.sessionId;
-	if (!sessionKey) return null;
-	return [req.harness ?? "", req.project ?? req.cwd ?? "", sessionKey].join("\0");
+export function recallSessionKey(req: {
+	readonly harness?: string | null;
+	readonly sessionKey?: string | null;
+	readonly sessionId?: string | null;
+}): string | null {
+	const sessionKey = req.sessionKey?.trim() || req.sessionId?.trim();
+	return sessionKey ? `${sessionKey}\0${req.harness ?? ""}` : null;
 }
 
 export function pruneSessionStartDedupe(now = Date.now()): void {

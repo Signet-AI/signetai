@@ -453,7 +453,9 @@ IDs longer than 256 bytes are not matched.
 
 Injected results are claimed in the session's recall dedupe ledger for the
 current context epoch, so a memory is delivered at most once per session until
-the context resets (clear or compaction). A repeat entity hit that only finds
+the context resets (clear or compaction). Session start, prompt submit, clear,
+and compaction share this ledger per session key and harness; the project or
+working directory a connector sends does not change it. A repeat entity hit that only finds
 already-delivered results returns an empty `inject` with `engine: "deduped"`. If the claim cannot be
 recorded, because the ledger is unavailable or the prompt-submit deadline
 (`embedding.promptSubmitTimeoutMs`) passed before the claim committed, the claim

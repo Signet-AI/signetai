@@ -244,11 +244,11 @@ function listSessionRecallEvents(
 		.prepare(
 			`SELECT session_key, item_kind, item_id, surface, mode, score, source, created_at
 			 FROM session_recall_events
-			 WHERE agent_id = ? AND session_key = ?
+			 WHERE agent_id = ? AND (session_key = ? OR (session_key >= ? AND session_key < ?))
 			 ORDER BY created_at ASC
 			 LIMIT ?`,
 		)
-		.all(agentId, sessionKey, limit) as unknown as readonly RecallEventRow[];
+		.all(agentId, sessionKey, `${sessionKey}\0`, `${sessionKey}\u0001`, limit) as unknown as readonly RecallEventRow[];
 	return rows.map((row) => ({
 		id: `context:${row.created_at}:${row.item_kind}:${row.item_id}`,
 		kind: "context.recalled",

@@ -3419,7 +3419,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1606,
+      "line": 1600,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",

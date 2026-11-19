@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
-import { handleUserPromptSubmit, formatPromptClockContext } from "./hooks";
+import { formatPromptClockContext, handleSessionEnd, handleUserPromptSubmit } from "./hooks";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
 import { setActiveTelemetry } from "./telemetry";
 
@@ -271,7 +271,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 			limit: 10,
 			agentId: "default",
 			readPolicy: "isolated",
-			sessionKey: "session-entity",
+			sessionKey: "session-entity\0codex",
 			recallSurface: "api.hooks.user-prompt-submit",
 			recallMode: "automatic",
 			claimRecallResults: false,
@@ -511,6 +511,17 @@ for await (const _ of Bun.stdin.stream()) {
 		expect(result.inject).toContain("Prompt context comes from entity-gated recall.");
 		expect(result.inject).not.toContain("summary:");
 		expect(result.inject).not.toContain("model summary");
+	});
+
+	it("delivers a memory again after the session context is cleared", async () => {
+		seedEntityContext();
+		const prompt = "How should Signet architecture handle prompt context?";
+
+		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
+		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "deduped", memoryCount: 0 });
+		await handleSessionEnd({ harness: "codex", sessionKey: "session-cleared", cwd: "/repo", reason: "clear" });
+
+		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
 	});
 
 	it("injects nothing without a session to claim the delivery in", async () => {
