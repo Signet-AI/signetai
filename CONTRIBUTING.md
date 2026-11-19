@@ -28,10 +28,14 @@ bun test
 The build needs a Rust toolchain from [rustup](https://rustup.rs). Native
 accelerators build with it, and the dashboard's graph layout compiles to
 WebAssembly from `surfaces/app`; its build adds the `wasm32-unknown-unknown`
-target through rustup when it is missing. CI runs `cargo fmt --check` and
-`cargo clippy -- -D warnings` on `surfaces/app` for the native and
-`wasm32-unknown-unknown` targets; run them from `surfaces/app` before pushing
-Rust changes.
+target through rustup when it is missing. CI runs these checks from
+`surfaces/app`; run the same commands there before pushing Rust changes:
+
+```bash
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo clippy --locked --target wasm32-unknown-unknown -- -D warnings
+```
 
 `bun install` also installs the tracked Git hooks for the current worktree through
 the `prepare` script. Run `bun run hooks:install` explicitly when re-enabling
