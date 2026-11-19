@@ -22,13 +22,17 @@ function sessionStartDedupeKey(req: SessionStartIdentity): string | null {
 	].join("\0");
 }
 
+const CONTROL_CHARACTER = /\p{Cc}/u;
+
 export function recallSessionKey(req: {
 	readonly harness?: string | null;
 	readonly sessionKey?: string | null;
 	readonly sessionId?: string | null;
 }): string | null {
 	const sessionKey = req.sessionKey?.trim() || req.sessionId?.trim();
-	return sessionKey ? `${sessionKey}\0${req.harness ?? ""}` : null;
+	const harness = req.harness ?? "";
+	if (!sessionKey || CONTROL_CHARACTER.test(sessionKey) || CONTROL_CHARACTER.test(harness)) return null;
+	return `${sessionKey}\0${harness}`;
 }
 
 export function pruneSessionStartDedupe(now = Date.now()): void {

@@ -1339,7 +1339,7 @@ function registerRecall(app: Hono): void {
 					agentId,
 					readPolicy: agentScope.readPolicy,
 					policyGroup: agentScope.policyGroup,
-					sessionKey: body.sessionKey,
+					sessionKey: recallSessionKey({ harness: body.harness, sessionKey: body.sessionKey }) ?? undefined,
 					includeRecalled: body.includeRecalled === true,
 					recallSurface: "api.hooks.recall",
 					recallMode: "hook",

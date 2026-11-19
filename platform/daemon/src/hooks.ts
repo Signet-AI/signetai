@@ -1700,11 +1700,9 @@ export async function handleUserPromptSubmit(
 		const providerOutcome = recallPromptEntityContext(deps, {
 			userMessage,
 			agentId,
-			sessionKey: recallSessionKey(req) ?? undefined,
 			project: scope.project,
 			limit: submitCfg.recallLimit ?? 10,
 			minScore: resolveUserPromptMinScore(submitCfg.minScore),
-			injectBudget: submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars,
 			cfg,
 			signal: controller.signal,
 		}).then(
@@ -1769,6 +1767,12 @@ export async function handleUserPromptSubmit(
 						surface: PROMPT_RECALL_SURFACE,
 						mode: "automatic",
 						items: recall.results,
+						select: (fresh) =>
+							selectWithinBudget(
+								recall.entities,
+								fresh,
+								submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars,
+							),
 						signal: controller.signal,
 						deadlineAt,
 					})
@@ -1794,9 +1798,11 @@ export async function handleUserPromptSubmit(
 						? deadlineExpired
 							? "provider-timeout"
 							: "claim-failed"
-						: recall.results.length > 0
+						: (claimed?.meta.suppressed ?? 0) > 0
 							? "deduped"
-							: recall.engine;
+							: recall.results.length > 0
+								? "no-recall-hit"
+								: recall.engine;
 		recordUserPromptRecallTelemetry({
 			cfg,
 			agentId,
@@ -1892,11 +1898,9 @@ async function recallPromptEntityContext(
 	input: {
 		readonly userMessage: string;
 		readonly agentId: string;
-		readonly sessionKey: string | undefined;
 		readonly project: string | undefined;
 		readonly limit: number;
 		readonly minScore: number;
-		readonly injectBudget: number;
 		readonly cfg: ReturnType<typeof loadMemoryConfig>;
 		readonly signal: AbortSignal;
 	},
@@ -1913,7 +1917,6 @@ async function recallPromptEntityContext(
 			agentId: input.agentId,
 			readPolicy: scope.readPolicy,
 			policyGroup: scope.policyGroup,
-			sessionKey: input.sessionKey,
 			...(input.project ? { project: input.project } : {}),
 			recallSurface: PROMPT_RECALL_SURFACE,
 			recallMode: "automatic",
@@ -1926,20 +1929,27 @@ async function recallPromptEntityContext(
 		deps.fetchEmbedding,
 		{ signal: input.signal },
 	);
-	const results: RecallResult[] = [];
-	for (const row of recall.results) {
-		if (row.score < input.minScore || row.source === "llm_summary") continue;
-		const serialized = createPromptContext(buildPromptRecallInject(entities, [...results, row]))?.serialized ?? "";
-		if (serialized.length <= input.injectBudget) results.push(row);
-	}
+	const results = recall.results.filter((row) => row.score >= input.minScore && row.source !== "llm_summary");
 	const degradation = recall.meta?.degradation;
 	return {
 		entities,
 		results,
-		engine:
-			results.length > 0 ? "entity-recall" : (recall.meta?.dedupe?.suppressed ?? 0) > 0 ? "deduped" : "no-recall-hit",
+		engine: results.length > 0 ? "entity-recall" : "no-recall-hit",
 		...(degradation ? { degradation } : {}),
 	};
+}
+
+function selectWithinBudget(
+	entities: readonly PromptEntityMatch[],
+	rows: readonly RecallResult[],
+	budget: number,
+): RecallResult[] {
+	const selected: RecallResult[] = [];
+	for (const row of rows) {
+		const serialized = createPromptContext(buildPromptRecallInject(entities, [...selected, row]))?.serialized ?? "";
+		if (serialized.length <= budget) selected.push(row);
+	}
+	return selected;
 }
 
 function promptRecallHeader(entities: readonly PromptEntityMatch[]): string {

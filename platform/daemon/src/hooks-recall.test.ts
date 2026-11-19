@@ -223,6 +223,50 @@ memory:
 		}
 	}, 30_000);
 
+	it("shares one delivery ledger between hook recall and prompt recall", async () => {
+		const sessionKey = `shared-ledger-${crypto.randomUUID()}`;
+		const harness = "openclaw";
+		const now = new Date().toISOString();
+		const config = readFileSync(join(dir, "agent.yaml"), "utf8");
+		await getDbAccessor?.().withWriteTxAsync((db) => {
+			db.prepare(
+				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-osprey', 'Osprey', 'osprey', 'project', 'default', 10, ?, ?)`,
+			).run(now, now);
+			db.prepare(
+				`INSERT OR IGNORE INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)
+				 VALUES ('osprey-deploy', 'Osprey deploys through the blue pipeline.', 'fact', 'default', 'test', ?, ?)`,
+			).run(now, now);
+		});
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`${config}hooks:\n  userPromptSubmit:\n    minScore: 0\n`.replace(
+				"embedding:\n  provider: none\n",
+				"embedding:\n  provider: none\n  promptSubmitTimeoutMs: 10000\n",
+			),
+		);
+		const hook = async (route: string, body: Record<string, unknown>): Promise<Record<string, unknown>> => {
+			const response = await app.request(`/api/hooks/${route}`, {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "x-signet-runtime-path": "plugin" },
+				body: JSON.stringify({ harness, sessionKey, ...body }),
+			});
+			expect(response.status).toBe(200);
+			return (await response.json()) as Record<string, unknown>;
+		};
+		try {
+			const recalled = await hook("recall", { query: "Osprey deploys pipeline", limit: 5 });
+			expect(JSON.stringify(recalled.results)).toContain("osprey-deploy");
+			expect(await hook("user-prompt-submit", { userPrompt: "How does Osprey deploy its pipeline?" })).toMatchObject({
+				engine: "deduped",
+				memoryCount: 0,
+			});
+		} finally {
+			writeFileSync(join(dir, "agent.yaml"), config);
+			releaseSession?.(sessionKey);
+		}
+	}, 30_000);
+
 	it("labels partial FTS recall separately from provider outages", async () => {
 		setFtsIndexIncomplete(true);
 		try {
