@@ -1700,6 +1700,7 @@ export async function handleUserPromptSubmit(
 		const providerOutcome = recallPromptEntityContext(deps, {
 			userMessage,
 			agentId,
+			sessionKey: recallSessionKey(req),
 			project: scope.project,
 			limit: submitCfg.recallLimit ?? 10,
 			minScore: resolveUserPromptMinScore(submitCfg.minScore),
@@ -1898,6 +1899,7 @@ async function recallPromptEntityContext(
 	input: {
 		readonly userMessage: string;
 		readonly agentId: string;
+		readonly sessionKey: string | null;
 		readonly project: string | undefined;
 		readonly limit: number;
 		readonly minScore: number;
@@ -1918,6 +1920,7 @@ async function recallPromptEntityContext(
 			readPolicy: scope.readPolicy,
 			policyGroup: scope.policyGroup,
 			...(input.project ? { project: input.project } : {}),
+			...(input.sessionKey ? { skipDeliveredIn: input.sessionKey } : {}),
 			recallSurface: PROMPT_RECALL_SURFACE,
 			recallMode: "automatic",
 			claimRecallResults: false,
@@ -1934,7 +1937,8 @@ async function recallPromptEntityContext(
 	return {
 		entities,
 		results,
-		engine: results.length > 0 ? "entity-recall" : "no-recall-hit",
+		engine:
+			results.length > 0 ? "entity-recall" : (recall.meta?.dedupe?.suppressed ?? 0) > 0 ? "deduped" : "no-recall-hit",
 		...(degradation ? { degradation } : {}),
 	};
 }

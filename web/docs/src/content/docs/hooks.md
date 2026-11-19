@@ -457,7 +457,10 @@ the context resets (clear or compaction). Session start, prompt submit, hook rec
 (`/api/hooks/recall`), clear, and compaction share this ledger per session key
 and harness; the project or working directory a connector sends does not change
 it. A session key or harness containing control characters has no ledger, so
-prompt submit injects nothing for it (`engine: "no-session"`). A repeat entity hit that only finds
+prompt submit injects nothing for it (`engine: "no-session"`). Recall leaves out
+memories the session already received (the latest 1,000 deliveries in the
+current epoch) before it applies `recallLimit`, so earlier deliveries do not
+crowd out fresh results. A repeat entity hit that only finds
 already-delivered results returns an empty `inject` with `engine: "deduped"`. If the claim cannot be
 recorded, because the ledger is unavailable or the prompt-submit deadline
 (`embedding.promptSubmitTimeoutMs`) passed before the claim committed, the claim
