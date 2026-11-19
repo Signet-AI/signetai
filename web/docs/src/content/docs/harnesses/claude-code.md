@@ -23,18 +23,18 @@ The connector writes hooks to `~/.claude/settings.json`:
 
 | Hook | Signet command | Installed timeout |
 |---|---|---|
-| `SessionStart` | `signet hook session-start -H claude-code --project "$(pwd)"` | resolved session-start budget plus 2 seconds |
-| `UserPromptSubmit` | `signet hook user-prompt-submit -H claude-code --project "$(pwd)"` | resolved prompt-submit budget plus 2 seconds |
-| `PreToolUse` | `signet hook notifications -H claude-code --hook PreToolUse --project "$(pwd)" --hook-json` | resolved prompt-submit budget plus 2 seconds |
-| `PreCompact` | `signet hook pre-compaction -H claude-code --project "$(pwd)"` | 7 seconds: the CLI's 5-second daemon wait plus 2 seconds |
+| `SessionStart` | `signet hook session-start -H claude-code --project "$(pwd)"` | resolved session-start budget plus 5 seconds |
+| `UserPromptSubmit` | `signet hook user-prompt-submit -H claude-code --project "$(pwd)"` | resolved prompt-submit budget plus 5 seconds |
+| `PreToolUse` | `signet hook notifications -H claude-code --hook PreToolUse --project "$(pwd)" --hook-json` | resolved prompt-submit budget plus 5 seconds |
+| `PreCompact` | `signet hook pre-compaction -H claude-code --project "$(pwd)"` | 10 seconds: the CLI's 5-second daemon wait plus 5 seconds |
 | `SessionEnd` | `signet hook session-end -H claude-code` | 15 seconds |
 | `Stop` | `signet hook stop -H claude-code` | none (`async: true`) |
 
 Signet identifies its own entries by a `signet hook <name> -H claude-code` invocation, including quoted executable paths and Node.js or Bun invocations of `signet.js`. An unrelated command that mentions a Signet path as an argument is not a Signet hook. Installation adds the Signet hook groups after the groups already on each event. A later installation replaces only the Signet entries, and disconnecting Claude Code removes only those entries. Hooks you add yourself stay in place. If `settings.json` is not valid JSON, or its `hooks` value is not an object, installation and disconnect stop with an error and leave the file unchanged.
 
-The default daemon session-start budget is 15 seconds, so the default installed `SessionStart` timeout is 17 seconds. The connector computes this when it writes the configuration from `SIGNET_SESSION_START_TIMEOUT` (or the compatibility fetch-timeout variable). It does not assume a home directory or bake a personal path into the hook command.
+The default daemon session-start budget is 15 seconds, so the default installed `SessionStart` timeout is 20 seconds. The 5-second grace covers what the CLI does before it calls the daemon: reading the hook input (up to 2 seconds), reading the transcript (up to 0.75 seconds), and starting the process. The connector computes this when it writes the configuration from `SIGNET_SESSION_START_TIMEOUT` (or the compatibility fetch-timeout variable). It does not assume a home directory or bake a personal path into the hook command.
 
-Likewise, the prompt-submit and `PreToolUse` notification hooks use the resolved `SIGNET_PROMPT_SUBMIT_TIMEOUT` plus two seconds, because `signet hook notifications` waits for the daemon with the same budget. Existing settings are not changed until setup or connector installation runs again.
+Likewise, the prompt-submit and `PreToolUse` notification hooks use the resolved `SIGNET_PROMPT_SUBMIT_TIMEOUT` plus five seconds, because `signet hook notifications` waits for the daemon with the same budget. The connector reads these variables when it writes `settings.json`. After changing one, run `signet connect claude-code` again so the hook timeouts match the CLI waits.
 
 The `Stop` hook never delays, blocks, or continues a turn. It records the reply that ends each turn, which Claude Code passes as `last_assistant_message`. Claude Code runs it in the background, and [`signet hook stop`](/cli/integrations-security/#signet-hook) writes no stdout. Failures are reported on stderr.
 

@@ -294,11 +294,11 @@ describe("ClaudeCodeConnector hook timeouts", () => {
 	it("writes every Signet hook timeout in seconds", async () => {
 		await new ClaudeCodeConnector().install(tmpRoot);
 		expect(timeoutsByHook()).toEqual({
-			"session-start": 17,
+			"session-start": 20,
 			wake: 3600,
-			"user-prompt-submit": 7,
-			notifications: 7,
-			"pre-compaction": 7,
+			"user-prompt-submit": 10,
+			notifications: 10,
+			"pre-compaction": 10,
 			"session-end": 15,
 		});
 	});
@@ -307,7 +307,14 @@ describe("ClaudeCodeConnector hook timeouts", () => {
 		process.env.SIGNET_SESSION_START_TIMEOUT = "20500";
 		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = "7500";
 		await new ClaudeCodeConnector().install(tmpRoot);
-		expect(timeoutsByHook()).toMatchObject({ "session-start": 23, "user-prompt-submit": 10, notifications: 10 });
+		expect(timeoutsByHook()).toMatchObject({ "session-start": 26, "user-prompt-submit": 13, notifications: 13 });
+	});
+
+	it("falls back to SIGNET_FETCH_TIMEOUT when the session-start budget is blank, like the CLI", async () => {
+		process.env.SIGNET_SESSION_START_TIMEOUT = "   ";
+		process.env.SIGNET_FETCH_TIMEOUT = "60000";
+		await new ClaudeCodeConnector().install(tmpRoot);
+		expect(timeoutsByHook()).toMatchObject({ "session-start": 65 });
 	});
 });
 
