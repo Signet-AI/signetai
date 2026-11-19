@@ -297,8 +297,8 @@ describe("ClaudeCodeConnector hook timeouts", () => {
 			"session-start": 17,
 			wake: 3600,
 			"user-prompt-submit": 7,
-			notifications: 3,
-			"pre-compaction": 3,
+			notifications: 7,
+			"pre-compaction": 7,
 			"session-end": 15,
 		});
 	});
@@ -307,7 +307,7 @@ describe("ClaudeCodeConnector hook timeouts", () => {
 		process.env.SIGNET_SESSION_START_TIMEOUT = "20500";
 		process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = "7500";
 		await new ClaudeCodeConnector().install(tmpRoot);
-		expect(timeoutsByHook()).toMatchObject({ "session-start": 23, "user-prompt-submit": 10 });
+		expect(timeoutsByHook()).toMatchObject({ "session-start": 23, "user-prompt-submit": 10, notifications: 10 });
 	});
 });
 

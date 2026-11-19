@@ -40,7 +40,7 @@ export interface SessionContext {
 }
 
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
-const SHORT_HOOK_TIMEOUT_SECONDS = 3;
+const PRE_COMPACTION_DAEMON_WAIT_MS = 5_000;
 const SESSION_END_HOOK_TIMEOUT_SECONDS = 15;
 
 function readClaudeSettings(path: string): Record<string, unknown> {
@@ -346,6 +346,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 		const servers = isJsonObject(mcpConfig?.mcpServers) ? mcpConfig.mcpServers : {};
 		const signetCmd = renderCommand(resolveSignetCliCommand(launcher ?? cliFromMcp(readMcpLauncher(servers.signet))));
 		const pwdExpr = process.platform === "win32" ? "%CD%" : "$(pwd)";
+		const promptSubmitTimeout = userPromptSubmitHookTimeoutSeconds();
 
 		const hooks: Record<string, unknown[]> = {};
 		const wakeHook = {
@@ -377,7 +378,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 						{
 							type: "command",
 							command: `${signetCmd} hook user-prompt-submit -H claude-code --project "${pwdExpr}"`,
-							timeout: userPromptSubmitHookTimeoutSeconds(),
+							timeout: promptSubmitTimeout,
 						},
 					],
 				},
@@ -391,7 +392,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 						{
 							type: "command",
 							command: `${signetCmd} hook notifications -H claude-code --hook PreToolUse --project "${pwdExpr}" --hook-json`,
-							timeout: SHORT_HOOK_TIMEOUT_SECONDS,
+							timeout: promptSubmitTimeout,
 						},
 					],
 				},
@@ -405,7 +406,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 						{
 							type: "command",
 							command: `${signetCmd} hook pre-compaction -H claude-code --project "${pwdExpr}"`,
-							timeout: SHORT_HOOK_TIMEOUT_SECONDS,
+							timeout: hookTimeoutSeconds(PRE_COMPACTION_DAEMON_WAIT_MS),
 						},
 					],
 				},
