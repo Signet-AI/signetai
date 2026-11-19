@@ -19,7 +19,7 @@ import {
 	cliFromMcp,
 	type ResolvedCommand,
 } from "@signet/connector-base";
-import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
+import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutFromEnv } from "@signet/core";
 
 export interface ConnectorConfig {
 	daemonUrl?: string;
@@ -196,8 +196,7 @@ function hookTimeoutSeconds(budgetMs: number): number {
 }
 
 function sessionStartHookTimeoutSeconds(): number {
-	const raw = process.env.SIGNET_SESSION_START_TIMEOUT?.trim() || process.env.SIGNET_FETCH_TIMEOUT?.trim();
-	return hookTimeoutSeconds(resolveSessionStartTimeoutMs(raw));
+	return hookTimeoutSeconds(resolveSessionStartTimeoutFromEnv());
 }
 
 function userPromptSubmitHookTimeoutSeconds(): number {

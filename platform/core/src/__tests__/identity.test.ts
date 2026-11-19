@@ -13,6 +13,7 @@ import {
 	resolveHermesHomePath,
 	resolveHermesTarget,
 	resolvePromptSubmitTimeoutMs,
+	resolveSessionStartTimeoutFromEnv,
 	resolveSessionStartTimeoutMs,
 	resolveStartupIdentityFiles,
 	resolveSpecialIdentityFiles,
@@ -364,6 +365,28 @@ describe("resolveSessionStartTimeoutMs", () => {
 	test("clamps high values and preserves valid ones", () => {
 		expect(resolveSessionStartTimeoutMs("18000")).toBe(18000);
 		expect(resolveSessionStartTimeoutMs("999999")).toBe(120000);
+	});
+});
+
+describe("resolveSessionStartTimeoutFromEnv", () => {
+	test("prefers SIGNET_SESSION_START_TIMEOUT over SIGNET_FETCH_TIMEOUT", () => {
+		expect(
+			resolveSessionStartTimeoutFromEnv({ SIGNET_SESSION_START_TIMEOUT: "20000", SIGNET_FETCH_TIMEOUT: "60000" }),
+		).toBe(20000);
+	});
+
+	test("falls back to SIGNET_FETCH_TIMEOUT when the session-start value is unset or blank", () => {
+		expect(resolveSessionStartTimeoutFromEnv({ SIGNET_FETCH_TIMEOUT: "60000" })).toBe(60000);
+		expect(
+			resolveSessionStartTimeoutFromEnv({ SIGNET_SESSION_START_TIMEOUT: "   ", SIGNET_FETCH_TIMEOUT: " 60000 " }),
+		).toBe(60000);
+	});
+
+	test("returns the default when both are unset or blank", () => {
+		expect(resolveSessionStartTimeoutFromEnv({})).toBe(15000);
+		expect(resolveSessionStartTimeoutFromEnv({ SIGNET_SESSION_START_TIMEOUT: "", SIGNET_FETCH_TIMEOUT: " " })).toBe(
+			15000,
+		);
 	});
 });
 
