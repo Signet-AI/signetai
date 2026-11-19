@@ -1133,9 +1133,11 @@ class SignetMemoryProvider(MemoryProvider):
                 if not result:
                     return
                 if not result.get("sessionKnown", True) and self._session_initialized:
-                    logger.debug("Signet daemon restarted mid-session, restoring session claim")
                     with self._prefetch_lock:
+                        if generation != self._prefetch_generation or session_key != self._session_key:
+                            return
                         self._session_prefetch_result = ""
+                    logger.debug("Signet daemon restarted mid-session, restoring session claim")
                     reinit = client.session_start(
                         session_key, project=project, claim_only=True,
                     )
@@ -1157,14 +1159,7 @@ class SignetMemoryProvider(MemoryProvider):
                         self._prefetch_result = "\n".join(
                             part for part in (self._prefetch_result, recall_inject) if part and part.strip()
                         )
-                    if (
-                        isinstance(notification_inject, str)
-                        and notification_inject.strip()
-                        and notification_inject not in self._notification_result
-                    ):
-                        self._notification_result = "\n".join(
-                            part for part in (self._notification_result, notification_inject) if part and part.strip()
-                        )
+                    self._add_notification(notification_inject)
             except Exception as e:
                 logger.debug("Signet prompt submit failed: %s", e)
             finally:
@@ -1208,6 +1203,13 @@ class SignetMemoryProvider(MemoryProvider):
         self._release_turn()
         self._queue_notification_refresh("sync_turn")
 
+    def _add_notification(self, inject: Any) -> None:
+        """Keep an undrained notification; append a new one. Caller holds _prefetch_lock."""
+        if isinstance(inject, str) and inject.strip() and inject not in self._notification_result:
+            self._notification_result = "\n".join(
+                part for part in (self._notification_result, inject) if part and part.strip()
+            )
+
     def _queue_notification_refresh(self, hook: str) -> None:
         """Fetch peer notifications without blocking the current Hermes callback."""
         client = self._client
@@ -1225,7 +1227,7 @@ class SignetMemoryProvider(MemoryProvider):
                 inject = (result or {}).get("inject", "")
                 with self._prefetch_lock:
                     if generation == self._prefetch_generation and session_key == self._session_key:
-                        self._notification_result = inject if isinstance(inject, str) else ""
+                        self._add_notification(inject)
             except Exception as e:
                 logger.debug("Signet %s notification refresh failed: %s", hook, e)
 
