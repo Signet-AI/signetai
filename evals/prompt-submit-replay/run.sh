@@ -35,17 +35,18 @@ if ss -tln | grep -q ":$PORT "; then
 	echo "port $PORT is already in use" >&2
 	exit 1
 fi
-for file in pristine.db agent.yaml workspace-layout.json transcripts.json; do
-	[ -f "$DIR/$file" ] || { echo "missing $DIR/$file; run prepare.py first" >&2; exit 1; }
+DATASET=$(realpath -e "$DIR/dataset" 2>/dev/null) || { echo "no prepared dataset in $DIR; run prepare.py first" >&2; exit 1; }
+for file in manifest.json pristine.db agent.yaml workspace-layout.json transcripts.json; do
+	[ -f "$DATASET/$file" ] || { echo "missing $DATASET/$file; run prepare.py again" >&2; exit 1; }
 done
 
 rm -rf "$WS" "$ATTEMPT"
 mkdir -p "$WS/data" "$WS/runtime/plugins" "$WS/runtime/logs" "$DIR/home" "$ATTEMPT"
-cp "$DIR/transcripts.json" "$ATTEMPT/transcripts.json"
-cp "$DIR/pristine.db" "$WS/data/signet.db"
-cp "$DIR/agent.yaml" "$WS/agent.yaml"
-cp "$DIR/workspace-layout.json" "$WS/workspace-layout.json"
-[ -f "$DIR/plugin-registry.json" ] && cp "$DIR/plugin-registry.json" "$WS/runtime/plugins/registry-v1.json"
+cp "$DATASET/manifest.json" "$DATASET/transcripts.json" "$ATTEMPT/"
+cp "$DATASET/pristine.db" "$WS/data/signet.db"
+cp "$DATASET/agent.yaml" "$WS/agent.yaml"
+cp "$DATASET/workspace-layout.json" "$WS/workspace-layout.json"
+[ -f "$DATASET/plugin-registry.json" ] && cp "$DATASET/plugin-registry.json" "$WS/runtime/plugins/registry-v1.json"
 
 UNSET=()
 for name in $(compgen -e); do
@@ -112,29 +113,28 @@ LOG=$(ls -t "$WS"/runtime/logs/signet-*.log | head -1)
 
 SETTLED=
 for _ in $(seq 1 180); do
-	if grep -a -q "Global integrity check passed" "$LOG" && grep -a -q "Incremental database integrity progress" "$LOG"; then
-		LAST=$(grep -a "Incremental database integrity progress" "$LOG" | tail -1 | python3 -c "import sys,json,datetime;print(datetime.datetime.fromisoformat(json.loads(sys.stdin.read())['timestamp'].replace('Z','+00:00')).timestamp())")
-		if python3 -c "import time,sys;sys.exit(0 if time.time()-float('$LAST')>20 else 1)"; then
-			SETTLED=1
-			break
-		fi
-	fi
-	sleep 5
+	status=0
+	python3 "$HERE/settled.py" "$LOG" || status=$?
+	case $status in
+		0) SETTLED=1 && break ;;
+		1) sleep 5 ;;
+		*) break ;;
+	esac
 done
 if [ -z "$SETTLED" ]; then
-	echo "startup maintenance did not settle within 15 minutes; see daemon-log-unsettled.log" >&2
+	echo "startup integrity checks did not finish cleanly within 15 minutes; see daemon-log-unsettled.log" >&2
 	cp "$LOG" "$ATTEMPT/daemon-log-unsettled.log"
 	exit 1
 fi
-echo "startup maintenance settled"
+echo "startup integrity checks finished"
 
 curl -s -f -m 120 -X POST "127.0.0.1:$PORT/api/memory/recall" -H 'content-type: application/json' \
 	-d "{\"query\":\"warm up the embedder and reranker\",\"agentId\":\"$AGENT_ID\",\"limit\":5}" > /dev/null
 sleep 2
 grep -a -o '"Cross-encoder ready","data":{[^}]*}' "$LOG" | tail -1 || echo "no cross-encoder line in the daemon log"
 
-for session in $(python3 -c "import json,sys;print(' '.join(json.load(open(sys.argv[1]))))" "$DIR/transcripts.json"); do
-	harness=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]]['harness'])" "$DIR/transcripts.json" "$session")
+for session in $(python3 -c "import json,sys;print(' '.join(json.load(open(sys.argv[1]))))" "$ATTEMPT/transcripts.json"); do
+	harness=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[sys.argv[2]]['harness'])" "$ATTEMPT/transcripts.json" "$session")
 	case $harness in
 		pi | opencode) step env REPLAY_DIR="$ATTEMPT" REPLAY_AGENT_ID="$AGENT_ID" REAL_HOME="$HOME" timeout 300 bun "$HERE/drive.ts" "$RUN" "$PORT" "$session" ;;
 		*) step timeout 400 python3 "$HERE/drive.py" "$RUN" "$PORT" "$session" --dir "$ATTEMPT" --agent-id "$AGENT_ID" ;;
@@ -149,8 +149,8 @@ cat "$WS"/runtime/logs/signet-*.log > "$ATTEMPT/daemon-log-$RUN.ndjson"
 sqlite3 -readonly -json "$WS/data/signet.db" "SELECT session_key, agent_id, context_epoch, item_kind, item_id, surface, mode, created_at FROM session_recall_events WHERE session_key LIKE '$RUN-%'" > "$ATTEMPT/ledger-$RUN.json"
 RECORDS=$(wc -l < "$ATTEMPT/results-$RUN.jsonl")
 rm -rf "$WS" "$ATTEMPT/step.log"
-python3 -c "import hashlib,json,sys;print(json.dumps({'run':sys.argv[1],'records':int(sys.argv[2]),'transcriptsSha256':hashlib.sha256(open(sys.argv[3],'rb').read()).hexdigest()}))" \
-	"$RUN" "$RECORDS" "$ATTEMPT/transcripts.json" > "$ATTEMPT/complete.json"
+python3 -c "import hashlib,json,sys;print(json.dumps({'run':sys.argv[1],'records':int(sys.argv[2]),'dataset':json.load(open(sys.argv[3]))['dataset'],'transcriptsSha256':hashlib.sha256(open(sys.argv[4],'rb').read()).hexdigest()}))" \
+	"$RUN" "$RECORDS" "$ATTEMPT/manifest.json" "$ATTEMPT/transcripts.json" > "$ATTEMPT/complete.json"
 rm -rf "$DIR/run-$RUN"
 mv "$ATTEMPT" "$DIR/run-$RUN"
 trap - EXIT TERM INT HUP

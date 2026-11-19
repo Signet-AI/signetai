@@ -1,5 +1,7 @@
 import argparse
+import fcntl
 import glob
+import hashlib
 import json
 import os
 import re
@@ -65,37 +67,45 @@ def source_layout(args):
     return layout
 
 
-def snapshot(args, layout):
+def snapshot(args, layout, stage):
     source = layout["database"]
-    target = os.path.join(args.dir, "pristine.db")
-    if os.path.exists(target):
-        os.remove(target)
+    target = os.path.join(stage, "pristine.db")
     con = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
     con.execute("VACUUM INTO ?", (target,))
     con.close()
     print(f"snapshot: {target} ({os.path.getsize(target) // 1_000_000} MB)", file=sys.stderr)
 
 
-def workspace_config(args, layout):
+def reuse_snapshot(args, stage):
+    current = os.path.join(args.dir, "dataset", "pristine.db")
+    if not os.path.exists(current):
+        sys.exit("--skip-snapshot needs a prepared dataset; run prepare.py without it first")
+    os.link(current, os.path.join(stage, "pristine.db"))
+
+
+def workspace_config(args, layout, stage):
     with open(os.path.join(args.agents, "agent.yaml")) as handle:
         config = yaml.safe_load(handle)
     config["harnesses"] = []
     config.setdefault("network", {})["mode"] = "localhost"
+    updates = config.setdefault("updates", {})
+    updates.pop("auto_install", None)
+    updates["autoInstall"] = False
     memory = config.setdefault("memory", {})
     memory.setdefault("pipelineV2", {})["paused"] = True
     memory.setdefault("dreaming", {})["enabled"] = False
     config.pop("auth", None)
-    with open(os.path.join(args.dir, "agent.yaml"), "w") as handle:
+    with open(os.path.join(stage, "agent.yaml"), "w") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
-    with open(os.path.join(args.dir, "workspace-layout.json"), "w") as handle:
+    with open(os.path.join(stage, "workspace-layout.json"), "w") as handle:
         json.dump({"version": 2, "overrides": {}}, handle, indent=2)
     registry = os.path.join(layout["runtime"], "plugins", "registry-v1.json")
     if os.path.exists(registry):
-        shutil.copyfile(registry, os.path.join(args.dir, "plugin-registry.json"))
+        shutil.copyfile(registry, os.path.join(stage, "plugin-registry.json"))
 
 
-def entity_pattern(args):
-    con = sqlite3.connect(f"file:{os.path.join(args.dir, 'pristine.db')}?mode=ro", uri=True)
+def entity_pattern(args, stage):
+    con = sqlite3.connect(f"file:{os.path.join(stage, 'pristine.db')}?mode=ro", uri=True)
     names = [
         row[0]
         for row in con.execute(
@@ -238,8 +248,8 @@ def pick(sessions, pattern, size, top, forced):
     return scored[:top]
 
 
-def extract(args):
-    pattern = entity_pattern(args)
+def extract(args, stage):
+    pattern = entity_pattern(args, stage)
     sources = [
         ("claude-code", claude_sessions(), 1),
         ("codex", codex_sessions(), 1),
@@ -253,22 +263,83 @@ def extract(args):
             key = harness if index == 0 else f"{harness}#{index + 1}"
             transcripts[key] = {"harness": harness, "source": source, "entityTurns": hits, "turns": turns}
             print(f"{key}: {len(turns)} turns, {hits} name an entity", file=sys.stderr)
-    with open(os.path.join(args.dir, "transcripts.json"), "w") as handle:
+    with open(os.path.join(stage, "transcripts.json"), "w") as handle:
         json.dump(transcripts, handle, indent=1, ensure_ascii=False)
+
+
+def sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def publish(args, stage):
+    files = {name: sha256(os.path.join(stage, name)) for name in sorted(os.listdir(stage))}
+    dataset = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
+    with open(os.path.join(stage, "manifest.json"), "w") as handle:
+        json.dump({"dataset": dataset, "files": files}, handle, indent=1)
+    datasets = os.path.join(args.dir, "datasets")
+    target = os.path.join(datasets, dataset)
+    if os.path.exists(target):
+        shutil.rmtree(stage)
+    else:
+        os.rename(stage, target)
+    link = os.path.join(args.dir, ".dataset.next")
+    if os.path.lexists(link):
+        os.remove(link)
+    os.symlink(os.path.join("datasets", dataset), link)
+    os.replace(link, os.path.join(args.dir, "dataset"))
+    for name in os.listdir(datasets):
+        if name != dataset:
+            shutil.rmtree(os.path.join(datasets, name))
+    print(f"dataset {dataset[:12]} published in {target}", file=sys.stderr)
+
+
+def contains(parent, child):
+    return os.path.commonpath([parent, child]) == parent
+
+
+def check_dirs(args):
+    replay = os.path.realpath(args.dir)
+    agents = os.path.realpath(args.agents)
+    if contains(agents, replay) or contains(replay, agents):
+        sys.exit(f"{args.dir} overlaps the workspace {args.agents}; choose a separate replay directory")
+    os.makedirs(replay, mode=0o700, exist_ok=True)
+    info = os.stat(replay)
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        sys.exit(f"{args.dir} must be owned by you and closed to other users (chmod 700)")
+    live = os.stat(agents)
+    if (info.st_dev, info.st_ino) == (live.st_dev, live.st_ino):
+        sys.exit(f"{args.dir} is the workspace {args.agents}; choose a separate replay directory")
+    args.dir = replay
 
 
 def main():
     args = parse_args()
     os.umask(0o077)
-    os.makedirs(args.dir, mode=0o700, exist_ok=True)
-    info = os.stat(args.dir)
-    if info.st_uid != os.getuid() or info.st_mode & 0o077:
-        sys.exit(f"{args.dir} must be owned by you and closed to other users (chmod 700)")
+    check_dirs(args)
+    lock = open(os.path.join(args.dir, ".replay.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(f"a replay or analysis is using {args.dir}")
     layout = source_layout(args)
-    if not args.skip_snapshot:
-        snapshot(args, layout)
-    workspace_config(args, layout)
-    extract(args)
+    os.makedirs(os.path.join(args.dir, "datasets"), exist_ok=True)
+    stage = os.path.join(args.dir, "datasets", f".staging-{os.getpid()}")
+    shutil.rmtree(stage, ignore_errors=True)
+    os.mkdir(stage)
+    try:
+        if args.skip_snapshot:
+            reuse_snapshot(args, stage)
+        else:
+            snapshot(args, layout, stage)
+        workspace_config(args, layout, stage)
+        extract(args, stage)
+        publish(args, stage)
+    finally:
+        shutil.rmtree(stage, ignore_errors=True)
 
 
 main()
