@@ -92,8 +92,8 @@ stop() {
 fail() {
 	stop
 	rm -rf "$WS"
-	if [ -d "$ATTEMPT" ]; then
-		mv "$ATTEMPT" "$FAILED"
+	if [ -d "$ATTEMPT" ] && ! [ -e "$FAILED" ] && ! [ -L "$FAILED" ]; then
+		mv -T "$ATTEMPT" "$FAILED"
 		echo "$RUN did not finish; its partial output is in $FAILED" >&2
 	fi
 }
@@ -158,6 +158,6 @@ rm -rf "$WS" "$ATTEMPT/step.log"
 python3 -c "import hashlib,json,sys;print(json.dumps({'run':sys.argv[1],'records':int(sys.argv[2]),'dataset':json.load(open(sys.argv[3]))['dataset'],'transcriptsSha256':hashlib.sha256(open(sys.argv[4],'rb').read()).hexdigest()}))" \
 	"$RUN" "$RECORDS" "$ATTEMPT/manifest.json" "$ATTEMPT/transcripts.json" > "$ATTEMPT/complete.json"
 rm -rf "$DIR/run-$RUN"
-mv "$ATTEMPT" "$DIR/run-$RUN"
+mv -T "$ATTEMPT" "$DIR/run-$RUN"
 trap - EXIT TERM INT HUP
 echo "$RUN finished: $RECORDS records in $DIR/run-$RUN"

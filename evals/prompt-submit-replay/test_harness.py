@@ -204,6 +204,25 @@ class PrepareTest(Scratch):
             self.assertNotEqual(self.prepare(replay).returncode, 0)
 
 
+class WriterTest(Scratch):
+    def test_probe_and_driver_do_not_write_through_symlinks(self):
+        outside = os.path.join(self.root, "keep.txt")
+        with open(outside, "w") as handle:
+            handle.write("user data")
+        with open(os.path.join(self.root, "transcripts.json"), "w") as handle:
+            json.dump({}, handle)
+        os.symlink(outside, os.path.join(self.root, "candidates-base.jsonl"))
+        probe = [sys.executable, os.path.join(HERE, "probe.py"), "base", "49999", "--dir", self.root]
+        self.assertNotEqual(subprocess.run(probe, capture_output=True, text=True).returncode, 0)
+        with open(os.path.join(self.root, "transcripts.json"), "w") as handle:
+            json.dump({"s": {"harness": "claude-code", "turns": []}}, handle)
+        os.symlink(outside, os.path.join(self.root, "results-base.jsonl"))
+        drive = [sys.executable, os.path.join(HERE, "drive.py"), "base", "49999", "s", "--dir", self.root, "--signet", "/bin/true"]
+        self.assertNotEqual(subprocess.run(drive, capture_output=True, text=True).returncode, 0)
+        with open(outside) as handle:
+            self.assertEqual(handle.read(), "user data")
+
+
 class AnalyzeTest(Scratch):
     def run_dir(self, run, dataset):
         path = os.path.join(self.root, f"run-{run}")

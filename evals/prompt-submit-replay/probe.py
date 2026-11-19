@@ -16,7 +16,9 @@ args = parser.parse_args()
 
 with open(os.path.join(args.dir, "transcripts.json")) as handle:
     transcripts = json.load(handle)
-with open(os.path.join(args.dir, f"candidates-{args.run}.jsonl"), "w") as output:
+candidates = os.path.join(args.dir, f"candidates-{args.run}.jsonl")
+flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+with os.fdopen(os.open(candidates, flags, 0o600), "w") as output:
     for session, item in transcripts.items():
         for index, turn in enumerate(item["turns"], 1):
             query = PROVENANCE.sub("", turn).strip()
