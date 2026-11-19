@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { closeSync, constants, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
@@ -65,7 +65,12 @@ async function importConnector(path: string): Promise<unknown> {
 }
 
 function record(sessionKey: string, turn: number, kind: string, text: string): void {
-	appendFileSync(out, `${JSON.stringify({ run, harness: session, sessionKey, turn, kind, text })}\n`);
+	const fd = openSync(out, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o600);
+	try {
+		writeSync(fd, `${JSON.stringify({ run, harness: session, sessionKey, turn, kind, text })}\n`);
+	} finally {
+		closeSync(fd);
+	}
 }
 
 function textOf(content: unknown): string {

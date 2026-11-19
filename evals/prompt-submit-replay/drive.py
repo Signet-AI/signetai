@@ -43,7 +43,7 @@ RESULTS = os.path.join(args.dir, f"results-{args.run}.jsonl")
 
 def record(session, key, turn, kind, text):
     row = {"run": args.run, "harness": session, "sessionKey": key, "turn": turn, "kind": kind, "text": text}
-    with open(RESULTS, "a") as output:
+    with os.fdopen(os.open(RESULTS, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o600), "a") as output:
         output.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
