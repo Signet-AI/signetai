@@ -1,5 +1,6 @@
 import argparse
 import collections
+import fcntl
 import json
 import os
 import re
@@ -9,17 +10,18 @@ import sys
 MARKERS = ("## Relevant Entity Context", "## Relevant Memory:")
 PLUGIN_BLOCK = re.compile(r"<signet-plugin-context\b[\s\S]*?</signet-plugin-context>")
 PLUGIN = re.compile(r'<signet-plugin-context[^>]*\btarget="([a-z-]+)"')
+ITEM_END = re.compile(r" \([^()\s]+\)$")
 COLUMNS = (
     "turns",
     "turnsWithMemory",
-    "memoryLinesDelivered",
-    "uniqueLines",
+    "memoryItemsDelivered",
+    "uniqueItems",
     "repeatDeliveries",
     "pluginGuidanceOnPrompts",
     "pluginGuidanceAtSessionStart",
     "memoryChars",
 )
-TOTALS = ("turns", "turnsWithMemory", "memoryLinesDelivered", "repeatDeliveries", "pluginGuidanceOnPrompts", "memoryChars")
+TOTALS = ("turns", "turnsWithMemory", "memoryItemsDelivered", "repeatDeliveries", "pluginGuidanceOnPrompts", "memoryChars")
 
 
 def parse_args():
@@ -29,30 +31,39 @@ def parse_args():
     return parser.parse_args()
 
 
-def memory_section(text):
+def memory_items(text):
     text = PLUGIN_BLOCK.sub("", text)
     starts = [text.find(marker) for marker in MARKERS if marker in text]
     if not starts:
-        return []
+        return [], []
     section = []
+    items = []
+    item = None
     for line in text[min(starts) :].splitlines():
         stripped = line.strip()
-        if stripped == "## Plugin Context":
-            continue
-        if stripped.startswith("</signet-"):
-            break
-        if stripped.startswith("## ") and not stripped.startswith(MARKERS):
-            break
+        if item is None:
+            if stripped == "## Plugin Context":
+                continue
+            if stripped.startswith("</signet-"):
+                break
+            if stripped.startswith("## ") and not stripped.startswith(MARKERS):
+                break
+            if stripped.startswith("- "):
+                item = []
         section.append(line)
-    return section
-
-
-def memory_lines(text):
-    return [line.strip() for line in memory_section(text) if line.strip().startswith("- ")]
+        if item is None:
+            continue
+        item.append(line.rstrip())
+        if ITEM_END.search(line.rstrip()):
+            items.append("\n".join(item).strip())
+            item = None
+    if item is not None:
+        items.append("\n".join(item).strip())
+    return section, items
 
 
 def memory_chars(text):
-    return len("\n".join(memory_section(text)).strip())
+    return len("\n".join(memory_items(text)[0]).strip())
 
 
 def run_dir(args, run):
@@ -63,15 +74,25 @@ def check_runs(args):
     info = os.stat(args.dir)
     if info.st_uid != os.getuid() or info.st_mode & 0o077:
         sys.exit(f"{args.dir} must be owned by you and closed to other users (chmod 700)")
-    digests = {}
+    lock = open(os.path.join(args.dir, ".replay.lock"), "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        sys.exit(f"a replay or prepare.py is using {args.dir}; analyze after it finishes")
+    markers = {}
     for run in args.runs:
         marker = os.path.join(run_dir(args, run), "complete.json")
         if not os.path.exists(marker):
             sys.exit(f"{run} has no completed run in {run_dir(args, run)}; rerun run.sh")
         with open(marker) as handle:
-            digests[run] = json.load(handle)["transcriptsSha256"]
-    if len(set(digests.values())) > 1:
-        sys.exit(f"runs replayed different transcripts: {digests}")
+            markers[run] = json.load(handle)
+        if "dataset" not in markers[run]:
+            sys.exit(f"{run} predates dataset tracking; rerun run.sh")
+    for field, label in (("dataset", "prepared datasets"), ("transcriptsSha256", "transcripts")):
+        values = {run: marker[field] for run, marker in markers.items()}
+        if len(set(values.values())) > 1:
+            sys.exit(f"runs replayed different {label}: {values}")
+    return lock
 
 
 def summarize(args, dump):
@@ -99,23 +120,24 @@ def summarize(args, dump):
                 if row["kind"] != "prompt" or row["turn"] > lengths.get(session, row["turn"]):
                     dump.write(f"\n### diagnostic {row['kind']} row {row['turn']}: not a user turn, excluded\n")
                     continue
-                lines = memory_lines(row["text"])
+                lines = memory_items(row["text"])[1]
                 injected_turns += 1 if lines else 0
                 plugin_turns += 1 if "user-prompt-submit" in targets else 0
                 chars += memory_chars(row["text"])
-                dump.write(f"\n### turn {row['turn']}: {len(lines)} memory lines\n")
+                dump.write(f"\n### turn {row['turn']}: {len(lines)} memory items\n")
                 for line in lines:
+                    flat = " ".join(line[2:].split())
                     if seen[line]:
-                        repeats.append((row["turn"], line[:140]))
-                    dump.write(f"- {line[2:200]}{' [REPEAT]' if seen[line] else ''}\n")
+                        repeats.append((row["turn"], flat[:140]))
+                    dump.write(f"- {flat[:200]}{' [REPEAT]' if seen[line] else ''}\n")
                     seen[line] += 1
             summary[(run, session)] = {
                 "turns": sum(
                     1 for row in items if row["kind"] == "prompt" and row["turn"] <= lengths.get(session, row["turn"])
                 ),
                 "turnsWithMemory": injected_turns,
-                "memoryLinesDelivered": sum(seen.values()),
-                "uniqueLines": len(seen),
+                "memoryItemsDelivered": sum(seen.values()),
+                "uniqueItems": len(seen),
                 "repeatDeliveries": sum(seen.values()) - len(seen),
                 "pluginGuidanceOnPrompts": plugin_turns,
                 "pluginGuidanceAtSessionStart": start_guidance,
@@ -143,12 +165,16 @@ def ledgers(args):
 def daemon_decisions(args):
     engines = collections.defaultdict(collections.Counter)
     latency = collections.defaultdict(list)
+    failed = collections.Counter()
     for run in args.runs:
         path = os.path.join(run_dir(args, run), f"daemon-log-{run}.ndjson")
         if not os.path.exists(path):
             continue
         with open(path, errors="ignore") as handle:
             for line in handle:
+                if '"User prompt submit failed"' in line:
+                    failed[run] += 1
+                    continue
                 if '"User prompt submit"' not in line:
                     continue
                 try:
@@ -160,17 +186,17 @@ def daemon_decisions(args):
                 engines[(run, data.get("sessionKey"))][data.get("engine")] += 1
                 if isinstance(data.get("durationMs"), (int, float)):
                     latency[run].append(data["durationMs"])
-    return engines, latency
+    return engines, latency, failed
 
 
 def main():
     args = parse_args()
     os.umask(0o077)
-    check_runs(args)
+    lock = check_runs(args)
     with open(os.path.join(args.dir, "per-turn-evidence.md"), "w") as dump:
         summary = summarize(args, dump)
     claims = ledgers(args)
-    engines, latency = daemon_decisions(args)
+    engines, latency, failed = daemon_decisions(args)
     print(f"{'session':16} {'run':7} " + " ".join(f"{column[:14]:>14}" for column in COLUMNS) + f" {'ledgerRows':>10} {'ledgerDup':>9}")
     for session in sorted({session for _, session in summary}):
         for run in args.runs:
@@ -195,12 +221,18 @@ def main():
     print("\nENGINE DECISIONS PER SESSION (from daemon log)")
     for (run, key), counter in sorted(engines.items(), key=lambda entry: (str(entry[0][1]), entry[0][0])):
         print(f"  {run:7} {key:28} {dict(counter)}")
+    print("\nFAILED PROMPT SUBMITS (from daemon log; not in the latency or engine samples)")
+    for run in args.runs:
+        print(f"  {run:7} {failed[run]}")
     for run, values in latency.items():
         values.sort()
         p90 = values[int(len(values) * 0.9)]
         print(f"prompt-submit latency {run}: n={len(values)} p50={statistics.median(values):.0f}ms p90={p90:.0f}ms max={values[-1]:.0f}ms")
+    report = {f"{run}|{session}": item for (run, session), item in summary.items()}
+    report["failedPromptSubmits"] = {run: failed[run] for run in args.runs}
     with open(os.path.join(args.dir, "summary.json"), "w") as handle:
-        json.dump({f"{run}|{session}": item for (run, session), item in summary.items()}, handle, indent=1, ensure_ascii=False)
+        json.dump(report, handle, indent=1, ensure_ascii=False)
+    lock.close()
 
 
 if __name__ == "__main__":
