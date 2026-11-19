@@ -112,6 +112,32 @@ class PrepareTest(Scratch):
             self.assertNotEqual(self.prepare(replay).returncode, 0)
         self.assertEqual(sorted(os.listdir(self.ws)), ["agent.yaml", "data"])
 
+    def test_refuses_when_a_layout_path_is_inside_the_replay_directory(self):
+        replay = os.path.join(self.root, "out")
+        moved = os.path.join(replay, "datasets", "live")
+        os.makedirs(moved)
+        os.rename(os.path.join(self.ws, "data", "signet.db"), os.path.join(moved, "signet.db"))
+        with open(os.path.join(self.ws, "workspace-layout.json"), "w") as handle:
+            json.dump({"version": 2, "overrides": {"database": os.path.join(moved, "signet.db")}}, handle)
+        result = self.prepare(replay)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("overlaps workspace path", result.stderr)
+        self.assertTrue(os.path.exists(os.path.join(moved, "signet.db")))
+
+    def test_publication_prunes_only_harness_datasets(self):
+        replay = os.path.join(self.root, "out")
+        self.assertEqual(self.prepare(replay).returncode, 0)
+        keep = os.path.join(replay, "datasets", "notes")
+        os.mkdir(keep)
+        con = sqlite3.connect(os.path.join(self.ws, "data", "signet.db"))
+        con.execute("INSERT INTO entities VALUES ('Heron', 'project', 'default', 'active')")
+        con.commit()
+        con.close()
+        self.assertEqual(self.prepare(replay).returncode, 0)
+        names = sorted(os.listdir(os.path.join(replay, "datasets")))
+        self.assertEqual(len(names), 2)
+        self.assertIn("notes", names)
+
     def test_publishes_a_dataset_with_updates_off(self):
         replay = os.path.join(self.root, "out")
         self.assertEqual(self.prepare(replay).returncode, 0, self.prepare)

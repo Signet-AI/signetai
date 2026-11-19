@@ -14,13 +14,16 @@ import yaml
 
 HOME = os.path.expanduser("~")
 HERMES_HARNESS = "hermes-agent"
+DATASET_NAME = re.compile(r"[0-9a-f]{64}|\.staging-\d+")
 LAYOUT_MODULE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "platform", "core", "src", "workspace-layout.ts"
 )
 LAYOUT_SCRIPT = """
 import { findExistingWorkspaceDatabase, resolveWorkspaceLayout } from %s;
 const root = process.argv[1];
-console.log(JSON.stringify({ database: findExistingWorkspaceDatabase(root), runtime: resolveWorkspaceLayout(root).runtime }));
+const layout = resolveWorkspaceLayout(root);
+const paths = [layout.database, layout.transcripts, layout.runtime, layout.cache, layout.files, layout.imports, layout.secrets, layout.skills, layout.data, layout.layoutFile];
+console.log(JSON.stringify({ database: findExistingWorkspaceDatabase(root), runtime: layout.runtime, paths }));
 """
 SKIP_PREFIXES = (
     "<environment_context",
@@ -304,7 +307,7 @@ def publish(args, stage):
     os.symlink(os.path.join("datasets", dataset), link)
     os.replace(link, os.path.join(args.dir, "dataset"))
     for name in os.listdir(datasets):
-        if name != dataset:
+        if name != dataset and DATASET_NAME.fullmatch(name):
             shutil.rmtree(os.path.join(datasets, name))
     print(f"dataset {dataset[:12]} published in {target}", file=sys.stderr)
 
@@ -313,11 +316,13 @@ def contains(parent, child):
     return os.path.commonpath([parent, child]) == parent
 
 
-def check_dirs(args):
+def check_dirs(args, layout):
     replay = os.path.realpath(args.dir)
+    for path in [args.agents, layout["database"], *layout["paths"]]:
+        owned = os.path.realpath(path)
+        if contains(owned, replay) or contains(replay, owned):
+            sys.exit(f"{args.dir} overlaps workspace path {path}; choose a separate replay directory")
     agents = os.path.realpath(args.agents)
-    if contains(agents, replay) or contains(replay, agents):
-        sys.exit(f"{args.dir} overlaps the workspace {args.agents}; choose a separate replay directory")
     os.makedirs(replay, mode=0o700, exist_ok=True)
     info = os.stat(replay)
     if info.st_uid != os.getuid() or info.st_mode & 0o077:
@@ -331,13 +336,13 @@ def check_dirs(args):
 def main():
     args = parse_args()
     os.umask(0o077)
-    check_dirs(args)
+    layout = source_layout(args)
+    check_dirs(args, layout)
     lock = open(os.path.join(args.dir, ".replay.lock"), "w")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         sys.exit(f"a replay or analysis is using {args.dir}")
-    layout = source_layout(args)
     os.makedirs(os.path.join(args.dir, "datasets"), exist_ok=True)
     stage = os.path.join(args.dir, "datasets", f".staging-{os.getpid()}")
     shutil.rmtree(stage, ignore_errors=True)
