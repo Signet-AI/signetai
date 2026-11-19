@@ -39,7 +39,7 @@ const PRELUDE = [
 	"        submitted.append([key, msg, kw.get('last_assistant_message')])",
 	"        time.sleep(self.delays.get(msg, 0))",
 	"        return {'inject': 'recall for ' + msg}",
-	"    def session_start(self, key, **kw): return {}",
+	"    def session_start(self, key, **kw): submitted.append(['session_start', key]); return {}",
 	"    def notifications(self, key, hook, **kw): return {}",
 	"p = sig.SignetMemoryProvider()",
 	"p._client = FakeClient()",
@@ -92,10 +92,60 @@ describe("Hermes prompt recall timing", () => {
 			"time.sleep(1)",
 			"p._session_initialized = True",
 			"context = p.prefetch('next question', session_id='sess-2')",
-			"print(json.dumps({'context': context, 'keys': [s[0] for s in submitted]}))",
+			"print(json.dumps({'context': context, 'keys': [s[1] if s[0] == 'session_start' else s[0] for s in submitted]}))",
 		]) as { context: string; keys: string[] };
 
 		expect(out.context).toBe("recall for next question");
-		expect(out.keys).toEqual(["sess-1", "sess-2"]);
+		expect(out.keys).toEqual(["sess-1", "sess-2", "sess-2"]);
+	}, 20_000);
+
+	it("submits a new session's first prompt only after Hermes applies the switch", () => {
+		const out = py([
+			"import threading",
+			"turn('old question', 'old answer')",
+			"def boundary():",
+			"    time.sleep(1)",
+			"    p.on_session_switch('sess-2', reset=True)",
+			"threading.Thread(target=boundary).start()",
+			"context = p.prefetch('new private question', session_id='sess-2')",
+			"print(json.dumps({'context': context, 'calls': submitted[1:]}))",
+		]) as { context: string; calls: Array<string[]> };
+
+		expect(out.calls).toEqual([
+			["session_start", "sess-2"],
+			["sess-2", "new private question", ""],
+		]);
+		expect(out.context).toBe("recall for new private question");
+	});
+
+	it("sends the previous reply even when Hermes syncs it after the next turn starts", () => {
+		const out = py([
+			"import threading",
+			"p.prefetch('first question', session_id='sess-1')",
+			"def late_sync():",
+			"    time.sleep(1)",
+			"    p.sync_turn('first question', 'answer one', session_id='sess-1')",
+			"threading.Thread(target=late_sync).start()",
+			"p.prefetch('second question', session_id='sess-1')",
+			"print(json.dumps(submitted))",
+		]) as Array<[string, string, string]>;
+
+		expect(out.map((call) => call[2])).toEqual(["", "answer one"]);
+	});
+
+	it("waits for every running submit on shutdown and publishes nothing after it", () => {
+		const out = py([
+			"import threading",
+			"FakeClient.delays = {'slow question': 4}",
+			"turn('slow question', 'ok')",
+			"turn('fast question', 'ok')",
+			"p.shutdown()",
+			"alive = [t.name for t in threading.enumerate() if t.name == 'signet-prompt-submit' and t.is_alive()]",
+			"time.sleep(1.5)",
+			"print(json.dumps({'alive': alive, 'leftover': p._prefetch_result}))",
+		]) as { alive: string[]; leftover: string };
+
+		expect(out.alive).toEqual([]);
+		expect(out.leftover).toBe("");
 	}, 20_000);
 });
