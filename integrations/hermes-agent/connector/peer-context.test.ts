@@ -69,7 +69,7 @@ describe("hermes peer-session context", () => {
 				...PRELUDE,
 				"p._remember_host_metadata({'session_title': 'Fix GPU bug'})",
 				"p._client.session_start('sess-1', context=p._peer_context())",
-				"p.queue_prefetch('please ' + 'refactor ' * 200)",
+				"p.prefetch('please ' + 'refactor ' * 200)",
 				"p._prefetch_thread.join(3)",
 				"print(json.dumps(calls))",
 			].join("\n"),
@@ -157,8 +157,8 @@ describe("hermes peer-session context", () => {
 			[
 				...PRELUDE,
 				"call('agent_context_update', task='use sk-ant...CDEF and password=hunter2hunter2 ok')",
-				"p.queue_prefetch('yes'); p._prefetch_thread.join(3)",
-				"p.queue_prefetch('continue'); p._prefetch_thread.join(3)",
+				"p.prefetch('yes'); p._prefetch_thread.join(3)",
+				"p.prefetch('continue'); p._prefetch_thread.join(3)",
 				"print(json.dumps([p._peer_context(), [c for c in calls if c[0] == 'prompt'][-1][1]]))",
 			].join("\n"),
 		) as Array<{ task: string }>;
