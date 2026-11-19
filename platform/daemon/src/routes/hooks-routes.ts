@@ -85,7 +85,7 @@ import { openBoundedSse } from "../sse-stream.js";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpochAsync } from "../session-recall-dedupe";
-import { sessionStartRecallKey } from "../session-start-state";
+import { recallSessionKey } from "../session-start-state";
 import {
 	type RuntimePath,
 	claimSession,
@@ -1580,14 +1580,8 @@ function registerCompactionComplete(app: Hono): void {
 				memoryId: summaryId ?? "skipped-temp-session",
 			});
 
-			const recallSessionKey = sessionStartRecallKey({
-				harness: body.harness,
-				project: project ?? undefined,
-				cwd: cwd ?? undefined,
-				sessionKey: body.sessionKey,
-			});
 			const epoch = await advanceRecallContextEpochAsync({
-				sessionKey: recallSessionKey,
+				sessionKey: recallSessionKey({ harness: body.harness, sessionKey: body.sessionKey }),
 				agentId,
 				reason: "compaction-complete",
 				sourceRef: summaryId ?? body.sessionKey ?? undefined,

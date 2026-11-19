@@ -18,7 +18,7 @@ import {
 	clearSessionStartDedupe,
 	hasSessionStartDedupe,
 	markSessionStartDedupe,
-	sessionStartRecallKey,
+	recallSessionKey,
 } from "./session-start-state";
 import { resetSessionEndTelemetry } from "./session-end-state";
 import { createTelemetryCollector, setActiveTelemetry } from "./telemetry";
@@ -136,14 +136,14 @@ memory:
 		const sessionKey = `compaction-recall-${crypto.randomUUID()}`;
 		const harness = "openclaw";
 		const cwd = "/tmp/project";
-		const recallSessionKey = sessionStartRecallKey({ harness, cwd, sessionKey });
-		if (recallSessionKey === null) throw new Error("expected a durable recall key");
+		const sessionRecallKey = recallSessionKey({ harness, sessionKey });
+		if (sessionRecallKey === null) throw new Error("expected a durable recall key");
 		markSessionStartDedupe({ harness, cwd, sessionKey, agentId: "default" });
 		expect(hasSessionStartDedupe({ harness, cwd, sessionKey, agentId: "default" })).toBeTrue();
 
 		try {
 			const first = await claimRecallItemsAsync({
-				sessionKey: recallSessionKey,
+				sessionKey: sessionRecallKey,
 				agentId: "default",
 				surface: "test",
 				mode: "automatic",
@@ -164,7 +164,7 @@ memory:
 			expect(hasSessionStartDedupe({ harness, cwd, sessionKey, agentId: "default" })).toBeFalse();
 
 			const second = await claimRecallItemsAsync({
-				sessionKey: recallSessionKey,
+				sessionKey: sessionRecallKey,
 				agentId: "default",
 				surface: "test",
 				mode: "automatic",

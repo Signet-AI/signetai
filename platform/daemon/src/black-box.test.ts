@@ -120,6 +120,25 @@ describe("black box session replay", () => {
 		expect(replay.frame.likelyInfluences[0]?.refs[0]?.id).toBe("mem-1");
 	});
 
+	it("shows recall deliveries recorded under every harness of the session", () => {
+		getDbAccessor().withWriteTx((db) => {
+			const event = db.prepare(
+				`INSERT INTO session_recall_events
+				 (session_key, agent_id, context_epoch, item_kind, item_id, surface, mode, score, source, created_at)
+				 VALUES (?, 'default', 0, 'memory', ?, 'api.hooks.user-prompt-submit', 'automatic', 0.9, 'hybrid', ?)`,
+			);
+			event.run("session-a\0codex", "mem-codex", "2026-06-20T10:00:01.000Z");
+			event.run("session-a\0claude-code", "mem-claude", "2026-06-20T10:00:02.000Z");
+			event.run("session-ab\0codex", "mem-other-session", "2026-06-20T10:00:03.000Z");
+		});
+
+		const replay = buildBlackBoxSession(getDbAccessor(), { agentId: "default", sessionKey: "session-a" });
+
+		expect(
+			replay.events.filter((event) => event.kind === "context.recalled").map((event) => event.refs[0]?.id),
+		).toEqual(["mem-codex", "mem-claude"]);
+	});
+
 	it("keeps sessions scoped by agent", () => {
 		insertSearchTelemetry({
 			agentId: "alice",

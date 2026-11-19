@@ -136,7 +136,7 @@ def ledgers(args):
                 text = handle.read().strip()
         for row in json.loads(text) if text else []:
             if row["surface"] == "api.hooks.user-prompt-submit":
-                claims[row["session_key"]].append(row["item_id"])
+                claims[row["session_key"].split("\x00")[0]].append(row["item_id"])
     return claims
 
 
