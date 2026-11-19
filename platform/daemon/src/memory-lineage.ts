@@ -61,12 +61,10 @@ const REINDEX_BATCH_SIZE = 50;
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const purgeSeen = new Set<string>();
 const artifactIndexCache = new Map<string, Map<string, string>>();
-const lastChangedManifestsByAgent = new Map<string, Set<string>>();
 
 function reindexStateKey(agentId?: string): string {
 	return `${getAgentsDir()}\0${agentId?.trim() || "*"}`;
 }
-const prevLedgerRefsByAgent = new Map<string, Set<string>>();
 
 export type ArtifactKind = "summary" | "transcript" | "compaction" | "manifest";
 type SentenceQuality = "ok" | "fallback";
@@ -115,7 +113,6 @@ interface ArtifactRow {
 	readonly captured_at: string;
 	readonly started_at: string | null;
 	readonly ended_at: string | null;
-	readonly manifest_path: string | null;
 	readonly source_node_id: string | null;
 	readonly memory_sentence: string | null;
 	readonly memory_sentence_quality: string | null;
@@ -799,7 +796,6 @@ export async function indexCanonicalTranscriptJsonl(input: {
 	readonly startedAt: string | null;
 	readonly endedAt: string | null;
 	readonly transcript: string;
-	readonly manifestPath: string | null;
 }): Promise<void> {
 	const transcriptPath = canonicalTranscriptRelativePath(input.harness);
 	const sessionToken = deriveSessionToken(input.agentId, input.sessionId);
@@ -819,7 +815,7 @@ export async function indexCanonicalTranscriptJsonl(input: {
 			captured_at: input.capturedAt,
 			started_at: input.startedAt,
 			ended_at: input.endedAt,
-			manifest_path: input.manifestPath,
+			manifest_path: null,
 			updated_at: new Date().toISOString(),
 			source_node_id: null,
 			content_sha256: hashNormalizedBody(content),
@@ -1011,7 +1007,6 @@ async function doReindex(agentId?: string): Promise<void> {
 		commitBatchCacheDeletes(batch);
 		return true;
 	};
-	lastChangedManifestsByAgent.delete(cacheKey);
 
 	try {
 		const ready = await getDbAccessor().withReadDbAsync(
@@ -1209,10 +1204,6 @@ async function doReindex(agentId?: string): Promise<void> {
 		cache.set(p, sk);
 	}
 
-	lastChangedManifestsByAgent.set(
-		cacheKey,
-		new Set([...changedPaths].filter((path) => path.endsWith("--manifest.md"))),
-	);
 	artifactIndexCache.set(cacheKey, cache);
 	const elapsed = Math.round(performance.now() - t0);
 
@@ -1285,7 +1276,6 @@ async function ensureManifestRecord(seed: {
 		transcript_status: "pending",
 		canonical_transcript_path: canonicalPath,
 		compaction_path: null,
-		memory_md_refs: [],
 		updated_at: seed.capturedAt,
 		revision: 1,
 		content_sha256: hashNormalizedBody(""),
@@ -1942,10 +1932,10 @@ async function buildLedger(agentId: string): Promise<ReadonlyArray<LedgerSession
 					.prepare(
 						`SELECT agent_id, source_path, source_sha256, source_kind, session_id, session_key,
 					        session_token, project, harness, captured_at, started_at, ended_at,
-					        manifest_path, source_node_id, memory_sentence, memory_sentence_quality, content
+					        source_node_id, memory_sentence, memory_sentence_quality, content
 					 FROM memory_artifacts
 					 WHERE agent_id = ?
-					   AND source_kind IN ('summary', 'transcript', 'compaction')
+					   AND source_kind IN ('summary', 'transcript', 'compaction', 'manifest')
 					 ORDER BY COALESCE(ended_at, captured_at) DESC, captured_at DESC`,
 					)
 					.all(agentId) as ArtifactRow[],
@@ -1997,7 +1987,7 @@ async function buildLedger(agentId: string): Promise<ReadonlyArray<LedgerSession
 			summaryPath: pathForKind(group, "summary"),
 			transcriptPath: pathForKind(group, "transcript"),
 			compactionPath: pathForKind(group, "compaction"),
-			manifestPath: picked.manifest_path,
+			manifestPath: pathForKind(group, "manifest"),
 		});
 	}
 
@@ -2037,7 +2027,7 @@ function renderLedgerRows(sessions: ReadonlyArray<LedgerSession>): string[] {
 function renderLedgerSection(
 	sessions: ReadonlyArray<LedgerSession>,
 	base: ReadonlyArray<string>,
-): { readonly block: string; readonly refs: ReadonlyArray<string>; readonly count: number } {
+): { readonly block: string; readonly count: number } {
 	function renderCount(count: number): string {
 		const kept = sessions.slice(0, count);
 		const clipped = sessions.length - kept.length;
@@ -2055,12 +2045,8 @@ function renderLedgerSection(
 		});
 	}
 	if (fitsBudget([...base, renderCount(sessions.length)])) {
-		const refs = sessions
-			.map((session) => session.manifestPath)
-			.filter((path): path is string => typeof path === "string");
 		return {
 			block: renderCount(sessions.length),
-			refs,
 			count: sessions.length,
 		};
 	}
@@ -2080,21 +2066,15 @@ function renderLedgerSection(
 	}
 
 	if (best > 0) {
-		const kept = sessions.slice(0, best);
-		const block = renderCount(best);
-		const refs = kept.map((session) => session.manifestPath).filter((path): path is string => typeof path === "string");
 		return {
-			block,
-			refs,
-			count: kept.length,
+			block: renderCount(best),
+			count: best,
 		};
 	}
 
 	if (sessions.length === 0) {
-		const block = renderCount(0);
 		return {
-			block,
-			refs: [],
+			block: renderCount(0),
 			count: 0,
 		};
 	}
@@ -2104,7 +2084,6 @@ function renderLedgerSection(
 			heading: `## ${LEDGER_HEADING}`,
 			lines: [`- older ledger rows clipped: kept 0 of ${sessions.length} in-window sessions within projection budget.`],
 		}),
-		refs: [],
 		count: 0,
 	};
 }
@@ -2125,76 +2104,12 @@ function renderIndexSection(indexBlock: string, base: ReadonlyArray<string>): st
 	return "";
 }
 
-async function syncManifestRefs(
-	refs: ReadonlyArray<string>,
-	changedManifests: ReadonlySet<string> | undefined,
-	agentId: string,
-): Promise<void> {
-	const set = new Set(refs);
-	let files: string[];
-	if (changedManifests !== undefined) {
-		const absFiles = new Set(changedManifests);
-		const root = getAgentsDir();
-		for (const rel of set) {
-			absFiles.add(join(root, rel));
-		}
-		const prev = prevLedgerRefsByAgent.get(agentId);
-		if (prev) {
-			for (const rel of prev) {
-				if (!set.has(rel)) {
-					absFiles.add(join(root, rel));
-				}
-			}
-		}
-		prevLedgerRefsByAgent.set(agentId, set);
-		if (absFiles.size === 0) return;
-		files = [...absFiles];
-	} else {
-		prevLedgerRefsByAgent.set(agentId, set);
-		files = (await listCanonicalFiles()).filter((path) => path.endsWith("--manifest.md"));
-	}
-	const yielder = yieldEvery(20);
-	for (const path of files) {
-		await mutateManifest(path, (state) => {
-			const rel = relativePath(path);
-			const nextRefs = set.has(rel) ? [LEDGER_HEADING] : [];
-			const nextBody =
-				nextRefs.length > 0
-					? `## ${LEDGER_HEADING}\n\nThis session currently appears in the working memory ledger.`
-					: "";
-			const currentRefs = Array.isArray(state.frontmatter.memory_md_refs)
-				? state.frontmatter.memory_md_refs.filter((value): value is string => typeof value === "string")
-				: [];
-			if (
-				currentRefs.length === nextRefs.length &&
-				currentRefs.every((value, idx) => value === nextRefs[idx]) &&
-				normalizeMarkdownBody(state.body) === nextBody
-			) {
-				return null;
-			}
-			return {
-				frontmatter: {
-					...state.frontmatter,
-					memory_md_refs: nextRefs,
-					revision: state.revision + 1,
-					updated_at: new Date().toISOString(),
-					content_sha256: hashNormalizedBody(nextBody),
-				},
-				body: nextBody,
-			};
-		});
-		await yielder();
-	}
-}
-
 export async function renderMemoryProjection(agentId = "default"): Promise<{
 	content: string;
 	fileCount: number;
 	indexBlock: string;
 }> {
 	await reindexMemoryArtifacts(agentId);
-	const changedManifests = lastChangedManifestsByAgent.get(reindexStateKey(agentId));
-	lastChangedManifestsByAgent.delete(reindexStateKey(agentId));
 	const memories = await readTopMemories(agentId);
 	const threadHeads = await readThreadHeads(agentId);
 	const nodes = await readTemporalNodes(agentId);
@@ -2239,7 +2154,6 @@ export async function renderMemoryProjection(agentId = "default"): Promise<{
 		}),
 	];
 	const ledgerBlock = renderLedgerSection(ledger, parts);
-	await syncManifestRefs(ledgerBlock.refs, changedManifests, agentId);
 	parts.push(ledgerBlock.block);
 	const trimmedIndex = renderIndexSection(indexBlock, parts);
 	if (trimmedIndex.length > 0) {
@@ -2377,6 +2291,4 @@ export async function purgeCanonicalNoiseSessionsOnce(agentId: string, reason: s
 export function resetProjectionPurgeState(): void {
 	purgeSeen.clear();
 	artifactIndexCache.clear();
-	lastChangedManifestsByAgent.clear();
-	prevLedgerRefsByAgent.clear();
 }

@@ -3121,7 +3121,7 @@ describe("handleSynthesisRequest", () => {
 			expect(before.prompt).toContain("session=sess-pr390");
 			expect(before.prompt).toContain("[[memory/");
 			expect(before.prompt).toContain("|transcript]]");
-			expect(before.prompt).toContain("|manifest]]");
+			expect(before.prompt).not.toContain("|manifest]]");
 
 			const db = openTestDb();
 			const artifact = db

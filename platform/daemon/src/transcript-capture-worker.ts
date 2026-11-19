@@ -611,7 +611,6 @@ async function processTranscriptCaptureJob(
 		startedAt: null,
 		endedAt: job.endedAt,
 		transcript: indexedTranscript,
-		manifestPath: canonicalTranscriptRelativePath(job.harness),
 	});
 	const auditPath = await writeCaptureAudit(basePath, job, resolved);
 	logger.debug("transcripts", "Transcript capture job completed", {
