@@ -12,7 +12,6 @@ import {
 	readJson,
 	registerHookCommands,
 	resolvePromptSubmitTimeout,
-	resolveSessionStartTimeout,
 	shouldReadCompactionInput,
 } from "./hook";
 
@@ -74,24 +73,6 @@ describe("resolvePromptSubmitTimeout", () => {
 		expect(resolvePromptSubmitTimeout()).toBe(5000);
 		if (prev === undefined) delete process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT;
 		else process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT = prev;
-	});
-});
-
-describe("resolveSessionStartTimeout", () => {
-	test("uses the dedicated session-start timeout env when valid", () => {
-		const prev = process.env.SIGNET_SESSION_START_TIMEOUT;
-		process.env.SIGNET_SESSION_START_TIMEOUT = "18000";
-		expect(resolveSessionStartTimeout()).toBe(18000);
-		if (prev === undefined) delete process.env.SIGNET_SESSION_START_TIMEOUT;
-		else process.env.SIGNET_SESSION_START_TIMEOUT = prev;
-	});
-
-	test("falls back to the default when env is invalid or too small", () => {
-		const prev = process.env.SIGNET_SESSION_START_TIMEOUT;
-		process.env.SIGNET_SESSION_START_TIMEOUT = "200";
-		expect(resolveSessionStartTimeout()).toBe(15000);
-		if (prev === undefined) delete process.env.SIGNET_SESSION_START_TIMEOUT;
-		else process.env.SIGNET_SESSION_START_TIMEOUT = prev;
 	});
 });
 

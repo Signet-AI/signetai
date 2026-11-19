@@ -5,7 +5,7 @@ import type { Readable } from "node:stream";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	resolvePromptSubmitTimeoutMs,
-	resolveSessionStartTimeoutMs,
+	resolveSessionStartTimeoutFromEnv,
 } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
@@ -280,7 +280,7 @@ export async function buildPeerContext(
 	return Object.keys(context).length > 0 ? context : undefined;
 }
 
-const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeout();
+const SESSION_START_TIMEOUT_MS = resolveSessionStartTimeoutFromEnv();
 const PROMPT_SUBMIT_TIMEOUT_MS = resolvePromptSubmitTimeout();
 const STOP_TIMEOUT_MS = 10_000;
 const STOP_MAX_ATTEMPTS = 3;
@@ -304,11 +304,6 @@ function legacyHookHeaders(headers?: HeadersInit): Headers {
 function readTimeoutEnv(name: string): string {
 	const value = process.env[name];
 	return typeof value === "string" ? value.trim() : "";
-}
-
-export function resolveSessionStartTimeout(): number {
-	const raw = readTimeoutEnv("SIGNET_SESSION_START_TIMEOUT") || readTimeoutEnv("SIGNET_FETCH_TIMEOUT");
-	return resolveSessionStartTimeoutMs(raw);
 }
 
 export function resolvePromptSubmitTimeout(): number {

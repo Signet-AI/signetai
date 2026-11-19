@@ -12,7 +12,7 @@ import {
 	parseRecallPayload,
 	readStaticIdentity,
 	resolveWorkspacePath,
-	resolveSessionStartTimeoutMs,
+	resolveSessionStartTimeoutFromEnv,
 	stripInternalMemoryContext,
 	wrapMemoryContext,
 } from "@signet/core";
@@ -28,9 +28,7 @@ const WRITE_TIMEOUT = 10000;
 const HEARTBEAT_TIMEOUT = 2000;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const COMPACTION_HOOK_DEDUPE_MS = 1000;
-const SESSION_START_TIMEOUT = resolveSessionStartTimeoutMs(
-	process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT,
-);
+const SESSION_START_TIMEOUT = resolveSessionStartTimeoutFromEnv();
 
 type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
 

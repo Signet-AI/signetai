@@ -362,6 +362,13 @@ export function resolveSessionStartTimeoutMs(raw?: string): number {
 	return ms;
 }
 
+export function resolveSessionStartTimeoutFromEnv(
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): number {
+	const raw = env.SIGNET_SESSION_START_TIMEOUT?.trim() || env.SIGNET_FETCH_TIMEOUT?.trim();
+	return resolveSessionStartTimeoutMs(raw);
+}
+
 export function resolvePromptSubmitTimeoutMs(raw?: string): number {
 	if (!raw) return 5_000;
 	const ms = Number.parseInt(raw, 10);
