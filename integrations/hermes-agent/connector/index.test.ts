@@ -1056,7 +1056,7 @@ for vector in contract["vectors"]:
 		expect(plugin).toContain('parent_session_id: str = ""');
 		expect(plugin).toContain("reset: bool = False");
 		expect(plugin).toContain("**kwargs: Any");
-		expect(plugin).toContain("self._session_key = new_session_id");
+		expect(plugin).toContain("self._begin_session(new_session_id)");
 		expect(plugin).toContain("self._transcript_lines = []");
 		expect(plugin).toContain("metadata: Optional[Dict[str, Any]] = None");
 		expect(plugin).toContain('metadata.get("write_origin", "")');
