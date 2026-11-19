@@ -1020,8 +1020,10 @@ class SignetMemoryProvider(MemoryProvider):
         if not self._client:
             return ""
 
+        state = None
         if query:
-            submit = self._submit_prompt(query, self._await_turn_state(session_id))
+            state = self._await_turn_state(session_id)
+            submit = self._submit_prompt(query, state)
             if submit is None:
                 return ""
             submit.join(timeout=_PROMPT_SUBMIT_WAIT_SECS)
@@ -1032,6 +1034,10 @@ class SignetMemoryProvider(MemoryProvider):
                 )
 
         with self._prefetch_lock:
+            if state is not None and (
+                state["session_key"] != self._session_key or state["generation"] != self._prefetch_generation
+            ):
+                return ""
             parts = [self._session_prefetch_result, self._prefetch_result, self._notification_result]
             self._session_prefetch_result = ""
             self._prefetch_result = ""
@@ -1138,7 +1144,6 @@ class SignetMemoryProvider(MemoryProvider):
                             "Signet session-claim recovery after daemon restart returned no data; "
                             "the next prompt may be treated as a new session"
                         )
-                    return
                 inject = result.get("dynamicContext") or result.get("inject", "")
                 notification = result.get("notifications")
                 notification_inject = notification.get("inject", "") if isinstance(notification, dict) else ""
@@ -1152,7 +1157,14 @@ class SignetMemoryProvider(MemoryProvider):
                         self._prefetch_result = "\n".join(
                             part for part in (self._prefetch_result, recall_inject) if part and part.strip()
                         )
-                    self._notification_result = notification_inject if isinstance(notification_inject, str) else ""
+                    if (
+                        isinstance(notification_inject, str)
+                        and notification_inject.strip()
+                        and notification_inject not in self._notification_result
+                    ):
+                        self._notification_result = "\n".join(
+                            part for part in (self._notification_result, notification_inject) if part and part.strip()
+                        )
             except Exception as e:
                 logger.debug("Signet prompt submit failed: %s", e)
             finally:
