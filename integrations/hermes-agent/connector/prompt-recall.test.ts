@@ -35,14 +35,15 @@ const PRELUDE = [
 	"submitted = []",
 	"class FakeClient:",
 	"    delays = {}",
+	"    responses = {}",
 	"    def user_prompt_submit(self, key, msg, **kw):",
 	"        submitted.append([key, msg, kw.get('last_assistant_message')])",
 	"        time.sleep(self.delays.get(msg, 0))",
-	"        return {'inject': 'recall for ' + msg}",
+	"        return {'inject': 'recall for ' + msg, **self.responses.get(msg, {})}",
 	"    start_delay = 0",
 	"    def session_start(self, key, **kw):",
 	"        time.sleep(self.start_delay)",
-	"        submitted.append(['session_start', key])",
+	"        submitted.append(['session_start', key] + (['claim'] if kw.get('claim_only') else []))",
 	"        return {'dynamicContext': 'start for ' + key}",
 	"    def notifications(self, key, hook, **kw): return {}",
 	"p = sig.SignetMemoryProvider()",
@@ -78,7 +79,8 @@ describe("Hermes prompt recall timing", () => {
 		const out = py([
 			"FakeClient.delays = {'slow question': 4}",
 			"slow = turn('slow question', 'ok')",
-			"time.sleep(1.5)",
+			"p._prefetch_thread.join(5)",
+			"assert not p._prefetch_thread.is_alive()",
 			"fast = turn('fast question', 'ok')",
 			"print(json.dumps({'slow': slow[0], 'waited': slow[1], 'fast': fast[0]}))",
 		]) as { slow: string; waited: number; fast: string };
@@ -92,8 +94,10 @@ describe("Hermes prompt recall timing", () => {
 		const out = py([
 			"FakeClient.delays = {'slow question': 3.5}",
 			"turn('slow question', 'ok')",
+			"old = p._prefetch_thread",
 			"p.on_session_switch('sess-2', reset=True)",
-			"time.sleep(1)",
+			"old.join(5)",
+			"assert not old.is_alive()",
 			"p._session_initialized = True",
 			"context = p.prefetch('next question', session_id='sess-2')",
 			"print(json.dumps({'context': context, 'keys': [s[1] if s[0] == 'session_start' else s[0] for s in submitted]}))",
@@ -248,4 +252,47 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.context).toBe("recall for after failure");
 		expect(out.waited).toBeLessThan(1);
 	});
+
+	it("keeps a prompt's recall when the daemon reports a restarted session", () => {
+		const out = py([
+			"FakeClient.responses = {'after restart': {'sessionKnown': False}}",
+			"context = p.prefetch('after restart', session_id='sess-1')",
+			"print(json.dumps({'context': context, 'calls': submitted}))",
+		]) as { context: string; calls: Array<string[]> };
+
+		expect(out.calls).toEqual([
+			["sess-1", "after restart", ""],
+			["session_start", "sess-1", "claim"],
+		]);
+		expect(out.context).toBe("recall for after restart");
+	});
+
+	it("keeps an undrained notification when a later submit carries none", () => {
+		const out = py([
+			"FakeClient.responses = {'noted': {'notifications': {'inject': 'board note'}}}",
+			"state = p._await_turn_state('sess-1')",
+			"p._submit_prompt('noted', state).join(5)",
+			"p._submit_prompt('plain', state).join(5)",
+			"print(json.dumps(p.prefetch('', session_id='sess-1')))",
+		]) as string;
+
+		expect(out.split("\n")).toContain("board note");
+	});
+
+	it("leaves a new session's context for that session when it starts during a submit", () => {
+		const out = py([
+			"import threading",
+			"FakeClient.delays = {'old question': 1.5}",
+			"def boundary():",
+			"    time.sleep(0.5)",
+			"    p.on_session_switch('sess-2', reset=True)",
+			"threading.Thread(target=boundary).start()",
+			"old = p.prefetch('old question', session_id='sess-1')",
+			"new = p.prefetch('', session_id='sess-2')",
+			"print(json.dumps({'old': old, 'new': new}))",
+		]) as { old: string; new: string };
+
+		expect(out.old).toBe("");
+		expect(out.new).toBe("start for sess-2");
+	}, 20_000);
 });
