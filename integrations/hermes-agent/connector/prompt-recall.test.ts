@@ -174,6 +174,7 @@ describe("Hermes prompt recall timing", () => {
 		const out = py([
 			"import threading",
 			"p.prefetch('current question', session_id='sess-1')",
+			"p.on_session_end([])",
 			"p.on_session_switch('sess-1', reason='compression')",
 			"def late_sync():",
 			"    time.sleep(0.5)",
