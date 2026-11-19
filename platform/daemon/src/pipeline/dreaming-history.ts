@@ -2,7 +2,9 @@ import type { LlmUsage } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerQueryAll, ownerQueryOne, ownerRunStatement, ownerTransaction } from "../db-owner-maintenance";
+import { DB_OWNER_MAX_RESULT_BYTES } from "../db-owner-protocol";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
+import { ownerBytesFromHex } from "../db-owner-sql";
 import { logger } from "../logger";
 import { readDreamingPassRecord } from "./dreaming-runbook";
 
@@ -12,6 +14,9 @@ const PENDING_LINE = "(not summarized yet: zoom it)";
 const LINE_TRIES = 3;
 const MAX_CALLS_PER_COMPACTION = 6;
 const COMPACTION_TIMEOUT_MS = 300_000;
+const SIZE_PAGE_ROWS = 4_096;
+const LINE_PAGE_ROWS = 256;
+const LINE_PAGE_BYTES = Math.floor((DB_OWNER_MAX_RESULT_BYTES - 65_536) / 2);
 
 export interface DreamingHistoryCompleter {
 	complete(input: {
@@ -20,13 +25,14 @@ export interface DreamingHistoryCompleter {
 	}): Promise<{ readonly text: string; readonly usage: LlmUsage | null }>;
 }
 
-export interface DreamingHistoryPart {
+export interface DreamingHistorySlot {
 	readonly level: number;
 	readonly idx: number;
-	readonly text: string | null;
+	readonly bytes: number | null;
 }
 
-export type DreamingHistoryNodes = ReadonlyMap<string, string>;
+export type DreamingHistorySizes = ReadonlyMap<string, number>;
+export type DreamingHistoryLines = ReadonlyMap<string, string>;
 
 function nodeKey(level: number, idx: number): string {
 	return `${level}:${idx}`;
@@ -36,14 +42,20 @@ function byteLength(text: string): number {
 	return Buffer.byteLength(text, "utf8");
 }
 
-function partBytes(part: DreamingHistoryPart): number {
-	return byteLength(part.text ?? PENDING_LINE);
+const PENDING_BYTES = byteLength(PENDING_LINE);
+
+function slotBytes(slot: DreamingHistorySlot): number {
+	return slot.bytes ?? PENDING_BYTES;
+}
+
+function slotOf(sizes: DreamingHistorySizes, level: number, idx: number): DreamingHistorySlot {
+	return { level, idx, bytes: sizes.get(nodeKey(level, idx)) ?? null };
 }
 
 function mostDuePair(
-	view: readonly DreamingHistoryPart[],
+	view: readonly DreamingHistorySlot[],
 	leafCount: number,
-	accept: (older: DreamingHistoryPart, newer: DreamingHistoryPart) => boolean,
+	accept: (older: DreamingHistorySlot, newer: DreamingHistorySlot) => boolean,
 ): number {
 	let best = -1;
 	let bestDue = Number.NEGATIVE_INFINITY;
@@ -64,26 +76,22 @@ function mostDuePair(
 
 export function foldDreamingHistory(
 	leafCount: number,
-	nodes: DreamingHistoryNodes,
+	sizes: DreamingHistorySizes,
 	budget: number = DREAMING_HISTORY_VIEW_BYTES,
-): DreamingHistoryPart[] {
-	const view: DreamingHistoryPart[] = [];
+): DreamingHistorySlot[] {
+	const view: DreamingHistorySlot[] = [];
 	let size = 0;
 	for (let leaf = 0; leaf < leafCount; leaf++) {
-		const part = { level: 0, idx: leaf, text: nodes.get(nodeKey(0, leaf)) ?? null };
-		view.push(part);
-		size += partBytes(part);
+		const slot = slotOf(sizes, 0, leaf);
+		view.push(slot);
+		size += slotBytes(slot);
 		while (size > budget) {
-			const index = mostDuePair(view, leaf + 1, (older) => nodes.has(nodeKey(older.level + 1, older.idx / 2)));
+			const index = mostDuePair(view, leaf + 1, (older) => sizes.has(nodeKey(older.level + 1, older.idx / 2)));
 			if (index < 0) break;
-			const older = view[index] as DreamingHistoryPart;
-			const newer = view[index + 1] as DreamingHistoryPart;
-			const parent = {
-				level: older.level + 1,
-				idx: older.idx / 2,
-				text: nodes.get(nodeKey(older.level + 1, older.idx / 2)) ?? null,
-			};
-			size += partBytes(parent) - partBytes(older) - partBytes(newer);
+			const older = view[index] as DreamingHistorySlot;
+			const newer = view[index + 1] as DreamingHistorySlot;
+			const parent = slotOf(sizes, older.level + 1, older.idx / 2);
+			size += slotBytes(parent) - slotBytes(older) - slotBytes(newer);
 			view.splice(index, 2, parent);
 		}
 	}
@@ -92,20 +100,26 @@ export function foldDreamingHistory(
 
 export function nextDreamingHistoryMerge(
 	leafCount: number,
-	nodes: DreamingHistoryNodes,
+	sizes: DreamingHistorySizes,
 	budget: number = DREAMING_HISTORY_VIEW_BYTES,
-): { readonly level: number; readonly idx: number; readonly older: string; readonly newer: string } | null {
-	const view = foldDreamingHistory(leafCount, nodes, budget);
-	if (view.reduce((sum, part) => sum + partBytes(part), 0) <= budget) return null;
+): {
+	readonly level: number;
+	readonly idx: number;
+	readonly older: DreamingHistorySlot;
+	readonly newer: DreamingHistorySlot;
+} | null {
+	const view = foldDreamingHistory(leafCount, sizes, budget);
+	if (view.reduce((sum, slot) => sum + slotBytes(slot), 0) <= budget) return null;
 	const index = mostDuePair(
 		view,
 		leafCount,
-		(older, newer) => older.text !== null && newer.text !== null && !nodes.has(nodeKey(older.level + 1, older.idx / 2)),
+		(older, newer) =>
+			older.bytes !== null && newer.bytes !== null && !sizes.has(nodeKey(older.level + 1, older.idx / 2)),
 	);
 	if (index < 0) return null;
-	const older = view[index] as DreamingHistoryPart;
-	const newer = view[index + 1] as DreamingHistoryPart;
-	return { level: older.level + 1, idx: older.idx / 2, older: older.text ?? "", newer: newer.text ?? "" };
+	const older = view[index] as DreamingHistorySlot;
+	const newer = view[index + 1] as DreamingHistorySlot;
+	return { level: older.level + 1, idx: older.idx / 2, older, newer };
 }
 
 function lineLabel(level: number, idx: number): string {
@@ -116,9 +130,14 @@ function flatten(text: string): string {
 	return text.replace(/\s+/g, " ").trim();
 }
 
-export function renderDreamingHistory(view: readonly DreamingHistoryPart[]): string {
+export function renderDreamingHistory(view: readonly DreamingHistorySlot[], lines: DreamingHistoryLines): string {
 	if (view.length === 0) return "(no earlier passes)";
-	return view.map((part) => `${lineLabel(part.level, part.idx)}|${flatten(part.text ?? PENDING_LINE)}`).join("\n");
+	return view
+		.map(
+			(slot) =>
+				`${lineLabel(slot.level, slot.idx)}|${flatten(lines.get(nodeKey(slot.level, slot.idx)) ?? PENDING_LINE)}`,
+		)
+		.join("\n");
 }
 
 export function dreamingScopeKey(scopes: readonly string[]): string {
@@ -135,25 +154,104 @@ function streamAllowed(scopeKey: string, allowedScopes: readonly string[]): bool
 	return scopes.length > 0 && scopes.every((scope) => allowed.has(scope));
 }
 
-async function loadNodes(
+async function loadSizes(
 	owner: DbOwnerClient,
 	agentId: string,
 	scopeKey: string,
-): Promise<{ readonly leafCount: number; readonly nodes: Map<string, string> }> {
-	const rows = await ownerQueryAll<{ level: number; idx: number; text: string }>(
-		owner,
-		"dreaming.history.nodes",
-		"SELECT level, idx, text FROM dreaming_history_nodes WHERE agent_id = ? AND scope_key = ?",
-		[agentId, scopeKey],
-		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
-	);
-	const nodes = new Map<string, string>();
+): Promise<{ readonly leafCount: number; readonly sizes: Map<string, number> }> {
+	const sizes = new Map<string, number>();
 	let leafCount = 0;
-	for (const row of rows) {
-		nodes.set(nodeKey(row.level, row.idx), row.text);
-		if (row.level === 0) leafCount = Math.max(leafCount, row.idx + 1);
+	let after = { level: -1, idx: -1 };
+	let rows: readonly { level: number; idx: number; bytes: number }[] = [];
+	do {
+		rows = await ownerQueryAll<{ level: number; idx: number; bytes: number }>(
+			owner,
+			"dreaming.history.sizes",
+			`SELECT level, idx, length(CAST(text AS BLOB)) AS bytes FROM dreaming_history_nodes
+			 WHERE agent_id = ? AND scope_key = ? AND (level, idx) > (?, ?)
+			 ORDER BY level, idx LIMIT ?`,
+			[agentId, scopeKey, after.level, after.idx, SIZE_PAGE_ROWS],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		);
+		for (const row of rows) {
+			sizes.set(nodeKey(row.level, row.idx), row.bytes);
+			if (row.level === 0) leafCount = Math.max(leafCount, row.idx + 1);
+			after = row;
+		}
+	} while (rows.length === SIZE_PAGE_ROWS);
+	return { leafCount, sizes };
+}
+
+function lineBatches(slots: readonly DreamingHistorySlot[]): DreamingHistorySlot[][] {
+	const batches: DreamingHistorySlot[][] = [];
+	let bytes = 0;
+	for (const slot of slots) {
+		if (slot.bytes === null || slot.bytes > LINE_PAGE_BYTES) continue;
+		const batch = batches.at(-1);
+		if (batch === undefined || batch.length === LINE_PAGE_ROWS || bytes + slot.bytes > LINE_PAGE_BYTES) {
+			batches.push([slot]);
+			bytes = slot.bytes;
+			continue;
+		}
+		batch.push(slot);
+		bytes += slot.bytes;
 	}
-	return { leafCount, nodes };
+	return batches;
+}
+
+async function readLongLine(
+	owner: DbOwnerClient,
+	agentId: string,
+	scopeKey: string,
+	slot: DreamingHistorySlot,
+	bytes: number,
+): Promise<string> {
+	const pages: Uint8Array[] = [];
+	for (let start = 1; start <= bytes; start += LINE_PAGE_BYTES) {
+		const page = await ownerQueryOne<{ chunk: string }>(
+			owner,
+			"dreaming.history.line-page",
+			`SELECT hex(substr(CAST(text AS BLOB), ?, ?)) AS chunk FROM dreaming_history_nodes
+			 WHERE agent_id = ? AND scope_key = ? AND level = ? AND idx = ?`,
+			[start, LINE_PAGE_BYTES, agentId, scopeKey, slot.level, slot.idx],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		);
+		if (page === undefined) throw new Error(`Dreaming history line ${nodeKey(slot.level, slot.idx)} is missing`);
+		pages.push(ownerBytesFromHex(page.chunk));
+	}
+	return Buffer.concat(pages).toString("utf8");
+}
+
+async function readLines(
+	owner: DbOwnerClient,
+	agentId: string,
+	scopeKey: string,
+	slots: readonly DreamingHistorySlot[],
+): Promise<Map<string, string>> {
+	const lines = new Map<string, string>();
+	for (const batch of lineBatches(slots)) {
+		const rows = await ownerQueryAll<{ level: number; idx: number; hex: string }>(
+			owner,
+			"dreaming.history.lines",
+			`SELECT level, idx, hex(CAST(text AS BLOB)) AS hex FROM dreaming_history_nodes
+			 WHERE agent_id = ? AND scope_key = ? AND (level, idx) IN (VALUES ${batch.map(() => "(?, ?)").join(", ")})`,
+			[agentId, scopeKey, ...batch.flatMap((slot) => [slot.level, slot.idx])],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		);
+		for (const row of rows)
+			lines.set(nodeKey(row.level, row.idx), Buffer.from(ownerBytesFromHex(row.hex)).toString("utf8"));
+	}
+	for (const slot of slots) {
+		if (slot.bytes === null || slot.bytes <= LINE_PAGE_BYTES) continue;
+		lines.set(nodeKey(slot.level, slot.idx), await readLongLine(owner, agentId, scopeKey, slot, slot.bytes));
+	}
+	return lines;
+}
+
+async function renderStream(owner: DbOwnerClient, agentId: string, scopeKey: string): Promise<string> {
+	const { leafCount, sizes } = await loadSizes(owner, agentId, scopeKey);
+	const view = foldDreamingHistory(leafCount, sizes);
+	return renderDreamingHistory(view, await readLines(owner, agentId, scopeKey, view));
 }
 
 export async function renderDreamingHistoryForPass(
@@ -175,14 +273,10 @@ export async function renderDreamingHistoryForPass(
 		.map((row) => row.scopeKey)
 		.filter((scopeKey) => streamAllowed(scopeKey, scopes));
 	if (streams.length === 0) return "(no earlier passes)";
-	if (streams.length === 1 && streams[0] === ownKey) {
-		const { leafCount, nodes } = await loadNodes(owner, agentId, ownKey);
-		return renderDreamingHistory(foldDreamingHistory(leafCount, nodes));
-	}
+	if (streams.length === 1 && streams[0] === ownKey) return await renderStream(owner, agentId, ownKey);
 	const sections: string[] = [];
 	for (const scopeKey of streams) {
-		const { leafCount, nodes } = await loadNodes(owner, agentId, scopeKey);
-		sections.push(`scopes=${scopeKey}\n${renderDreamingHistory(foldDreamingHistory(leafCount, nodes))}`);
+		sections.push(`scopes=${scopeKey}\n${await renderStream(owner, agentId, scopeKey)}`);
 	}
 	return sections.join("\n\n");
 }
@@ -222,12 +316,22 @@ export async function zoomDreamingHistory(
 			? { ok: false, error: `Pass ${leaf.passId} for line ${id}+1 is no longer retained.` }
 			: { ok: true, record };
 	}
-	const level = Math.log2(n);
+	const level = Math.log2(n) - 1;
 	const childIdx = (id / n) * 2;
-	const { nodes } = await loadNodes(owner, agentId, scopeKey);
-	const lines = [childIdx, childIdx + 1].flatMap((idx) => {
-		const text = nodes.get(nodeKey(level - 1, idx));
-		return text === undefined ? [] : [`${lineLabel(level - 1, idx)}|${flatten(text)}`];
+	const children = (
+		await ownerQueryAll<{ idx: number; bytes: number }>(
+			owner,
+			"dreaming.history.children",
+			`SELECT idx, length(CAST(text AS BLOB)) AS bytes FROM dreaming_history_nodes
+			 WHERE agent_id = ? AND scope_key = ? AND level = ? AND idx IN (?, ?) ORDER BY idx`,
+			[agentId, scopeKey, level, childIdx, childIdx + 1],
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+		)
+	).map((row) => ({ level, idx: row.idx, bytes: row.bytes }));
+	const texts = await readLines(owner, agentId, scopeKey, children);
+	const lines = children.flatMap((slot) => {
+		const text = texts.get(nodeKey(slot.level, slot.idx));
+		return text === undefined ? [] : [`${lineLabel(slot.level, slot.idx)}|${flatten(text)}`];
 	});
 	return lines.length === 0 ? { ok: false, error: `No line ${id}+${n}.` } : { ok: true, lines };
 }
@@ -395,10 +499,16 @@ export async function compactDreamingHistory(
 				built++;
 				continue;
 			}
-			const { leafCount, nodes } = await loadNodes(owner, agentId, scopeKey);
-			const merge = nextDreamingHistoryMerge(leafCount, nodes);
+			const { leafCount, sizes } = await loadSizes(owner, agentId, scopeKey);
+			const merge = nextDreamingHistoryMerge(leafCount, sizes);
 			if (merge === null) break;
-			const line = await buildLine(completer, mergePrompt(merge.older, merge.newer));
+			const texts = await readLines(owner, agentId, scopeKey, [merge.older, merge.newer]);
+			const older = texts.get(nodeKey(merge.older.level, merge.older.idx));
+			const newer = texts.get(nodeKey(merge.newer.level, merge.newer.idx));
+			if (older === undefined || newer === undefined) {
+				throw new Error(`Dreaming history lines under ${nodeKey(merge.level, merge.idx)} are missing`);
+			}
+			const line = await buildLine(completer, mergePrompt(older, newer));
 			await ownerTransaction(
 				owner,
 				"dreaming.history.merge.insert",

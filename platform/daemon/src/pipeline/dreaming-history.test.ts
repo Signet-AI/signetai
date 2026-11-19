@@ -23,18 +23,18 @@ function nodes(entries: readonly [number, number, string][]): Map<string, string
 	return new Map(entries.map(([level, idx, text]) => [`${level}:${idx}`, text]));
 }
 
+function sizesOf(texts: ReadonlyMap<string, string>): Map<string, number> {
+	return new Map([...texts].map(([key, text]) => [key, Buffer.byteLength(text)]));
+}
+
 describe("dreaming history view", () => {
 	it("shows every pass on its own line while the history fits the budget", () => {
-		const view = foldDreamingHistory(
-			3,
-			nodes([
-				[0, 0, "a"],
-				[0, 1, "b"],
-				[0, 2, "c"],
-			]),
-			100,
-		);
-		expect(renderDreamingHistory(view)).toBe("0+1|a\n1+1|b\n2+1|c");
+		const texts = nodes([
+			[0, 0, "a"],
+			[0, 1, "b"],
+			[0, 2, "c"],
+		]);
+		expect(renderDreamingHistory(foldDreamingHistory(3, sizesOf(texts), 100), texts)).toBe("0+1|a\n1+1|b\n2+1|c");
 	});
 
 	it("folds the oldest pair first once over budget and asks for the parent it lacks", () => {
@@ -44,16 +44,22 @@ describe("dreaming history view", () => {
 			[0, 2, "z".repeat(40)],
 			[0, 3, "w".repeat(40)],
 		]);
-		expect(nextDreamingHistoryMerge(4, leaves, 130)).toMatchObject({ level: 1, idx: 0 });
+		expect(nextDreamingHistoryMerge(4, sizesOf(leaves), 130)).toMatchObject({
+			level: 1,
+			idx: 0,
+			older: { level: 0, idx: 0 },
+			newer: { level: 0, idx: 1 },
+		});
 		const merged = new Map([...leaves, ["1:0", "xy"]]);
-		expect(renderDreamingHistory(foldDreamingHistory(4, merged, 130))).toBe(
+		expect(renderDreamingHistory(foldDreamingHistory(4, sizesOf(merged), 130), merged)).toBe(
 			`0+2|xy\n2+1|${"z".repeat(40)}\n3+1|${"w".repeat(40)}`,
 		);
-		expect(nextDreamingHistoryMerge(4, merged, 130)).toBeNull();
+		expect(nextDreamingHistoryMerge(4, sizesOf(merged), 130)).toBeNull();
 	});
 
 	it("marks a pass whose line is missing instead of cutting its record", () => {
-		expect(renderDreamingHistory(foldDreamingHistory(2, nodes([[0, 0, "a"]]), 100))).toBe(
+		const texts = nodes([[0, 0, "a"]]);
+		expect(renderDreamingHistory(foldDreamingHistory(2, sizesOf(texts), 100), texts)).toBe(
 			"0+1|a\n1+1|(not summarized yet: zoom it)",
 		);
 	});
@@ -254,4 +260,52 @@ describe("dreaming history compaction", () => {
 		expect(await compactDreamingHistory(getDbAccessor(), completer, AGENT, SCOPE)).toBe(1);
 		expect(await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE])).toBe("0+1|worked only in scope a");
 	});
+
+	it("renders, opens, and compacts a history larger than one owner result", async () => {
+		const leaves = 4_500;
+		const leaf = (idx: number): string => `${idx} "é\\" ${"x".repeat(480)}`;
+		const long = `abcd${'é"\\\u0001'.repeat(300_000)}`;
+		getDbAccessor().withWriteTx((db) => {
+			const insert = db.prepare(
+				"INSERT INTO dreaming_history_nodes (agent_id, scope_key, level, idx, pass_id, text) VALUES (?, ?, ?, ?, NULL, ?)",
+			);
+			for (let idx = 0; idx < leaves; idx++) insert.run(AGENT, SCOPE, 0, idx, leaf(idx));
+			insert.run(AGENT, SCOPE, 1, 0, long);
+			insert.run("agent-b", SCOPE, 0, 0, "another agent's line");
+			insert.run(AGENT, "scope-b", 0, 0, "another scope's line");
+		});
+		const expected = [
+			`0+2|${long}`,
+			...Array.from({ length: leaves - 2 }, (_, index) => `${index + 2}+1|${leaf(index + 2)}`),
+		].join("\n");
+
+		const history = await renderDreamingHistoryForPass(getDbAccessor(), AGENT, [SCOPE]);
+		expect(history.length).toBe(expected.length);
+		expect(history === expected).toBe(true);
+		expect(
+			await zoomDreamingHistory(getDbAccessor(), {
+				agentId: AGENT,
+				scopeKey: SCOPE,
+				allowedScopes: [SCOPE],
+				id: 4_498,
+				n: 2,
+			}),
+		).toEqual({ ok: true, lines: [`4498+1|${leaf(4_498)}`, `4499+1|${leaf(4_499)}`] });
+		const opened = await zoomDreamingHistory(getDbAccessor(), {
+			agentId: AGENT,
+			scopeKey: SCOPE,
+			allowedScopes: [SCOPE],
+			id: 0,
+			n: 4,
+		});
+		expect(opened.ok && opened.lines?.length === 1 && opened.lines[0] === `0+2|${long}`).toBe(true);
+
+		const completer = recordingCompleter(() => "merged passes two and three");
+		expect(await compactDreamingHistory(getDbAccessor(), completer, AGENT, SCOPE, { maxCalls: 1 })).toBe(1);
+		expect(completer.prompts[0]).toContain(`<older>\n${leaf(2)}\n</older>\n<newer>\n${leaf(3)}\n</newer>`);
+		const stored = storedNodes();
+		expect(stored).toHaveLength(leaves + 4);
+		expect(stored.find((node) => node.level === 1 && node.idx === 1)?.text).toBe("merged passes two and three");
+		expect(stored.find((node) => node.level === 1 && node.idx === 0)?.text === long).toBe(true);
+	}, 60_000);
 });
