@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { formatPromptClockContext, handleSessionEnd, handleUserPromptSubmit } from "./hooks";
+import { hybridRecall } from "./memory-search";
 import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost, resetDefaultPluginHostForTests } from "./plugins/index";
 import { setActiveTelemetry } from "./telemetry";
 
@@ -271,7 +272,6 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 			limit: 10,
 			agentId: "default",
 			readPolicy: "isolated",
-			sessionKey: "session-entity\0codex",
 			recallSurface: "api.hooks.user-prompt-submit",
 			recallMode: "automatic",
 			claimRecallResults: false,
@@ -279,6 +279,7 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 			transcriptEvidence: false,
 		});
 		expect(params?.project).toBeUndefined();
+		expect(params?.sessionKey).toBeUndefined();
 		expect(hybridRecallMock.mock.calls[0]?.[3]?.signal).toBeInstanceOf(AbortSignal);
 		expect(result).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
 		expect(result.inject).toContain("## Relevant Memory: Signet");
@@ -341,6 +342,23 @@ describe("handleUserPromptSubmit entity-gated recall", () => {
 
 		expect(result.memoryCount).toBe(1);
 		expect(result.inject.length).toBeLessThanOrEqual(500);
+	});
+
+	it("delivers the next fresh memory when the top one fills the budget and was already delivered", async () => {
+		seedEntityContext();
+		recallRows = ["alpha", "beta", "gamma"].map((name) => ({
+			id: `mem-${name}`,
+			content: `${name} Signet architecture detail`.padEnd(210, " x"),
+			score: 0.9,
+		}));
+		const prompt = "How should Signet architecture handle prompt context?";
+
+		const first = await submit(prompt, "session-backfill");
+		const second = await submit(prompt, "session-backfill");
+
+		expect(first.inject).toContain("(mem-alpha)");
+		expect(second).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
+		expect(second.inject).toContain("(mem-beta)");
 	});
 
 	it("does not claim or inject when the deadline expires while the claim is queued", async () => {
@@ -459,6 +477,48 @@ for await (const _ of Bun.stdin.stream()) {
 		expect(elapsed).toBeLessThan(1500);
 	}, 10_000);
 
+	it("keeps real recall off the write lock while another process holds it", async () => {
+		seedEntityContext();
+		const holder = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`const { Database } = require("bun:sqlite");
+const db = new Database(${JSON.stringify(memoryDbPath)});
+db.exec("PRAGMA busy_timeout = 5000");
+for await (const _ of Bun.stdin.stream()) {
+	db.exec("BEGIN IMMEDIATE");
+	console.log("locked");
+	Bun.sleepSync(2500);
+	db.exec("COMMIT");
+	break;
+}`,
+			],
+			{ stdin: "pipe", stdout: "pipe", stderr: "inherit" },
+		);
+		const lines = holder.stdout.getReader();
+		let recallStarted = 0;
+		const deps = makeDeps({
+			loadMemoryConfig: () => {
+				const cfg = realLoadMemoryConfig(agentsDir);
+				return { ...cfg, embedding: { ...cfg.embedding, provider: "none", promptSubmitTimeoutMs: 150 } };
+			},
+			hybridRecall: async (...args) => {
+				holder.stdin.write("lock\n");
+				holder.stdin.flush();
+				await lines.read();
+				recallStarted = performance.now();
+				return hybridRecall(...args);
+			},
+		});
+
+		await submit("How should Signet architecture handle prompt context?", "session-real-lock", deps);
+		const elapsed = performance.now() - recallStarted;
+		await holder.exited;
+
+		expect(elapsed).toBeLessThan(1000);
+	}, 15_000);
+
 	it("reports degraded recall instead of a plain miss", async () => {
 		seedEntityContext();
 		const deps = makeDeps({
@@ -472,20 +532,6 @@ for await (const _ of Bun.stdin.stream()) {
 
 		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-recall-hit" });
 		expect(result.warnings?.some((warning) => warning.includes("fts_incomplete"))).toBe(true);
-	});
-
-	it("reports candidates recall suppressed as already delivered", async () => {
-		seedEntityContext();
-		const deps = makeDeps({
-			hybridRecall: (async () => ({
-				results: [],
-				meta: { dedupe: { enabled: true, contextEpoch: 1, suppressed: 1, repeatedReturned: 0 } },
-			})) as unknown as PromptDeps["hybridRecall"],
-		});
-
-		const result = await submit("How should Signet architecture handle prompt context?", "session-suppressed", deps);
-
-		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "deduped" });
 	});
 
 	it("injects source memories instead of an unattributed model summary", async () => {
@@ -525,6 +571,14 @@ for await (const _ of Bun.stdin.stream()) {
 		await handleSessionEnd({ harness: "codex", sessionKey: "session-cleared", cwd: "/repo", reason: "clear" });
 
 		expect(await submit(prompt, "session-cleared")).toMatchObject({ engine: "entity-recall", memoryCount: 1 });
+	});
+
+	it("treats a session key with control characters as no session", async () => {
+		seedEntityContext();
+
+		const result = await submit("How should Signet architecture handle prompt context?", "session-a\0codex");
+
+		expect(result).toMatchObject({ inject: "", memoryCount: 0, engine: "no-session" });
 	});
 
 	it("injects nothing without a session to claim the delivery in", async () => {

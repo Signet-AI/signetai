@@ -1413,14 +1413,14 @@
     },
     {
       "path": "hooks.ts",
-      "line": 2288,
+      "line": 2298,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2290,
+      "line": 2300,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
@@ -4716,28 +4716,28 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 235,
+      "line": 252,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path"
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 261,
+      "line": 278,
       "api": "withWriteTxAsync",
       "source": "return await getDbAccessor().withWriteTxAsync(",
       "category": "hot-path"
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 305,
+      "line": 322,
       "api": "withWriteTxAsync",
       "source": "return await getDbAccessor().withWriteTxAsync(",
       "category": "hot-path"
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 353,
+      "line": 370,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"
