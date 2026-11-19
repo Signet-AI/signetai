@@ -1537,6 +1537,7 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 export async function handleUserPromptSubmit(
 	req: UserPromptSubmitRequest,
 	overrides?: Partial<UserPromptSubmitDeps>,
+	scope: { readonly project?: string } = {},
 ): Promise<UserPromptSubmitResponse> {
 	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
 	const start = deps.now();
@@ -1700,6 +1701,7 @@ export async function handleUserPromptSubmit(
 			userMessage,
 			agentId,
 			sessionKey: req.sessionKey,
+			project: scope.project,
 			limit: submitCfg.recallLimit ?? 10,
 			minScore: resolveUserPromptMinScore(submitCfg.minScore),
 			injectBudget: submitCfg.maxInjectChars ?? cfg.pipelineV2.guardrails.contextBudgetChars,
@@ -1891,6 +1893,7 @@ async function recallPromptEntityContext(
 		readonly userMessage: string;
 		readonly agentId: string;
 		readonly sessionKey: string | undefined;
+		readonly project: string | undefined;
 		readonly limit: number;
 		readonly minScore: number;
 		readonly injectBudget: number;
@@ -1911,6 +1914,7 @@ async function recallPromptEntityContext(
 			readPolicy: scope.readPolicy,
 			policyGroup: scope.policyGroup,
 			sessionKey: input.sessionKey,
+			...(input.project ? { project: input.project } : {}),
 			recallSurface: PROMPT_RECALL_SURFACE,
 			recallMode: "automatic",
 			claimRecallResults: false,

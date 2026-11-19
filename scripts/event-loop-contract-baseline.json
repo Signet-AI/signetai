@@ -1413,14 +1413,14 @@
     },
     {
       "path": "hooks.ts",
-      "line": 2284,
+      "line": 2288,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2286,
+      "line": 2290,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
@@ -3404,14 +3404,14 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1508,
+      "line": 1510,
       "api": "existsSync",
       "source": "if (!existsSync(getCurrentMemoryDbPath())) {",
       "category": "hot-path"
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1515,
+      "line": 1517,
       "api": "withReadDb",
       "source": "getDbAccessor().withReadDb(",
       "category": "hot-path",
@@ -3419,7 +3419,7 @@
     },
     {
       "path": "routes/hooks-routes.ts",
-      "line": 1604,
+      "line": 1606,
       "api": "withWriteTx",
       "source": "getDbAccessor().withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",

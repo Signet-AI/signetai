@@ -122,7 +122,8 @@ session bookkeeping and the stable per-prompt context contract (an empty
 `inject`). Explicit recall is still available through `/api/memory/recall` and
 MCP/CLI recall tools, including for the same prompt. Unknown entities and
 prompts whose recall results do not clear `hooks.userPromptSubmit.minScore`
-return `inject: ""`. When recall runs degraded (for example, an incomplete
+return `inject: ""`. With a project-scoped token, recall is limited to that
+project, as in `POST /api/memory/recall`. When recall runs degraded (for example, an incomplete
 keyword index or a failed graph traversal), the response adds a `warnings`
 entry naming the degradation.
 Raw transcript search is not injected on prompt-submit; use the dedicated

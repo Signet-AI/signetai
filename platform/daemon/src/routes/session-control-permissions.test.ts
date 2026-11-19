@@ -1099,6 +1099,50 @@ describe("session control permissions in team mode", () => {
 		expect(allowed.status).toBe(200);
 	});
 
+	it("limits prompt recall to the credential's project", async () => {
+		const now = new Date().toISOString();
+		await getDbAccessor().withWriteTxAsync((db) => {
+			db.prepare(
+				`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-heron', 'Heron', 'heron', 'project', 'agent-a', 10, ?, ?)`,
+			).run(now, now);
+			const memory = db.prepare(
+				`INSERT INTO memories (id, content, type, agent_id, project, updated_by, created_at, updated_at)
+				 VALUES (?, ?, 'fact', 'agent-a', ?, 'test', ?, ?)`,
+			);
+			memory.run("heron-a", "Heron deploys through the alpha pipeline.", "proj-a", now, now);
+			memory.run("heron-b", "Heron deploys through the beta pipeline.", "proj-b", now, now);
+			db.prepare("DELETE FROM embedding_index_state").run();
+		});
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: none\n  promptSubmitTimeoutMs: 10000\nhooks:\n  userPromptSubmit:\n    minScore: 0\nmemory:\n  pipelineV2:\n    reranker:\n      enabled: false\nauth:\n  mode: team\n",
+		);
+		presence.upsertAgentPresence({ ...sessionFixture("sess-scope"), runtimePath: "plugin", provider: "codex" });
+		try {
+			const res = await hook(
+				teamApp(),
+				"user-prompt-submit",
+				{
+					harness: "codex",
+					sessionKey: "sess-scope",
+					agentId: "agent-a",
+					project: "proj-a",
+					runtimePath: "plugin",
+					userPrompt: "How does Heron deploy its pipeline?",
+				},
+				bearer("agent", { scope: { agent: "agent-a", project: "proj-a" } }),
+			);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as { readonly inject: string; readonly engine?: string };
+			expect(body.engine).toBe("entity-recall");
+			expect(body.inject).toContain("alpha pipeline");
+			expect(body.inject).not.toContain("beta pipeline");
+		} finally {
+			writeAuthConfig("team");
+		}
+	}, 20_000);
+
 	it("denies session lifecycle hooks to read-only credentials", async () => {
 		expect(tracker.claimSession("sess-a", "plugin", "agent-a", "codex").ok).toBe(true);
 		const readonly = bearer("readonly");
