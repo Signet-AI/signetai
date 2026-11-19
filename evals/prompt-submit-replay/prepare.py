@@ -76,11 +76,23 @@ def snapshot(args, layout, stage):
     print(f"snapshot: {target} ({os.path.getsize(target) // 1_000_000} MB)", file=sys.stderr)
 
 
-def reuse_snapshot(args, stage):
-    current = os.path.join(args.dir, "dataset", "pristine.db")
-    if not os.path.exists(current):
+def record_source(layout, stage):
+    with open(os.path.join(stage, "source.json"), "w") as handle:
+        json.dump({"database": os.path.realpath(layout["database"])}, handle)
+
+
+def reuse_snapshot(layout, args, stage):
+    current = os.path.join(args.dir, "dataset")
+    if not os.path.exists(os.path.join(current, "pristine.db")):
         sys.exit("--skip-snapshot needs a prepared dataset; run prepare.py without it first")
-    os.link(current, os.path.join(stage, "pristine.db"))
+    try:
+        with open(os.path.join(current, "source.json")) as handle:
+            source = json.load(handle)["database"]
+    except (OSError, ValueError, KeyError):
+        sys.exit("the current dataset does not record its source workspace; run prepare.py without --skip-snapshot")
+    if source != os.path.realpath(layout["database"]):
+        sys.exit(f"the current snapshot came from {source}, not {layout['database']}; run prepare.py without --skip-snapshot")
+    os.link(os.path.join(current, "pristine.db"), os.path.join(stage, "pristine.db"))
 
 
 def workspace_config(args, layout, stage):
@@ -332,9 +344,10 @@ def main():
     os.mkdir(stage)
     try:
         if args.skip_snapshot:
-            reuse_snapshot(args, stage)
+            reuse_snapshot(layout, args, stage)
         else:
             snapshot(args, layout, stage)
+        record_source(layout, stage)
         workspace_config(args, layout, stage)
         extract(args, stage)
         publish(args, stage)

@@ -10,7 +10,9 @@ import sys
 MARKERS = ("## Relevant Entity Context", "## Relevant Memory:")
 PLUGIN_BLOCK = re.compile(r"<signet-plugin-context\b[\s\S]*?</signet-plugin-context>")
 PLUGIN = re.compile(r'<signet-plugin-context[^>]*\btarget="([a-z-]+)"')
-ITEM_END = re.compile(r" \([^()\s]+\)$")
+ITEM_END = re.compile(
+    r" \((?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z][a-z0-9_]*:[^()\s]+|v\d+|[^()\s]*/[^()\s]*)\)$"
+)
 COLUMNS = (
     "turns",
     "turnsWithMemory",
