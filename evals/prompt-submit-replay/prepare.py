@@ -45,6 +45,14 @@ SKIP_PREFIXES = (
 )
 
 
+
+def private_file(path, truncate=True):
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_TRUNC if truncate else 0)
+    try:
+        return os.fdopen(os.open(path, flags, 0o600), "w")
+    except OSError as error:
+        sys.exit(f"cannot open {path} as a regular file ({error.strerror}); remove it if it is a symlink")
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Snapshot a Signet workspace and extract real prompts for replay.")
     parser.add_argument("--dir", default=os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs"))
@@ -349,7 +357,7 @@ def main():
     os.umask(0o077)
     layout = source_layout(args)
     check_dirs(args, layout)
-    lock = open(os.path.join(args.dir, ".replay.lock"), "w")
+    lock = private_file(os.path.join(args.dir, ".replay.lock"), truncate=False)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:

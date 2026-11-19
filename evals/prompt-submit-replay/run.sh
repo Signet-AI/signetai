@@ -25,13 +25,13 @@ if [ "$(stat -c %u "$DIR")" != "$(id -u)" ] || (($(stat -c %#a "$DIR") & 077)); 
 	echo "$DIR must be owned by you and closed to other users (chmod 700)" >&2
 	exit 1
 fi
-for name in datasets home ws; do
+for name in datasets home ws .replay.lock; do
 	if [ -L "$DIR/$name" ]; then
 		echo "$DIR/$name is a symlink; the harness writes there, so it must be a real directory" >&2
 		exit 1
 	fi
 done
-exec 9> "$DIR/.replay.lock"
+exec 9>> "$DIR/.replay.lock"
 if ! flock -n 9; then
 	echo "another replay is using $DIR" >&2
 	exit 1

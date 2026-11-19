@@ -138,6 +138,24 @@ class PrepareTest(Scratch):
         self.assertIn("is a symlink", result.stderr)
         self.assertTrue(os.path.exists(os.path.join(victim, "keep.txt")))
 
+    def test_refuses_a_symlinked_lock_file(self):
+        replay = os.path.join(self.root, "out")
+        os.makedirs(replay, mode=0o700)
+        config = os.path.join(self.ws, "agent.yaml")
+        size = os.path.getsize(config)
+        os.symlink(config, os.path.join(replay, ".replay.lock"))
+        result = self.prepare(replay)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(os.path.getsize(config), size)
+        run = subprocess.run(
+            ["bash", os.path.join(HERE, "run.sh"), "probe", "49999", "/bin/false"],
+            env={**os.environ, "REPLAY_DIR": replay},
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(run.returncode, 0)
+        self.assertEqual(os.path.getsize(config), size)
+
     def test_publication_prunes_only_harness_datasets(self):
         replay = os.path.join(self.root, "out")
         self.assertEqual(self.prepare(replay).returncode, 0)
@@ -203,6 +221,21 @@ class AnalyzeTest(Scratch):
     def analyze(self):
         command = [sys.executable, os.path.join(HERE, "analyze.py"), "--dir", self.root, "base", "branch"]
         return subprocess.run(command, capture_output=True, text=True)
+
+    def test_does_not_write_through_symlinks(self):
+        self.run_dir("base", "d")
+        self.run_dir("branch", "d")
+        outside = os.path.join(tempfile.mkdtemp(dir=os.environ.get("TMPDIR")), "keep.txt")
+        with open(outside, "w") as handle:
+            handle.write("user data")
+        self.addCleanup(shutil.rmtree, os.path.dirname(outside))
+        for name in (".replay.lock", "summary.json"):
+            link = os.path.join(self.root, name)
+            os.symlink(outside, link)
+            self.assertNotEqual(self.analyze().returncode, 0)
+            os.remove(link)
+        with open(outside) as handle:
+            self.assertEqual(handle.read(), "user data")
 
     def test_reports_failed_prompt_submits(self):
         self.run_dir("base", "d")

@@ -26,6 +26,14 @@ COLUMNS = (
 TOTALS = ("turns", "turnsWithMemory", "memoryItemsDelivered", "repeatDeliveries", "pluginGuidanceOnPrompts", "memoryChars")
 
 
+
+def private_file(path, truncate=True):
+    flags = os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW | (os.O_TRUNC if truncate else 0)
+    try:
+        return os.fdopen(os.open(path, flags, 0o600), "w")
+    except OSError as error:
+        sys.exit(f"cannot open {path} as a regular file ({error.strerror}); remove it if it is a symlink")
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Compare two prompt-submit replay runs.")
     parser.add_argument("runs", nargs="*", default=["base", "branch"])
@@ -76,7 +84,7 @@ def check_runs(args):
     info = os.stat(args.dir)
     if info.st_uid != os.getuid() or info.st_mode & 0o077:
         sys.exit(f"{args.dir} must be owned by you and closed to other users (chmod 700)")
-    lock = open(os.path.join(args.dir, ".replay.lock"), "w")
+    lock = private_file(os.path.join(args.dir, ".replay.lock"), truncate=False)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
@@ -195,7 +203,7 @@ def main():
     args = parse_args()
     os.umask(0o077)
     lock = check_runs(args)
-    with open(os.path.join(args.dir, "per-turn-evidence.md"), "w") as dump:
+    with private_file(os.path.join(args.dir, "per-turn-evidence.md")) as dump:
         summary = summarize(args, dump)
     claims = ledgers(args)
     engines, latency, failed = daemon_decisions(args)
@@ -232,7 +240,7 @@ def main():
         print(f"prompt-submit latency {run}: n={len(values)} p50={statistics.median(values):.0f}ms p90={p90:.0f}ms max={values[-1]:.0f}ms")
     report = {f"{run}|{session}": item for (run, session), item in summary.items()}
     report["failedPromptSubmits"] = {run: failed[run] for run in args.runs}
-    with open(os.path.join(args.dir, "summary.json"), "w") as handle:
+    with private_file(os.path.join(args.dir, "summary.json")) as handle:
         json.dump(report, handle, indent=1, ensure_ascii=False)
     lock.close()
 
