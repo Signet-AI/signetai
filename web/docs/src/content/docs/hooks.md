@@ -707,14 +707,14 @@ Claude Code uses file-based hooks in `~/.claude/settings.json`. The hooks call t
       "hooks": [{
         "type": "command",
         "command": "signet hook session-start -H claude-code --project \"$(pwd)\"",
-        "timeout": 17
+        "timeout": 20
       }]
     }],
     "UserPromptSubmit": [{
       "hooks": [{
         "type": "command",
         "command": "signet hook user-prompt-submit -H claude-code --project \"$(pwd)\"",
-        "timeout": 7
+        "timeout": 10
       }]
     }],
     "SessionEnd": [{
@@ -742,9 +742,10 @@ Claude Code reads a hook `timeout` in seconds. The session-start and
 prompt-submit daemon wait budgets are in milliseconds:
 `SIGNET_SESSION_START_TIMEOUT` defaults to `15000` and
 `SIGNET_PROMPT_SUBMIT_TIMEOUT` defaults to `5000`. The connector adds a
-two-second grace to each and rounds up to whole seconds when it writes
-`settings.json`, so the installed defaults are `17` for `SessionStart` and
-`7` for `UserPromptSubmit`.
+five-second grace to each and rounds up to whole seconds when it writes
+`settings.json`, so the installed defaults are `20` for `SessionStart` and
+`10` for `UserPromptSubmit`. See [Claude Code](/harnesses/claude-code/) for
+what the grace covers.
 
 Upgrade note: Claude Code hook timeouts are persisted in
 `~/.claude/settings.json` during connector install/update. Existing

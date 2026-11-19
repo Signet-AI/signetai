@@ -41,8 +41,8 @@ Workspace status is `fresh` for an unconfigured default, `ready` when the config
 | Variable | Default | Meaning |
 |---|---:|---|
 | `SIGNET_SESSION_START_TIMEOUT` | `15000` ms | Session-start daemon wait budget for Signet-managed clients. |
-| `SIGNET_FETCH_TIMEOUT` | `15000` ms | Legacy session-start fallback when `SIGNET_SESSION_START_TIMEOUT` is unset. |
-| `SIGNET_PROMPT_SUBMIT_TIMEOUT` | `5000` ms | Prompt-submit daemon wait budget. Harness-specific generated configs add their documented grace time. |
+| `SIGNET_FETCH_TIMEOUT` | `15000` ms | Legacy session-start fallback when `SIGNET_SESSION_START_TIMEOUT` is unset or blank. |
+| `SIGNET_PROMPT_SUBMIT_TIMEOUT` | `5000` ms | Prompt-submit daemon wait budget. Harness-specific generated configs add their documented grace time when they are written; rerun `signet setup` after changing it. |
 
 ## Exit codes
 

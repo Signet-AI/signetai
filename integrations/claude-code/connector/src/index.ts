@@ -42,6 +42,7 @@ export interface SessionContext {
 const WAKE_HOOK_TIMEOUT_SECONDS = 3600;
 const PRE_COMPACTION_DAEMON_WAIT_MS = 5_000;
 const SESSION_END_HOOK_TIMEOUT_SECONDS = 15;
+const HOOK_GRACE_MS = 5_000;
 
 function readClaudeSettings(path: string): Record<string, unknown> {
 	if (!existsSync(path)) return {};
@@ -191,11 +192,11 @@ export function dispatchSessionEndFireAndForget(
 	}
 }
 function hookTimeoutSeconds(budgetMs: number): number {
-	return Math.ceil((budgetMs + 2_000) / 1_000);
+	return Math.ceil((budgetMs + HOOK_GRACE_MS) / 1_000);
 }
 
 function sessionStartHookTimeoutSeconds(): number {
-	const raw = process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT;
+	const raw = process.env.SIGNET_SESSION_START_TIMEOUT?.trim() || process.env.SIGNET_FETCH_TIMEOUT?.trim();
 	return hookTimeoutSeconds(resolveSessionStartTimeoutMs(raw));
 }
 
