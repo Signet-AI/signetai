@@ -74,7 +74,11 @@ function itemKind(id: string): string {
 }
 
 function itemKey(item: RecallDedupeItem): string {
-	return `${itemKind(item.id)}\0${item.id}`;
+	return recallItemKey(item.id);
+}
+
+export function recallItemKey(id: string): string {
+	return `${itemKind(id)}\0${id}`;
 }
 
 function disabledMeta(failedOpen = false): RecallDedupeMeta {
@@ -251,7 +255,7 @@ export function applyRecallDedupe<T extends RecallDedupeItem>(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return getDbAccessor().withWriteTx(
 			(db: import("./db-accessor").WriteDb) => applyRecallDedupeInTx(db, opts, sessionKey, agentId),
-			"session-recall-dedupe.ts:252",
+			"session-recall-dedupe.ts:256",
 		);
 	} catch (error) {
 		logger.warn("memory", "Recall dedupe failed open", {
@@ -284,7 +288,7 @@ export async function applyRecallDedupeAsync<T extends RecallDedupeItem>(
 				return result;
 			},
 			{
-				siteToken: "session-recall-dedupe.ts:278",
+				siteToken: "session-recall-dedupe.ts:282",
 				signal: opts.signal,
 				deadlineMs: deadlineAt === undefined ? undefined : deadlineAt - Date.now(),
 			},
@@ -331,7 +335,7 @@ export async function advanceRecallContextEpochAsync(input: {
 				const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
 				return { advanced: (changed?.count ?? 0) > 0, contextEpoch: next };
 			},
-			{ siteToken: "session-recall-dedupe.ts:322" },
+			{ siteToken: "session-recall-dedupe.ts:326" },
 		);
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
@@ -377,7 +381,7 @@ export function advanceRecallContextEpoch(input: {
 			).run(sessionKey, agentId, next, input.reason, input.sourceRef ?? null, new Date().toISOString());
 			const changed = db.prepare("SELECT changes() AS count").get() as { count?: number } | undefined;
 			return { advanced: (changed?.count ?? 0) > 0, contextEpoch: next };
-		}, "session-recall-dedupe.ts:370");
+		}, "session-recall-dedupe.ts:374");
 	} catch (error) {
 		logger.warn("memory", "Failed to advance recall context epoch", {
 			error: error instanceof Error ? error.message : String(error),

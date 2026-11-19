@@ -267,6 +267,62 @@ memory:
 		}
 	}, 30_000);
 
+	it("delivers a fresh memory ranked below ones the session already received", async () => {
+		const sessionKey = `falcon-${crypto.randomUUID()}`;
+		const now = new Date().toISOString();
+		const config = readFileSync(join(dir, "agent.yaml"), "utf8");
+		await getDbAccessor?.().withWriteTxAsync((db) => {
+			db.prepare(
+				`INSERT OR IGNORE INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+				 VALUES ('entity-falcon', 'Falcon', 'falcon', 'project', 'default', 10, ?, ?)`,
+			).run(now, now);
+			const memory = db.prepare(
+				`INSERT OR IGNORE INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at)
+				 VALUES (?, ?, 'fact', 'default', 'test', ?, ?)`,
+			);
+			const event = db.prepare(
+				`INSERT INTO session_recall_events (session_key, agent_id, context_epoch, item_kind, item_id, surface, mode)
+				 VALUES (?, 'default', 0, 'memory', ?, 'api.hooks.user-prompt-submit', 'automatic')`,
+			);
+			for (let i = 0; i < 10; i++) {
+				memory.run(
+					`falcon-${i}`,
+					`Falcon deploy pipeline step ${i}: Falcon deploys its pipeline in stage ${i}.`,
+					now,
+					now,
+				);
+				event.run(`${sessionKey}\0openclaw`, `falcon-${i}`);
+			}
+			memory.run(
+				"falcon-fresh",
+				"A long note about lunch, weather, and travel plans also says the Falcon deploy pipeline exists.",
+				now,
+				now,
+			);
+		});
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`${config}hooks:\n  userPromptSubmit:\n    minScore: 0\n    recallLimit: 10\n`.replace(
+				"embedding:\n  provider: none\n",
+				"embedding:\n  provider: none\n  promptSubmitTimeoutMs: 10000\n",
+			),
+		);
+		try {
+			const response = await app.request("/api/hooks/user-prompt-submit", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", "x-signet-runtime-path": "plugin" },
+				body: JSON.stringify({ harness: "openclaw", sessionKey, userPrompt: "How does Falcon deploy its pipeline?" }),
+			});
+			expect(response.status).toBe(200);
+			const body = (await response.json()) as { engine?: string; inject?: string };
+			expect(body.engine).toBe("entity-recall");
+			expect(body.inject).toContain("(falcon-fresh)");
+		} finally {
+			writeFileSync(join(dir, "agent.yaml"), config);
+			releaseSession?.(sessionKey);
+		}
+	}, 30_000);
+
 	it("labels partial FTS recall separately from provider outages", async () => {
 		setFtsIndexIncomplete(true);
 		try {

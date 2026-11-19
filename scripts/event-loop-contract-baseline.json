@@ -1413,14 +1413,14 @@
     },
     {
       "path": "hooks.ts",
-      "line": 2298,
+      "line": 2302,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2300,
+      "line": 2304,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
@@ -1972,7 +1972,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2791,
+      "line": 2830,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",
@@ -1980,7 +1980,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2868,
+      "line": 2907,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",
@@ -1988,7 +1988,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 2912,
+      "line": 2951,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",
@@ -1996,7 +1996,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 3004,
+      "line": 3043,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",
@@ -2004,7 +2004,7 @@
     },
     {
       "path": "memory-search.ts",
-      "line": 3333,
+      "line": 3372,
       "api": "withReadDbAsync",
       "source": ".withReadDbAsync(",
       "category": "hot-path",
@@ -4716,28 +4716,28 @@
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 252,
+      "line": 256,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx(",
       "category": "hot-path"
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 278,
+      "line": 282,
       "api": "withWriteTxAsync",
       "source": "return await getDbAccessor().withWriteTxAsync(",
       "category": "hot-path"
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 322,
+      "line": 326,
       "api": "withWriteTxAsync",
       "source": "return await getDbAccessor().withWriteTxAsync(",
       "category": "hot-path"
     },
     {
       "path": "session-recall-dedupe.ts",
-      "line": 370,
+      "line": 374,
       "api": "withWriteTx",
       "source": "return getDbAccessor().withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
       "category": "hot-path"

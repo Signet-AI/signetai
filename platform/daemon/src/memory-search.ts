@@ -73,7 +73,7 @@ import {
 	scoreStructuredPathEvidenceViaOwner,
 } from "./pipeline/structured-path-evidence";
 import { rankPositions, reciprocalRankScore, selectPrimaryCandidates } from "./recall-rank-fusion";
-import { type RecallDedupeMeta, applyRecallDedupe } from "./session-recall-dedupe";
+import { type RecallDedupeMeta, applyRecallDedupe, recallItemKey } from "./session-recall-dedupe";
 import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
 import { escapeLike } from "./sql-utils";
 import { recordRecallPerformed } from "./recall-telemetry";
@@ -106,6 +106,7 @@ export interface RecallParams {
 	expand?: boolean;
 	project?: string;
 	sessionKey?: string;
+	skipDeliveredIn?: string;
 	includeRecalled?: boolean;
 	sourceOnly?: boolean;
 	recallSurface?: string;
@@ -1892,6 +1893,7 @@ function describeRecallGraphError(error: unknown): {
 function isRecallGraphDeadlineError(error: { readonly code: string | number | null }): boolean {
 	return error.code === "DB_OWNER_DEADLINE" || error.code === "DB_OWNER_CANCELLED";
 }
+const DELIVERED_LOOKUP_LIMIT = 1000;
 const TEMPORAL_TOPIC_SCORE_CAP = 0.85;
 
 function temporalTopicTokens(raw: string): string[] {
@@ -1982,7 +1984,42 @@ export async function hybridRecall(
 			};
 		}
 	};
+	const deliveredSession = selectionDedupeEnabled ? undefined : params.skipDeliveredIn?.trim();
+	const delivered = deliveredSession
+		? new Set(
+				(
+					await graphOwnerReadAll<{ readonly item_kind: unknown; readonly item_id: unknown }>(
+						`SELECT item_kind, item_id
+						 FROM session_recall_events
+						 WHERE session_key = ?
+						   AND agent_id = ?
+						   AND context_epoch = COALESCE(
+						     (SELECT MAX(context_epoch) FROM session_context_epochs WHERE session_key = ? AND agent_id = ?),
+						     0
+						   )
+						 ORDER BY created_at DESC
+						 LIMIT ?`,
+						[
+							deliveredSession,
+							params.agentId ?? "default",
+							deliveredSession,
+							params.agentId ?? "default",
+							DELIVERED_LOOKUP_LIMIT,
+						],
+						"recall.delivered",
+						DELIVERED_LOOKUP_LIMIT,
+					)
+				).map((row) => `${String(row.item_kind)}\0${String(row.item_id)}`),
+			)
+		: null;
 	const suppressPreviouslyRecalledForSelection = <T extends RecallResult>(items: T[]): T[] => {
+		if (delivered) {
+			return items.filter((item) => {
+				if (!delivered.has(recallItemKey(item.id))) return true;
+				selectionSuppressedIds.add(item.id);
+				return false;
+			});
+		}
 		if (!selectionDedupeEnabled || items.length === 0) return items;
 		const deduped = applyRecallDedupe({
 			sessionKey: params.sessionKey,
@@ -2082,7 +2119,9 @@ export async function hybridRecall(
 					...deduped.meta,
 					suppressed: deduped.meta.suppressed + selectionSuppressedIds.size,
 				}
-			: deduped.meta;
+			: delivered
+				? { ...deduped.meta, suppressed: selectionSuppressedIds.size }
+				: deduped.meta;
 		response.results = deduped.items;
 		response.meta = {
 			...response.meta,
@@ -2098,7 +2137,7 @@ export async function hybridRecall(
 				: lexicalSearchPartial
 					? { degradation: "fts_incomplete" as const }
 					: {}),
-			...(dedupeMeta.enabled || dedupeMeta.failedOpen ? { dedupe: dedupeMeta } : {}),
+			...(dedupeMeta.enabled || dedupeMeta.failedOpen || delivered ? { dedupe: dedupeMeta } : {}),
 		};
 		try {
 			const trackedIds = response.results.map((row) => row.id).filter((id) => !id.includes(":"));
