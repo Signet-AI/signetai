@@ -567,6 +567,8 @@ def _clean_resources(value: Any) -> Optional[List[str]]:
 
 _WAKE_WAIT_MS = 25000
 _PROMPT_SUBMIT_WAIT_SECS = 3.0
+_TURN_SYNC_WAIT_SECS = 2.0
+_SUBMIT_DRAIN_SECS = 5.0
 _WAKE_DEFAULT_RETRY_SECS = 15.0
 _WAKE_MAX_RETRY_SECS = 300.0
 _WAKE_INJECT_RETRY_SECS = 5.0
@@ -745,6 +747,10 @@ class SignetMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread: Optional[threading.Thread] = None
         self._prefetch_generation = 0
+        self._turn_synced = threading.Condition(self._prefetch_lock)
+        self._turn_pending = False
+        self._submit_threads: set = set()
+        self._submit_closed = False
         self._turn_count = 0
         self._last_user_message = ""
         self._last_assistant_message = ""
@@ -935,7 +941,10 @@ class SignetMemoryProvider(MemoryProvider):
         next_session_key = session_id or "hermes-default"
         if self._session_key and self._session_key != next_session_key:
             self._reset_peer_state()
-        self._session_key = next_session_key
+        with self._prefetch_lock:
+            self._session_key = next_session_key
+            self._submit_closed = False
+        self._release_turn()
         self._host_session_key = str(kwargs.get("gateway_session_key") or self._session_key)
         self._project = _resolve_agent_workspace(agent_id, kwargs)
         self._remember_host_metadata(kwargs)
@@ -999,14 +1008,19 @@ class SignetMemoryProvider(MemoryProvider):
 
         Hermes calls prefetch before the turn it prepares and queue_prefetch
         only after that turn finishes, so the prompt is submitted here. The
-        wait is bounded; a slower answer is kept for the next prefetch
-        because the daemon has already recorded its memories as delivered.
+        previous turn's sync_turn and any session switch run later on Hermes'
+        background worker, so prefetch first waits, bounded, for them. The
+        submit wait is bounded too; a slower answer is kept for the next
+        prefetch because the daemon has already recorded its memories as
+        delivered.
         """
         if not self._client:
             return ""
 
         if query:
-            submit = self._submit_prompt(query)
+            submit = self._submit_prompt(query, self._await_turn_state(session_id))
+            if submit is None:
+                return ""
             submit.join(timeout=_PROMPT_SUBMIT_WAIT_SECS)
             if submit.is_alive():
                 logger.warning(
@@ -1032,13 +1046,41 @@ class SignetMemoryProvider(MemoryProvider):
         with self._transcript_lock:
             self._transcript_lines.append(f"user: {_strip_internal_memory_context(query)}")
 
-    def _submit_prompt(self, query: str) -> threading.Thread:
+    def _await_turn_state(self, session_id: str) -> str:
+        """Wait for the previous turn's sync and any pending session switch.
+
+        Returns the session key the prompt belongs to: the one Hermes passed,
+        which is the provider's key once a pending switch has been applied.
+        """
+        deadline = time.monotonic() + _TURN_SYNC_WAIT_SECS
+        with self._turn_synced:
+            while not self._submit_closed and (
+                self._turn_pending or (session_id and session_id != self._session_key)
+            ):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    logger.warning(
+                        "Signet prompt submitted before Hermes finished syncing the previous turn "
+                        "or switching sessions; the previous reply may be missing from live evidence"
+                    )
+                    break
+                self._turn_synced.wait(remaining)
+            self._turn_pending = True
+            return session_id or self._session_key
+
+    def _release_turn(self) -> None:
+        with self._turn_synced:
+            self._turn_pending = False
+            self._turn_synced.notify_all()
+
+    def _submit_prompt(self, query: str, session_key: str) -> Optional[threading.Thread]:
         """Send the prompt to user-prompt-submit on a background thread."""
         peer_context = self._peer_context()
         client = self._client
         last_assistant = self._last_assistant_message
         with self._prefetch_lock:
-            session_key = self._session_key
+            if self._submit_closed:
+                return None
             project = self._project
             generation = self._prefetch_generation
 
@@ -1082,9 +1124,14 @@ class SignetMemoryProvider(MemoryProvider):
                     self._notification_result = notification_inject if isinstance(notification_inject, str) else ""
             except Exception as e:
                 logger.debug("Signet prompt submit failed: %s", e)
+            finally:
+                with self._prefetch_lock:
+                    self._submit_threads.discard(threading.current_thread())
 
         thread = threading.Thread(target=_run, daemon=True, name="signet-prompt-submit")
-        self._prefetch_thread = thread
+        with self._prefetch_lock:
+            self._submit_threads.add(thread)
+            self._prefetch_thread = thread
         thread.start()
         return thread
 
@@ -1109,6 +1156,7 @@ class SignetMemoryProvider(MemoryProvider):
         if assistant_content:
             with self._transcript_lock:
                 self._transcript_lines.append(f"assistant: {_strip_internal_memory_context(assistant_content)}")
+        self._release_turn()
         self._queue_notification_refresh("sync_turn")
 
     def _queue_notification_refresh(self, hook: str) -> None:
@@ -1176,6 +1224,7 @@ class SignetMemoryProvider(MemoryProvider):
             self._session_prefetch_result = ""
             self._prefetch_result = ""
             self._notification_result = ""
+        self._release_turn()
 
         agent_id = self._agent_id
         self._project = _resolve_agent_workspace(agent_id, kwargs)
@@ -1595,6 +1644,7 @@ class SignetMemoryProvider(MemoryProvider):
             self._session_prefetch_result = ""
             self._prefetch_result = ""
             self._notification_result = ""
+        self._release_turn()
         if not self._client:
             return
         with self._transcript_lock:
@@ -2204,8 +2254,16 @@ class SignetMemoryProvider(MemoryProvider):
         self.flush_mirror_writes(timeout=5.0)
         if mirror_worker and mirror_worker.is_alive():
             mirror_worker.join(timeout=0.1)
-        if self._prefetch_thread and self._prefetch_thread.is_alive():
-            self._prefetch_thread.join(timeout=5.0)
+        with self._prefetch_lock:
+            self._submit_closed = True
+            self._prefetch_generation += 1
+            pending = list(self._submit_threads)
+            self._turn_synced.notify_all()
+        deadline = time.monotonic() + _SUBMIT_DRAIN_SECS
+        for thread in pending:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        if any(thread.is_alive() for thread in pending):
+            logger.warning("Signet prompt submits still running after %.1fs shutdown wait", _SUBMIT_DRAIN_SECS)
 
 
 def _injection_available(plugin_ctx: Any) -> bool:

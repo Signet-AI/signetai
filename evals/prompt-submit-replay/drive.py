@@ -95,6 +95,7 @@ def run_hermes(session):
     record(session, key, 0, "session-start", provider.system_prompt_block())
     for index, turn in enumerate(turns, 1):
         record(session, key, index, "prompt", provider.prefetch(turn, session_id=key))
+        provider.sync_turn(turn, "", session_id=key)
         provider.queue_prefetch(turn, session_id=key)
         if provider._prefetch_thread:
             provider._prefetch_thread.join(timeout=30)
