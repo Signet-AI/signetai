@@ -3232,6 +3232,13 @@ export async function hybridRecall(
 			}
 		}
 	});
+	if (delivered) {
+		scored = scored.filter((row) => {
+			if (!delivered.has(recallItemKey(row.id))) return true;
+			selectionSuppressedIds.add(row.id);
+			return false;
+		});
+	}
 	const preHydrate = selectionDedupeEnabled
 		? Math.max(needsPostFilter ? limit * 3 : limit, Math.min(scored.length, Math.max(limit * 4, limit + 10)))
 		: needsPostFilter

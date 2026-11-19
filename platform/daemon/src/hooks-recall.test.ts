@@ -284,7 +284,7 @@ memory:
 				`INSERT INTO session_recall_events (session_key, agent_id, context_epoch, item_kind, item_id, surface, mode)
 				 VALUES (?, 'default', 0, 'memory', ?, 'api.hooks.user-prompt-submit', 'automatic')`,
 			);
-			for (let i = 0; i < 10; i++) {
+			for (let i = 0; i < 35; i++) {
 				memory.run(
 					`falcon-${i}`,
 					`Falcon deploy pipeline step ${i}: Falcon deploys its pipeline in stage ${i}.`,
@@ -302,10 +302,9 @@ memory:
 		});
 		writeFileSync(
 			join(dir, "agent.yaml"),
-			`${config}hooks:\n  userPromptSubmit:\n    minScore: 0\n    recallLimit: 10\n`.replace(
-				"embedding:\n  provider: none\n",
-				"embedding:\n  provider: none\n  promptSubmitTimeoutMs: 10000\n",
-			),
+			`${config}hooks:\n  userPromptSubmit:\n    minScore: 0\n    recallLimit: 10\n`
+				.replace("search:\n", "search:\n  top_k: 100\n")
+				.replace("embedding:\n  provider: none\n", "embedding:\n  provider: none\n  promptSubmitTimeoutMs: 10000\n"),
 		);
 		try {
 			const response = await app.request("/api/hooks/user-prompt-submit", {
