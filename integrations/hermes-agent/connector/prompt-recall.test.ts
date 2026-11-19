@@ -153,4 +153,60 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.alive).toEqual([]);
 		expect(out.leftover).toBe("");
 	}, 20_000);
+
+	it("does not submit a prompt when the session switch is still unfinished at the deadline", () => {
+		const out = py([
+			"import threading",
+			"turn('old question', 'old private answer')",
+			"def boundary():",
+			"    time.sleep(3)",
+			"    p.on_session_switch('sess-2', reset=True)",
+			"threading.Thread(target=boundary).start()",
+			"context = p.prefetch('new private question', session_id='sess-2')",
+			"print(json.dumps({'context': context, 'calls': submitted[1:]}))",
+		]) as { context: string; calls: unknown[] };
+
+		expect(out.calls).toEqual([]);
+		expect(out.context).toBe("");
+	}, 20_000);
+
+	it("keeps waiting for the turn's reply across an inline compression switch", () => {
+		const out = py([
+			"import threading",
+			"p.prefetch('current question', session_id='sess-1')",
+			"p.on_session_switch('sess-1', reason='compression')",
+			"def late_sync():",
+			"    time.sleep(0.5)",
+			"    p.sync_turn('current question', 'completed answer', session_id='sess-1')",
+			"threading.Thread(target=late_sync).start()",
+			"p.prefetch('next question', session_id='sess-1')",
+			"print(json.dumps([call for call in submitted if call[0] == 'sess-1']))",
+		]) as Array<[string, string, string]>;
+
+		expect(out.map((call) => [call[1], call[2]])).toEqual([
+			["current question", ""],
+			["next question", "completed answer"],
+		]);
+	});
+
+	it("does not submit a prompt that races shutdown", () => {
+		const out = py([
+			"import threading",
+			"original = threading.Thread",
+			"class Racing(original):",
+			"    def __init__(self, *args, **kwargs):",
+			"        super().__init__(*args, **kwargs)",
+			"        if kwargs.get('name') == 'signet-prompt-submit':",
+			"            closer = original(target=p.shutdown)",
+			"            closer.start()",
+			"            closer.join()",
+			"sig.threading.Thread = Racing",
+			"context = p.prefetch('racing question', session_id='sess-1')",
+			"time.sleep(0.5)",
+			"print(json.dumps({'context': context, 'calls': submitted}))",
+		]) as { context: string; calls: unknown[] };
+
+		expect(out.calls).toEqual([]);
+		expect(out.context).toBe("");
+	});
 });
