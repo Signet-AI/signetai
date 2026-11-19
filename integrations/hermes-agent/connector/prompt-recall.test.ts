@@ -209,4 +209,42 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.calls).toEqual([]);
 		expect(out.context).toBe("");
 	});
+
+	it("returns no context, old or new, for a prompt it did not submit", () => {
+		const out = py([
+			"import threading",
+			"FakeClient.delays = {'old question': 4}",
+			"turn('old question', 'ok')",
+			"def boundary():",
+			"    time.sleep(3)",
+			"    p.on_session_switch('sess-2', reset=True)",
+			"threading.Thread(target=boundary).start()",
+			"context = p.prefetch('new private question', session_id='sess-2')",
+			"print(json.dumps({'context': context, 'prompts': [s[1] for s in submitted if s[0] != 'session_start']}))",
+		]) as { context: string; prompts: string[] };
+
+		expect(out.prompts).toEqual(["old question"]);
+		expect(out.context).toBe("");
+	}, 20_000);
+
+	it("keeps submitting prompts after session start raises during initialize", () => {
+		const out = py([
+			"class Broken(FakeClient):",
+			"    def is_available(self): return True",
+			"    def session_start(self, key, **kw): raise RuntimeError('transport failed')",
+			"sig.SignetClient = lambda **kw: Broken()",
+			"try:",
+			"    p.initialize('sess-3', agent_context='subagent')",
+			"except RuntimeError:",
+			"    pass",
+			"started = time.monotonic()",
+			"context = p.prefetch('after failure', session_id='sess-3')",
+			"waited = time.monotonic() - started",
+			"print(json.dumps({'context': context, 'waited': waited, 'calls': submitted}))",
+		]) as { context: string; waited: number; calls: Array<string[]> };
+
+		expect(out.calls).toEqual([["sess-3", "after failure", ""]]);
+		expect(out.context).toBe("recall for after failure");
+		expect(out.waited).toBeLessThan(1);
+	});
 });
