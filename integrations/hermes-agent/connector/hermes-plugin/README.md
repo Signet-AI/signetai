@@ -58,7 +58,7 @@ The plugin bridges Hermes Agent's memory lifecycle to the Signet daemon:
 
 1. **Session start** — Calls Signet's session-start hook, which returns identity files (AGENTS.md, SOUL.md, USER.md, MEMORY.md), scored memories, and knowledge graph constraints. The deterministic `stableSystemPrompt` is returned by `system_prompt_block()`; state-dependent `dynamicContext` is staged for Hermes' API-only prefetch path rather than being added to the canonical transcript.
 
-2. **Per-turn recall** — On each user message, calls the user-prompt-submit hook. Signet runs hybrid search (BM25 + vector similarity + knowledge graph traversal + predictive scoring) and returns the most relevant memories.
+2. **Per-turn recall** — Hermes calls `prefetch()` before each turn. The plugin sends that turn's message to the user-prompt-submit hook and waits up to 3 seconds, so recall for a message arrives with the same message. If the daemon answers later, the context comes with the next turn instead of being dropped, because the daemon has already recorded those memories as delivered to the session.
 
 3. **Session end** — Sends a transcript with internal Signet memory delimiters removed to Signet's session-end hook, which queues it for the memory pipeline: extraction, knowledge graph updates, retention decay, and MEMORY.md synthesis.
 

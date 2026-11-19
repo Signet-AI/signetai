@@ -566,6 +566,7 @@ def _clean_resources(value: Any) -> Optional[List[str]]:
 
 
 _WAKE_WAIT_MS = 25000
+_PROMPT_SUBMIT_WAIT_SECS = 3.0
 _WAKE_DEFAULT_RETRY_SECS = 15.0
 _WAKE_MAX_RETRY_SECS = 300.0
 _WAKE_INJECT_RETRY_SECS = 5.0
@@ -994,28 +995,24 @@ class SignetMemoryProvider(MemoryProvider):
         )
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
-        """Return prefetched recall results from background thread."""
+        """Submit this turn's prompt and return its recall for the same turn.
+
+        Hermes calls prefetch before the turn it prepares and queue_prefetch
+        only after that turn finishes, so the prompt is submitted here. The
+        wait is bounded; a slower answer is kept for the next prefetch
+        because the daemon has already recorded its memories as delivered.
+        """
         if not self._client:
             return ""
 
-        if self._prefetch_thread and self._prefetch_thread.is_alive():
-            self._prefetch_thread.join(timeout=3.0)
-
-        client = self._client
-        if client:
-            try:
-                notification = client.notifications(
-                    self._session_key,
-                    "prefetch",
-                    project=self._project,
-                    context=self._peer_context(),
+        if query:
+            submit = self._submit_prompt(query)
+            submit.join(timeout=_PROMPT_SUBMIT_WAIT_SECS)
+            if submit.is_alive():
+                logger.warning(
+                    "Signet prompt recall took longer than %.1fs; its context arrives with the next turn",
+                    _PROMPT_SUBMIT_WAIT_SECS,
                 )
-                if notification is not None:
-                    notification_inject = notification.get("inject", "")
-                    with self._prefetch_lock:
-                        self._notification_result = notification_inject if isinstance(notification_inject, str) else ""
-            except Exception as e:
-                logger.debug("Signet notification prefetch failed: %s", e)
 
         with self._prefetch_lock:
             parts = [self._session_prefetch_result, self._prefetch_result, self._notification_result]
@@ -1026,26 +1023,24 @@ class SignetMemoryProvider(MemoryProvider):
         return "\n".join(part for part in parts if part and part.strip())
 
     def queue_prefetch(self, query: str, *, session_id: str = "") -> None:
-        """Fire a background recall via user-prompt-submit hook.
+        """Record the finished turn's prompt in the session transcript.
 
-        Also accumulates transcript and sends it for per-turn recall.
-        If the daemon reports sessionKnown=false (daemon restarted),
-        re-initializes the session.
+        The prompt itself reaches the daemon from prefetch, before the turn.
         """
-        if not self._client or not query:
+        if not query:
             return
         with self._transcript_lock:
             self._transcript_lines.append(f"user: {_strip_internal_memory_context(query)}")
+
+    def _submit_prompt(self, query: str) -> threading.Thread:
+        """Send the prompt to user-prompt-submit on a background thread."""
         peer_context = self._peer_context()
         client = self._client
         last_assistant = self._last_assistant_message
         with self._prefetch_lock:
-            self._prefetch_generation += 1
-            self._prefetch_result = ""
-            self._notification_result = ""
             session_key = self._session_key
             project = self._project
-            prefetch_generation = self._prefetch_generation
+            generation = self._prefetch_generation
 
         def _run():
             try:
@@ -1056,41 +1051,42 @@ class SignetMemoryProvider(MemoryProvider):
                     project=project,
                     context=peer_context,
                 )
-                if result:
-                    if not result.get("sessionKnown", True) and self._session_initialized:
-                        logger.debug("Signet daemon restarted mid-session, restoring session claim")
-                        with self._prefetch_lock:
-                            self._session_prefetch_result = ""
-                        reinit = client.session_start(
-                            session_key, project=project, claim_only=True,
+                if not result:
+                    return
+                if not result.get("sessionKnown", True) and self._session_initialized:
+                    logger.debug("Signet daemon restarted mid-session, restoring session claim")
+                    with self._prefetch_lock:
+                        self._session_prefetch_result = ""
+                    reinit = client.session_start(
+                        session_key, project=project, claim_only=True,
+                    )
+                    if not reinit:
+                        logger.warning(
+                            "Signet session-claim recovery after daemon restart returned no data; "
+                            "the next prompt may be treated as a new session"
                         )
-                        if not reinit:
-                            logger.warning(
-                                "Signet session-claim recovery after daemon restart returned no data; "
-                                "the next prompt may be treated as a new session"
-                            )
+                    return
+                inject = result.get("dynamicContext") or result.get("inject", "")
+                notification = result.get("notifications")
+                notification_inject = notification.get("inject", "") if isinstance(notification, dict) else ""
+                recall_inject = inject
+                if notification_inject and inject.rstrip().endswith(notification_inject.strip()):
+                    recall_inject = inject.rstrip()[: -len(notification_inject.strip())].rstrip()
+                with self._prefetch_lock:
+                    if generation != self._prefetch_generation or session_key != self._session_key:
                         return
-                    inject = result.get("dynamicContext") or result.get("inject", "")
-                    notification = result.get("notifications")
-                    notification_inject = notification.get("inject", "") if isinstance(notification, dict) else ""
-                    recall_inject = inject
-                    if notification_inject and inject.rstrip().endswith(notification_inject.strip()):
-                        recall_inject = inject.rstrip()[: -len(notification_inject.strip())].rstrip()
-                    if (recall_inject and recall_inject.strip()) or (notification_inject and notification_inject.strip()):
-                        with self._prefetch_lock:
-                            if prefetch_generation == self._prefetch_generation and session_key == self._session_key:
-                                self._prefetch_result = recall_inject
-                                self._notification_result = notification_inject
+                    if recall_inject and recall_inject.strip():
+                        self._prefetch_result = "\n".join(
+                            part for part in (self._prefetch_result, recall_inject) if part and part.strip()
+                        )
+                    self._notification_result = notification_inject if isinstance(notification_inject, str) else ""
             except Exception as e:
-                logger.debug("Signet prefetch failed: %s", e)
-        prev_thread = self._prefetch_thread
-        if prev_thread and prev_thread.is_alive():
-            prev_thread.join(timeout=2.0)
+                logger.debug("Signet prompt submit failed: %s", e)
 
-        self._prefetch_thread = threading.Thread(
-            target=_run, daemon=True, name="signet-prefetch"
-        )
-        self._prefetch_thread.start()
+        thread = threading.Thread(target=_run, daemon=True, name="signet-prompt-submit")
+        self._prefetch_thread = thread
+        thread.start()
+        return thread
 
     def on_turn_start(self, turn_number: int, message: str, **kwargs) -> None:
         """Track turn count and trigger periodic checkpoint extraction."""

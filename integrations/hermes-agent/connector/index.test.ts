@@ -1066,17 +1066,6 @@ for vector in contract["vectors"]:
 		expect(plugin).toContain("self._prefetch_generation += 1");
 	});
 
-	it("invalidates stale prefetch results for every queued recall", () => {
-		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
-		const queuePrefetchFn = plugin.slice(plugin.indexOf("def queue_prefetch"), plugin.indexOf("def on_turn_start"));
-		const generationIncrement = queuePrefetchFn.indexOf("self._prefetch_generation += 1");
-
-		expect(queuePrefetchFn).toContain("with self._prefetch_lock:");
-		expect(queuePrefetchFn).toContain('self._prefetch_result = ""');
-		expect(generationIncrement).toBeGreaterThan(-1);
-		expect(generationIncrement).toBeLessThan(queuePrefetchFn.indexOf("def _run"));
-	});
-
 	it("keeps stable and dynamic session context on separate Hermes paths", () => {
 		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
 		const initialization = plugin.slice(plugin.indexOf("def initialize"), plugin.indexOf("def system_prompt_block"));
@@ -1183,10 +1172,9 @@ assert calls == [{
 					"provider._session_initialized = True",
 					"provider._session_key = 'active-session'",
 					"provider._project = '/tmp/project'",
-					"provider.queue_prefetch('restart recovery')",
+					"assert provider.prefetch('restart recovery') == ''",
 					"provider._prefetch_thread.join(1)",
 					"assert provider._client.calls == [{'args': ('active-session',), 'kwargs': {'project': '/tmp/project', 'claim_only': True}}]",
-					"assert provider.prefetch('restart recovery') == ''",
 				].join("\n"),
 			],
 			{ env: { ...process.env, PYTHONPATH: fixture }, encoding: "utf-8" },
