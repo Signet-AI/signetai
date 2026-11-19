@@ -1266,6 +1266,8 @@ class SignetMemoryProvider(MemoryProvider):
         if not keep_peer_state:
             self._reset_peer_state()
         self._remember_host_metadata(kwargs)
+        if kwargs.get("reason") != "compression":
+            self._release_turn()
         self._begin_session(new_session_id)
         client = self._client
         if not client:
@@ -1683,7 +1685,6 @@ class SignetMemoryProvider(MemoryProvider):
             self._session_prefetch_result = ""
             self._prefetch_result = ""
             self._notification_result = ""
-        self._release_turn()
         if not self._client:
             return
         with self._transcript_lock:
