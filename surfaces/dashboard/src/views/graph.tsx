@@ -13,6 +13,7 @@ import { useAsync } from "@/lib/use-async";
 import { useView } from "@/lib/view-context";
 import { cn } from "@/lib/utils";
 import { colorNodes, GRAPH_COLOR_MODES, type GraphColorMode, rampGradient } from "@/lib/graph-color";
+import { attempt } from "@signet/core";
 import type {
 	GraphSceneData,
 	GraphSceneHandle,
@@ -35,7 +36,7 @@ const GraphColorLab = import.meta.env.DEV
 const COLOR_MODE_KEY = "signet.graph.colorMode";
 
 function storedColorMode(): GraphColorMode {
-	const stored = localStorage.getItem(COLOR_MODE_KEY);
+	const stored = attempt(() => localStorage.getItem(COLOR_MODE_KEY));
 	return GRAPH_COLOR_MODES.find((mode) => mode.key === stored)?.key ?? "category";
 }
 
@@ -298,6 +299,7 @@ export function GraphView() {
 						: [],
 				cluster: entity.id,
 				...stamps(entity),
+				mentions: entity.mentions,
 				weight: Math.sqrt(entity.mentions / maxMentions),
 				metric: `${entityKind} · ${entity.entityType} · ${entity.mentions.toLocaleString()} mentions`,
 			});
@@ -483,13 +485,8 @@ export function GraphView() {
 		const gradient = rampGradient(modeConfig, modeColoring.min, modeColoring.max);
 		if (modeConfig.variable === "created")
 			return { gradient, low: daysAgo(modeColoring.min), high: daysAgo(modeColoring.max) };
-		const mentions = (graphQuery.data?.entities ?? []).map((entity) => entity.mentions);
-		return {
-			gradient,
-			low: mentionCount(Math.min(...mentions)),
-			high: mentionCount(Math.max(...mentions)),
-		};
-	}, [modeConfig, modeColoring, graphQuery.data]);
+		return { gradient, low: mentionCount(modeColoring.min), high: mentionCount(modeColoring.max) };
+	}, [modeConfig, modeColoring]);
 	useEffect(() => {
 		const colors = labColors ?? modeColoring?.colors ?? null;
 		colorsRef.current = colors;
@@ -499,7 +496,7 @@ export function GraphView() {
 		const mode = GRAPH_COLOR_MODES.find((entry) => entry.key === value);
 		if (!mode) return;
 		setColorMode(mode.key);
-		localStorage.setItem(COLOR_MODE_KEY, mode.key);
+		attempt(() => localStorage.setItem(COLOR_MODE_KEY, mode.key));
 	};
 	const dataSig = useMemo(() => {
 		const entities = graphQuery.data?.entities ?? [];
