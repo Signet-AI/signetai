@@ -567,9 +567,8 @@ def _clean_resources(value: Any) -> Optional[List[str]]:
 
 _WAKE_WAIT_MS = 25000
 _PROMPT_SUBMIT_WAIT_SECS = 3.0
-_TURN_SYNC_WAIT_SECS = 2.0
+_SESSION_READY_WAIT_SECS = 2.0
 _SUBMIT_DRAIN_SECS = 5.0
-_PENDING_TURN_LIMIT = 8
 _WAKE_DEFAULT_RETRY_SECS = 15.0
 _WAKE_MAX_RETRY_SECS = 300.0
 _WAKE_INJECT_RETRY_SECS = 5.0
@@ -732,10 +731,6 @@ class _WakeWaiter:
                 return
 
 
-def _turn_text(content: Any) -> str:
-    return _strip_internal_memory_context(content).strip() if isinstance(content, str) else ""
-
-
 class SignetMemoryProvider(MemoryProvider):
     """Signet persistent memory with hybrid search and knowledge graph."""
 
@@ -752,8 +747,7 @@ class SignetMemoryProvider(MemoryProvider):
         self._prefetch_lock = threading.Lock()
         self._prefetch_thread: Optional[threading.Thread] = None
         self._prefetch_generation = 0
-        self._turn_synced = threading.Condition(self._prefetch_lock)
-        self._pending_turns: List[Dict[str, Any]] = []
+        self._session_changed = threading.Condition(self._prefetch_lock)
         self._notification_seq = 0
         self._notification_applied = 0
         self._session_ready = True
@@ -761,7 +755,6 @@ class SignetMemoryProvider(MemoryProvider):
         self._submit_closed = False
         self._turn_count = 0
         self._last_user_message = ""
-        self._last_assistant_message = ""
         self._transcript_lines: List[str] = []
         self._transcript_lock = threading.Lock()
         self._identity: Optional[Dict[str, Any]] = None
@@ -1017,19 +1010,19 @@ class SignetMemoryProvider(MemoryProvider):
         """Submit this turn's prompt and return its recall for the same turn.
 
         Hermes calls prefetch before the turn it prepares and queue_prefetch
-        only after that turn finishes, so the prompt is submitted here. The
-        previous turn's sync_turn and any session switch run later on Hermes'
-        background worker, so prefetch first waits, bounded, for them. The
+        only after that turn finishes, so the prompt is submitted here. A
+        session switch runs on Hermes' background worker, so prefetch first
+        waits, bounded, for the session it was given to be started. The
         submit wait is bounded too; a slower answer is kept for the next
         prefetch because the daemon has already recorded its memories as
-        delivered.
+        delivered. The previous reply reaches the daemon from sync_turn.
         """
         if not self._client:
             return ""
 
         state = None
         if query:
-            state = self._await_turn_state(session_id, query)
+            state = self._await_session(session_id)
             submit = self._submit_prompt(query, state)
             if submit is None:
                 return ""
@@ -1062,27 +1055,22 @@ class SignetMemoryProvider(MemoryProvider):
         with self._transcript_lock:
             self._transcript_lines.append(f"user: {_strip_internal_memory_context(query)}")
 
-    def _await_turn_state(self, session_id: str, query: str = "") -> Optional[Dict[str, Any]]:
-        """Wait for earlier turns' syncs and any pending session switch.
+    def _await_session(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """Wait for a pending session switch to the session Hermes named.
 
         Returns the session-bound inputs for this prompt, captured together,
-        or None when the session Hermes named is not the provider's started
-        session by the deadline. A turn that never synced (an interrupted
-        turn) only delays the next prompt once: at the deadline it stops being
-        waited for, but its late sync still matches it rather than a newer
-        prompt's turn.
+        or None when that session is not the provider's started session by
+        the deadline.
         """
-        deadline = time.monotonic() + _TURN_SYNC_WAIT_SECS
-        with self._turn_synced:
+        deadline = time.monotonic() + _SESSION_READY_WAIT_SECS
+        with self._session_changed:
             while not self._submit_closed and (
-                self._awaiting_sync()
-                or not self._session_ready
-                or (session_id and session_id != self._session_key)
+                not self._session_ready or (session_id and session_id != self._session_key)
             ):
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     break
-                self._turn_synced.wait(remaining)
+                self._session_changed.wait(remaining)
             if self._submit_closed:
                 return None
             if not self._session_ready or (session_id and session_id != self._session_key):
@@ -1091,62 +1079,23 @@ class SignetMemoryProvider(MemoryProvider):
                     session_id,
                 )
                 return None
-            if self._awaiting_sync():
-                logger.warning(
-                    "Signet submitted this prompt before Hermes synced the previous turn; "
-                    "the previous reply is missing from live evidence"
-                )
-                for entry in self._pending_turns:
-                    entry["abandoned"] = True
-            self._pending_turns = self._pending_turns[-_PENDING_TURN_LIMIT:]
-            self._pending_turns.append({"query": _turn_text(query), "abandoned": False})
             self._notification_seq += 1
             return {
                 "notification_seq": self._notification_seq,
                 "session_key": self._session_key,
-                "last_assistant": self._last_assistant_message,
                 "project": self._project,
                 "generation": self._prefetch_generation,
             }
 
-    def _awaiting_sync(self) -> bool:
-        return any(not entry["abandoned"] for entry in self._pending_turns)
-
-    def _release_turn(self, user_content: Optional[str] = None) -> None:
-        """Mark a turn synced: the oldest whose prompt matches, else the oldest awaited.
-
-        Hermes syncs turns in order, so the oldest match is the right one even
-        when a prompt was sent twice. If the older copy was interrupted and
-        never syncs, the retry's sync clears it and the next prompt waits for
-        the retry once more. Without user_content every pending turn is
-        released.
-        """
-        with self._turn_synced:
-            if user_content is None:
-                self._pending_turns = []
-            else:
-                text = _turn_text(user_content)
-                index = next(
-                    (i for i, entry in enumerate(self._pending_turns) if entry["query"] == text),
-                    next((i for i, entry in enumerate(self._pending_turns) if not entry["abandoned"]), None),
-                )
-                if index is not None:
-                    self._pending_turns = [
-                        entry
-                        for i, entry in enumerate(self._pending_turns)
-                        if i > index or (i < index and not entry["abandoned"])
-                    ]
-            self._turn_synced.notify_all()
-
     def _begin_session(self, session_key: str) -> None:
-        with self._turn_synced:
+        with self._session_changed:
             self._session_key = session_key
             self._session_ready = False
 
     def _finish_session(self) -> None:
-        with self._turn_synced:
+        with self._session_changed:
             self._session_ready = True
-            self._turn_synced.notify_all()
+            self._session_changed.notify_all()
 
     def _submit_prompt(self, query: str, state: Optional[Dict[str, Any]]) -> Optional[threading.Thread]:
         """Send the prompt to user-prompt-submit on a background thread."""
@@ -1155,7 +1104,6 @@ class SignetMemoryProvider(MemoryProvider):
         peer_context = self._peer_context()
         client = self._client
         session_key = state["session_key"]
-        last_assistant = state["last_assistant"]
         project = state["project"]
         generation = state["generation"]
         notification_seq = state["notification_seq"]
@@ -1165,7 +1113,6 @@ class SignetMemoryProvider(MemoryProvider):
                 result = client.user_prompt_submit(
                     session_key,
                     query,
-                    last_assistant_message=last_assistant,
                     project=project,
                     context=peer_context,
                 )
@@ -1234,13 +1181,24 @@ class SignetMemoryProvider(MemoryProvider):
     def sync_turn(
         self, user_content: str, assistant_content: str, *, session_id: str = ""
     ) -> None:
-        """Track assistant response and accumulate transcript."""
-        self._last_assistant_message = assistant_content
-        if assistant_content:
-            with self._transcript_lock:
-                self._transcript_lines.append(f"assistant: {_strip_internal_memory_context(assistant_content)}")
-        self._release_turn(user_content)
-        self._queue_notification_refresh("sync_turn")
+        """Record the turn's reply with the daemon and in the local transcript.
+
+        Hermes runs this on its background worker, in turn order and before
+        any session switch that follows the turn. The next prompt's
+        user-prompt-submit response carries fresh notifications, so no
+        refresh is needed here.
+        """
+        if not assistant_content:
+            return
+        with self._transcript_lock:
+            self._transcript_lines.append(f"assistant: {_strip_internal_memory_context(assistant_content)}")
+        client = self._client
+        if not client:
+            return
+        try:
+            client.stop(self._session_key, assistant_content, project=self._project)
+        except Exception as e:
+            logger.debug("Signet stop hook failed: %s", e)
 
     def _set_notification(self, seq: int, inject: Any) -> None:
         """Keep the newest-requested unread snapshot. Caller holds _prefetch_lock.
@@ -1269,7 +1227,9 @@ class SignetMemoryProvider(MemoryProvider):
         def _run():
             try:
                 result = client.notifications(session_key, hook, project=project, context=peer_context)
-                inject = (result or {}).get("inject", "")
+                if result is None:
+                    return
+                inject = result.get("inject", "")
                 with self._prefetch_lock:
                     if generation == self._prefetch_generation and session_key == self._session_key:
                         self._set_notification(seq, inject)
@@ -1309,7 +1269,6 @@ class SignetMemoryProvider(MemoryProvider):
         self._turn_count = 0
         self._last_checkpoint_turn = 0
         self._last_user_message = ""
-        self._last_assistant_message = ""
         with self._transcript_lock:
             self._transcript_lines = []
         with self._inject_lock:
@@ -1325,8 +1284,6 @@ class SignetMemoryProvider(MemoryProvider):
         if not keep_peer_state:
             self._reset_peer_state()
         self._remember_host_metadata(kwargs)
-        if kwargs.get("reason") != "compression":
-            self._release_turn()
         self._begin_session(new_session_id)
         client = self._client
         if not client:
@@ -2357,7 +2314,7 @@ class SignetMemoryProvider(MemoryProvider):
             self._submit_closed = True
             self._prefetch_generation += 1
             pending = list(self._submit_threads)
-            self._turn_synced.notify_all()
+            self._session_changed.notify_all()
         deadline = time.monotonic() + _SUBMIT_DRAIN_SECS
         for thread in pending:
             thread.join(timeout=max(0.0, deadline - time.monotonic()))
