@@ -13,7 +13,7 @@ import { useAsync } from "@/lib/use-async";
 import { useView } from "@/lib/view-context";
 import { cn } from "@/lib/utils";
 import { colorNodes, GRAPH_COLOR_MODES, type GraphColorMode, rampGradient } from "@/lib/graph-color";
-import { attempt } from "@signet/core";
+import { attempt } from "@signet/core/attempt";
 import type {
 	GraphSceneData,
 	GraphSceneHandle,
