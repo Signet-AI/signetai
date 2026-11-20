@@ -431,10 +431,14 @@ export interface KnowledgeConstellation {
 		sourceId?: string | null;
 		sourceKind?: string | null;
 		sourcePath?: string | null;
+		createdAt?: string | null;
+		updatedAt?: string | null;
 		aspects: Array<{
 			id: string;
 			name: string;
 			weight: number;
+			createdAt?: string | null;
+			updatedAt?: string | null;
 			attributes: Array<{
 				id: string;
 				content: string;
@@ -449,6 +453,8 @@ export interface KnowledgeConstellation {
 				sourceId: string | null;
 				sourcePath: string | null;
 				sourceRoot: string | null;
+				createdAt?: string | null;
+				updatedAt?: string | null;
 			}>;
 		}>;
 	}>;

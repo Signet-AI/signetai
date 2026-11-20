@@ -683,6 +683,10 @@
 	background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 	border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); box-shadow: none; }
 .graph-agent-picker:hover { color: var(--home-title, var(--foreground)); }
+.graph-color-key { flex-shrink: 0; display: flex; align-items: center; gap: 8px; height: 32px; padding-inline: 12px; border-radius: 999px; font-size: var(--text-meta); color: var(--muted-foreground); white-space: nowrap;
+	background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+	border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); }
+.graph-color-key-bar { width: 96px; height: 6px; border-radius: 3px; }
 .graph-agent-options { max-width: 260px; font-size: var(--text-small); }
 .graph-agent-options .lg-dot { display: inline-block; flex-shrink: 0; margin-right: 6px; vertical-align: middle; }
 .graph-agent-options [role="option"] > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
