@@ -61,6 +61,8 @@ export interface SceneNode {
 	evidenceRefs?: readonly string[];
 	scopeColor?: string;
 	category?: EntityCategory;
+	createdAt?: number;
+	updatedAt?: number;
 }
 
 export interface SceneEdge {
@@ -103,6 +105,7 @@ export interface GraphSceneHandle {
 	zoom(factor: number): void;
 	setHiddenKinds(kinds: readonly SceneNodeKind[]): void;
 	isolate(cluster: string | null): void;
+	setColors(colors: ReadonlyMap<string, string> | null): void;
 	dispose(): void;
 }
 
@@ -371,6 +374,7 @@ export function createGraphScene(
 		zoom: (factor) => send({ type: "zoom", factor }),
 		setHiddenKinds: (kinds) => send({ type: "hidden", kinds }),
 		isolate: (cluster) => send({ type: "isolate", cluster }),
+		setColors: (colors) => send({ type: "colors", colors }),
 		dispose: () => {
 			if (disposed) return;
 			engine?.dispose();

@@ -3,8 +3,8 @@ import { sourceDocumentTitle } from "@/lib/constellation-display";
 import { categoryColor, ENTITY_CATEGORIES, entityCategory } from "@/lib/entity-category";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SearchIcon, XIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { PaletteIcon, SearchIcon, XIcon } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { api, viewsAllAgents } from "@/lib/api";
 import { scopedQueryKey } from "@/lib/query-cache";
@@ -12,6 +12,7 @@ import { useSession } from "@/lib/session";
 import { useAsync } from "@/lib/use-async";
 import { useView } from "@/lib/view-context";
 import { cn } from "@/lib/utils";
+import { colorNodes, GRAPH_COLOR_MODES, type GraphColorMode, rampGradient } from "@/lib/graph-color";
 import type {
 	GraphSceneData,
 	GraphSceneHandle,
@@ -26,6 +27,27 @@ import {
 	MAX_CONSTELLATION_ENTITY_LIMIT,
 	MAX_VISIBLE_CONSTELLATION_NODES,
 } from "@/lib/constellation-display";
+
+const GraphColorLab = import.meta.env.DEV
+	? lazy(() => import("@/components/graph-color-lab").then((module) => ({ default: module.GraphColorLab })))
+	: null;
+
+const COLOR_MODE_KEY = "signet.graph.colorMode";
+
+function storedColorMode(): GraphColorMode {
+	const stored = localStorage.getItem(COLOR_MODE_KEY);
+	return GRAPH_COLOR_MODES.find((mode) => mode.key === stored)?.key ?? "category";
+}
+
+function daysAgo(days: number): string {
+	const rounded = Math.round(days);
+	if (rounded < 1) return "today";
+	return rounded === 1 ? "1 day ago" : `${rounded} days ago`;
+}
+
+function mentionCount(count: number): string {
+	return count === 1 ? "1 mention" : `${count.toLocaleString()} mentions`;
+}
 
 const ENTITY_LIMIT = MAX_CONSTELLATION_ENTITY_LIMIT;
 const FACT_BUDGET = 6_000;
@@ -86,6 +108,18 @@ function nodeKindLabel(kind: SceneNodeKind): string {
 	if (kind === "source") return "Document";
 	if (kind === "claimSlot") return "Claim slot";
 	return humanize(kind);
+}
+
+function stamps(row: { createdAt?: string | null; updatedAt?: string | null }): {
+	createdAt?: number;
+	updatedAt?: number;
+} {
+	const createdAt = Date.parse(row.createdAt ?? "");
+	const updatedAt = Date.parse(row.updatedAt ?? "");
+	return {
+		...(Number.isFinite(createdAt) ? { createdAt } : {}),
+		...(Number.isFinite(updatedAt) ? { updatedAt } : {}),
+	};
 }
 
 function percent(value: number): string {
@@ -183,6 +217,9 @@ export function GraphView() {
 	const stageRef = useRef<HTMLDivElement>(null);
 	const sceneRef = useRef<GraphSceneHandle | null>(null);
 	const builtSigRef = useRef<number | null>(null);
+	const colorsRef = useRef<ReadonlyMap<string, string> | null>(null);
+	const [labColors, setLabColors] = useState<ReadonlyMap<string, string> | null>(null);
+	const [colorMode, setColorMode] = useState<GraphColorMode>(storedColorMode);
 
 	const sceneData = useMemo<GraphSceneData>(() => {
 		const nodes: SceneNode[] = [];
@@ -260,6 +297,7 @@ export function GraphView() {
 							]
 						: [],
 				cluster: entity.id,
+				...stamps(entity),
 				weight: Math.sqrt(entity.mentions / maxMentions),
 				metric: `${entityKind} · ${entity.entityType} · ${entity.mentions.toLocaleString()} mentions`,
 			});
@@ -269,6 +307,7 @@ export function GraphView() {
 					label: aspect.name,
 					kind: "aspect",
 					cluster: entity.id,
+					...stamps(aspect),
 					weight: aspect.weight,
 					metric: `aspect · ${percent(aspect.weight)} weight`,
 				});
@@ -296,6 +335,7 @@ export function GraphView() {
 						label: attrLabel,
 						kind,
 						cluster: entity.id,
+						...stamps(attr),
 						weight: attr.importance,
 						confidence: attr.confidence,
 						evidenceRefs: graphEvidenceRefs(attr),
@@ -373,6 +413,7 @@ export function GraphView() {
 				label: shorten(assertion.content, 68),
 				kind: "assertion",
 				cluster: assertion.subjectEntityId,
+				...stamps({ createdAt: assertion.assertedAt, updatedAt: assertion.assertedAt }),
 				weight: assertion.confidence,
 				confidence: assertion.confidence,
 				evidenceRefs: graphEvidenceRefs(assertion),
@@ -427,6 +468,39 @@ export function GraphView() {
 		return { nodes, edges };
 	}, [graphQuery.data, sources, agentColors]);
 	const limitedScene = useMemo(() => capGraphSceneData(sceneData), [sceneData]);
+	const colorModes = useMemo(() => {
+		const dated = limitedScene.data.nodes.some((node) => node.createdAt !== undefined);
+		return GRAPH_COLOR_MODES.filter((mode) => mode.key !== "age" || dated);
+	}, [limitedScene]);
+	const activeMode = colorModes.find((mode) => mode.key === colorMode) ?? colorModes[0];
+	const modeConfig = activeMode?.config ?? null;
+	const modeColoring = useMemo(
+		() => (modeConfig ? colorNodes(limitedScene.data.nodes, modeConfig) : null),
+		[limitedScene, modeConfig],
+	);
+	const colorKey = useMemo(() => {
+		if (!modeConfig || !modeColoring || modeColoring.valued === 0) return null;
+		const gradient = rampGradient(modeConfig, modeColoring.min, modeColoring.max);
+		if (modeConfig.variable === "created")
+			return { gradient, low: daysAgo(modeColoring.min), high: daysAgo(modeColoring.max) };
+		const mentions = (graphQuery.data?.entities ?? []).map((entity) => entity.mentions);
+		return {
+			gradient,
+			low: mentionCount(Math.min(...mentions)),
+			high: mentionCount(Math.max(...mentions)),
+		};
+	}, [modeConfig, modeColoring, graphQuery.data]);
+	useEffect(() => {
+		const colors = labColors ?? modeColoring?.colors ?? null;
+		colorsRef.current = colors;
+		sceneRef.current?.setColors(colors);
+	}, [labColors, modeColoring]);
+	const chooseColorMode = (value: string) => {
+		const mode = GRAPH_COLOR_MODES.find((entry) => entry.key === value);
+		if (!mode) return;
+		setColorMode(mode.key);
+		localStorage.setItem(COLOR_MODE_KEY, mode.key);
+	};
 	const dataSig = useMemo(() => {
 		const entities = graphQuery.data?.entities ?? [];
 		let h = entityLimit * 31 + entities.length + (sources?.length ?? 0) * 7;
@@ -517,6 +591,7 @@ export function GraphView() {
 					scopedQueryKey(`constellation-layout:${agentScope}`),
 				);
 				sceneRef.current.setHiddenKinds(hiddenKindsRef.current);
+				if (colorsRef.current) sceneRef.current.setColors(colorsRef.current);
 				builtSigRef.current = dataSig;
 				setSceneBuilt(true);
 			})
@@ -828,6 +903,11 @@ export function GraphView() {
 				</div>
 
 				<div ref={stageRef} className="graph-stage" />
+				{GraphColorLab && (
+					<Suspense fallback={null}>
+						<GraphColorLab nodes={limitedScene.data.nodes} onColors={setLabColors} />
+					</Suspense>
+				)}
 				<div className="graph-toolbar">
 					<fieldset className="graph-navigation" aria-label="Graph navigation">
 						<button
@@ -891,6 +971,30 @@ export function GraphView() {
 								))}
 							</SelectContent>
 						</Select>
+					)}
+					<Select value={activeMode?.key ?? "category"} onValueChange={chooseColorMode}>
+						<SelectTrigger className="graph-agent-picker" aria-label="Color the graph by">
+							<PaletteIcon className="size-3.5 shrink-0" aria-hidden="true" />
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent className="graph-agent-options" position="popper" align="start" sideOffset={4}>
+							{colorModes.map((mode) => (
+								<SelectItem key={mode.key} value={mode.key}>
+									{mode.label}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+					{colorKey && !labColors && (
+						<div
+							className="graph-color-key"
+							role="img"
+							aria-label={`Color scale from ${colorKey.low} to ${colorKey.high}`}
+						>
+							<span>{colorKey.low}</span>
+							<span className="graph-color-key-bar" style={{ background: colorKey.gradient }} />
+							<span>{colorKey.high}</span>
+						</div>
 					)}
 					<search className="graph-search">
 						<SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
