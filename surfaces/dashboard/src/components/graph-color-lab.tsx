@@ -18,6 +18,7 @@ function readJson(key: string): unknown {
 	try {
 		return JSON.parse(localStorage.getItem(key) ?? "null");
 	} catch {
+		localStorage.removeItem(key);
 		return null;
 	}
 }
