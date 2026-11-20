@@ -1,7 +1,7 @@
 [
 	{
 		"path": "docs/specs/dependencies.yaml",
-		"reason": "Retire the spec dependency index; specs and INDEX.md remain authoritative.",
+		"reason": "Retire the spec dependency index.",
 		"retiredIn": "2026-11-17"
 	},
 	{

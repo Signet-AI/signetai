@@ -114,9 +114,7 @@ alongside the compatibility context.
 Canonical transcript surfaces remove internal `<signet-memory>` and
 `<memory-context>` blocks (including `<signet-memory-context>` envelopes).
 Where a harness exposes a stream boundary, the
-adapter also scrubs split delimiters from visible provider output. The full
-contract and measured evaluation are documented in [Cache-Stable Memory
-Injection](https://github.com/Signet-AI/signetai/blob/main/docs/specs/approved/cache-stable-memory-injection.md).
+adapter also scrubs split delimiters from visible provider output.
 
 ## Cross-Agent Notifications
 

@@ -19,9 +19,9 @@ accuracy** under the `rules` profile. This is an average across the current
 tracked local and canary score set, not a claim that every individual run lands
 at exactly that value.
 
-For the underlying run ledger and per-run accuracy, Hit@K, F1, MRR, NDCG,
-latency, and context-size notes, see
-[`docs/BENCHMARKING-PROGRESS.md`](https://github.com/Signet-AI/signetai/blob/main/docs/BENCHMARKING-PROGRESS.md).
+Per-run accuracy, Hit@K, MRR, context size, and Dreaming token use are recorded
+in the run ledger,
+[`.agents/skills/benchmarking/results/ledger.jsonl`](https://github.com/Signet-AI/signetai/blob/main/.agents/skills/benchmarking/results/ledger.jsonl).
 
 ## Default developer run
 
@@ -519,10 +519,6 @@ If a change affects extraction, the structured remember request shape, graph
 storage, embeddings, or indexing, invalidate the workspace and ingest again.
 That is the line between honest fast iteration and fooling ourselves. No need
 to laminate the pancake.
-
-## Progress log
-
-Development run history and score comparisons live in [`docs/BENCHMARKING-PROGRESS.md`](https://github.com/Signet-AI/signetai/blob/main/docs/BENCHMARKING-PROGRESS.md). Keep this file focused on how to run benchmarks and what the harness measures.
 
 ## What is being measured
 

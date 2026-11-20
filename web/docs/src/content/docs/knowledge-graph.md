@@ -492,5 +492,3 @@ relying on a global graph.
 - [KNOWLEDGE-ARCHITECTURE.md](/knowledge-architecture/)
 - [PIPELINE.md](/pipeline/)
 - [API.md](/api/)
-- [dreaming-skill-runbook.md](https://github.com/Signet-AI/signetai/blob/main/docs/dreaming-skill-runbook.md)
-- [knowledge-graph-control-plane.md](https://github.com/Signet-AI/signetai/blob/main/docs/knowledge-graph-control-plane.md)

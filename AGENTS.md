@@ -189,6 +189,8 @@ Update the owning public contract when user-visible behavior, APIs, schemas, con
 
 Do not create a parallel explanation when an authoritative reference already exists. Do not hand-edit generated output; follow its source header or owning package script.
 
+Root `docs/` records only architectural decisions with their reasons, constraints that span components, and implementation traps that are hard to discover from the source. Each entry names its owning code. Feature documentation, field or method lists, control-flow narration, file catalogs, plans, research, progress logs, and PR summaries do not belong there: types, tests, and code record the implementation; `web/docs` holds user documentation; issues and pull requests hold plans and history. When a change invalidates a `docs/` entry, update or delete the entry in the same change.
+
 ## Code conventions
 
 - Match surrounding syntax and organization without inheriting unnecessary abstraction.

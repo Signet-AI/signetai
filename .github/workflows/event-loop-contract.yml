@@ -9,7 +9,7 @@ on:
       - "scripts/legacy-sync-db-baseline.json"
       - "scripts/legacy-sync-db-baseline.ts"
       - "scripts/audit-event-loop-contract.test.ts"
-      - "docs/event-loop-contract-audit.md"
+      - "scripts/event-loop-contract-audit.md"
       - ".github/workflows/event-loop-contract.yml"
   push:
     branches: [main]
@@ -20,7 +20,7 @@ on:
       - "scripts/legacy-sync-db-baseline.json"
       - "scripts/legacy-sync-db-baseline.ts"
       - "scripts/audit-event-loop-contract.test.ts"
-      - "docs/event-loop-contract-audit.md"
+      - "scripts/event-loop-contract-audit.md"
       - ".github/workflows/event-loop-contract.yml"
 
 permissions:

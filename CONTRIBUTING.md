@@ -223,7 +223,7 @@ the ledger disagree. Line numbers are kept for diagnostics only, so moving code
 does not fail the check. When you add, remove or change one of those calls, run
 `bun scripts/audit-event-loop-contract.ts --write-baseline`, update the expected
 counts in `scripts/audit-event-loop-contract.test.ts` if they changed, and
-commit the ledger and `docs/event-loop-contract-audit.md` with the change.
+commit the ledger and `scripts/event-loop-contract-audit.md` with the change.
 
 **Database ownership:** Runtime packages may import SQLite implementations only
 from the exact owner modules listed by `bun run audit:database-ownership`.
@@ -421,50 +421,161 @@ improvements, helpers, and plumbing should use `fix:`, `refactor:`,
 Release Workflow
 ---
 
-Releases are manual. Merging to `main` never bumps a version or publishes a
-release. Stable versions use SemVer starting with `1.0.0`: breaking changes are
-major, features are minor, and fixes or compatible maintenance are patch.
-**Do not publish packages or push release tags by hand.**
+Releases are manual. Merging to `main` never bumps a version, creates a tag, or
+publishes a release. **Do not publish packages or push release tags by hand.**
 
-1. From an up-to-date PR branch, run `bun run release:prepare [version]`.
-   Use `1.0.0` explicitly for the first release under this policy. An omitted
-   version uses conventional commit subjects since the last stable tag.
-2. Review the version, changelog, and lockfile changes. Open a PR titled
-   `chore: release <version>`. A person makes this deliberate release commit;
-   the workflow never writes version commits to `main`.
-3. After merge, dispatch **Release** (`.github/workflows/release.yml`) on `main`
-   with `channel=check`. It builds, signs, and smoke-tests without publishing.
-4. After a successful check, dispatch **Release** on the same candidate with
-   `channel=stable`.
+### Versioning
 
-For an opt-in development build, dispatch with `channel=next`. Its version is
-`X.Y.Z-next.N` for an unreleased committed base, or the next patch's `-next.N`
-if the base is already tagged. Check builds use `X.Y.Z-check.N`. Neither version
-is committed. All build jobs use the planned SHA, stamp if necessary, and install
-dependencies before building.
+Starting with `1.0.0`, stable releases use SemVer: a major version changes an
+incompatible public contract, a minor version adds a feature, and a patch
+version fixes behavior or makes compatible maintenance changes. Earlier `0.x`
+versions remain in the release history.
 
-Native and reusable desktop builds upload to a draft. The publish job verifies
-all assets, stages npm versions with `release-staging`, publishes the GitHub
-release (which creates the tag), then advances npm channels. Stable advances
-`latest` and `next`; development advances only `next`. Both move forward under
-SemVer ordering, so nightly follows stable when no newer development build
-exists. User channel names remain `stable` and `nightly`.
+The root `package.json` owns the committed release version. A maintainer
+prepares one version-and-changelog commit in a PR; automation never commits a
+version bump to `main`. Development and check versions exist only in build
+workspaces:
 
-Re-run a failed workflow to reuse its version, commit, draft, and existing npm
-versions. A fresh stable dispatch can resume only the same version and commit;
-a next re-run must retain the run number. A failure after GitHub finalization
-can leave partial npm dist-tags: re-run the failed jobs rather than creating a
-new release. **Point Stable at Release** is the separate rollback workflow; it
-requires a published plain version, moves `latest`, and moves `next` only forward.
+- If the committed version `X.Y.Z` has not been tagged, a development build is
+  `X.Y.Z-next.N`.
+- If `vX.Y.Z` already exists, a development build increments the patch first:
+  `X.Y.(Z+1)-next.N`.
+- A check build is `X.Y.Z-check.N`.
+
+`N` is the Release workflow run number. Re-running the same run retains that
+number. Development builds do not consume stable version numbers.
+
+### Dispatch channels
+
+The **Release** workflow (`.github/workflows/release.yml`) runs only through
+`workflow_dispatch` and has one input, `channel`:
+
+| Dispatch channel | Result |
+| --- | --- |
+| `check` (default) | Build, sign, and smoke-test the candidate; publish no release, git tag, or npm package |
+| `next` | Build a development prerelease from `main` and advance npm `next` |
+| `stable` | Release the committed plain version from `main` and advance npm `latest` and `next` |
+
+`check` runs from any branch and skips the stable planning checks (changelog
+section, npm ordering, existing releases), so a green check proves the builds,
+not that a stable plan will pass.
+
+All build jobs use the same planned commit SHA. Next and check jobs stamp the
+resolved version, then install dependencies before building. Native platforms,
+desktop packaging, macOS signing and notarization, and runtime acceptance checks
+are release gates. The reusable Desktop Build workflow also supports a manual
+unpublished build of its current ref; tags do not trigger desktop builds. AUR
+metadata omits the prerelease hyphen in `pkgver` (for example, `1.0.1next.42`)
+because Arch forbids hyphens there; download URLs keep the exact SemVer version.
+Desktop auto-update from a development build is untested.
+
+### Cut a stable release
+
+1. Start a PR branch from current `main`, with release tags fetched.
+2. Run `bun run release:prepare [version]`. Use `1.0.0` explicitly for the
+   first release under this policy. An explicit version must be plain `x.y.z`
+   and greater than the committed version. With no argument, conventional
+   commit subjects since the last stable tag determine major, minor, or patch.
+   Prerelease tags never shorten the changelog or bump range.
+3. Review the new `CHANGELOG.md` section, workspace versions, Cargo versions,
+   and lockfiles. The script runs version sync, changelog generation, and
+   `bun install`.
+4. Open a PR titled `chore: release <version>`. Merge the deliberate release
+   commit after review and normal checks. Do not push a release tag.
+5. Dispatch **Release** on `main` with `channel=check`. Inspect its results.
+6. Dispatch **Release** on the same candidate with `channel=stable`.
+7. Confirm the workflow succeeds, the public GitHub release has all native and
+   desktop assets, and npm dist-tags point to the intended versions:
+
+   ```bash
+   npm view signetai dist-tags --json
+   gh release view v<version>
+   ```
+
+To distribute development work instead, dispatch **Release** with
+`channel=next`. No preparation commit is needed.
+
+### Publication and resume
+
+Planning validates the stable branch, version, changelog section, remote tag,
+existing GitHub release, and current npm `latest`. A version already on npm is
+reused only by a run that resumes its own draft for the same commit; otherwise
+planning stops and a new version must be prepared. A remote stable tag must
+name the exact planned commit. A draft targeting a different commit is rejected
+with an instruction to delete it.
+
+Stable and next runs create or reuse a draft release targeting the planned SHA.
+No git tag exists at this stage. All native and desktop jobs finish and upload
+to the draft first. The publish job then checks every expected native, desktop,
+and manifest asset, verifies the merged macOS update manifest, builds and stages
+npm packages, and publishes each missing version with the `release-staging`
+dist-tag. `release-staging` points at the newest published version; the release
+token cannot delete dist-tags.
+
+Only after that does it publish the GitHub release, which creates the tag.
+Stable is marked normal/latest; next is marked prerelease/not latest. A
+separate `promote` job then advances the channel dist-tags. Stable advances
+`latest` and `next`; development advances only `next`. Tags move forward in
+SemVer order only: `1.0.1` replaces `1.0.1-next.5`, but `1.0.2` does not
+replace `1.1.0-next.3`.
 
 The required publish set is `signetai`, the scoped core and connector-base
 packages, all listed harness connectors, and the Codex plugin. The OpenClaw
-memory adapter remains optional. Native npm tarballs are GitHub release assets,
-not separately published registry packages. Add new required scoped packages to
-both the publish/staging list and the rollback package list, with tests.
+memory adapter is optional; its absence does not block the release. Native npm
+tarballs are GitHub release assets, not separately published registry packages.
+Add new required scoped packages to both the publish/staging list and the
+rollback package list, with tests.
 
-See [Release channels](docs/RELEASE_CHANNELS.md) for the full versioning,
-publication, resume, rollback, and verification contract.
+Last, a stable release calls the **Docker Image** workflow, which builds
+`ghcr.io/signet-ai/signet` from the new tag and pushes `vX.Y.Z` and `X.Y.Z`. It
+moves the floating `latest`, `X.Y`, and `X` tags only when the version is
+GitHub's latest release. Development releases publish no image. If only the
+Docker job fails, dispatch **Docker Image** with the released version.
+
+A build or upload failure leaves no new tag and at most a draft release. A
+later npm failure can also leave staged npm versions. Re-run the failed jobs to
+reuse the run's SHA, version, draft, and already-published npm versions. A
+fresh stable dispatch can also resume the same version, but only from the same
+commit and only while the release is still a draft. For next, use GitHub's
+re-run action to retain the run number; a fresh dispatch has a new prerelease
+version. Do not advance `main` and expect it to resume an old draft.
+
+Publication is not a transaction across npm and GitHub. Once a release is
+public, planning and the publish job refuse to run for it, so public assets are
+never rebuilt or replaced, and a build-job re-run after publication fails.
+Finalization treats an API error as success when the release did become public.
+If `promote` fails, re-run only that job. If the publish job still fails after
+the release is public, or a `promote` re-run cannot succeed, run **Point Stable
+at Release** with the version. Concurrent `promote` jobs are serialized. If npm
+publishing fails partway, the versions it did publish carry only
+`release-staging` until a re-run of `publish` succeeds and `promote` moves the
+user-facing tags.
+
+### Roll back stable
+
+**Point Stable at Release** (`.github/workflows/promote-release.yml`) is an
+explicit stable-pointer override, not development-to-stable promotion. Supply a
+plain `x.y.z` version whose required npm packages already exist and whose GitHub
+release is public, not a draft. It points each required package's npm `latest`
+at that version, includes the optional adapter only if published, verifies the
+tags, and marks the GitHub release latest. It advances npm `next` to the same
+version only when `next` is older, so a rollback never moves `next` backward. It
+does not rebuild assets or publish packages.
+
+This rolls the stable pointer back. It does not force already-installed newer
+clients to downgrade. Verify the selected release and npm `latest` afterward.
+
+### Release integrity and trust
+
+Native self-updates validate each selected asset's size and SHA-256 against
+`native-manifest.json` from the same release. The direct installer checks the
+asset's SHA-256. These checks detect incomplete, corrupted, or mismatched
+downloads; they do not independently authenticate the manifest, which is not
+signed. macOS native binaries use Developer ID signing, and official macOS
+desktop builds are signed, notarized, and checked with Gatekeeper.
+
+The release workflow, repository release permissions, and HTTPS delivery from
+GitHub are the distribution trust boundary.
 
 Scripts
 ---
