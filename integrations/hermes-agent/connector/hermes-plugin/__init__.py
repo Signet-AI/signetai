@@ -750,6 +750,7 @@ class SignetMemoryProvider(MemoryProvider):
         self._session_changed = threading.Condition(self._prefetch_lock)
         self._notification_seq = 0
         self._notification_applied = 0
+        self._notification_one_shot = False
         self._session_ready = True
         self._submit_threads: set = set()
         self._submit_closed = False
@@ -1135,6 +1136,7 @@ class SignetMemoryProvider(MemoryProvider):
                 inject = result.get("dynamicContext") or result.get("inject", "")
                 notification = result.get("notifications")
                 notification_inject = notification.get("inject", "") if isinstance(notification, dict) else ""
+                one_shot = isinstance(notification, dict) and bool(notification.get("boardNotices"))
                 recall_inject = inject
                 if notification_inject and inject.rstrip().endswith(notification_inject.strip()):
                     recall_inject = inject.rstrip()[: -len(notification_inject.strip())].rstrip()
@@ -1145,7 +1147,7 @@ class SignetMemoryProvider(MemoryProvider):
                         self._prefetch_result = "\n".join(
                             part for part in (self._prefetch_result, recall_inject) if part and part.strip()
                         )
-                    self._set_notification(notification_seq, notification_inject)
+                    self._set_notification(notification_seq, notification_inject, one_shot)
             except Exception as e:
                 logger.debug("Signet prompt submit failed: %s", e)
             finally:
@@ -1196,20 +1198,32 @@ class SignetMemoryProvider(MemoryProvider):
         if not client:
             return
         try:
-            client.stop(self._session_key, assistant_content, project=self._project)
+            client.stop(session_id or self._session_key, assistant_content, project=self._project)
         except Exception as e:
             logger.debug("Signet stop hook failed: %s", e)
 
-    def _set_notification(self, seq: int, inject: Any) -> None:
+    def _set_notification(self, seq: int, inject: Any, one_shot: bool = False) -> None:
         """Keep the newest-requested unread snapshot. Caller holds _prefetch_lock.
 
         The daemon returns every unread message on each request, so a response
-        to an older request is stale once a newer one has been applied.
+        to an older request is stale once a newer one has been applied. Board
+        notices are claimed when returned and never repeat, so a response that
+        carries them is kept alongside newer snapshots until drained.
         """
+        text = inject if isinstance(inject, str) else ""
         if seq < self._notification_applied:
+            if one_shot and text.strip() and text not in self._notification_result:
+                self._notification_result = "\n".join(p for p in (self._notification_result, text) if p.strip())
+                self._notification_one_shot = True
             return
         self._notification_applied = seq
-        self._notification_result = inject if isinstance(inject, str) else ""
+        if self._notification_one_shot and self._notification_result.strip():
+            if text.strip() and text not in self._notification_result:
+                self._notification_result = "\n".join((self._notification_result, text))
+            self._notification_one_shot = self._notification_one_shot or one_shot
+            return
+        self._notification_result = text
+        self._notification_one_shot = one_shot
 
     def _queue_notification_refresh(self, hook: str) -> None:
         """Fetch peer notifications without blocking the current Hermes callback."""
