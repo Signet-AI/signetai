@@ -340,19 +340,38 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.second).toBe("recall for after ack");
 	});
 
-	it("releases a retried prompt's own wait when the interrupted copy never syncs", () => {
+	it("waits at most once more after a verbatim retry of an interrupted prompt", () => {
 		const out = py([
 			"p.prefetch('same question', session_id='sess-1')",
 			"p.prefetch('same question', session_id='sess-1')",
 			"p.sync_turn('same question', 'answer', session_id='sess-1')",
-			"started = time.monotonic()",
 			"p.prefetch('next question', session_id='sess-1')",
+			"p.sync_turn('next question', 'next answer', session_id='sess-1')",
+			"started = time.monotonic()",
+			"p.prefetch('last question', session_id='sess-1')",
 			"waited = time.monotonic() - started",
-			"print(json.dumps({'waited': waited, 'last': submitted[-1][2]}))",
-		]) as { waited: number; last: string };
+			"print(json.dumps({'waited': waited, 'replies': [call[2] for call in submitted]}))",
+		]) as { waited: number; replies: string[] };
 
 		expect(out.waited).toBeLessThan(0.5);
-		expect(out.last).toBe("answer");
+		expect(out.replies).toEqual(["", "", "answer", "next answer"]);
+	}, 20_000);
+
+	it("does not let a late sync for an older identical prompt release the retry's wait", () => {
+		const out = py([
+			"import threading",
+			"p.prefetch('same question', session_id='sess-1')",
+			"p.prefetch('same question', session_id='sess-1')",
+			"p.sync_turn('same question', 'old answer', session_id='sess-1')",
+			"def late_sync():",
+			"    time.sleep(0.5)",
+			"    p.sync_turn('same question', 'retry answer', session_id='sess-1')",
+			"threading.Thread(target=late_sync).start()",
+			"p.prefetch('third question', session_id='sess-1')",
+			"print(json.dumps(submitted[-1]))",
+		]) as [string, string, string];
+
+		expect(out).toEqual(["sess-1", "third question", "retry answer"]);
 	}, 20_000);
 
 	it("does not let an earlier turn's late sync release a later turn's wait", () => {
