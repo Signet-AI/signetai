@@ -16,6 +16,7 @@ import { getDbAccessorPath, type DbAccessor, type ReadDb } from "./db-accessor";
 import { dbOwnerQuery, getDbOwner } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import { runWriteTxAsync } from "./db-accessor";
+import { utcTimestampMs } from "./episodic-sources";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import type { DreamingEpisodicBacklogProbe } from "./pipeline/dreaming";
 import { getDreamingEpisodicTokenBacklogCachedOrNull } from "./pipeline/dreaming-token-cache";
@@ -1805,6 +1806,12 @@ export async function propagateMemoryStatus(accessor: DbAccessor, agentId: strin
 }
 const SOURCE_CLAIM_ENTITY_TYPES = ["source_document", "source_document_reference"] as const;
 
+function isoTimestamp(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const ms = utcTimestampMs(value);
+	return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
 export interface ConstellationAttribute {
 	readonly id: string;
 	readonly content: string;
@@ -1824,6 +1831,8 @@ export interface ConstellationAttribute {
 	readonly sourceRoot: string | null;
 	readonly proposalId: string | null;
 	readonly proposalEvidenceCount: number;
+	readonly createdAt: string | null;
+	readonly updatedAt: string | null;
 }
 
 export interface ConstellationAssertion {
@@ -1848,6 +1857,8 @@ export interface ConstellationAspect {
 	readonly weight: number;
 	readonly status: "active" | "archived";
 	readonly proposalId: string | null;
+	readonly createdAt: string | null;
+	readonly updatedAt: string | null;
 	readonly attributes: readonly ConstellationAttribute[];
 }
 
@@ -1863,6 +1874,8 @@ export interface ConstellationEntity {
 	readonly sourceId: string | null;
 	readonly sourceKind: string | null;
 	readonly sourcePath: string | null;
+	readonly createdAt: string | null;
+	readonly updatedAt: string | null;
 	readonly aspects: readonly ConstellationAspect[];
 }
 
@@ -2147,7 +2160,7 @@ export async function getKnowledgeGraphForConstellation(
 			const entityRows = db
 				.prepare(
 					`SELECT e.id, e.agent_id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id,
-				        e.source_id, e.source_kind, e.source_path
+				        e.source_id, e.source_kind, e.source_path, e.created_at, e.updated_at
 				 FROM entities e
 				 WHERE e.agent_id IN (${agentPlaceholders})
 				   AND COALESCE(e.status, 'active') = 'active'
@@ -2226,9 +2239,9 @@ export async function getKnowledgeGraphForConstellation(
 			const entityIdPlaceholders = placeholders(entityIds.length);
 			const aspectRows = db
 				.prepare(
-					`SELECT id, entity_id, name, weight, status, proposal_id, rn
+					`SELECT id, entity_id, name, weight, status, proposal_id, created_at, updated_at, rn
 				 FROM (
-				   SELECT id, entity_id, name, weight, status, proposal_id,
+				   SELECT id, entity_id, name, weight, status, proposal_id, created_at, updated_at,
 				          ROW_NUMBER() OVER (
 							  PARTITION BY entity_id
 							  ORDER BY CASE WHEN EXISTS (
@@ -2266,6 +2279,8 @@ export async function getKnowledgeGraphForConstellation(
 					weight: number;
 					status: "active" | "archived";
 					proposalId: string | null;
+					createdAt: string | null;
+					updatedAt: string | null;
 				}>
 			>();
 			const aspectIds: string[] = [];
@@ -2286,6 +2301,8 @@ export async function getKnowledgeGraphForConstellation(
 					weight: Number(row.weight ?? 0.5),
 					status: row.status === "archived" ? "archived" : "active",
 					proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
+					createdAt: isoTimestamp(row.created_at),
+					updatedAt: isoTimestamp(row.updated_at),
 				});
 				aspectsByEntity.set(entityId, bucket);
 			}
@@ -2299,12 +2316,12 @@ export async function getKnowledgeGraphForConstellation(
 						`SELECT id, aspect_id, content, kind, importance, confidence, memory_id, status,
 					        version, version_root_id, previous_attribute_id,
 					        group_key, claim_key, source_kind, source_id, source_path, source_root,
-					        proposal_id, proposal_evidence, claim_priority, rn
+					        proposal_id, proposal_evidence, created_at, updated_at, claim_priority, rn
 					 FROM (
 					   SELECT id, aspect_id, content, kind, importance, confidence, memory_id, status,
 					          version, version_root_id, previous_attribute_id,
 					          group_key, claim_key, source_kind, source_id, source_path, source_root,
-					          proposal_id, proposal_evidence,
+					          proposal_id, proposal_evidence, created_at, updated_at,
 					          CASE WHEN kind = 'claim' THEN 0 ELSE 1 END AS claim_priority,
 					          ROW_NUMBER() OVER (
 							  PARTITION BY aspect_id
@@ -2351,6 +2368,8 @@ export async function getKnowledgeGraphForConstellation(
 						sourceRoot: typeof row.source_root === "string" ? row.source_root : null,
 						proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
 						proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
+						createdAt: isoTimestamp(row.created_at),
+						updatedAt: isoTimestamp(row.updated_at),
 					});
 					attrsByAspect.set(aspectId, bucket);
 				}
@@ -2369,6 +2388,8 @@ export async function getKnowledgeGraphForConstellation(
 					weight: asp.weight,
 					status: asp.status,
 					proposalId: asp.proposalId,
+					createdAt: asp.createdAt,
+					updatedAt: asp.updatedAt,
 					attributes: attrsByAspect.get(asp.id) ?? [],
 				}));
 				return {
@@ -2383,6 +2404,8 @@ export async function getKnowledgeGraphForConstellation(
 					sourceId: typeof row.source_id === "string" ? row.source_id : null,
 					sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
 					sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+					createdAt: isoTimestamp(row.created_at),
+					updatedAt: isoTimestamp(row.updated_at),
 					aspects,
 				};
 			});
