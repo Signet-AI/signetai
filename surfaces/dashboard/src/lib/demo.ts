@@ -327,9 +327,12 @@ const DEP_TYPES = ["generates", "depends_on", "references", "strengthens"] as co
 
 function demoConstellation(): KnowledgeConstellation {
 	const rng = mulberry32(20260807);
+	const age = mulberry32(20261119);
+	const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
 	let attrN = 0;
 	let aspectN = 0;
 	const entities = ENTITY_NAMES.map((name, i) => {
+		const entityAge = 2 + age() * 58;
 		const aspects = [];
 		const aspectCount = 2 + Math.floor(rng() * 2);
 		for (let a = 0; a < aspectCount; a++) {
@@ -340,6 +343,7 @@ function demoConstellation(): KnowledgeConstellation {
 			for (let b = 0; b < attrCount; b++) {
 				attrN += 1;
 				const kind = ATTR_KINDS[Math.floor(rng() * ATTR_KINDS.length)];
+				const stamp = daysAgo(entityAge * age());
 				attributes.push({
 					id: `demo-attr-${attrN}`,
 					content: `${name} ${kind === "constraint" ? "constrains" : kind === "rule" ? "governs" : "informs"} ${aspectName} handling in the demo workspace`,
@@ -354,12 +358,16 @@ function demoConstellation(): KnowledgeConstellation {
 					sourceId: kind === "claim" ? "demo-obsidian" : null,
 					sourcePath: kind === "claim" ? `references/demo/${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md` : null,
 					sourceRoot: kind === "claim" ? "vault://main" : null,
+					createdAt: stamp,
+					updatedAt: stamp,
 				});
 			}
 			aspects.push({
 				id: `demo-aspect-${aspectN}`,
 				name: aspectName,
 				weight: Math.round((0.6 + rng() * 0.4) * 100) / 100,
+				createdAt: daysAgo(entityAge),
+				updatedAt: daysAgo(entityAge),
 				attributes,
 			});
 		}
@@ -370,6 +378,8 @@ function demoConstellation(): KnowledgeConstellation {
 			entityType: i < 8 ? "concept" : i % 4 === 0 ? "tool" : "project",
 			mentions: 12 + Math.floor(rng() * 890),
 			pinned: i % 9 === 0,
+			createdAt: daysAgo(entityAge),
+			updatedAt: daysAgo(entityAge),
 			aspects,
 		};
 	});

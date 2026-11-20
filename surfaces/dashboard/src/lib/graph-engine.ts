@@ -27,7 +27,8 @@ export type EngineCommand =
 	| { type: "center" }
 	| { type: "zoom"; factor: number }
 	| { type: "hidden"; kinds: readonly SceneNodeKind[] }
-	| { type: "isolate"; cluster: string | null };
+	| { type: "isolate"; cluster: string | null }
+	| { type: "colors"; colors: ReadonlyMap<string, string> | null };
 
 export type EngineInput =
 	| EngineCommand
@@ -278,7 +279,8 @@ export function createGraphEngine(
 	let visibility = new Float64Array(0);
 	let segments = new Float64Array(0);
 	let points = new Float64Array(0);
-	const tint = nodeTint;
+	let override: ReadonlyMap<string, string> | null = null;
+	const tint = (node: SceneNode, dark: boolean) => override?.get(node.id) ?? nodeTint(node, dark);
 	const bodyOf = (node: SceneNode) => (node.cluster !== node.id && byId.has(node.cluster) ? node.cluster : node.id);
 	const radius = (node: SceneNode) =>
 		node.kind === "entity" ? 4 + 3 * Math.min(1, Math.max(0, node.weight)) : RADIUS[node.kind];
@@ -867,6 +869,28 @@ export function createGraphEngine(
 		keys = joined;
 		host.emit({ type: "keys", keys: available });
 	};
+	const retint = () => {
+		tints = [nodes.map((node) => tint(node, false)), nodes.map((node) => tint(node, true))];
+		const colors = (shade: 0 | 1) => {
+			const list: string[] = [];
+			const slot = new Map<string, number>();
+			const indices = Int32Array.from(edges, (_, index) => {
+				const color = tints[shade][bodyIndex[edgeFrom[index] ?? 0] ?? 0] ?? BRIDGE.dark;
+				let at = slot.get(color);
+				if (at === undefined) {
+					at = list.length;
+					slot.set(color, at);
+					list.push(color);
+				}
+				return at;
+			});
+			return { list, indices };
+		};
+		const light = colors(0);
+		const dark = colors(1);
+		palette = [light.list, dark.list];
+		edgeTint = [light.indices, dark.indices];
+	};
 	const deadline = setTimeout(() => host.emit({ type: "error" }), 15_000);
 	simulation.onmessage = (event: MessageEvent<GraphWorkerResponse>) => {
 		if (disposed) return;
@@ -888,7 +912,6 @@ export function createGraphEngine(
 		byId = new Map(nodes.map((node) => [node.id, node]));
 		indexOf = new Map(nodes.map((node, index) => [node.id, index]));
 		bodyIndex = Int32Array.from(nodes, (node) => indexOf.get(bodyOf(node)) ?? 0);
-		tints = [nodes.map((node) => tint(node, false)), nodes.map((node) => tint(node, true))];
 		labelCandidates = nodes.flatMap((node, index) => (tierOf(node.kind) === 0 ? [index] : []));
 		labelLive.clear();
 		reveal = new Float64Array(nodes.length);
@@ -916,25 +939,7 @@ export function createGraphEngine(
 		edgeLocal = Uint8Array.from(edges, (_, index) =>
 			bodyIndex[edgeFrom[index] ?? 0] === bodyIndex[edgeTo[index] ?? 0] ? 1 : 0,
 		);
-		const colors = (shade: 0 | 1) => {
-			const list: string[] = [];
-			const slot = new Map<string, number>();
-			const indices = Int32Array.from(edges, (_, index) => {
-				const color = tints[shade][bodyIndex[edgeFrom[index] ?? 0] ?? 0] ?? BRIDGE.dark;
-				let at = slot.get(color);
-				if (at === undefined) {
-					at = list.length;
-					slot.set(color, at);
-					list.push(color);
-				}
-				return at;
-			});
-			return { list, indices };
-		};
-		const light = colors(0);
-		const dark = colors(1);
-		palette = [light.list, dark.list];
-		edgeTint = [light.indices, dark.indices];
+		retint();
 		parentOf = new Map();
 		childrenOf = new Map();
 		for (const { edge, from, to } of edges) {
@@ -1057,6 +1062,11 @@ export function createGraphEngine(
 				break;
 			case "isolate":
 				isolate(message.cluster);
+				break;
+			case "colors":
+				override = message.colors;
+				retint();
+				invalidate();
 				break;
 		}
 		announce();
