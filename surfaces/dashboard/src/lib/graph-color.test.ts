@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { colorNodes, DEFAULT_COLOR_CONFIG, GRAPH_COLOR_MODES, rampPosition, sampleRamp } from "./graph-color";
+import {
+	colorNodes,
+	DEFAULT_COLOR_CONFIG,
+	GRAPH_COLOR_MODES,
+	parseColorConfig,
+	rampPosition,
+	sampleRamp,
+} from "./graph-color";
 import type { SceneNode } from "./graph-scene";
 
 const node = (id: string, cluster: string, confidence?: number): SceneNode => ({
@@ -14,8 +21,8 @@ const node = (id: string, cluster: string, confidence?: number): SceneNode => ({
 
 describe("graph color", () => {
 	test("log scale gives recent ages more of the ramp than a linear scale", () => {
-		const linear = { ...DEFAULT_COLOR_CONFIG, log: false };
-		const log = { ...DEFAULT_COLOR_CONFIG, log: true };
+		const linear = { ...DEFAULT_COLOR_CONFIG, scale: "linear" as const };
+		const log = { ...DEFAULT_COLOR_CONFIG, scale: "log" as const };
 		expect(rampPosition(linear, 1, 0, 45)).toBeCloseTo(1 / 45);
 		expect(rampPosition(log, 1, 0, 45)).toBeCloseTo(Math.log(2) / Math.log(46));
 		expect(rampPosition(log, 45, 0, 45)).toBe(1);
@@ -35,6 +42,29 @@ describe("graph color", () => {
 		expect(inherited.colors.get("g")).toBe(sampleRamp(config.stops, 0.5, "rgb"));
 		expect(inherited.colors.get("lone")).toBe(config.missing);
 		expect(colorNodes(nodes, { ...config, inherit: false }).colors.get("g")).toBe(config.missing);
+	});
+
+	test("mentions color raw counts on entity and source-document nodes, not connected sources", () => {
+		const mentions = GRAPH_COLOR_MODES.find((mode) => mode.key === "mentions")?.config;
+		if (!mentions) throw new Error("mentions mode is missing");
+		const nodes: SceneNode[] = [
+			{ id: "few", label: "few", kind: "entity", cluster: "few", weight: 0.5, metric: "", mentions: 25 },
+			{ id: "many", label: "many", kind: "entity", cluster: "many", weight: 1, metric: "", mentions: 100 },
+			{ id: "doc", label: "doc", kind: "source", cluster: "doc", weight: 0.2, metric: "", mentions: 4 },
+			{ id: "source:vault", label: "vault", kind: "source", cluster: "source", weight: 1, metric: "" },
+		];
+		const coloring = colorNodes(nodes, mentions);
+		expect([coloring.valued, coloring.min, coloring.max]).toEqual([3, 4, 100]);
+		expect(coloring.colors.get("source:vault")).toBe(mentions.missing);
+		const share = (count: number) => Math.sqrt(count / 100);
+		expect(rampPosition(mentions, 25, 4, 100)).toBe(
+			rampPosition({ ...mentions, scale: "linear" }, share(25), share(4), share(100)),
+		);
+	});
+
+	test("stored lab presets with the legacy log flag load as log scale", () => {
+		expect(parseColorConfig({ variable: "created", stops: ["#000000"], log: true })?.scale).toBe("log");
+		expect(parseColorConfig({ variable: "created", stops: ["#000000"], scale: "sqrt" })?.scale).toBe("sqrt");
 	});
 
 	test("the shipped modes keep category as the uncolored default", () => {

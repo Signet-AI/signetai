@@ -17,7 +17,7 @@
 .graph-color-lab .gcl-stops { display: flex; flex-wrap: wrap; gap: 4px; }
 .graph-color-lab .gcl-stop { position: relative; display: inline-flex; }
 .graph-color-lab .gcl-stop button { position: absolute; top: -6px; right: -6px; display: none; width: 14px; height: 14px; line-height: 12px; border-radius: 999px; font-size: 11px; color: var(--foreground); background: var(--popover); border: 1px solid var(--border); }
-.graph-color-lab .gcl-stop:hover button { display: block; }
+.graph-color-lab .gcl-stop:hover button, .graph-color-lab .gcl-stop:focus-within button { display: block; }
 .graph-color-lab .gcl-add { width: 22px; height: 22px; border-radius: 4px; color: var(--muted-foreground); border: 1px dashed var(--border); }
 .graph-color-lab .gcl-pair { display: flex; gap: 6px; }
 .graph-color-lab .gcl-presets { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }

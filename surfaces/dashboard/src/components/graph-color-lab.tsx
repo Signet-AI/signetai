@@ -205,9 +205,19 @@ export function GraphColorLab({
 						/>
 						Reverse
 					</label>
-					<label className="gcl-row">
-						<input type="checkbox" checked={config.log} onChange={(event) => update({ log: event.target.checked })} />
-						Log scale
+					<label className="gcl-field">
+						<span>Scale</span>
+						<select
+							value={config.scale}
+							onChange={(event) => {
+								const scale = event.target.value;
+								if (scale === "linear" || scale === "sqrt" || scale === "log") update({ scale });
+							}}
+						>
+							<option value="linear">Linear</option>
+							<option value="sqrt">Square root</option>
+							<option value="log">Log</option>
+						</select>
 					</label>
 					<label className="gcl-row">
 						<input type="checkbox" checked={config.auto} onChange={(event) => update({ auto: event.target.checked })} />
