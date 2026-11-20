@@ -1,0 +1,27 @@
+.graph-color-lab { position: absolute; top: 12px; right: 16px; z-index: 4; width: 260px; max-height: calc(100% - 120px); overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+	padding: 10px 12px; border-radius: 10px; font-size: var(--text-small); color: var(--home-title, var(--foreground));
+	background: color-mix(in oklch, var(--background) 80%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+	border: 1px solid color-mix(in srgb, var(--foreground) 10%, transparent); box-shadow: 0 8px 24px oklch(0 0 0 / 0.4); }
+.graph-color-lab .gcl-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.graph-color-lab .gcl-tag { font-size: var(--text-meta); color: var(--muted-foreground); }
+.graph-color-lab .gcl-toggle { color: var(--muted-foreground); }
+.graph-color-lab .gcl-toggle:hover { color: var(--foreground); }
+.graph-color-lab .gcl-bar { height: 10px; border-radius: 3px; }
+.graph-color-lab .gcl-range { display: flex; justify-content: space-between; font-size: var(--text-meta); color: var(--muted-foreground); font-variant-numeric: tabular-nums; }
+.graph-color-lab .gcl-body { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.graph-color-lab .gcl-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.graph-color-lab .gcl-field { display: flex; flex-direction: column; gap: 4px; color: var(--muted-foreground); }
+.graph-color-lab select, .graph-color-lab input[type="text"], .graph-color-lab input[type="number"] { width: 100%; min-width: 0; height: 26px; padding-inline: 6px; border-radius: 6px;
+	color: var(--foreground); background: color-mix(in srgb, var(--foreground) 6%, transparent); border: 1px solid var(--border); }
+.graph-color-lab input[type="color"] { width: 22px; height: 22px; padding: 0; border: none; border-radius: 4px; background: none; cursor: pointer; }
+.graph-color-lab .gcl-stops { display: flex; flex-wrap: wrap; gap: 4px; }
+.graph-color-lab .gcl-stop { position: relative; display: inline-flex; }
+.graph-color-lab .gcl-stop button { position: absolute; top: -6px; right: -6px; display: none; width: 14px; height: 14px; line-height: 12px; border-radius: 999px; font-size: 11px; color: var(--foreground); background: var(--popover); border: 1px solid var(--border); }
+.graph-color-lab .gcl-stop:hover button { display: block; }
+.graph-color-lab .gcl-add { width: 22px; height: 22px; border-radius: 4px; color: var(--muted-foreground); border: 1px dashed var(--border); }
+.graph-color-lab .gcl-pair { display: flex; gap: 6px; }
+.graph-color-lab .gcl-presets { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border); }
+.graph-color-lab .gcl-presets button, .graph-color-lab .gcl-pair button { padding-inline: 8px; height: 26px; border-radius: 6px; border: 1px solid var(--border); color: var(--foreground); }
+.graph-color-lab .gcl-presets button:disabled { opacity: 0.4; }
+.graph-color-lab .gcl-preset { display: flex; gap: 6px; }
+.graph-color-lab .gcl-preset button:first-child { flex: 1; text-align: start; }

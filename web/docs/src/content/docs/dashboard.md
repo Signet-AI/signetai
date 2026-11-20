@@ -87,6 +87,20 @@ The zoom buttons and **Fit graph** offer the same navigation without scrolling.
 Select a node to inspect its content and provenance. With the graph focused,
 arrow keys browse nodes, Enter selects, and Escape resets the view.
 
+**Color by** in the graph toolbar chooses what node color shows:
+
+- **Category** colors entities and their clusters by entity type. This is the default.
+- **Mentions** shades each entity and its cluster from dark to red by how often
+  the entity is mentioned.
+- **Age** colors nodes by how long ago they were created, on a log scale that
+  spreads recent days across more of the scale. It appears only when the daemon
+  reports creation times.
+
+Mentions and Age show a key with the range in plain units, such as "today" to
+"46 days ago". Nodes without their own value, such as groups and evidence
+origins, take the average of their entity's cluster. The browser remembers the
+choice.
+
 **Ask Signet about your memories** starts from a compact input at the bottom of
 the graph. Sending a message opens chat in a right sidebar and moves the input
 there; the canvas resizes beside it. Closing chat returns the input to the graph
