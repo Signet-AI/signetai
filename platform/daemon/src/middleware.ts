@@ -9,12 +9,11 @@ import { analyticsCollector, authConfig, authSecret, isAllowedOrigin, shuttingDo
 
 const UNSAFE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const LOOPBACK_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
-const EXTENSION_ORIGIN = /^(chrome-extension|moz-extension|safari-web-extension):\/\//;
 
 function isForeignBrowserWrite(c: Context): boolean {
 	if (!UNSAFE_METHODS.has(c.req.method) || isAuthOpenPath(c.req.path)) return false;
 	const origin = c.req.header("origin");
-	if (origin !== undefined && (isAllowedOrigin(origin) || EXTENSION_ORIGIN.test(origin))) return false;
+	if (origin !== undefined && isAllowedOrigin(origin)) return false;
 	if (c.req.header("sec-fetch-site") === "cross-site") return true;
 	if (origin === undefined) return false;
 	const url = new URL(c.req.url);

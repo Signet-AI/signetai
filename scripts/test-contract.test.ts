@@ -15,7 +15,6 @@ const MAINTAINED_TEST_ROOTS = [
 	"surfaces/dashboard",
 	"surfaces/desktop",
 	"surfaces/tray",
-	"surfaces/browser-extension",
 	"integrations",
 	"libs",
 	"memorybench",

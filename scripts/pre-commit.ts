@@ -37,7 +37,6 @@ const BUILD_EXCLUDED_WORKSPACES = new Set([
 	"@signet/daemon",
 	"@signet/desktop",
 	"@signet/tray",
-	"@signet/extension",
 	"signet-dashboard",
 	"@signet/docs",
 	"@signet/web",
