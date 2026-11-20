@@ -569,6 +569,7 @@ _WAKE_WAIT_MS = 25000
 _PROMPT_SUBMIT_WAIT_SECS = 3.0
 _TURN_SYNC_WAIT_SECS = 2.0
 _SUBMIT_DRAIN_SECS = 5.0
+_PENDING_TURN_LIMIT = 8
 _WAKE_DEFAULT_RETRY_SECS = 15.0
 _WAKE_MAX_RETRY_SECS = 300.0
 _WAKE_INJECT_RETRY_SECS = 5.0
@@ -731,6 +732,10 @@ class _WakeWaiter:
                 return
 
 
+def _turn_text(content: Any) -> str:
+    return _strip_internal_memory_context(content).strip() if isinstance(content, str) else ""
+
+
 class SignetMemoryProvider(MemoryProvider):
     """Signet persistent memory with hybrid search and knowledge graph."""
 
@@ -748,7 +753,7 @@ class SignetMemoryProvider(MemoryProvider):
         self._prefetch_thread: Optional[threading.Thread] = None
         self._prefetch_generation = 0
         self._turn_synced = threading.Condition(self._prefetch_lock)
-        self._turn_pending = False
+        self._pending_turns: List[Dict[str, Any]] = []
         self._session_ready = True
         self._submit_threads: set = set()
         self._submit_closed = False
@@ -1022,7 +1027,7 @@ class SignetMemoryProvider(MemoryProvider):
 
         state = None
         if query:
-            state = self._await_turn_state(session_id)
+            state = self._await_turn_state(session_id, query)
             submit = self._submit_prompt(query, state)
             if submit is None:
                 return ""
@@ -1055,18 +1060,20 @@ class SignetMemoryProvider(MemoryProvider):
         with self._transcript_lock:
             self._transcript_lines.append(f"user: {_strip_internal_memory_context(query)}")
 
-    def _await_turn_state(self, session_id: str) -> Optional[Dict[str, Any]]:
-        """Wait for the previous turn's sync and any pending session switch.
+    def _await_turn_state(self, session_id: str, query: str = "") -> Optional[Dict[str, Any]]:
+        """Wait for earlier turns' syncs and any pending session switch.
 
         Returns the session-bound inputs for this prompt, captured together,
         or None when the session Hermes named is not the provider's started
-        session by the deadline. A previous turn that never synced (an
-        interrupted turn) only delays the prompt.
+        session by the deadline. A turn that never synced (an interrupted
+        turn) only delays the next prompt once: at the deadline it stops being
+        waited for, but its late sync still matches it rather than a newer
+        prompt's turn.
         """
         deadline = time.monotonic() + _TURN_SYNC_WAIT_SECS
         with self._turn_synced:
             while not self._submit_closed and (
-                self._turn_pending
+                self._awaiting_sync()
                 or not self._session_ready
                 or (session_id and session_id != self._session_key)
             ):
@@ -1082,12 +1089,15 @@ class SignetMemoryProvider(MemoryProvider):
                     session_id,
                 )
                 return None
-            if self._turn_pending:
+            if self._awaiting_sync():
                 logger.warning(
                     "Signet submitted this prompt before Hermes synced the previous turn; "
                     "the previous reply is missing from live evidence"
                 )
-            self._turn_pending = True
+                for entry in self._pending_turns:
+                    entry["abandoned"] = True
+            self._pending_turns = self._pending_turns[-_PENDING_TURN_LIMIT:]
+            self._pending_turns.append({"query": _turn_text(query), "abandoned": False})
             return {
                 "session_key": self._session_key,
                 "last_assistant": self._last_assistant_message,
@@ -1095,9 +1105,29 @@ class SignetMemoryProvider(MemoryProvider):
                 "generation": self._prefetch_generation,
             }
 
-    def _release_turn(self) -> None:
+    def _awaiting_sync(self) -> bool:
+        return any(not entry["abandoned"] for entry in self._pending_turns)
+
+    def _release_turn(self, user_content: Optional[str] = None) -> None:
+        """Mark a turn synced: the one whose prompt matches, else the oldest awaited.
+
+        Without user_content every pending turn is released.
+        """
         with self._turn_synced:
-            self._turn_pending = False
+            if user_content is None:
+                self._pending_turns = []
+            else:
+                text = _turn_text(user_content)
+                index = next(
+                    (i for i, entry in enumerate(self._pending_turns) if entry["query"] == text),
+                    next((i for i, entry in enumerate(self._pending_turns) if not entry["abandoned"]), None),
+                )
+                if index is not None:
+                    self._pending_turns = [
+                        entry
+                        for i, entry in enumerate(self._pending_turns)
+                        if i > index or (i < index and not entry["abandoned"])
+                    ]
             self._turn_synced.notify_all()
 
     def _begin_session(self, session_key: str) -> None:
@@ -1200,7 +1230,7 @@ class SignetMemoryProvider(MemoryProvider):
         if assistant_content:
             with self._transcript_lock:
                 self._transcript_lines.append(f"assistant: {_strip_internal_memory_context(assistant_content)}")
-        self._release_turn()
+        self._release_turn(user_content)
         self._queue_notification_refresh("sync_turn")
 
     def _add_notification(self, inject: Any) -> None:
