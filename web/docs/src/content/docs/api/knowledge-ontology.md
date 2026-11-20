@@ -144,6 +144,9 @@ Responses carry an `ETag` computed from the body. A request with a matching
 polling an unchanged graph does not download or parse it again. The daemon
 still runs the read to compute the tag.
 
+Entities, aspects, and attributes carry `createdAt` and `updatedAt` as ISO 8601
+UTC timestamps, or `null` when the stored value is missing or unparseable.
+
 `metadata.truncated` reports which bounds omitted rows that exist:
 `entities`, `aspects`, `attributes`, `dependencies`, and `assertions` are each
 `true` when that part of the response is incomplete.

@@ -384,6 +384,36 @@ describe("GET /api/knowledge/constellation bounds", () => {
 		expect((await read("max_attributes_per_aspect=3&max_attributes=abc")).truncated.attributes).toBe(false);
 	});
 
+	test("returns each node's created and updated time as ISO UTC", async () => {
+		await seedRankedFacts();
+		await runWriteTxAsync(getDbAccessor(), (db) => {
+			db.prepare("UPDATE entities SET created_at = '2026-09-20 01:02:03' WHERE id = 'entity-first'").run();
+			db.prepare("UPDATE entity_aspects SET updated_at = 'not a time' WHERE id = 'aspect-a'").run();
+			db.prepare("UPDATE entity_attributes SET updated_at = '2026-09-21 04:05:06' WHERE id = 'fact-a1'").run();
+		});
+		const app = new Hono();
+		registerKnowledgeRoutes(app);
+		const body = (await (await app.request("/api/knowledge/constellation?agent_id=default")).json()) as {
+			entities: Array<{
+				id: string;
+				createdAt: string | null;
+				updatedAt: string | null;
+				aspects: Array<{
+					id: string;
+					createdAt: string | null;
+					updatedAt: string | null;
+					attributes: Array<{ id: string; createdAt: string | null; updatedAt: string | null }>;
+				}>;
+			}>;
+		};
+		const entity = body.entities.find((row) => row.id === "entity-first");
+		const aspect = entity?.aspects.find((row) => row.id === "aspect-a");
+		const fact = aspect?.attributes.find((row) => row.id === "fact-a1");
+		expect([entity?.createdAt, entity?.updatedAt]).toEqual(["2026-09-20T01:02:03.000Z", "2026-09-23T00:00:00.000Z"]);
+		expect([aspect?.createdAt, aspect?.updatedAt]).toEqual(["2026-09-23T00:00:00.000Z", null]);
+		expect([fact?.createdAt, fact?.updatedAt]).toEqual(["2026-09-23T00:00:00.000Z", "2026-09-21T04:05:06.000Z"]);
+	});
+
 	test("revalidates an unchanged graph with its ETag and serves the new graph after a write", async () => {
 		await seedRankedFacts();
 		const app = new Hono();
