@@ -343,4 +343,38 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.first).toBe("recall for next question\nmessage A\nmessage B");
 		expect(out.second).toBe("recall for later question\nmessage C");
 	});
+
+	it("keeps a claimed board notice when a newer response carries none", () => {
+		const out = py([
+			"board = {'notifications': {'inject': 'board notice', 'boardNotices': [{'threadId': 't'}]}}",
+			"FakeClient.responses = {'older': board}",
+			"older = p._await_session('sess-1')",
+			"newer = p._await_session('sess-1')",
+			"p._submit_prompt('newer', newer).join(5)",
+			"p._submit_prompt('older', older).join(5)",
+			"late = p.prefetch('', session_id='sess-1')",
+			"FakeClient.responses = {'first': board}",
+			"first = p._await_session('sess-1')",
+			"second = p._await_session('sess-1')",
+			"p._submit_prompt('first', first).join(5)",
+			"p._submit_prompt('second', second).join(5)",
+			"kept = p.prefetch('', session_id='sess-1')",
+			"print(json.dumps({'late': late.split('\\n'), 'kept': kept.split('\\n')}))",
+		]) as { late: string[]; kept: string[] };
+
+		expect(out.late).toContain("board notice");
+		expect(out.kept).toContain("board notice");
+	});
+
+	it("records a reply under the session Hermes synced it for after a compression switch", () => {
+		const out = py([
+			"p.prefetch('question one', session_id='sess-1')",
+			"p.on_session_end([])",
+			"p.on_session_switch('sess-child', parent_session_id='sess-1', reason='compression')",
+			"p.sync_turn('question one', 'answer one', session_id='sess-1')",
+			"print(json.dumps(stopped))",
+		]) as Array<[string, string]>;
+
+		expect(out).toEqual([["sess-1", "answer one"]]);
+	});
 });
