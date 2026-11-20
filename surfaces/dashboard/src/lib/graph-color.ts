@@ -2,6 +2,7 @@ import type { SceneNode } from "./graph-scene";
 
 export type ColorVariable = "confidence" | "importance" | "mentions" | "aspectWeight" | "created" | "updated";
 export type Interpolation = "rgb" | "oklab";
+export type Scale = "linear" | "sqrt" | "log";
 
 export interface ColorConfig {
 	readonly variable: ColorVariable;
@@ -10,7 +11,7 @@ export interface ColorConfig {
 	readonly bands: number;
 	readonly gamma: number;
 	readonly reverse: boolean;
-	readonly log: boolean;
+	readonly scale: Scale;
 	readonly auto: boolean;
 	readonly min: number;
 	readonly max: number;
@@ -36,7 +37,7 @@ export const COLOR_VARIABLES: ReadonlyArray<{
 		label: "Importance",
 		read: (node) => (VALUED_IMPORTANCE.has(node.kind) ? node.weight : undefined),
 	},
-	{ key: "mentions", label: "Mentions (entities)", read: (node) => (node.kind === "entity" ? node.weight : undefined) },
+	{ key: "mentions", label: "Mentions", read: (node) => node.mentions },
 	{ key: "aspectWeight", label: "Aspect weight", read: (node) => (node.kind === "aspect" ? node.weight : undefined) },
 	{ key: "created", label: "Days since created", read: (node) => ageInDays(node.createdAt) },
 	{ key: "updated", label: "Days since updated", read: (node) => ageInDays(node.updatedAt) },
@@ -107,7 +108,7 @@ export const DEFAULT_COLOR_CONFIG: ColorConfig = {
 	bands: 0,
 	gamma: 1,
 	reverse: false,
-	log: false,
+	scale: "linear",
 	auto: true,
 	min: 0,
 	max: 1,
@@ -184,7 +185,8 @@ export function sampleRamp(stops: readonly string[], t: number, interpolation: I
 }
 
 export function rampPosition(config: ColorConfig, value: number, min: number, max: number): number {
-	const scale = (v: number) => (config.log ? Math.log1p(Math.max(0, v)) : v);
+	const scale = (v: number) =>
+		config.scale === "log" ? Math.log1p(Math.max(0, v)) : config.scale === "sqrt" ? Math.sqrt(Math.max(0, v)) : v;
 	const low = scale(min);
 	const span = scale(max) - low;
 	let t = span > 0 ? (scale(value) - low) / span : 0.5;
@@ -258,7 +260,7 @@ export function parseColorConfig(value: unknown): ColorConfig | null {
 		bands: Math.round(Math.min(32, Math.max(0, number("bands", 0)))),
 		gamma: Math.min(8, Math.max(0.1, number("gamma", 1))),
 		reverse: flag("reverse", false),
-		log: flag("log", false),
+		scale: value.scale === "sqrt" || value.scale === "log" ? value.scale : flag("log", false) ? "log" : "linear",
 		auto: flag("auto", true),
 		min: number("min", 0),
 		max: number("max", 1),
@@ -284,6 +286,7 @@ export const GRAPH_COLOR_MODES: ReadonlyArray<{
 			stops: ["#1c1c1c", "#e66100", "#c01c28"],
 			bands: 16,
 			gamma: 1.7,
+			scale: "sqrt",
 		},
 	},
 	{
@@ -294,7 +297,7 @@ export const GRAPH_COLOR_MODES: ReadonlyArray<{
 			variable: "created",
 			stops: RAMPS.turbo ?? [],
 			bands: 16,
-			log: true,
+			scale: "log",
 			missing: "#000000",
 		},
 	},

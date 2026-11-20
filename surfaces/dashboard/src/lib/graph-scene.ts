@@ -63,6 +63,7 @@ export interface SceneNode {
 	category?: EntityCategory;
 	createdAt?: number;
 	updatedAt?: number;
+	mentions?: number;
 }
 
 export interface SceneEdge {
