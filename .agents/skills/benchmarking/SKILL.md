@@ -38,7 +38,7 @@ A `<workspace>` is the bench workspace root printed as `MemoryBench workspace:` 
 
 ## Results ledger
 
-`results/ledger.jsonl` is the record of benchmark runs, one JSON object per line. Before a run, read the latest comparable entries (same benchmark, sample, and Dreaming model) to pick the baseline. After a run finishes, append it with `run-summary.ts --append --note "<what the run tested>"` before changing any code, so the recorded commit and dirty flag describe what ran. Record failed and aborted runs too when they taught something; say so in the note. `docs/BENCHMARKING-PROGRESS.md` is a historical log from an older harness and is no longer appended to.
+`results/ledger.jsonl` is the record of benchmark runs, one JSON object per line. Before a run, read the latest comparable entries (same benchmark, sample, and Dreaming model) to pick the baseline. After a run finishes, append it with `run-summary.ts --append --note "<what the run tested>"` before changing any code, so the recorded commit and dirty flag describe what ran. Record failed and aborted runs too when they taught something; say so in the note.
 
 ## Hard rules
 

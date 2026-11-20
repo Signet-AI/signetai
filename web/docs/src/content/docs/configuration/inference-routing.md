@@ -177,7 +177,7 @@ subscription-backed CLI session, or gateway.
 | `thinking` | object | For local executors (`openai-compatible`, `ollama`, `llama-cpp`). Chat-template thinking control |
 | `models` | map | Named model entries for this target |
 
-Example ACPX background target (see also `docs/ACP-INTEGRATION.md` for the architecture and current limitations):
+Example ACPX background target:
 
 ```yaml
 inference:

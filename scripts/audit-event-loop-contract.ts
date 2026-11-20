@@ -169,7 +169,7 @@ interface AuditOptions {
 const DEFAULT_SOURCE_ROOT = "platform/daemon/src";
 const DEFAULT_BASELINE = "scripts/event-loop-contract-baseline.json";
 const DEFAULT_COUNT_BASELINE = "scripts/legacy-sync-db-baseline.json";
-const DEFAULT_REPORT = "docs/event-loop-contract-audit.md";
+const DEFAULT_REPORT = "scripts/event-loop-contract-audit.md";
 const SYNC_COMPAT_MODULE = "db-accessor-sync";
 const SOURCE_MODULE_EXTENSIONS = [".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".jsx", ".tsx"] as const;
 const OFF_PARENT_ENTRYPOINTS = new Set(["db-owner-worker.ts"]);

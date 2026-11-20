@@ -37,6 +37,46 @@ docker compose up -d
 
 See [Self-Hosting](/self-hosting/) for the persistent volume and initial auth boundary.
 
+## Update channels
+
+Signet has two update channels:
+
+- `stable` follows the npm `latest` tag and GitHub's latest release. It is the default.
+- `nightly` follows the npm `next` tag, which is a development prerelease or the newer stable release.
+
+A stable release advances both tags. A development release advances only `next`. Tags move forward in version order, so nightly follows stable when no development build is newer. Stable users never move to a development prerelease.
+
+Show or set the channel:
+
+```bash
+signet update channel
+signet update channel nightly
+signet update channel stable
+```
+
+`latest` and `next` are accepted as aliases for `stable` and `nightly`. The daemon stores the choice in `agent.yaml`:
+
+```yaml
+updates:
+  auto_install: false
+  check_interval: 21600
+  channel: stable
+```
+
+Install a channel directly:
+
+```bash
+npm install -g signetai
+npm install -g signetai@next
+curl -fsSL https://signetai.sh/install.sh | SIGNET_CHANNEL=nightly bash
+```
+
+On Windows, set `$env:SIGNET_CHANNEL = "nightly"` before running `iwr -useb https://signetai.sh/install.ps1 | iex`.
+
+`SIGNET_RELEASE_TAG`, `SIGNET_VERSION`, and `VERSION` pin an explicit version in the installer.
+
+Native updates check each asset's size and SHA-256 against the release manifest. These checks detect incomplete or corrupted downloads. They do not authenticate the manifest.
+
 ## Configuration migration
 
 Current configuration uses the workspace `agent.yaml`, with canonical inference routing for model selection. `memory.synthesis` is retired and rejected by the loader. If an old workspace fails to start after an update:

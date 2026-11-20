@@ -117,7 +117,7 @@ A stopped pod keeps `/workspace` (model, venv, repo, run DBs, evidence) and cost
 
 ## Recipe and decisions (why these defaults)
 
-- vLLM 0.32.0 cu129 pinned by `pod/freeze.txt` (triton 3.6.0, torchcodec removed). Full launch recipe and decode matrix: `docs/inference-recipes/qwen3.8-27b-vllm-blackwell.md`.
+- vLLM 0.32.0 cu129 pinned by `pod/freeze.txt` (triton 3.6.0, torchcodec removed). Full launch recipe and decode matrix: `qwen3.8-27b-vllm-blackwell.md`.
 - Weights: `RedHatAI/Qwen3.8-27B-INT4` + fp8 KV + MTP 3. At 32 agents it kept 92% cache hits, against 77% for FP8 weights. TurboQuant KV ran 9-15x slower in vLLM 0.32 on Hopper.
 - Context 262,144. Dreaming needs at least 200K; the window comes from the server's `/v1/models`, not from a Signet cap.
 - Dreaming concurrency 12 per H200. Concurrency is limited by the pass deadline, not request slots: at 24 passes each got ~25 tok/s and most died at the 30-minute deadline. Past the KV knee (~32-48 agents), cache hits fall to 0% and every turn re-prefills. On bigger GPUs, raise `--dream-conc` only while per-pass decode stays at or above ~50 tok/s.
