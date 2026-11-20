@@ -331,4 +331,43 @@ describe("Hermes prompt recall timing", () => {
 
 		expect(out).toBe("board note");
 	});
+
+	it("does not let an earlier turn's late sync release a later turn's wait", () => {
+		const out = py([
+			"import threading",
+			"p.prefetch('first question', session_id='sess-1')",
+			"p.prefetch('second question', session_id='sess-1')",
+			"p.sync_turn('first question', 'answer one', session_id='sess-1')",
+			"def late_sync():",
+			"    time.sleep(0.5)",
+			"    p.sync_turn('second question', 'answer two', session_id='sess-1')",
+			"threading.Thread(target=late_sync).start()",
+			"p.prefetch('third question', session_id='sess-1')",
+			"print(json.dumps(submitted))",
+		]) as Array<[string, string, string]>;
+
+		expect(out.map((call) => [call[1], call[2]])).toEqual([
+			["first question", ""],
+			["second question", ""],
+			["third question", "answer two"],
+		]);
+	}, 20_000);
+
+	it("waits for an unsynced turn only once", () => {
+		const out = py([
+			"p.prefetch('interrupted question', session_id='sess-1')",
+			"started = time.monotonic()",
+			"p.prefetch('second question', session_id='sess-1')",
+			"first_wait = time.monotonic() - started",
+			"p.sync_turn('second question', 'answer two', session_id='sess-1')",
+			"started = time.monotonic()",
+			"p.prefetch('third question', session_id='sess-1')",
+			"second_wait = time.monotonic() - started",
+			"print(json.dumps({'first': first_wait, 'second': second_wait, 'last': submitted[-1][2]}))",
+		]) as { first: number; second: number; last: string };
+
+		expect(out.first).toBeGreaterThan(1.5);
+		expect(out.second).toBeLessThan(0.5);
+		expect(out.last).toBe("answer two");
+	}, 20_000);
 });
