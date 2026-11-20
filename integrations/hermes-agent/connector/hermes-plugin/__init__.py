@@ -1113,21 +1113,23 @@ class SignetMemoryProvider(MemoryProvider):
         return any(not entry["abandoned"] for entry in self._pending_turns)
 
     def _release_turn(self, user_content: Optional[str] = None) -> None:
-        """Mark a turn synced: the one whose prompt matches, else the oldest awaited.
+        """Mark a turn synced: the oldest whose prompt matches, else the oldest awaited.
 
-        A still-awaited match wins over an abandoned one with the same text, so
-        retrying an interrupted prompt releases the retry. Without
-        user_content every pending turn is released.
+        Hermes syncs turns in order, so the oldest match is the right one even
+        when a prompt was sent twice. If the older copy was interrupted and
+        never syncs, the retry's sync clears it and the next prompt waits for
+        the retry once more. Without user_content every pending turn is
+        released.
         """
         with self._turn_synced:
             if user_content is None:
                 self._pending_turns = []
             else:
                 text = _turn_text(user_content)
-                matches = [i for i, entry in enumerate(self._pending_turns) if entry["query"] == text]
-                live = [i for i in matches if not self._pending_turns[i]["abandoned"]]
-                awaited = [i for i, entry in enumerate(self._pending_turns) if not entry["abandoned"]]
-                index = next(iter(live or matches or awaited), None)
+                index = next(
+                    (i for i, entry in enumerate(self._pending_turns) if entry["query"] == text),
+                    next((i for i, entry in enumerate(self._pending_turns) if not entry["abandoned"]), None),
+                )
                 if index is not None:
                     self._pending_turns = [
                         entry
