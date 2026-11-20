@@ -33,11 +33,12 @@ const PRELUDE = [
 	"import json, time",
 	"import plugins.memory.signet as sig",
 	"submitted = []",
+	"stopped = []",
 	"class FakeClient:",
 	"    delays = {}",
 	"    responses = {}",
 	"    def user_prompt_submit(self, key, msg, **kw):",
-	"        submitted.append([key, msg, kw.get('last_assistant_message')])",
+	"        submitted.append([key, msg, kw.get('last_assistant_message', '')])",
 	"        time.sleep(self.delays.get(msg, 0))",
 	"        return {'inject': 'recall for ' + msg, **self.responses.get(msg, {})}",
 	"    start_delay = 0",
@@ -45,10 +46,11 @@ const PRELUDE = [
 	"        time.sleep(self.start_delay)",
 	"        submitted.append(['session_start', key] + (['claim'] if kw.get('claim_only') else []))",
 	"        return {'dynamicContext': 'start for ' + key}",
+	"    def stop(self, key, reply, **kw): stopped.append([key, reply])",
 	"    notes = {}",
 	"    def notifications(self, key, hook, **kw):",
 	"        time.sleep(self.notes.get('delay', 0))",
-	"        return {'inject': self.notes.get('inject', '')}",
+	"        return None if self.notes.get('fail') else {'inject': self.notes.get('inject', '')}",
 	"p = sig.SignetMemoryProvider()",
 	"p._client = FakeClient()",
 	"p._session_key = 'sess-1'",
@@ -68,13 +70,17 @@ describe("Hermes prompt recall timing", () => {
 		const out = py([
 			"first = turn('who produced SXRS?', 'Franco Picache.')",
 			"second = turn('what about KNL?', 'Nick Mays.')",
-			"print(json.dumps({'contexts': [first[0], second[0]], 'submitted': submitted}))",
-		]) as { contexts: string[]; submitted: Array<[string, string, string]> };
+			"print(json.dumps({'contexts': [first[0], second[0]], 'submitted': submitted, 'stopped': stopped}))",
+		]) as { contexts: string[]; submitted: Array<[string, string, string]>; stopped: Array<[string, string]> };
 
 		expect(out.contexts).toEqual(["recall for who produced SXRS?", "recall for what about KNL?"]);
 		expect(out.submitted).toEqual([
 			["sess-1", "who produced SXRS?", ""],
-			["sess-1", "what about KNL?", "Franco Picache."],
+			["sess-1", "what about KNL?", ""],
+		]);
+		expect(out.stopped).toEqual([
+			["sess-1", "Franco Picache."],
+			["sess-1", "Nick Mays."],
 		]);
 	});
 
@@ -130,21 +136,6 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.context).toBe("start for sess-2\nrecall for new private question");
 	});
 
-	it("sends the previous reply even when Hermes syncs it after the next turn starts", () => {
-		const out = py([
-			"import threading",
-			"p.prefetch('first question', session_id='sess-1')",
-			"def late_sync():",
-			"    time.sleep(1)",
-			"    p.sync_turn('first question', 'answer one', session_id='sess-1')",
-			"threading.Thread(target=late_sync).start()",
-			"p.prefetch('second question', session_id='sess-1')",
-			"print(json.dumps(submitted))",
-		]) as Array<[string, string, string]>;
-
-		expect(out.map((call) => call[2])).toEqual(["", "answer one"]);
-	});
-
 	it("waits for every running submit on shutdown and publishes nothing after it", () => {
 		const out = py([
 			"import threading",
@@ -176,26 +167,6 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.calls).toEqual([]);
 		expect(out.context).toBe("");
 	}, 20_000);
-
-	it("keeps waiting for the turn's reply across an inline compression switch", () => {
-		const out = py([
-			"import threading",
-			"p.prefetch('current question', session_id='sess-1')",
-			"p.on_session_end([])",
-			"p.on_session_switch('sess-1', reason='compression')",
-			"def late_sync():",
-			"    time.sleep(0.5)",
-			"    p.sync_turn('current question', 'completed answer', session_id='sess-1')",
-			"threading.Thread(target=late_sync).start()",
-			"p.prefetch('next question', session_id='sess-1')",
-			"print(json.dumps([call for call in submitted if call[0] == 'sess-1']))",
-		]) as Array<[string, string, string]>;
-
-		expect(out.map((call) => [call[1], call[2]])).toEqual([
-			["current question", ""],
-			["next question", "completed answer"],
-		]);
-	});
 
 	it("does not submit a prompt that races shutdown", () => {
 		const out = py([
@@ -273,8 +244,8 @@ describe("Hermes prompt recall timing", () => {
 	it("keeps the newest notification snapshot when an older submit answers last", () => {
 		const out = py([
 			"FakeClient.responses = {'newer': {'notifications': {'inject': 'board note'}}}",
-			"older = p._await_turn_state('sess-1')",
-			"newer = p._await_turn_state('sess-1')",
+			"older = p._await_session('sess-1')",
+			"newer = p._await_session('sess-1')",
 			"p._submit_prompt('newer', newer).join(5)",
 			"p._submit_prompt('older', older).join(5)",
 			"print(json.dumps(p.prefetch('', session_id='sess-1')))",
@@ -319,97 +290,57 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.new).toBe("start for sess-2");
 	}, 20_000);
 
-	it("ignores a refresh that answers after a newer snapshot or after delivery", () => {
+	it("does not wait for a turn that Hermes never synced", () => {
+		const out = py([
+			"p.prefetch('interrupted question', session_id='sess-1')",
+			"started = time.monotonic()",
+			"context = p.prefetch('next question', session_id='sess-1')",
+			"waited = time.monotonic() - started",
+			"print(json.dumps({'context': context, 'waited': waited, 'stopped': stopped}))",
+		]) as { context: string; waited: number; stopped: unknown[] };
+
+		expect(out.waited).toBeLessThan(0.5);
+		expect(out.context).toBe("recall for next question");
+		expect(out.stopped).toEqual([]);
+	});
+
+	it("records the reply under the session the turn ran in, before a /new switch", () => {
+		const out = py([
+			"turn('old question', 'old answer')",
+			"p.on_session_end([])",
+			"p.on_session_switch('sess-2', reset=True)",
+			"p.prefetch('new question', session_id='sess-2')",
+			"p.sync_turn('new question', 'new answer', session_id='sess-2')",
+			"print(json.dumps(stopped))",
+		]) as Array<[string, string]>;
+
+		expect(out).toEqual([
+			["sess-1", "old answer"],
+			["sess-2", "new answer"],
+		]);
+	});
+
+	it("ignores a refresh that answers after a newer snapshot or fails", () => {
 		const out = py([
 			"import threading",
 			"FakeClient.notes = {'delay': 0.5, 'inject': 'message A'}",
-			"p._queue_notification_refresh('sync_turn')",
+			"p._queue_notification_refresh('on_delegation')",
 			"FakeClient.responses = {'next question': {'notifications': {'inject': 'message A\\nmessage B'}}}",
 			"first = p.prefetch('next question', session_id='sess-1')",
 			"for t in threading.enumerate():",
-			"    if t.name == 'signet-notify-sync_turn': t.join(5)",
-			"p.sync_turn('next question', 'ok', session_id='sess-1')",
-			"FakeClient.notes = {}",
+			"    if t.name == 'signet-notify-on_delegation': t.join(5)",
+			"FakeClient.notes = {'fail': True}",
+			"FakeClient.responses = {'later question': {'notifications': {'inject': 'message C'}}}",
+			"later = p._await_session('sess-1')",
+			"p._submit_prompt('later question', later).join(5)",
+			"p._queue_notification_refresh('on_delegation')",
 			"for t in threading.enumerate():",
-			"    if t.name == 'signet-notify-sync_turn': t.join(5)",
-			"second = p.prefetch('after ack', session_id='sess-1')",
+			"    if t.name == 'signet-notify-on_delegation': t.join(5)",
+			"second = p.prefetch('', session_id='sess-1')",
 			"print(json.dumps({'first': first, 'second': second}))",
 		]) as { first: string; second: string };
 
 		expect(out.first).toBe("recall for next question\nmessage A\nmessage B");
-		expect(out.second).toBe("recall for after ack");
+		expect(out.second).toBe("recall for later question\nmessage C");
 	});
-
-	it("waits at most once more after a verbatim retry of an interrupted prompt", () => {
-		const out = py([
-			"p.prefetch('same question', session_id='sess-1')",
-			"p.prefetch('same question', session_id='sess-1')",
-			"p.sync_turn('same question', 'answer', session_id='sess-1')",
-			"p.prefetch('next question', session_id='sess-1')",
-			"p.sync_turn('next question', 'next answer', session_id='sess-1')",
-			"started = time.monotonic()",
-			"p.prefetch('last question', session_id='sess-1')",
-			"waited = time.monotonic() - started",
-			"print(json.dumps({'waited': waited, 'replies': [call[2] for call in submitted]}))",
-		]) as { waited: number; replies: string[] };
-
-		expect(out.waited).toBeLessThan(0.5);
-		expect(out.replies).toEqual(["", "", "answer", "next answer"]);
-	}, 20_000);
-
-	it("does not let a late sync for an older identical prompt release the retry's wait", () => {
-		const out = py([
-			"import threading",
-			"p.prefetch('same question', session_id='sess-1')",
-			"p.prefetch('same question', session_id='sess-1')",
-			"p.sync_turn('same question', 'old answer', session_id='sess-1')",
-			"def late_sync():",
-			"    time.sleep(0.5)",
-			"    p.sync_turn('same question', 'retry answer', session_id='sess-1')",
-			"threading.Thread(target=late_sync).start()",
-			"p.prefetch('third question', session_id='sess-1')",
-			"print(json.dumps(submitted[-1]))",
-		]) as [string, string, string];
-
-		expect(out).toEqual(["sess-1", "third question", "retry answer"]);
-	}, 20_000);
-
-	it("does not let an earlier turn's late sync release a later turn's wait", () => {
-		const out = py([
-			"import threading",
-			"p.prefetch('first question', session_id='sess-1')",
-			"p.prefetch('second question', session_id='sess-1')",
-			"p.sync_turn('first question', 'answer one', session_id='sess-1')",
-			"def late_sync():",
-			"    time.sleep(0.5)",
-			"    p.sync_turn('second question', 'answer two', session_id='sess-1')",
-			"threading.Thread(target=late_sync).start()",
-			"p.prefetch('third question', session_id='sess-1')",
-			"print(json.dumps(submitted))",
-		]) as Array<[string, string, string]>;
-
-		expect(out.map((call) => [call[1], call[2]])).toEqual([
-			["first question", ""],
-			["second question", ""],
-			["third question", "answer two"],
-		]);
-	}, 20_000);
-
-	it("waits for an unsynced turn only once", () => {
-		const out = py([
-			"p.prefetch('interrupted question', session_id='sess-1')",
-			"started = time.monotonic()",
-			"p.prefetch('second question', session_id='sess-1')",
-			"first_wait = time.monotonic() - started",
-			"p.sync_turn('second question', 'answer two', session_id='sess-1')",
-			"started = time.monotonic()",
-			"p.prefetch('third question', session_id='sess-1')",
-			"second_wait = time.monotonic() - started",
-			"print(json.dumps({'first': first_wait, 'second': second_wait, 'last': submitted[-1][2]}))",
-		]) as { first: number; second: number; last: string };
-
-		expect(out.first).toBeGreaterThan(1.5);
-		expect(out.second).toBeLessThan(0.5);
-		expect(out.last).toBe("answer two");
-	}, 20_000);
 });

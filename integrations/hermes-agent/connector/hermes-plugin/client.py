@@ -399,6 +399,24 @@ class SignetClient:
             timeout=_RECALL_TIMEOUT_SECS,
         )
 
+    def stop(
+        self,
+        session_key: str,
+        last_assistant_message: str,
+        *,
+        project: str = "",
+    ) -> Optional[Dict[str, Any]]:
+        """Record a finished turn's assistant reply through the stop hook."""
+        body: Dict[str, Any] = {
+            "harness": self._harness,
+            "sessionKey": session_key,
+            "lastAssistantMessage": last_assistant_message,
+            "agentId": self._agent_id,
+        }
+        if project:
+            body["cwd"] = project
+        return self._post("/api/hooks/stop", body)
+
     def notifications(
         self,
         session_key: str,
