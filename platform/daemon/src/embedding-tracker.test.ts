@@ -1,8 +1,9 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, setSystemTime } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
+import { embeddingProfileFingerprint } from "./embedding-profile";
 import { acquireEmbeddingRepairLease, finishEmbeddingRepairLease } from "./embedding-repair-state";
 import { computeEmbeddingRetryBackoffMs, processEmbeddingCycle, startEmbeddingTracker } from "./embedding-tracker";
 
@@ -161,6 +162,85 @@ describe("startEmbeddingTracker admission", () => {
 				),
 			).toEqual({ n: 1 });
 		} finally {
+			await tracker.stop();
+			closeDbAccessor();
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	it("backs off while the profile does not match the active index, then resumes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-embedding-tracker-mismatch-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		const accessor = getDbAccessor();
+		const trackerCfg = { enabled: true, pollMs: 20, batchSize: 8 };
+		const repairCfg = {
+			reembedCooldownMs: 0,
+			reembedHourlyBudget: 100,
+			requeueCooldownMs: 0,
+			requeueHourlyBudget: 1,
+			dedupCooldownMs: 0,
+			dedupHourlyBudget: 1,
+			dedupSemanticThreshold: 0.9,
+			dedupBatchSize: 1,
+		};
+		const now = new Date().toISOString();
+		accessor.withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories (id, content, content_hash, type, agent_id, created_at, updated_at, embedding_model)
+				 VALUES (?, ?, ?, 'fact', 'default', ?, ?, NULL)`,
+			).run("fresh-a", "A fresh derived memory.", "hash-fresh-a", now, now);
+		});
+		let fetches = 0;
+		let probes = 0;
+		const tracker = startEmbeddingTracker(
+			accessor,
+			cfg,
+			trackerCfg,
+			repairCfg,
+			async () => {
+				fetches++;
+				return Array.from({ length: cfg.dimensions }, () => 0.01);
+			},
+			async () => {
+				probes++;
+				return { available: true };
+			},
+		);
+		try {
+			const deadline = Date.now() + 2_000;
+			while (tracker.getStats().skippedCycles < 5 && Date.now() < deadline)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(fetches).toBe(0);
+			expect(probes).toBe(0);
+			expect(tracker.getStats().skippedCycles).toBeGreaterThanOrEqual(5);
+			expect(
+				accessor.withReadDb(
+					(db) =>
+						db.prepare("SELECT embedding_model FROM memories WHERE id = 'fresh-a'").get() as {
+							embedding_model: string | null;
+						},
+				),
+			).toEqual({ embedding_model: null });
+
+			accessor.withWriteTx((db) => {
+				db.prepare("UPDATE embedding_index_state SET active_profile_json = ? WHERE id = 1").run(
+					JSON.stringify({
+						fingerprint: embeddingProfileFingerprint(cfg),
+						provider: cfg.provider,
+						model: cfg.model,
+						dimensions: cfg.dimensions,
+						baseUrl: cfg.base_url,
+					}),
+				);
+			});
+			setSystemTime(new Date(Date.now() + 61_000));
+			const resumeDeadline = performance.now() + 2_000;
+			while (fetches === 0 && performance.now() < resumeDeadline)
+				await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(fetches).toBeGreaterThan(0);
+			expect(probes).toBeGreaterThan(0);
+		} finally {
+			setSystemTime();
 			await tracker.stop();
 			closeDbAccessor();
 			rmSync(dir, { recursive: true, force: true });
