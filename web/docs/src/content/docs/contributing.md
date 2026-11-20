@@ -105,7 +105,7 @@ This is a Bun workspace monorepo organized by intent:
 
 ```
 platform/               # engine/runtime: core, daemon, native
-surfaces/               # human-facing surfaces: CLI, dashboard, desktop, tray, browser extension
+surfaces/               # human-facing surfaces: CLI, dashboard, desktop, tray
 integrations/           # external harness integrations grouped by tool
 libs/                   # reusable developer libraries: SDK, connector-base
 plugins/                # Signet-native plugins loaded by Signet
@@ -122,7 +122,6 @@ platform/daemon/                       # @signet/daemon — HTTP API, file watch
 surfaces/cli/                          # @signet/cli — setup wizard and daemon management
 surfaces/dashboard/                    # signet-dashboard — Svelte dashboard
 surfaces/desktop/                      # @signet/desktop — Electron desktop application
-surfaces/browser-extension/            # @signet/extension — browser extension
 libs/sdk/                              # @signet/sdk — integration SDK for third-party apps
 libs/connector-base/                   # @signet/connector-base — shared connector primitives
 integrations/<tool>/connector/         # install-time harness connectors
@@ -359,9 +358,8 @@ using labels as a single bucket:
 - Type: `bug`, `enhancement`, `documentation`, or another existing type.
 - Priority: `priority: P0` through `priority: P3`, based on user impact and urgency.
 - Component: `component: core`, `component: daemon`, `component: cli`,
-  `component: dashboard`, `component: desktop`, `component: browser-extension`,
-  `component: connector`, `component: dreaming`, `component: inference`, or
-  `component: native`.
+  `component: dashboard`, `component: desktop`, `component: connector`,
+  `component: dreaming`, `component: inference`, or `component: native`.
 - Risk: use every applicable `risk:` label for the invariant that could be
   damaged while fixing the issue.
 - Blast radius: `blast: contained`, `blast: subsystem`, `blast: broad`, or

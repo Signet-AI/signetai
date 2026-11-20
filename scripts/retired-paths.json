@@ -18,5 +18,10 @@
 		"path": "scripts/sync-specs-to-project.test.ts",
 		"reason": "Remove tests for the retired project-board synchronizer.",
 		"retiredIn": "2026-11-17"
+	},
+	{
+		"path": "surfaces/browser-extension",
+		"reason": "Delete the unpublished, unmaintained browser extension.",
+		"retiredIn": "2026-11-20"
 	}
 ]

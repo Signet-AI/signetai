@@ -30,8 +30,6 @@ areas:
         name: "@signet/desktop"
       - path: surfaces/tray
         name: "@signet/tray"
-      - path: surfaces/browser-extension
-        name: "@signet/extension"
 
   integrations:
     purpose: "External harness integrations grouped by the tool they connect to."

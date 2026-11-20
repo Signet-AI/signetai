@@ -75,6 +75,8 @@ describe("browser writes without credentials", () => {
 		expect(await send("POST", { ...textPlain, "sec-fetch-site": "cross-site" })).toBe(403);
 		expect(await send("POST", { origin: `http://127.0.0.1:${port}`, "sec-fetch-site": "cross-site" })).toBe(403);
 		expect(await send("DELETE", { origin: "http://evil.example" })).toBe(403);
+		expect(await send("POST", { origin: "chrome-extension://abcdefghijklmnop" })).toBe(403);
+		expect(await send("POST", { origin: "moz-extension://4b1f1c1e-0000-4000-8000-000000000000" })).toBe(403);
 		expect(handled).toBe(before);
 	});
 
@@ -92,8 +94,6 @@ describe("browser writes without credentials", () => {
 		expect(await send("POST", { host: `localhost:${port}`, origin: `http://localhost:${port}` })).toBe(200);
 		expect(await send("POST", { host: `localhost.:${port}`, origin: `http://localhost.:${port}` })).toBe(200);
 		expect(await send("POST", { "sec-fetch-site": "same-origin" })).toBe(200);
-		expect(await send("POST", { origin: "chrome-extension://abcdefghijklmnop" })).toBe(200);
-		expect(await send("POST", { origin: "moz-extension://4b1f1c1e-0000-4000-8000-000000000000" })).toBe(200);
 		expect(await send("GET", { origin: "http://evil.example" })).toBe(200);
 	});
 
