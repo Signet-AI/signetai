@@ -7,10 +7,15 @@ import {
 	detectSignetInstallations,
 	getMissingIdentityFiles,
 	hasValidIdentity,
+	allTargetRefs,
 	inactivePackageManagerInstallations,
 	loadIdentityMode,
+	parseRoutingConfig,
+	parseYamlDocument,
+	resolveRoutingDecision,
 	resolveWorkspaceLayout,
 } from "@signet/core";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
@@ -818,6 +823,41 @@ function addReadinessFindings(report: StatusReport, findings: DoctorFinding[]): 
 		fix: "Inspect the queue in `signet status`; repair only identified jobs with `signet repair queue requeue --apply` or retire obsolete jobs with `signet repair queue cancel --apply`.",
 	});
 }
+function addExtractionPrivacyFindings(basePath: string, findings: DoctorFinding[]): void {
+	const path = join(basePath, "agent.yaml");
+	if (!existsSync(path)) return;
+	let parsed: ReturnType<typeof parseRoutingConfig>;
+	try {
+		parsed = parseRoutingConfig(parseYamlDocument(readFileSync(path, "utf-8")));
+	} catch {
+		return;
+	}
+	if (!parsed.ok || !parsed.value.workloads?.memoryExtraction) return;
+	const config = parsed.value;
+	const targets = Object.fromEntries(
+		allTargetRefs(config).map((ref) => [
+			ref,
+			{ available: true, health: "healthy" as const, circuitOpen: false, accountState: "ready" as const },
+		]),
+	);
+	const decision = resolveRoutingDecision(config, { operation: "memory_extraction" }, { targets });
+	if (decision.ok) return;
+	const trace = decision.error.details?.trace as
+		| { readonly candidates?: readonly { readonly targetRef: string; readonly blockedBy: readonly string[] }[] }
+		| undefined;
+	const gated = (trace?.candidates ?? []).filter((candidate) =>
+		candidate.blockedBy.some((reason) => reason.startsWith("privacy gate")),
+	);
+	if (gated.length === 0) return;
+	const reason = gated[0]?.blockedBy.find((entry) => entry.startsWith("privacy gate")) ?? "privacy gate";
+	findings.push({
+		level: "warn",
+		code: "memory_extraction_privacy_blocked",
+		message: `Dreaming cannot run: memory extraction is blocked by the ${reason} for ${gated.map((candidate) => candidate.targetRef).join(", ")}.`,
+		fix: "To send memory and transcript text to this provider, choose Use remotely under Settings → Inference in the dashboard, or set inference.taskClasses.memory_extraction.privacy to remote_ok in agent.yaml. Otherwise point memory extraction at a local target.",
+	});
+}
+
 function addDaemonLifecycleExitFindings(
 	probe: NonNullable<DaemonStatus["probe"]>,
 	findings: DoctorFinding[],
@@ -1082,6 +1122,7 @@ function getDoctorFindings(report: StatusReport, installations: SignetInstallati
 	addPhysicalMemoryFinding(report, findings);
 	addReadinessFindings(report, findings);
 	addQueueBacklogFindings(report, findings);
+	if (hasAgentYaml) addExtractionPrivacyFindings(report.basePath, findings);
 
 	if (report.openclawWorkspaceUnprotected) {
 		findings.push({
