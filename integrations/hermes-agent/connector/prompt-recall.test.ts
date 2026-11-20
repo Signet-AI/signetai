@@ -270,12 +270,13 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.context).toBe("recall for after restart");
 	});
 
-	it("keeps an undrained notification when a later submit carries none", () => {
+	it("keeps the newest notification snapshot when an older submit answers last", () => {
 		const out = py([
-			"FakeClient.responses = {'noted': {'notifications': {'inject': 'board note'}}}",
-			"state = p._await_turn_state('sess-1')",
-			"p._submit_prompt('noted', state).join(5)",
-			"p._submit_prompt('plain', state).join(5)",
+			"FakeClient.responses = {'newer': {'notifications': {'inject': 'board note'}}}",
+			"older = p._await_turn_state('sess-1')",
+			"newer = p._await_turn_state('sess-1')",
+			"p._submit_prompt('newer', newer).join(5)",
+			"p._submit_prompt('older', older).join(5)",
 			"print(json.dumps(p.prefetch('', session_id='sess-1')))",
 		]) as string;
 
@@ -318,19 +319,41 @@ describe("Hermes prompt recall timing", () => {
 		expect(out.new).toBe("start for sess-2");
 	}, 20_000);
 
-	it("keeps an undrained notification when a delayed refresh returns none", () => {
+	it("ignores a refresh that answers after a newer snapshot or after delivery", () => {
 		const out = py([
 			"import threading",
-			"FakeClient.notes = {'delay': 0.3, 'inject': ''}",
-			"p._notification_result = 'board note'",
+			"FakeClient.notes = {'delay': 0.5, 'inject': 'message A'}",
 			"p._queue_notification_refresh('sync_turn')",
+			"FakeClient.responses = {'next question': {'notifications': {'inject': 'message A\\nmessage B'}}}",
+			"first = p.prefetch('next question', session_id='sess-1')",
 			"for t in threading.enumerate():",
 			"    if t.name == 'signet-notify-sync_turn': t.join(5)",
-			"print(json.dumps(p.prefetch('', session_id='sess-1')))",
-		]) as string;
+			"p.sync_turn('next question', 'ok', session_id='sess-1')",
+			"FakeClient.notes = {}",
+			"for t in threading.enumerate():",
+			"    if t.name == 'signet-notify-sync_turn': t.join(5)",
+			"second = p.prefetch('after ack', session_id='sess-1')",
+			"print(json.dumps({'first': first, 'second': second}))",
+		]) as { first: string; second: string };
 
-		expect(out).toBe("board note");
+		expect(out.first).toBe("recall for next question\nmessage A\nmessage B");
+		expect(out.second).toBe("recall for after ack");
 	});
+
+	it("releases a retried prompt's own wait when the interrupted copy never syncs", () => {
+		const out = py([
+			"p.prefetch('same question', session_id='sess-1')",
+			"p.prefetch('same question', session_id='sess-1')",
+			"p.sync_turn('same question', 'answer', session_id='sess-1')",
+			"started = time.monotonic()",
+			"p.prefetch('next question', session_id='sess-1')",
+			"waited = time.monotonic() - started",
+			"print(json.dumps({'waited': waited, 'last': submitted[-1][2]}))",
+		]) as { waited: number; last: string };
+
+		expect(out.waited).toBeLessThan(0.5);
+		expect(out.last).toBe("answer");
+	}, 20_000);
 
 	it("does not let an earlier turn's late sync release a later turn's wait", () => {
 		const out = py([

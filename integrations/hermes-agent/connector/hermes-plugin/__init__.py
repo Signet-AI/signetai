@@ -754,6 +754,8 @@ class SignetMemoryProvider(MemoryProvider):
         self._prefetch_generation = 0
         self._turn_synced = threading.Condition(self._prefetch_lock)
         self._pending_turns: List[Dict[str, Any]] = []
+        self._notification_seq = 0
+        self._notification_applied = 0
         self._session_ready = True
         self._submit_threads: set = set()
         self._submit_closed = False
@@ -1098,7 +1100,9 @@ class SignetMemoryProvider(MemoryProvider):
                     entry["abandoned"] = True
             self._pending_turns = self._pending_turns[-_PENDING_TURN_LIMIT:]
             self._pending_turns.append({"query": _turn_text(query), "abandoned": False})
+            self._notification_seq += 1
             return {
+                "notification_seq": self._notification_seq,
                 "session_key": self._session_key,
                 "last_assistant": self._last_assistant_message,
                 "project": self._project,
@@ -1111,17 +1115,19 @@ class SignetMemoryProvider(MemoryProvider):
     def _release_turn(self, user_content: Optional[str] = None) -> None:
         """Mark a turn synced: the one whose prompt matches, else the oldest awaited.
 
-        Without user_content every pending turn is released.
+        A still-awaited match wins over an abandoned one with the same text, so
+        retrying an interrupted prompt releases the retry. Without
+        user_content every pending turn is released.
         """
         with self._turn_synced:
             if user_content is None:
                 self._pending_turns = []
             else:
                 text = _turn_text(user_content)
-                index = next(
-                    (i for i, entry in enumerate(self._pending_turns) if entry["query"] == text),
-                    next((i for i, entry in enumerate(self._pending_turns) if not entry["abandoned"]), None),
-                )
+                matches = [i for i, entry in enumerate(self._pending_turns) if entry["query"] == text]
+                live = [i for i in matches if not self._pending_turns[i]["abandoned"]]
+                awaited = [i for i, entry in enumerate(self._pending_turns) if not entry["abandoned"]]
+                index = next(iter(live or matches or awaited), None)
                 if index is not None:
                     self._pending_turns = [
                         entry
@@ -1150,6 +1156,7 @@ class SignetMemoryProvider(MemoryProvider):
         last_assistant = state["last_assistant"]
         project = state["project"]
         generation = state["generation"]
+        notification_seq = state["notification_seq"]
 
         def _run():
             try:
@@ -1189,7 +1196,7 @@ class SignetMemoryProvider(MemoryProvider):
                         self._prefetch_result = "\n".join(
                             part for part in (self._prefetch_result, recall_inject) if part and part.strip()
                         )
-                    self._add_notification(notification_inject)
+                    self._set_notification(notification_seq, notification_inject)
             except Exception as e:
                 logger.debug("Signet prompt submit failed: %s", e)
             finally:
@@ -1233,12 +1240,16 @@ class SignetMemoryProvider(MemoryProvider):
         self._release_turn(user_content)
         self._queue_notification_refresh("sync_turn")
 
-    def _add_notification(self, inject: Any) -> None:
-        """Keep an undrained notification; append a new one. Caller holds _prefetch_lock."""
-        if isinstance(inject, str) and inject.strip() and inject not in self._notification_result:
-            self._notification_result = "\n".join(
-                part for part in (self._notification_result, inject) if part and part.strip()
-            )
+    def _set_notification(self, seq: int, inject: Any) -> None:
+        """Keep the newest-requested unread snapshot. Caller holds _prefetch_lock.
+
+        The daemon returns every unread message on each request, so a response
+        to an older request is stale once a newer one has been applied.
+        """
+        if seq < self._notification_applied:
+            return
+        self._notification_applied = seq
+        self._notification_result = inject if isinstance(inject, str) else ""
 
     def _queue_notification_refresh(self, hook: str) -> None:
         """Fetch peer notifications without blocking the current Hermes callback."""
@@ -1250,6 +1261,8 @@ class SignetMemoryProvider(MemoryProvider):
         peer_context = self._peer_context()
         with self._prefetch_lock:
             generation = self._prefetch_generation
+            self._notification_seq += 1
+            seq = self._notification_seq
 
         def _run():
             try:
@@ -1257,7 +1270,7 @@ class SignetMemoryProvider(MemoryProvider):
                 inject = (result or {}).get("inject", "")
                 with self._prefetch_lock:
                     if generation == self._prefetch_generation and session_key == self._session_key:
-                        self._add_notification(inject)
+                        self._set_notification(seq, inject)
             except Exception as e:
                 logger.debug("Signet %s notification refresh failed: %s", hook, e)
 
