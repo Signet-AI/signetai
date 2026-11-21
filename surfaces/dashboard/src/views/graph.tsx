@@ -36,6 +36,7 @@ const GraphColorLab = import.meta.env.DEV
 	: null;
 
 const COLOR_MODE_KEY = "signet.graph.colorMode";
+const AGE_TICK_MS = 60_000;
 
 function storedColorMode(): GraphColorMode {
 	const stored = attempt(() => localStorage.getItem(COLOR_MODE_KEY));
@@ -439,9 +440,17 @@ export function GraphView() {
 	}, [limitedScene]);
 	const activeMode = colorModes.find((mode) => mode.key === colorMode) ?? colorModes[0];
 	const modeConfig = activeMode?.config ?? null;
+	const dated = modeConfig?.variable === "created" || modeConfig?.variable === "updated";
+	const [now, setNow] = useState(Date.now);
+	useEffect(() => {
+		if (!dated) return;
+		setNow(Date.now());
+		const timer = setInterval(() => setNow(Date.now()), AGE_TICK_MS);
+		return () => clearInterval(timer);
+	}, [dated]);
 	const modeColoring = useMemo(
-		() => (modeConfig ? colorNodes(limitedScene.data.nodes, modeConfig) : null),
-		[limitedScene, modeConfig],
+		() => (modeConfig ? colorNodes(limitedScene.data.nodes, modeConfig, now) : null),
+		[limitedScene, modeConfig, now],
 	);
 	const colorKey = useMemo(() => {
 		if (!modeConfig || !modeColoring || modeColoring.valued === 0) return null;

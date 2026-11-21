@@ -80,6 +80,33 @@ describe("graph color", () => {
 		);
 	});
 
+	test("age colors read the clock once, so identical timestamps share a color", () => {
+		const age = GRAPH_COLOR_MODES.find((mode) => mode.key === "age")?.config;
+		if (!age) throw new Error("age mode is missing");
+		const created = Date.UTC(2026, 0, 1);
+		const nodes: SceneNode[] = ["a", "b", "c"].map((id) => ({
+			id,
+			label: id,
+			kind: "entity",
+			cluster: id,
+			weight: 1,
+			metric: "",
+			createdAt: created,
+		}));
+		const realNow = Date.now;
+		let clock = created + 10 * 86_400_000;
+		Date.now = () => clock++;
+		try {
+			const coloring = colorNodes(nodes, age);
+			expect(new Set(coloring.colors.values()).size).toBe(1);
+			expect(coloring.min).toBe(coloring.max);
+		} finally {
+			Date.now = realNow;
+		}
+		const later = colorNodes(nodes, age, created + 11 * 86_400_000);
+		expect(later.min).toBe(11);
+	});
+
 	test("stored lab presets with the legacy log flag load as log scale", () => {
 		expect(parseColorConfig({ variable: "created", stops: ["#000000"], log: true })?.scale).toBe("log");
 		expect(parseColorConfig({ variable: "created", stops: ["#000000"], scale: "sqrt" })?.scale).toBe("sqrt");
