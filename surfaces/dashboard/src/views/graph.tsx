@@ -24,9 +24,11 @@ import type {
 } from "@/lib/graph-scene";
 import {
 	capGraphSceneData,
+	entitySceneNode,
 	graphEvidenceRefs,
 	MAX_CONSTELLATION_ENTITY_LIMIT,
 	MAX_VISIBLE_CONSTELLATION_NODES,
+	stamps,
 } from "@/lib/constellation-display";
 
 const GraphColorLab = import.meta.env.DEV
@@ -109,18 +111,6 @@ function nodeKindLabel(kind: SceneNodeKind): string {
 	if (kind === "source") return "Document";
 	if (kind === "claimSlot") return "Claim slot";
 	return humanize(kind);
-}
-
-function stamps(row: { createdAt?: string | null; updatedAt?: string | null }): {
-	createdAt?: number;
-	updatedAt?: number;
-} {
-	const createdAt = Date.parse(row.createdAt ?? "");
-	const updatedAt = Date.parse(row.updatedAt ?? "");
-	return {
-		...(Number.isFinite(createdAt) ? { createdAt } : {}),
-		...(Number.isFinite(updatedAt) ? { updatedAt } : {}),
-	};
 }
 
 function percent(value: number): string {
@@ -275,34 +265,7 @@ export function GraphView() {
 			return id;
 		};
 		for (const entity of entities) {
-			const entityKind =
-				entity.entityType === "source_document" || entity.entityType === "source_document_reference"
-					? "source"
-					: "entity";
-			addNode({
-				id: entity.id,
-				label: entityKind === "source" ? sourceDocumentTitle(entity.name) : entity.name,
-				kind: entityKind,
-				...(entityKind === "source" ? { detail: entity.name } : {}),
-				evidenceRefs:
-					entityKind === "source"
-						? [
-								...new Set([
-									...graphEvidenceRefs({
-										sourceId: entity.sourceId ?? null,
-										sourceKind: entity.sourceKind ?? null,
-										sourcePath: entity.sourcePath ?? null,
-									}),
-									...entity.aspects.flatMap((aspect) => aspect.attributes.flatMap(graphEvidenceRefs)),
-								]),
-							]
-						: [],
-				cluster: entity.id,
-				...stamps(entity),
-				mentions: entity.mentions,
-				weight: Math.sqrt(entity.mentions / maxMentions),
-				metric: `${entityKind} · ${entity.entityType} · ${entity.mentions.toLocaleString()} mentions`,
-			});
+			addNode(entitySceneNode(entity, maxMentions));
 			for (const aspect of entity.aspects) {
 				addNode({
 					id: aspect.id,

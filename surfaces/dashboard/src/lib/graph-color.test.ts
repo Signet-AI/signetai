@@ -7,6 +7,7 @@ import {
 	rampPosition,
 	sampleRamp,
 } from "./graph-color";
+import { entitySceneNode } from "./constellation-display";
 import type { SceneNode } from "./graph-scene";
 
 const node = (id: string, cluster: string, confidence?: number): SceneNode => ({
@@ -47,14 +48,31 @@ describe("graph color", () => {
 	test("mentions color raw counts on entity and source-document nodes, not connected sources", () => {
 		const mentions = GRAPH_COLOR_MODES.find((mode) => mode.key === "mentions")?.config;
 		if (!mentions) throw new Error("mentions mode is missing");
+		const entity = (id: string, entityType: string, count: number) => ({
+			id,
+			agentId: "default",
+			name: id,
+			entityType,
+			mentions: count,
+			pinned: false,
+			aspects: [],
+		});
+		const rows = [
+			entity("few", "person", 25),
+			entity("many", "project", 100),
+			entity("doc", "source_document", 4),
+			entity("ref", "source_document_reference", 64),
+		];
 		const nodes: SceneNode[] = [
-			{ id: "few", label: "few", kind: "entity", cluster: "few", weight: 0.5, metric: "", mentions: 25 },
-			{ id: "many", label: "many", kind: "entity", cluster: "many", weight: 1, metric: "", mentions: 100 },
-			{ id: "doc", label: "doc", kind: "source", cluster: "doc", weight: 0.2, metric: "", mentions: 4 },
+			...rows.map((row) => entitySceneNode(row, 100)),
 			{ id: "source:vault", label: "vault", kind: "source", cluster: "source", weight: 1, metric: "" },
 		];
+		expect(nodes.map((node) => node.kind)).toEqual(["entity", "entity", "source", "source", "source"]);
 		const coloring = colorNodes(nodes, mentions);
-		expect([coloring.valued, coloring.min, coloring.max]).toEqual([3, 4, 100]);
+		expect([coloring.valued, coloring.min, coloring.max]).toEqual([4, 4, 100]);
+		const colors = rows.map((row) => coloring.colors.get(row.id));
+		expect(new Set(colors).size).toBe(4);
+		expect(colors).not.toContain(mentions.missing);
 		expect(coloring.colors.get("source:vault")).toBe(mentions.missing);
 		const share = (count: number) => Math.sqrt(count / 100);
 		expect(rampPosition(mentions, 25, 4, 100)).toBe(
