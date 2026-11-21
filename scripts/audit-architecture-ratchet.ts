@@ -88,8 +88,8 @@ function production(path: string): boolean {
 	);
 }
 
-function owner(path: string): boolean {
-	return OWNERS.has(path) || /^platform\/core\/src\/migrations\/(?:\d{3}-[^/]+|index)\.ts$/.test(path);
+function owner(path: string, owners: ReadonlySet<string> = OWNERS): boolean {
+	return owners.has(path) || /^platform\/core\/src\/migrations\/(?:\d{3}-[^/]+|index)\.ts$/.test(path);
 }
 
 function unwrap(expression: ts.Expression): ts.Expression {
@@ -318,6 +318,37 @@ function origins(base: string): ReadonlyMap<string, string> {
 	return paths;
 }
 
+function policy(text: string): ReadonlySet<string> {
+	const file = ts.createSourceFile("policy.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const declarations = new Map<string, ts.Expression>();
+	for (const statement of file.statements) {
+		if (!ts.isVariableStatement(statement)) continue;
+		for (const declaration of statement.declarationList.declarations) {
+			if (ts.isIdentifier(declaration.name) && declaration.initializer)
+				declarations.set(declaration.name.text, declaration.initializer);
+		}
+	}
+	const values = (name: string, seen: ReadonlySet<string>): string[] => {
+		const initializer = declarations.get(name);
+		const list = initializer ? unwrap(initializer) : undefined;
+		if (!list || seen.has(name) || !ts.isArrayLiteralExpression(list))
+			throw new Error(`Cannot read ${name} from the base ratchet policy`);
+		return list.elements.flatMap((element) => {
+			if (ts.isStringLiteralLike(element)) return [element.text];
+			if (ts.isSpreadElement(element) && ts.isIdentifier(element.expression))
+				return values(element.expression.text, new Set([...seen, name]));
+			throw new Error(`Cannot read ${name} from the base ratchet policy`);
+		});
+	};
+	return new Set(values("SQL_OWNERS", new Set()));
+}
+
+function ownersAt(ref: string): ReadonlySet<string> {
+	const path = `${ref}:scripts/audit-architecture-ratchet.ts`;
+	if (Bun.spawnSync(["git", "-C", process.cwd(), "cat-file", "-e", path]).exitCode !== 0) return OWNERS;
+	return policy(git("show", path));
+}
+
 function retiredPaths(after: ReadonlySet<string>): readonly string[] {
 	const registry = "scripts/retired-paths.json";
 	if (!after.has(registry)) throw new Error(`Missing retirement registry: ${registry}`);
@@ -377,6 +408,7 @@ function main(): void {
 	const before = tree(base);
 	const after = tree("HEAD");
 	const sources = origins(base);
+	const baseOwners = ownersAt(base);
 	const totals: Counts = { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 	const failures: string[] = [...retiredPaths(after)];
 	let files = 0;
@@ -394,8 +426,7 @@ function main(): void {
 	for (const [source, group] of groups) {
 		const previous =
 			before.has(source) && production(source)
-				? count(source, git("show", `${base}:${source}`), owner(source) || group.some((member) => owner(member.path)))
-						.counts
+				? count(source, git("show", `${base}:${source}`), owner(source, baseOwners)).counts
 				: { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 		for (const category of CATEGORIES) {
 			const head = group.reduce((sum, member) => sum + member.head.counts[category], 0);

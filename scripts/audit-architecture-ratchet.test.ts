@@ -54,6 +54,18 @@ function audit(root: string, ...args: readonly string[]): { readonly code: numbe
 	return { code: result.exitCode, output: result.stdout.toString() + result.stderr.toString() };
 }
 
+const QUERIES = [
+	'export const a = "SELECT id FROM memories";',
+	'export const b = "DELETE FROM memories";',
+	'export const c = "UPDATE memories SET content = ?";',
+	"export const value = 1;",
+].join("\n");
+const OWNER = "platform/daemon/src/db/owner/accessor.ts";
+
+function policy(declaration: string): string {
+	return `${declaration}\nconst OWNERS = new Set(SQL_OWNERS);\n`;
+}
+
 afterEach(() => {
 	for (const repo of repos.splice(0)) rmSync(repo, { recursive: true, force: true });
 });
@@ -115,23 +127,50 @@ for (const { category, violation } of cases) {
 	});
 }
 
-test("a file renamed onto a SQL owner path is exempt on its base side too", () => {
+test("a renamed SQL owner is counted under the base revision's owner list", () => {
 	const source = "platform/daemon/src/old-owner.ts";
-	const target = "platform/daemon/src/db/owner/accessor.ts";
-	const queries = [
-		'export const a = "SELECT id FROM memories";',
-		'export const b = "DELETE FROM memories";',
-		'export const c = "UPDATE memories SET content = ?";',
-		"export const value = 1;",
-	];
-	const root = fixture({ [source]: queries.join("\n") });
-	mkdirSync(dirname(join(root, target)), { recursive: true });
-	git(root, "mv", source, target);
-	write(root, target, [...queries, "ownerRun(client, a);"].join("\n"));
+	for (const declaration of [
+		`const SQL_OWNERS = ["${source}"] as const;`,
+		`const LEGACY = ['${source}'];\nconst SQL_OWNERS = [...LEGACY] satisfies readonly string[];`,
+	]) {
+		const root = fixture({ "scripts/audit-architecture-ratchet.ts": policy(declaration), [source]: QUERIES });
+		mkdirSync(dirname(join(root, OWNER)), { recursive: true });
+		git(root, "mv", source, OWNER);
+		write(root, OWNER, `${QUERIES}\nownerRun(client, a);`);
+		commit(root);
+		const result = audit(root);
+		expect(result.code).toBe(1);
+		expect(result.output).toContain(`${OWNER}\traw-sql\t0 -> 1`);
+	}
+});
+
+test("an unreadable base owner list fails instead of falling back", () => {
+	const root = fixture({
+		"scripts/audit-architecture-ratchet.ts": policy("const SQL_OWNERS = loadOwners();"),
+		[FILE]: "export const value = 1;",
+	});
+	const result = audit(root);
+	expect(result.code).toBe(1);
+	expect(result.output).toContain("Cannot read SQL_OWNERS from the base ratchet policy");
+});
+
+test("copying non-owner SQL into an owner keeps the non-owner baseline", () => {
+	const root = fixture({ "scripts/audit-architecture-ratchet.ts": policy("const SQL_OWNERS = [];"), [FILE]: QUERIES });
+	write(root, "platform/core/src/database.ts", QUERIES);
+	commit(root);
+	expect(audit(root).code).toBe(0);
+});
+
+test("dropping a file from the owner list cannot grandfather its SQL", () => {
+	const root = fixture({
+		"scripts/audit-architecture-ratchet.ts": policy(`const SQL_OWNERS = ["${FILE}"];`),
+		[FILE]: QUERIES,
+	});
+	write(root, "scripts/audit-architecture-ratchet.ts", policy("const SQL_OWNERS = [];"));
 	commit(root);
 	const result = audit(root);
 	expect(result.code).toBe(1);
-	expect(result.output).toContain(`${target}\traw-sql\t0 -> 1`);
+	expect(result.output).toContain(`${FILE}\traw-sql\t0 -> 3`);
 });
 
 test("raw SQL reports all text, transport, accessor and marker forms", () => {

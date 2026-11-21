@@ -10,6 +10,10 @@ function source(relativePath: string): string {
 	return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
 
+function bare(node: ts.Expression): ts.Expression {
+	return ts.isParenthesizedExpression(node) ? bare(node.expression) : node;
+}
+
 function imports(path: string): string[] {
 	const file = join(ROOT, path);
 	const text = readFileSync(file, "utf8");
@@ -21,11 +25,18 @@ function imports(path: string): string[] {
 		if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
 			specifiers.push(node.argument.literal.text);
 		}
+		if (
+			ts.isImportEqualsDeclaration(node) &&
+			ts.isExternalModuleReference(node.moduleReference) &&
+			ts.isStringLiteralLike(node.moduleReference.expression)
+		) {
+			specifiers.push(node.moduleReference.expression.text);
+		}
 		if (ts.isCallExpression(node)) {
-			const callee = node.expression;
+			const callee = bare(node.expression);
 			const loads =
 				callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require");
-			const [argument] = node.arguments;
+			const argument = node.arguments[0] ? bare(node.arguments[0]) : undefined;
 			if (loads && argument && ts.isStringLiteralLike(argument)) specifiers.push(argument.text);
 		}
 		ts.forEachChild(node, visit);
