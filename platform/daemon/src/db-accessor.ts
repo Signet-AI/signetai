@@ -334,10 +334,10 @@ function assertDatabaseIntegrityWritesAllowed(): void {
 }
 
 function configurePragmas(db: SqliteDatabase, path: string): void {
+	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec("PRAGMA auto_vacuum = INCREMENTAL");
 	const journal = resolveSqliteJournalConfig({ directory: dirname(path) });
 	db.exec(`PRAGMA journal_mode = ${journal.journalMode}`);
-	db.exec("PRAGMA busy_timeout = 5000");
 	db.exec(`PRAGMA synchronous = ${journal.networkFilesystem ? "FULL" : "NORMAL"}`);
 	db.exec("PRAGMA temp_store = MEMORY");
 }

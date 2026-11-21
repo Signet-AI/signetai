@@ -19,6 +19,46 @@ export interface SynthesisResponse {
 }
 
 let synthesisWorker: Worker | null = null;
+let synthesisWorkerTermination: Promise<void> | null = null;
+const SYNTHESIS_WORKER_TERMINATION_TIMEOUT_MS = 5_000;
+
+function stopSynthesisWorker(worker: Worker): Promise<void> {
+	if (synthesisWorkerTermination !== null) return synthesisWorkerTermination;
+	synthesisWorker = null;
+	const termination = worker.terminate().then(
+		() => undefined,
+		(error: unknown) => {
+			throw error instanceof Error ? error : new Error(String(error));
+		},
+	);
+	synthesisWorkerTermination = termination;
+	void termination
+		.finally(() => {
+			if (synthesisWorkerTermination === termination) synthesisWorkerTermination = null;
+		})
+		.catch(() => {});
+	return termination;
+}
+
+function waitForSynthesisWorkerTermination(termination: Promise<void>): Promise<void> {
+	return new Promise<void>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			reject(
+				new Error(`Synthesis render worker termination timed out after ${SYNTHESIS_WORKER_TERMINATION_TIMEOUT_MS}ms`),
+			);
+		}, SYNTHESIS_WORKER_TERMINATION_TIMEOUT_MS);
+		termination.then(
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			(error: unknown) => {
+				clearTimeout(timer);
+				reject(error instanceof Error ? error : new Error(String(error)));
+			},
+		);
+	});
+}
 
 export function setSynthesisWorker(worker: Worker | null): void {
 	synthesisWorker = worker;
@@ -55,6 +95,9 @@ export async function handleSynthesisRequest(
 	void _maxTokens;
 
 	const agentId = opts?.agentId ?? "default";
+	if (synthesisWorkerTermination !== null) {
+		await waitForSynthesisWorkerTermination(synthesisWorkerTermination);
+	}
 	if (hasDbAccessor()) {
 		await purgeCanonicalNoiseSessionsOnce(agentId, NOISE_PURGE_REASON);
 	}
@@ -88,14 +131,13 @@ export async function handleSynthesisRequest(
 			if (settled) return;
 			settled = true;
 			cleanup();
-			setSynthesisWorker(null);
-			w.terminate().catch((err) => {
-				logger.debug("hooks", "Synthesis render worker terminate failed", {
-					error: err instanceof Error ? err.message : String(err),
-				});
-			});
-			logger.warn("hooks", "Synthesis render worker failed, falling back to synchronous render", error ?? { message });
 			try {
+				await waitForSynthesisWorkerTermination(stopSynthesisWorker(w));
+				logger.warn(
+					"hooks",
+					"Synthesis render worker failed, falling back to synchronous render",
+					error ?? { message },
+				);
 				const rendered = await renderMemoryProjection(agentId);
 				resolve({
 					harness: "daemon",
@@ -105,7 +147,9 @@ export async function handleSynthesisRequest(
 					indexBlock: rendered.indexBlock,
 				});
 			} catch (err) {
-				reject(err instanceof Error ? err : new Error(String(err)));
+				const failure = err instanceof Error ? err : new Error(String(err));
+				logger.error("hooks", "Synthesis render worker fallback failed", failure);
+				reject(failure);
 			}
 		}
 

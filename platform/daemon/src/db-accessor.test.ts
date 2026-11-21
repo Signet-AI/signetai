@@ -1812,4 +1812,68 @@ db.exec("COMMIT");`,
 			timeout: 5000,
 		});
 	}, 10_000);
+
+	test("waits for an exclusive writer before configuring initialization pragmas", async () => {
+		const dbPath = tmpDbPath();
+		dir = join(dbPath, "..");
+		const releasePath = join(dir, "release-lock");
+		const seed = new Database(dbPath);
+		seed.exec("PRAGMA journal_mode = WAL");
+		seed.exec("CREATE TABLE probe (value INTEGER)");
+		seed.close();
+
+		const holder = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`const { Database } = require("bun:sqlite");
+const { existsSync } = require("node:fs");
+const db = new Database(${JSON.stringify(dbPath)});
+db.exec("PRAGMA locking_mode = EXCLUSIVE");
+db.exec("BEGIN IMMEDIATE");
+console.log("locked");
+while (!existsSync(${JSON.stringify(releasePath)})) Bun.sleepSync(5);
+db.exec("COMMIT");
+db.close();`,
+			],
+			{ stdout: "pipe", stderr: "inherit" },
+		);
+		let initializer: ReturnType<typeof Bun.spawn> | null = null;
+		try {
+			await holder.stdout.getReader().read();
+
+			initializer = Bun.spawn(
+				[
+					process.execPath,
+					"-e",
+					`const { pathToFileURL } = require("node:url");
+const { initDbAccessorLite, closeDbAccessor } = await import(
+  pathToFileURL(${JSON.stringify(join(import.meta.dir, "db-accessor.ts"))}).href
+);
+console.log("started");
+initDbAccessorLite(${JSON.stringify(dbPath)}, "");
+await closeDbAccessor();
+console.log("initialized");
+process.exit(0);`,
+				],
+				{ stdout: "pipe", stderr: "inherit" },
+			);
+			const started = await initializer.stdout.getReader().read();
+			expect(new TextDecoder().decode(started.value)).toContain("started");
+			await Bun.sleep(100);
+			expect(initializer.exitCode).toBeNull();
+
+			writeFileSync(releasePath, "release\n");
+			expect(await initializer.exited).toBe(0);
+			expect(await holder.exited).toBe(0);
+		} finally {
+			writeFileSync(releasePath, "release\n");
+			holder.kill();
+			await holder.exited;
+			if (initializer !== null) {
+				initializer.kill();
+				await initializer.exited;
+			}
+		}
+	}, 10_000);
 });
