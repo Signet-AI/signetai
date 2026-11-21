@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=de16dbc216af698ec2db226ca9d155d541f86ae4 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=f9a88c41b8b40a7c81790ee9b3f9ba75a5da27b2 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 > [!CAUTION]
 > **詐欺警告: Signet にトークンやコインは存在しません。** Signet の名前を使ったトークンやコインは、本プロジェクトとは一切関係ありません。「Signet を支援するから」といった理由で購入しないでください。
 
@@ -65,8 +65,6 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 > 日常的な利用には `stable` チャネルをおすすめします。`nightly` ビルド（`install.sh | bash -s -- --nightly`）には未リリースの変更が含まれており、壊れる可能性があります。
 
 ## 仕組み
-
-<a href="https://signetai.sh/"><img src="public/sources.png" alt="ソース"></a>
 
 **ソース**は、すでにお持ちのコンテキストを Signet に取り込みます。接続済みのソースは変更に合わせて常に同期され、ファイルや Web ページをワンタイムインポートとして取り込むこともできます（[対応ソースとフォーマット](#対応ソースとフォーマット) を参照）。エージェントとの会話は、誰が・いつ・何を話したか、どこから来た情報かという記録とともにインポートされます。中断されたインポートは途中から再開され、再インポートしても証跡が重複することはありません。また、会話を構造化された JSONL として書き出すこともできます。
 
