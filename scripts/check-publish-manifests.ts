@@ -6,7 +6,7 @@ import {
 	NATIVE_BINARY_MAX_BYTES,
 	NATIVE_CONNECTORS_MAX_BYTES,
 	NATIVE_DAEMON_JS_MAX_BYTES,
-} from "../platform/daemon/src/native-release-limits";
+} from "../platform/daemon/src/runtime/update/native-release-limits";
 
 const RUNTIME_FIELDS = ["dependencies", "optionalDependencies", "peerDependencies"] as const;
 

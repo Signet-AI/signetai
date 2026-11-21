@@ -1,5 +1,5 @@
-import { getDbAccessor } from "../src/db-accessor";
-import type { ReadDb, SyncDbCallSiteToken, WriteDb } from "../src/db-accessor";
+import { getDbAccessor } from "../src/db/owner/accessor";
+import type { ReadDb, SyncDbCallSiteToken, WriteDb } from "../src/db/owner/accessor";
 
 export interface SyncDbAccessor {
 	withWriteTx<T>(fn: (db: WriteDb) => T, siteToken?: SyncDbCallSiteToken): T;

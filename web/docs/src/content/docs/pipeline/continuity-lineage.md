@@ -5,7 +5,7 @@ description: "How checkpoints, transcripts, and Markdown lineage preserve sessio
 
 ## Session Checkpoints
 
-Session checkpoints (`platform/daemon/src/session-checkpoints.ts`) capture
+Session checkpoints (`platform/daemon/src/sessions/checkpoints.ts`) capture
 periodic snapshots of session state for continuity recovery. They store
 a digest of the session's current focus, prompt count, memory queries,
 and recent remembers.

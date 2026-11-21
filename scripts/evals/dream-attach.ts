@@ -6,7 +6,7 @@ import {
 	DREAMING_LIVE_MAX_RAW_CHARS,
 	DreamingLiveEventHub,
 	publishDreamingAgentEvent,
-} from "../../platform/daemon/src/pipeline/dreaming-live-events";
+} from "../../platform/daemon/src/dreaming/passes/live-events";
 import type { DaemonStreamResult } from "../../surfaces/cli/src/lib/daemon";
 import { DreamingAttachView, followDreamingPass } from "../../surfaces/cli/src/lib/dream-attach";
 

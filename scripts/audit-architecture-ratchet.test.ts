@@ -247,7 +247,7 @@ test("only the expected-miss helpers' own catches are exempt", async () => {
 });
 
 test("owner SQL is exempt but casts and swallowed errors are not", () => {
-	const path = "platform/daemon/src/db-owner-worker.ts";
+	const path = "platform/daemon/src/db/owner/db-owner-worker.ts";
 	const root = fixture({ "README.md": "base" });
 	write(
 		root,
@@ -263,7 +263,7 @@ test("owner SQL is exempt but casts and swallowed errors are not", () => {
 });
 
 test("owner files still ratchet raw owner-protocol and legacy accessor bypasses", () => {
-	const path = "platform/daemon/src/memory-search.ts";
+	const path = "platform/daemon/src/recall/search/memory-search.ts";
 	const root = fixture({ [path]: 'export const sql = "SELECT id FROM memories";' });
 	write(
 		root,
@@ -380,7 +380,7 @@ test("all production roots and TSX files are audited", () => {
 });
 
 test("moving SQL out of the owner closure cannot carry its exemption", () => {
-	const source = "platform/daemon/src/db-owner-worker.ts";
+	const source = "platform/daemon/src/db/owner/db-owner-worker.ts";
 	const root = fixture({ [source]: cases[0].violation });
 	mkdirSync(dirname(join(root, FILE)), { recursive: true });
 	git(root, "mv", source, FILE);
@@ -393,15 +393,15 @@ test("moving SQL out of the owner closure cannot carry its exemption", () => {
 test("named owner handlers retain their SQL authority without exempting transports", () => {
 	const root = fixture({ "README.md": "base" });
 	for (const path of [
-		"platform/daemon/src/memory-search.ts",
-		"platform/daemon/src/pipeline/dreaming-capabilities.ts",
-		"platform/daemon/src/session-transcripts.ts",
+		"platform/daemon/src/recall/search/memory-search.ts",
+		"platform/daemon/src/dreaming/operations/capabilities.ts",
+		"platform/daemon/src/transcripts/store/session-transcripts.ts",
 	]) {
 		write(root, path, cases[0].violation);
 	}
 	commit(root);
 	expect(audit(root).code).toBe(0);
-	const transport = "platform/daemon/src/db-owner-sql.ts";
+	const transport = "platform/daemon/src/db/owner/sql.ts";
 	write(root, transport, cases[0].violation);
 	commit(root);
 	const result = audit(root);

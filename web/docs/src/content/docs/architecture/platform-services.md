@@ -47,7 +47,7 @@ limit is exceeded, the response is 429 with a `Retry-After` header.
 
 ## Analytics
 
-`platform/daemon/src/analytics.ts` implements an in-memory [Analytics](/analytics/)
+`platform/daemon/src/telemetry/usage/analytics.ts` implements an in-memory [Analytics](/analytics/)
 accumulator. All state is ephemeral — it resets on daemon restart.
 Durable history lives in `memory_history` and structured logs.
 
@@ -103,7 +103,7 @@ the age of the oldest unresolved error.
 
 ## Diagnostics and Repair
 
-`platform/daemon/src/diagnostics.ts` provides read-only health signals
+`platform/daemon/src/telemetry/diagnostics/diagnostics.ts` provides read-only health signals
 across six domains. All functions accept a `ReadDb` or `ProviderTracker`
 and return plain data — no mutations, no side effects.
 

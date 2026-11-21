@@ -32,11 +32,12 @@ test("classifies database callbacks by execution home rather than async API spel
 	try {
 		const call = (path: string): string => `getDbAccessor().withReadDbAsync((db) => db, { siteToken: "${path}:1" });\n`;
 		writeFileSync(join(root, "parent.ts"), call("parent.ts"));
-		writeFileSync(join(root, "db-owner-worker.ts"), call("db-owner-worker.ts"));
+		mkdirSync(join(root, "db", "owner"), { recursive: true });
+		writeFileSync(join(root, "db", "owner", "db-owner-worker.ts"), call("db/owner/db-owner-worker.ts"));
 		const first = runAudit({ sourceRoot: root });
 		expect(first.executionHome).toEqual({ total: 2, onParent: 1, offParent: 1 });
 		expect(first.executionHomeSites.map((site) => [site.path, site.executionHome])).toEqual([
-			["db-owner-worker.ts", "off-parent"],
+			["db/owner/db-owner-worker.ts", "off-parent"],
 			["parent.ts", "on-parent"],
 		]);
 		expect(first.violations.filter((violation) => violation.kind === "new-parent-execution-site")).toHaveLength(1);
@@ -309,12 +310,14 @@ test("the CI boundary resolves interpolated compatibility imports", () => {
 test("the Obsidian embedding sync calls remain enumerated in the legacy ledger", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
 	const result = runAudit({ sourceRoot: resolve("platform/daemon/src"), baselineSites: baseline });
-	const baselineSites = baseline.filter((site) => site.path === "obsidian-source-embeddings.ts");
-	const liveSites = result.sites.filter((site) => site.path === "obsidian-source-embeddings.ts");
+	const baselineSites = baseline.filter((site) => site.path === "sources/providers/obsidian/embeddings.ts");
+	const liveSites = result.sites.filter((site) => site.path === "sources/providers/obsidian/embeddings.ts");
 	expect(baselineSites).toHaveLength(6);
 	expect(liveSites).toHaveLength(baselineSites.length);
 	expect(occurrenceKeys(liveSites)).toEqual(occurrenceKeys(baselineSites));
-	expect(result.violations.filter((violation) => violation.path === "obsidian-source-embeddings.ts")).toEqual([]);
+	expect(
+		result.violations.filter((violation) => violation.path === "sources/providers/obsidian/embeddings.ts"),
+	).toEqual([]);
 });
 
 test("bootstrap, CLI, and worker fixtures can use the explicit compatibility module", () => {
@@ -474,7 +477,7 @@ test("a marker above the call line keeps the site marked, a distant marker does 
 		rmSync(root, { recursive: true, force: true });
 	}
 });
-const productionAccessorType = readFileSync(resolve("platform/daemon/src/db-accessor.ts"), "utf8");
+const productionAccessorType = readFileSync(resolve("platform/daemon/src/db/owner/accessor.ts"), "utf8");
 const syncAccessorType = readFileSync(resolve("platform/daemon/legacy-sync/db-accessor-sync.ts"), "utf8");
 expect(productionAccessorType).toContain("export interface DbAccessor extends AsyncDbAccessor {}");
 expect(productionAccessorType).not.toContain("export interface SyncDbAccessorCompat");

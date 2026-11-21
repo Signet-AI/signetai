@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import type { DbAccessor } from "../db-accessor";
+import type { DbAccessor } from "../db/owner/accessor";
 import { checkPermission } from "./policy";
 import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from "./api-keys";
 

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const DAEMON_ENTRY = join(import.meta.dir, "daemon.ts");
-const DB_OWNER_CLIENT = join(import.meta.dir, "db-owner-client.ts");
+const DB_OWNER_CLIENT = join(import.meta.dir, "db/owner/client.ts");
 
 const AVAILABILITY_CODES = [
 	"DB_OWNER_DEADLINE",
@@ -94,7 +94,7 @@ function runScenario(scenario: Scenario): { exitCode: number | null; lifecycleSt
 
 describe("daemon unhandledRejection survivability by DB owner code", () => {
 	test("exposes the availability allowlist as the DB owner contract", () => {
-		const { DB_OWNER_SURVIVABLE_CODES } = require("./db-owner-client.ts") as {
+		const { DB_OWNER_SURVIVABLE_CODES } = require("./db/owner/client.ts") as {
 			DB_OWNER_SURVIVABLE_CODES: ReadonlySet<string>;
 		};
 		expect([...DB_OWNER_SURVIVABLE_CODES].sort()).toEqual([...AVAILABILITY_CODES].sort());

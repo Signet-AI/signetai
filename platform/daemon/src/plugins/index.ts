@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { getGraphiqStatePath } from "@signet/core";
-import { getAgentsDir } from "../graphiq.js";
-import { getLocalSecretProviderHealth } from "../secrets.js";
+import { getAgentsDir } from "../harness/identity/graphiq.js";
+import { getLocalSecretProviderHealth } from "../secrets/secrets.js";
 import { signetGraphiqManifest } from "./bundled/graphiq.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
 import { PluginHostV1 } from "./host.js";

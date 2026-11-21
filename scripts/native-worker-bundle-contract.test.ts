@@ -33,7 +33,7 @@ describe("native worker bundle contract", () => {
 		const outputDirectory = mkdtempSync(join(tmpdir(), "signet-native-worker-bundle-"));
 		tempDirs.push(outputDirectory);
 		const output = join(outputDirectory, "db-owner-worker.js");
-		const entrypoint = join(root, "platform", "daemon", "src", "db-owner-worker.ts");
+		const entrypoint = join(root, "platform", "daemon", "src", "db", "owner", "db-owner-worker.ts");
 		const result = spawnSync(
 			"bun",
 			[

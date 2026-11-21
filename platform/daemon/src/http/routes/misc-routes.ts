@@ -1,0 +1,541 @@
+import { readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
+import {
+	PIPELINE_CONFIG_FILES,
+	findPipelineConfigFile,
+	parseSimpleYaml,
+	readPipelinePauseState,
+	resolveAgentMemoryPolicy,
+} from "@signet/core";
+import type { Hono } from "hono";
+import { invalidateAgentScopeCache } from "../../agents/identity/agent-id.js";
+import { requirePermission } from "../../auth";
+import { checkPermission } from "../../auth/policy";
+import type { AgentRemovalResult } from "../../agents/identity/removal.js";
+import { dbOwnerAgentRemove, dbOwnerQuery } from "../../db/owner/runtime.js";
+import { type LogCategory, type LogEntry, logger } from "../../runtime/logging/logger.js";
+import { loadPipelineConfig } from "../../config/memory-config.js";
+import { openBoundedSse } from "../server/sse-stream.js";
+import {
+	MAX_UPDATE_INTERVAL_SECONDS,
+	MIN_UPDATE_INTERVAL_SECONDS,
+	checkForUpdates as checkForUpdatesImpl,
+	getUpdateState,
+	parseBooleanFlag,
+	parseUpdateChannel,
+	parseUpdateInterval,
+	runUpdate as runUpdateImpl,
+	setUpdateConfig,
+} from "../../runtime/update/system.js";
+import { loadDashboardIdentity } from "./dashboard-identity.js";
+import { AGENTS_DIR, authConfig } from "./state.js";
+import { parseOptionalString, resolveScopedAgentId, toRecord } from "./utils.js";
+import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../../db/maintenance/write-pressure";
+
+const GUARDED_CONFIG_FILES_CI = new Set(["agent.yaml", "config.yaml"]);
+
+const MAX_CONFIG_BYTES = 1_048_576;
+const MAX_POLICY_GROUP_LENGTH = 128;
+
+function validatePolicyGroup(rawGroup: unknown): string | null | undefined {
+	if (rawGroup !== undefined && rawGroup !== null && typeof rawGroup !== "string") {
+		throw new Error("group must be a string");
+	}
+	if (typeof rawGroup === "string" && (rawGroup.length === 0 || rawGroup.length > MAX_POLICY_GROUP_LENGTH)) {
+		throw new Error(`group must be between 1 and ${MAX_POLICY_GROUP_LENGTH} characters`);
+	}
+	return rawGroup;
+}
+
+interface AgentRow {
+	id: string;
+	name: string;
+	read_policy: string;
+	policy_group: string | null;
+	created_at: string;
+	updated_at: string;
+}
+
+export function registerMiscRoutes(app: Hono): void {
+	app.use("/api/config", async (c, next) => {
+		if (c.req.method === "POST") {
+			const cl = c.req.header("content-length");
+			if (cl && Number(cl) > MAX_CONFIG_BYTES) {
+				return c.json({ error: `payload exceeds ${MAX_CONFIG_BYTES} byte limit` }, 413);
+			}
+			return requirePermission("admin", authConfig)(c, next);
+		}
+		return next();
+	});
+
+	app.get("/api/logs", (c) => {
+		const limit = Number.parseInt(c.req.query("limit") || "100", 10);
+		const level = c.req.query("level") as "debug" | "info" | "warn" | "error" | undefined;
+		const category = c.req.query("category") as LogCategory | undefined;
+		const sinceRaw = c.req.query("since");
+		const since = sinceRaw ? new Date(sinceRaw) : undefined;
+
+		const logs = logger.getRecent({ limit, level, category, since });
+		return c.json({ logs, count: logs.length });
+	});
+
+	app.get("/api/logs/stream", (c) => {
+		const sse = openBoundedSse({
+			requestSignal: c.req.raw.signal,
+			overflowPolicy: "drop",
+			onStart(producer) {
+				const onLog = (entry: LogEntry): void => {
+					producer.write(entry);
+				};
+				producer.addDisposer(() => logger.off("log", onLog));
+				if (producer.signal.aborted) return;
+				logger.on("log", onLog);
+				producer.write({ type: "connected" });
+			},
+		});
+		return sse.response;
+	});
+
+	app.get("/api/config", async (c) => {
+		try {
+			const files: Array<{ name: string; content: string; size: number }> = [];
+			const dirFiles = readdirSync(AGENTS_DIR);
+			const configFiles = dirFiles.filter((f) => f.endsWith(".md") || f.endsWith(".yaml"));
+
+			for (const fileName of configFiles) {
+				const filePath = join(AGENTS_DIR, fileName);
+				const fileStat = statSync(filePath);
+				if (fileStat.isFile()) {
+					const content = readFileSync(filePath, "utf-8");
+					files.push({ name: fileName, content, size: fileStat.size });
+				}
+			}
+
+			const priority = ["agent.yaml", "AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"];
+			files.sort((a, b) => {
+				const aIdx = priority.indexOf(a.name);
+				const bIdx = priority.indexOf(b.name);
+				if (aIdx === -1 && bIdx === -1) return a.name.localeCompare(b.name);
+				if (aIdx === -1) return 1;
+				if (bIdx === -1) return -1;
+				return aIdx - bIdx;
+			});
+
+			return c.json({ files });
+		} catch (e) {
+			logger.error("api", "Error loading config files", e as Error);
+			return c.json({ files: [], error: "Failed to load config files" });
+		}
+	});
+
+	app.post("/api/config", async (c) => {
+		try {
+			const { file, content: rawContent } = await c.req.json();
+			const content = rawContent;
+
+			if (!file || typeof content !== "string") {
+				return c.json({ error: "Invalid request" }, 400);
+			}
+
+			if (content.length > MAX_CONFIG_BYTES) {
+				return c.json({ error: `content exceeds ${MAX_CONFIG_BYTES} byte limit` }, 413);
+			}
+
+			if (file.includes("/") || file.includes("..")) {
+				return c.json({ error: "Invalid file name" }, 400);
+			}
+
+			if (!file.endsWith(".md") && !file.endsWith(".yaml")) {
+				return c.json({ error: "Invalid file type" }, 400);
+			}
+
+			const filePath = join(AGENTS_DIR, file);
+			const isGuardedConfig = GUARDED_CONFIG_FILES_CI.has(file.toLowerCase());
+			if (isGuardedConfig) {
+				const guardAuth = c.get("auth");
+				const guardDecision = checkPermission(guardAuth?.claims ?? null, "admin", authConfig.mode);
+				if (!guardDecision.allowed) {
+					c.status(403);
+					return c.json({
+						error: `${guardDecision.reason ?? "forbidden"} - guarded config files require admin permission`,
+					});
+				}
+				let paused: boolean;
+				try {
+					paused = loadPipelineConfig(parseSimpleYaml(content)).paused;
+				} catch (error) {
+					return c.json({ error: error instanceof Error ? error.message : "Invalid memory pipeline config" }, 400);
+				}
+				const active = findPipelineConfigFile(AGENTS_DIR);
+				const rankOf = (name: string): number =>
+					PIPELINE_CONFIG_FILES.findIndex((candidate) => candidate.toLowerCase() === name.toLowerCase());
+				const rank = rankOf(file);
+				const activeRank = active === null ? -1 : rankOf(basename(active));
+				const selected = rank !== -1 && (activeRank === -1 || rank <= activeRank);
+				if (selected && paused !== readPipelinePauseState(AGENTS_DIR).paused) {
+					return c.json(
+						{
+							error:
+								"memory.pipelineV2.paused changes only through /api/pipeline/pause or /api/pipeline/resume. Reload the config and retry.",
+						},
+						409,
+					);
+				}
+			}
+
+			writeFileSync(filePath, content, "utf-8");
+			logger.info("api", "Config file updated", { file });
+			return c.json({ success: true });
+		} catch (e) {
+			logger.error("api", "Error saving config file", e as Error);
+			return c.json({ error: "Failed to save file" }, 500);
+		}
+	});
+
+	app.get("/api/identity", (c) => {
+		return c.json(
+			loadDashboardIdentity(AGENTS_DIR, (message, err) => {
+				logger.warn("api", message, { error: err instanceof Error ? err.message : String(err) });
+			}),
+		);
+	});
+
+	app.get("/api/agents", async (c) => {
+		try {
+			const agents = await dbOwnerQuery<AgentRow[]>(
+				{
+					sql: "SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents ORDER BY name",
+					result: "all",
+				},
+				{ operation: "agents.list", lane: "read", deadlineMs: 2_000 },
+			);
+			return c.json({ agents });
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "Database unavailable" }, 503);
+		}
+	});
+
+	app.get("/api/agents/:name", async (c) => {
+		const name = c.req.param("name");
+		let agent: AgentRow | undefined;
+		try {
+			agent = await dbOwnerQuery<AgentRow | undefined>(
+				{
+					sql: "SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE name = ?",
+					params: [name],
+					result: "get",
+				},
+				{ operation: "agents.get", lane: "read", deadlineMs: 2_000 },
+			);
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "Database unavailable" }, 503);
+		}
+		if (!agent) return c.json({ error: "Agent not found" }, 404);
+		try {
+			const resolved = resolveAgentMemoryPolicy(agent.read_policy, agent.policy_group);
+			return c.json({ ...agent, effective_scope: resolved.effectiveScope });
+		} catch (error) {
+			return c.json(
+				{
+					error:
+						error instanceof Error
+							? `Invalid persisted memory policy: ${error.message}`
+							: "Invalid persisted memory policy",
+				},
+				500,
+			);
+		}
+	});
+
+	app.post("/api/agents", async (c) => {
+		const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+		const body = toRecord(await c.req.json().catch(() => null));
+		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+		const name = parseOptionalString(body.name);
+		if (!name) return c.json({ error: "name is required" }, 400);
+		const scopedAgent = resolveScopedAgentId(c, name);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		let resolved: ReturnType<typeof resolveAgentMemoryPolicy>;
+		try {
+			const rawPolicy = Object.hasOwn(body, "read_policy") ? body.read_policy : undefined;
+			const rawGroup = Object.hasOwn(body, "policy_group") ? body.policy_group : undefined;
+			if (rawPolicy !== undefined && typeof rawPolicy !== "string") {
+				return c.json({ error: "memory must be one of: isolated, shared, group" }, 400);
+			}
+			resolved = resolveAgentMemoryPolicy(rawPolicy ?? "isolated", validatePolicyGroup(rawGroup));
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "Invalid memory policy" }, 400);
+		}
+		const readPolicy = resolved.readPolicy;
+		const group = resolved.policyGroup;
+		if (readPolicy !== "isolated") {
+			const widened = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+			if (widened) return widened;
+		}
+		const now = new Date().toISOString();
+		try {
+			await dbOwnerQuery(
+				{
+					sql: `INSERT INTO agents (id, name, read_policy, policy_group, created_at, updated_at)
+				 VALUES (?, ?, ?, ?, ?, ?)`,
+					params: [name, name, readPolicy, group, now, now],
+					result: "run",
+				},
+				{ operation: "agents.create", lane: "write", deadlineMs: 5_000 },
+			);
+		} catch (error) {
+			if (error instanceof Error && /UNIQUE constraint failed/i.test(error.message)) {
+				return c.json({ error: `Agent ${name} already exists` }, 409);
+			}
+			if (isRetryableWritePressure(error)) {
+				c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
+				return c.json({ error: "Write pressure; retry agent creation", retryable: true }, 503);
+			}
+			throw error;
+		}
+		invalidateAgentScopeCache(name);
+		const created = await dbOwnerQuery<AgentRow | undefined>(
+			{
+				sql: "SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE id = ?",
+				params: [name],
+				result: "get",
+			},
+			{ operation: "agents.get_created", lane: "read", deadlineMs: 2_000 },
+		);
+		return c.json(created, 201);
+	});
+
+	app.patch("/api/agents/:name", async (c) => {
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+		const name = c.req.param("name");
+		if (name === "default") return c.json({ error: "Cannot modify the default agent" }, 400);
+		const body = toRecord(await c.req.json().catch(() => null));
+		if (!body) return c.json({ error: "Invalid JSON body" }, 400);
+		const existing = await dbOwnerQuery<{ id: string; read_policy: string; policy_group: string | null } | undefined>(
+			{
+				sql: "SELECT id, read_policy, policy_group FROM agents WHERE name = ?",
+				params: [name],
+				result: "get",
+			},
+			{ operation: "agents.get_for_update", lane: "read", deadlineMs: 2_000 },
+		);
+		if (!existing) return c.json({ error: "Agent not found" }, 404);
+		let resolved: ReturnType<typeof resolveAgentMemoryPolicy>;
+		try {
+			const rawPolicy = Object.hasOwn(body, "memory")
+				? body.memory
+				: Object.hasOwn(body, "read_policy")
+					? body.read_policy
+					: existing.read_policy;
+			const rawGroup = Object.hasOwn(body, "group")
+				? body.group
+				: Object.hasOwn(body, "policy_group")
+					? body.policy_group
+					: existing.policy_group;
+			if (typeof rawPolicy !== "string") {
+				return c.json({ error: "memory must be one of: isolated, shared, group" }, 400);
+			}
+			resolved = resolveAgentMemoryPolicy(rawPolicy, validatePolicyGroup(rawGroup));
+		} catch (error) {
+			return c.json({ error: error instanceof Error ? error.message : "Invalid memory policy" }, 400);
+		}
+		const now = new Date().toISOString();
+		await dbOwnerQuery(
+			{
+				sql: "UPDATE agents SET read_policy = ?, policy_group = ?, updated_at = ? WHERE id = ?",
+				params: [resolved.readPolicy, resolved.policyGroup, now, existing.id],
+				result: "run",
+			},
+			{ operation: "agents.update", lane: "write", deadlineMs: 5_000 },
+		);
+		invalidateAgentScopeCache(existing.id);
+		const updated = await dbOwnerQuery<AgentRow | undefined>(
+			{
+				sql: "SELECT id, name, read_policy, policy_group, created_at, updated_at FROM agents WHERE id = ?",
+				params: [existing.id],
+				result: "get",
+			},
+			{ operation: "agents.get_updated", lane: "read", deadlineMs: 2_000 },
+		);
+		return c.json({ ...updated, effective_scope: resolved.effectiveScope });
+	});
+
+	app.delete("/api/agents/:name", async (c) => {
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+		const name = c.req.param("name");
+		if (name === "default") return c.json({ error: "Cannot remove the default agent" }, 400);
+		const purge = c.req.query("purge") === "true";
+		const agent = await dbOwnerQuery<{ id: string } | undefined>(
+			{ sql: "SELECT id FROM agents WHERE name = ?", params: [name], result: "get" },
+			{ operation: "agents.get_for_delete", lane: "read", deadlineMs: 2_000 },
+		);
+		if (!agent) return c.json({ error: "Agent not found" }, 404);
+		let result: AgentRemovalResult;
+		try {
+			result = await dbOwnerAgentRemove(
+				{
+					agentId: agent.id,
+					mode: purge ? "purge" : "archive",
+					changedBy: "agents-api",
+					changedAt: new Date().toISOString(),
+				},
+				{ operation: purge ? "agents.purge" : "agents.archive", lane: "write", deadlineMs: 60_000 },
+			);
+		} catch (error) {
+			logger.error("api", "Agent removal failed", error instanceof Error ? error : new Error(String(error)), {
+				agentId: agent.id,
+				purge,
+			});
+			return c.json({ error: error instanceof Error ? error.message : "Agent removal failed" }, 500);
+		} finally {
+			invalidateAgentScopeCache(agent.id);
+		}
+		if (result.status === "not_found") return c.json({ error: "Agent not found" }, 404);
+		return c.json({ success: true, purged: purge, mode: result.mode, rows: result.rows });
+	});
+
+	app.get("/api/update/check", async (c) => {
+		const force = c.req.query("force") === "true";
+		const us = getUpdateState();
+
+		if (!force && us.lastCheck && us.lastCheckTime) {
+			const age = Date.now() - us.lastCheckTime.getTime();
+			if (age < 3600000) {
+				return c.json({
+					...us.lastCheck,
+					cached: true,
+					checkedAt: us.lastCheckTime.toISOString(),
+				});
+			}
+		}
+
+		const result = await checkForUpdatesImpl();
+		const after = getUpdateState();
+		return c.json({
+			...result,
+			cached: false,
+			checkedAt: after.lastCheckTime?.toISOString(),
+		});
+	});
+
+	app.get("/api/update/config", (c) => {
+		const us = getUpdateState();
+		return c.json({
+			...us.config,
+			minInterval: MIN_UPDATE_INTERVAL_SECONDS,
+			maxInterval: MAX_UPDATE_INTERVAL_SECONDS,
+			pendingRestartVersion: us.pendingRestartVersion,
+			lastAutoUpdateAt: us.lastAutoUpdateAt?.toISOString(),
+			lastAutoUpdateError: us.lastAutoUpdateError,
+			updateInProgress: us.installInProgress,
+		});
+	});
+
+	app.post("/api/update/config", async (c) => {
+		type UpdateConfigBody = Partial<{
+			autoInstall: boolean | string;
+			auto_install: boolean | string;
+			checkInterval: number | string;
+			check_interval: number | string;
+			channel: string;
+		}>;
+
+		const body = (await c.req.json()) as UpdateConfigBody;
+		const autoInstallRaw = body.autoInstall ?? body.auto_install;
+		const checkIntervalRaw = body.checkInterval ?? body.check_interval;
+		const channelRaw = body.channel;
+
+		let autoInstall: boolean | undefined;
+		let checkInterval: number | undefined;
+		let channel: ReturnType<typeof parseUpdateChannel> | undefined;
+
+		if (autoInstallRaw !== undefined) {
+			const parsed = parseBooleanFlag(autoInstallRaw);
+			if (parsed === null) {
+				return c.json({ success: false, error: "autoInstall must be true or false" }, 400);
+			}
+			autoInstall = parsed;
+		}
+
+		if (checkIntervalRaw !== undefined) {
+			const parsed = parseUpdateInterval(checkIntervalRaw);
+			if (parsed === null) {
+				return c.json(
+					{
+						success: false,
+						error: `checkInterval must be between ${MIN_UPDATE_INTERVAL_SECONDS} and ${MAX_UPDATE_INTERVAL_SECONDS} seconds`,
+					},
+					400,
+				);
+			}
+			checkInterval = parsed;
+		}
+
+		if (channelRaw !== undefined) {
+			const parsed = parseUpdateChannel(channelRaw);
+			if (parsed === null) {
+				return c.json({ success: false, error: "channel must be stable or nightly" }, 400);
+			}
+			channel = parsed;
+		}
+
+		const changed = autoInstall !== undefined || checkInterval !== undefined || channel !== undefined;
+		let persisted = true;
+
+		if (changed) {
+			const result = setUpdateConfig({ autoInstall, checkInterval, channel: channel ?? undefined });
+			persisted = result.persisted;
+		}
+
+		const us = getUpdateState();
+		return c.json({
+			success: true,
+			config: us.config,
+			persisted,
+			pendingRestartVersion: us.pendingRestartVersion,
+			lastAutoUpdateAt: us.lastAutoUpdateAt?.toISOString(),
+			lastAutoUpdateError: us.lastAutoUpdateError,
+		});
+	});
+
+	app.post("/api/update/run", async (c) => {
+		let targetVersion: string | undefined;
+
+		try {
+			const body = await c.req.json<{ targetVersion?: string }>();
+			if (body.targetVersion && typeof body.targetVersion === "string") {
+				targetVersion = body.targetVersion;
+			}
+		} catch {}
+
+		if (!targetVersion) {
+			const check = await checkForUpdatesImpl();
+
+			if (check.restartRequired && !check.updateAvailable) {
+				return c.json({
+					success: true,
+					message: `Update ${check.pendingVersion || check.latestVersion || "already"} installed. Restart daemon to apply.`,
+					installedVersion: check.pendingVersion || check.latestVersion,
+					restartRequired: true,
+				});
+			}
+
+			if (!check.updateAvailable && check.latestVersion) {
+				return c.json({
+					success: true,
+					message: "Already running the latest version.",
+					installedVersion: check.latestVersion,
+					restartRequired: false,
+				});
+			}
+
+			targetVersion = check.latestVersion ?? undefined;
+		}
+
+		const result = await runUpdateImpl(targetVersion);
+		return c.json(result);
+	});
+}

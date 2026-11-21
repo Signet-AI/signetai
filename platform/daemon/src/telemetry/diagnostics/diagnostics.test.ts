@@ -1,0 +1,481 @@
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { runMigrations } from "../../../../core/src/migrations";
+import type { ReadDb } from "../../db/owner/accessor";
+import {
+	createProviderTracker,
+	getDiagnostics,
+	getGraphHealth,
+	getIndexHealth,
+	getMutationHealth,
+	getProviderHealth,
+	getQueueHealth,
+	getStorageHealth,
+} from "./diagnostics";
+import {
+	DEFAULT_QUEUE_THRESHOLDS,
+	EMPTY_QUEUE_COUNTS,
+	getQueueDiagnosticsSnapshot,
+	getQueuePressureSnapshot,
+	scoreCountsWithThresholds,
+} from "./queue";
+
+function makeDb(): Database {
+	const db = new Database(":memory:");
+	db.exec("PRAGMA journal_mode = WAL");
+	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+	return db;
+}
+
+let db: Database;
+
+beforeEach(() => {
+	db = makeDb();
+});
+
+afterEach(() => {
+	db.close();
+});
+
+function asReadDb(raw: Database): ReadDb {
+	return raw as unknown as ReadDb;
+}
+
+const now = new Date().toISOString();
+
+function insertMemory(
+	raw: Database,
+	id: string,
+	opts: { isDeleted?: number; embeddingModel?: string | null } = {},
+): void {
+	raw
+		.prepare(
+			`INSERT INTO memories
+				(id, type, content, confidence, tags, created_at, updated_at,
+				 updated_by, version, manual_override, is_deleted, embedding_model)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		)
+		.run(
+			id,
+			"fact",
+			`content for ${id}`,
+			0.9,
+			"[]",
+			now,
+			now,
+			"test",
+			1,
+			0,
+			opts.isDeleted ?? 0,
+			opts.embeddingModel ?? null,
+		);
+}
+
+function insertJob(
+	raw: Database,
+	id: string,
+	memId: string,
+	status: string,
+	createdAt = now,
+	updatedAt = now,
+	jobType = "document_ingest",
+): void {
+	raw
+		.prepare(
+			`INSERT INTO memory_jobs
+				(id, memory_id, job_type, status, attempts, max_attempts,
+				 created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		)
+		.run(id, memId, jobType, status, 0, 3, createdAt, updatedAt);
+}
+
+function insertHistory(raw: Database, id: string, memId: string, event: string, createdAt = now): void {
+	raw
+		.prepare(
+			`INSERT INTO memory_history
+				(id, memory_id, event, changed_by, created_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+		)
+		.run(id, memId, event, "test", createdAt);
+}
+
+describe("getQueueHealth", () => {
+	test("empty DB returns healthy score", () => {
+		const result = getQueueHealth(asReadDb(db));
+		expect(result.status).toBe("healthy");
+		expect(result.score).toBe(1);
+		expect(result.depth).toBe(0);
+		expect(result.deadRate).toBe(0);
+		expect(result.leaseAnomalies).toBe(0);
+	});
+
+	test("many pending jobs degrades queue health", () => {
+		for (let i = 0; i < 51; i++) {
+			const memId = `mem-q-${i}`;
+			insertMemory(db, memId);
+			insertJob(db, `job-${i}`, memId, "pending");
+		}
+
+		const result = getQueueHealth(asReadDb(db));
+		expect(result.depth).toBe(51);
+		expect(result.score).toBeLessThan(0.8);
+		expect(result.status).not.toBe("healthy");
+	});
+
+	test("high dead rate degrades queue health", () => {
+		for (let i = 0; i < 10; i++) {
+			const memId = `mem-dr-${i}`;
+			insertMemory(db, memId);
+			const status = i < 5 ? "completed" : "dead";
+			insertJob(db, `job-dr-${i}`, memId, status);
+		}
+
+		const result = getQueueHealth(asReadDb(db));
+		expect(result.deadRate).toBeGreaterThan(0.01);
+		expect(result.score).toBeLessThan(1);
+	});
+
+	test("old dead jobs outside the recent window do not degrade queue health", () => {
+		const oldTs = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+		for (let i = 0; i < 20; i++) {
+			const memId = `mem-old-dead-${i}`;
+			insertMemory(db, memId);
+			insertJob(db, `job-old-dead-${i}`, memId, "dead", oldTs, oldTs);
+		}
+
+		const result = getQueueHealth(asReadDb(db));
+		expect(result.deadRate).toBe(0);
+		expect(result.status).toBe("healthy");
+	});
+
+	test("excludes retired extraction jobs from live queue health", () => {
+		insertMemory(db, "mem-retired-extract");
+		insertJob(db, "job-retired-extract", "mem-retired-extract", "dead", now, now, "extract");
+
+		const result = getQueueHealth(asReadDb(db));
+		expect(result.depth).toBe(0);
+		expect(result.deadRate).toBe(0);
+		expect(result.status).toBe("healthy");
+		expect(getQueueDiagnosticsSnapshot(asReadDb(db), { fresh: true }).memory.dead).toBe(0);
+	});
+});
+
+describe("expanded queue diagnostics", () => {
+	test("scores healthy, degraded, and unhealthy threshold states", () => {
+		expect(scoreCountsWithThresholds(EMPTY_QUEUE_COUNTS, "summary")).toEqual({ score: 1, status: "healthy" });
+		expect(
+			scoreCountsWithThresholds(
+				{ ...EMPTY_QUEUE_COUNTS, dead: DEFAULT_QUEUE_THRESHOLDS.summaryDeadWarn + 1 },
+				"summary",
+			).status,
+		).toBe("degraded");
+		expect(
+			scoreCountsWithThresholds({ ...EMPTY_QUEUE_COUNTS, dead: DEFAULT_QUEUE_THRESHOLDS.summaryDeadFail }, "summary")
+				.status,
+		).toBe("unhealthy");
+	});
+
+	test("caches status snapshots while allowing fresh diagnostics reads", () => {
+		const readDb = asReadDb(db);
+		const initial = getQueueDiagnosticsSnapshot(readDb, { fresh: true });
+		expect(initial.memory.dead).toBe(0);
+
+		insertMemory(db, "mem-cache");
+		insertJob(db, "job-cache", "mem-cache", "dead");
+
+		expect(getQueueDiagnosticsSnapshot(readDb).memory.dead).toBe(0);
+		expect(getQueueDiagnosticsSnapshot(readDb, { fresh: true }).memory.dead).toBe(1);
+	});
+
+	test("marks observable bounded diagnostics as exact", () => {
+		insertMemory(db, "mem-exact-diagnostics");
+		insertJob(db, "job-exact", "mem-exact-diagnostics", "completed");
+
+		const counts = getQueueDiagnosticsSnapshot(asReadDb(db), { fresh: true }).memory;
+		expect(counts.completed).toBe(1);
+		expect(counts.completeness).toBe("exact");
+	});
+
+	test("reports unknown completeness when a legacy schema lacks the diagnostics index", () => {
+		insertMemory(db, "mem-legacy-diagnostics");
+		insertJob(db, "job-legacy", "mem-legacy-diagnostics", "completed");
+		db.exec("DROP INDEX idx_memory_jobs_diagnostics_status_created_at");
+
+		const counts = getQueueDiagnosticsSnapshot(asReadDb(db), { fresh: true }).memory;
+		expect(counts).toMatchObject({
+			pending: 0,
+			leased: 0,
+			completed: 0,
+			failed: 0,
+			dead: 0,
+			completeness: "unknown",
+		});
+	});
+
+	test("bounds fresh diagnostics counts and marks terminal history as truncated", () => {
+		insertMemory(db, "mem-bounded-diagnostics");
+		for (let i = 0; i < 1_100; i++) {
+			insertJob(db, `job-bounded-${i}`, "mem-bounded-diagnostics", "completed");
+		}
+
+		const counts = getQueueDiagnosticsSnapshot(asReadDb(db), { fresh: true }).memory;
+		expect(counts.completed).toBe(1_000);
+		expect(counts.completeness).toBe("truncated");
+		const plan = db
+			.prepare(
+				`EXPLAIN QUERY PLAN
+				 SELECT status FROM memory_jobs INDEXED BY idx_memory_jobs_diagnostics_status_created_at
+				 WHERE status = 'completed' AND job_type <> 'extract' LIMIT 1001`,
+			)
+			.all() as ReadonlyArray<{ readonly detail?: string }>;
+		expect(plan.some((row) => row.detail?.includes("idx_memory_jobs_diagnostics_status_created_at"))).toBe(true);
+	});
+
+	test("bounds heartbeat queue observation and distinguishes empty queue age", () => {
+		const readDb = asReadDb(db);
+		const empty = getQueuePressureSnapshot(readDb);
+		expect(empty.memoryQueueDepth).toBe(0);
+		expect(empty.summaryQueueDepth).toBe(0);
+		expect(empty.oldestJobAgeSec).toBeUndefined();
+
+		for (let i = 0; i < 1_100; i++) {
+			const memoryId = `mem-pressure-${i}`;
+			insertMemory(db, memoryId);
+			insertJob(db, `job-pressure-${i}`, memoryId, "pending");
+		}
+
+		const pressure = getQueuePressureSnapshot(readDb);
+		expect(pressure.memoryQueueDepth).toBe(1_001);
+		expect(pressure.summaryQueueDepth).toBe(0);
+		expect(pressure.oldestJobAgeSec).toBeGreaterThanOrEqual(0);
+	});
+});
+
+describe("getStorageHealth", () => {
+	test("empty DB returns healthy score", () => {
+		const result = getStorageHealth(asReadDb(db));
+		expect(result.status).toBe("healthy");
+		expect(result.totalMemories).toBe(0);
+		expect(result.deletedTombstones).toBe(0);
+		expect(result.dbSizeBytes).toBeGreaterThan(0);
+	});
+
+	test("high tombstone ratio degrades storage health", () => {
+		for (let i = 0; i < 3; i++) insertMemory(db, `mem-active-${i}`);
+		for (let i = 0; i < 7; i++) insertMemory(db, `mem-del-${i}`, { isDeleted: 1 });
+
+		const result = getStorageHealth(asReadDb(db));
+		expect(result.totalMemories).toBe(10);
+		expect(result.deletedTombstones).toBe(7);
+		expect(result.score).toBeLessThan(0.8);
+	});
+});
+
+describe("getIndexHealth", () => {
+	test("empty DB returns healthy score with no mismatch", () => {
+		const result = getIndexHealth(asReadDb(db));
+		expect(result.status).toBe("healthy");
+		expect(result.ftsMismatch).toBe(false);
+		expect(result.embeddingCoverage).toBe(1);
+	});
+
+	test("tombstones remain searchable in the FTS index without degrading health", () => {
+		for (let i = 0; i < 5; i++) {
+			insertMemory(db, `mem-active-fts-${i}`, { embeddingModel: "text-embedding-3" });
+		}
+		for (let i = 0; i < 6; i++) {
+			insertMemory(db, `mem-del-fts-${i}`, { isDeleted: 1 });
+		}
+
+		const result = getIndexHealth(asReadDb(db));
+		expect(result.memoriesRowCount).toBe(5);
+		expect(result.ftsRowCount).toBe(11);
+		expect(result.ftsMismatch).toBe(false);
+		expect(result.embeddingCoverage).toBe(1);
+		expect(result.score).toBe(1);
+	});
+
+	test("low embedding coverage degrades index health", () => {
+		for (let i = 0; i < 2; i++) {
+			insertMemory(db, `mem-emb-${i}`, { embeddingModel: "text-embedding-3" });
+		}
+		for (let i = 0; i < 8; i++) {
+			insertMemory(db, `mem-noemb-${i}`);
+		}
+
+		const result = getIndexHealth(asReadDb(db));
+		expect(result.embeddingCoverage).toBe(0.2);
+		expect(result.score).toBeLessThan(0.8);
+	});
+});
+
+describe("getGraphHealth", () => {
+	test("small or empty graph state stays healthy while it is still inconclusive", () => {
+		const result = getGraphHealth(asReadDb(db));
+		expect(result.status).toBe("healthy");
+		expect(result.score).toBe(1);
+		expect(result.entityCount).toBe(0);
+		expect(result.quality).toBe("unknown");
+	});
+
+	test("flatlined graph degrades when many active memories have no entities", () => {
+		for (let i = 0; i < 10; i++) {
+			insertMemory(db, `mem-graph-flatline-${i}`);
+		}
+
+		const result = getGraphHealth(asReadDb(db));
+		expect(result.entityCount).toBe(0);
+		expect(result.status).toBe("degraded");
+		expect(result.score).toBeLessThan(0.8);
+	});
+
+	test("disabled graph health stays healthy even with many memories and no entities", () => {
+		for (let i = 0; i < 10; i++) {
+			insertMemory(db, `mem-graph-disabled-${i}`);
+		}
+
+		const result = getGraphHealth(asReadDb(db), { graphEnabled: false });
+		expect(result.entityCount).toBe(0);
+		expect(result.status).toBe("healthy");
+		expect(result.score).toBe(1);
+	});
+
+	test("primary traversal with zero edges degrades graph health", () => {
+		const primary = getGraphHealth(asReadDb(db), { traversalPrimary: true });
+		expect(primary.edgeCount).toBe(0);
+		expect(primary.status).toBe("degraded");
+		expect(primary.score).toBeLessThan(1);
+
+		const secondary = getGraphHealth(asReadDb(db), { traversalPrimary: false });
+		expect(secondary.edgeCount).toBe(0);
+		expect(secondary.status).toBe("healthy");
+		expect(secondary.score).toBe(1);
+	});
+
+	test("composite status reflects graph degradation", () => {
+		for (let i = 0; i < 10; i++) {
+			insertMemory(db, `mem-graph-composite-${i}`);
+		}
+
+		const tracker = createProviderTracker();
+		const report = getDiagnostics(asReadDb(db), tracker);
+
+		expect(report.graph.status).toBe("degraded");
+		expect(report.composite.status).toBe("degraded");
+	});
+});
+
+describe("createProviderTracker", () => {
+	test("starts empty with no stats", () => {
+		const tracker = createProviderTracker();
+		expect(tracker.stats.total).toBe(0);
+		expect(tracker.stats.successes).toBe(0);
+	});
+
+	test("records outcomes correctly", () => {
+		const tracker = createProviderTracker();
+		tracker.record("success");
+		tracker.record("success");
+		tracker.record("failure");
+		tracker.record("timeout");
+
+		expect(tracker.stats.total).toBe(4);
+		expect(tracker.stats.successes).toBe(2);
+		expect(tracker.stats.failures).toBe(1);
+		expect(tracker.stats.timeouts).toBe(1);
+	});
+
+	test("ring buffer wraps at capacity and evicts oldest", () => {
+		const tracker = createProviderTracker(3);
+		tracker.record("failure");
+		tracker.record("failure");
+		tracker.record("failure");
+		tracker.record("success");
+		tracker.record("success");
+		tracker.record("success");
+
+		expect(tracker.stats.total).toBe(3);
+		expect(tracker.stats.successes).toBe(3);
+		expect(tracker.stats.failures).toBe(0);
+	});
+
+	test("getProviderHealth reflects tracker state", () => {
+		const tracker = createProviderTracker();
+		for (let i = 0; i < 8; i++) tracker.record("success");
+		for (let i = 0; i < 2; i++) tracker.record("failure");
+
+		const result = getProviderHealth(tracker);
+		expect(result.availabilityRate).toBe(0.8);
+		expect(result.score).toBe(0.8);
+		expect(result.status).toBe("healthy");
+	});
+
+	test("empty tracker returns healthy (no data assumption)", () => {
+		const tracker = createProviderTracker();
+		const result = getProviderHealth(tracker);
+		expect(result.status).toBe("healthy");
+		expect(result.availabilityRate).toBe(1);
+	});
+});
+
+describe("getMutationHealth", () => {
+	test("empty DB returns healthy score", () => {
+		const result = getMutationHealth(asReadDb(db));
+		expect(result.status).toBe("healthy");
+		expect(result.recentRecovers).toBe(0);
+		expect(result.recentDeletes).toBe(0);
+	});
+
+	test("many recent recoveries degrade mutation health", () => {
+		insertMemory(db, "mem-hist");
+		for (let i = 0; i < 6; i++) {
+			insertHistory(db, `hist-${i}`, "mem-hist", "recovered");
+		}
+
+		const result = getMutationHealth(asReadDb(db));
+		expect(result.recentRecovers).toBe(6);
+		expect(result.score).toBeLessThan(0.8);
+	});
+
+	test("old recoveries outside 7-day window are not counted", () => {
+		insertMemory(db, "mem-old");
+		const old = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
+		for (let i = 0; i < 10; i++) {
+			insertHistory(db, `hist-old-${i}`, "mem-old", "recovered", old);
+		}
+
+		const result = getMutationHealth(asReadDb(db));
+		expect(result.recentRecovers).toBe(0);
+		expect(result.status).toBe("healthy");
+	});
+});
+
+describe("getDiagnostics", () => {
+	test("composite score is weighted average of domain scores", () => {
+		const tracker = createProviderTracker();
+		const report = getDiagnostics(asReadDb(db), tracker);
+		expect(report.composite.score).toBeCloseTo(1, 5);
+		expect(report.composite.status).toBe("healthy");
+		expect(typeof report.timestamp).toBe("string");
+	});
+
+	test("composite status reflects worst unhealthy domain", () => {
+		for (let i = 0; i < 51; i++) {
+			const memId = `mem-comp-unhealthy-${i}`;
+			insertMemory(db, memId);
+			insertJob(db, `job-comp-unhealthy-${i}`, memId, "pending");
+		}
+		insertMemory(db, "mem-comp-dead");
+		insertJob(db, "job-comp-dead", "mem-comp-dead", "dead");
+
+		const tracker = createProviderTracker();
+		const report = getDiagnostics(asReadDb(db), tracker);
+
+		expect(report.queue.depth).toBe(51);
+		expect(report.queue.deadRate).toBeGreaterThan(0.01);
+		expect(report.queue.status).toBe("unhealthy");
+		expect(report.composite.score).toBeGreaterThanOrEqual(0.75);
+		expect(report.composite.status).toBe("unhealthy");
+	});
+});

@@ -1,0 +1,905 @@
+import { createHash } from "node:crypto";
+import type { Context } from "hono";
+import { normalizeAndHashContent } from "../../recall/text/content-normalization";
+import { getAgentPresenceForSession } from "../../agents/cross-agent/messages";
+import { getDbAccessor } from "../../db/owner/accessor";
+import {
+	fetchEmbedding,
+	findLlamaCppEmbeddingModel,
+	resolveEmbeddingApiKey,
+	resolveEmbeddingBaseUrl,
+	resolveLlamaCppFallbackBaseUrl,
+	resolveOllamaUrl,
+	setNativeFallbackProvider,
+} from "../../inference/embeddings/fetch";
+import { logger } from "../../runtime/logging/logger";
+import { getActiveSessions, hasSession, normalizeSessionKey } from "../../sessions/tracker";
+import { getStoredSessionTranscriptInfoAsync } from "../../transcripts/store/session-transcripts";
+import type { EmbeddingConfig } from "../../config/memory-config";
+import type { NativeEmbeddingRuntimeOptions } from "../../inference/embeddings/native";
+import {
+	resolveScopedAgent,
+	resolveScopedProject as resolveScopedProjectForClaims,
+	shouldEnforceScope,
+} from "../server/request-scope";
+import { authConfig } from "./state";
+
+export interface EmbeddingStatus {
+	provider: "native" | "ollama" | "openai" | "llama-cpp" | "none";
+	model: string;
+	available: boolean;
+	modelCached?: boolean;
+	dimensions?: number;
+	base_url: string;
+	error?: string;
+	checkedAt: string;
+}
+
+export function blobToVector(blob: Buffer, dimensions: number | null): number[] {
+	const raw = blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength);
+	const vector = new Float32Array(raw);
+	const size =
+		typeof dimensions === "number" && dimensions > 0 && dimensions <= vector.length ? dimensions : vector.length;
+	return Array.from(vector.slice(0, size));
+}
+
+export function chunkBySentence(text: string, targetChars: number): readonly string[] {
+	const sentences = text.split(/(?<=[.!?])\s+|(?=^[-*] |\n## )/m).filter(Boolean);
+	const raw: string[] = [];
+	let current = "";
+
+	for (const sentence of sentences) {
+		if (sentence.length > targetChars * 2) {
+			if (current.length > 0) {
+				raw.push(current.trim());
+				current = "";
+			}
+			for (let i = 0; i < sentence.length; i += targetChars) {
+				raw.push(sentence.slice(i, i + targetChars).trim());
+			}
+			continue;
+		}
+
+		const combined = current.length > 0 ? `${current} ${sentence}` : sentence;
+		if (combined.length > targetChars && current.length > 0) {
+			raw.push(current.trim());
+			current = sentence;
+		} else {
+			current = combined;
+		}
+	}
+
+	if (current.trim().length > 0) {
+		raw.push(current.trim());
+	}
+
+	const filtered = raw.filter((c) => c.length > 0);
+	if (filtered.length <= 1) return filtered;
+
+	const chunks: string[] = [];
+	for (let i = 0; i < filtered.length; i++) {
+		if (i < filtered.length - 1) {
+			const overlap = filtered[i + 1].slice(0, Math.floor(targetChars * 0.25));
+			chunks.push(`${filtered[i]} ${overlap}`.trim());
+		} else {
+			chunks.push(filtered[i]);
+		}
+	}
+
+	return chunks;
+}
+
+export function parseTagsField(raw: string | null): string[] {
+	if (!raw) return [];
+
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (Array.isArray(parsed)) {
+			return parsed.filter((value): value is string => typeof value === "string");
+		}
+	} catch {}
+
+	return raw
+		.split(",")
+		.map((tag) => tag.trim())
+		.filter((tag) => tag.length > 0);
+}
+
+export function parseBoundedInt(raw: string | undefined, fallback: number, min: number, max: number): number {
+	if (!raw) return fallback;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed)) return fallback;
+	return Math.min(max, Math.max(min, parsed));
+}
+
+export function parseOptionalBoundedInt(raw: string | undefined, min: number, max: number): number | undefined {
+	if (!raw) return undefined;
+	const parsed = Number.parseInt(raw, 10);
+	if (!Number.isFinite(parsed)) return undefined;
+	return Math.min(max, Math.max(min, parsed));
+}
+
+export function parseOptionalBoundedFloat(raw: string | undefined, min: number, max: number): number | undefined {
+	if (!raw) return undefined;
+	const parsed = Number.parseFloat(raw);
+	if (!Number.isFinite(parsed)) return undefined;
+	return Math.min(max, Math.max(min, parsed));
+}
+
+export function parseCsvQuery(raw: string | undefined): string[] {
+	if (!raw) return [];
+	return [
+		...new Set(
+			raw
+				.split(",")
+				.map((entry) => entry.trim())
+				.filter((entry) => entry.length > 0),
+		),
+	];
+}
+
+export function parseIsoDateQuery(raw: string | undefined): string | undefined {
+	if (!raw) return undefined;
+	const value = raw.trim();
+	if (!value) return undefined;
+	const date = new Date(value);
+	if (Number.isNaN(date.getTime())) return undefined;
+	return date.toISOString();
+}
+
+export function parseOptionalString(value: unknown): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export const MAX_MEMORY_TYPE_CHARS = 64;
+
+export function parseMemoryType(value: unknown): { readonly type: string } | { readonly error: string } {
+	const type = parseOptionalString(value);
+	if (type === undefined) return { error: "type must be a non-empty string" };
+	if (type.length > MAX_MEMORY_TYPE_CHARS) return { error: `type must be at most ${MAX_MEMORY_TYPE_CHARS} characters` };
+	return { type };
+}
+
+export function parseOptionalNumber(value: unknown): number | undefined {
+	if (typeof value === "number" && Number.isFinite(value)) return value;
+	if (typeof value === "string" && value.trim().length > 0) {
+		const parsed = Number.parseFloat(value);
+		if (Number.isFinite(parsed)) return parsed;
+	}
+	return undefined;
+}
+
+export function parseOptionalInt(value: unknown): number | undefined {
+	const parsed = parseOptionalNumber(value);
+	if (parsed === undefined) return undefined;
+	if (!Number.isInteger(parsed)) return undefined;
+	if (parsed <= 0) return undefined;
+	return parsed;
+}
+
+export function parseOptionalBoolean(value: unknown): boolean | undefined {
+	if (typeof value === "boolean") return value;
+	if (typeof value === "number") {
+		if (value === 1) return true;
+		if (value === 0) return false;
+		return undefined;
+	}
+	if (typeof value === "string") {
+		const lower = value.trim().toLowerCase();
+		if (lower === "1" || lower === "true") return true;
+		if (lower === "0" || lower === "false") return false;
+	}
+	return undefined;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+	return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+export function toRecord(value: unknown): Record<string, unknown> | null {
+	return isRecord(value) ? value : null;
+}
+
+export async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {
+	const raw = await c.req.text();
+	if (!raw.trim()) return {};
+	try {
+		return toRecord(JSON.parse(raw));
+	} catch {
+		return null;
+	}
+}
+
+const TYPE_HINTS: Array<[string, string]> = [
+	["prefer", "preference"],
+	["likes", "preference"],
+	["want", "preference"],
+	["decided", "decision"],
+	["agreed", "decision"],
+	["will use", "decision"],
+	["learned", "learning"],
+	["discovered", "learning"],
+	["til ", "learning"],
+	["bug", "issue"],
+	["issue", "issue"],
+	["broken", "issue"],
+	["never", "rule"],
+	["always", "rule"],
+	["must", "rule"],
+];
+
+export function inferType(content: string): string {
+	const lower = content.toLowerCase();
+	for (const [hint, type] of TYPE_HINTS) {
+		if (lower.includes(hint)) return type;
+	}
+	return "fact";
+}
+
+export interface ParsedMemory {
+	content: string;
+	tags: string | null;
+	pinned: boolean;
+	importance: number;
+}
+
+export function parsePrefixes(raw: string): ParsedMemory {
+	let content = raw.trim();
+	let pinned = false;
+	let importance = 0.8;
+	let tags: string | null = null;
+
+	if (content.toLowerCase().startsWith("critical:")) {
+		content = content.slice(9).trim();
+		pinned = true;
+		importance = 1.0;
+	}
+
+	const tagMatch = content.match(/^\[([^\]]+)\]:\s*(.+)$/s);
+	if (tagMatch) {
+		tags = tagMatch[1]
+			.split(",")
+			.map((t) => t.trim().toLowerCase())
+			.filter(Boolean)
+			.join(",");
+		content = tagMatch[2].trim();
+	}
+
+	return { content, tags, pinned, importance };
+}
+
+export function shouldEnforceAuthScope(c: Context): boolean {
+	return shouldEnforceScope(authConfig.mode, c.get("auth")?.claims ?? null);
+}
+
+export function resolveScopedAgentId(
+	c: Context,
+	requestedAgentId: string | undefined,
+	fallbackAgentId = "default",
+): { agentId: string; error?: string } {
+	return resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, requestedAgentId, fallbackAgentId);
+}
+
+export function resolveScopedProject(
+	c: Context,
+	requestedProject: string | undefined,
+): { project: string | undefined; error?: string } {
+	return resolveScopedProjectForClaims(c.get("auth")?.claims ?? null, authConfig.mode, requestedProject);
+}
+
+export function validateSessionAgentBinding(
+	c: Context,
+	sessionKey: string | undefined,
+	agentId: string,
+	options: { requireExisting: boolean; context: string; project?: string },
+): string | undefined {
+	const normalizedSessionKey = parseOptionalString(sessionKey);
+	if (!normalizedSessionKey || !shouldEnforceAuthScope(c)) {
+		return undefined;
+	}
+	const requestedProject = resolveScopedProject(c, options.project);
+	if (requestedProject.error) return requestedProject.error;
+
+	const trackedKey = normalizeSessionKey(normalizedSessionKey);
+	const claimants = getActiveSessions().filter((session) => session.key === trackedKey);
+	if (claimants.length > 0 && !claimants.some((session) => session.agentId === agentId)) {
+		return `${options.context} belongs to a different agent`;
+	}
+
+	const existing = getAgentPresenceForSession(normalizedSessionKey);
+	if (!existing) {
+		return options.requireExisting ? `${options.context} is not an active session` : undefined;
+	}
+
+	if (existing.agentId !== agentId) {
+		return `${options.context} belongs to a different agent`;
+	}
+
+	return existing.project ? resolveScopedProject(c, existing.project).error : undefined;
+}
+
+export async function validateSessionControl(
+	c: Context,
+	sessionKey: string | undefined,
+	agentId: string,
+	options: { context: string; project?: string },
+): Promise<string | undefined> {
+	const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, { ...options, requireExisting: false });
+	if (bindingError) return bindingError;
+	const key = parseOptionalString(sessionKey);
+	if (!key || !shouldEnforceAuthScope(c) || !c.get("auth")?.claims?.scope.project) return undefined;
+	if (getAgentPresenceForSession(key)) return undefined;
+	const stored = await getStoredSessionTranscriptInfoAsync(key, agentId);
+	if (!stored) return hasSession(key, agentId) ? `${options.context} project cannot be verified` : undefined;
+	return stored.project ? resolveScopedProject(c, stored.project).error : undefined;
+}
+
+export function parseTagsMutation(value: unknown): string | null | undefined {
+	if (value === null) return null;
+	if (typeof value === "string") {
+		const trimmed = value
+			.split(",")
+			.map((tag) => tag.trim())
+			.filter((tag) => tag.length > 0)
+			.join(",");
+		return trimmed.length > 0 ? trimmed : null;
+	}
+	if (Array.isArray(value)) {
+		if (value.some((entry) => typeof entry !== "string")) {
+			return undefined;
+		}
+		const tags = value
+			.map((tag) => tag.trim())
+			.filter((tag) => tag.length > 0)
+			.join(",");
+		return tags.length > 0 ? tags : null;
+	}
+	return undefined;
+}
+
+export interface MutationActor {
+	changedBy: string;
+	actorType: string;
+	sessionId: string | undefined;
+	requestId: string | undefined;
+}
+
+const ACTOR_TYPES = new Set(["operator", "pipeline", "harness", "sdk", "daemon"]);
+
+export function resolveMutationActor(c: Context, fallback?: string): MutationActor {
+	const auth = c.get("auth");
+	if (auth?.claims) {
+		return {
+			changedBy: auth.claims.sub,
+			actorType: auth.claims.role,
+			sessionId: parseOptionalString(c.req.header("x-signet-session-id")),
+			requestId: parseOptionalString(c.req.header("x-signet-request-id")),
+		};
+	}
+
+	const headerActor = parseOptionalString(c.req.header("x-signet-actor"));
+	const changedBy = headerActor ?? (fallback && fallback.trim().length > 0 ? fallback.trim() : "daemon");
+
+	const rawType = parseOptionalString(c.req.header("x-signet-actor-type"));
+	const actorType = rawType && ACTOR_TYPES.has(rawType) ? rawType : "operator";
+
+	return {
+		changedBy,
+		actorType,
+		sessionId: parseOptionalString(c.req.header("x-signet-session-id")),
+		requestId: parseOptionalString(c.req.header("x-signet-request-id")),
+	};
+}
+
+export interface ForgetCandidate {
+	id: string;
+	pinned: number;
+	version: number;
+	score: number;
+}
+
+export interface ForgetCandidatesRequest {
+	query: string;
+	type: string;
+	tags: string;
+	who: string;
+	sourceType: string;
+	since: string;
+	until: string;
+	scope: string | null;
+	limit: number;
+}
+
+const MAX_MUTATION_BATCH = 200;
+
+export function buildForgetCandidatesWhere(
+	req: ForgetCandidatesRequest,
+	alias: string,
+): { clause: string; args: unknown[] } {
+	const parts: string[] = [];
+	const args: unknown[] = [];
+	const prefix = alias.length > 0 ? `${alias}.` : "";
+
+	if (req.type) {
+		parts.push(`${prefix}type = ?`);
+		args.push(req.type);
+	}
+	if (req.tags) {
+		const tags = req.tags
+			.split(",")
+			.map((tag) => tag.trim())
+			.filter((tag) => tag.length > 0);
+		for (const tag of tags) {
+			parts.push(`${prefix}tags LIKE ?`);
+			args.push(`%${tag}%`);
+		}
+	}
+	if (req.who) {
+		parts.push(`${prefix}who = ?`);
+		args.push(req.who);
+	}
+	if (req.sourceType) {
+		parts.push(`${prefix}source_type = ?`);
+		args.push(req.sourceType);
+	}
+	if (req.scope !== null) {
+		parts.push(`${prefix}scope = ?`);
+		args.push(req.scope);
+	} else {
+		parts.push(`${prefix}scope IS NULL`);
+	}
+	if (req.since) {
+		parts.push(`${prefix}created_at >= ?`);
+		args.push(req.since);
+	}
+	if (req.until) {
+		parts.push(`${prefix}created_at <= ?`);
+		args.push(req.until);
+	}
+
+	const clause = parts.length > 0 ? ` AND ${parts.join(" AND ")}` : "";
+	return { clause, args };
+}
+
+export function loadForgetCandidates(
+	req: ForgetCandidatesRequest,
+	scope?: { readonly sql: string; readonly args: readonly unknown[] },
+): ForgetCandidate[] {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("../../db/owner/accessor").ReadDb) => {
+		const limit = Math.max(1, Math.min(req.limit, MAX_MUTATION_BATCH));
+		const withQuery = req.query.trim().length > 0;
+		const { clause, args } = buildForgetCandidatesWhere(req, "m");
+		const scopeSql = scope?.sql ?? "";
+		const scopeArgs = scope?.args ?? [];
+
+		if (withQuery) {
+			try {
+				const rows = db
+					.prepare(
+						`SELECT m.id, m.pinned, m.version, bm25(memories_fts) AS raw_score
+						 FROM memories_fts
+						 JOIN memories m ON memories_fts.rowid = m.rowid
+						 WHERE memories_fts MATCH ? AND m.is_deleted = 0${clause}${scopeSql}
+						 ORDER BY raw_score
+						 LIMIT ?`,
+					)
+					.all<{ id: string; pinned: number; version: number; raw_score: number }>(
+						req.query,
+						...args,
+						...scopeArgs,
+						limit,
+					);
+				return rows.map((row) => ({
+					id: row.id,
+					pinned: row.pinned,
+					version: row.version,
+					score: 1 / (1 + Math.abs(row.raw_score ?? 0)),
+				}));
+			} catch {}
+
+			const fallbackRows = db
+				.prepare(
+					`SELECT m.id, m.pinned, m.version
+					 FROM memories m
+					 WHERE m.is_deleted = 0
+					   AND (m.content LIKE ? OR m.tags LIKE ?)${clause}${scopeSql}
+					 ORDER BY m.updated_at DESC
+					 LIMIT ?`,
+				)
+				.all<{ id: string; pinned: number; version: number }>(
+					`%${req.query}%`,
+					`%${req.query}%`,
+					...args,
+					...scopeArgs,
+					limit,
+				);
+			return fallbackRows.map((row) => ({
+				id: row.id,
+				pinned: row.pinned,
+				version: row.version,
+				score: 0,
+			}));
+		}
+
+		const rows = db
+			.prepare(
+				`SELECT m.id, m.pinned, m.version
+				 FROM memories m
+				 WHERE m.is_deleted = 0${clause}${scopeSql}
+				 ORDER BY m.pinned DESC, m.importance DESC, m.updated_at DESC
+				 LIMIT ?`,
+			)
+			.all<{ id: string; pinned: number; version: number }>(...args, ...scopeArgs, limit);
+		return rows.map((row) => ({
+			id: row.id,
+			pinned: row.pinned,
+			version: row.version,
+			score: 0,
+		}));
+	}, "db:forget.candidates.read");
+}
+
+export function loadForgetCandidatesByIds(
+	requestedIds: readonly string[],
+	limit: number,
+	scope?: { readonly sql: string; readonly args: readonly unknown[] },
+): ForgetCandidate[] {
+	const dedupedIds = [...new Set(requestedIds)]
+		.map((id) => id.trim())
+		.filter((id) => id.length > 0)
+		.slice(0, Math.max(1, Math.min(limit, MAX_MUTATION_BATCH)));
+	if (dedupedIds.length === 0) return [];
+
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("../../db/owner/accessor").ReadDb) => {
+		const placeholders = dedupedIds.map(() => "?").join(", ");
+		const scopeSql = scope?.sql ?? "";
+		const scopeArgs = scope?.args ?? [];
+		const rows = db
+			.prepare(
+				`SELECT m.id, m.pinned, m.version
+				 FROM memories m
+				 WHERE m.is_deleted = 0 AND m.id IN (${placeholders})${scopeSql}`,
+			)
+			.all(...dedupedIds, ...scopeArgs) as Array<{
+			id: string;
+			pinned: number;
+			version: number;
+		}>;
+		const rowById = new Map(rows.map((row) => [row.id, row]));
+		return dedupedIds
+			.map((id) => rowById.get(id))
+			.filter((row): row is { id: string; pinned: number; version: number } => Boolean(row))
+			.map((row) => ({
+				id: row.id,
+				pinned: row.pinned,
+				version: row.version,
+				score: 0,
+			}));
+	}, "db:forget.candidates-by-id.read");
+}
+
+export function buildForgetConfirmToken(memoryIds: readonly string[]): string {
+	const canonical = [...new Set(memoryIds)].sort().join("|");
+	return createHash("sha256").update(canonical).digest("hex").slice(0, 32);
+}
+
+export interface ParsedModifyPatch {
+	patch: {
+		content?: string;
+		normalizedContent?: string;
+		contentHash?: string;
+		type?: string;
+		tags?: string | null;
+		importance?: number;
+		pinned?: number;
+	};
+	contentForEmbedding: string | null;
+}
+
+export function parseModifyPatch(
+	payload: Record<string, unknown>,
+): { ok: true; value: ParsedModifyPatch } | { ok: false; error: string } {
+	const patch: ParsedModifyPatch["patch"] = {};
+	let changed = false;
+	let contentForEmbedding: string | null = null;
+
+	const hasField = (field: string): boolean => Object.hasOwn(payload, field);
+
+	if (hasField("content")) {
+		if (typeof payload.content !== "string") {
+			return { ok: false, error: "content must be a string" };
+		}
+		const normalized = normalizeAndHashContent(payload.content);
+		if (!normalized.storageContent) {
+			return { ok: false, error: "content must not be empty" };
+		}
+		patch.content = normalized.storageContent;
+		patch.normalizedContent =
+			normalized.normalizedContent.length > 0 ? normalized.normalizedContent : normalized.hashBasis;
+		patch.contentHash = normalized.contentHash;
+		contentForEmbedding = normalized.storageContent;
+		changed = true;
+	}
+
+	if (hasField("type")) {
+		const parsed = parseMemoryType(payload.type);
+		if ("error" in parsed) {
+			return { ok: false, error: parsed.error };
+		}
+		patch.type = parsed.type;
+		changed = true;
+	}
+
+	if (hasField("tags")) {
+		const tags = parseTagsMutation(payload.tags);
+		if (tags === undefined) {
+			return {
+				ok: false,
+				error: "tags must be a string, string array, or null",
+			};
+		}
+		patch.tags = tags;
+		changed = true;
+	}
+
+	if (hasField("importance")) {
+		const importance = parseOptionalNumber(payload.importance);
+		if (importance === undefined || importance < 0 || importance > 1 || !Number.isFinite(importance)) {
+			return {
+				ok: false,
+				error: "importance must be a finite number between 0 and 1",
+			};
+		}
+		patch.importance = importance;
+		changed = true;
+	}
+
+	if (hasField("pinned")) {
+		const pinned = parseOptionalBoolean(payload.pinned);
+		if (pinned === undefined) {
+			return { ok: false, error: "pinned must be a boolean" };
+		}
+		patch.pinned = pinned ? 1 : 0;
+		changed = true;
+	}
+
+	if (!changed) {
+		return {
+			ok: false,
+			error: "at least one of content, type, tags, importance, pinned is required",
+		};
+	}
+
+	return { ok: true, value: { patch, contentForEmbedding } };
+}
+
+export let cachedEmbeddingStatus: EmbeddingStatus | null = null;
+export let statusCacheTime = 0;
+export const STATUS_CACHE_TTL = 30000;
+const embeddingStatusCache = new Map<string, { readonly status: EmbeddingStatus; readonly checkedAt: number }>();
+
+function nativeRuntimeOptions(cfg: EmbeddingConfig): NativeEmbeddingRuntimeOptions {
+	return cfg.runtime === "onnxruntime"
+		? { runtime: "onnxruntime", ...(cfg.onnxRuntimePath ? { onnxRuntimePath: cfg.onnxRuntimePath } : {}) }
+		: { runtime: "wasm" };
+}
+
+function embeddingStatusCacheKey(cfg: EmbeddingConfig): string {
+	return `${cfg.provider}\u0000${cfg.model}\u0000${resolveEmbeddingBaseUrl(cfg)}\u0000${cfg.warmNative === false ? "no-native" : "native"}\u0000${nativeRuntimeOptions(cfg).runtime}\u0000${cfg.onnxRuntimePath ?? ""}`;
+}
+
+function cacheEmbeddingStatus(key: string, status: EmbeddingStatus, now: number): void {
+	embeddingStatusCache.set(key, { status, checkedAt: now });
+	cachedEmbeddingStatus = status;
+	statusCacheTime = now;
+}
+
+export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<EmbeddingStatus> {
+	const now = Date.now();
+	const cacheKey = embeddingStatusCacheKey(cfg);
+	const cached = embeddingStatusCache.get(cacheKey);
+	let nativeEmbedding: typeof import("../../inference/embeddings/native") | null = null;
+	if (cfg.provider === "native" && cfg.warmNative !== false) {
+		nativeEmbedding = await import("../../inference/embeddings/native");
+		nativeEmbedding.configureNativeEmbeddingLifecycle({ idleTtlMs: cfg.idleTtlMs });
+	}
+
+	if (cached && now - cached.checkedAt < STATUS_CACHE_TTL) {
+		cachedEmbeddingStatus = cached.status;
+		statusCacheTime = cached.checkedAt;
+		return cached.status;
+	}
+
+	const status: EmbeddingStatus = {
+		provider: cfg.provider,
+		model: cfg.model,
+		base_url: resolveEmbeddingBaseUrl(cfg),
+		available: false,
+		checkedAt: new Date().toISOString(),
+	};
+
+	if (cfg.provider === "none") {
+		status.available = false;
+		status.error = "Embedding provider set to 'none' — vector search disabled";
+		cacheEmbeddingStatus(cacheKey, status, now);
+		return status;
+	}
+
+	try {
+		if (cfg.provider === "native") {
+			if (cfg.warmNative === false) {
+				const fallback = await fetchEmbedding("test", cfg);
+				if (fallback) {
+					status.available = true;
+					status.dimensions = fallback.length;
+					status.error = "Native embedding disabled (embedding.warmNative: false); using local fallback";
+					cacheEmbeddingStatus(cacheKey, status, now);
+					return status;
+				}
+				status.error = "Native embedding disabled (embedding.warmNative: false); no local fallback is available";
+				cacheEmbeddingStatus(cacheKey, status, now);
+				return status;
+			}
+			const mod = nativeEmbedding ?? (await import("../../inference/embeddings/native"));
+			const runtime = nativeRuntimeOptions(cfg);
+			const nativeStatus = await mod.checkNativeProvider(runtime);
+			status.modelCached = nativeStatus.modelCached;
+			if (nativeStatus.available) {
+				status.available = true;
+				status.dimensions = nativeStatus.dimensions;
+				if (runtime.runtime !== "onnxruntime") setNativeFallbackProvider(null);
+			} else if (runtime.runtime === "onnxruntime") {
+				status.error = `Native ONNX runtime embedding unavailable: ${nativeStatus.error ?? "unknown"}`;
+				logger.warn("embedding", status.error);
+			} else {
+				logger.warn("embedding", `Native provider unavailable: ${nativeStatus.error ?? "unknown"}`);
+				try {
+					let fallbackUsed = false;
+
+					const discoveredModel = await findLlamaCppEmbeddingModel(resolveLlamaCppFallbackBaseUrl(cfg));
+					if (discoveredModel) {
+						status.available = true;
+						status.dimensions = 768;
+						status.error = `Native unavailable — using llama.cpp fallback (model: ${discoveredModel})`;
+						setNativeFallbackProvider("llama-cpp", discoveredModel);
+						fallbackUsed = true;
+						logger.info("embedding", `llama.cpp fallback available with ${discoveredModel} — will use for embeddings`);
+					}
+
+					if (!fallbackUsed) {
+						const ollamaRes = await fetch(`${resolveOllamaUrl().replace(/\/$/, "")}/api/tags`, {
+							method: "GET",
+							signal: AbortSignal.timeout(3000),
+						});
+						if (ollamaRes.ok) {
+							const ollamaData = (await ollamaRes.json()) as { models?: { name: string }[] };
+							const models = ollamaData.models ?? [];
+							const hasNomic = models.some((m) => m.name.startsWith("nomic-embed-text"));
+							if (hasNomic) {
+								status.available = true;
+								status.dimensions = 768;
+								status.error = "Native unavailable — using ollama fallback";
+								setNativeFallbackProvider("ollama");
+								logger.info("embedding", "Ollama fallback available — will use ollama for embeddings");
+							} else {
+								status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama available but nomic-embed-text not found.`;
+							}
+						} else {
+							status.error = `Native: ${nativeStatus.error ?? "not ready"}. Ollama not available.`;
+						}
+					}
+				} catch {
+					status.error = `Native: ${nativeStatus.error ?? "not ready"}. Local providers not reachable.`;
+				}
+				if (!status.available) setNativeFallbackProvider("unavailable");
+			}
+		} else if (cfg.provider === "llama-cpp") {
+			const res = await fetch(`${cfg.base_url.replace(/\/$/, "")}/v1/models`, {
+				method: "GET",
+				signal: AbortSignal.timeout(5000),
+			});
+
+			if (!res.ok) {
+				status.error = `llama.cpp server returned ${res.status}`;
+			} else {
+				const testResult = await fetchEmbedding("test", cfg);
+				if (testResult) {
+					status.available = true;
+					status.dimensions = testResult.length;
+				} else {
+					status.error = "llama.cpp server reachable but embedding failed";
+				}
+			}
+		} else if (cfg.provider === "ollama") {
+			const res = await fetch(`${cfg.base_url.replace(/\/$/, "")}/api/tags`, {
+				method: "GET",
+				signal: AbortSignal.timeout(5000),
+			});
+
+			if (!res.ok) {
+				status.error = `Ollama returned ${res.status}`;
+			} else {
+				const data = (await res.json()) as { models?: { name: string }[] };
+				const models = data.models ?? [];
+				const modelExists = models.some((m) => m.name.startsWith(cfg.model));
+
+				if (!modelExists) {
+					status.error = `Model '${cfg.model}' not found. Available: ${models.map((m) => m.name).join(", ") || "none"}`;
+				} else {
+					status.available = true;
+					status.dimensions = cfg.dimensions;
+				}
+			}
+		} else {
+			const apiKey = await resolveEmbeddingApiKey(cfg.api_key);
+			if (!apiKey) {
+				status.error = "Missing OpenAI API key";
+				cacheEmbeddingStatus(cacheKey, status, now);
+				return status;
+			}
+			const testResult = await fetchEmbedding("test", cfg);
+			if (testResult) {
+				status.available = true;
+				status.dimensions = testResult.length;
+			} else {
+				status.error = "Failed to generate test embedding";
+			}
+		}
+	} catch (err) {
+		status.error = err instanceof Error ? err.message : "Unknown error";
+	}
+
+	cacheEmbeddingStatus(cacheKey, status, now);
+	return status;
+}
+
+export interface FilterParams {
+	type: string;
+	tags: string;
+	who: string;
+	pinned: boolean;
+	importance_min: number | null;
+	since: string;
+}
+
+export function buildWhere(p: FilterParams): { clause: string; args: unknown[] } {
+	const parts: string[] = [];
+	const args: unknown[] = [];
+
+	if (p.type) {
+		parts.push("m.type = ?");
+		args.push(p.type);
+	}
+	if (p.tags) {
+		const tagList = p.tags
+			.split(",")
+			.map((t) => t.trim())
+			.filter(Boolean);
+		for (const tag of tagList) {
+			parts.push("m.tags LIKE ?");
+			args.push(`%${tag}%`);
+		}
+	}
+	if (p.who) {
+		parts.push("m.who = ?");
+		args.push(p.who);
+	}
+	if (p.pinned) {
+		parts.push("m.pinned = 1");
+	}
+	if (p.importance_min !== null) {
+		parts.push("m.importance >= ?");
+		args.push(p.importance_min);
+	}
+	if (p.since) {
+		parts.push("m.created_at >= ?");
+		args.push(p.since);
+	}
+
+	const clause = parts.length ? ` AND ${parts.join(" AND ")}` : "";
+	return { clause, args };
+}

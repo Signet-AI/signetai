@@ -45,10 +45,12 @@ async function main(): Promise<void> {
 	process.env.SIGNET_AGENT_ID = "default";
 	writeFileSync(join(agentsDir, "AGENTS.md"), "Stale-session sweep liveness eval.\n");
 
-	const { closeDbAccessor, getDbAccessor, initDbAccessor } = await import("../platform/daemon/src/db-accessor");
-	const hooks = await import("../platform/daemon/src/hooks");
-	const { createTelemetryCollector, setActiveTelemetry } = await import("../platform/daemon/src/telemetry");
-	const { upsertSessionTranscript } = await import("../platform/daemon/src/session-transcripts");
+	const { closeDbAccessor, getDbAccessor, initDbAccessor } = await import("../platform/daemon/src/db/owner/accessor");
+	const hooks = await import("../platform/daemon/src/http/hooks/hooks");
+	const { createTelemetryCollector, setActiveTelemetry } = await import(
+		"../platform/daemon/src/telemetry/usage/telemetry"
+	);
+	const { upsertSessionTranscript } = await import("../platform/daemon/src/transcripts/store/session-transcripts");
 
 	const dbPath = join(agentsDir, "memory", "memories.db");
 	const telemetryConfig = {

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LlmProvider } from "@signet/core";
 import { Hono } from "hono";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db-accessor";
-import { extractOntologyProposals } from "../platform/daemon/src/ontology-extraction";
-import { registerOntologyRoutes } from "../platform/daemon/src/routes/ontology-routes";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db/owner/accessor";
+import { extractOntologyProposals } from "../platform/daemon/src/ontology/extraction/source-extraction";
+import { registerOntologyRoutes } from "../platform/daemon/src/http/routes/ontology-routes";
 
 const NOW = "2026-08-14T00:00:00.000Z";
 

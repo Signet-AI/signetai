@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { DREAMING_CAPABILITY_IDS } from "../platform/daemon/src/pipeline/dreaming-capabilities";
+import { DREAMING_CAPABILITY_IDS } from "../platform/daemon/src/dreaming/operations/capabilities";
 
 const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_DREAMING_MCP_SMOKE === "1";

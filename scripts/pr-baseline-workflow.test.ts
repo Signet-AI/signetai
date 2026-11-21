@@ -45,7 +45,9 @@ test("architecture runs the merge-base ratchet and its boundary tests unconditio
 	expect(source).toContain("  architecture:\n");
 	expect(source).toContain("fetch-depth: 0");
 	expect(source).toContain("run: bun run audit:ratchet");
-	expect(source).toContain("scripts/audit-architecture-ratchet.test.ts platform/core/src/attempt.test.ts");
+	expect(source).toContain(
+		"scripts/audit-architecture-ratchet.test.ts scripts/daemon-layout.test.ts platform/core/src/attempt.test.ts",
+	);
 	expect(source).not.toContain("if:");
 });
 

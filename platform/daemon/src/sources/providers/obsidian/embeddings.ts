@@ -1,0 +1,629 @@
+import { buildObsidianSourceChunks, hash, normalizePath, relPath, type ObsidianSourceChunk } from "./chunks";
+import { LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, SOURCE_CHUNK_SOURCE_TYPE, activeVectorProjectionTable } from "@signet/core";
+import { yieldEvery } from "../../../runtime/concurrency/async-yield";
+import { getDbAccessor } from "../../../db/owner/accessor";
+import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "../../../db/owner/helpers";
+import { computeRetryBackoffMs } from "../../../embeddings/index/repair-state";
+import type { EmbeddingFetchOptions } from "../../../inference/embeddings/fetch";
+import type { PipelineCauseFamily } from "../../../runtime/logging/pipeline-operation";
+import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "../../../embeddings/index/state";
+import { embeddingProfileFingerprint } from "../../../embeddings/index/profile";
+import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "../../../db/owner/runtime";
+import type { EmbeddingRole } from "../../../embeddings/index/profile";
+import type { EmbeddingConfig } from "../../../config/memory-config";
+import {
+	awaitEmbeddingProviderAvailable,
+	recordEmbeddingProviderFailure,
+	shouldEmitEmbeddingProviderNotice,
+} from "../../../inference/embeddings/circuit-breaker";
+import { logger } from "../../../runtime/logging/logger";
+
+export { buildObsidianSourceChunks };
+export type { ObsidianSourceChunk };
+
+export const OBSIDIAN_CHUNK_SOURCE_TYPE = SOURCE_CHUNK_SOURCE_TYPE;
+const OBSIDIAN_SOURCE_CHUNK_DELAY_MS = 100;
+const EMBEDDING_PROVIDER_PROBE_TEXT = "Signet embedding provider health check.";
+const OBSIDIAN_CHUNK_SOURCE_TYPES = [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE] as const;
+
+export type SourceEmbeddingFetch = (
+	text: string,
+	cfg: EmbeddingConfig,
+	role?: EmbeddingRole,
+	opts?: EmbeddingFetchOptions,
+) => Promise<number[] | null>;
+
+export interface IndexObsidianSourceEmbeddingsInput {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly root: string;
+	readonly filePath: string;
+	readonly content: string;
+	readonly chunks?: readonly ObsidianSourceChunk[];
+	readonly embeddingConfig: EmbeddingConfig;
+	readonly fetchEmbedding: SourceEmbeddingFetch;
+	readonly checkpoint?: {
+		readonly sourceKey: string;
+		readonly scanned: number;
+		readonly cursor: string | null;
+		readonly frontier: readonly string[] | null;
+		readonly complete: boolean;
+	};
+	readonly signal?: AbortSignal;
+}
+
+export interface IndexObsidianSourceEmbeddingsResult {
+	readonly chunks: number;
+	readonly embedded: number;
+	readonly skipped: number;
+	readonly status?: typeof EMBEDDINGS_PENDING_PROVIDER_DOWN;
+	readonly providerUnavailable: boolean;
+	readonly retryAfterMs?: number;
+}
+
+export const EMBEDDINGS_PENDING_PROVIDER_DOWN = "embeddings pending - provider down";
+
+interface SourceEmbeddingFailureState {
+	readonly attempts: number;
+	readonly retryAt: number;
+}
+
+const SOURCE_EMBEDDING_POLL_MS = 10_000;
+const sourceEmbeddingFailures = new Map<string, SourceEmbeddingFailureState>();
+
+export function resetObsidianSourceEmbeddingBackoff(): void {
+	sourceEmbeddingFailures.clear();
+}
+
+function sourceEmbeddingFailureKey(input: IndexObsidianSourceEmbeddingsInput, model: string): string {
+	return `${input.agentId}:${input.sourceId}:${normalizePath(input.filePath)}:${model}`;
+}
+
+function providerUnavailableCause(cause: PipelineCauseFamily): boolean {
+	return cause === "provider_unavailable" || cause === "timeout";
+}
+
+export interface PurgeObsidianSourceEmbeddingsInput {
+	readonly sourceId: string;
+	readonly agentId?: string;
+	readonly signal?: AbortSignal;
+}
+
+export interface PurgeObsidianSourceFileEmbeddingsInput {
+	readonly sourceId: string;
+	readonly agentId?: string;
+	readonly root: string;
+	readonly filePath: string;
+	readonly signal?: AbortSignal;
+}
+
+export async function indexObsidianSourceEmbeddingsViaOwner(
+	input: IndexObsidianSourceEmbeddingsInput,
+): Promise<IndexObsidianSourceEmbeddingsResult> {
+	const chunks = input.chunks === undefined ? buildObsidianSourceChunks(input) : [...input.chunks];
+	const configured = await ownerEmbeddingConfig(input.embeddingConfig, input.signal);
+	if (configured.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
+	const failureKey = sourceEmbeddingFailureKey(input, configured.model);
+	const providerKey = `${configured.provider}:${configured.model}:${configured.base_url ?? ""}`;
+	let probeCause: PipelineCauseFamily | null = null;
+	const gate = await awaitEmbeddingProviderAvailable(
+		providerKey,
+		async () => {
+			const probe = await input.fetchEmbedding(EMBEDDING_PROVIDER_PROBE_TEXT, configured, "document", {
+				usage: { source: "artifact-index", agentId: input.agentId },
+				onFailure: (cause) => {
+					probeCause = cause;
+				},
+			});
+			return Boolean(probe?.length) && (probeCause === null || !providerUnavailableCause(probeCause));
+		},
+		SOURCE_EMBEDDING_POLL_MS,
+		() => logger.warn("embedding", `Embedding provider unavailable; retrying source indexing (${providerKey})`),
+	);
+	if (!gate.available)
+		return {
+			chunks: chunks.length,
+			embedded: 0,
+			skipped: chunks.length,
+			status: EMBEDDINGS_PENDING_PROVIDER_DOWN,
+			providerUnavailable: true,
+			retryAfterMs: gate.retryAfterMs,
+		};
+	const failureState = sourceEmbeddingFailures.get(failureKey);
+	if (failureState && failureState.retryAt > Date.now())
+		return {
+			chunks: chunks.length,
+			embedded: 0,
+			skipped: chunks.length,
+			status: EMBEDDINGS_PENDING_PROVIDER_DOWN,
+			providerUnavailable: true,
+			retryAfterMs: failureState.retryAt - Date.now(),
+		};
+	const vecTable = await ownerVecTable(input.signal);
+	const vecAvailable = vecTable !== null;
+	const vecDimensions = vecTable !== null ? await ownerVecDimensions(vecTable, input.signal) : null;
+	const currentHashes = new Set<string>();
+	let embedded = 0;
+	let skipped = 0;
+	let providerUnavailable = false;
+	let retryAfterMs: number | undefined;
+	for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+		input.signal?.throwIfAborted();
+		const chunk = chunks[chunkIndex];
+		if (!chunk) continue;
+		const contentHash = hash(`${input.agentId}\n${chunk.id}\n${chunk.chunkText}`);
+		const embeddingId = hash(`${OBSIDIAN_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
+		currentHashes.add(contentHash);
+		const existing = await dbOwnerQuery<{ readonly id: string; readonly content_hash: string } | null>(
+			ownerStatement(
+				"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
+				[SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunk.id, input.agentId],
+				"get",
+			),
+			{ operation: "sources.embeddings.owner.existing", lane: "read", signal: input.signal },
+		);
+		if (existing?.content_hash === contentHash) {
+			skipped++;
+			continue;
+		}
+		let failureCause: PipelineCauseFamily = "provider_unavailable";
+		const vector = await input.fetchEmbedding(chunk.chunkText, configured, "document", {
+			usage: { source: "artifact-index", agentId: input.agentId },
+			onFailure: (cause) => {
+				failureCause = cause;
+			},
+		});
+		if (!vector || vector.length === 0) {
+			if (providerUnavailableCause(failureCause)) {
+				recordEmbeddingProviderFailure(providerKey, SOURCE_EMBEDDING_POLL_MS);
+				if (shouldEmitEmbeddingProviderNotice(providerKey))
+					logger.warn("embedding", `Embedding provider unavailable; retrying source indexing (${providerKey})`);
+				const attempts = (failureState?.attempts ?? 0) + 1;
+				retryAfterMs = computeRetryBackoffMs(attempts, SOURCE_EMBEDDING_POLL_MS);
+				sourceEmbeddingFailures.set(failureKey, { attempts, retryAt: Date.now() + retryAfterMs });
+				providerUnavailable = true;
+				skipped += chunks.length - chunkIndex;
+				break;
+			}
+			skipped++;
+			continue;
+		}
+		const active = await ownerEmbeddingConfig(configured);
+		if (embeddingProfileFingerprint(active) !== embeddingProfileFingerprint(configured)) {
+			skipped++;
+			continue;
+		}
+		const statements = [] as Array<ReturnType<typeof ownerStatement>>;
+		if (existing && vecAvailable && existing.content_hash !== contentHash)
+			statements.push(ownerStatement(`DELETE FROM ${vecTable} WHERE id = ?`, [existing.id]));
+		if (existing && existing.content_hash !== contentHash)
+			statements.push(ownerStatement("DELETE FROM embeddings WHERE id = ?", [existing.id]));
+		statements.push(
+			ownerStatement(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 ON CONFLICT(content_hash) DO UPDATE SET vector = excluded.vector, dimensions = excluded.dimensions,
+				 source_type = excluded.source_type, source_id = excluded.source_id, chunk_text = excluded.chunk_text,
+				 created_at = excluded.created_at, agent_id = excluded.agent_id`,
+				[
+					embeddingId,
+					contentHash,
+					{ type: "bytes", base64: vectorToBlob(vector).toString("base64") },
+					vector.length,
+					OBSIDIAN_CHUNK_SOURCE_TYPE,
+					chunk.id,
+					chunk.chunkText,
+					new Date().toISOString(),
+					input.agentId,
+				],
+			),
+		);
+		if (vecAvailable && vecDimensions === vector.length)
+			statements.push(
+				ownerStatement(`INSERT OR REPLACE INTO ${vecTable} (id, embedding) VALUES (?, ?)`, [
+					embeddingId,
+					{ type: "bytes", base64: vectorToBlob(vector).toString("base64") },
+				]),
+			);
+		await dbOwnerBatch(statements, {
+			operation: "sources.embeddings.owner.write",
+			lane: "write",
+			workloadClass: "maintenance",
+			estimatedWorkUnits: statements.length,
+			signal: input.signal,
+		});
+		embedded++;
+	}
+	if (!providerUnavailable) {
+		const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
+		const stale = await dbOwnerQuery<
+			readonly { readonly id: string; readonly source_type: string; readonly content_hash: string }[]
+		>(
+			ownerStatement(
+				"SELECT id, source_type, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id >= ? AND source_id < ? AND agent_id = ?",
+				[SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, prefix, prefixUpperBound(prefix), input.agentId],
+				"all",
+			),
+			{ operation: "sources.embeddings.owner.stale", lane: "read", signal: input.signal },
+		);
+		const staleIds = stale
+			.filter((row) => row.source_type === LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE || !currentHashes.has(row.content_hash))
+			.map((row) => row.id);
+		const checkpointStatement =
+			input.checkpoint === undefined
+				? null
+				: ownerStatement(
+						`INSERT INTO source_sync_checkpoints
+						 (agent_id, source_key, phase, cursor, frontier, scanned, complete, updated_at)
+						 VALUES (?, ?, 'content', ?, ?, ?, ?, datetime('now'))
+						 ON CONFLICT(agent_id, source_key, phase) DO UPDATE SET
+						 cursor = excluded.cursor,
+						 frontier = excluded.frontier,
+						 scanned = excluded.scanned,
+						 complete = excluded.complete,
+						 updated_at = excluded.updated_at`,
+						[
+							input.agentId,
+							input.checkpoint.sourceKey,
+							input.checkpoint.cursor,
+							input.checkpoint.frontier === null ? null : JSON.stringify(input.checkpoint.frontier),
+							input.checkpoint.scanned,
+							input.checkpoint.complete ? 1 : 0,
+						],
+					);
+		if (staleIds.length > 0 || checkpointStatement !== null) {
+			const statements = [
+				...(vecAvailable
+					? [ownerStatement(`DELETE FROM ${vecTable} WHERE id IN (${staleIds.map(() => "?").join(", ")})`, staleIds)]
+					: []),
+				...(staleIds.length > 0
+					? [ownerStatement(`DELETE FROM embeddings WHERE id IN (${staleIds.map(() => "?").join(", ")})`, staleIds)]
+					: []),
+				...(checkpointStatement === null ? [] : [checkpointStatement]),
+			];
+			await dbOwnerBatch(statements, {
+				operation: "sources.embeddings.owner.stale.delete",
+				lane: "write",
+				workloadClass: "maintenance",
+				signal: input.signal,
+			});
+		}
+	}
+	return providerUnavailable
+		? {
+				chunks: chunks.length,
+				embedded,
+				skipped,
+				status: EMBEDDINGS_PENDING_PROVIDER_DOWN,
+				providerUnavailable: true,
+				retryAfterMs,
+			}
+		: { chunks: chunks.length, embedded, skipped, providerUnavailable: false };
+}
+
+export async function purgeObsidianSourceFileEmbeddingsViaOwner(
+	input: PurgeObsidianSourceFileEmbeddingsInput,
+): Promise<number> {
+	const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
+	return await purgeObsidianSourceEmbeddingsByPrefixViaOwner(prefix, input.agentId, input.signal);
+}
+
+export async function purgeObsidianSourceEmbeddingsViaOwner(
+	input: PurgeObsidianSourceEmbeddingsInput,
+): Promise<number> {
+	return await purgeObsidianSourceEmbeddingsByPrefixViaOwner(`${input.sourceId}:`, input.agentId, input.signal);
+}
+
+async function purgeObsidianSourceEmbeddingsByPrefixViaOwner(
+	prefix: string,
+	agentId?: string,
+	signal?: AbortSignal,
+): Promise<number> {
+	const agentWhere = agentId ? " AND agent_id = ?" : "";
+	const args = agentId ? [prefix, prefixUpperBound(prefix), agentId] : [prefix, prefixUpperBound(prefix)];
+	const rows = await dbOwnerQuery<readonly { readonly id: string }[]>(
+		ownerStatement(
+			`SELECT id FROM embeddings WHERE source_type IN (?, ?) AND source_id >= ? AND source_id < ?${agentWhere}`,
+			[SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, ...args],
+			"all",
+		),
+		{ operation: "sources.embeddings.owner.purge.read", lane: "read", signal },
+	);
+	if (rows.length === 0) return 0;
+	const ids = rows.map((row) => row.id);
+	const vec = await ownerVecTable(signal);
+	await dbOwnerBatch(
+		[
+			...(vec !== null
+				? [ownerStatement(`DELETE FROM ${vec} WHERE id IN (${ids.map(() => "?").join(", ")})`, ids)]
+				: []),
+			ownerStatement(`DELETE FROM embeddings WHERE id IN (${ids.map(() => "?").join(", ")})`, ids),
+		],
+		{ operation: "sources.embeddings.owner.purge.write", lane: "write", workloadClass: "maintenance", signal },
+	);
+	return ids.length;
+}
+
+interface OwnerEmbeddingStateRow {
+	readonly active_profile_json: string;
+	readonly state: string;
+}
+
+async function ownerEmbeddingConfig(configured: EmbeddingConfig, signal?: AbortSignal): Promise<EmbeddingConfig> {
+	if (configured.profile) return configured;
+	const row = await dbOwnerQuery<OwnerEmbeddingStateRow | null>(
+		ownerStatement("SELECT active_profile_json, state FROM embedding_index_state WHERE id = 1", [], "get"),
+		{ operation: "sources.embeddings.owner.config", lane: "read", signal },
+	);
+	if (row === null) return configured;
+	try {
+		const active = JSON.parse(row.active_profile_json) as Record<string, unknown>;
+		if (
+			typeof active.provider !== "string" ||
+			typeof active.model !== "string" ||
+			typeof active.dimensions !== "number"
+		)
+			return configured;
+		return {
+			...configured,
+			provider: active.provider as EmbeddingConfig["provider"],
+			model: active.model,
+			dimensions: active.dimensions,
+			base_url: typeof active.baseUrl === "string" ? active.baseUrl : configured.base_url,
+			profile: typeof active.profile === "string" ? active.profile : undefined,
+		};
+	} catch {
+		return configured;
+	}
+}
+
+async function ownerVecTable(signal?: AbortSignal): Promise<"vec_embeddings" | "vec_embeddings_staging" | null> {
+	const state = await dbOwnerQuery<{ readonly active_profile_json: unknown } | null>(
+		ownerStatement("SELECT active_profile_json FROM embedding_index_state WHERE id = 1", [], "get"),
+		{ operation: "sources.embeddings.owner.vec-projection", lane: "read", signal },
+	).catch(() => null);
+	const table = activeVectorProjectionTable({ prepare: () => ({ get: () => state ?? undefined }) });
+	const row = await dbOwnerQuery<{ readonly name: string } | null>(
+		ownerStatement("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", [table], "get"),
+		{ operation: "sources.embeddings.owner.vec", lane: "read", signal },
+	);
+	return row !== null ? table : null;
+}
+
+async function ownerVecDimensions(table: string, signal?: AbortSignal): Promise<number | null> {
+	const row = await dbOwnerQuery<{ readonly sql: string } | null>(
+		ownerStatement("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", [table], "get"),
+		{ operation: "sources.embeddings.owner.vec-dimensions", lane: "read", signal },
+	);
+	const match = row?.sql.match(/float\s*\[\s*(\d+)\s*\]/i);
+	return match?.[1] === undefined ? null : Number(match[1]);
+}
+
+export async function indexObsidianSourceEmbeddings(
+	input: IndexObsidianSourceEmbeddingsInput,
+): Promise<IndexObsidianSourceEmbeddingsResult> {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const embeddingConfig = getDbAccessor().withReadDb(
+		(db: import("../../../db/owner/accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
+		"sources/providers/obsidian/embeddings.ts:407",
+	);
+	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
+	const chunks = buildObsidianSourceChunks(input);
+	const failureKey = sourceEmbeddingFailureKey(input, embeddingConfig.model);
+	const failureState = sourceEmbeddingFailures.get(failureKey);
+	if (failureState && failureState.retryAt > Date.now()) {
+		return {
+			chunks: chunks.length,
+			embedded: 0,
+			skipped: chunks.length,
+			status: EMBEDDINGS_PENDING_PROVIDER_DOWN,
+			providerUnavailable: true,
+			retryAfterMs: failureState.retryAt - Date.now(),
+		};
+	}
+	if (failureState) sourceEmbeddingFailures.delete(failureKey);
+	const currentHashes = new Set<string>();
+	const yielder = yieldEvery(1);
+	let embedded = 0;
+	let skipped = 0;
+	let providerUnavailable = false;
+	let retryAfterMs: number | undefined;
+	const now = new Date().toISOString();
+
+	for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+		const chunk = chunks[chunkIndex];
+		if (!chunk) continue;
+		const contentHash = hash(`${input.agentId}\n${chunk.id}\n${chunk.chunkText}`);
+		const embId = hash(`${OBSIDIAN_CHUNK_SOURCE_TYPE}:${input.agentId}:${chunk.id}`).slice(0, 32);
+		currentHashes.add(contentHash);
+		const existingChunk = existingChunkEmbedding(input.agentId, chunk.id);
+		if (existingChunk?.content_hash === contentHash) {
+			skipped++;
+			await yielder();
+			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
+			continue;
+		}
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		const writeConfig = getDbAccessor().withReadDb(
+			(db: import("../../../db/owner/accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
+			"sources/providers/obsidian/embeddings.ts:448",
+		);
+		let failureCause: PipelineCauseFamily = "provider_unavailable";
+		const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
+			usage: { source: "artifact-index", agentId: input.agentId },
+			onFailure: (cause) => {
+				failureCause = cause;
+			},
+		});
+		if (!vector || vector.length === 0) {
+			if (providerUnavailableCause(failureCause)) {
+				const activeProviderKey = `${writeConfig.provider}:${writeConfig.model}:${writeConfig.base_url ?? ""}`;
+				recordEmbeddingProviderFailure(activeProviderKey, SOURCE_EMBEDDING_POLL_MS);
+				if (shouldEmitEmbeddingProviderNotice(activeProviderKey))
+					logger.warn("embedding", `Embedding provider unavailable; retrying source indexing (${activeProviderKey})`);
+				const attempts = (failureState?.attempts ?? 0) + 1;
+				retryAfterMs = computeRetryBackoffMs(attempts, SOURCE_EMBEDDING_POLL_MS);
+				sourceEmbeddingFailures.set(failureKey, { attempts, retryAt: Date.now() + retryAfterMs });
+				providerUnavailable = true;
+				skipped += chunks.length - chunkIndex;
+				break;
+			}
+			skipped++;
+			await yielder();
+			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
+			continue;
+		}
+		sourceEmbeddingFailures.delete(failureKey);
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		const stored = getDbAccessor().withWriteTx((db: import("../../../db/owner/accessor").WriteDb) => {
+			if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
+			const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
+				| { content_hash: string }
+				| undefined;
+			if (existingForId && existingForId.content_hash !== contentHash) {
+				if (!syncVecDeleteByEmbeddingIds(db, [embId])) {
+					throw new Error("failed to reconcile vec_embeddings before replacing source embedding");
+				}
+				db.prepare("DELETE FROM embeddings WHERE id = ?").run(embId);
+			}
+			db.prepare(
+				`INSERT INTO embeddings
+				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+				 ON CONFLICT(content_hash) DO UPDATE SET
+				   vector = excluded.vector,
+				   dimensions = excluded.dimensions,
+				   source_type = excluded.source_type,
+				   source_id = excluded.source_id,
+				   chunk_text = excluded.chunk_text,
+				   created_at = excluded.created_at,
+				   agent_id = excluded.agent_id`,
+			).run(
+				embId,
+				contentHash,
+				vectorToBlob(vector),
+				vector.length,
+				OBSIDIAN_CHUNK_SOURCE_TYPE,
+				chunk.id,
+				chunk.chunkText,
+				now,
+				input.agentId,
+			);
+			const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+				| { id: string }
+				| undefined;
+			syncVecInsert(db, stored?.id ?? embId, vector);
+			return true;
+		}, "sources/providers/obsidian/embeddings.ts:479");
+		if (!stored) {
+			skipped++;
+			await yielder();
+			await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
+			continue;
+		}
+		embedded++;
+		await yielder();
+		await sleep(OBSIDIAN_SOURCE_CHUNK_DELAY_MS);
+	}
+
+	if (!providerUnavailable)
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+		getDbAccessor().withWriteTx((db: import("../../../db/owner/accessor").WriteDb) => {
+			const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
+			const stale = OBSIDIAN_CHUNK_SOURCE_TYPES.flatMap(
+				(sourceType) =>
+					db
+						.prepare(
+							"SELECT id, source_type, content_hash FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ? AND agent_id = ?",
+						)
+						.all(sourceType, prefix, prefixUpperBound(prefix), input.agentId) as Array<{
+						id: string;
+						source_type: string;
+						content_hash: string;
+					}>,
+			);
+			const staleIds = stale
+				.filter((row) => row.source_type === LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE || !currentHashes.has(row.content_hash))
+				.map((row) => row.id);
+			if (staleIds.length > 0) {
+				if (!syncVecDeleteByEmbeddingIds(db, staleIds)) {
+					throw new Error("failed to reconcile vec_embeddings before removing stale source embeddings");
+				}
+				const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
+				for (const id of staleIds) stmt.run(id);
+			}
+		}, "sources/providers/obsidian/embeddings.ts:532");
+
+	return {
+		chunks: chunks.length,
+		embedded,
+		skipped,
+		...(providerUnavailable
+			? {
+					status: EMBEDDINGS_PENDING_PROVIDER_DOWN as typeof EMBEDDINGS_PENDING_PROVIDER_DOWN,
+					providerUnavailable: true,
+					retryAfterMs,
+				}
+			: { providerUnavailable: false }),
+	};
+}
+
+function sleep(ms: number): Promise<void> {
+	return ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+}
+
+function existingChunkEmbedding(agentId: string, chunkId: string): { id: string; content_hash: string } | null {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	const row = getDbAccessor().withReadDb(
+		(db: import("../../../db/owner/accessor").ReadDb) =>
+			db
+				.prepare(
+					"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
+				)
+				.get(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
+		"sources/providers/obsidian/embeddings.ts:578",
+	) as { id: string; content_hash: string } | undefined;
+	return row ?? null;
+}
+
+export function purgeObsidianSourceFileEmbeddings(input: PurgeObsidianSourceFileEmbeddingsInput): number {
+	const prefix = `${input.sourceId}:${relPath(normalizePath(input.root).replace(/\/$/, ""), normalizePath(input.filePath))}#`;
+	return purgeEmbeddingsBySourceIdPrefix(prefix, input.agentId);
+}
+
+export function purgeObsidianSourceEmbeddings(input: PurgeObsidianSourceEmbeddingsInput): number {
+	return purgeEmbeddingsBySourceIdPrefix(`${input.sourceId}:`, input.agentId);
+}
+
+function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): number {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx((db: import("../../../db/owner/accessor").WriteDb) => {
+		const agentWhere = agentId ? " AND agent_id = ?" : "";
+		const upper = prefixUpperBound(prefix);
+		let changes = 0;
+		for (const sourceType of OBSIDIAN_CHUNK_SOURCE_TYPES) {
+			const args = agentId ? [sourceType, prefix, upper, agentId] : [sourceType, prefix, upper];
+			const rows = db
+				.prepare(`SELECT id FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
+				.all(...args) as Array<{ id: string }>;
+			if (
+				!syncVecDeleteByEmbeddingIds(
+					db,
+					rows.map((row) => row.id),
+				)
+			) {
+				throw new Error("failed to reconcile vec_embeddings before purging source embeddings");
+			}
+			const result = db
+				.prepare(`DELETE FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
+				.run(...args);
+			changes += result.changes;
+		}
+		return changes;
+	}, "sources/providers/obsidian/embeddings.ts:601");
+}
+
+function prefixUpperBound(prefix: string): string {
+	return `${prefix}\uffff`;
+}

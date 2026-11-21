@@ -63,7 +63,7 @@ The most common defect is a change that works on the path you tested and is miss
 
 - Run `bun install` and `bun run build:core`. A source daemon imports every connector's `dist`, so also run `bun run build:workspace-deps` in `surfaces/cli`. Check `git status` first; afterwards restore only the tracked `dist/` files your build changed.
 - Launch an isolated daemon from `platform/daemon` with `bun src/daemon.ts` and disposable `HOME`, `SIGNET_PATH`, and `SIGNET_PORT`, plus `SIGNET_HOST=127.0.0.1`, `SIGNET_BIND=127.0.0.1`, and `SIGNET_TELEMETRY_OPTOUT=1`. Unset harness home overrides such as `HERMES_HOME` and `CODEX_HOME`. Start it under `setsid` and record its process group.
-- The daemon refuses a workspace without a database. Create one first with `initDbAccessor(<path>)` from `platform/daemon/src/db-accessor.ts` at the path the error names.
+- The daemon refuses a workspace without a database. Create one first with `initDbAccessor(<path>)` from `platform/daemon/src/db/owner/accessor.ts` at the path the error names.
 - Give a scratch `agent.yaml` the current `configVersion`. Without it, the boot-time legacy migration turns feature toggles back on.
 - An empty workspace is a weak test. For real data, `VACUUM INTO` the live database to `<ws>/data/signet.db` and write a fresh `workspace-layout.json` containing `{"version":2}`. A copied layout can carry absolute overrides that escape the sandbox. Never copy `sources.json` or `.secrets`. Copy in; never symlink or write back.
 - `/health` reports `pid` and `agentsDir`; check both before trusting a probe. On a busy port the daemon logs a warning and keeps retrying instead of exiting.
@@ -112,7 +112,7 @@ Decisions and traps by subsystem live in `docs/`; the API and user-facing behavi
 ## Where code lives
 
 - `platform/core`: shared types, the SQLite adapter (Bun and Node), migrations, search, workspace layout.
-- `platform/daemon`: HTTP API (`src/routes`), hooks, MCP tools (`src/mcp`), pipeline and Dreaming (`src/pipeline`), the DB owner.
+- `platform/daemon/src`: one folder per feature (`memory/`, `recall/`, `ontology/`, `dreaming/`, `sources/`, `transcripts/`, `sessions/`, `agents/`, `embeddings/`, `inference/`, ...) plus shared plumbing (`http/` for routes, hooks and MCP; `db/` for the DB owner; `runtime/`; `workers/`). Only `daemon.ts` and `index.ts` sit at the root.
 - `platform/native`: Rust accelerators. `surfaces/`: `cli`, `dashboard` (React), `desktop` (Electron), `tray`, `app` (graph layout).
 - `integrations/<harness>/`: connectors, plugins, and extensions. New harness-specific paths, config, install, and detection go here.
 - `libs/`: `sdk`, `connector-base` (the base every connector extends), `lifecycle-proof`.

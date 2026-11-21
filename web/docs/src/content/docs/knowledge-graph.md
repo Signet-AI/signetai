@@ -218,7 +218,7 @@ through the audited ontology apply path. The retired `txPersistStructured` /
 remember and ingest no longer author graph structure directly.
 
 The only retained write closure in
-`platform/daemon/src/pipeline/graph-transactions.ts` is
+`platform/daemon/src/ontology/graph/transactions.ts` is
 `txDecrementEntityMentions`, used by the retention worker to decrement mention
 counts after a memory purge. Retention never deletes entities: an entity that
 reaches zero mentions keeps its pin, aspects, attributes, aliases,
@@ -226,7 +226,7 @@ dependencies, relations, and epistemic assertions.
 
 ### Ontology Operation Handlers
 
-Source: `platform/daemon/src/ontology-proposals.ts`
+Source: `platform/daemon/src/ontology/proposals/proposals.ts`
 
 The control plane applies or proposes graph operations such as:
 
@@ -254,7 +254,7 @@ audit row.
 
 ## Traversal
 
-Source: `platform/daemon/src/pipeline/graph-traversal.ts`
+Source: `platform/daemon/src/recall/graph/traversal.ts`
 
 Traversal resolves focal entities, walks a bounded subgraph, and returns memory
 IDs plus structural metadata for recall.
@@ -317,13 +317,13 @@ reranker, dampening, and context-construction stages.
 
 ## Feedback and Maintenance
 
-Source: `platform/daemon/src/pipeline/aspect-feedback.ts`
+Source: `platform/daemon/src/ontology/proposals/aspect-feedback.ts`
 
 Aspect feedback is driven by session outcomes. FTS overlap can increase aspect
 weights when previously injected memories later match full-text searches.
 Aspect decay lowers stale weights toward a configured floor.
 
-Source: `platform/daemon/src/pipeline/graph-transactions.ts`
+Source: `platform/daemon/src/ontology/graph/transactions.ts`
 
 ### Supersession
 
@@ -339,7 +339,7 @@ audit row. The periodic retroactive supersession sweep was retired under
 the Dreaming cutover (#946); maintenance does not supersede semantic
 rows.
 
-Source: `platform/daemon/src/knowledge-graph-hygiene.ts`
+Source: `platform/daemon/src/ontology/graph/hygiene.ts`
 
 Hygiene reporting is read-only. It surfaces suspicious entities, duplicate
 canonical groups, missing group/claim/source fields, and safe known-entity
@@ -347,7 +347,7 @@ mention candidates.
 
 ## HTTP API
 
-Read-oriented graph endpoints live in `platform/daemon/src/routes/knowledge-routes.ts`.
+Read-oriented graph endpoints live in `platform/daemon/src/http/routes/knowledge-routes.ts`.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
@@ -381,7 +381,7 @@ traversal timeout or traversal failure returns the available expansion with
 `partial: true` and a `degradation` marker; an owner failure before focal
 resolution returns HTTP 503 with `code: "knowledge_graph_unavailable"`.
 
-Ontology-control endpoints live in `platform/daemon/src/routes/ontology-routes.ts`.
+Ontology-control endpoints live in `platform/daemon/src/http/routes/ontology-routes.ts`.
 
 | Endpoint family | Purpose |
 |---|---|
@@ -441,7 +441,7 @@ Use `--json` on either command family for automation.
 
 ## Dashboard Payload
 
-`getKnowledgeGraphForConstellation` in `platform/daemon/src/knowledge-graph.ts`
+`getKnowledgeGraphForConstellation` in `platform/daemon/src/ontology/graph/knowledge-graph.ts`
 builds the dashboard graph. It fetches active entities, aspects, attributes,
 dependencies, epistemic assertions, proposal overlays, and dreaming summaries
 within bounded limits. Source-document entities are included when an active

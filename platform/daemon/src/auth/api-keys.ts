@@ -1,5 +1,5 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import type { DbAccessor, ReadDb, WriteDb } from "../db/owner/accessor";
 import type { AuthResult, Permission, TokenClaims, TokenRole, TokenScope } from "./types";
 import { PERMISSIONS, TOKEN_ROLES } from "./types";
 
@@ -194,7 +194,7 @@ export function createApiKey(accessor: DbAccessor, input: ApiKeyCreateInput): Cr
 	const expiresAt = normalizeIsoTimestamp(input.expiresAt);
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+	accessor.withWriteTx((db: import("../db/owner/accessor").WriteDb) => {
 		db.prepare(
 			`INSERT INTO api_keys
 			   (id, prefix, name, key_hash, role, scope_json, permissions_json, connector, harness,
@@ -239,7 +239,7 @@ export function createApiKey(accessor: DbAccessor, input: ApiKeyCreateInput): Cr
 export function listApiKeys(accessor: DbAccessor): readonly ApiKeyRecord[] {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
-		(db: import("../db-accessor").ReadDb) =>
+		(db: import("../db/owner/accessor").ReadDb) =>
 			(
 				db
 					.prepare(
@@ -257,7 +257,7 @@ export function listApiKeys(accessor: DbAccessor): readonly ApiKeyRecord[] {
 export function revokeApiKey(accessor: DbAccessor, idOrPrefix: string): ApiKeyRecord | null {
 	const now = new Date().toISOString();
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+	return accessor.withWriteTx((db: import("../db/owner/accessor").WriteDb) => {
 		const row = queryByIdOrPrefix(db, idOrPrefix);
 		if (!row) return null;
 		db.prepare("UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?").run(now, row.id);
@@ -271,7 +271,7 @@ export function verifyApiKey(accessor: DbAccessor, token: string): AuthResult {
 	const now = new Date().toISOString();
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
+	return accessor.withWriteTx((db: import("../db/owner/accessor").WriteDb) => {
 		const row = db
 			.prepare(
 				`SELECT id, prefix, name, key_hash, role, scope_json, permissions_json, connector, harness,

@@ -6,8 +6,8 @@ on:
       - "platform/daemon/src/transcript-import-*.ts"
       - "platform/core/src/migrations/*transcript-import*.ts"
       - "platform/core/src/migrations/contract.ts"
-      - "platform/daemon/src/routes/transcript-import-routes.ts"
-      - "platform/daemon/src/routes/sources-routes.ts"
+      - "platform/daemon/src/http/routes/transcript-import-routes.ts"
+      - "platform/daemon/src/http/routes/sources-routes.ts"
       - ".github/workflows/transcript-import-platform.yml"
   push:
     branches: [main]
@@ -15,8 +15,8 @@ on:
       - "platform/daemon/src/transcript-import-*.ts"
       - "platform/core/src/migrations/*transcript-import*.ts"
       - "platform/core/src/migrations/contract.ts"
-      - "platform/daemon/src/routes/transcript-import-routes.ts"
-      - "platform/daemon/src/routes/sources-routes.ts"
+      - "platform/daemon/src/http/routes/transcript-import-routes.ts"
+      - "platform/daemon/src/http/routes/sources-routes.ts"
       - ".github/workflows/transcript-import-platform.yml"
 
 permissions:
@@ -35,9 +35,9 @@ jobs:
       - run: bun run --filter @signet/core build
       - name: Verify durable Windows imports
         run: |
-          bun test --max-concurrency=1 platform/daemon/src/transcript-import-bytes.test.ts
-          bun test --max-concurrency=1 platform/daemon/src/transcript-import-scan.test.ts
-          bun test --max-concurrency=1 platform/daemon/src/transcript-import-commit.test.ts
+          bun test --max-concurrency=1 platform/daemon/src/transcripts/import/bytes.test.ts
+          bun test --max-concurrency=1 platform/daemon/src/transcripts/import/scan.test.ts
+          bun test --max-concurrency=1 platform/daemon/src/transcripts/import/commit.test.ts
 
   posix-migration-coverage:
     name: Transcript import legacy migration (${{ matrix.os }})
@@ -54,4 +54,4 @@ jobs:
       - run: bun install --frozen-lockfile
       - run: bun run --filter @signet/core build
       - name: Verify POSIX legacy migration
-        run: bun test --max-concurrency=1 --test-name-pattern "legacy migration verifies bytes" platform/daemon/src/transcript-import-bytes.test.ts
+        run: bun test --max-concurrency=1 --test-name-pattern "legacy migration verifies bytes" platform/daemon/src/transcripts/import/bytes.test.ts

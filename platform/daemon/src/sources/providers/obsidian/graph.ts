@@ -1,0 +1,752 @@
+import { createHash } from "node:crypto";
+import { existsSync, statSync } from "node:fs";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import type { WriteDb } from "../../../db/owner/accessor";
+import { getDbAccessor } from "../../../db/owner/accessor";
+import { tableExists } from "../../../db/owner/helpers";
+import { requireDependencyReason } from "../../../ontology/history/history";
+import { reconcileOntologyContradictionsInTx } from "../../../ontology/contradictions/state";
+import { purgeAttributeMemoryProjectionsInTx } from "../../lifecycle/semantic-memory-projection";
+import {
+	flagDreamingClaimsForRemovedSourcePathInTx,
+	flagDreamingClaimsForSourceRevisionInTx,
+} from "../../../ontology/claims/source-claim-review";
+
+const OBSIDIAN_SOURCE_KIND = "source_obsidian_markdown";
+
+export interface IndexObsidianSourceStructureInput {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly sourceName: string;
+	readonly root: string;
+	readonly filePath: string;
+	readonly content: string;
+	readonly markdownPathIndex?: ObsidianMarkdownPathIndex;
+}
+
+export interface IndexObsidianSourceStructureResult {
+	readonly documentEntityId: string;
+	readonly folderEntitiesTouched: number;
+	readonly documentEntitiesTouched: number;
+	readonly communitiesTouched: number;
+	readonly dependenciesTouched: number;
+}
+
+export interface PurgeObsidianSourceStructureInput {
+	readonly agentId?: string;
+	readonly sourceId: string;
+	readonly root: string;
+}
+
+export interface PurgeObsidianSourceFileStructureInput {
+	readonly agentId: string;
+	readonly sourceId: string;
+	readonly root: string;
+	readonly filePath: string;
+}
+
+export interface PurgeObsidianSourceStructureResult {
+	readonly entities: number;
+	readonly attributes: number;
+	readonly dependencies: number;
+	readonly communities: number;
+}
+
+export interface ObsidianMarkdownPathIndex {
+	readonly byStem: Map<string, string>;
+	readonly byNormalizedStem: Map<string, string>;
+	readonly byRel: Map<string, string>;
+}
+
+function normalizedRoot(root: string): string {
+	return resolve(root).replace(/\\/g, "/").replace(/\/$/, "");
+}
+
+function normalizedPath(path: string): string {
+	return resolve(path).replace(/\\/g, "/");
+}
+
+function relPath(root: string, path: string): string {
+	return relative(root, path).replace(/\\/g, "/");
+}
+
+function canonicalSegment(value: string): string {
+	return value.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+}
+
+function sourceCanonical(sourceId: string, kind: "source" | "folder" | "document", rel: string): string {
+	const suffix = canonicalSegment(rel);
+	return suffix.length > 0 ? `obsidian:${sourceId}:${kind}:${suffix}` : `obsidian:${sourceId}:${kind}:/`;
+}
+
+function idFor(...parts: readonly string[]): string {
+	return `src_${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 32)}`;
+}
+
+function slug(value: string): string {
+	const out = value
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "_")
+		.replace(/^_+|_+$/g, "")
+		.replace(/_{2,}/g, "_");
+	return out || "general";
+}
+
+function displayNameForFile(path: string): string {
+	return basename(path, extname(path));
+}
+
+function folderDisplayName(rel: string, sourceName: string): string {
+	return rel.length === 0 ? sourceName : rel;
+}
+
+function upsertSourceEntity(
+	db: WriteDb,
+	input: {
+		readonly id: string;
+		readonly name: string;
+		readonly canonicalName: string;
+		readonly entityType: string;
+		readonly agentId: string;
+		readonly sourceId: string;
+		readonly sourceRoot: string;
+		readonly sourcePath: string;
+		readonly now: string;
+	},
+): { readonly id: string; readonly inserted: boolean } {
+	const uniqueName = `${input.name} — ${input.canonicalName} — ${input.agentId}`;
+	const existing = db
+		.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
+		.get(input.canonicalName, input.agentId) as { id: string } | undefined;
+	if (existing) {
+		db.prepare(
+			`UPDATE entities
+			 SET name = ?, entity_type = ?, mentions = MAX(COALESCE(mentions, 0), 1), updated_at = ?,
+			     source_id = ?, source_kind = ?, source_path = ?, source_root = ?
+			 WHERE id = ?`,
+		).run(
+			uniqueName,
+			input.entityType,
+			input.now,
+			input.sourceId,
+			OBSIDIAN_SOURCE_KIND,
+			input.sourcePath,
+			input.sourceRoot,
+			existing.id,
+		);
+		return { id: existing.id, inserted: false };
+	}
+	db.prepare(
+		`INSERT INTO entities
+		 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at,
+		  source_id, source_kind, source_path, source_root)
+		 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+	).run(
+		input.id,
+		uniqueName,
+		input.canonicalName,
+		input.entityType,
+		input.agentId,
+		input.now,
+		input.now,
+		input.sourceId,
+		OBSIDIAN_SOURCE_KIND,
+		input.sourcePath,
+		input.sourceRoot,
+	);
+	return { id: input.id, inserted: true };
+}
+
+function upsertCommunity(
+	db: WriteDb,
+	input: {
+		readonly id: string;
+		readonly name: string;
+		readonly agentId: string;
+		readonly sourceId: string;
+		readonly sourceRoot: string;
+		readonly sourcePath: string;
+		readonly now: string;
+	},
+): void {
+	db.prepare(
+		`INSERT INTO entity_communities
+		 (id, agent_id, name, cohesion, member_count, created_at, updated_at, source_id, source_kind, source_path, source_root)
+		 VALUES (?, ?, ?, 1.0, 0, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   name = excluded.name,
+		   updated_at = excluded.updated_at,
+		   source_id = excluded.source_id,
+		   source_kind = excluded.source_kind,
+		   source_path = excluded.source_path,
+		   source_root = excluded.source_root`,
+	).run(
+		input.id,
+		input.agentId,
+		input.name,
+		input.now,
+		input.now,
+		input.sourceId,
+		OBSIDIAN_SOURCE_KIND,
+		input.sourcePath,
+		input.sourceRoot,
+	);
+}
+
+function upsertDependency(
+	db: WriteDb,
+	input: {
+		readonly sourceEntityId: string;
+		readonly targetEntityId: string;
+		readonly agentId: string;
+		readonly type: string;
+		readonly strength: number;
+		readonly confidence: number;
+		readonly reason: string | null;
+		readonly sourceId: string;
+		readonly sourceRoot: string;
+		readonly sourcePath: string;
+		readonly now: string;
+	},
+): boolean {
+	const existing = db
+		.prepare(
+			`SELECT id FROM entity_dependencies
+			 WHERE source_entity_id = ? AND target_entity_id = ? AND dependency_type = ? AND agent_id = ?
+			 LIMIT 1`,
+		)
+		.get(input.sourceEntityId, input.targetEntityId, input.type, input.agentId) as { id: string } | undefined;
+	if (existing) {
+		db.prepare(
+			`UPDATE entity_dependencies
+			 SET strength = MAX(strength, ?), confidence = MAX(COALESCE(confidence, 0), ?),
+			     reason = ?, updated_at = ?, source_id = ?, source_kind = ?, source_path = ?, source_root = ?
+			 WHERE id = ?`,
+		).run(
+			input.strength,
+			input.confidence,
+			input.reason,
+			input.now,
+			input.sourceId,
+			OBSIDIAN_SOURCE_KIND,
+			input.sourcePath,
+			input.sourceRoot,
+			existing.id,
+		);
+		return false;
+	}
+	const id = idFor("dep", input.agentId, input.type, input.sourceEntityId, input.targetEntityId);
+	db.prepare(
+		`INSERT INTO entity_dependencies
+		 (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, reason,
+		  created_at, updated_at, source_id, source_kind, source_path, source_root)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	).run(
+		id,
+		input.sourceEntityId,
+		input.targetEntityId,
+		input.agentId,
+		input.type,
+		input.strength,
+		input.confidence,
+		input.reason,
+		input.now,
+		input.now,
+		input.sourceId,
+		OBSIDIAN_SOURCE_KIND,
+		input.sourcePath,
+		input.sourceRoot,
+	);
+	return true;
+}
+
+function stripFrontmatter(content: string): string {
+	const normalized = content.replace(/\r\n?/g, "\n");
+	if (!normalized.startsWith("---\n")) return normalized;
+	const end = normalized.indexOf("\n---\n", 4);
+	return end === -1 ? normalized : normalized.slice(end + 5);
+}
+
+function wikiLinks(content: string): string[] {
+	const links = new Set<string>();
+	const re = /\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g;
+	let match: RegExpExecArray | null;
+	while ((match = re.exec(content))) {
+		const target = match[1]?.trim();
+		if (target) links.add(target);
+	}
+	return [...links];
+}
+
+function existingMarkdownPath(path: string): string | null {
+	try {
+		return existsSync(path) && statSync(path).isFile() ? normalizedPath(path) : null;
+	} catch {
+		return null;
+	}
+}
+
+function markdownTarget(target: string): string {
+	return target.endsWith(".md") ? target : `${target}.md`;
+}
+
+export function buildObsidianMarkdownPathIndex(root: string, files: readonly string[]): ObsidianMarkdownPathIndex {
+	const index: ObsidianMarkdownPathIndex = {
+		byStem: new Map(),
+		byNormalizedStem: new Map(),
+		byRel: new Map(),
+	};
+	for (const file of files) {
+		addObsidianMarkdownPathIndex(index, root, file);
+	}
+	return index;
+}
+export function addObsidianMarkdownPathIndex(index: ObsidianMarkdownPathIndex, root: string, file: string): void {
+	const path = normalizedPath(file);
+	const rel = relPath(normalizedRoot(root), path);
+	if (!rel.endsWith(".md")) return;
+	index.byRel.set(rel, path);
+	const stem = displayNameForFile(path);
+	if (!index.byStem.has(stem)) index.byStem.set(stem, path);
+	const normalizedStem = slug(stem);
+	if (!index.byNormalizedStem.has(normalizedStem)) index.byNormalizedStem.set(normalizedStem, path);
+}
+
+function resolveWikiLinkPath(
+	root: string,
+	filePath: string,
+	target: string,
+	index?: ObsidianMarkdownPathIndex,
+	db?: WriteDb,
+	agentId?: string,
+	sourceId?: string,
+): { path: string; rel: string; found: boolean } {
+	const targetPath = markdownTarget(target);
+	const candidates = [join(dirname(filePath), targetPath), join(root, targetPath)];
+	for (const candidate of candidates) {
+		const found = existingMarkdownPath(candidate);
+		if (found) return { path: found, rel: relPath(root, found), found: true };
+	}
+	const indexed =
+		index?.byRel.get(targetPath) ??
+		(target.includes("/") ? undefined : (index?.byStem.get(target) ?? index?.byNormalizedStem.get(slug(target))));
+	if (indexed) return { path: indexed, rel: relPath(root, indexed), found: true };
+	if (db && agentId && sourceId) {
+		const row = db
+			.prepare(
+				`SELECT source_path AS sourcePath
+				   FROM entities
+				  WHERE agent_id = ?
+				    AND source_id = ?
+				    AND source_root = ?
+				    AND source_kind = ?
+				    AND entity_type = 'source_document'
+				    AND (source_path = ? OR source_path LIKE ?)
+				  ORDER BY CASE WHEN source_path = ? THEN 0 ELSE 1 END, source_path ASC
+				  LIMIT 1`,
+			)
+			.get(agentId, sourceId, root, OBSIDIAN_SOURCE_KIND, targetPath, `%/${targetPath}`, targetPath) as
+			| { sourcePath?: string }
+			| undefined;
+		if (row?.sourcePath) {
+			const found = normalizedPath(row.sourcePath);
+			return { path: found, rel: relPath(root, found), found: true };
+		}
+	}
+	const rel = targetPath;
+	return { path: normalizedPath(join(root, rel)), rel, found: false };
+}
+
+function folderRelatives(root: string, filePath: string): string[] {
+	const relDir = dirname(relPath(root, filePath));
+	if (relDir === "." || relDir === "") return [];
+	const parts = relDir.split("/").filter(Boolean);
+	return parts.map((_part, idx) => parts.slice(0, idx + 1).join("/"));
+}
+
+function purgeOrphanedDocumentReferences(db: WriteDb, agentId: string, sourceId: string, root: string): number {
+	return db
+		.prepare(
+			`DELETE FROM entities
+			 WHERE agent_id = ?
+			   AND source_id = ?
+			   AND source_root = ?
+			   AND entity_type = 'source_document_reference'
+			   AND NOT EXISTS (
+			     SELECT 1 FROM entity_dependencies d
+			     WHERE d.agent_id = entities.agent_id
+			       AND (d.source_entity_id = entities.id OR d.target_entity_id = entities.id)
+			   )`,
+		)
+		.run(agentId, sourceId, root).changes;
+}
+
+export function purgeObsidianSourceFileStructureInTx(
+	db: WriteDb,
+	input: PurgeObsidianSourceFileStructureInput,
+): PurgeObsidianSourceStructureResult {
+	const removed = removeObsidianSourceFileStructureInTx(db, input);
+	flagDreamingClaimsForRemovedSourcePathInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourcePath: normalizedPath(input.filePath),
+	});
+	return removed;
+}
+
+export function isObsidianSourceFileIndexedInTx(
+	db: WriteDb,
+	input: { readonly agentId: string; readonly sourceId: string; readonly filePath: string },
+): boolean {
+	const filePath = normalizedPath(input.filePath);
+	return (
+		db
+			.prepare(
+				`SELECT 1 FROM entity_dependencies d
+				   JOIN entities e ON e.id = d.target_entity_id
+				  WHERE d.agent_id = ?
+				    AND d.source_id = ?
+				    AND d.source_kind = ?
+				    AND d.source_path = ?
+				    AND d.dependency_type = 'contains'
+				    AND e.entity_type = 'source_document'
+				    AND e.source_path = ?
+				  LIMIT 1`,
+			)
+			.get(input.agentId, input.sourceId, OBSIDIAN_SOURCE_KIND, filePath, filePath) != null
+	);
+}
+
+function removeObsidianSourceFileStructureInTx(
+	db: WriteDb,
+	input: PurgeObsidianSourceFileStructureInput,
+): PurgeObsidianSourceStructureResult {
+	const root = normalizedRoot(input.root);
+	const filePath = normalizedPath(input.filePath);
+	const fileRel = relPath(root, filePath);
+	const documentEntityId = idFor(input.agentId, input.sourceId, "document", fileRel);
+	purgeAttributeMemoryProjectionsInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourceRoot: root,
+		sourcePath: filePath,
+	});
+
+	const attributes = db
+		.prepare(
+			`DELETE FROM entity_attributes
+			 WHERE agent_id = ?
+			   AND source_id = ?
+			   AND source_root = ?
+			   AND source_path = ?`,
+		)
+		.run(input.agentId, input.sourceId, root, filePath).changes;
+	const aspects = db
+		.prepare(
+			`DELETE FROM entity_aspects WHERE agent_id = ? AND entity_id = ?
+			 AND NOT EXISTS (SELECT 1 FROM entity_attributes attr WHERE attr.aspect_id = entity_aspects.id)`,
+		)
+		.run(input.agentId, documentEntityId).changes;
+	const dependencies = db
+		.prepare(
+			`DELETE FROM entity_dependencies
+			 WHERE agent_id = ?
+			   AND source_id = ?
+			   AND source_root = ?
+			   AND source_path = ?`,
+		)
+		.run(input.agentId, input.sourceId, root, filePath).changes;
+	const entities =
+		db
+			.prepare(
+				`DELETE FROM entities
+				 WHERE agent_id = ?
+				   AND source_id = ?
+				   AND source_root = ?
+				   AND source_path = ?
+				   AND entity_type IN ('source_document', 'source_document_reference')
+				   AND NOT EXISTS (SELECT 1 FROM entity_aspects asp WHERE asp.entity_id = entities.id)`,
+			)
+			.run(input.agentId, input.sourceId, root, filePath).changes +
+		purgeOrphanedDocumentReferences(db, input.agentId, input.sourceId, root);
+	reconcileOntologyContradictionsInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+	});
+	return { entities, attributes, dependencies, communities: aspects };
+}
+
+export function applyObsidianSourceStructureInTx(
+	db: import("../../../db/owner/accessor").WriteDb,
+	input: IndexObsidianSourceStructureInput,
+): IndexObsidianSourceStructureResult {
+	const root = normalizedRoot(input.root);
+	const filePath = normalizedPath(input.filePath);
+	const fileRel = relPath(root, filePath);
+	const now = new Date().toISOString();
+	const content = stripFrontmatter(input.content);
+	removeObsidianSourceFileStructureInTx(db, input);
+	flagDreamingClaimsForSourceRevisionInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourcePath: filePath,
+		content: input.content,
+	});
+
+	let folderEntitiesTouched = 0;
+	let documentEntitiesTouched = 0;
+	let communitiesTouched = 0;
+	let dependenciesTouched = 0;
+
+	const rootEntity = upsertSourceEntity(db, {
+		id: idFor(input.agentId, input.sourceId, "source", root),
+		name: input.sourceName,
+		canonicalName: sourceCanonical(input.sourceId, "source", "/"),
+		entityType: "source",
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourceRoot: root,
+		sourcePath: root,
+		now,
+	});
+
+	let parentEntityId = rootEntity.id;
+	let parentCommunityId: string | null = null;
+	for (const folderRel of folderRelatives(root, filePath)) {
+		const folderPath = join(root, folderRel);
+		const folderId = idFor(input.agentId, input.sourceId, "folder", folderRel);
+		const communityId = idFor(input.agentId, input.sourceId, "community", folderRel);
+		upsertCommunity(db, {
+			id: communityId,
+			name: folderDisplayName(folderRel, input.sourceName),
+			agentId: input.agentId,
+			sourceId: input.sourceId,
+			sourceRoot: root,
+			sourcePath: normalizedPath(folderPath),
+			now,
+		});
+		communitiesTouched++;
+		const folder = upsertSourceEntity(db, {
+			id: folderId,
+			name: folderDisplayName(folderRel, input.sourceName),
+			canonicalName: sourceCanonical(input.sourceId, "folder", folderRel),
+			entityType: "source_folder",
+			agentId: input.agentId,
+			sourceId: input.sourceId,
+			sourceRoot: root,
+			sourcePath: normalizedPath(folderPath),
+			now,
+		});
+		folderEntitiesTouched++;
+		db.prepare("UPDATE entities SET community_id = ? WHERE id = ?").run(communityId, folder.id);
+		if (parentCommunityId)
+			db.prepare("UPDATE entities SET community_id = ? WHERE id = ?").run(parentCommunityId, folder.id);
+		if (
+			upsertDependency(db, {
+				sourceEntityId: parentEntityId,
+				targetEntityId: folder.id,
+				agentId: input.agentId,
+				type: "contains",
+				strength: 1,
+				confidence: 1,
+				reason: requireDependencyReason("related_to", `Obsidian filesystem parent contains ${folderRel}`),
+				sourceId: input.sourceId,
+				sourceRoot: root,
+				sourcePath: filePath,
+				now,
+			})
+		)
+			dependenciesTouched++;
+		parentEntityId = folder.id;
+		parentCommunityId = communityId;
+	}
+
+	const doc = upsertSourceEntity(db, {
+		id: idFor(input.agentId, input.sourceId, "document", fileRel),
+		name: displayNameForFile(filePath),
+		canonicalName: sourceCanonical(input.sourceId, "document", fileRel),
+		entityType: "source_document",
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourceRoot: root,
+		sourcePath: filePath,
+		now,
+	});
+	documentEntitiesTouched++;
+	if (parentCommunityId) db.prepare("UPDATE entities SET community_id = ? WHERE id = ?").run(parentCommunityId, doc.id);
+	if (
+		upsertDependency(db, {
+			sourceEntityId: parentEntityId,
+			targetEntityId: doc.id,
+			agentId: input.agentId,
+			type: "contains",
+			strength: 1,
+			confidence: 1,
+			reason: requireDependencyReason("related_to", `Obsidian filesystem parent contains ${fileRel}`),
+			sourceId: input.sourceId,
+			sourceRoot: root,
+			sourcePath: filePath,
+			now,
+		})
+	)
+		dependenciesTouched++;
+
+	for (const link of wikiLinks(content)) {
+		const targetPath = resolveWikiLinkPath(
+			root,
+			filePath,
+			link,
+			input.markdownPathIndex,
+			db,
+			input.agentId,
+			input.sourceId,
+		);
+		const target = upsertSourceEntity(db, {
+			id: idFor(input.agentId, input.sourceId, "document", targetPath.rel),
+			name: displayNameForFile(targetPath.path),
+			canonicalName: sourceCanonical(input.sourceId, "document", targetPath.rel),
+			entityType: targetPath.found ? "source_document" : "source_document_reference",
+			agentId: input.agentId,
+			sourceId: input.sourceId,
+			sourceRoot: root,
+			sourcePath: targetPath.path,
+			now,
+		});
+		documentEntitiesTouched++;
+		if (
+			upsertDependency(db, {
+				sourceEntityId: doc.id,
+				targetEntityId: target.id,
+				agentId: input.agentId,
+				type: "wiki_link",
+				strength: 0.9,
+				confidence: targetPath.found ? 1 : 0.7,
+				reason: requireDependencyReason("related_to", `Obsidian wiki link [[${link}]] in ${fileRel}`),
+				sourceId: input.sourceId,
+				sourceRoot: root,
+				sourcePath: filePath,
+				now,
+			})
+		)
+			dependenciesTouched++;
+	}
+
+	db.prepare(
+		`UPDATE entity_communities
+			 SET member_count = (
+			   SELECT COUNT(*) FROM entities e WHERE e.community_id = entity_communities.id
+			 ), updated_at = ?
+			 WHERE agent_id = ? AND source_id = ?`,
+	).run(now, input.agentId, input.sourceId);
+
+	return {
+		documentEntityId: doc.id,
+		folderEntitiesTouched,
+		documentEntitiesTouched,
+		communitiesTouched,
+		dependenciesTouched,
+	};
+}
+
+export function indexObsidianSourceStructure(
+	input: IndexObsidianSourceStructureInput,
+): IndexObsidianSourceStructureResult {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx(
+		(db: import("../../../db/owner/accessor").WriteDb) => applyObsidianSourceStructureInTx(db, input),
+		"db:source-graph.obsidian.index.write",
+	);
+}
+
+export function purgeObsidianSourceFileStructure(
+	input: PurgeObsidianSourceFileStructureInput,
+): PurgeObsidianSourceStructureResult {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx(
+		(db: import("../../../db/owner/accessor").WriteDb) => purgeObsidianSourceFileStructureInTx(db, input),
+		"db:source-graph.obsidian.file-purge.write",
+	);
+}
+
+export function applyObsidianSourceStructurePurgeInTx(
+	db: import("../../../db/owner/accessor").WriteDb,
+	input: PurgeObsidianSourceStructureInput,
+): PurgeObsidianSourceStructureResult {
+	const root = normalizedRoot(input.root);
+	const agentWhere = input.agentId ? "agent_id = ? AND " : "";
+	const params = input.agentId ? [input.agentId, input.sourceId, root] : [input.sourceId, root];
+	purgeAttributeMemoryProjectionsInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourceRoot: root,
+	});
+	const attrs = db
+		.prepare(`DELETE FROM entity_attributes WHERE ${agentWhere}source_id = ? AND source_root = ?`)
+		.run(...params).changes;
+	const deps = db
+		.prepare(`DELETE FROM entity_dependencies WHERE ${agentWhere}source_id = ? AND source_root = ?`)
+		.run(...params).changes;
+	const entities = db
+		.prepare(`DELETE FROM entities WHERE ${agentWhere}source_id = ? AND source_root = ?`)
+		.run(...params).changes;
+	const communities = db
+		.prepare(`DELETE FROM entity_communities WHERE ${agentWhere}source_id = ? AND source_root = ?`)
+		.run(...params).changes;
+	const derivedParams = input.agentId ? [input.agentId, input.sourceId] : [input.sourceId];
+	purgeAttributeMemoryProjectionsInTx(db, {
+		agentId: input.agentId,
+		sourceId: input.sourceId,
+		sourceRoot: "dreaming",
+	});
+	const derivedAttrs = db
+		.prepare(`DELETE FROM entity_attributes WHERE ${agentWhere}source_id = ? AND source_root = 'dreaming'`)
+		.run(...derivedParams).changes;
+	const derivedDeps = db
+		.prepare(`DELETE FROM entity_dependencies WHERE ${agentWhere}source_id = ? AND source_root = 'dreaming'`)
+		.run(...derivedParams).changes;
+	const derivedEntityIds = db
+		.prepare(`SELECT id FROM entities WHERE ${agentWhere}source_id = ? AND source_root = 'dreaming'`)
+		.all(...derivedParams) as Array<{ id: string }>;
+	if (derivedEntityIds.length > 0) {
+		const deleteAspects = db.prepare("DELETE FROM entity_aspects WHERE entity_id = ?");
+		for (const entity of derivedEntityIds) deleteAspects.run(entity.id);
+	}
+	const derivedEntities = db
+		.prepare(`DELETE FROM entities WHERE ${agentWhere}source_id = ? AND source_root = 'dreaming'`)
+		.run(...derivedParams).changes;
+	if (tableExists(db, "ontology_contradictions")) {
+		if (input.agentId) {
+			reconcileOntologyContradictionsInTx(db, { agentId: input.agentId, sourceId: input.sourceId });
+		} else {
+			const agents = db
+				.prepare(
+					"SELECT DISTINCT agent_id FROM ontology_contradictions WHERE left_source_id = ? OR right_source_id = ?",
+				)
+				.all(input.sourceId, input.sourceId) as Array<{ agent_id: string }>;
+			for (const agent of agents) {
+				reconcileOntologyContradictionsInTx(db, { agentId: agent.agent_id, sourceId: input.sourceId });
+			}
+		}
+	}
+	return {
+		entities: entities + derivedEntities,
+		attributes: attrs + derivedAttrs,
+		dependencies: deps + derivedDeps,
+		communities,
+	};
+}
+
+export function purgeObsidianSourceStructure(
+	input: PurgeObsidianSourceStructureInput,
+): PurgeObsidianSourceStructureResult {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+	return getDbAccessor().withWriteTx(
+		(db: import("../../../db/owner/accessor").WriteDb) => applyObsidianSourceStructurePurgeInTx(db, input),
+		"db:source-graph.obsidian.source-purge.write",
+	);
+}
+
+export function sourceIdForObsidianRoot(root: string): string {
+	return `obsidian:${createHash("sha256").update(normalizedRoot(root)).digest("hex").slice(0, 16)}`;
+}

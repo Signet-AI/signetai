@@ -1,0 +1,1018 @@
+import { DbOwnerDeadlineError, type DbOwnerClient } from "../owner/client";
+import {
+	ownerQueryAll,
+	ownerQueryOne,
+	ownerTransaction,
+	ownerRunStatement,
+	type DbOwnerMaintenanceMetrics,
+	type DbOwnerMaintenanceOptions,
+} from "../maintenance/maintenance";
+import { updateDatabaseIntegrityStatus, type DatabaseIntegrityProgress } from "./integrity";
+
+const CHECKPOINT_TABLE = "db_integrity_checkpoints";
+const DEFAULT_CHECKPOINT_KEY = "database.quick-check";
+const DEFAULT_TABLES_PER_RUN = 8;
+const MAX_TABLES_PER_RUN = 64;
+const DEFAULT_OWNER_DEADLINE_MS = 1_000;
+const MAX_OWNER_DEADLINE_MS = 5_000;
+const DEFAULT_RUN_BUDGET_MS = 5_000;
+const MAX_RUN_BUDGET_MS = 60_000;
+const DEFAULT_WORK_UNITS = 8;
+const MAX_WORK_UNITS = 64;
+const DEFAULT_LARGE_TABLE_ROWS = 100_000;
+const MAX_LARGE_TABLE_ROWS = 1_000_000;
+const DEFAULT_SCAN_CHUNK_ROWS = 20_000;
+const MAX_SCAN_CHUNK_ROWS = 100_000;
+const ROWID_ALIASES = ["rowid", "_rowid_", "oid"] as const;
+const LEGACY_FTS_UNVERIFIABLE_STATUS = "degraded:fts-unverifiable" as const;
+export const MIGRATION_VERIFY_PARKED_STATUS = "degraded:integrity-unverified" as const;
+export const MIGRATION_VERIFY_FAILED_STATUS = "failed:integrity-unverified" as const;
+
+export type IncrementalIntegrityPhase = "running" | "complete" | "cancelled" | "timed_out" | "unavailable" | "degraded";
+
+const INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS = 1_000;
+const INCREMENTAL_INTEGRITY_RETRY_MAX_DELAY_MS = 30_000;
+export function nextIncrementalIntegrityRetryDelay(phase: IncrementalIntegrityPhase, previousDelayMs: number): number {
+	if (phase === "running") return INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS;
+	if (phase !== "timed_out" && phase !== "unavailable") return 0;
+	const previous =
+		Number.isFinite(previousDelayMs) && previousDelayMs >= INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS
+			? previousDelayMs
+			: 0;
+	return Math.min(
+		INCREMENTAL_INTEGRITY_RETRY_MAX_DELAY_MS,
+		previous === 0 ? INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS : previous * 2,
+	);
+}
+
+export interface IncrementalIntegrityProgress extends DatabaseIntegrityProgress {
+	readonly checkpointKey: string;
+	readonly phase: IncrementalIntegrityPhase;
+	readonly checkedObjects: number;
+	readonly failedObjects: number;
+	readonly scannedObjects: number;
+	readonly remainingObjects: number;
+	readonly lastObject: string | null;
+}
+
+export interface IncrementalIntegrityResult extends IncrementalIntegrityProgress {
+	readonly errors: readonly string[];
+}
+
+export interface IncrementalIntegrityOptions {
+	readonly owner: DbOwnerClient;
+	readonly checkpointKey?: string;
+	readonly tablesPerRun?: number;
+	readonly ownerDeadlineMs?: number;
+	readonly runBudgetMs?: number;
+	readonly maxWorkUnits?: number;
+	readonly largeTableRows?: number;
+	readonly scanChunkRows?: number;
+	readonly signal?: AbortSignal;
+	readonly onProgress?: (progress: IncrementalIntegrityProgress) => void | Promise<void>;
+	readonly onObjectScan?: (object: { readonly name: string; readonly type: TableRow["type"] }) => void | Promise<void>;
+	readonly onBeforeCheckpointCommit?: () => void | Promise<void>;
+}
+
+interface Checkpoint {
+	readonly cursor: string;
+	readonly checkedTables: number;
+	readonly skippedTables: number;
+	readonly failedTables: number;
+	readonly scannedTables: number;
+	readonly objectCursor: string;
+	readonly objectRowid: string | null;
+	readonly pagesChecked: number;
+	readonly bytesChecked: number;
+	readonly attemptCount: number;
+	readonly schemaVersion: number;
+	readonly status:
+		| "running"
+		| "complete"
+		| typeof LEGACY_FTS_UNVERIFIABLE_STATUS
+		| typeof MIGRATION_VERIFY_PARKED_STATUS
+		| typeof MIGRATION_VERIFY_FAILED_STATUS;
+}
+
+interface TableRow {
+	readonly name: string;
+	readonly type: "table" | "index" | "view" | "trigger";
+	readonly cursor: string;
+	readonly sql?: string;
+}
+
+interface NumberRow {
+	readonly value?: unknown;
+}
+
+interface SchemaVersionRow {
+	readonly schema_version?: unknown;
+}
+
+interface PageCountRow {
+	readonly page_count?: unknown;
+	readonly page_size?: unknown;
+}
+
+interface ScanChunkRow {
+	readonly scanned?: unknown;
+	readonly last?: unknown;
+}
+
+interface QuickCheckRow {
+	readonly quick_check?: unknown;
+	readonly integrity_check?: unknown;
+}
+
+type OwnerMetricsCallback = (metrics: DbOwnerMaintenanceMetrics) => void | Promise<void>;
+
+function integrityOwnerOptions(
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+	estimatedWorkUnits?: number,
+): DbOwnerMaintenanceOptions {
+	return {
+		deadlineMs,
+		waitForOwnerCompletionOnDeadline: true,
+		...(estimatedWorkUnits === undefined ? {} : { estimatedWorkUnits }),
+		...(onOwnerMetrics === undefined ? {} : { onOwnerMetrics }),
+	};
+}
+
+const TELEMETRY_INTEGRITY_CURSOR = "\uffff:telemetry_integrity";
+
+function checkpointCursorToLastObject(cursor: string): string | null {
+	if (cursor.length === 0) return null;
+	if (cursor === TELEMETRY_INTEGRITY_CURSOR) return "table:telemetry_events";
+	const separator = cursor.lastIndexOf(":");
+	return separator < 1 || separator === cursor.length - 1
+		? cursor
+		: `${cursor.slice(separator + 1)}:${cursor.slice(0, separator)}`;
+}
+
+function boundedString(value: string | undefined): string {
+	const key = value?.trim() || DEFAULT_CHECKPOINT_KEY;
+	if (key.length > 200 || !/^[A-Za-z0-9._:-]+$/.test(key)) throw new RangeError("invalid integrity checkpoint key");
+	return key;
+}
+
+function boundedPositive(value: number | undefined, defaultValue: number, maximum: number, label: string): number {
+	if (value === undefined) return defaultValue;
+	if (!Number.isFinite(value) || value <= 0) throw new RangeError(`${label} must be positive`);
+	return Math.min(maximum, Math.floor(value));
+}
+
+function boundedTables(value: number | undefined): number {
+	return boundedPositive(value, DEFAULT_TABLES_PER_RUN, MAX_TABLES_PER_RUN, "integrity table budget");
+}
+
+function boundedWorkUnits(value: number | undefined): number {
+	return boundedPositive(value, DEFAULT_WORK_UNITS, MAX_WORK_UNITS, "integrity work budget");
+}
+
+function escapeIdentifier(value: string): string {
+	return `"${value.replaceAll('"', '""')}"`;
+}
+
+function isUnchunkableFts(object: TableRow): boolean {
+	return object.type === "table" && typeof object.sql === "string" && /\bUSING\s+fts5\s*\(/i.test(object.sql);
+}
+
+function isOrdinaryTable(object: TableRow): boolean {
+	return object.type === "table" && !/^\s*CREATE\s+VIRTUAL\s+TABLE\b/i.test(object.sql ?? "");
+}
+
+function isWithoutRowid(object: TableRow): boolean {
+	return /\bWITHOUT\s+ROWID\b/i.test(object.sql ?? "");
+}
+
+function scalar(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+}
+
+function text(value: unknown): string {
+	return typeof value === "string" ? value : String(value ?? "");
+}
+
+function isDeadline(error: unknown): boolean {
+	return error instanceof DbOwnerDeadlineError || (error instanceof Error && error.name === "DbOwnerDeadlineError");
+}
+
+function isDuplicateColumnError(error: unknown): boolean {
+	return error instanceof Error && /duplicate column name/i.test(error.message);
+}
+
+async function ensureCheckpoint(
+	owner: DbOwnerClient,
+	key: string,
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<void> {
+	await ownerTransaction(
+		owner,
+		"integrity.checkpoint.ensure",
+		[
+			ownerRunStatement(`CREATE TABLE IF NOT EXISTS ${CHECKPOINT_TABLE} (
+					checkpoint_key TEXT PRIMARY KEY,
+					cursor TEXT NOT NULL DEFAULT '',
+					checked_tables INTEGER NOT NULL DEFAULT 0,
+					failed_tables INTEGER NOT NULL DEFAULT 0,
+					pages_checked INTEGER NOT NULL DEFAULT 0,
+					bytes_checked INTEGER NOT NULL DEFAULT 0,
+					attempt_count INTEGER NOT NULL DEFAULT 0,
+					skipped_objects INTEGER NOT NULL DEFAULT 0,
+					scanned_objects INTEGER NOT NULL DEFAULT 0,
+					object_cursor TEXT NOT NULL DEFAULT '',
+					object_rowid INTEGER,
+					schema_version INTEGER NOT NULL DEFAULT -1,
+					status TEXT NOT NULL DEFAULT 'running',
+					updated_at TEXT NOT NULL
+				)`),
+		],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
+	);
+	let columns = await ownerQueryAll<{ readonly name?: unknown }>(
+		owner,
+		"integrity.checkpoint.columns",
+		`PRAGMA table_info(${CHECKPOINT_TABLE})`,
+		[],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics),
+	);
+	for (const [name, definition] of [
+		["attempt_count", "INTEGER NOT NULL DEFAULT 0"],
+		["skipped_objects", "INTEGER NOT NULL DEFAULT 0"],
+		["scanned_objects", "INTEGER NOT NULL DEFAULT 0"],
+		["object_cursor", "TEXT NOT NULL DEFAULT ''"],
+		["object_rowid", "INTEGER"],
+		["schema_version", "INTEGER NOT NULL DEFAULT -1"],
+	] as const) {
+		if (columns.some((column) => column.name === name)) continue;
+		try {
+			await ownerTransaction(
+				owner,
+				`integrity.checkpoint.add-${name}`,
+				[ownerRunStatement(`ALTER TABLE ${CHECKPOINT_TABLE} ADD COLUMN ${name} ${definition}`)],
+				integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
+			);
+		} catch (error) {
+			if (!isDuplicateColumnError(error)) throw error;
+			columns = await ownerQueryAll<{ readonly name?: unknown }>(
+				owner,
+				"integrity.checkpoint.columns.after-race",
+				`PRAGMA table_info(${CHECKPOINT_TABLE})`,
+				[],
+				integrityOwnerOptions(deadlineMs, onOwnerMetrics),
+			);
+			if (!columns.some((column) => column.name === name)) throw error;
+		}
+	}
+	await ownerTransaction(
+		owner,
+		"integrity.checkpoint.ensure",
+		[
+			ownerRunStatement(
+				`INSERT OR IGNORE INTO ${CHECKPOINT_TABLE}
+					(checkpoint_key, cursor, checked_tables, failed_tables, pages_checked, bytes_checked, attempt_count, skipped_objects, schema_version, status, updated_at)
+					VALUES (?, '', 0, 0, 0, 0, 0, 0, -1, 'running', ?)`,
+				[key, new Date().toISOString()],
+			),
+		],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
+	);
+}
+
+async function readCheckpoint(
+	owner: DbOwnerClient,
+	key: string,
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<Checkpoint> {
+	const row = await ownerQueryOne<Checkpoint>(
+		owner,
+		"integrity.checkpoint.read",
+		`SELECT cursor, checked_tables AS checkedTables, failed_tables AS failedTables,
+			pages_checked AS pagesChecked, bytes_checked AS bytesChecked,
+			attempt_count AS attemptCount, skipped_objects AS skippedTables,
+			scanned_objects AS scannedTables, object_cursor AS objectCursor, CAST(object_rowid AS TEXT) AS objectRowid,
+			schema_version AS schemaVersion, status
+		 FROM ${CHECKPOINT_TABLE} WHERE checkpoint_key = ?`,
+		[key],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics),
+	);
+	if (
+		row === undefined ||
+		(row.status !== "running" &&
+			row.status !== "complete" &&
+			row.status !== LEGACY_FTS_UNVERIFIABLE_STATUS &&
+			row.status !== MIGRATION_VERIFY_PARKED_STATUS &&
+			row.status !== MIGRATION_VERIFY_FAILED_STATUS) ||
+		typeof row.attemptCount !== "number" ||
+		typeof row.skippedTables !== "number" ||
+		typeof row.scannedTables !== "number" ||
+		typeof row.objectCursor !== "string" ||
+		(row.objectRowid !== null && typeof row.objectRowid !== "string") ||
+		typeof row.schemaVersion !== "number" ||
+		typeof row.cursor !== "string"
+	) {
+		throw new Error(`integrity checkpoint ${key} is missing or invalid`);
+	}
+	return row;
+}
+
+async function resetCheckpoint(
+	owner: DbOwnerClient,
+	key: string,
+	schemaVersion: number,
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<void> {
+	await ownerTransaction(
+		owner,
+		"integrity.checkpoint.reset",
+		[
+			ownerRunStatement(
+				`UPDATE ${CHECKPOINT_TABLE}
+				 SET cursor = '', checked_tables = 0, failed_tables = 0,
+				     pages_checked = 0, bytes_checked = 0, attempt_count = 0,
+				     skipped_objects = 0, scanned_objects = 0, object_cursor = '', object_rowid = NULL,
+				     schema_version = ?, status = 'running', updated_at = ?
+				 WHERE checkpoint_key = ?`,
+				[schemaVersion, new Date().toISOString(), key],
+			),
+		],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
+	);
+}
+
+async function readSchemaVersion(
+	owner: DbOwnerClient,
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<number> {
+	const row = await ownerQueryOne<SchemaVersionRow>(
+		owner,
+		"integrity.schema-version",
+		"PRAGMA schema_version",
+		[],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics),
+	);
+	return scalar(row?.schema_version);
+}
+
+async function readPageMetrics(
+	owner: DbOwnerClient,
+	deadlineMs: () => number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<{ readonly pages: number; readonly bytes: number }> {
+	const pageCount = await ownerQueryOne<PageCountRow>(
+		owner,
+		"integrity.page-count",
+		"PRAGMA page_count",
+		[],
+		integrityOwnerOptions(deadlineMs(), onOwnerMetrics),
+	);
+	const pageSize = await ownerQueryOne<PageCountRow>(
+		owner,
+		"integrity.page-size",
+		"PRAGMA page_size",
+		[],
+		integrityOwnerOptions(deadlineMs(), onOwnerMetrics),
+	);
+	const pages = scalar(pageCount?.page_count);
+	return { pages, bytes: pages * scalar(pageSize?.page_size) };
+}
+
+async function nextObject(
+	owner: DbOwnerClient,
+	cursor: string,
+	deadlineMs: () => number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<TableRow | undefined> {
+	const object = await ownerQueryOne<TableRow>(
+		owner,
+		"integrity.objects.next",
+		`SELECT name, type, sql, name || ':' || type AS cursor FROM sqlite_schema
+		 WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+		   AND name <> ? AND NOT (type = 'table' AND name = 'telemetry_events')
+		   AND (name || ':' || type) > ?
+		   AND type IN ('table', 'index', 'view', 'trigger')
+		 ORDER BY name, type LIMIT 1`,
+		[CHECKPOINT_TABLE, cursor],
+		integrityOwnerOptions(deadlineMs(), onOwnerMetrics),
+	);
+	if (object !== undefined) return object;
+	if (cursor >= TELEMETRY_INTEGRITY_CURSOR) return undefined;
+	const telemetry = await ownerQueryOne<{ readonly name: string }>(
+		owner,
+		"integrity.telemetry.exists",
+		"SELECT name FROM sqlite_schema WHERE type = 'table' AND name = 'telemetry_events'",
+		[],
+		integrityOwnerOptions(deadlineMs(), onOwnerMetrics),
+	);
+	return telemetry === undefined
+		? undefined
+		: { name: "telemetry_events", type: "table", cursor: TELEMETRY_INTEGRITY_CURSOR };
+}
+
+async function remainingObjects(
+	owner: DbOwnerClient,
+	cursor: string,
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<number> {
+	const row = await ownerQueryOne<NumberRow>(
+		owner,
+		"integrity.objects.remaining",
+		`SELECT COUNT(*) + CASE WHEN ? < ? AND EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'telemetry_events') THEN 1 ELSE 0 END AS value FROM sqlite_schema
+		 WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
+		   AND name <> ? AND NOT (type = 'table' AND name = 'telemetry_events')
+		   AND (name || ':' || type) > ?
+		   AND type IN ('table', 'index', 'view', 'trigger')`,
+		[cursor, TELEMETRY_INTEGRITY_CURSOR, CHECKPOINT_TABLE, cursor],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics),
+	);
+	return scalar(row?.value);
+}
+
+async function persistTable(
+	owner: DbOwnerClient,
+	key: string,
+	object: string,
+	checkpoint: Checkpoint,
+	metrics: { readonly pages: number; readonly bytes: number } | null,
+	outcome: { readonly failed: boolean; readonly skipped: boolean; readonly scanned: boolean },
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<Checkpoint> {
+	const { failed, skipped, scanned } = outcome;
+	const next: Checkpoint = {
+		cursor: object,
+		checkedTables: checkpoint.checkedTables + (skipped ? 0 : 1),
+		skippedTables: checkpoint.skippedTables + (skipped ? 1 : 0),
+		failedTables: checkpoint.failedTables + (failed ? 1 : 0),
+		scannedTables: checkpoint.scannedTables + (scanned && !failed ? 1 : 0),
+		objectCursor: "",
+		objectRowid: null,
+		pagesChecked: metrics?.pages ?? checkpoint.pagesChecked,
+		bytesChecked: metrics?.bytes ?? checkpoint.bytesChecked,
+		attemptCount: checkpoint.attemptCount,
+		schemaVersion: checkpoint.schemaVersion,
+		status: "running",
+	};
+	await ownerTransaction(
+		owner,
+		"integrity.checkpoint.commit",
+		[
+			ownerRunStatement(
+				`UPDATE ${CHECKPOINT_TABLE}
+				 SET cursor = ?, checked_tables = ?, skipped_objects = ?, failed_tables = ?, scanned_objects = ?,
+				     object_cursor = '', object_rowid = NULL,
+				     pages_checked = ?, bytes_checked = ?, attempt_count = ?, status = 'running', updated_at = ?
+				 WHERE checkpoint_key = ? AND cursor = ?`,
+				[
+					next.cursor,
+					next.checkedTables,
+					next.skippedTables,
+					next.failedTables,
+					next.scannedTables,
+					next.pagesChecked,
+					next.bytesChecked,
+					next.attemptCount,
+					new Date().toISOString(),
+					key,
+					checkpoint.cursor,
+				],
+			),
+		],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
+	);
+	return next;
+}
+
+async function persistScanProgress(
+	owner: DbOwnerClient,
+	key: string,
+	checkpoint: Checkpoint,
+	objectCursor: string,
+	objectRowid: string | null,
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<Checkpoint> {
+	await ownerTransaction(
+		owner,
+		"integrity.checkpoint.scan-progress",
+		[
+			ownerRunStatement(
+				`UPDATE ${CHECKPOINT_TABLE}
+				 SET object_cursor = ?, object_rowid = CAST(? AS INTEGER), updated_at = ?
+				 WHERE checkpoint_key = ? AND cursor = ?`,
+				[objectCursor, objectRowid, new Date().toISOString(), key, checkpoint.cursor],
+			),
+		],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
+	);
+	return { ...checkpoint, objectCursor, objectRowid };
+}
+
+async function markComplete(
+	owner: DbOwnerClient,
+	key: string,
+	deadlineMs: number,
+	onOwnerMetrics?: OwnerMetricsCallback,
+): Promise<void> {
+	await ownerTransaction(
+		owner,
+		"integrity.checkpoint.complete",
+		[
+			ownerRunStatement(`UPDATE ${CHECKPOINT_TABLE} SET status = 'complete', updated_at = ? WHERE checkpoint_key = ?`, [
+				new Date().toISOString(),
+				key,
+			]),
+		],
+		integrityOwnerOptions(deadlineMs, onOwnerMetrics, 1),
+	);
+}
+
+function progressFrom(
+	key: string,
+	phase: IncrementalIntegrityPhase,
+	checkpoint: Checkpoint,
+	remaining: number,
+	lastObject: string | null,
+	elapsedMs: number,
+	ownerQueueAdmissionMs: number,
+	ownerExecutionMs: number,
+	cancellationReason: string | null,
+): IncrementalIntegrityProgress {
+	return {
+		checkpointKey: key,
+		phase,
+		checkedObjects: checkpoint.checkedTables,
+		skippedObjects: checkpoint.skippedTables,
+		failedObjects: checkpoint.failedTables,
+		scannedObjects: checkpoint.scannedTables,
+		remainingObjects: remaining,
+		lastObject,
+		databasePagesObserved: checkpoint.pagesChecked,
+		databaseBytesObserved: checkpoint.bytesChecked,
+		elapsedMs,
+		ownerQueueAdmissionMs,
+		ownerExecutionMs,
+		cancellationReason,
+		degradationReason: null,
+	};
+}
+export async function runIncrementalDatabaseIntegrityCheck(
+	options: IncrementalIntegrityOptions,
+): Promise<IncrementalIntegrityResult> {
+	const key = boundedString(options.checkpointKey);
+	const tablesPerRun = Math.min(boundedTables(options.tablesPerRun), boundedWorkUnits(options.maxWorkUnits));
+	const ownerDeadlineMs = boundedPositive(
+		options.ownerDeadlineMs,
+		DEFAULT_OWNER_DEADLINE_MS,
+		MAX_OWNER_DEADLINE_MS,
+		"integrity owner deadline",
+	);
+	const runBudgetMs = boundedPositive(
+		options.runBudgetMs,
+		DEFAULT_RUN_BUDGET_MS,
+		MAX_RUN_BUDGET_MS,
+		"integrity run budget",
+	);
+	const largeTableRows = boundedPositive(
+		options.largeTableRows,
+		DEFAULT_LARGE_TABLE_ROWS,
+		MAX_LARGE_TABLE_ROWS,
+		"integrity large table threshold",
+	);
+	const scanChunkRows = boundedPositive(
+		options.scanChunkRows,
+		DEFAULT_SCAN_CHUNK_ROWS,
+		MAX_SCAN_CHUNK_ROWS,
+		"integrity scan chunk",
+	);
+	const startedAt = Date.now();
+	let ownerQueueAdmissionMs = 0;
+	let ownerExecutionMs = 0;
+	const recordOwnerMetrics = (metrics: DbOwnerMaintenanceMetrics): void => {
+		ownerQueueAdmissionMs += metrics.queueAdmissionMs;
+		ownerExecutionMs += metrics.ownerExecutionMs;
+	};
+	let phase: IncrementalIntegrityPhase = "running";
+	let cancellationReason: string | null = null;
+	let checkpoint: Checkpoint = {
+		cursor: "",
+		checkedTables: 0,
+		skippedTables: 0,
+		failedTables: 0,
+		scannedTables: 0,
+		objectCursor: "",
+		objectRowid: null,
+		pagesChecked: 0,
+		bytesChecked: 0,
+		attemptCount: 0,
+		schemaVersion: -1,
+		status: "running",
+	};
+	let lastTable: string | null = null;
+	const errors: string[] = [];
+	class IntegrityRunBudgetError extends Error {
+		constructor() {
+			super("incremental integrity run budget exhausted");
+			this.name = "IntegrityRunBudgetError";
+		}
+	}
+	const remainingBudget = (): number => {
+		const remaining = runBudgetMs - (Date.now() - startedAt);
+		if (remaining < 1) throw new IntegrityRunBudgetError();
+		return Math.min(ownerDeadlineMs, Math.floor(remaining));
+	};
+	const emit = async (
+		phase: IncrementalIntegrityPhase,
+		reason: string | null,
+		remainingOverride?: number,
+	): Promise<void> => {
+		const remaining =
+			remainingOverride ??
+			(phase === "degraded"
+				? 0
+				: await remainingObjects(options.owner, checkpoint.cursor, remainingBudget(), recordOwnerMetrics).catch(
+						() => 0,
+					));
+		const progress = progressFrom(
+			key,
+			phase,
+			checkpoint,
+			remaining,
+			lastTable,
+			Date.now() - startedAt,
+			ownerQueueAdmissionMs,
+			ownerExecutionMs,
+			reason,
+		);
+		updateDatabaseIntegrityStatus(progress, errors, options.owner);
+		await options.onProgress?.(progress);
+	};
+	const progressSnapshot = async (remainingOverride?: number): Promise<IncrementalIntegrityProgress> => {
+		const remaining =
+			remainingOverride ??
+			(phase === "degraded"
+				? 0
+				: await remainingObjects(options.owner, checkpoint.cursor, remainingBudget(), recordOwnerMetrics).catch(
+						() => 0,
+					));
+		return progressFrom(
+			key,
+			phase,
+			checkpoint,
+			remaining,
+			lastTable,
+			Date.now() - startedAt,
+			ownerQueueAdmissionMs,
+			ownerExecutionMs,
+			cancellationReason,
+		);
+	};
+	const restartIfSchemaChanged = async (): Promise<boolean> => {
+		const schemaVersion = await readSchemaVersion(options.owner, remainingBudget(), recordOwnerMetrics);
+		if (schemaVersion === checkpoint.schemaVersion) return false;
+		await resetCheckpoint(options.owner, key, schemaVersion, remainingBudget(), recordOwnerMetrics);
+		checkpoint = await readCheckpoint(options.owner, key, remainingBudget(), recordOwnerMetrics);
+		lastTable = null;
+		await emit("running", "database schema changed; restarting integrity sweep");
+		return true;
+	};
+
+	try {
+		await ensureCheckpoint(options.owner, key, remainingBudget(), recordOwnerMetrics);
+		checkpoint = await readCheckpoint(options.owner, key, remainingBudget(), recordOwnerMetrics);
+		const schemaVersion = await readSchemaVersion(options.owner, remainingBudget(), recordOwnerMetrics);
+		if (checkpoint.schemaVersion !== schemaVersion) {
+			await resetCheckpoint(options.owner, key, schemaVersion, remainingBudget(), recordOwnerMetrics);
+			checkpoint = await readCheckpoint(options.owner, key, remainingBudget(), recordOwnerMetrics);
+		}
+		lastTable = checkpointCursorToLastObject(checkpoint.cursor);
+		if (checkpoint.status === "complete") {
+			await resetCheckpoint(options.owner, key, schemaVersion, remainingBudget(), recordOwnerMetrics);
+			checkpoint = await readCheckpoint(options.owner, key, remainingBudget(), recordOwnerMetrics);
+			lastTable = checkpointCursorToLastObject(checkpoint.cursor);
+		}
+		await emit("running", null);
+
+		let processedInRun = 0;
+		while (processedInRun < tablesPerRun) {
+			if (options.signal?.aborted) {
+				phase = "cancelled";
+				cancellationReason = "aborted before the next table checkpoint";
+				await emit("cancelled", "aborted before the next table checkpoint");
+				return { ...(await progressSnapshot()), errors };
+			}
+			if (runBudgetMs - (Date.now() - startedAt) < 1) {
+				phase = "timed_out";
+				cancellationReason = "maintenance run budget exhausted at an object checkpoint";
+				await emit("timed_out", cancellationReason);
+				return { ...(await progressSnapshot()), errors };
+			}
+			const table = await nextObject(options.owner, checkpoint.cursor, remainingBudget, recordOwnerMetrics);
+			if (table === undefined) {
+				if (await restartIfSchemaChanged()) return { ...(await progressSnapshot()), errors };
+				await markComplete(options.owner, key, remainingBudget(), recordOwnerMetrics);
+				checkpoint = { ...checkpoint, status: "complete" };
+				phase = "complete";
+				await emit("complete", null);
+				return { ...(await progressSnapshot()), errors };
+			}
+			lastTable = `${table.type}:${table.name}`;
+			if (isUnchunkableFts(table)) {
+				await options.onObjectScan?.(table);
+				checkpoint = await persistTable(
+					options.owner,
+					key,
+					table.cursor,
+					checkpoint,
+					null,
+					{ failed: false, skipped: true, scanned: false },
+					remainingBudget(),
+					recordOwnerMetrics,
+				);
+				processedInRun += 1;
+				await emit("running", null);
+				continue;
+			}
+			if (isOrdinaryTable(table)) {
+				const resuming = checkpoint.objectCursor === table.cursor;
+				if (!resuming) {
+					await options.onObjectScan?.(table);
+					checkpoint = await persistScanProgress(
+						options.owner,
+						key,
+						checkpoint,
+						table.cursor,
+						null,
+						remainingBudget(),
+						recordOwnerMetrics,
+					);
+				}
+				let large = resuming;
+				let rowidAlias: string | undefined;
+				let chunk: ScanChunkRow | undefined;
+				let unreadable: string | null = null;
+				try {
+					if (!resuming) {
+						const probe = await ownerQueryOne<NumberRow>(
+							options.owner,
+							"integrity.table.size",
+							`SELECT count(*) AS value FROM (SELECT 1 FROM ${escapeIdentifier(table.name)} LIMIT ?)`,
+							[largeTableRows + 1],
+							integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
+						);
+						large = scalar(probe?.value) > largeTableRows;
+					}
+					if (large && !isWithoutRowid(table)) {
+						const columns = await ownerQueryAll<{ readonly name?: unknown }>(
+							options.owner,
+							"integrity.table.columns",
+							`PRAGMA table_xinfo(${escapeIdentifier(table.name)})`,
+							[],
+							integrityOwnerOptions(remainingBudget(), recordOwnerMetrics),
+						);
+						const declared = new Set(columns.map((column) => text(column.name).toLowerCase()));
+						rowidAlias = ROWID_ALIASES.find((alias) => !declared.has(alias));
+						if (rowidAlias !== undefined) {
+							const width =
+								columns
+									.map((column) => `coalesce(length(CAST(${escapeIdentifier(text(column.name))} AS BLOB)), 0)`)
+									.join(" + ") || "0";
+							const after = resuming ? checkpoint.objectRowid : null;
+							chunk = await ownerQueryOne<ScanChunkRow>(
+								options.owner,
+								"integrity.table.scan",
+								`SELECT count(*) AS scanned, CAST(max(r) AS TEXT) AS last, total(w) AS bytes
+								 FROM (SELECT ${rowidAlias} AS r, ${width} AS w FROM ${escapeIdentifier(table.name)}
+								       ${after === null ? "" : `WHERE ${rowidAlias} > CAST(? AS INTEGER)`}
+								       ORDER BY ${rowidAlias} LIMIT ?)`,
+								after === null ? [scanChunkRows] : [after, scanChunkRows],
+								integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
+							);
+						}
+					}
+				} catch (error) {
+					if (isDeadline(error) || error instanceof IntegrityRunBudgetError) throw error;
+					unreadable = error instanceof Error ? error.message : String(error);
+				}
+				if (unreadable !== null || (large && rowidAlias === undefined)) {
+					if (unreadable !== null) errors.push(`${table.name}: ${unreadable}`);
+					await options.onBeforeCheckpointCommit?.();
+					checkpoint = await persistTable(
+						options.owner,
+						key,
+						table.cursor,
+						checkpoint,
+						null,
+						{ failed: unreadable !== null, skipped: unreadable === null, scanned: false },
+						remainingBudget(),
+						recordOwnerMetrics,
+					);
+					processedInRun += 1;
+					await emit("running", null);
+					continue;
+				}
+				if (large) {
+					if (scalar(chunk?.scanned) >= scanChunkRows) {
+						checkpoint = await persistScanProgress(
+							options.owner,
+							key,
+							checkpoint,
+							table.cursor,
+							text(chunk?.last),
+							remainingBudget(),
+							recordOwnerMetrics,
+						);
+					} else {
+						const metrics = await readPageMetrics(options.owner, remainingBudget, recordOwnerMetrics);
+						await options.onBeforeCheckpointCommit?.();
+						checkpoint = await persistTable(
+							options.owner,
+							key,
+							table.cursor,
+							checkpoint,
+							metrics,
+							{ failed: false, skipped: false, scanned: true },
+							remainingBudget(),
+							recordOwnerMetrics,
+						);
+					}
+					processedInRun += 1;
+					await emit("running", null);
+					continue;
+				}
+			} else {
+				await options.onObjectScan?.(table);
+			}
+			const row =
+				table.type === "table"
+					? await ownerQueryOne<QuickCheckRow>(
+							options.owner,
+							`integrity.${table.type}.check`,
+							table.cursor === TELEMETRY_INTEGRITY_CURSOR
+								? `PRAGMA integrity_check(${escapeIdentifier(table.name)})`
+								: `PRAGMA quick_check(${escapeIdentifier(table.name)})`,
+							[],
+							integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
+						)
+					: await ownerQueryOne<{ sql?: unknown }>(
+							options.owner,
+							`integrity.${table.type}.check`,
+							"SELECT sql FROM sqlite_schema WHERE type = ? AND name = ?",
+							[table.type, table.name],
+							integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
+						);
+			let message =
+				table.type === "table"
+					? text((row as QuickCheckRow | undefined)?.quick_check ?? (row as QuickCheckRow | undefined)?.integrity_check)
+					: (row as { sql?: unknown } | undefined)?.sql === undefined
+						? ""
+						: "ok";
+			let failed = message !== "ok";
+			if (table.cursor === TELEMETRY_INTEGRITY_CURSOR) {
+				const indexes = await ownerQueryAll<{ readonly name: string }>(
+					options.owner,
+					"integrity.telemetry.indexes",
+					"SELECT name FROM sqlite_schema WHERE type = 'index' AND tbl_name = 'telemetry_events' AND sql IS NOT NULL ORDER BY name",
+					[],
+					integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
+				);
+				if (failed && indexes.length > 0) {
+					await ownerTransaction(
+						options.owner,
+						"integrity.telemetry.reindex",
+						indexes.map((index) => ownerRunStatement(`REINDEX ${escapeIdentifier(index.name)}`)),
+						integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, Math.min(MAX_WORK_UNITS, indexes.length + 2)),
+					);
+					const verification = await ownerQueryOne<QuickCheckRow>(
+						options.owner,
+						"integrity.telemetry.verify",
+						`PRAGMA integrity_check(${escapeIdentifier(table.name)})`,
+						[],
+						integrityOwnerOptions(remainingBudget(), recordOwnerMetrics, 1),
+					);
+					message = text(verification?.integrity_check);
+					failed = message !== "ok";
+				}
+			}
+			if (failed && message.length > 0) errors.push(`${table.name}: ${message}`);
+			const metrics = await readPageMetrics(options.owner, remainingBudget, recordOwnerMetrics);
+			await options.onBeforeCheckpointCommit?.();
+			checkpoint = await persistTable(
+				options.owner,
+				key,
+				table.cursor,
+				checkpoint,
+				metrics,
+				{ failed, skipped: false, scanned: false },
+				remainingBudget(),
+				recordOwnerMetrics,
+			);
+			processedInRun += 1;
+			await emit("running", null);
+		}
+		const remaining = await remainingObjects(options.owner, checkpoint.cursor, remainingBudget(), recordOwnerMetrics);
+		if (remaining === 0) {
+			if (await restartIfSchemaChanged()) return { ...(await progressSnapshot()), errors };
+			await markComplete(options.owner, key, remainingBudget(), recordOwnerMetrics);
+			checkpoint = { ...checkpoint, status: "complete" };
+			phase = "complete";
+			await emit("complete", null);
+			return { ...(await progressSnapshot()), errors };
+		}
+		cancellationReason = "maintenance object budget exhausted at an object checkpoint";
+		await emit("running", cancellationReason);
+		return { ...(await progressSnapshot()), errors };
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : String(error);
+		phase = isDeadline(error) || error instanceof IntegrityRunBudgetError ? "timed_out" : "unavailable";
+		cancellationReason = reason;
+		const remainingOverride = isDeadline(error) ? 0 : undefined;
+		try {
+			await emit(phase, reason, remainingOverride);
+		} catch {
+			const progress = progressFrom(
+				key,
+				phase,
+				checkpoint,
+				0,
+				lastTable,
+				Date.now() - startedAt,
+				ownerQueueAdmissionMs,
+				ownerExecutionMs,
+				reason,
+			);
+			updateDatabaseIntegrityStatus(progress, [...errors, reason], options.owner);
+			return { ...progress, errors: [...errors, reason] };
+		}
+		return { ...(await progressSnapshot(remainingOverride)), errors: [...errors, reason] };
+	}
+}
+
+export interface MigrationVerifyCheckpoint {
+	readonly attemptCount: number;
+	readonly status: Checkpoint["status"];
+}
+
+export async function readMigrationVerifyCheckpoint(
+	owner: DbOwnerClient,
+	checkpointKey = "database.migration-verify",
+	deadlineMs = 5_000,
+): Promise<MigrationVerifyCheckpoint> {
+	const key = boundedString(checkpointKey);
+	await ensureCheckpoint(owner, key, deadlineMs);
+	const checkpoint = await readCheckpoint(owner, key, deadlineMs);
+	return { attemptCount: checkpoint.attemptCount, status: checkpoint.status };
+}
+
+export async function incrementMigrationVerifyAttempt(
+	owner: DbOwnerClient,
+	checkpointKey = "database.migration-verify",
+	deadlineMs = 5_000,
+): Promise<number> {
+	const key = boundedString(checkpointKey);
+	await ensureCheckpoint(owner, key, deadlineMs);
+	await ownerTransaction(
+		owner,
+		"integrity.migration-verify.attempt",
+		[
+			ownerRunStatement(
+				`UPDATE ${CHECKPOINT_TABLE}
+				 SET attempt_count = attempt_count + 1, status = 'running', updated_at = ?
+				 WHERE checkpoint_key = ?`,
+				[new Date().toISOString(), key],
+			),
+		],
+		{ deadlineMs, estimatedWorkUnits: 1 },
+	);
+	return (await readCheckpoint(owner, key, deadlineMs)).attemptCount;
+}
+
+export async function markMigrationVerifyTerminal(
+	owner: DbOwnerClient,
+	status: typeof MIGRATION_VERIFY_PARKED_STATUS | typeof MIGRATION_VERIFY_FAILED_STATUS | "complete",
+	checkpointKey = "database.migration-verify",
+	deadlineMs = 5_000,
+): Promise<void> {
+	const key = boundedString(checkpointKey);
+	await ensureCheckpoint(owner, key, deadlineMs);
+	await ownerTransaction(
+		owner,
+		"integrity.migration-verify.terminal",
+		[
+			ownerRunStatement(`UPDATE ${CHECKPOINT_TABLE} SET status = ?, updated_at = ? WHERE checkpoint_key = ?`, [
+				status,
+				new Date().toISOString(),
+				key,
+			]),
+		],
+		{ deadlineMs, estimatedWorkUnits: 1 },
+	);
+}
+
+export const INCREMENTAL_INTEGRITY_CHECKPOINT_TABLE = CHECKPOINT_TABLE;

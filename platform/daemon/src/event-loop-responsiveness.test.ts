@@ -3,7 +3,7 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { yieldEvery } from "./async-yield";
+import { yieldEvery } from "./runtime/concurrency/async-yield";
 
 describe("event-loop responsiveness during async file processing", () => {
 	it("event loop remains responsive while processing 500+ files with yields", async () => {

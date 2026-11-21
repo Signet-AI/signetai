@@ -9,7 +9,7 @@ This page covers document-source connectors. If you want to install a harness
 adapter on another machine and point it at a remote Signet daemon, see
 [Remote Harness Connectors](/remote-connectors/).
 
-The connector framework lives in `platform/daemon/src/connectors/`.
+The connector framework lives in `platform/daemon/src/sources/providers/filesystem/`.
 Type definitions are in `platform/core/src/connector-types.ts`.
 
 
@@ -50,7 +50,7 @@ error → syncing → idle      (next sync succeeds)
 ```
 
 The `status` field is updated via `updateConnectorStatus()` in
-`platform/daemon/src/connectors/registry.ts`.
+`platform/daemon/src/sources/providers/filesystem/connector-registry.ts`.
 
 
 ## Connector Lifecycle
@@ -345,7 +345,7 @@ To add a new provider, implement the `ConnectorRuntime` interface from
 
 ### Step 1: Implement ConnectorRuntime
 
-Create a new file in `platform/daemon/src/connectors/`:
+Create a new file in `platform/daemon/src/sources/providers/filesystem/`:
 
 ```typescript
 import type {

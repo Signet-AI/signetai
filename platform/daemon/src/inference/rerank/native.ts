@@ -1,0 +1,148 @@
+import { type EmbeddingWorkerHandle, createEmbeddingWorkerHandle } from "../embeddings/worker-handle";
+import { logger } from "../../runtime/logging/logger";
+import { nativeEmbeddingAssetPaths } from "../embeddings/native";
+
+const RECREATE_AFTER_FAILURE_MS = 300_000;
+
+export type NativeRerankDevice = "default" | "cuda" | "cpu" | "metal";
+
+export interface NativeRerankRuntime {
+	readonly device: NativeRerankDevice;
+	readonly onnxRuntimePath?: string;
+	readonly cudaLibraryPaths?: readonly string[];
+}
+
+const DEFAULT_RUNTIME: NativeRerankRuntime = { device: "default" };
+
+function runtimeKey(modelId: string, runtime: NativeRerankRuntime): string {
+	return JSON.stringify([modelId, runtime.device, runtime.onnxRuntimePath ?? "", ...(runtime.cudaLibraryPaths ?? [])]);
+}
+
+let current: {
+	readonly key: string;
+	readonly requestedKey: string;
+	readonly device: NativeRerankDevice;
+	readonly handle: Promise<EmbeddingWorkerHandle>;
+	initializedOnce: boolean;
+} | null = null;
+let failedAt = 0;
+let acceleratedFailedKey: string | null = null;
+let inFlight = false;
+
+function createHandle(modelId: string, runtime: NativeRerankRuntime): Promise<EmbeddingWorkerHandle> {
+	const remoteHostOverride = process.env.SIGNET_EMBEDDING_REMOTE_HOST?.trim() || undefined;
+	const assets = nativeEmbeddingAssetPaths();
+	return createEmbeddingWorkerHandle({
+		modelId,
+		task: "rerank",
+		...(assets ?? {}),
+		...(remoteHostOverride ? { remoteHostOverride } : {}),
+		...(runtime.device === "cuda"
+			? {
+					device: "cuda" as const,
+					...(runtime.onnxRuntimePath ? { onnxRuntimePath: runtime.onnxRuntimePath } : {}),
+					...(runtime.cudaLibraryPaths?.length ? { cudaLibraryPaths: runtime.cudaLibraryPaths } : {}),
+				}
+			: runtime.device === "metal"
+				? {
+						device: "metal" as const,
+						...(runtime.onnxRuntimePath ? { onnxRuntimePath: runtime.onnxRuntimePath } : {}),
+					}
+				: runtime.device === "cpu"
+					? {
+							runtime: "onnxruntime" as const,
+							...(runtime.onnxRuntimePath ? { onnxRuntimePath: runtime.onnxRuntimePath } : {}),
+						}
+					: {}),
+	});
+}
+
+function acceleratedInitFailed(handle: EmbeddingWorkerHandle, initializedOnce: boolean): boolean {
+	if (initializedOnce) return false;
+	const status = handle.getStatus();
+	if (status.initialized || status.initializing) return false;
+	return handle.isPermanentlyDisabled() || handle.getLastError() !== null;
+}
+
+async function handleFor(modelId: string, requested: NativeRerankRuntime): Promise<EmbeddingWorkerHandle> {
+	const requestedKey = runtimeKey(modelId, requested);
+	const runtime = requested.device !== "default" && acceleratedFailedKey === requestedKey ? DEFAULT_RUNTIME : requested;
+	const key = runtimeKey(modelId, runtime);
+	if (current !== null && (current.key !== key || current.requestedKey !== requestedKey))
+		await shutdownNativeReranker();
+	if (current !== null) {
+		const handle = await current.handle;
+		if (current.device !== "default" && acceleratedInitFailed(handle, current.initializedOnce)) {
+			acceleratedFailedKey = requestedKey;
+			logger.warn(
+				"memory",
+				`${current.device.toUpperCase()} cross-encoder unavailable; using the default ONNX runtime`,
+				{
+					model: modelId,
+					error: handle.getLastError(),
+				},
+			);
+			await shutdownNativeReranker();
+			return await handleFor(modelId, requested);
+		}
+		if (!handle.isPermanentlyDisabled()) return handle;
+		if (Date.now() - failedAt < RECREATE_AFTER_FAILURE_MS) {
+			throw new Error(handle.getLastError() ?? "Cross-encoder disabled after a failure");
+		}
+		await shutdownNativeReranker();
+	}
+	current = {
+		key,
+		requestedKey,
+		device: runtime.device,
+		handle: createHandle(modelId, runtime),
+		initializedOnce: false,
+	};
+	const created = current;
+	try {
+		return await created.handle;
+	} catch (error) {
+		if (current === created) current = null;
+		throw error;
+	}
+}
+
+export function nativeRerankActiveDevice(): NativeRerankDevice | null {
+	return current?.device ?? null;
+}
+
+export async function nativeRerank(
+	modelId: string,
+	query: string,
+	documents: readonly string[],
+	runtime: NativeRerankRuntime = DEFAULT_RUNTIME,
+	deadlineAt?: number,
+): Promise<number[]> {
+	if (inFlight) throw new Error("cross-encoder busy with another recall");
+	inFlight = true;
+	try {
+		const handle = await handleFor(modelId, runtime);
+		if (!handle.getStatus().initialized) {
+			if (!handle.getStatus().initializing) void handle.checkAvailable();
+			throw new Error("cross-encoder loading");
+		}
+		if (current !== null) current.initializedOnce = true;
+		try {
+			return await handle.rerank(query, documents, deadlineAt !== undefined ? { deadlineAt } : undefined);
+		} catch (error) {
+			if (handle.isPermanentlyDisabled()) failedAt = Date.now();
+			throw error;
+		}
+	} finally {
+		inFlight = false;
+	}
+}
+
+export async function shutdownNativeReranker(): Promise<void> {
+	const previous = current;
+	current = null;
+	if (previous === null) return;
+	try {
+		await (await previous.handle).stop();
+	} catch {}
+}

@@ -1,0 +1,1048 @@
+import type { ReadDb } from "../../db/owner/accessor";
+export type EpisodicSourceKind = "memory" | "artifact" | "transcript" | "summary";
+export const EPISODIC_CAPTURED_AT_FLOOR = "2000-01-01T00:00:00.000Z";
+export function utcTimestampMs(value: string): number {
+	const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
+		? `${value.replace(" ", "T")}Z`
+		: value;
+	return Date.parse(normalized);
+}
+export function timestampMillis(value: string): number {
+	const parsed = utcTimestampMs(value);
+	return Number.isFinite(parsed) ? parsed : 0;
+}
+export interface EpisodicCursor {
+	readonly capturedAt: string;
+	readonly kind: EpisodicSourceKind | null;
+	readonly id: string;
+	readonly fragmentOffset?: number;
+}
+
+export interface EpisodicSourceRecord {
+	readonly kind: EpisodicSourceKind;
+	readonly id: string;
+	readonly content: string;
+	readonly sourceKind: string;
+	readonly sourceId: string;
+	readonly sourcePath: string | null;
+	readonly sourceEntryId: string | null;
+	readonly sourceRevision?: string;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly evidenceMeta: string | null;
+	readonly completed: boolean;
+}
+
+export interface EpisodicSourceCandidateRef {
+	readonly kind: Exclude<EpisodicSourceKind, "summary">;
+	readonly id: string;
+}
+
+export interface EpisodicSourceCandidateScan {
+	readonly refs: readonly EpisodicSourceCandidateRef[];
+	readonly complete: boolean;
+}
+
+export interface ReadEpisodicSourceOptions {
+	readonly agentId: string;
+	readonly from: string;
+}
+
+export type StrictEpisodicSourceRefResolution =
+	| { readonly status: "resolved"; readonly source: EpisodicSourceRecord }
+	| { readonly status: "invalid" | "not_found" | "cross_agent"; readonly sourceRef: string };
+
+const SOURCE_KIND_RANK: Readonly<Record<EpisodicSourceKind, number>> = {
+	memory: 0,
+	artifact: 1,
+	transcript: 2,
+	summary: 3,
+};
+
+function cursorPredicate(
+	timestampColumn: string,
+	idColumn: string,
+	kind: EpisodicSourceKind,
+	newerThan: string | null,
+	cursor: EpisodicCursor | null | undefined,
+): { readonly sql: string; readonly args: readonly (string | null)[] } {
+	if (cursor) {
+		const cursorRank = cursor.kind === null ? -1 : SOURCE_KIND_RANK[cursor.kind];
+		const rank = SOURCE_KIND_RANK[kind];
+		if (rank > cursorRank) {
+			return { sql: `julianday(${timestampColumn}) >= julianday(?)`, args: [cursor.capturedAt] };
+		}
+		if (rank < cursorRank) {
+			return { sql: `julianday(${timestampColumn}) > julianday(?)`, args: [cursor.capturedAt] };
+		}
+		return {
+			sql: `(julianday(${timestampColumn}) > julianday(?) OR (julianday(${timestampColumn}) = julianday(?) AND ${idColumn} > ?))`,
+			args: [cursor.capturedAt, cursor.capturedAt, cursor.id],
+		};
+	}
+	return {
+		sql: `(? IS NULL OR julianday(${timestampColumn}) > julianday(?) OR julianday(${timestampColumn}) < julianday(?))`,
+		args: [newerThan, newerThan, EPISODIC_CAPTURED_AT_FLOOR],
+	};
+}
+
+function compareEpisodicSources(a: EpisodicSourceRecord, b: EpisodicSourceRecord, order: "newest" | "oldest"): number {
+	const time = timestampMillis(a.capturedAt) - timestampMillis(b.capturedAt);
+	if (time !== 0) return order === "oldest" ? time : -time;
+	const rank = SOURCE_KIND_RANK[a.kind] - SOURCE_KIND_RANK[b.kind];
+	if (rank !== 0) return order === "oldest" ? rank : -rank;
+	const id = a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+	return order === "oldest" ? id : -id;
+}
+
+function readNonEmptyTrimmed(value: unknown): string | null {
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function managedSourcePath(meta: string | null): string | null {
+	if (!meta) return null;
+	try {
+		const value = JSON.parse(meta) as { managedPath?: unknown };
+		return readNonEmptyTrimmed(value.managedPath);
+	} catch {
+		return null;
+	}
+}
+
+export const ARTIFACT_IS_DREAMING_INPUT = `NOT (
+	ma.source_kind = 'manifest'
+	OR (
+		ma.source_kind = 'transcript' AND ma.session_key IS NOT NULL
+		AND EXISTS (
+			SELECT 1 FROM session_transcripts AS st
+			WHERE st.agent_id = ma.agent_id AND st.session_key = ma.session_key
+		)
+	)
+	OR (
+		ma.source_kind IN ('summary', 'compaction')
+		AND EXISTS (
+			SELECT 1 FROM session_summaries AS ss
+			WHERE ss.agent_id = ma.agent_id
+			  AND ss.depth = 0
+			  AND COALESCE(ss.source_type, 'summary') = ma.source_kind
+			  AND (
+				ss.session_key = ma.session_key
+				OR (
+					ss.session_key IS NULL AND ma.session_key IS NULL
+					AND ss.content = ma.content
+					AND julianday(ss.latest_at) = julianday(ma.captured_at)
+				)
+			  )
+		)
+	)
+)`;
+
+function tableHasColumn(db: ReadDb, table: string, column: string): boolean {
+	try {
+		const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
+		return rows.some((row) => row.name === column);
+	} catch {
+		return false;
+	}
+}
+
+export function scanEpisodicSourceCandidates(
+	db: ReadDb,
+	agentId: string,
+	maxCandidates: number,
+): EpisodicSourceCandidateScan {
+	if (!Number.isSafeInteger(maxCandidates) || maxCandidates < 1 || maxCandidates > 50) {
+		throw new RangeError("Episodic source candidate limit must be an integer between 1 and 50");
+	}
+	const rows = selectEpisodicSourceRefs(db, {
+		agentId,
+		query: "",
+		excludeDelivered: true,
+		limit: maxCandidates + 1,
+		order: "none",
+	});
+	const refs = rows.map((candidate): EpisodicSourceCandidateRef => {
+		if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+			throw new Error("Unexpected episodic source candidate row");
+		}
+		const kind = Reflect.get(candidate, "kind");
+		const id = Reflect.get(candidate, "id");
+		if ((kind !== "memory" && kind !== "artifact" && kind !== "transcript") || typeof id !== "string") {
+			throw new Error("Unexpected episodic source candidate row");
+		}
+		return { kind, id };
+	});
+	return { refs, complete: refs.length <= maxCandidates };
+}
+
+function candidateRefFilter(
+	refs: readonly EpisodicSourceCandidateRef[] | undefined,
+	kind: EpisodicSourceKind,
+	column: string,
+): { readonly sql: string; readonly args: readonly string[] } {
+	if (refs === undefined) return { sql: "", args: [] };
+	const ids = refs.filter((ref) => ref.kind === kind).map((ref) => ref.id);
+	if (ids.length === 0) return { sql: "AND 0", args: [] };
+	return { sql: `AND ${column} IN (${ids.map(() => "?").join(", ")})`, args: ids };
+}
+
+export function sourceIdCandidates(value: string): string[] {
+	const trimmed = value.trim();
+	const stripped = trimmed.replace(/^(memory|artifact|source|transcript|session|summary):/, "");
+	return [
+		...new Set(
+			[
+				trimmed,
+				stripped,
+				`memory:${stripped}`,
+				`artifact:${stripped}`,
+				`source:${stripped}`,
+				`transcript:${stripped}`,
+				`session:${stripped}`,
+				`summary:${stripped}`,
+			].filter(Boolean),
+		),
+	];
+}
+
+export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+	const ids = sourceIdCandidates(id);
+	const placeholders = ids.map(() => "?").join(", ");
+	const row = db
+		.prepare(
+			`SELECT id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
+			 FROM memories
+			 WHERE agent_id = ?
+			   AND memory_kind = 'episodic'
+			   AND COALESCE(is_deleted, 0) = 0
+			   AND visibility != 'archived'
+			   AND scope IS NULL
+			   AND id IN (${placeholders})
+			 LIMIT 1`,
+		)
+		.get(agentId, ...ids) as
+		| {
+				readonly id: string;
+				readonly content: string;
+				readonly source_type: string | null;
+				readonly source_id: string | null;
+				readonly source_path: string | null;
+				readonly runtime_path: string | null;
+				readonly project: string | null;
+				readonly who: string | null;
+				readonly created_at: string;
+				readonly evidence_meta: string | null;
+		  }
+		| undefined;
+	if (!row) return null;
+	return {
+		kind: "memory",
+		id: row.id,
+		content: row.content,
+		sourceKind: row.source_type ?? "manual",
+		sourceId: row.source_id ?? row.id,
+		sourceEntryId: null,
+		sourcePath: readNonEmptyTrimmed(row.source_path) ?? readNonEmptyTrimmed(row.runtime_path),
+		project: row.project,
+		harness: readNonEmptyTrimmed(row.who),
+		capturedAt: row.created_at,
+		evidenceMeta: row.evidence_meta,
+		completed: true,
+	};
+}
+
+export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+	const ids = sourceIdCandidates(id);
+	const placeholders = ids.map(() => "?").join(", ");
+	const row = db
+		.prepare(
+			`SELECT source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
+			        project, harness, content, captured_at, updated_at
+			 FROM memory_artifacts
+			 WHERE agent_id = ?
+			   AND COALESCE(is_deleted, 0) = 0
+			   AND (
+			     source_path = ?
+			     OR source_node_id IN (${placeholders})
+			     OR session_id IN (${placeholders})
+			     OR session_key IN (${placeholders})
+			     OR session_token IN (${placeholders})
+			   )
+			 ORDER BY captured_at DESC
+			 LIMIT 1`,
+		)
+		.get(agentId, id, ...ids, ...ids, ...ids, ...ids) as
+		| {
+				readonly source_path: string;
+				readonly source_sha256: string | null;
+				readonly source_kind: string;
+				readonly source_id: string | null;
+				readonly source_node_id: string | null;
+				readonly session_id: string;
+				readonly session_key: string | null;
+				readonly session_token: string;
+				readonly project: string | null;
+				readonly harness: string | null;
+				readonly content: string;
+				readonly captured_at: string;
+				readonly updated_at: string;
+		  }
+		| undefined;
+	if (!row) return null;
+	return {
+		kind: "artifact",
+		id: row.source_path,
+		content: row.content,
+		sourceKind: row.source_kind,
+		sourceId: row.source_node_id ?? row.session_key ?? row.session_id ?? row.session_token,
+		sourceEntryId: readNonEmptyTrimmed(row.source_id),
+		sourceRevision: readNonEmptyTrimmed(row.source_sha256) ?? row.captured_at ?? row.updated_at,
+		sourcePath: row.source_path,
+		project: row.project,
+		harness: row.harness,
+		capturedAt: row.captured_at ?? row.updated_at,
+		evidenceMeta: null,
+		completed: true,
+	};
+}
+
+export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+	const ids = sourceIdCandidates(id);
+	const placeholders = ids.map(() => "?").join(", ");
+	const hasUpdated = tableHasColumn(db, "session_transcripts", "updated_at");
+	const hasCompleted = tableHasColumn(db, "session_transcripts", "completed_at");
+	const updatedAt = hasUpdated ? "st.updated_at" : "NULL";
+	const completedAt = hasCompleted ? "st.completed_at" : "NULL";
+	const capturedAt = `COALESCE(${completedAt}, ${updatedAt}, st.created_at)`;
+	const orderBy = `${capturedAt} DESC, st.created_at DESC`;
+	const hasSourceId = tableHasColumn(db, "session_transcripts", "source_id");
+	const hasSourceRecordId = tableHasColumn(db, "session_transcripts", "source_record_id");
+	const hasSourceMeta = tableHasColumn(db, "session_transcripts", "source_meta_json");
+	const hasContentHash = tableHasColumn(db, "session_transcripts", "content_hash");
+	const sourceId = hasSourceId ? "st.source_id" : "NULL";
+	const sourceRecordId = hasSourceRecordId ? "st.source_record_id" : "NULL";
+	const sourceMeta = hasSourceMeta ? "st.source_meta_json" : "NULL";
+	const contentHash = hasContentHash ? "st.content_hash" : "NULL";
+	const completed = hasCompleted ? "st.completed_at IS NOT NULL" : "0";
+	const row = db
+		.prepare(
+			`SELECT st.session_key, st.content, st.harness, st.project, st.created_at, ${updatedAt} AS updated_at,
+			        ${completedAt} AS completed_at, ${completed} AS completed, ${sourceId} AS source_id,
+			        ${sourceRecordId} AS source_record_id, ${sourceMeta} AS source_meta_json, ${contentHash} AS content_hash
+			 FROM session_transcripts AS st
+			 WHERE st.agent_id = ? AND st.session_key IN (${placeholders})
+			 ORDER BY ${orderBy}
+			 LIMIT 1`,
+		)
+		.get(agentId, ...ids) as
+		| {
+				readonly session_key: string;
+				readonly content: string;
+				readonly harness: string | null;
+				readonly project: string | null;
+				readonly created_at: string;
+				readonly updated_at: string | null;
+				readonly completed_at: string | null;
+				readonly completed: number;
+				readonly source_id: string | null;
+				readonly source_record_id: string | null;
+				readonly source_meta_json: string | null;
+				readonly content_hash: string | null;
+		  }
+		| undefined;
+	if (!row) return null;
+	return {
+		kind: "transcript",
+		id: row.session_key,
+		content: row.content,
+		sourceKind: "transcript",
+		sourceId: row.source_record_id ?? row.session_key,
+		sourceEntryId: row.source_id,
+		sourceRevision: row.source_id
+			? (row.content_hash ?? row.completed_at ?? row.updated_at ?? row.created_at)
+			: (row.completed_at ?? row.updated_at ?? row.created_at),
+		sourcePath: managedSourcePath(row.source_meta_json),
+		project: row.project,
+		harness: row.harness,
+		capturedAt: row.completed_at ?? row.updated_at ?? row.created_at,
+		evidenceMeta: null,
+		completed: row.completed === 1,
+	};
+}
+
+export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
+	const ids = sourceIdCandidates(id);
+	const placeholders = ids.map(() => "?").join(", ");
+	const row = db
+		.prepare(
+			`SELECT id, content, project, harness, session_key, source_type, source_ref, latest_at
+			 FROM session_summaries
+			 WHERE agent_id = ?
+			   AND depth = 0
+			   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
+			   AND (id IN (${placeholders}) OR source_ref IN (${placeholders}))
+			 ORDER BY latest_at DESC
+			 LIMIT 1`,
+		)
+		.get(agentId, ...ids, ...ids) as
+		| {
+				readonly id: string;
+				readonly content: string;
+				readonly project: string | null;
+				readonly harness: string | null;
+				readonly session_key: string | null;
+				readonly source_type: string | null;
+				readonly source_ref: string | null;
+				readonly latest_at: string;
+		  }
+		| undefined;
+	if (!row) return null;
+	return {
+		kind: "summary",
+		id: row.id,
+		content: row.content,
+		sourceKind: row.source_type ?? "summary",
+		sourceId: row.source_ref ?? row.session_key ?? row.id,
+		sourceEntryId: null,
+		sourcePath: null,
+		project: row.project,
+		harness: row.harness,
+		capturedAt: row.latest_at,
+		evidenceMeta: null,
+		completed: true,
+	};
+}
+export function readRecentEpisodicSources(
+	db: ReadDb,
+	agentId: string,
+	limit: number | null,
+	kinds?: readonly EpisodicSourceKind[],
+	newerThan?: string | null,
+	order: "newest" | "oldest" | "none" = "newest",
+	cursor?: EpisodicCursor | null,
+	candidateRefs?: readonly EpisodicSourceCandidateRef[],
+): EpisodicSourceRecord[] {
+	const boundedLimit = limit === null ? -1 : Math.max(1, Math.min(Math.floor(limit), 500));
+	const newer = newerThan?.trim() || null;
+	const direction = order === "oldest" ? "ASC" : "DESC";
+	const sourceOrder = (timestamp: string, tieBreaker: string): string =>
+		order === "none" ? "" : `ORDER BY julianday(${timestamp}) ${direction}, ${tieBreaker} ${direction}`;
+	const memoryCursor = cursorPredicate("created_at", "id", "memory", newer, cursor);
+	const artifactCursor = cursorPredicate("captured_at", "source_path", "artifact", newer, cursor);
+	const transcriptHasUpdated = tableHasColumn(db, "session_transcripts", "updated_at");
+	const transcriptHasCompleted = tableHasColumn(db, "session_transcripts", "completed_at");
+	const transcriptUpdatedAt = transcriptHasUpdated ? "st.updated_at" : "NULL";
+	const transcriptCompletedAt = transcriptHasCompleted ? "st.completed_at" : "NULL";
+	const transcriptTime = `COALESCE(${transcriptCompletedAt}, ${transcriptUpdatedAt}, st.created_at)`;
+	const transcriptCompleted = transcriptHasCompleted ? "st.completed_at IS NOT NULL" : "0";
+	const transcriptSourceId = tableHasColumn(db, "session_transcripts", "source_id") ? "st.source_id" : "NULL";
+	const transcriptSourceRecordId = tableHasColumn(db, "session_transcripts", "source_record_id")
+		? "st.source_record_id"
+		: "NULL";
+	const transcriptSourceMeta = tableHasColumn(db, "session_transcripts", "source_meta_json")
+		? "st.source_meta_json"
+		: "NULL";
+	const transcriptContentHash = tableHasColumn(db, "session_transcripts", "content_hash") ? "st.content_hash" : "NULL";
+	const transcriptCursor = cursorPredicate(transcriptTime, "session_key", "transcript", newer, cursor);
+	const summaryCursor = cursorPredicate("latest_at", "id", "summary", newer, cursor);
+	const allowedKinds = kinds ? new Set(kinds) : null;
+	const candidateKinds =
+		candidateRefs === undefined ? null : new Set<EpisodicSourceKind>(candidateRefs.map((ref) => ref.kind));
+	const wants = (kind: EpisodicSourceKind): boolean =>
+		(allowedKinds === null || allowedKinds.has(kind)) && (candidateKinds === null || candidateKinds.has(kind));
+	const memoryCandidate = candidateRefFilter(candidateRefs, "memory", "id");
+	const artifactCandidate = candidateRefFilter(candidateRefs, "artifact", "source_path");
+	const transcriptCandidate = candidateRefFilter(candidateRefs, "transcript", "st.session_key");
+	const memories: EpisodicSourceRecord[] = wants("memory")
+		? db
+				.prepare(
+					`SELECT id, content, source_type, source_id, source_path, runtime_path, project, who, created_at, evidence_meta
+				 FROM memories
+				 WHERE agent_id = ?
+				   AND memory_kind = 'episodic'
+				   AND COALESCE(is_deleted, 0) = 0
+				   AND visibility != 'archived'
+				   AND scope IS NULL
+				   -- Session summaries are retained in memories for ordinary recall,
+				   -- but their temporal-DAG node is the one canonical Dreaming input.
+				   AND COALESCE(type, '') != 'session_summary'
+				   AND ${memoryCursor.sql}
+				   ${memoryCandidate.sql}
+				 ${sourceOrder("created_at", "id")}
+				 LIMIT ?`,
+				)
+				.all(agentId, ...memoryCursor.args, ...memoryCandidate.args, boundedLimit)
+				.map((row) => {
+					const memory = row as {
+						readonly id: string;
+						readonly content: string;
+						readonly source_type: string | null;
+						readonly source_id: string | null;
+						readonly source_path: string | null;
+						readonly runtime_path: string | null;
+						readonly project: string | null;
+						readonly who: string | null;
+						readonly created_at: string;
+						readonly evidence_meta: string | null;
+					};
+					return {
+						kind: "memory",
+						id: memory.id,
+						content: memory.content,
+						sourceKind: memory.source_type ?? "manual",
+						sourceId: memory.source_id ?? memory.id,
+						sourceEntryId: null,
+						sourcePath: readNonEmptyTrimmed(memory.source_path) ?? readNonEmptyTrimmed(memory.runtime_path),
+						project: memory.project,
+						harness: readNonEmptyTrimmed(memory.who),
+						capturedAt: memory.created_at,
+						evidenceMeta: memory.evidence_meta,
+						completed: true,
+					} satisfies EpisodicSourceRecord;
+				})
+		: [];
+	const artifacts: EpisodicSourceRecord[] = wants("artifact")
+		? db
+				.prepare(
+					`SELECT source_path, source_sha256, source_kind, source_id, source_node_id, session_id, session_key, session_token,
+			        project, harness, content, captured_at, updated_at
+			 FROM memory_artifacts AS ma
+			 WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
+			   AND ${ARTIFACT_IS_DREAMING_INPUT}
+			   AND ${artifactCursor.sql}
+			   ${artifactCandidate.sql}
+			   ${sourceOrder("captured_at", "source_path")}
+			   LIMIT ?`,
+				)
+				.all(agentId, ...artifactCursor.args, ...artifactCandidate.args, boundedLimit)
+				.map((row) => {
+					const artifact = row as {
+						readonly source_path: string;
+						readonly source_sha256: string | null;
+						readonly source_kind: string;
+						readonly source_id: string | null;
+						readonly source_node_id: string | null;
+						readonly session_id: string;
+						readonly session_key: string | null;
+						readonly session_token: string;
+						readonly project: string | null;
+						readonly harness: string | null;
+						readonly content: string;
+						readonly captured_at: string;
+						readonly updated_at: string;
+					};
+					return {
+						kind: "artifact",
+						id: artifact.source_path,
+						content: artifact.content,
+						sourceKind: artifact.source_kind,
+						sourceId: artifact.source_node_id ?? artifact.session_key ?? artifact.session_id ?? artifact.session_token,
+						sourceEntryId: readNonEmptyTrimmed(artifact.source_id),
+						sourceRevision: readNonEmptyTrimmed(artifact.source_sha256) ?? artifact.captured_at ?? artifact.updated_at,
+						sourcePath: artifact.source_path,
+						project: artifact.project,
+						harness: artifact.harness,
+						capturedAt: artifact.captured_at ?? artifact.updated_at,
+						evidenceMeta: null,
+						completed: true,
+					} satisfies EpisodicSourceRecord;
+				})
+		: [];
+	const transcripts: EpisodicSourceRecord[] = wants("transcript")
+		? db
+				.prepare(
+					`SELECT st.session_key, st.content, st.harness, st.project, st.created_at,
+					        ${transcriptUpdatedAt} AS updated_at, ${transcriptCompletedAt} AS completed_at,
+					        ${transcriptTime} AS captured_at, ${transcriptCompleted} AS completed,
+					        ${transcriptSourceId} AS source_id, ${transcriptSourceRecordId} AS source_record_id,
+					        ${transcriptSourceMeta} AS source_meta_json, ${transcriptContentHash} AS content_hash
+				 FROM session_transcripts AS st
+				 WHERE st.agent_id = ?
+				   AND ${transcriptCompleted}
+				   AND ${transcriptCursor.sql}
+				   ${transcriptCandidate.sql}
+				 ${sourceOrder(transcriptTime, "st.session_key")}
+				 LIMIT ?`,
+				)
+				.all(agentId, ...transcriptCursor.args, ...transcriptCandidate.args, boundedLimit)
+				.map((row) => {
+					const transcript = row as {
+						readonly session_key: string;
+						readonly content: string;
+						readonly harness: string | null;
+						readonly project: string | null;
+						readonly created_at: string;
+						readonly updated_at: string | null;
+						readonly completed_at: string | null;
+						readonly captured_at: string;
+						readonly completed: number;
+						readonly source_id: string | null;
+						readonly source_record_id: string | null;
+						readonly source_meta_json: string | null;
+						readonly content_hash: string | null;
+					};
+					return {
+						kind: "transcript",
+						id: transcript.session_key,
+						content: transcript.content,
+						sourceKind: "transcript",
+						sourceId: transcript.source_record_id ?? transcript.session_key,
+						sourceEntryId: transcript.source_id,
+						sourceRevision: transcript.source_id
+							? (transcript.content_hash ?? transcript.captured_at)
+							: transcript.captured_at,
+						sourcePath: managedSourcePath(transcript.source_meta_json),
+						project: transcript.project,
+						harness: transcript.harness,
+						capturedAt:
+							transcript.captured_at ?? transcript.completed_at ?? transcript.updated_at ?? transcript.created_at,
+						evidenceMeta: null,
+						completed: transcript.completed === 1,
+					} satisfies EpisodicSourceRecord;
+				})
+		: [];
+	const summaries: EpisodicSourceRecord[] = wants("summary")
+		? db
+				.prepare(
+					`SELECT id, content, project, harness, session_key, source_type, source_ref, latest_at
+			 FROM session_summaries
+			 WHERE agent_id = ?
+			   AND depth = 0
+			   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
+			   AND ${summaryCursor.sql}
+			 ${sourceOrder("latest_at", "id")}
+			 LIMIT ?`,
+				)
+				.all(agentId, ...summaryCursor.args, boundedLimit)
+				.map((row) => {
+					const summary = row as {
+						readonly id: string;
+						readonly content: string;
+						readonly project: string | null;
+						readonly harness: string | null;
+						readonly session_key: string | null;
+						readonly source_type: string | null;
+						readonly source_ref: string | null;
+						readonly latest_at: string;
+					};
+					return {
+						kind: "summary",
+						id: summary.id,
+						content: summary.content,
+						sourceKind: summary.source_type ?? "summary",
+						sourceId: summary.source_ref ?? summary.session_key ?? summary.id,
+						sourceEntryId: null,
+						sourcePath: null,
+						project: summary.project,
+						harness: summary.harness,
+						capturedAt: summary.latest_at,
+						evidenceMeta: null,
+						completed: true,
+					} satisfies EpisodicSourceRecord;
+				})
+		: [];
+	const sources = [...memories, ...artifacts, ...transcripts, ...summaries];
+	if (order !== "none") sources.sort((a, b) => compareEpisodicSources(a, b, order));
+	return sources.slice(0, boundedLimit < 0 ? undefined : boundedLimit);
+}
+export interface DreamingEvidenceSourceCount {
+	readonly eligible: number;
+	readonly bounded: boolean;
+}
+
+export function countEpisodicDreamingEvidenceSources(
+	db: ReadDb,
+	agentId: string,
+	kinds: readonly EpisodicSourceKind[],
+	bound: number,
+): DreamingEvidenceSourceCount {
+	const branches: string[] = [];
+	const wants = new Set(kinds);
+	if (wants.has("memory")) {
+		branches.push(`SELECT 'memory' AS kind, id FROM memories
+		 WHERE agent_id = ?
+		   AND memory_kind = 'episodic'
+		   AND COALESCE(is_deleted, 0) = 0
+		   AND visibility != 'archived'
+		   AND scope IS NULL
+		   AND COALESCE(type, '') != 'session_summary'
+		   AND length(content) > 0`);
+	}
+	if (wants.has("artifact")) {
+		branches.push(`SELECT 'artifact' AS kind, ma.source_path AS id FROM memory_artifacts AS ma
+		 WHERE ma.agent_id = ?
+		   AND COALESCE(ma.is_deleted, 0) = 0
+		   AND length(ma.content) > 0
+		   AND ${ARTIFACT_IS_DREAMING_INPUT}`);
+	}
+	if (wants.has("transcript")) {
+		const completed = tableHasColumn(db, "session_transcripts", "completed_at")
+			? "session_transcripts.completed_at IS NOT NULL"
+			: "0";
+		branches.push(`SELECT 'transcript' AS kind, session_key AS id FROM session_transcripts
+		 WHERE agent_id = ?
+		   AND ${completed}
+		   AND length(content) > 0`);
+	}
+	if (wants.has("summary")) {
+		branches.push(`SELECT 'summary' AS kind, id FROM session_summaries
+		 WHERE agent_id = ?
+		   AND depth = 0
+		   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
+		   AND length(content) > 0`);
+	}
+	if (branches.length === 0) return { eligible: 0, bounded: true };
+	const boundedLimit = Math.max(1, Math.floor(bound));
+	const selected = (["memory", "artifact", "transcript", "summary"] as const)
+		.filter((kind) => wants.has(kind))
+		.map(() => agentId);
+	const row: unknown = db
+		.prepare(`SELECT COUNT(*) AS n FROM (SELECT DISTINCT kind, id FROM (
+	  ${branches.join(" UNION ALL ")}
+	) LIMIT ${boundedLimit + 1})`)
+		.get(...selected);
+	const counted = row !== null && typeof row === "object" && "n" in row ? (row as Record<string, unknown>).n : null;
+	const eligible = typeof counted === "number" ? counted : 0;
+	return { eligible, bounded: eligible <= boundedLimit };
+}
+
+export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOptions): EpisodicSourceRecord | null {
+	const from = options.from.trim();
+	if (!from) return null;
+	if (from.startsWith("memory:")) {
+		return readEpisodicMemory(db, options.agentId, from.replace(/^memory:/, ""));
+	}
+	if (from.startsWith("transcript:") || from.startsWith("session:")) {
+		return readEpisodicTranscript(db, options.agentId, from);
+	}
+	if (from.startsWith("summary:")) return readEpisodicSummary(db, options.agentId, from);
+	if (from.startsWith("artifact:") || from.startsWith("source:")) {
+		return readEpisodicArtifact(db, options.agentId, from.replace(/^(artifact|source):/, ""));
+	}
+	return (
+		readEpisodicMemory(db, options.agentId, from) ??
+		readEpisodicArtifact(db, options.agentId, from) ??
+		readEpisodicTranscript(db, options.agentId, from) ??
+		readEpisodicSummary(db, options.agentId, from)
+	);
+}
+export function resolveStrictEpisodicSourceRef(
+	db: ReadDb,
+	params: { readonly agentId: string; readonly sourceRef: unknown },
+): StrictEpisodicSourceRefResolution {
+	if (typeof params.sourceRef !== "string") return { status: "invalid", sourceRef: "" };
+	const sourceRef = params.sourceRef.trim();
+	const separator = sourceRef.indexOf(":");
+	if (separator <= 0 || separator === sourceRef.length - 1) return { status: "invalid", sourceRef };
+	const kind = sourceRef.slice(0, separator);
+	const id = sourceRef.slice(separator + 1).trim();
+	if (!(["memory", "artifact", "transcript", "summary"] as const).includes(kind as EpisodicSourceKind) || !id) {
+		return { status: "invalid", sourceRef };
+	}
+	const canonicalRef = `${kind}:${id}`;
+	const source = readEpisodicSource(db, { agentId: params.agentId, from: canonicalRef });
+	if (source !== null) return { status: "resolved", source };
+	const owners = findEpisodicSourceAgentIds(db, canonicalRef);
+	if (owners.some((agentId) => agentId !== params.agentId)) {
+		return { status: "cross_agent", sourceRef: canonicalRef };
+	}
+	return { status: "not_found", sourceRef: canonicalRef };
+}
+export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly string[] {
+	const trimmed = from.trim();
+	const colon = trimmed.indexOf(":");
+	if (colon <= 0) return [];
+	const kind = trimmed.slice(0, colon);
+	const sourceId = trimmed.slice(colon + 1);
+	const ids = sourceIdCandidates(sourceId);
+	const placeholders = ids.map(() => "?").join(", ");
+	let rows: Array<{ agent_id: string | null }>;
+
+	if (kind === "memory") {
+		rows = db
+			.prepare(
+				`SELECT DISTINCT agent_id
+				 FROM memories
+				 WHERE memory_kind = 'episodic'
+				   AND COALESCE(is_deleted, 0) = 0
+				   AND visibility != 'archived'
+				   AND scope IS NULL
+				   AND id IN (${placeholders})`,
+			)
+			.all(...ids) as Array<{ agent_id: string | null }>;
+	} else if (kind === "artifact" || kind === "source") {
+		rows = db
+			.prepare(
+				`SELECT DISTINCT agent_id
+				 FROM memory_artifacts
+				 WHERE COALESCE(is_deleted, 0) = 0
+				   AND (
+				     source_path = ?
+				     OR source_node_id IN (${placeholders})
+				     OR session_id IN (${placeholders})
+				     OR session_key IN (${placeholders})
+				     OR session_token IN (${placeholders})
+				   )`,
+			)
+			.all(sourceId, ...ids, ...ids, ...ids, ...ids) as Array<{ agent_id: string | null }>;
+	} else if (kind === "transcript" || kind === "session") {
+		rows = db
+			.prepare(
+				`SELECT DISTINCT agent_id
+				 FROM session_transcripts
+				 WHERE session_key IN (${placeholders})`,
+			)
+			.all(...ids) as Array<{ agent_id: string | null }>;
+	} else if (kind === "summary") {
+		rows = db
+			.prepare(
+				`SELECT DISTINCT agent_id
+				 FROM session_summaries
+				 WHERE depth = 0
+				   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
+				   AND (id IN (${placeholders}) OR source_ref IN (${placeholders}))`,
+			)
+			.all(...ids, ...ids) as Array<{ agent_id: string | null }>;
+	} else {
+		return [];
+	}
+
+	return [...new Set(rows.map((row) => row.agent_id).filter((agentId): agentId is string => Boolean(agentId)))].sort();
+}
+
+const MAX_QUERY_TERMS = 8;
+
+export function foldAsciiCase(value: string): string {
+	return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+export function episodicQueryTerms(query: string): readonly string[] {
+	const raw = query.split(/\s+/).filter((token) => token.length > 0);
+	const worded = raw.filter((token) => /[\p{L}\p{N}]/u.test(token));
+	const significant = worded
+		.map((token) => token.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ""))
+		.filter((token) => token.length >= 3);
+	const terms = significant.length > 0 ? significant : worded.length > 0 ? worded : raw;
+	const seen = new Set<string>();
+	return terms
+		.filter((term) => {
+			const key = foldAsciiCase(term);
+			if (seen.has(key)) return false;
+			seen.add(key);
+			return true;
+		})
+		.slice(0, MAX_QUERY_TERMS);
+}
+
+interface EpisodicSourceSearchParams {
+	readonly agentId: string;
+	readonly query: string;
+	readonly since?: string;
+	readonly before?: string;
+	readonly kind?: "memory" | "artifact" | "transcript" | "summary";
+	readonly excludeDelivered?: boolean;
+	readonly excludeSourceRefs?: readonly string[];
+	readonly limit?: number | null;
+	readonly order?: "newest" | "none";
+	readonly candidateRefs?: readonly EpisodicSourceCandidateRef[];
+}
+
+export function searchEpisodicSources(db: ReadDb, params: EpisodicSourceSearchParams): EpisodicSourceRecord[] {
+	return selectEpisodicSourceRefs(db, params)
+		.map((row) => readEpisodicSource(db, { agentId: params.agentId, from: `${row.kind}:${row.id}` }))
+		.filter((source): source is EpisodicSourceRecord => source !== null);
+}
+
+function selectEpisodicSourceRefs(
+	db: ReadDb,
+	params: EpisodicSourceSearchParams,
+): Array<{ readonly kind: EpisodicSourceKind; readonly id: string }> {
+	const query = params.query.trim();
+	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 51));
+	const terms = query === "" ? [] : episodicQueryTerms(query);
+	const matchScore = (column: string): string =>
+		query === ""
+			? `(${column} IS NOT NULL)`
+			: terms.length === 0
+				? "0"
+				: `(${terms.map(() => `(${column} LIKE ? ESCAPE '\\')`).join(" + ")})`;
+	const contentArgs: unknown[] = terms.map((term) => `%${term.replace(/[\\%_]/g, "\\$&")}%`);
+	const sinceArgs: unknown[] = params.since !== undefined ? [params.since, EPISODIC_CAPTURED_AT_FLOOR] : [];
+	const beforeArgs: unknown[] = params.before !== undefined ? [params.before] : [];
+	const deliveredFilterEnabled =
+		params.excludeDelivered === true &&
+		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_consumption'").get() !=
+			null;
+	const reviewedFilterEnabled =
+		params.excludeDelivered === true &&
+		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_reviews'").get() != null;
+	const deliveredPredicate = (
+		kind: EpisodicSourceKind,
+		id: string,
+		capturedAt: string,
+		sourceEntryId: string,
+		sourceRevision: string,
+	): string =>
+		deliveredFilterEnabled
+			? `AND NOT EXISTS (
+				SELECT 1 FROM dreaming_evidence_consumption dec
+				 WHERE dec.agent_id = ? AND dec.source_kind = '${kind}' AND dec.source_id = ${id}
+				   AND dec.source_captured_at = ${capturedAt} AND dec.source_entry_id = ${sourceEntryId}
+				   AND dec.source_revision = ${sourceRevision}
+				   AND dec.delivered_offset >= dec.source_length
+			)`
+			: "";
+	const deliveredArgs = deliveredFilterEnabled ? [params.agentId] : [];
+	const reviewedPredicate = (
+		kind: EpisodicSourceKind,
+		id: string,
+		capturedAt: string,
+		sourceEntryId: string,
+		sourceRevision: string,
+	): string =>
+		reviewedFilterEnabled
+			? `AND NOT EXISTS (
+				SELECT 1 FROM dreaming_evidence_reviews der
+				 WHERE der.agent_id = ? AND der.source_kind = '${kind}' AND der.source_id = ${id}
+				   AND der.source_captured_at = ${capturedAt} AND der.source_entry_id = ${sourceEntryId}
+				   AND der.source_revision = ${sourceRevision}
+			)`
+			: "";
+	const reviewedArgs = reviewedFilterEnabled ? [params.agentId] : [];
+	const transcriptHasUpdatedAt = tableHasColumn(db, "session_transcripts", "updated_at");
+	const transcriptHasCompletedAt = tableHasColumn(db, "session_transcripts", "completed_at");
+	const transcriptSearchTime = transcriptHasCompletedAt
+		? transcriptHasUpdatedAt
+			? "COALESCE(session_transcripts.completed_at, session_transcripts.updated_at, session_transcripts.created_at)"
+			: "COALESCE(session_transcripts.completed_at, session_transcripts.created_at)"
+		: transcriptHasUpdatedAt
+			? "COALESCE(session_transcripts.updated_at, session_transcripts.created_at)"
+			: "session_transcripts.created_at";
+	const transcriptEntryId = tableHasColumn(db, "session_transcripts", "source_id")
+		? "COALESCE(session_transcripts.source_id, '')"
+		: "''";
+	const transcriptRevision =
+		transcriptEntryId === "''"
+			? transcriptSearchTime
+			: `CASE WHEN ${transcriptEntryId} = '' THEN ${transcriptSearchTime} ELSE ${
+					tableHasColumn(db, "session_transcripts", "content_hash")
+						? `COALESCE(session_transcripts.content_hash, ${transcriptSearchTime})`
+						: transcriptSearchTime
+				} END`;
+	const transcriptCompleted = transcriptHasCompletedAt ? "session_transcripts.completed_at IS NOT NULL" : "0";
+	const commonArgs = [...contentArgs, params.agentId, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs];
+	const candidateKinds =
+		params.candidateRefs === undefined
+			? null
+			: new Set<EpisodicSourceKind>(params.candidateRefs.map((ref) => ref.kind));
+	const wants = (kind: EpisodicSourceKind): boolean =>
+		(kind === "summary" ? params.kind === "summary" : params.kind === undefined || params.kind === kind) &&
+		(candidateKinds === null || candidateKinds.has(kind));
+	const memoryCandidate = candidateRefFilter(params.candidateRefs, "memory", "id");
+	const artifactCandidate = candidateRefFilter(params.candidateRefs, "artifact", "ma.source_path");
+	const transcriptCandidate = candidateRefFilter(params.candidateRefs, "transcript", "session_key");
+	const summaryCandidate = candidateRefFilter(params.candidateRefs, "summary", "id");
+	const excluded = params.excludeSourceRefs ?? [];
+	const excludeRefs = (kind: EpisodicSourceKind, id: string): { readonly sql: string; readonly args: unknown[] } =>
+		excluded.length === 0
+			? { sql: "", args: [] }
+			: { sql: `AND ('${kind}:' || ${id}) NOT IN (SELECT value FROM json_each(?))`, args: [JSON.stringify(excluded)] };
+	const memoryExcluded = excludeRefs("memory", "id");
+	const artifactExcluded = excludeRefs("artifact", "ma.source_path");
+	const transcriptExcluded = excludeRefs("transcript", "session_key");
+	const summaryExcluded = excludeRefs("summary", "id");
+
+	const branches: Array<{ sql: string; args: unknown[] }> = [];
+	if (wants("memory")) {
+		branches.push({
+			sql: `SELECT 'memory' AS kind, id, created_at AS captured_at, ${matchScore("content")} AS match_score
+			      FROM memories
+			      WHERE agent_id = ? AND memory_kind = 'episodic'
+			        AND COALESCE(is_deleted, 0) = 0 AND visibility != 'archived' AND scope IS NULL
+			        AND COALESCE(type, '') != 'session_summary'
+			        ${params.since ? "AND (julianday(created_at) >= julianday(?) OR julianday(created_at) < julianday(?))" : ""}
+			        ${params.before ? "AND julianday(created_at) <= julianday(?)" : ""}
+			        ${deliveredPredicate("memory", "id", "created_at", "''", "created_at")}
+			        ${reviewedPredicate("memory", "id", "created_at", "''", "created_at")}
+			        ${memoryCandidate.sql}
+			        ${memoryExcluded.sql}`,
+			args: [...commonArgs, ...memoryCandidate.args, ...memoryExcluded.args],
+		});
+	}
+	if (wants("artifact")) {
+		branches.push({
+			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at, ${matchScore("ma.content")} AS match_score
+			      FROM memory_artifacts ma
+			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0
+			        AND length(ma.content) > 0
+			        AND ${ARTIFACT_IS_DREAMING_INPUT}
+			        ${params.since ? "AND (julianday(ma.captured_at) >= julianday(?) OR julianday(ma.captured_at) < julianday(?))" : ""}
+			        ${params.before ? "AND julianday(ma.captured_at) <= julianday(?)" : ""}
+			        ${deliveredPredicate("artifact", "ma.source_path", "ma.captured_at", "COALESCE(ma.source_id, '')", "CASE WHEN ma.source_sha256 IS NULL OR ma.source_sha256 = '' THEN ma.captured_at ELSE ma.source_sha256 END")}
+			        ${reviewedPredicate("artifact", "ma.source_path", "ma.captured_at", "COALESCE(ma.source_id, '')", "CASE WHEN ma.source_sha256 IS NULL OR ma.source_sha256 = '' THEN ma.captured_at ELSE ma.source_sha256 END")}
+			        AND (ma.source_sha256 IS NULL OR ma.source_sha256 = ''
+			             OR ma.source_path = (
+			               SELECT ma2.source_path FROM memory_artifacts ma2
+			               WHERE ma2.agent_id = ma.agent_id AND COALESCE(ma2.is_deleted, 0) = 0
+			                 AND ma2.source_sha256 = ma.source_sha256
+			                 AND COALESCE(ma2.source_id, '') = COALESCE(ma.source_id, '')
+			               ORDER BY ma2.captured_at DESC, ma2.source_path ASC
+			               LIMIT 1
+			             ))
+			        ${artifactCandidate.sql}
+			        ${artifactExcluded.sql}`,
+			args: [...commonArgs, ...artifactCandidate.args, ...artifactExcluded.args],
+		});
+	}
+	if (wants("transcript")) {
+		branches.push({
+			sql: `SELECT 'transcript' AS kind, session_key AS id, ${transcriptSearchTime} AS captured_at,
+			             ${matchScore("session_transcripts.content")} AS match_score
+			      FROM session_transcripts
+			      WHERE agent_id = ? AND ${transcriptCompleted}
+			        ${params.since ? `AND (julianday(${transcriptSearchTime}) >= julianday(?) OR julianday(${transcriptSearchTime}) < julianday(?))` : ""}
+			        ${params.before ? `AND julianday(${transcriptSearchTime}) <= julianday(?)` : ""}
+			        ${deliveredPredicate("transcript", "session_key", transcriptSearchTime, transcriptEntryId, transcriptRevision)}
+			        ${reviewedPredicate("transcript", "session_key", transcriptSearchTime, transcriptEntryId, transcriptRevision)}
+			        ${transcriptCandidate.sql}
+			        ${transcriptExcluded.sql}`,
+			args: [...commonArgs, ...transcriptCandidate.args, ...transcriptExcluded.args],
+		});
+	}
+	if (wants("summary")) {
+		branches.push({
+			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at, ${matchScore("content")} AS match_score
+			      FROM session_summaries
+			      WHERE agent_id = ? AND depth = 0
+			        AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
+			        ${params.since ? "AND (julianday(latest_at) >= julianday(?) OR julianday(latest_at) < julianday(?))" : ""}
+			        ${params.before ? "AND julianday(latest_at) <= julianday(?)" : ""}
+			        ${deliveredPredicate("summary", "id", "latest_at", "''", "latest_at")}
+			        ${reviewedPredicate("summary", "id", "latest_at", "''", "latest_at")}
+			        ${summaryCandidate.sql}
+			        ${summaryExcluded.sql}`,
+			args: [...commonArgs, ...summaryCandidate.args, ...summaryExcluded.args],
+		});
+	}
+
+	if (branches.length === 0) return [];
+	const union = branches.map((branch) => branch.sql).join("\nUNION ALL\n");
+	const orderBy =
+		params.order === "none" ? "" : "ORDER BY match_score DESC, julianday(captured_at) DESC, kind ASC, id ASC";
+	const rows = db
+		.prepare(
+			`SELECT kind, id
+			 FROM (
+			 ${union}
+			 )
+			 WHERE match_score > 0
+			 ${orderBy}
+			 LIMIT ${limit === null ? -1 : "?"}`,
+		)
+		.all(...branches.flatMap((branch) => branch.args), ...(limit === null ? [] : [limit])) as Array<{
+		kind: EpisodicSourceKind;
+		id: string;
+	}>;
+	return rows;
+}

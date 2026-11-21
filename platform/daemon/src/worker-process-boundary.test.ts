@@ -20,32 +20,35 @@ const compiledRuntimeLaunch =
 
 const intentionalProcessOwners: Readonly<Record<string, IntentionalProcessOwner>> = {
 	"daemon.ts": { count: 1, reason: "daemon replacement after an update" },
-	"database-integrity.ts": { count: 1, reason: "killable integrity worker runner" },
-	"db-owner-client.ts": { count: 1, reason: "exclusive synchronous SQLite owner" },
-	"harness-health.ts": { count: 1, reason: "killable connector health inspection child" },
-	"transcript-recovery-supervisor.ts": { count: 1, reason: "killable transcript recovery supervisor" },
-	"transcript-recovery-worker.ts": { count: 1, reason: "bounded transcript recovery child" },
+	"db/integrity/integrity.ts": { count: 1, reason: "killable integrity worker runner" },
+	"db/owner/client.ts": { count: 1, reason: "exclusive synchronous SQLite owner" },
+	"harness/health/health.ts": { count: 1, reason: "killable connector health inspection child" },
+	"transcripts/recovery/transcript-recovery-supervisor.ts": {
+		count: 1,
+		reason: "killable transcript recovery supervisor",
+	},
+	"transcripts/recovery/transcript-recovery-worker.ts": { count: 1, reason: "bounded transcript recovery child" },
 };
 
 const inProcessHelpers = [
 	{
 		name: "native source scanner",
-		path: "native-memory-source-worker.ts",
+		path: "sources/providers/native-memory/native-memory-source-worker.ts",
 		required: [/\bnew Worker\s*\(/, /\bparentPort\b/],
 	},
 	{
 		name: "synthesis renderer",
-		path: "synthesis-render-worker.ts",
+		path: "workers/synthesis/synthesis-render-worker.ts",
 		required: [/\bparentPort\b/],
 	},
 	{
 		name: "native embedding adapter",
-		path: "embedding-worker-handle.ts",
+		path: "inference/embeddings/worker-handle.ts",
 		required: [/\bnew Worker\s*\(/, /\bworker\.terminate\s*\(/],
 	},
 	{
 		name: "pipeline helpers",
-		path: "pipeline/index.ts",
+		path: "workers/index.ts",
 		required: [/\bstartDocumentWorker\b/, /\bstartSynthesisWorker\b/],
 	},
 ] as const;

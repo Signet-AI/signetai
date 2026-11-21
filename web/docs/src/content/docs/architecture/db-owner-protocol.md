@@ -3,7 +3,7 @@ title: "DB owner protocol"
 description: "Contributor reference for the daemon-to-database-owner job and wire contract."
 ---
 
-This page documents the daemon-to-owner contract. The executable protocol types live in `platform/daemon/src/db-owner-protocol.ts`; the daemon client and owner runtime are in `db-owner-client.ts` and `db-owner-worker.ts`. Only the owner imports SQLite and executes synchronous SQL.
+This page documents the daemon-to-owner contract. The executable protocol types live in `platform/daemon/src/db/owner/protocol.ts`; the daemon client and owner runtime are in `db-owner-client.ts` and `db-owner-worker.ts`. Only the owner imports SQLite and executes synchronous SQL.
 
 ## Job envelope
 
