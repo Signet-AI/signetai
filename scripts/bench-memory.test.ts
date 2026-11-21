@@ -42,7 +42,7 @@ import {
 	setBenchRecallTranscriptEvidenceLimit,
 	benchRecallTranscriptEvidenceLimit,
 } from "./bench-memory";
-import { loadMemoryConfig } from "../platform/daemon/src/memory-config";
+import { loadMemoryConfig } from "../platform/daemon/src/config/memory-config";
 import { parseRoutingConfig } from "../platform/core/src/routing";
 
 const workspaces: string[] = [];

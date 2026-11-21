@@ -1,0 +1,448 @@
+import { Database } from "bun:sqlite";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { runMigrations } from "../../../core/src/migrations";
+import type { DbAccessor, ReadDb, SqliteStatement, WriteDb } from "../db/owner/accessor";
+import { vectorToBlob } from "../db/owner/helpers";
+import { type RetentionConfig, startRetentionWorker } from "./retention";
+
+function makeAccessor(db: Database, writeDb: WriteDb = db as unknown as WriteDb): DbAccessor {
+	return {
+		withWriteTx<T>(fn: (db: WriteDb) => T): T {
+			db.exec("BEGIN IMMEDIATE");
+			try {
+				const result = fn(writeDb);
+				db.exec("COMMIT");
+				return result;
+			} catch (err) {
+				db.exec("ROLLBACK");
+				throw err;
+			}
+		},
+		withWriteTxAsync<T>(fn: (db: WriteDb) => T): Promise<T> {
+			return Promise.resolve().then(() => {
+				db.exec("BEGIN IMMEDIATE");
+				try {
+					const result = fn(writeDb);
+					db.exec("COMMIT");
+					return result;
+				} catch (error) {
+					db.exec("ROLLBACK");
+					throw error;
+				}
+			});
+		},
+		withReadDb<T>(fn: (db: ReadDb) => T): T {
+			return fn(db as unknown as ReadDb);
+		},
+		withReadDbAsync<T>(fn: (db: ReadDb) => Promise<T>): Promise<T> {
+			return fn(db as unknown as ReadDb);
+		},
+		close() {
+			db.close();
+		},
+	};
+}
+
+function failVectorDeleteOnce(db: Database): WriteDb {
+	let failed = false;
+	return {
+		exec(sql: string): void {
+			db.exec(sql);
+		},
+		prepare(sql: string): SqliteStatement {
+			const statement = db.prepare(sql) as unknown as SqliteStatement;
+			if (sql !== "DELETE FROM vec_embeddings WHERE id = ?") return statement;
+			return {
+				run(...params: unknown[]) {
+					if (!failed) {
+						failed = true;
+						throw new Error("simulated vec delete failure");
+					}
+					return statement.run(...params);
+				},
+				get(...params: unknown[]) {
+					return statement.get(...params);
+				},
+				all<Row = unknown>(...params: unknown[]) {
+					return statement.all<Row>(...params);
+				},
+			};
+		},
+	};
+}
+
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+function testRetentionConfig(overrides: Partial<RetentionConfig> = {}): RetentionConfig {
+	return {
+		intervalMs: 999999,
+		tombstoneRetentionMs: 30 * ONE_DAY_MS,
+		historyRetentionMs: 180 * ONE_DAY_MS,
+		completedJobRetentionMs: 14 * ONE_DAY_MS,
+		deadJobRetentionMs: 30 * ONE_DAY_MS,
+		batchLimit: 500,
+		...overrides,
+	};
+}
+
+function daysAgo(days: number): string {
+	return new Date(Date.now() - days * ONE_DAY_MS).toISOString();
+}
+
+describe("retention worker", () => {
+	let db: Database;
+	let accessor: DbAccessor;
+
+	beforeEach(() => {
+		db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		accessor = makeAccessor(db);
+	});
+
+	afterEach(() => {
+		db.close();
+	});
+
+	it("purges tombstoned memories past retention window", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+		).run("recent-del", "recent", "fact", daysAgo(5), now, now, "test");
+		db.prepare(
+			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+		).run("old-del", "old", "fact", daysAgo(35), now, now, "test");
+		for (const memoryId of ["recent-del", "old-del"]) {
+			db.prepare(
+				`INSERT INTO temporal_edges (id, subject_type, subject_id, facet, start_at, created_at, updated_at)
+				 VALUES (?, 'memory', ?, 'occurred', '2023-03-19T00:00:00.000Z', ?, ?)`,
+			).run(`edge-${memoryId}`, memoryId, now, now);
+		}
+
+		const handle = startRetentionWorker(accessor, testRetentionConfig());
+		const result = await handle.sweep();
+		handle.stop();
+
+		expect(result.tombstonesPurged).toBe(1);
+		const recent = db.prepare("SELECT id FROM memories WHERE id = ?").get("recent-del");
+		expect(recent).toBeTruthy();
+		const old = db.prepare("SELECT id FROM memories WHERE id = ?").get("old-del");
+		expect(old).toBeNull();
+		const edges = db.prepare("SELECT subject_id FROM temporal_edges ORDER BY subject_id").all();
+		expect(edges).toEqual([{ subject_id: "recent-del" }]);
+	});
+
+	it("purges old history events past retention window", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+		).run("mem-hist", "content", "fact", now, now, "test");
+		db.prepare(
+			`INSERT INTO memory_history (id, memory_id, event, changed_by, created_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+		).run("hist-recent", "mem-hist", "updated", "test", daysAgo(30));
+		db.prepare(
+			`INSERT INTO memory_history (id, memory_id, event, changed_by, created_at)
+			 VALUES (?, ?, ?, ?, ?)`,
+		).run("hist-old", "mem-hist", "updated", "test", daysAgo(200));
+
+		const handle = startRetentionWorker(accessor, testRetentionConfig());
+		const result = await handle.sweep();
+		handle.stop();
+
+		expect(result.historyPurged).toBe(1);
+		expect(db.prepare("SELECT id FROM memory_history WHERE id = ?").get("hist-recent")).toBeTruthy();
+		expect(db.prepare("SELECT id FROM memory_history WHERE id = ?").get("hist-old")).toBeNull();
+	});
+
+	it("purges completed and dead jobs past retention windows", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?)`,
+		).run("mem-jobs", "content", "fact", now, now, "test");
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, completed_at, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run("job-recent", "mem-jobs", "extract", "completed", daysAgo(5), now, now);
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, completed_at, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run("job-old", "mem-jobs", "extract", "completed", daysAgo(20), now, now);
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, failed_at, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run("job-dead", "mem-jobs", "extract", "dead", daysAgo(35), now, now);
+		db.prepare(
+			`INSERT INTO memory_jobs (id, memory_id, job_type, status, failed_at, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		).run("job-dead-recent", "mem-jobs", "extract", "dead", daysAgo(10), now, now);
+
+		const handle = startRetentionWorker(accessor, testRetentionConfig());
+		const result = await handle.sweep();
+		handle.stop();
+
+		expect(result.completedJobsPurged).toBe(1);
+		expect(result.deadJobsPurged).toBe(1);
+
+		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-recent")).toBeTruthy();
+		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-old")).toBeNull();
+		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-dead")).toBeNull();
+		expect(db.prepare("SELECT id FROM memory_jobs WHERE id = ?").get("job-dead-recent")).toBeTruthy();
+	});
+
+	it("purges old transcript capture jobs past retention windows", async () => {
+		const insertCompleted = db.prepare(
+			`INSERT INTO transcript_capture_jobs (
+				id, agent_id, harness, session_id, transcript, captured_at, status, attempts, max_attempts,
+				created_at, updated_at, completed_at
+			) VALUES (?, 'default', 'test', ?, 'User: hi', ?, 'completed', 1, 5, ?, ?, ?)`,
+		);
+		insertCompleted.run("tc-recent", "tc-recent", daysAgo(5), daysAgo(5), daysAgo(5), daysAgo(5));
+		insertCompleted.run("tc-old", "tc-old", daysAgo(20), daysAgo(20), daysAgo(20), daysAgo(20));
+		db.prepare(
+			`INSERT INTO transcript_capture_jobs (
+				id, agent_id, harness, session_id, transcript, captured_at, status, attempts, max_attempts,
+				created_at, updated_at
+			) VALUES (?, 'default', 'test', ?, 'User: hi', ?, 'dead', 5, 5, ?, ?)`,
+		).run("tc-dead", "tc-dead", daysAgo(35), daysAgo(35), daysAgo(35));
+
+		const handle = startRetentionWorker(accessor, testRetentionConfig());
+		const result = await handle.sweep();
+		handle.stop();
+
+		expect(result.completedTranscriptCaptureJobsPurged).toBe(1);
+		expect(result.deadTranscriptCaptureJobsPurged).toBe(1);
+		expect(db.prepare("SELECT id FROM transcript_capture_jobs WHERE id = ?").get("tc-recent")).toBeTruthy();
+		expect(db.prepare("SELECT id FROM transcript_capture_jobs WHERE id = ?").get("tc-old")).toBeNull();
+		expect(db.prepare("SELECT id FROM transcript_capture_jobs WHERE id = ?").get("tc-dead")).toBeNull();
+	});
+
+	it("purges graph links before tombstones and keeps entities at zero mentions", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+		).run("mem-graph", "graph test", "fact", daysAgo(35), now, now, "test");
+		db.prepare(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		).run("ent-1", "TestEntity", "testentity", "concept", now, now);
+		db.prepare(
+			`INSERT INTO memory_entity_mentions (memory_id, entity_id)
+			 VALUES (?, ?)`,
+		).run("mem-graph", "ent-1");
+
+		const handle = startRetentionWorker(accessor, testRetentionConfig());
+		const result = await handle.sweep();
+		handle.stop();
+
+		expect(result.graphLinksPurged).toBe(1);
+		expect(result.tombstonesPurged).toBe(1);
+		expect(db.prepare("SELECT * FROM memory_entity_mentions WHERE memory_id = ?").get("mem-graph")).toBeNull();
+		expect(db.prepare("SELECT mentions FROM entities WHERE id = ?").get("ent-1")).toEqual({ mentions: 0 });
+		expect(db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-graph")).toBeNull();
+	});
+
+	it("decrements entity mentions during graph link purge", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+		).run("mem-orphan", "orphan test", "fact", daysAgo(35), now, now, "test");
+		db.prepare(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 1, ?, ?)`,
+		).run("ent-last", "Last", "last", "extracted", now, now);
+		db.prepare(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 3, ?, ?)`,
+		).run("ent-survive", "Survivor", "survivor", "extracted", now, now);
+		db.prepare(
+			`INSERT INTO memory_entity_mentions (memory_id, entity_id)
+			 VALUES (?, ?)`,
+		).run("mem-orphan", "ent-last");
+		db.prepare(
+			`INSERT INTO memory_entity_mentions (memory_id, entity_id)
+			 VALUES (?, ?)`,
+		).run("mem-orphan", "ent-survive");
+
+		const handle = startRetentionWorker(accessor, testRetentionConfig());
+		const result = await handle.sweep();
+		handle.stop();
+
+		expect(result.graphLinksPurged).toBe(2);
+		expect(db.prepare("SELECT mentions FROM entities WHERE id = ?").get("ent-last")).toEqual({ mentions: 0 });
+		expect(db.prepare("SELECT mentions FROM entities WHERE id = ?").get("ent-survive")).toEqual({ mentions: 2 });
+	});
+
+	it("keeps a pinned entity and its ontology content when its last mentioning memory is purged", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
+		).run("mem-forgotten", "forgotten", "fact", daysAgo(35), now, now, "test");
+		db.prepare(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, pinned, pinned_at, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 1, 1, ?, ?, ?)`,
+		).run("ent-pinned", "Pinned", "pinned", "person", now, now, now);
+		db.prepare(
+			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, 4, ?, ?)`,
+		).run("ent-peer", "Peer", "peer", "project", now, now);
+		db.prepare("INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES (?, ?)").run(
+			"mem-forgotten",
+			"ent-pinned",
+		);
+		db.prepare(
+			`INSERT INTO entity_aspects (id, entity_id, name, canonical_name)
+			 VALUES ('asp-1', 'ent-pinned', 'Role', 'role')`,
+		).run();
+		db.prepare(
+			`INSERT INTO entity_attributes (id, aspect_id, kind, content, normalized_content)
+			 VALUES ('attr-1', 'asp-1', 'attribute', 'Leads the team', 'leads the team')`,
+		).run();
+		db.prepare(
+			`INSERT INTO entity_aliases (id, entity_id, alias, canonical_alias)
+			 VALUES ('alias-1', 'ent-pinned', 'Pin', 'pin')`,
+		).run();
+		db.prepare(
+			`INSERT INTO entity_dependencies (id, source_entity_id, target_entity_id, dependency_type)
+			 VALUES ('dep-1', 'ent-pinned', 'ent-peer', 'works_on')`,
+		).run();
+		db.prepare(
+			`INSERT INTO relations (id, source_entity_id, target_entity_id, relation_type, strength, mentions, confidence, created_at)
+			 VALUES ('rel-1', 'ent-pinned', 'ent-peer', 'works_on', 1.0, 1, 0.8, ?)`,
+		).run(now);
+		db.prepare(
+			`INSERT INTO epistemic_assertions (id, subject_entity_id, predicate, content, normalized_content, asserted_at)
+			 VALUES ('assert-1', 'ent-pinned', 'claims', 'Ships weekly', 'ships weekly', ?)`,
+		).run(now);
+
+		const handle = startRetentionWorker(accessor, testRetentionConfig());
+		const result = await handle.sweep();
+		handle.stop();
+
+		expect(result.graphLinksPurged).toBe(1);
+		expect(result.tombstonesPurged).toBe(1);
+		expect(db.prepare("SELECT pinned, mentions FROM entities WHERE id = ?").get("ent-pinned")).toEqual({
+			pinned: 1,
+			mentions: 0,
+		});
+		expect(db.prepare("SELECT id FROM entity_aspects WHERE id = 'asp-1'").get()).toBeTruthy();
+		expect(db.prepare("SELECT id FROM entity_attributes WHERE id = 'attr-1'").get()).toBeTruthy();
+		expect(db.prepare("SELECT id FROM entity_aliases WHERE id = 'alias-1'").get()).toBeTruthy();
+		expect(db.prepare("SELECT id FROM entity_dependencies WHERE id = 'dep-1'").get()).toBeTruthy();
+		expect(db.prepare("SELECT id FROM relations WHERE id = 'rel-1'").get()).toBeTruthy();
+		expect(db.prepare("SELECT id FROM epistemic_assertions WHERE id = 'assert-1'").get()).toBeTruthy();
+	});
+
+	it("keeps tombstones and canonical embeddings when vec deletion fails, then retries atomically", async () => {
+		const now = new Date().toISOString();
+		db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL)");
+		db.prepare(
+			`INSERT INTO memories
+				(id, content, content_hash, type, agent_id, is_deleted, deleted_at, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?)`,
+		).run("mem-expired", "expired", "hash-expired", "fact", "agent-a", daysAgo(35), now, now, "test");
+		db.prepare(
+			`INSERT INTO memories
+				(id, content, content_hash, type, agent_id, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("mem-survivor", "survivor", "hash-survivor", "fact", "agent-b", now, now, "test");
+		db.prepare(
+			`INSERT INTO embeddings
+				(id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+			 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)`,
+		).run("emb-expired", "hash-expired", vectorToBlob([1, 2, 3]), 3, "mem-expired", "expired", now, "agent-a");
+		db.prepare(
+			`INSERT INTO embeddings
+				(id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
+			 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)`,
+		).run("emb-survivor", "hash-survivor", vectorToBlob([4, 5, 6]), 3, "mem-survivor", "survivor", now, "agent-b");
+		db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run("emb-expired", vectorToBlob([1, 2, 3]));
+		db.prepare("INSERT INTO vec_embeddings (id, embedding) VALUES (?, ?)").run("emb-survivor", vectorToBlob([4, 5, 6]));
+		db.prepare(
+			`INSERT INTO entities (id, agent_id, name, canonical_name, entity_type, mentions, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, 1, ?, ?)`,
+		).run("entity-expired", "agent-a", "Expired", "expired", "concept", now, now);
+		db.prepare("INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES (?, ?)").run(
+			"mem-expired",
+			"entity-expired",
+		);
+
+		const failingAccessor = makeAccessor(db, failVectorDeleteOnce(db));
+		const failingHandle = startRetentionWorker(failingAccessor, testRetentionConfig());
+		await expect(failingHandle.sweep()).rejects.toThrow("failed to reconcile vec_embeddings");
+		failingHandle.stop();
+		expect(db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-expired")).toBeTruthy();
+		expect(db.prepare("SELECT id FROM embeddings WHERE id = ?").get("emb-expired")).toBeTruthy();
+		expect(db.prepare("SELECT id FROM vec_embeddings WHERE id = ?").get("emb-expired")).toBeTruthy();
+		expect(
+			db.prepare("SELECT memory_id, entity_id FROM memory_entity_mentions WHERE memory_id = ?").get("mem-expired"),
+		).toEqual({
+			memory_id: "mem-expired",
+			entity_id: "entity-expired",
+		});
+		expect(db.prepare("SELECT id, mentions FROM entities WHERE id = ?").get("entity-expired")).toEqual({
+			id: "entity-expired",
+			mentions: 1,
+		});
+		expect(db.prepare("SELECT memory_id FROM memories_cold WHERE memory_id = ?").get("mem-expired")).toBeNull();
+
+		const retryHandle = startRetentionWorker(failingAccessor, testRetentionConfig());
+		const retry = await retryHandle.sweep();
+		const repeat = await retryHandle.sweep();
+		retryHandle.stop();
+
+		expect(retry.embeddingsPurged).toBe(1);
+		expect(retry.tombstonesPurged).toBe(1);
+		expect(repeat.embeddingsPurged).toBe(0);
+		expect(repeat.tombstonesPurged).toBe(0);
+		expect(db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-expired")).toBeNull();
+		expect(db.prepare("SELECT id FROM embeddings WHERE id = ?").get("emb-expired")).toBeNull();
+		expect(db.prepare("SELECT id FROM vec_embeddings WHERE id = ?").get("emb-expired")).toBeNull();
+		expect(
+			db.prepare("SELECT memory_id FROM memory_entity_mentions WHERE memory_id = ?").get("mem-expired"),
+		).toBeNull();
+		expect(db.prepare("SELECT id, mentions FROM entities WHERE id = ?").get("entity-expired")).toEqual({
+			id: "entity-expired",
+			mentions: 0,
+		});
+		expect(db.prepare("SELECT id, agent_id FROM memories WHERE id = ?").get("mem-survivor")).toEqual({
+			id: "mem-survivor",
+			agent_id: "agent-b",
+		});
+		expect(db.prepare("SELECT id, agent_id FROM embeddings WHERE id = ?").get("emb-survivor")).toEqual({
+			id: "emb-survivor",
+			agent_id: "agent-b",
+		});
+		expect(db.prepare("SELECT id FROM vec_embeddings WHERE id = ?").get("emb-survivor")).toBeTruthy();
+		const cold = db
+			.prepare("SELECT memory_id, agent_id, archived_reason FROM memories_cold WHERE memory_id = ?")
+			.get("mem-expired");
+		expect(cold).toMatchObject({ memory_id: "mem-expired", agent_id: "agent-a", archived_reason: "retention_decay" });
+	});
+
+	it("returns zero counts and rejects unsupported delete syntax", async () => {
+		const spy = {
+			prepare(sql: string) {
+				if (/DELETE\s+FROM\s+\w+\s+WHERE(?:(?!\bIN\s*\()[\s\S])*\bLIMIT\b/i.test(sql)) {
+					throw new Error("DELETE ... LIMIT is unavailable");
+				}
+				return db.prepare(sql) as unknown as SqliteStatement;
+			},
+		} as unknown as WriteDb;
+		const handle = startRetentionWorker(makeAccessor(db, spy), testRetentionConfig());
+		const result = await handle.sweep();
+		handle.stop();
+
+		expect(result.tombstonesPurged).toBe(0);
+		expect(result.historyPurged).toBe(0);
+		expect(result.completedJobsPurged).toBe(0);
+		expect(result.deadJobsPurged).toBe(0);
+		expect(result.graphLinksPurged).toBe(0);
+	});
+});

@@ -1,0 +1,262 @@
+import type { ReadDb } from "../../db/owner/accessor";
+
+export interface UnembeddedRow {
+	readonly id: string;
+	readonly content: string;
+	readonly contentHash: string | null;
+	readonly agentId: string | null;
+	readonly knownCrossAgentHashConflict?: 0 | 1;
+}
+
+export interface StaleEmbeddingRow {
+	readonly id: string;
+	readonly content: string;
+	readonly contentHash: string;
+	readonly currentModel: string | null;
+}
+
+export interface MigrationEmbeddingRow extends UnembeddedRow {
+	readonly currentModel: string | null;
+	readonly currentDimensions: number | null;
+}
+
+export interface MigrationEmbeddingSource {
+	readonly model: string | null;
+	readonly dimensions: number | null;
+	readonly count: number;
+}
+
+const migrationWhere = `COALESCE(NULLIF(m.agent_id, ''), 'default') = ? AND m.is_deleted = 0 AND m.content_hash IS NOT NULL AND trim(m.content_hash) <> ''
+			 AND (? = 1 OR m.embedding_model IS NULL OR m.embedding_model <> ? OR NOT EXISTS (
+			 SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id AND e.dimensions = ?))`;
+
+export function listEmbeddingMigrationRows(
+	db: ReadDb,
+	model: string,
+	dimensions: number,
+	all: boolean,
+	limit: number,
+	agentId: string,
+): ReadonlyArray<MigrationEmbeddingRow> {
+	return db
+		.prepare(
+			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId, m.embedding_model AS currentModel,
+				(SELECT e.dimensions FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id LIMIT 1) AS currentDimensions
+			 FROM memories m WHERE ${migrationWhere}
+			 ORDER BY m.updated_at ASC LIMIT ?`,
+		)
+		.all(agentId, all ? 1 : 0, model, dimensions, limit) as MigrationEmbeddingRow[];
+}
+
+export function countEmbeddingMigrationRows(
+	db: ReadDb,
+	model: string,
+	dimensions: number,
+	all: boolean,
+	agentId: string,
+): number {
+	return count(
+		db,
+		`SELECT COUNT(*) AS n FROM memories m WHERE ${migrationWhere}`,
+		agentId,
+		all ? 1 : 0,
+		model,
+		dimensions,
+	);
+}
+
+export function listEmbeddingMigrationSources(
+	db: ReadDb,
+	model: string,
+	dimensions: number,
+	all: boolean,
+	agentId: string,
+): ReadonlyArray<MigrationEmbeddingSource> {
+	return db
+		.prepare(
+			`SELECT m.embedding_model AS model,
+				(SELECT e.dimensions FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id LIMIT 1) AS dimensions,
+				COUNT(*) AS count
+			 FROM memories m WHERE ${migrationWhere}
+			 GROUP BY m.embedding_model, dimensions
+			 ORDER BY count DESC, model ASC`,
+		)
+		.all(agentId, all ? 1 : 0, model, dimensions) as MigrationEmbeddingSource[];
+}
+
+function count(db: ReadDb, sql: string, ...args: readonly unknown[]): number {
+	const row = db.prepare(sql).get(...args) as { n: number } | undefined;
+	return row?.n ?? 0;
+}
+
+const sameAgentHashOwner = `
+			   AND EXISTS (
+			     SELECT 1 FROM memories owner
+			     WHERE owner.id = e.source_id
+			       AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
+			   )`;
+
+const crossAgentHashConflict = `EXISTS (
+			 SELECT 1 FROM embeddings e
+			 WHERE e.source_type = 'memory'
+			   AND e.content_hash = m.content_hash
+			   AND COALESCE(NULLIF(e.agent_id, ''), 'default') <> COALESCE(NULLIF(m.agent_id, ''), 'default')
+		   )`;
+function embeddingRepairBackoffFilter(
+	model: string | undefined,
+	now: string,
+): { readonly clause: string; readonly params: readonly string[] } {
+	if (model === undefined) return { clause: "", params: [] };
+	return {
+		clause: `AND NOT EXISTS (
+		     SELECT 1 FROM embedding_repair_backoff b
+		     WHERE b.memory_id = m.id
+		       AND b.model = ?
+		       AND (m.content_hash IS NULL OR b.content_hash = m.content_hash)
+		       AND b.retry_at > ?
+		   )`,
+		params: [model, now],
+	};
+}
+
+export function countUnembeddedMemories(db: ReadDb, agentId: string): number {
+	return count(
+		db,
+		`SELECT COUNT(*) AS n FROM memories m
+		 WHERE m.is_deleted = 0
+		   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
+		   AND NOT EXISTS (
+		     SELECT 1 FROM embeddings e
+		     WHERE e.source_type = 'memory' AND e.source_id = m.id
+		   )
+		   AND NOT EXISTS (
+		     SELECT 1 FROM embeddings e
+		     WHERE e.source_type = 'memory'${sameAgentHashOwner}
+		       AND m.content_hash IS NOT NULL
+		       AND e.content_hash = m.content_hash
+		   )`,
+		agentId,
+	);
+}
+
+export function listUnembeddedMemories(
+	db: ReadDb,
+	limit: number,
+	agentId: string,
+	model?: string,
+	now = new Date().toISOString(),
+): ReadonlyArray<UnembeddedRow> {
+	const backoff = embeddingRepairBackoffFilter(model, now);
+	return db
+		.prepare(
+			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
+				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
+			 FROM memories m
+			 WHERE m.is_deleted = 0
+			   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
+			   ${backoff.clause}
+			   AND NOT EXISTS (
+			     SELECT 1 FROM embeddings e
+			     WHERE e.source_type = 'memory' AND e.source_id = m.id
+			   )
+			   AND NOT EXISTS (
+			     SELECT 1 FROM embeddings e
+			     WHERE e.source_type = 'memory'${sameAgentHashOwner}
+			       AND m.content_hash IS NOT NULL
+			       AND e.content_hash = m.content_hash
+			   )
+			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
+			 LIMIT ?`,
+		)
+		.all(agentId, ...backoff.params, limit) as UnembeddedRow[];
+}
+
+export function countAllUnembeddedMemories(db: ReadDb): number {
+	return count(
+		db,
+		`SELECT COUNT(*) AS n FROM memories m
+		 WHERE m.is_deleted = 0
+		   AND NOT EXISTS (
+		     SELECT 1 FROM embeddings e
+		     WHERE e.source_type = 'memory' AND e.source_id = m.id
+		   )
+		   AND NOT EXISTS (
+		     SELECT 1 FROM embeddings e
+		     WHERE e.source_type = 'memory'${sameAgentHashOwner}
+		       AND m.content_hash IS NOT NULL
+		       AND e.content_hash = m.content_hash
+		   )`,
+	);
+}
+
+export function listAllUnembeddedMemories(
+	db: ReadDb,
+	limit: number,
+	model?: string,
+	now = new Date().toISOString(),
+): ReadonlyArray<UnembeddedRow> {
+	const backoff = embeddingRepairBackoffFilter(model, now);
+	return db
+		.prepare(
+			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
+				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
+			 FROM memories m
+			 WHERE m.is_deleted = 0
+			   ${backoff.clause}
+			   AND NOT EXISTS (
+			     SELECT 1 FROM embeddings e
+			     WHERE e.source_type = 'memory' AND e.source_id = m.id
+			   )
+			   AND NOT EXISTS (
+			     SELECT 1 FROM embeddings e
+			     WHERE e.source_type = 'memory'${sameAgentHashOwner}
+			       AND m.content_hash IS NOT NULL
+			       AND e.content_hash = m.content_hash
+			   )
+			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
+			 LIMIT ?`,
+		)
+		.all(...backoff.params, limit) as UnembeddedRow[];
+}
+
+export function listStaleEmbeddingRows(
+	db: ReadDb,
+	model: string,
+	limit: number,
+	now = new Date().toISOString(),
+): ReadonlyArray<StaleEmbeddingRow> {
+	return db
+		.prepare(
+			`SELECT m.id, m.content, m.content_hash AS contentHash,
+			        m.embedding_model AS currentModel
+			 FROM memories m
+			 LEFT JOIN embedding_repair_backoff b
+			   ON b.memory_id = m.id AND b.content_hash = m.content_hash AND b.model = ?
+			 WHERE m.is_deleted = 0
+			   AND m.content_hash IS NOT NULL
+			   AND trim(m.content_hash) <> ''
+			   AND (b.retry_at IS NULL OR b.retry_at <= ?)
+			   AND (
+			     (
+			       NOT EXISTS (
+			         SELECT 1 FROM embeddings e
+			         WHERE e.source_type = 'memory' AND e.source_id = m.id
+			       )
+			       AND NOT EXISTS (
+			         SELECT 1 FROM embeddings e
+			         WHERE e.source_type = 'memory' AND e.content_hash = m.content_hash
+			       )
+			     )
+			     OR EXISTS (
+			       SELECT 1 FROM embeddings e
+			       WHERE e.source_type = 'memory'
+			         AND e.source_id = m.id
+			         AND e.content_hash <> m.content_hash
+			     )
+			     OR (m.embedding_model IS NOT NULL AND m.embedding_model <> ?)
+			   )
+			 ORDER BY m.updated_at DESC
+			 LIMIT ?`,
+		)
+		.all(model, now, model, limit) as StaleEmbeddingRow[];
+}

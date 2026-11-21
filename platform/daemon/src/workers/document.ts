@@ -1,0 +1,705 @@
+import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../runtime/concurrency/admission";
+import { normalizeAndHashContent } from "../recall/text/content-normalization";
+import type { DbAccessor, WriteDb } from "../db/owner/accessor";
+import { syncVecInsert, vectorToBlob } from "../db/owner/helpers";
+import type { DbOwnerMaintenance } from "../db/maintenance/maintenance";
+import { ownerQueryOne } from "../db/maintenance/maintenance";
+import type { EmbeddingFetchOptions } from "../inference/embeddings/fetch";
+import { isActiveEmbeddingConfig } from "../embeddings/index/state";
+import type { EmbeddingRole } from "../embeddings/index/profile";
+import { logger } from "../runtime/logging/logger";
+import type { EmbeddingConfig, PipelineV2Config } from "../config/memory-config";
+import { isPipelineTimeout, recordPipelineError } from "../runtime/logging/pipeline-error";
+import {
+	type PipelineCauseFamily,
+	normalizePipelineCause,
+	recordPipelineOperation,
+} from "../runtime/logging/pipeline-operation";
+import { isSystemPressureHigh } from "../telemetry/pressure/system-pressure";
+import { txIngestEnvelope } from "../memory/transactions";
+import { fetchUrlContent } from "../sources/providers/web/url-fetcher";
+
+async function writeTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise<T> {
+	const writer = accessor.withWriteTxAsync;
+	if (!writer) throw new Error("async write API is unavailable");
+	return writer(fn);
+}
+
+export interface DocumentWorkerHandle {
+	stop(): Promise<void>;
+	readonly running: boolean;
+	readonly inFlight: number;
+	readonly maxInFlight: number;
+}
+export const DOCUMENT_WORK_MAX_IN_FLIGHT = 2;
+
+const sharedDocumentAdmission = createConcurrencyAdmission(DOCUMENT_WORK_MAX_IN_FLIGHT);
+
+export interface DocumentWorkerDeps {
+	readonly accessor: DbAccessor;
+	readonly admission?: ConcurrencyAdmission;
+	readonly embeddingCfg: EmbeddingConfig;
+	readonly fetchEmbedding: (
+		text: string,
+		cfg: EmbeddingConfig,
+		role?: EmbeddingRole,
+		opts?: EmbeddingFetchOptions,
+	) => Promise<number[] | null>;
+	readonly pipelineCfg: PipelineV2Config;
+	readonly ownerMaintenance?: DbOwnerMaintenance;
+}
+
+interface DocumentJobRow {
+	readonly id: string;
+	readonly memory_id: string | null;
+	readonly document_id: string | null;
+	readonly job_type: string;
+	readonly payload: string | null;
+	readonly attempts: number;
+	readonly max_attempts: number;
+	readonly created_at: string;
+}
+
+interface DocumentProcessResult {
+	readonly accepted: number;
+	readonly skipped: number;
+	readonly failed: number;
+	readonly causeFamily?: PipelineCauseFamily;
+}
+
+interface MutableDocumentOperation {
+	accepted: number;
+	skipped: number;
+	failed: number;
+	cancelled: boolean;
+	operationClass: "indexing" | "extraction";
+	causeFamily?: PipelineCauseFamily;
+}
+
+interface DocumentRow {
+	readonly id: string;
+	readonly source_url: string | null;
+	readonly source_type: string;
+	readonly content_type: string | null;
+	readonly title: string | null;
+	readonly raw_content: string | null;
+	readonly status: string;
+	readonly error: string | null;
+	readonly agent_id: string;
+	readonly project: string | null;
+}
+
+function readDocumentScope(doc: DocumentRow): { agentId: string; project: string | null } {
+	return {
+		agentId: doc.agent_id.trim() || "default",
+		project: doc.project?.trim() || null,
+	};
+}
+
+function chunkText(text: string, chunkSize: number, overlap: number): readonly string[] {
+	if (text.length <= chunkSize) return [text];
+
+	const chunks: string[] = [];
+	let start = 0;
+
+	while (start < text.length) {
+		const end = Math.min(start + chunkSize, text.length);
+		chunks.push(text.slice(start, end));
+		const next = end - overlap;
+		if (next <= start) break;
+		start = next;
+	}
+
+	return chunks;
+}
+
+function leaseDocumentJob(db: WriteDb, maxAttempts: number): DocumentJobRow | null {
+	const now = new Date().toISOString();
+
+	const row = db
+		.prepare(
+			`SELECT id, memory_id, document_id, job_type, payload,
+			        attempts, max_attempts, created_at
+			 FROM memory_jobs
+			 WHERE job_type = 'document_ingest'
+			   AND status = 'pending'
+			   AND attempts < ?
+			 ORDER BY created_at ASC
+			 LIMIT 1`,
+		)
+		.get(maxAttempts) as DocumentJobRow | undefined;
+
+	if (!row) return null;
+
+	db.prepare(
+		`UPDATE memory_jobs
+		 SET status = 'leased', leased_at = ?,
+		     attempts = attempts + 1, updated_at = ?
+		 WHERE id = ?`,
+	).run(now, now, row.id);
+
+	return { ...row, attempts: row.attempts + 1 };
+}
+
+function completeJob(db: WriteDb, jobId: string): void {
+	const now = new Date().toISOString();
+	db.prepare(
+		`UPDATE memory_jobs
+		 SET status = 'completed', completed_at = ?, updated_at = ?
+		 WHERE id = ?`,
+	).run(now, now, jobId);
+}
+
+function failJob(db: WriteDb, jobId: string, error: string, attempts: number, maxAttempts: number): void {
+	const now = new Date().toISOString();
+	const nextStatus = attempts >= maxAttempts ? "dead" : "pending";
+	db.prepare(
+		`UPDATE memory_jobs
+		 SET status = ?, error = ?, failed_at = ?, updated_at = ?
+		 WHERE id = ?`,
+	).run(nextStatus, error, now, now, jobId);
+}
+
+function isDocumentDeleted(db: WriteDb, docId: string): boolean {
+	const row = db.prepare("SELECT status FROM documents WHERE id = ?").get(docId) as { status: string } | undefined;
+	return row?.status === "deleted";
+}
+
+function updateDocumentStatus(db: WriteDb, docId: string, status: string, error?: string): void {
+	const now = new Date().toISOString();
+	if (error !== undefined) {
+		db.prepare(
+			`UPDATE documents
+			 SET status = ?, error = ?, updated_at = ?
+			 WHERE id = ? AND status != 'deleted'`,
+		).run(status, error, now, docId);
+	} else {
+		db.prepare(
+			`UPDATE documents
+			 SET status = ?, updated_at = ?
+			 WHERE id = ? AND status != 'deleted'`,
+		).run(status, now, docId);
+	}
+}
+
+function completeDocument(db: WriteDb, docId: string, chunkCount: number, memoryCount: number): void {
+	const now = new Date().toISOString();
+	db.prepare(
+		`UPDATE documents
+		 SET status = 'done', chunk_count = ?, memory_count = ?,
+		     completed_at = ?, updated_at = ?
+		 WHERE id = ? AND status != 'deleted'`,
+	).run(chunkCount, memoryCount, now, now, docId);
+}
+
+export async function enqueueDocumentIngestJob(accessor: DbAccessor, documentId: string): Promise<string | null> {
+	return writeTx(accessor, (db) => {
+		const existing = db
+			.prepare(
+				`SELECT 1 FROM memory_jobs
+				 WHERE document_id = ? AND job_type = 'document_ingest'
+				   AND status IN ('pending', 'leased')
+				 LIMIT 1`,
+			)
+			.get(documentId);
+		if (existing) return null;
+
+		const id = crypto.randomUUID();
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memory_jobs
+			 (id, memory_id, document_id, job_type, status,
+			  attempts, max_attempts, created_at, updated_at)
+			 VALUES (?, NULL, ?, 'document_ingest', 'pending', 0, ?, ?, ?)`,
+		).run(id, documentId, 3, now, now);
+
+		return id;
+	});
+}
+
+async function processDocument(
+	deps: DocumentWorkerDeps,
+	job: DocumentJobRow,
+	operation: MutableDocumentOperation,
+): Promise<DocumentProcessResult> {
+	const { accessor, embeddingCfg, fetchEmbedding, pipelineCfg } = deps;
+	operation.operationClass = "indexing";
+	const docId = job.document_id;
+	if (!docId) {
+		throw new Error("document_ingest job missing document_id");
+	}
+
+	const doc = deps.ownerMaintenance
+		? await ownerQueryOne<DocumentRow>(
+				deps.ownerMaintenance.owner,
+				"pipeline.document-worker.document-read",
+				"SELECT * FROM documents WHERE id = ?",
+				[docId],
+			)
+		: await accessor.withReadDbAsync(
+				async (db) => {
+					return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
+				},
+				{ siteToken: "workers/document.ts:239" },
+			);
+
+	if (!doc) {
+		throw new Error(`Document ${docId} not found`);
+	}
+
+	if (doc.status === "done" || doc.status === "deleted") {
+		await writeTx(accessor, (db) => completeJob(db, job.id));
+		operation.skipped++;
+		return { accepted: 0, skipped: 1, failed: 0 };
+	}
+	const documentScope = readDocumentScope(doc);
+	await writeTx(accessor, (db) => updateDocumentStatus(db, docId, "extracting"));
+
+	let content: string;
+	let title = doc.title;
+
+	try {
+		if (doc.source_type === "url" && doc.source_url) {
+			const result = await fetchUrlContent(doc.source_url, {
+				maxBytes: pipelineCfg.documents.maxContentBytes,
+			});
+			content = result.content;
+			if (result.title && !title) title = result.title;
+		} else {
+			content = doc.raw_content ?? "";
+		}
+	} catch (err) {
+		operation.operationClass = "extraction";
+		recordPipelineError("extraction", isPipelineTimeout(err) ? "EXTRACTION_TIMEOUT" : "EXTRACTION_PARSE_FAIL");
+		throw err;
+	}
+
+	let deletedAfterExtraction = false;
+	await writeTx(accessor, (db) => {
+		if (isDocumentDeleted(db, docId)) {
+			completeJob(db, job.id);
+			deletedAfterExtraction = true;
+		}
+	});
+	if (deletedAfterExtraction) {
+		operation.skipped++;
+		operation.cancelled = true;
+		return { accepted: 0, skipped: 1, failed: 0 };
+	}
+
+	if (content.length === 0) {
+		operation.operationClass = "extraction";
+		recordPipelineError("extraction", "EXTRACTION_PARSE_FAIL");
+		let deletedWhileEmpty = false;
+		await writeTx(accessor, (db) => {
+			if (isDocumentDeleted(db, docId)) {
+				completeJob(db, job.id);
+				deletedWhileEmpty = true;
+				return;
+			}
+			updateDocumentStatus(db, docId, "failed", "Empty content");
+			failJob(db, job.id, "Empty content", job.attempts, job.max_attempts);
+		});
+		if (deletedWhileEmpty) {
+			operation.skipped++;
+			operation.cancelled = true;
+			return {
+				accepted: operation.accepted,
+				skipped: operation.skipped,
+				failed: operation.failed,
+				causeFamily: operation.causeFamily,
+			};
+		}
+		if (job.attempts >= job.max_attempts) {
+			operation.skipped++;
+			operation.failed++;
+			operation.causeFamily ??= "invalid_input";
+		}
+		return {
+			accepted: 0,
+			skipped: job.attempts >= job.max_attempts ? 1 : 0,
+			failed: job.attempts >= job.max_attempts ? 1 : 0,
+			causeFamily: "invalid_input",
+		};
+	}
+	if (title && title !== doc.title) {
+		await writeTx(accessor, (db) => {
+			db.prepare("UPDATE documents SET title = ?, updated_at = ? WHERE id = ? AND status != 'deleted'").run(
+				title,
+				new Date().toISOString(),
+				docId,
+			);
+		});
+	}
+	await writeTx(accessor, (db) => updateDocumentStatus(db, docId, "chunking"));
+
+	const chunks = chunkText(content, pipelineCfg.documents.chunkSize, pipelineCfg.documents.chunkOverlap);
+
+	await writeTx(accessor, (db) => {
+		db.prepare("UPDATE documents SET chunk_count = ?, updated_at = ? WHERE id = ? AND status != 'deleted'").run(
+			chunks.length,
+			new Date().toISOString(),
+			docId,
+		);
+	});
+	await writeTx(accessor, (db) => updateDocumentStatus(db, docId, "embedding"));
+
+	let memoriesCreated = 0;
+
+	let aborted = false;
+	for (let i = 0; i < chunks.length; i++) {
+		const chunkText = chunks[i];
+		if (!chunkText || chunkText.trim().length === 0) {
+			operation.skipped++;
+			continue;
+		}
+		const vector = await fetchEmbedding(chunkText, embeddingCfg, "document", {
+			usage: { source: "artifact-index", agentId: documentScope.agentId },
+			onFailure: (causeFamily) => {
+				operation.failed++;
+				operation.causeFamily ??= causeFamily;
+			},
+		});
+		await writeTx(accessor, (db) => {
+			if (isDocumentDeleted(db, docId)) {
+				completeJob(db, job.id);
+				aborted = true;
+				operation.cancelled = true;
+				return;
+			}
+			const normalized = normalizeAndHashContent(chunkText);
+			const canStoreVector = vector !== null && isActiveEmbeddingConfig(db, embeddingCfg);
+			const existingLink = db
+				.prepare(
+					`SELECT dm.memory_id FROM document_memories dm
+					 JOIN memories m ON m.id = dm.memory_id
+					 WHERE dm.document_id = ? AND m.content_hash = ?
+					   AND m.is_deleted = 0
+					 LIMIT 1`,
+				)
+				.get(docId, normalized.contentHash);
+			if (existingLink) {
+				operation.skipped++;
+				return;
+			}
+
+			const now = new Date().toISOString();
+			const existingScopedMemory = db
+				.prepare(
+					`SELECT id FROM memories
+					 WHERE content_hash = ?
+					   AND COALESCE(NULLIF(agent_id, ''), 'default') = ?
+					   AND COALESCE(project, '') = COALESCE(?, '')
+					   AND COALESCE(scope, '__NULL__') = '__NULL__'
+					   AND visibility = 'private'
+					   AND type = 'document_chunk'
+					   AND source_type = 'document'
+					   AND is_deleted = 0
+					 LIMIT 1`,
+				)
+				.get(normalized.contentHash, documentScope.agentId, documentScope.project) as { id: string } | undefined;
+			const memId = existingScopedMemory?.id ?? crypto.randomUUID();
+
+			if (!existingScopedMemory) {
+				txIngestEnvelope(db, {
+					id: memId,
+					content: normalized.storageContent,
+					normalizedContent: normalized.normalizedContent,
+					contentHash: normalized.contentHash,
+					who: docId,
+					why: "document_ingest",
+					project: documentScope.project,
+					importance: 0.3,
+					type: "document_chunk",
+					tags: title ? `document:${title}` : null,
+					pinned: 0,
+					isDeleted: 0,
+					extractionStatus: "none",
+					embeddingModel: canStoreVector ? embeddingCfg.model : null,
+					extractionModel: null,
+					updatedBy: "document-worker",
+					memoryKind: "episodic",
+					sourceType: "document",
+					sourceId: docId,
+					agentId: documentScope.agentId,
+					visibility: "private",
+					createdAt: now,
+				});
+			}
+			db.prepare(
+				`INSERT OR IGNORE INTO document_memories
+				 (document_id, memory_id, chunk_index)
+				 VALUES (?, ?, ?)`,
+			).run(docId, memId, i);
+			if (canStoreVector && vector) {
+				if (vector.length !== embeddingCfg.dimensions) {
+					logger.warn("document-worker", "Embedding dimension mismatch, skipping vector insert", {
+						got: vector.length,
+						expected: embeddingCfg.dimensions,
+						documentId: docId,
+					});
+				} else {
+					const embId = crypto.randomUUID();
+					const blob = vectorToBlob(vector);
+					const embeddingHash = `memory:${documentScope.agentId}:${memId}:${normalized.contentHash}`;
+					db.prepare(
+						`INSERT INTO embeddings
+						 (id, content_hash, vector, dimensions, source_type,
+						  source_id, chunk_text, created_at, agent_id)
+						 VALUES (?, ?, ?, ?, 'memory', ?, ?, ?, ?)
+						 ON CONFLICT(content_hash) DO UPDATE SET
+						   vector = excluded.vector,
+						   dimensions = excluded.dimensions`,
+					).run(embId, embeddingHash, blob, vector.length, memId, chunkText, now, documentScope.agentId);
+					const actualEmbRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embeddingHash) as
+						| { id: string }
+						| undefined;
+					if (actualEmbRow) {
+						syncVecInsert(db, actualEmbRow.id, vector);
+					}
+				}
+			}
+
+			memoriesCreated++;
+			operation.accepted++;
+		});
+		if (aborted) {
+			operation.skipped++;
+			return {
+				accepted: operation.accepted,
+				skipped: operation.skipped,
+				failed: operation.failed,
+				causeFamily: operation.causeFamily,
+			};
+		}
+	}
+	await writeTx(accessor, (db) => {
+		updateDocumentStatus(db, docId, "indexing");
+	});
+
+	await writeTx(accessor, (db) => {
+		if (isDocumentDeleted(db, docId)) {
+			completeJob(db, job.id);
+			aborted = true;
+			operation.cancelled = true;
+			return;
+		}
+		completeDocument(db, docId, chunks.length, memoriesCreated);
+		completeJob(db, job.id);
+	});
+	if (aborted) {
+		operation.skipped++;
+		return {
+			accepted: operation.accepted,
+			skipped: operation.skipped,
+			failed: operation.failed,
+			causeFamily: operation.causeFamily,
+		};
+	}
+
+	logger.info("document-worker", "Document processed", {
+		documentId: docId,
+		chunks: chunks.length,
+		memories: memoriesCreated,
+		title: title ?? "(untitled)",
+	});
+	return {
+		accepted: operation.accepted,
+		skipped: operation.skipped,
+		failed: operation.failed,
+		causeFamily: operation.causeFamily,
+	};
+}
+
+export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHandle {
+	let running = true;
+	let timer: ReturnType<typeof setInterval> | null = null;
+	const admission = deps.admission ?? sharedDocumentAdmission;
+	const operations = new Map<
+		string,
+		{ readonly startedAtMs: number; readonly firstLeaseAtMs: number; readonly state: MutableDocumentOperation }
+	>();
+
+	async function terminalStatus(jobId: string): Promise<string | null> {
+		if (deps.ownerMaintenance) {
+			const row = await ownerQueryOne<{ status?: string }>(
+				deps.ownerMaintenance.owner,
+				"pipeline.document-worker.terminal-status",
+				"SELECT status FROM memory_jobs WHERE id = ?",
+				[jobId],
+			);
+			return row?.status ?? null;
+		}
+		return deps.accessor.withReadDbAsync(
+			async (db) => {
+				const row = db.prepare("SELECT status FROM memory_jobs WHERE id = ?").get(jobId) as
+					| { status?: string }
+					| undefined;
+				return row?.status ?? null;
+			},
+			{ siteToken: "workers/document.ts:533" },
+		);
+	}
+
+	async function emitOperation(
+		job: DocumentJobRow,
+		operation: {
+			readonly startedAtMs: number;
+			readonly firstLeaseAtMs: number;
+			readonly state: MutableDocumentOperation;
+		},
+	): Promise<void> {
+		const { state } = operation;
+		if (job.document_id) {
+			const durable = deps.ownerMaintenance
+				? await ownerQueryOne<{ chunk_count?: number | null; memory_count?: number | null }>(
+						deps.ownerMaintenance.owner,
+						"pipeline.document-worker.document-progress",
+						"SELECT chunk_count, memory_count FROM documents WHERE id = ?",
+						[job.document_id],
+					)
+				: await deps.accessor.withReadDbAsync(
+						async (db) =>
+							db.prepare("SELECT chunk_count, memory_count FROM documents WHERE id = ?").get(job.document_id) as
+								| { chunk_count?: number | null; memory_count?: number | null }
+								| undefined,
+						{ siteToken: "workers/document.ts:561" },
+					);
+			const durableLinks = deps.ownerMaintenance
+				? await ownerQueryOne<{ count?: number | null }>(
+						deps.ownerMaintenance.owner,
+						"pipeline.document-worker.document-links",
+						"SELECT COUNT(*) AS count FROM document_memories WHERE document_id = ?",
+						[job.document_id],
+					)
+				: await deps.accessor.withReadDbAsync(
+						async (db) =>
+							db
+								.prepare("SELECT COUNT(*) AS count FROM document_memories WHERE document_id = ?")
+								.get(job.document_id) as { count?: number | null } | undefined,
+						{ siteToken: "workers/document.ts:575" },
+					);
+			if (durable) {
+				const accepted =
+					typeof durableLinks?.count === "number"
+						? durableLinks.count
+						: typeof durable.memory_count === "number"
+							? durable.memory_count
+							: 0;
+				const chunks = typeof durable.chunk_count === "number" ? durable.chunk_count : 0;
+				state.accepted = Math.max(state.accepted, accepted);
+				if (chunks > 0) state.skipped = Math.min(state.skipped, Math.max(0, chunks - accepted));
+			}
+		}
+		const outcome = state.cancelled
+			? "cancelled"
+			: state.failed > 0
+				? state.accepted > 0
+					? "partial"
+					: "failed"
+				: state.skipped > 0 && state.accepted === 0
+					? "skipped"
+					: "completed";
+		recordPipelineOperation({
+			operationClass: state.operationClass,
+			outcome,
+			accepted: state.accepted,
+			skipped: state.skipped,
+			retried: Math.max(0, job.attempts - 1),
+			failed: state.failed,
+			durationMs: Date.now() - operation.startedAtMs,
+			queueAgeMs: operation.firstLeaseAtMs - Date.parse(job.created_at),
+			causeFamily: state.causeFamily,
+		});
+	}
+
+	async function tick(): Promise<void> {
+		if (!running) return;
+		if (isSystemPressureHigh()) return;
+		if (!admission.acquire()) return;
+
+		try {
+			const leasedAt = Date.now();
+			const job = await writeTx(deps.accessor, (db) => leaseDocumentJob(db, deps.pipelineCfg.worker.maxRetries));
+
+			if (!job) return;
+			const operation = operations.get(job.id) ?? {
+				startedAtMs: leasedAt,
+				firstLeaseAtMs: leasedAt,
+				state: { accepted: 0, skipped: 0, failed: 0, cancelled: false, operationClass: "indexing" },
+			};
+			operations.set(job.id, operation);
+
+			try {
+				await processDocument(deps, job, operation.state);
+				const status = await terminalStatus(job.id);
+				if (status === "completed" || status === "dead") {
+					await emitOperation(job, operation);
+					operations.delete(job.id);
+				}
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				logger.warn("document-worker", "Job failed", {
+					jobId: job.id,
+					documentId: job.document_id,
+					error: msg,
+				});
+
+				await writeTx(deps.accessor, (db) => {
+					if (job.document_id && isDocumentDeleted(db, job.document_id)) {
+						completeJob(db, job.id);
+						operation.state.skipped++;
+						operation.state.cancelled = true;
+						return;
+					}
+					failJob(db, job.id, msg, job.attempts, job.max_attempts);
+					if (job.document_id) {
+						updateDocumentStatus(db, job.document_id, "failed", msg);
+					}
+				});
+				operation.state.causeFamily ??= normalizePipelineCause(err);
+				const status = await terminalStatus(job.id);
+				if (status === "dead") {
+					operation.state.failed++;
+				}
+				if (status === "dead" || status === "completed") {
+					await emitOperation(job, operation);
+					operations.delete(job.id);
+				}
+			}
+		} finally {
+			admission.release();
+		}
+	}
+
+	timer = setInterval(() => {
+		if (!running) return;
+		tick().catch((e) => {
+			logger.warn("document-worker", "Tick error", {
+				error: String(e),
+			});
+		});
+	}, deps.pipelineCfg.documents.workerIntervalMs);
+
+	logger.info("document-worker", "Worker started", {
+		intervalMs: deps.pipelineCfg.documents.workerIntervalMs,
+		chunkSize: deps.pipelineCfg.documents.chunkSize,
+	});
+
+	return {
+		async stop() {
+			running = false;
+			if (timer) clearInterval(timer);
+			logger.info("document-worker", "Worker stopped");
+		},
+		get running() {
+			return running;
+		},
+		get inFlight() {
+			return admission.inFlight();
+		},
+		get maxInFlight() {
+			return admission.maxInFlight;
+		},
+	};
+}

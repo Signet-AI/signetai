@@ -12,7 +12,7 @@ Why: transcripts are evidence. Injected context in a transcript would be re-inge
 
 Why: a clock-only change must not change the memory-context hash, or every turn would look like new context and break provider prompt caching.
 
-Owner: `platform/daemon/src/hooks.ts`.
+Owner: `platform/daemon/src/http/hooks/hooks.ts`.
 
 ## Composed bytes are the replay contract
 
@@ -26,7 +26,7 @@ Owner: `platform/core/src/memory-context.ts`, the harness plugins under `integra
 
 Automatic prompt recall skips greetings and acknowledgements and records a `skipped_low_signal` outcome. The gate is conservative so that short identifiers, project names, and terse corrections still get recall. It never applies to explicit recall or remember tools.
 
-Owner: `platform/daemon/src/hooks.ts`.
+Owner: `platform/daemon/src/http/hooks/hooks.ts`.
 
 ## The stable prompt describes capability, not tools
 
@@ -34,19 +34,19 @@ The session-start capability prompt does not list tool names, slash commands, id
 
 Why: the harness already exposes current tool names and schemas. A second inventory in Signet would drift from the real one.
 
-Owner: `platform/daemon/src/session-start-format.ts`.
+Owner: `platform/daemon/src/recall/context/session-start-format.ts`.
 
 ## Startup only delivers a current head
 
 Session start delivers generated memory text only from a current, scoped database head. A stale or unavailable head is withheld, and ordinary recall still supplies current evidence. Nothing can retract text already loaded into an active chat, so withholding is the only safe choice.
 
-Owner: `platform/daemon/src/memory-head-owner.ts`.
+Owner: `platform/daemon/src/dreaming/head/owner.ts`.
 
 ## Delivery is not processing
 
 Injecting a cross-agent message into a model's context does not prove the recipient acted on it, so delivery never acknowledges or deletes a message. A wake is a delivery attempt and never acknowledges either. Unacknowledged messages keep appearing at compatible hooks until the recipient acknowledges them.
 
-Owner: `platform/daemon/src/cross-agent.ts`, `platform/daemon/src/cross-agent-wake.ts`.
+Owner: `platform/daemon/src/agents/cross-agent/messages.ts`, `platform/daemon/src/agents/cross-agent/wake.ts`.
 
 ## Harness sub-agent IDs are lineage, not identity
 
@@ -54,10 +54,10 @@ A harness's sub-agent identifier, such as Claude Code's hook `agent_id`, is line
 
 Why: using it would silently fork user memory into a new scope for every sub-agent.
 
-Owner: `platform/daemon/src/subagent-context.ts`, `surfaces/cli/src/commands/hook.ts`.
+Owner: `platform/daemon/src/agents/cross-agent/subagent-context.ts`, `surfaces/cli/src/commands/hook.ts`.
 
 ## Recovery matches on real paths
 
 Session recovery compares project paths after `realpath()`, so symlinks and aliases neither create false matches nor miss real ones.
 
-Owner: `platform/daemon/src/continuity-state.ts`.
+Owner: `platform/daemon/src/sessions/continuity-state.ts`.

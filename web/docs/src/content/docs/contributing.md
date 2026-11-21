@@ -156,7 +156,7 @@ lifecycle), `policy.ts` (access rules), `rate-limiter.ts`.
 the daemon. `registry.ts` manages connector registration; `filesystem.ts`
 handles connector-driven file operations.
 
-**`platform/daemon/src/analytics.ts`**, **`timeline.ts`**, and
+**`platform/daemon/src/telemetry/usage/analytics.ts`**, **`timeline.ts`**, and
 **`diagnostics.ts`** provide observability. Analytics tracks pipeline
 events; timeline records structured agent history; diagnostics exposes
 health and repair tooling. Tests live alongside each file.

@@ -12,7 +12,7 @@ Owner: `platform/core/src/workspace-layout.ts`.
 
 Before the first rename, the daemon records the planned moves and each source item's filesystem identity in `.workspace-layout-upgrade.json`. `.daemon/` moves last. After an interruption, an already-moved item is accepted only when its destination matches the recorded identity, and layout v2 is written only after no v1 storage path remains. If a journal lacks enough identity to verify a completed move, the daemon stays on v1 and refuses to start rather than guess; the journal lists the planned moves for manual recovery.
 
-Owner: `platform/daemon/src/workspace-layout-upgrade.ts`.
+Owner: `platform/daemon/src/workspace/layout-upgrade.ts`.
 
 ## Existing secret stores stay valid
 
@@ -20,4 +20,4 @@ Existing `$SIGNET_WORKSPACE/.secrets/secrets.enc` files must keep working withou
 
 Why: a failed secret migration locks users out of credentials that Signet cannot regenerate.
 
-Owner: `platform/daemon/src/secrets.ts`.
+Owner: `platform/daemon/src/secrets/secrets.ts`.

@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { EXTERNAL_BUN, EXTERNAL_NODE } from "./build-externals";
 
 const ALIAS: Record<string, string> = {
-	sharp: "./src/shims/sharp.ts",
+	sharp: "./src/inference/embeddings/sharp-shim.ts",
 };
 
 const targets: Array<{
@@ -10,20 +10,29 @@ const targets: Array<{
 	outfile: string;
 }> = [
 	{ entrypoint: "./src/daemon.ts", outfile: "./dist/daemon.js" },
-	{ entrypoint: "./src/mcp-stdio.ts", outfile: "./dist/mcp-stdio.js" },
+	{ entrypoint: "./src/http/mcp/mcp-stdio.ts", outfile: "./dist/mcp-stdio.js" },
 	{ entrypoint: "./src/index.ts", outfile: "./dist/index.js" },
 	{ entrypoint: "../core/src/secrets-keyring-child.ts", outfile: "./dist/secrets-keyring-child.js" },
-	{ entrypoint: "./src/synthesis-render-worker.ts", outfile: "./dist/synthesis-render-worker.js" },
-	{ entrypoint: "./src/database-integrity-worker.ts", outfile: "./dist/database-integrity-worker.js" },
-	{ entrypoint: "./src/db-owner-worker.ts", outfile: "./dist/db-owner-worker.js" },
-	{ entrypoint: "./src/native-memory-source-worker.ts", outfile: "./dist/native-memory-source-worker.js" },
-	{ entrypoint: "./src/embedding-worker.ts", outfile: "./dist/embedding-worker.js" },
-	{ entrypoint: "./src/harness-install-worker.ts", outfile: "./dist/harness-install-worker.js" },
-	{ entrypoint: "./src/harness-health-worker.ts", outfile: "./dist/harness-health-worker.js" },
-	{ entrypoint: "./src/pipeline/dreaming-token-worker.ts", outfile: "./dist/dreaming-token-worker.js" },
-	{ entrypoint: "./src/pipeline/pi-agent-worker.ts", outfile: "./dist/pi-agent-worker.js" },
-	{ entrypoint: "./src/transcript-recovery-child.ts", outfile: "./dist/transcript-recovery-child.js" },
-	{ entrypoint: "./src/transcript-recovery-supervisor.ts", outfile: "./dist/transcript-recovery-supervisor.js" },
+	{ entrypoint: "./src/workers/synthesis/synthesis-render-worker.ts", outfile: "./dist/synthesis-render-worker.js" },
+	{ entrypoint: "./src/db/integrity/database-integrity-worker.ts", outfile: "./dist/database-integrity-worker.js" },
+	{ entrypoint: "./src/db/owner/db-owner-worker.ts", outfile: "./dist/db-owner-worker.js" },
+	{
+		entrypoint: "./src/sources/providers/native-memory/native-memory-source-worker.ts",
+		outfile: "./dist/native-memory-source-worker.js",
+	},
+	{ entrypoint: "./src/inference/embeddings/embedding-worker.ts", outfile: "./dist/embedding-worker.js" },
+	{ entrypoint: "./src/harness/install/harness-install-worker.ts", outfile: "./dist/harness-install-worker.js" },
+	{ entrypoint: "./src/harness/health/harness-health-worker.ts", outfile: "./dist/harness-health-worker.js" },
+	{ entrypoint: "./src/inference/providers/dreaming-token-worker.ts", outfile: "./dist/dreaming-token-worker.js" },
+	{ entrypoint: "./src/inference/providers/pi-agent-worker.ts", outfile: "./dist/pi-agent-worker.js" },
+	{
+		entrypoint: "./src/transcripts/recovery/transcript-recovery-child.ts",
+		outfile: "./dist/transcript-recovery-child.js",
+	},
+	{
+		entrypoint: "./src/transcripts/recovery/transcript-recovery-supervisor.ts",
+		outfile: "./dist/transcript-recovery-supervisor.js",
+	},
 ];
 
 const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";

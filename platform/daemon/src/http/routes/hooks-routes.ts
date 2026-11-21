@@ -1,0 +1,2360 @@
+import { existsSync } from "node:fs";
+import { emptyHookRecallResponse, hashPromptContext, withHookRecallCompat } from "@signet/core";
+import type { Context } from "hono";
+import { updateTranscriptLifecycle } from "../../transcripts/store/lifecycle";
+import { commitCompactionSummary } from "../../transcripts/store/session-transcripts";
+import { DbOwnerError, DbOwnerDiedError, DbOwnerAdmissionError } from "../../db/owner/client";
+
+import type { Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
+import { dbOwnerQuery, ownerStatement } from "../../db/owner/runtime";
+import { getAgentScope, requestedAgentId, resolveAgentId, resolveDaemonAgentId } from "../../agents/identity/agent-id";
+import {
+	aggregateRecall,
+	parseAggregateRecallBudget,
+	readAggregateRecallBudgetInput,
+} from "../../recall/search/aggregate-recall";
+import { checkScope, requirePermission, requireRateLimit } from "../../auth";
+import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../../runtime/concurrency/admission";
+import {
+	type AcpDeliveryAttempt,
+	type AgentMessage,
+	AgentMessageCapacityError,
+	AgentMessageNotFoundError,
+	type AgentMessageType,
+	acknowledgeAgentMessage,
+	claimAcpMessageDelivery,
+	completeAcpMessageDelivery,
+	createAgentMessage,
+	getAgentPresenceForSession,
+	getAgentPresenceForSessionAgent,
+	isMessageVisibleToAgent,
+	listAgentMessagePage,
+	listAgentMessages,
+	listAgentPresence,
+	relayMessageViaAcp,
+	removeAgentPresence,
+	subscribeCrossAgentEvents,
+	touchAgentPresence,
+	upsertAgentPresence,
+} from "../../agents/cross-agent/messages";
+import { boardAuthorAudience, createBoardEventVisibility, resolveBoardViewer } from "../../agents/board/board";
+import {
+	contextFromProject,
+	parsePresenceContext,
+	type AgentPresenceContextPatch,
+} from "../../agents/cross-agent/context";
+import {
+	INSPECT_DEFAULT_MESSAGES,
+	INSPECT_MAX_MESSAGES,
+	canViewSessionOf,
+	resolvePresenceAudience,
+	readTranscriptTail,
+} from "../../agents/cross-agent/inspect";
+import { getDbAccessor } from "../../db/owner/accessor";
+import { fetchEmbedding } from "../../inference/embeddings/fetch";
+import type { EmbeddingRole } from "../../embeddings/index/profile";
+import {
+	type CheckpointExtractRequest,
+	type PreCompactionRequest,
+	type RecallRequest,
+	type RememberRequest,
+	type SessionEndRequest,
+	type SessionStartRequest,
+	type StopResponse,
+	type SynthesisRequest,
+	type UserPromptSubmitRequest,
+	handleCheckpointExtract,
+	handlePreCompaction,
+	handleSessionEnd,
+	handleSessionStart,
+	handleStop,
+	handleSynthesisRequest,
+	handleUserPromptSubmit,
+	resetSessionStartDedupe,
+} from "../hooks/hooks.js";
+import { getInferenceRouterOrNull } from "../../inference/router/router";
+import { fetchInternal } from "../server/internal-fetch.js";
+import { logger } from "../../runtime/logging/logger";
+import { type EmbeddingConfig, loadMemoryConfig } from "../../config/memory-config";
+import { normalizeMarkdownBody, writeCompactionArtifact } from "../../sources/lifecycle/memory-lineage.js";
+import { type RecallParams, hybridRecall } from "../../recall/search/memory-search";
+import {
+	type BoardActivityNotice,
+	type HookNotificationsBlock,
+	appendNotificationInject,
+	collectCrossAgentNotifications,
+	isNotificationCompatibleHook,
+} from "../../agents/cross-agent/notifications";
+import { getSynthesisWorker, readLastSynthesisTime } from "../../workers";
+import {
+	type PipelineCauseFamily,
+	normalizePipelineCause,
+	recordPipelineOperation,
+} from "../../runtime/logging/pipeline-operation";
+import { DEFAULT_SYNTHESIS_WORKER_CONFIG } from "../../workers/synthesis/worker";
+import { openBoundedSse } from "../server/sse-stream.js";
+import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../../telemetry/search/recall";
+import { isNoiseSession } from "../../sessions/noise";
+import { advanceRecallContextEpochAsync } from "../../recall/context/session-recall-dedupe";
+import { recallSessionKey } from "../../sessions/start-state";
+import {
+	type RuntimePath,
+	claimSession,
+	clearEndedSession,
+	getActiveSessions,
+	getEndedSession,
+	getSessionPath,
+	hasSession,
+	isSessionBypassed,
+	markSessionEnded,
+	normalizeSessionKey,
+	releaseSession,
+	renewSession,
+} from "../../sessions/tracker.js";
+import { recordSkillInvocation } from "../../transcripts/capture/skill-invocations";
+import { recordSkillsFromTranscript } from "../../transcripts/capture/skill-transcript-scan";
+import { validateTemporalTimeOptions } from "../../recall/temporal/recall";
+import { getTranscriptCaptureJobStatus } from "../../transcripts/capture/worker";
+import { claimBoardActivityNotices } from "../../agents/board/board";
+import {
+	MAX_WAKE_RELEASE_IDS,
+	MAX_WAKE_WAIT_MS,
+	consumeSessionEndWake,
+	releaseDirectMessageWakes,
+	releaseWakeClaimsWithRetry,
+	waitForDirectMessageWake,
+	wasWokenSince,
+} from "../../agents/cross-agent/wake";
+import { autoConnectGraphiq } from "./graphiq-routes.js";
+import {
+	AGENTS_DIR,
+	INTERNAL_SELF_HOST,
+	PORT,
+	authConfig,
+	authCrossAgentMessageLimiter,
+	authRecallLlmLimiter,
+	getCurrentMemoryDbPath,
+	harnessLastSeen,
+} from "./state";
+import {
+	parseOptionalBoolean,
+	parseOptionalInt,
+	parseOptionalString,
+	readOptionalJsonObject,
+	resolveScopedAgentId,
+	resolveScopedProject,
+	shouldEnforceAuthScope,
+	toRecord,
+	validateSessionAgentBinding,
+	validateSessionControl,
+} from "./utils";
+import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../../db/maintenance/write-pressure";
+
+async function checkTranscriptLifecycle(input: Parameters<typeof updateTranscriptLifecycle>[0]): Promise<void> {
+	try {
+		await updateTranscriptLifecycle(input);
+	} catch (error) {
+		if (
+			!(
+				error instanceof DbOwnerDiedError ||
+				error instanceof DbOwnerAdmissionError ||
+				(error instanceof DbOwnerError &&
+					["DB_OWNER_DEADLINE", "DB_OWNER_CLOSED", "DB_OWNER_START_TIMEOUT", "DB_OWNER_WRITES_BLOCKED"].includes(
+						String(error.code),
+					))
+			)
+		)
+			throw error;
+		logger.warn("hooks", "Transcript lifecycle check unavailable; owner admission still enforces deletion", {
+			action: input.action,
+			error: error.message,
+		});
+	}
+}
+
+export function stampHarness(harness: string | undefined): void {
+	if (harness) {
+		harnessLastSeen.set(harness, new Date().toISOString());
+	}
+}
+export function preferHookRecallCause(
+	current: PipelineCauseFamily | undefined,
+	candidate: PipelineCauseFamily,
+): PipelineCauseFamily {
+	if (candidate === "provider_unavailable") return candidate;
+	return current ?? candidate;
+}
+
+async function recordHookRecallOperation(handler: () => Promise<Response>): Promise<Response> {
+	const startedAt = Date.now();
+	try {
+		const response = await handler();
+		const status = response.status;
+		const skipped = response.headers.get("x-signet-operation-skipped") === "1";
+		const degraded = response.headers.get("x-signet-operation-degraded") === "1";
+		const cause = response.headers.get("x-signet-operation-cause") as PipelineCauseFamily | null;
+		response.headers.delete("x-signet-operation-skipped");
+		response.headers.delete("x-signet-operation-degraded");
+		response.headers.delete("x-signet-operation-cause");
+		const failed = status >= 400 ? 1 : 0;
+		const partial = degraded ? 1 : 0;
+		recordPipelineOperation({
+			operationClass: "recall",
+			outcome: failed > 0 ? "failed" : skipped ? "skipped" : partial > 0 ? "partial" : "completed",
+			accepted: failed > 0 || skipped ? 0 : 1,
+			skipped: skipped ? 1 : 0,
+			retried: 0,
+			failed,
+			durationMs: Date.now() - startedAt,
+			queueAgeMs: 0,
+			causeFamily:
+				failed > 0
+					? (cause ?? normalizePipelineCause({ status }))
+					: partial > 0
+						? (cause ?? "provider_unavailable")
+						: undefined,
+		});
+		return response;
+	} catch (error) {
+		recordPipelineOperation({
+			operationClass: "recall",
+			outcome: "failed",
+			accepted: 0,
+			skipped: 0,
+			retried: 0,
+			failed: 1,
+			durationMs: Date.now() - startedAt,
+			queueAgeMs: 0,
+			causeFamily: normalizePipelineCause(error),
+		});
+		throw error;
+	}
+}
+function resolveRuntimePath(c: Context, body?: { runtimePath?: string }): RuntimePath | undefined {
+	const header = c.req.header("x-signet-runtime-path");
+	const val = header || body?.runtimePath;
+	if (val === "plugin" || val === "legacy") return val;
+	return undefined;
+}
+function checkSessionClaim(
+	c: Context,
+	sessionKey: string | undefined,
+	runtimePath: RuntimePath | undefined,
+	agentId = "default",
+): Response | null {
+	if (!sessionKey || !runtimePath) return null;
+
+	const owner = getSessionPath(sessionKey, agentId);
+	if (owner && owner !== runtimePath) {
+		return c.json({ error: `session claimed by ${owner} path` }, 409) as unknown as Response;
+	}
+	return null;
+}
+
+function claimAutomaticSessionOrSkip(
+	sessionKey: string | undefined,
+	runtimePath: RuntimePath | undefined,
+	agentId: string,
+	harness: string | undefined,
+	hook: string,
+	noop: Record<string, unknown>,
+): Record<string, unknown> | null {
+	if (!sessionKey || !runtimePath) return null;
+
+	const claim = claimSession(sessionKey, runtimePath, agentId, harness);
+	if (claim.ok) return null;
+
+	logger.info("hooks", "Duplicate runtime hook skipped", {
+		hook,
+		sessionKey,
+		runtimePath,
+		claimedBy: claim.claimedBy,
+	});
+	return {
+		...noop,
+		skipped: true,
+		duplicateRuntimePath: true,
+		claimedBy: claim.claimedBy,
+	};
+}
+
+function skipConflictingSessionEnd(
+	sessionKey: string | undefined,
+	runtimePath: RuntimePath | undefined,
+	agentId = "default",
+): Record<string, unknown> | null {
+	if (!sessionKey || !runtimePath) return null;
+	const ended = getEndedSession(sessionKey, agentId);
+	if (ended && !ended.runtimePath) return null;
+	if (ended) {
+		logger.info("hooks", "Duplicate session-end skipped", {
+			sessionKey,
+			runtimePath,
+			endedBy: ended.runtimePath,
+		});
+		return {
+			memoriesSaved: 0,
+			skipped: true,
+			duplicateSessionEnd: true,
+			endedBy: ended.runtimePath ?? "unknown",
+		};
+	}
+	const owner = getSessionPath(sessionKey, agentId);
+	if (!owner || owner === runtimePath) return null;
+
+	logger.info("hooks", "Duplicate runtime session-end skipped", {
+		sessionKey,
+		runtimePath,
+		claimedBy: owner,
+	});
+	return {
+		memoriesSaved: 0,
+		skipped: true,
+		duplicateRuntimePath: true,
+		claimedBy: owner,
+	};
+}
+
+const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/;
+
+function parseIsoTimestamp(value: unknown, field = "createdAt"): { value?: string; error?: string } {
+	const text = parseOptionalString(value);
+	if (!text) return {};
+	if (!ISO_TIMESTAMP_RE.test(text)) return { error: `${field} must be an ISO timestamp` };
+	const ms = Date.parse(text);
+	if (!Number.isFinite(ms)) return { error: `${field} must be a valid timestamp` };
+	return { value: new Date(ms).toISOString() };
+}
+
+function parseOptionalNonNegativeInt(value: unknown): number | undefined {
+	if (typeof value === "number") {
+		return Number.isInteger(value) && value >= 0 ? value : undefined;
+	}
+	if (typeof value !== "string") return undefined;
+	const text = value.trim();
+	if (!/^\d+$/.test(text)) return undefined;
+	const parsed = Number(text);
+	return Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+function isInternalCall(c: Context): boolean {
+	return c.req.header("x-signet-no-hooks") === "1";
+}
+type HookContextResult =
+	| { readonly ok: true; readonly patch: AgentPresenceContextPatch | undefined }
+	| { readonly ok: false; readonly response: Response };
+
+function resolveHookContext(
+	c: Context,
+	raw: unknown,
+	sessionKey: string | undefined,
+	agentId: string,
+): HookContextResult {
+	if (raw === undefined || typeof raw === "string") return { ok: true, patch: undefined };
+	const parsed = parsePresenceContext(raw);
+	if (!parsed.ok) return { ok: false, response: c.json({ error: parsed.error }, 400) };
+	if (parsed.patch && sessionKey) {
+		const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, {
+			requireExisting: false,
+			context: "sessionKey",
+		});
+		if (bindingError) return { ok: false, response: c.json({ error: bindingError }, 403) };
+	}
+	return { ok: true, patch: parsed.patch };
+}
+
+function hookContextDefaults(...candidates: readonly (string | undefined)[]): AgentPresenceContextPatch | undefined {
+	for (const candidate of candidates) {
+		const found = contextFromProject(candidate);
+		if (found) return found;
+	}
+	return undefined;
+}
+
+function checkBypass(body?: { sessionKey?: string; sessionId?: string; agentId?: string }): boolean {
+	const key = body?.sessionKey ?? body?.sessionId;
+	if (!key) return false;
+	return isSessionBypassed(key, resolveAgentId({ agentId: body?.agentId, sessionKey: key }));
+}
+
+interface HookNotificationContext {
+	readonly harness: string;
+	readonly hook: string;
+	readonly agentId: string;
+	readonly sessionKey?: string;
+}
+
+async function boardNoticesForHook(context: HookNotificationContext): Promise<readonly BoardActivityNotice[]> {
+	try {
+		return await claimBoardActivityNotices({ agentId: context.agentId, sessionKey: context.sessionKey });
+	} catch (error) {
+		logger.warn("board", "Board activity notices unavailable for hook", {
+			hook: context.hook,
+			agentId: context.agentId,
+			error: error instanceof Error ? error.message : String(error),
+		});
+		return [];
+	}
+}
+
+async function withCrossAgentNotifications<T extends object>(
+	result: T & {
+		readonly inject?: string;
+		readonly dynamicContext?: string;
+		readonly contextHash?: string;
+		readonly clockContext?: string;
+	},
+	context: HookNotificationContext,
+): Promise<
+	T & {
+		readonly inject: string;
+		readonly dynamicContext?: string;
+		readonly contextHash?: string;
+		readonly clockContext?: string;
+		readonly notifications?: HookNotificationsBlock;
+	}
+> {
+	const boardNotices = await boardNoticesForHook(context);
+	const notifications = collectCrossAgentNotifications({ ...context, boardNotices });
+	const inject = notifications ? appendNotificationInject(result.inject, notifications) : (result.inject ?? "");
+	const dynamicContext =
+		result.dynamicContext === undefined
+			? undefined
+			: notifications
+				? appendNotificationInject(result.dynamicContext, notifications)
+				: result.dynamicContext;
+	const dynamicFields = dynamicContext === undefined ? {} : { dynamicContext };
+	if (!notifications) return { ...result, inject, ...dynamicFields };
+	if (typeof result.contextHash !== "string") return { ...result, inject, ...dynamicFields, notifications };
+	return {
+		...result,
+		inject,
+		...dynamicFields,
+		contextHash: hashPromptContext(inject),
+		notifications,
+	};
+}
+
+export function listLiveSessions(agentId: string): Array<{
+	key: string;
+	runtimePath: string;
+	claimedAt: string;
+	expiresAt: string | null;
+	bypassed: boolean;
+}> {
+	const byKey = new Map<
+		string,
+		{ key: string; runtimePath: string; claimedAt: string; expiresAt: string | null; bypassed: boolean }
+	>(
+		getActiveSessions()
+			.filter((s) => s.agentId === agentId)
+			.map((session) => [session.key, session] as const),
+	);
+
+	for (const presence of listAgentPresence({ limit: Number.MAX_SAFE_INTEGER })) {
+		if (presence.agentId !== agentId) continue;
+		if (!presence.sessionKey) continue;
+		const key = normalizeSessionKey(presence.sessionKey);
+		if (byKey.has(key)) continue;
+		byKey.set(key, {
+			key,
+			runtimePath: presence.runtimePath ?? "unknown",
+			claimedAt: presence.startedAt,
+			expiresAt: null,
+			bypassed: isSessionBypassed(key, agentId),
+		});
+	}
+	return [...byKey.values()].sort((a, b) => b.claimedAt.localeCompare(a.claimedAt));
+}
+function registerSessionStart(app: Hono): void {
+	app.post("/api/hooks/session-start", async (c) => {
+		if (isInternalCall(c)) {
+			return c.json({ inject: "", stableSystemPrompt: "", dynamicContext: "", memories: [] });
+		}
+		let recallAttempted = false;
+		let recallOutcomeRecorded = false;
+		try {
+			const body = (await c.req.json()) as SessionStartRequest;
+
+			if (!body.harness) {
+				return c.json({ error: "harness is required" }, 400);
+			}
+
+			const runtimePath = resolveRuntimePath(c, body);
+			if (body.claimOnly === true && !runtimePath) {
+				return c.json({ error: "claimOnly requires a runtime path" }, 400);
+			}
+			if (runtimePath) body.runtimePath = runtimePath;
+
+			const requestedAgentId = resolveAgentId({
+				agentId: parseOptionalString(body.agentId),
+				sessionKey: body.sessionKey,
+			});
+			const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			body.agentId = scopedAgent.agentId;
+
+			const startContext = resolveHookContext(
+				c,
+				body.context,
+				parseOptionalString(body.sessionKey),
+				scopedAgent.agentId,
+			);
+			if (!startContext.ok) return startContext.response;
+			const startBinding = await validateSessionControl(c, body.sessionKey, scopedAgent.agentId, {
+				context: "sessionKey",
+				project: parseOptionalString(body.project),
+			});
+			if (startBinding) return c.json({ error: startBinding }, 403);
+
+			if (body.sessionKey && runtimePath) {
+				const claim = claimSession(body.sessionKey, runtimePath, scopedAgent.agentId, body.harness);
+				if (!claim.ok) {
+					return c.json(
+						{
+							error: `session claimed by ${claim.claimedBy} path`,
+						},
+						409,
+					);
+				}
+			}
+
+			if (body.sessionKey)
+				await checkTranscriptLifecycle({
+					agentId: scopedAgent.agentId,
+					sessionKey: normalizeSessionKey(body.sessionKey),
+					action: "start",
+				});
+
+			upsertAgentPresence({
+				sessionKey: parseOptionalString(body.sessionKey),
+				agentId: scopedAgent.agentId,
+				harness: body.harness,
+				project: parseOptionalString(body.project),
+				runtimePath,
+				provider: body.harness,
+				context: startContext.patch,
+				contextDefaults: hookContextDefaults(body.cwd, parseOptionalString(body.project)),
+			});
+
+			stampHarness(body.harness);
+
+			try {
+				autoConnectGraphiq(parseOptionalString(body.project));
+			} catch {}
+
+			if (checkBypass(body)) {
+				return c.json({ inject: "", stableSystemPrompt: "", dynamicContext: "", memories: [], bypassed: true });
+			}
+
+			if (body.claimOnly === true) {
+				return c.json({ sessionKnown: true });
+			}
+
+			recordRecallAttempt("prompt_injection");
+			recallAttempted = true;
+			const result = await handleSessionStart(body);
+			const response = await withCrossAgentNotifications(result, {
+				harness: body.harness,
+				hook: "SessionStart",
+				agentId: scopedAgent.agentId,
+				sessionKey: parseOptionalString(body.sessionKey),
+			});
+			recordRecallOutcome({
+				surface: "prompt_injection",
+				resultCount: result.memories.length,
+				delivery: result.memories.length > 0 ? "injected" : "not_delivered",
+			});
+			recallOutcomeRecorded = true;
+			return c.json(response);
+		} catch (e) {
+			if (recallAttempted && !recallOutcomeRecorded) {
+				recordRecallOutcome({ surface: "prompt_injection", error: true, delivery: "not_delivered" });
+			}
+			logger.error("hooks", "Session start hook failed", e as Error);
+			return c.json({ error: "Hook execution failed" }, 500);
+		}
+	});
+}
+export const PROMPT_SUBMIT_MAX_IN_FLIGHT = 8;
+
+export type PromptSubmitAdmission = ConcurrencyAdmission;
+
+export function createPromptSubmitAdmission(maxInFlight: number): PromptSubmitAdmission {
+	return createConcurrencyAdmission(maxInFlight);
+}
+
+let promptSubmitAdmission: PromptSubmitAdmission = createPromptSubmitAdmission(PROMPT_SUBMIT_MAX_IN_FLIGHT);
+export function __setPromptSubmitAdmissionForTests(admission: PromptSubmitAdmission | null): void {
+	promptSubmitAdmission = admission ?? createPromptSubmitAdmission(PROMPT_SUBMIT_MAX_IN_FLIGHT);
+}
+function registerUserPromptSubmit(app: Hono): void {
+	app.post("/api/hooks/user-prompt-submit", async (c) => {
+		if (isInternalCall(c)) {
+			return c.json({ inject: "", dynamicContext: "", memoryCount: 0 });
+		}
+		try {
+			const body = (await c.req.json()) as UserPromptSubmitRequest;
+
+			const hasUserMessage = typeof body.userMessage === "string" && body.userMessage.trim().length > 0;
+			const hasUserPrompt = typeof body.userPrompt === "string" && body.userPrompt.trim().length > 0;
+
+			if (!body.harness || (!hasUserMessage && !hasUserPrompt)) {
+				return c.json({ error: "harness and userMessage or userPrompt are required" }, 400);
+			}
+
+			const runtimePath = resolveRuntimePath(c, body);
+			if (runtimePath) body.runtimePath = runtimePath;
+
+			const sessionKey = parseOptionalString(body.sessionKey);
+			const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
+			const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const agentId = scopedAgent.agentId;
+			body.agentId = agentId;
+			const promptContext = resolveHookContext(c, body.context, sessionKey, agentId);
+			if (!promptContext.ok) return promptContext.response;
+			const promptBinding = await validateSessionControl(c, sessionKey, agentId, {
+				context: "sessionKey",
+				project: parseOptionalString(body.project),
+			});
+			if (promptBinding) return c.json({ error: promptBinding }, 403);
+			const known = sessionKey ? hasSession(sessionKey, agentId) : false;
+			const duplicate = claimAutomaticSessionOrSkip(
+				sessionKey,
+				runtimePath,
+				agentId,
+				body.harness,
+				"user-prompt-submit",
+				{
+					inject: "",
+					dynamicContext: "",
+					memoryCount: 0,
+					sessionKnown: known,
+				},
+			);
+			if (duplicate) {
+				return c.json(duplicate);
+			}
+			if (sessionKey) {
+				const touched = touchAgentPresence(sessionKey, agentId, {
+					context: promptContext.patch,
+					contextDefaults: hookContextDefaults(parseOptionalString(body.project)),
+				});
+				if (!touched) {
+					upsertAgentPresence({
+						sessionKey,
+						agentId,
+						harness: body.harness,
+						project: parseOptionalString(body.project),
+						runtimePath,
+						provider: body.harness,
+						context: promptContext.patch,
+						contextDefaults: hookContextDefaults(parseOptionalString(body.project)),
+					});
+				}
+			} else {
+				upsertAgentPresence({
+					agentId,
+					harness: body.harness,
+					project: parseOptionalString(body.project),
+					runtimePath,
+					provider: body.harness,
+					context: promptContext.patch,
+					contextDefaults: hookContextDefaults(parseOptionalString(body.project)),
+				});
+			}
+
+			stampHarness(body.harness);
+
+			if (checkBypass(body)) {
+				return c.json({ inject: "", dynamicContext: "", memoryCount: 0, bypassed: true });
+			}
+
+			if (!promptSubmitAdmission.acquire()) {
+				return c.json(
+					{
+						error: `Too many concurrent prompt submissions (max ${PROMPT_SUBMIT_MAX_IN_FLIGHT}); retry shortly`,
+					},
+					503,
+				);
+			}
+			let result: Awaited<ReturnType<typeof handleUserPromptSubmit>>;
+			try {
+				result = await handleUserPromptSubmit(body, undefined, {
+					project: parseOptionalString(c.get("auth")?.claims?.scope?.project),
+				});
+			} finally {
+				promptSubmitAdmission.release();
+			}
+			return c.json(
+				await withCrossAgentNotifications(
+					{ ...result, sessionKnown: known },
+					{
+						harness: body.harness,
+						hook: "UserPromptSubmit",
+						agentId,
+						sessionKey,
+					},
+				),
+			);
+		} catch (e) {
+			logger.error("hooks", "User prompt submit hook failed", e as Error);
+			return c.json({ error: "Hook execution failed" }, 500);
+		}
+	});
+}
+function registerNotifications(app: Hono): void {
+	app.post("/api/hooks/notifications", async (c) => {
+		if (isInternalCall(c)) return c.json({ inject: "" });
+		const denied = await requirePermission("recall", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+
+		try {
+			const payload = await readOptionalJsonObject(c);
+			if (payload === null) return c.json({ error: "invalid request body" }, 400);
+			const harness = parseOptionalString(payload.harness);
+			const hook = parseOptionalString(payload.hook);
+			if (!harness || !hook) return c.json({ error: "harness and hook are required" }, 400);
+			if (!isNotificationCompatibleHook(harness, hook)) {
+				return c.json({ error: `hook '${hook}' is not notification-compatible for harness '${harness}'` }, 400);
+			}
+
+			const sessionKey = parseOptionalString(payload.sessionKey);
+			const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(payload.agentId), sessionKey });
+			const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+			});
+			if (sessionError) return c.json({ error: sessionError }, 403);
+			if (sessionKey && isSessionBypassed(sessionKey, scopedAgent.agentId)) {
+				return c.json({ inject: "", bypassed: true });
+			}
+
+			const noticeContext = resolveHookContext(c, payload.context, sessionKey, scopedAgent.agentId);
+			if (!noticeContext.ok) return noticeContext.response;
+			if (sessionKey) {
+				const touched = touchAgentPresence(sessionKey, scopedAgent.agentId, { context: noticeContext.patch });
+				if (!touched) {
+					upsertAgentPresence({
+						sessionKey,
+						agentId: scopedAgent.agentId,
+						harness,
+						project: parseOptionalString(payload.project),
+						provider: harness,
+						context: noticeContext.patch,
+						contextDefaults: hookContextDefaults(parseOptionalString(payload.project)),
+					});
+				}
+			}
+			stampHarness(harness);
+
+			const notifications = collectCrossAgentNotifications({
+				harness,
+				hook,
+				agentId: scopedAgent.agentId,
+				sessionKey,
+			});
+			return notifications ? c.json({ inject: notifications.inject, notifications }) : c.json({ inject: "" });
+		} catch (error) {
+			logger.error("hooks", "Notification hook failed", error instanceof Error ? error : new Error(String(error)));
+			return c.json({ error: "Hook execution failed" }, 500);
+		}
+	});
+}
+function registerDirectMessageWake(app: Hono): void {
+	app.post("/api/cross-agent/wake", async (c) => {
+		if (isInternalCall(c)) return c.json({ wake: false, reason: "timeout" });
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) return c.json({ error: "invalid request body" }, 400);
+		const harness = parseOptionalString(payload.harness);
+		const sessionKey = parseOptionalString(payload.sessionKey);
+		if (!harness || !sessionKey) return c.json({ error: "harness and sessionKey are required" }, 400);
+		const rawWait = payload.waitMs;
+		if (rawWait !== undefined && (typeof rawWait !== "number" || !Number.isFinite(rawWait) || rawWait < 0)) {
+			return c.json({ error: "waitMs must be a non-negative number" }, 400);
+		}
+		const waitMs = Math.min(MAX_WAKE_WAIT_MS, typeof rawWait === "number" ? rawWait : MAX_WAKE_WAIT_MS);
+		const scopedAgent = resolveCrossAgentScope(c, parseOptionalString(payload.agentId), sessionKey);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+			requireExisting: false,
+			context: "sessionKey",
+		});
+		if (sessionError) return c.json({ error: sessionError }, 403);
+		if (isSessionBypassed(sessionKey, scopedAgent.agentId)) {
+			return c.json({ wake: false, reason: "bypassed", retryAfterMs: 300_000 });
+		}
+
+		const wakeContext = resolveHookContext(c, payload.context, sessionKey, scopedAgent.agentId);
+		if (!wakeContext.ok) return wakeContext.response;
+		const touched = touchAgentPresence(sessionKey, scopedAgent.agentId, { context: wakeContext.patch });
+		if (!touched) {
+			upsertAgentPresence({
+				sessionKey,
+				agentId: scopedAgent.agentId,
+				harness,
+				project: parseOptionalString(payload.project),
+				provider: harness,
+				context: wakeContext.patch,
+				contextDefaults: hookContextDefaults(parseOptionalString(payload.project)),
+			});
+		}
+		stampHarness(harness);
+
+		try {
+			const result = await waitForDirectMessageWake({
+				agentId: scopedAgent.agentId,
+				sessionKey,
+				harness,
+				waitMs,
+				signal: c.req.raw.signal,
+			});
+			if (result.wake && !c.req.raw.signal.aborted) clearEndedSession(sessionKey, scopedAgent.agentId);
+			if (result.wake && c.req.raw.signal.aborted) {
+				await releaseWakeClaimsWithRetry({
+					agentId: scopedAgent.agentId,
+					sessionKey,
+					messageIds: result.messageIds,
+				});
+				return c.json({ wake: false, reason: "aborted" });
+			}
+			return c.json(result);
+		} catch (error) {
+			logger.error("hooks", "Direct message wake failed", error instanceof Error ? error : new Error(String(error)));
+			return c.json({ error: "Direct message wake failed", retryAfterMs: 30_000 }, 500);
+		}
+	});
+}
+
+function registerDirectMessageWakeRelease(app: Hono): void {
+	app.post("/api/cross-agent/wake/release", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) return c.json({ error: "invalid request body" }, 400);
+		const sessionKey = parseOptionalString(payload.sessionKey);
+		if (Array.isArray(payload.messageIds) && payload.messageIds.length > MAX_WAKE_RELEASE_IDS) {
+			return c.json({ error: `messageIds accepts at most ${MAX_WAKE_RELEASE_IDS} ids` }, 400);
+		}
+		const messageIds = Array.isArray(payload.messageIds)
+			? payload.messageIds.filter((id): id is string => typeof id === "string")
+			: null;
+		if (!sessionKey || messageIds === null || messageIds.length === 0) {
+			return c.json({ error: "sessionKey and messageIds are required" }, 400);
+		}
+		const scopedAgent = resolveCrossAgentScope(c, parseOptionalString(payload.agentId), sessionKey);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+			requireExisting: false,
+			context: "sessionKey",
+		});
+		if (sessionError) return c.json({ error: sessionError }, 403);
+		try {
+			const released = await releaseDirectMessageWakes({ agentId: scopedAgent.agentId, sessionKey, messageIds });
+			return c.json({ released });
+		} catch (error) {
+			logger.error(
+				"hooks",
+				"Direct message wake release failed",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			return c.json({ error: "Direct message wake release failed" }, 500);
+		}
+	});
+}
+
+const MAX_STOP_REPLY_CHARS = 262_144;
+const STOP_MAX_IN_FLIGHT = 8;
+let stopAdmission: ConcurrencyAdmission = createConcurrencyAdmission(STOP_MAX_IN_FLIGHT);
+export function __setStopAdmissionForTests(admission: ConcurrencyAdmission | null): void {
+	stopAdmission = admission ?? createConcurrencyAdmission(STOP_MAX_IN_FLIGHT);
+}
+
+function registerStop(app: Hono): void {
+	app.post(
+		"/api/hooks/stop",
+		async (c, next) => {
+			if (!stopAdmission.acquire()) {
+				c.header("Retry-After", "1");
+				return c.json({ error: `Too many concurrent stop hooks (max ${STOP_MAX_IN_FLIGHT}); retry shortly` }, 503);
+			}
+			try {
+				await next();
+			} finally {
+				stopAdmission.release();
+			}
+		},
+		bodyLimit({ maxSize: 2 * 1_048_576, onError: (c) => c.json({ error: "payload too large" }, 413) }),
+		async (c) => {
+			if (isInternalCall(c)) return c.json({ recorded: false });
+			try {
+				const body = await readOptionalJsonObject(c);
+				if (body === null) return c.json({ error: "invalid request body" }, 400);
+				const harness = parseOptionalString(body.harness);
+				if (!harness) return c.json({ error: "harness is required" }, 400);
+				const sessionKey = parseOptionalString(body.sessionKey) ?? parseOptionalString(body.sessionId);
+				if (!sessionKey) return c.json({ error: "sessionKey is required" }, 400);
+				if (body.lastAssistantMessage !== undefined && typeof body.lastAssistantMessage !== "string") {
+					return c.json({ error: "lastAssistantMessage must be a string" }, 400);
+				}
+				const lastAssistantMessage = body.lastAssistantMessage ?? "";
+				if (lastAssistantMessage.length > MAX_STOP_REPLY_CHARS) {
+					return c.json({ error: `lastAssistantMessage exceeds ${MAX_STOP_REPLY_CHARS} characters` }, 413);
+				}
+				const runtimePath = resolveRuntimePath(c, { runtimePath: parseOptionalString(body.runtimePath) });
+				const scope = resolveScopedAgentId(
+					c,
+					resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey }),
+					"default",
+				);
+				if (scope.error) return c.json({ error: scope.error }, 403);
+				const agentId = scope.agentId;
+				const bindingError = validateSessionAgentBinding(c, sessionKey, agentId, {
+					requireExisting: false,
+					context: "sessionKey",
+				});
+				if (bindingError) return c.json({ error: bindingError }, 403);
+				const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+				if (denied) return denied;
+				stampHarness(harness);
+				const claimedBy = getSessionPath(sessionKey, agentId);
+				if (claimedBy && claimedBy !== runtimePath) {
+					return c.json({
+						recorded: false,
+						skipped: true,
+						duplicateRuntimePath: true,
+						claimedBy,
+					} satisfies StopResponse);
+				}
+				if (getEndedSession(sessionKey, agentId)) {
+					return c.json({ recorded: false, skipped: true, sessionEnded: true } satisfies StopResponse);
+				}
+				if (isSessionBypassed(sessionKey, agentId)) {
+					return c.json({ recorded: false, bypassed: true } satisfies StopResponse);
+				}
+
+				const project = resolveScopedProject(c, parseOptionalString(body.cwd));
+				if (project.error) return c.json({ error: project.error }, 403);
+				if (shouldEnforceAuthScope(c) && c.get("auth")?.claims?.scope?.project) {
+					const existing = await dbOwnerQuery<{ project: string | null } | null>(
+						ownerStatement(
+							"SELECT project FROM session_transcripts WHERE session_key = ? AND agent_id = ?",
+							[sessionKey, agentId],
+							"get",
+						),
+						{ operation: "transcripts.stop.scope", lane: "read" },
+					);
+					if (existing && existing.project !== project.project) {
+						return c.json({ error: "session transcript is outside the project scope" }, 403);
+					}
+				}
+				return c.json(
+					await handleStop({
+						harness,
+						sessionKey,
+						agentId,
+						cwd: project.project,
+						lastAssistantMessage,
+					}),
+				);
+			} catch (e) {
+				if (isRetryableWritePressure(e)) {
+					logger.warn("hooks", "Stop hook deferred by write pressure; caller should retry", {
+						error: e instanceof Error ? e.message : String(e),
+					});
+					c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
+					return c.json({ error: "Write pressure; retry the stop hook", retryable: true }, 503);
+				}
+				logger.error("hooks", "Stop hook failed", e as Error);
+				return c.json({ error: "Hook execution failed" }, 500);
+			}
+		},
+	);
+}
+
+const SESSION_END_WAKE_GRACE_MS = 2_000;
+
+function registerSessionEnd(app: Hono): void {
+	app.post("/api/hooks/session-end", async (c) => {
+		if (isInternalCall(c)) {
+			return c.json({ memoriesSaved: 0 });
+		}
+		const requestStartedAt = performance.now();
+		try {
+			const body = (await c.req.json()) as SessionEndRequest;
+
+			if (!body.harness) {
+				return c.json({ error: "harness is required" }, 400);
+			}
+			if (body.lastAssistantMessage !== undefined && typeof body.lastAssistantMessage !== "string") {
+				return c.json({ error: "lastAssistantMessage must be a string" }, 400);
+			}
+			const capturedAt = parseIsoTimestamp(body.capturedAt, "capturedAt");
+			if (capturedAt.error) return c.json({ error: capturedAt.error }, 400);
+			body.capturedAt = capturedAt.value;
+
+			const runtimePath = resolveRuntimePath(c, body);
+			if (runtimePath) body.runtimePath = runtimePath;
+
+			stampHarness(body.harness);
+
+			const sessionKey = body.sessionKey || body.sessionId;
+			const endScope = resolveCrossAgentScope(c, parseOptionalString(body.agentId), sessionKey);
+			if (endScope.error) return c.json({ error: endScope.error }, 403);
+			const agentId = endScope.agentId;
+			body.agentId = agentId;
+			const bindingError = await validateSessionControl(c, sessionKey, agentId, {
+				context: "sessionKey",
+			});
+			if (bindingError) return c.json({ error: bindingError }, 403);
+			const conflict = skipConflictingSessionEnd(sessionKey, runtimePath, agentId);
+			if (conflict) return c.json(conflict);
+			const transcriptPath = parseOptionalString(body.transcriptPath);
+			const duplicate = claimAutomaticSessionOrSkip(sessionKey, runtimePath, agentId, body.harness, "session-end", {
+				memoriesSaved: 0,
+			});
+			if (duplicate) return c.json(duplicate);
+
+			if (sessionKey)
+				await checkTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "status" });
+			if (sessionKey && isSessionBypassed(sessionKey, agentId)) {
+				await checkTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "end" });
+				markSessionEnded(sessionKey, runtimePath, agentId);
+				removeAgentPresence(sessionKey);
+				return c.json({ memoriesSaved: 0, bypassed: true });
+			}
+
+			try {
+				const result = await handleSessionEnd(body);
+				const wakeSince = requestStartedAt - SESSION_END_WAKE_GRACE_MS;
+				const woken = (): boolean =>
+					sessionKey !== undefined &&
+					(body.harness === "codex"
+						? consumeSessionEndWake(agentId, sessionKey)
+						: wasWokenSince(agentId, sessionKey, wakeSince));
+				if (sessionKey && !woken()) {
+					await checkTranscriptLifecycle({ agentId, sessionKey: normalizeSessionKey(sessionKey), action: "end" });
+					if (!woken()) {
+						markSessionEnded(sessionKey, runtimePath, agentId);
+						removeAgentPresence(sessionKey);
+					}
+				}
+				if (transcriptPath) {
+					setImmediate(() =>
+						recordSkillsFromTranscript({
+							transcriptPath,
+							harness: body.harness,
+							agentId,
+							origin: "scan",
+							expectedSessionId: sessionKey,
+						}),
+					);
+				}
+				return c.json(result);
+			} catch (e) {
+				if (sessionKey) {
+					releaseSession(sessionKey, agentId);
+					removeAgentPresence(sessionKey);
+				}
+				throw e;
+			}
+		} catch (e) {
+			if (isRetryableWritePressure(e)) {
+				logger.warn("hooks", "Session end deferred by write pressure; caller should retry", {
+					error: e instanceof Error ? e.message : String(e),
+				});
+				c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
+				return c.json({ error: "Write pressure; retry the session end", retryable: true }, 503);
+			}
+			logger.error("hooks", "Session end hook failed", e as Error);
+			return c.json({ error: "Hook execution failed" }, 500);
+		}
+	});
+
+	app.get("/api/hooks/transcript-capture/:jobId", async (c) => {
+		const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+		const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(c.req.query("agentId")) });
+		const scopedAgent = resolveScopedAgentId(c, requestedAgentId);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const jobId = c.req.param("jobId").trim();
+		if (!jobId) return c.json({ error: "jobId is required" }, 400);
+		const job = await getTranscriptCaptureJobStatus(getDbAccessor(), scopedAgent.agentId, jobId);
+		if (!job) return c.json({ error: "Transcript capture job not found" }, 404);
+		return c.json(job);
+	});
+}
+function registerSkillInvocation(app: Hono): void {
+	app.post("/api/hooks/skill-invocation", async (c) => {
+		if (isInternalCall(c)) {
+			return c.json({ recorded: false });
+		}
+		try {
+			const body = toRecord(await c.req.json()) ?? {};
+			const harness = parseOptionalString(body.harness);
+			const skillName = parseOptionalString(body.skillName ?? body.skill);
+			if (!harness) return c.json({ error: "harness is required" }, 400);
+			if (!skillName) return c.json({ error: "skillName is required" }, 400);
+
+			stampHarness(harness);
+
+			const createdAt = parseIsoTimestamp(body.createdAt);
+			if (createdAt.error) return c.json({ error: createdAt.error }, 400);
+			const sessionKey = parseOptionalString(body.sessionKey ?? body.sessionId);
+			const runtimePath = resolveRuntimePath(c, { runtimePath: parseOptionalString(body.runtimePath) });
+			const conflict = checkSessionClaim(
+				c,
+				sessionKey,
+				runtimePath,
+				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey }),
+			);
+			if (conflict) return conflict;
+			const requestedAgentId = resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey });
+			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+			const scopedAgent = resolveScopedAgentId(c, requestedAgentId);
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+				requireExisting: false,
+				context: "sessionKey",
+			});
+			if (sessionError) return c.json({ error: sessionError }, 403);
+
+			const rawLatencyMs = body.latencyMs;
+			const latencyMs =
+				rawLatencyMs === undefined || rawLatencyMs === null ? 0 : parseOptionalNonNegativeInt(rawLatencyMs);
+			if (latencyMs === undefined) {
+				return c.json({ error: "latencyMs must be a non-negative integer" }, 400);
+			}
+
+			recordSkillInvocation({
+				skillName,
+				agentId: scopedAgent.agentId,
+				source: "agent",
+				latencyMs,
+				success: parseOptionalBoolean(body.success) ?? true,
+				errorText: parseOptionalString(body.errorText),
+				harness,
+				sessionId: sessionKey,
+				toolUseId: parseOptionalString(body.toolUseId),
+				cwd: parseOptionalString(body.cwd),
+				origin: parseOptionalString(body.origin),
+				args: parseOptionalString(body.args),
+				createdAt: createdAt.value,
+			});
+			return c.json({ recorded: true });
+		} catch (e) {
+			logger.error("hooks", "Skill invocation hook failed", e as Error);
+			return c.json({ error: "Hook execution failed" }, 500);
+		}
+	});
+}
+function registerCheckpointExtract(app: Hono): void {
+	app.post("/api/hooks/session-checkpoint-extract", async (c) => {
+		if (isInternalCall(c)) {
+			return c.json({ skipped: true });
+		}
+		try {
+			const body = (await c.req.json()) as CheckpointExtractRequest;
+
+			if (!body.harness || !body.sessionKey) {
+				return c.json({ error: "harness and sessionKey are required" }, 400);
+			}
+
+			const runtimePath = resolveRuntimePath(c, body);
+			if (runtimePath) body.runtimePath = runtimePath;
+			const scopedAgent = resolveScopedAgentId(
+				c,
+				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+			);
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const agentId = scopedAgent.agentId;
+			const checkpointBinding = await validateSessionControl(c, body.sessionKey, agentId, {
+				context: "sessionKey",
+			});
+			if (checkpointBinding) return c.json({ error: checkpointBinding }, 403);
+
+			const duplicate = claimAutomaticSessionOrSkip(
+				body.sessionKey,
+				runtimePath,
+				agentId,
+				body.harness,
+				"session-checkpoint-extract",
+				{
+					skipped: true,
+				},
+			);
+			if (duplicate) return c.json(duplicate);
+
+			stampHarness(body.harness);
+
+			if (isSessionBypassed(body.sessionKey, agentId)) {
+				return c.json({ skipped: true });
+			}
+
+			renewSession(body.sessionKey, agentId);
+
+			const result = await handleCheckpointExtract(body);
+			return c.json(result);
+		} catch (e) {
+			logger.error("hooks", "Checkpoint extract hook failed", e as Error);
+			return c.json({ error: "Hook execution failed" }, 500);
+		}
+	});
+}
+function registerRemember(app: Hono): void {
+	app.post("/api/hooks/remember", async (c) => {
+		if (isInternalCall(c)) {
+			return c.json({ success: true, memories: [] });
+		}
+		try {
+			const body = (await c.req.json()) as RememberRequest;
+
+			if (!body.harness || !body.content) {
+				return c.json({ error: "harness and content are required" }, 400);
+			}
+
+			const runtimePath = resolveRuntimePath(c, body);
+			if (runtimePath) body.runtimePath = runtimePath;
+
+			const conflict = checkSessionClaim(
+				c,
+				body.sessionKey,
+				runtimePath,
+				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+			);
+			if (conflict) return conflict;
+
+			if (checkBypass(body)) {
+				return c.json({ success: true, memories: [], bypassed: true });
+			}
+
+			const headers: Record<string, string> = { "Content-Type": "application/json" };
+			const auth = c.req.header("authorization");
+			if (auth) headers.Authorization = auth;
+			const sessionKey = c.req.header("x-signet-session-key") ?? body.sessionKey;
+			if (sessionKey) headers["x-signet-session-key"] = sessionKey;
+			return fetchInternal(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify(body),
+			});
+		} catch (e) {
+			logger.error("hooks", "Remember hook failed", e as Error);
+			return c.json({ error: "Hook execution failed" }, 500);
+		}
+	});
+}
+function registerRecall(app: Hono): void {
+	app.post("/api/hooks/recall", async (c) => {
+		if (isInternalCall(c)) {
+			return c.json(emptyHookRecallResponse("", { internal: true }));
+		}
+		let recallAttempted = false;
+		const recallSurface = "tool_call" as const;
+		return recordHookRecallOperation(async () => {
+			try {
+				const body = (await c.req.json()) as RecallRequest;
+
+				if (!body.harness || !body.query) {
+					return c.json({ error: "harness and query are required" }, 400);
+				}
+				const aggregateBudgetInput = readAggregateRecallBudgetInput(body);
+				const aggregateBudget = parseAggregateRecallBudget(aggregateBudgetInput);
+				if (aggregateBudgetInput !== undefined && aggregateBudget === null) {
+					return c.json({ error: "Invalid aggregateBudget. Expected one of: small, medium, large." }, 400);
+				}
+				const temporalTimeError = validateTemporalTimeOptions(body.time);
+				if (temporalTimeError) return c.json({ error: temporalTimeError }, 400);
+
+				const runtimePath = resolveRuntimePath(c, body);
+				if (runtimePath) body.runtimePath = runtimePath;
+
+				const conflict = checkSessionClaim(
+					c,
+					body.sessionKey,
+					runtimePath,
+					resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+				);
+				if (conflict) return conflict;
+
+				if (checkBypass(body)) {
+					c.header("x-signet-operation-skipped", "1");
+					return c.json(emptyHookRecallResponse(body.query, { bypassed: true }));
+				}
+
+				const aggregateSaveRequested =
+					body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
+				if (aggregateSaveRequested) {
+					const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+					if (denied) return denied;
+				}
+
+				const agentId = resolveAgentId({
+					agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
+					sessionKey: body.sessionKey,
+				});
+				if (aggregateSaveRequested) {
+					const aggAuth = c.get("auth");
+					if (aggAuth?.claims && aggAuth.claims.role !== "admin") {
+						const tokenProject = aggAuth.claims.scope?.project;
+						if (tokenProject && (!body.project || body.project !== tokenProject)) {
+							return c.json({ error: `scope restricted to project '${tokenProject}'` }, 403);
+						}
+						const scopeDecision = checkScope(
+							aggAuth.claims,
+							{ agent: agentId, project: body.project ?? undefined },
+							authConfig.mode,
+						);
+						if (!scopeDecision.allowed) {
+							return c.json({ error: scopeDecision.reason ?? "scope violation" }, 403);
+						}
+					}
+				}
+
+				const agentScope = await getAgentScope(agentId);
+				const cfg = loadMemoryConfig(AGENTS_DIR);
+				const recallSurface = "tool_call" as const;
+				if (body.aggregate === true && authConfig.mode !== "local") {
+					const actor = c.get("auth")?.claims?.sub ?? "anonymous";
+					const check = authRecallLlmLimiter.check(actor);
+					if (!check.allowed) {
+						c.header("Retry-After", String(Math.ceil((check.resetAt - Date.now()) / 1000)));
+						return c.json({ error: "rate limit exceeded", retryAfter: check.resetAt }, 429);
+					}
+					authRecallLlmLimiter.record(actor);
+				}
+				const requestedProject = parseOptionalString(body.project);
+				const scopedP = resolveScopedProject(c, requestedProject);
+				if (scopedP.error) return c.json({ error: scopedP.error }, 403);
+				recordRecallAttempt(recallSurface);
+				recallAttempted = true;
+				const project = scopedP.project ?? requestedProject;
+				const params: RecallParams = {
+					query: body.query,
+					keywordQuery: body.keywordQuery,
+					limit: body.limit,
+					project,
+					aggregate: body.aggregate,
+					aggregateBudget: aggregateBudget ?? undefined,
+					aggregate_budget: aggregateBudget ?? undefined,
+					saveAggregate: body.saveAggregate ?? body.save_aggregate,
+					save_aggregate: body.save_aggregate ?? body.saveAggregate,
+					type: body.type,
+					tags: body.tags,
+					who: body.who,
+					since: body.since,
+					until: body.until,
+					time: body.time as RecallParams["time"],
+					expand: body.expand,
+					agentId,
+					readPolicy: agentScope.readPolicy,
+					policyGroup: agentScope.policyGroup,
+					sessionKey: recallSessionKey({ harness: body.harness, sessionKey: body.sessionKey }) ?? undefined,
+					includeRecalled: body.includeRecalled === true,
+					recallSurface: "api.hooks.recall",
+					recallMode: "hook",
+					telemetrySurface: recallSurface,
+				};
+				let embeddingDegraded = false;
+				let embeddingCause: PipelineCauseFamily | undefined;
+				const embedFn = async (text: string, embeddingConfig: EmbeddingConfig, role?: EmbeddingRole) => {
+					const embedding = await recallAttributedEmbedFn(fetchEmbedding, agentId, (causeFamily) => {
+						embeddingDegraded = true;
+						embeddingCause = preferHookRecallCause(embeddingCause, causeFamily);
+					})(text, embeddingConfig, role);
+					if (embedding === null && embeddingConfig.provider !== "none") embeddingDegraded = true;
+					return embedding;
+				};
+				const result =
+					body.aggregate === true
+						? await aggregateRecall(params, cfg, {
+								router: getInferenceRouterOrNull(),
+								embedFn,
+							})
+						: await hybridRecall(params, cfg, embedFn);
+				if (result.meta.partial === true || result.aggregate?.partial === true || embeddingDegraded) {
+					c.header("x-signet-operation-degraded", "1");
+					if (result.meta.partial === true) {
+						embeddingCause = preferHookRecallCause(embeddingCause, "fts_index_incomplete");
+					}
+					if (result.aggregate?.stoppedReason === "router_unavailable") {
+						embeddingCause = preferHookRecallCause(embeddingCause, "provider_unavailable");
+					}
+					if (result.aggregate?.stoppedReason === "synthesis_failed") {
+						embeddingCause = preferHookRecallCause(embeddingCause, "internal_error");
+					}
+					if (embeddingCause) c.header("x-signet-operation-cause", embeddingCause);
+				}
+				recordRecallOutcome({
+					surface: recallSurface,
+					resultCount: result.results.length,
+					truncated: result.results.length >= effectiveRecallLimit(params.limit),
+					delivery: "returned",
+				});
+				return c.json(withHookRecallCompat(result));
+			} catch (e) {
+				if (recallAttempted) recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
+				logger.error("hooks", "Recall hook failed", e as Error);
+				c.header("x-signet-operation-cause", normalizePipelineCause(e));
+				return c.json({ error: "Hook execution failed" }, 500);
+			}
+		});
+	});
+}
+function registerPreCompaction(app: Hono): void {
+	app.post("/api/hooks/pre-compaction", async (c) => {
+		try {
+			const rawBody = toRecord(await c.req.json()) ?? {};
+			const transcriptPath =
+				parseOptionalString(rawBody.transcriptPath) ?? parseOptionalString(rawBody.transcript_path);
+			const body = rawBody as unknown as PreCompactionRequest;
+
+			if (!body.harness) {
+				return c.json({ error: "harness is required" }, 400);
+			}
+
+			const runtimePath = resolveRuntimePath(c, body);
+			if (runtimePath) body.runtimePath = runtimePath;
+
+			const scopedAgent = resolveScopedAgentId(
+				c,
+				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+			);
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const agentId = scopedAgent.agentId;
+			const sessionError = await validateSessionControl(c, body.sessionKey, agentId, {
+				context: "sessionKey",
+			});
+			if (sessionError) return c.json({ error: sessionError }, 403);
+			if (transcriptPath) body.agentId = agentId;
+			const duplicate = claimAutomaticSessionOrSkip(
+				body.sessionKey,
+				runtimePath,
+				agentId,
+				body.harness,
+				"pre-compaction",
+				{
+					guidelines: "",
+					instructions: "",
+					summaryPrompt: "",
+				},
+			);
+			if (duplicate) return c.json(duplicate);
+
+			if (checkBypass(body)) {
+				return c.json({ instructions: "", bypassed: true });
+			}
+
+			const result = handlePreCompaction(body);
+			if (transcriptPath) {
+				setImmediate(() =>
+					recordSkillsFromTranscript({
+						transcriptPath,
+						harness: body.harness,
+						agentId,
+						origin: "scan",
+						expectedSessionId: body.sessionKey,
+					}),
+				);
+			}
+			return c.json(result);
+		} catch (e) {
+			logger.error("hooks", "Pre-compaction hook failed", e as Error);
+			return c.json({ error: "Hook execution failed" }, 500);
+		}
+	});
+}
+function registerCompactionComplete(app: Hono): void {
+	app.post("/api/hooks/compaction-complete", async (c) => {
+		try {
+			const body = (await c.req.json()) as {
+				harness: string;
+				summary: string;
+				sessionKey?: string;
+				project?: string;
+				cwd?: string;
+				agentId?: string;
+				runtimePath?: string;
+				capturedAt?: string;
+			};
+
+			if (!body.harness || !body.summary) {
+				return c.json({ error: "harness and summary are required" }, 400);
+			}
+			const capturedAt = parseOptionalString(body.capturedAt);
+			if (body.capturedAt !== undefined && (capturedAt === undefined || Number.isNaN(Date.parse(capturedAt)))) {
+				return c.json({ error: "capturedAt must be an ISO timestamp" }, 400);
+			}
+			const summary = normalizeMarkdownBody(body.summary);
+
+			const runtimePath = resolveRuntimePath(c, body);
+			const scopedAgent = resolveScopedAgentId(
+				c,
+				resolveAgentId({ agentId: parseOptionalString(body.agentId), sessionKey: body.sessionKey }),
+			);
+			if (scopedAgent.error) {
+				return c.json({ error: scopedAgent.error }, 403);
+			}
+			const agentId = scopedAgent.agentId;
+			const compactionBinding = await validateSessionControl(c, body.sessionKey, agentId, {
+				context: "sessionKey",
+				project: parseOptionalString(body.project),
+			});
+			if (compactionBinding) return c.json({ error: compactionBinding }, 403);
+			const duplicate = claimAutomaticSessionOrSkip(
+				body.sessionKey,
+				runtimePath,
+				agentId,
+				body.harness,
+				"compaction-complete",
+				{
+					success: true,
+				},
+			);
+			if (duplicate) return c.json(duplicate);
+
+			if (checkBypass(body)) {
+				return c.json({ success: true, bypassed: true });
+			}
+
+			if (!existsSync(getCurrentMemoryDbPath())) {
+				return c.json({ error: "Memory database not found" }, 500);
+			}
+
+			const now = new Date().toISOString();
+			const transcriptRow = body.sessionKey
+				? // @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+					getDbAccessor().withReadDb(
+						(db: import("../../db/owner/accessor").ReadDb) =>
+							db
+								.prepare(
+									`SELECT project
+									 FROM session_transcripts
+									 WHERE session_key = ? AND agent_id = ?`,
+								)
+								.get(body.sessionKey, agentId) as { project: string | null } | undefined,
+						"db:hooks.session-transcript.project.read",
+					)
+				: undefined;
+			const requestedProject = transcriptRow?.project ?? parseOptionalString(body.project);
+			const scopedProject = resolveScopedProject(c, requestedProject);
+			if (scopedProject.error) {
+				return c.json({ error: scopedProject.error }, 403);
+			}
+			const project = scopedProject.project ?? null;
+			const cwd = parseOptionalString(body.cwd);
+
+			const sessionId = body.sessionKey ?? `compaction:${now}`;
+			const noise = isNoiseSession({
+				project,
+				sessionKey: body.sessionKey ?? null,
+				sessionId,
+				harness: body.harness,
+			});
+			const summaryId = noise ? null : crypto.randomUUID();
+			if (summaryId) {
+				const admitted = await commitCompactionSummary(getDbAccessor(), {
+					agentId,
+					sessionKey: body.sessionKey ?? null,
+					harness: body.harness,
+					project,
+					summary,
+					summaryId,
+					now,
+					capturedAt,
+				});
+				if (!admitted) return c.json({ success: true, bypassed: true });
+
+				try {
+					await writeCompactionArtifact({
+						agentId,
+						sessionId,
+						sessionKey: body.sessionKey ?? null,
+						project,
+						harness: body.harness,
+						capturedAt: capturedAt ?? now,
+						startedAt: null,
+						endedAt: null,
+						summary,
+					});
+				} catch (err) {
+					logger.warn("hooks", "Compaction artifact write failed (non-fatal)", {
+						error: err instanceof Error ? err.message : String(err),
+						sessionKey: body.sessionKey,
+					});
+				}
+			}
+
+			logger.info("hooks", noise ? "Compaction summary skipped (noise session)" : "Compaction summary saved", {
+				harness: body.harness,
+				memoryId: summaryId ?? "skipped-temp-session",
+			});
+
+			const epoch = await advanceRecallContextEpochAsync({
+				sessionKey: recallSessionKey({ harness: body.harness, sessionKey: body.sessionKey }),
+				agentId,
+				reason: "compaction-complete",
+				sourceRef: summaryId ?? body.sessionKey ?? undefined,
+			});
+			resetSessionStartDedupe({
+				harness: body.harness,
+				agentId,
+				project: project ?? undefined,
+				cwd: cwd ?? undefined,
+				sessionKey: body.sessionKey,
+			});
+
+			if (body.sessionKey) {
+				try {
+					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
+					getDbAccessor().withWriteTx((db: import("../../db/owner/accessor").WriteDb) => {
+						const hasTx = db
+							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_transcripts'")
+							.get();
+						if (hasTx) {
+							db.prepare("DELETE FROM session_transcripts WHERE session_key = ? AND agent_id = ?").run(
+								body.sessionKey,
+								agentId,
+							);
+						}
+						const hasCur = db
+							.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_extract_cursors'")
+							.get();
+						if (hasCur) {
+							db.prepare("DELETE FROM session_extract_cursors WHERE session_key = ? AND agent_id = ?").run(
+								body.sessionKey,
+								agentId,
+							);
+						}
+					}, "db:hooks.compaction.transcript-state.delete");
+				} catch (err) {
+					logger.warn("hooks", "Failed to reset checkpoint state after compaction (non-fatal)", {
+						error: err instanceof Error ? err.message : String(err),
+						sessionKey: body.sessionKey,
+					});
+				}
+			}
+
+			void getSynthesisWorker()
+				?.triggerNow({
+					force: true,
+					source: "compaction-complete",
+					agentId,
+				})
+				.then((result) => {
+					if (!result.skipped) return;
+					logger.info("synthesis", "Skipped MEMORY.md synthesis after compaction", {
+						reason: result.reason,
+						sessionKey: body.sessionKey,
+					});
+				})
+				.catch((error) => {
+					logger.warn("synthesis", "Failed to trigger MEMORY.md synthesis after compaction", {
+						error: error instanceof Error ? error.message : String(error),
+					});
+				});
+
+			return c.json({
+				success: true,
+				memoryId: summaryId,
+				contextEpoch: epoch.contextEpoch,
+				dedupeDegraded: epoch.failedOpen === true,
+			});
+		} catch (e) {
+			logger.error("hooks", "Compaction complete failed", e as Error);
+			return c.json({ error: "Failed to save summary" }, 500);
+		}
+	});
+}
+
+const AGENT_MESSAGE_TYPES: readonly AgentMessageType[] = ["assist_request", "decision_update", "info", "question"];
+const MAX_CROSS_AGENT_MESSAGE_CHARS = 65_536;
+
+function parseAgentMessageType(value: string | undefined): AgentMessageType | undefined {
+	if (!value) return undefined;
+	for (const type of AGENT_MESSAGE_TYPES) {
+		if (type === value) return type;
+	}
+	return undefined;
+}
+
+function resolveCrossAgentScope(
+	c: Context,
+	agentId: string | undefined,
+	sessionKey: string | undefined,
+): { agentId: string; error?: string } {
+	return resolveScopedAgentId(c, requestedAgentId({ agentId, sessionKey }), resolveDaemonAgentId());
+}
+
+function registerCrossAgentPresence(app: Hono): void {
+	app.get("/api/cross-agent/presence", async (c) => {
+		const includeSelf = parseOptionalBoolean(c.req.query("include_self")) ?? false;
+		const limit = parseOptionalInt(c.req.query("limit")) ?? 50;
+		const requestedAgent = parseOptionalString(c.req.query("agent_id"));
+		const sessionKey = parseOptionalString(c.req.query("session_key"));
+		const project = parseOptionalString(c.req.query("project"));
+		const scopeAll = c.req.query("scope");
+		if (scopeAll !== undefined && scopeAll !== "all") {
+			return c.json({ error: "scope must be 'all' when provided" }, 400);
+		}
+		const scopedAgent = resolveCrossAgentScope(c, requestedAgent, sessionKey);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+			requireExisting: true,
+			context: "session_key",
+		});
+		if (sessionError) {
+			return c.json({ error: sessionError }, 403);
+		}
+		const operator = scopeAll === "all";
+		if (operator && shouldEnforceAuthScope(c) && c.get("auth")?.claims?.role !== "admin") {
+			return c.json({ error: "scope=all requires local mode or an admin token" }, 403);
+		}
+
+		try {
+			const allowedAgentIds = operator ? null : await resolvePresenceAudience(scopedAgent.agentId);
+			const sessions = listAgentPresence({
+				agentId: scopedAgent.agentId,
+				sessionKey,
+				project,
+				includeSelf,
+				limit,
+				allowedAgentIds,
+			});
+			return c.json({ sessions, count: sessions.length });
+		} catch (error) {
+			logger.error("hooks", "Presence listing failed", error instanceof Error ? error : new Error(String(error)));
+			return c.json({ error: "Failed to list presence" }, 500);
+		}
+	});
+
+	app.post("/api/cross-agent/presence", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) {
+			return c.json({ error: "invalid request body" }, 400);
+		}
+
+		const parsedContext = parsePresenceContext(payload.context);
+		if (!parsedContext.ok) {
+			return c.json({ error: parsedContext.error }, 400);
+		}
+
+		const sessionKey = parseOptionalString(payload.sessionKey);
+		const scopedAgent = resolveCrossAgentScope(c, parseOptionalString(payload.agentId), sessionKey);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const sessionError = await validateSessionControl(c, sessionKey, scopedAgent.agentId, {
+			context: "sessionKey",
+			project: parseOptionalString(payload.project),
+		});
+		if (sessionError) {
+			return c.json({ error: sessionError }, 403);
+		}
+
+		const existing = sessionKey ? getAgentPresenceForSession(sessionKey) : null;
+		const owned = existing && existing.agentId === scopedAgent.agentId ? existing : null;
+		const harness = parseOptionalString(payload.harness) ?? owned?.harness;
+		if (!harness) {
+			return c.json({ error: "harness is required" }, 400);
+		}
+
+		const runtimePathRaw = parseOptionalString(payload.runtimePath);
+		const runtimePath =
+			runtimePathRaw === "plugin" || runtimePathRaw === "legacy" ? runtimePathRaw : owned?.runtimePath;
+
+		const project = parseOptionalString(payload.project) ?? owned?.project;
+		const presence = upsertAgentPresence({
+			sessionKey,
+			agentId: scopedAgent.agentId,
+			harness,
+			project,
+			runtimePath,
+			provider: parseOptionalString(payload.provider) ?? owned?.provider ?? harness,
+			context: parsedContext.patch,
+			contextDefaults: owned ? undefined : hookContextDefaults(project),
+		});
+
+		return c.json({ presence });
+	});
+
+	app.get("/api/cross-agent/sessions/:sessionKey/context", async (c) => {
+		const targetSessionKey = parseOptionalString(c.req.param("sessionKey"));
+		if (!targetSessionKey) return c.json({ error: "session key is required" }, 400);
+
+		const limitRaw = c.req.query("max_messages");
+		let maxMessages = INSPECT_DEFAULT_MESSAGES;
+		if (limitRaw !== undefined) {
+			const parsed = parseOptionalInt(limitRaw);
+			if (parsed === undefined || parsed < 1 || parsed > INSPECT_MAX_MESSAGES) {
+				return c.json({ error: `max_messages must be between 1 and ${INSPECT_MAX_MESSAGES}` }, 400);
+			}
+			maxMessages = parsed;
+		}
+
+		const scopeAll = c.req.query("scope");
+		if (scopeAll !== undefined && scopeAll !== "all") {
+			return c.json({ error: "scope must be 'all' when provided" }, 400);
+		}
+		const callerSessionKey = parseOptionalString(c.req.query("caller_session_key"));
+		const scopedAgent = resolveCrossAgentScope(c, parseOptionalString(c.req.query("agent_id")), callerSessionKey);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const callerError = validateSessionAgentBinding(c, callerSessionKey, scopedAgent.agentId, {
+			requireExisting: true,
+			context: "caller_session_key",
+		});
+		if (callerError) return c.json({ error: callerError }, 403);
+
+		const operator = scopeAll === "all";
+		if (operator && shouldEnforceAuthScope(c) && c.get("auth")?.claims?.role !== "admin") {
+			return c.json({ error: "scope=all requires local mode or an admin token" }, 403);
+		}
+
+		const targetAgentId = parseOptionalString(c.req.query("target_agent_id"));
+		const target =
+			targetAgentId === undefined
+				? getAgentPresenceForSession(targetSessionKey)
+				: getAgentPresenceForSessionAgent(targetSessionKey, targetAgentId);
+		if (!target) {
+			return c.json({ error: "session not found" }, 404);
+		}
+
+		try {
+			if (!operator && !(await canViewSessionOf(scopedAgent.agentId, target.agentId))) {
+				return c.json({ error: "session is not visible to this agent" }, 403);
+			}
+			const tail = await readTranscriptTail(target.agentId, targetSessionKey, maxMessages);
+			return c.json({
+				presence: target,
+				recentMessages: tail.recentMessages,
+				truncated: tail.truncated,
+				provenance: {
+					presence: "self-reported",
+					transcript: tail.available ? "signet-captured-tail" : "unavailable",
+					transcriptUpdatedAt: tail.transcriptUpdatedAt,
+					transcriptBytes: tail.transcriptBytes,
+					bytesRead: tail.bytesRead,
+					roles: "user-and-assistant-only",
+					untrusted: true,
+				},
+			});
+		} catch (error) {
+			logger.error(
+				"hooks",
+				"Session context inspection failed",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			return c.json({ error: "Failed to inspect session context" }, 500);
+		}
+	});
+
+	app.delete("/api/cross-agent/presence/:sessionKey", (c) => {
+		const sessionKey = c.req.param("sessionKey");
+		const scopedAgent = resolveCrossAgentScope(c, undefined, sessionKey);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+			requireExisting: false,
+			context: "sessionKey",
+		});
+		if (sessionError) {
+			return c.json({ error: sessionError }, 403);
+		}
+		const removed = removeAgentPresence(sessionKey);
+		return c.json({ removed });
+	});
+}
+
+async function relayClaimedAcpMessage(attempt: AcpDeliveryAttempt): Promise<AgentMessage> {
+	const relay = await relayMessageViaAcp({
+		...attempt.request,
+		idempotencyKey: attempt.idempotencyKey,
+	});
+	const receipt: Record<string, unknown> = { status: relay.status, idempotencyKey: attempt.idempotencyKey };
+	if (relay.runId) receipt.runId = relay.runId;
+	return completeAcpMessageDelivery(attempt.message.id, attempt.leaseToken, {
+		status: relay.ok ? "delivered" : relay.indeterminate ? "indeterminate" : "failed",
+		error: relay.error,
+		receipt,
+	});
+}
+
+function registerCrossAgentMessages(app: Hono): void {
+	app.get("/api/cross-agent/messages", (c) => {
+		const scope = c.req.query("scope");
+		if (scope !== undefined && scope !== "all") return c.json({ error: "scope must be 'all' when provided" }, 400);
+		const operator = scope === "all";
+		if (operator && shouldEnforceAuthScope(c) && c.get("auth")?.claims?.role !== "admin") {
+			return c.json({ error: "scope=all requires local mode or an admin token" }, 403);
+		}
+		const requestedAgent = parseOptionalString(c.req.query("agent_id"));
+		const sessionKey = parseOptionalString(c.req.query("session_key"));
+		const since = parseOptionalString(c.req.query("since"));
+		const includeSent = parseOptionalBoolean(c.req.query("include_sent")) ?? false;
+		const includeBroadcast = parseOptionalBoolean(c.req.query("include_broadcast")) ?? true;
+		const unreadOnly = parseOptionalBoolean(c.req.query("unread_only")) ?? false;
+		const limit = parseOptionalInt(c.req.query("limit")) ?? 100;
+		const offset = parseOptionalNonNegativeInt(c.req.query("offset")) ?? 0;
+		const order = c.req.query("order") === "asc" ? "asc" : "desc";
+		const scopedAgent = resolveCrossAgentScope(c, requestedAgent, sessionKey);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+			requireExisting: true,
+			context: "session_key",
+		});
+		if (sessionError) {
+			return c.json({ error: sessionError }, 403);
+		}
+
+		const page = listAgentMessagePage({
+			allAgents: operator,
+			agentId: scopedAgent.agentId,
+			sessionKey,
+			since,
+			includeSent,
+			includeBroadcast,
+			unreadOnly,
+			limit,
+			offset,
+			order,
+		});
+
+		return c.json(page);
+	});
+
+	app.post("/api/cross-agent/messages/:messageId/ack", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) return c.json({ error: "invalid request body" }, 400);
+		const messageId = parseOptionalString(c.req.param("messageId"));
+		if (!messageId) return c.json({ error: "messageId is required" }, 400);
+
+		const sessionKey =
+			parseOptionalString(payload.sessionKey) ?? parseOptionalString(c.req.header("x-signet-session-key"));
+		const scopedAgent = resolveCrossAgentScope(
+			c,
+			parseOptionalString(payload.agentId) ?? parseOptionalString(c.req.header("x-signet-agent-id")),
+			sessionKey,
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+			requireExisting: false,
+			context: "sessionKey",
+		});
+		if (sessionError) return c.json({ error: sessionError }, 403);
+
+		try {
+			return c.json(
+				acknowledgeAgentMessage({
+					messageId,
+					agentId: scopedAgent.agentId,
+					sessionKey,
+				}),
+			);
+		} catch (error) {
+			if (error instanceof AgentMessageNotFoundError) return c.json({ error: error.message }, 404);
+			logger.error(
+				"hooks",
+				"Cross-agent acknowledgement failed",
+				error instanceof Error ? error : new Error(String(error)),
+			);
+			return c.json({ error: "Failed to acknowledge cross-agent message" }, 500);
+		}
+	});
+
+	app.post("/api/cross-agent/messages/:messageId/retry", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) return c.json({ error: "invalid request body" }, 400);
+		const messageId = parseOptionalString(c.req.param("messageId"));
+		if (!messageId) return c.json({ error: "messageId is required" }, 400);
+		const scopedAgent = resolveCrossAgentScope(
+			c,
+			parseOptionalString(payload.agentId) ?? parseOptionalString(c.req.header("x-signet-agent-id")),
+			undefined,
+		);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+
+		try {
+			const attempt = claimAcpMessageDelivery({
+				messageId,
+				agentId: scopedAgent.agentId,
+				retryIndeterminate: true,
+			});
+			const message = await relayClaimedAcpMessage(attempt);
+			return c.json({ message });
+		} catch (error) {
+			if (error instanceof AgentMessageNotFoundError) return c.json({ error: error.message }, 404);
+			const message = error instanceof Error ? error.message : String(error);
+			if (
+				message.includes("already active") ||
+				message.includes("retry limit") ||
+				message.includes("not indeterminate")
+			) {
+				return c.json({ error: message }, 409);
+			}
+			logger.error("hooks", "ACP retry failed", error instanceof Error ? error : new Error(message));
+			return c.json({ error: "ACP retry could not be completed" }, 500);
+		}
+	});
+
+	app.post("/api/cross-agent/messages", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) {
+			return c.json({ error: "invalid request body" }, 400);
+		}
+
+		const content = parseOptionalString(payload.content);
+		if (!content) {
+			return c.json({ error: "content is required" }, 400);
+		}
+		if (content.length > MAX_CROSS_AGENT_MESSAGE_CHARS) {
+			return c.json({ error: `content too large (max ${MAX_CROSS_AGENT_MESSAGE_CHARS} chars)` }, 400);
+		}
+
+		const deliveryPathRaw = parseOptionalString(payload.via);
+		const deliveryPath = deliveryPathRaw === "acp" ? "acp" : "local";
+
+		const rawType = parseOptionalString(payload.type);
+		const parsedType = parseAgentMessageType(rawType);
+		if (rawType && !parsedType) {
+			return c.json({ error: `unsupported message type '${rawType}'` }, 400);
+		}
+		const type = parsedType ?? "info";
+		const broadcast = parseOptionalBoolean(payload.broadcast) ?? false;
+		const fromSessionKey = parseOptionalString(payload.fromSessionKey);
+		const scopedSender = resolveCrossAgentScope(c, parseOptionalString(payload.fromAgentId), fromSessionKey);
+		if (scopedSender.error) {
+			return c.json({ error: scopedSender.error }, 403);
+		}
+		const fromSessionError = validateSessionAgentBinding(c, fromSessionKey, scopedSender.agentId, {
+			requireExisting: true,
+			context: "fromSessionKey",
+		});
+		if (fromSessionError) {
+			return c.json({ error: fromSessionError }, 403);
+		}
+		const toAgentId = parseOptionalString(payload.toAgentId);
+		const toSessionKey = parseOptionalString(payload.toSessionKey);
+		const hasLocalTarget = broadcast || !!toAgentId || !!toSessionKey;
+		if (deliveryPath === "local" && !hasLocalTarget) {
+			return c.json({ error: "local target required (toAgentId, toSessionKey, or broadcast=true)" }, 400);
+		}
+
+		let acpRequest:
+			| {
+					readonly baseUrl: string;
+					readonly targetAgentName: string;
+					readonly timeoutMs?: number;
+					readonly metadata?: Record<string, unknown>;
+			  }
+			| undefined;
+		if (deliveryPath === "acp") {
+			const acpPayload = toRecord(payload.acp);
+			const baseUrl = parseOptionalString(acpPayload?.baseUrl) ?? parseOptionalString(acpPayload?.url);
+			const targetAgentName =
+				parseOptionalString(acpPayload?.targetAgentName) ?? parseOptionalString(acpPayload?.agentName);
+			if (!baseUrl || !targetAgentName) {
+				return c.json({ error: "acp.baseUrl and acp.targetAgentName are required when via='acp'" }, 400);
+			}
+			acpRequest = {
+				baseUrl,
+				targetAgentName,
+				timeoutMs: parseOptionalInt(acpPayload?.timeoutMs),
+				metadata: toRecord(acpPayload?.metadata) ?? undefined,
+			};
+		}
+
+		let message: AgentMessage;
+		try {
+			message = createAgentMessage({
+				fromAgentId: scopedSender.agentId,
+				fromSessionKey,
+				toAgentId,
+				toSessionKey,
+				content,
+				type,
+				broadcast,
+				deliveryPath,
+				deliveryStatus: acpRequest ? "queued" : "delivered",
+				acpBaseUrl: acpRequest?.baseUrl,
+				acpTargetAgentName: acpRequest?.targetAgentName,
+				acpTimeoutMs: acpRequest?.timeoutMs,
+				acpMetadata: acpRequest?.metadata,
+			});
+		} catch (error) {
+			if (error instanceof AgentMessageCapacityError) {
+				return c.json({ error: error.message }, 429);
+			}
+			const msg = error instanceof Error ? error.message : String(error);
+			return c.json({ error: msg }, 400);
+		}
+
+		if (acpRequest) {
+			try {
+				const attempt = claimAcpMessageDelivery({ messageId: message.id, agentId: scopedSender.agentId });
+				message = await relayClaimedAcpMessage(attempt);
+			} catch (error) {
+				logger.error(
+					"hooks",
+					"Failed to persist ACP delivery result",
+					error instanceof Error ? error : new Error(String(error)),
+				);
+				return c.json({ error: "ACP delivery result could not be persisted", message }, 500);
+			}
+		}
+		return c.json({ message });
+	});
+}
+
+function registerCrossAgentStream(app: Hono): void {
+	app.get("/api/cross-agent/stream", async (c) => {
+		const requestedAgent = parseOptionalString(c.req.query("agent_id"));
+		const sessionKey = parseOptionalString(c.req.query("session_key"));
+		const project = parseOptionalString(c.req.query("project"));
+		const includeSelf = parseOptionalBoolean(c.req.query("include_self")) ?? false;
+		const includeSent = parseOptionalBoolean(c.req.query("include_sent")) ?? false;
+		const scopedAgent = resolveCrossAgentScope(c, requestedAgent, sessionKey);
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+			requireExisting: true,
+			context: "session_key",
+		});
+		if (sessionError) {
+			return c.json({ error: sessionError }, 403);
+		}
+		const agentId = scopedAgent.agentId;
+		let snapshotAudience: ReadonlySet<string> | null;
+		let presenceVisible: (authorAgentId: string) => Promise<boolean>;
+		try {
+			const viewer = await resolveBoardViewer(agentId);
+			snapshotAudience = await boardAuthorAudience(viewer);
+			presenceVisible = await createBoardEventVisibility(viewer);
+		} catch (error) {
+			logger.error("hooks", "Presence stream scope failed", error instanceof Error ? error : new Error(String(error)));
+			return c.json({ error: "Failed to resolve presence visibility" }, 500);
+		}
+		let presenceQueue: Promise<void> = Promise.resolve();
+
+		const sse = openBoundedSse({
+			requestSignal: c.req.raw.signal,
+			highWaterMarkBytes: 1024 * 1024,
+			maxFrameBytes: 512 * 1024,
+			heartbeat: { intervalMs: 15_000, comment: "keepalive" },
+			onStart(producer) {
+				let unsubscribe = (): void => {};
+				producer.addDisposer(() => unsubscribe());
+				if (producer.signal.aborted) return;
+				const writeEvent = (event: unknown): void => {
+					producer.write(event);
+				};
+
+				writeEvent({
+					type: "connected",
+					agentId,
+					sessionKey,
+					project,
+					timestamp: new Date().toISOString(),
+				});
+				if (producer.isClosed) return;
+
+				writeEvent({
+					type: "snapshot",
+					presence: listAgentPresence({
+						agentId,
+						sessionKey,
+						project,
+						includeSelf,
+						limit: 50,
+						allowedAgentIds: snapshotAudience,
+					}),
+					messages: listAgentMessages({
+						agentId,
+						sessionKey,
+						includeSent,
+						includeBroadcast: true,
+						limit: 20,
+					}),
+					timestamp: new Date().toISOString(),
+				});
+				if (producer.isClosed) return;
+
+				const nextUnsubscribe = subscribeCrossAgentEvents((event) => {
+					if (event.type === "message") {
+						if (
+							!isMessageVisibleToAgent(event.message, {
+								agentId,
+								sessionKey,
+								includeBroadcast: true,
+							})
+						) {
+							if (!(includeSent && event.message.fromAgentId === agentId)) {
+								return;
+							}
+						}
+					}
+
+					if (event.type === "presence" && !includeSelf && event.presence.agentId === agentId) {
+						if (!sessionKey) {
+							return;
+						}
+						if (!event.presence.sessionKey || event.presence.sessionKey === sessionKey) {
+							return;
+						}
+					}
+					if (event.type === "presence" && project && event.presence.project !== project) {
+						return;
+					}
+
+					if (event.type === "presence") {
+						presenceQueue = presenceQueue
+							.then(async () => {
+								if (producer.isClosed || !(await presenceVisible(event.presence.agentId))) return;
+								writeEvent(event);
+							})
+							.catch(() => {});
+						return;
+					}
+					writeEvent(event);
+				});
+				unsubscribe = nextUnsubscribe;
+				if (producer.isClosed) unsubscribe();
+			},
+		});
+
+		return sse.response;
+	});
+}
+
+function registerSynthesis(app: Hono): void {
+	app.get("/api/hooks/synthesis/config", (c) => {
+		const config = DEFAULT_SYNTHESIS_WORKER_CONFIG;
+		return c.json(config);
+	});
+	app.post("/api/hooks/synthesis", async (c) => {
+		try {
+			const body = (await c.req.json()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
+			const scopedAgent = resolveScopedAgentId(
+				c,
+				resolveAgentId({
+					agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
+					sessionKey: body.sessionKey ?? c.req.header("x-signet-session-key"),
+				}),
+			);
+			if (scopedAgent.error) {
+				return c.json({ error: scopedAgent.error }, 403);
+			}
+			const result = await handleSynthesisRequest(body, { agentId: scopedAgent.agentId });
+			return c.json(result);
+		} catch (e) {
+			logger.error("hooks", "Synthesis request failed", e as Error);
+			return c.json({ error: "Synthesis request failed" }, 500);
+		}
+	});
+	app.post("/api/hooks/synthesis/complete", async (c) => {
+		return c.json(
+			{
+				error: "Synthesis completion route retired; use Dreaming",
+				code: "SYNTHESIS_COMPLETION_RETIRED",
+				version: 1,
+				deprecatedRoute: "/api/hooks/synthesis/complete",
+				replacement: { method: "POST", path: "/api/synthesis/trigger" },
+				migration: "Dreaming owns manifest-gated MEMORY.md head publication; do not submit content directly.",
+			},
+			410,
+		);
+	});
+	app.post("/api/synthesis/trigger", async (c) => {
+		try {
+			const worker = getSynthesisWorker();
+			if (!worker) {
+				return c.json({ error: "Synthesis worker not running" }, 503);
+			}
+			const result = await worker.triggerNow();
+			return c.json(result);
+		} catch (e) {
+			logger.error("synthesis", "Synthesis trigger failed", e as Error);
+			return c.json({ error: "Synthesis trigger failed" }, 500);
+		}
+	});
+	app.get("/api/synthesis/status", (c) => {
+		const worker = getSynthesisWorker();
+		const config = DEFAULT_SYNTHESIS_WORKER_CONFIG;
+		const lastRunAt = readLastSynthesisTime();
+		return c.json({
+			running: worker?.running ?? false,
+			lastRunAt: lastRunAt > 0 ? new Date(lastRunAt).toISOString() : null,
+			config,
+		});
+	});
+}
+function recallAttributedEmbedFn(
+	embedFn: typeof fetchEmbedding,
+	agentId: string,
+	onFailure?: (causeFamily: PipelineCauseFamily) => void,
+): (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null> {
+	return (text, cfg, role) =>
+		embedFn(text, cfg, role, {
+			usage: { source: role === "query" ? "recall" : "memory-capture", agentId },
+			onFailure,
+		});
+}
+
+const SESSION_LIFECYCLE_HOOKS = [
+	"/api/hooks/session-start",
+	"/api/hooks/user-prompt-submit",
+	"/api/hooks/session-end",
+	"/api/hooks/session-checkpoint-extract",
+	"/api/hooks/pre-compaction",
+	"/api/hooks/compaction-complete",
+] as const;
+
+export function registerHooksRoutes(app: Hono): void {
+	for (const path of SESSION_LIFECYCLE_HOOKS) {
+		app.use(path, async (c, next) => requirePermission("remember", authConfig)(c, next));
+	}
+	app.use("/api/cross-agent", async (c, next) => {
+		if (c.req.method === "GET") {
+			return requirePermission("recall", authConfig)(c, next);
+		}
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/cross-agent/*", async (c, next) => {
+		if (c.req.method === "GET") {
+			return requirePermission("recall", authConfig)(c, next);
+		}
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/cross-agent/messages", async (c, next) => {
+		if (c.req.method !== "POST") {
+			await next();
+			return;
+		}
+		return requireRateLimit("cross-agent-message", authCrossAgentMessageLimiter, authConfig)(c, next);
+	});
+
+	registerSessionStart(app);
+	registerUserPromptSubmit(app);
+	registerNotifications(app);
+	registerDirectMessageWake(app);
+	registerDirectMessageWakeRelease(app);
+	registerSessionEnd(app);
+	registerStop(app);
+	registerSkillInvocation(app);
+	registerCheckpointExtract(app);
+	registerRemember(app);
+	registerRecall(app);
+	registerPreCompaction(app);
+	registerCompactionComplete(app);
+	registerCrossAgentPresence(app);
+	registerCrossAgentMessages(app);
+	registerCrossAgentStream(app);
+	registerSynthesis(app);
+}

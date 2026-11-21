@@ -10,7 +10,7 @@ contract and milestone plan.
 `build.outDir: "build"`, `base: "/"`). Three consumers key off that path:
 
 - `scripts/prepare-dashboard-bundle.ts` — copies `build/` into a target package.
-- `platform/daemon/src/routes/dashboard.ts` — serves `build/` with SPA fallback
+- `platform/daemon/src/http/routes/dashboard.ts` — serves `build/` with SPA fallback
   to `index.html` (dev path + published `dashboard/` paths).
 - `surfaces/desktop/src/main.ts` — serves `dashboardRoot()` over the privileged
   `app://signet/` scheme with the same SPA fallback; `/health`, `/api/*`,

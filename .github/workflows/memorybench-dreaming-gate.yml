@@ -53,4 +53,4 @@ jobs:
           memorybench/src/benchmarks/dreaming-scenarios/index.test.ts
           memorybench/src/orchestrator/checkpoint.test.ts
           memorybench/src/providers/signet/index.test.ts
-          platform/daemon/src/pipeline/memorybench-dreaming-gate.test.ts
+          platform/daemon/src/dreaming/passes/memorybench-dreaming-gate.test.ts

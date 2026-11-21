@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const outfile = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
-const entry = join(root, "platform", "daemon", "src", "mcp-stdio.ts");
+const entry = join(root, "platform", "daemon", "src", "http", "mcp", "mcp-stdio.ts");
 const EXTERNAL = [
 	"better-sqlite3",
 	"@1password/sdk",
@@ -14,7 +14,7 @@ const EXTERNAL = [
 	"@huggingface/transformers",
 ];
 const ALIAS: Record<string, string> = {
-	sharp: join(root, "platform", "daemon", "src", "shims", "sharp.ts"),
+	sharp: join(root, "platform", "daemon", "src", "inference", "embeddings", "sharp-shim.ts"),
 };
 
 const result = await Bun.build({

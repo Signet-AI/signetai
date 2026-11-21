@@ -5,7 +5,7 @@
 		{
 			"id": "dm_send_deliver",
 			"feature": "Direct message send/delivery",
-			"existing_tests_or_proofs": "platform/daemon/src/routes/hooks-routes.ts; platform/daemon/src/notifications/cross-agent-notifications.test.ts; platform/daemon/src/routes/hooks-routes.notifications.test.ts",
+			"existing_tests_or_proofs": "platform/daemon/src/http/routes/hooks-routes.ts; platform/daemon/src/agents/cross-agent/notifications.test.ts; platform/daemon/src/http/routes/hooks-routes.notifications.test.ts",
 			"eval_lane": "c1 designed (graded: daemon DM rows resolved by agent+session; two-way ordering corroborated by the sender's own successful agent_message_send tool result with the exact backend id, so delayed instrument polls cannot demote a real earlier send). Live NOT RUN; grader exercised by controls only",
 			"cases": ["c1-discovery-wake"],
 			"live_run": "NOT RUN"
@@ -37,7 +37,7 @@
 		{
 			"id": "board_post_reply_topics",
 			"feature": "Board post/reply/topics/threads",
-			"existing_tests_or_proofs": "platform/daemon/src/routes/board-routes.test.ts",
+			"existing_tests_or_proofs": "platform/daemon/src/http/routes/board-routes.test.ts",
 			"eval_lane": "transport stress lane, NOT RUN",
 			"cases": [],
 			"live_run": "NOT RUN"
@@ -77,7 +77,7 @@
 		{
 			"id": "discovery",
 			"feature": "Presence discovery with context (agent_peers, agent_context_update, agent_session_inspect)",
-			"existing_tests_or_proofs": "platform/daemon/src/routes/cross-agent-context-routes.test.ts; native Pi context tools are present and available in the paired coding run. Discovery is diagnostic there, not a required scoring ritual.",
+			"existing_tests_or_proofs": "platform/daemon/src/http/routes/cross-agent-context-routes.test.ts; native Pi context tools are present and available in the paired coding run. Discovery is diagnostic there, not a required scoring ritual.",
 			"eval_lane": "c1 designed (2 real + 10 synthetic uniform-shape profiles: 3 cpu-only, 2 other-host GPU, 2 completed GPU jobs, 2 read-only GPU monitors, 1 retired same-agent session). Real stale-presence behaviour is NOT tested: the daemon API cannot backdate context time and presence TTL (4h) prunes at 6h; no test-only time controls or DB writes were added. Offline clock-skew controls only filter ordering. Live NOT RUN",
 			"cases": ["c1-discovery-wake"],
 			"live_run": "NOT RUN"

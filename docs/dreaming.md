@@ -10,7 +10,7 @@ Trap: callers resume from `retryFrom` with only the uncommitted suffix. Replayin
 
 Why: one all-or-nothing transaction would hold the writer for the whole batch. Bounding each hold by operation count and elapsed time lets unrelated daemon work run between chunks.
 
-Owner: `platform/daemon/src/pipeline/dreaming-operations.ts`, `surfaces/cli/src/commands/dream.ts`.
+Owner: `platform/daemon/src/dreaming/operations/operations.ts`, `surfaces/cli/src/commands/dream.ts`.
 
 ## The daemon owns the head fence
 
@@ -18,4 +18,4 @@ Owner: `platform/daemon/src/pipeline/dreaming-operations.ts`, `surfaces/cli/src/
 
 Why: a caller-supplied fence can be refreshed past the work it is meant to protect.
 
-Owner: `platform/daemon/src/memory-head-owner.ts`.
+Owner: `platform/daemon/src/dreaming/head/owner.ts`.

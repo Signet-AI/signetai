@@ -2,9 +2,9 @@ import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DbOwnerClient, DbOwnerJobHandle, DbOwnerSubmitOptions } from "./db-owner-client";
-import type { DbOwnerRequest } from "./db-owner-protocol";
-import type { RecallParams, RecallResponse } from "./memory-search";
+import type { DbOwnerClient, DbOwnerJobHandle, DbOwnerSubmitOptions } from "./db/owner/client";
+import type { DbOwnerRequest } from "./db/owner/protocol";
+import type { RecallParams, RecallResponse } from "./recall/search/memory-search";
 
 const prevSignetPath = process.env.SIGNET_PATH;
 const tmpDir = join(tmpdir(), `signet-test-auth-coloc-${Date.now()}`);
@@ -56,11 +56,11 @@ afterAll(async () => {
 describe("auth guard co-location", () => {
 	beforeAll(async () => {
 		await import("./daemon");
-		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
+		const { closeDbAccessor, initDbAccessor } = await import("./db/owner/accessor");
 		await closeDbAccessor();
 		initDbAccessor(join(tmpDir, "memory", "memories.db"));
 		closeAccessor = closeDbAccessor;
-		const state = await import("./routes/state.js");
+		const state = await import("./http/routes/state.js");
 		state.reloadAuthState(tmpDir);
 		resetAuth = () => {
 			writeFileSync(join(tmpDir, "agent.yaml"), "auth:\n  mode: local\n");
@@ -75,7 +75,7 @@ describe("auth guard co-location", () => {
 
 	it("passes the resolved SQLite runtime to the shared owner", async () => {
 		const { createRecallDbOwnerOptions, daemonMigrationControl } = await import("./daemon");
-		const { MEMORY_DB } = await import("./routes/state.js");
+		const { MEMORY_DB } = await import("./http/routes/state.js");
 		const options = createRecallDbOwnerOptions("/tmp/custom-libsqlite3.dylib");
 		expect(options).toEqual({
 			dbPath: MEMORY_DB,
@@ -89,7 +89,7 @@ describe("auth guard co-location", () => {
 		return res.status;
 	}
 
-	function sessionDeps(): import("./routes/session-routes").SessionRoutesDeps {
+	function sessionDeps(): import("./http/routes/session-routes").SessionRoutesDeps {
 		return {
 			gitConfig: {
 				enabled: false,
@@ -153,11 +153,11 @@ describe("auth guard co-location", () => {
 		}
 
 		it("maps configured reranker provider-down failures to HTTP 503 through recall routes", async () => {
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { Hono } = await import("hono");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { getOrCreateInferenceRouter } = await import("./inference-router");
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { getOrCreateInferenceRouter } = await import("./inference/router/router");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode recall test");
 			const token = createToken(secret, { sub: "reranker-recall", role: "readonly", scope: {} }, 60);
@@ -224,10 +224,10 @@ inference:
 		});
 
 		it("keeps generic recall failures at HTTP 500", async () => {
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { Hono } = await import("hono");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode recall test");
 			const token = createToken(secret, { sub: "internal-recall", role: "readonly", scope: {} }, 60);
@@ -248,11 +248,11 @@ inference:
 		});
 
 		it("records the FTS cause for a partial direct recall", async () => {
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { Hono } = await import("hono");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
-			const { setActiveTelemetry } = await import("./telemetry");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
+			const { setActiveTelemetry } = await import("./telemetry/usage/telemetry");
 			const events: Array<{ event: string; properties: Record<string, unknown> }> = [];
 			setActiveTelemetry({
 				record: (event: string, properties: Readonly<Record<string, string | number | boolean | null>>) =>
@@ -303,12 +303,12 @@ inference:
 		});
 
 		it("records the FTS cause for a partial aggregate recall", async () => {
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { Hono } = await import("hono");
-			const { aggregateRecall } = await import("./aggregate-recall");
+			const { aggregateRecall } = await import("./recall/search/aggregate-recall");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
-			const { setActiveTelemetry } = await import("./telemetry");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
+			const { setActiveTelemetry } = await import("./telemetry/usage/telemetry");
 			const events: Array<{ event: string; properties: Record<string, unknown> }> = [];
 			setActiveTelemetry({
 				record: (event: string, properties: Readonly<Record<string, string | number | boolean | null>>) =>
@@ -367,16 +367,16 @@ inference:
 
 		it("POST /api/memory/remember returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
 			registerMemoryRoutes(app);
 			expect(await status(app, "POST", "/api/memory/remember")).toBe(403);
 		});
 
 		it("POST /api/memory/remember rejects zero-length validity windows", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode remember test");
 
@@ -403,9 +403,9 @@ inference:
 
 		it("POST /api/memory/recall aggregate save requires remember permission", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode recall test");
 
@@ -431,9 +431,9 @@ inference:
 
 		it("POST /api/memory/recall forwards read-only aggregate options", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode recall test");
 
@@ -499,9 +499,9 @@ inference:
 
 		it("POST /api/memory/recall rejects invalid aggregate budgets before aggregation", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode recall test");
 
@@ -538,9 +538,9 @@ inference:
 
 		it("POST /api/memory/recall rejects invalid temporal ranges before recall", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMemoryRoutes } = await import("./routes/memory-routes");
+			const { registerMemoryRoutes } = await import("./http/routes/memory-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode recall test");
 
@@ -588,14 +588,14 @@ inference:
 	describe("session routes need guards", () => {
 		it("GET /api/sessions/summaries returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerSessionRoutes } = await import("./routes/session-routes");
+			const { registerSessionRoutes } = await import("./http/routes/session-routes");
 			registerSessionRoutes(app, sessionDeps());
 			expect(await status(app, "GET", "/api/sessions/summaries")).toBe(403);
 		});
 
 		it("POST /api/git/sync returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerSessionRoutes } = await import("./routes/session-routes");
+			const { registerSessionRoutes } = await import("./http/routes/session-routes");
 			registerSessionRoutes(app, sessionDeps());
 			expect(await status(app, "POST", "/api/git/sync")).toBe(403);
 		});
@@ -604,14 +604,14 @@ inference:
 	describe("misc routes have config guards", () => {
 		it("POST /api/config returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			const { registerMiscRoutes } = await import("./http/routes/misc-routes");
 			registerMiscRoutes(app);
 			expect(await status(app, "POST", "/api/config")).toBe(403);
 		});
 
 		it("POST /api/config rejects oversized payloads before body parsing", async () => {
 			const app = await makeApp();
-			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			const { registerMiscRoutes } = await import("./http/routes/misc-routes");
 			registerMiscRoutes(app);
 			const res = await app.request("/api/config", {
 				method: "POST",
@@ -622,9 +622,9 @@ inference:
 
 		it("POST /api/config rejects retired memory routing before writing", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			const { registerMiscRoutes } = await import("./http/routes/misc-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode config test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
@@ -648,9 +648,9 @@ inference:
 
 		it("POST /api/config leaves pipeline pause changes to the pause and resume routes", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			const { registerMiscRoutes } = await import("./http/routes/misc-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode config test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
@@ -693,9 +693,9 @@ inference:
 		});
 		it("POST /api/agents distinguishes omitted, null, valid, and invalid policy_group", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerMiscRoutes } = await import("./routes/misc-routes");
+			const { registerMiscRoutes } = await import("./http/routes/misc-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode agent test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
@@ -734,7 +734,7 @@ inference:
 	describe("knowledge routes need guards", () => {
 		it("POST /api/knowledge/expand returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerKnowledgeRoutes } = await import("./routes/knowledge-routes");
+			const { registerKnowledgeRoutes } = await import("./http/routes/knowledge-routes");
 			registerKnowledgeRoutes(app);
 			expect(await status(app, "POST", "/api/knowledge/expand")).toBe(403);
 		});
@@ -743,77 +743,77 @@ inference:
 	describe("ontology routes need guards", () => {
 		it("POST /api/ontology/proposals returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "POST", "/api/ontology/proposals")).toBe(403);
 		});
 
 		it("POST /api/ontology/proposals/batch returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "POST", "/api/ontology/proposals/batch")).toBe(403);
 		});
 
 		it("POST /api/ontology/operations/apply returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "POST", "/api/ontology/operations/apply")).toBe(403);
 		});
 
 		it("POST /api/ontology/operations/batch returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "POST", "/api/ontology/operations/batch")).toBe(403);
 		});
 
 		it("GET /api/ontology/proposals/:id/evidence returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "GET", "/api/ontology/proposals/test/evidence")).toBe(403);
 		});
 
 		it("GET /api/ontology/proposals/conflicts returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "GET", "/api/ontology/proposals/conflicts")).toBe(403);
 		});
 
 		it("POST /api/ontology/extract returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "POST", "/api/ontology/extract")).toBe(403);
 		});
 
 		it("POST /api/ontology/consolidate returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "POST", "/api/ontology/consolidate")).toBe(403);
 		});
 
 		it("GET /api/ontology/claims/evidence returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "GET", "/api/ontology/claims/evidence")).toBe(403);
 		});
 
 		it("GET /api/ontology/links/:id/evidence returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "GET", "/api/ontology/links/link-1/evidence")).toBe(403);
 		});
 
 		it("POST /api/ontology/proposals/repair/duplicates returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerOntologyRoutes } = await import("./routes/ontology-routes");
+			const { registerOntologyRoutes } = await import("./http/routes/ontology-routes");
 			registerOntologyRoutes(app);
 			expect(await status(app, "POST", "/api/ontology/proposals/repair/duplicates")).toBe(403);
 		});
@@ -822,7 +822,7 @@ inference:
 	describe("dream routes need guards", () => {
 		it("dream status, quality, pass traces, trigger, evidence requeue, capability registry, and agent operations return 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerPipelineRoutes } = await import("./routes/pipeline-routes");
+			const { registerPipelineRoutes } = await import("./http/routes/pipeline-routes");
 			registerPipelineRoutes(app);
 			expect(await status(app, "GET", "/api/dream/status")).toBe(403);
 			expect(await status(app, "GET", "/api/dream/quality")).toBe(403);
@@ -836,9 +836,9 @@ inference:
 
 		it("binds agent-scoped Dreaming writes to the credential agent", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { registerPipelineRoutes } = await import("./routes/pipeline-routes");
+			const { registerPipelineRoutes } = await import("./http/routes/pipeline-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode Dreaming test");
 			app.use("*", createAuthMiddleware(state.authConfig, secret));
@@ -873,7 +873,7 @@ inference:
 	describe("connector routes need guards", () => {
 		it("POST /api/connectors returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerConnectorRoutes } = await import("./routes/connectors-routes");
+			const { registerConnectorRoutes } = await import("./http/routes/connectors-routes");
 			registerConnectorRoutes(app);
 			expect(await status(app, "POST", "/api/connectors")).toBe(403);
 		});
@@ -882,7 +882,7 @@ inference:
 	describe("repair routes need guards", () => {
 		it("POST /api/repair/requeue-dead returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerRepairRoutes } = await import("./routes/repair-routes");
+			const { registerRepairRoutes } = await import("./http/routes/repair-routes");
 			registerRepairRoutes(app);
 			expect(await status(app, "POST", "/api/repair/requeue-dead")).toBe(403);
 		});
@@ -891,25 +891,25 @@ inference:
 	describe("telemetry routes need analytics guards", () => {
 		it("GET /api/telemetry/health returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerTelemetryRoutes } = await import("./routes/telemetry-routes");
+			const { registerTelemetryRoutes } = await import("./http/routes/telemetry-routes");
 			registerTelemetryRoutes(app);
 			expect(await status(app, "GET", "/api/telemetry/health")).toBe(403);
 		});
 
 		it("GET /api/telemetry/memory-search returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerTelemetryRoutes } = await import("./routes/telemetry-routes");
+			const { registerTelemetryRoutes } = await import("./http/routes/telemetry-routes");
 			registerTelemetryRoutes(app);
 			expect(await status(app, "GET", "/api/telemetry/memory-search")).toBe(403);
 		});
 
 		it("scopes memory search telemetry list and export to the authenticated token", async () => {
 			const app = await makeApp();
-			const state = await import("./routes/state.js");
+			const state = await import("./http/routes/state.js");
 			const { createAuthMiddleware, createToken } = await import("./auth");
-			const { getDbAccessor } = await import("./db-accessor");
-			const { recordMemorySearchTelemetry } = await import("./memory-search-telemetry");
-			const { registerTelemetryRoutes } = await import("./routes/telemetry-routes");
+			const { getDbAccessor } = await import("./db/owner/accessor");
+			const { recordMemorySearchTelemetry } = await import("./telemetry/search/memory-search");
+			const { registerTelemetryRoutes } = await import("./http/routes/telemetry-routes");
 			const secret = state.authSecret;
 			if (!secret) throw new Error("expected auth secret for team-mode telemetry test");
 
@@ -980,7 +980,7 @@ inference:
 	describe("database diagnostics routes need diagnostics guards", () => {
 		it("GET /api/diagnostics/database/schema returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerDatabaseDiagnosticsRoutes } = await import("./routes/database-diagnostics");
+			const { registerDatabaseDiagnosticsRoutes } = await import("./http/routes/database-diagnostics");
 			registerDatabaseDiagnosticsRoutes(app);
 			expect(await status(app, "GET", "/api/diagnostics/database/schema")).toBe(403);
 		});
@@ -989,7 +989,7 @@ inference:
 	describe("plugin routes need guards", () => {
 		it("GET /api/plugins returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerPluginRoutes } = await import("./routes/plugins-routes");
+			const { registerPluginRoutes } = await import("./http/routes/plugins-routes");
 			registerPluginRoutes(app);
 			expect(await status(app, "GET", "/api/plugins")).toBe(403);
 		});
@@ -998,7 +998,7 @@ inference:
 	describe("secret routes need guards", () => {
 		it("GET /api/secrets returns 403 without auth", async () => {
 			const app = await makeApp();
-			const { registerSecretRoutes } = await import("./routes/secrets-routes");
+			const { registerSecretRoutes } = await import("./http/routes/secrets-routes");
 			registerSecretRoutes(app);
 			expect(await status(app, "GET", "/api/secrets")).toBe(403);
 		});

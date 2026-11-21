@@ -2,12 +2,12 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { addWebSource } from "../../platform/core/src/index";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../../platform/daemon/src/db-accessor";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../../platform/daemon/src/db/owner/accessor";
 import {
 	webSourceProvider,
 	setWebDnsLookupForTest,
 	setWebRequestForTest,
-} from "../../platform/daemon/src/web-source-provider";
+} from "../../platform/daemon/src/sources/providers/web/provider";
 
 const previousSignetPath = process.env.SIGNET_PATH;
 const dir = mkdtempSync(join(tmpdir(), "signet-web-source-eval-"));

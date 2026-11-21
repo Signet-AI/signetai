@@ -4,9 +4,9 @@ import * as nodeCrypto from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from "./api-keys";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
-import * as ownerRuntime from "../db-owner-runtime";
-import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db/owner/accessor";
+import * as ownerRuntime from "../db/owner/runtime";
+import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "../db/owner/runtime";
 import { checkPermission } from "./policy";
 
 let tempDir = "";

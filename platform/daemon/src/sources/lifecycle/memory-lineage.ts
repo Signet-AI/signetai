@@ -1,0 +1,2294 @@
+import type { Database } from "bun:sqlite";
+import { withSessionArtifactLease } from "../../transcripts/store/artifact-lease";
+import { admitSessionTranscriptInDb } from "../../transcripts/store/session-transcripts";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, readdir, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+import {
+	type LlmProvider,
+	currentArtifactRelativePath,
+	redactCredentials,
+	resolveDefaultBasePath,
+	resolveWorkspaceLayout,
+} from "@signet/core";
+import { getAgentScope } from "../../agents/identity/agent-id";
+import { yieldEvery } from "../../runtime/concurrency/async-yield";
+import type { WriteDb } from "../../db/owner/accessor";
+import { runWriteTxAsync } from "../../db/owner/accessor";
+import { getDbAccessor } from "../../db/owner/accessor";
+import {
+	dbOwnerBatch,
+	dbOwnerQuery,
+	dbOwnerSourceArtifactUpsert,
+	dbOwnerSourceArtifactUpsertBatch,
+	ownerStatement,
+} from "../../db/owner/runtime";
+import { EPISODIC_CAPTURED_AT_FLOOR, timestampMillis } from "../../dreaming/evidence/episodic-sources";
+import { logger } from "../../runtime/logging/logger";
+import { MEMORY_HEAD_MAX_TOKENS } from "../../dreaming/head/head";
+import { buildAgentScopeClause } from "../../recall/search/memory-search";
+import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "../providers/native-memory/constants";
+import { countTokens } from "../../recall/text/tokenizer";
+import { isNoiseSession, isTempProject } from "../../sessions/noise";
+import { canonicalTranscriptRelativePath } from "../../transcripts/store/jsonl";
+import { awaitPressureClear, isSystemPressureHigh } from "../../telemetry/pressure/system-pressure";
+import { loadMemoryConfig } from "../../config/memory-config";
+import { awaitEmbeddingProviderAvailable } from "../../inference/embeddings/circuit-breaker";
+
+function getAgentsDir(): string {
+	return resolveDefaultBasePath();
+}
+
+function getMemoryDir(): string {
+	return resolveWorkspaceLayout(getAgentsDir()).transcripts;
+}
+
+function memoryRelativePrefix(): string {
+	return resolveWorkspaceLayout(getAgentsDir()).version === 2 ? "transcripts/" : "memory/";
+}
+const HASH_SCOPE = "body-normalized-v1";
+const SANITIZER_VERSION = "sanitize_transcript_v1";
+const SENTENCE_VERSION = "memory_sentence_v1";
+export const IMMUTABLE_ARTIFACT_ERROR_PREFIX = "Refusing to mutate immutable artifact";
+const LEDGER_HEADING = "Session Ledger (Last 30 Days)";
+const LOW_SIGNAL_SENTENCES = new Set(["Investigated issue.", "Worked on task.", "Reviewed code."]);
+const PROJECTION_HEADROOM_TOKENS = 256;
+export const MEMORY_PROJECTION_MAX_TOKENS = Math.max(512, MEMORY_HEAD_MAX_TOKENS - PROJECTION_HEADROOM_TOKENS);
+export const NOISE_PURGE_REASON = "automatic projection cleanup for temp/test sessions";
+const REINDEX_BATCH_SIZE = 50;
+
+const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
+const purgeSeen = new Set<string>();
+const artifactIndexCache = new Map<string, Map<string, string>>();
+
+function reindexStateKey(agentId?: string): string {
+	return `${getAgentsDir()}\0${agentId?.trim() || "*"}`;
+}
+
+export type ArtifactKind = "summary" | "transcript" | "compaction" | "manifest";
+type SentenceQuality = "ok" | "fallback";
+
+interface MemorySentence {
+	readonly text: string;
+	readonly quality: SentenceQuality;
+	readonly generatedAt: string;
+}
+
+interface ArtifactSeed {
+	readonly kind: ArtifactKind;
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+	readonly sessionToken: string;
+	readonly manifestPath: string;
+	readonly sourceNodeId: string | null;
+	readonly memorySentence: MemorySentence;
+	readonly body: string;
+	readonly replaceExisting?: boolean;
+}
+
+interface ManifestState {
+	readonly path: string;
+	readonly revision: number;
+	readonly frontmatter: Record<string, unknown>;
+	readonly body: string;
+}
+
+interface ArtifactRow {
+	readonly agent_id: string;
+	readonly source_path: string;
+	readonly source_sha256: string;
+	readonly source_kind: string;
+	readonly session_id: string;
+	readonly session_key: string | null;
+	readonly session_token: string;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly captured_at: string;
+	readonly started_at: string | null;
+	readonly ended_at: string | null;
+	readonly source_node_id: string | null;
+	readonly memory_sentence: string | null;
+	readonly memory_sentence_quality: string | null;
+	readonly content: string;
+}
+
+interface LedgerSession {
+	readonly sessionToken: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly membershipTs: string;
+	readonly sentence: string;
+	readonly summaryPath: string | null;
+	readonly transcriptPath: string | null;
+	readonly compactionPath: string | null;
+	readonly manifestPath: string | null;
+}
+
+interface ProjectionSection {
+	readonly heading: string;
+	readonly lines: ReadonlyArray<string>;
+}
+
+function readString(frontmatter: Record<string, unknown>, key: string): string | null {
+	const value = frontmatter[key];
+	return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function normalizeLf(text: string): string {
+	return text.replace(/\r\n?/g, "\n");
+}
+
+export function normalizeMarkdownBody(body: string): string {
+	const lines = normalizeLf(body)
+		.split("\n")
+		.map((line) => line.replace(/[ \t]+$/g, ""));
+	while (lines.length > 0 && lines[lines.length - 1] === "") {
+		lines.pop();
+	}
+	return lines.join("\n");
+}
+
+export function hashNormalizedBody(body: string): string {
+	return createHash("sha256").update(normalizeMarkdownBody(body), "utf8").digest("hex");
+}
+
+function toScalar(value: unknown): string {
+	if (value === null) return "null";
+	if (typeof value === "number" || typeof value === "boolean") return String(value);
+	if (typeof value === "string") return JSON.stringify(value);
+	return JSON.stringify(String(value));
+}
+
+function serializeFrontmatter(frontmatter: Record<string, unknown>): string {
+	const lines = ["---"];
+	for (const [key, value] of Object.entries(frontmatter)) {
+		if (Array.isArray(value)) {
+			lines.push(`${key}:`);
+			for (const item of value) {
+				lines.push(`  - ${toScalar(item)}`);
+			}
+			continue;
+		}
+		lines.push(`${key}: ${toScalar(value)}`);
+	}
+	lines.push("---");
+	return lines.join("\n");
+}
+
+function parseScalar(raw: string): unknown {
+	const trimmed = raw.trim();
+	if (trimmed === "null") return null;
+	if (trimmed === "true") return true;
+	if (trimmed === "false") return false;
+	if (/^-?\d+$/.test(trimmed)) return Number.parseInt(trimmed, 10);
+	if (/^-?\d+\.\d+$/.test(trimmed)) return Number.parseFloat(trimmed);
+	if (trimmed.startsWith('"')) {
+		try {
+			return JSON.parse(trimmed);
+		} catch {
+			return trimmed.slice(1, -1);
+		}
+	}
+	return trimmed;
+}
+
+function parseFrontmatterDocument(content: string): { frontmatter: Record<string, unknown>; body: string } {
+	const text = normalizeLf(content);
+	if (!text.startsWith("---\n")) {
+		return { frontmatter: {}, body: text };
+	}
+
+	const end = text.indexOf("\n---\n", 4);
+	if (end === -1) {
+		return { frontmatter: {}, body: text };
+	}
+
+	const raw = text.slice(4, end).split("\n");
+	const frontmatter: Record<string, unknown> = {};
+	let key = "";
+	for (const line of raw) {
+		if (line.startsWith("  - ") && key.length > 0) {
+			const list = frontmatter[key];
+			if (Array.isArray(list)) {
+				list.push(parseScalar(line.slice(4)));
+			}
+			continue;
+		}
+
+		const idx = line.indexOf(":");
+		if (idx === -1) continue;
+		key = line.slice(0, idx).trim();
+		const value = line.slice(idx + 1).trim();
+		if (value.length === 0) {
+			frontmatter[key] = [];
+			continue;
+		}
+		frontmatter[key] = parseScalar(value);
+	}
+
+	return {
+		frontmatter,
+		body: text.slice(end + 5),
+	};
+}
+
+function base32Sha256(input: string): string {
+	const bytes = createHash("sha256").update(input, "utf8").digest();
+	let bits = 0;
+	let value = 0;
+	let out = "";
+	for (const byte of bytes) {
+		value = (value << 8) | byte;
+		bits += 8;
+		while (bits >= 5) {
+			out += BASE32[(value >>> (bits - 5)) & 31];
+			bits -= 5;
+		}
+	}
+	if (bits > 0) {
+		out += BASE32[(value << (5 - bits)) & 31];
+	}
+	return out;
+}
+export function deriveSessionToken(agentId: string, sessionId: string): string {
+	const seed = `${agentId}:${sessionId.trim()}`;
+	return base32Sha256(seed).slice(0, 16);
+}
+
+function fsTimestamp(iso: string): string {
+	return iso.replace(/:/g, "-");
+}
+
+function artifactFileName(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
+	return `${fsTimestamp(capturedAt)}--${sessionToken}--${kind}.md`;
+}
+
+function artifactPath(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
+	return join(getMemoryDir(), artifactFileName(capturedAt, sessionToken, kind));
+}
+
+function relativeArtifactPath(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
+	return `${memoryRelativePrefix()}${artifactFileName(capturedAt, sessionToken, kind)}`;
+}
+
+function storedArtifactRelativePath(path: string): string {
+	return currentArtifactRelativePath(resolveWorkspaceLayout(getAgentsDir()).version, path);
+}
+
+function wikilink(path: string, label?: string): string {
+	return label ? `[[${path}|${label}]]` : `[[${path}]]`;
+}
+
+export function sanitizeTranscriptV1(raw: string): string {
+	return normalizeMarkdownBody(raw);
+}
+
+function pickAnchor(body: string, project: string | null, harness: string | null): string {
+	const path = project ? basename(project.trim()) : "";
+	if (path.length > 0) return path;
+
+	const issue = body.match(/\b(?:PR|pr|issue|Issue|task|TASK)[-#:\s]*([A-Za-z0-9._-]+)\b/);
+	if (issue?.[0]) return issue[0].replace(/\s+/g, "");
+
+	const token = body.match(
+		/\b(?:(?:platform|surfaces|integrations|libs|dist|runtimes|plugins|web|memorybench|packages)\/[A-Za-z0-9._/-]+|[A-Za-z0-9._-]+\.(?:ts|tsx|js|jsx|rs|md))\b/,
+	);
+	if (token?.[0]) return token[0];
+
+	if (harness && harness.trim().length > 0) return harness.trim();
+	return "session";
+}
+
+function tokenCount(text: string): number {
+	return countTokens(text);
+}
+
+function joinParts(parts: ReadonlyArray<string>): string {
+	return parts
+		.filter((part) => part.trim().length > 0)
+		.join("\n\n")
+		.trimEnd();
+}
+
+function renderSection(section: ProjectionSection): string {
+	return [section.heading, "", ...section.lines].join("\n").trimEnd();
+}
+
+function fitsBudget(parts: ReadonlyArray<string>): boolean {
+	return tokenCount(joinParts(parts)) <= MEMORY_PROJECTION_MAX_TOKENS;
+}
+
+function fallbackSentence(body: string, project: string | null, harness: string | null, sourceKind: string): string {
+	const anchor = pickAnchor(body, project, harness);
+	const clean = normalizeMarkdownBody(body).replace(/\n+/g, " ").trim();
+	const preview = clean.length > 120 ? `${clean.slice(0, 117).trim()}...` : clean;
+	const sentence =
+		sourceKind === "compaction"
+			? `Compaction for ${anchor} preserved durable context, linked the active session state, and captured this summary for later MEMORY.md projection and drill-down.`
+			: `Session ${anchor} captured durable ${sourceKind} context, preserved lineage metadata, and recorded this artifact for MEMORY.md projection and later drill-down.`;
+	if (preview.length < 24) return sentence;
+	return sentence;
+}
+
+function sentenceWordCount(text: string): number {
+	return text
+		.trim()
+		.split(/\s+/)
+		.filter((word) => word.length > 0).length;
+}
+
+function hasTerminalPunctuation(text: string): boolean {
+	return /[.!?]$/.test(text.trim());
+}
+
+function hasConcreteAnchor(text: string, body: string, project: string | null): boolean {
+	const anchor = pickAnchor(body, project, null);
+	return (
+		text.includes(anchor) ||
+		!!text.match(
+			/\b(?:(?:platform|surfaces|integrations|libs|dist|runtimes|plugins|web|memorybench|packages)\/|PR#?|issue#?|task#?|[A-Za-z0-9._-]+\.(?:ts|tsx|js|jsx|rs|md))\b/,
+		)
+	);
+}
+
+function validateSentence(text: string, body: string, project: string | null): boolean {
+	if (LOW_SIGNAL_SENTENCES.has(text.trim())) return false;
+	const words = sentenceWordCount(text);
+	if (words < 12 || words > 48) return false;
+	if (!hasTerminalPunctuation(text)) return false;
+	return hasConcreteAnchor(text, body, project);
+}
+
+function coerceSentence(
+	text: string | null,
+	body: string,
+	project: string | null,
+	harness: string | null,
+	sourceKind: string,
+): string {
+	if (text && validateSentence(text, body, project)) return text;
+	return fallbackSentence(body, project, harness, sourceKind);
+}
+
+function sentencePrompt(body: string, project: string | null, sourceKind: string): string {
+	return `Write exactly one sentence summarizing this ${sourceKind} artifact for MEMORY.md.
+
+Rules:
+- 12 to 48 words
+- must end with punctuation
+- include at least one concrete anchor like a project name, path token, issue id, PR id, or component name
+- no lists, no markdown, no quotes
+- exactly one sentence
+
+Project: ${project ?? "none"}
+
+Artifact:
+${body.slice(0, 4000)}`;
+}
+
+export async function resolveMemorySentence(
+	body: string,
+	project: string | null,
+	harness: string | null,
+	sourceKind: string,
+	provider?: LlmProvider | null,
+): Promise<MemorySentence> {
+	const generatedAt = new Date().toISOString();
+	if (provider) {
+		try {
+			const raw = await provider.generate(sentencePrompt(redactCredentials(body), project, sourceKind), {
+				maxTokens: 120,
+				timeoutMs: 10_000,
+			});
+			const cleaned = normalizeMarkdownBody(raw).replace(/\n+/g, " ").trim();
+			const line = cleaned.match(/^(.+?[.!?])(?:\s|$)/)?.[1] ?? cleaned;
+			if (validateSentence(line, body, project)) {
+				return {
+					text: line,
+					quality: "ok",
+					generatedAt,
+				};
+			}
+		} catch {}
+	}
+
+	return {
+		text: fallbackSentence(body, project, harness, sourceKind),
+		quality: "fallback",
+		generatedAt,
+	};
+}
+
+function writeAtomic(path: string, content: string): void {
+	mkdirSync(getMemoryDir(), { recursive: true });
+	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+	writeFileSync(tmp, content, "utf8");
+	renameSync(tmp, path);
+}
+
+function loadManifest(path: string): ManifestState | null {
+	if (!existsSync(path)) return null;
+	const parsed = parseFrontmatterDocument(readFileSync(path, "utf8"));
+	const rawRevision = parsed.frontmatter.revision;
+	return {
+		path,
+		revision: typeof rawRevision === "number" ? rawRevision : 0,
+		frontmatter: parsed.frontmatter,
+		body: parsed.body,
+	};
+}
+
+async function loadManifestAsync(path: string): Promise<ManifestState | null> {
+	try {
+		const parsed = parseFrontmatterDocument(await readFile(path, "utf8"));
+		const rawRevision = parsed.frontmatter.revision;
+		return {
+			path,
+			revision: typeof rawRevision === "number" ? rawRevision : 0,
+			frontmatter: parsed.frontmatter,
+			body: parsed.body,
+		};
+	} catch {
+		return null;
+	}
+}
+
+function writeImmutableArtifact(seed: ArtifactSeed): string {
+	const path = artifactPath(seed.capturedAt, seed.sessionToken, seed.kind);
+	const body = normalizeMarkdownBody(seed.body);
+	const frontmatter: Record<string, unknown> = {
+		kind: seed.kind,
+		agent_id: seed.agentId,
+		session_id: seed.sessionId,
+		session_key: seed.sessionKey,
+		project: seed.project,
+		harness: seed.harness,
+		captured_at: seed.capturedAt,
+		started_at: seed.startedAt,
+		ended_at: seed.endedAt,
+		manifest_path: seed.manifestPath,
+		source_node_id: seed.sourceNodeId,
+		content_sha256: hashNormalizedBody(body),
+		hash_scope: HASH_SCOPE,
+		memory_sentence: seed.memorySentence.text,
+		memory_sentence_version: SENTENCE_VERSION,
+		memory_sentence_quality: seed.memorySentence.quality,
+		memory_sentence_generated_at: seed.memorySentence.generatedAt,
+	};
+	if (seed.kind === "transcript") {
+		frontmatter.sanitizer_version = SANITIZER_VERSION;
+	}
+	const content = `${serializeFrontmatter(frontmatter)}\n${body}\n`;
+
+	if (existsSync(path)) {
+		const existing = parseFrontmatterDocument(readFileSync(path, "utf8"));
+		const fm = existing.frontmatter;
+		const fieldsMatch =
+			fm.kind === frontmatter.kind &&
+			fm.agent_id === frontmatter.agent_id &&
+			fm.session_id === frontmatter.session_id &&
+			fm.hash_scope === frontmatter.hash_scope;
+		if (!fieldsMatch) {
+			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (identity mismatch)`);
+		}
+		const existingBodyHash = hashNormalizedBody(existing.body);
+		const declaredHash =
+			typeof fm.content_sha256 === "string" && fm.content_sha256.length > 0 ? fm.content_sha256 : null;
+		if (declaredHash && declaredHash !== existingBodyHash) {
+			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (checksum mismatch)`);
+		}
+		if (existingBodyHash !== frontmatter.content_sha256 && !seed.replaceExisting) {
+			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (content mismatch)`);
+		}
+		if (existingBodyHash !== frontmatter.content_sha256 && seed.replaceExisting) writeAtomic(path, content);
+		return path;
+	}
+
+	writeAtomic(path, content);
+	return path;
+}
+export interface MemoryArtifactUpsertFields {
+	readonly agentId: string;
+	readonly sourcePath: string;
+	readonly sourceSha256: string;
+	readonly sourceKind: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly sessionToken: string;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+	readonly manifestPath: string | null;
+	readonly sourceNodeId: string | null;
+	readonly memorySentence: string | null;
+	readonly memorySentenceQuality: string | null;
+	readonly content: string;
+	readonly updatedAt: string;
+	readonly sourceMtimeMs: number | null;
+	readonly sourceId: string | null;
+	readonly sourceRoot: string | null;
+	readonly sourceExternalId: string | null;
+	readonly sourceParentPath: string | null;
+	readonly sourceMetaJson: string | null;
+}
+
+export interface MemoryArtifactUpsertOptions {
+	readonly conflictGuardSourceId?: boolean;
+}
+
+const MEMORY_ARTIFACT_UPSERT_SQL = `INSERT INTO memory_artifacts (
+		agent_id, source_path, source_sha256, source_kind, session_id,
+		session_key, session_token, project, harness, captured_at,
+		started_at, ended_at, manifest_path, source_node_id,
+		memory_sentence, memory_sentence_quality, content, updated_at,
+		source_mtime_ms, source_id, source_root, source_external_id,
+		source_parent_path, source_meta_json
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(agent_id, source_path) DO UPDATE SET
+		source_sha256 = excluded.source_sha256,
+		source_kind = excluded.source_kind,
+		session_id = excluded.session_id,
+		session_key = excluded.session_key,
+		session_token = excluded.session_token,
+		project = excluded.project,
+		harness = excluded.harness,
+		captured_at = excluded.captured_at,
+		started_at = excluded.started_at,
+		ended_at = excluded.ended_at,
+		manifest_path = excluded.manifest_path,
+		source_node_id = excluded.source_node_id,
+		memory_sentence = excluded.memory_sentence,
+		memory_sentence_quality = excluded.memory_sentence_quality,
+		content = excluded.content,
+		updated_at = excluded.updated_at,
+		source_mtime_ms = excluded.source_mtime_ms,
+		source_id = excluded.source_id,
+		source_root = excluded.source_root,
+		source_external_id = excluded.source_external_id,
+		source_parent_path = excluded.source_parent_path,
+		source_meta_json = excluded.source_meta_json,
+		is_deleted = 0,
+		deleted_at = NULL`;
+export function upsertMemoryArtifactInTx(
+	db: Database,
+	fields: MemoryArtifactUpsertFields,
+	options: MemoryArtifactUpsertOptions = {},
+): boolean {
+	if (
+		["transcript", "summary", "compaction", "manifest"].includes(fields.sourceKind) &&
+		!admitSessionTranscriptInDb(db, fields)
+	)
+		return false;
+	const sql = options.conflictGuardSourceId
+		? `${MEMORY_ARTIFACT_UPSERT_SQL}\n		WHERE memory_artifacts.source_id = excluded.source_id`
+		: MEMORY_ARTIFACT_UPSERT_SQL;
+	db.prepare(sql).run(
+		fields.agentId,
+		fields.sourcePath,
+		fields.sourceSha256,
+		fields.sourceKind,
+		fields.sessionId,
+		fields.sessionKey,
+		fields.sessionToken,
+		fields.project,
+		fields.harness,
+		fields.capturedAt,
+		fields.startedAt,
+		fields.endedAt,
+		fields.manifestPath,
+		fields.sourceNodeId,
+		fields.memorySentence,
+		fields.memorySentenceQuality,
+		fields.content,
+		fields.updatedAt,
+		fields.sourceMtimeMs,
+		fields.sourceId,
+		fields.sourceRoot,
+		fields.sourceExternalId,
+		fields.sourceParentPath,
+		fields.sourceMetaJson,
+	);
+	return true;
+}
+
+function artifactFieldsFromFrontmatter(
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	sourceMtimeMs = statSync(path).mtimeMs,
+	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
+): MemoryArtifactUpsertFields {
+	const agentId = typeof frontmatter.agent_id === "string" ? frontmatter.agent_id : "default";
+	const sourcePath =
+		options.trustSourcePath && typeof frontmatter.source_path === "string"
+			? frontmatter.source_path.replace(/\\/g, "/")
+			: path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/");
+	const sourceKind = typeof frontmatter.kind === "string" ? frontmatter.kind : "manifest";
+	const sessionId = typeof frontmatter.session_id === "string" ? frontmatter.session_id : sourcePath;
+	const sessionKey = typeof frontmatter.session_key === "string" ? frontmatter.session_key : null;
+	const sessionToken = sourcePath.match(/--([a-z2-7]{16})--/)?.[1] ?? deriveSessionToken(agentId, sessionId);
+	const capturedAt =
+		typeof frontmatter.captured_at === "string" &&
+		timestampMillis(frontmatter.captured_at) >= Date.parse(EPISODIC_CAPTURED_AT_FLOOR)
+			? frontmatter.captured_at
+			: new Date().toISOString();
+	const rawSourceNodeId = typeof frontmatter.source_node_id === "string" ? frontmatter.source_node_id : null;
+	return {
+		agentId,
+		sourcePath,
+		sourceSha256:
+			typeof frontmatter.content_sha256 === "string" ? frontmatter.content_sha256 : hashNormalizedBody(body),
+		sourceKind,
+		sessionId,
+		sessionKey,
+		sessionToken,
+		project: typeof frontmatter.project === "string" ? frontmatter.project : null,
+		harness: typeof frontmatter.harness === "string" ? frontmatter.harness : null,
+		capturedAt,
+		startedAt: typeof frontmatter.started_at === "string" ? frontmatter.started_at : null,
+		endedAt: typeof frontmatter.ended_at === "string" ? frontmatter.ended_at : null,
+		manifestPath: typeof frontmatter.manifest_path === "string" ? frontmatter.manifest_path : null,
+		sourceNodeId:
+			rawSourceNodeId === NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID && !options.trustNativeMarker ? null : rawSourceNodeId,
+		memorySentence: typeof frontmatter.memory_sentence === "string" ? frontmatter.memory_sentence : null,
+		memorySentenceQuality:
+			typeof frontmatter.memory_sentence_quality === "string" ? frontmatter.memory_sentence_quality : null,
+		content: body,
+		updatedAt: typeof frontmatter.updated_at === "string" ? frontmatter.updated_at : new Date().toISOString(),
+		sourceMtimeMs,
+		sourceId: typeof frontmatter.source_id === "string" ? frontmatter.source_id : null,
+		sourceRoot: typeof frontmatter.source_root === "string" ? frontmatter.source_root : null,
+		sourceExternalId: typeof frontmatter.source_external_id === "string" ? frontmatter.source_external_id : null,
+		sourceParentPath: typeof frontmatter.source_parent_path === "string" ? frontmatter.source_parent_path : null,
+		sourceMetaJson: typeof frontmatter.source_meta_json === "string" ? frontmatter.source_meta_json : null,
+	};
+}
+
+function upsertArtifactRowInTx(
+	db: Database,
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	sourceMtimeMs = statSync(path).mtimeMs,
+	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
+): boolean {
+	return upsertMemoryArtifactInTx(db, artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options), {
+		conflictGuardSourceId: false,
+	});
+}
+
+async function requireArtifactAdmission(seed: {
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly capturedAt: string;
+}): Promise<void> {
+	const admitted = await runWriteTxAsync(getDbAccessor(), (db) => admitSessionTranscriptInDb(db, seed));
+	if (!admitted) throw new Error("Session transcript deletion rejects this artifact");
+}
+
+async function upsertArtifactRow(
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	sourceMtimeMs = statSync(path).mtimeMs,
+	options: { readonly trustSourcePath?: boolean; readonly trustNativeMarker?: boolean } = {},
+): Promise<void> {
+	const admitted = await runWriteTxAsync(getDbAccessor(), (db) =>
+		upsertArtifactRowInTx(db as WriteDb as Database, path, frontmatter, body, sourceMtimeMs, options),
+	);
+	if (!admitted) {
+		await unlink(path);
+		throw new Error("Session transcript deletion rejects this artifact");
+	}
+}
+
+async function upsertSourceArtifactRow(
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+	sourceMtimeMs = statSync(path).mtimeMs,
+	options: {
+		readonly trustSourcePath?: boolean;
+		readonly trustNativeMarker?: boolean;
+		readonly signal?: AbortSignal;
+	} = {},
+): Promise<void> {
+	await dbOwnerSourceArtifactUpsert(
+		{ fields: artifactFieldsFromFrontmatter(path, frontmatter, body, sourceMtimeMs, options) },
+		{
+			operation: "sources.artifacts.upsert",
+			lane: "write",
+			workloadClass: "maintenance",
+			deadlineMs: 30_000,
+			estimatedWorkUnits: 2,
+			signal: options.signal,
+		},
+	);
+}
+
+export async function indexExternalMemoryArtifact(input: {
+	readonly agentId?: string;
+	readonly sourcePath: string;
+	readonly sourceKind: string;
+	readonly harness: string;
+	readonly content: string;
+	readonly sourceMtimeMs: number;
+	readonly capturedAt?: string;
+	readonly project?: string | null;
+	readonly sourceId?: string | null;
+	readonly sourceRoot?: string | null;
+	readonly sourceExternalId?: string | null;
+	readonly sourceParentPath?: string | null;
+	readonly sourceMeta?: Readonly<Record<string, unknown>>;
+	readonly signal?: AbortSignal;
+}): Promise<void> {
+	const capturedAt =
+		input.capturedAt ??
+		(Number.isFinite(input.sourceMtimeMs) ? new Date(input.sourceMtimeMs).toISOString() : new Date().toISOString());
+	await upsertSourceArtifactRow(
+		input.sourcePath,
+		{
+			agent_id: input.agentId?.trim() || "default",
+			source_path: input.sourcePath.replace(/\\/g, "/"),
+			kind: input.sourceKind,
+			session_id: `native:${input.harness}:${input.sourcePath}`,
+			session_key: `native:${input.harness}`,
+			project: input.project ?? null,
+			harness: input.harness,
+			captured_at: capturedAt,
+			started_at: capturedAt,
+			ended_at: capturedAt,
+			updated_at: new Date().toISOString(),
+			source_id: input.sourceId ?? null,
+			source_root: input.sourceRoot ?? null,
+			source_external_id: input.sourceExternalId ?? null,
+			source_parent_path: input.sourceParentPath ?? null,
+			source_meta_json: input.sourceMeta ? JSON.stringify(input.sourceMeta) : null,
+			source_node_id: NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID,
+			content_sha256: hashNormalizedBody(input.content),
+			memory_sentence: `Indexed ${input.harness} native memory from ${basename(input.sourcePath)}.`,
+			memory_sentence_quality: "fallback",
+		},
+		input.content,
+		input.sourceMtimeMs,
+		{ trustNativeMarker: true, trustSourcePath: true, signal: input.signal },
+	);
+}
+
+export async function indexCanonicalTranscriptJsonl(input: {
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly harness: string;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+	readonly transcript: string;
+}): Promise<void> {
+	const transcriptPath = canonicalTranscriptRelativePath(input.harness);
+	const sessionToken = deriveSessionToken(input.agentId, input.sessionId);
+	const content = normalizeMarkdownBody(input.transcript);
+	const path = join(getAgentsDir(), transcriptPath);
+	await upsertSourceArtifactRow(
+		path,
+		{
+			agent_id: input.agentId,
+			source_path: `${transcriptPath}#${sessionToken}`,
+			kind: "transcript",
+			session_id: input.sessionId,
+			session_key: input.sessionKey,
+			session_token: sessionToken,
+			project: input.project,
+			harness: input.harness,
+			captured_at: input.capturedAt,
+			started_at: input.startedAt,
+			ended_at: input.endedAt,
+			manifest_path: null,
+			updated_at: new Date().toISOString(),
+			source_node_id: null,
+			content_sha256: hashNormalizedBody(content),
+			hash_scope: HASH_SCOPE,
+			sanitizer_version: SANITIZER_VERSION,
+			memory_sentence: fallbackSentence(content, input.project, input.harness, "transcript"),
+			memory_sentence_quality: "fallback",
+		},
+		content,
+		existsSync(path) ? statSync(path).mtimeMs : Date.now(),
+		{ trustSourcePath: true },
+	);
+}
+
+async function listCanonicalFiles(): Promise<string[]> {
+	const dir = getMemoryDir();
+	if (!existsSync(dir)) return [];
+	const entries = await readdir(dir);
+	return entries
+		.filter((name) => /^\d{4}-\d{2}-\d{2}T.*--[a-z2-7]{16}--(summary|transcript|compaction|manifest)\.md$/.test(name))
+		.map((name) => join(dir, name))
+		.sort();
+}
+
+export async function softDeleteArtifactRowsForPath(
+	path: string,
+	agentId: string | null,
+	deletedAt = new Date().toISOString(),
+	options: { readonly signal?: AbortSignal } = {},
+): Promise<void> {
+	const sourcePath = relativePath(path);
+	const absolutePath = path.replace(/\\/g, "/");
+	const statements = agentId
+		? [
+				ownerStatement(
+					`UPDATE memory_artifacts
+					 SET is_deleted = 1, deleted_at = ?, updated_at = ?
+					 WHERE source_path = ? AND agent_id = ? AND COALESCE(is_deleted, 0) = 0`,
+					[deletedAt, deletedAt, sourcePath, agentId],
+				),
+				ownerStatement(
+					`UPDATE memory_artifacts
+					 SET is_deleted = 1, deleted_at = ?, updated_at = ?
+					 WHERE source_path = ? AND agent_id = ? AND COALESCE(is_deleted, 0) = 0`,
+					[deletedAt, deletedAt, absolutePath, agentId],
+				),
+			]
+		: [
+				ownerStatement(
+					`UPDATE memory_artifacts
+					 SET is_deleted = 1, deleted_at = ?, updated_at = ?
+					 WHERE source_path = ? AND COALESCE(is_deleted, 0) = 0`,
+					[deletedAt, deletedAt, sourcePath],
+				),
+				ownerStatement(
+					`UPDATE memory_artifacts
+					 SET is_deleted = 1, deleted_at = ?, updated_at = ?
+					 WHERE source_path = ? AND COALESCE(is_deleted, 0) = 0`,
+					[deletedAt, deletedAt, absolutePath],
+				),
+			];
+	await dbOwnerBatch(statements, {
+		operation: "sources.artifacts.soft-delete",
+		lane: "write",
+		workloadClass: "maintenance",
+		estimatedWorkUnits: 2,
+		signal: options.signal,
+	});
+}
+
+export async function deleteArtifactRowsForPath(path: string, agentId: string | null): Promise<void> {
+	const sourcePath = relativePath(path);
+	const absolutePath = path.replace(/\\/g, "/");
+	const paths = [sourcePath, absolutePath];
+	const statements = paths.map((value) =>
+		agentId
+			? ownerStatement("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?", [value, agentId])
+			: ownerStatement("DELETE FROM memory_artifacts WHERE source_path = ?", [value]),
+	);
+	await dbOwnerBatch(statements, {
+		operation: "sources.artifacts.delete",
+		lane: "write",
+		workloadClass: "maintenance",
+		estimatedWorkUnits: 2,
+	});
+}
+const reindexFlights = new Map<string, Promise<void>>();
+let reindexTail: Promise<void> = Promise.resolve();
+
+export async function reindexMemoryArtifacts(agentId?: string): Promise<void> {
+	const key = reindexStateKey(agentId);
+	const existing = reindexFlights.get(key);
+	if (existing) return existing;
+
+	const run = reindexTail.catch(() => {}).then(() => doReindex(agentId));
+	const flight = run.finally(() => {
+		if (reindexFlights.get(key) === flight) reindexFlights.delete(key);
+	});
+	reindexFlights.set(key, flight);
+	reindexTail = flight.catch(() => {});
+	await flight;
+}
+
+async function doReindex(agentId?: string): Promise<void> {
+	const scope = agentId?.trim() || null;
+	let breakerOpen = false;
+	const embedding = loadMemoryConfig(getAgentsDir()).embedding;
+	const providerKey = `${embedding.provider}:${embedding.model}:${embedding.base_url ?? ""}`;
+	const initialGate = await awaitEmbeddingProviderAvailable(providerKey, undefined, 1000);
+	if (!initialGate.available) {
+		breakerOpen = true;
+		return;
+	}
+	const files = await listCanonicalFiles();
+	const t0 = performance.now();
+	const stopTimer = logger.time("resources", "reindexMemoryArtifacts");
+	const cacheKey = reindexStateKey(scope ?? undefined);
+	const cache = artifactIndexCache.get(cacheKey) ?? new Map<string, string>();
+	const changedPaths = new Set<string>();
+	interface PendingUpsert {
+		readonly path: string;
+		readonly frontmatter: Record<string, unknown>;
+		readonly body: string;
+		readonly mtime: number;
+		readonly statKey: string;
+		readonly markChanged: boolean;
+	}
+	interface PendingDelete {
+		readonly path: string;
+		readonly statKey: string | null;
+		readonly markChanged: boolean;
+	}
+	const pendingUpserts: PendingUpsert[] = [];
+	const pendingDeletes: PendingDelete[] = [];
+	const cacheOnlyUpdates: Array<{ path: string; statKey: string }> = [];
+	const commitBatchCacheUpserts = (batch: readonly PendingUpsert[]): void => {
+		for (const item of batch) {
+			cache.set(item.path, item.statKey);
+			if (item.markChanged) changedPaths.add(item.path);
+		}
+	};
+	const commitBatchCacheDeletes = (batch: readonly PendingDelete[]): void => {
+		for (const item of batch) {
+			if (item.statKey !== null) {
+				cache.set(item.path, item.statKey);
+			} else {
+				cache.delete(item.path);
+			}
+			if (item.markChanged) changedPaths.add(item.path);
+		}
+	};
+	const flushUpsertBatch = async (): Promise<boolean> => {
+		if (pendingUpserts.length === 0) return false;
+		const batch = [...pendingUpserts];
+		await dbOwnerSourceArtifactUpsertBatch(
+			batch.map((item) => ({
+				fields: artifactFieldsFromFrontmatter(item.path, item.frontmatter, item.body, item.mtime),
+			})),
+			{
+				operation: "sources.reindex.artifacts-upsert",
+				lane: "write",
+				workloadClass: "maintenance",
+				estimatedWorkUnits: batch.length * 2,
+			},
+		);
+		pendingUpserts.length = 0;
+		commitBatchCacheUpserts(batch);
+		return true;
+	};
+	const flushDeleteBatch = async (): Promise<boolean> => {
+		if (pendingDeletes.length === 0) return false;
+		const batch = [...pendingDeletes];
+		const statements = batch.flatMap((item) => {
+			const sourcePath = relativePath(item.path);
+			const absolutePath = item.path.replace(/\\/g, "/");
+			return [sourcePath, absolutePath].map((value) =>
+				scope
+					? ownerStatement("DELETE FROM memory_artifacts WHERE source_path = ? AND agent_id = ?", [value, scope])
+					: ownerStatement("DELETE FROM memory_artifacts WHERE source_path = ?", [value]),
+			);
+		});
+		await dbOwnerBatch(statements, {
+			operation: "sources.reindex.artifacts-delete",
+			lane: "write",
+			workloadClass: "maintenance",
+			estimatedWorkUnits: batch.length * 2,
+		});
+		pendingDeletes.length = 0;
+		commitBatchCacheDeletes(batch);
+		return true;
+	};
+
+	try {
+		const ready = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const row = db
+					.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifacts'`)
+					.get();
+				return row !== undefined;
+			},
+			{ siteToken: "db:memory.reindex.schema" },
+		);
+		if (!ready) {
+			stopTimer({ fileCount: files.length });
+			return;
+		}
+	} catch {
+		stopTimer({ fileCount: files.length });
+		return;
+	}
+
+	const fileSet = new Set(files);
+	if (cache.size === 0) {
+		const dbPaths = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const rows = scope
+					? (db
+							.prepare("SELECT agent_id, source_path, source_mtime_ms FROM memory_artifacts WHERE agent_id = ?")
+							.all(scope) as Array<{
+							agent_id: string;
+							source_path: string;
+							source_mtime_ms?: number | null;
+						}>)
+					: (db.prepare("SELECT agent_id, source_path, source_mtime_ms FROM memory_artifacts").all() as Array<{
+							agent_id: string;
+							source_path: string;
+							source_mtime_ms?: number | null;
+						}>);
+				return rows;
+			},
+			{ siteToken: "db:memory.reindex.paths" },
+		);
+		if (dbPaths.length > 0) {
+			const root = getAgentsDir();
+			const occupied = new Set(dbPaths.map((row) => `${row.agent_id}\0${row.source_path}`));
+			const relocated = dbPaths.flatMap((row) => {
+				const target = storedArtifactRelativePath(row.source_path);
+				if (target === row.source_path) return [];
+				if (occupied.has(`${row.agent_id}\0${target}`)) {
+					throw new Error(`Migrated artifact path already indexed: ${target}`);
+				}
+				if (!fileSet.has(join(root, target))) {
+					throw new Error(`Migrated artifact is missing: ${target}`);
+				}
+				return [
+					ownerStatement("UPDATE memory_artifacts SET source_path = ? WHERE agent_id = ? AND source_path = ?", [
+						target,
+						row.agent_id,
+						row.source_path,
+					]),
+				];
+			});
+			for (let offset = 0; offset < relocated.length; offset += REINDEX_BATCH_SIZE) {
+				await dbOwnerBatch(relocated.slice(offset, offset + REINDEX_BATCH_SIZE), {
+					operation: "sources.reindex.migrated-artifact-paths",
+					lane: "write",
+					workloadClass: "maintenance",
+					estimatedWorkUnits: Math.min(REINDEX_BATCH_SIZE, relocated.length - offset),
+				});
+			}
+			for (const row of dbPaths) {
+				cache.set(join(root, storedArtifactRelativePath(row.source_path)), "0");
+			}
+			for (const path of files) {
+				if (!cache.has(path)) cache.set(path, "0");
+			}
+		}
+	}
+
+	const tombstones = new Set<string>();
+	const table = await dbOwnerQuery<unknown>(
+		ownerStatement(
+			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_artifact_tombstones'",
+			[],
+			"get",
+		),
+		{ operation: "sources.reindex.tombstones.ready", lane: "read" },
+	);
+	if (table) {
+		const rows = await dbOwnerQuery<readonly { readonly session_token: string }[]>(
+			ownerStatement(
+				scope
+					? "SELECT session_token FROM memory_artifact_tombstones WHERE agent_id = ?"
+					: "SELECT session_token FROM memory_artifact_tombstones",
+				scope ? [scope] : [],
+				"all",
+			),
+			{ operation: "sources.reindex.tombstones", lane: "read" },
+		);
+		for (const row of rows) tombstones.add(row.session_token);
+	} else {
+		logger.warn(
+			"watcher",
+			"Tombstone table missing during native source reindex; proceeding without tombstone filter",
+			{
+				operation: "sources.reindex.tombstones",
+			},
+		);
+	}
+
+	const baseYielder = yieldEvery(1);
+	let itemsSinceYield = 0;
+	const yielder = async (): Promise<void> => {
+		itemsSinceYield += 1;
+		if (itemsSinceYield < REINDEX_BATCH_SIZE) return;
+		itemsSinceYield = 0;
+		if (isSystemPressureHigh()) await awaitPressureClear();
+		const gate = await awaitEmbeddingProviderAvailable(providerKey, undefined, 1000);
+		breakerOpen = !gate.available;
+		await baseYielder();
+	};
+	for (const path of files) {
+		if (breakerOpen) break;
+		let statKey: string;
+		let mtime: number;
+		try {
+			const s = await stat(path);
+			statKey = `${s.mtimeMs}:${s.ctimeMs}:${s.size}`;
+			mtime = s.mtimeMs;
+		} catch {
+			await yielder();
+			continue;
+		}
+		if (cache.get(path) === statKey) {
+			await yielder();
+			continue;
+		}
+
+		let content: string;
+		try {
+			content = await readFile(path, "utf8");
+		} catch {
+			cacheOnlyUpdates.push({ path, statKey });
+			continue;
+		}
+
+		const parsed = parseFrontmatterDocument(content);
+		const nextAgent = typeof parsed.frontmatter.agent_id === "string" ? parsed.frontmatter.agent_id : "default";
+		if (scope && nextAgent !== scope) {
+			pendingDeletes.push({ path, statKey, markChanged: false });
+			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && (await flushDeleteBatch())) {
+				await yielder();
+			}
+			continue;
+		}
+		const match = path.match(/--([a-z2-7]{16})--/);
+		const sessionToken = match?.[1];
+		if (sessionToken && tombstones.has(sessionToken)) {
+			pendingDeletes.push({ path, statKey, markChanged: true });
+			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && (await flushDeleteBatch())) {
+				await yielder();
+			}
+			continue;
+		}
+		const body = normalizeMarkdownBody(parsed.body);
+		if (!isValidArtifact(path, parsed.frontmatter, body)) {
+			pendingDeletes.push({ path, statKey, markChanged: true });
+			if (pendingDeletes.length >= REINDEX_BATCH_SIZE && (await flushDeleteBatch())) {
+				await yielder();
+			}
+			continue;
+		}
+		pendingUpserts.push({ path, frontmatter: parsed.frontmatter, body, mtime, statKey, markChanged: true });
+		if (pendingUpserts.length >= REINDEX_BATCH_SIZE) {
+			await yielder();
+			if (!breakerOpen) await flushUpsertBatch();
+		}
+	}
+
+	for (const path of cache.keys()) {
+		if (fileSet.has(path)) continue;
+		if (path.includes(".jsonl#")) continue;
+		pendingDeletes.push({ path, statKey: null, markChanged: true });
+		if (pendingDeletes.length >= REINDEX_BATCH_SIZE && (await flushDeleteBatch())) {
+			await yielder();
+		}
+	}
+
+	if (!breakerOpen && (await flushUpsertBatch())) {
+		await yielder();
+	}
+	if (await flushDeleteBatch()) {
+		await yielder();
+	}
+	for (const { path: p, statKey: sk } of cacheOnlyUpdates) {
+		cache.set(p, sk);
+	}
+
+	artifactIndexCache.set(cacheKey, cache);
+	const elapsed = Math.round(performance.now() - t0);
+
+	stopTimer({
+		fileCount: files.length,
+		duration: elapsed,
+		batchCount: Math.ceil(changedPaths.size / REINDEX_BATCH_SIZE),
+		changedFiles: changedPaths.size,
+	});
+}
+
+function isValidArtifact(path: string, frontmatter: Record<string, unknown>, body: string): boolean {
+	const kind = readString(frontmatter, "kind");
+	if (!kind) return false;
+	if (!["summary", "transcript", "compaction", "manifest"].includes(kind)) return false;
+
+	const agentId = readString(frontmatter, "agent_id");
+	const sessionId = readString(frontmatter, "session_id");
+	const capturedAt = readString(frontmatter, "captured_at");
+	const hashScope = readString(frontmatter, "hash_scope");
+	const contentSha = readString(frontmatter, "content_sha256");
+	if (!agentId || !sessionId || !capturedAt || !hashScope || !contentSha) return false;
+	if (hashScope !== HASH_SCOPE) return false;
+	if (contentSha !== hashNormalizedBody(body)) return false;
+
+	if (kind === "transcript") {
+		const sanitizerVersion = readString(frontmatter, "sanitizer_version");
+		if (sanitizerVersion !== SANITIZER_VERSION) return false;
+	}
+
+	if (kind !== "manifest") {
+		const manifestPath = readString(frontmatter, "manifest_path");
+		if (!manifestPath || !storedArtifactRelativePath(manifestPath).startsWith(memoryRelativePrefix())) return false;
+	}
+
+	const rel = relativePath(path);
+	return rel.startsWith(memoryRelativePrefix()) && rel.endsWith(`--${kind}.md`);
+}
+
+async function ensureManifestRecord(seed: {
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+	readonly sessionToken: string;
+}): Promise<ManifestState> {
+	const path = artifactPath(seed.capturedAt, seed.sessionToken, "manifest");
+	const transcriptPath = relativeArtifactPath(seed.capturedAt, seed.sessionToken, "transcript");
+	const canonicalPath = seed.harness ? canonicalTranscriptRelativePath(seed.harness) : null;
+	const existing = loadManifest(path);
+	if (existing) return existing;
+
+	const frontmatter: Record<string, unknown> = {
+		kind: "manifest",
+		agent_id: seed.agentId,
+		session_id: seed.sessionId,
+		session_key: seed.sessionKey,
+		project: seed.project,
+		harness: seed.harness,
+		captured_at: seed.capturedAt,
+		started_at: seed.startedAt,
+		ended_at: seed.endedAt,
+		summary_path: null,
+		summary_status: "not_requested",
+		transcript_path: transcriptPath,
+		transcript_status: "pending",
+		canonical_transcript_path: canonicalPath,
+		compaction_path: null,
+		updated_at: seed.capturedAt,
+		revision: 1,
+		content_sha256: hashNormalizedBody(""),
+		hash_scope: HASH_SCOPE,
+	};
+	await requireArtifactAdmission(seed);
+	writeAtomic(path, `${serializeFrontmatter(frontmatter)}\n`);
+	const manifest = loadManifest(path);
+	if (!manifest) {
+		throw new Error(`Failed to create manifest ${path}`);
+	}
+	await upsertArtifactRow(path, manifest.frontmatter, manifest.body);
+	return manifest;
+}
+
+async function writeAtomicAsync(path: string, content: string): Promise<void> {
+	await mkdir(getMemoryDir(), { recursive: true });
+	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
+	await writeFile(tmp, content, "utf8");
+	await rename(tmp, path);
+}
+
+async function saveManifestAsyncUnlocked(
+	path: string,
+	frontmatter: Record<string, unknown>,
+	body: string,
+): Promise<ManifestState> {
+	const normalizedBody = normalizeMarkdownBody(body);
+	const content = `${serializeFrontmatter(frontmatter)}\n${normalizedBody}\n`;
+	await writeAtomicAsync(path, content);
+	const manifest = {
+		path,
+		revision: typeof frontmatter.revision === "number" ? frontmatter.revision : 0,
+		frontmatter,
+		body: normalizedBody,
+	};
+	let sourceMtimeMs = Date.now();
+	try {
+		sourceMtimeMs = (await stat(path)).mtimeMs;
+	} catch {}
+	await upsertArtifactRow(path, manifest.frontmatter, manifest.body, sourceMtimeMs);
+	return manifest;
+}
+
+async function findExistingManifest(agentId: string, sessionId: string): Promise<ManifestState | null> {
+	try {
+		const row = await getDbAccessor().withReadDbAsync(
+			async (db) =>
+				db
+					.prepare(
+						`SELECT source_path
+					 FROM memory_artifacts
+					 WHERE agent_id = ? AND source_kind = 'manifest' AND session_id = ?
+					 ORDER BY captured_at ASC
+					 LIMIT 1`,
+					)
+					.get(agentId, sessionId) as { source_path: string } | undefined,
+			{ siteToken: "db:memory.manifest.find" },
+		);
+		if (!row) return null;
+		return loadManifest(join(getAgentsDir(), storedArtifactRelativePath(row.source_path)));
+	} catch {
+		return null;
+	}
+}
+
+function manifestValue(frontmatter: Record<string, unknown>, key: string): string | null {
+	const value = frontmatter[key];
+	return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+export async function ensureCanonicalManifest(seed: {
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+}): Promise<ManifestState> {
+	return withSessionArtifactLease(seed, false, async () => {
+		const existing = await findExistingManifest(seed.agentId, seed.sessionId);
+		if (existing) return existing;
+		return await ensureManifestRecord({
+			...seed,
+			sessionToken: deriveSessionToken(seed.agentId, seed.sessionId),
+		});
+	});
+}
+
+const MANIFEST_LOCK_TIMEOUT_MS = 5_000;
+const MANIFEST_LOCK_STALE_MS = 30_000;
+const MANIFEST_LOCK_RETRY_MS = 25;
+
+interface ManifestLockOwner {
+	readonly pid: number;
+	readonly token: string;
+}
+
+interface ManifestFileUpdate {
+	readonly frontmatter: Record<string, unknown>;
+	readonly body: string;
+}
+
+function manifestLockErrorCode(error: unknown): string | null {
+	if (!(error instanceof Error) || !("code" in error)) return null;
+	const code = error.code;
+	return typeof code === "string" ? code : null;
+}
+
+function parseManifestLockOwner(raw: string): ManifestLockOwner | null {
+	try {
+		const value: unknown = JSON.parse(raw);
+		if (typeof value !== "object" || value === null) return null;
+		const pid = Reflect.get(value, "pid");
+		const token = Reflect.get(value, "token");
+		if (!Number.isInteger(pid) || pid <= 0 || typeof token !== "string" || token.length === 0) return null;
+		return { pid, token };
+	} catch {
+		return null;
+	}
+}
+
+async function readManifestLockOwner(lockPath: string): Promise<ManifestLockOwner | null> {
+	try {
+		return parseManifestLockOwner(await readFile(join(lockPath, "owner.json"), "utf8"));
+	} catch {
+		return null;
+	}
+}
+
+async function manifestLockOwnedBy(lockPath: string, token: string): Promise<boolean> {
+	const owner = await readManifestLockOwner(lockPath);
+	return owner?.pid === process.pid && owner.token === token;
+}
+
+function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return error instanceof Error && "code" in error && error.code === "EPERM";
+	}
+}
+
+async function recoverManifestLock(lockPath: string): Promise<void> {
+	try {
+		const lockStat = await stat(lockPath);
+		const owner = await readManifestLockOwner(lockPath);
+		if (owner) {
+			if (!isProcessAlive(owner.pid)) {
+				await rm(lockPath, { recursive: true, force: true });
+			}
+			return;
+		}
+		if (Date.now() - lockStat.mtimeMs > MANIFEST_LOCK_STALE_MS) {
+			await rm(lockPath, { recursive: true, force: true });
+		}
+	} catch {}
+}
+
+function delayManifestLockRetry(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, MANIFEST_LOCK_RETRY_MS));
+}
+
+async function acquireManifestLock(lockPath: string, path: string): Promise<string> {
+	const startedAt = Date.now();
+	const token = randomUUID();
+	while (true) {
+		let lastError: unknown = null;
+		let owned = false;
+		try {
+			await mkdir(lockPath);
+			let ownerWriteError: unknown = null;
+			try {
+				await writeFile(join(lockPath, "owner.json"), JSON.stringify({ pid: process.pid, token }), "utf8");
+			} catch (error) {
+				if (await manifestLockOwnedBy(lockPath, token)) {
+					await rm(lockPath, { recursive: true, force: true });
+				}
+				ownerWriteError = error;
+			}
+			const ownerWriteCode = manifestLockErrorCode(ownerWriteError);
+			if (ownerWriteError && ownerWriteCode !== "EEXIST" && ownerWriteCode !== "ENOENT") {
+				throw ownerWriteError;
+			}
+			lastError = ownerWriteError;
+			if (!ownerWriteError) {
+				owned = await manifestLockOwnedBy(lockPath, token);
+				if (owned) return token;
+			}
+		} catch (error) {
+			if (manifestLockErrorCode(error) !== "EEXIST") throw error;
+			lastError = error;
+		}
+		if (manifestLockErrorCode(lastError) === "EEXIST") await recoverManifestLock(lockPath);
+		if (Date.now() - startedAt > MANIFEST_LOCK_TIMEOUT_MS) {
+			throw new Error(`Timed out waiting for manifest lock: ${path}`, { cause: lastError });
+		}
+		await delayManifestLockRetry();
+	}
+}
+
+async function releaseManifestLock(lockPath: string, token: string): Promise<void> {
+	if (!(await manifestLockOwnedBy(lockPath, token))) return;
+	await rm(lockPath, { recursive: true, force: true });
+}
+
+async function withManifestLock<T>(path: string, fn: () => Promise<T> | T): Promise<T> {
+	const lockPath = `${path}.lock`;
+	const token = await acquireManifestLock(lockPath, path);
+	try {
+		return await fn();
+	} finally {
+		await releaseManifestLock(lockPath, token);
+	}
+}
+
+let manifestUpdateTail: Promise<void> = Promise.resolve();
+
+function enqueueManifestUpdate<T>(work: () => Promise<T>): Promise<T> {
+	const run = manifestUpdateTail.catch(() => {}).then(work);
+	manifestUpdateTail = run.then(
+		() => undefined,
+		() => undefined,
+	);
+	return run;
+}
+
+async function mutateManifest(
+	path: string,
+	mutate: (current: ManifestState) => ManifestFileUpdate | null,
+): Promise<ManifestState | null> {
+	return enqueueManifestUpdate(() =>
+		withManifestLock(path, async () => {
+			const current = await loadManifestAsync(path);
+			if (!current) return null;
+			const next = mutate(current);
+			if (!next) return current;
+			return saveManifestAsyncUnlocked(path, next.frontmatter, next.body);
+		}),
+	);
+}
+
+export async function updateManifest(
+	path: string,
+	mutate: (frontmatter: Record<string, unknown>) => Record<string, unknown>,
+): Promise<ManifestState> {
+	const manifest = await loadManifestAsync(path);
+	if (!manifest) throw new Error(`Manifest not found: ${path}`);
+	const agentId = manifestValue(manifest.frontmatter, "agent_id");
+	const sessionId = manifestValue(manifest.frontmatter, "session_id");
+	const capturedAt = manifestValue(manifest.frontmatter, "captured_at");
+	if (!agentId || !sessionId || !capturedAt) throw new Error("Manifest has no session identity");
+	const identity = { agentId, sessionId, sessionKey: manifestValue(manifest.frontmatter, "session_key"), capturedAt };
+	return withSessionArtifactLease(identity, false, async () => {
+		await requireArtifactAdmission(identity);
+		const result = await mutateManifest(path, (current) => {
+			const next = mutate({ ...current.frontmatter });
+			const revision = typeof next.revision === "number" ? next.revision : current.revision;
+			next.revision = revision + 1;
+			next.updated_at = new Date().toISOString();
+			if (!("content_sha256" in next)) {
+				next.content_sha256 = hashNormalizedBody(current.body);
+			}
+			if (!("hash_scope" in next)) {
+				next.hash_scope = HASH_SCOPE;
+			}
+			return { frontmatter: next, body: current.body };
+		});
+		if (!result) throw new Error(`Manifest not found: ${path}`);
+		return result;
+	});
+}
+
+function relativePath(path: string): string {
+	return path.replace(`${getAgentsDir()}/`, "").replace(/\\/g, "/");
+}
+
+export async function writeTranscriptArtifact(params: {
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+	readonly transcript: string;
+	readonly summaryStatus?: "pending" | "skipped" | "not_requested";
+	readonly replaceExisting?: boolean;
+}): Promise<{ readonly manifestPath: string; readonly transcriptPath: string }> {
+	return withSessionArtifactLease(params, false, async () => {
+		await requireArtifactAdmission(params);
+		const manifest = await ensureCanonicalManifest(params);
+		const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
+		const body = sanitizeTranscriptV1(params.transcript);
+		const sentence = {
+			text: fallbackSentence(body, params.project, params.harness, "transcript"),
+			quality: "fallback" as const,
+			generatedAt: new Date().toISOString(),
+		};
+		const fullPath = writeImmutableArtifact({
+			kind: "transcript",
+			agentId: params.agentId,
+			sessionId: params.sessionId,
+			sessionKey: params.sessionKey,
+			project: params.project,
+			harness: params.harness,
+			capturedAt: manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt,
+			startedAt: params.startedAt,
+			endedAt: params.endedAt,
+			sessionToken,
+			manifestPath: relativePath(manifest.path),
+			sourceNodeId: null,
+			memorySentence: sentence,
+			body,
+			replaceExisting: params.replaceExisting,
+		});
+		const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
+		await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+		await updateManifest(manifest.path, (frontmatter) => {
+			const existingSummaryStatus = manifestValue(frontmatter, "summary_status");
+			const terminalSummaryStatus =
+				existingSummaryStatus === "completed" ||
+				existingSummaryStatus === "failed" ||
+				existingSummaryStatus === "skipped";
+			return {
+				...frontmatter,
+				transcript_path: relativePath(fullPath),
+				transcript_status: "completed",
+				canonical_transcript_path: params.harness ? canonicalTranscriptRelativePath(params.harness) : null,
+				summary_status: frontmatter.summary_path
+					? "completed"
+					: terminalSummaryStatus
+						? existingSummaryStatus
+						: (params.summaryStatus ?? frontmatter.summary_status ?? "not_requested"),
+			};
+		});
+		return {
+			manifestPath: relativePath(manifest.path),
+			transcriptPath: relativePath(fullPath),
+		};
+	});
+}
+
+export async function writeSummaryArtifact(params: {
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+	readonly summary: string;
+	readonly provider?: LlmProvider | null;
+}): Promise<{ readonly manifestPath: string; readonly summaryPath: string }> {
+	return withSessionArtifactLease(params, false, async () => {
+		await requireArtifactAdmission(params);
+		const manifest = await ensureCanonicalManifest(params);
+		const capturedAt = manifestValue(manifest.frontmatter, "captured_at") ?? params.capturedAt;
+		const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
+		const body = normalizeMarkdownBody(params.summary);
+		const sentence = await resolveMemorySentence(body, params.project, params.harness, "summary", params.provider);
+		const fullPath = writeImmutableArtifact({
+			kind: "summary",
+			agentId: params.agentId,
+			sessionId: params.sessionId,
+			sessionKey: params.sessionKey,
+			project: params.project,
+			harness: params.harness,
+			capturedAt,
+			startedAt: params.startedAt,
+			endedAt: params.endedAt,
+			sessionToken,
+			manifestPath: relativePath(manifest.path),
+			sourceNodeId: null,
+			memorySentence: sentence,
+			body,
+		});
+		const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
+		await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+		await updateManifest(manifest.path, (frontmatter) => ({
+			...frontmatter,
+			summary_path: relativePath(fullPath),
+			summary_status: "completed",
+		}));
+		return {
+			manifestPath: relativePath(manifest.path),
+			summaryPath: relativePath(fullPath),
+		};
+	});
+}
+
+export async function writeCompactionArtifact(params: {
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly harness: string | null;
+	readonly capturedAt: string;
+	readonly startedAt: string | null;
+	readonly endedAt: string | null;
+	readonly summary: string;
+	readonly provider?: LlmProvider | null;
+}): Promise<{ readonly manifestPath: string; readonly compactionPath: string }> {
+	return withSessionArtifactLease(params, false, async () => {
+		await requireArtifactAdmission(params);
+		const manifest = await ensureCanonicalManifest(params);
+		const capturedAt = params.capturedAt;
+		const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
+		const body = normalizeMarkdownBody(params.summary);
+		const sentence = await resolveMemorySentence(body, params.project, params.harness, "compaction", params.provider);
+		const fullPath = writeImmutableArtifact({
+			kind: "compaction",
+			agentId: params.agentId,
+			sessionId: params.sessionId,
+			sessionKey: params.sessionKey,
+			project: params.project,
+			harness: params.harness,
+			capturedAt,
+			startedAt: params.startedAt,
+			endedAt: params.endedAt,
+			sessionToken,
+			manifestPath: relativePath(manifest.path),
+			sourceNodeId: null,
+			memorySentence: sentence,
+			body,
+		});
+		const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
+		await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));
+		await updateManifest(manifest.path, (frontmatter) => ({
+			...frontmatter,
+			compaction_path: relativePath(fullPath),
+			ended_at: params.endedAt,
+		}));
+		return {
+			manifestPath: relativePath(manifest.path),
+			compactionPath: relativePath(fullPath),
+		};
+	});
+}
+
+function buildTemporalIndex(
+	nodes: ReadonlyArray<{
+		readonly id: string;
+		readonly kind: string;
+		readonly source_type: string;
+		readonly depth: number;
+		readonly latest_at: string;
+		readonly project: string | null;
+		readonly session_key: string | null;
+		readonly source_ref: string | null;
+		readonly content: string;
+	}>,
+): string {
+	const lines = nodes.map((node) => {
+		const preview = normalizeMarkdownBody(node.content).replace(/\n+/g, " ").trim().slice(0, 120);
+		return `- id=${node.id} kind=${node.kind} source=${node.source_type} depth=${node.depth} session=${node.session_key ?? "none"} project=${node.project ?? "none"} ref=${node.source_ref ?? "none"} latest=${node.latest_at}\n  summary: ${preview}`;
+	});
+	if (lines.length === 0) return "";
+	return renderSection({
+		heading: "## Temporal Index",
+		lines,
+	});
+}
+
+async function readThreadHeads(agentId: string): Promise<
+	ReadonlyArray<{
+		readonly label: string;
+		readonly source_type: string;
+		readonly latest_at: string;
+		readonly sample: string;
+		readonly node_id: string;
+		readonly project: string | null;
+		readonly session_key: string | null;
+		readonly harness: string | null;
+	}>
+> {
+	try {
+		const rows = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				return db
+					.prepare(
+						`SELECT label, source_type, latest_at, sample, node_id, project, session_key, harness
+				 FROM memory_thread_heads
+				 WHERE agent_id = ?
+				 ORDER BY latest_at DESC
+				 LIMIT 12`,
+					)
+					.all(agentId) as Array<{
+					label: string;
+					source_type: string;
+					latest_at: string;
+					sample: string;
+					node_id: string;
+					project: string | null;
+					session_key: string | null;
+					harness: string | null;
+				}>;
+			},
+			{ siteToken: "db:memory.projection.thread-heads" },
+		);
+		return rows.filter(
+			(row) =>
+				!isNoiseSession({
+					project: row.project,
+					sessionKey: row.session_key,
+					sessionId: row.node_id,
+					harness: row.harness,
+				}),
+		);
+	} catch {
+		return [];
+	}
+}
+
+async function readTopMemories(agentId: string): Promise<
+	ReadonlyArray<{
+		readonly content: string;
+		readonly type: string;
+		readonly importance: number;
+		readonly project: string | null;
+	}>
+> {
+	try {
+		const scope = await getAgentScope(agentId);
+		const clause = buildAgentScopeClause(agentId, scope.readPolicy, scope.policyGroup);
+		const rows = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				return db
+					.prepare(
+						`SELECT m.id, m.content, m.type, m.importance, m.project
+				 FROM memories m
+				 WHERE m.is_deleted = 0${clause.sql}
+				 ORDER BY m.pinned DESC, m.importance DESC, m.created_at DESC
+				 LIMIT 32`,
+					)
+					.all(...clause.args) as Array<{
+					id: string;
+					content: string;
+					type: string;
+					importance: number;
+					project: string | null;
+				}>;
+			},
+			{ siteToken: "db:memory.projection.top-memories" },
+		);
+		return rows.filter((row) => !isNoiseSession({ project: row.project })).slice(0, 8);
+	} catch {
+		return [];
+	}
+}
+
+async function readTemporalNodes(agentId: string): Promise<
+	ReadonlyArray<{
+		readonly id: string;
+		readonly kind: string;
+		readonly source_type: string;
+		readonly depth: number;
+		readonly latest_at: string;
+		readonly project: string | null;
+		readonly session_key: string | null;
+		readonly source_ref: string | null;
+		readonly content: string;
+	}>
+> {
+	try {
+		const rows = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				return db
+					.prepare(
+						`SELECT id, kind, COALESCE(source_type, kind) AS source_type, depth, latest_at,
+				        project, session_key, source_ref, content
+				 FROM session_summaries
+				 WHERE agent_id = ?
+				 ORDER BY latest_at DESC
+				 LIMIT 20`,
+					)
+					.all(agentId) as Array<{
+					id: string;
+					kind: string;
+					source_type: string;
+					depth: number;
+					latest_at: string;
+					project: string | null;
+					session_key: string | null;
+					source_ref: string | null;
+					content: string;
+				}>;
+			},
+			{ siteToken: "db:memory.projection.temporal-nodes" },
+		);
+		return rows.filter(
+			(row) =>
+				!isNoiseSession({
+					project: row.project,
+					sessionKey: row.session_key,
+					sessionId: row.id,
+				}),
+		);
+	} catch {
+		return [];
+	}
+}
+
+function chooseSentence(rows: ReadonlyArray<ArtifactRow>): ArtifactRow | null {
+	const ranked = [...rows].sort((a, b) => {
+		const rank = (row: ArtifactRow): number => {
+			if (row.source_kind === "transcript") return 3;
+			if (row.source_kind === "compaction") return 2;
+			if (row.source_kind === "summary") return 1;
+			return 0;
+		};
+		return rank(b) - rank(a) || (b.ended_at ?? b.captured_at).localeCompare(a.ended_at ?? a.captured_at);
+	});
+	return ranked[0] ?? null;
+}
+
+function sessionProject(rows: ReadonlyArray<ArtifactRow>): string | null {
+	for (const row of rows) {
+		if (row.project) return row.project;
+	}
+	return null;
+}
+
+function sessionId(rows: ReadonlyArray<ArtifactRow>): string {
+	return rows[0]?.session_id ?? "unknown";
+}
+
+function pathForKind(rows: ReadonlyArray<ArtifactRow>, kind: string): string | null {
+	for (const row of rows) {
+		if (row.source_kind === kind) return row.source_path;
+	}
+	return null;
+}
+
+function membershipTs(rows: ReadonlyArray<ArtifactRow>): string {
+	const picked = chooseSentence(rows);
+	if (!picked) return rows[0]?.captured_at ?? new Date().toISOString();
+	return picked.ended_at ?? picked.captured_at;
+}
+
+async function buildLedger(agentId: string): Promise<ReadonlyArray<LedgerSession>> {
+	const now = Date.now();
+	const floor = now - 30 * 24 * 60 * 60 * 1000;
+	let rows: ArtifactRow[] = [];
+	try {
+		rows = await getDbAccessor().withReadDbAsync(
+			async (db) =>
+				db
+					.prepare(
+						`SELECT agent_id, source_path, source_sha256, source_kind, session_id, session_key,
+					        session_token, project, harness, captured_at, started_at, ended_at,
+					        source_node_id, memory_sentence, memory_sentence_quality, content
+					 FROM memory_artifacts
+					 WHERE agent_id = ?
+					   AND source_kind IN ('summary', 'transcript', 'compaction', 'manifest')
+					 ORDER BY COALESCE(ended_at, captured_at) DESC, captured_at DESC`,
+					)
+					.all(agentId) as ArtifactRow[],
+			{ siteToken: "db:memory.projection.ledger" },
+		);
+	} catch {
+		rows = [];
+	}
+
+	const bySession = new Map<string, ArtifactRow[]>();
+	for (const row of rows) {
+		const bucket = bySession.get(row.session_token);
+		if (bucket) {
+			bucket.push(row);
+			continue;
+		}
+		bySession.set(row.session_token, [row]);
+	}
+
+	const sessions: LedgerSession[] = [];
+	for (const [token, group] of bySession) {
+		const stamp = Date.parse(membershipTs(group));
+		if (!Number.isFinite(stamp) || stamp < floor || stamp > now) continue;
+		const picked = chooseSentence(group);
+		if (!picked?.memory_sentence) continue;
+		if (
+			isNoiseSession({
+				project: sessionProject(group),
+				sessionKey: picked.session_key,
+				sessionId: sessionId(group),
+				harness: picked.harness,
+			})
+		) {
+			continue;
+		}
+		sessions.push({
+			sessionToken: token,
+			sessionId: sessionId(group),
+			sessionKey: picked.session_key,
+			project: sessionProject(group),
+			membershipTs: membershipTs(group),
+			sentence: coerceSentence(
+				picked.memory_sentence,
+				picked.content,
+				picked.project,
+				picked.harness,
+				picked.source_kind,
+			),
+			summaryPath: pathForKind(group, "summary"),
+			transcriptPath: pathForKind(group, "transcript"),
+			compactionPath: pathForKind(group, "compaction"),
+			manifestPath: pathForKind(group, "manifest"),
+		});
+	}
+
+	sessions.sort((a, b) => b.membershipTs.localeCompare(a.membershipTs));
+	return sessions;
+}
+
+function renderLedgerRows(sessions: ReadonlyArray<LedgerSession>): string[] {
+	if (sessions.length === 0) {
+		return ["- no in-window sessions yet."];
+	}
+
+	const lines: string[] = [];
+	let day = "";
+	for (const session of sessions) {
+		const utcDay = session.membershipTs.slice(0, 10);
+		if (utcDay !== day) {
+			day = utcDay;
+			if (lines.length > 0) {
+				lines.push("");
+			}
+			lines.push(`### ${utcDay}`, "");
+		}
+		const links = [
+			session.summaryPath ? wikilink(session.summaryPath, "summary") : "",
+			session.transcriptPath ? wikilink(session.transcriptPath, "transcript") : "",
+			session.compactionPath ? wikilink(session.compactionPath, "compaction") : "",
+			session.manifestPath ? wikilink(session.manifestPath, "manifest") : "",
+		].filter((value) => value.length > 0);
+		lines.push(
+			`- ${session.membershipTs} | session=${session.sessionKey ?? session.sessionId} | project=${session.project ?? "none"} | ${session.sentence} ${links.join(" ")}`.trim(),
+		);
+	}
+	return lines;
+}
+
+function renderLedgerSection(
+	sessions: ReadonlyArray<LedgerSession>,
+	base: ReadonlyArray<string>,
+): { readonly block: string; readonly count: number } {
+	function renderCount(count: number): string {
+		const kept = sessions.slice(0, count);
+		const clipped = sessions.length - kept.length;
+		const lines =
+			clipped > 0
+				? [
+						`- older ledger rows clipped: kept ${kept.length} of ${sessions.length} in-window sessions within projection budget.`,
+						"",
+						...renderLedgerRows(kept),
+					]
+				: renderLedgerRows(kept);
+		return renderSection({
+			heading: `## ${LEDGER_HEADING}`,
+			lines,
+		});
+	}
+	if (fitsBudget([...base, renderCount(sessions.length)])) {
+		return {
+			block: renderCount(sessions.length),
+			count: sessions.length,
+		};
+	}
+
+	let low = 1;
+	let high = sessions.length;
+	let best = 0;
+	while (low <= high) {
+		const mid = Math.floor((low + high) / 2);
+		const block = renderCount(mid);
+		if (fitsBudget([...base, block])) {
+			best = mid;
+			low = mid + 1;
+			continue;
+		}
+		high = mid - 1;
+	}
+
+	if (best > 0) {
+		return {
+			block: renderCount(best),
+			count: best,
+		};
+	}
+
+	if (sessions.length === 0) {
+		return {
+			block: renderCount(0),
+			count: 0,
+		};
+	}
+
+	return {
+		block: renderSection({
+			heading: `## ${LEDGER_HEADING}`,
+			lines: [`- older ledger rows clipped: kept 0 of ${sessions.length} in-window sessions within projection budget.`],
+		}),
+		count: 0,
+	};
+}
+
+function renderIndexSection(indexBlock: string, base: ReadonlyArray<string>): string {
+	if (indexBlock.trim().length === 0) return "";
+	if (fitsBudget([...base, indexBlock])) return indexBlock;
+
+	const lines = indexBlock.split("\n");
+	while (lines.length > 2) {
+		lines.pop();
+		const next = lines.join("\n").trimEnd();
+		if (fitsBudget([...base, next])) {
+			return next;
+		}
+	}
+
+	return "";
+}
+
+export async function renderMemoryProjection(agentId = "default"): Promise<{
+	content: string;
+	fileCount: number;
+	indexBlock: string;
+}> {
+	await reindexMemoryArtifacts(agentId);
+	const memories = await readTopMemories(agentId);
+	const threadHeads = await readThreadHeads(agentId);
+	const nodes = await readTemporalNodes(agentId);
+	const ledger = await buildLedger(agentId);
+	const indexBlock = buildTemporalIndex(nodes);
+
+	const globalLines =
+		memories.length > 0
+			? memories.map((row) => `- [${row.type}] ${row.content}`)
+			: ["- no durable global head items yet."];
+	const threadLines =
+		threadHeads.length > 0
+			? threadHeads.flatMap((row) => [
+					`### ${row.label}`,
+					`- ${row.sample}`,
+					`- latest=${row.latest_at} source=${row.source_type} node=${row.node_id}`,
+					"",
+				])
+			: ["- no thread heads yet."];
+	const openLines =
+		threadHeads.length > 0 ? threadHeads.slice(0, 8).map((row) => `- ${row.label}`) : ["- no open thread heads yet."];
+	const durableLines =
+		memories.length > 0 ? memories.slice(0, 8).map((row) => `- ${row.content}`) : ["- no durable notes yet."];
+
+	const parts = [
+		"# Working Memory Summary",
+		renderSection({
+			heading: "## Global Head (Tier 1)",
+			lines: globalLines,
+		}),
+		renderSection({
+			heading: "## Thread Heads (Tier 2)",
+			lines: threadLines,
+		}),
+		renderSection({
+			heading: "## Open Threads",
+			lines: openLines,
+		}),
+		renderSection({
+			heading: "## Durable Notes & Constraints",
+			lines: durableLines,
+		}),
+	];
+	const ledgerBlock = renderLedgerSection(ledger, parts);
+	parts.push(ledgerBlock.block);
+	const trimmedIndex = renderIndexSection(indexBlock, parts);
+	if (trimmedIndex.length > 0) {
+		parts.push(trimmedIndex);
+	}
+
+	return {
+		content: redactCredentials(joinParts(parts)),
+		fileCount: memories.length + threadHeads.length + ledgerBlock.count + nodes.length,
+		indexBlock: redactCredentials(trimmedIndex),
+	};
+}
+
+export function appendSynthesisIndexBlock(content: string, indexBlock: string): string {
+	const trimmed = content.trimEnd();
+	if (trimmed.includes("## Temporal Index")) return trimmed;
+	if (indexBlock.trim().length === 0) return trimmed;
+	return `${trimmed}\n\n${indexBlock.trim()}`;
+}
+
+export async function removeCanonicalSession(agentId: string, sessionToken: string, reason: string): Promise<void> {
+	const rows = await getDbAccessor().withReadDbAsync(
+		async (db) =>
+			db
+				.prepare(
+					`SELECT source_path
+				 FROM memory_artifacts
+				 WHERE agent_id = ? AND session_token = ?`,
+				)
+				.all(agentId, sessionToken) as Array<{ source_path: string }>,
+		{ siteToken: "db:memory.session.paths" },
+	);
+	const paths = rows.map((row) => row.source_path);
+	await runWriteTxAsync(getDbAccessor(), (db) => {
+		db.prepare(
+			`INSERT INTO memory_artifact_tombstones (
+				agent_id, session_token, removed_at, reason, removed_paths
+			) VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(agent_id, session_token) DO UPDATE SET
+				removed_at = excluded.removed_at,
+				reason = excluded.reason,
+				removed_paths = excluded.removed_paths`,
+		).run(agentId, sessionToken, new Date().toISOString(), reason, JSON.stringify(paths));
+		db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ? AND session_token = ?").run(agentId, sessionToken);
+	});
+	for (const path of paths) {
+		rmSync(join(getAgentsDir(), storedArtifactRelativePath(path)), { force: true });
+	}
+}
+
+function isNoiseArtifactGroup(
+	rows: ReadonlyArray<{
+		session_id: string;
+		session_key: string | null;
+		project: string | null;
+		harness: string | null;
+	}>,
+): boolean {
+	let hasProject = false;
+	for (const row of rows) {
+		if (isTempProject(row.project)) return true;
+		if (typeof row.project === "string" && row.project.trim().length > 0) {
+			hasProject = true;
+		}
+	}
+	if (hasProject) return false;
+	return rows.some((row) =>
+		isNoiseSession({
+			project: null,
+			sessionKey: row.session_key,
+			sessionId: row.session_id,
+			harness: row.harness,
+		}),
+	);
+}
+
+export async function purgeCanonicalNoiseSessions(agentId: string, reason: string): Promise<number> {
+	const rows = await getDbAccessor().withReadDbAsync(
+		async (db) =>
+			db
+				.prepare(
+					`SELECT session_token, session_id, session_key, project, harness
+				 FROM memory_artifacts
+				 WHERE agent_id = ?
+				   AND source_kind IN ('summary', 'transcript', 'compaction')
+				 ORDER BY session_token`,
+				)
+				.all(agentId) as Array<{
+				session_token: string;
+				session_id: string;
+				session_key: string | null;
+				project: string | null;
+				harness: string | null;
+			}>,
+		{ siteToken: "db:memory.noise.sessions" },
+	);
+	const groups = new Map<
+		string,
+		Array<{
+			session_id: string;
+			session_key: string | null;
+			project: string | null;
+			harness: string | null;
+		}>
+	>();
+	for (const row of rows) {
+		const group = groups.get(row.session_token);
+		if (group) {
+			group.push(row);
+			continue;
+		}
+		groups.set(row.session_token, [row]);
+	}
+	let count = 0;
+	for (const [sessionToken, group] of groups) {
+		if (!isNoiseArtifactGroup(group)) continue;
+		await removeCanonicalSession(agentId, sessionToken, reason);
+		count++;
+	}
+	return count;
+}
+
+function purgeScope(agentId: string): string {
+	return `${getAgentsDir()}\u0000${agentId}`;
+}
+
+export async function purgeCanonicalNoiseSessionsOnce(agentId: string, reason: string): Promise<number> {
+	const key = purgeScope(agentId);
+	if (purgeSeen.has(key)) return 0;
+	const count = await purgeCanonicalNoiseSessions(agentId, reason);
+	purgeSeen.add(key);
+	return count;
+}
+
+export function resetProjectionPurgeState(): void {
+	purgeSeen.clear();
+	artifactIndexCache.clear();
+}

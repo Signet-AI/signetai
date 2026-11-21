@@ -1,0 +1,145 @@
+import { expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { execFileSync, spawnSync } from "node:child_process";
+import { runHarnessInspection, stopHarnessHealth } from "./health";
+
+const request = (id: string) => ({ id, configured: true, lastSeen: null });
+
+test("overlapping inspections share one child and its result", async () => {
+	const dir = mkdtempSync("/tmp/signet-health-shared-");
+	const entrypoint = join(dir, "worker.ts");
+	const spawns = join(dir, "spawns");
+	writeFileSync(
+		entrypoint,
+		`
+import { appendFileSync } from "node:fs";
+const workerData = JSON.parse(process.env.SIGNET_HEALTH_INSPECTION);
+appendFileSync(${JSON.stringify(spawns)}, workerData.id + "\\n");
+import { inspectRegisteredConnector } from ${JSON.stringify(join(import.meta.dir, "../install/registry.ts"))};
+class Connector {
+ name = "fixture";
+ getConfigPath() { return ""; }
+ isDetected() { return true; }
+ isInstalled() { return true; }
+ async inspectHealth() { await new Promise((resolve) => setTimeout(resolve, 300)); return {status:"healthy",message:"Probe passed"}; }
+}
+console.log("SIGNET_HEALTH_RESULT " + JSON.stringify(await inspectRegisteredConnector(workerData.id, async () => Connector, true, null, new Date().toISOString())));
+`,
+	);
+	const spawnCount = () => (existsSync(spawns) ? readFileSync(spawns, "utf8").trim().split("\n").length : 0);
+	try {
+		const first = runHarnessInspection(request("shared"), { entrypoint, timeoutMs: 5000 });
+		const second = runHarnessInspection(request("shared"), { entrypoint, timeoutMs: 5000 });
+		const leaving = new AbortController();
+		const third = runHarnessInspection(request("shared"), { entrypoint, signal: leaving.signal });
+		leaving.abort();
+		expect((await third).health.message).toContain("cancelled");
+		const results = await Promise.all([first, second]);
+		for (const result of results) {
+			expect(result.available).toBe(true);
+			expect(result.health.status).toBe("healthy");
+		}
+		expect(spawnCount()).toBe(1);
+
+		const controllers = [new AbortController(), new AbortController()];
+		const abandoned = controllers.map((controller) =>
+			runHarnessInspection(request("abandoned"), { entrypoint, signal: controller.signal, timeoutMs: 5000 }),
+		);
+		for (const controller of controllers) controller.abort();
+		for (const result of await Promise.all(abandoned)) expect(result.health.message).toContain("cancelled");
+		const fresh = await runHarnessInspection(request("abandoned"), { entrypoint, timeoutMs: 5000 });
+		expect(fresh.health.status).toBe("healthy");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a blocked connector cannot block the parent event loop or suppress another result; timeout joins its child", async () => {
+	const dir = mkdtempSync("/tmp/signet-health-proof-");
+	const entrypoint = join(dir, "worker.ts");
+	writeFileSync(
+		entrypoint,
+		`
+import { readFileSync, writeFileSync } from "node:fs";
+const workerData = JSON.parse(process.env.SIGNET_HEALTH_INSPECTION);
+setInterval(() => {}, 1000);
+import { inspectRegisteredConnector } from ${JSON.stringify(join(import.meta.dir, "../install/registry.ts"))};
+class Connector {
+ name = "fixture";
+ getConfigPath() {
+ if (workerData.id === "fifo") { writeFileSync(${JSON.stringify(join(dir, "started"))}, "ready"); readFileSync(${JSON.stringify(join(dir, "pipe"))}); }
+ if (workerData.id === "blocked") { while (true) {} } return ""; }
+ isDetected() { return true; }
+ isInstalled() { return true; }
+ async inspectHealth() { if (workerData.id === "pending") await new Promise(() => {}); return {status:"healthy",message:"Probe passed"}; }
+}
+console.log("SIGNET_HEALTH_RESULT " + JSON.stringify(await inspectRegisteredConnector(workerData.id, async () => Connector, true, null, new Date().toISOString())));
+
+`,
+	);
+	try {
+		let ticks = 0;
+		const timer = setInterval(() => ticks++, 10);
+		const blocked = runHarnessInspection(request("blocked"), { entrypoint, timeoutMs: 300 });
+		const duplicate = await runHarnessInspection(request("blocked"), { entrypoint });
+		expect(duplicate.health.message).toContain("timed out");
+		const healthy = await runHarnessInspection(request("healthy"), { entrypoint, timeoutMs: 2000 });
+		expect(healthy.health.status).toBe("healthy");
+		const timeout = await blocked;
+		expect(timeout.health.message).toContain("timed out");
+		expect(timeout.health.status).toBe("unknown");
+		expect(timeout.inspectionStatus).toBe("unavailable");
+		const absent = await runHarnessInspection(
+			{ id: "blocked", configured: false, lastSeen: null },
+			{ entrypoint, timeoutMs: 100 },
+		);
+		expect(absent.relevant).toBe(false);
+		expect(absent.installed).toBe(false);
+		clearInterval(timer);
+		expect(ticks).toBeGreaterThan(2);
+		if (process.platform !== "win32") {
+			execFileSync("mkfifo", [join(dir, "pipe")]);
+			const fifo = runHarnessInspection(request("fifo"), { entrypoint, timeoutMs: 1000 });
+			expect((await fifo).health.message).toContain("timed out");
+			expect(existsSync(join(dir, "started"))).toBe(true);
+		}
+		const retry = await runHarnessInspection(request("blocked"), { entrypoint, timeoutMs: 100 });
+		expect(retry.health.message).toContain("timed out");
+		const pending = await runHarnessInspection(request("pending"), { entrypoint, timeoutMs: 300 });
+		expect(pending.health.message).toContain("timed out");
+		const controller = new AbortController();
+		const cancelled = runHarnessInspection(request("blocked"), { entrypoint, signal: controller.signal });
+		controller.abort();
+		expect((await cancelled).health.message).toContain("cancelled");
+		const shutdown = runHarnessInspection(request("blocked"), { entrypoint });
+		await stopHarnessHealth();
+		expect((await shutdown).health.message).toContain("cancelled");
+		expect((await runHarnessInspection(request("healthy"), { entrypoint })).health.message).toContain("cancelled");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test.skipIf(process.platform === "win32")(
+	"the inspection child bounds native I/O even without a supervising daemon",
+	() => {
+		const dir = mkdtempSync("/tmp/signet-health-watchdog-");
+		try {
+			execFileSync("mkfifo", [join(dir, "config.yaml")]);
+			const start = Date.now();
+			const child = spawnSync(process.execPath, [join(import.meta.dir, "harness-health-worker.ts")], {
+				env: { ...process.env, HERMES_HOME: dir, SIGNET_HEALTH_INSPECTION: JSON.stringify(request("hermes-agent")) },
+				encoding: "utf8",
+				timeout: 8000,
+			});
+			expect(child.error).toBeUndefined();
+			expect(child.status).toBe(1);
+			expect(Date.now() - start).toBeGreaterThan(4000);
+			expect(child.stdout).toBe("");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	},
+	10000,
+);

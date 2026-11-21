@@ -46,7 +46,7 @@ describe("sync DB attribution runtime boundaries", () => {
 		const fixture = join(directory, "attribution-probe.ts");
 		const bundle = join(directory, "attribution-probe.bundle.js");
 		const binary = join(directory, process.platform === "win32" ? "attribution-probe.exe" : "attribution-probe");
-		const attribution = join(root, "platform", "daemon", "src", "db-accessor.ts");
+		const attribution = join(root, "platform", "daemon", "src", "db", "owner", "accessor.ts");
 
 		writeFileSync(
 			fixture,
