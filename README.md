@@ -63,8 +63,6 @@ Supported platforms: Linux x64/arm64, macOS x64/arm64, Windows x64, and Docker. 
 
 ## How it works
 
-<a href="https://signetai.sh/"><img src="public/sources.png" alt="Sources"></a>
-
 Your **sources** bring the context you already have into Signet. Connected sources stay in sync as they change, and you can also import files and webpages as one-time imports (see [supported sources and formats](#supported-sources-and-formats)). Agent conversations are imported with who said what, when, and where it came from; interrupted imports resume, re-imports don't duplicate evidence, and you can export conversations back out as structured JSONL.
 
 **Dreaming** maintains what Signet knows as your work evolves. It reads new evidence alongside your existing context, connects the people, projects, facts, and relationships it describes, revisits contradictions, and proposes updates to claims. Changes are validated and recorded with citations, and the original evidence is never rewritten. Time-sensitive claims, like a deadline or someone's current role, can have a review date so they get revisited before they go stale. You can watch Dreaming work in the dashboard through live traces and an operation ledger.
