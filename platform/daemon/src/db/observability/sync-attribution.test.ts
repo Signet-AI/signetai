@@ -42,7 +42,7 @@ describe("sync DB attribution", () => {
 	});
 
 	test("latches the explicit file and line for a never-completing in-flight call", () => {
-		const token = beginSyncDbCall("withReadDb", 1_000, "sync-db-attribution.test.ts:45");
+		const token = beginSyncDbCall("withReadDb", 1_000, "db/observability/sync-attribution.test.ts:45");
 
 		expect(getSyncDbCallSitesForWindow(1_000, 2_000)).toEqual([
 			"withReadDb@platform/daemon/src/db/observability/sync-attribution.test.ts:45",
@@ -73,11 +73,11 @@ describe("sync DB attribution", () => {
 		expect(metrics.slowCalls).toBe(1);
 		expect(metrics.unattributedCalls).toBe(0);
 		expect(metrics.sites).toHaveLength(1);
-		expect(metrics.sites[0]?.siteId).toContain("sync-db-attribution.test.ts:");
+		expect(metrics.sites[0]?.siteId).toContain("db/observability/sync-attribution.test.ts:");
 	});
 
 	test("captures source-tree caller tokens before queueing", () => {
-		expect(captureSyncDbCallSiteToken()).toMatch(/^sync-db-attribution\.test\.ts:\d+$/);
+		expect(captureSyncDbCallSiteToken()).toMatch(/^db\/observability\/sync-attribution\.test\.ts:\d+$/);
 	});
 
 	test("keeps absolute bundled source locations intact in attribution IDs", () => {
@@ -118,9 +118,9 @@ describe("sync DB attribution", () => {
 	test("captures valid Windows source locations with spaces before queueing", () => {
 		const stack = [
 			"Error",
-			"    at captureCallerSite (C:/repo/platform/daemon/src/sync-db-attribution.ts:110:1)",
-			"    at captureSyncDbCallSiteToken (C:/repo/platform/daemon/src/sync-db-attribution.ts:262:1)",
-			"    at runWriteTxAsync (C:/repo/platform/daemon/src/db-accessor.ts:3029:1)",
+			"    at captureCallerSite (C:/repo/platform/daemon/src/db/observability/sync-attribution.ts:110:1)",
+			"    at captureSyncDbCallSiteToken (C:/repo/platform/daemon/src/db/observability/sync-attribution.ts:262:1)",
+			"    at runWriteTxAsync (C:/repo/platform/daemon/src/db/owner/accessor.ts:3029:1)",
 			"    at caller (C:/Program Files/Signet/daemon.js:54:1)",
 		].join("\n");
 
@@ -138,9 +138,9 @@ describe("sync DB attribution", () => {
 	test("captures raw-backslash UNC source locations before queueing", () => {
 		const stack = [
 			"Error",
-			String.raw`    at captureCallerSite (\\server\share\repo\platform\daemon\src\sync-db-attribution.ts:110:1)`,
-			String.raw`    at captureSyncDbCallSiteToken (\\server\share\repo\platform\daemon\src\sync-db-attribution.ts:262:1)`,
-			String.raw`    at runWriteTxAsync (\\server\share\repo\platform\daemon\src\db-accessor.ts:3029:1)`,
+			String.raw`    at captureCallerSite (\\server\share\repo\platform\daemon\src\db\observability\sync-attribution.ts:110:1)`,
+			String.raw`    at captureSyncDbCallSiteToken (\\server\share\repo\platform\daemon\src\db\observability\sync-attribution.ts:262:1)`,
+			String.raw`    at runWriteTxAsync (\\server\share\repo\platform\daemon\src\db\owner\accessor.ts:3029:1)`,
 			String.raw`    at caller (\\server\share\repo\dist\daemon.js:54:1)`,
 		].join("\n");
 
@@ -154,8 +154,8 @@ describe("sync DB attribution", () => {
 	test("does not attribute anonymous raw-backslash internal frames", () => {
 		const stack = [
 			"Error",
-			String.raw`    at captureCallerSite (C:\repo\platform\daemon\src\sync-db-attribution.ts:110:1)`,
-			String.raw`    at C:\repo\platform\daemon\src\db-accessor.ts:2789:1`,
+			String.raw`    at captureCallerSite (C:\repo\platform\daemon\src\db\observability\sync-attribution.ts:110:1)`,
+			String.raw`    at C:\repo\platform\daemon\src\db\owner\accessor.ts:2789:1`,
 		].join("\n");
 		const token = beginSyncDbCall("withWriteTxAsync", 1_000);
 

@@ -19,7 +19,7 @@ import {
 } from "./skills";
 
 describe("repo skills frontmatter", () => {
-	const skillsRoot = join(__dirname, "..", "..", "..", "..", "skills");
+	const skillsRoot = join(__dirname, "..", "..", "..", "..", "..", "skills");
 	const hasSkillsDir = existsSync(skillsRoot);
 
 	it.skipIf(!hasSkillsDir)("all skills have parseable SKILL.md with name and description", () => {
@@ -642,7 +642,7 @@ This is a test skill.`,
 		});
 		expect(res.status).toBe(400);
 	});
-	it.skipIf(!existsSync(join(__dirname, "..", "..", "..", "..", "skills")))(
+	it.skipIf(!existsSync(join(__dirname, "..", "..", "..", "..", "..", "skills")))(
 		"GET /api/skills/browse includes signet provider skills",
 		async () => {
 			const res = await app.request("/api/skills/browse");

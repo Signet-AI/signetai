@@ -1023,6 +1023,6 @@ describe("runWorkspaceLayoutStartup", () => {
 	it("loads before any daemon module that binds workspace paths", () => {
 		const source = readFileSync(join(import.meta.dir, "../daemon.ts"), "utf8");
 		const firstImport = source.split("\n").find((line) => line.startsWith("import "));
-		expect(firstImport).toBe('import { workspaceLayoutStartup } from "./layout-startup";');
+		expect(firstImport).toBe('import { workspaceLayoutStartup } from "./workspace/layout-startup";');
 	});
 });

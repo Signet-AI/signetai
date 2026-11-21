@@ -427,13 +427,13 @@ test("filtered imports preserve system tool unknown roles and literal User lines
 test("journaled lifecycle intent survives restart and a backward clock", () => {
 	const workspace = join(root, "restart-clock");
 	mkdirSync(join(workspace, "memory"), { recursive: true });
-	const module = (name: string): string => new URL(`./${name}.ts`, import.meta.url).href;
+	const module = (path: string): string => new URL(`${path}.ts`, import.meta.url).href;
 	const setup = `
-		import { initDbAccessor, closeDbAccessor, getDbAccessor } from ${JSON.stringify(module("db-accessor"))};
-		import { deleteSessionTranscript, updateTranscriptLifecycle } from ${JSON.stringify(module("session-transcript-lifecycle"))};
-		import { upsertSessionTranscriptAsync } from ${JSON.stringify(module("session-transcripts"))};
-		import { withTranscriptLifecycleIntents } from ${JSON.stringify(module("transcript-lifecycle-intents"))};
-		import { dbOwnerTranscriptOperation, getDbOwnerForAccessor } from ${JSON.stringify(module("db-owner-runtime"))};
+		import { initDbAccessor, closeDbAccessor, getDbAccessor } from ${JSON.stringify(module("../../db/owner/accessor"))};
+		import { deleteSessionTranscript, updateTranscriptLifecycle } from ${JSON.stringify(module("./lifecycle"))};
+		import { upsertSessionTranscriptAsync } from ${JSON.stringify(module("./session-transcripts"))};
+		import { withTranscriptLifecycleIntents } from ${JSON.stringify(module("./lifecycle-intents"))};
+		import { dbOwnerTranscriptOperation, getDbOwnerForAccessor } from ${JSON.stringify(module("../../db/owner/runtime"))};
 		initDbAccessor(process.env.SIGNET_PATH + "/memory/memories.db");
 		const input = { agentId: "clock", sessionKey: "restart-clock" };
 		const clock = Date.now;

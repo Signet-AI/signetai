@@ -26,7 +26,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, "../db/owner/accessor.ts"))},
 mock.module(${JSON.stringify(join(import.meta.dir, "../recall/search/memory-search.ts"))}, () => ({
   hybridRecall: async () => ({ results: [], meta: { timings: { stages: [] } } }),
 }));
-await import(${JSON.stringify(join(import.meta.dir, "memory-search.bench.ts"))});
+await import(${JSON.stringify(join(import.meta.dir, "../recall/search/memory-search.bench.ts"))});
 `;
 	const child = Bun.spawn([process.execPath, "--eval", script], {
 		cwd: import.meta.dir,

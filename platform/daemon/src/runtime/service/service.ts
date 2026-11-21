@@ -74,6 +74,7 @@ export async function probeDaemonHealth(
 function getDaemonPath(): string {
 	const candidates = [
 		join(__dirname, "..", "..", "daemon", "dist", "daemon.js"),
+		join(__dirname, "..", "..", "..", "dist", "daemon.js"),
 		join(__dirname, "..", "dist", "daemon.js"),
 		join(__dirname, "daemon.js"),
 	];

@@ -318,7 +318,7 @@ describe("DbAccessor", () => {
 			recordEventLoopHeartbeat(5_000, 2_000);
 			const liveness = getEventLoopLiveness(5_000);
 			expect(liveness.status).toBe("wedged");
-			expect(liveness.syncDbCallSites.some((site) => site.includes("db-accessor.test.ts:"))).toBe(true);
+			expect(liveness.syncDbCallSites.some((site) => site.includes("db/owner/accessor.test.ts:"))).toBe(true);
 		} finally {
 			Date.now = realNow;
 		}
@@ -344,7 +344,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:339" },
+				{ siteToken: "db/owner/accessor.test.ts:339" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -375,7 +375,7 @@ describe("DbAccessor", () => {
 				recordEventLoopHeartbeat(5_000, 2_000);
 				state.latched = getEventLoopLiveness(5_000);
 				db.prepare("SELECT 1").get();
-			}, "db-accessor.test.ts:370");
+			}, "db/owner/accessor.test.ts:372");
 		} finally {
 			Date.now = realNow;
 		}
@@ -405,7 +405,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:398" },
+				{ siteToken: "db/owner/accessor.test.ts:400" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -444,7 +444,7 @@ describe("DbAccessor", () => {
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
 		expect(state.latched.syncDbCallSites).toContainEqual(
-			expect.stringMatching(/^withWriteTxAsync@platform\/daemon\/src\/db-accessor\.test\.ts:\d+$/),
+			expect.stringMatching(/^withWriteTxAsync@platform\/daemon\/src\/db\/owner\/accessor\.test\.ts:\d+$/),
 		);
 	});
 
@@ -1586,20 +1586,20 @@ describe("sqlite runtime ordering", () => {
 
 		const hits: string[] = [];
 
-		for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: import.meta.dir })) {
+		for await (const file of new Bun.Glob("**/*.ts").scan({ cwd: join(import.meta.dir, "..", "..") })) {
 			if (file.endsWith(".test.ts") || file.endsWith(".bench.ts")) continue;
 			if (file.startsWith("__tests__/")) continue;
 
-			const text = readFileSync(join(import.meta.dir, file), "utf8");
+			const text = readFileSync(join(import.meta.dir, "..", "..", file), "utf8");
 			if (text.includes("new Database(")) {
 				hits.push(file);
 			}
 		}
 
 		expect([...new Set(hits)].sort()).toEqual([
-			"../integrity/database-integrity-worker.ts",
-			"../integrity/integrity.ts",
-			"db-owner-worker.ts",
+			"db/integrity/database-integrity-worker.ts",
+			"db/integrity/integrity.ts",
+			"db/owner/db-owner-worker.ts",
 		]);
 	});
 });

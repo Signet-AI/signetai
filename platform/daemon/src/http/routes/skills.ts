@@ -363,7 +363,7 @@ function getSignetSkillsSourceDir(): string | null {
 	if (process.env.SIGNET_SKILLS_SOURCE && existsSync(process.env.SIGNET_SKILLS_SOURCE)) {
 		return process.env.SIGNET_SKILLS_SOURCE;
 	}
-	const devPath = join(__dirname, "..", "..", "..", "..", "skills");
+	const devPath = join(__dirname, "..", "..", "..", "..", "..", "skills");
 	if (existsSync(devPath)) return devPath;
 	const distPath = join(__dirname, "..", "..", "skills");
 	if (existsSync(distPath)) return distPath;

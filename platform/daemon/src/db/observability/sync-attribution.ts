@@ -118,8 +118,8 @@ function captureCallerSite(): string {
 			parsed.functionName.endsWith("checkpointWalAsync") ||
 			parsed.functionName.endsWith("incrementalVacuumAsync") ||
 			parsed.functionName.endsWith("vacuumConversionAsync") ||
-			parsed.file.endsWith("/sync-db-attribution.ts") ||
-			parsed.file.endsWith("/db-accessor.ts") ||
+			parsed.file.endsWith("/db/observability/sync-attribution.ts") ||
+			parsed.file.endsWith("/db/owner/accessor.ts") ||
 			parsed.file.startsWith("node:") ||
 			parsed.file.startsWith("bun:")
 		) {
