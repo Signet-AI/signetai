@@ -283,11 +283,8 @@ export function revokeApiKey(accessor: DbAccessor, idOrPrefix: string): ApiKeyRe
 	}, "auth/api-keys.ts:278");
 }
 
-export async function verifyApiKey(token: string): Promise<AuthResult> {
-	const prefix = extractApiKeyPrefix(token);
-	if (!prefix) return { authenticated: false, claims: null, error: "malformed api key" };
-
-	const row = await dbOwnerQuery<ApiKeyRow | null>(
+function readApiKey(prefix: string): Promise<ApiKeyRow | null> {
+	return dbOwnerQuery<ApiKeyRow | null>(
 		ownerStatement(
 			`SELECT id, prefix, name, key_hash, role, scope_json, permissions_json, connector, harness,
 			        agent_id, allowed_projects_json, created_at, last_used_at, revoked_at, expires_at
@@ -299,6 +296,13 @@ export async function verifyApiKey(token: string): Promise<AuthResult> {
 		),
 		{ operation: "auth.verify-api-key", lane: "read" },
 	);
+}
+
+export async function verifyApiKey(token: string): Promise<AuthResult> {
+	const prefix = extractApiKeyPrefix(token);
+	if (!prefix) return { authenticated: false, claims: null, error: "malformed api key" };
+
+	const row = await readApiKey(prefix);
 	if (!row) return { authenticated: false, claims: null, error: "invalid api key" };
 
 	if (!(await verifyApiKeyHash(row.key_hash, token))) {
@@ -321,14 +325,22 @@ export async function verifyApiKey(token: string): Promise<AuthResult> {
 			{ operation: "auth.record-api-key-use", lane: "write" },
 		);
 	}
-	const role = normalizeRole(row.role);
-	const scope = safeJsonObject(row.scope_json);
-	const iat = Math.floor(new Date(row.created_at).getTime() / 1000);
-	const exp = row.expires_at ? Math.floor(new Date(row.expires_at).getTime() / 1000) : 2 ** 31 - 1;
-	const permissions = normalizePermissions(safeStringArray(row.permissions_json), []);
+	const current = await readApiKey(prefix);
+	if (!current || current.id !== row.id || current.key_hash !== row.key_hash) {
+		return { authenticated: false, claims: null, error: "invalid api key" };
+	}
+	if (current.revoked_at) return { authenticated: false, claims: null, error: "api key revoked" };
+	if (current.expires_at && current.expires_at <= now) {
+		return { authenticated: false, claims: null, error: "api key expired" };
+	}
+	const role = normalizeRole(current.role);
+	const scope = safeJsonObject(current.scope_json);
+	const iat = Math.floor(new Date(current.created_at).getTime() / 1000);
+	const exp = current.expires_at ? Math.floor(new Date(current.expires_at).getTime() / 1000) : 2 ** 31 - 1;
+	const permissions = normalizePermissions(safeStringArray(current.permissions_json), []);
 	const claims: TokenClaims = {
-		sub: `api-key:${row.id}`,
-		name: row.name,
+		sub: `api-key:${current.id}`,
+		name: current.name,
 		role,
 		scope,
 		iat,

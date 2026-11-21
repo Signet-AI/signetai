@@ -36,6 +36,20 @@ async function lastUsedAt(id: string): Promise<string | null> {
 	return row?.last_used_at ?? null;
 }
 
+async function setRole(id: string, role: string): Promise<void> {
+	await dbOwnerBatch([ownerStatement("UPDATE api_keys SET role = ? WHERE id = ?", [role, id])], {
+		operation: "test.api-keys-role",
+		lane: "write",
+	});
+}
+
+function duringScrypt(change: () => Promise<void> | void): { readonly mockRestore: () => void } {
+	const original = nodeCrypto.scrypt;
+	return spyOn(nodeCrypto, "scrypt").mockImplementationOnce(((...args: Parameters<typeof original>) => {
+		void Promise.resolve(change()).then(() => Reflect.apply(original, nodeCrypto, args));
+	}) as typeof original);
+}
+
 describe("api keys", () => {
 	test("creates a connector key, stores only metadata, and verifies the raw secret", async () => {
 		const created = createApiKey(getDbAccessor(), { name: "work laptop pi", connector: "pi", agentId: "agent-pi" });
@@ -145,5 +159,44 @@ describe("api keys", () => {
 			staleRead.mockRestore();
 		}
 		expect(await lastUsedAt(created.id)).toBe(recent);
+	});
+
+	test("a key revoked while its secret is being hashed does not authenticate", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
+		const scrypt = duringScrypt(() => {
+			revokeApiKey(getDbAccessor(), created.prefix);
+		});
+		try {
+			expect(await verifyApiKey(created.key)).toMatchObject({ authenticated: false, error: "api key revoked" });
+		} finally {
+			scrypt.mockRestore();
+		}
+	});
+
+	test("a key revoked while its last use is recorded does not authenticate", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
+		const batch = dbOwnerBatch;
+		const write = spyOn(ownerRuntime, "dbOwnerBatch").mockImplementationOnce((async (statements, options) => {
+			revokeApiKey(getDbAccessor(), created.prefix);
+			return batch(statements, options);
+		}) as typeof dbOwnerBatch);
+		try {
+			expect(await verifyApiKey(created.key)).toMatchObject({ authenticated: false, error: "api key revoked" });
+			expect(write).toHaveBeenCalledTimes(1);
+		} finally {
+			write.mockRestore();
+		}
+	});
+
+	test("claims come from the key as it stands after verification", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "admin laptop", role: "admin" });
+		const scrypt = duringScrypt(() => setRole(created.id, "readonly"));
+		try {
+			const verified = await verifyApiKey(created.key);
+			expect(verified.authenticated).toBe(true);
+			expect(verified.claims?.role).toBe("readonly");
+		} finally {
+			scrypt.mockRestore();
+		}
 	});
 });
