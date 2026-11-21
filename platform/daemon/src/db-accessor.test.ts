@@ -39,7 +39,6 @@ import {
 	hasPendingMigrationBackup,
 	initDbAccessor,
 	initDbAccessorAsync,
-	initDbAccessorLite,
 	pruneMigrationBackupsAfterIntegrity,
 	readVecEmbeddingDimensions,
 	resolveCustomSqlitePath,
@@ -345,7 +344,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:340" },
+				{ siteToken: "db-accessor.test.ts:339" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -353,7 +352,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:340");
+		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:339");
 	});
 
 	test("attributes an in-flight parent sync call at latch time", () => {
@@ -374,14 +373,14 @@ describe("DbAccessor", () => {
 				recordEventLoopHeartbeat(5_000, 2_000);
 				state.latched = getEventLoopLiveness(5_000);
 				db.prepare("SELECT 1").get();
-			}, "db-accessor.test.ts:371");
+			}, "db-accessor.test.ts:370");
 		} finally {
 			Date.now = realNow;
 		}
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:371");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:370");
 	});
 
 	test("attributes an in-flight queued async write callback at latch time", async () => {
@@ -404,7 +403,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:399" },
+				{ siteToken: "db-accessor.test.ts:398" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -412,7 +411,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:399");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:398");
 	});
 
 	test("attributes the actual caller through runWriteTxAsync", async () => {
@@ -1817,6 +1816,7 @@ db.exec("COMMIT");`,
 	test("waits for an exclusive writer before configuring initialization pragmas", async () => {
 		const dbPath = tmpDbPath();
 		dir = join(dbPath, "..");
+		const releasePath = join(dir, "release-lock");
 		const seed = new Database(dbPath);
 		seed.exec("PRAGMA journal_mode = WAL");
 		seed.exec("CREATE TABLE probe (value INTEGER)");
@@ -1827,21 +1827,46 @@ db.exec("COMMIT");`,
 				process.execPath,
 				"-e",
 				`const { Database } = require("bun:sqlite");
+const { existsSync } = require("node:fs");
 const db = new Database(${JSON.stringify(dbPath)});
 db.exec("PRAGMA locking_mode = EXCLUSIVE");
 db.exec("BEGIN IMMEDIATE");
 console.log("locked");
-Bun.sleepSync(300);
+while (!existsSync(${JSON.stringify(releasePath)})) Bun.sleepSync(5);
 db.exec("COMMIT");
 db.close();`,
 			],
 			{ stdout: "pipe", stderr: "inherit" },
 		);
-		await holder.stdout.getReader().read();
+		try {
+			await holder.stdout.getReader().read();
 
-		const started = performance.now();
-		expect(() => initDbAccessorLite(dbPath, "")).not.toThrow();
-		expect(performance.now() - started).toBeGreaterThanOrEqual(100);
-		expect(await holder.exited).toBe(0);
+			const initializer = Bun.spawn(
+				[
+					process.execPath,
+					"-e",
+					`const { pathToFileURL } = require("node:url");
+const { initDbAccessorLite, closeDbAccessor } = await import(
+  pathToFileURL(${JSON.stringify(join(import.meta.dir, "db-accessor.ts"))}).href
+);
+console.log("started");
+initDbAccessorLite(${JSON.stringify(dbPath)}, "");
+await closeDbAccessor();
+console.log("initialized");
+process.exit(0);`,
+				],
+				{ stdout: "pipe", stderr: "inherit" },
+			);
+			const started = await initializer.stdout.getReader().read();
+			expect(new TextDecoder().decode(started.value)).toContain("started");
+			await Bun.sleep(100);
+			expect(initializer.exitCode).toBeNull();
+
+			writeFileSync(releasePath, "release\n");
+			expect(await initializer.exited).toBe(0);
+			expect(await holder.exited).toBe(0);
+		} finally {
+			writeFileSync(releasePath, "release\n");
+		}
 	}, 10_000);
 });
