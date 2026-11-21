@@ -13,8 +13,27 @@ function source(relativePath: string): string {
 function imports(path: string): string[] {
 	const file = join(ROOT, path);
 	const text = readFileSync(file, "utf8");
-	const specifiers = [...text.matchAll(/["'`](\.{1,2}\/[^"'`\s]+)["'`]/g)].map((match) => match[1] ?? "");
-	return specifiers.map((specifier) => relative(ROOT, join(dirname(file), specifier)).replace(/\.(ts|js)$/, ""));
+	const specifiers: string[] = [];
+	const visit = (node: ts.Node): void => {
+		if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+			if (ts.isStringLiteral(node.moduleSpecifier)) specifiers.push(node.moduleSpecifier.text);
+		}
+		if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
+			specifiers.push(node.argument.literal.text);
+		}
+		if (ts.isCallExpression(node)) {
+			const callee = node.expression;
+			const loads =
+				callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require");
+			const [argument] = node.arguments;
+			if (loads && argument && ts.isStringLiteralLike(argument)) specifiers.push(argument.text);
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
+	return specifiers
+		.filter((specifier) => specifier.startsWith("./") || specifier.startsWith("../"))
+		.map((specifier) => relative(ROOT, join(dirname(file), specifier)).replace(/\.(ts|js)$/, ""));
 }
 
 describe("DB foundation dependency invariant", () => {

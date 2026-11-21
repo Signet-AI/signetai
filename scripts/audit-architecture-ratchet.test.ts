@@ -115,7 +115,7 @@ for (const { category, violation } of cases) {
 	});
 }
 
-test("a renamed SQL owner keeps the base revision's ownership for its base count", () => {
+test("a file renamed onto a SQL owner path is exempt on its base side too", () => {
 	const source = "platform/daemon/src/old-owner.ts";
 	const target = "platform/daemon/src/db/owner/accessor.ts";
 	const queries = [
@@ -124,10 +124,7 @@ test("a renamed SQL owner keeps the base revision's ownership for its base count
 		'export const c = "UPDATE memories SET content = ?";',
 		"export const value = 1;",
 	];
-	const root = fixture({
-		"scripts/audit-architecture-ratchet.ts": `const SQL_OWNERS = [\n\t"${source}",\n] as const;\n`,
-		[source]: queries.join("\n"),
-	});
+	const root = fixture({ [source]: queries.join("\n") });
 	mkdirSync(dirname(join(root, target)), { recursive: true });
 	git(root, "mv", source, target);
 	write(root, target, [...queries, "ownerRun(client, a);"].join("\n"));
