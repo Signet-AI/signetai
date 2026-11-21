@@ -67,11 +67,11 @@ jobs:
         run: bun run build
       - name: Worker-handle unit + facade contract tests
         working-directory: platform/daemon
-        run: bun test src/embedding-worker-handle.test.ts src/native-embedding.test.ts
+        run: bun test src/inference/embeddings/worker-handle.test.ts src/inference/embeddings/native.test.ts
 
       - name: Native embedding /health isolation (source daemon)
         working-directory: platform/daemon
-        run: bun test src/native-embedding-eventloop-isolation.test.ts
+        run: bun test src/inference/embeddings/native-embedding-eventloop-isolation.test.ts
       - name: Build dashboard assets
         run: bun run build:dashboard
 
