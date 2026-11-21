@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=de16dbc216af698ec2db226ca9d155d541f86ae4 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=f9a88c41b8b40a7c81790ee9b3f9ba75a5da27b2 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 > [!CAUTION]
 > **사기 경고: Signet에는 토큰이나 코인이 없습니다.** Signet이라는 이름을 사용하는 모든 토큰과 코인은 이 프로젝트와 아무런 관련이 없습니다. Signet을 지원한다고 여기고 구매하지 마세요.
 
@@ -65,8 +65,6 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 > 일상적인 용도로는 `stable` 채널을 권장합니다. `nightly` 빌드(`install.sh | bash -s -- --nightly`)에는 아직 정식 출시되지 않은 변경 사항이 포함되어 있어 불안정할 수 있습니다.
 
 ## 작동 방식
-
-<a href="https://signetai.sh/"><img src="public/sources.png" alt="소스"></a>
 
 **소스**는 이미 갖고 있는 컨텍스트를 Signet 안으로 가져옵니다. 연결된 소스는 변경될 때마다 동기화 상태를 유지하고, 파일이나 웹페이지를 일회성으로 가져올 수도 있습니다([지원 소스 및 형식](#지원-소스-및-형식) 참고). 에이전트 대화는 누가 언제 무엇을 말했고 어디에서 비롯됐는지까지 함께 가져오며, 중단된 가져오기는 이어서 진행되고, 다시 가져와도 증거가 중복되지 않으며, 대화를 구조화된 JSONL로 내보낼 수도 있습니다.
 

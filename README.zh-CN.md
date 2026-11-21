@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=de16dbc216af698ec2db226ca9d155d541f86ae4 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=f9a88c41b8b40a7c81790ee9b3f9ba75a5da27b2 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 > [!CAUTION]
 > **防骗警示：Signet 没有任何代币或加密货币。** 任何使用 Signet 之名的代币或加密货币都与本项目无关。请不要以为购买它们就是在支持 Signet。
 
@@ -65,8 +65,6 @@ Install and fully configure Signet AI by following this guide exactly: https://s
 > 日常使用我们推荐 `stable` 通道。`nightly` 构建（`install.sh | bash -s -- --nightly`）包含未发布的改动，可能会出问题。
 
 ## 工作原理
-
-<a href="https://signetai.sh/"><img src="public/sources.png" alt="来源"></a>
 
 你的**来源**会把已有的上下文引入 Signet。已连接的来源会随其变化保持同步，你也可以将文件和网页作为一次性导入（参见[支持的来源与格式](#支持的来源与格式)）。导入智能体对话时会保留谁在何时说了什么以及内容来自哪里；中断的导入可以续传，重复导入不会产生重复证据，你还可以将对话以结构化的 JSONL 格式重新导出。
 

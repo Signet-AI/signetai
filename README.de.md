@@ -1,4 +1,4 @@
-<!-- readme-sync source=README.md blob=de16dbc216af698ec2db226ca9d155d541f86ae4 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
+<!-- readme-sync source=README.md blob=f9a88c41b8b40a7c81790ee9b3f9ba75a5da27b2 Generated from README.md by scripts/sync-readme-translations.ts. Manual fixes are kept on later syncs. -->
 > [!CAUTION]
 > **Betrugswarnung: Signet hat keinen Token oder Coin.** Jeder Token oder Coin, der den Namen Signet trägt, hat nichts mit diesem Projekt zu tun. Kauf ihn nicht in dem Glauben, damit Signet zu unterstützen.
 
@@ -65,8 +65,6 @@ Unterstützte Plattformen: Linux x64/arm64, macOS x64/arm64, Windows x64 und Doc
 > Den `stable`-Kanal empfehlen wir für den täglichen Einsatz. `nightly`-Builds (`install.sh | bash -s -- --nightly`) enthalten unveröffentlichte Änderungen und können kaputtgehen.
 
 ## Wie es funktioniert
-
-<a href="https://signetai.sh/"><img src="public/sources.png" alt="Quellen"></a>
 
 Deine **Quellen** bringen den Kontext, den du bereits hast, in Signet. Verbundene Quellen bleiben bei Änderungen synchronisiert; Dateien und Webseiten kannst du zusätzlich als Einmalimport aufnehmen (siehe [Unterstützte Quellen und Formate](#unterstützte-quellen-und-formate)). Bei importierten Agent-Unterhaltungen wird festgehalten, wer was wann gesagt hat und woher es stammt; unterbrochene Importe werden fortgesetzt, bei erneutem Import entstehen keine doppelten Belege, und Unterhaltungen lassen sich als strukturiertes JSONL wieder exportieren.
 
