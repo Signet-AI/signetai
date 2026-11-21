@@ -62,10 +62,6 @@ const QUERIES = [
 ].join("\n");
 const OWNER = "platform/daemon/src/db/owner/accessor.ts";
 
-function policy(declaration: string): string {
-	return `${declaration}\nconst OWNERS = new Set(SQL_OWNERS);\n`;
-}
-
 afterEach(() => {
 	for (const repo of repos.splice(0)) rmSync(repo, { recursive: true, force: true });
 });
@@ -129,44 +125,33 @@ for (const { category, violation } of cases) {
 
 test("a renamed SQL owner is counted under the base revision's owner list", () => {
 	const source = "platform/daemon/src/old-owner.ts";
-	for (const declaration of [
-		`const SQL_OWNERS = ["${source}"] as const;`,
-		`const LEGACY = ['${source}'];\nconst SQL_OWNERS = [...LEGACY] satisfies readonly string[];`,
-	]) {
-		const root = fixture({ "scripts/audit-architecture-ratchet.ts": policy(declaration), [source]: QUERIES });
-		mkdirSync(dirname(join(root, OWNER)), { recursive: true });
-		git(root, "mv", source, OWNER);
-		write(root, OWNER, `${QUERIES}\nownerRun(client, a);`);
-		commit(root);
-		const result = audit(root);
-		expect(result.code).toBe(1);
-		expect(result.output).toContain(`${OWNER}\traw-sql\t0 -> 1`);
-	}
+	const root = fixture({ "scripts/sql-owners.json": JSON.stringify([source]), [source]: QUERIES });
+	mkdirSync(dirname(join(root, OWNER)), { recursive: true });
+	git(root, "mv", source, OWNER);
+	write(root, OWNER, `${QUERIES}\nownerRun(client, a);`);
+	commit(root);
+	const result = audit(root);
+	expect(result.code).toBe(1);
+	expect(result.output).toContain(`${OWNER}\traw-sql\t0 -> 1`);
 });
 
 test("an unreadable base owner list fails instead of falling back", () => {
-	const root = fixture({
-		"scripts/audit-architecture-ratchet.ts": policy("const SQL_OWNERS = loadOwners();"),
-		[FILE]: "export const value = 1;",
-	});
-	const result = audit(root);
-	expect(result.code).toBe(1);
-	expect(result.output).toContain("Cannot read SQL_OWNERS from the base ratchet policy");
+	for (const list of ['{"owners": []}', "[1]", "["]) {
+		const root = fixture({ "scripts/sql-owners.json": list, [FILE]: "export const value = 1;" });
+		expect(audit(root).code).toBe(1);
+	}
 });
 
 test("copying non-owner SQL into an owner keeps the non-owner baseline", () => {
-	const root = fixture({ "scripts/audit-architecture-ratchet.ts": policy("const SQL_OWNERS = [];"), [FILE]: QUERIES });
+	const root = fixture({ "scripts/sql-owners.json": "[]", [FILE]: QUERIES });
 	write(root, "platform/core/src/database.ts", QUERIES);
 	commit(root);
 	expect(audit(root).code).toBe(0);
 });
 
 test("dropping a file from the owner list cannot grandfather its SQL", () => {
-	const root = fixture({
-		"scripts/audit-architecture-ratchet.ts": policy(`const SQL_OWNERS = ["${FILE}"];`),
-		[FILE]: QUERIES,
-	});
-	write(root, "scripts/audit-architecture-ratchet.ts", policy("const SQL_OWNERS = [];"));
+	const root = fixture({ "scripts/sql-owners.json": JSON.stringify([FILE]), [FILE]: QUERIES });
+	write(root, "scripts/sql-owners.json", "[]");
 	commit(root);
 	const result = audit(root);
 	expect(result.code).toBe(1);

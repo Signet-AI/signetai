@@ -1,45 +1,15 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import ts from "typescript";
 
-const SQL_OWNERS = [
-	"platform/core/src/database.ts",
-	"platform/core/src/fts-schema.ts",
-	"platform/core/src/search.ts",
-	"platform/daemon/src/db/owner/db-owner-worker.ts",
-	"platform/daemon/src/db/owner/accessor.ts",
-	"platform/daemon/src/telemetry/diagnostics/diagnostics.ts",
-	"platform/daemon/src/telemetry/diagnostics/queue.ts",
-	"platform/daemon/src/embeddings/index/state.ts",
-	"platform/daemon/src/embeddings/index/repair-state.ts",
-	"platform/daemon/src/dreaming/evidence/episodic-sources.ts",
-	"platform/daemon/src/recall/search/memory-search.ts",
-	"platform/daemon/src/db/maintenance/query-planner-statistics.ts",
-	"platform/daemon/src/transcripts/store/session-transcripts.ts",
-	"platform/daemon/src/db/owner/helpers.ts",
-	"platform/daemon/src/db/maintenance/vacuum.ts",
-	"platform/daemon/src/agents/identity/removal.ts",
-	"platform/daemon/src/sources/lifecycle/memory-lineage.ts",
-	"platform/daemon/src/dreaming/head/owner.ts",
-	"platform/daemon/src/sources/providers/obsidian/graph.ts",
-	"platform/daemon/src/sources/lifecycle/artifact-graph.ts",
-	"platform/daemon/src/sources/lifecycle/purge-tx.ts",
-	"platform/daemon/src/sources/lifecycle/snapshots.ts",
-	"platform/daemon/src/ontology/claims/source-claim-review.ts",
-	"platform/daemon/src/transcripts/import/commit.ts",
-	"platform/daemon/src/ontology/contradictions/state.ts",
-	"platform/daemon/src/sources/lifecycle/semantic-memory-projection.ts",
-	"platform/daemon/src/ontology/graph/hygiene.ts",
-	"platform/daemon/src/embeddings/vectors/repair-owner.ts",
-	"platform/daemon/src/ontology/graph/transactions.ts",
-	"platform/daemon/src/dreaming/passes/dreaming.ts",
-	"platform/daemon/src/dreaming/operations/capabilities.ts",
-	"platform/daemon/src/dreaming/evidence/retry.ts",
-	"platform/daemon/src/dreaming/passes/attention.ts",
-	"platform/daemon/src/dreaming/passes/surprisal.ts",
-	"platform/daemon/src/dreaming/evidence/consumption.ts",
-] as const;
-const OWNERS: ReadonlySet<string> = new Set(SQL_OWNERS);
+function owners(text: string, ref: string): ReadonlySet<string> {
+	const value: unknown = JSON.parse(text);
+	if (!Array.isArray(value) || !value.every((path) => typeof path === "string"))
+		throw new Error(`Cannot read SQL owners at ${ref}`);
+	return new Set(value);
+}
+
+const OWNERS = owners(readFileSync(resolve(import.meta.dir, "sql-owners.json"), "utf8"), "HEAD");
 const EXCLUDED = new Set([
 	"__tests__",
 	"test",
@@ -318,35 +288,10 @@ function origins(base: string): ReadonlyMap<string, string> {
 	return paths;
 }
 
-function policy(text: string): ReadonlySet<string> {
-	const file = ts.createSourceFile("policy.ts", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-	const declarations = new Map<string, ts.Expression>();
-	for (const statement of file.statements) {
-		if (!ts.isVariableStatement(statement)) continue;
-		for (const declaration of statement.declarationList.declarations) {
-			if (ts.isIdentifier(declaration.name) && declaration.initializer)
-				declarations.set(declaration.name.text, declaration.initializer);
-		}
-	}
-	const values = (name: string, seen: ReadonlySet<string>): string[] => {
-		const initializer = declarations.get(name);
-		const list = initializer ? unwrap(initializer) : undefined;
-		if (!list || seen.has(name) || !ts.isArrayLiteralExpression(list))
-			throw new Error(`Cannot read ${name} from the base ratchet policy`);
-		return list.elements.flatMap((element) => {
-			if (ts.isStringLiteralLike(element)) return [element.text];
-			if (ts.isSpreadElement(element) && ts.isIdentifier(element.expression))
-				return values(element.expression.text, new Set([...seen, name]));
-			throw new Error(`Cannot read ${name} from the base ratchet policy`);
-		});
-	};
-	return new Set(values("SQL_OWNERS", new Set()));
-}
-
 function ownersAt(ref: string): ReadonlySet<string> {
-	const path = `${ref}:scripts/audit-architecture-ratchet.ts`;
+	const path = `${ref}:scripts/sql-owners.json`;
 	if (Bun.spawnSync(["git", "-C", process.cwd(), "cat-file", "-e", path]).exitCode !== 0) return OWNERS;
-	return policy(git("show", path));
+	return owners(git("show", path), ref);
 }
 
 function retiredPaths(after: ReadonlySet<string>): readonly string[] {

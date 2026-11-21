@@ -10,39 +10,11 @@ function source(relativePath: string): string {
 	return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
 
-function bare(node: ts.Expression): ts.Expression {
-	return ts.isParenthesizedExpression(node) ? bare(node.expression) : node;
-}
-
 function imports(path: string): string[] {
 	const file = join(ROOT, path);
-	const text = readFileSync(file, "utf8");
-	const specifiers: string[] = [];
-	const visit = (node: ts.Node): void => {
-		if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
-			if (ts.isStringLiteral(node.moduleSpecifier)) specifiers.push(node.moduleSpecifier.text);
-		}
-		if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument) && ts.isStringLiteral(node.argument.literal)) {
-			specifiers.push(node.argument.literal.text);
-		}
-		if (
-			ts.isImportEqualsDeclaration(node) &&
-			ts.isExternalModuleReference(node.moduleReference) &&
-			ts.isStringLiteralLike(node.moduleReference.expression)
-		) {
-			specifiers.push(node.moduleReference.expression.text);
-		}
-		if (ts.isCallExpression(node)) {
-			const callee = bare(node.expression);
-			const loads =
-				callee.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(callee) && callee.text === "require");
-			const argument = node.arguments[0] ? bare(node.arguments[0]) : undefined;
-			if (loads && argument && ts.isStringLiteralLike(argument)) specifiers.push(argument.text);
-		}
-		ts.forEachChild(node, visit);
-	};
-	visit(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS));
-	return specifiers
+	return new Bun.Transpiler({ loader: "ts" })
+		.scanImports(readFileSync(file, "utf8"))
+		.map((entry) => entry.path)
 		.filter((specifier) => specifier.startsWith("./") || specifier.startsWith("../"))
 		.map((specifier) => relative(ROOT, join(dirname(file), specifier)).replace(/\.(ts|js)$/, ""));
 }
