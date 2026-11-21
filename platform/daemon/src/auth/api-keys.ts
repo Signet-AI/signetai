@@ -330,7 +330,7 @@ export async function verifyApiKey(token: string): Promise<AuthResult> {
 		return { authenticated: false, claims: null, error: "invalid api key" };
 	}
 	if (current.revoked_at) return { authenticated: false, claims: null, error: "api key revoked" };
-	if (current.expires_at && current.expires_at <= now) {
+	if (current.expires_at && current.expires_at <= new Date().toISOString()) {
 		return { authenticated: false, claims: null, error: "api key expired" };
 	}
 	const role = normalizeRole(current.role);
