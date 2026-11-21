@@ -15,6 +15,7 @@ import {
 } from "../../db/maintenance/maintenance";
 import { getEventLoopLiveness, resetDbObservability } from "../../db/observability/observability";
 import { startEventLoopMonitor, stopResourceMonitors } from "../../telemetry/pressure/resource-monitor";
+import { resetPressureState } from "../../telemetry/pressure/system-pressure";
 import { mountHealthRoutes } from "./health";
 
 let dir = "";
@@ -94,6 +95,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
 	stopResourceMonitors();
+	resetPressureState();
 	resetDbObservability();
 	await closeRegisteredDbOwnerMaintenance();
 	await closeDbAccessor();
