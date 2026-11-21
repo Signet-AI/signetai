@@ -88,8 +88,8 @@ function production(path: string): boolean {
 	);
 }
 
-function owner(path: string): boolean {
-	return OWNERS.has(path) || /^platform\/core\/src\/migrations\/(?:\d{3}-[^/]+|index)\.ts$/.test(path);
+function owner(path: string, owners: ReadonlySet<string> = OWNERS): boolean {
+	return owners.has(path) || /^platform\/core\/src\/migrations\/(?:\d{3}-[^/]+|index)\.ts$/.test(path);
 }
 
 function unwrap(expression: ts.Expression): ts.Expression {
@@ -170,7 +170,7 @@ function prepared(expression: ts.Expression): boolean {
 	return node.expression.name.text === "prepare" || prepared(node.expression.expression);
 }
 
-function count(path: string, content: string): CountsWithDetails {
+function count(path: string, content: string, exempt = owner(path)): CountsWithDetails {
 	const counts: Counts = { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 	const sql = { text: 0, helper: 0, request: 0, accessor: 0, marker: 0 };
 	const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
@@ -235,7 +235,7 @@ function count(path: string, content: string): CountsWithDetails {
 		return aliases.get(value) ?? value;
 	};
 	const visit = (node: ts.Node): void => {
-		if (!owner(path)) {
+		if (!exempt) {
 			const text =
 				ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
 					? node.text
@@ -318,6 +318,14 @@ function origins(base: string): ReadonlyMap<string, string> {
 	return paths;
 }
 
+function ownersAt(ref: string): ReadonlySet<string> {
+	const result = Bun.spawnSync(["git", "-C", process.cwd(), "show", `${ref}:scripts/audit-architecture-ratchet.ts`]);
+	if (result.exitCode !== 0) return OWNERS;
+	const list = /const SQL_OWNERS = \[([\s\S]*?)\] as const;/.exec(result.stdout.toString())?.[1];
+	if (list === undefined) return OWNERS;
+	return new Set([...list.matchAll(/"([^"]+)"/g)].map((match) => match[1] ?? ""));
+}
+
 function retiredPaths(after: ReadonlySet<string>): readonly string[] {
 	const registry = "scripts/retired-paths.json";
 	if (!after.has(registry)) throw new Error(`Missing retirement registry: ${registry}`);
@@ -377,6 +385,7 @@ function main(): void {
 	const before = tree(base);
 	const after = tree("HEAD");
 	const sources = origins(base);
+	const baseOwners = ownersAt(base);
 	const totals: Counts = { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 	const failures: string[] = [...retiredPaths(after)];
 	let files = 0;
@@ -394,7 +403,7 @@ function main(): void {
 	for (const [source, group] of groups) {
 		const previous =
 			before.has(source) && production(source)
-				? count(source, git("show", `${base}:${source}`)).counts
+				? count(source, git("show", `${base}:${source}`), owner(source, baseOwners)).counts
 				: { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 		for (const category of CATEGORIES) {
 			const head = group.reduce((sum, member) => sum + member.head.counts[category], 0);

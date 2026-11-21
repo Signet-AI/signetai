@@ -115,6 +115,28 @@ for (const { category, violation } of cases) {
 	});
 }
 
+test("a renamed SQL owner keeps the base revision's ownership for its base count", () => {
+	const source = "platform/daemon/src/old-owner.ts";
+	const target = "platform/daemon/src/db/owner/accessor.ts";
+	const queries = [
+		'export const a = "SELECT id FROM memories";',
+		'export const b = "DELETE FROM memories";',
+		'export const c = "UPDATE memories SET content = ?";',
+		"export const value = 1;",
+	];
+	const root = fixture({
+		"scripts/audit-architecture-ratchet.ts": `const SQL_OWNERS = [\n\t"${source}",\n] as const;\n`,
+		[source]: queries.join("\n"),
+	});
+	mkdirSync(dirname(join(root, target)), { recursive: true });
+	git(root, "mv", source, target);
+	write(root, target, [...queries, "ownerRun(client, a);"].join("\n"));
+	commit(root);
+	const result = audit(root);
+	expect(result.code).toBe(1);
+	expect(result.output).toContain(`${target}\traw-sql\t0 -> 1`);
+});
+
 test("raw SQL reports all text, transport, accessor and marker forms", () => {
 	const root = fixture({ "README.md": "base" });
 	const statements = [

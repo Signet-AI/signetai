@@ -13,7 +13,7 @@ function source(relativePath: string): string {
 function imports(path: string): string[] {
 	const file = join(ROOT, path);
 	const text = readFileSync(file, "utf8");
-	const specifiers = [...text.matchAll(/(?:from|import\()\s*"(\.{1,2}\/[^"]+)"/g)].map((match) => match[1] ?? "");
+	const specifiers = [...text.matchAll(/["'`](\.{1,2}\/[^"'`\s]+)["'`]/g)].map((match) => match[1] ?? "");
 	return specifiers.map((specifier) => relative(ROOT, join(dirname(file), specifier)).replace(/\.(ts|js)$/, ""));
 }
 
