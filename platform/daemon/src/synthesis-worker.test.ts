@@ -1,10 +1,12 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { findSqliteVecExtension } from "@signet/core";
+import * as db from "./db-accessor";
 import { closeDbAccessor, getDbAccessor, hasDbAccessor, initDbAccessor, initDbAccessorLite } from "./db-accessor";
+import * as lineage from "./memory-lineage";
 import { type SynthesisRequest, getSynthesisWorker, handleSynthesisRequest, setSynthesisWorker } from "./hooks";
 
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -323,6 +325,54 @@ describe("handleSynthesisRequest", () => {
 			await worker.terminate();
 		}
 	}, 120_000);
+
+	test("a request still in its purge step waits for a terminating worker before rendering", async () => {
+		let releasePurge = (): void => {};
+		const purgeGate = new Promise<number>((resolve) => {
+			releasePurge = () => resolve(0);
+		});
+		const accessor = spyOn(db, "hasDbAccessor").mockReturnValue(true);
+		const purge = spyOn(lineage, "purgeCanonicalNoiseSessionsOnce").mockImplementation((agent) =>
+			agent === "delayed" ? purgeGate : Promise.resolve(0),
+		);
+		let workerExited = false;
+		const renders: Array<{ readonly agent: string; readonly exited: boolean }> = [];
+		const render = spyOn(lineage, "renderMemoryProjection").mockImplementation(async (agent = "default") => {
+			renders.push({ agent, exited: workerExited });
+			return { content: "rendered", fileCount: 0, indexBlock: "" };
+		});
+		const worker = new Worker(
+			`
+				const { parentPort } = require("node:worker_threads");
+				parentPort.on("message", (msg) => {
+					parentPort.postMessage({ type: "error", requestId: msg.requestId, error: "boom" });
+					Bun.sleepSync(1200);
+				});
+			`,
+			{ eval: true },
+		);
+		worker.on("exit", () => {
+			workerExited = true;
+		});
+		setSynthesisWorker(worker);
+		try {
+			const delayed = handleSynthesisRequest({ trigger: "manual" }, { agentId: "delayed" });
+			const failing = handleSynthesisRequest({ trigger: "manual" }, { agentId: "failing" });
+			const deadline = performance.now() + 3000;
+			while (getSynthesisWorker() !== null && performance.now() < deadline) await Bun.sleep(5);
+			expect(getSynthesisWorker()).toBeNull();
+			releasePurge();
+			await Promise.all([delayed, failing]);
+			expect(renders.map((entry) => entry.agent).sort()).toEqual(["delayed", "failing"]);
+			expect(renders.every((entry) => entry.exited)).toBe(true);
+		} finally {
+			releasePurge();
+			accessor.mockRestore();
+			purge.mockRestore();
+			render.mockRestore();
+			await worker.terminate();
+		}
+	}, 10_000);
 
 	test("regression: getSynthesisWorker returns null after setSynthesisWorker(null)", () => {
 		setSynthesisWorker(null);
