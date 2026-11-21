@@ -1852,7 +1852,7 @@ db.close();`,
 					"-e",
 					`const { pathToFileURL } = require("node:url");
 const { initDbAccessorLite, closeDbAccessor } = await import(
-  pathToFileURL(${JSON.stringify(join(import.meta.dir, "db-accessor.ts"))}).href
+  pathToFileURL(${JSON.stringify(join(import.meta.dir, "accessor.ts"))}).href
 );
 console.log("started");
 initDbAccessorLite(${JSON.stringify(dbPath)}, "");

@@ -5,9 +5,20 @@ import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { findSqliteVecExtension } from "@signet/core";
 import * as db from "../../db/owner/accessor";
-import { closeDbAccessor, getDbAccessor, hasDbAccessor, initDbAccessor, initDbAccessorLite } from "../../db/owner/accessor";
+import {
+	closeDbAccessor,
+	getDbAccessor,
+	hasDbAccessor,
+	initDbAccessor,
+	initDbAccessorLite,
+} from "../../db/owner/accessor";
 import * as lineage from "../../sources/lifecycle/memory-lineage";
-import { type SynthesisRequest, getSynthesisWorker, handleSynthesisRequest, setSynthesisWorker } from "../../http/hooks/hooks";
+import {
+	type SynthesisRequest,
+	getSynthesisWorker,
+	handleSynthesisRequest,
+	setSynthesisWorker,
+} from "../../http/hooks/hooks";
 
 const originalSignetPath = process.env.SIGNET_PATH;
 const AGENTS_DIR = mkdtempSync(join(tmpdir(), "signet-synthesis-worker-"));
