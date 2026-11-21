@@ -1,4 +1,7 @@
-import type { GraphSceneData } from "./graph-scene";
+import type { KnowledgeConstellation } from "./api";
+import type { GraphSceneData, SceneNode } from "./graph-scene";
+
+type ConstellationEntity = KnowledgeConstellation["entities"][number];
 
 export const MAX_CONSTELLATION_ENTITY_LIMIT = 300;
 export const MAX_VISIBLE_CONSTELLATION_NODES = 20_000;
@@ -59,4 +62,45 @@ export function capGraphSceneData(
 export function sourceDocumentTitle(name: string): string {
 	const title = name.split(" — ")[0]?.trim();
 	return title || name;
+}
+
+export function stamps(row: { createdAt?: string | null; updatedAt?: string | null }): {
+	createdAt?: number;
+	updatedAt?: number;
+} {
+	const createdAt = Date.parse(row.createdAt ?? "");
+	const updatedAt = Date.parse(row.updatedAt ?? "");
+	return {
+		...(Number.isFinite(createdAt) ? { createdAt } : {}),
+		...(Number.isFinite(updatedAt) ? { updatedAt } : {}),
+	};
+}
+
+export function entitySceneNode(entity: ConstellationEntity, maxMentions: number): SceneNode {
+	const entityKind =
+		entity.entityType === "source_document" || entity.entityType === "source_document_reference" ? "source" : "entity";
+	return {
+		id: entity.id,
+		label: entityKind === "source" ? sourceDocumentTitle(entity.name) : entity.name,
+		kind: entityKind,
+		...(entityKind === "source" ? { detail: entity.name } : {}),
+		evidenceRefs:
+			entityKind === "source"
+				? [
+						...new Set([
+							...graphEvidenceRefs({
+								sourceId: entity.sourceId ?? null,
+								sourceKind: entity.sourceKind ?? null,
+								sourcePath: entity.sourcePath ?? null,
+							}),
+							...entity.aspects.flatMap((aspect) => aspect.attributes.flatMap(graphEvidenceRefs)),
+						]),
+					]
+				: [],
+		cluster: entity.id,
+		...stamps(entity),
+		mentions: entity.mentions,
+		weight: Math.sqrt(entity.mentions / maxMentions),
+		metric: `${entityKind} · ${entity.entityType} · ${entity.mentions.toLocaleString()} mentions`,
+	};
 }
