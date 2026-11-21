@@ -97,11 +97,6 @@ async function verifyApiKeyHash(storedHash: string, token: string): Promise<bool
 	return true;
 }
 
-function isLastUseStale(lastUsedAt: string | null, nowMs: number): boolean {
-	const lastMs = lastUsedAt ? Date.parse(lastUsedAt) : Number.NaN;
-	return Number.isNaN(lastMs) || nowMs - lastMs >= LAST_USED_WRITE_INTERVAL_MS;
-}
-
 function safeJsonObject(raw: string): TokenScope {
 	try {
 		const parsed = JSON.parse(raw) as unknown;
@@ -238,7 +233,7 @@ export function createApiKey(accessor: DbAccessor, input: ApiKeyCreateInput): Cr
 			now,
 			expiresAt,
 		);
-	}, "auth/api-keys.ts:220");
+	}, "auth/api-keys.ts:215");
 
 	return {
 		id,
@@ -273,7 +268,7 @@ export function listApiKeys(accessor: DbAccessor): readonly ApiKeyRecord[] {
 					)
 					.all() as unknown as ApiKeyRow[]
 			).map(rowToRecord),
-		"auth/api-keys.ts:264",
+		"auth/api-keys.ts:259",
 	);
 }
 
@@ -285,7 +280,7 @@ export function revokeApiKey(accessor: DbAccessor, idOrPrefix: string): ApiKeyRe
 		if (!row) return null;
 		db.prepare("UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?").run(now, row.id);
 		return rowToRecord({ ...row, revoked_at: row.revoked_at ?? now });
-	}, "auth/api-keys.ts:283");
+	}, "auth/api-keys.ts:278");
 }
 
 export async function verifyApiKey(token: string): Promise<AuthResult> {
@@ -314,11 +309,17 @@ export async function verifyApiKey(token: string): Promise<AuthResult> {
 	if (row.revoked_at) return { authenticated: false, claims: null, error: "api key revoked" };
 	if (row.expires_at && row.expires_at <= now) return { authenticated: false, claims: null, error: "api key expired" };
 
-	if (isLastUseStale(row.last_used_at, nowMs)) {
-		await dbOwnerBatch([ownerStatement("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [now, row.id])], {
-			operation: "auth.record-api-key-use",
-			lane: "write",
-		});
+	const staleBefore = new Date(nowMs - LAST_USED_WRITE_INTERVAL_MS).toISOString();
+	if (!row.last_used_at || row.last_used_at <= staleBefore) {
+		await dbOwnerBatch(
+			[
+				ownerStatement(
+					"UPDATE api_keys SET last_used_at = ? WHERE id = ? AND (last_used_at IS NULL OR last_used_at <= ?)",
+					[now, row.id, staleBefore],
+				),
+			],
+			{ operation: "auth.record-api-key-use", lane: "write" },
+		);
 	}
 	const role = normalizeRole(row.role);
 	const scope = safeJsonObject(row.scope_json);
