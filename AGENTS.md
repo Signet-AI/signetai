@@ -112,7 +112,7 @@ Decisions and traps by subsystem live in `docs/`; the API and user-facing behavi
 ## Where code lives
 
 - `platform/core`: shared types, the SQLite adapter (Bun and Node), migrations, search, workspace layout.
-- `platform/daemon/src`: one folder per feature (`memory/`, `recall/`, `ontology/`, `dreaming/`, `sources/`, `transcripts/`, `sessions/`, `agents/`, `embeddings/`, `inference/`, ...) plus shared plumbing (`http/` for routes, hooks and MCP; `db/` for the DB owner; `runtime/`; `workers/`). Only `daemon.ts` and `index.ts` sit at the root.
+- `platform/daemon/src`: one folder per feature (`memory/`, `recall/`, `ontology/`, `dreaming/`, `sources/`, `transcripts/`, `sessions/`, `agents/`, `embeddings/`, `inference/`, ...) plus shared plumbing (`http/` for routes, hooks and MCP; `db/` for the DB owner; `runtime/`; `workers/`). Only the entry points (`daemon.ts`, `dev-daemon.ts`, `index.ts`) sit at the root.
 - `platform/native`: Rust accelerators. `surfaces/`: `cli`, `dashboard` (React), `desktop` (Electron), `tray`, `app` (graph layout).
 - `integrations/<harness>/`: connectors, plugins, and extensions. New harness-specific paths, config, install, and detection go here.
 - `libs/`: `sdk`, `connector-base` (the base every connector extends), `lifecycle-proof`.

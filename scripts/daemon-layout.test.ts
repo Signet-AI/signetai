@@ -28,7 +28,7 @@ const FOLDERS = [
 	"workspace",
 ];
 
-const ROOT_FILES = ["daemon.ts", "index.ts"];
+const ROOT_FILES = ["daemon.ts", "dev-daemon.ts", "index.ts"];
 
 test("daemon source root holds only the entry points, their tests, and the feature folders", () => {
 	const entries = readdirSync(SOURCE_ROOT, { withFileTypes: true });

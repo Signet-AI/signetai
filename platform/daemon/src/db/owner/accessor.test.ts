@@ -382,7 +382,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db/owner/accessor.test.ts:370");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db/owner/accessor.test.ts:372");
 	});
 
 	test("attributes an in-flight queued async write callback at latch time", async () => {
@@ -414,7 +414,7 @@ describe("DbAccessor", () => {
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
 		expect(state.latched.syncDbCallSites).toContain(
-			"withWriteTxAsync@platform/daemon/src/db/owner/accessor.test.ts:398",
+			"withWriteTxAsync@platform/daemon/src/db/owner/accessor.test.ts:400",
 		);
 	});
 
