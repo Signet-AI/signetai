@@ -1,17 +1,32 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { findSqliteVecExtension } from "@signet/core";
-import { closeDbAccessor, getDbAccessor, hasDbAccessor, initDbAccessorLite } from "./db-accessor";
+import { closeDbAccessor, getDbAccessor, hasDbAccessor, initDbAccessor, initDbAccessorLite } from "./db-accessor";
 import { type SynthesisRequest, getSynthesisWorker, handleSynthesisRequest, setSynthesisWorker } from "./hooks";
 
-const AGENTS_DIR = process.env.SIGNET_PATH?.trim() || join(homedir(), ".agents");
+const originalSignetPath = process.env.SIGNET_PATH;
+const AGENTS_DIR = mkdtempSync(join(tmpdir(), "signet-synthesis-worker-"));
+process.env.SIGNET_PATH = AGENTS_DIR;
 const DB_PATH = join(AGENTS_DIR, "memory", "memories.db");
 const VEC_EXT_PATH = findSqliteVecExtension();
-const DB_AVAILABLE = existsSync(DB_PATH) && VEC_EXT_PATH !== null;
+const DB_AVAILABLE = VEC_EXT_PATH !== null;
 const WORKER_PATH = join(import.meta.dir, "synthesis-render-worker.ts");
+
+beforeAll(async () => {
+	if (!DB_AVAILABLE) return;
+	initDbAccessor(DB_PATH, { agentsDir: AGENTS_DIR });
+	await closeDbAccessor();
+});
+
+afterAll(async () => {
+	await closeDbAccessor();
+	rmSync(AGENTS_DIR, { recursive: true, force: true });
+	if (originalSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+	else process.env.SIGNET_PATH = originalSignetPath;
+});
 
 function waitForWorkerMessage<T>(worker: Worker, pred: (m: T) => boolean, timeout = 10_000): Promise<T> {
 	return new Promise<T>((resolve, reject) => {
@@ -238,7 +253,7 @@ describe("handleSynthesisRequest", () => {
 			console.warn("SKIP: real DB not available");
 			return;
 		}
-		tmpDir = join(homedir(), `.signet-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+		tmpDir = mkdtempSync(join(tmpdir(), "signet-synthesis-request-"));
 		mkdirSync(join(tmpDir, "memory"), { recursive: true });
 		process.env.SIGNET_PATH = tmpDir;
 
