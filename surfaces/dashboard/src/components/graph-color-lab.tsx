@@ -1,3 +1,4 @@
+import { attempt } from "@signet/core/attempt";
 import { useEffect, useMemo, useState } from "react";
 import "./graph-color-lab.css";
 import {
@@ -15,12 +16,9 @@ const CURRENT_KEY = "signet.dev.graphColor";
 const PRESETS_KEY = "signet.dev.graphColorPresets";
 
 function readJson(key: string): unknown {
-	try {
-		return JSON.parse(localStorage.getItem(key) ?? "null");
-	} catch {
-		localStorage.removeItem(key);
-		return null;
-	}
+	const stored = attempt(() => JSON.parse(localStorage.getItem(key) ?? "null"));
+	if (stored === undefined) attempt(() => localStorage.removeItem(key));
+	return stored ?? null;
 }
 
 function loadCurrent(): { enabled: boolean; config: ColorConfig } {
@@ -67,12 +65,12 @@ export function GraphColorLab({
 	}, [enabled, coloring, onColors]);
 
 	useEffect(() => {
-		localStorage.setItem(CURRENT_KEY, JSON.stringify({ enabled, config }));
+		attempt(() => localStorage.setItem(CURRENT_KEY, JSON.stringify({ enabled, config })));
 	}, [enabled, config]);
 
 	const savePresets = (next: Record<string, ColorConfig>) => {
 		setPresets(next);
-		localStorage.setItem(PRESETS_KEY, JSON.stringify(next));
+		attempt(() => localStorage.setItem(PRESETS_KEY, JSON.stringify(next)));
 	};
 
 	const gradient = useMemo(

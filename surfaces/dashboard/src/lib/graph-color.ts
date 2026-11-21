@@ -22,14 +22,14 @@ export interface ColorConfig {
 const VALUED_IMPORTANCE = new Set(["attribute", "claim", "constraint", "claimSlot", "group"]);
 const DAY_MS = 86_400_000;
 
-function ageInDays(time: number | undefined): number | undefined {
-	return time === undefined ? undefined : Math.max(0, (Date.now() - time) / DAY_MS);
+function ageInDays(time: number | undefined, now: number): number | undefined {
+	return time === undefined ? undefined : Math.max(0, (now - time) / DAY_MS);
 }
 
 export const COLOR_VARIABLES: ReadonlyArray<{
 	readonly key: ColorVariable;
 	readonly label: string;
-	readonly read: (node: SceneNode) => number | undefined;
+	readonly read: (node: SceneNode, now: number) => number | undefined;
 }> = [
 	{ key: "confidence", label: "Confidence", read: (node) => node.confidence },
 	{
@@ -39,8 +39,8 @@ export const COLOR_VARIABLES: ReadonlyArray<{
 	},
 	{ key: "mentions", label: "Mentions", read: (node) => node.mentions },
 	{ key: "aspectWeight", label: "Aspect weight", read: (node) => (node.kind === "aspect" ? node.weight : undefined) },
-	{ key: "created", label: "Days since created", read: (node) => ageInDays(node.createdAt) },
-	{ key: "updated", label: "Days since updated", read: (node) => ageInDays(node.updatedAt) },
+	{ key: "created", label: "Days since created", read: (node, now) => ageInDays(node.createdAt, now) },
+	{ key: "updated", label: "Days since updated", read: (node, now) => ageInDays(node.updatedAt, now) },
 ];
 
 export const RAMPS: Readonly<Record<string, readonly string[]>> = {
@@ -202,12 +202,12 @@ export interface NodeColoring {
 	readonly max: number;
 }
 
-export function colorNodes(nodes: readonly SceneNode[], config: ColorConfig): NodeColoring {
+export function colorNodes(nodes: readonly SceneNode[], config: ColorConfig, now = Date.now()): NodeColoring {
 	const read = COLOR_VARIABLES.find((variable) => variable.key === config.variable)?.read;
 	const values = new Map<string, number>();
 	const sums = new Map<string, { total: number; count: number }>();
 	for (const node of nodes) {
-		const value = read?.(node);
+		const value = read?.(node, now);
 		if (value === undefined || !Number.isFinite(value)) continue;
 		values.set(node.id, value);
 		const sum = sums.get(node.cluster) ?? { total: 0, count: 0 };
