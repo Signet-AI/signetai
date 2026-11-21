@@ -486,6 +486,35 @@ describe("middleware - createAuthMiddleware", () => {
 		expect(res.status).toBe(401);
 	});
 
+	test("team mode: waits for an async api key verifier", async () => {
+		const verifyApiKey = async () => ({
+			authenticated: true,
+			claims: { sub: "api-key:key_1", scope: {}, role: "agent" as const, iat: 0, exp: 2 ** 31 - 1 },
+		});
+		const app = new Hono();
+		app.use("*", createAuthMiddleware(teamConfig, secret, verifyApiKey));
+		app.get("/test", (c) => c.json({ sub: c.get("auth").claims?.sub }));
+		app.get("/api/auth/whoami", (c) => c.json({ sub: c.get("auth").claims?.sub ?? null }));
+		const headers = { Authorization: "Bearer sig_sk_abc123_secret" };
+
+		const res = await app.request(new Request("http://localhost/test", { headers }));
+		expect(res.status).toBe(200);
+		expect(await res.json()).toEqual({ sub: "api-key:key_1" });
+
+		const whoami = await app.request(new Request("http://localhost/api/auth/whoami", { headers }));
+		expect(await whoami.json()).toEqual({ sub: "api-key:key_1" });
+	});
+
+	test("team mode: a rejected async api key verifier returns 401", async () => {
+		const verifyApiKey = async () => ({ authenticated: false, claims: null, error: "invalid api key" });
+		const app = makeTestApp(createAuthMiddleware(teamConfig, secret, verifyApiKey));
+		const res = await app.request(
+			new Request("http://localhost/test", { headers: { Authorization: "Bearer sig_sk_abc123_secret" } }),
+		);
+		expect(res.status).toBe(401);
+		expect(await res.json()).toEqual({ error: "invalid api key" });
+	});
+
 	test("hybrid mode: Host header alone does not bypass auth (fail closed)", async () => {
 		const app = makeTestApp(createAuthMiddleware(hybridConfig, secret));
 		const res = await app.request(

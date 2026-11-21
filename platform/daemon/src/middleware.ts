@@ -3,7 +3,6 @@ import type { Context, Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { createAuthMiddleware, isAuthOpenPath, verifyApiKey } from "./auth";
-import { getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
 import { analyticsCollector, authConfig, authSecret, isAllowedOrigin, shuttingDown } from "./routes/state.js";
 
@@ -42,7 +41,7 @@ export function registerGlobalMiddleware(app: Hono): void {
 			c.status(503);
 			return c.json({ error: "server initializing" });
 		}
-		const mw = createAuthMiddleware(authConfig, authSecret, (token) => verifyApiKey(getDbAccessor(), token));
+		const mw = createAuthMiddleware(authConfig, authSecret, verifyApiKey);
 		return mw(c, next);
 	});
 	app.use("*", async (c, next) => {

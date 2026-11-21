@@ -179,6 +179,8 @@ List keys without revealing secrets:
 signet api-key list
 ```
 
+The last-used time of a key updates at most once a minute.
+
 Revoke a key if a machine is retired or the key was exposed:
 
 ```bash

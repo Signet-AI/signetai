@@ -1,10 +1,14 @@
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
 import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
+import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import type { AuthResult, Permission, TokenClaims, TokenRole, TokenScope } from "./types";
 import { PERMISSIONS, TOKEN_ROLES } from "./types";
 
 const API_KEY_PREFIX = "sig_sk_";
 const DEFAULT_CONNECTOR_PERMISSIONS: readonly Permission[] = ["recall", "remember", "documents"];
+const VERIFIED_TOKEN_LIMIT = 256;
+const LAST_USED_WRITE_INTERVAL_MS = 60_000;
+const verifiedTokens = new Map<string, string>();
 
 export interface ApiKeyCreateInput {
 	readonly name: string;
@@ -67,16 +71,35 @@ function hashApiKey(key: string): string {
 	return `scrypt:${salt}:${hash}`;
 }
 
-function verifyApiKeyHash(storedHash: string, token: string): boolean {
-	const [algorithm, salt, hash] = storedHash.split(":");
-	if (algorithm === "scrypt" && salt && hash) {
-		const expected = Buffer.from(hash, "hex");
-		const actual = scryptSync(token, salt, expected.length).toString("hex");
-		const actualBuffer = Buffer.from(actual, "hex");
-		return expected.length === actualBuffer.length && timingSafeEqual(expected, actualBuffer);
-	}
+function scryptAsync(token: string, salt: string, length: number): Promise<Buffer> {
+	return new Promise((resolve, reject) => {
+		scrypt(token, salt, length, (error, derived) => (error ? reject(error) : resolve(derived)));
+	});
+}
 
-	return false;
+function rememberVerifiedToken(digest: string, storedHash: string): void {
+	if (verifiedTokens.size >= VERIFIED_TOKEN_LIMIT) {
+		const oldest = verifiedTokens.keys().next().value;
+		if (oldest !== undefined) verifiedTokens.delete(oldest);
+	}
+	verifiedTokens.set(digest, storedHash);
+}
+
+async function verifyApiKeyHash(storedHash: string, token: string): Promise<boolean> {
+	const digest = createHash("sha256").update(token).digest("hex");
+	if (verifiedTokens.get(digest) === storedHash) return true;
+	const [algorithm, salt, hash] = storedHash.split(":");
+	if (algorithm !== "scrypt" || !salt || !hash) return false;
+	const expected = Buffer.from(hash, "hex");
+	const actual = await scryptAsync(token, salt, expected.length);
+	if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return false;
+	rememberVerifiedToken(digest, storedHash);
+	return true;
+}
+
+function isLastUseStale(lastUsedAt: string | null, nowMs: number): boolean {
+	const lastMs = lastUsedAt ? Date.parse(lastUsedAt) : Number.NaN;
+	return Number.isNaN(lastMs) || nowMs - lastMs >= LAST_USED_WRITE_INTERVAL_MS;
 }
 
 function safeJsonObject(raw: string): TokenScope {
@@ -215,7 +238,7 @@ export function createApiKey(accessor: DbAccessor, input: ApiKeyCreateInput): Cr
 			now,
 			expiresAt,
 		);
-	}, "auth/api-keys.ts:197");
+	}, "auth/api-keys.ts:220");
 
 	return {
 		id,
@@ -250,7 +273,7 @@ export function listApiKeys(accessor: DbAccessor): readonly ApiKeyRecord[] {
 					)
 					.all() as unknown as ApiKeyRow[]
 			).map(rowToRecord),
-		"auth/api-keys.ts:241",
+		"auth/api-keys.ts:264",
 	);
 }
 
@@ -262,49 +285,54 @@ export function revokeApiKey(accessor: DbAccessor, idOrPrefix: string): ApiKeyRe
 		if (!row) return null;
 		db.prepare("UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?) WHERE id = ?").run(now, row.id);
 		return rowToRecord({ ...row, revoked_at: row.revoked_at ?? now });
-	}, "auth/api-keys.ts:260");
+	}, "auth/api-keys.ts:283");
 }
 
-export function verifyApiKey(accessor: DbAccessor, token: string): AuthResult {
+export async function verifyApiKey(token: string): Promise<AuthResult> {
 	const prefix = extractApiKeyPrefix(token);
 	if (!prefix) return { authenticated: false, claims: null, error: "malformed api key" };
-	const now = new Date().toISOString();
 
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("../db-accessor").WriteDb) => {
-		const row = db
-			.prepare(
-				`SELECT id, prefix, name, key_hash, role, scope_json, permissions_json, connector, harness,
-				        agent_id, allowed_projects_json, created_at, last_used_at, revoked_at, expires_at
-				   FROM api_keys
-				  WHERE prefix = ?
-				  LIMIT 1`,
-			)
-			.get(prefix) as ApiKeyRow | undefined;
-		if (!row) return { authenticated: false, claims: null, error: "invalid api key" };
+	const row = await dbOwnerQuery<ApiKeyRow | null>(
+		ownerStatement(
+			`SELECT id, prefix, name, key_hash, role, scope_json, permissions_json, connector, harness,
+			        agent_id, allowed_projects_json, created_at, last_used_at, revoked_at, expires_at
+			   FROM api_keys
+			  WHERE prefix = ?
+			  LIMIT 1`,
+			[prefix],
+			"get",
+		),
+		{ operation: "auth.verify-api-key", lane: "read" },
+	);
+	if (!row) return { authenticated: false, claims: null, error: "invalid api key" };
 
-		if (!verifyApiKeyHash(row.key_hash, token)) {
-			return { authenticated: false, claims: null, error: "invalid api key" };
-		}
-		if (row.revoked_at) return { authenticated: false, claims: null, error: "api key revoked" };
-		if (row.expires_at && row.expires_at <= now)
-			return { authenticated: false, claims: null, error: "api key expired" };
+	if (!(await verifyApiKeyHash(row.key_hash, token))) {
+		return { authenticated: false, claims: null, error: "invalid api key" };
+	}
+	const nowMs = Date.now();
+	const now = new Date(nowMs).toISOString();
+	if (row.revoked_at) return { authenticated: false, claims: null, error: "api key revoked" };
+	if (row.expires_at && row.expires_at <= now) return { authenticated: false, claims: null, error: "api key expired" };
 
-		db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").run(now, row.id);
-		const role = normalizeRole(row.role);
-		const scope = safeJsonObject(row.scope_json);
-		const iat = Math.floor(new Date(row.created_at).getTime() / 1000);
-		const exp = row.expires_at ? Math.floor(new Date(row.expires_at).getTime() / 1000) : 2 ** 31 - 1;
-		const permissions = normalizePermissions(safeStringArray(row.permissions_json), []);
-		const claims: TokenClaims = {
-			sub: `api-key:${row.id}`,
-			name: row.name,
-			role,
-			scope,
-			iat,
-			exp,
-			...(permissions.length > 0 ? { permissions } : {}),
-		};
-		return { authenticated: true, claims };
-	}, "auth/api-keys.ts:274");
+	if (isLastUseStale(row.last_used_at, nowMs)) {
+		await dbOwnerBatch([ownerStatement("UPDATE api_keys SET last_used_at = ? WHERE id = ?", [now, row.id])], {
+			operation: "auth.record-api-key-use",
+			lane: "write",
+		});
+	}
+	const role = normalizeRole(row.role);
+	const scope = safeJsonObject(row.scope_json);
+	const iat = Math.floor(new Date(row.created_at).getTime() / 1000);
+	const exp = row.expires_at ? Math.floor(new Date(row.expires_at).getTime() / 1000) : 2 ** 31 - 1;
+	const permissions = normalizePermissions(safeStringArray(row.permissions_json), []);
+	const claims: TokenClaims = {
+		sub: `api-key:${row.id}`,
+		name: row.name,
+		role,
+		scope,
+		iat,
+		exp,
+		...(permissions.length > 0 ? { permissions } : {}),
+	};
+	return { authenticated: true, claims };
 }
