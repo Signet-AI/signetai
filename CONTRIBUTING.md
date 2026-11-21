@@ -227,7 +227,7 @@ count, so a copy cannot duplicate debt. New files start at zero; an existing
 destination keeps its own count. There is no generated baseline to update.
 
 Raw SQL has two parts. SQL text is allowed only in the owner files listed in
-the script and in numbered core migrations and their registry. Raw owner
+`scripts/sql-owners.json` and in numbered core migrations and their registry. Raw owner
 requests (`ownerReadAll`, `ownerReadOne`, `ownerRun`, `ownerBatch`, and
 `query`/`transaction`/`batch` request kinds) and legacy accessor calls
 (`withReadDb`, `withWriteTx`, `LEGACY_SYNC_DB_ACCESS` markers) count in every
