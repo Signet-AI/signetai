@@ -60,6 +60,10 @@ function waitForSynthesisWorkerTermination(termination: Promise<void>): Promise<
 	});
 }
 
+async function settleSynthesisWorker(): Promise<void> {
+	if (synthesisWorkerTermination !== null) await waitForSynthesisWorkerTermination(synthesisWorkerTermination);
+}
+
 export function setSynthesisWorker(worker: Worker | null): void {
 	synthesisWorker = worker;
 }
@@ -95,12 +99,11 @@ export async function handleSynthesisRequest(
 	void _maxTokens;
 
 	const agentId = opts?.agentId ?? "default";
-	if (synthesisWorkerTermination !== null) {
-		await waitForSynthesisWorkerTermination(synthesisWorkerTermination);
-	}
+	await settleSynthesisWorker();
 	if (hasDbAccessor()) {
 		await purgeCanonicalNoiseSessionsOnce(agentId, NOISE_PURGE_REASON);
 	}
+	await settleSynthesisWorker();
 
 	const worker = getSynthesisWorker();
 	if (worker === null) {
