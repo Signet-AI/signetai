@@ -47,7 +47,7 @@ limit is exceeded, the response is 429 with a `Retry-After` header.
 
 ## Analytics
 
-`platform/daemon/src/analytics.ts` implements an in-memory [Analytics](/analytics/)
+`platform/daemon/src/telemetry/usage/analytics.ts` implements an in-memory [Analytics](/analytics/)
 accumulator. All state is ephemeral — it resets on daemon restart.
 Durable history lives in `memory_history` and structured logs.
 
@@ -80,7 +80,7 @@ push documents and memories into the [Pipeline](/pipeline/). It is distinct from
 [harness connector packages](/harnesses/) (claude-code, codex, kimi, opencode, openclaw, oh-my-pi, pi) — those
 handle platform hook installation; this framework handles ongoing sync.
 
-**Registry** (`connectors/registry.ts`): CRUD operations on the
+**Registry** (`sources/providers/filesystem/connector-registry.ts`): CRUD operations on the
 `connectors` table. `registerConnector` inserts a new row with
 `status = 'idle'` and returns its UUID. `updateConnectorStatus`
 transitions a connector between `idle`, `syncing`, and `error` states.
@@ -88,7 +88,7 @@ transitions a connector between `idle`, `syncing`, and `error` states.
 cursor is a JSON object stored in `cursor_json`; it tracks the
 high-water mark for incremental sync (typically a timestamp or offset).
 
-**Filesystem connector** (`connectors/filesystem.ts`): watches a
+**Filesystem connector** (`sources/providers/filesystem/connector.ts`): watches a
 directory path, ingests files as documents, and tracks the cursor
 based on file modification times.
 
@@ -103,7 +103,7 @@ the age of the oldest unresolved error.
 
 ## Diagnostics and Repair
 
-`platform/daemon/src/diagnostics.ts` provides read-only health signals
+`platform/daemon/src/telemetry/diagnostics/diagnostics.ts` provides read-only health signals
 across six domains. All functions accept a `ReadDb` or `ProviderTracker`
 and return plain data — no mutations, no side effects.
 
@@ -146,7 +146,7 @@ this), then a rate limiter with per-action cooldown and hourly budget.
 Each successful repair writes an audit event to `memory_history` with
 `memory_id = 'system'`.
 
-**Embedding refresh tracker** (`embedding-tracker.ts`): the existing
+**Embedding refresh tracker** (`embeddings/index/tracker.ts`): the existing
 incremental tracker owns stale and missing-memory vector writes. It does not
 create a second repair queue. Before a provider batch, it acquires a durable
 SQLite lease. A batch that re-embeds existing vectors consumes one
@@ -158,7 +158,7 @@ provider failures retain exponential retry deadlines across daemon restarts;
 the lease, completed batch count, and last error are returned with
 `GET /api/repair/embedding-gaps`.
 
-**Maintenance worker** (`pipeline/maintenance-worker.ts`): runs on a
+**Maintenance worker** (`workers/maintenance.ts`): runs on a
 configurable interval. Each cycle calls `getDiagnostics`, builds repair
 recommendations from the report, and either logs them (`observe` mode)
 or executes them (`execute` mode). A halt tracker prevents the same

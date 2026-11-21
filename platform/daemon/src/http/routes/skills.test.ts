@@ -1,0 +1,821 @@
+import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Hono } from "hono";
+import {
+	buildSkillInstallPlan,
+	fetchCatalogUrl,
+	formatInstalls,
+	listInstalledSkills,
+	mountSkillsRoutes,
+	parseSkillFrontmatter,
+	readCatalogResponseJson,
+	readCatalogResponseText,
+	replaceSkillDirectoryAtomically,
+	validateClawhubZipEntryMetadata,
+	validateExtractedSkillTree,
+	withClawhubInstallLock,
+} from "./skills";
+
+describe("repo skills frontmatter", () => {
+	const skillsRoot = join(__dirname, "..", "..", "..", "..", "..", "skills");
+	const hasSkillsDir = existsSync(skillsRoot);
+
+	it.skipIf(!hasSkillsDir)("all skills have parseable SKILL.md with name and description", () => {
+		const dirs = readdirSync(skillsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+		expect(dirs.length).toBeGreaterThan(0);
+
+		for (const dir of dirs) {
+			const skillMd = join(skillsRoot, dir.name, "SKILL.md");
+			if (!existsSync(skillMd)) continue;
+
+			const content = readFileSync(skillMd, "utf-8");
+			const meta = parseSkillFrontmatter(content);
+			expect(meta.description.length, `${dir.name} should have a description`).toBeGreaterThan(0);
+		}
+	});
+
+	it.skipIf(!hasSkillsDir)("no skill has last_verified as a top-level frontmatter key", () => {
+		const dirs = readdirSync(skillsRoot, { withFileTypes: true }).filter((d) => d.isDirectory());
+
+		for (const dir of dirs) {
+			const skillMd = join(skillsRoot, dir.name, "SKILL.md");
+			if (!existsSync(skillMd)) continue;
+
+			const content = readFileSync(skillMd, "utf-8");
+			const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
+			if (!fmMatch) continue;
+			const lines = fmMatch[1].split("\n");
+			for (const line of lines) {
+				if (/^last_verified:/.test(line)) {
+					throw new Error(`${dir.name}/SKILL.md has top-level last_verified — move it under metadata:`);
+				}
+			}
+		}
+	});
+
+	it.skipIf(!hasSkillsDir)("builtin skills have builtin: true in frontmatter", () => {
+		const expectedBuiltin = ["dreaming", "memory-debug", "onboarding", "recall", "remember", "signet"];
+
+		for (const name of expectedBuiltin) {
+			const skillMd = join(skillsRoot, name, "SKILL.md");
+			if (!existsSync(skillMd)) continue;
+
+			const content = readFileSync(skillMd, "utf-8");
+			expect(/^builtin:\s*true$/m.test(content), `${name} should have builtin: true`).toBe(true);
+		}
+	});
+
+	it.skipIf(!hasSkillsDir)("non-builtin skills do not have builtin: true", () => {
+		const nonBuiltin = ["agent-architect", "skill-creator", "web-search"];
+
+		for (const name of nonBuiltin) {
+			const skillMd = join(skillsRoot, name, "SKILL.md");
+			if (!existsSync(skillMd)) continue;
+
+			const content = readFileSync(skillMd, "utf-8");
+			expect(/^builtin:\s*true$/m.test(content), `${name} should not have builtin: true`).toBe(false);
+		}
+	});
+});
+
+describe("parseSkillFrontmatter", () => {
+	it("parses valid frontmatter with all fields", () => {
+		const content = `---
+description: A test skill
+version: 1.0.0
+author: test-author
+license: MIT
+user_invocable: true
+arg_hint: <query>
+---
+
+# Skill content here`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("A test skill");
+		expect(meta.version).toBe("1.0.0");
+		expect(meta.author).toBe("test-author");
+		expect(meta.license).toBe("MIT");
+		expect(meta.user_invocable).toBe(true);
+		expect(meta.arg_hint).toBe("<query>");
+	});
+
+	it("returns empty description when no frontmatter present", () => {
+		const content = "# Just a markdown file\n\nNo frontmatter here.";
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("");
+		expect(meta.version).toBeUndefined();
+		expect(meta.author).toBeUndefined();
+	});
+
+	it("handles partial frontmatter fields", () => {
+		const content = `---
+description: Only description
+---
+
+Body text`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("Only description");
+		expect(meta.version).toBeUndefined();
+		expect(meta.author).toBeUndefined();
+		expect(meta.license).toBeUndefined();
+		expect(meta.user_invocable).toBe(false);
+		expect(meta.arg_hint).toBeUndefined();
+	});
+
+	it("strips surrounding quotes from values", () => {
+		const content = `---
+description: "quoted description"
+author: 'single-quoted'
+---`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("quoted description");
+		expect(meta.author).toBe("single-quoted");
+	});
+
+	it("parses optional verified and permissions metadata", () => {
+		const content = `---
+description: metadata skill
+verified: true
+permissions: [network, filesystem]
+---`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.verified).toBe(true);
+		expect(meta.permissions).toEqual(["network", "filesystem"]);
+	});
+
+	it("parses frontmatter with metadata block (last_verified under metadata)", () => {
+		const content = `---
+name: web-search
+description: "Search the web"
+metadata:
+  last_verified: 2026-03-21
+---
+
+# Web Search`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("Search the web");
+	});
+
+	it("parses builtin flag via regex", () => {
+		const builtin = `---
+name: remember
+description: Save to memory
+builtin: true
+user_invocable: false
+---`;
+
+		const notBuiltin = `---
+name: web-search
+description: Search the web
+---`;
+
+		expect(/^builtin:\s*true$/m.test(builtin)).toBe(true);
+		expect(/^builtin:\s*true$/m.test(notBuiltin)).toBe(false);
+
+		const meta = parseSkillFrontmatter(builtin);
+		expect(meta.description).toBe("Save to memory");
+		expect(meta.user_invocable).toBe(false);
+	});
+
+	it("parses multiline YAML description using > folded scalar", () => {
+		const content = `---
+name: agent-architect
+description: >
+  Design agents with genuine humanity — craft SOUL.md, IDENTITY.md, USER.md,
+  and AGENTS.md files that produce agents people actually connect with.
+metadata:
+  last_verified: 2026-03-21
+---
+
+# Agent Architect`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe(
+			"Design agents with genuine humanity — craft SOUL.md, IDENTITY.md, USER.md, and AGENTS.md files that produce agents people actually connect with.",
+		);
+	});
+
+	it("parses multiline YAML description using | literal scalar", () => {
+		const content = `---
+name: shorts
+description: |
+  First line of the description.
+  Second line stays separate.
+version: 2.0.0
+---`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("First line of the description.\nSecond line stays separate.");
+		expect(meta.version).toBe("2.0.0");
+	});
+
+	it("does not read the next key as an empty field's value", () => {
+		const meta = parseSkillFrontmatter("---\nauthor:\ndescription: Real description\n---");
+		expect(meta.author).toBeUndefined();
+		expect(meta.description).toBe("Real description");
+	});
+
+	it("ignores metadata block keys when parsing top-level fields", () => {
+		const content = `---
+name: test-skill
+description: "A skill with nested metadata"
+metadata:
+  last_verified: 2026-03-21
+  custom_key: custom_value
+---`;
+
+		const meta = parseSkillFrontmatter(content);
+		expect(meta.description).toBe("A skill with nested metadata");
+		expect(meta.version).toBeUndefined();
+	});
+});
+
+describe("formatInstalls", () => {
+	it("returns raw number for values under 1000", () => {
+		expect(formatInstalls(0)).toBe("0");
+		expect(formatInstalls(1)).toBe("1");
+		expect(formatInstalls(999)).toBe("999");
+	});
+
+	it("formats thousands with K suffix", () => {
+		expect(formatInstalls(1000)).toBe("1.0K");
+		expect(formatInstalls(1500)).toBe("1.5K");
+		expect(formatInstalls(999999)).toBe("1000.0K");
+	});
+
+	it("formats millions with M suffix", () => {
+		expect(formatInstalls(1000000)).toBe("1.0M");
+		expect(formatInstalls(1500000)).toBe("1.5M");
+	});
+});
+
+describe("listInstalledSkills", () => {
+	const tmpAgentsDir = join(tmpdir(), `signet-test-agents-${process.pid}`);
+	const tmpSkillsDir = join(tmpAgentsDir, "skills");
+	let origSignetPath: string | undefined;
+
+	beforeEach(() => {
+		origSignetPath = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = tmpAgentsDir;
+		mkdirSync(tmpSkillsDir, { recursive: true });
+	});
+
+	afterEach(() => {
+		if (origSignetPath === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = origSignetPath;
+		if (existsSync(tmpAgentsDir)) {
+			rmSync(tmpAgentsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("returns empty array when skills dir has no subdirs", () => {
+		const result = listInstalledSkills();
+		expect(result).toEqual([]);
+	});
+
+	it("returns empty array when skills dir does not exist", () => {
+		rmSync(tmpSkillsDir, { recursive: true, force: true });
+		const result = listInstalledSkills();
+		expect(result).toEqual([]);
+	});
+
+	it("skips directories without SKILL.md", () => {
+		mkdirSync(join(tmpSkillsDir, "no-skillmd"), { recursive: true });
+		writeFileSync(join(tmpSkillsDir, "no-skillmd", "README.md"), "# Hello");
+		const result = listInstalledSkills();
+		expect(result).toEqual([]);
+	});
+
+	it("returns skills with parsed metadata", () => {
+		const skillDir = join(tmpSkillsDir, "my-skill");
+		mkdirSync(skillDir, { recursive: true });
+		writeFileSync(
+			join(skillDir, "SKILL.md"),
+			`---
+description: My cool skill
+version: 2.0.0
+user_invocable: true
+---
+
+# My Skill`,
+		);
+
+		const result = listInstalledSkills();
+		expect(result).toHaveLength(1);
+		expect(result[0].name).toBe("my-skill");
+		expect(result[0].description).toBe("My cool skill");
+		expect(result[0].version).toBe("2.0.0");
+		expect(result[0].user_invocable).toBe(true);
+		expect(result[0].path).toBe(skillDir);
+	});
+
+	it("handles mix of valid and invalid skill dirs", () => {
+		const validDir = join(tmpSkillsDir, "valid-skill");
+		mkdirSync(validDir, { recursive: true });
+		writeFileSync(
+			join(validDir, "SKILL.md"),
+			`---
+description: Valid
+---`,
+		);
+		mkdirSync(join(tmpSkillsDir, "empty-dir"), { recursive: true });
+
+		const result = listInstalledSkills();
+		expect(result).toHaveLength(1);
+		expect(result[0].name).toBe("valid-skill");
+	});
+});
+
+describe("skills routes", () => {
+	const tmpAgentsDir = join(tmpdir(), `signet-route-test-${process.pid}`);
+	const skillsDir = join(tmpAgentsDir, "skills");
+	let origSignetPath: string | undefined;
+	let app: Hono;
+
+	beforeEach(() => {
+		origSignetPath = process.env.SIGNET_PATH;
+		process.env.SIGNET_PATH = tmpAgentsDir;
+
+		mkdirSync(skillsDir, { recursive: true });
+		const testSkillDir = join(skillsDir, "test-skill");
+		mkdirSync(testSkillDir, { recursive: true });
+		writeFileSync(
+			join(testSkillDir, "SKILL.md"),
+			`---
+description: A test skill
+version: 1.0.0
+user_invocable: true
+---
+
+# Test Skill
+
+This is a test skill.`,
+		);
+
+		app = new Hono();
+		mountSkillsRoutes(app);
+	});
+
+	afterEach(() => {
+		if (origSignetPath === undefined) delete process.env.SIGNET_PATH;
+		else process.env.SIGNET_PATH = origSignetPath;
+		if (existsSync(tmpAgentsDir)) {
+			rmSync(tmpAgentsDir, { recursive: true, force: true });
+		}
+	});
+
+	it("GET /api/skills lists installed skills from fixture", async () => {
+		const res = await app.request("/api/skills");
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.count).toBe(1);
+		expect(body.skills).toHaveLength(1);
+		expect(body.skills[0].name).toBe("test-skill");
+		expect(body.skills[0].description).toBe("A test skill");
+	});
+
+	it("GET /api/skills returns empty when no skills installed", async () => {
+		rmSync(skillsDir, { recursive: true, force: true });
+		const res = await app.request("/api/skills");
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.count).toBe(0);
+		expect(body.skills).toEqual([]);
+	});
+
+	it("GET /api/skills/:name returns skill content from fixture", async () => {
+		const res = await app.request("/api/skills/test-skill");
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.name).toBe("test-skill");
+		expect(body.description).toBe("A test skill");
+		expect(body.version).toBe("1.0.0");
+		expect(body.content).toContain("# Test Skill");
+	});
+
+	it("GET /api/skills/:name returns 400 for path traversal", async () => {
+		const res = await app.request("/api/skills/..%2F..%2Fetc");
+		expect(res.status).toBe(400);
+	});
+
+	it("GET /api/skills/:name returns 404 for missing skill", async () => {
+		const res = await app.request("/api/skills/nonexistent-skill-xyz");
+		expect(res.status).toBe(404);
+	});
+
+	it("DELETE /api/skills/:name removes skill from fixture", async () => {
+		const res = await app.request("/api/skills/test-skill", {
+			method: "DELETE",
+		});
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(body.success).toBe(true);
+		expect(body.name).toBe("test-skill");
+		expect(existsSync(join(skillsDir, "test-skill"))).toBe(false);
+	});
+
+	it("DELETE /api/skills/:name rejects path traversal", async () => {
+		const res = await app.request("/api/skills/..%2Ffoo", {
+			method: "DELETE",
+		});
+		expect(res.status).toBe(400);
+		const body = await res.json();
+		expect(body.error).toBe("Invalid skill name");
+	});
+
+	it("DELETE /api/skills/:name returns 404 for missing skill", async () => {
+		const res = await app.request("/api/skills/does-not-exist", {
+			method: "DELETE",
+		});
+		expect(res.status).toBe(404);
+	});
+
+	it("POST /api/skills/install rejects missing name", async () => {
+		const res = await app.request("/api/skills/install", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({}),
+		});
+		expect(res.status).toBe(400);
+		const body = await res.json();
+		expect(body.error).toBe("name is required");
+	});
+
+	it("POST /api/skills/install rejects invalid name characters", async () => {
+		const res = await app.request("/api/skills/install", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ name: "skill; rm -rf /" }),
+		});
+		expect(res.status).toBe(400);
+		const body = await res.json();
+		expect(body.error).toBe("Invalid skill name");
+	});
+
+	it("GET /api/skills/search returns 400 without query", async () => {
+		const res = await app.request("/api/skills/search");
+		expect(res.status).toBe(400);
+		const body = await res.json();
+		expect(body.error).toContain("Query parameter q is required");
+	});
+
+	it("bounds external skill fetches with abort signals", async () => {
+		const originalFetch = globalThis.fetch;
+		const calls: Array<{ url: string; signal: AbortSignal | undefined }> = [];
+		globalThis.fetch = mock(async (input: string | URL | Request, init?: RequestInit) => {
+			const url = typeof input === "string" ? input : input.toString();
+			calls.push({ url, signal: init?.signal as AbortSignal | undefined });
+
+			if (url.startsWith("https://skills.sh/api/search")) {
+				return new Response(JSON.stringify({ skills: [] }), { status: 200 });
+			}
+			if (url.startsWith("https://clawhub.ai/api/v1/skills")) {
+				return new Response(JSON.stringify({ items: [], nextCursor: null }), { status: 200 });
+			}
+			if (url.startsWith("https://api.github.com/")) {
+				return new Response(JSON.stringify({ tree: [{ path: "remote-skill/SKILL.md" }] }), { status: 200 });
+			}
+			if (url.startsWith("https://raw.githubusercontent.com/")) {
+				return new Response("---\ndescription: Remote skill\n---\n", { status: 200 });
+			}
+			return new Response("not a zip", { status: 200 });
+		}) as unknown as typeof fetch;
+
+		try {
+			await app.request("/api/skills/search?q=remote");
+			await app.request("/api/skills/remote-skill?source=owner/repo");
+			await app.request("/api/skills/install", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: "remote-skill", source: "clawhub@remote-skill" }),
+			});
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+
+		const externalUrls = [
+			"https://clawhub.ai/api/v1/download?slug=remote-skill",
+			"https://skills.sh/api/search?q=remote",
+			"https://api.github.com/repos/owner/repo/git/trees/main?recursive=1",
+			"https://raw.githubusercontent.com/owner/repo/main/remote-skill/SKILL.md",
+		];
+		for (const url of externalUrls) {
+			const call = calls.find((entry) => entry.url === url);
+			expect(call, `expected bounded fetch for ${url}`).toBeDefined();
+			expect(call?.signal, `expected abort signal for ${url}`).toBeDefined();
+		}
+	});
+
+	it("aborts a stalled catalog fetch at its deadline", async () => {
+		const originalFetch = globalThis.fetch;
+		let signal: AbortSignal | undefined;
+		globalThis.fetch = mock((_input: string | URL | Request, init?: RequestInit) => {
+			signal = init?.signal as AbortSignal | undefined;
+			return new Promise<Response>((_resolve, reject) => {
+				signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+			});
+		}) as unknown as typeof fetch;
+
+		try {
+			await expect(fetchCatalogUrl("https://skills.example.invalid", 5)).rejects.toThrow("aborted");
+			expect(signal?.aborted).toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("keeps the deadline active while consuming a catalog response body", async () => {
+		const originalFetch = globalThis.fetch;
+		let signal: AbortSignal | undefined;
+		globalThis.fetch = mock(async (_input: string | URL | Request, init?: RequestInit) => {
+			signal = init?.signal as AbortSignal | undefined;
+			const body = new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(new TextEncoder().encode("partial"));
+					signal?.addEventListener("abort", () => controller.error(new Error("aborted")), { once: true });
+				},
+			});
+			return new Response(body, { status: 200 });
+		}) as unknown as typeof fetch;
+
+		try {
+			const response = await fetchCatalogUrl("https://skills.example.invalid", 5);
+			await expect(readCatalogResponseText(response)).rejects.toThrow("aborted");
+			expect(signal?.aborted).toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	it("rejects an oversized text response while it is still streaming", async () => {
+		const limit = 1024;
+		let pulls = 0;
+		let cancelled = false;
+		const body = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				pulls += 1;
+				if (pulls === 1) {
+					controller.enqueue(new Uint8Array(limit));
+					return;
+				}
+				controller.enqueue(new Uint8Array(1));
+			},
+			cancel() {
+				cancelled = true;
+			},
+		});
+
+		await expect(readCatalogResponseText(new Response(body), limit)).rejects.toThrow("catalog response too large");
+		expect(pulls).toBe(2);
+		expect(cancelled).toBe(true);
+	});
+
+	it("rejects an oversized JSON response before parsing", async () => {
+		const limit = 1024;
+		const response = new Response("not valid JSON", {
+			status: 200,
+			headers: { "content-length": String(limit + 1) },
+		});
+
+		await expect(readCatalogResponseJson(response, limit)).rejects.toThrow("catalog response too large");
+	});
+
+	it("preserves normal bounded text and JSON responses", async () => {
+		expect(await readCatalogResponseText(new Response("catalog entry"))).toBe("catalog entry");
+		expect(await readCatalogResponseJson<{ skills: string[] }>(new Response('{"skills":["remote"]}'))).toEqual({
+			skills: ["remote"],
+		});
+	});
+
+	it("preserves downstream body and parse errors", async () => {
+		const body = new ReadableStream<Uint8Array>({
+			start(controller) {
+				controller.error(new Error("catalog body failed"));
+			},
+		});
+		await expect(readCatalogResponseText(new Response(body))).rejects.toThrow("catalog body failed");
+		await expect(readCatalogResponseJson(new Response("{"))).rejects.toThrow(SyntaxError);
+	});
+
+	it("routes every external catalog/document body through the shared bounded reader", () => {
+		const source = readFileSync(join(__dirname, "skills.ts"), "utf-8");
+		expect(source).not.toContain("await res.text()");
+		expect(source).not.toContain("await res.json()");
+		expect(source).not.toContain("await treeRes.json()");
+		expect(source).not.toContain("await mdRes.text()");
+		expect(source).toContain("readCatalogResponseText(res)");
+		expect(source).toContain("readCatalogResponseText(mdRes)");
+		expect(source).toContain("readCatalogResponseJson<");
+	});
+
+	it("POST /api/skills/install accepts valid name with source", async () => {
+		const prevDisableInstall = process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL;
+		process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL = "1";
+		try {
+			const res = await app.request("/api/skills/install", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ name: "web-search", source: "Signet-AI/signetai" }),
+			});
+			expect(res.status).not.toBe(400);
+		} finally {
+			if (prevDisableInstall === undefined) {
+				Reflect.deleteProperty(process.env as Record<string, string | undefined>, "SIGNET_TEST_DISABLE_SKILLS_INSTALL");
+			} else {
+				process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL = prevDisableInstall;
+			}
+		}
+	});
+
+	it("POST /api/skills/install rejects invalid JSON body", async () => {
+		const res = await app.request("/api/skills/install", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: "not json",
+		});
+		expect(res.status).toBe(400);
+	});
+	it.skipIf(!existsSync(join(__dirname, "..", "..", "..", "..", "..", "skills")))(
+		"GET /api/skills/browse includes signet provider skills",
+		async () => {
+			const res = await app.request("/api/skills/browse");
+			expect(res.status).toBe(200);
+			const body = await res.json();
+			const signetSkills = body.results.filter((s: { provider: string }) => s.provider === "signet");
+			expect(signetSkills.length).toBeGreaterThan(0);
+			const catalogKeys = new Set<string>();
+			for (const skill of signetSkills) {
+				expect(skill.fullName).toBe("Signet-AI/signetai");
+				expect(skill.catalogKey).toBe(`signet:Signet-AI/signetai:${skill.name}`);
+				expect(catalogKeys.has(skill.catalogKey)).toBe(false);
+				catalogKeys.add(skill.catalogKey);
+				expect(skill.official).toBe(true);
+			}
+			const builtins = signetSkills.filter((s: { builtin: boolean }) => s.builtin);
+			expect(builtins.length).toBeGreaterThan(0);
+		},
+	);
+});
+
+describe("install command args", () => {
+	it("constructs --skill flag for repo sources", () => {
+		expect(buildSkillInstallPlan("web-search", "Signet-AI/signetai")).toEqual({
+			kind: "skills-cli",
+			pkg: "Signet-AI/signetai",
+			args: ["add", "Signet-AI/signetai", "--global", "--yes", "--skill", "web-search"],
+		});
+	});
+
+	it("does not add --skill when source equals name", () => {
+		expect(buildSkillInstallPlan("browser-use", "browser-use")).toEqual({
+			kind: "skills-cli",
+			pkg: "browser-use",
+			args: ["add", "browser-use", "--global", "--yes"],
+		});
+	});
+
+	it("routes ClawHub sources through the ClawHub installer", () => {
+		expect(buildSkillInstallPlan("some-skill", "clawhub@some-skill")).toEqual({
+			kind: "clawhub",
+			slug: "some-skill",
+		});
+	});
+
+	it("keeps skills.sh owner/repo@skill sources on the skills CLI path", () => {
+		expect(buildSkillInstallPlan("web-search", "inference-skills/skills@web-search")).toEqual({
+			kind: "skills-cli",
+			pkg: "inference-skills/skills@web-search",
+			args: ["add", "inference-skills/skills@web-search", "--global", "--yes"],
+		});
+	});
+});
+
+describe("ClawHub skill archive validation", () => {
+	const tmpRoot = join(tmpdir(), `signet-clawhub-validate-${process.pid}`);
+
+	afterEach(() => {
+		rmSync(tmpRoot, { recursive: true, force: true });
+	});
+
+	it("accepts regular files and directories", () => {
+		const root = join(tmpRoot, "valid");
+		mkdirSync(join(root, "references"), { recursive: true });
+		writeFileSync(join(root, "SKILL.md"), "# Valid\n");
+		writeFileSync(join(root, "references", "README.md"), "# Reference\n");
+
+		expect(validateExtractedSkillTree(root)).toEqual({ ok: true });
+	});
+
+	it("accepts regular file metadata before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "references/README.md",
+				externalFileAttributes: 0o100644 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: true, path: "references/README.md", kind: "file" });
+	});
+
+	it("accepts directory metadata before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "references/",
+				externalFileAttributes: 0o40755 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: true, path: "references", kind: "directory" });
+	});
+
+	it("rejects symlink metadata before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "SKILL.md",
+				externalFileAttributes: 0o120777 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: false, error: "ClawHub zip contains unsupported entry types" });
+	});
+
+	it("rejects traversal paths before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "refs/../../SKILL.md",
+				externalFileAttributes: 0o100644 << 16,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: false, error: "ClawHub zip contains unsafe paths" });
+	});
+
+	it("rejects oversized entries before extraction", () => {
+		expect(
+			validateClawhubZipEntryMetadata({
+				fileName: "large.bin",
+				externalFileAttributes: 0o100644 << 16,
+				uncompressedSize: 26 * 1024 * 1024,
+				versionMadeBy: 3 << 8,
+			}),
+		).toEqual({ ok: false, error: "ClawHub zip entry is too large" });
+	});
+
+	it("rejects symbolic links before copying into the skills directory", () => {
+		const root = join(tmpRoot, "symlink");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(root, "target.md"), "# Target\n");
+		symlinkSync("target.md", join(root, "SKILL.md"));
+
+		expect(validateExtractedSkillTree(root)).toEqual({
+			ok: false,
+			error: "ClawHub package root SKILL.md must be a regular file",
+		});
+	});
+
+	it("replaces target skill directories through a staging directory", () => {
+		const source = join(tmpRoot, "source");
+		const target = join(tmpRoot, "skills", "demo");
+		mkdirSync(source, { recursive: true });
+		mkdirSync(target, { recursive: true });
+		writeFileSync(join(source, "SKILL.md"), "# New\n");
+		writeFileSync(join(target, "SKILL.md"), "# Old\n");
+
+		replaceSkillDirectoryAtomically(source, target);
+
+		expect(readFileSync(join(target, "SKILL.md"), "utf-8")).toBe("# New\n");
+		expect(readdirSync(join(tmpRoot, "skills")).filter((name) => name.includes(".demo."))).toEqual([]);
+	});
+
+	it("serializes concurrent installs for the same ClawHub slug", async () => {
+		const order: string[] = [];
+		let releaseFirst: (() => void) | undefined;
+		let markFirstStarted: (() => void) | undefined;
+		const firstStarted = new Promise<void>((resolve) => {
+			markFirstStarted = resolve;
+		});
+		const firstCanFinish = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+
+		const first = withClawhubInstallLock("demo", async () => {
+			order.push("first:start");
+			markFirstStarted?.();
+			await firstCanFinish;
+			order.push("first:end");
+		});
+		const second = withClawhubInstallLock("demo", async () => {
+			order.push("second:start");
+			order.push("second:end");
+		});
+
+		await firstStarted;
+		expect(order).toEqual(["first:start"]);
+		releaseFirst?.();
+		await Promise.all([first, second]);
+		expect(order).toEqual(["first:start", "first:end", "second:start", "second:end"]);
+	});
+});

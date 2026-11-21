@@ -3,8 +3,8 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
-import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
-import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
+import { cleanupTestTempDir, createTestTempDir } from "./runtime/testing/test-temp-dir";
+import { createDbOwnerClient, type DbOwnerClient } from "./db/owner/client";
 
 let app: Hono;
 let dir = "";
@@ -43,8 +43,8 @@ describe("daemon status contract", () => {
 		process.env.SIGNET_PATH = dir;
 
 		const daemon = await import("./daemon");
-		const { initDbAccessor } = await import("./db-accessor");
-		const state = await import("./routes/state.js");
+		const { initDbAccessor } = await import("./db/owner/accessor");
+		const state = await import("./http/routes/state.js");
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 		state.reloadAuthState(dir);
 		app = daemon.app;
@@ -53,7 +53,7 @@ describe("daemon status contract", () => {
 
 	afterAll(async () => {
 		try {
-			const { closeDbAccessor } = await import("./db-accessor");
+			const { closeDbAccessor } = await import("./db/owner/accessor");
 			const daemon = await import("./daemon");
 			await daemon.stopDaemonRuntimeForTests();
 			await closeDbAccessor();
@@ -68,12 +68,12 @@ describe("daemon status contract", () => {
 	afterEach(async () => {
 		Bun.spawn = originalSpawn;
 		Bun.which = originalWhich;
-		const provider = await import("./pipeline/provider");
+		const provider = await import("./inference/router/provider");
 		provider.configureLlmConcurrency(2);
 	});
 
 	it("keeps /health/live responsive while the DB owner is blocked (status genuinely contends, not dropped)", async () => {
-		const { getDbAccessor } = await import("./db-accessor");
+		const { getDbAccessor } = await import("./db/owner/accessor");
 		const accessor = getDbAccessor();
 		const originalWithReadDbAsync = accessor.withReadDbAsync;
 		let releaseOwner: (() => void) | undefined;
@@ -148,11 +148,11 @@ describe("daemon status contract", () => {
 	});
 
 	it("reports agent-scoped workspace and ontology counts", async () => {
-		const { getDbAccessor } = await import("./db-accessor");
+		const { getDbAccessor } = await import("./db/owner/accessor");
 		const { closeRegisteredDbOwnerMaintenance, createDbOwnerMaintenance, registerDbOwnerMaintenance } = await import(
-			"./db-owner-maintenance"
+			"./db/maintenance/maintenance"
 		);
-		const { getDbOwnerForAccessor } = await import("./db-owner-runtime");
+		const { getDbOwnerForAccessor } = await import("./db/owner/runtime");
 		const agentId = `status-test-${crypto.randomUUID()}`;
 		const previousAgentId = process.env.SIGNET_AGENT_ID;
 		let owner: DbOwnerClient | undefined;
@@ -278,7 +278,7 @@ describe("daemon status contract", () => {
 	});
 
 	it("serves status without synchronously reading SQLite when the event loop is under pressure", async () => {
-		const { getDbAccessor } = await import("./db-accessor");
+		const { getDbAccessor } = await import("./db/owner/accessor");
 		const accessor = getDbAccessor();
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: regression probes retired sync path
 		const originalWithReadDb = accessor.withReadDb;
@@ -302,7 +302,7 @@ describe("daemon status contract", () => {
 	});
 
 	it("keeps the real HTTP listener responsive during an active DB-owner VACUUM window", async () => {
-		const { createDbOwnerClient } = await import("./db-owner-client");
+		const { createDbOwnerClient } = await import("./db/owner/client");
 		const dbPath = join(dir, "memory", "memories.db");
 		const legacy = new Database(dbPath);
 		legacy.exec("PRAGMA auto_vacuum = NONE");
@@ -347,8 +347,8 @@ describe("daemon status contract", () => {
 	}, 30_000);
 
 	it("reports unknown queue completeness when the status read fails", async () => {
-		const { getDbAccessor } = await import("./db-accessor");
-		const { pipelineQueueBlock } = await import("./routes/pipeline-routes");
+		const { getDbAccessor } = await import("./db/owner/accessor");
+		const { pipelineQueueBlock } = await import("./http/routes/pipeline-routes");
 		const accessor = getDbAccessor();
 		const originalWithReadDb = accessor.withReadDb;
 		accessor.withReadDb = () => {
@@ -416,9 +416,9 @@ describe("daemon status contract", () => {
 		Reflect.deleteProperty(process.env, "OPENAI_API_KEY");
 
 		try {
-			const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
-			const { loadMemoryConfig } = await import("./memory-config");
-			const state = await import("./routes/state.js");
+			const { closeDbAccessor, initDbAccessor } = await import("./db/owner/accessor");
+			const { loadMemoryConfig } = await import("./config/memory-config");
+			const state = await import("./http/routes/state.js");
 			closeDbAccessor();
 			initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 			writeFileSync(
@@ -455,10 +455,10 @@ describe("daemon status contract", () => {
 	});
 
 	it.skip("keeps legacy extraction permanently disabled under the semantic cutover [retired config fixture pending migration]", async () => {
-		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
-		const { loadMemoryConfig } = await import("./memory-config");
-		const { getLlmConcurrencyStatus } = await import("./pipeline/provider");
-		const state = await import("./routes/state.js");
+		const { closeDbAccessor, initDbAccessor } = await import("./db/owner/accessor");
+		const { loadMemoryConfig } = await import("./config/memory-config");
+		const { getLlmConcurrencyStatus } = await import("./inference/router/provider");
+		const state = await import("./http/routes/state.js");
 		closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 		writeFileSync(
@@ -505,7 +505,7 @@ describe("daemon status contract", () => {
 
 	it("routes daemon boot, heartbeat, and maintenance DB work through the owner", () => {
 		const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf-8");
-		const extractionFallback = readFileSync(new URL("./pipeline/extraction-fallback.ts", import.meta.url), "utf-8");
+		const extractionFallback = readFileSync(new URL("./ontology/extraction/fallback.ts", import.meta.url), "utf-8");
 		expect(source).not.toContain("withReadDbAsync");
 		expect(source).not.toContain("withWriteTxAsync");
 		expect(source).toContain("startup.sync-agent-roster");
@@ -545,15 +545,15 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 	}
 
 	async function restartRuntime(cfg: string): Promise<void> {
-		const { loadMemoryConfig } = await import("./memory-config");
-		const state = await import("./routes/state.js");
+		const { loadMemoryConfig } = await import("./config/memory-config");
+		const state = await import("./http/routes/state.js");
 		writeConfig(cfg);
 		expect(state.restartPipelineRuntimeRef).toBeDefined();
 		await state.restartPipelineRuntimeRef?.(loadMemoryConfig(dir));
 	}
 
 	function seedMemory(memoryId: string): void {
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -563,7 +563,7 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 	}
 
 	function seedPendingLegacyJob(memoryId: string, jobId: string): void {
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		const now = new Date().toISOString();
 		seedMemory(memoryId);
 		getDbAccessor().withWriteTx((db) => {
@@ -576,7 +576,7 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 	}
 
 	function seedLeasedLegacyJob(memoryId: string, jobId: string): void {
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		const now = new Date().toISOString();
 		seedMemory(memoryId);
 		getDbAccessor().withWriteTx((db) => {
@@ -589,7 +589,7 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 	}
 
 	function getJob(jobId: string): { status: string; error: string | null } {
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		return getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT status, error FROM memory_jobs WHERE id = ?").get(jobId) as {
@@ -600,7 +600,7 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 	}
 
 	function getMemoryStatus(memoryId: string): string {
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		return getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT extraction_status FROM memories WHERE id = ?").get(memoryId) as {
@@ -610,7 +610,7 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 	}
 
 	function getMemoryKind(memoryId: string): string | null {
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		return getDbAccessor().withReadDb(
 			(db) =>
 				(db.prepare("SELECT memory_kind FROM memories WHERE id = ?").get(memoryId) as { memory_kind: string | null })
@@ -619,14 +619,14 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 	}
 
 	function countMemoryJobs(): number {
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		return getDbAccessor().withReadDb(
 			(db) => db.prepare("SELECT COUNT(*) as cnt FROM memory_jobs").get() as { cnt: number },
 		).cnt;
 	}
 
 	beforeEach(async () => {
-		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
+		const { closeDbAccessor, initDbAccessor } = await import("./db/owner/accessor");
 		closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 	});
@@ -683,15 +683,15 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 	}
 
 	async function restartRuntime(cfg: string): Promise<void> {
-		const { loadMemoryConfig } = await import("./memory-config");
-		const state = await import("./routes/state.js");
+		const { loadMemoryConfig } = await import("./config/memory-config");
+		const state = await import("./http/routes/state.js");
 		writeConfig(cfg);
 		expect(state.restartPipelineRuntimeRef).toBeDefined();
 		await state.restartPipelineRuntimeRef?.(loadMemoryConfig(dir));
 	}
 
 	function seedPendingStructuralJob(memoryId: string, jobId: string, jobType: string): void {
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		const now = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -706,7 +706,7 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 	}
 
 	function countStructuralJobs(): number {
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		return getDbAccessor().withReadDb(
 			(db) =>
 				db
@@ -718,7 +718,7 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 	}
 
 	beforeEach(async () => {
-		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
+		const { closeDbAccessor, initDbAccessor } = await import("./db/owner/accessor");
 		closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 	});
@@ -768,7 +768,7 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 
 	it("does not start the dependency-synthesis worker and cannot produce direct dependency writes under Dreaming", async () => {
 		await restartRuntime(DREAMING_ENABLED_STRUCTURAL_CONFIG);
-		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
 			const stale = new Date(Date.now() - 3_600_000).toISOString();
@@ -799,7 +799,7 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 		const body = (await res.json()) as { workers?: Record<string, unknown> };
 		expect(body.workers ?? {}).not.toHaveProperty("dependencySynthesis");
 
-		const { getDbAccessor: getAccessor2 } = require("./db-accessor") as typeof import("./db-accessor");
+		const { getDbAccessor: getAccessor2 } = require("./db/owner/accessor") as typeof import("./db/owner/accessor");
 		const deps = getAccessor2().withReadDb(
 			(db) => db.prepare("SELECT COUNT(*) as cnt FROM entity_dependencies").get() as { cnt: number },
 		);
@@ -820,7 +820,7 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 		const releaseMarker = join(dir, "init-release");
 		process.env.SIGNET_DB_OWNER_TEST_INIT_STARTED = startedMarker;
 		process.env.SIGNET_DB_OWNER_TEST_INIT_RELEASE = releaseMarker;
-		const owner = createDbOwnerClient({ dbPath, workerPath: join(import.meta.dir, "db-owner-worker.ts") });
+		const owner = createDbOwnerClient({ dbPath, workerPath: join(import.meta.dir, "db/owner/db-owner-worker.ts") });
 		try {
 			await owner.start();
 			const initialization = owner.submit(
@@ -850,7 +850,7 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 		const releaseMarker = join(dir, "kill-init-release");
 		process.env.SIGNET_DB_OWNER_TEST_INIT_STARTED = startedMarker;
 		process.env.SIGNET_DB_OWNER_TEST_INIT_RELEASE = releaseMarker;
-		const first = createDbOwnerClient({ dbPath, workerPath: join(import.meta.dir, "db-owner-worker.ts") });
+		const first = createDbOwnerClient({ dbPath, workerPath: join(import.meta.dir, "db/owner/db-owner-worker.ts") });
 		await first.start();
 		const pid = first.health().pid;
 		if (pid === null) throw new Error("owner did not publish a pid");

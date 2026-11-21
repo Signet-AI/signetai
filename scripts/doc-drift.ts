@@ -109,8 +109,8 @@ interface RouteEntry {
 function extractRoutesFromSource(): RouteEntry[] {
 	const files = [
 		"platform/daemon/src/daemon.ts",
-		...listTsFilesRecursive("platform/daemon/src/routes"),
-		"platform/daemon/src/mcp/route.ts",
+		...listTsFilesRecursive("platform/daemon/src/http/routes"),
+		"platform/daemon/src/http/mcp/route.ts",
 	];
 	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*([`"'])(.*?)\2/g;
 

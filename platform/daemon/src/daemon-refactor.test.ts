@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { isSessionCleanupRunning, stopSessionCleanup } from "./session-tracker";
+import { isSessionCleanupRunning, stopSessionCleanup } from "./sessions/tracker";
 
 describe("daemon route extraction refactor", () => {
 	beforeEach(() => {
@@ -16,7 +16,7 @@ describe("daemon route extraction refactor", () => {
 	});
 
 	it("reloadAuthState is idempotent and produces consistent auth state", async () => {
-		const state = await import("./routes/state.js");
+		const state = await import("./http/routes/state.js");
 
 		state.reloadAuthState(state.AGENTS_DIR);
 		const mode1 = state.authConfig.mode;
@@ -36,7 +36,7 @@ describe("daemon route extraction refactor", () => {
 	});
 	it("reloadAuthState completes without error in team mode", async () => {
 		expect.assertions(1);
-		const state = await import("./routes/state.js");
+		const state = await import("./http/routes/state.js");
 
 		const tmpDir = join(tmpdir(), `signet-test-auth-${Date.now()}`);
 		mkdirSync(join(tmpDir, "memory"), { recursive: true });

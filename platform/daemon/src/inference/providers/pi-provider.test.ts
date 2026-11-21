@@ -1,0 +1,763 @@
+import { describe, expect, mock, test } from "bun:test";
+import type { Api, Model, Usage } from "@earendil-works/pi-ai";
+import { getBuiltinModels as getModels } from "@earendil-works/pi-ai/providers/all";
+import type { SessionStats } from "@earendil-works/pi-coding-agent";
+import {
+	createPiModelProvider,
+	isPiAgentSessionProvider,
+	mapSessionStatsToUsage,
+	mapUsage,
+	resolvePiModel,
+	summarizeCacheRequests,
+	awaitWithAbort,
+} from "./pi-provider";
+import { configureLlmConcurrency, getLlmConcurrencyStatus, withLlmConcurrency } from "../router/provider";
+
+describe("pi provider catalog models", () => {
+	test.each([
+		["modelRuntime", () => new Promise<never>(() => {})],
+		["resourceLoader.reload", () => new Promise<never>(() => {})],
+		["createAgentSession", () => new Promise<never>(() => {})],
+	] as const)("aborts stalled %s initialization within the shared deadline", async (stage, createStalled) => {
+		const controller = new AbortController();
+		const pending = awaitWithAbort(createStalled(), controller.signal);
+		setTimeout(() => controller.abort(new Error("Agent session exceeded the 25ms deadline")), 25);
+		await expect(pending).rejects.toThrow("Agent session exceeded the 25ms deadline");
+		expect(stage).toBeDefined();
+	});
+
+	test("allows initialization to complete before the shared deadline", async () => {
+		const controller = new AbortController();
+		await expect(awaitWithAbort(Promise.resolve("initialized"), controller.signal)).resolves.toBe("initialized");
+		expect(controller.signal.aborted).toBe(false);
+	});
+
+	test("does not resurrect a late session after initialization cancellation", async () => {
+		const controller = new AbortController();
+		let disposed = false;
+		let resolveLate: ((session: { dispose: () => void }) => void) | undefined;
+		const pending = awaitWithAbort(
+			new Promise<{ dispose: () => void }>((resolve) => {
+				resolveLate = resolve;
+			}),
+			controller.signal,
+			(session) => session.dispose(),
+		);
+		controller.abort(new Error("Agent session exceeded the 25ms deadline"));
+		await expect(pending).rejects.toThrow("Agent session exceeded the 25ms deadline");
+		resolveLate?.({ dispose: () => (disposed = true) });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		expect(disposed).toBe(true);
+	});
+
+	test("preserves the Codex responses API and registry metadata", () => {
+		const model = getModels("openai-codex").find((candidate) => candidate.id === "gpt-6-luna");
+		expect(model).toBeDefined();
+		const resolved = resolvePiModel({
+			executor: "openai-codex",
+			providerFamily: "openai-codex",
+			model: "gpt-6-luna",
+			piModel: model as Model<Api>,
+			apiKey: "oauth-access",
+		});
+
+		expect(resolved.piModel.api).toBe("openai-codex-responses");
+		expect(resolved.piModel.baseUrl).toBe("https://chatgpt.com/backend-api");
+		expect(resolved.apiKey).toBe("oauth-access");
+	});
+
+	test("normalizes a pasted OpenAI chat-completions endpoint to Pi's base URL", () => {
+		const model = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4.1-flash");
+		expect(model).toBeDefined();
+		const resolved = resolvePiModel({
+			executor: "openai-compatible",
+			providerFamily: "opencode-go",
+			model: "deepseek-v4.1-flash",
+			piModel: model as Model<Api>,
+			apiKey: "test-key",
+			baseUrl: "https://opencode.ai/zen/go/v1/chat/completions",
+		});
+
+		expect(resolved.piModel.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+	});
+
+	test("routes supplied OpenCode session affinity through non-interactive Pi calls (#1887)", async () => {
+		const originalFetch = globalThis.fetch;
+		const requestHeaders: Headers[] = [];
+		globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit) => {
+			const headers = new Headers(init?.headers);
+			requestHeaders.push(headers);
+			if (init?.method !== "GET" && !headers.get("x-opencode-session")) {
+				return Promise.resolve(new Response("missing x-opencode-session", { status: 400 }));
+			}
+			return Promise.resolve(
+				new Response(
+					[
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\n`,
+						`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+						"data: [DONE]\n\n",
+					].join(""),
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				),
+			);
+		}) as unknown as typeof fetch;
+		try {
+			const model = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4.1-flash");
+			expect(model).toBeDefined();
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				providerFamily: "opencode-go",
+				model: "deepseek-v4.1-flash",
+				piModel: model as Model<Api>,
+				apiKey: "test-key",
+			});
+
+			await expect(provider.available()).resolves.toBe(true);
+			await expect(provider.generate("non-interactive call", { sessionId: "request-session" })).resolves.toBe("done");
+			const streamWithUsage = provider.streamWithUsage;
+			if (!streamWithUsage) throw new Error("expected Pi stream support");
+			const result = await streamWithUsage("non-interactive stream", { sessionId: "request-session" });
+			const reader = result.stream.getReader();
+			while (!(await reader.read()).done) {}
+
+			expect(requestHeaders).toHaveLength(3);
+			expect(requestHeaders[0]?.get("x-opencode-session")).toBeNull();
+			expect(requestHeaders[0]?.get("x-opencode-client")).toBeNull();
+			expect(requestHeaders.slice(1).map((headers) => headers.get("x-opencode-session"))).toEqual([
+				"request-session",
+				"request-session",
+			]);
+			expect(requestHeaders.slice(1).every((headers) => headers.get("x-opencode-client") === "pi")).toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("preserves configured OpenCode headers and isolates unrelated providers", async () => {
+		const originalFetch = globalThis.fetch;
+		const requestHeaders: Headers[] = [];
+		globalThis.fetch = mock((_input: RequestInfo | URL, init?: RequestInit) => {
+			requestHeaders.push(new Headers(init?.headers));
+			return Promise.resolve(
+				new Response(
+					[
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\n`,
+						`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+						"data: [DONE]\n\n",
+					].join(""),
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				),
+			);
+		}) as unknown as typeof fetch;
+		try {
+			const openCodeModel = getModels("opencode-go").find((candidate) => candidate.id === "deepseek-v4.1-flash");
+			if (!openCodeModel) throw new Error("expected OpenCode Go catalog model");
+			const configuredOpenCodeModel = {
+				...openCodeModel,
+				headers: {
+					"X-OpenCode-Session": "configured-session",
+					"X-OpenCode-Client": "configured-client",
+				},
+			};
+			const openCodeProvider = createPiModelProvider({
+				executor: "openai-compatible",
+				providerFamily: "opencode-go",
+				model: "deepseek-v4.1-flash",
+				piModel: configuredOpenCodeModel,
+				apiKey: "test-key",
+			});
+			await expect(openCodeProvider.generate("configured headers", { sessionId: "generated-session" })).resolves.toBe(
+				"done",
+			);
+
+			const unrelatedModel = getModels("openrouter").find((candidate) => candidate.api === "openai-completions");
+			if (!unrelatedModel) throw new Error("expected an OpenAI-compatible OpenRouter catalog model");
+			const unrelatedProvider = createPiModelProvider({
+				executor: "openrouter",
+				providerFamily: "openrouter",
+				model: unrelatedModel.id,
+				piModel: unrelatedModel,
+				apiKey: "test-key",
+			});
+			await expect(unrelatedProvider.generate("unrelated provider", { sessionId: "unrelated-session" })).resolves.toBe(
+				"done",
+			);
+
+			const endpointModel = {
+				...openCodeModel,
+				provider: "custom-opencode",
+				baseUrl: "https://opencode.ai/zen/go/v1",
+			};
+			const endpointProvider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "deepseek-v4.1-flash",
+				piModel: endpointModel,
+				apiKey: "test-key",
+			});
+			await expect(endpointProvider.generate("endpoint detection", { sessionId: "endpoint-session" })).resolves.toBe(
+				"done",
+			);
+
+			expect(requestHeaders).toHaveLength(3);
+			expect(requestHeaders[0]?.get("x-opencode-session")).toBe("configured-session");
+			expect(requestHeaders[0]?.get("x-opencode-client")).toBe("configured-client");
+			expect(requestHeaders[1]?.get("x-opencode-session")).toBeNull();
+			expect(requestHeaders[1]?.get("x-opencode-client")).toBeNull();
+			expect(requestHeaders[2]?.get("x-opencode-session")).toBe("endpoint-session");
+			expect(requestHeaders[2]?.get("x-opencode-client")).toBe("pi");
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("labels a tier-only rate model as locally estimated and keeps its cost", () => {
+		const base = getModels("openrouter").find((candidate) => candidate.api === "openai-completions");
+		if (!base) throw new Error("expected OpenRouter catalog model");
+		const tieredModel: Model<Api> = {
+			...base,
+			cost: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				tiers: [{ inputTokensAbove: 200_000, input: 2, output: 5, cacheRead: 0.4, cacheWrite: 0 }],
+			},
+		};
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "tiered-model",
+			baseUrl: "https://gateway.example.test/v1",
+			piModel: tieredModel,
+		});
+		const stats: SessionStats = {
+			sessionFile: undefined,
+			sessionId: "session",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 2,
+			tokens: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0, total: 4 },
+			cost: 0.5,
+		};
+		expect(provider.accountingProvenance).toBe("locally_estimated");
+		expect(mapSessionStatsToUsage(stats, 10, provider.accountingProvenance)).toMatchObject({
+			totalCost: 0.5,
+			accountingProvenance: "locally_estimated",
+		});
+	});
+
+	test("does not label a remote zero-rate model as provider-reported cost", () => {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "gateway-model",
+			baseUrl: "https://gateway.example.test/v1",
+		});
+		const stats: SessionStats = {
+			sessionFile: undefined,
+			sessionId: "session",
+			userMessages: 1,
+			assistantMessages: 1,
+			toolCalls: 0,
+			toolResults: 0,
+			totalMessages: 2,
+			tokens: { input: 3, output: 1, cacheRead: 0, cacheWrite: 0, total: 4 },
+			cost: 0,
+		};
+
+		expect(provider.accountingProvenance).toBe("unavailable");
+		expect(
+			mapSessionStatsToUsage(stats, 10, provider.accountingProvenance, [
+				{ cacheRead: 3, cacheWrite: 0 },
+				{ cacheRead: 0, cacheWrite: 2 },
+				{ cacheRead: 0, cacheWrite: 0 },
+			] as Usage[]),
+		).toMatchObject({
+			totalTokens: 4,
+			totalCost: null,
+			accountingProvenance: "unavailable",
+		});
+		expect(
+			mapSessionStatsToUsage(stats, 10, provider.accountingProvenance, [
+				{ cacheRead: 3, cacheWrite: 0 },
+				{ cacheRead: 0, cacheWrite: 2 },
+				{ cacheRead: 0, cacheWrite: 0 },
+			] as Usage[]).cacheRequests,
+		).toEqual({ requests: 3, hits: 1, misses: 1, unknown: 1, writes: 1 });
+	});
+
+	test("reports the largest single request's context as the peak", () => {
+		const stats: SessionStats = {
+			sessionFile: undefined,
+			sessionId: "session",
+			userMessages: 1,
+			assistantMessages: 3,
+			toolCalls: 2,
+			toolResults: 2,
+			totalMessages: 6,
+			tokens: { input: 9_000, output: 600, cacheRead: 150_000, cacheWrite: 4_000, total: 163_600 },
+			cost: 0,
+		};
+		const usage = (input: number, cacheRead: number, cacheWrite: number): Usage =>
+			({ input, cacheRead, cacheWrite }) as Usage;
+
+		expect(
+			mapSessionStatsToUsage(stats, 10, "provider_reported", [
+				usage(4_000, 0, 4_000),
+				usage(2_000, 60_000, 0),
+				usage(3_000, 90_000, 0),
+			]).peakContextTokens,
+		).toBe(93_000);
+		expect(mapSessionStatsToUsage(stats, 10, "provider_reported").peakContextTokens).toBeNull();
+		expect(mapUsage(usage(1_500, 20_000, 500), "provider_reported").peakContextTokens).toBe(22_000);
+	});
+
+	test("does not report request cache accounting when a provider omits cache fields", () => {
+		const mapped = mapUsage({} as Usage, "provider_reported");
+		expect(mapped).toMatchObject({
+			totalTokens: null,
+			totalCost: null,
+			accountingProvenance: "unavailable",
+		});
+		expect(mapped.cacheRequests).toBeNull();
+	});
+
+	test("keeps provider-reported zero cache fields as an unknown request", () => {
+		const mapped = mapUsage({ cacheRead: 0, cacheWrite: 0 } as Usage, "provider_reported");
+
+		expect(mapped.cacheRequests).toEqual({ requests: 1, hits: 0, misses: 0, unknown: 1, writes: 0 });
+	});
+
+	test("classifies per-response cache usage without treating zero reads as a miss", () => {
+		const usage = (cacheRead: number, cacheWrite: number): Usage => ({ cacheRead, cacheWrite }) as Usage;
+
+		expect(summarizeCacheRequests([usage(12, 0), usage(0, 8), usage(0, 0), usage(0, 0)])).toEqual({
+			requests: 4,
+			hits: 1,
+			misses: 1,
+			unknown: 2,
+			writes: 1,
+		});
+	});
+
+	test("creates an isolated AgentSession with no ambient tools", async () => {
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "test-model",
+			baseUrl: "http://127.0.0.1:1234/v1",
+		});
+		expect(isPiAgentSessionProvider(provider)).toBe(true);
+		const session = await provider.createAgentSession([]);
+		try {
+			expect(session.getActiveToolNames()).toEqual([]);
+		} finally {
+			await session.dispose();
+		}
+	});
+
+	test("accepts a reachable OpenAI-compatible gateway without a models endpoint", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = mock(() =>
+			Promise.resolve(new Response("not found", { status: 404 })),
+		) as unknown as typeof fetch;
+		try {
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "gateway-model",
+				baseUrl: "https://gateway.example.test/v1",
+				apiKey: "test-key",
+			});
+			await expect(provider.available()).resolves.toBe(true);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test.each([
+		["API key", "sk-ant-api03-test", { "x-api-key": "sk-ant-api03-test" }],
+		["OAuth token", "sk-ant-oat01-test", { authorization: "Bearer sk-ant-oat01-test" }],
+	] as const)("probes an uncataloged Anthropic model with %s auth headers", async (_kind, apiKey, expectedAuth) => {
+		const originalFetch = globalThis.fetch;
+		const requests: { url: string; headers: Record<string, string> }[] = [];
+		globalThis.fetch = mock((url: string, init?: RequestInit) => {
+			const headers = { ...(init?.headers as Record<string, string>) };
+			requests.push({ url, headers });
+			const authorized = Object.entries(expectedAuth).every(([name, value]) => headers[name] === value);
+			const versioned = headers["anthropic-version"] === "2023-06-01";
+			return Promise.resolve(new Response("{}", { status: authorized && versioned ? 200 : 400 }));
+		}) as unknown as typeof fetch;
+		try {
+			const provider = createPiModelProvider({
+				executor: "anthropic",
+				model: "claude-uncataloged-test",
+				apiKey,
+			});
+			await expect(provider.available()).resolves.toBe(true);
+			expect(requests).toHaveLength(1);
+			expect(requests[0]?.url).toBe("https://api.anthropic.com/v1/models");
+			expect(Object.keys(requests[0]?.headers ?? {}).sort()).toEqual(
+				[...Object.keys(expectedAuth), "anthropic-version"].sort(),
+			);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("settles a successful silent-overflow response without continuing from an assistant message", async () => {
+		const originalFetch = globalThis.fetch;
+		globalThis.fetch = mock(() =>
+			Promise.resolve(
+				new Response(
+					[
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }], usage: { prompt_tokens: 3, completion_tokens: 1 } })}\n\n`,
+						`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`,
+						"data: [DONE]\n\n",
+					].join(""),
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				),
+			),
+		) as unknown as typeof fetch;
+
+		const workerServer = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch: (request) => globalThis.fetch(request.url),
+		});
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "silent-overflow-test",
+			baseUrl: `http://127.0.0.1:${workerServer.port}/v1`,
+			contextWindow: 2,
+		});
+		await expect(provider.generate("ordinary routed call")).resolves.toBe("done");
+		const session = await provider.createAgentSession([]);
+		try {
+			const result = await session.prompt("finish without tools");
+			expect(result).toBeUndefined();
+		} finally {
+			await session.dispose();
+			workerServer.stop(true);
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("admits normal Pi completions through the global LLM semaphore (#1333)", async () => {
+		const originalFetch = globalThis.fetch;
+		const originalLimit = getLlmConcurrencyStatus().limit;
+		let releaseBlocker: (() => void) | undefined;
+		try {
+			configureLlmConcurrency(1);
+			const blocker = withLlmConcurrency(
+				() =>
+					new Promise<void>((resolve) => {
+						releaseBlocker = resolve;
+					}),
+				5000,
+				"test-blocker",
+			);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			let requests = 0;
+			globalThis.fetch = mock(() => {
+				requests++;
+				return Promise.resolve(
+					new Response(
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+						{ status: 200, headers: { "content-type": "text/event-stream" } },
+					),
+				);
+			}) as unknown as typeof fetch;
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "concurrency-test",
+				baseUrl: "http://127.0.0.1:1234/v1",
+			});
+			const generated = provider.generate("wait for admission", { timeoutMs: 5000 });
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			expect(requests).toBe(0);
+
+			releaseBlocker?.();
+			await blocker;
+			await expect(generated).resolves.toBe("done");
+			expect(requests).toBe(1);
+			expect(getLlmConcurrencyStatus().running).toBe(0);
+		} finally {
+			releaseBlocker?.();
+			configureLlmConcurrency(originalLimit);
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("admits Pi streams through the global LLM semaphore until their upstream work settles (#1333)", async () => {
+		const originalFetch = globalThis.fetch;
+		const originalLimit = getLlmConcurrencyStatus().limit;
+		let releaseBlocker: (() => void) | undefined;
+		try {
+			configureLlmConcurrency(1);
+			const blocker = withLlmConcurrency(
+				() =>
+					new Promise<void>((resolve) => {
+						releaseBlocker = resolve;
+					}),
+				5000,
+				"test-blocker",
+			);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			let requests = 0;
+			globalThis.fetch = mock(() => {
+				requests++;
+				return Promise.resolve(
+					new Response(
+						`data: ${JSON.stringify({ choices: [{ delta: { content: "streamed" } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+						{ status: 200, headers: { "content-type": "text/event-stream" } },
+					),
+				);
+			}) as unknown as typeof fetch;
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "stream-concurrency-test",
+				baseUrl: "http://127.0.0.1:1234/v1",
+			});
+			const streamWithUsage = provider.streamWithUsage;
+			if (!streamWithUsage) throw new Error("expected Pi stream support");
+			const upstream = streamWithUsage("wait for admission", { timeoutMs: 5000 });
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			expect(requests).toBe(0);
+
+			releaseBlocker?.();
+			await blocker;
+			const result = await upstream;
+			const reader = result.stream.getReader();
+			let text = "";
+			while (true) {
+				const next = await reader.read();
+				if (next.done) break;
+				if (next.value.type === "text-delta") text += next.value.text;
+			}
+			expect(text).toBe("streamed");
+			expect(requests).toBe(1);
+			expect(getLlmConcurrencyStatus().running).toBe(0);
+		} finally {
+			releaseBlocker?.();
+			configureLlmConcurrency(originalLimit);
+			globalThis.fetch = originalFetch;
+		}
+	});
+
+	test("keeps the Pi stream permit through cancellation until the upstream stream settles (#1333)", async () => {
+		const originalFetch = globalThis.fetch;
+		const originalLimit = getLlmConcurrencyStatus().limit;
+		let resolveResponse: ((response: Response) => void) | undefined;
+		try {
+			configureLlmConcurrency(1);
+			let requests = 0;
+			globalThis.fetch = mock(() => {
+				requests++;
+				return new Promise<Response>((resolve) => {
+					resolveResponse = resolve;
+				});
+			}) as unknown as typeof fetch;
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "stream-cancel-concurrency-test",
+				baseUrl: "http://127.0.0.1:1234/v1",
+			});
+			const streamWithUsage = provider.streamWithUsage;
+			if (!streamWithUsage) throw new Error("expected Pi stream support");
+			const result = await streamWithUsage("cancel after opening", { timeoutMs: 5000 });
+			for (let i = 0; i < 20 && requests === 0; i += 1) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(requests).toBe(1);
+			expect(getLlmConcurrencyStatus().running).toBe(1);
+
+			result.cancel();
+			expect(getLlmConcurrencyStatus().running).toBe(1);
+			resolveResponse?.(
+				new Response(
+					`data: ${JSON.stringify({ choices: [{ delta: { content: "late" } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				),
+			);
+			await result.stream.getReader().closed.catch(() => {});
+			for (let i = 0; i < 20 && getLlmConcurrencyStatus().running !== 0; i += 1) {
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			}
+			expect(getLlmConcurrencyStatus().running).toBe(0);
+		} finally {
+			resolveResponse?.(
+				new Response("data: [DONE]\n\n", { status: 200, headers: { "content-type": "text/event-stream" } }),
+			);
+			configureLlmConcurrency(originalLimit);
+			globalThis.fetch = originalFetch;
+		}
+	});
+});
+
+describe("local thinking control", () => {
+	function recordingServer(): { url: string; bodies: Record<string, unknown>[]; stop: () => void } {
+		const bodies: Record<string, unknown>[] = [];
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch: async (request) => {
+				if (request.method === "POST") bodies.push((await request.json()) as Record<string, unknown>);
+				return new Response(
+					`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			},
+		});
+		return { url: `http://127.0.0.1:${server.port}/v1`, bodies, stop: () => server.stop(true) };
+	}
+
+	const thinking = {
+		format: "chat-template",
+		budgetTokens: 2000,
+		chatTemplateKwargs: { enable_thinking: { $var: "thinking.enabled" }, preserve_thinking: false },
+	} as const;
+
+	test("routed calls send the chat-template kwargs and the vLLM thinking budget", async () => {
+		const server = recordingServer();
+		try {
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "qwen-thinking-test",
+				baseUrl: server.url,
+				reasoning: "medium",
+				maxTokens: 16_384,
+				thinking,
+			});
+			await expect(provider.generate("think briefly", { maxTokens: 16_384 })).resolves.toBe("done");
+			expect(server.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: true, preserve_thinking: false });
+			expect(server.bodies[0]?.thinking_token_budget).toBe(2000);
+		} finally {
+			server.stop();
+		}
+	});
+
+	test("agent sessions carry the thinking level and budget into the worker", async () => {
+		const server = recordingServer();
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "qwen-thinking-agent-test",
+			baseUrl: server.url,
+			reasoning: "medium",
+			maxTokens: 16_384,
+			thinking,
+		});
+		const session = await provider.createAgentSession([], { maxTokens: 16_384 });
+		try {
+			await session.prompt("finish without tools");
+			expect(server.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: true, preserve_thinking: false });
+			expect(server.bodies[0]?.thinking_token_budget).toBe(2000);
+		} finally {
+			await session.dispose();
+			server.stop();
+		}
+	});
+
+	test("agent sessions resolve a lazy context window; plain completions never ask for it", async () => {
+		const server = recordingServer();
+		let resolved = 0;
+		const provider = createPiModelProvider({
+			executor: "openai-compatible",
+			model: "lazy-window-test",
+			baseUrl: server.url,
+			resolveContextWindow: async () => {
+				resolved += 1;
+				return 262_144;
+			},
+		});
+		try {
+			await expect(provider.generate("plain")).resolves.toBe("done");
+			expect(resolved).toBe(0);
+			const session = await provider.createAgentSession([]);
+			try {
+				expect(resolved).toBe(1);
+			} finally {
+				await session.dispose();
+			}
+		} finally {
+			server.stop();
+		}
+	});
+
+	test("targets without thinking config keep the keyless local defaults", async () => {
+		const server = recordingServer();
+		try {
+			const provider = createPiModelProvider({
+				executor: "openai-compatible",
+				model: "plain-local-test",
+				baseUrl: server.url,
+			});
+			await expect(provider.generate("plain")).resolves.toBe("done");
+			expect(server.bodies[0]?.chat_template_kwargs).toBeUndefined();
+			expect(server.bodies[0]?.thinking_token_budget).toBeUndefined();
+		} finally {
+			server.stop();
+		}
+	});
+});
+
+describe("OpenRouter provider routing", () => {
+	function recordingServer(): { url: string; bodies: Record<string, unknown>[]; stop: () => void } {
+		const bodies: Record<string, unknown>[] = [];
+		const server = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch: async (request) => {
+				if (request.method === "POST") bodies.push((await request.json()) as Record<string, unknown>);
+				return new Response(
+					`data: ${JSON.stringify({ choices: [{ delta: { content: "done" } }] })}\n\ndata: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				);
+			},
+		});
+		return { url: `http://127.0.0.1:${server.port}/v1`, bodies, stop: () => server.stop(true) };
+	}
+
+	const routing = {
+		order: ["deepinfra", "together"],
+		only: ["deepinfra"],
+		ignore: ["lambda"],
+		allow_fallbacks: false,
+		require_parameters: true,
+		data_collection: "deny",
+		quantizations: ["fp8", "fp16"],
+		sort: "price",
+		max_price: { prompt: 0.5, completion: 1.5 },
+	} as const;
+
+	test("sends the configured provider routing as the request body's provider field", async () => {
+		const server = recordingServer();
+		try {
+			const provider = createPiModelProvider({
+				executor: "openrouter",
+				model: "deepseek/deepseek-v4.1-flash-1017",
+				baseUrl: server.url,
+				apiKey: "openrouter-test-key",
+				openRouterRouting: routing,
+			});
+			await expect(provider.generate("route this")).resolves.toBe("done");
+			expect(server.bodies[0]?.provider).toEqual(routing);
+		} finally {
+			server.stop();
+		}
+	});
+
+	test("omits the provider field from requests without configured routing", async () => {
+		const server = recordingServer();
+		try {
+			const provider = createPiModelProvider({
+				executor: "openrouter",
+				model: "deepseek/deepseek-v4.1-flash-1017",
+				baseUrl: server.url,
+				apiKey: "openrouter-test-key",
+			});
+			await expect(provider.generate("plain")).resolves.toBe("done");
+			expect("provider" in (server.bodies[0] ?? {})).toBe(false);
+		} finally {
+			server.stop();
+		}
+	});
+});

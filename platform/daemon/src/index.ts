@@ -1,12 +1,12 @@
-export { createDbOwnerClient } from "./db-owner-client";
+export { createDbOwnerClient } from "./db/owner/client";
 export type {
 	DbOwnerClient,
 	DbOwnerClientOptions,
 	DbOwnerHealth,
 	DbOwnerJobHandle,
 	DbOwnerSubmitOptions,
-} from "./db-owner-client";
-export { recallThroughDbOwner } from "./db-owner-recall";
+} from "./db/owner/client";
+export { recallThroughDbOwner } from "./db/owner/recall";
 
 export {
 	installService,
@@ -20,4 +20,4 @@ export {
 	getDaemonLogs,
 	type ServiceHealthStatus,
 	type ServiceStatus,
-} from "./service";
+} from "./runtime/service/service";

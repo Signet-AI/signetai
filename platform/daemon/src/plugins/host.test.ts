@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { countTokens } from "../pipeline/tokenizer.js";
+import { countTokens } from "../recall/text/tokenizer.js";
 import { SIGNET_GRAPHIQ_PLUGIN_ID, signetGraphiqManifest } from "./bundled/graphiq.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "./bundled/secrets.js";
 import { PluginHostV1 } from "./host.js";

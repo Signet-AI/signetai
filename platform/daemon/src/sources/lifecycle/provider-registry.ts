@@ -1,0 +1,87 @@
+import type { SignetSourceEntry, SignetSourceKind, SourceFailureState } from "@signet/core";
+import { discordSourceProvider } from "../providers/discord/provider";
+import { githubSourceProvider } from "../providers/github/provider";
+import { notionSourceProvider } from "../providers/notion/provider";
+import { webSourceProvider } from "../providers/web/provider";
+import { markImportedSourceUnsupported } from "./imported-lifecycle";
+import {
+	type NativeMemorySource,
+	obsidianNativeMemorySource,
+	purgeNativeMemorySourceArtifacts,
+} from "../providers/native-memory/provider";
+
+export interface SourceProviderProgressEvent {
+	readonly scanned: number;
+	readonly total: number;
+	readonly indexed: number;
+	readonly currentPath: string;
+}
+
+export interface SourceProviderSyncContext {
+	readonly source: SignetSourceEntry;
+	readonly agentsDir: string;
+	readonly agentId: string;
+	readonly shouldContinue: () => boolean;
+	readonly onProgress?: (event: SourceProviderProgressEvent) => void;
+}
+
+export interface SourceProviderSyncResult {
+	readonly indexed: number;
+	readonly scanned: number;
+	readonly total: number;
+	readonly failures: readonly SourceFailureState[];
+}
+
+export interface SourceProviderAdapter {
+	readonly kind: SignetSourceKind;
+	readonly toNativeSource?: (source: SignetSourceEntry) => NativeMemorySource;
+	readonly sync?: (context: SourceProviderSyncContext) => Promise<SourceProviderSyncResult>;
+	readonly purge: (source: SignetSourceEntry, agentId: string | undefined) => number | Promise<number>;
+}
+
+const additionalProviders = new Map<SignetSourceKind, SourceProviderAdapter>();
+
+export const obsidianSourceProvider: SourceProviderAdapter = {
+	kind: "obsidian",
+	toNativeSource: (source) => obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs),
+	purge: (source, agentId) =>
+		purgeNativeMemorySourceArtifacts(
+			obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs),
+			agentId,
+		),
+};
+
+export const importedSourceProvider: SourceProviderAdapter = {
+	kind: "import",
+	purge: (source, agentId) =>
+		markImportedSourceUnsupported({
+			sourceId: source.id,
+			agentId: agentId ?? "default",
+		}).artifacts,
+};
+
+export function registerSourceProvider(provider: SourceProviderAdapter): void {
+	additionalProviders.set(provider.kind, provider);
+}
+
+export function getSourceProvider(kind: SignetSourceKind): SourceProviderAdapter | undefined {
+	if (kind === obsidianSourceProvider.kind) return obsidianSourceProvider;
+	if (kind === discordSourceProvider.kind) return discordSourceProvider;
+	if (kind === githubSourceProvider.kind) return githubSourceProvider;
+	if (kind === notionSourceProvider.kind) return notionSourceProvider;
+	if (kind === webSourceProvider.kind) return webSourceProvider;
+	if (kind === importedSourceProvider.kind) return importedSourceProvider;
+	return additionalProviders.get(kind);
+}
+
+export function configuredSourceProviders(): readonly SourceProviderAdapter[] {
+	return [
+		obsidianSourceProvider,
+		discordSourceProvider,
+		githubSourceProvider,
+		notionSourceProvider,
+		webSourceProvider,
+		importedSourceProvider,
+		...additionalProviders.values(),
+	];
+}

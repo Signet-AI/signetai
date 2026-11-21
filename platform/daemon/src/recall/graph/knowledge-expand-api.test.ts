@@ -1,0 +1,153 @@
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
+import type { Hono } from "hono";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../../db/owner/accessor";
+
+let app: Hono;
+let dir = "";
+let prev: string | undefined;
+
+function jsonHeader(): HeadersInit {
+	return { "Content-Type": "application/json" };
+}
+
+function seedKnowledge(): void {
+	const now = new Date().toISOString();
+	getDbAccessor().withWriteTx((db) => {
+		db.prepare(
+			`INSERT INTO entities (
+				id, name, canonical_name, entity_type, agent_id, pinned, pinned_at, mentions, created_at, updated_at
+			) VALUES (?, ?, ?, 'person', 'default', 1, ?, 50, ?, ?)`,
+		).run("ent-nicholai", "Nicholai", "nicholai", now, now, now);
+
+		db.prepare(
+			`INSERT INTO entities (
+				id, name, canonical_name, entity_type, agent_id, pinned, pinned_at, mentions, created_at, updated_at
+			) VALUES (?, ?, ?, 'project', 'default', 0, NULL, 10, ?, ?)`,
+		).run("ent-signet", "Signet", "signet", now, now);
+
+		db.prepare(
+			`INSERT INTO entity_aspects (
+				id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at
+			) VALUES (?, ?, 'default', 'overview', 'overview', 0.9, ?, ?)`,
+		).run("asp-signet", "ent-signet", now, now);
+
+		db.prepare(
+			`INSERT INTO entity_attributes (
+				id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at
+			) VALUES (?, 'asp-signet', 'default', NULL, 'attribute', ?, ?, 1, 0.9, 'active', ?, ?)`,
+		).run("attr-signet", "portable memory system", "portable memory system", now, now);
+
+		db.prepare(
+			`INSERT INTO session_summaries (
+				id, project, depth, kind, content, token_count,
+				earliest_at, latest_at, session_key, harness,
+				agent_id, source_type, source_ref, meta_json, created_at
+			) VALUES (?, ?, 0, 'session', ?, 12, ?, ?, ?, 'codex', 'default', 'summary', ?, NULL, ?)`,
+		).run(
+			"sum-signet",
+			"/mnt/work/dev/signet/signetai5",
+			"Reviewed Signet daemon dogfood regressions",
+			now,
+			now,
+			"sess-signet",
+			"sess-signet",
+			now,
+		);
+	});
+}
+
+describe("knowledge expand API", () => {
+	beforeAll(async () => {
+		prev = process.env.SIGNET_PATH;
+		dir = mkdtempSync(join(tmpdir(), "signet-knowledge-expand-"));
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    enabled: false
+`,
+		);
+		process.env.SIGNET_PATH = dir;
+
+		const daemon = await import("../../daemon");
+		app = daemon.app;
+	});
+
+	beforeEach(async () => {
+		await closeDbAccessor();
+		rmSync(join(dir, "memory"), { recursive: true, force: true });
+		mkdirSync(join(dir, "memory"), { recursive: true });
+		initDbAccessor(join(dir, "memory", "memories.db"));
+		seedKnowledge();
+	});
+
+	afterEach(async () => {
+		await closeDbAccessor();
+	});
+
+	afterAll(async () => {
+		await closeDbAccessor();
+		if (prev === undefined) {
+			delete process.env.SIGNET_PATH;
+		} else {
+			process.env.SIGNET_PATH = prev;
+		}
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("resolves direct entity expansion by exact name instead of pinned prominence", async () => {
+		const res = await app.request("http://localhost/api/knowledge/expand", {
+			method: "POST",
+			headers: jsonHeader(),
+			body: JSON.stringify({ entity: "Signet" }),
+		});
+		const json = (await res.json()) as {
+			entity?: { name?: string };
+			aspects?: Array<{ attributes?: Array<{ content?: string }> }>;
+		};
+
+		expect(res.status).toBe(200);
+		expect(json.entity?.name).toBe("Signet");
+		expect(json.aspects?.[0]?.attributes?.[0]?.content).toBe("portable memory system");
+	});
+
+	it("keeps graph traversal and hydration behind the DB owner", () => {
+		const source = readFileSync(new URL("../../http/routes/knowledge-routes.ts", import.meta.url), "utf8");
+		const expandStart = source.indexOf('app.post("/api/knowledge/expand",');
+		const sessionStart = source.indexOf('app.post("/api/knowledge/expand/session",');
+		const expandSource = source.slice(expandStart, sessionStart);
+
+		expect(expandSource).toContain("resolveFocalEntitiesViaOwner");
+		expect(expandSource).toContain("traverseKnowledgeGraphViaOwner");
+		expect(expandSource).toContain("expandKnowledgeGraphViaOwner");
+		const exactResolutionStart = expandSource.indexOf("resolveNamedEntity");
+		const exactResolution = expandSource.slice(exactResolutionStart, exactResolutionStart + 240);
+		expect(exactResolution).toContain("deadlineAt: traversalDeadlineAt");
+
+		expect(expandSource).not.toMatch(/\bresolveFocalEntities\s*\(/);
+		expect(expandSource).not.toMatch(/\btraverseKnowledgeGraph\s*\(/);
+		expect(expandSource).not.toContain("withReadDbAsync");
+	});
+
+	it("falls back to summary text and project matching for session expansion", async () => {
+		const res = await app.request("http://localhost/api/knowledge/expand/session", {
+			method: "POST",
+			headers: jsonHeader(),
+			body: JSON.stringify({ entityName: "Signet", maxResults: 5 }),
+		});
+		const json = (await res.json()) as {
+			entityName?: string;
+			total?: number;
+			summaries?: Array<{ id: string }>;
+		};
+
+		expect(res.status).toBe(200);
+		expect(json.entityName).toBe("Signet");
+		expect(json.total).toBe(1);
+		expect(json.summaries?.[0]?.id).toBe("sum-signet");
+	});
+});

@@ -105,7 +105,7 @@ jobs:
       - name: Native embedding /health isolation (source daemon)
         if: matrix.platform == 'linux-x64'
         working-directory: platform/daemon
-        run: bun test src/native-embedding-eventloop-isolation.test.ts
+        run: bun test src/inference/embeddings/native-embedding-eventloop-isolation.test.ts
 
       - name: Build dashboard assets
         run: bun run build:dashboard

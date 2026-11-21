@@ -1,45 +1,15 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import ts from "typescript";
 
-const SQL_OWNERS = [
-	"platform/core/src/database.ts",
-	"platform/core/src/fts-schema.ts",
-	"platform/core/src/search.ts",
-	"platform/daemon/src/db-owner-worker.ts",
-	"platform/daemon/src/db-accessor.ts",
-	"platform/daemon/src/diagnostics.ts",
-	"platform/daemon/src/diagnostics-queue.ts",
-	"platform/daemon/src/embedding-index-state.ts",
-	"platform/daemon/src/embedding-repair-state.ts",
-	"platform/daemon/src/episodic-sources.ts",
-	"platform/daemon/src/memory-search.ts",
-	"platform/daemon/src/query-planner-statistics.ts",
-	"platform/daemon/src/session-transcripts.ts",
-	"platform/daemon/src/db-helpers.ts",
-	"platform/daemon/src/db-vacuum.ts",
-	"platform/daemon/src/agent-removal.ts",
-	"platform/daemon/src/memory-lineage.ts",
-	"platform/daemon/src/memory-head-owner.ts",
-	"platform/daemon/src/obsidian-source-graph.ts",
-	"platform/daemon/src/source-artifact-graph.ts",
-	"platform/daemon/src/source-purge-tx.ts",
-	"platform/daemon/src/source-snapshots.ts",
-	"platform/daemon/src/source-claim-review.ts",
-	"platform/daemon/src/transcript-import-commit.ts",
-	"platform/daemon/src/ontology-contradictions.ts",
-	"platform/daemon/src/semantic-memory-projection.ts",
-	"platform/daemon/src/knowledge-graph-hygiene.ts",
-	"platform/daemon/src/vector-repair-owner.ts",
-	"platform/daemon/src/pipeline/graph-transactions.ts",
-	"platform/daemon/src/pipeline/dreaming.ts",
-	"platform/daemon/src/pipeline/dreaming-capabilities.ts",
-	"platform/daemon/src/pipeline/dreaming-evidence-retry.ts",
-	"platform/daemon/src/pipeline/dreaming-attention.ts",
-	"platform/daemon/src/pipeline/dreaming-surprisal.ts",
-	"platform/daemon/src/pipeline/dreaming-evidence-consumption.ts",
-] as const;
-const OWNERS: ReadonlySet<string> = new Set(SQL_OWNERS);
+function owners(text: string, ref: string): ReadonlySet<string> {
+	const value: unknown = JSON.parse(text);
+	if (!Array.isArray(value) || !value.every((path) => typeof path === "string"))
+		throw new Error(`Cannot read SQL owners at ${ref}`);
+	return new Set(value);
+}
+
+const OWNERS = owners(readFileSync(resolve(import.meta.dir, "sql-owners.json"), "utf8"), "HEAD");
 const EXCLUDED = new Set([
 	"__tests__",
 	"test",
@@ -88,8 +58,8 @@ function production(path: string): boolean {
 	);
 }
 
-function owner(path: string): boolean {
-	return OWNERS.has(path) || /^platform\/core\/src\/migrations\/(?:\d{3}-[^/]+|index)\.ts$/.test(path);
+function owner(path: string, owners: ReadonlySet<string> = OWNERS): boolean {
+	return owners.has(path) || /^platform\/core\/src\/migrations\/(?:\d{3}-[^/]+|index)\.ts$/.test(path);
 }
 
 function unwrap(expression: ts.Expression): ts.Expression {
@@ -170,7 +140,7 @@ function prepared(expression: ts.Expression): boolean {
 	return node.expression.name.text === "prepare" || prepared(node.expression.expression);
 }
 
-function count(path: string, content: string): CountsWithDetails {
+function count(path: string, content: string, exempt = owner(path)): CountsWithDetails {
 	const counts: Counts = { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 	const sql = { text: 0, helper: 0, request: 0, accessor: 0, marker: 0 };
 	const source = ts.createSourceFile(path, content, ts.ScriptTarget.Latest, true);
@@ -235,7 +205,7 @@ function count(path: string, content: string): CountsWithDetails {
 		return aliases.get(value) ?? value;
 	};
 	const visit = (node: ts.Node): void => {
-		if (!owner(path)) {
+		if (!exempt) {
 			const text =
 				ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
 					? node.text
@@ -318,6 +288,12 @@ function origins(base: string): ReadonlyMap<string, string> {
 	return paths;
 }
 
+function ownersAt(ref: string): ReadonlySet<string> {
+	const path = `${ref}:scripts/sql-owners.json`;
+	if (Bun.spawnSync(["git", "-C", process.cwd(), "cat-file", "-e", path]).exitCode !== 0) return OWNERS;
+	return owners(git("show", path), ref);
+}
+
 function retiredPaths(after: ReadonlySet<string>): readonly string[] {
 	const registry = "scripts/retired-paths.json";
 	if (!after.has(registry)) throw new Error(`Missing retirement registry: ${registry}`);
@@ -377,6 +353,7 @@ function main(): void {
 	const before = tree(base);
 	const after = tree("HEAD");
 	const sources = origins(base);
+	const baseOwners = ownersAt(base);
 	const totals: Counts = { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 	const failures: string[] = [...retiredPaths(after)];
 	let files = 0;
@@ -394,7 +371,7 @@ function main(): void {
 	for (const [source, group] of groups) {
 		const previous =
 			before.has(source) && production(source)
-				? count(source, git("show", `${base}:${source}`)).counts
+				? count(source, git("show", `${base}:${source}`), owner(source, baseOwners)).counts
 				: { "raw-sql": 0, "swallowed-error": 0, "unchecked-cast": 0 };
 		for (const category of CATEGORIES) {
 			const head = group.reduce((sum, member) => sum + member.head.counts[category], 0);

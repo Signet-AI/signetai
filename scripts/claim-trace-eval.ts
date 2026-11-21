@@ -1,14 +1,14 @@
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db-accessor";
-import { createEpistemicAssertionsInTx } from "../platform/daemon/src/ontology-assertions";
-import { linkDerivedMemorySourcesInTx } from "../platform/daemon/src/derived-memory-provenance";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db/owner/accessor";
+import { createEpistemicAssertionsInTx } from "../platform/daemon/src/ontology/claims/assertions";
+import { linkDerivedMemorySourcesInTx } from "../platform/daemon/src/memory/derived-memory-provenance";
 import {
 	type ClaimTraceResult,
 	OntologyClaimTraceError,
 	explainOntologyClaim,
-} from "../platform/daemon/src/ontology-claim-trace";
+} from "../platform/daemon/src/ontology/claims/trace";
 
 const agentId = "eval-agent";
 const now = "2026-08-10T00:00:00.000Z";

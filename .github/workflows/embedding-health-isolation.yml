@@ -3,16 +3,18 @@ name: Embedding Health Isolation
 on:
   pull_request:
     paths:
-      - "platform/daemon/src/native-embedding*.ts"
-      - "platform/daemon/src/embedding-worker*.ts"
-      - "platform/daemon/src/embedding-fetch.ts"
-      - "platform/daemon/src/embedding-health.ts"
-      - "platform/daemon/src/routes/utils.ts"
+      - "platform/daemon/src/inference/embeddings/native*.ts"
+      - "platform/daemon/src/inference/embeddings/embedding-worker*.ts"
+      - "platform/daemon/src/inference/embeddings/worker-*.ts"
+      - "platform/daemon/src/inference/embeddings/fetch.ts"
+      - "platform/daemon/src/embeddings/index/health.ts"
+      - "platform/daemon/src/http/routes/utils.ts"
       - "platform/daemon/src/daemon.ts"
-      - "platform/daemon/src/db-owner*.ts"
-      - "platform/daemon/src/mcp-stdio*.ts"
-      - "platform/daemon/src/pipeline/acpx-dreaming-mcp*.ts"
-      - "platform/daemon/src/native-runtime-assets.ts"
+      - "platform/daemon/src/db/owner/**"
+      - "platform/daemon/src/db/maintenance/maintenance*.ts"
+      - "platform/daemon/src/http/mcp/*stdio*.ts"
+      - "platform/daemon/src/dreaming/tools/acpx-mcp*.ts"
+      - "platform/daemon/src/runtime/update/native-runtime-assets.ts"
       - "scripts/native-dreaming-mcp-smoke.test.ts"
       - "scripts/native-embedding-runtime-smoke.test.ts"
       - "scripts/native-dreaming-finalize-smoke.test.ts"
@@ -22,16 +24,18 @@ on:
   push:
     branches: [main]
     paths:
-      - "platform/daemon/src/native-embedding*.ts"
-      - "platform/daemon/src/embedding-worker*.ts"
-      - "platform/daemon/src/embedding-fetch.ts"
-      - "platform/daemon/src/embedding-health.ts"
-      - "platform/daemon/src/routes/utils.ts"
+      - "platform/daemon/src/inference/embeddings/native*.ts"
+      - "platform/daemon/src/inference/embeddings/embedding-worker*.ts"
+      - "platform/daemon/src/inference/embeddings/worker-*.ts"
+      - "platform/daemon/src/inference/embeddings/fetch.ts"
+      - "platform/daemon/src/embeddings/index/health.ts"
+      - "platform/daemon/src/http/routes/utils.ts"
       - "platform/daemon/src/daemon.ts"
-      - "platform/daemon/src/db-owner*.ts"
-      - "platform/daemon/src/mcp-stdio*.ts"
-      - "platform/daemon/src/pipeline/acpx-dreaming-mcp*.ts"
-      - "platform/daemon/src/native-runtime-assets.ts"
+      - "platform/daemon/src/db/owner/**"
+      - "platform/daemon/src/db/maintenance/maintenance*.ts"
+      - "platform/daemon/src/http/mcp/*stdio*.ts"
+      - "platform/daemon/src/dreaming/tools/acpx-mcp*.ts"
+      - "platform/daemon/src/runtime/update/native-runtime-assets.ts"
       - "scripts/native-dreaming-mcp-smoke.test.ts"
       - "scripts/native-embedding-runtime-smoke.test.ts"
       - "scripts/native-dreaming-finalize-smoke.test.ts"
@@ -63,11 +67,11 @@ jobs:
         run: bun run build
       - name: Worker-handle unit + facade contract tests
         working-directory: platform/daemon
-        run: bun test src/embedding-worker-handle.test.ts src/native-embedding.test.ts
+        run: bun test src/inference/embeddings/worker-handle.test.ts src/inference/embeddings/native.test.ts
 
       - name: Native embedding /health isolation (source daemon)
         working-directory: platform/daemon
-        run: bun test src/native-embedding-eventloop-isolation.test.ts
+        run: bun test src/inference/embeddings/native-embedding-eventloop-isolation.test.ts
       - name: Build dashboard assets
         run: bun run build:dashboard
 

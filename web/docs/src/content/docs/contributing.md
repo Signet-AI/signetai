@@ -140,26 +140,15 @@ Key Modules
 These are the areas most likely to be touched in non-trivial contributions.
 Familiarize yourself with them before diving in.
 
-**`platform/daemon/src/pipeline/`** is the LLM-based memory extraction
-pipeline. It runs in stages: extraction (`extraction.ts`, shared JSON
-recovery/parsing helpers) → decision (`decision.ts`, write/update/skip) →
-optional graph operations → retention decay. The entrypoint is `worker.ts`;
-`provider.ts` wires up the stages. Config modes like `shadowMode` and
-`mutationsFrozen` are respected here. For live prompt checks against local
-Ollama models, see `platform/daemon/src/pipeline/README.md`.
-
-**`platform/daemon/src/auth/`** handles token-based auth for the
-HTTP API. Key files: `middleware.ts` (Hono middleware), `tokens.ts` (token
-lifecycle), `policy.ts` (access rules), `rate-limiter.ts`.
-
-**`platform/daemon/src/connectors/`** is the connector framework used by
-the daemon. `registry.ts` manages connector registration; `filesystem.ts`
-handles connector-driven file operations.
-
-**`platform/daemon/src/analytics.ts`**, **`timeline.ts`**, and
-**`diagnostics.ts`** provide observability. Analytics tracks pipeline
-events; timeline records structured agent history; diagnostics exposes
-health and repair tooling. Tests live alongside each file.
+**`platform/daemon/src/`** is organized by feature. Each top-level folder
+owns one area: `memory/`, `recall/`, `ontology/`, `dreaming/`, `sources/`,
+`transcripts/`, `sessions/`, `agents/`, `embeddings/`, `inference/`,
+`harness/`, `plugins/`, `secrets/`, `auth/`, `telemetry/`, `config/`, and
+`workspace/`. Shared plumbing has its own folders: `http/` (routes,
+middleware, hooks, MCP), `db/` (the DB owner process, integrity, and
+maintenance), `runtime/` (process lifecycle, logging, updates), and
+`workers/` (scheduled background jobs). Only the entry points (`daemon.ts`,
+`dev-daemon.ts`, `index.ts`) sit at the root. Tests live beside the file they cover.
 
 **`platform/core/src/database.ts`** owns the SQLite schema and migrations.
 Any schema change must go through here. The wrapper supports both
@@ -176,7 +165,7 @@ Make changes, rebuild the affected package, then test:
 cd platform/daemon && bun run build
 
 # Run a single test file
-bun test platform/daemon/src/pipeline/worker.test.ts
+bun test platform/daemon/src/recall/search/memory-search.test.ts
 
 # Full rebuild
 bun run build
@@ -245,7 +234,7 @@ count, so a copy cannot duplicate debt. New files start at zero; an existing
 destination keeps its own count. There is no generated baseline to update.
 
 Raw SQL has two parts. SQL text is allowed only in the owner files listed in
-the script and in numbered core migrations and their registry. Raw owner
+`scripts/sql-owners.json` and in numbered core migrations and their registry. Raw owner
 requests (`ownerReadAll`, `ownerReadOne`, `ownerRun`, `ownerBatch`, and
 `query`/`transaction`/`batch` request kinds) and legacy accessor calls
 (`withReadDb`, `withWriteTx`, `LEGACY_SYNC_DB_ACCESS` markers) count in every
@@ -657,7 +646,7 @@ To run tests for a specific package:
 bun test platform/daemon/
 
 # Run a single test file
-bun test platform/daemon/src/pipeline/worker.test.ts
+bun test platform/daemon/src/recall/search/memory-search.test.ts
 
 # Run all tests across all workspaces
 bun run test

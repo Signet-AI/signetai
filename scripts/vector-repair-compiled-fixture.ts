@@ -1,6 +1,6 @@
 import { Database } from "bun:sqlite";
-import { applyVectorRepairBatch } from "../platform/daemon/src/vector-repair-owner";
-import type { DbOwnerVectorRepairInput } from "../platform/daemon/src/db-owner-protocol";
+import { applyVectorRepairBatch } from "../platform/daemon/src/embeddings/vectors/repair-owner";
+import type { DbOwnerVectorRepairInput } from "../platform/daemon/src/db/owner/protocol";
 
 const rowCount = Number.parseInt(process.argv[2] ?? "5000", 10);
 const db = new Database(":memory:");

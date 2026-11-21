@@ -96,7 +96,7 @@ import {
 	initUpdateSystem,
 	runUpdate,
 	setUpdateConfigOffline,
-} from "../../../platform/daemon/src/update-system.js";
+} from "../../../platform/daemon/src/runtime/update/system.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
 import {
 	acquireNativeSyncLock,

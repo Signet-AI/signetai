@@ -1,0 +1,362 @@
+import { existsSync } from "node:fs";
+import { type AgentRosterReadPolicy, redactCredentials } from "@signet/core";
+import { yieldEvery } from "../runtime/concurrency/async-yield";
+import { getDbOwner } from "../db/owner/runtime";
+import { ownerReadAll } from "../db/owner/sql";
+import { logger } from "../runtime/logging/logger";
+import { effectiveScore } from "./classification";
+import { buildAgentScopeClause, currentMemorySql } from "../recall/search/memory-search";
+
+export interface ScoredMemory {
+	id: string;
+	content: string;
+	type: string;
+	importance: number;
+	tags: string | null;
+	pinned: number;
+	project: string | null;
+	created_at: string;
+	source_type: string | null;
+	source_id: string | null;
+	access_count: number;
+	effScore: number;
+}
+
+const PREDICTED_CONTEXT_TERM_LIMIT = 6;
+const PREDICTED_CONTEXT_STOPWORDS: ReadonlySet<string> = new Set([
+	"able",
+	"about",
+	"after",
+	"again",
+	"also",
+	"back",
+	"been",
+	"before",
+	"being",
+	"check",
+	"code",
+	"could",
+	"from",
+	"have",
+	"into",
+	"issue",
+	"just",
+	"like",
+	"more",
+	"need",
+	"only",
+	"path",
+	"should",
+	"that",
+	"their",
+	"them",
+	"then",
+	"there",
+	"these",
+	"they",
+	"this",
+	"time",
+	"user",
+	"want",
+	"were",
+	"what",
+	"when",
+	"where",
+	"which",
+	"with",
+	"work",
+	"would",
+	"your",
+]);
+
+function clampScore01(value: number): number {
+	if (!Number.isFinite(value)) return 0.5;
+	return Math.max(0, Math.min(1, value));
+}
+
+export function buildActiveConstraintsSection(
+	constraints: ReadonlyArray<{
+		readonly entityName: string;
+		readonly content: string;
+		readonly importance: number;
+	}>,
+	charBudget: number,
+): string {
+	const redactedConstraints = constraints.map((item) => ({ ...item, content: redactCredentials(item.content) }));
+	if (redactedConstraints.length === 0) return "";
+
+	const header = "\n## Active Constraints\n\nConstraints for entities in scope. These always apply.\n";
+	const fullLines = redactedConstraints.map((item) => `- [${item.entityName}] ${item.content}\n`);
+	const fullSection = `${header}${fullLines.join("")}`.trimEnd();
+	if (charBudget <= 0 || fullSection.length <= charBudget) return fullSection;
+
+	const fixedOverhead = redactedConstraints.reduce(
+		(acc, item) => acc + `- [${item.entityName}] \n`.length,
+		header.length,
+	);
+	const availableForContent = Math.max(0, charBudget - fixedOverhead);
+	const perConstraintBudget = Math.max(24, Math.floor(availableForContent / redactedConstraints.length));
+	const compressedLines = redactedConstraints.map((item) => {
+		const content =
+			item.content.length <= perConstraintBudget
+				? item.content
+				: `${item.content.slice(0, Math.max(1, perConstraintBudget - 3))}...`;
+		return `- [${item.entityName}] ${content}\n`;
+	});
+	const compressedSection = `${header}${compressedLines.join("")}`.trimEnd();
+
+	logger.warn("hooks", "Constraint section exceeded budget; preserving all constraints", {
+		constraintBudgetChars: charBudget,
+		constraintCount: redactedConstraints.length,
+		fullChars: fullSection.length,
+		injectChars: compressedSection.length,
+	});
+	return compressedSection;
+}
+export const MAX_TRAVERSAL_CANDIDATE_IDS = 500;
+const TRAVERSAL_CANDIDATE_BATCH_SIZE = 50;
+
+export async function fetchTraversalCandidates(
+	memoryDbPath: string,
+	memoryIds: ReadonlyArray<string>,
+	agentId: string,
+): Promise<ScoredMemory[]> {
+	if (memoryIds.length === 0 || !existsSync(memoryDbPath)) return [];
+
+	const boundedMemoryIds = memoryIds.slice(0, MAX_TRAVERSAL_CANDIDATE_IDS);
+	if (boundedMemoryIds.length < memoryIds.length) {
+		logger.warn("hooks", "Traversal candidate hydration exceeded its hard cap", {
+			requested: memoryIds.length,
+			cap: MAX_TRAVERSAL_CANDIDATE_IDS,
+		});
+	}
+
+	try {
+		const owner = await getDbOwner(memoryDbPath);
+		const rows: ScoredMemory[] = [];
+		const yieldBetweenBatches = yieldEvery(1);
+
+		for (let offset = 0; offset < boundedMemoryIds.length; offset += TRAVERSAL_CANDIDATE_BATCH_SIZE) {
+			const batch = boundedMemoryIds.slice(offset, offset + TRAVERSAL_CANDIDATE_BATCH_SIZE);
+			const placeholders = batch.map(() => "?").join(", ");
+			const batchRows = await ownerReadAll<ScoredMemory>(
+				owner,
+				`SELECT
+					 m.id,
+					 m.content,
+					 m.type,
+					 m.importance,
+					 m.tags,
+					 m.pinned,
+					 m.project,
+					 m.created_at,
+					 m.source_type,
+					 m.source_id,
+					 COALESCE(m.access_count, 0) AS access_count,
+					 COALESCE(
+						 (SELECT MAX(ea.importance)
+						  FROM entity_attributes ea
+						  WHERE ea.memory_id = m.id
+						    AND ea.agent_id = ?
+						    AND ea.status = 'active'),
+						 m.importance,
+						 0.5
+					 ) AS effScore
+				 FROM memories m
+				 WHERE m.id IN (${placeholders})${currentMemorySql("m")}`,
+				[agentId, ...batch],
+				{
+					operation: "session-start.traversal-candidate-hydration",
+					lane: "read",
+					deadlineMs: 5_000,
+					estimatedWorkUnits: Math.max(1, Math.min(150, batch.length * 3)),
+				},
+			);
+			rows.push(...batchRows);
+			await yieldBetweenBatches();
+		}
+
+		return rows.map((row) => ({
+			...row,
+			content: redactCredentials(row.content),
+			effScore: clampScore01(row.effScore),
+		}));
+	} catch {
+		return [];
+	}
+}
+export async function getAllScoredCandidates(
+	memoryDbPath: string,
+	project: string | undefined,
+	limit: number,
+	agentId = "default",
+	readPolicy: AgentRosterReadPolicy = "isolated",
+	policyGroup: string | null = null,
+): Promise<ScoredMemory[]> {
+	if (!existsSync(memoryDbPath)) return [];
+
+	try {
+		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
+		const owner = await getDbOwner(memoryDbPath);
+		const readOptions = {
+			operation: "session-start.candidate-pool",
+			lane: "read" as const,
+			deadlineMs: 5_000,
+			estimatedWorkUnits: Math.max(1, Math.min(10_000, limit * 3)),
+		};
+		const rows: ReadonlyArray<{
+			id: string;
+			content: string;
+			type: string;
+			importance: number;
+			tags: string | null;
+			pinned: number;
+			project: string | null;
+			created_at: string;
+			source_type: string | null;
+			source_id: string | null;
+			access_count: number;
+		}> = await ownerReadAll(
+			owner,
+			`SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.project, m.created_at,
+			        m.source_type, m.source_id,
+			        COALESCE(m.access_count, 0) AS access_count
+			 FROM memories m
+				 WHERE 1 = 1${currentMemorySql("m")}${scope.sql}
+			 ORDER BY m.created_at DESC LIMIT ?`,
+			[...scope.args, limit * 3],
+			readOptions,
+		);
+
+		const scored: ScoredMemory[] = rows
+			.map((r) => ({
+				...r,
+				content: redactCredentials(r.content),
+				effScore: effectiveScore(r.importance, r.created_at, r.pinned === 1),
+			}))
+			.filter((r) => r.effScore > 0.2 || r.pinned === 1);
+		scored.sort((a, b) => {
+			if (project) {
+				const aMatch = a.project === project ? 1 : 0;
+				const bMatch = b.project === project ? 1 : 0;
+				if (aMatch !== bMatch) return bMatch - aMatch;
+			}
+			return b.effScore - a.effScore;
+		});
+
+		return scored.slice(0, limit);
+	} catch (e) {
+		logger.error("hooks", "Failed to get scored candidates", e as Error);
+		return [];
+	}
+}
+export async function getPredictedContextMemories(
+	memoryDbPath: string,
+	project: string | undefined,
+	limit: number,
+	charBudget: number,
+	excludeIds: ReadonlySet<string>,
+	agentId: string,
+	readPolicy: AgentRosterReadPolicy = "isolated",
+	policyGroup: string | null = null,
+): Promise<ScoredMemory[]> {
+	if (!existsSync(memoryDbPath)) return [];
+	if (!project || project.trim().length === 0) return [];
+
+	try {
+		const owner = await getDbOwner(memoryDbPath);
+		const readOptions = {
+			operation: "session-start.predicted-context",
+			lane: "read" as const,
+			deadlineMs: 5_000,
+			estimatedWorkUnits: Math.max(1, Math.min(500, limit * 10)),
+		};
+		const transcriptRows = await ownerReadAll<{
+			readonly session_key: string;
+			readonly transcript: string;
+		}>(
+			owner,
+			`SELECT st.session_key, st.content AS transcript
+			 FROM session_transcripts st
+			 WHERE st.project = ? AND st.completed_at IS NOT NULL AND st.agent_id = ?
+			 ORDER BY COALESCE(st.updated_at, st.created_at) DESC LIMIT 5`,
+			[project, agentId],
+			{ ...readOptions, operation: "session-start.predicted-context.transcripts" },
+		);
+
+		if (transcriptRows.length === 0) return [];
+		const termFreq = new Map<string, number>();
+		for (const row of transcriptRows) {
+			const text = row.transcript.slice(0, 3000);
+			const words = text
+				.toLowerCase()
+				.replace(/[^a-z0-9\s]/g, " ")
+				.split(/\s+/)
+				.filter((w) => w.length >= 4 && !PREDICTED_CONTEXT_STOPWORDS.has(w));
+			const seen = new Set<string>();
+			for (const w of words) {
+				if (seen.has(w)) continue;
+				seen.add(w);
+				termFreq.set(w, (termFreq.get(w) ?? 0) + 1);
+			}
+		}
+		const recurring = [...termFreq.entries()]
+			.filter(([_, count]) => count >= 2)
+			.sort((a, b) => b[1] - a[1])
+			.slice(0, PREDICTED_CONTEXT_TERM_LIMIT)
+			.map(([term]) => term);
+
+		if (recurring.length === 0) return [];
+		const ftsQuery = recurring.join(" OR ");
+		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
+		const rows = await ownerReadAll<{
+			readonly id: string;
+			readonly content: string;
+			readonly type: string;
+			readonly importance: number;
+			readonly tags: string | null;
+			readonly pinned: number;
+			readonly project: string | null;
+			readonly created_at: string;
+			readonly source_type: string | null;
+			readonly source_id: string | null;
+			readonly access_count: number;
+		}>(
+			owner,
+			`SELECT m.id, m.content, m.type, m.importance, m.tags,
+			        m.pinned, m.project, m.created_at, m.source_type, m.source_id,
+			        COALESCE(m.access_count, 0) AS access_count
+			 FROM memories_fts
+			 JOIN memories m ON memories_fts.rowid = m.rowid
+			 WHERE memories_fts MATCH ?
+			   ${currentMemorySql("m")}
+			   AND m.project = ?
+			   ${scope.sql}
+			 ORDER BY bm25(memories_fts)
+			 LIMIT ?`,
+			[ftsQuery, project, ...scope.args, limit * 2],
+			{ ...readOptions, operation: "session-start.predicted-context.fts" },
+		);
+		const selected: ScoredMemory[] = [];
+		let used = 0;
+		for (const r of rows) {
+			if (excludeIds.has(r.id)) continue;
+			if (selected.length >= limit) break;
+			const content = redactCredentials(r.content);
+			if (used + content.length > charBudget) break;
+			selected.push({
+				...r,
+				content,
+				effScore: effectiveScore(r.importance, r.created_at, r.pinned === 1),
+			});
+			used += content.length;
+		}
+
+		return selected;
+	} catch (e) {
+		logger.warn("hooks", "Predicted context failed (non-fatal)", {
+			error: e instanceof Error ? e.message : String(e),
+		});
+		return [];
+	}
+}

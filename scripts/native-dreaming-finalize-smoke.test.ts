@@ -5,7 +5,7 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runMigrations } from "../platform/core/src/migrations";
-import type { DbOwnerDreamingPassFinalize } from "../platform/daemon/src/db-owner-protocol";
+import type { DbOwnerDreamingPassFinalize } from "../platform/daemon/src/db/owner/protocol";
 
 const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_DB_OWNER_SMOKE === "1";

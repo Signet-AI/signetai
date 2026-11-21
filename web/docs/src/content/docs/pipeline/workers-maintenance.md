@@ -238,8 +238,6 @@ better extraction results and `qwen3:4b` will be removed in a future update. Eac
 timeout (default 45,000 ms) and throws a descriptive error on abort. HTTP
 errors surface the status code and the first 200 characters of the response
 body. The `available` check uses a 3-second timeout against `GET /api/tags`.
-For live prompt harness commands, see
-`platform/daemon/src/pipeline/README.md`.
 
 **ClaudeCodeProvider** invokes the Claude Code CLI as a subprocess:
 `claude -p <prompt> --model <model> --no-session-persistence --output-format text`.
@@ -273,7 +271,7 @@ exist.
 
 ## Embedding Tracker
 
-The embedding tracker (`platform/daemon/src/embedding-tracker.ts`) is a
+The embedding tracker (`platform/daemon/src/embeddings/index/tracker.ts`) is a
 background polling loop that detects stale or missing embeddings and
 refreshes them in small batches. It is separate from the extraction
 pipeline and runs alongside it.

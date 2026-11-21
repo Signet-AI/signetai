@@ -1,0 +1,4072 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import {
+	type AgentRosterReadPolicy,
+	applyRecallScoreThreshold,
+	redactCredentials,
+	vectorSearchWithMetadata,
+} from "@signet/core";
+import type { Context, Hono, MiddlewareHandler } from "hono";
+import { ensureAgentRegistered, getAgentScope, resolveDaemonAgentId } from "../../agents/identity/agent-id";
+import {
+	aggregateRecall,
+	parseAggregateRecallBudget,
+	readAggregateRecallBudgetInput,
+} from "../../recall/search/aggregate-recall";
+import { checkScope, requirePermission, requirePermissionWithRateLimit } from "../../auth";
+import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../../runtime/concurrency/admission";
+import type { DbOwnerClient } from "../../db/owner/client";
+import { DB_OWNER_MAX_WORK_UNITS, type DbOwnerParameter } from "../../db/owner/protocol";
+import { dbOwnerQuery } from "../../db/owner/runtime";
+import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../../db/owner/recall";
+import { normalizeAndHashContent } from "../../recall/text/content-normalization";
+import {
+	type ReadDb,
+	type WriteDb,
+	getDbAccessor,
+	runWriteTxAsync,
+	prepareTypedStatement,
+} from "../../db/owner/accessor";
+import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../../db/owner/helpers";
+import { fetchEmbedding } from "../../inference/embeddings/fetch";
+import { buildEmbeddingHealth } from "../../embeddings/index/health";
+import { getDatabaseIntegrityStatus } from "../../db/integrity/integrity";
+import { stagingCoverage } from "../../embeddings/index/migration";
+import {
+	isActiveEmbeddingConfig,
+	readEmbeddingIndexState,
+	resolveActiveEmbeddingConfig,
+} from "../../embeddings/index/state";
+import type { EmbeddingRole } from "../../embeddings/index/profile";
+import { getInferenceRouterOrNull } from "../../inference/router/router";
+import { fetchInternal } from "../server/internal-fetch.js";
+import { logger } from "../../runtime/logging/logger";
+import { type EmbeddingConfig, type ResolvedMemoryConfig, loadMemoryConfig } from "../../config/memory-config";
+import {
+	type RecallParams,
+	type RecallResponse,
+	buildAgentScopeClause,
+	currentMemorySql,
+	hybridRecall,
+} from "../../recall/search/memory-search";
+import { recordMemorySearchTelemetry } from "../../telemetry/search/memory-search";
+import { resolveMemorySearchTelemetryProject } from "../../telemetry/search/memory-search-project";
+import { buildMemoryTimeline } from "../../recall/temporal/memory-timeline";
+import { recordPathFeedback } from "../../recall/graph/path-feedback";
+import { enqueueDocumentIngestJob } from "../../workers";
+import {
+	type PipelineCauseFamily,
+	normalizePipelineCause,
+	recordPipelineOperation,
+} from "../../runtime/logging/pipeline-operation";
+import {
+	effectiveRecallLimit,
+	normalizeRecallSurface,
+	recordRecallAttempt,
+	recordRecallOutcome,
+} from "../../telemetry/search/recall";
+import { parseFeedback, recordAgentFeedback } from "../../recall/search/session-memories";
+import { writeSessionTranscriptRow } from "../../transcripts/store/session-transcripts";
+import { getActiveTelemetry } from "../../telemetry/usage/telemetry";
+import { txInsertMemoryTemporalEdges, type MemoryTemporalEdgeInput } from "../../recall/temporal/edges";
+import { normalizeTemporalTimestamp, validateTemporalTimeOptions } from "../../recall/temporal/recall";
+import {
+	type SupersedeMemoryTxStatus,
+	txForgetMemory,
+	txIngestEnvelope,
+	txModifyMemory,
+	txRecoverMemory,
+	txSupersedeMemory,
+} from "../../memory/transactions";
+import {
+	type ProjectionNode,
+	cacheProjection,
+	computeProjection,
+	computeProjectionForQuery,
+	getCachedProjection,
+} from "../../embeddings/vectors/umap-projection";
+import {
+	AGENTS_DIR,
+	INTERNAL_SELF_HOST,
+	PORT,
+	PROJECTION_ERROR_TTL_MS,
+	authBatchForgetLimiter,
+	authConfig,
+	authForgetLimiter,
+	authModifyLimiter,
+	authRecallLlmLimiter,
+	embeddingTrackerHandle,
+	projectionErrors,
+	projectionInFlight,
+} from "./state";
+
+import {
+	type FilterParams,
+	type ForgetCandidatesRequest,
+	blobToVector,
+	buildForgetConfirmToken,
+	buildWhere,
+	checkEmbeddingProvider,
+	chunkBySentence,
+	inferType,
+	loadForgetCandidates,
+	loadForgetCandidatesByIds,
+	parseBoundedInt,
+	parseCsvQuery,
+	parseIsoDateQuery,
+	parseMemoryType,
+	parseModifyPatch,
+	parseOptionalBoolean,
+	parseOptionalBoundedFloat,
+	parseOptionalBoundedInt,
+	parseOptionalInt,
+	parseOptionalString,
+	parsePrefixes,
+	parseTagsField,
+	parseTagsMutation,
+	readOptionalJsonObject,
+	resolveMutationActor,
+	resolveScopedAgentId,
+	resolveScopedProject,
+	shouldEnforceAuthScope,
+	toRecord,
+	validateSessionAgentBinding,
+} from "./utils";
+
+async function withActiveEmbeddingConfig(cfg: ResolvedMemoryConfig): Promise<ResolvedMemoryConfig> {
+	return {
+		...cfg,
+		embedding: await getDbAccessor().withReadDbAsync(async (db) => resolveActiveEmbeddingConfig(db, cfg.embedding), {
+			siteToken: "http/routes/memory-routes.ts:141",
+		}),
+	};
+}
+
+const MAX_MUTATION_BATCH = 200;
+const MEMORY_LIST_MAX_LIMIT = 500;
+const SIMILAR_CANDIDATE_FACTOR = 4;
+const SIMILAR_MAX_CANDIDATES = 200;
+export const MEMORY_CAPTURE_MAX_IN_FLIGHT = 8;
+const FORGET_CONFIRM_THRESHOLD = 25;
+const SOFT_DELETE_RETENTION_DAYS = 30;
+const SOFT_DELETE_RETENTION_MS = SOFT_DELETE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+export interface MemoryRoutesDeps {
+	readonly aggregateRecall?: typeof aggregateRecall;
+	readonly hybridRecall?: typeof hybridRecall;
+	readonly fetchEmbedding?: typeof fetchEmbedding;
+	readonly getInferenceRouterOrNull?: typeof getInferenceRouterOrNull;
+	readonly memoryCaptureAdmission?: ConcurrencyAdmission;
+	readonly recallOwner?: DbOwnerClient;
+}
+
+function parseOptionalIsoTimestamp(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const trimmed = value.trim();
+	if (!trimmed) return null;
+	const ts = new Date(trimmed);
+	return Number.isNaN(ts.getTime()) ? null : ts.toISOString();
+}
+
+function collectExplicitTemporalInputs(body: {
+	readonly sourceCreatedAt?: string;
+	readonly observedAt?: string;
+	readonly occurredAt?: string;
+	readonly validFrom?: string;
+	readonly validUntil?: string;
+}): { inputs?: readonly MemoryTemporalEdgeInput[]; error?: string } {
+	const sourceCreatedAt = normalizeTemporalTimestamp(body.sourceCreatedAt);
+	const observedAt = normalizeTemporalTimestamp(body.observedAt);
+	const occurredAt = normalizeTemporalTimestamp(body.occurredAt);
+	const validFrom = normalizeTemporalTimestamp(body.validFrom);
+	const validUntil = normalizeTemporalTimestamp(body.validUntil);
+	if (body.sourceCreatedAt !== undefined && !sourceCreatedAt)
+		return { error: "sourceCreatedAt must be a valid ISO timestamp" };
+	if (body.observedAt !== undefined && !observedAt) return { error: "observedAt must be a valid ISO timestamp" };
+	if (body.occurredAt !== undefined && !occurredAt) return { error: "occurredAt must be a valid ISO timestamp" };
+	if (body.validFrom !== undefined && !validFrom) return { error: "validFrom must be a valid ISO timestamp" };
+	if (body.validUntil !== undefined && !validUntil) return { error: "validUntil must be a valid ISO timestamp" };
+	if (validUntil && validFrom && validUntil <= validFrom) return { error: "validUntil must be after validFrom" };
+
+	const inputs: MemoryTemporalEdgeInput[] = [];
+	if (sourceCreatedAt)
+		inputs.push({
+			facet: "source",
+			startAt: sourceCreatedAt,
+			endAt: sourceCreatedAt,
+			provenance: "remember.sourceCreatedAt",
+		});
+	if (observedAt)
+		inputs.push({ facet: "observed", startAt: observedAt, endAt: observedAt, provenance: "remember.observedAt" });
+	if (occurredAt)
+		inputs.push({ facet: "occurred", startAt: occurredAt, endAt: occurredAt, provenance: "remember.occurredAt" });
+	if (validFrom)
+		inputs.push({ facet: "valid", startAt: validFrom, endAt: validUntil, provenance: "remember.validRange" });
+	return { inputs };
+}
+
+function codexHome(): string {
+	return process.env.CODEX_HOME?.trim() || join(homedir(), ".codex");
+}
+
+function noteSlug(title: string | undefined, content: string): string {
+	const seed = title?.trim() || content.slice(0, 80);
+	const slug = seed
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.slice(0, 48);
+	return slug || createHash("sha256").update(content).digest("hex").slice(0, 12);
+}
+
+interface CodexNativeNoteWriteOptions {
+	readonly now?: Date;
+	readonly uniqueSuffix?: () => string;
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+	return (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as { readonly code?: unknown }).code === code
+	);
+}
+
+export function writeCodexNativeNote(
+	input: { readonly content: string; readonly title?: string; readonly tags?: string },
+	options: CodexNativeNoteWriteOptions = {},
+): string {
+	const now = options.now ?? new Date();
+	const timestamp = now.toISOString().replace(/[:.]/g, "-");
+	const slug = noteSlug(input.title, input.content);
+	const dir = join(codexHome(), "memories", "extensions", "ad_hoc", "notes");
+	mkdirSync(dir, { recursive: true });
+	const baseName = `${timestamp}-${slug}`;
+	const frontmatter = [
+		"---",
+		"source: signet_save_note",
+		`created_at: ${JSON.stringify(now.toISOString())}`,
+		...(input.title?.trim() ? [`title: ${JSON.stringify(input.title.trim())}`] : []),
+		...(input.tags?.trim() ? [`tags: ${JSON.stringify(input.tags.trim())}`] : []),
+		"---",
+		"",
+	].join("\n");
+	const noteContent = `${frontmatter}${input.content.trim()}\n`;
+	for (let attempt = 0; attempt < 8; attempt += 1) {
+		const suffix = attempt === 0 ? "" : `-${options.uniqueSuffix?.() ?? randomUUID().slice(0, 8)}`;
+		const path = join(dir, `${baseName}${suffix}.md`);
+		try {
+			writeFileSync(path, noteContent, { encoding: "utf-8", flag: "wx" });
+			return path;
+		} catch (error) {
+			if (hasErrorCode(error, "EEXIST")) continue;
+			throw error;
+		}
+	}
+	throw new Error("Failed to allocate a unique Codex native note path");
+}
+
+interface RememberRowProvenance {
+	readonly sourcePath?: string;
+	readonly runtimePath?: string;
+	readonly idempotencyKey?: string;
+}
+
+interface RememberDedupeScope {
+	readonly agentId: string;
+	readonly visibility: "global" | "private" | "archived";
+	readonly project: string | null;
+	readonly scope: string | null;
+}
+
+interface RememberDedupeRow {
+	readonly id: string;
+	readonly agentId: string;
+	readonly type: string;
+	readonly tags: string | null;
+	readonly pinned: number;
+	readonly importance: number;
+	readonly content: string;
+}
+
+interface RememberDedupeIdRow {
+	readonly id: string;
+	readonly sourceId: string | null;
+}
+
+interface RememberChunkDedupeRow extends RememberDedupeIdRow {
+	readonly contentHash: string | null;
+	readonly idempotencyKey: string;
+}
+
+function pickOptionalString(...values: readonly unknown[]): string | undefined {
+	for (const value of values) {
+		const parsed = parseOptionalString(value);
+		if (parsed) return parsed;
+	}
+	return undefined;
+}
+
+function parseRememberRowProvenance(body: Record<string, unknown>): RememberRowProvenance {
+	const metadata = toRecord(body.metadata) ?? {};
+	return {
+		sourcePath: pickOptionalString(
+			body.sourcePath,
+			body.source_path,
+			body.source,
+			metadata.sourcePath,
+			metadata.source_path,
+			metadata.source,
+		),
+		runtimePath: pickOptionalString(body.runtimePath, body.runtime_path, metadata.runtimePath, metadata.runtime_path),
+		idempotencyKey: pickOptionalString(
+			body.idempotencyKey,
+			body.idempotency_key,
+			metadata.idempotencyKey,
+			metadata.idempotency_key,
+		),
+	};
+}
+
+function idempotencyKeyForChunk(baseKey: string | undefined, index: number): string | undefined {
+	return baseKey ? `${baseKey}:chunk:${index + 1}` : undefined;
+}
+
+function chunkGroupIdForIdempotencyKey(baseKey: string | undefined, input: RememberDedupeScope): string | undefined {
+	if (!baseKey) return undefined;
+	const hash = createHash("sha256")
+		.update(input.agentId || "default")
+		.update("\0")
+		.update(input.visibility)
+		.update("\0")
+		.update(input.scope ?? "__NULL__")
+		.update("\0")
+		.update(baseKey)
+		.digest("hex")
+		.slice(0, 32);
+	return `chunk-group:${hash}`;
+}
+
+function escapeSqlLike(value: string): string {
+	return value.replace(/[\\%_]/g, "\\$&");
+}
+
+function chunkIdempotencyIndex(baseKey: string, key: string): number | null {
+	const prefix = `${baseKey}:chunk:`;
+	if (!key.startsWith(prefix)) return null;
+	const index = Number.parseInt(key.slice(prefix.length), 10);
+	return Number.isSafeInteger(index) && index > 0 ? index - 1 : null;
+}
+
+function scopedMemoryPredicate(input: RememberDedupeScope): {
+	readonly sql: string;
+	readonly params: readonly string[];
+} {
+	return {
+		sql: `
+			COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			AND COALESCE(project, '') = ?
+			AND COALESCE(visibility, 'global') = ?
+			AND COALESCE(scope, '__NULL__') = ?
+		`,
+		params: [input.agentId || "default", input.project ?? "", input.visibility, input.scope ?? "__NULL__"],
+	};
+}
+
+function scopedContentHashPredicate(input: RememberDedupeScope): {
+	readonly sql: string;
+	readonly params: readonly string[];
+} {
+	return {
+		sql: `
+			COALESCE(NULLIF(agent_id, ''), 'default') = ?
+			AND COALESCE(project, '') = ?
+			AND COALESCE(scope, '__NULL__') = ?
+			AND COALESCE(visibility, 'global') = ?
+		`,
+		params: [input.agentId || "default", input.project ?? "", input.scope ?? "__NULL__", input.visibility],
+	};
+}
+
+function getScopedIdempotencyMemoryId(
+	db: ReadDb | WriteDb,
+	key: string | undefined,
+	input: RememberDedupeScope,
+): RememberDedupeIdRow | undefined {
+	if (!key) return undefined;
+	const scoped = scopedMemoryPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, source_id AS sourceId
+			 FROM memories
+			 WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(key, ...scoped.params) as RememberDedupeIdRow | undefined;
+}
+
+function getScopedIdempotencyDedupeRow(
+	db: ReadDb | WriteDb,
+	key: string | undefined,
+	input: RememberDedupeScope,
+): RememberDedupeRow | undefined {
+	if (!key) return undefined;
+	const scoped = scopedMemoryPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
+			 FROM memories
+			 WHERE idempotency_key = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(key, ...scoped.params) as RememberDedupeRow | undefined;
+}
+
+const TRANSCRIPT_PROJECT_CONFLICT = "transcript project conflict";
+
+async function supersedesTargetVisible(
+	memoryId: string,
+	agentId: string,
+	project: string | undefined,
+): Promise<boolean> {
+	const projectSql = project === undefined ? "" : " AND COALESCE(project, '') = ?";
+	const row = await dbOwnerQuery<unknown>(
+		{
+			sql: `SELECT 1 AS found FROM memories WHERE id = ? AND agent_id = ?${projectSql} LIMIT 1`,
+			params: project === undefined ? [memoryId, agentId] : [memoryId, agentId, project],
+			result: "get",
+		},
+		{ operation: "memory.authorize_supersedes", lane: "read", deadlineMs: 2_000 },
+	);
+	return row != null;
+}
+
+function getScopedSourceDedupeRow(
+	db: ReadDb | WriteDb,
+	sourceType: string,
+	sourceId: string,
+	input: RememberDedupeScope,
+): RememberDedupeRow | undefined {
+	const scoped = scopedMemoryPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
+			 FROM memories
+			 WHERE source_type = ? AND source_id = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(sourceType, sourceId, ...scoped.params) as RememberDedupeRow | undefined;
+}
+
+function getScopedContentHashMemoryId(
+	db: ReadDb | WriteDb,
+	contentHash: string,
+	input: RememberDedupeScope,
+): { readonly id: string } | undefined {
+	const scoped = scopedContentHashPredicate(input);
+	return db
+		.prepare(
+			`SELECT id
+			 FROM memories
+			 WHERE content_hash = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(contentHash, ...scoped.params) as { readonly id: string } | undefined;
+}
+
+function isMemoryContentHashUniqueError(err: unknown): boolean {
+	if (!(err instanceof Error)) return false;
+	return err.message.includes("idx_memories_content_hash_unique") || err.message.includes("memories.content_hash");
+}
+
+function getScopedContentHashDedupeRow(
+	db: ReadDb | WriteDb,
+	contentHash: string,
+	input: RememberDedupeScope,
+): RememberDedupeRow | undefined {
+	const scoped = scopedContentHashPredicate(input);
+	return db
+		.prepare(
+			`SELECT id, COALESCE(NULLIF(agent_id, ''), 'default') AS agentId, type, tags, pinned, importance, content
+			 FROM memories
+			 WHERE content_hash = ? AND ${scoped.sql} AND is_deleted = 0
+			 LIMIT 1`,
+		)
+		.get(contentHash, ...scoped.params) as RememberDedupeRow | undefined;
+}
+
+function getScopedChunkIdempotencyRows(
+	db: ReadDb | WriteDb,
+	baseKey: string | undefined,
+	input: RememberDedupeScope,
+): readonly RememberChunkDedupeRow[] {
+	if (!baseKey) return [];
+	const scoped = scopedMemoryPredicate(input);
+	return prepareTypedStatement<RememberChunkDedupeRow>(
+		db,
+		`SELECT id, source_id AS sourceId, content_hash AS contentHash, idempotency_key AS idempotencyKey
+			 FROM memories
+			 WHERE idempotency_key LIKE ? ESCAPE '\\' AND ${scoped.sql} AND is_deleted = 0`,
+	)
+		.all(`${escapeSqlLike(baseKey)}:chunk:%`, ...scoped.params)
+		.filter((row) => chunkIdempotencyIndex(baseKey, row.idempotencyKey) !== null)
+		.sort((left, right) => {
+			const leftIndex = chunkIdempotencyIndex(baseKey, left.idempotencyKey);
+			const rightIndex = chunkIdempotencyIndex(baseKey, right.idempotencyKey);
+			return (leftIndex ?? 0) - (rightIndex ?? 0);
+		});
+}
+
+function recordRecallQaTelemetry(input: {
+	readonly route: string;
+	readonly agentId: string;
+	readonly sessionKey: string | null;
+	readonly project: string | null;
+	readonly params: RecallParams;
+	readonly result: RecallResponse;
+	readonly cfg: ResolvedMemoryConfig;
+}): void {
+	if (!input.cfg.pipelineV2.telemetry.memorySearchQaEnabled) return;
+	void recordMemorySearchTelemetry(getDbAccessor(), {
+		route: input.route,
+		agentId: input.agentId,
+		sessionKey: input.sessionKey,
+		project: input.project,
+		params: input.params,
+		response: input.result,
+		retentionDays: input.cfg.pipelineV2.telemetry.retentionDays,
+	});
+}
+function recallAttributedEmbedFn(
+	embedFn: typeof fetchEmbedding,
+	agentId: string,
+	onFailure?: (causeFamily: PipelineCauseFamily) => void,
+): (text: string, cfg: EmbeddingConfig, role?: EmbeddingRole) => Promise<number[] | null> {
+	return (text, cfg, role) =>
+		embedFn(text, cfg, role, {
+			usage: { source: role === "query" ? "recall" : "memory-capture", agentId },
+			onFailure,
+		});
+}
+
+function resolveAgentIdHint(input: { readonly agentId?: string; readonly sessionKey?: string }): string | undefined {
+	const explicitAgentId = parseOptionalString(input.agentId);
+	if (explicitAgentId) return explicitAgentId;
+	const parts = (parseOptionalString(input.sessionKey) ?? "").split(":");
+	return parts[0] === "agent" ? parseOptionalString(parts[1]) : undefined;
+}
+
+function resolveMemoryScopedAgentId(
+	c: Context,
+	input: { readonly agentId?: string; readonly sessionKey?: string },
+): { agentId: string; error?: string } {
+	const sessionKey = parseOptionalString(input.sessionKey);
+	const requestedAgentId = resolveAgentIdHint(input);
+	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
+	if (scopedAgent.error) return scopedAgent;
+
+	const sessionError = validateSessionAgentBinding(c, sessionKey, scopedAgent.agentId, {
+		requireExisting: false,
+		context: "session",
+	});
+	if (sessionError) return { agentId: scopedAgent.agentId, error: sessionError };
+
+	return scopedAgent;
+}
+
+interface MemoryReadScope {
+	readonly agentId: string;
+	readonly readPolicy: AgentRosterReadPolicy;
+	readonly policyGroup: string | null;
+	readonly project: string | undefined;
+	readonly sql: string;
+	readonly args: readonly DbOwnerParameter[];
+}
+
+const ALL_AGENTS = "all";
+
+function redactProjectionNodes(nodes: readonly ProjectionNode[]): ProjectionNode[] {
+	return nodes.map((node) => ({ ...node, content: redactCredentials(node.content) }));
+}
+
+const RESULT_TOO_LARGE_ERROR = "Result is too large; request a smaller limit";
+
+function isOwnerResultTooLarge(error: unknown): boolean {
+	return (error as { readonly code?: unknown } | null)?.code === "DB_OWNER_RESULT_TOO_LARGE";
+}
+
+function isFtsQuerySyntaxError(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /fts5: syntax error|no such column|malformed MATCH|unknown special query|unterminated string/i.test(message);
+}
+
+async function resolveMemoryReadScope(
+	c: Context,
+	options: { readonly allowAllAgents?: boolean } = {},
+): Promise<MemoryReadScope | Response> {
+	const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
+	const project = parseOptionalString(c.get("auth")?.claims?.scope?.project);
+	const projectSql = project ? " AND m.project = ?" : "";
+	const projectArgs = project ? [project] : [];
+	if (requestedAgentId?.trim() === ALL_AGENTS) {
+		if (!options.allowAllAgents) return c.json({ error: "this route does not support an all-agents view" }, 400);
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+		return {
+			agentId: ALL_AGENTS,
+			readPolicy: "shared",
+			policyGroup: null,
+			project,
+			sql: ` AND m.visibility != 'archived'${projectSql}`,
+			args: projectArgs,
+		};
+	}
+	const scopedAgent = resolveMemoryScopedAgentId(c, {
+		agentId: requestedAgentId,
+		sessionKey: c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key"),
+	});
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+	const agentScope = await getAgentScope(scopedAgent.agentId);
+	const access = buildAgentScopeClause(scopedAgent.agentId, agentScope.readPolicy, agentScope.policyGroup);
+	return {
+		agentId: scopedAgent.agentId,
+		readPolicy: agentScope.readPolicy,
+		policyGroup: agentScope.policyGroup,
+		project,
+		sql: `${access.sql}${projectSql}`,
+		args: [...(access.args as DbOwnerParameter[]), ...projectArgs],
+	};
+}
+
+interface MemoryMutationScope {
+	readonly sql: string;
+	readonly args: readonly DbOwnerParameter[];
+}
+
+function resolveMemoryMutationScope(c: Context): MemoryMutationScope | Response {
+	const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
+	const sessionKey = c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key");
+	const claims = c.get("auth")?.claims ?? null;
+	const tokenScoped = shouldEnforceAuthScope(c) && claims !== null && claims.role !== "admin";
+	let agentId = tokenScoped ? parseOptionalString(claims.scope.agent) : undefined;
+	if (resolveAgentIdHint({ agentId: requestedAgentId, sessionKey })) {
+		const scopedAgent = resolveMemoryScopedAgentId(c, { agentId: requestedAgentId, sessionKey });
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		agentId = scopedAgent.agentId;
+	}
+	const project = tokenScoped ? parseOptionalString(claims.scope.project) : undefined;
+	const parts: string[] = [];
+	const args: DbOwnerParameter[] = [];
+	if (agentId) {
+		parts.push(" AND COALESCE(m.agent_id, 'default') = ?");
+		args.push(agentId);
+	}
+	if (project) {
+		parts.push(" AND m.project = ?");
+		args.push(project);
+	}
+	return { sql: parts.join(""), args };
+}
+
+async function memoriesOutsideMutationScope(
+	scope: MemoryMutationScope,
+	memoryIds: readonly string[],
+): Promise<readonly string[]> {
+	if (!scope.sql) return [];
+	const ids = [...new Set(memoryIds.map((id) => id.trim()).filter(Boolean))];
+	if (ids.length === 0) return [];
+	const rows = await dbOwnerQuery<Array<{ id: string }>>(
+		{
+			sql: `SELECT m.id FROM memories m WHERE m.id IN (${ids.map(() => "?").join(", ")})${scope.sql}`,
+			params: [...ids, ...scope.args],
+			result: "all",
+		},
+		{ operation: "memory.authorize_mutation", lane: "read", deadlineMs: 2_000 },
+	);
+	const visible = new Set(rows.map((row) => row.id));
+	return ids.filter((id) => !visible.has(id));
+}
+
+async function denyMemoryMutation(c: Context, memoryIds: readonly string[]): Promise<Response | undefined> {
+	const scope = resolveMemoryMutationScope(c);
+	if (scope instanceof Response) return scope;
+	const hidden = await memoriesOutsideMutationScope(scope, memoryIds);
+	if (hidden.length === 0) return undefined;
+	return c.json({ id: hidden[0], status: "not_found", error: "Not found" }, 404);
+}
+
+interface DocumentScopeRow {
+	readonly agent_id: string | null;
+	readonly project: string | null;
+}
+
+function documentScopeMatches(
+	row: DocumentScopeRow,
+	scope: { readonly agentId: string; readonly project: string | null },
+): boolean {
+	return row.agent_id === scope.agentId && row.project === scope.project;
+}
+
+function documentScopeOwnedBy(
+	row: DocumentScopeRow,
+	scope: { readonly agentId: string; readonly project: string | null },
+): boolean {
+	if (row.agent_id !== scope.agentId) return false;
+	return scope.project === null || row.project === scope.project;
+}
+
+function documentMetadataJson(metadata: unknown): string | null {
+	return metadata === undefined ? null : JSON.stringify(metadata);
+}
+function recordFirstUseTelemetry(kind: "remember" | "recall"): void {
+	getActiveTelemetry()?.recordFirstUse(kind);
+}
+
+const routeOperationFailures = new WeakMap<object, PipelineCauseFamily[]>();
+
+function recordRouteOperationFailure(c: Context): (causeFamily: PipelineCauseFamily) => void {
+	const failures = routeOperationFailures.get(c);
+	return (causeFamily) => failures?.push(causeFamily);
+}
+
+function normalizeRouteFailure(status: number): PipelineCauseFamily {
+	return status === 500 ? "internal_error" : normalizePipelineCause({ status });
+}
+
+function recallFailureStatus(error: unknown): 500 | 503 {
+	return normalizePipelineCause(error) === "provider_unavailable" ? 503 : 500;
+}
+
+async function responseOperationSummary(
+	response: Response,
+): Promise<{ readonly deduped: boolean; readonly accepted?: number }> {
+	const reader = response.clone().body?.getReader();
+	if (!reader) return { deduped: false };
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		while (total < 64 * 1024) {
+			const next = await reader.read();
+			if (next.done || !next.value) break;
+			const remaining = 64 * 1024 - total;
+			const chunk = next.value.byteLength > remaining ? next.value.slice(0, remaining) : next.value;
+			chunks.push(chunk);
+			total += chunk.byteLength;
+			if (chunk.byteLength < next.value.byteLength) break;
+		}
+	} finally {
+		await reader.cancel().catch(() => {});
+	}
+	const bytes = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	try {
+		const parsed = JSON.parse(new TextDecoder().decode(bytes)) as { deduped?: unknown; chunk_count?: unknown };
+		const chunkCount =
+			typeof parsed.chunk_count === "number" && Number.isSafeInteger(parsed.chunk_count) && parsed.chunk_count >= 0
+				? Math.min(parsed.chunk_count, 10_000)
+				: undefined;
+		return { deduped: parsed.deduped === true, ...(chunkCount === undefined ? {} : { accepted: chunkCount }) };
+	} catch {
+		return { deduped: false };
+	}
+}
+
+export function createMemoryCaptureAdmissionMiddleware(
+	admission: ConcurrencyAdmission,
+	maxInFlight = MEMORY_CAPTURE_MAX_IN_FLIGHT,
+): MiddlewareHandler {
+	return async (c, next) => {
+		if (!admission.acquire()) {
+			logger.warn("memory", "Memory capture admission limit reached", {
+				maxInFlight,
+				inFlight: admission.inFlight(),
+			});
+			return c.json(
+				{
+					error: `Too many concurrent memory captures (max ${maxInFlight}); retry shortly`,
+				},
+				503,
+			);
+		}
+
+		const complete = logger.time("memory", "Memory capture");
+		try {
+			return await next();
+		} finally {
+			admission.release();
+			complete({ inFlight: admission.inFlight() });
+		}
+	};
+}
+
+export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): void {
+	const aggregateRecallFn = deps.aggregateRecall ?? aggregateRecall;
+	const hybridRecallFn = deps.hybridRecall ?? hybridRecall;
+	const recallOwner = deps.recallOwner;
+	const routeRecall = async (
+		params: RecallParams,
+		config: ResolvedMemoryConfig,
+		embedFn: Parameters<typeof hybridRecall>[2],
+	): Promise<RecallResponse> => {
+		if (recallOwner !== undefined) return await hybridRecallThroughDbOwner(recallOwner, params, config);
+		return await hybridRecallFn(params, config, embedFn);
+	};
+	const fetchEmbeddingFn = deps.fetchEmbedding ?? fetchEmbedding;
+	const getInferenceRouterOrNullFn = deps.getInferenceRouterOrNull ?? getInferenceRouterOrNull;
+	const memoryCaptureAdmission =
+		deps.memoryCaptureAdmission ?? createConcurrencyAdmission(MEMORY_CAPTURE_MAX_IN_FLIGHT);
+
+	app.use("/api/memory/remember", async (c, next) => {
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/memory/save", async (c, next) => {
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/memory/codex-native-note", async (c, next) => {
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/hook/remember", async (c, next) => {
+		return requirePermission("remember", authConfig)(c, next);
+	});
+	app.use("/api/memory/recall", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+
+	async function recordRequestOperation(
+		c: Context,
+		next: () => Promise<void>,
+		operationClass: "memory_capture" | "recall",
+	): Promise<Response> {
+		const startedAt = Date.now();
+		const failures: PipelineCauseFamily[] = [];
+		routeOperationFailures.set(c, failures);
+		try {
+			await next();
+		} catch (error) {
+			recordPipelineOperation({
+				operationClass,
+				outcome: "failed",
+				accepted: 0,
+				skipped: 0,
+				retried: 0,
+				failed: 1,
+				durationMs: Date.now() - startedAt,
+				queueAgeMs: 0,
+				causeFamily: normalizePipelineCause(error),
+			});
+			routeOperationFailures.delete(c);
+			throw error;
+		}
+		const status = c.res.status;
+		const degraded = c.res.headers.get("x-signet-operation-degraded") === "1";
+		const cause = c.res.headers.get("x-signet-operation-cause") as PipelineCauseFamily | null;
+		if (c.res.headers.get("x-signet-operation-recorded") === "1") {
+			c.res.headers.delete("x-signet-operation-recorded");
+			c.res.headers.delete("x-signet-operation-degraded");
+			c.res.headers.delete("x-signet-operation-cause");
+			routeOperationFailures.delete(c);
+			return c.res;
+		}
+		const responseSummary = operationClass === "memory_capture" ? await responseOperationSummary(c.res) : undefined;
+		const skipped =
+			operationClass === "memory_capture" &&
+			(c.res.headers.get("x-signet-operation-skipped") === "1" || responseSummary?.deduped === true)
+				? 1
+				: 0;
+		const failed = failures.length > 0 ? failures.length : status >= 400 && skipped === 0 ? 1 : 0;
+		const outcome =
+			skipped > 0
+				? "skipped"
+				: failed > 0
+					? status >= 400
+						? "failed"
+						: "partial"
+					: degraded
+						? "partial"
+						: "completed";
+		const accepted = outcome === "completed" || outcome === "partial" ? (responseSummary?.accepted ?? 1) : 0;
+		recordPipelineOperation({
+			operationClass,
+			outcome,
+			accepted,
+			skipped,
+			retried: 0,
+			failed,
+			durationMs: Date.now() - startedAt,
+			queueAgeMs: 0,
+			causeFamily:
+				failed > 0
+					? (failures[0] ?? normalizeRouteFailure(status))
+					: degraded
+						? (cause ?? "provider_unavailable")
+						: undefined,
+		});
+		c.res.headers.delete("x-signet-operation-skipped");
+		c.res.headers.delete("x-signet-operation-degraded");
+		c.res.headers.delete("x-signet-operation-cause");
+		if (c.req.header("x-signet-operation-forwarded") === "1") {
+			c.header("x-signet-operation-recorded", "1");
+		} else {
+			c.res.headers.delete("x-signet-operation-recorded");
+		}
+		routeOperationFailures.delete(c);
+		return c.res;
+	}
+
+	app.use("/api/memory/remember", async (c, next) => recordRequestOperation(c, next, "memory_capture"));
+	app.use("/api/memory/remember", createMemoryCaptureAdmissionMiddleware(memoryCaptureAdmission));
+	app.use("/api/memory/save", async (c, next) => recordRequestOperation(c, next, "memory_capture"));
+	app.use("/api/hook/remember", async (c, next) => recordRequestOperation(c, next, "memory_capture"));
+	app.use("/api/memory/recall", async (c, next) => recordRequestOperation(c, next, "recall"));
+	app.use("/api/memory/search", async (c, next) => recordRequestOperation(c, next, "recall"));
+	app.use("/memory/search", async (c, next) => recordRequestOperation(c, next, "recall"));
+	app.use("/memory/similar", async (c, next) => recordRequestOperation(c, next, "recall"));
+	app.use("/api/memory/search", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/memory/search", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/memory/similar", async (c, next) => {
+		return requirePermission("recall", authConfig)(c, next);
+	});
+	app.use("/api/memory/timeline", async (c, next) => {
+		return recordRequestOperation(
+			c,
+			async () => {
+				const denied = await requirePermission("recall", authConfig)(c, next);
+				if (denied) c.res = denied;
+			},
+			"recall",
+		);
+	});
+	app.use("/api/memories/curator-slices", async (c, next) => {
+		return recordRequestOperation(
+			c,
+			async () => {
+				const denied = await requirePermission("recall", authConfig)(c, next);
+				if (denied) c.res = denied;
+			},
+			"recall",
+		);
+	});
+	app.use("/api/memory/modify", (c, next) =>
+		requirePermissionWithRateLimit("modify", "modify", authModifyLimiter, authConfig)(c, next),
+	);
+	app.use("/api/memory/forget", (c, next) =>
+		requirePermissionWithRateLimit("forget", "batchForget", authBatchForgetLimiter, authConfig)(c, next),
+	);
+
+	app.use("/api/memories/:id/tombstone", (c, next) =>
+		requirePermissionWithRateLimit("forget", "forget", authForgetLimiter, authConfig)(c, next),
+	);
+	app.use("/api/memories/:id/supersede", (c, next) =>
+		requirePermissionWithRateLimit("modify", "modify", authModifyLimiter, authConfig)(c, next),
+	);
+	app.use("/api/memory/:id/recover", async (c, next) => {
+		return requirePermission("recover", authConfig)(c, next);
+	});
+	app.use("/api/documents", async (c, next) => {
+		return requirePermission("documents", authConfig)(c, next);
+	});
+	app.use("/api/documents/*", async (c, next) => {
+		return requirePermission("documents", authConfig)(c, next);
+	});
+	app.use("/api/memory/jobs", async (c, next) => {
+		return requirePermission("documents", authConfig)(c, next);
+	});
+
+	app.use("/api/memory/:id", async (c, next) => {
+		if (c.req.method === "PATCH") {
+			return requirePermissionWithRateLimit("modify", "modify", authModifyLimiter, authConfig)(c, next);
+		}
+		if (c.req.method === "DELETE") {
+			return requirePermissionWithRateLimit("forget", "forget", authForgetLimiter, authConfig)(c, next);
+		}
+		if (c.req.method === "GET") {
+			return requirePermission("recall", authConfig)(c, next);
+		}
+		return next();
+	});
+	app.get("/api/memories", async (c) => {
+		try {
+			const limit = parseBoundedInt(c.req.query("limit"), 100, 1, MEMORY_LIST_MAX_LIMIT);
+			const offset = parseBoundedInt(c.req.query("offset"), 0, 0, Number.MAX_SAFE_INTEGER);
+			const type = parseOptionalString(c.req.query("type"));
+			const scope = await resolveMemoryReadScope(c, { allowAllAgents: true });
+			if (scope instanceof Response) return scope;
+			const whereSql = `WHERE COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}${type ? " AND m.type = ?" : ""}`;
+			const whereArgs = [...scope.args, ...(type ? [type] : [])];
+
+			const memories = await dbOwnerQuery<Array<{ content: string; project: string | null }>>(
+				{
+					sql: `SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.source_type, m.pinned, m.type, m.agent_id, m.project
+					 FROM memories m
+					 ${whereSql}
+					 ORDER BY m.created_at DESC
+					 LIMIT ? OFFSET ?`,
+					params: [...whereArgs, limit, offset],
+					result: "all",
+				},
+				{ operation: "memory.list", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
+			);
+			const stats = await dbOwnerQuery<{ total: number; critical: number; with_embeddings: number } | undefined>(
+				{
+					sql: `SELECT COUNT(*) AS total,
+					        COALESCE(SUM(CASE WHEN m.importance >= 0.9 THEN 1 ELSE 0 END), 0) AS critical,
+					        COALESCE(SUM(CASE WHEN
+					          EXISTS (SELECT 1 FROM embeddings e WHERE e.source_type = 'memory' AND e.source_id = m.id)
+					          OR (m.content_hash IS NOT NULL AND EXISTS (
+					            SELECT 1 FROM embeddings e
+					            JOIN memories owner ON owner.id = e.source_id
+					            WHERE e.source_type = 'memory'
+					              AND e.content_hash = m.content_hash
+					              AND COALESCE(NULLIF(owner.agent_id, ''), 'default') = COALESCE(NULLIF(m.agent_id, ''), 'default')
+					          ))
+					        THEN 1 ELSE 0 END), 0) AS with_embeddings
+					 FROM memories m
+					 ${whereSql}`,
+					params: whereArgs,
+					result: "get",
+				},
+				{ operation: "memory.list_stats", lane: "read", deadlineMs: 5_000 },
+			);
+
+			return c.json({
+				memories: memories.map((row) => ({ ...row, content: redactCredentials(row.content) })),
+				stats: {
+					total: stats?.total ?? 0,
+					withEmbeddings: stats?.with_embeddings ?? 0,
+					critical: stats?.critical ?? 0,
+				},
+			});
+		} catch (e) {
+			const tooLarge = isOwnerResultTooLarge(e);
+			if (!tooLarge) logger.error("memory", "Error loading memories", e as Error);
+			return c.json(
+				{
+					memories: [],
+					stats: { total: 0, withEmbeddings: 0, critical: 0 },
+					error: tooLarge ? RESULT_TOO_LARGE_ERROR : "Failed to load memories",
+				},
+				tooLarge ? 413 : 500,
+			);
+		}
+	});
+	app.get("/api/memories/most-used", async (c) => {
+		try {
+			const raw = Number.parseInt(c.req.query("limit") || "6", 10);
+			const limit = Number.isNaN(raw) || raw < 1 ? 6 : Math.min(raw, 200);
+			const scope = await resolveMemoryReadScope(c);
+			if (scope instanceof Response) return scope;
+			const rows = await dbOwnerQuery<Array<{ id: string; content: string }>>(
+				{
+					sql: `SELECT m.id, m.content, m.access_count, m.importance, m.type, m.tags, m.agent_id
+					 FROM memories m
+					 WHERE m.access_count > 0
+					   AND COALESCE(m.is_deleted, 0) = 0
+					   AND m.superseded_by IS NULL${scope.sql}
+					 ORDER BY m.access_count DESC, m.importance DESC
+					 LIMIT ?`,
+					params: [...scope.args, limit],
+					result: "all",
+				},
+				{ operation: "memory.most_used", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
+			);
+			return c.json({ memories: rows.map((row) => ({ ...row, content: redactCredentials(row.content) })) });
+		} catch (e) {
+			const tooLarge = isOwnerResultTooLarge(e);
+			if (!tooLarge) logger.error("memory", "Error loading most-used memories", e as Error);
+			return c.json(
+				{ memories: [], error: tooLarge ? RESULT_TOO_LARGE_ERROR : "Failed to load most-used memories" },
+				tooLarge ? 413 : 500,
+			);
+		}
+	});
+	app.get("/api/memories/curator-slices", async (c) => {
+		try {
+			const minSessions = Math.max(1, Math.min(100, Number.parseInt(c.req.query("minSessions") || "3", 10) || 3));
+			const limit = Math.max(1, Math.min(500, Number.parseInt(c.req.query("limit") || "100", 10) || 100));
+			const scope = await resolveMemoryReadScope(c);
+			if (scope instanceof Response) return scope;
+			const agentId = scope.agentId;
+			const slice = async <Row extends { content: string }>(
+				operation: string,
+				sql: string,
+				params: readonly DbOwnerParameter[],
+			): Promise<Row[]> => {
+				const rows = await dbOwnerQuery<Row[]>(
+					{ sql, params, result: "all" },
+					{ operation, lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
+				);
+				return rows.map((row) => ({ ...row, content: redactCredentials(row.content) }));
+			};
+			const injectedNeverUsed = await slice<{ id: string; content: string; sessions: number }>(
+				"memory.curator_injected_never_used",
+				`SELECT m.id, m.content, COUNT(DISTINCT sm.session_key) AS sessions
+				 FROM session_memories sm
+				 JOIN memories m ON m.id = sm.memory_id
+				 WHERE sm.agent_id = ?
+				   AND sm.was_injected = 1
+				   AND COALESCE(m.is_deleted, 0) = 0
+				   AND m.superseded_by IS NULL${scope.sql}
+				 GROUP BY m.id, m.content
+				 HAVING sessions >= ?
+				    AND SUM(CASE WHEN sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5 THEN 1 ELSE 0 END) = 0
+				 ORDER BY sessions DESC
+				 LIMIT ?`,
+				[agentId, ...scope.args, minSessions, limit],
+			);
+			const contradicted = await slice<{ id: string; content: string; contradicted_count: number }>(
+				"memory.curator_contradicted",
+				`SELECT m.id, m.content, COUNT(*) AS contradicted_count
+				 FROM session_memories sm
+				 JOIN memories m ON m.id = sm.memory_id
+				 WHERE sm.agent_id = ?
+				   AND COALESCE(m.is_deleted, 0) = 0
+				   AND m.superseded_by IS NULL${scope.sql}
+				   AND (sm.agent_preference = 'CONTRADICTED' OR sm.agent_relevance_score < 0)
+				 GROUP BY m.id, m.content
+				 ORDER BY contradicted_count DESC
+				 LIMIT ?`,
+				[agentId, ...scope.args, limit],
+			);
+			const highUsed = await slice<{ id: string; content: string; used_count: number }>(
+				"memory.curator_high_used",
+				`SELECT m.id, m.content, COUNT(*) AS used_count
+				 FROM session_memories sm
+				 JOIN memories m ON m.id = sm.memory_id
+				 WHERE sm.agent_id = ?
+				   AND COALESCE(m.is_deleted, 0) = 0
+				   AND m.superseded_by IS NULL${scope.sql}
+				   AND (sm.agent_preference = 'USED' OR sm.agent_relevance_score > 0.5)
+				 GROUP BY m.id, m.content
+				 ORDER BY used_count DESC
+				 LIMIT ?`,
+				[agentId, ...scope.args, limit],
+			);
+			return c.json({ agentId, minSessions, limit, injectedNeverUsed, contradicted, highUsed });
+		} catch (e) {
+			if (isOwnerResultTooLarge(e)) return c.json({ error: RESULT_TOO_LARGE_ERROR }, 413);
+			logger.error("memory", "Error loading curator slices", e as Error);
+			return c.json({ error: "Failed to load curator slices" }, 500);
+		}
+	});
+	app.get("/api/memory/timeline", async (c) => {
+		try {
+			const raw = Number.parseInt(c.req.query("tzOffset") || "0", 10);
+			const tzOffsetMin = Number.isNaN(raw) ? 0 : Math.max(-840, Math.min(840, raw));
+			const scope = await resolveMemoryReadScope(c, { allowAllAgents: true });
+			if (scope instanceof Response) return scope;
+			const timeline = await getDbAccessor().withReadDbAsync(
+				async (db) => buildMemoryTimeline(db, { tzOffsetMin, scope }),
+				{ siteToken: "http/routes/memory-routes.ts:1168" },
+			);
+			return c.json(timeline);
+		} catch (e) {
+			logger.error("memory", "Error building memory timeline", e as Error);
+			return c.json(
+				{
+					error: "Failed to build memory timeline",
+					generatedAt: new Date().toISOString(),
+					generatedFor: new Date().toISOString(),
+					rangePreset: "today-last_week-one_month",
+					totalMemories: 0,
+					totalHistoryEvents: 0,
+					invalidMemoryTimestamps: 0,
+					invalidHistoryTimestamps: 0,
+					buckets: [],
+					dailyBuckets: [],
+				},
+				500,
+			);
+		}
+	});
+	app.get("/api/memory/review-queue", async (c) => {
+		try {
+			const scope = await resolveMemoryReadScope(c);
+			if (scope instanceof Response) return scope;
+			const rows = await dbOwnerQuery<unknown[]>(
+				{
+					sql: `SELECT h.id, h.memory_id, h.event, h.old_content, h.new_content,
+						        h.reason, h.metadata, h.created_at, h.session_id,
+						        m.content AS current_content, m.type AS memory_type,
+						        m.importance
+					 FROM memory_history h
+					 JOIN memories m ON m.id = h.memory_id
+					 WHERE h.event IN ('DEDUP', 'REVIEW_NEEDED', 'BLOCKED_DESTRUCTIVE')
+					   AND h.created_at > datetime('now', '-30 days')${scope.sql}
+					 ORDER BY h.created_at DESC
+					 LIMIT 200`,
+					params: scope.args,
+					result: "all",
+				},
+				{ operation: "memory.review_queue", lane: "read", deadlineMs: 5_000 },
+			);
+			return c.json({ items: rows });
+		} catch (e) {
+			logger.error("memory", "Error fetching review queue", e as Error);
+			return c.json({ error: "Failed to fetch review queue", items: [] }, 500);
+		}
+	});
+	app.get("/memory/search", async (c) => {
+		const query = (c.req.query("q") ?? "").trim();
+		const distinct = c.req.query("distinct");
+		const limitParam = c.req.query("limit");
+		const scope = await resolveMemoryReadScope(c, { allowAllAgents: true });
+		if (scope instanceof Response) return scope;
+		const liveSql = ` AND COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}`;
+		if (distinct === "who") {
+			try {
+				const rows = await dbOwnerQuery<{ who: string }[]>(
+					{
+						sql: `SELECT DISTINCT m.who FROM memories m WHERE m.who IS NOT NULL${liveSql} ORDER BY m.who`,
+						params: scope.args,
+						result: "all",
+					},
+					{ operation: "memory.search_distinct_who", lane: "read", deadlineMs: 2_000 },
+				);
+				const values = rows.map((r) => r.who);
+				return c.json({ values });
+			} catch {
+				return c.json({ values: [] });
+			}
+		}
+
+		const filterParams: FilterParams = {
+			type: c.req.query("type") ?? "",
+			tags: c.req.query("tags") ?? "",
+			who: c.req.query("who") ?? "",
+			pinned: c.req.query("pinned") === "1" || c.req.query("pinned") === "true",
+			importance_min: c.req.query("importance_min") ? Number.parseFloat(c.req.query("importance_min") ?? "") : null,
+			since: c.req.query("since") ?? "",
+		};
+
+		const hasFilters = Object.values(filterParams).some((v) => v !== "" && v !== false && v !== null);
+		if (!query && !hasFilters) return c.json({ results: [] });
+		const limit = effectiveRecallLimit(limitParam ? Number.parseInt(limitParam, 10) : query ? 20 : 50);
+		const recallSurface = normalizeRecallSurface(c.req.header("x-signet-recall-surface"), "dashboard");
+		recordRecallAttempt(recallSurface);
+
+		try {
+			const { clause, args } = buildWhere(filterParams);
+			const filterArgs = [...(args as DbOwnerParameter[]), ...scope.args];
+			const search = (operation: string, sql: string, params: readonly DbOwnerParameter[]) =>
+				dbOwnerQuery<Array<Record<string, unknown>>>(
+					{ sql, params, result: "all" },
+					{ operation, lane: "read", deadlineMs: 5_000, estimatedWorkUnits: limit },
+				);
+			let rows: Array<Record<string, unknown>> = [];
+			if (query) {
+				try {
+					rows = await search(
+						"memory.search_fts",
+						`SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags,
+						        m.type, m.pinned, m.agent_id, bm25(memories_fts) as score
+						 FROM memories_fts
+						 JOIN memories m ON memories_fts.rowid = m.rowid
+						 WHERE memories_fts MATCH ?${clause}${liveSql}
+						 ORDER BY score
+						 LIMIT ?`,
+						[query, ...filterArgs, limit],
+					);
+				} catch (error) {
+					if (!isFtsQuerySyntaxError(error)) throw error;
+					rows = await search(
+						"memory.search_like",
+						`SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.type, m.pinned, m.agent_id
+						 FROM memories m
+						 WHERE (m.content LIKE ? OR m.tags LIKE ?)${clause}${liveSql}
+						 ORDER BY m.created_at DESC
+						 LIMIT ?`,
+						[`%${query}%`, `%${query}%`, ...filterArgs, limit],
+					);
+				}
+			} else {
+				rows = await search(
+					"memory.search_filters",
+					`SELECT m.id, m.content, m.created_at, m.who, m.importance, m.tags, m.type, m.pinned, m.agent_id,
+					        CASE WHEN m.pinned = 1 THEN 1.0
+					             ELSE m.importance * MAX(0.1, POWER(0.95,
+					               CAST(JulianDay('now') - JulianDay(m.created_at) AS INTEGER)))
+					        END AS score
+					 FROM memories m
+					 WHERE 1=1${clause}${liveSql}
+					 ORDER BY score DESC
+					 LIMIT ?`,
+					[...filterArgs, limit],
+				);
+			}
+			const results = rows.map((record) =>
+				typeof record.content === "string" ? { ...record, content: redactCredentials(record.content) } : record,
+			);
+
+			recordRecallOutcome({
+				surface: recallSurface,
+				resultCount: results.length,
+				truncated: results.length >= limit,
+				delivery: "returned",
+			});
+			return c.json({ results });
+		} catch (e) {
+			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
+			if (isOwnerResultTooLarge(e)) return c.json({ results: [], error: RESULT_TOO_LARGE_ERROR }, 413);
+			logger.error("memory", "Error searching memories", e as Error);
+			return c.json({ results: [], error: "Search failed" }, 500);
+		}
+	});
+	app.post("/api/memory/codex-native-note", async (c) => {
+		const body = await c.req.json().catch(() => ({}));
+		const content = typeof body.content === "string" ? body.content.trim() : "";
+		if (!content) return c.json({ error: "content is required" }, 400);
+		if (content.length > 8000) return c.json({ error: "content must be at most 8000 characters" }, 400);
+		const title = typeof body.title === "string" ? body.title : undefined;
+		const tags = typeof body.tags === "string" ? body.tags : undefined;
+
+		const pipelineCfg = loadMemoryConfig(AGENTS_DIR).pipelineV2;
+		if (pipelineCfg.mutationsFrozen) {
+			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		}
+
+		try {
+			const path = writeCodexNativeNote({ content, title, tags });
+			logger.info("memory", "Saved Codex native memory note", {
+				path,
+				actor: c.get("auth")?.claims?.sub ?? c.req.header("x-signet-actor") ?? "anonymous",
+			});
+			return c.json({ ok: true, path });
+		} catch (e) {
+			logger.error("memory", "Failed to save Codex native memory note", e as Error);
+			return c.json({ error: "Failed to save Codex native memory note" }, 500);
+		}
+	});
+	app.post("/api/memory/remember", async (c) => {
+		let body: {
+			content?: string;
+			who?: string;
+			project?: string;
+			importance?: number;
+			type?: unknown;
+			tags?: unknown;
+			pinned?: boolean;
+			sourceType?: string;
+			sourceId?: string;
+			createdAt?: string;
+			occurredAt?: string;
+			observedAt?: string;
+			validFrom?: string;
+			validUntil?: string;
+			sourceCreatedAt?: string;
+			reviewAfter?: string;
+			supersedes?: string;
+			reason?: string;
+			scope?: string | null;
+			agentId?: string;
+			visibility?: "global" | "private" | "archived";
+			sourcePath?: string;
+			source_path?: string;
+			source?: string;
+			runtimePath?: string;
+			runtime_path?: string;
+			idempotencyKey?: string;
+			idempotency_key?: string;
+			metadata?: Record<string, unknown>;
+			hints?: string[];
+			transcript?: string;
+			structured?: {
+				entities?: Array<{
+					source: string;
+					sourceType?: string;
+					relationship: string;
+					target: string;
+					targetType?: string;
+					confidence: number;
+				}>;
+				aspects?: Array<{
+					entityName: string;
+					entityType?: string;
+					aspect: string;
+					attributes: Array<{
+						groupKey?: string;
+						claimKey?: string;
+						content: string;
+						confidence?: number;
+						importance?: number;
+					}>;
+				}>;
+				hints?: string[];
+			};
+		};
+
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const raw = body.content?.trim();
+		if (!raw) return c.json({ error: "content is required" }, 400);
+		const requestedCreatedAt = parseOptionalIsoTimestamp(body.createdAt);
+		if (body.createdAt !== undefined && !requestedCreatedAt) {
+			return c.json({ error: "createdAt must be a valid ISO timestamp" }, 400);
+		}
+		const temporalInputs = collectExplicitTemporalInputs(body);
+		if (temporalInputs.error) return c.json({ error: temporalInputs.error }, 400);
+		const requestedReviewAfter = parseOptionalIsoTimestamp(body.reviewAfter);
+		if (body.reviewAfter !== undefined && !requestedReviewAfter) {
+			return c.json({ error: "reviewAfter must be a valid ISO timestamp" }, 400);
+		}
+		const requestedSupersedes = body.supersedes?.trim();
+		if (body.supersedes !== undefined && !requestedSupersedes) {
+			return c.json({ error: "supersedes must be a memory id" }, 400);
+		}
+		const scope = body.scope ?? null;
+		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
+		const scopedAgent = resolveMemoryScopedAgentId(c, {
+			agentId: body.agentId,
+			sessionKey: c.req.header("x-signet-session-key"),
+		});
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const agentId = scopedAgent.agentId;
+		const auth = c.get("auth");
+		if (auth?.claims) {
+			const tokenProject = auth.claims.scope?.project;
+			if (auth.claims.role !== "admin" && tokenProject && (!body.project || body.project !== tokenProject)) {
+				return c.json({ error: `scope restricted to project '${tokenProject}'` }, 403);
+			}
+			const scopeDecision = checkScope(auth.claims, { project: body.project ?? undefined }, authConfig.mode);
+			if (!scopeDecision.allowed) {
+				return c.json({ error: scopeDecision.reason ?? "scope violation" }, 403);
+			}
+		}
+		const enforcedProject =
+			auth?.claims && auth.claims.role !== "admin" ? parseOptionalString(auth.claims.scope?.project) : undefined;
+		if (requestedSupersedes && !(await supersedesTargetVisible(requestedSupersedes, agentId, enforcedProject))) {
+			return c.json({ error: "supersedes target rejected: not_found" }, 400);
+		}
+
+		const hasBodyType = body.type !== undefined && body.type !== null;
+		const parsedType = hasBodyType ? parseMemoryType(body.type) : undefined;
+		if (parsedType && "error" in parsedType) {
+			return c.json({ error: parsedType.error }, 400);
+		}
+		const bodyType = parsedType?.type;
+
+		await ensureAgentRegistered(agentId);
+		const visibility: RememberDedupeScope["visibility"] = body.visibility === "private" ? "private" : "global";
+		const dedupeScope: RememberDedupeScope = { agentId, visibility, project: body.project ?? null, scope };
+		const hasBodyTags = Object.hasOwn(body, "tags");
+		const bodyTags = hasBodyTags ? parseTagsMutation(body.tags) : undefined;
+		if (hasBodyTags && bodyTags === undefined) {
+			return c.json({ error: "tags must be a string, string array, or null" }, 400);
+		}
+		const fullCfgBase = loadMemoryConfig(AGENTS_DIR);
+		const fullCfg = await withActiveEmbeddingConfig(fullCfgBase);
+		const pipelineCfg = fullCfg.pipelineV2;
+		if (pipelineCfg.mutationsFrozen) {
+			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		}
+		const guardrails = pipelineCfg.guardrails;
+		if (
+			requestedSupersedes !== undefined &&
+			"structured" in body === false &&
+			raw.length > guardrails.maxContentChars
+		) {
+			return c.json({ error: "supersedes cannot be combined with oversized content (auto-chunking)" }, 400);
+		}
+		if ("structured" in body) {
+			if (body.structured == null || typeof body.structured !== "object" || Array.isArray(body.structured)) {
+				return c.json({ error: "structured must be an object with entities and/or aspects arrays" }, 400);
+			}
+
+			if (body.structured.entities !== undefined && !Array.isArray(body.structured.entities)) {
+				return c.json({ error: "structured.entities must be an array" }, 400);
+			}
+			if (body.structured.aspects !== undefined && !Array.isArray(body.structured.aspects)) {
+				return c.json({ error: "structured.aspects must be an array" }, 400);
+			}
+			if (body.structured.hints !== undefined && !Array.isArray(body.structured.hints)) {
+				return c.json({ error: "structured.hints must be an array" }, 400);
+			}
+		} else if (raw.length > guardrails.maxContentChars) {
+			const chunks = chunkBySentence(raw, guardrails.chunkTargetChars);
+			if (chunks.length === 0) {
+				return c.json({ error: "content produced no valid chunks" }, 400);
+			}
+
+			const who = body.who ?? "daemon";
+			const project = body.project ?? null;
+			const sourceType = body.sourceType?.trim() || "manual";
+			const sourceId = body.sourceId?.trim() || null;
+			const parsedPrefixes = parsePrefixes(raw);
+			const importance = body.importance ?? parsedPrefixes.importance;
+			const pinned = (body.pinned ?? parsedPrefixes.pinned) ? 1 : 0;
+			const tags = hasBodyTags ? bodyTags : parsedPrefixes.tags;
+
+			const chunkPlans = chunks
+				.map((chunk, index) => {
+					const normalized = normalizeAndHashContent(chunk);
+					if (!normalized.storageContent) return null;
+					return {
+						chunk,
+						contentForInsert:
+							normalized.normalizedContent.length > 0 ? normalized.normalizedContent : normalized.hashBasis,
+						idempotencyKey: idempotencyKeyForChunk(rowProvenance.idempotencyKey, index),
+						memType: bodyType ?? inferType(chunk),
+						normalized,
+					};
+				})
+				.filter((plan): plan is NonNullable<typeof plan> => plan !== null);
+			if (chunkPlans.length === 0) {
+				return c.json({ error: "content produced no valid chunks" }, 400);
+			}
+
+			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
+				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
+				{ siteToken: "http/routes/memory-routes.ts:1531" },
+			);
+			if (baseIdempotencyMemory) {
+				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
+			}
+
+			const existingChunks = await getDbAccessor().withReadDbAsync(
+				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
+				{ siteToken: "http/routes/memory-routes.ts:1539" },
+			);
+			if (existingChunks.length > 0) {
+				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
+				const matchesExistingPlan =
+					groupIds.size === 1 &&
+					existingChunks.length === chunkPlans.length &&
+					existingChunks.every((row, index) => {
+						const plan = chunkPlans[index];
+						return row.idempotencyKey === plan.idempotencyKey && row.contentHash === plan.normalized.contentHash;
+					});
+				if (!matchesExistingPlan) {
+					return c.json({ error: "idempotencyKey already used for different chunked content" }, 409);
+				}
+
+				c.header("x-signet-operation-skipped", "1");
+				recordFirstUseTelemetry("remember");
+				return c.json({
+					chunked: true,
+					chunk_count: existingChunks.length,
+					ids: existingChunks.map((row) => row.id),
+					group_id: Array.from(groupIds)[0],
+					deduped: true,
+				});
+			}
+			const contentHashes = new Set<string>();
+			for (const plan of chunkPlans) {
+				if (contentHashes.has(plan.normalized.contentHash)) {
+					return c.json({ error: "chunked content contains duplicate chunks" }, 409);
+				}
+				contentHashes.add(plan.normalized.contentHash);
+				const byHash = await getDbAccessor().withReadDbAsync(
+					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
+					{ siteToken: "http/routes/memory-routes.ts:1572" },
+				);
+				if (byHash) {
+					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+				}
+			}
+
+			const groupId = chunkGroupIdForIdempotencyKey(rowProvenance.idempotencyKey, dedupeScope) ?? crypto.randomUUID();
+			const now = new Date().toISOString();
+			const plannedChunkIds = chunkPlans.map(() => crypto.randomUUID());
+			type ChunkInsertResult =
+				| { readonly ids: readonly string[]; readonly status: "inserted" }
+				| { readonly groupId: string | undefined; readonly ids: readonly string[]; readonly status: "deduped" }
+				| { readonly status: "chunk_idempotency_conflict" }
+				| { readonly status: "content_conflict" }
+				| { readonly status: "non_chunk_idempotency_conflict" };
+
+			try {
+				const result: ChunkInsertResult = await runWriteTxAsync(getDbAccessor(), (db) => {
+					const baseMemory = getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope);
+					if (baseMemory) return { status: "non_chunk_idempotency_conflict" };
+
+					const txExistingChunks = getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope);
+					if (txExistingChunks.length > 0) {
+						const groupIds = new Set(txExistingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
+						const matchesExistingPlan =
+							groupIds.size === 1 &&
+							txExistingChunks.length === chunkPlans.length &&
+							txExistingChunks.every((row, index) => {
+								const plan = chunkPlans[index];
+								return row.idempotencyKey === plan.idempotencyKey && row.contentHash === plan.normalized.contentHash;
+							});
+						if (!matchesExistingPlan) return { status: "chunk_idempotency_conflict" };
+
+						return {
+							groupId: Array.from(groupIds)[0],
+							ids: txExistingChunks.map((row) => row.id),
+							status: "deduped",
+						};
+					}
+
+					for (const plan of chunkPlans) {
+						const byHash = getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope);
+						if (byHash) return { status: "content_conflict" };
+					}
+
+					for (let chunkIndex = 0; chunkIndex < chunkPlans.length; chunkIndex += 1) {
+						const plan = chunkPlans[chunkIndex];
+						const chunkId = plannedChunkIds[chunkIndex];
+						txIngestEnvelope(db, {
+							id: chunkId,
+							content: plan.normalized.storageContent,
+							normalizedContent: plan.contentForInsert,
+							contentHash: plan.normalized.contentHash,
+							who,
+							why: pinned ? "explicit-critical" : "explicit",
+							project,
+							importance,
+							type: plan.memType,
+							tags: tags ?? null,
+							pinned,
+							isDeleted: 0,
+							extractionStatus: "none",
+							embeddingModel: null,
+							extractionModel: null,
+							updatedBy: who,
+							memoryKind: "episodic",
+							sourceType: "chunk",
+							sourceId: groupId,
+							sourcePath: rowProvenance.sourcePath ?? null,
+							runtimePath: rowProvenance.runtimePath ?? null,
+							idempotencyKey: plan.idempotencyKey ?? null,
+							scope,
+							agentId,
+							visibility,
+							reviewAfter: requestedReviewAfter ?? undefined,
+							createdAt: now,
+						});
+					}
+
+					return { ids: plannedChunkIds, status: "inserted" };
+				});
+
+				if (result.status === "non_chunk_idempotency_conflict") {
+					return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
+				}
+				if (result.status === "chunk_idempotency_conflict") {
+					return c.json({ error: "idempotencyKey already used for different chunked content" }, 409);
+				}
+				if (result.status === "content_conflict") {
+					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+				}
+				if (result.status === "deduped") {
+					c.header("x-signet-operation-skipped", "1");
+					recordFirstUseTelemetry("remember");
+					return c.json({
+						chunked: true,
+						chunk_count: result.ids.length,
+						ids: result.ids,
+						group_id: result.groupId,
+						deduped: true,
+					});
+				}
+
+				const savedChunkIds = [...result.ids];
+
+				for (let chunkIndex = 0; chunkIndex < chunkPlans.length; chunkIndex += 1) {
+					const plan = chunkPlans[chunkIndex];
+					const chunkId = savedChunkIds[chunkIndex];
+					try {
+						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding, "document", {
+							usage: { source: "memory-capture", agentId },
+							onFailure: recordRouteOperationFailure(c),
+						});
+						if (vec) {
+							if (vec.length !== fullCfg.embedding.dimensions) {
+								logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
+									got: vec.length,
+									expected: fullCfg.embedding.dimensions,
+									memoryId: chunkId,
+								});
+							} else {
+								const embId = crypto.randomUUID();
+								const blob = vectorToBlob(vec);
+								const embHash = scope ? `${plan.normalized.contentHash}:${scope}` : plan.normalized.contentHash;
+								await runWriteTxAsync(getDbAccessor(), (db) => {
+									const activeCfg = resolveActiveEmbeddingConfig(db, fullCfgBase.embedding);
+									if (!isActiveEmbeddingConfig(db, activeCfg)) return;
+									syncVecDeleteBySourceId(db, "memory", chunkId);
+									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
+									db.prepare(`
+										INSERT INTO embeddings
+										  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+										VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+									`).run(embId, embHash, blob, vec.length, chunkId, plan.normalized.storageContent, now);
+									syncVecInsert(db, embId, vec);
+									db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(
+										fullCfg.embedding.model,
+										chunkId,
+									);
+								});
+							}
+						}
+					} catch (e) {
+						logger.warn("memory", "Chunk embedding failed (chunk saved without vector)", {
+							chunkId,
+							error: String(e),
+						});
+					}
+				}
+				logger.info("memory", "Chunked memory saved", {
+					groupId,
+					chunkCount: savedChunkIds.length,
+				});
+
+				recordFirstUseTelemetry("remember");
+				return c.json({
+					chunked: true,
+					chunk_count: savedChunkIds.length,
+					ids: savedChunkIds,
+					group_id: groupId,
+				});
+			} catch (e) {
+				if (isMemoryContentHashUniqueError(e)) {
+					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
+				}
+				if (e instanceof Error && e.message.includes("idempotency_key")) {
+					return c.json({ error: "idempotencyKey is already used by a memory outside this project" }, 409);
+				}
+				logger.warn("memory", "Failed to save chunked memory", {
+					groupId,
+					error: String(e),
+				});
+				return c.json({ error: "Failed to save chunks" }, 500);
+			}
+		}
+
+		const who = body.who ?? "daemon";
+		const project = body.project ?? null;
+		const sourceType = body.sourceType?.trim() || "manual";
+		const sourceId = body.sourceId?.trim() || null;
+
+		const parsed = parsePrefixes(raw);
+
+		const importance = body.importance ?? parsed.importance;
+		const pinned = (body.pinned ?? parsed.pinned) ? 1 : 0;
+		const tags = hasBodyTags ? bodyTags : parsed.tags;
+		const memType = bodyType ?? inferType(parsed.content);
+
+		const id = crypto.randomUUID();
+		const now = new Date().toISOString();
+		const createdAt = requestedCreatedAt ?? now;
+		const normalizedContent = normalizeAndHashContent(parsed.content);
+		if (!normalizedContent.storageContent) {
+			return c.json({ error: "content is required" }, 400);
+		}
+		const normalizedContentForInsert =
+			normalizedContent.normalizedContent.length > 0
+				? normalizedContent.normalizedContent
+				: normalizedContent.hashBasis;
+		const contentHash = normalizedContent.contentHash;
+		const chunkedIdempotencyMemory =
+			rowProvenance.idempotencyKey === undefined
+				? []
+				: await getDbAccessor().withReadDbAsync(
+						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
+						{ siteToken: "http/routes/memory-routes.ts:1778" },
+					);
+		if (chunkedIdempotencyMemory.length > 0) {
+			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
+		}
+
+		let supersededStatus: SupersedeMemoryTxStatus | null = null;
+
+		try {
+			const result = await runWriteTxAsync(getDbAccessor(), (db) => {
+				const saved = saveMemory(db);
+				if (
+					!saved.deduped &&
+					body.transcript &&
+					sourceId &&
+					writeSessionTranscriptRow(db, {
+						sessionKey: sourceId,
+						transcript: body.transcript,
+						harness: sourceType,
+						project,
+						agentId,
+						sameProjectOnly: enforcedProject !== undefined,
+					}) === "conflict"
+				) {
+					throw new Error(TRANSCRIPT_PROJECT_CONFLICT);
+				}
+				return saved;
+			});
+			function saveMemory(db: WriteDb) {
+				if (sourceId) {
+					const bySource = getScopedSourceDedupeRow(db, sourceType, sourceId, dedupeScope);
+					if (bySource) return { deduped: true as const, row: bySource };
+				}
+
+				const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
+				if (byIdempotencyKey) return { deduped: true as const, row: byIdempotencyKey };
+				const byHash = getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
+				if (byHash) return { deduped: true as const, row: byHash };
+				txIngestEnvelope(db, {
+					id,
+					content: normalizedContent.storageContent,
+					normalizedContent: normalizedContentForInsert,
+					contentHash,
+					who,
+					why: pinned ? "explicit-critical" : "explicit",
+					project,
+					importance,
+					type: memType,
+					tags: tags ?? null,
+					pinned,
+					isDeleted: 0,
+					extractionStatus: "none",
+					embeddingModel: null,
+					extractionModel: null,
+					updatedBy: who,
+					memoryKind: "episodic",
+					evidenceMeta: body.structured
+						? JSON.stringify({
+								entities: body.structured.entities ?? [],
+								aspects: body.structured.aspects ?? [],
+							})
+						: null,
+					sourceType,
+					sourceId,
+					sourcePath: rowProvenance.sourcePath ?? null,
+					runtimePath: rowProvenance.runtimePath ?? null,
+					idempotencyKey: rowProvenance.idempotencyKey ?? null,
+					scope,
+					agentId,
+					visibility,
+					reviewAfter: requestedReviewAfter ?? undefined,
+					createdAt,
+				});
+				txInsertMemoryTemporalEdges({
+					db,
+					memoryId: id,
+					agentId,
+					inputs: temporalInputs.inputs ?? [],
+					now,
+				});
+				let superseded: SupersedeMemoryTxStatus | null = null;
+				if (requestedSupersedes !== undefined) {
+					const actor = resolveMutationActor(c, who);
+					const result = txSupersedeMemory(db, {
+						memoryId: requestedSupersedes,
+						supersededBy: id,
+						reason: body.reason ?? null,
+						changedBy: actor.changedBy,
+						changedAt: now,
+						ctx: { actorType: actor.actorType, sessionId: actor.sessionId, requestId: actor.requestId },
+					});
+					if (result.status !== "superseded" && result.status !== "already_superseded") {
+						const statusLabel =
+							result.status === "already_superseded_by_other" ? "already superseded by another memory" : result.status;
+						throw new Error(`supersedes target rejected: ${statusLabel}`);
+					}
+					superseded = result.status;
+				}
+				return { deduped: false as const, superseded };
+			}
+			supersededStatus = result.deduped ? null : (result as { superseded: SupersedeMemoryTxStatus | null }).superseded;
+
+			if (result.deduped) {
+				c.header("x-signet-operation-skipped", "1");
+				await runWriteTxAsync(getDbAccessor(), (db) =>
+					txInsertMemoryTemporalEdges({
+						db,
+						memoryId: result.row.id,
+						agentId: result.row.agentId,
+						inputs: temporalInputs.inputs ?? [],
+						now,
+					}),
+				);
+				recordFirstUseTelemetry("remember");
+				return c.json({
+					id: result.row.id,
+					type: result.row.type,
+					tags: result.row.tags || "",
+					pinned: !!result.row.pinned,
+					importance: result.row.importance,
+					content: result.row.content,
+					embedded: true,
+					deduped: true,
+				});
+			}
+		} catch (e) {
+			const msg = e instanceof Error ? e.message : "";
+			if (msg.includes("UNIQUE constraint")) {
+				const existing = await getDbAccessor().withReadDbAsync(
+					async (db) => {
+						const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
+						if (byIdempotencyKey) return byIdempotencyKey;
+						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
+					},
+					{ siteToken: "http/routes/memory-routes.ts:1908" },
+				);
+				if (existing) {
+					c.header("x-signet-operation-skipped", "1");
+					await runWriteTxAsync(getDbAccessor(), (db) =>
+						txInsertMemoryTemporalEdges({
+							db,
+							memoryId: existing.id,
+							agentId: existing.agentId,
+							inputs: temporalInputs.inputs ?? [],
+							now,
+						}),
+					);
+					recordFirstUseTelemetry("remember");
+					return c.json({
+						id: existing.id,
+						type: existing.type,
+						tags: existing.tags || "",
+						pinned: !!existing.pinned,
+						importance: existing.importance,
+						content: existing.content,
+						embedded: true,
+						deduped: true,
+					});
+				}
+				if (msg.includes("idempotency_key")) {
+					return c.json({ error: "idempotencyKey is already used by a memory outside this project" }, 409);
+				}
+			}
+			if (e instanceof Error && e.message === TRANSCRIPT_PROJECT_CONFLICT) {
+				return c.json({ error: "this session's transcript belongs to another project" }, 409);
+			}
+			logger.error("memory", "Failed to save memory", e as Error);
+			if (e instanceof Error && e.message.startsWith("supersedes target rejected:")) {
+				return c.json({ error: e.message }, 400);
+			}
+			return c.json({ error: "Failed to save memory" }, 500);
+		}
+		let embedded = false;
+		try {
+			const baseCfg = loadMemoryConfig(AGENTS_DIR);
+			const cfg = await withActiveEmbeddingConfig(baseCfg);
+			const vec = await fetchEmbedding(normalizedContent.storageContent, cfg.embedding, "document", {
+				usage: { source: "memory-capture", agentId },
+				onFailure: recordRouteOperationFailure(c),
+			});
+			if (vec) {
+				if (vec.length !== cfg.embedding.dimensions) {
+					logger.warn("memory", "Embedding dimension mismatch, skipping vector insert", {
+						got: vec.length,
+						expected: cfg.embedding.dimensions,
+						memoryId: id,
+					});
+				} else {
+					const embHash = scope ? `${contentHash}:${scope}` : contentHash;
+					const blob = vectorToBlob(vec);
+					const embId = crypto.randomUUID();
+					embedded = await runWriteTxAsync(getDbAccessor(), (db) => {
+						const activeCfg = resolveActiveEmbeddingConfig(db, baseCfg.embedding);
+						if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
+						syncVecDeleteBySourceId(db, "memory", id);
+						db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(id);
+						db.prepare(`
+							INSERT INTO embeddings
+							  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
+							VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
+						`).run(embId, embHash, blob, vec.length, id, normalizedContent.storageContent, now);
+						syncVecInsert(db, embId, vec);
+						db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(cfg.embedding.model, id);
+						return true;
+					});
+				}
+			}
+		} catch (e) {
+			logger.warn("memory", "Embedding failed (memory saved without vector)", {
+				id,
+				error: String(e),
+			});
+		}
+		let hintsWritten = 0;
+		const structuredRetained = !!body.structured;
+		if (Array.isArray(body.hints) || structuredRetained) {
+			const allHints = structuredRetained
+				? [...(body.structured?.hints ?? []), ...(body.hints ?? [])]
+				: (body.hints ?? []);
+			if (allHints.length > 0) {
+				try {
+					await runWriteTxAsync(getDbAccessor(), (db) => {
+						const stmt = db.prepare(
+							`INSERT OR IGNORE INTO memory_hints (id, memory_id, agent_id, hint, created_at)
+							 VALUES (?, ?, ?, ?, ?)`,
+						);
+						for (const hint of allHints) {
+							const h = typeof hint === "string" ? hint.trim() : "";
+							if (h.length < 5 || h.length > 300) continue;
+							stmt.run(crypto.randomUUID(), id, agentId, h, now);
+							hintsWritten++;
+						}
+					});
+				} catch (e) {
+					logger.warn("memory", "Hints write failed (non-fatal)", {
+						id,
+						error: e instanceof Error ? e.message : String(e),
+					});
+				}
+			}
+		}
+
+		logger.info("memory", "Memory saved", {
+			id,
+			type: memType,
+			pinned: !!pinned,
+			embedded,
+			hints: hintsWritten,
+			structured: structuredRetained,
+		});
+
+		recordFirstUseTelemetry("remember");
+		return c.json({
+			id,
+			type: memType,
+			tags,
+			pinned: !!pinned,
+			importance,
+			content: normalizedContent.storageContent,
+			embedded,
+			entities_linked: 0,
+			hints_written: hintsWritten,
+			structured: structuredRetained,
+			structured_applied: false,
+			...(supersededStatus !== null ? { superseded: supersededStatus } : {}),
+		});
+	});
+	app.post("/api/memory/save", async (c) => {
+		const body = await c.req.json().catch(() => ({}));
+		const headers: Record<string, string> = { "Content-Type": "application/json" };
+		headers["x-signet-operation-forwarded"] = "1";
+		const authHdr = c.req.header("authorization");
+		if (authHdr) headers.authorization = authHdr;
+		const sessionKey = c.req.header("x-signet-session-key");
+		if (sessionKey) headers["x-signet-session-key"] = sessionKey;
+		return fetchInternal(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(body),
+		});
+	});
+	app.post("/api/hook/remember", async (c) => {
+		const body = await c.req.json().catch(() => ({}));
+		const headers: Record<string, string> = { "Content-Type": "application/json" };
+		headers["x-signet-operation-forwarded"] = "1";
+		const authHdr = c.req.header("authorization");
+		if (authHdr) headers.authorization = authHdr;
+		const sessionKey = c.req.header("x-signet-session-key");
+		if (sessionKey) headers["x-signet-session-key"] = sessionKey;
+		return fetchInternal(`http://${INTERNAL_SELF_HOST}:${PORT}/api/memory/remember`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify(body),
+		});
+	});
+	app.get("/api/memory/search", async (c) => {
+		const q = (c.req.query("q") ?? "").trim();
+		if (!q) return c.json({ error: "query is required" }, 400);
+
+		const limit = effectiveRecallLimit(Number.parseInt(c.req.query("limit") ?? "10", 10));
+		const type = c.req.query("type");
+		const tags = c.req.query("tags");
+		const who = c.req.query("who");
+		const pinned = c.req.query("pinned");
+		const importanceMin = c.req.query("importance_min");
+		const since = c.req.query("since");
+		const until = c.req.query("until");
+		const expand = c.req.query("expand");
+		const project = c.req.query("project");
+		const includeRecalled = c.req.query("includeRecalled") ?? c.req.query("include_recalled");
+
+		const configuredCfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg = recallOwner !== undefined ? configuredCfg : await withActiveEmbeddingConfig(configuredCfg);
+		const recallSurface = "explicit_api" as const;
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
+		const scopeProject = scope.project;
+		try {
+			const sessionKeyRaw =
+				c.req.query("sessionKey") ?? c.req.query("session_key") ?? c.req.header("x-signet-session-key");
+			const sessionKey = sessionKeyRaw ?? null;
+			const agentId = scope.agentId;
+			recordRecallAttempt(recallSurface);
+			const agentScope = { readPolicy: scope.readPolicy, policyGroup: scope.policyGroup };
+			const params = {
+				query: q,
+				limit,
+				type,
+				tags,
+				who,
+				pinned: pinned === "1" || pinned === "true",
+				importance_min: importanceMin ? Number.parseFloat(importanceMin) : undefined,
+				since,
+				until,
+				expand: expand === "1" || expand === "true",
+				project,
+				agentId,
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup ?? undefined,
+				sessionKey: sessionKeyRaw,
+				includeRecalled: includeRecalled === "1" || includeRecalled === "true",
+				telemetrySurface: recallSurface,
+				recallSurface: "api.memory.search",
+				recallMode: "direct",
+				...(scopeProject ? { project: scopeProject } : {}),
+			};
+			const result = await routeRecall(
+				params,
+				cfg,
+				recallAttributedEmbedFn(fetchEmbedding, agentId, recordRouteOperationFailure(c)),
+			);
+			recordRecallQaTelemetry({
+				route: "GET /api/memory/search",
+				agentId,
+				sessionKey,
+				project: resolveMemorySearchTelemetryProject(params),
+				params,
+				result,
+				cfg,
+			});
+			recordRecallOutcome({
+				surface: recallSurface,
+				resultCount: result.results.length,
+				truncated: result.results.length >= limit,
+				delivery: "returned",
+			});
+			if (result.meta.partial === true) {
+				c.header("x-signet-operation-degraded", "1");
+				c.header("x-signet-operation-cause", result.meta.degradation ?? "fts_index_incomplete");
+			}
+			return c.json(result);
+		} catch (e) {
+			recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
+			logger.error("memory", "Search (recall alias) failed", e as Error);
+			if ((e as { readonly code?: unknown })?.code === "DB_OWNER_WRITES_BLOCKED") {
+				return c.json(
+					{
+						error: "Recall unavailable while database integrity is unresolved",
+						results: [],
+						repairGuidance: getDatabaseIntegrityStatus().repairGuidance,
+					},
+					503,
+				);
+			}
+			return c.json({ error: "Recall failed", results: [] }, recallFailureStatus(e));
+		}
+	});
+	app.get("/api/memory/:id", async (c) => {
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) {
+			return c.json({ error: "memory id is required" }, 400);
+		}
+
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
+		const row = await dbOwnerQuery<Record<string, unknown> | undefined>(
+			{
+				sql: `SELECT m.id, m.content, m.type, m.importance, m.tags, m.pinned, m.who, m.agent_id,
+				        m.source_id, m.source_type, m.source_path, m.runtime_path,
+				        m.idempotency_key, m.project, NULL AS session_id, m.confidence,
+				        m.access_count, m.last_accessed, m.is_deleted, m.deleted_at,
+				        m.extraction_status, m.embedding_model, m.version,
+				        m.memory_kind, m.created_at, m.updated_at, m.updated_by
+				 FROM memories m
+				 WHERE m.id = ?
+				   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)${scope.sql}`,
+				params: [memoryId, ...scope.args],
+				result: "get",
+			},
+			{ operation: "memory.get", lane: "read", deadlineMs: 5_000, estimatedWorkUnits: 1 },
+		);
+
+		if (!row) {
+			return c.json({ error: "not found" }, 404);
+		}
+
+		const sessionId =
+			typeof row.source_id === "string" && typeof row.source_type === "string" && row.source_type.startsWith("session")
+				? row.source_id
+				: undefined;
+
+		return c.json({
+			...row,
+			sourcePath: row.source_path,
+			runtimePath: row.runtime_path,
+			idempotencyKey: row.idempotency_key,
+			sessionId,
+		});
+	});
+	app.get("/api/memory/:id/history", async (c) => {
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) {
+			return c.json({ error: "memory id is required" }, 400);
+		}
+
+		const limit = Math.min(parseOptionalInt(c.req.query("limit")) ?? 200, 1000);
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
+
+		const exists = await dbOwnerQuery<{ id: string } | undefined>(
+			{
+				sql: `SELECT m.id FROM memories m WHERE m.id = ?${scope.sql}`,
+				params: [memoryId, ...scope.args],
+				result: "get",
+			},
+			{ operation: "memory.history_exists", lane: "read", deadlineMs: 2_000 },
+		);
+		if (!exists) {
+			return c.json({ error: "Not found", memoryId }, 404);
+		}
+
+		const history = await dbOwnerQuery<
+			Array<{
+				id: string;
+				event: string;
+				old_content: string | null;
+				new_content: string | null;
+				changed_by: string;
+				reason: string | null;
+				metadata: string | null;
+				created_at: string;
+				actor_type: string | null;
+				session_id: string | null;
+				request_id: string | null;
+			}>
+		>(
+			{
+				sql: `SELECT id, event, old_content, new_content, changed_by, reason,
+					        metadata, created_at, actor_type, session_id, request_id
+					 FROM memory_history
+					 WHERE memory_id = ?
+					 ORDER BY created_at ASC
+					 LIMIT ?`,
+				params: [memoryId, limit],
+				result: "all",
+			},
+			{ operation: "memory.history", lane: "read", deadlineMs: 5_000 },
+		);
+
+		return c.json({
+			memoryId,
+			count: history.length,
+			history: history.map((row) => {
+				let metadata: unknown = row.metadata;
+				if (row.metadata) {
+					try {
+						metadata = JSON.parse(row.metadata);
+					} catch {
+						metadata = row.metadata;
+					}
+				}
+				return {
+					id: row.id,
+					event: row.event,
+					oldContent: row.old_content,
+					newContent: row.new_content,
+					changedBy: row.changed_by,
+					actorType: row.actor_type ?? undefined,
+					reason: row.reason,
+					metadata,
+					createdAt: row.created_at,
+					sessionId: row.session_id ?? undefined,
+					requestId: row.request_id ?? undefined,
+				};
+			}),
+		});
+	});
+	app.get("/api/memory/:id/lineage", async (c) => {
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) return c.json({ error: "memory id is required" }, 400);
+		const limit = Math.min(parseOptionalInt(c.req.query("limit")) ?? 50, 500);
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
+
+		type LineageRow = {
+			id: string;
+			content: string;
+			type: string;
+			importance: number;
+			version: number;
+			created_at: string;
+			updated_at: string;
+			superseded_by: string | null;
+			superseded_at: string | null;
+			superseded_reason: string | null;
+		};
+		const lineageColumns = `m.id, m.content, m.type, m.importance, m.version, m.created_at, m.updated_at,
+		        m.superseded_by, m.superseded_at, m.superseded_reason`;
+		const lineageQuery = (operation: string, sql: string, id: string) =>
+			dbOwnerQuery<LineageRow | undefined>(
+				{ sql, params: [id, ...scope.args], result: "get" },
+				{ operation, lane: "read", deadlineMs: 2_000, estimatedWorkUnits: 1 },
+			);
+		const selectLineage = (id: string) =>
+			lineageQuery(
+				"memory.lineage_node",
+				`SELECT ${lineageColumns}
+				 FROM memories m
+				 WHERE m.id = ?
+				   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)${scope.sql}`,
+				id,
+			);
+		const selectPredecessor = (id: string) =>
+			lineageQuery(
+				"memory.lineage_predecessor",
+				`SELECT ${lineageColumns}
+				 FROM memories m
+				 WHERE m.superseded_by = ?
+				   AND (m.is_deleted = 0 OR m.is_deleted IS NULL)${scope.sql}
+				 ORDER BY m.created_at ASC
+				 LIMIT 1`,
+				id,
+			);
+
+		const rows: LineageRow[] = [];
+		const head = await selectLineage(memoryId);
+		if (head) {
+			const seen = new Set<string>([head.id]);
+			const byId = new Map<string, LineageRow>([[head.id, head]]);
+			let current = head;
+			while (current.superseded_by && !seen.has(current.superseded_by) && byId.size < limit) {
+				seen.add(current.superseded_by);
+				const next = await selectLineage(current.superseded_by);
+				if (!next) break;
+				byId.set(next.id, next);
+				current = next;
+			}
+			let cursor = head;
+			while (byId.size < limit) {
+				const predecessor = await selectPredecessor(cursor.id);
+				if (!predecessor || seen.has(predecessor.id)) break;
+				seen.add(predecessor.id);
+				byId.set(predecessor.id, predecessor);
+				cursor = predecessor;
+			}
+			rows.push(
+				...[...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version),
+			);
+		}
+
+		return c.json({
+			memoryId,
+			count: rows.length,
+			lineage: rows.map((row) => ({
+				id: row.id,
+				content: redactCredentials(row.content),
+				type: row.type,
+				importance: row.importance,
+				version: row.version,
+				createdAt: row.created_at,
+				updatedAt: row.updated_at,
+				supersededBy: row.superseded_by,
+				supersededAt: row.superseded_at,
+				supersededReason: row.superseded_reason,
+			})),
+		});
+	});
+	app.get("/api/memory/jobs/:id", async (c) => {
+		const jobId = c.req.param("id")?.trim();
+		if (!jobId) {
+			return c.json({ error: "job id is required" }, 400);
+		}
+
+		const scope = resolveMemoryMutationScope(c);
+		if (scope instanceof Response) return scope;
+		const ownerSql = scope.sql
+			? ` AND (j.memory_id IS NULL OR EXISTS (SELECT 1 FROM memories m WHERE m.id = j.memory_id${scope.sql}))
+			   AND (j.document_id IS NULL OR EXISTS (SELECT 1 FROM documents m WHERE m.id = j.document_id${scope.sql}))`
+			: "";
+		const maybeRow = await dbOwnerQuery<unknown>(
+			{
+				sql: `SELECT j.id, j.memory_id, j.document_id, j.job_type, j.status,
+					        j.attempts, j.max_attempts, j.leased_at, j.completed_at,
+					        j.failed_at, j.error, j.created_at, j.updated_at
+					 FROM memory_jobs j
+					 WHERE j.id = ?${ownerSql}
+					 LIMIT 1`,
+				params: scope.sql ? [jobId, ...scope.args, ...scope.args] : [jobId],
+				result: "get",
+			},
+			{ operation: "memory.job", lane: "read", deadlineMs: 2_000 },
+		);
+
+		type JobRow = {
+			readonly id: string;
+			readonly memory_id: string | null;
+			readonly document_id: string | null;
+			readonly job_type: string;
+			readonly status: string;
+			readonly attempts: number;
+			readonly max_attempts: number;
+			readonly leased_at: string | null;
+			readonly completed_at: string | null;
+			readonly failed_at: string | null;
+			readonly error: string | null;
+			readonly created_at: string;
+			readonly updated_at: string;
+		};
+
+		const isJobRow = (val: unknown): val is JobRow => {
+			if (!val || typeof val !== "object") return false;
+			const obj = val as Record<string, unknown>;
+			return (
+				typeof obj.id === "string" &&
+				typeof obj.job_type === "string" &&
+				typeof obj.status === "string" &&
+				typeof obj.attempts === "number" &&
+				typeof obj.max_attempts === "number" &&
+				typeof obj.created_at === "string" &&
+				typeof obj.updated_at === "string"
+			);
+		};
+
+		const row = isJobRow(maybeRow) ? maybeRow : null;
+
+		if (!row) {
+			return c.json({ error: "Job not found" }, 404);
+		}
+
+		return c.json({
+			id: row.id,
+			memory_id: row.memory_id,
+			document_id: row.document_id,
+			job_type: row.job_type,
+			status: row.status,
+			attempt_count: row.attempts,
+			attempts: row.attempts,
+			max_attempts: row.max_attempts,
+			next_attempt_at: null,
+			last_error: row.error,
+			last_error_code: null,
+			error: row.error,
+			leased_at: row.leased_at,
+			completed_at: row.completed_at,
+			failed_at: row.failed_at,
+			created_at: row.created_at,
+			updated_at: row.updated_at,
+		});
+	});
+	app.post("/api/memory/:id/recover", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) {
+			return c.json({ error: "memory id is required" }, 400);
+		}
+
+		const reason = parseOptionalString(payload.reason) ?? parseOptionalString(c.req.query("reason"));
+		if (!reason) {
+			return c.json({ error: "reason is required" }, 400);
+		}
+
+		const hasIfVersionInBody = Object.hasOwn(payload, "if_version");
+		const ifVersionBody = parseOptionalInt(payload.if_version);
+		if (hasIfVersionInBody && ifVersionBody === undefined) {
+			return c.json({ error: "if_version must be a positive integer" }, 400);
+		}
+
+		const queryIfVersionRaw = c.req.query("if_version");
+		const ifVersionQuery = parseOptionalInt(queryIfVersionRaw);
+		if (queryIfVersionRaw !== undefined && ifVersionQuery === undefined) {
+			return c.json({ error: "if_version must be a positive integer" }, 400);
+		}
+		const ifVersion = ifVersionBody ?? ifVersionQuery;
+
+		const cfg = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		if (cfg.pipelineV2.mutationsFrozen) {
+			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		}
+		const denied = await denyMemoryMutation(c, [memoryId]);
+		if (denied) return denied;
+
+		const now = new Date().toISOString();
+		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
+		const txResult = await runWriteTxAsync(getDbAccessor(), (db) =>
+			txRecoverMemory(db, {
+				memoryId,
+				reason,
+				changedBy: actor.changedBy,
+				changedAt: now,
+				retentionWindowMs: SOFT_DELETE_RETENTION_MS,
+				ifVersion,
+				ctx: actor,
+			}),
+		);
+
+		switch (txResult.status) {
+			case "recovered":
+				return c.json({
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					newVersion: txResult.newVersion,
+					retentionDays: SOFT_DELETE_RETENTION_DAYS,
+				});
+			case "not_found":
+				return c.json({ id: txResult.memoryId, status: txResult.status, error: "Not found" }, 404);
+			case "not_deleted":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error: "Memory is not deleted",
+					},
+					409,
+				);
+			case "retention_expired":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error: `Recover window expired (${SOFT_DELETE_RETENTION_DAYS} days)`,
+					},
+					409,
+				);
+			case "version_conflict":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error: "Version conflict",
+					},
+					409,
+				);
+		}
+
+		return c.json({ error: "Unknown mutation result" }, 500);
+	});
+	app.patch("/api/memory/:id", async (c) => {
+		const payload = toRecord(await c.req.json().catch(() => null));
+		if (!payload) {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) {
+			return c.json({ error: "memory id is required" }, 400);
+		}
+
+		const reason = parseOptionalString(payload.reason);
+		if (!reason) {
+			return c.json({ error: "reason is required" }, 400);
+		}
+
+		const hasIfVersion = Object.hasOwn(payload, "if_version");
+		const ifVersion = parseOptionalInt(payload.if_version);
+		if (hasIfVersion && ifVersion === undefined) {
+			return c.json({ error: "if_version must be a positive integer" }, 400);
+		}
+
+		const parsedPatch = parseModifyPatch(payload);
+		if (!parsedPatch.ok) {
+			return c.json({ error: parsedPatch.error }, 400);
+		}
+
+		const cfg = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		if (cfg.pipelineV2.mutationsFrozen) {
+			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		}
+		const denied = await denyMemoryMutation(c, [memoryId]);
+		if (denied) return denied;
+
+		let embeddingVector: number[] | null = null;
+		if (parsedPatch.value.contentForEmbedding !== null) {
+			embeddingVector = await fetchEmbedding(parsedPatch.value.contentForEmbedding, cfg.embedding, "document", {
+				usage: { source: "memory-capture" },
+			});
+		}
+
+		const now = new Date().toISOString();
+		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
+		const txResult = await runWriteTxAsync(getDbAccessor(), (db) =>
+			txModifyMemory(db, {
+				memoryId,
+				patch: parsedPatch.value.patch,
+				reason,
+				changedBy: actor.changedBy,
+				changedAt: now,
+				ifVersion,
+				extractionStatusOnContentChange: "none",
+				extractionModelOnContentChange: null,
+				embeddingModelOnContentChange: cfg.embedding.model,
+				embeddingVector,
+				embeddingConfig: cfg.embedding,
+				ctx: actor,
+			}),
+		);
+
+		switch (txResult.status) {
+			case "updated":
+				return c.json({
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					newVersion: txResult.newVersion,
+					contentChanged: txResult.contentChanged ?? false,
+					embedded: txResult.contentChanged === true && embeddingVector !== null ? true : undefined,
+				});
+			case "no_changes":
+				return c.json({
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+				});
+			case "not_found":
+				return c.json({ id: txResult.memoryId, status: txResult.status, error: "Not found" }, 404);
+			case "deleted":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error: "Cannot modify deleted memory",
+					},
+					409,
+				);
+			case "version_conflict":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error: "Version conflict",
+					},
+					409,
+				);
+			case "duplicate_content_hash":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						duplicateMemoryId: txResult.duplicateMemoryId,
+						error: "Duplicate content hash",
+					},
+					409,
+				);
+			case "episodic_content_immutable":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error:
+							"Episodic evidence is immutable: content and type cannot be changed. Update tags, importance, or pinned, or save a new memory.",
+					},
+					409,
+				);
+			case "semantic_projection_content_immutable":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error:
+							"Semantic claim projections are managed by the ontology. Use an audited ontology operation to change claim content or type.",
+					},
+					409,
+				);
+		}
+
+		return c.json({ error: "Unknown mutation result" }, 500);
+	});
+	app.delete("/api/memory/:id", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) {
+			return c.json({ error: "memory id is required" }, 400);
+		}
+
+		const reason = parseOptionalString(payload.reason) ?? parseOptionalString(c.req.query("reason"));
+		if (!reason) {
+			return c.json({ error: "reason is required" }, 400);
+		}
+
+		const hasForceInBody = Object.hasOwn(payload, "force");
+		const forceFromBody = parseOptionalBoolean(payload.force);
+		if (hasForceInBody && forceFromBody === undefined) {
+			return c.json({ error: "force must be a boolean" }, 400);
+		}
+		const forceFromQuery = parseOptionalBoolean(c.req.query("force"));
+		const force = forceFromBody ?? forceFromQuery ?? false;
+
+		const hasIfVersionInBody = Object.hasOwn(payload, "if_version");
+		const ifVersionBody = parseOptionalInt(payload.if_version);
+		if (hasIfVersionInBody && ifVersionBody === undefined) {
+			return c.json({ error: "if_version must be a positive integer" }, 400);
+		}
+
+		const queryIfVersionRaw = c.req.query("if_version");
+		const ifVersionQuery = parseOptionalInt(queryIfVersionRaw);
+		if (queryIfVersionRaw !== undefined && ifVersionQuery === undefined) {
+			return c.json({ error: "if_version must be a positive integer" }, 400);
+		}
+		const ifVersion = ifVersionBody ?? ifVersionQuery;
+
+		const cfg = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		if (cfg.pipelineV2.mutationsFrozen) {
+			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		}
+		const denied = await denyMemoryMutation(c, [memoryId]);
+		if (denied) return denied;
+
+		const now = new Date().toISOString();
+		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
+		const txResult = await runWriteTxAsync(getDbAccessor(), (db) =>
+			txForgetMemory(db, {
+				memoryId,
+				reason,
+				changedBy: actor.changedBy,
+				changedAt: now,
+				force,
+				ifVersion,
+				ctx: actor,
+			}),
+		);
+
+		switch (txResult.status) {
+			case "deleted":
+				return c.json({
+					id: txResult.memoryId,
+					status: txResult.status,
+					currentVersion: txResult.currentVersion,
+					newVersion: txResult.newVersion,
+				});
+			case "not_found":
+				return c.json({ id: txResult.memoryId, status: txResult.status, error: "Not found" }, 404);
+			case "already_deleted":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+					},
+					409,
+				);
+			case "version_conflict":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error: "Version conflict",
+					},
+					409,
+				);
+			case "pinned_requires_force":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error: "Pinned memories require force=true",
+					},
+					409,
+				);
+			case "autonomous_force_denied":
+				return c.json(
+					{
+						id: txResult.memoryId,
+						status: txResult.status,
+						currentVersion: txResult.currentVersion,
+						error: "Autonomous agents cannot force-delete pinned memories",
+					},
+					403,
+				);
+		}
+
+		return c.json({ error: "Unknown mutation result" }, 500);
+	});
+	app.post("/api/memories/:id/tombstone", async (c) => {
+		const payload = await readOptionalJsonObject(c);
+		if (payload === null) return c.json({ error: "Invalid JSON body" }, 400);
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) return c.json({ error: "memory id is required" }, 400);
+
+		const cfg = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		if (cfg.pipelineV2.mutationsFrozen) return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		const denied = await denyMemoryMutation(c, [memoryId]);
+		if (denied) return denied;
+
+		const now = new Date().toISOString();
+		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
+		const reason =
+			parseOptionalString(payload.reason) ?? parseOptionalString(c.req.query("reason")) ?? "curator tombstone";
+		const txResult = await runWriteTxAsync(getDbAccessor(), (db) =>
+			txForgetMemory(db, {
+				memoryId,
+				reason,
+				changedBy: actor.changedBy,
+				changedAt: now,
+				force: true,
+				ctx: actor,
+			}),
+		);
+
+		if (txResult.status === "deleted" || txResult.status === "already_deleted") {
+			return c.json({
+				id: txResult.memoryId,
+				status: "tombstoned",
+				currentVersion: txResult.currentVersion,
+				newVersion: txResult.newVersion,
+				idempotent: txResult.status === "already_deleted",
+			});
+		}
+		if (txResult.status === "not_found") return c.json({ id: txResult.memoryId, status: txResult.status }, 404);
+		return c.json({ id: txResult.memoryId, status: txResult.status, error: "Tombstone failed" }, 409);
+	});
+	app.post("/api/memories/:id/supersede", async (c) => {
+		const payload = toRecord(await c.req.json().catch(() => null));
+		if (!payload) return c.json({ error: "Invalid JSON body" }, 400);
+		const memoryId = c.req.param("id")?.trim();
+		if (!memoryId) return c.json({ error: "memory id is required" }, 400);
+		const supersededBy = parseOptionalString(payload.superseded_by);
+		if (!supersededBy) return c.json({ error: "superseded_by is required" }, 400);
+
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		if (cfg.pipelineV2.mutationsFrozen) return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		const denied = await denyMemoryMutation(c, [memoryId, supersededBy]);
+		if (denied) return denied;
+
+		const now = new Date().toISOString();
+		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
+		const reason = parseOptionalString(payload.reason) ?? null;
+		const txResult = await runWriteTxAsync(getDbAccessor(), (db) =>
+			txSupersedeMemory(db, {
+				memoryId,
+				supersededBy,
+				reason,
+				changedBy: actor.changedBy,
+				changedAt: now,
+				ctx: actor,
+			}),
+		);
+
+		if (txResult.status === "superseded" || txResult.status === "already_superseded") {
+			return c.json({
+				id: txResult.memoryId,
+				status: "superseded",
+				superseded_by: txResult.supersededBy,
+				currentVersion: txResult.currentVersion,
+				newVersion: txResult.newVersion,
+				idempotent: txResult.status === "already_superseded",
+			});
+		}
+		if (txResult.status === "not_found" || txResult.status === "target_not_found") {
+			return c.json({ id: txResult.memoryId, status: txResult.status, superseded_by: supersededBy }, 404);
+		}
+		if (txResult.status === "self_supersede") {
+			return c.json({ id: txResult.memoryId, status: txResult.status, error: "memory cannot supersede itself" }, 400);
+		}
+		if (txResult.status === "scope_mismatch") {
+			return c.json(
+				{ id: txResult.memoryId, status: txResult.status, error: "superseded_by must share memory scope" },
+				409,
+			);
+		}
+		return c.json({ id: txResult.memoryId, status: txResult.status, error: "Supersede failed" }, 409);
+	});
+	app.post("/api/memory/feedback", async (c) => {
+		const payload = toRecord(await c.req.json().catch(() => null));
+		if (!payload) {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const sessionKey = parseOptionalString(payload.sessionKey);
+		const feedback = payload.feedback;
+		if (!sessionKey || !feedback) {
+			return c.json({ error: "sessionKey and feedback required" }, 400);
+		}
+
+		const parsed = parseFeedback(feedback);
+		if (!parsed) {
+			return c.json({ error: "Invalid feedback format — expected map of ID to number (-1 to 1)" }, 400);
+		}
+
+		const scopedAgent = resolveMemoryScopedAgentId(c, { agentId: parseOptionalString(payload.agentId), sessionKey });
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const agentId = scopedAgent.agentId;
+		const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.feedback;
+		try {
+			const result = recordPathFeedback(getDbAccessor(), {
+				sessionKey,
+				agentId,
+				ratings: parsed,
+				paths: payload.paths,
+				rewards: payload.rewards,
+				maxAspectWeight: cfg?.maxAspectWeight,
+				minAspectWeight: cfg?.minAspectWeight,
+			});
+			return c.json({
+				ok: true,
+				recorded: Object.keys(parsed).length,
+				accepted: result.accepted,
+				rejected: Math.max(0, Object.keys(parsed).length - result.accepted),
+				propagated: result.propagated,
+				cooccurrenceUpdated: result.cooccurrenceUpdated,
+				dependenciesUpdated: result.dependenciesUpdated,
+				acceptanceRule: "accepted means the memory id was recorded for this session and agent",
+			});
+		} catch (error) {
+			recordAgentFeedback(sessionKey, parsed, agentId);
+			logger.warn("daemon", "Path feedback failed; fell back to legacy feedback", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey,
+			});
+			return c.json({ ok: true, recorded: Object.keys(parsed).length, fallback: true });
+		}
+	});
+	app.post("/api/memory/forget", async (c) => {
+		const payload = toRecord(await c.req.json().catch(() => null));
+		if (!payload) {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const mode = parseOptionalString(payload.mode) ?? "preview";
+		if (mode !== "preview" && mode !== "execute") {
+			return c.json({ error: "mode must be preview or execute" }, 400);
+		}
+
+		const hasLimit = Object.hasOwn(payload, "limit");
+		const parsedLimit = parseOptionalInt(payload.limit);
+		if (hasLimit && parsedLimit === undefined) {
+			return c.json({ error: "limit must be a positive integer" }, 400);
+		}
+		const limit = Math.max(1, Math.min(parsedLimit ?? 20, MAX_MUTATION_BATCH));
+
+		let ids: string[] = [];
+		if (Object.hasOwn(payload, "ids")) {
+			if (!Array.isArray(payload.ids)) {
+				return c.json({ error: "ids must be an array of strings" }, 400);
+			}
+			const parsedIds: string[] = [];
+			for (const value of payload.ids) {
+				if (typeof value !== "string" || value.trim().length === 0) {
+					return c.json({ error: "ids must contain non-empty strings" }, 400);
+				}
+				parsedIds.push(value.trim());
+			}
+			ids = parsedIds;
+		}
+
+		const request: ForgetCandidatesRequest = {
+			query: parseOptionalString(payload.query) ?? "",
+			type: parseOptionalString(payload.type) ?? "",
+			tags: parseOptionalString(payload.tags) ?? "",
+			who: parseOptionalString(payload.who) ?? "",
+			sourceType: parseOptionalString(payload.source_type) ?? "",
+			since: parseOptionalString(payload.since) ?? "",
+			until: parseOptionalString(payload.until) ?? "",
+			scope: parseOptionalString(payload.scope) ?? null,
+			limit,
+		};
+
+		const hasQueryScope =
+			request.query.length > 0 ||
+			request.type.length > 0 ||
+			request.tags.length > 0 ||
+			request.who.length > 0 ||
+			request.sourceType.length > 0 ||
+			request.since.length > 0 ||
+			request.until.length > 0 ||
+			request.scope !== null;
+		if (ids.length === 0 && !hasQueryScope) {
+			return c.json(
+				{
+					error: "query, ids, or at least one filter (type/tags/who/source_type/since/until) is required",
+				},
+				400,
+			);
+		}
+
+		const mutationScope = resolveMemoryMutationScope(c);
+		if (mutationScope instanceof Response) return mutationScope;
+		const candidates =
+			ids.length > 0
+				? loadForgetCandidatesByIds(ids, limit, mutationScope)
+				: loadForgetCandidates(request, mutationScope);
+		const candidateIds = candidates.map((candidate) => candidate.id);
+		const confirmToken = buildForgetConfirmToken(candidateIds);
+		const requiresConfirm = candidateIds.length > FORGET_CONFIRM_THRESHOLD;
+
+		if (mode === "preview") {
+			return c.json({
+				mode: "preview",
+				count: candidates.length,
+				requiresConfirm,
+				confirmToken,
+				candidates: candidates.map((candidate) => ({
+					id: candidate.id,
+					score: Math.round(candidate.score * 1000) / 1000,
+					pinned: candidate.pinned === 1,
+					version: candidate.version,
+				})),
+			});
+		}
+
+		const reason = parseOptionalString(payload.reason);
+		if (!reason) {
+			return c.json({ error: "reason is required for execute mode" }, 400);
+		}
+
+		const hasForce = Object.hasOwn(payload, "force");
+		const force = parseOptionalBoolean(payload.force);
+		if (hasForce && force === undefined) {
+			return c.json({ error: "force must be a boolean" }, 400);
+		}
+
+		if (Object.hasOwn(payload, "if_version")) {
+			return c.json(
+				{
+					error: "if_version is not supported for batch forget; use DELETE /api/memory/:id for version-guarded deletes",
+				},
+				400,
+			);
+		}
+
+		if (requiresConfirm) {
+			const providedToken = parseOptionalString(payload.confirm_token);
+			if (!providedToken || providedToken !== confirmToken) {
+				return c.json(
+					{
+						error: "confirm_token is required for large forget operations; run preview first",
+						requiresConfirm: true,
+						confirmToken,
+						count: candidates.length,
+					},
+					400,
+				);
+			}
+		}
+
+		const cfg = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		if (cfg.pipelineV2.mutationsFrozen) {
+			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		}
+
+		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
+		const changedAt = new Date().toISOString();
+
+		const results: Array<{
+			id: string;
+			status: string;
+			currentVersion?: number;
+			newVersion?: number;
+		}> = [];
+
+		for (const memoryId of candidateIds) {
+			const txResult = await runWriteTxAsync(getDbAccessor(), (db) =>
+				txForgetMemory(db, {
+					memoryId,
+					reason,
+					changedBy: actor.changedBy,
+					changedAt,
+					force: force ?? false,
+					ctx: actor,
+				}),
+			);
+			results.push({
+				id: txResult.memoryId,
+				status: txResult.status,
+				currentVersion: txResult.currentVersion,
+				newVersion: txResult.newVersion,
+			});
+		}
+
+		return c.json({
+			mode: "execute",
+			requested: candidateIds.length,
+			deleted: results.filter((result) => result.status === "deleted").length,
+			results,
+		});
+	});
+	app.post("/api/memory/modify", async (c) => {
+		const payload = toRecord(await c.req.json().catch(() => null));
+		if (!payload) {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		if (!Array.isArray(payload.patches) || payload.patches.length === 0) {
+			return c.json({ error: "patches[] is required" }, 400);
+		}
+		if (payload.patches.length > MAX_MUTATION_BATCH) {
+			return c.json(
+				{
+					error: `patches[] exceeds maximum batch size (${MAX_MUTATION_BATCH})`,
+				},
+				400,
+			);
+		}
+
+		const cfg = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		if (cfg.pipelineV2.mutationsFrozen) {
+			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
+		}
+
+		const defaultReason = parseOptionalString(payload.reason);
+		const actor = resolveMutationActor(c, parseOptionalString(payload.changed_by));
+		const changedAt = new Date().toISOString();
+		const mutationScope = resolveMemoryMutationScope(c);
+		if (mutationScope instanceof Response) return mutationScope;
+		const hidden = new Set(
+			await memoriesOutsideMutationScope(
+				mutationScope,
+				payload.patches.map((patch) => parseOptionalString(toRecord(patch)?.id) ?? ""),
+			),
+		);
+
+		const results: Array<{
+			id: string | null;
+			status: string;
+			error?: string;
+			currentVersion?: number;
+			newVersion?: number;
+			duplicateMemoryId?: string;
+			contentChanged?: boolean;
+			embedded?: boolean;
+		}> = [];
+
+		for (const rawPatch of payload.patches) {
+			const patchPayload = toRecord(rawPatch);
+			if (!patchPayload) {
+				results.push({
+					id: null,
+					status: "invalid_request",
+					error: "Each patch must be an object",
+				});
+				continue;
+			}
+
+			const memoryId = parseOptionalString(patchPayload.id);
+			if (!memoryId) {
+				results.push({
+					id: null,
+					status: "invalid_request",
+					error: "Patch id is required",
+				});
+				continue;
+			}
+			if (hidden.has(memoryId)) {
+				results.push({ id: memoryId, status: "not_found", error: "Not found" });
+				continue;
+			}
+
+			const reason = parseOptionalString(patchPayload.reason) ?? defaultReason;
+			if (!reason) {
+				results.push({
+					id: memoryId,
+					status: "invalid_request",
+					error: "reason is required",
+				});
+				continue;
+			}
+
+			const hasIfVersion = Object.hasOwn(patchPayload, "if_version");
+			const ifVersion = parseOptionalInt(patchPayload.if_version);
+			if (hasIfVersion && ifVersion === undefined) {
+				results.push({
+					id: memoryId,
+					status: "invalid_request",
+					error: "if_version must be a positive integer",
+				});
+				continue;
+			}
+
+			const parsedPatch = parseModifyPatch(patchPayload);
+			if (!parsedPatch.ok) {
+				results.push({
+					id: memoryId,
+					status: "invalid_request",
+					error: parsedPatch.error,
+				});
+				continue;
+			}
+
+			let embeddingVector: number[] | null = null;
+			if (parsedPatch.value.contentForEmbedding !== null) {
+				embeddingVector = await fetchEmbedding(parsedPatch.value.contentForEmbedding, cfg.embedding, "document", {
+					usage: { source: "memory-capture" },
+				});
+			}
+
+			const txResult = await runWriteTxAsync(getDbAccessor(), (db) =>
+				txModifyMemory(db, {
+					memoryId,
+					patch: parsedPatch.value.patch,
+					reason,
+					changedBy: actor.changedBy,
+					changedAt,
+					ifVersion,
+					extractionStatusOnContentChange: "none",
+					extractionModelOnContentChange: null,
+					embeddingModelOnContentChange: cfg.embedding.model,
+					embeddingVector,
+					embeddingConfig: cfg.embedding,
+					ctx: actor,
+				}),
+			);
+
+			results.push({
+				id: txResult.memoryId,
+				status: txResult.status,
+				currentVersion: txResult.currentVersion,
+				newVersion: txResult.newVersion,
+				duplicateMemoryId: txResult.duplicateMemoryId,
+				contentChanged: txResult.contentChanged,
+				embedded: txResult.contentChanged === true && embeddingVector !== null ? true : undefined,
+			});
+		}
+
+		return c.json({
+			total: results.length,
+			updated: results.filter((result) => result.status === "updated").length,
+			results,
+		});
+	});
+	app.post("/api/memory/recall", async (c) => {
+		let body: RecallParams;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const query = body.query?.trim() ?? "";
+		if (!query) return c.json({ error: "query is required" }, 400);
+		const aggregateBudgetInput = readAggregateRecallBudgetInput(body);
+		const aggregateBudget = parseAggregateRecallBudget(aggregateBudgetInput);
+		if (aggregateBudgetInput !== undefined && aggregateBudget === null) {
+			return c.json({ error: "Invalid aggregateBudget. Expected one of: small, medium, large." }, 400);
+		}
+		const temporalTimeError = validateTemporalTimeOptions(body.time);
+		if (temporalTimeError) return c.json({ error: temporalTimeError }, 400);
+
+		const aggregateSaveRequested =
+			body.aggregate === true && body.saveAggregate !== false && body.save_aggregate !== false;
+		const recallLimit = effectiveRecallLimit(body.limit);
+		if (aggregateSaveRequested) {
+			const denied = await requirePermission("remember", authConfig)(c, () => Promise.resolve());
+			if (denied) return denied;
+		}
+
+		const configuredCfg = loadMemoryConfig(AGENTS_DIR);
+		const cfg =
+			recallOwner !== undefined && body.aggregate !== true
+				? configuredCfg
+				: await withActiveEmbeddingConfig(configuredCfg);
+		if (
+			((cfg.pipelineV2.reranker.enabled && cfg.pipelineV2.reranker.useExtractionModel) || body.aggregate === true) &&
+			authConfig.mode !== "local"
+		) {
+			const actor = c.get("auth")?.claims?.sub ?? "anonymous";
+			const check = authRecallLlmLimiter.check(actor);
+			if (!check.allowed) {
+				c.header("Retry-After", String(Math.ceil((check.resetAt - Date.now()) / 1000)));
+				return c.json({ error: "rate limit exceeded", retryAfter: check.resetAt }, 429);
+			}
+			authRecallLlmLimiter.record(actor);
+		}
+		let recallAttempted = false;
+		try {
+			const sessionKeyRaw = body.sessionKey ?? c.req.header("x-signet-session-key");
+			const sessionKey = sessionKeyRaw ?? null;
+			const scopedAgent = resolveMemoryScopedAgentId(c, { agentId: body.agentId, sessionKey: sessionKeyRaw });
+			if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+			const agentId = scopedAgent.agentId;
+			const recallSurface = normalizeRecallSurface(body.recallSurface, "explicit_api");
+			if (aggregateSaveRequested) {
+				const recallAuth = c.get("auth");
+				if (recallAuth?.claims && recallAuth.claims.role !== "admin") {
+					const tokenProject = recallAuth.claims.scope?.project;
+					if (tokenProject && (!body.project || body.project !== tokenProject)) {
+						return c.json({ error: `scope restricted to project '${tokenProject}'` }, 403);
+					}
+				}
+			}
+
+			recordRecallAttempt(recallSurface);
+			recallAttempted = true;
+			const agentScope = await getAgentScope(agentId);
+			const scopeProject = c.get("auth")?.claims?.scope?.project;
+			const params = {
+				...body,
+				query,
+				limit: recallLimit,
+				aggregate: body.aggregate,
+				aggregateBudget: aggregateBudget ?? undefined,
+				aggregate_budget: aggregateBudget ?? undefined,
+				saveAggregate: body.saveAggregate ?? body.save_aggregate,
+				save_aggregate: body.save_aggregate ?? body.saveAggregate,
+				agentId,
+				readPolicy: agentScope.readPolicy,
+				policyGroup: agentScope.policyGroup ?? undefined,
+				sessionKey: sessionKeyRaw,
+				includeRecalled: body.includeRecalled === true,
+				telemetrySurface: recallSurface,
+				recallSurface: "api.memory.recall",
+				recallMode: "direct",
+				...(scopeProject ? { project: scopeProject } : {}),
+			};
+			const result =
+				body.aggregate === true
+					? await aggregateRecallFn(params, cfg, {
+							router: getInferenceRouterOrNullFn(),
+							embedFn: recallAttributedEmbedFn(fetchEmbeddingFn, agentId, recordRouteOperationFailure(c)),
+						})
+					: await routeRecall(
+							params,
+							cfg,
+							recallAttributedEmbedFn(fetchEmbeddingFn, agentId, recordRouteOperationFailure(c)),
+						);
+			const requestedMinScore = (body as { readonly minScore?: unknown }).minScore;
+			const returnedResult = applyRecallScoreThreshold(
+				result,
+				typeof requestedMinScore === "number" ? requestedMinScore : undefined,
+			) as typeof result;
+			recordRecallQaTelemetry({
+				route: "POST /api/memory/recall",
+				agentId,
+				sessionKey,
+				project: resolveMemorySearchTelemetryProject(params),
+				params,
+				result: returnedResult,
+				cfg,
+			});
+			recordRecallOutcome({
+				surface: recallSurface,
+				resultCount: returnedResult.results.length,
+				truncated: returnedResult.results.length >= recallLimit,
+				delivery: "returned",
+			});
+			if (returnedResult.meta.partial === true) {
+				c.header("x-signet-operation-degraded", "1");
+				c.header("x-signet-operation-cause", returnedResult.meta.degradation ?? "fts_index_incomplete");
+			}
+			recordFirstUseTelemetry("recall");
+			return c.json(returnedResult);
+		} catch (e) {
+			const recallSurface = normalizeRecallSurface(body.recallSurface, "explicit_api");
+			if (recallAttempted) recordRecallOutcome({ surface: recallSurface, error: true, delivery: "not_delivered" });
+			logger.error("memory", "Recall failed", e as Error);
+			if ((e as { readonly code?: unknown })?.code === "DB_OWNER_WRITES_BLOCKED") {
+				return c.json(
+					{
+						error: "Recall unavailable while database integrity is unresolved",
+						results: [],
+						repairGuidance: getDatabaseIntegrityStatus().repairGuidance,
+					},
+					503,
+				);
+			}
+			return c.json({ error: "Recall failed", results: [] }, recallFailureStatus(e));
+		}
+	});
+	app.get("/memory/similar", async (c) => {
+		const id = c.req.query("id");
+		if (!id) {
+			return c.json({ error: "id is required", results: [] }, 400);
+		}
+
+		const k = parseBoundedInt(c.req.query("k"), 10, 1, 50);
+		const type = c.req.query("type");
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
+
+		try {
+			const embeddingRow = await dbOwnerQuery<{ vector_hex: string } | undefined>(
+				{
+					sql: `SELECT hex(e.vector) AS vector_hex
+					 FROM embeddings e
+					 INNER JOIN memories m ON m.id = e.source_id
+					 WHERE e.source_type = 'memory' AND e.source_id = ?
+					   AND COALESCE(m.source_type, '') != 'aggregate-recall'${currentMemorySql("m")}${scope.sql}
+					 LIMIT 1`,
+					params: [id, ...scope.args],
+					result: "get",
+				},
+				{ operation: "memory.similar_seed", lane: "read", deadlineMs: 2_000, estimatedWorkUnits: 1 },
+			);
+
+			if (!embeddingRow) {
+				return c.json({ error: "No embedding found for this memory", results: [] }, 404);
+			}
+
+			const vectorBytes = Buffer.from(embeddingRow.vector_hex, "hex");
+			const queryVector = new Float32Array(
+				vectorBytes.buffer.slice(vectorBytes.byteOffset, vectorBytes.byteOffset + vectorBytes.byteLength),
+			);
+			const searchOptions = {
+				limit: Math.min((k + 1) * SIMILAR_CANDIDATE_FACTOR, SIMILAR_MAX_CANDIDATES),
+				type,
+				excludeAggregateRecall: true,
+				maxScanRows: DB_OWNER_MAX_WORK_UNITS,
+			};
+			const searchData =
+				recallOwner === undefined
+					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
+							siteToken: "http/routes/memory-routes.ts:3425",
+						})
+					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
+
+			const candidates = searchData.results.filter((r) => r.id !== id);
+
+			if (candidates.length === 0) {
+				return c.json({
+					results: [],
+					completeness: searchData.completeness,
+					...(searchData.searchedWindow === undefined ? {} : { searchedWindow: searchData.searchedWindow }),
+				});
+			}
+
+			const ids = candidates.map((r) => r.id);
+			const rows = await dbOwnerQuery<
+				Array<{
+					id: string;
+					content: string;
+					type: string;
+					tags: string | null;
+					confidence: number;
+					created_at: string;
+				}>
+			>(
+				{
+					sql: `SELECT m.id, m.content, m.type, m.tags, m.confidence, m.created_at
+					 FROM memories m
+					 WHERE m.id IN (${ids.map(() => "?").join(", ")})${currentMemorySql("m")}${scope.sql}`,
+					params: [...ids, ...scope.args],
+					result: "all",
+				},
+				{ operation: "memory.similar_rows", lane: "read", deadlineMs: 2_000, estimatedWorkUnits: ids.length },
+			);
+			const rowMap = new Map(rows.map((r) => [r.id, r]));
+			const results = candidates
+				.filter((r) => rowMap.has(r.id))
+				.slice(0, k)
+				.map((r) => {
+					const row = rowMap.get(r.id);
+					if (!row) return null;
+					return {
+						id: r.id,
+						content: redactCredentials(row.content),
+						type: row.type,
+						tags: parseTagsField(row.tags),
+						score: Math.round(r.score * 100) / 100,
+						confidence: row.confidence,
+						created_at: row.created_at,
+					};
+				})
+				.filter((r): r is NonNullable<typeof r> => r !== null);
+
+			return c.json({
+				results,
+				completeness: searchData.completeness,
+				...(searchData.searchedWindow === undefined ? {} : { searchedWindow: searchData.searchedWindow }),
+				...(results.length < k && searchData.results.length >= searchOptions.limit ? { truncated: true } : {}),
+			});
+		} catch (e) {
+			logger.error("memory", "Similarity search failed", e as Error);
+			return c.json({ error: "Similarity search failed", results: [] }, 500);
+		}
+	});
+	app.get("/api/embeddings", async (c) => {
+		const withVectors = c.req.query("vectors") === "true";
+		const limit = parseBoundedInt(c.req.query("limit"), 600, 50, 5000);
+		const offset = parseBoundedInt(c.req.query("offset"), 0, 0, 100000);
+
+		type EmbeddingRow = {
+			id: string;
+			content: string;
+			who: string | null;
+			importance: number | null;
+			type: string | null;
+			tags: string | null;
+			source_type: string | null;
+			source_id: string | null;
+			created_at: string;
+			vector?: Buffer;
+			dimensions?: number | null;
+		};
+
+		const scope = await resolveMemoryReadScope(c);
+		if (scope instanceof Response) return scope;
+		const liveSql = ` AND COALESCE(m.is_deleted, 0) = 0 AND m.superseded_by IS NULL${scope.sql}`;
+
+		try {
+			const { total, rows } = await getDbAccessor().withReadDbAsync(
+				async (db) => {
+					const totalRow = db
+						.prepare(`
+				SELECT COUNT(*) AS count
+				FROM embeddings e
+				INNER JOIN memories m ON m.id = e.source_id
+				WHERE e.source_type = 'memory'${liveSql}
+			`)
+						.get(...scope.args) as { count: number } | undefined;
+
+					const rowData = withVectors
+						? (db
+								.prepare(`
+					SELECT
+						m.id, m.content, m.who, m.importance, m.type, m.tags,
+						m.source_type, m.source_id, m.created_at,
+						e.vector, e.dimensions
+					FROM embeddings e
+					INNER JOIN memories m ON m.id = e.source_id
+					WHERE e.source_type = 'memory'${liveSql}
+					ORDER BY m.created_at DESC
+					LIMIT ? OFFSET ?
+				`)
+								.all(...scope.args, limit, offset) as EmbeddingRow[])
+						: (db
+								.prepare(`
+					SELECT
+						m.id, m.content, m.who, m.importance, m.type, m.tags,
+						m.source_type, m.source_id, m.created_at
+					FROM embeddings e
+					INNER JOIN memories m ON m.id = e.source_id
+					WHERE e.source_type = 'memory'${liveSql}
+					ORDER BY m.created_at DESC
+					LIMIT ? OFFSET ?
+				`)
+								.all(...scope.args, limit, offset) as EmbeddingRow[]);
+
+					return { total: totalRow?.count ?? 0, rows: rowData };
+				},
+				{ siteToken: "http/routes/memory-routes.ts:3514" },
+			);
+
+			const embeddings = rows.map((row) => ({
+				id: row.id,
+				content: redactCredentials(row.content),
+				text: redactCredentials(row.content),
+				who: row.who ?? "unknown",
+				importance: typeof row.importance === "number" ? row.importance : 0.5,
+				type: row.type,
+				tags: parseTagsField(row.tags),
+				sourceType: row.source_type ?? "memory",
+				sourceId: row.source_id ?? row.id,
+				createdAt: row.created_at,
+				vector: withVectors && row.vector ? blobToVector(row.vector, row.dimensions ?? null) : undefined,
+			}));
+
+			return c.json({
+				embeddings,
+				count: embeddings.length,
+				total,
+				limit,
+				offset,
+				hasMore: offset + embeddings.length < total,
+			});
+		} catch (e) {
+			return c.json({
+				error: (e as Error).message,
+				embeddings: [],
+				count: 0,
+				total: 0,
+				limit,
+				offset,
+				hasMore: false,
+			});
+		}
+	});
+	app.get("/api/embeddings/status", async (c) => {
+		const config = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
+		const status = await checkEmbeddingProvider(config.embedding);
+		const tracker = embeddingTrackerHandle?.getStats() ?? null;
+		const index = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const state = readEmbeddingIndexState(db);
+				return state?.staging
+					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
+					: state;
+			},
+			{ siteToken: "http/routes/memory-routes.ts:3595" },
+		);
+		return c.json({ ...status, tracker, index });
+	});
+	app.get("/api/embeddings/health", async (c) => {
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
+		const report = await getDbAccessor().withReadDbAsync(
+			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
+			{ siteToken: "http/routes/memory-routes.ts:3609" },
+		);
+		return c.json(report);
+	});
+	app.get("/api/embeddings/projection", async (c) => {
+		const denied = await requirePermission("admin", authConfig)(c, () => Promise.resolve());
+		if (denied) return denied;
+		const dimParam = c.req.query("dimensions");
+		const nComponents: 2 | 3 = dimParam === "3" ? 3 : 2;
+		const limit = parseOptionalBoundedInt(c.req.query("limit"), 1, 5000);
+		const offset = parseOptionalBoundedInt(c.req.query("offset"), 0, 100000) ?? 0;
+
+		const query = parseOptionalString(c.req.query("q"));
+		const whoFilters = [...new Set([...parseCsvQuery(c.req.query("who")), ...parseCsvQuery(c.req.query("harness"))])];
+		const typeFilters = (() => {
+			const list = parseCsvQuery(c.req.query("types"));
+			if (list.length > 0) return list;
+			const single = parseOptionalString(c.req.query("type"));
+			return single ? [single] : [];
+		})();
+		const sourceTypeFilters = (() => {
+			const list = parseCsvQuery(c.req.query("sourceTypes"));
+			if (list.length > 0) return list;
+			const legacy = parseCsvQuery(c.req.query("source_type"));
+			if (legacy.length > 0) return legacy;
+			const single = parseOptionalString(c.req.query("sourceType"));
+			return single ? [single] : [];
+		})();
+		const tagFilters = parseCsvQuery(c.req.query("tags"));
+		const pinned = parseOptionalBoolean(c.req.query("pinned"));
+		const since = parseIsoDateQuery(c.req.query("since"));
+		const until = parseIsoDateQuery(c.req.query("until"));
+		let importanceMin =
+			parseOptionalBoundedFloat(c.req.query("importanceMin"), 0, 1) ??
+			parseOptionalBoundedFloat(c.req.query("importance_min"), 0, 1);
+		let importanceMax =
+			parseOptionalBoundedFloat(c.req.query("importanceMax"), 0, 1) ??
+			parseOptionalBoundedFloat(c.req.query("importance_max"), 0, 1);
+		if (typeof importanceMin === "number" && typeof importanceMax === "number" && importanceMin > importanceMax) {
+			const swap = importanceMin;
+			importanceMin = importanceMax;
+			importanceMax = swap;
+		}
+
+		const hasFilters =
+			query !== undefined ||
+			whoFilters.length > 0 ||
+			typeFilters.length > 0 ||
+			sourceTypeFilters.length > 0 ||
+			tagFilters.length > 0 ||
+			pinned !== undefined ||
+			since !== undefined ||
+			until !== undefined ||
+			importanceMin !== undefined ||
+			importanceMax !== undefined;
+		const useCachedProjection = !hasFilters && limit === undefined && offset === 0;
+
+		if (!useCachedProjection) {
+			try {
+				const projection = await getDbAccessor().withReadDbAsync(
+					async (db) =>
+						computeProjectionForQuery(db, nComponents, {
+							limit,
+							offset,
+							filters: hasFilters
+								? {
+										query,
+										who: whoFilters,
+										types: typeFilters,
+										sourceTypes: sourceTypeFilters,
+										tags: tagFilters,
+										pinned,
+										since,
+										until,
+										importanceMin,
+										importanceMax,
+									}
+								: undefined,
+						}),
+					{ siteToken: "http/routes/memory-routes.ts:3670" },
+				);
+
+				return c.json({
+					status: "ready",
+					dimensions: nComponents,
+					count: projection.count,
+					total: projection.total,
+					limit: projection.limit,
+					offset: projection.offset,
+					hasMore: projection.hasMore,
+					nodes: redactProjectionNodes(projection.result.nodes),
+					edges: projection.result.edges,
+				});
+			} catch (err) {
+				const message = err instanceof Error ? err.message : String(err);
+				return c.json({ status: "error", message }, 500);
+			}
+		}
+
+		const { cached, total } = await getDbAccessor().withReadDbAsync(
+			async (db) => {
+				const cachedResult = getCachedProjection(db, nComponents);
+				const countRow = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
+				const count =
+					typeof countRow === "object" && countRow !== null && "count" in countRow && typeof countRow.count === "number"
+						? countRow.count
+						: 0;
+				return { cached: cachedResult, total: count };
+			},
+			{ siteToken: "http/routes/memory-routes.ts:3710" },
+		);
+
+		if (cached !== null && cached.embeddingCount === total) {
+			return c.json({
+				status: "ready",
+				dimensions: nComponents,
+				count: total,
+				total,
+				limit: total,
+				offset: 0,
+				hasMore: false,
+				nodes: redactProjectionNodes(cached.result.nodes),
+				edges: cached.result.edges,
+				cachedAt: cached.cachedAt,
+			});
+		}
+
+		const recentError = projectionErrors.get(nComponents);
+		if (recentError) {
+			if (Date.now() > recentError.expires) {
+				projectionErrors.delete(nComponents);
+			} else {
+				return c.json({ status: "error", message: recentError.message }, 500);
+			}
+		}
+
+		if (!projectionInFlight.has(nComponents)) {
+			projectionErrors.delete(nComponents);
+			const computation = (async () => {
+				try {
+					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
+						siteToken: "http/routes/memory-routes.ts:3751",
+					});
+					const count = await getDbAccessor().withReadDbAsync(
+						async (db) => {
+							const row = db.prepare("SELECT COUNT(*) as count FROM embeddings WHERE source_type = 'memory'").get();
+							return typeof row === "object" && row !== null && "count" in row && typeof row.count === "number"
+								? row.count
+								: 0;
+						},
+						{ siteToken: "http/routes/memory-routes.ts:3754" },
+					);
+					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
+				} catch (err) {
+					const msg = err instanceof Error ? err.message : String(err);
+					logger.error("projection", "UMAP computation failed", err instanceof Error ? err : new Error(msg));
+					projectionErrors.set(nComponents, {
+						message: msg,
+						expires: Date.now() + PROJECTION_ERROR_TTL_MS,
+					});
+				} finally {
+					projectionInFlight.delete(nComponents);
+				}
+			})();
+			projectionInFlight.set(nComponents, computation);
+		}
+
+		return c.json({ status: "computing", dimensions: nComponents }, 202);
+	});
+	app.post("/api/documents", async (c) => {
+		let body: Record<string, unknown>;
+		try {
+			body = (await c.req.json()) as Record<string, unknown>;
+		} catch {
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+
+		const sourceType = body.source_type as string | undefined;
+		if (!sourceType || !["text", "url", "file"].includes(sourceType)) {
+			return c.json({ error: "source_type must be text, url, or file" }, 400);
+		}
+
+		if (sourceType === "text" && typeof body.content !== "string") {
+			return c.json({ error: "content is required for text source_type" }, 400);
+		}
+		if (sourceType === "url" && typeof body.url !== "string") {
+			return c.json({ error: "url is required for url source_type" }, 400);
+		}
+
+		const sourceUrl =
+			sourceType === "url"
+				? (body.url as string)
+				: sourceType === "file"
+					? ((body.url as string | undefined) ?? null)
+					: null;
+
+		const scopedAgent = resolveMemoryScopedAgentId(c, {
+			agentId:
+				parseOptionalString(body.agentId) ??
+				parseOptionalString(body.agent_id) ??
+				c.req.query("agentId") ??
+				c.req.query("agent_id") ??
+				c.req.header("x-signet-agent-id"),
+			sessionKey: c.req.header("x-signet-session-key"),
+		});
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const metadataRecord = toRecord(body.metadata);
+		const scopedProject = resolveScopedProject(
+			c,
+			parseOptionalString(body.project) ?? parseOptionalString(metadataRecord?.project),
+		);
+		if (scopedProject.error) return c.json({ error: scopedProject.error }, 403);
+		await ensureAgentRegistered(scopedAgent.agentId);
+		const metadataJson = documentMetadataJson(body.metadata);
+
+		const accessor = getDbAccessor();
+
+		try {
+			const id = crypto.randomUUID();
+			const now = new Date().toISOString();
+
+			const result = await runWriteTxAsync(accessor, (db) => {
+				if (sourceUrl) {
+					const candidates = prepareTypedStatement<{ id: string; status: string } & DocumentScopeRow>(
+						db,
+						`SELECT id, status, agent_id, project FROM documents
+							 WHERE source_url = ?
+							   AND status NOT IN ('failed', 'deleted')`,
+					).all(sourceUrl);
+					const existing = candidates.find((candidate) =>
+						documentScopeMatches(candidate, {
+							agentId: scopedAgent.agentId,
+							project: scopedProject.project ?? null,
+						}),
+					);
+					if (existing) {
+						return { deduplicated: true as const, existing };
+					}
+				}
+
+				db.prepare(
+					`INSERT INTO documents
+					 (id, source_url, source_type, content_type, title,
+					  raw_content, status, connector_id, chunk_count,
+					  memory_count, metadata_json, agent_id, project, created_at, updated_at)
+					 VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?, ?, ?)`,
+				).run(
+					id,
+					sourceUrl,
+					sourceType,
+					(body.content_type as string | undefined) ?? null,
+					(body.title as string | undefined) ?? null,
+					sourceType === "text" ? (body.content as string) : null,
+					(body.connector_id as string | undefined) ?? null,
+					metadataJson,
+					scopedAgent.agentId,
+					scopedProject.project ?? null,
+					now,
+					now,
+				);
+
+				return { deduplicated: false as const };
+			});
+
+			if (result.deduplicated) {
+				return c.json({
+					id: result.existing.id,
+					status: result.existing.status,
+					deduplicated: true,
+				});
+			}
+
+			const jobId = await enqueueDocumentIngestJob(accessor, id);
+			return c.json({ id, status: "queued", jobId: jobId ?? undefined }, 201);
+		} catch (e) {
+			logger.error("documents", "Failed to create document", e as Error);
+			return c.json({ error: "Failed to create document" }, 500);
+		}
+	});
+	app.get("/api/documents", async (c) => {
+		if (shouldEnforceAuthScope(c)) {
+			return c.json({ error: "documents list requires unscoped credentials" }, 403);
+		}
+		const status = c.req.query("status");
+		const limit = Math.min(Math.max(1, Number.parseInt(c.req.query("limit") ?? "50", 10) || 50), 500);
+		const offset = Math.max(0, Number.parseInt(c.req.query("offset") ?? "0", 10) || 0);
+
+		try {
+			const countSql = status
+				? "SELECT COUNT(*) AS cnt FROM documents WHERE status = ?"
+				: "SELECT COUNT(*) AS cnt FROM documents";
+			const listSql = status
+				? "SELECT * FROM documents WHERE status = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"
+				: "SELECT * FROM documents ORDER BY created_at DESC LIMIT ? OFFSET ?";
+			const [countRow, documents] = await Promise.all([
+				dbOwnerQuery<{ cnt: number } | undefined>(
+					{ sql: countSql, params: status ? [status] : [], result: "get" },
+					{ operation: "documents.count", lane: "read", deadlineMs: 3_000 },
+				),
+				dbOwnerQuery<unknown[]>(
+					{ sql: listSql, params: status ? [status, limit, offset] : [limit, offset], result: "all" },
+					{ operation: "documents.list", lane: "read", deadlineMs: 5_000 },
+				),
+			]);
+			const result = { documents, total: countRow?.cnt ?? 0 };
+
+			return c.json({ ...result, limit, offset });
+		} catch (e) {
+			logger.error("documents", "Failed to list documents", e as Error);
+			return c.json({ error: "Failed to list documents" }, 500);
+		}
+	});
+	app.get("/api/documents/:id", async (c) => {
+		if (shouldEnforceAuthScope(c)) {
+			return c.json({ error: "document access requires unscoped credentials" }, 403);
+		}
+		const id = c.req.param("id");
+		try {
+			const doc = await dbOwnerQuery<Record<string, unknown> | undefined>(
+				{ sql: "SELECT * FROM documents WHERE id = ?", params: [id], result: "get" },
+				{ operation: "documents.get", lane: "read", deadlineMs: 3_000 },
+			);
+			if (!doc) return c.json({ error: "Document not found" }, 404);
+			return c.json(doc);
+		} catch (e) {
+			logger.error("documents", "Failed to get document", e as Error);
+			return c.json({ error: "Failed to get document" }, 500);
+		}
+	});
+	app.get("/api/documents/:id/chunks", async (c) => {
+		const id = c.req.param("id");
+		try {
+			const scope = await resolveMemoryReadScope(c);
+			if (scope instanceof Response) return scope;
+			const enforce = shouldEnforceAuthScope(c);
+			const documentScopeSql = enforce ? ` AND d.agent_id = ?${scope.project ? " AND d.project = ?" : ""}` : "";
+			const documentScopeArgs = enforce ? [scope.agentId, ...(scope.project ? [scope.project] : [])] : [];
+			const chunks = await dbOwnerQuery<Array<{ content: string }>>(
+				{
+					sql: `SELECT m.id, m.content, m.type, m.created_at,
+					        dm.chunk_index
+					 FROM document_memories dm
+					 JOIN documents d ON d.id = dm.document_id
+					 JOIN memories m ON m.id = dm.memory_id
+					 WHERE dm.document_id = ? AND d.status != 'deleted' AND m.is_deleted = 0${documentScopeSql}${scope.sql}
+					 ORDER BY dm.chunk_index ASC`,
+					params: [id, ...documentScopeArgs, ...scope.args],
+					result: "all",
+				},
+				{ operation: "documents.list_chunks", lane: "read", deadlineMs: 5_000 },
+			);
+			return c.json({
+				chunks: chunks.map((chunk) => ({ ...chunk, content: redactCredentials(chunk.content) })),
+				count: chunks.length,
+			});
+		} catch (e) {
+			logger.error("documents", "Failed to list chunks", e as Error);
+			return c.json({ error: "Failed to list chunks" }, 500);
+		}
+	});
+	app.delete("/api/documents/:id", async (c) => {
+		const id = c.req.param("id");
+		const reason = c.req.query("reason");
+		if (!reason) {
+			return c.json({ error: "reason query parameter is required" }, 400);
+		}
+
+		const doc = await dbOwnerQuery<({ id: string } & DocumentScopeRow) | undefined>(
+			{ sql: "SELECT id, agent_id, project FROM documents WHERE id = ?", params: [id], result: "get" },
+			{ operation: "documents.get_for_delete", lane: "read", deadlineMs: 3_000 },
+		);
+		if (!doc) return c.json({ error: "Document not found" }, 404);
+
+		const accessor = getDbAccessor();
+		try {
+			const now = new Date().toISOString();
+			const actor = resolveMutationActor(c, "document-api");
+
+			const delScopedAgent = resolveMemoryScopedAgentId(c, {
+				agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+				sessionKey: c.req.header("x-signet-session-key"),
+			});
+			if (delScopedAgent.error) return c.json({ error: delScopedAgent.error }, 403);
+			const delScopeProject = c.get("auth")?.claims?.scope?.project ?? null;
+			const documentOwnedByScope = documentScopeOwnedBy(doc, {
+				agentId: delScopedAgent.agentId,
+				project: delScopeProject,
+			});
+			const enforceScope = shouldEnforceAuthScope(c);
+			const delProjectSql = delScopeProject ? " AND m.project = ?" : "";
+			const delScopeArgs = delScopeProject ? [delScopedAgent.agentId, delScopeProject] : [delScopedAgent.agentId];
+			const linkedMemorySql = `SELECT dm.memory_id FROM document_memories dm
+				 WHERE dm.document_id = ?
+				 ${enforceScope ? `AND EXISTS (SELECT 1 FROM memories m WHERE m.id = dm.memory_id AND m.is_deleted = 0 AND m.agent_id = ? AND m.visibility != 'archived'${delProjectSql})` : ""}`;
+			if (enforceScope && !documentOwnedByScope) {
+				return c.json({ error: "document not found" }, 404);
+			}
+
+			const memoriesRemoved = await runWriteTxAsync(accessor, (db) => {
+				db.prepare(
+					`UPDATE documents
+					 SET status = 'deleted', error = ?, updated_at = ?
+					 WHERE id = ?`,
+				).run(reason, now, id);
+				db.prepare(
+					`UPDATE memory_jobs
+					 SET status = 'completed', error = ?, completed_at = ?, updated_at = ?
+					 WHERE job_type = 'document_ingest'
+					   AND memory_id IS NULL
+					   AND document_id = ?
+					   AND status IN ('pending', 'leased')`,
+				).run(`Document deleted: ${reason}`, now, now, id);
+
+				let removed = 0;
+				const linkedMemories = prepareTypedStatement<{ memory_id: string }>(db, linkedMemorySql).all(
+					id,
+					...(enforceScope ? delScopeArgs : []),
+				);
+				for (const link of linkedMemories) {
+					const mem = db.prepare("SELECT is_deleted FROM memories WHERE id = ?").get(link.memory_id) as
+						| { is_deleted: number }
+						| undefined;
+					if (!mem || mem.is_deleted === 1) continue;
+					const activeReferences = db
+						.prepare(
+							`SELECT COUNT(*) AS count
+							 FROM document_memories dm
+							 JOIN documents d ON d.id = dm.document_id
+							 WHERE dm.memory_id = ?
+							   AND dm.document_id != ?
+							   AND d.status != 'deleted'`,
+						)
+						.get(link.memory_id, id) as { count: number };
+					if (activeReferences.count > 0) continue;
+
+					db.prepare(
+						`UPDATE memories
+						 SET is_deleted = 1, deleted_at = ?, updated_at = ?,
+						     updated_by = ?, version = version + 1
+						 WHERE id = ?`,
+					).run(now, now, actor.changedBy, link.memory_id);
+
+					const histId = crypto.randomUUID();
+					db.prepare(
+						`INSERT INTO memory_history
+						 (id, memory_id, event, old_content, new_content,
+						  changed_by, reason, metadata, created_at)
+						 VALUES (?, ?, 'deleted', NULL, NULL, ?, ?, NULL, ?)`,
+					).run(histId, link.memory_id, actor.changedBy, `Document deleted: ${reason}`, now);
+
+					removed++;
+				}
+				return removed;
+			});
+
+			return c.json({ deleted: true, memoriesRemoved });
+		} catch (e) {
+			logger.error("documents", "Failed to delete document", e as Error);
+			return c.json({ error: "Failed to delete document" }, 500);
+		}
+	});
+}

@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
 	readRetainedMigrationVerifyStatus,
 	runProductionMigrationVerificationWiring,
-} from "./daemon-migration-startup";
+} from "./db/integrity/migration-startup";
 
 function ownerThatFails(error: Error): Parameters<typeof readRetainedMigrationVerifyStatus>[0] {
 	return {

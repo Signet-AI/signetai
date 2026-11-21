@@ -138,15 +138,15 @@ parentPort.postMessage({ type: "worker-thread-smoke", pid: process.pid, threadId
 );
 
 const workerEntries = [
-	["synthesis-render-worker", "platform/daemon/src/synthesis-render-worker.ts"],
-	["database-integrity-worker", "platform/daemon/src/database-integrity-worker.ts"],
-	["db-owner-worker", "platform/daemon/src/db-owner-worker.ts"],
-	["native-memory-source-worker", "platform/daemon/src/native-memory-source-worker.ts"],
-	["harness-install-worker", "platform/daemon/src/harness-install-worker.ts"],
-	["harness-health-worker", "platform/daemon/src/harness-health-worker.ts"],
-	["embedding-worker", "platform/daemon/src/embedding-worker.ts"],
-	["dreaming-token-worker", "platform/daemon/src/pipeline/dreaming-token-worker.ts"],
-	["pi-agent-worker", "platform/daemon/src/pipeline/pi-agent-worker.ts"],
+	["synthesis-render-worker", "platform/daemon/src/workers/synthesis/synthesis-render-worker.ts"],
+	["database-integrity-worker", "platform/daemon/src/db/integrity/database-integrity-worker.ts"],
+	["db-owner-worker", "platform/daemon/src/db/owner/db-owner-worker.ts"],
+	["native-memory-source-worker", "platform/daemon/src/sources/providers/native-memory/native-memory-source-worker.ts"],
+	["harness-install-worker", "platform/daemon/src/harness/install/harness-install-worker.ts"],
+	["harness-health-worker", "platform/daemon/src/harness/health/harness-health-worker.ts"],
+	["embedding-worker", "platform/daemon/src/inference/embeddings/embedding-worker.ts"],
+	["dreaming-token-worker", "platform/daemon/src/inference/providers/dreaming-token-worker.ts"],
+	["pi-agent-worker", "platform/daemon/src/inference/providers/pi-agent-worker.ts"],
 	["worker-thread-smoke", workerThreadSmokeEntry],
 ] as const;
 const nativeExternalArgs = ["--external", "better-sqlite3", "--external", "@napi-rs/keyring"] as const;
@@ -388,7 +388,7 @@ export const { AutoModelForSequenceClassification, AutoTokenizer, Tensor, env, p
 
 writeFileSync(
 	join(buildDir, "cli-native.ts"),
-	`import { materializeEmbeddedAssetTree, materializeEmbeddedNativeAddon, materializeEmbeddedNativeLibrary, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
+	`import { materializeEmbeddedAssetTree, materializeEmbeddedNativeAddon, materializeEmbeddedNativeLibrary, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/runtime/update/native-runtime-assets";
 import tokenizerWasmAsset from ${JSON.stringify(tokenizerWasmPath)};
 import { handoffInspectorParent } from "../surfaces/cli/src/lib/inspector-proxy";
 import { connectorAssets, dashboardAssets, graphiqAssets, nativeAddonAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
@@ -445,7 +445,7 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 } else if (process.env.SIGNET_NATIVE_SOURCE_WORKER_SMOKE) {
 	const { mkdtemp, readdir, rm, writeFile } = await import("node:fs/promises");
 	const { tmpdir } = await import("node:os");
-	const { createNativeSourceWorker, NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES } = await import("../platform/daemon/src/native-memory-source-worker");
+	const { createNativeSourceWorker, NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES } = await import("../platform/daemon/src/sources/providers/native-memory/native-memory-source-worker");
 	const root = await mkdtemp(join(tmpdir(), "signet-native-source-smoke-"));
 	const worker = createNativeSourceWorker();
 	try {
@@ -514,7 +514,7 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 	const { runInspectorProxyFromEnvironment } = await import("../surfaces/cli/src/lib/inspector-proxy");
 	await runInspectorProxyFromEnvironment();
 } else if (process.env.SIGNET_DREAMING_MCP_CONFIG_SMOKE) {
-	const { createDreamingAcpxMcpConfig } = await import("../platform/daemon/src/pipeline/acpx-dreaming-mcp");
+	const { createDreamingAcpxMcpConfig } = await import("../platform/daemon/src/dreaming/tools/acpx-mcp");
 	const config = createDreamingAcpxMcpConfig({
 		agentId: "native-smoke",
 		passId: "native-smoke-pass",
@@ -526,10 +526,10 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 		config.dispose();
 	}
 } else if (process.env.SIGNET_MCP_STDIO_WORKER) {
-	const { runMcpStdio } = await import("../platform/daemon/src/mcp-stdio-runtime");
+	const { runMcpStdio } = await import("../platform/daemon/src/http/mcp/stdio-runtime");
 	await runMcpStdio();
 } else if (process.env.SIGNET_DREAMING_TOKEN_WORKER_SMOKE) {
-	const { DreamingBacklogTokenCache } = await import("../platform/daemon/src/pipeline/dreaming-token-cache");
+	const { DreamingBacklogTokenCache } = await import("../platform/daemon/src/dreaming/passes/token-cache");
 	const cache = new DreamingBacklogTokenCache();
 	try {
 		const first = await cache.replaceExactSnapshot("native-smoke", [
@@ -579,7 +579,7 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 } else if (process.env.SIGNET_RUNTIME_VERSION_SMOKE) {
 	process.stdout.write(JSON.stringify({ type: "runtime-version", bun: Bun.version }) + "\\n");
 } else if (process.env.SIGNET_NATIVE_WORKER_THREAD_SMOKE) {
-	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/native-runtime-assets");
+	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/runtime/update/native-runtime-assets");
 	const workerPath = resolveEmbeddedWorkerPath("worker-thread-smoke");
 	if (workerPath === null) throw new Error("worker-thread smoke requires an embedded worker asset");
 	const { Worker } = await import("node:worker_threads");
@@ -622,21 +622,21 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 		await worker.terminate();
 	}
 } else if (process.env.SIGNET_HEALTH_INSPECTION) {
-	await import("../platform/daemon/src/harness-health-worker");
+	await import("../platform/daemon/src/harness/health/harness-health-worker");
 } else if (process.env.SIGNET_DB_OWNER_WORKER) {
-	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
+	const { runDbOwnerWorker } = await import("../platform/daemon/src/db/owner/db-owner-worker");
 	runDbOwnerWorker();
 } else if (process.env.SIGNET_INSTALL_HARNESS) {
-	const { runHarnessInstallWorker } = await import("../platform/daemon/src/harness-install-worker");
+	const { runHarnessInstallWorker } = await import("../platform/daemon/src/harness/install/harness-install-worker");
 	await runHarnessInstallWorker();
 } else if (process.env.SIGNET_DB_OWNER_CLIENT_SMOKE) {
 	const dbPath = process.env.SIGNET_DB_OWNER_DB_PATH;
 	if (!dbPath) throw new Error("DB owner client smoke requires SIGNET_DB_OWNER_DB_PATH");
-	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/native-runtime-assets");
+	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/runtime/update/native-runtime-assets");
 	if (resolveEmbeddedWorkerPath("db-owner-worker") === null) {
 		throw new Error("DB owner client smoke requires embedded db-owner-worker asset");
 	}
-	const { createDbOwnerClient } = await import("../platform/daemon/src/db-owner-client");
+	const { createDbOwnerClient } = await import("../platform/daemon/src/db/owner/client");
 	const client = createDbOwnerClient({ dbPath });
 	try {
 		const handle = client.submit<readonly { readonly value: number }[]>(
@@ -652,10 +652,10 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 		await client.close();
 	}
 } else if (process.env.SIGNET_DB_OWNER_DB_PATH) {
-	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
+	const { runDbOwnerWorker } = await import("../platform/daemon/src/db/owner/db-owner-worker");
 	runDbOwnerWorker();
 } else if (process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH) {
-	const { runDatabaseIntegrityWorker } = await import("../platform/daemon/src/database-integrity-worker");
+	const { runDatabaseIntegrityWorker } = await import("../platform/daemon/src/db/integrity/database-integrity-worker");
 	runDatabaseIntegrityWorker();
 } else {
 	await import("../surfaces/cli/src/cli.ts");

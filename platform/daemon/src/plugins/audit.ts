@@ -1,7 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { preflightWorkspace, redactCredentials, resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
-import { logger } from "../logger.js";
+import { logger } from "../runtime/logging/logger.js";
 
 export type PluginAuditResultV1 = "ok" | "denied" | "degraded" | "error";
 export type PluginAuditSourceV1 = "plugin-host" | "secrets-provider" | "secrets-routes";

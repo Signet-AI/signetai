@@ -3,9 +3,9 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db-accessor";
-import { handleUserPromptSubmit } from "../platform/daemon/src/hooks";
-import { matchPromptEntities } from "../platform/daemon/src/prompt-entity-context";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../platform/daemon/src/db/owner/accessor";
+import { handleUserPromptSubmit } from "../platform/daemon/src/http/hooks/hooks";
+import { matchPromptEntities } from "../platform/daemon/src/recall/context/prompt-entity-context";
 
 const iterations = positiveEnvInt("SIGNET_PROMPT_SUBMIT_BENCH_ITERS", 20);
 const embeddingDelayMs = positiveEnvInt("SIGNET_PROMPT_SUBMIT_BENCH_EMBED_MS", 10);

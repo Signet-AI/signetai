@@ -1,0 +1,1358 @@
+import { afterEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+	DEFAULT_LLAMACPP_MAX_INPUT_TOKENS,
+	DEFAULT_NATIVE_EMBEDDING_IDLE_TTL_MS,
+	DEFAULT_PIPELINE_V2,
+	MAX_LLAMACPP_MAX_INPUT_TOKENS,
+	MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
+	MAX_NATIVE_EMBEDDING_IDLE_TTL_MS,
+	MIN_LLAMACPP_MAX_INPUT_TOKENS,
+	MIN_NATIVE_EMBEDDING_IDLE_TTL_MS,
+	MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS,
+	detectLocalTimeZone,
+	loadDreamingConfig,
+	loadMemoryConfig,
+	loadPipelineConfig,
+	retiredDreamingIdentityFiles,
+} from "./memory-config";
+import { DEFAULT_DREAMING_POLICIES } from "../dreaming/passes/policies";
+
+const tmpDirs: string[] = [];
+
+afterEach(() => {
+	while (tmpDirs.length > 0) {
+		const dir = tmpDirs.pop();
+		if (!dir) continue;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+describe("loadDreamingConfig", () => {
+	it("uses the built-in policy for every pass type that is not configured", () => {
+		expect(loadDreamingConfig({}).policies).toEqual(DEFAULT_DREAMING_POLICIES);
+		expect(loadDreamingConfig({ memory: { dreaming: { enabled: true } } }).policies).toEqual(DEFAULT_DREAMING_POLICIES);
+		expect(
+			loadDreamingConfig({ memory: { dreaming: { policies: { content: "File only decisions.\n" } } } }).policies,
+		).toEqual({ ...DEFAULT_DREAMING_POLICIES, content: "File only decisions.\n" });
+	});
+
+	it("reads a pass-type policy written as a YAML block in agent.yaml", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-dreaming-policy-"));
+		tmpDirs.push(dir);
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			"memory:\n  dreaming:\n    policies:\n      hygiene: |\n        Archive only exact duplicates.\n        Keep everything else.\n",
+		);
+		expect(loadMemoryConfig(dir).dreaming.policies).toEqual({
+			...DEFAULT_DREAMING_POLICIES,
+			hygiene: "Archive only exact duplicates.\nKeep everything else.\n",
+		});
+	});
+
+	it("keeps the built-in policy for blank, malformed, oversized, and unknown policy entries", () => {
+		const policies = loadDreamingConfig({
+			memory: {
+				dreaming: {
+					policies: {
+						hygiene: "   \n",
+						content: 42,
+						combined: "x".repeat(64_001),
+						hygeine: "Misspelled pass type.",
+					},
+				},
+			},
+		}).policies;
+		expect(policies).toEqual(DEFAULT_DREAMING_POLICIES);
+		expect(loadDreamingConfig({ memory: { dreaming: { policies: "Not a mapping." } } }).policies).toEqual(
+			DEFAULT_DREAMING_POLICIES,
+		);
+		expect(
+			loadDreamingConfig({ memory: { dreaming: { policies: { combined: "x".repeat(64_000) } } } }).policies.combined,
+		).toHaveLength(64_000);
+	});
+
+	it("reports each policy entry that is not in use", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-dreaming-policy-"));
+		tmpDirs.push(dir);
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			`memory:\n  dreaming:\n    policies:\n      hygiene: "   "\n      content: 42\n      combined: "${"x".repeat(64_001)}"\n      hygeine: Misspelled.\n`,
+		);
+		expect(loadMemoryConfig(dir).dreamingPolicyProblems).toEqual({
+			"dreaming.policies.content": "is not text; the content pass uses its default policy",
+			"dreaming.policies.combined": "is longer than 64,000 characters; the combined pass uses its default policy",
+			"dreaming.policies.hygeine": "is not a pass type (hygiene, content, combined); it is ignored",
+		});
+		writeFileSync(join(dir, "agent.yaml"), "memory:\n  dreaming:\n    policies: Not a mapping.\n");
+		expect(loadMemoryConfig(dir).dreamingPolicyProblems).toEqual({
+			"dreaming.policies": "must be a mapping of pass type to policy text; every pass uses its default policy",
+		});
+		writeFileSync(join(dir, "agent.yaml"), "memory:\n  dreaming:\n    policies:\n      content: File decisions.\n");
+		expect(loadMemoryConfig(dir).dreamingPolicyProblems).toEqual({});
+	});
+
+	it("finds identity entries that still use the retired dreaming kind", () => {
+		expect(retiredDreamingIdentityFiles({})).toEqual([]);
+		expect(
+			retiredDreamingIdentityFiles({
+				identity: {
+					special: [
+						{ path: "HEARTBEAT.md", kind: "heartbeat" },
+						{ path: "DREAMING.md", kind: "dreaming", role: "dreaming_prompt", budget: 4000 },
+						{ kind: "dreaming" },
+					],
+				},
+			}),
+		).toEqual(["DREAMING.md", "(no path)"]);
+	});
+
+	it("defaults dreaming off and preserves an explicit enable", () => {
+		expect(loadDreamingConfig({}).enabled).toBe(false);
+		expect(loadDreamingConfig({ memory: { dreaming: { enabled: true } } }).enabled).toBe(true);
+	});
+
+	it("defaults and bounds the low-volume backlog maximum wait", () => {
+		expect(loadDreamingConfig({}).maxInterval).toBe(6 * 60 * 60 * 1_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxInterval: 1 } } }).maxInterval).toBe(5 * 60 * 1_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxInterval: 9 * 24 * 60 * 60 * 1_000 } } }).maxInterval).toBe(
+			7 * 24 * 60 * 60 * 1_000,
+		);
+	});
+
+	it("defaults and bounds the per-pass backlog budget", () => {
+		expect(loadDreamingConfig({}).maxPassTokens).toBe(200_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxPassTokens: 120_000 } } }).maxPassTokens).toBe(120_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxPassTokens: 5 } } }).maxPassTokens).toBe(10_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxPassTokens: 9_000_000 } } }).maxPassTokens).toBe(2_000_000);
+	});
+
+	it("leaves the Dreaming output cap to the model unless one is configured", () => {
+		expect(loadDreamingConfig({}).maxOutputTokens).toBeNull();
+		expect(loadDreamingConfig({ memory: { dreaming: { enabled: true } } }).maxOutputTokens).toBeNull();
+		expect(loadDreamingConfig({ memory: { dreaming: { maxOutputTokens: 64_000 } } }).maxOutputTokens).toBe(64_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxOutputTokens: 200_000 } } }).maxOutputTokens).toBe(200_000);
+		expect(loadDreamingConfig({ memory: { dreaming: { maxOutputTokens: 10 } } }).maxOutputTokens).toBe(1_000);
+	});
+
+	it("keeps surprisal attention opt-in and clamps its resource bounds", () => {
+		expect(loadDreamingConfig({}).surprisal).toEqual({
+			enabled: false,
+			sampleSize: 128,
+			maxCandidates: 5,
+			minObservations: 20,
+			neighborCount: 5,
+			treeLeafSize: 10,
+			minScore: 0.75,
+		});
+
+		const config = loadDreamingConfig({
+			memory: {
+				dreaming: {
+					surprisal: {
+						enabled: true,
+						sampleSize: 10_000,
+						maxCandidates: 0,
+						minObservations: 1,
+						neighborCount: 99,
+						treeLeafSize: 1,
+						minScore: -1,
+					},
+				},
+			},
+		});
+		expect(config.surprisal).toEqual({
+			enabled: true,
+			sampleSize: 500,
+			maxCandidates: 1,
+			minObservations: 8,
+			neighborCount: 32,
+			treeLeafSize: 2,
+			minScore: 0,
+		});
+	});
+});
+
+function makeTempAgentsDir(): string {
+	const dir = mkdtempSync(join(tmpdir(), "signet-daemon-config-"));
+	tmpDirs.push(dir);
+	return dir;
+}
+
+function restoreWarmNativeEnv(value: string | undefined): void {
+	if (value === undefined) {
+		Reflect.deleteProperty(process.env, "SIGNET_EMBEDDING_WARM_NATIVE");
+		return;
+	}
+	process.env.SIGNET_EMBEDDING_WARM_NATIVE = value;
+}
+
+describe("loadMemoryConfig", () => {
+	it("defaults telemetry off and requires an explicit boolean opt-in at the canonical path", () => {
+		const agentsDir = mkdtempSync(join(tmpdir(), "telemetry-consent-"));
+		tmpDirs.push(agentsDir);
+		expect(DEFAULT_PIPELINE_V2.telemetryEnabled).toBe(false);
+		for (const [content, enabled] of [
+			["memory: {}", false],
+			["pipelineV2:\n  telemetryEnabled: true", false],
+			["memory:\n  pipelineV2:\n    telemetryEnabled: false", false],
+			["memory:\n  pipelineV2:\n    telemetryEnabled: true", true],
+		] as const) {
+			writeFileSync(join(agentsDir, "agent.yaml"), content);
+			expect(loadMemoryConfig(agentsDir).pipelineV2.telemetryEnabled).toBe(enabled);
+		}
+	});
+	it("rejects malformed selected YAML without falling back to another config file", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding: [\nauth:\n  mode: team\n");
+		writeFileSync(join(agentsDir, "config.yaml"), "embedding:\n  provider: none\n");
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow(`${join(agentsDir, "agent.yaml")}: invalid YAML syntax`);
+	});
+
+	it("rejects invalid provider, dimensions, and search values with redacted field diagnostics", () => {
+		const agentsDir = makeTempAgentsDir();
+		for (const [field, value] of [
+			["embedding.provider", "potato"],
+			["embedding.dimensions", "banana"],
+			["embedding.costRates.native", "nope"],
+			["embedding.cost_rates.native", "nope"],
+			["search.top_k", "-20"],
+			["network.mode", "public"],
+		] as const) {
+			const content = `embedding:
+  api_key: super-secret-value
+  provider: ${field === "embedding.provider" ? value : "none"}
+  dimensions: ${field === "embedding.dimensions" ? value : "768"}
+  ${field === "embedding.costRates.native" ? "costRates" : field === "embedding.cost_rates.native" ? "cost_rates" : "costRates"}:
+    native: ${field.includes("cost") ? value : "0"}
+search:
+  top_k: ${field === "search.top_k" ? value : "20"}
+network:
+  mode: ${field === "network.mode" ? value : "localhost"}
+`;
+			writeFileSync(join(agentsDir, "agent.yaml"), content);
+			expect(() => loadMemoryConfig(agentsDir)).toThrow(field);
+			expect(() => loadMemoryConfig(agentsDir)).not.toThrow("super-secret-value");
+		}
+	});
+
+	it("preserves valid disabled embedding and team authentication", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: none\nauth:\n  mode: team\n");
+
+		const config = loadMemoryConfig(agentsDir);
+		expect(config.embedding.provider).toBe("none");
+		expect(config.auth.mode).toBe("team");
+	});
+
+	it("keeps documented defaults when optional runtime settings are absent", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "name: Example\n");
+
+		const config = loadMemoryConfig(agentsDir);
+		expect(config.embedding.provider).toBe("native");
+		expect(config.search.top_k).toBe(20);
+		expect(config.search.min_score).toBe(0.1);
+		expect(config.auth.mode).toBe("local");
+	});
+
+	it("ignores the retired search.alpha while keeping the min_score default of configs that carry it", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "search:\n  alpha: 8\n");
+		const legacy = loadMemoryConfig(agentsDir).search;
+		expect(legacy).not.toHaveProperty("alpha");
+		expect(legacy.top_k).toBe(20);
+		expect(legacy.min_score).toBe(0.3);
+
+		writeFileSync(join(agentsDir, "agent.yaml"), "search:\n  top_k: 12\n  min_score: 0.25\n");
+		const explicit = loadMemoryConfig(agentsDir).search;
+		expect(explicit.top_k).toBe(12);
+		expect(explicit.min_score).toBe(0.25);
+	});
+
+	it("preserves the supported local embedding provider alias", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: local\n");
+
+		expect(loadMemoryConfig(agentsDir).embedding.provider).toBe("native");
+	});
+
+	it("preserves an explicit empty telemetry API key for local-only delivery (#1290)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    telemetry:
+      posthogApiKey: ""
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2.telemetry.posthogApiKey).toBe("");
+	});
+
+	it("prefers agent.yaml embedding settings over config.yaml fallback", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`embedding:
+  provider: ollama
+  model: all-minilm
+  dimensions: 384
+`,
+		);
+		writeFileSync(
+			join(agentsDir, "config.yaml"),
+			`embeddings:
+  provider: openai
+  model: text-embedding-3-large
+  dimensions: 3072
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.model).toBe("all-minilm");
+		expect(cfg.embedding.dimensions).toBe(384);
+	});
+
+	it("parses configured embedding cost rates for remote providers (#1201)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`embedding:
+  provider: openai
+  costRates:
+    openai: 0.03
+    openrouter: 0.01
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.costRates).toEqual({ openai: 0.03, openrouter: 0.01 });
+	});
+
+	it("parses embedding.warmNative: false as the native kill-switch (#1073)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`embedding:
+  provider: native
+  warmNative: false
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.warmNative).toBe(false);
+	});
+
+	it("parses warmNative without requiring an explicit provider (#1073)", () => {
+		const agentsDir = makeTempAgentsDir();
+		const previous = process.env.SIGNET_EMBEDDING_WARM_NATIVE;
+		try {
+			Reflect.deleteProperty(process.env, "SIGNET_EMBEDDING_WARM_NATIVE");
+			writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  warmNative: false\n");
+			expect(loadMemoryConfig(agentsDir).embedding.warmNative).toBe(false);
+		} finally {
+			restoreWarmNativeEnv(previous);
+		}
+	});
+
+	it("defaults warmNative to true when unset (#1073)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: native\n");
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.warmNative).toBe(true);
+	});
+
+	it("lets SIGNET_EMBEDDING_WARM_NATIVE override the yaml value (#1073)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: native\n  warmNative: true\n");
+		const previous = process.env.SIGNET_EMBEDDING_WARM_NATIVE;
+		try {
+			process.env.SIGNET_EMBEDDING_WARM_NATIVE = "0";
+			const cfg = loadMemoryConfig(agentsDir);
+			expect(cfg.embedding.warmNative).toBe(false);
+		} finally {
+			restoreWarmNativeEnv(previous);
+		}
+	});
+
+	it("applies SIGNET_EMBEDDING_WARM_NATIVE when no config file exists (#1073)", () => {
+		const agentsDir = makeTempAgentsDir();
+		const previous = process.env.SIGNET_EMBEDDING_WARM_NATIVE;
+		try {
+			process.env.SIGNET_EMBEDDING_WARM_NATIVE = "0";
+			expect(loadMemoryConfig(agentsDir).embedding.warmNative).toBe(false);
+		} finally {
+			restoreWarmNativeEnv(previous);
+		}
+	});
+
+	it("rejects retired memory.embeddings configuration with actionable guidance", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "AGENT.yaml"),
+			`memory:
+  embeddings:
+    provider: openai
+    model: text-embedding-3-small
+    dimensions: 1536
+`,
+		);
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow(
+			"memory.embeddings is retired; configure provider, model, and dimensions under the canonical embedding block instead.",
+		);
+	});
+
+	it("rejects retired top-level embeddings configuration with actionable guidance", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "config.yaml"),
+			`embeddings:
+  provider: openai
+  model: text-embedding-3-large
+  dimensions: 3072
+`,
+		);
+
+		expect(() => loadMemoryConfig(agentsDir)).toThrow(
+			"embeddings is retired; configure provider, model, and dimensions under the canonical embedding block instead.",
+		);
+	});
+
+	it("defaults to native provider when no config exists", () => {
+		const agentsDir = makeTempAgentsDir();
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("native");
+		expect(cfg.embedding.model).toBe("nomic-embed-text-v1.5");
+		expect(cfg.embedding.dimensions).toBe(768);
+		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
+		expect(cfg.embedding.llamaCppMaxInputTokens).toBe(DEFAULT_LLAMACPP_MAX_INPUT_TOKENS);
+		expect(cfg.embedding.idleTtlMs).toBe(DEFAULT_NATIVE_EMBEDDING_IDLE_TTL_MS);
+		expect(cfg.embedding.preloadNative).toBe(false);
+	});
+
+	it("loads and bounds the native embedding idle TTL", () => {
+		const configuredDir = makeTempAgentsDir();
+		writeFileSync(join(configuredDir, "agent.yaml"), "embedding:\n  idleTtlMs: 120000\n");
+		expect(loadMemoryConfig(configuredDir).embedding.idleTtlMs).toBe(120000);
+
+		const lowDir = makeTempAgentsDir();
+		writeFileSync(join(lowDir, "agent.yaml"), "embedding:\n  idleTtlMs: 1\n");
+		expect(loadMemoryConfig(lowDir).embedding.idleTtlMs).toBe(MIN_NATIVE_EMBEDDING_IDLE_TTL_MS);
+
+		const highDir = makeTempAgentsDir();
+		writeFileSync(join(highDir, "agent.yaml"), "embedding:\n  idleTtlMs: 999999999\n");
+		expect(loadMemoryConfig(highDir).embedding.idleTtlMs).toBe(MAX_NATIVE_EMBEDDING_IDLE_TTL_MS);
+	});
+
+	it("deliberately enables the bounded freshness prior by default and allows opt-out", () => {
+		const defaultDir = makeTempAgentsDir();
+		const defaults = loadMemoryConfig(defaultDir);
+		expect(defaults.search.temporal_prior_enabled).toBe(true);
+		expect(defaults.search.temporal_prior_weight).toBe(0.15);
+		expect(defaults.search.temporal_prior_half_life_days).toBe(14);
+
+		const disabledDir = makeTempAgentsDir();
+		writeFileSync(join(disabledDir, "agent.yaml"), "search:\n  temporal_prior_enabled: false\n");
+		expect(loadMemoryConfig(disabledDir).search.temporal_prior_enabled).toBe(false);
+	});
+
+	it("loads embedding prompt-submit timeout from agent.yaml", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: mxbai-embed-large\n  promptSubmitTimeoutMs: 10000\n",
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.promptSubmitTimeoutMs).toBe(10000);
+	});
+
+	it("allows native model preloading to be opted into explicitly", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  preloadNative: true\n");
+		expect(loadMemoryConfig(agentsDir).embedding.preloadNative).toBe(true);
+	});
+
+	it("clamps embedding prompt-submit timeout bounds", () => {
+		const lowDir = makeTempAgentsDir();
+		writeFileSync(join(lowDir, "agent.yaml"), "embedding:\n  provider: ollama\n  promptSubmitTimeoutMs: 50\n");
+		expect(loadMemoryConfig(lowDir).embedding.promptSubmitTimeoutMs).toBe(MIN_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
+
+		const highDir = makeTempAgentsDir();
+		writeFileSync(join(highDir, "agent.yaml"), "embedding:\n  provider: ollama\n  promptSubmitTimeoutMs: 999999\n");
+		expect(loadMemoryConfig(highDir).embedding.promptSubmitTimeoutMs).toBe(MAX_PROMPT_SUBMIT_EMBEDDING_TIMEOUT_MS);
+	});
+
+	it("loads and clamps the llama.cpp input token limit", () => {
+		const configuredDir = makeTempAgentsDir();
+		writeFileSync(
+			join(configuredDir, "agent.yaml"),
+			"embedding:\n  provider: llama-cpp\n  llamaCppMaxInputTokens: 1800\n",
+		);
+		expect(loadMemoryConfig(configuredDir).embedding.llamaCppMaxInputTokens).toBe(1800);
+
+		const lowDir = makeTempAgentsDir();
+		writeFileSync(join(lowDir, "agent.yaml"), "embedding:\n  llamaCppMaxInputTokens: 1\n");
+		expect(loadMemoryConfig(lowDir).embedding.llamaCppMaxInputTokens).toBe(MIN_LLAMACPP_MAX_INPUT_TOKENS);
+
+		const highDir = makeTempAgentsDir();
+		writeFileSync(join(highDir, "agent.yaml"), "embedding:\n  llamaCppMaxInputTokens: 999999\n");
+		expect(loadMemoryConfig(highDir).embedding.llamaCppMaxInputTokens).toBe(MAX_LLAMACPP_MAX_INPUT_TOKENS);
+	});
+
+	it("respects ollama+nomic-embed-text config without overriding", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: nomic-embed-text\n  dimensions: 768\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.model).toBe("nomic-embed-text");
+	});
+
+	it("defaults ollama base_url to the IPv4 loopback when not specified", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: ollama\n  model: nomic-embed-text\n");
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.base_url).toBe("http://127.0.0.1:11434");
+	});
+
+	it("respects explicit ollama base_url when provided", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: http://192.168.1.100:11434\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.base_url).toBe("http://192.168.1.100:11434");
+	});
+
+	it("accepts embedding.endpoint as an alias for embedding.base_url", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: nomic-embed-text\n  endpoint: http://172.17.0.1:11434\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.base_url).toBe("http://172.17.0.1:11434");
+	});
+
+	it("defaults ollama base_url when explicitly empty", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			'embedding:\n  provider: ollama\n  model: nomic-embed-text\n  base_url: ""\n',
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.base_url).toBe("http://127.0.0.1:11434");
+	});
+
+	it("defaults openai base_url to the official API endpoint when not specified", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: openai\n  model: text-embedding-3-small\n");
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("openai");
+		expect(cfg.embedding.base_url).toBe("https://api.openai.com/v1");
+	});
+
+	it("respects explicit openai base_url when provided", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: openai\n  model: text-embedding-3-small\n  base_url: https://example.com/v1\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("openai");
+		expect(cfg.embedding.base_url).toBe("https://example.com/v1");
+	});
+
+	it("respects ollama+nomic-embed-text:latest config without overriding", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: nomic-embed-text:latest\n  dimensions: 768\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+	});
+
+	it("does NOT migrate ollama+bge-large (non-nomic model)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: ollama\n  model: bge-large\n  dimensions: 1024\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("ollama");
+		expect(cfg.embedding.model).toBe("bge-large");
+	});
+
+	it("does NOT migrate openai provider", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			"embedding:\n  provider: openai\n  model: text-embedding-3-small\n  dimensions: 1536\n",
+		);
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.embedding.provider).toBe("openai");
+	});
+
+	it("includes install-on retrieval and maintenance defaults when no config exists", () => {
+		const agentsDir = makeTempAgentsDir();
+		const cfg = loadMemoryConfig(agentsDir);
+
+		expect(cfg.search.rehearsal_enabled).toBe(true);
+		expect(cfg.pipelineV2.reranker.enabled).toBe(true);
+		expect(cfg.pipelineV2.graph.enabled).toBe(true);
+		expect(cfg.pipelineV2.autonomous.enabled).toBe(true);
+		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(true);
+		expect(cfg.pipelineV2.autonomous.maintenanceMode).toBe("execute");
+	});
+
+	it("includes pipelineV2 defaults when no config exists", () => {
+		const agentsDir = makeTempAgentsDir();
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2).toEqual(DEFAULT_PIPELINE_V2);
+	});
+
+	it("loads pipelineV2 flags from agent.yaml (flat keys, backward compat)", () => {
+		const agentsDir = makeTempAgentsDir();
+		writeFileSync(
+			join(agentsDir, "agent.yaml"),
+			`memory:
+  pipelineV2:
+    enabled: true
+    shadowMode: true
+    graphEnabled: true
+    minFactConfidenceForWrite: 0.82
+`,
+		);
+
+		const cfg = loadMemoryConfig(agentsDir);
+		expect(cfg.pipelineV2.enabled).toBe(true);
+		expect(cfg.pipelineV2.shadowMode).toBe(true);
+		expect(cfg.pipelineV2.graph.enabled).toBe(true);
+		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
+		expect(cfg.pipelineV2.autonomous.enabled).toBe(DEFAULT_PIPELINE_V2.autonomous.enabled);
+		expect(cfg.pipelineV2.mutationsFrozen).toBe(DEFAULT_PIPELINE_V2.mutationsFrozen);
+		expect(cfg.pipelineV2.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
+		expect(cfg.pipelineV2.extraction.minConfidence).toBe(0.82);
+	});
+
+	it("rejects retired memory-pipeline routing keys instead of applying a local fallback", () => {
+		const cases = [
+			{ extractionProvider: "codex" },
+			{ extractionModel: "gpt-5.3-codex" },
+			{ extractionEndpoint: "https://gateway.example.test/v1" },
+			{ extractionFallbackProvider: "none" },
+			{ allowRemoteProviders: false },
+			{ extraction: { provider: "ollama" } },
+			{ extraction: { model: "qwen3:8b" } },
+			{ extraction: { endpoint: "http://127.0.0.1:11434" } },
+			{ synthesis: { provider: "ollama" } },
+			{ synthesis: { model: "qwen3:8b" } },
+			{ synthesis: { endpoint: "http://127.0.0.1:11434" } },
+		] as const;
+
+		for (const legacy of cases) {
+			expect(() => loadPipelineConfig({ memory: { pipelineV2: legacy } })).toThrow("is retired");
+		}
+	});
+
+	it("rejects retired command extraction rather than silently falling back", () => {
+		expect(() =>
+			loadPipelineConfig({
+				memory: { pipelineV2: { extraction: { provider: "command" } } },
+			}),
+		).toThrow("is retired");
+	});
+});
+
+describe("loadPipelineConfig", () => {
+	it("returns all-false defaults when memory.pipelineV2 is absent", () => {
+		const result = loadPipelineConfig({});
+		expect(result).toEqual(DEFAULT_PIPELINE_V2);
+	});
+
+	it("returns all-false defaults when memory key exists but pipelineV2 is absent", () => {
+		const result = loadPipelineConfig({ memory: { database: "test.db" } });
+		expect(result).toEqual(DEFAULT_PIPELINE_V2);
+	});
+
+	it("loads extraction tuning without provider routing", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: { strength: "high", timeout: 30000, minConfidence: 0.8 },
+				},
+			},
+		});
+
+		expect(result.extraction.strength).toBe("high");
+		expect(result.extraction.timeout).toBe(30000);
+		expect(result.extraction.minConfidence).toBe(0.8);
+		expect(result.extraction).not.toHaveProperty("provider");
+		expect(result.extraction).not.toHaveProperty("model");
+		expect(result).not.toHaveProperty("synthesis");
+	});
+
+	it("rejects the retired synthesis block", () => {
+		expect(() => loadPipelineConfig({ memory: { pipelineV2: { synthesis: { enabled: true } } } })).toThrow(
+			"memory.pipelineV2.synthesis is retired",
+		);
+	});
+
+	it("rejects the retired top-level synthesis config", () => {
+		expect(() => loadPipelineConfig({ memory: { synthesis: { harness: "openclaw" } } })).toThrow(
+			"memory.synthesis is retired",
+		);
+	});
+
+	it("defaults reflections to 6am in the detected local timezone with 3 briefs", () => {
+		const result = loadPipelineConfig({});
+		expect(result.reflections.schedule).toBe("0 6 * * *");
+		expect(result.reflections.count).toBe(3);
+		expect(result.reflections.timezone).toBe(detectLocalTimeZone());
+	});
+
+	it("honors the reflections count and timezone and bounds invalid values", () => {
+		const clamped = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					reflections: {
+						count: 9,
+						timezone: "Not/AZone",
+						schedule: "0 9 * * *",
+					},
+				},
+			},
+		});
+		expect(clamped.reflections.count).toBe(6);
+		expect(clamped.reflections.timezone).toBe(detectLocalTimeZone());
+		expect(clamped.reflections.schedule).toBe("0 9 * * *");
+
+		const valid = loadPipelineConfig({
+			memory: { pipelineV2: { reflections: { timezone: "Europe/Berlin", count: 2 } } },
+		});
+		expect(valid.reflections.timezone).toBe("Europe/Berlin");
+		expect(valid.reflections.count).toBe(2);
+	});
+
+	it("rejects synthesis provider/model/endpoint routing", () => {
+		const cases = [
+			{ provider: "openrouter" },
+			{ model: "gpt-4o-mini" },
+			{ endpoint: "https://gateway.example.test/v1" },
+		] as const;
+
+		for (const synthesis of cases) {
+			expect(() => loadPipelineConfig({ memory: { pipelineV2: { synthesis } } })).toThrow("is retired");
+		}
+	});
+
+	it("loads explicit Claude Code API key env inheritance and budget controls", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					claudeCode: {
+						allowApiKeyEnv: true,
+						maxBudgetUsd: 0.5,
+						cooldownMs: 120000,
+					},
+				},
+			},
+		});
+
+		expect(result.claudeCode.allowApiKeyEnv).toBe(true);
+		expect(result.claudeCode.maxBudgetUsd).toBe(0.5);
+		expect(result.claudeCode.cooldownMs).toBe(120000);
+	});
+
+	it("maps legacy Claude Code billingMode to API key env inheritance", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					claudeCode: {
+						billingMode: "api-key",
+					},
+				},
+			},
+		});
+
+		expect(result.claudeCode.allowApiKeyEnv).toBe(true);
+	});
+
+	it("defaults Claude Code background calls to strip ambient Anthropic env without a spend cap", () => {
+		const result = loadPipelineConfig({});
+
+		expect(result.claudeCode.allowApiKeyEnv).toBe(false);
+		expect(result.claudeCode.maxBudgetUsd).toBeUndefined();
+		expect(result.claudeCode.cooldownMs).toBeGreaterThan(0);
+	});
+
+	it("rejects flat extraction model routing", () => {
+		expect(() => loadPipelineConfig({ memory: { pipelineV2: { extractionModel: "qwen3:8b" } } })).toThrow("is retired");
+	});
+
+	it("loads all flags correctly when all set to true (flat keys)", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: true,
+					shadowMode: true,
+					allowUpdateDelete: true,
+					graphEnabled: true,
+					autonomousEnabled: true,
+					mutationsFrozen: true,
+					autonomousFrozen: true,
+				},
+			},
+		});
+
+		expect(result.enabled).toBe(true);
+		expect(result.shadowMode).toBe(true);
+		expect(result.autonomous.allowUpdateDelete).toBe(true);
+		expect(result.graph.enabled).toBe(true);
+		expect(result.autonomous.enabled).toBe(true);
+		expect(result.mutationsFrozen).toBe(true);
+		expect(result.autonomous.frozen).toBe(true);
+	});
+
+	it("merges partial config with defaults", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: true,
+					mutationsFrozen: true,
+				},
+			},
+		});
+
+		expect(result.enabled).toBe(true);
+		expect(result.mutationsFrozen).toBe(true);
+		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
+		expect(result.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
+		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
+		expect(result.autonomous.enabled).toBe(DEFAULT_PIPELINE_V2.autonomous.enabled);
+		expect(result.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
+	});
+
+	it("bounds explicit telemetry deployment role and install channel declarations", () => {
+		const configured = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					telemetry: { deploymentRole: "SERVICE", installChannel: "container" },
+				},
+			},
+		});
+		expect(configured.telemetry.deploymentRole).toBe("service");
+		expect(configured.telemetry.installChannel).toBe("container");
+
+		const invalid = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					telemetry: { deploymentRole: "owner", installChannel: "local-path" },
+				},
+			},
+		});
+		expect(invalid.telemetry.deploymentRole).toBe("unknown");
+		expect(invalid.telemetry.installChannel).toBe("unknown");
+	});
+
+	it("loads feedback config and clamps weights", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					feedback: {
+						enabled: true,
+						ftsWeightDelta: 0.04,
+						maxAspectWeight: 2,
+						minAspectWeight: -1,
+						decayEnabled: false,
+						decayRate: 0.02,
+						staleDays: 30,
+						decayIntervalSessions: 25,
+					},
+				},
+			},
+		});
+
+		expect(result.feedback.enabled).toBe(true);
+		expect(result.feedback.ftsWeightDelta).toBe(0.04);
+		expect(result.feedback.maxAspectWeight).toBe(1);
+		expect(result.feedback.minAspectWeight).toBe(0);
+		expect(result.feedback.decayEnabled).toBe(false);
+		expect(result.feedback.decayRate).toBe(0.02);
+		expect(result.feedback.staleDays).toBe(30);
+		expect(result.feedback.decayIntervalSessions).toBe(25);
+	});
+
+	it("treats non-boolean truthy values as defaults (not coerced)", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: "yes",
+					shadowMode: 1,
+					graphEnabled: "true",
+				},
+			},
+		});
+		expect(result.enabled).toBe(DEFAULT_PIPELINE_V2.enabled);
+		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
+		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
+	});
+
+	it("clamps numeric fields to valid ranges (flat keys)", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					workerMaxRetries: -5,
+					extractionTimeout: 999999,
+					leaseTimeoutMs: 1,
+					minFactConfidenceForWrite: 3,
+				},
+			},
+		});
+		expect(result.worker.maxRetries).toBe(1);
+		expect(result.extraction.timeout).toBe(300000);
+		expect(result.worker.leaseTimeoutMs).toBe(10000);
+		expect(result.extraction.minConfidence).toBe(1);
+	});
+
+	it("uses defaults for non-number numeric fields", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					workerMaxRetries: null,
+					extractionTimeout: undefined,
+					leaseTimeoutMs: true,
+					minFactConfidenceForWrite: "high",
+				},
+			},
+		});
+
+		expect(result.worker.maxRetries).toBe(DEFAULT_PIPELINE_V2.worker.maxRetries);
+		expect(result.extraction.timeout).toBe(DEFAULT_PIPELINE_V2.extraction.timeout);
+		expect(result.worker.leaseTimeoutMs).toBe(DEFAULT_PIPELINE_V2.worker.leaseTimeoutMs);
+		expect(result.extraction.minConfidence).toBe(DEFAULT_PIPELINE_V2.extraction.minConfidence);
+	});
+
+	it("accepts valid numeric values within range (flat keys)", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					workerMaxRetries: 5,
+					extractionTimeout: 60000,
+					leaseTimeoutMs: 120000,
+					minFactConfidenceForWrite: 0.55,
+				},
+			},
+		});
+
+		expect(result.worker.maxRetries).toBe(5);
+		expect(result.extraction.timeout).toBe(60000);
+		expect(result.worker.leaseTimeoutMs).toBe(120000);
+		expect(result.extraction.minConfidence).toBe(0.55);
+	});
+
+	it("treats empty rateLimit objects as unconfigured", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: { rateLimit: {} },
+				},
+			},
+		});
+
+		expect(result.extraction.rateLimit).toBeUndefined();
+	});
+
+	it("preserves explicit maxCallsPerHour disable in rateLimit config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						rateLimit: {
+							maxCallsPerHour: 0,
+						},
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.rateLimit).toEqual({
+			maxCallsPerHour: 0,
+			burstSize: 20,
+			waitTimeoutMs: 5000,
+		});
+	});
+
+	it("clamps burstSize to 1 in parsed rateLimit config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					extraction: {
+						rateLimit: {
+							maxCallsPerHour: 100,
+							burstSize: 0,
+						},
+					},
+				},
+			},
+		});
+
+		expect(result.extraction.rateLimit).toEqual({
+			maxCallsPerHour: 100,
+			burstSize: 1,
+			waitTimeoutMs: 5000,
+		});
+	});
+
+	it("rejects retired write-gate and durability configuration", () => {
+		for (const pipelineV2 of [
+			{ writeGate: { threshold: 0.45 } },
+			{ durability: { enabled: true } },
+			{ writeGateEnabled: true },
+		]) {
+			expect(() => loadPipelineConfig({ memory: { pipelineV2 } })).toThrow(
+				"writeGate and durability configuration is retired",
+			);
+		}
+	});
+
+	it("rejects retired procedural enrichment configuration", () => {
+		for (const procedural of [{ enrichOnInstall: true }, { enrichMinDescription: 30 }]) {
+			expect(() => loadPipelineConfig({ memory: { pipelineV2: { procedural } } })).toThrow(
+				"procedural enrichment configuration is retired",
+			);
+		}
+	});
+
+	it("loads graph boost and reranker fields (flat keys)", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					graphBoostWeight: 0.25,
+					graphBoostTimeoutMs: 300,
+					rerankerEnabled: true,
+					rerankerModel: "cross-encoder/ms-marco",
+					rerankerTopN: 15,
+					rerankerTimeoutMs: 1500,
+				},
+			},
+		});
+
+		expect(result.graph.boostWeight).toBe(0.25);
+		expect(result.graph.boostTimeoutMs).toBe(300);
+		expect(result.reranker.enabled).toBe(true);
+		expect(result.reranker.model).toBe("cross-encoder/ms-marco");
+		expect(result.reranker.useExtractionModel).toBe(false);
+		expect(result.reranker.topN).toBe(15);
+		expect(result.reranker.timeoutMs).toBe(1500);
+	});
+
+	it("uses defaults for graph boost and reranker when absent", () => {
+		const result = loadPipelineConfig({
+			memory: { pipelineV2: { enabled: true } },
+		});
+
+		expect(result.graph.boostWeight).toBe(DEFAULT_PIPELINE_V2.graph.boostWeight);
+		expect(result.graph.boostTimeoutMs).toBe(DEFAULT_PIPELINE_V2.graph.boostTimeoutMs);
+		expect(result.reranker.enabled).toBe(DEFAULT_PIPELINE_V2.reranker.enabled);
+		expect(result.reranker.model).toBe(DEFAULT_PIPELINE_V2.reranker.model);
+		expect(result.reranker.useExtractionModel).toBe(DEFAULT_PIPELINE_V2.reranker.useExtractionModel);
+		expect(result.reranker.topN).toBe(DEFAULT_PIPELINE_V2.reranker.topN);
+		expect(result.reranker.timeoutMs).toBe(DEFAULT_PIPELINE_V2.reranker.timeoutMs);
+		expect(result.reranker.device).toBe("default");
+		expect(result.reranker.onnxRuntimePath).toBe("");
+		expect(result.reranker.cudaLibraryPaths).toEqual([]);
+	});
+
+	it("loads the CUDA cross-encoder runtime settings", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					reranker: {
+						device: "cuda",
+						onnxRuntimePath: "/opt/ort/node_modules/onnxruntime-node",
+						cudaLibraryPaths: ["/opt/cuda12/lib", "~/cudnn/lib"],
+					},
+				},
+			},
+		});
+
+		expect(result.reranker.device).toBe("cuda");
+		expect(result.reranker.onnxRuntimePath).toBe("/opt/ort/node_modules/onnxruntime-node");
+		expect(result.reranker.cudaLibraryPaths[0]).toBe("/opt/cuda12/lib");
+		expect(result.reranker.cudaLibraryPaths[1]?.endsWith("/cudnn/lib")).toBe(true);
+		expect(result.reranker.cudaLibraryPaths[1]?.startsWith("~")).toBe(false);
+	});
+
+	for (const entry of [null, "", "   ", 42, false, "relative/lib"]) {
+		it(`rejects invalid CUDA library path ${JSON.stringify(entry)} at config load`, () => {
+			expect(() =>
+				loadPipelineConfig({
+					memory: { pipelineV2: { reranker: { cudaLibraryPaths: ["/opt/cuda/lib", entry] } } },
+				}),
+			).toThrow(/memory\.pipelineV2\.reranker\.cudaLibraryPaths/);
+		});
+	}
+
+	it("accepts the Metal reranker device with its runtime path", () => {
+		const result = loadPipelineConfig({
+			memory: { pipelineV2: { reranker: { device: "metal", onnxRuntimePath: "/opt/ort/onnxruntime-node" } } },
+		});
+		expect(result.reranker.device).toBe("metal");
+		expect(result.reranker.onnxRuntimePath).toBe("/opt/ort/onnxruntime-node");
+		expect(result.reranker.cudaLibraryPaths).toEqual([]);
+	});
+
+	it("rejects unknown reranker devices and relative runtime paths instead of ignoring them", () => {
+		expect(() => loadPipelineConfig({ memory: { pipelineV2: { reranker: { device: "gpu" } } } })).toThrow(
+			/reranker\.device/,
+		);
+		expect(() =>
+			loadPipelineConfig({
+				memory: { pipelineV2: { reranker: { onnxRuntimePath: "node_modules/onnxruntime-node" } } },
+			}),
+		).toThrow(/absolute path/);
+		expect(() =>
+			loadPipelineConfig({ memory: { pipelineV2: { reranker: { cudaLibraryPaths: "/opt/cuda" } } } }),
+		).toThrow(/list of paths/);
+	});
+
+	it("loads maintenance and repair config fields (flat keys)", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					maintenanceIntervalMs: 120000,
+					maintenanceMode: "execute",
+					repairReembedCooldownMs: 60000,
+					repairReembedHourlyBudget: 5,
+					repairRequeueCooldownMs: 30000,
+					repairRequeueHourlyBudget: 100,
+				},
+			},
+		});
+
+		expect(result.autonomous.maintenanceIntervalMs).toBe(120000);
+		expect(result.autonomous.maintenanceMode).toBe("execute");
+		expect(result.repair.reembedCooldownMs).toBe(60000);
+		expect(result.repair.reembedHourlyBudget).toBe(5);
+		expect(result.repair.requeueCooldownMs).toBe(30000);
+		expect(result.repair.requeueHourlyBudget).toBe(100);
+	});
+
+	it("retired extraction-worker config fields are absent from the resolved config (#946)", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					worker: {
+						pollMs: 5000,
+						maxLoadPerCpu: 0.6,
+						overloadBackoffMs: 45000,
+						threadedExtraction: false,
+					},
+					extraction: {
+						escalation: {
+							maxNewEntitiesPerChunk: 7,
+							maxNewAttributesPerEntity: 9,
+							level2MaxEntities: 3,
+						},
+					},
+				},
+			},
+		});
+		expect(result.worker).not.toHaveProperty("pollMs");
+		expect(result.worker).not.toHaveProperty("maxLoadPerCpu");
+		expect(result.worker).not.toHaveProperty("overloadBackoffMs");
+		expect(result.worker).not.toHaveProperty("threadedExtraction");
+		expect(result.extraction).not.toHaveProperty("escalation");
+		expect(result.worker.maxRetries).toBe(DEFAULT_PIPELINE_V2.worker.maxRetries);
+		expect(result.worker.leaseTimeoutMs).toBe(DEFAULT_PIPELINE_V2.worker.leaseTimeoutMs);
+		expect(result.worker.maxLlmConcurrency).toBe(DEFAULT_PIPELINE_V2.worker.maxLlmConcurrency);
+	});
+
+	it("loads canonical worker maxLlmConcurrency with bounded defaults and env override", () => {
+		const previous = process.env.SIGNET_MAX_LLM_CONCURRENCY;
+		try {
+			delete process.env.SIGNET_MAX_LLM_CONCURRENCY;
+			expect(loadPipelineConfig({ memory: { pipelineV2: { enabled: true } } }).worker.maxLlmConcurrency).toBe(2);
+			expect(
+				loadPipelineConfig({ memory: { pipelineV2: { enabled: true, worker: { maxLlmConcurrency: 0 } } } }).worker
+					.maxLlmConcurrency,
+			).toBe(1);
+			expect(
+				loadPipelineConfig({ memory: { pipelineV2: { enabled: true, worker: { maxLlmConcurrency: 99 } } } }).worker
+					.maxLlmConcurrency,
+			).toBe(99);
+			expect(
+				loadPipelineConfig({ memory: { pipelineV2: { enabled: true, worker: { maxLlmConcurrency: 999 } } } }).worker
+					.maxLlmConcurrency,
+			).toBe(256);
+			process.env.SIGNET_MAX_LLM_CONCURRENCY = "7";
+			expect(
+				loadPipelineConfig({ memory: { pipelineV2: { enabled: true, worker: { maxLlmConcurrency: 3 } } } }).worker
+					.maxLlmConcurrency,
+			).toBe(7);
+		} finally {
+			if (previous === undefined) delete process.env.SIGNET_MAX_LLM_CONCURRENCY;
+			else process.env.SIGNET_MAX_LLM_CONCURRENCY = previous;
+		}
+	});
+	it("ignores retired threadedExtraction config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: true,
+					worker: { threadedExtraction: false },
+				},
+			},
+		});
+
+		expect(result.worker).not.toHaveProperty("threadedExtraction");
+	});
+
+	it("uses defaults for maintenance config when absent", () => {
+		const result = loadPipelineConfig({
+			memory: { pipelineV2: { enabled: true } },
+		});
+
+		expect(result.autonomous.maintenanceIntervalMs).toBe(DEFAULT_PIPELINE_V2.autonomous.maintenanceIntervalMs);
+		expect(result.autonomous.maintenanceMode).toBe(DEFAULT_PIPELINE_V2.autonomous.maintenanceMode);
+		expect(result.repair.reembedCooldownMs).toBe(DEFAULT_PIPELINE_V2.repair.reembedCooldownMs);
+		expect(result.repair.reembedHourlyBudget).toBe(DEFAULT_PIPELINE_V2.repair.reembedHourlyBudget);
+		expect(result.repair.requeueCooldownMs).toBe(DEFAULT_PIPELINE_V2.repair.requeueCooldownMs);
+		expect(result.repair.requeueHourlyBudget).toBe(DEFAULT_PIPELINE_V2.repair.requeueHourlyBudget);
+	});
+
+	it("rejects invalid maintenanceMode values", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					maintenanceMode: "turbo",
+				},
+			},
+		});
+
+		expect(result.autonomous.maintenanceMode).toBe(DEFAULT_PIPELINE_V2.autonomous.maintenanceMode);
+	});
+
+	it("defaults paused to false when absent", () => {
+		const result = loadPipelineConfig({
+			memory: { pipelineV2: { enabled: true } },
+		});
+
+		expect(result.paused).toBe(false);
+	});
+
+	it("loads explicit paused state", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: true,
+					paused: true,
+				},
+			},
+		});
+
+		expect(result.enabled).toBe(true);
+		expect(result.paused).toBe(true);
+	});
+
+	it("preserves explicit false values over defaults", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: false,
+					graph: { enabled: false },
+					reranker: { enabled: false },
+					autonomous: {
+						enabled: false,
+						allowUpdateDelete: false,
+						maintenanceMode: "observe",
+					},
+				},
+			},
+		});
+
+		expect(result.enabled).toBe(false);
+		expect(result.graph.enabled).toBe(false);
+		expect(result.reranker.enabled).toBe(false);
+		expect(result.autonomous.enabled).toBe(false);
+		expect(result.autonomous.allowUpdateDelete).toBe(false);
+		expect(result.autonomous.maintenanceMode).toBe("observe");
+	});
+
+	it("supports nested config format", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					enabled: true,
+					extraction: {
+						timeout: 30000,
+						minConfidence: 0.8,
+					},
+					graph: { enabled: true, boostWeight: 0.3 },
+					reranker: { enabled: true, model: "my-reranker", useExtractionModel: true, topN: 10 },
+					autonomous: {
+						enabled: true,
+						frozen: false,
+						allowUpdateDelete: true,
+						maintenanceIntervalMs: 60000,
+						maintenanceMode: "execute",
+					},
+				},
+			},
+		});
+
+		expect(result.enabled).toBe(true);
+		expect(result.extraction.timeout).toBe(30000);
+		expect(result.extraction.minConfidence).toBe(0.8);
+		expect(result.graph.enabled).toBe(true);
+		expect(result.graph.boostWeight).toBe(0.3);
+		expect(result.reranker.enabled).toBe(true);
+		expect(result.reranker.model).toBe("my-reranker");
+		expect(result.reranker.useExtractionModel).toBe(true);
+		expect(result.reranker.topN).toBe(10);
+		expect(result.autonomous.enabled).toBe(true);
+		expect(result.autonomous.allowUpdateDelete).toBe(true);
+		expect(result.autonomous.maintenanceIntervalMs).toBe(60000);
+		expect(result.autonomous.maintenanceMode).toBe("execute");
+	});
+
+	it("nested keys take precedence over flat keys", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					rerankerEnabled: false,
+					rerankerModel: "flat-model",
+					rerankerUseExtractionModel: false,
+					reranker: {
+						enabled: true,
+						model: "nested-model",
+						useExtractionModel: true,
+					},
+				},
+			},
+		});
+
+		expect(result.reranker.enabled).toBe(true);
+		expect(result.reranker.model).toBe("nested-model");
+		expect(result.reranker.useExtractionModel).toBe(true);
+	});
+});

@@ -1,0 +1,1144 @@
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
+import type { Context, Hono } from "hono";
+import { DbOwnerCancelledError, DbOwnerError } from "../../db/owner/client";
+import { isAgentRegistered, resolveAgentId, resolveDaemonAgentId } from "../../agents/identity/agent-id.js";
+import { requirePermission, requirePermissionWithRateLimit } from "../../auth";
+import { getDbAccessor } from "../../db/owner/accessor.js";
+import {
+	getDbOwnerMaintenanceState,
+	ownerQueryAll,
+	ownerQueryOne,
+	withRegisteredDbOwnerMaintenance,
+} from "../../db/maintenance/maintenance.js";
+import { getVacuumConversionStatusAsync } from "../../db/maintenance/vacuum.js";
+import { type QueueCounts, getQueueDiagnosticsSnapshot } from "../../telemetry/diagnostics/queue.js";
+import { readEmbeddingUsageSummary } from "../../embeddings/usage/usage";
+import { readWorkspaceLayoutStatus } from "../../workspace/layout-upgrade";
+import { getInferenceRouterOrNull } from "../../inference/router/router.js";
+import type { BackgroundWorkloadDiagnostics } from "../../inference/router/router.js";
+import { getLlmProvider } from "../../inference/router/llm.js";
+import { getMcpWorkloadDiagnostics } from "../mcp/route.js";
+import { getLlmConcurrencyStatus } from "../../inference/router/provider.js";
+import { graphWriteCaps, loadMemoryConfig } from "../../config/memory-config.js";
+import {
+	getDreamingAttention,
+	getDreamingEvidenceExclusions,
+	getDreamingReviewedEvidence,
+	getDreamingPasses,
+	getDreamingPass,
+	getDreamingPassPolicy,
+	getActiveDreamingPasses,
+	getDreamingQualityReport,
+	getDreamingState,
+	getDreamingToolCalls,
+} from "../../workers";
+import { getDreamingEvidenceCoverage } from "../../dreaming/evidence/coverage";
+import {
+	getDreamingWorker,
+	getDreamingWorkloadDiagnostics,
+	getPipelineWorkerStatus,
+	requestDreamingEvidenceRequeue,
+	requestDreamingReviewedEvidenceRequeue,
+} from "../../workers";
+import {
+	DREAMING_LIVE_HEARTBEAT_MS,
+	dreamingLiveEvents,
+	type DreamingLiveEvent,
+} from "../../dreaming/passes/live-events";
+import { getFeedbackTelemetry } from "../../ontology/proposals/aspect-feedback.js";
+import { probeDreamingEpisodicBacklog } from "../../dreaming/passes/dreaming";
+import { DEFAULT_DREAMING_POLICIES } from "../../dreaming/passes/policies";
+import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../../dreaming/passes/token-cache";
+import { getDreamingCapability, getDreamingCapabilityManifest } from "../../dreaming/operations/capabilities.js";
+import { callDreamingPassTool } from "../../dreaming/tools/pass-tools";
+import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../../dreaming/operations/operations.js";
+import { AlreadyRunningError, type DreamingSchedulerStatus } from "../../dreaming/passes/worker.js";
+import { getSseDiagnosticsSnapshot, openBoundedSse } from "../server/sse-stream.js";
+import { getTraversalStatus } from "../../recall/graph/traversal.js";
+import {
+	getAvailableModels,
+	getModelsByProvider,
+	getRegistryStatus,
+	refreshRegistry,
+} from "../../inference/router/model-registry.js";
+import { getCachedResourceSnapshot } from "../../telemetry/pressure/resource-monitor.js";
+import { activeSessionCount, getBypassedSessionKeys, getSessionTrackerStats } from "../../sessions/tracker.js";
+import { telemetryDisabledByEnv } from "../../telemetry/usage/telemetry.js";
+import { getTranscriptCaptureStatus } from "../../transcripts/capture/worker.js";
+import { getTranscriptHealthReport } from "../../transcripts/store/health.js";
+import { getWorkspaceStatusSummary } from "../../telemetry/diagnostics/status-summary.js";
+import {
+	AGENTS_DIR,
+	BIND_HOST,
+	CURRENT_VERSION,
+	DAEMON_RUNTIME,
+	HOST,
+	LOG_DIR,
+	MEMORY_DB,
+	WORKSPACE_LAYOUT,
+	NETWORK_MODE,
+	PORT,
+	analyticsCollector,
+	authAdminLimiter,
+	authConfig,
+	buildOpenClawHealth,
+	getCachedDiagnosticsReport,
+	getCachedDiagnosticsReportIfFresh,
+	getExtractionWorkloadState,
+	getUpdateState,
+	invalidateDiagnosticsCache,
+	openClawHeartbeat,
+	pipelineTransition,
+	providerRuntimeResolution,
+	readEnvTrimmed,
+	readPipelineMode,
+	restartPipelineRuntimeRef,
+	setOpenClawHeartbeat,
+	setPipelineTransition,
+	telemetryRef,
+} from "./state.js";
+import { STATUS_CACHE_TTL, cachedEmbeddingStatus, resolveScopedAgentId, statusCacheTime } from "./utils.js";
+import { WRITE_PRESSURE_RETRY_AFTER_SECONDS, isRetryableWritePressure } from "../../db/maintenance/write-pressure";
+
+interface PipelineQueueBlock {
+	readonly memory: QueueCounts;
+	readonly summary: QueueCounts;
+	readonly oldestDeadSummaryJob: ReturnType<typeof getQueueDiagnosticsSnapshot>["oldestDeadSummaryJob"];
+}
+
+const EMPTY_QUEUE_COUNTS_SHAPE: QueueCounts = {
+	pending: 0,
+	leased: 0,
+	completed: 0,
+	failed: 0,
+	dead: 0,
+	oldestAgeSec: 0,
+	oldestDeadAgeSec: 0,
+	lastError: null,
+	completeness: "exact",
+};
+
+const UNKNOWN_QUEUE_COUNTS_SHAPE: QueueCounts = {
+	...EMPTY_QUEUE_COUNTS_SHAPE,
+	completeness: "unknown",
+};
+
+export function pipelineQueueBlock(options: { readonly allowSynchronousRead?: boolean } = {}): PipelineQueueBlock {
+	if (options.allowSynchronousRead === false) {
+		return {
+			memory: { ...UNKNOWN_QUEUE_COUNTS_SHAPE },
+			summary: { ...UNKNOWN_QUEUE_COUNTS_SHAPE },
+			oldestDeadSummaryJob: null,
+		};
+	}
+	try {
+		const accessor = getDbAccessor();
+		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+		return accessor.withReadDb((db: import("../../db/owner/accessor").ReadDb) => {
+			const snapshot = getQueueDiagnosticsSnapshot(db);
+			return {
+				memory: snapshot.memory,
+				summary: snapshot.summary,
+				oldestDeadSummaryJob: snapshot.oldestDeadSummaryJob,
+			};
+		}, "db:pipeline.queue-diagnostics.snapshot.read");
+	} catch {
+		return {
+			memory: { ...UNKNOWN_QUEUE_COUNTS_SHAPE },
+			summary: { ...UNKNOWN_QUEUE_COUNTS_SHAPE },
+			oldestDeadSummaryJob: null,
+		};
+	}
+}
+
+async function workloadDiagnosticsSnapshot(agentId: string): Promise<{
+	readonly inference: BackgroundWorkloadDiagnostics;
+	readonly mcp: ReturnType<typeof getMcpWorkloadDiagnostics>;
+	readonly pi: {
+		readonly active: number;
+		readonly oldestAgeMs: number | null;
+	};
+	readonly providerSemaphore: ReturnType<typeof getLlmConcurrencyStatus>;
+	readonly dreaming: Awaited<ReturnType<typeof getDreamingWorkloadDiagnostics>>;
+}> {
+	const inference: BackgroundWorkloadDiagnostics = getInferenceRouterOrNull()?.getBackgroundWorkloadDiagnostics(
+		agentId,
+	) ?? {
+		active: 0,
+		agentSessions: 0,
+		oldestAgeMs: null,
+		oldestAgentSessionAgeMs: null,
+		byOperation: {},
+	};
+	return {
+		inference,
+		mcp: getMcpWorkloadDiagnostics(agentId),
+		pi: { active: inference.agentSessions, oldestAgeMs: inference.oldestAgentSessionAgeMs },
+		providerSemaphore: getLlmConcurrencyStatus(),
+		dreaming: await getDreamingWorkloadDiagnostics(getDbAccessor(), agentId),
+	};
+}
+
+async function workloadDiagnostics(c: Context): Promise<Response> {
+	const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
+	const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
+	if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+	const agentId = resolveAgentId({ agentId: scopedAgent.agentId });
+	return c.json({ agentId, ...(await workloadDiagnosticsSnapshot(agentId)) });
+}
+
+const pipelineAdminGuard = (c: Context, next: () => Promise<void>) =>
+	requirePermissionWithRateLimit("admin", "admin", authAdminLimiter, authConfig)(c, next);
+
+function asRecord(value: unknown): Record<string, unknown> {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+	return value as Record<string, unknown>;
+}
+
+function readString(record: Readonly<Record<string, unknown>>, key: string): string | undefined {
+	const value = record[key];
+	if (typeof value !== "string") return undefined;
+	const trimmed = value.trim();
+	return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readNumber(record: Readonly<Record<string, unknown>>, key: string): number | undefined {
+	const value = record[key];
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function _readBoolean(record: Readonly<Record<string, unknown>>, key: string): boolean | undefined {
+	const value = record[key];
+	if (typeof value === "boolean") return value;
+	if (value === "true") return true;
+	if (value === "false") return false;
+	return undefined;
+}
+
+function readArray(record: Readonly<Record<string, unknown>>, key: string): readonly unknown[] | undefined {
+	const value = record[key];
+	return Array.isArray(value) ? value : undefined;
+}
+
+function requestedDreamAgentId(c: Context, body: Readonly<Record<string, unknown>> = {}): string | undefined {
+	return (
+		readString(body, "agentId") ??
+		readString(body, "agent_id") ??
+		c.req.query("agentId") ??
+		c.req.query("agent_id") ??
+		c.req.header("x-signet-agent-id")
+	);
+}
+
+export function resolveDreamRequestAgentId(c: Context, body: Readonly<Record<string, unknown>> = {}): string {
+	return resolveAgentId({ agentId: requestedDreamAgentId(c, body) ?? resolveDaemonAgentId() });
+}
+
+function resolveScopedDreamAgent(
+	c: Context,
+	body: Readonly<Record<string, unknown>> = {},
+): { readonly agentId: string; readonly error?: string } {
+	return resolveScopedAgentId(c, requestedDreamAgentId(c, body), resolveDaemonAgentId());
+}
+
+function parseDreamingCursor(value: string | undefined): number | null | "invalid" {
+	if (value === undefined || value.trim() === "") return null;
+	if (!/^\d+$/.test(value.trim())) return "invalid";
+	const cursor = Number.parseInt(value, 10);
+	return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : "invalid";
+}
+
+function isTerminalDreamingEvent(event: DreamingLiveEvent): boolean {
+	return event.type === "pass_completed" || event.type === "pass_failed";
+}
+
+const DREAMING_LIVE_STREAM_HIGH_WATER_MARK_BYTES = 1024 * 1024;
+
+export function getDreamingTriggerBlockReason(
+	transitioning: boolean,
+	pipeline: { readonly enabled: boolean; readonly paused: boolean; readonly mutationsFrozen: boolean },
+): { readonly status: 409 | 503; readonly error: string } | null {
+	if (transitioning) return { status: 409, error: "Pipeline transition already in progress" };
+	if (!pipeline.enabled) return { status: 503, error: "Pipeline is disabled" };
+	if (pipeline.paused) return { status: 503, error: "Pipeline is paused" };
+	if (pipeline.mutationsFrozen) return { status: 503, error: "Mutations are frozen (kill switch active)" };
+	return null;
+}
+
+export type DreamingBlockedBy = "disabled" | "paused" | "frozen" | "no_provider";
+
+export function getDreamingBlockedBy(
+	pipeline: { readonly enabled: boolean; readonly paused: boolean; readonly mutationsFrozen: boolean },
+	scheduler: DreamingSchedulerStatus | null,
+): DreamingBlockedBy | null {
+	if (!pipeline.enabled) return "disabled";
+	if (pipeline.paused) return "paused";
+	if (pipeline.mutationsFrozen) return "frozen";
+	if (scheduler?.reason === "inference_unavailable") return "no_provider";
+	return null;
+}
+
+async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
+	if (pipelineTransition) {
+		return c.json({ error: "Pipeline transition already in progress" }, 409);
+	}
+
+	const prev = readPipelinePauseState(AGENTS_DIR);
+	if (!prev.exists) {
+		return c.json({ error: "No Signet config file found" }, 404);
+	}
+
+	setPipelineTransition(true);
+	try {
+		const changed = prev.paused !== paused;
+		const next = changed ? setPipelinePaused(AGENTS_DIR, paused) : prev;
+		if (changed) {
+			if (!restartPipelineRuntimeRef) {
+				throw new Error("Pipeline runtime not initialized");
+			}
+			await restartPipelineRuntimeRef(loadMemoryConfig(AGENTS_DIR), telemetryRef);
+		}
+		const liveCfg = loadMemoryConfig(AGENTS_DIR);
+		return c.json({
+			success: true,
+			changed,
+			paused: next.paused,
+			file: next.file,
+			mode: readPipelineMode(liveCfg.pipelineV2),
+		});
+	} catch (err) {
+		const { logger } = await import("../../runtime/logging/logger.js");
+		logger.error(
+			"pipeline",
+			paused ? "Failed to pause pipeline" : "Failed to resume pipeline",
+			err instanceof Error ? err : new Error(String(err)),
+		);
+		return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+	} finally {
+		setPipelineTransition(false);
+	}
+}
+
+export function registerPipelineRoutes(app: Hono): void {
+	app.use("/api/diagnostics", async (c, next) => {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.use("/api/diagnostics/*", async (c, next) => {
+		return requirePermission("diagnostics", authConfig)(c, next);
+	});
+	app.get("/api/diagnostics/transcripts", async (c) => {
+		const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
+		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
+		if (scopedAgent.error) {
+			return c.json({ error: scopedAgent.error }, 403);
+		}
+		const agentId = resolveAgentId({ agentId: scopedAgent.agentId });
+		return c.json(await getTranscriptHealthReport(getDbAccessor(), AGENTS_DIR, agentId));
+	});
+
+	app.get("/api/diagnostics/workloads", (c) => workloadDiagnostics(c));
+
+	app.get("/api/status", async (c) => {
+		const config = loadMemoryConfig(AGENTS_DIR);
+		const extractionWorkload = getExtractionWorkloadState({
+			enabled: false,
+			paused: config.pipelineV2.paused,
+		});
+		const configuredLogFile = readEnvTrimmed("SIGNET_LOG_FILE");
+		const configuredLogDir = readEnvTrimmed("SIGNET_LOG_DIR") ?? LOG_DIR;
+		const datedLogFile = join(configuredLogDir, `signet-${new Date().toISOString().slice(0, 10)}.log`);
+
+		let health: { score: number; status: string } | undefined;
+		try {
+			const report = getCachedDiagnosticsReportIfFresh();
+			if (report !== null) health = report.composite;
+		} catch {}
+
+		const us = getUpdateState();
+		const dreamingWorker = getDreamingWorker();
+		let embeddingMigration = null;
+		try {
+			embeddingMigration =
+				(await withRegisteredDbOwnerMaintenance((maintenance) =>
+					maintenance.embeddingMigrationProgress(config.embedding.base_url),
+				)) ?? null;
+		} catch {}
+
+		let agentCreatedAt: string | null = null;
+		try {
+			for (const p of [join(AGENTS_DIR, "agent.yaml"), join(AGENTS_DIR, "AGENT.yaml")]) {
+				if (existsSync(p)) {
+					const yaml = parseSimpleYaml(readFileSync(p, "utf-8"));
+					const agent = yaml.agent as Record<string, unknown> | undefined;
+					if (agent?.created) {
+						agentCreatedAt = String(agent.created);
+					}
+					break;
+				}
+			}
+		} catch {}
+
+		let transcriptCapture:
+			| {
+					pending: number;
+					failed: number;
+					dead: number;
+					processing: number;
+			  }
+			| undefined;
+		try {
+			const capture = await getTranscriptCaptureStatus(getDbAccessor(), resolveDaemonAgentId());
+			transcriptCapture = {
+				pending: capture.pending,
+				failed: capture.failed,
+				dead: capture.dead,
+				processing: capture.processing,
+			};
+		} catch {}
+
+		return c.json({
+			status: "running",
+			runtime: DAEMON_RUNTIME,
+			version: CURRENT_VERSION,
+			pid: process.pid,
+			uptime: process.uptime(),
+			startedAt: new Date(Date.now() - process.uptime() * 1000).toISOString(),
+			port: PORT,
+			host: HOST,
+			bindHost: BIND_HOST,
+			networkMode: NETWORK_MODE,
+			agentId: resolveDaemonAgentId(),
+			agentsDir: AGENTS_DIR,
+			memoryDb: existsSync(MEMORY_DB),
+			workspaceLayout: readWorkspaceLayoutStatus(AGENTS_DIR, WORKSPACE_LAYOUT.version),
+			resources: getCachedResourceSnapshot(),
+			pipelineV2: config.pipelineV2,
+			telemetryDisabledByEnv: telemetryDisabledByEnv(),
+			pipeline: {
+				queue: pipelineQueueBlock({ allowSynchronousRead: false }),
+				dreaming: dreamingWorker?.scheduler ?? null,
+			},
+			dreaming: {
+				enabled: config.dreaming.enabled,
+				workerRunning: dreamingWorker?.running ?? false,
+				blockedBy: getDreamingBlockedBy(config.pipelineV2, dreamingWorker?.scheduler ?? null),
+			},
+			providerResolution: { ...providerRuntimeResolution, extraction: extractionWorkload },
+			logging: {
+				logDir: configuredLogFile ? dirname(configuredLogFile) : configuredLogDir,
+				logFile: configuredLogFile ?? datedLogFile,
+			},
+			activeSessions: activeSessionCount(),
+			bypassedSessions: getBypassedSessionKeys().size,
+			sessions: { lifecycle: getSessionTrackerStats() },
+			...(transcriptCapture ? { transcripts: { capture: transcriptCapture } } : {}),
+			agentCreatedAt,
+			...(health ? { health } : {}),
+			update: {
+				currentVersion: us.currentVersion,
+				latestVersion: us.lastCheck?.latestVersion ?? null,
+				updateAvailable: us.lastCheck?.updateAvailable ?? false,
+				pendingRestart: us.pendingRestartVersion,
+				autoInstall: us.config.autoInstall,
+				checkInterval: us.config.checkInterval,
+				lastCheckAt: us.lastCheckTime?.toISOString() ?? null,
+				lastError: us.lastAutoUpdateError,
+				timerActive: us.timerActive,
+			},
+			embedding: {
+				provider: config.embedding.provider,
+				model: config.embedding.model,
+				...(cachedEmbeddingStatus && Date.now() - statusCacheTime < STATUS_CACHE_TTL
+					? { available: cachedEmbeddingStatus.available }
+					: {}),
+				usage: await readEmbeddingUsageSummary(getDbAccessor()),
+				migration: embeddingMigration,
+			},
+		});
+	});
+
+	let greetingCache: { greeting: string; cachedAt: string; expires: number } | null = null;
+
+	app.get("/api/home/greeting", async (c) => {
+		const now = Date.now();
+		if (greetingCache && now < greetingCache.expires) {
+			return c.json({ greeting: greetingCache.greeting, cachedAt: greetingCache.cachedAt });
+		}
+
+		const soulPath = join(AGENTS_DIR, "SOUL.md");
+		let soulContent = "";
+		try {
+			soulContent = readFileSync(soulPath, "utf-8").slice(0, 500);
+		} catch {}
+
+		const hour = new Date().getHours();
+		const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
+
+		try {
+			const provider = getLlmProvider();
+			if (provider) {
+				const prompt = `Given this agent personality description:\n\n${soulContent}\n\nGenerate a brief ${timeOfDay} greeting in this character's voice. Max 15 words. No emojis. No quotes around the greeting.`;
+				const text = await provider.generate(prompt, { timeoutMs: 10000, maxTokens: 50 });
+				const greeting = text.trim().replace(/^["']|["']$/g, "");
+				greetingCache = { greeting, cachedAt: new Date().toISOString(), expires: now + 3600000 };
+				return c.json({ greeting: greetingCache.greeting, cachedAt: greetingCache.cachedAt });
+			}
+		} catch {}
+
+		const fallback = `good ${timeOfDay}`;
+		greetingCache = { greeting: fallback, cachedAt: new Date().toISOString(), expires: now + 3600000 };
+		return c.json({ greeting: greetingCache.greeting, cachedAt: greetingCache.cachedAt });
+	});
+
+	app.get("/api/diagnostics", async (c) => {
+		const report = getCachedDiagnosticsReport();
+		const requestedAgentId = c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id");
+		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, resolveDaemonAgentId());
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const agentId = resolveAgentId({ agentId: scopedAgent.agentId });
+		return c.json({
+			...report,
+			sse: getSseDiagnosticsSnapshot(),
+			workloads: { agentId, ...(await workloadDiagnosticsSnapshot(agentId)) },
+		});
+	});
+
+	app.get("/api/diagnostics/:domain", async (c, next) => {
+		const domain = c.req.param("domain");
+		if (domain === "queue" || domain === "openclaw" || domain === "workloads") return next();
+		const report = getCachedDiagnosticsReport();
+
+		const domainData = report[domain as keyof typeof report];
+		if (!domainData || typeof domainData === "string") {
+			return c.json({ error: `Unknown domain: ${domain}` }, 400);
+		}
+		return c.json(domainData);
+	});
+
+	app.post("/api/diagnostics/openclaw/heartbeat", async (c) => {
+		let body: unknown;
+		try {
+			body = await c.req.json();
+		} catch {
+			return c.json({ error: "Invalid JSON" }, 400);
+		}
+		if (!body || typeof body !== "object") {
+			return c.json({ error: "Body must be an object" }, 400);
+		}
+		const b = body as Record<string, unknown>;
+		if (typeof b.pluginVersion !== "string") {
+			return c.json({ error: "pluginVersion (string) is required" }, 400);
+		}
+		const prev = openClawHeartbeat?.data;
+		const newData: import("./state.js").OpenClawHeartbeatData = {
+			pluginVersion: b.pluginVersion.slice(0, 128),
+			hooksRegistered: Array.isArray(b.hooksRegistered)
+				? (b.hooksRegistered as unknown[])
+						.filter((x): x is string => typeof x === "string")
+						.map((s) => s.slice(0, 128))
+						.slice(0, 50)
+				: [],
+			lastHookCall: typeof b.lastHookCall === "string" ? b.lastHookCall.slice(0, 512) : null,
+			lastError: typeof b.lastError === "string" ? b.lastError.slice(0, 512) : null,
+			latencyMs: typeof b.latencyMs === "number" && Number.isFinite(b.latencyMs) ? b.latencyMs : 0,
+			lastFailedDelta: Math.max(
+				0,
+				typeof b.hooksFailed === "number" ? b.hooksFailed : typeof b.errorCount === "number" ? b.errorCount : 0,
+			),
+			totalSucceeded:
+				(prev?.totalSucceeded ?? 0) + Math.max(0, typeof b.hooksSucceeded === "number" ? b.hooksSucceeded : 0),
+			totalFailed:
+				(prev?.totalFailed ?? 0) +
+				Math.max(
+					0,
+					typeof b.hooksFailed === "number" ? b.hooksFailed : typeof b.errorCount === "number" ? b.errorCount : 0,
+				),
+		};
+		setOpenClawHeartbeat({
+			timestamp: new Date().toISOString(),
+			data: newData,
+		});
+		invalidateDiagnosticsCache();
+		return c.json({ ok: true });
+	});
+
+	app.get("/api/diagnostics/openclaw", (c) => {
+		return c.json(buildOpenClawHealth());
+	});
+
+	app.get("/api/pipeline/status", async (c) => {
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const accessor = getDbAccessor();
+		const toCountMap = (rows: readonly { status: string; count: number }[]): Record<string, number> => {
+			const out: Record<string, number> = {
+				pending: 0,
+				leased: 0,
+				completed: 0,
+				failed: 0,
+				dead: 0,
+			};
+			for (const r of rows) out[r.status] = r.count;
+			return out;
+		};
+		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
+			ownerQueryAll<{ status: string; count: number }>(
+				maintenance.owner,
+				"http/routes/pipeline-routes.ts:588",
+				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
+			),
+		);
+		const ownerState = getDbOwnerMaintenanceState();
+		if (ownerRows === undefined && ownerState !== "closing") {
+			return c.json({ error: "DB owner maintenance is unavailable" }, 503);
+		}
+		const memoryRows = ownerRows ?? [];
+		const dbData = {
+			queues: {
+				memory: toCountMap(memoryRows),
+				summary: toCountMap([]),
+			},
+		};
+		const diagnostics = getCachedDiagnosticsReport();
+
+		const pipelineV2 = cfg.pipelineV2;
+		const workers = getPipelineWorkerStatus();
+		const mode = readPipelineMode(pipelineV2);
+
+		return c.json({
+			workers,
+			databaseMaintenance: {
+				vacuumConversion: await getVacuumConversionStatusAsync(accessor),
+			},
+			providerResolution: {
+				...providerRuntimeResolution,
+				extraction: getExtractionWorkloadState({
+					enabled: false,
+					paused: pipelineV2.paused,
+				}),
+			},
+			queues: dbData.queues,
+			diagnostics,
+			latency: analyticsCollector.getLatency(),
+			errorSummary: analyticsCollector.getErrorSummary(),
+			mode,
+			feedback: getFeedbackTelemetry(),
+			traversal: {
+				enabled: pipelineV2.graph.enabled && (pipelineV2.traversal?.enabled ?? true),
+				lastRun: getTraversalStatus(),
+			},
+		});
+	});
+
+	app.use("/api/pipeline/pause", pipelineAdminGuard);
+	app.use("/api/pipeline/resume", pipelineAdminGuard);
+
+	app.post("/api/pipeline/pause", (c) => {
+		return togglePipelinePause(c, true);
+	});
+
+	app.post("/api/pipeline/resume", (c) => {
+		return togglePipelinePause(c, false);
+	});
+
+	app.get("/api/pipeline/models", (c) => {
+		const provider = c.req.query("provider");
+		const includeDeprecated = c.req.query("deprecated") === "true";
+		return c.json({
+			models: getAvailableModels(provider ?? undefined, includeDeprecated),
+			registry: getRegistryStatus(),
+		});
+	});
+
+	app.get("/api/pipeline/models/by-provider", (c) => {
+		return c.json(getModelsByProvider());
+	});
+
+	let lastRefreshRequestAt = 0;
+	const REFRESH_COOLDOWN_MS = 60_000;
+
+	app.post("/api/pipeline/models/refresh", async (c) => {
+		const now = Date.now();
+		if (now - lastRefreshRequestAt < REFRESH_COOLDOWN_MS) {
+			return c.json(
+				{
+					models: getModelsByProvider(),
+					registry: getRegistryStatus(),
+					throttled: true,
+				},
+				429,
+			);
+		}
+		lastRefreshRequestAt = now;
+		await refreshRegistry();
+		return c.json({
+			models: getModelsByProvider(),
+			registry: getRegistryStatus(),
+		});
+	});
+	app.use("/api/dream/operations", async (c, next) => {
+		return requirePermission("modify", authConfig)(c, next);
+	});
+	app.use("/api/dream/tools/*", async (c, next) => {
+		return requirePermission("modify", authConfig)(c, next);
+	});
+	app.use("/api/dream/tools", async (c, next) => {
+		return requirePermission("modify", authConfig)(c, next);
+	});
+	app.use("/api/dream/*", async (c, next) => {
+		if (
+			c.req.path === "/api/dream/operations" ||
+			c.req.path === "/api/dream/tools" ||
+			c.req.path.startsWith("/api/dream/tools/")
+		)
+			return next();
+		return requirePermission("admin", authConfig)(c, next);
+	});
+
+	app.get("/api/dream/evidence/coverage", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		let registered: boolean;
+		try {
+			registered = await isAgentRegistered(scopedAgent.agentId);
+		} catch (error) {
+			if (error instanceof DbOwnerError && String(error.code).startsWith("DB_OWNER_")) {
+				return c.json({ error: error.message, code: String(error.code) }, 503);
+			}
+			throw error;
+		}
+		if (!registered) {
+			return c.json({ error: `Agent not found: ${scopedAgent.agentId}` }, 404);
+		}
+		const coverage = await getDreamingEvidenceCoverage(getDbAccessor(), scopedAgent.agentId);
+		return c.json(coverage);
+	});
+	app.get("/api/dream/status", async (c) => {
+		const cfg = loadMemoryConfig(AGENTS_DIR);
+		const accessor = getDbAccessor();
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const agentId = scopedAgent.agentId;
+
+		const state = await getDreamingState(accessor, agentId);
+		const probe =
+			c.req.query("measure") === "1"
+				? await probeDreamingEpisodicBacklog(accessor, agentId, cfg.dreaming.tokenThreshold)
+				: null;
+		const episodicTokensPending =
+			probe === null
+				? getDreamingEpisodicTokenBacklogCachedOrNull(agentId)
+				: probe.kind === "exact"
+					? probe.tokens
+					: null;
+		const passes = await getDreamingPasses(accessor, agentId, 10);
+		const exclusions = await getDreamingEvidenceExclusions(accessor, agentId);
+		const reviewedEvidence = await getDreamingReviewedEvidence(accessor, agentId);
+		const attention = getDreamingAttention(accessor, agentId);
+		const worker = getDreamingWorker();
+		const activePasses = (worker?.activePasses ?? [])
+			.filter((pass) => pass.agentId === agentId || pass.scopes.includes(agentId))
+			.map((pass) => ({ passId: pass.passId, mode: pass.mode }));
+
+		return c.json({
+			worker: {
+				running: worker !== null,
+				active: worker?.activeAgentId === agentId,
+				activeAgentId: worker?.activeAgentId === agentId ? agentId : null,
+				activePasses,
+			},
+			scheduler: worker?.scheduler ?? null,
+			state,
+			episodicTokensPending,
+			config: {
+				tokenThreshold: cfg.dreaming.tokenThreshold,
+				maxPassTokens: cfg.dreaming.maxPassTokens,
+				backfillOnFirstRun: cfg.dreaming.backfillOnFirstRun,
+				maxInputTokens: cfg.dreaming.maxInputTokens,
+				maxOutputTokens: cfg.dreaming.maxOutputTokens,
+				maxConcurrentPasses: cfg.dreaming.maxConcurrentPasses,
+				codemode: cfg.dreaming.codemode,
+				timeout: cfg.dreaming.timeout,
+				surprisal: cfg.dreaming.surprisal,
+				policies: cfg.dreaming.policies,
+				defaultPolicies: DEFAULT_DREAMING_POLICIES,
+				policyProblems: cfg.dreamingPolicyProblems,
+			},
+			passes,
+			attention,
+			exclusions,
+			reviewedEvidence,
+		});
+	});
+	app.get("/api/dream/passes/active", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const requestSignal = c.req.raw.signal;
+		try {
+			return c.json({
+				agentId: scopedAgent.agentId,
+				items: await getActiveDreamingPasses(getDbAccessor(), scopedAgent.agentId, { signal: requestSignal }),
+			});
+		} catch (error) {
+			if (requestSignal.aborted && error instanceof DbOwnerCancelledError) return new Response(null, { status: 499 });
+			throw error;
+		}
+	});
+	app.get("/api/dream/passes/:passId/events", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const passId = c.req.param("passId").trim();
+		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
+		const requestSignal = c.req.raw.signal;
+		let pass: Awaited<ReturnType<typeof getDreamingPass>>;
+		try {
+			pass = await getDreamingPass(getDbAccessor(), scopedAgent.agentId, passId, { signal: requestSignal });
+		} catch (error) {
+			if (requestSignal.aborted && error instanceof DbOwnerCancelledError) return new Response(null, { status: 499 });
+			throw error;
+		}
+		if (!pass) return c.json({ error: "Dreaming pass not found" }, 404);
+
+		const cursorValue = c.req.query("after") ?? c.req.header("last-event-id");
+		const afterCursor = parseDreamingCursor(cursorValue);
+		if (afterCursor === "invalid") return c.json({ error: "after/Last-Event-ID must be a non-negative integer" }, 400);
+
+		dreamingLiveEvents.ensurePass({
+			passId: pass.id,
+			agentId: pass.agentId,
+			mode: pass.mode,
+			startedAt: pass.startedAt,
+			status: pass.status,
+			completedAt: pass.completedAt,
+			summary: pass.summary,
+			error: pass.error,
+		});
+
+		let lastCursor = afterCursor ?? 0;
+		const sse = openBoundedSse({
+			requestSignal,
+			highWaterMarkBytes: DREAMING_LIVE_STREAM_HIGH_WATER_MARK_BYTES,
+			maxFrameBytes: 512 * 1024,
+			heartbeat: { intervalMs: DREAMING_LIVE_HEARTBEAT_MS, comment: "heartbeat" },
+			overflowEvent: {
+				payload: (reason) => ({ type: "overflow", passId, reason, after: lastCursor, reconnect: true }),
+			},
+			headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
+			onStart(producer) {
+				let subscription: ReturnType<typeof dreamingLiveEvents.subscribe> | null = null;
+				producer.addDisposer(() => subscription?.unsubscribe());
+				if (producer.signal.aborted) return;
+				const write = (eventName: string, data: unknown, cursor?: number): boolean => {
+					const status = producer.write(data, { event: eventName, id: cursor });
+					if (status !== "accepted") return false;
+					if (cursor !== undefined) lastCursor = cursor;
+					return true;
+				};
+				const writeLiveEvent = (event: DreamingLiveEvent): void => {
+					if (!write(event.type, event, event.cursor)) return;
+					if (isTerminalDreamingEvent(event)) producer.close();
+				};
+				try {
+					subscription = dreamingLiveEvents.subscribe(passId, afterCursor, (event) => {
+						writeLiveEvent(event);
+					});
+				} catch (error) {
+					producer.write({ error: error instanceof Error ? error.message : String(error) }, { event: "error" });
+					producer.close();
+					return;
+				}
+				if (!subscription) {
+					producer.write({ error: "Dreaming pass live stream is unavailable" }, { event: "error" });
+					producer.close();
+					return;
+				}
+				if (producer.isClosed) {
+					subscription.unsubscribe();
+					return;
+				}
+				write("snapshot", {
+					type: "snapshot",
+					passId,
+					snapshot: {
+						...subscription.snapshot,
+						tokensConsumed: pass.tokensConsumed,
+						tokensInput: pass.tokensInput,
+						tokensOutput: pass.tokensOutput,
+						tokensCacheRead: pass.tokensCacheRead,
+						tokensCacheWrite: pass.tokensCacheWrite,
+						tokensCost: pass.tokensCost,
+						mutationsApplied: pass.mutationsApplied,
+						mutationsSkipped: pass.mutationsSkipped,
+						mutationsFailed: pass.mutationsFailed,
+					},
+				});
+				if (subscription.gap && !producer.isClosed) {
+					write("gap", { type: "gap", passId, gap: subscription.gap });
+				}
+				for (const event of subscription.replay) {
+					if (producer.isClosed) break;
+					writeLiveEvent(event);
+				}
+				if (producer.isClosed) return;
+				if (subscription.snapshot.status !== "running") producer.close();
+			},
+		});
+		return sse.response;
+	});
+	app.get("/api/dream/passes/:passId/tools", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const passId = c.req.param("passId").trim();
+		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
+		return c.json({
+			agentId: scopedAgent.agentId,
+			passId,
+			items: await getDreamingToolCalls(getDbAccessor(), scopedAgent.agentId, passId),
+		});
+	});
+	app.get("/api/dream/passes/:passId/policy", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const passId = c.req.param("passId").trim();
+		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
+		const found = await getDreamingPassPolicy(getDbAccessor(), scopedAgent.agentId, passId);
+		if (!found) return c.json({ error: "Dreaming pass not found" }, 404);
+		return c.json({ agentId: scopedAgent.agentId, passId, policy: found.policy });
+	});
+	app.get("/api/dream/quality", async (c) => {
+		const scopedAgent = resolveScopedDreamAgent(c);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		return c.json(await getDreamingQualityReport(getDbAccessor(), scopedAgent.agentId));
+	});
+
+	app.post("/api/dream/exclusions/requeue", async (c) => {
+		const raw: unknown = await c.req.json().catch(() => null);
+		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
+		const body = asRecord(raw);
+		const sourceKind = readString(body, "sourceKind");
+		if (
+			sourceKind !== "memory" &&
+			sourceKind !== "artifact" &&
+			sourceKind !== "transcript" &&
+			sourceKind !== "summary"
+		) {
+			return c.json({ error: "Invalid episodic source kind" }, 400);
+		}
+		const sourceId = readString(body, "sourceId");
+		if (!sourceId) return c.json({ error: "Missing episodic source id" }, 400);
+		const scopedAgent = resolveScopedDreamAgent(c, body);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const agentId = scopedAgent.agentId;
+		if (sourceKind === "summary") {
+			const accessor = getDbAccessor();
+			const ownerPresent = await withRegisteredDbOwnerMaintenance(
+				async (maintenance) =>
+					(await ownerQueryOne<{ present: number }>(
+						maintenance.owner,
+						"http/routes/pipeline-routes.ts:939",
+						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
+						[agentId, sourceId],
+					)) != null,
+			);
+			if (ownerPresent === undefined) {
+				return c.json(
+					{
+						error:
+							getDbOwnerMaintenanceState() === "closing"
+								? "DB owner maintenance is closing"
+								: "DB owner maintenance is unavailable",
+					},
+					503,
+				);
+			}
+			if (ownerPresent) {
+				return c.json({ error: "Summary evidence requeue is retired; requeue the completed transcript instead" }, 410);
+			}
+			const reviewedSummaryRequeued = await requestDreamingReviewedEvidenceRequeue(
+				accessor,
+				agentId,
+				sourceKind,
+				sourceId,
+			);
+			if (!reviewedSummaryRequeued) {
+				return c.json({ error: "Summary evidence requeue is retired; requeue the completed transcript instead" }, 410);
+			}
+			return c.json({ requeued: true, reviewedExcluded: true, agentId, sourceKind, sourceId });
+		}
+		const requeued = await requestDreamingEvidenceRequeue(getDbAccessor(), agentId, sourceKind, sourceId);
+		const reviewedRequeued = await requestDreamingReviewedEvidenceRequeue(
+			getDbAccessor(),
+			agentId,
+			sourceKind,
+			sourceId,
+		);
+		if (!requeued && !reviewedRequeued) return c.json({ error: "Dreaming evidence exclusion not found" }, 404);
+		return c.json({
+			requeued: true,
+			...(reviewedRequeued ? { reviewedExcluded: true } : {}),
+			agentId,
+			sourceKind,
+			sourceId,
+		});
+	});
+	app.post("/api/dream/operations", async (c) => {
+		const raw: unknown = await c.req.json().catch(() => null);
+		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
+		const body = asRecord(raw);
+		const operations = readArray(body, "operations");
+		if (!operations || operations.length === 0) return c.json({ error: "operations are required" }, 400);
+		if (operations.length > DREAMING_MAX_OPERATIONS_PER_REQUEST) {
+			return c.json({ error: `operations cannot exceed ${DREAMING_MAX_OPERATIONS_PER_REQUEST} items` }, 400);
+		}
+		const scopedAgent = resolveScopedDreamAgent(c, body);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const agentId = scopedAgent.agentId;
+		const actor = readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "dreaming-agent";
+		const result = await applyDreamingOperations({
+			accessor: getDbAccessor(),
+			agentId,
+			actor,
+			writeCaps: graphWriteCaps(loadMemoryConfig(AGENTS_DIR)),
+			operations: operations.map((rawOperation) => {
+				const operation = asRecord(rawOperation);
+				return {
+					operation: readString(operation, "operation") ?? "",
+					payload: asRecord(operation.payload),
+					reason: readString(operation, "reason") ?? readString(operation, "rationale"),
+					evidence: readArray(operation, "evidence"),
+					confidence: readNumber(operation, "confidence"),
+					risk: readString(operation, "risk") ?? null,
+				};
+			}),
+		});
+		return c.json({ ...result, agentId }, result.ok ? 200 : result.retryable ? 503 : 400);
+	});
+	app.get("/api/dream/tools", (c) => c.json({ items: getDreamingCapabilityManifest() }));
+	app.post("/api/dream/tools/:capability", async (c) => {
+		const raw: unknown = await c.req.json().catch(() => null);
+		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
+		const body = asRecord(raw);
+		const scopedAgent = resolveScopedDreamAgent(c, body);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const input = asRecord(body.input);
+		const requestedInputAgent = readString(input, "agentId");
+		const foreign = requestedInputAgent !== undefined && requestedInputAgent !== scopedAgent.agentId;
+		const scopeError = { error: "Dreaming capability agent scope does not match the credential" };
+		const passId = readString(body, "passId");
+		if (passId === undefined && body.passId !== undefined) {
+			return c.json({ error: "passId must be a non-empty string" }, 400);
+		}
+		if (passId !== undefined) {
+			if (foreign) return c.json(scopeError, 403);
+			const outcome = await callDreamingPassTool({
+				passId,
+				agentId: scopedAgent.agentId,
+				capabilityId: c.req.param("capability"),
+				input,
+			});
+			if (outcome.kind === "inactive") return c.json({ error: "Dreaming pass is not accepting tool calls" }, 409);
+			if (outcome.kind === "forbidden") return c.json(scopeError, 403);
+			if (outcome.kind === "unknown") return c.json({ error: "Unknown Dreaming capability" }, 404);
+			return c.json(
+				{ ...outcome.result, agentId: scopedAgent.agentId },
+				outcome.result.ok ? 200 : outcome.result.retryable === true ? 503 : 400,
+			);
+		}
+		const capability = getDreamingCapability(
+			{
+				accessor: getDbAccessor(),
+				agentId: scopedAgent.agentId,
+				actor: readString(body, "actor") ?? c.req.header("x-signet-actor") ?? "dreaming-client",
+			},
+			c.req.param("capability"),
+		);
+		if (!capability) return c.json({ error: "Unknown Dreaming capability" }, 404);
+		if (foreign) return c.json(scopeError, 403);
+		const result = await capability.invoke({ ...input, agentId: scopedAgent.agentId });
+		return c.json({ ...result, agentId: scopedAgent.agentId }, result.ok ? 200 : result.retryable === true ? 503 : 400);
+	});
+
+	app.post("/api/dream/trigger", async (c) => {
+		const config = loadMemoryConfig(AGENTS_DIR);
+		const blocked = getDreamingTriggerBlockReason(pipelineTransition, config.pipelineV2);
+		if (blocked) return c.json({ error: blocked.error }, blocked.status);
+
+		const worker = getDreamingWorker();
+		if (!worker) {
+			return c.json({ error: "Dreaming worker not running" }, 503);
+		}
+
+		const contentType = c.req.header("content-type") ?? "";
+		let mode: "compact" | "incremental" = "incremental";
+		let body: Record<string, unknown> = {};
+		if (contentType.includes("application/json")) {
+			const raw: unknown = await c.req.json().catch(() => null);
+			if (raw === null) {
+				return c.json({ error: "Malformed JSON body" }, 400);
+			}
+			body = asRecord(raw);
+			if (body.mode === "compact") {
+				mode = "compact";
+			}
+		}
+		const scopedAgent = resolveScopedDreamAgent(c, body);
+		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
+		const agentId = scopedAgent.agentId;
+		if (!(await worker.inferenceReady(agentId))) {
+			return c.json({ error: "No inference provider is connected" }, 503);
+		}
+
+		let userRequest: { sourceRef: string; content: string } | undefined;
+		if (body.instructionSourceRef !== undefined) {
+			if (typeof body.instructionSourceRef !== "string" || body.instructionSourceRef.length > 200)
+				return c.json({ error: "Invalid instruction source reference" }, 400);
+			const capability = getDreamingCapability(
+				{ accessor: getDbAccessor(), agentId, actor: "dashboard-user" },
+				"search_evidence",
+			);
+			if (!capability) return c.json({ error: "Evidence retrieval unavailable" }, 503);
+			const evidence = await capability.invoke({
+				agentId,
+				sourceRef: body.instructionSourceRef,
+				offset: 0,
+				chunkSize: 16000,
+			});
+			const item = Array.isArray(evidence.items) ? evidence.items[0] : undefined;
+			if (
+				!evidence.ok ||
+				typeof item !== "object" ||
+				item === null ||
+				!("content" in item) ||
+				typeof item.content !== "string" ||
+				!("sourceRef" in item) ||
+				typeof item.sourceRef !== "string"
+			)
+				return c.json({ error: "Instruction evidence not found in this agent scope" }, 400);
+			if ("contentHasNext" in item && item.contentHasNext === true)
+				return c.json({ error: "Instruction is too long; provide a shorter request" }, 400);
+			userRequest = { sourceRef: item.sourceRef, content: item.content };
+		}
+		let passId: string;
+		try {
+			passId = await worker.triggerAsync(mode, agentId, userRequest);
+		} catch (e) {
+			if (e instanceof AlreadyRunningError) return c.json({ error: e.message }, 409);
+			const msg = e instanceof Error ? e.message : String(e);
+			if (isRetryableWritePressure(e) || (e instanceof Error && e.name === "DbOwnerDeadlineError")) {
+				c.header("Retry-After", String(WRITE_PRESSURE_RETRY_AFTER_SECONDS));
+				return c.json({ error: msg, retryable: true }, 503);
+			}
+			return c.json({ error: msg }, 500);
+		}
+		return c.json({ accepted: true, passId, status: "running", mode, agentId }, 202);
+	});
+
+	app.get("/api/status/workspace", async (c) => {
+		try {
+			return c.json(await getWorkspaceStatusSummary(getDbAccessor(), resolveDaemonAgentId()));
+		} catch {
+			return c.json({ error: "Workspace statistics are unavailable" }, 503);
+		}
+	});
+}

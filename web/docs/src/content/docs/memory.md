@@ -49,7 +49,7 @@ extraction or decision worker.
 ### Extraction
 
 Direct LLM fact/entity extraction from raw memory content was retired under
-the Dreaming cutover (#946). `platform/daemon/src/pipeline/extraction.ts`
+the Dreaming cutover (#946). `platform/daemon/src/ontology/extraction/extraction.ts`
 now holds only shared JSON recovery and parsing helpers consumed across the
 pipeline (reranker, contradiction, dreaming) and by the
 ontology modules. Semantic graph authorship flows through the audited
@@ -72,7 +72,7 @@ extraction, decision, or structural worker that writes semantic state.
 
 ## Hybrid Recall
 
-Recall is implemented in `platform/daemon/src/memory-search.ts` by
+Recall is implemented in `platform/daemon/src/recall/search/memory-search.ts` by
 `hybridRecall`. Its job is not to find one perfect row. Its job is to
 collect a broad candidate set, filter it to the caller's allowed view,
 shape the evidence, and return a bounded list of useful context.
@@ -399,7 +399,7 @@ Optional filters: `type`, `tags`, `who`, `pinned`, `importance_min`,
 ## Content Normalization
 
 Before any memory is written, content passes through normalization
-(`platform/daemon/src/content-normalization.ts`).
+(`platform/daemon/src/recall/text/content-normalization.ts`).
 
 Storage content trims whitespace and collapses internal whitespace
 runs to single spaces. Normalized content additionally lowercases the
@@ -424,7 +424,7 @@ V2 `add` proposals.
 
 During controlled-write processing, `update` and `delete` proposals
 are evaluated for contradiction risk
-(`platform/daemon/src/pipeline/worker.ts`).
+(`platform/daemon/src/ontology/contradictions/detector.ts`).
 
 The detector tokenizes both the new fact and the target memory
 content (lowercase, punctuation stripped, minimum 2-char tokens).
@@ -600,7 +600,7 @@ pins the memory but does not itself rewrite the importance field.
 
 ### Retention Worker
 
-The retention worker (`platform/daemon/src/pipeline/retention-worker.ts`)
+The retention worker (`platform/daemon/src/workers/retention.ts`)
 runs every 6 hours and purges expired data in a strict sequence. The dependent
 graph-link, embedding, and tombstone steps run in one write transaction so a
 vector cleanup failure cannot commit only part of the purge. History and job

@@ -3,11 +3,11 @@ title: "DB owner protocol"
 description: "Contributor reference for the daemon-to-database-owner job and wire contract."
 ---
 
-This page documents the daemon-to-owner contract. The executable protocol types live in `platform/daemon/src/db-owner-protocol.ts`; the daemon client and owner runtime are in `db-owner-client.ts` and `db-owner-worker.ts`. Only the owner imports SQLite and executes synchronous SQL.
+This page documents the daemon-to-owner contract. The executable protocol types live in `platform/daemon/src/db/owner/protocol.ts`; the daemon client and owner runtime are in `db/owner/client.ts` and `db/owner/db-owner-worker.ts`. Only the owner imports SQLite and executes synchronous SQL.
 
 ## Job envelope
 
-A job carries an identifier, operation, lane, workload class, enqueue time, absolute deadline, estimated work units, cancellation state, and a request. The excerpt below shows common SQL request shapes; the complete request union and field types are defined in `db-owner-protocol.ts`.
+A job carries an identifier, operation, lane, workload class, enqueue time, absolute deadline, estimated work units, cancellation state, and a request. The excerpt below shows common SQL request shapes; the complete request union and field types are defined in `db/owner/protocol.ts`.
 
 ```ts
 {
@@ -112,6 +112,6 @@ Async transcript upserts and live appends submit `session_transcript_write` on t
 
 ## FTS and Dreaming maintenance
 
-`db-owner-maintenance.ts` owns bounded FTS repair and backfill. Startup creates only the canonical FTS schema and triggers, then submits keyset-paginated chunks to the maintenance lane. Each chunk uses a durable `db_owner_maintenance_checkpoints` row and one atomic batch that advances the cursor and inserts the matching anti-join rows. The checkpoint is the resume contract after an owner crash. Tokenizer rebuilds recreate the schema in the owner before chunking; they never perform a full synchronous backfill on the daemon event loop. A backfill invocation also has a total wall-clock budget, total estimated work-unit budget, and cooperative `AbortSignal`; when any budget is exhausted it returns `running` with the durable checkpoint for a later invocation.
+`db/maintenance/maintenance.ts` owns bounded FTS repair and backfill. Startup creates only the canonical FTS schema and triggers, then submits keyset-paginated chunks to the maintenance lane. Each chunk uses a durable `db_owner_maintenance_checkpoints` row and one atomic batch that advances the cursor and inserts the matching anti-join rows. The checkpoint is the resume contract after an owner crash. Tokenizer rebuilds recreate the schema in the owner before chunking; they never perform a full synchronous backfill on the daemon event loop. A backfill invocation also has a total wall-clock budget, total estimated work-unit budget, and cooperative `AbortSignal`; when any budget is exhausted it returns `running` with the durable checkpoint for a later invocation.
 
 The maintenance lane publishes the queue-pressure gate used by scheduled Dreaming sweeps and autonomous pipeline maintenance. Dreaming pass lifecycle rows and retention/repair admission are submitted through that lane, while queue depth, oldest pending age, recent dead rate, and stale leases are evaluated in the owner before work starts. Manual Dreaming work, pipeline scheduling/retry behavior, retention lifecycle, and existing evidence ordering remain unchanged; queue pressure only defers scheduled work.

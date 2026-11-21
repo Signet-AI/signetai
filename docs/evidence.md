@@ -10,7 +10,7 @@ Why: redacting at rest would destroy the only copy of user-owned evidence and ma
 
 Ontology proposals point at evidence through `evidence` and `source_*` columns. The proposal table never holds transcript or source-artifact content. Raw artifacts remain the source of truth.
 
-Owner: `platform/daemon/src/ontology-proposals.ts`, `platform/daemon/src/ontology-evidence.ts`.
+Owner: `platform/daemon/src/ontology/proposals/proposals.ts`, `platform/daemon/src/ontology/evidence/evidence.ts`.
 
 ## Native harness memory is indexed, not adopted
 
@@ -18,13 +18,13 @@ When a harness has its own memory system, Signet indexes that harness's memory f
 
 Why: Signet offers one portable memory interface across harnesses without becoming a second writer of another tool's state.
 
-Owner: `platform/daemon/src/native-memory-sources.ts`.
+Owner: `platform/daemon/src/sources/providers/native-memory/provider.ts`.
 
 ## Claim premises must resolve to real evidence
 
 A claim premise is accepted only when it names a canonical episodic source kind (`memory`, `artifact`, `transcript`, or `summary`) and the row exists for the same agent. A supplied quote must occur in the immutable source content. A missing source or mismatched quote is a conflict; a source owned by another agent or outside the authorized project or session is forbidden. Session-scoped calls fail closed when the source's session cannot be proven.
 
-Owner: `platform/daemon/src/ontology-claim-trace.ts`.
+Owner: `platform/daemon/src/ontology/claims/trace.ts`.
 
 ## Contradictions are advisory
 
@@ -34,19 +34,19 @@ The only persisted detector is the deterministic lexical guard (negation mismatc
 
 Why: graph noise and inference cost stay bounded, and nothing automatic resolves a conflict the evidence does not resolve.
 
-Owner: `platform/daemon/src/ontology-contradictions.ts`.
+Owner: `platform/daemon/src/ontology/contradictions/state.ts`.
 
 ## Attention is not evidence
 
 Dreaming attention signals, including the opt-in `surprisal` hint about unusual embedding regions, are hints for where to look. They are never claims, evidence records, or confidence scores. A pass never cites `attention:<id>` as provenance, never creates an entity or claim from geometry alone, and never bypasses the evidence cursor and resolver.
 
-Owner: `platform/daemon/src/pipeline/dreaming-policies.ts`.
+Owner: `platform/daemon/src/dreaming/passes/policies.ts`.
 
 ## `MEMORY.md` is a projection
 
 `MEMORY.md` is derived and rebuildable from the database; it is not canonical history. If a process dies between replacing the file and committing the transaction, the database wins, and delivery never trusts the file as committed state. A user-authored file blocks projection with an explicit pending result; Signet reports the conflict and never overwrites it.
 
-Owner: `platform/daemon/src/memory-head-owner.ts`, `platform/daemon/src/memory-lineage.ts`.
+Owner: `platform/daemon/src/dreaming/head/owner.ts`, `platform/daemon/src/sources/lifecycle/memory-lineage.ts`.
 
 ## Deletion leaves tombstones
 
@@ -54,7 +54,7 @@ Privacy-driven removal writes a tombstone and removes the linked rows. Reindexin
 
 Trap: if the `memory_artifact_tombstones` table is missing, native source reindex logs a warning and proceeds without the filter. Anything that can drop or skip that table can resurrect deleted content.
 
-Owner: `platform/daemon/src/memory-lineage.ts`.
+Owner: `platform/daemon/src/sources/lifecycle/memory-lineage.ts`.
 
 ## Dependency history belongs to triggers
 

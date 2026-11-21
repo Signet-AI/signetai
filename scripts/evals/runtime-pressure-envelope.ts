@@ -3,13 +3,13 @@
 import { Database } from "bun:sqlite";
 import { performance } from "node:perf_hooks";
 import { runMigrations } from "../../platform/core/src/migrations";
-import type { ReadDb } from "../../platform/daemon/src/db-accessor";
-import { getQueuePressureSnapshot } from "../../platform/daemon/src/diagnostics-queue";
+import type { ReadDb } from "../../platform/daemon/src/db/owner/accessor";
+import { getQueuePressureSnapshot } from "../../platform/daemon/src/telemetry/diagnostics/queue";
 import {
 	buildRuntimePressureEnvelope,
 	getRuntimePressureEnvelope,
 	setRuntimePressureEnvelope,
-} from "../../platform/daemon/src/runtime-pressure";
+} from "../../platform/daemon/src/telemetry/pressure/runtime-pressure";
 
 const SAMPLE_COUNT = 2_000;
 const QUEUE_SAMPLE_COUNT = 100;

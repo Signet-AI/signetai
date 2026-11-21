@@ -1,0 +1,101 @@
+import type { RecallSurface } from "@signet/core";
+import { logger } from "../../runtime/logging/logger";
+import { getActiveTelemetry } from "../usage/telemetry";
+
+export type RecallResultState = "empty" | "non_empty" | "truncated" | "error";
+export type RecallDeliveryState = "returned" | "injected" | "consumed" | "not_delivered";
+export type RecallSkipReason = "skipped_low_signal";
+
+const RECALL_SURFACES: ReadonlySet<string> = new Set<RecallSurface>([
+	"explicit_api",
+	"tool_call",
+	"prompt_injection",
+	"dashboard",
+	"other",
+]);
+export function normalizeRecallSurface(value: unknown, fallback: RecallSurface = "other"): RecallSurface {
+	return typeof value === "string" && RECALL_SURFACES.has(value) ? (value as RecallSurface) : fallback;
+}
+
+export function recallResultState(resultCount: number, truncated = false): Exclude<RecallResultState, "error"> {
+	if (resultCount <= 0) return "empty";
+	return truncated ? "truncated" : "non_empty";
+}
+export function effectiveRecallLimit(value: unknown): number {
+	if (typeof value !== "number" || !Number.isFinite(value)) return 10;
+	return Math.min(50, Math.max(1, Math.trunc(value)));
+}
+
+function boundedResultCount(value: number): number {
+	return Number.isFinite(value) ? Math.min(100, Math.max(0, Math.trunc(value))) : 0;
+}
+export function recordRecallAttempt(surface: RecallSurface): void {
+	getActiveTelemetry()?.record("recall.attempted", { surface });
+}
+export function recordRecallOutcome(input: {
+	readonly surface: RecallSurface;
+	readonly resultCount?: number;
+	readonly truncated?: boolean;
+	readonly delivery: RecallDeliveryState;
+	readonly error?: boolean;
+	readonly reason?: RecallSkipReason;
+}): void {
+	const resultCount = boundedResultCount(input.resultCount ?? 0);
+	const resultState: RecallResultState = input.error
+		? "error"
+		: recallResultState(resultCount, input.truncated === true);
+	const deliveryState = input.error ? "not_delivered" : input.delivery;
+	getActiveTelemetry()?.record("recall.outcome", {
+		surface: input.surface,
+		resultState,
+		deliveryState,
+		results: resultCount,
+		...(input.reason ? { reason: input.reason } : {}),
+	});
+}
+
+export type RecallTelemetryType = "semantic" | "keyword" | "temporal" | "graph";
+
+interface RecallPerformedResponse {
+	readonly results: readonly { readonly source?: string | null }[];
+	readonly method?: string;
+	readonly meta: {
+		readonly temporal?: unknown;
+		readonly partial?: boolean;
+		readonly degradation?: string;
+		readonly timings?: { readonly totalMs?: number };
+	};
+}
+
+export function classifyRecallTelemetry(
+	response: Pick<RecallPerformedResponse, "results" | "method"> & {
+		readonly meta: Pick<RecallPerformedResponse["meta"], "temporal">;
+	},
+): RecallTelemetryType | undefined {
+	const sources = new Set(response.results.map((result) => result.source ?? ""));
+	if (response.meta.temporal || [...sources].some((source) => source.startsWith("temporal"))) return "temporal";
+	if (["traversal", "ka_traversal", "structured", "sec", "graph"].some((source) => sources.has(source))) return "graph";
+	if (response.method === "hybrid") return "semantic";
+	if (response.method === "keyword") return "keyword";
+	return undefined;
+}
+
+export function recordRecallPerformed(response: RecallPerformedResponse, surface: string, limit: number): void {
+	const telemetry = getActiveTelemetry();
+	if (!telemetry) return;
+	const type = classifyRecallTelemetry(response);
+	const partial = response.meta.partial === true;
+	try {
+		telemetry.record("recall.performed", {
+			...(type ? { type } : {}),
+			surface,
+			results: response.results.length,
+			latencyMs: response.meta.timings?.totalMs ?? 0,
+			truncated: response.results.length >= limit,
+			partial,
+			...(partial && response.meta.degradation ? { degradation: response.meta.degradation } : {}),
+		});
+	} catch {
+		logger.warn("telemetry", "Failed to record recall.performed");
+	}
+}

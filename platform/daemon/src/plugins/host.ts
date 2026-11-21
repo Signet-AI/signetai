@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { getPluginRegistryPath, preflightWorkspace, resolveDefaultBasePath } from "@signet/core";
-import { logger } from "../logger.js";
-import { truncateToTokens } from "../pipeline/tokenizer.js";
+import { logger } from "../runtime/logging/logger.js";
+import { truncateToTokens } from "../recall/text/tokenizer.js";
 import { recordPluginAuditEvent } from "./audit.js";
 import { runtimeSupportedInV1, unsupportedRuntimeReason, validatePluginManifest } from "./manifest.js";
 import { EMPTY_PLUGIN_SURFACES } from "./types.js";
