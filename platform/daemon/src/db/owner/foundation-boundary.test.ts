@@ -12,9 +12,11 @@ function source(relativePath: string): string {
 
 function imports(path: string): string[] {
 	const file = join(ROOT, path);
-	return new Bun.Transpiler({ loader: "ts" })
-		.scanImports(readFileSync(file, "utf8"))
-		.map((entry) => entry.path)
+	const text = readFileSync(file, "utf8");
+	const loads = [...text.matchAll(/import\.meta\.require\(\s*["'`]([^"'`]+)["'`]\s*\)/g)].map(
+		(match) => match[1] ?? "",
+	);
+	return [...new Bun.Transpiler({ loader: "ts" }).scanImports(text).map((entry) => entry.path), ...loads]
 		.filter((specifier) => specifier.startsWith("./") || specifier.startsWith("../"))
 		.map((specifier) => relative(ROOT, join(dirname(file), specifier)).replace(/\.(ts|js)$/, ""));
 }

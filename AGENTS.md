@@ -123,7 +123,7 @@ Decisions and traps by subsystem live in `docs/`; the API and user-facing behavi
 ## Taste
 
 - Transports stay thin. A route, hook handler, CLI command, or MCP tool decodes input, calls one daemon operation, and maps errors.
-- New SQL goes in the owner modules listed in `scripts/audit-architecture-ratchet.ts` or in numbered core migrations. The ratchet fails any change that raises a file's raw-SQL, swallowed-error, or unchecked-cast count.
+- New SQL goes in the owner modules listed in `scripts/sql-owners.json` or in numbered core migrations. The ratchet fails any change that raises a file's raw-SQL, swallowed-error, or unchecked-cast count.
 - Configuration is normalized once, at its boundary. Do not add fallback readers or reread environment variables downstream. Unsupported retired inputs fail loudly.
 - Strict TypeScript: no `any`, no unsafe `as` casts (`as const` is fine), no `!`. Use core's `attempt` or `attemptAsync` for an expected miss instead of an empty `catch`.
 - Test-only observers and execution paths stay out of production import graphs.
