@@ -140,8 +140,8 @@ owns one area: `memory/`, `recall/`, `ontology/`, `dreaming/`, `sources/`,
 `workspace/`. Shared plumbing has its own folders: `http/` (routes,
 middleware, hooks, MCP), `db/` (the DB owner process, integrity, and
 maintenance), `runtime/` (process lifecycle, logging, updates), and
-`workers/` (scheduled background jobs). Only `daemon.ts` and `index.ts` sit
-at the root. Tests live beside the file they cover.
+`workers/` (scheduled background jobs). Only the entry points (`daemon.ts`,
+`dev-daemon.ts`, `index.ts`) sit at the root. Tests live beside the file they cover.
 
 **`platform/core/src/database.ts`** owns the SQLite schema and migrations.
 Any schema change must go through here. The wrapper supports both
