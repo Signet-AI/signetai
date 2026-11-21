@@ -188,6 +188,23 @@ describe("api keys", () => {
 		}
 	});
 
+	test("a key that expires while its last use is recorded does not authenticate", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
+		const batch = dbOwnerBatch;
+		const write = spyOn(ownerRuntime, "dbOwnerBatch").mockImplementationOnce((async (statements, options) => {
+			await setKeyColumn(created.id, "expires_at", new Date(Date.now() + 20).toISOString());
+			await Bun.sleep(40);
+			return batch(statements, options);
+		}) as typeof dbOwnerBatch);
+		try {
+			expect(await verifyApiKey(created.key)).toMatchObject({ authenticated: false, error: "api key expired" });
+		} finally {
+			write.mockRestore();
+		}
+		await setKeyColumn(created.id, "expires_at", new Date(Date.now() + 60_000).toISOString());
+		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+	});
+
 	test("claims come from the key as it stands after verification", async () => {
 		const created = createApiKey(getDbAccessor(), { name: "admin laptop", role: "admin" });
 		const scrypt = duringScrypt(() => setRole(created.id, "readonly"));
