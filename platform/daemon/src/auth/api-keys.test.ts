@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from "./api-keys";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import * as ownerRuntime from "../db-owner-runtime";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
 import { checkPermission } from "./policy";
 
@@ -126,5 +127,23 @@ describe("api keys", () => {
 		const refreshed = await lastUsedAt(created.id);
 		expect(refreshed).not.toBe(stale);
 		expect(Date.parse(refreshed ?? "")).toBeGreaterThan(Date.parse(stale));
+	});
+
+	test("does not overwrite a last use recorded by a concurrent request", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
+		const recent = new Date(Date.now() - 1_000).toISOString();
+		await setKeyColumn(created.id, "last_used_at", recent);
+
+		const query = dbOwnerQuery;
+		const staleRead = spyOn(ownerRuntime, "dbOwnerQuery").mockImplementationOnce((async (statement, options) => {
+			const row = await query<Record<string, unknown> | null>(statement, options);
+			return row && { ...row, last_used_at: null };
+		}) as typeof dbOwnerQuery);
+		try {
+			expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+		} finally {
+			staleRead.mockRestore();
+		}
+		expect(await lastUsedAt(created.id)).toBe(recent);
 	});
 });

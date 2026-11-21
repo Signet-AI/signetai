@@ -25,21 +25,21 @@
     },
     {
       "path": "auth/api-keys.ts",
-      "line": 220,
+      "line": 215,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path"
     },
     {
       "path": "auth/api-keys.ts",
-      "line": 264,
+      "line": 259,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "auth/api-keys.ts",
-      "line": 283,
+      "line": 278,
       "api": "withWriteTx",
       "source": "return accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path"

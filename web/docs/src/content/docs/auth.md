@@ -112,4 +112,4 @@ SSO and SAML endpoints are reserved but are not configured login providers today
 
 ## Rotate and recover
 
-Revoking an API key prevents further use of that key. Replacing or deleting the daemon signing secret invalidates existing signed tokens and dashboard sessions; restart the daemon afterward and issue fresh credentials. Treat this as an incident-recovery operation, not routine maintenance.
+Revoking an API key prevents further use of that key. The daemon rejects every request whose key check starts after the revocation is saved. A request whose key check was already running when the revocation was saved can still complete. Replacing or deleting the daemon signing secret invalidates existing signed tokens and dashboard sessions; restart the daemon afterward and issue fresh credentials. Treat this as an incident-recovery operation, not routine maintenance.
