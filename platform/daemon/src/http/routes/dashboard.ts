@@ -13,7 +13,7 @@ function getDashboardCandidates(): string[] {
 
 	return [
 		...(envDashboardDir ? [envDashboardDir] : []),
-		join(__dirname, "..", "..", "..", "..", "surfaces", "dashboard", "build"),
+		join(__dirname, "..", "..", "..", "..", "..", "surfaces", "dashboard", "build"),
 		join(__dirname, "..", "dashboard"),
 		join(__dirname, "dashboard"),
 	];

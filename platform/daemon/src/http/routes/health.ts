@@ -171,7 +171,9 @@ export function mountHealthRoutes(app: Hono): void {
 			try {
 				const ownerHealth = await withRegisteredDbOwnerMaintenance(async (ownerMaintenance) => {
 					try {
-						await ownerQueryOne(ownerMaintenance.owner, "routes/health.ts:165", "SELECT 1", [], { deadlineMs: 500 });
+						await ownerQueryOne(ownerMaintenance.owner, "http/routes/health.ts:174", "SELECT 1", [], {
+							deadlineMs: 500,
+						});
 						dbOk = true;
 					} catch {}
 					return ownerMaintenance.health();

@@ -510,7 +510,7 @@ async function purgeStaleDesktopCacheArtifacts(
 					.run(agentId, sourceId, syncStartedAt),
 			),
 		{
-			siteToken: "sources/providers/discord/desktop-cache-source.ts:497",
+			siteToken: "sources/providers/discord/desktop-cache-source.ts:500",
 			operation: "discord-desktop-cache.purge-stale.delete",
 		},
 	);

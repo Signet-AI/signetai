@@ -23,7 +23,7 @@ function resolveMcpProcess(): DreamingMcpProcess {
 	const suffix = extname(here) === ".ts" ? ".ts" : ".js";
 	const candidates =
 		suffix === ".ts"
-			? [join(dirname(dirname(here)), "mcp-stdio.ts")]
+			? [join(dirname(here), "..", "..", "http", "mcp", "mcp-stdio.ts")]
 			: [join(dirname(here), "mcp-stdio.js"), join(dirname(dirname(here)), "mcp-stdio.js")];
 	const entrypoint = candidates.find((candidate) => existsSync(candidate));
 	if (!entrypoint) {

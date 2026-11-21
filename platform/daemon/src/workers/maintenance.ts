@@ -312,15 +312,15 @@ export function startMaintenanceWorker(
 				: // DYNAMIC_SITE_TOKEN
 					await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker), { siteToken });
 		if (deps.ownerMaintenance && !(await deps.ownerMaintenance.queueIsHealthy())) {
-			const report = await readDiagnostics("pipeline/maintenance-worker.ts:315");
+			const report = await readDiagnostics("workers/maintenance.ts:315");
 			logger.info("maintenance", "Cycle deferred while the owner maintenance lane is unhealthy");
 			return { report, recommendations: [], executed: [], feedbackDecayedAspects: 0, feedbackPropagatedAttributes: 0 };
 		}
 		if (isSystemPressureHigh()) {
-			const report = await readDiagnostics("pipeline/maintenance-worker.ts:320");
+			const report = await readDiagnostics("workers/maintenance.ts:320");
 			return { report, recommendations: [], executed: [], feedbackDecayedAspects: 0, feedbackPropagatedAttributes: 0 };
 		}
-		const report = await readDiagnostics("pipeline/maintenance-worker.ts:323");
+		const report = await readDiagnostics("workers/maintenance.ts:323");
 
 		const embeddingStats = deps.embedding
 			? await getEmbeddingRepairStats(accessor, deps.embedding.cfg, deps.embedding.agentId)
@@ -392,7 +392,7 @@ export function startMaintenanceWorker(
 			}
 		}
 		if (executed.length > 0) {
-			const postReport = await readDiagnostics("pipeline/maintenance-worker.ts:395");
+			const postReport = await readDiagnostics("workers/maintenance.ts:395");
 			const improved = postReport.composite.score > preScore;
 
 			for (const exec of executed) {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const DAEMON_SRC = readFileSync(join(__dirname, "routes/misc-routes.ts"), "utf-8");
+const DAEMON_SRC = readFileSync(join(__dirname, "../../http/routes/misc-routes.ts"), "utf-8");
 const CLI_SRC = readFileSync(join(__dirname, "../../../../../surfaces/cli/src/commands/update.ts"), "utf-8");
 
 function mustMatch(src: string, pattern: RegExp): string {

@@ -42,7 +42,7 @@ describe("temporal summary API auth", () => {
 		);
 		process.env.SIGNET_PATH = dir;
 
-		const daemon = await import(`./daemon?temporal-summary-api=${Date.now()}`);
+		const daemon = await import(`../../daemon?temporal-summary-api=${Date.now()}`);
 		const state = await import("../../http/routes/state");
 		reloadAuthState = state.reloadAuthState;
 		reloadAuthState(dir);

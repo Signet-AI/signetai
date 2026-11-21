@@ -340,7 +340,7 @@ function getDaemonVersion(): string {
 	const candidates = [
 		join(__dirname, "..", "package.json"),
 		join(__dirname, "..", "..", "signetai", "package.json"),
-		join(__dirname, "..", "..", "package.json"),
+		join(__dirname, "..", "..", "..", "package.json"),
 	];
 
 	for (const candidate of candidates) {

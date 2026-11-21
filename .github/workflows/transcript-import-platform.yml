@@ -3,7 +3,7 @@ name: Transcript Import Platform Contract
 on:
   pull_request:
     paths:
-      - "platform/daemon/src/transcript-import-*.ts"
+      - "platform/daemon/src/transcripts/import/**"
       - "platform/core/src/migrations/*transcript-import*.ts"
       - "platform/core/src/migrations/contract.ts"
       - "platform/daemon/src/http/routes/transcript-import-routes.ts"
@@ -12,7 +12,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "platform/daemon/src/transcript-import-*.ts"
+      - "platform/daemon/src/transcripts/import/**"
       - "platform/core/src/migrations/*transcript-import*.ts"
       - "platform/core/src/migrations/contract.ts"
       - "platform/daemon/src/http/routes/transcript-import-routes.ts"

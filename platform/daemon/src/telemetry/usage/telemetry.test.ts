@@ -649,8 +649,8 @@ describe("telemetry collector", () => {
 		const err = new Error(longMessage);
 		err.stack = [
 			"Error: database is locked",
-			"    at run (/home/alice/.agents/platform/daemon/src/db-accessor.ts:1045:12)",
-			"    at withWriteTx (/home/alice/.agents/platform/daemon/src/db-accessor.ts:1060:14)",
+			"    at run (/home/alice/.agents/platform/daemon/src/db/owner/accessor.ts:1045:12)",
+			"    at withWriteTx (/home/alice/.agents/platform/daemon/src/db/owner/accessor.ts:1060:14)",
 			"    at main (/home/alice/.agents/platform/daemon/src/daemon.ts:2001:9)",
 			"    at Module._compile (node:internal/modules/cjs/loader:1234:17)",
 			"    at Module._extensions..js (node:internal/modules/cjs/loader:987:10)",
