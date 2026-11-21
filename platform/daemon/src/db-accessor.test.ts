@@ -1838,10 +1838,11 @@ db.close();`,
 			],
 			{ stdout: "pipe", stderr: "inherit" },
 		);
+		let initializer: ReturnType<typeof Bun.spawn> | null = null;
 		try {
 			await holder.stdout.getReader().read();
 
-			const initializer = Bun.spawn(
+			initializer = Bun.spawn(
 				[
 					process.execPath,
 					"-e",
@@ -1867,6 +1868,12 @@ process.exit(0);`,
 			expect(await holder.exited).toBe(0);
 		} finally {
 			writeFileSync(releasePath, "release\n");
+			holder.kill();
+			await holder.exited;
+			if (initializer !== null) {
+				initializer.kill();
+				await initializer.exited;
+			}
 		}
 	}, 10_000);
 });
