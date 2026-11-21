@@ -55,17 +55,17 @@ function isLocalhost(c: Context): boolean {
 export function createAuthMiddleware(
 	config: AuthConfig,
 	secret: Buffer | null,
-	verifyApiKey?: (token: string) => AuthResult,
+	verifyApiKey?: (token: string) => Promise<AuthResult>,
 ): MiddlewareHandler {
-	const verify = (token: string): AuthResult => {
-		if (isSignetApiKey(token) && verifyApiKey) return verifyApiKey(token);
+	const verify = async (token: string): Promise<AuthResult> => {
+		if (isSignetApiKey(token) && verifyApiKey) return await verifyApiKey(token);
 		if (secret) return verifyToken(secret, token);
 		return { authenticated: false, claims: null, error: "auth secret not configured" };
 	};
-	const verifyOpen = (path: string, token: string): AuthResult => {
+	const verifyOpen = async (path: string, token: string): Promise<AuthResult> => {
 		if (isSignetApiKey(token) && path !== "/api/auth/whoami") return { authenticated: false, claims: null };
 		try {
-			return verify(token);
+			return await verify(token);
 		} catch {
 			return { authenticated: false, claims: null, error: "credential could not be verified" };
 		}
@@ -75,7 +75,7 @@ export function createAuthMiddleware(
 		if (isAuthOpenPath(c.req.path) || isDashboardRequest(c)) {
 			c.set(
 				"auth",
-				token && config.mode !== "local" ? verifyOpen(c.req.path, token) : { authenticated: false, claims: null },
+				token && config.mode !== "local" ? await verifyOpen(c.req.path, token) : { authenticated: false, claims: null },
 			);
 			if (config.mode === "hybrid" && isLocalhost(c) && !c.get("auth")?.claims) {
 				c.set("auth", { authenticated: false, claims: null, trustedLocal: true });
@@ -89,7 +89,7 @@ export function createAuthMiddleware(
 			return;
 		}
 		if (config.mode === "hybrid" && isLocalhost(c)) {
-			c.set("auth", token ? verify(token) : { authenticated: false, claims: null });
+			c.set("auth", token ? await verify(token) : { authenticated: false, claims: null });
 			await next();
 			return;
 		}
@@ -104,7 +104,7 @@ export function createAuthMiddleware(
 			return c.json({ error: "auth secret not configured" });
 		}
 
-		const result = verify(token);
+		const result = await verify(token);
 		if (!result.authenticated) {
 			c.status(401);
 			c.header("WWW-Authenticate", "Bearer");

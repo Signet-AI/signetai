@@ -23,7 +23,7 @@ import {
 	TELEMETRY_INSTALL_CHANNELS,
 	parseRuntimeYaml,
 } from "@signet/core";
-import { type AuthConfig, parseAuthConfig } from "./auth";
+import { type AuthConfig, parseAuthConfig } from "./auth/config";
 import type { EmbeddingCostRates } from "./embedding-cost";
 import { MAX_LLM_CONCURRENCY } from "./llm-concurrency-limits";
 import { logger } from "./logger";

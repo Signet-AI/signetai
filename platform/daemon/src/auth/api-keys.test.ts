@@ -1,78 +1,54 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
-import type { DbAccessor } from "../db-accessor";
-import { checkPermission } from "./policy";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import * as nodeCrypto from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createApiKey, listApiKeys, revokeApiKey, verifyApiKey } from "./api-keys";
+import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "../db-owner-runtime";
+import { checkPermission } from "./policy";
 
-function makeAccessor(): { accessor: DbAccessor; close: () => void } {
-	const db = new Database(":memory:");
-	db.exec(`
-		CREATE TABLE api_keys (
-			id TEXT PRIMARY KEY,
-			prefix TEXT NOT NULL UNIQUE,
-			name TEXT NOT NULL,
-			key_hash TEXT NOT NULL,
-			role TEXT NOT NULL DEFAULT 'agent',
-			scope_json TEXT NOT NULL DEFAULT '{}',
-			permissions_json TEXT NOT NULL DEFAULT '[]',
-			connector TEXT,
-			harness TEXT,
-			agent_id TEXT,
-			allowed_projects_json TEXT,
-			created_at TEXT NOT NULL,
-			last_used_at TEXT,
-			revoked_at TEXT,
-			expires_at TEXT
-		)
-	`);
-	return {
-		accessor: {
-			withWriteTx(fn) {
-				db.exec("BEGIN IMMEDIATE");
-				try {
-					const result = fn(db as never);
-					db.exec("COMMIT");
-					return result;
-				} catch (error) {
-					db.exec("ROLLBACK");
-					throw error;
-				}
-			},
-			withReadDb(fn) {
-				return fn(db as never);
-			},
-			close() {
-				db.close();
-			},
-		},
-		close: () => db.close(),
-	};
-}
+let tempDir = "";
 
-let cleanup: (() => void) | null = null;
-
-afterEach(() => {
-	cleanup?.();
-	cleanup = null;
+beforeEach(() => {
+	tempDir = mkdtempSync(join(tmpdir(), "signet-api-keys-"));
+	initDbAccessor(join(tempDir, "memory.db"), { agentsDir: tempDir });
 });
 
-describe("api keys", () => {
-	test("creates a connector key, stores only metadata, and verifies the raw secret", () => {
-		const { accessor, close } = makeAccessor();
-		cleanup = close;
+afterEach(async () => {
+	await closeDbAccessor();
+	rmSync(tempDir, { recursive: true, force: true });
+});
 
-		const created = createApiKey(accessor, { name: "work laptop pi", connector: "pi", agentId: "agent-pi" });
+async function setKeyColumn(id: string, column: "expires_at" | "last_used_at", value: string): Promise<void> {
+	await dbOwnerBatch([ownerStatement(`UPDATE api_keys SET ${column} = ? WHERE id = ?`, [value, id])], {
+		operation: "test.api-keys-update",
+		lane: "write",
+	});
+}
+
+async function lastUsedAt(id: string): Promise<string | null> {
+	const row = await dbOwnerQuery<{ last_used_at: string | null } | null>(
+		ownerStatement("SELECT last_used_at FROM api_keys WHERE id = ?", [id], "get"),
+		{ operation: "test.api-keys-last-used", lane: "read" },
+	);
+	return row?.last_used_at ?? null;
+}
+
+describe("api keys", () => {
+	test("creates a connector key, stores only metadata, and verifies the raw secret", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "work laptop pi", connector: "pi", agentId: "agent-pi" });
 		expect(created.key.startsWith("sig_sk_")).toBe(true);
 		expect(created.prefix).toMatch(/^[0-9a-f]+$/);
 		expect(created.permissions).toContain("recall");
 		expect(created.permissions).toContain("documents");
 
-		const listed = listApiKeys(accessor);
+		const listed = listApiKeys(getDbAccessor());
 		expect(listed).toHaveLength(1);
 		expect(listed[0]?.name).toBe("work laptop pi");
 		expect("key" in (listed[0] as object)).toBe(false);
 
-		const verified = verifyApiKey(accessor, created.key);
+		const verified = await verifyApiKey(created.key);
 		expect(verified.authenticated).toBe(true);
 		expect(verified.claims?.role).toBe("agent");
 		expect(verified.claims?.scope).toEqual({});
@@ -80,29 +56,75 @@ describe("api keys", () => {
 		expect(checkPermission(verified.claims, "admin", "team").allowed).toBe(false);
 	});
 
-	test("non-connector admin keys are not restricted by an empty permissions list", () => {
-		const { accessor, close } = makeAccessor();
-		cleanup = close;
-
-		const created = createApiKey(accessor, { name: "admin laptop", role: "admin" });
+	test("non-connector admin keys are not restricted by an empty permissions list", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "admin laptop", role: "admin" });
 		expect(created.permissions).toEqual([]);
 
-		const verified = verifyApiKey(accessor, created.key);
+		const verified = await verifyApiKey(created.key);
 		expect(verified.authenticated).toBe(true);
 		expect(verified.claims?.permissions).toBeUndefined();
 		expect(checkPermission(verified.claims, "admin", "team").allowed).toBe(true);
 		expect(checkPermission(verified.claims, "connectors", "team").allowed).toBe(true);
 	});
 
-	test("revoked keys stop authenticating", () => {
-		const { accessor, close } = makeAccessor();
-		cleanup = close;
+	test("revoked keys stop authenticating", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "remote codex", connector: "codex" });
+		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
 
-		const created = createApiKey(accessor, { name: "remote codex", connector: "codex" });
-		expect(verifyApiKey(accessor, created.key).authenticated).toBe(true);
-
-		const revoked = revokeApiKey(accessor, created.prefix);
+		const revoked = revokeApiKey(getDbAccessor(), created.prefix);
 		expect(typeof revoked?.revokedAt).toBe("string");
-		expect(verifyApiKey(accessor, created.key)).toMatchObject({ authenticated: false, error: "api key revoked" });
+		expect(await verifyApiKey(created.key)).toMatchObject({ authenticated: false, error: "api key revoked" });
+	});
+
+	test("hashes a token once and reuses the result for later requests", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
+		const scrypt = spyOn(nodeCrypto, "scrypt");
+		const scryptSync = spyOn(nodeCrypto, "scryptSync");
+		try {
+			for (let i = 0; i < 3; i++) {
+				expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+			}
+			expect(scrypt).toHaveBeenCalledTimes(1);
+			expect(scryptSync).not.toHaveBeenCalled();
+		} finally {
+			scrypt.mockRestore();
+			scryptSync.mockRestore();
+		}
+	});
+
+	test("a wrong secret with a known prefix stays invalid after the real key was verified", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
+		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+
+		const forged = `sig_sk_${created.prefix}_${"A".repeat(43)}`;
+		expect(await verifyApiKey(forged)).toMatchObject({ authenticated: false, error: "invalid api key" });
+		expect(await verifyApiKey(forged)).toMatchObject({ authenticated: false, error: "invalid api key" });
+	});
+
+	test("an expired key stops authenticating after it was verified", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
+		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+
+		await setKeyColumn(created.id, "expires_at", "2000-01-01T00:00:00.000Z");
+		expect(await verifyApiKey(created.key)).toMatchObject({ authenticated: false, error: "api key expired" });
+	});
+
+	test("records last use at most once a minute per key", async () => {
+		const created = createApiKey(getDbAccessor(), { name: "container claude", connector: "claude-code" });
+
+		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+		const first = await lastUsedAt(created.id);
+		expect(first).toEqual(expect.any(String));
+
+		await Bun.sleep(5);
+		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+		expect(await lastUsedAt(created.id)).toBe(first);
+
+		const stale = new Date(Date.now() - 61_000).toISOString();
+		await setKeyColumn(created.id, "last_used_at", stale);
+		expect((await verifyApiKey(created.key)).authenticated).toBe(true);
+		const refreshed = await lastUsedAt(created.id);
+		expect(refreshed).not.toBe(stale);
+		expect(Date.parse(refreshed ?? "")).toBeGreaterThan(Date.parse(stale));
 	});
 });
