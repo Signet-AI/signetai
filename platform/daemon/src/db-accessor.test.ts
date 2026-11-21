@@ -39,6 +39,7 @@ import {
 	hasPendingMigrationBackup,
 	initDbAccessor,
 	initDbAccessorAsync,
+	initDbAccessorLite,
 	pruneMigrationBackupsAfterIntegrity,
 	readVecEmbeddingDimensions,
 	resolveCustomSqlitePath,
@@ -344,7 +345,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:339" },
+				{ siteToken: "db-accessor.test.ts:340" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -352,7 +353,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:339");
+		expect(state.latched.syncDbCallSites).toContain("withReadDbAsync@platform/daemon/src/db-accessor.test.ts:340");
 	});
 
 	test("attributes an in-flight parent sync call at latch time", () => {
@@ -373,14 +374,14 @@ describe("DbAccessor", () => {
 				recordEventLoopHeartbeat(5_000, 2_000);
 				state.latched = getEventLoopLiveness(5_000);
 				db.prepare("SELECT 1").get();
-			}, "db-accessor.test.ts:370");
+			}, "db-accessor.test.ts:371");
 		} finally {
 			Date.now = realNow;
 		}
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:370");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTx@platform/daemon/src/db-accessor.test.ts:371");
 	});
 
 	test("attributes an in-flight queued async write callback at latch time", async () => {
@@ -403,7 +404,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:398" },
+				{ siteToken: "db-accessor.test.ts:399" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -411,7 +412,7 @@ describe("DbAccessor", () => {
 
 		if (state.latched === null) throw new Error("in-flight latch did not produce liveness data");
 		expect(state.latched.status).toBe("wedged");
-		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:398");
+		expect(state.latched.syncDbCallSites).toContain("withWriteTxAsync@platform/daemon/src/db-accessor.test.ts:399");
 	});
 
 	test("attributes the actual caller through runWriteTxAsync", async () => {
@@ -1811,5 +1812,36 @@ db.exec("COMMIT");`,
 		expect(await getDbAccessor().withWriteTxAsync((db) => db.prepare("PRAGMA busy_timeout").get())).toEqual({
 			timeout: 5000,
 		});
+	}, 10_000);
+
+	test("waits for an exclusive writer before configuring initialization pragmas", async () => {
+		const dbPath = tmpDbPath();
+		dir = join(dbPath, "..");
+		const seed = new Database(dbPath);
+		seed.exec("PRAGMA journal_mode = WAL");
+		seed.exec("CREATE TABLE probe (value INTEGER)");
+		seed.close();
+
+		const holder = Bun.spawn(
+			[
+				process.execPath,
+				"-e",
+				`const { Database } = require("bun:sqlite");
+const db = new Database(${JSON.stringify(dbPath)});
+db.exec("PRAGMA locking_mode = EXCLUSIVE");
+db.exec("BEGIN IMMEDIATE");
+console.log("locked");
+Bun.sleepSync(300);
+db.exec("COMMIT");
+db.close();`,
+			],
+			{ stdout: "pipe", stderr: "inherit" },
+		);
+		await holder.stdout.getReader().read();
+
+		const started = performance.now();
+		expect(() => initDbAccessorLite(dbPath, "")).not.toThrow();
+		expect(performance.now() - started).toBeGreaterThanOrEqual(100);
+		expect(await holder.exited).toBe(0);
 	}, 10_000);
 });

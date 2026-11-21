@@ -89,7 +89,7 @@ export async function handleSynthesisRequest(
 			settled = true;
 			cleanup();
 			setSynthesisWorker(null);
-			w.terminate().catch((err) => {
+			await w.terminate().catch((err) => {
 				logger.debug("hooks", "Synthesis render worker terminate failed", {
 					error: err instanceof Error ? err.message : String(err),
 				});
