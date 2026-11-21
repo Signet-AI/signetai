@@ -1,21 +1,31 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import ts from "typescript";
 import { createDbAccessorLifecycle } from "./accessor-lifecycle";
+
+const ROOT = join(import.meta.dir, "..", "..");
 
 function source(relativePath: string): string {
 	return readFileSync(new URL(relativePath, import.meta.url), "utf8");
 }
 
+function imports(path: string): string[] {
+	const file = join(ROOT, path);
+	const text = readFileSync(file, "utf8");
+	const specifiers = [...text.matchAll(/(?:from|import\()\s*"(\.{1,2}\/[^"]+)"/g)].map((match) => match[1] ?? "");
+	return specifiers.map((specifier) => relative(ROOT, join(dirname(file), specifier)).replace(/\.(ts|js)$/, ""));
+}
+
 describe("DB foundation dependency invariant", () => {
 	it("prevents accessor and vacuum primitives from importing owner orchestration", () => {
-		const accessor = source("./accessor.ts");
-		const vacuum = source("../maintenance/vacuum.ts");
+		const accessor = imports("db/owner/accessor.ts");
+		const vacuum = imports("db/maintenance/vacuum.ts");
 
-		expect(accessor).not.toContain('from "./runtime"');
-		expect(accessor).not.toContain('import("../../agents/identity/agent-id")');
-		expect(accessor).not.toContain('from "../maintenance/vacuum-worker"');
-		expect(vacuum).not.toContain('from "./runtime"');
+		expect(accessor).not.toContain("db/owner/runtime");
+		expect(accessor).not.toContain("agents/identity/agent-id");
+		expect(accessor).not.toContain("db/maintenance/vacuum-worker");
+		expect(vacuum).not.toContain("db/owner/runtime");
 	});
 });
 
@@ -95,10 +105,16 @@ describe("close participant lifecycle", () => {
 
 describe("owner transport purity", () => {
 	it("keeps DB owner transport independent of Dreaming implementations", () => {
-		const runtime = source("./runtime.ts");
+		const runtime = imports("db/owner/runtime.ts");
+		const dreaming = runtime.filter(
+			(target) =>
+				target.startsWith("dreaming/") ||
+				target === "ontology/graph/quality" ||
+				target === "inference/providers/dreaming-token-worker",
+		);
 
-		expect(runtime).not.toContain('"../../ontology/graph/hygiene"');
-		expect(runtime).not.toContain('"./pipeline/dreaming');
+		expect(runtime).not.toContain("ontology/graph/hygiene");
+		expect(dreaming).toEqual([]);
 	});
 
 	it("keeps the knowledge graph independent of Dreaming composition", () => {

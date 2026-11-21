@@ -481,7 +481,7 @@ export function createMyConnector(
 
 - **Document rows:** Each synced resource should map to a `documents`
   table row with a unique `source_url`. Use the existing
-  `insertDocument()` / `updateDocument()` helpers from `filesystem.ts`
+  `insertDocument()` / `updateDocument()` helpers from `sources/providers/filesystem/connector.ts`
   as a reference, or write your own using `DbAccessor`.
 
 - **Ingest pipeline:** After inserting or updating a document row, call
