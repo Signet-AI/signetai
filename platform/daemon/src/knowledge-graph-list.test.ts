@@ -3,9 +3,13 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, MAX_READ_CONNECTIONS } from "./db-accessor";
+import { getDbOwner } from "./db-owner-runtime";
 import {
+	getAttributesForAspectFiltered,
 	getDependenciesFrom,
 	getDependenciesTo,
+	getEntityAspectsWithCounts,
+	getEntityDependenciesDetailed,
 	getKnowledgeEntityDetail,
 	getKnowledgeGraphForConstellation,
 	getKnowledgeStats,
@@ -748,6 +752,42 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 
 		const detail = await getKnowledgeEntityDetail(getDbAccessor(), "does-not-exist", "default");
 		expect(detail).toBeNull();
+	});
+
+	test("answers the Dreaming graph reads that queue behind a long owner job", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity("e-hub", "Hub");
+		seedEntity("e-leaf", "Leaf");
+		seedAspect("asp-hub", "e-hub", "Configuration");
+		seedAttribute("attr-hub", "asp-hub");
+		seedDependency("dep-hub-leaf", "e-hub", "e-leaf");
+
+		const owner = await getDbOwner();
+		const longJob = owner.submit(
+			{ kind: "sleep", durationMs: 2_500 },
+			{ operation: "test.long-owner-job", lane: "write", deadlineMs: 10_000 },
+		);
+
+		const accessor = getDbAccessor();
+		const reads = await Promise.allSettled([
+			listKnowledgeEntities(accessor, { agentId: "default", limit: 10, offset: 0 }),
+			getKnowledgeEntityDetail(accessor, "e-hub", "default"),
+			getEntityAspectsWithCounts(accessor, "e-hub", "default"),
+			getEntityDependenciesDetailed(accessor, { entityId: "e-hub", agentId: "default", direction: "both" }),
+			getAttributesForAspectFiltered(accessor, {
+				entityId: "e-hub",
+				aspectId: "asp-hub",
+				agentId: "default",
+				kind: "attribute",
+				status: "active",
+				limit: 10,
+				offset: 0,
+			}),
+		]);
+		await longJob.result;
+
+		expect(reads.flatMap((read) => (read.status === "rejected" ? [String(read.reason)] : []))).toEqual([]);
 	});
 });
 
