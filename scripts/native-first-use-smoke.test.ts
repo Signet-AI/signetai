@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_NATIVE_FIRST_USE_SMOKE === "1";
@@ -142,7 +142,7 @@ describe("compiled native first use", () => {
 	);
 
 	smoke(
-		"setup, doctor, remember, and recall work from a clean workspace",
+		"setup, doctor, remember, recall, and transcript recovery work from a clean workspace",
 		async () => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
@@ -189,6 +189,14 @@ describe("compiled native first use", () => {
 			expect(existsSync(gitLog) ? readFileSync(gitLog, "utf8") : "").not.toMatch(/\bgit (clone|fetch|pull)\b/);
 			const agentYaml = readFileSync(join(workspace, "agent.yaml"), "utf8");
 			expect(agentYaml).toContain("embedding:\n  provider: none");
+			const transcriptPath = join(smokeHome, ".claude", "projects", "-repo", "native-smoke.jsonl");
+			mkdirSync(dirname(transcriptPath), { recursive: true });
+			writeFileSync(
+				transcriptPath,
+				JSON.stringify({ sessionId: "native-smoke", cwd: "/repo", message: { role: "user", content: "recover me" } }),
+			);
+			const settled = new Date(Date.now() - 120_000);
+			utimesSync(transcriptPath, settled, settled);
 			let daemonOutput = "";
 			daemonChild = spawn(binary, [], {
 				env: {
@@ -197,6 +205,7 @@ describe("compiled native first use", () => {
 					SIGNET_PORT: String(port),
 					SIGNET_BIND: "127.0.0.1",
 					SIGNET_SKIP_AGENT_REGISTER: "1",
+					USERPROFILE: smokeHome,
 				},
 				stdio: ["ignore", "pipe", "pipe"],
 			});
@@ -233,7 +242,12 @@ describe("compiled native first use", () => {
 			expect(
 				results.some((row) => typeof row === "object" && row !== null && Reflect.get(row, "content") === sentence),
 			).toBe(true);
+
+			const deadline = Date.now() + 90_000;
+			while (!daemonOutput.includes("Transcript recovery scan") && Date.now() < deadline) await Bun.sleep(250);
+			expect(daemonOutput).toContain("Transcript recovery scan complete");
+			expect(daemonOutput).not.toContain("Transcript recovery scan failed");
 		},
-		3 * 60_000,
+		4 * 60_000,
 	);
 });
