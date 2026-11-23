@@ -90,4 +90,22 @@ describe("agent route memory policy contracts", () => {
 		).toBe(400);
 		expect((await request("PATCH", "/api/agents/not-found", {})).status).toBe(404);
 	});
+
+	it("answers roster routes that queue behind a long owner job", async () => {
+		expect((await request("POST", "/api/agents", { name: "queued-patch" })).status).toBe(201);
+		expect((await request("POST", "/api/agents", { name: "queued-delete" })).status).toBe(201);
+		const { getDbOwner } = await import("./db-owner-runtime");
+		const longJob = (await getDbOwner()).submit(
+			{ kind: "sleep", durationMs: 2_500 },
+			{ operation: "test.long-owner-job", lane: "write", deadlineMs: 10_000 },
+		);
+		const responses = await Promise.all([
+			request("GET", "/api/agents"),
+			request("GET", "/api/agents/queued-patch"),
+			request("PATCH", "/api/agents/queued-patch", { read_policy: "shared" }),
+			request("DELETE", "/api/agents/queued-delete"),
+		]);
+		await longJob.result;
+		expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200]);
+	});
 });
