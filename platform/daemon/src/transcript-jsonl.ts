@@ -453,18 +453,15 @@ function dropTornTail(path: string): void {
 	}
 }
 
+function serializeRecord(record: CanonicalTranscriptRecord): string {
+	return JSON.stringify(record).replace(/[\u2028\u2029]/g, (char) => (char === "\u2028" ? "\\u2028" : "\\u2029"));
+}
+
 async function appendRecords(path: string, records: readonly CanonicalTranscriptRecord[]): Promise<void> {
 	if (records.length === 0) return;
 	mkdirSync(dirname(path), { recursive: true });
 	dropTornTail(path);
-	await appendFile(
-		path,
-		records
-			.map((record) => JSON.stringify(record))
-			.join("\n")
-			.concat("\n"),
-		"utf8",
-	);
+	await appendFile(path, records.map(serializeRecord).join("\n").concat("\n"), "utf8");
 }
 
 async function syncPath(path: string): Promise<void> {
@@ -922,7 +919,7 @@ export function writeCanonicalTranscriptSnapshot(
 				}
 				return refused ? null : records;
 			}
-			for (const record of records) await emit(JSON.stringify(record));
+			for (const record of records) await emit(serializeRecord(record));
 			await handle.writeFile(pending);
 			await handle.sync();
 			await handle.close();
@@ -1067,7 +1064,7 @@ export function rewriteReplacingLiveOnlySessions(
 							continue;
 						}
 						for (const r of next) {
-							writeSync(fd, `${JSON.stringify(r)}\n`);
+							writeSync(fd, `${serializeRecord(r)}\n`);
 						}
 						rewritten.add(key);
 					} catch {
