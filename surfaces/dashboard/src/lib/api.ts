@@ -8,6 +8,8 @@ export const onboardingPreview = import.meta.env.DEV && import.meta.env.VITE_ONB
 
 const API_BASE = "";
 
+const READ_ONLY_POSTS = new Set(["/api/inference/explain", "/api/inference/execute"]);
+
 function invalidateMutation(path: string): void {
 	const resources = path.startsWith("/api/auth/api-keys")
 		? ["api-keys"]
@@ -46,8 +48,7 @@ async function dashboardFetch(path: string, init?: RequestInit): Promise<Respons
 	if (response.status === 401) {
 		noteUnauthorized();
 		dashboardQueryCache.clear(false);
-	} else if (response.ok && method !== "GET" && !path.includes("/probe") && !path.includes("/decision"))
-		invalidateMutation(path);
+	} else if (response.ok && method !== "GET" && !READ_ONLY_POSTS.has(path)) invalidateMutation(path);
 	return response;
 }
 
