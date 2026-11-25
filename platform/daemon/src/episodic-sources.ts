@@ -842,6 +842,7 @@ interface EpisodicSourceSearchParams {
 	readonly before?: string;
 	readonly kind?: "memory" | "artifact" | "transcript" | "summary";
 	readonly excludeDelivered?: boolean;
+	readonly excludeStalledFrom?: number;
 	readonly excludeSourceRefs?: readonly string[];
 	readonly limit?: number | null;
 	readonly order?: "newest" | "none" | "newest-arrival" | "oldest-arrival";
@@ -874,6 +875,7 @@ function selectEpisodicSourceRefs(
 		params.excludeDelivered === true &&
 		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_consumption'").get() !=
 			null;
+	const stalledFilter = params.excludeStalledFrom !== undefined;
 	const reviewedFilterEnabled =
 		params.excludeDelivered === true &&
 		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_reviews'").get() != null;
@@ -890,10 +892,12 @@ function selectEpisodicSourceRefs(
 				 WHERE dec.agent_id = ? AND dec.source_kind = '${kind}' AND dec.source_id = ${id}
 				   AND dec.source_captured_at = ${capturedAt} AND dec.source_entry_id = ${sourceEntryId}
 				   AND dec.source_revision = ${sourceRevision}
-				   AND dec.delivered_offset >= dec.source_length
+				   AND (dec.delivered_offset >= dec.source_length${stalledFilter ? " OR dec.stalled_passes >= ?" : ""})
 			)`
 			: "";
-	const deliveredArgs = deliveredFilterEnabled ? [params.agentId] : [];
+	const deliveredArgs = deliveredFilterEnabled
+		? [params.agentId, ...(stalledFilter ? [params.excludeStalledFrom] : [])]
+		: [];
 	const reviewedPredicate = (
 		kind: EpisodicSourceKind,
 		id: string,

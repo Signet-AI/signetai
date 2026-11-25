@@ -1668,6 +1668,56 @@ describe("Dreaming", () => {
 		).toEqual({ n: 1 });
 	});
 
+	it("keeps the waiting slot for healthy evidence when the oldest source is stalled", async () => {
+		seedArtifact(db, "Daily/stalled.md", "A note no pass has finished.", "stalled", "2026-07-01T00:00:00.000Z");
+		seedArtifact(db, "Daily/waiting.md", "A healthy note waiting since July.", "waiting", "2026-07-02T00:00:00.000Z");
+		db.prepare(
+			"INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES ('stalled-pass', ?, 'incremental', 'completed')",
+		).run(AGENT);
+		db.prepare(
+			`INSERT INTO dreaming_evidence_consumption
+			 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
+			  delivered_offset, source_length, pass_id, updated_at, cursor_basis, stalled_passes)
+			 VALUES (?, 'artifact', 'Daily/stalled.md', '2026-07-01T00:00:00.000Z', '', 'stalled', 0, 1000,
+			  'stalled-pass', '2026-07-01T00:00:00.000Z', 'review', ?)`,
+		).run(AGENT, DREAMING_EVIDENCE_STALL_PASSES);
+		for (let pass = 0; pass < 4; pass += 1) {
+			for (let index = 0; index < 3; index += 1) {
+				const arrivedAt = new Date(Date.parse("2026-08-02T01:00:00.000Z") + (pass * 3 + index) * 60_000).toISOString();
+				seedArtifact(
+					db,
+					`Daily/fresh-${pass}-${index}.md`,
+					`Fresh note ${pass}-${index} arrived after the waiting note.`,
+					`fresh-${pass}-${index}`,
+					arrivedAt,
+				);
+			}
+			await runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						await readAndReviewEvidence(input, { agentId: AGENT, limit: 3 });
+						return { summary: "Read one page" };
+					},
+				},
+				defaultCfg(),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				"incremental",
+			);
+		}
+
+		expect(
+			db
+				.prepare(
+					`SELECT COUNT(*) AS n FROM dreaming_evidence_consumption
+					 WHERE source_id = 'Daily/waiting.md' AND delivered_offset >= source_length`,
+				)
+				.get(),
+		).toEqual({ n: 1 });
+	});
+
 	it("treats exactly 50 sources as a complete bounded page", async () => {
 		const agentId = "exact-fifty";
 		for (let index = 0; index < 50; index += 1) {
