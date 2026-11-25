@@ -4,10 +4,17 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { up as migrateDreamingPartitions } from "../../core/src/migrations/179-dreaming-evidence-leases";
-import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
+import { createDbOwnerClient, type DbOwnerClient, type DbOwnerSubmitOptions } from "./db-owner-client";
+import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import {
+	closeRegisteredDbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+} from "./db-owner-maintenance";
+import type { DbOwnerJob, DbOwnerRequest } from "./db-owner-protocol";
 import { ownerReadOne, ownerRun } from "./db-owner-sql";
 import { withContentPassWrites } from "./memory-head-owner";
-import { writeMemoryHead, type MemoryHeadRequest } from "./memory-head";
+import { readCuratedMemoryHead, requestMemoryHead, writeMemoryHead, type MemoryHeadRequest } from "./memory-head";
 
 describe("memory head owner runtime", () => {
 	let root: string;
@@ -15,7 +22,13 @@ describe("memory head owner runtime", () => {
 	const options = { operation: "head-fixture", lane: "write" as const, deadlineMs: 10000 };
 	const sql = (query: string, values: readonly unknown[] = []) => ownerRun(client, query, values, options);
 	const head = (request: MemoryHeadRequest) =>
-		client.submit<Record<string, unknown>>({ kind: "memory_head", request }, options).result;
+		client.submit<Record<string, unknown>>(
+			{ kind: "memory_head", request },
+			{
+				...options,
+				lane: request.action === "read" || request.action === "inspect" ? "read" : "write",
+			},
+		).result;
 	const snapshot = (agentId = "default") => head({ action: "read", agentId });
 	const pass = (id: string, agentId = "default", compartmentId: number | null = null) =>
 		sql(
@@ -70,9 +83,266 @@ describe("memory head owner runtime", () => {
 		await memory("meeting", "Meeting is Tuesday.");
 	});
 	afterEach(async () => {
+		await closeRegisteredDbOwnerMaintenance();
+		await closeDbAccessor();
 		await client.close();
 		rmSync(root, { recursive: true, force: true });
 	});
+
+	const observeHeadRequests = () => {
+		const dbPath = join(root, "memory", "memories.db");
+		initDbAccessor(dbPath);
+		const owner = client;
+		const jobs: DbOwnerJob[] = [];
+		registerDbOwnerMaintenance(
+			createDbOwnerMaintenance({
+				dbPath,
+				owner: {
+					...owner,
+					submit<Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions) {
+						const handle = owner.submit<Result>(request, options);
+						jobs.push(handle.job);
+						return handle;
+					},
+				},
+			}),
+		);
+		return jobs;
+	};
+
+	it("reads and inspects completed heads on the read lane while a separate SQLite writer is held", async () => {
+		expect(await commit("read-contention")).toMatchObject({ ok: true });
+		const target = join(root, "MEMORY.md");
+		const content = readFileSync(target, "utf8");
+		rmSync(target);
+		const dbPath = join(root, "memory", "memories.db");
+		const jobs = observeHeadRequests();
+		const writer = new Database(dbPath);
+		const version = writer.query("PRAGMA data_version").get();
+		writer.exec("BEGIN IMMEDIATE");
+		let reading: Promise<unknown> | undefined;
+		let finalVersion: unknown;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			reading = Promise.all([
+				readCuratedMemoryHead("default"),
+				requestMemoryHead({ action: "inspect", agentId: "default", content }),
+			]);
+			const result = await Promise.race([
+				reading,
+				new Promise((_, reject) => {
+					timer = setTimeout(() => reject(new Error("head read waited behind external writer")), 750);
+				}),
+			]);
+			expect(result).toMatchObject([
+				{ status: "current", content: "- Meeting is Tuesday." },
+				{ generated: true, status: "current" },
+			]);
+			expect(jobs.map((job) => ({ action: job.operation, lane: job.lane }))).toEqual([
+				{ action: "memory-head.read", lane: "read" },
+				{ action: "memory-head.inspect", lane: "read" },
+			]);
+			expect(existsSync(target)).toBe(false);
+		} finally {
+			clearTimeout(timer);
+			writer.exec("ROLLBACK");
+			await reading?.catch(() => undefined);
+			finalVersion = writer.query("PRAGMA data_version").get();
+			writer.close();
+		}
+		expect(finalVersion).toEqual(version);
+	});
+
+	it("reports pending publication without a database or file write from a read request", async () => {
+		const target = join(root, "MEMORY.md");
+		mkdirSync(target);
+		expect(await commit("pending-read")).toMatchObject({ code: "PUBLICATION_PENDING" });
+		rmSync(target, { recursive: true });
+		const db = new Database(join(root, "memory", "memories.db"));
+		const version = db.query("PRAGMA data_version").get();
+		try {
+			const result = await client.submit(
+				{ kind: "memory_head", request: { action: "read", agentId: "default" } },
+				{ ...options, lane: "read" },
+			).result;
+			expect(result).toMatchObject({ publication: "pending", status: "current", revision: 1 });
+			expect(existsSync(target)).toBe(false);
+			expect(db.query("PRAGMA data_version").get()).toEqual(version);
+		} finally {
+			db.close();
+		}
+	});
+
+	for (const authored of [false, true]) {
+		it(`recovers durable pending publication through a separate write after restart; authored=${authored}`, async () => {
+			const target = join(root, "MEMORY.md");
+			mkdirSync(target);
+			expect(await commit("restart-pending")).toMatchObject({ code: "PUBLICATION_PENDING" });
+			rmSync(target, { recursive: true });
+			if (authored) writeFileSync(target, "My authored memory.");
+			await client.close();
+			client = createDbOwnerClient({ dbPath: join(root, "memory", "memories.db") });
+			const jobs = observeHeadRequests();
+			const result = await readCuratedMemoryHead("default");
+			expect(result).toMatchObject({ status: "current", revision: 1, content: "- Meeting is Tuesday." });
+			expect(jobs.map((job) => ({ action: job.operation, lane: job.lane }))).toEqual([
+				{ action: "memory-head.read", lane: "read" },
+				{ action: "memory-head.publish", lane: "write" },
+				{ action: "memory-head.read", lane: "read" },
+			]);
+			if (authored) {
+				expect(result).toMatchObject({
+					publication: "pending",
+					publicationError: expect.stringContaining("User-authored MEMORY.md preserved"),
+				});
+				expect(readFileSync(target, "utf8")).toBe("My authored memory.");
+			} else {
+				expect(result.publication).toBeUndefined();
+				expect(readFileSync(target, "utf8")).toContain("- Meeting is Tuesday.");
+			}
+			expect(
+				await ownerReadOne(
+					client,
+					"SELECT status FROM memory_head_publications WHERE agent_id='default' AND revision=1",
+					[],
+					options,
+				),
+			).toEqual({ status: authored ? "pending" : "completed" });
+			expect(await ownerReadOne(client, "SELECT COUNT(*) AS count FROM memory_head_revisions", [], options)).toEqual({
+				count: 1,
+			});
+		});
+	}
+
+	it("rejects head commit and publication requests submitted on the read lane", async () => {
+		await pass("read-mutation");
+		for (const request of [
+			{ action: "publish", agentId: "default" },
+			{ action: "commit", input: { passId: "read-mutation", agentId: "default", entries: [] } },
+		] as const) {
+			await expect(
+				client.submit({ kind: "memory_head", request }, { ...options, lane: "read" }).result,
+			).rejects.toThrow("requires the write lane");
+		}
+		expect(existsSync(join(root, "MEMORY.md"))).toBe(false);
+		expect(await ownerReadOne(client, "SELECT COUNT(*) AS count FROM memory_head_revisions", [], options)).toEqual({
+			count: 0,
+		});
+	});
+
+	for (const labels of [
+		[1, null],
+		[null, 1],
+	]) {
+		it(`keeps equal head entry IDs independent in label order ${JSON.stringify(labels)}`, async () => {
+			await partitions();
+			await memory("secret", "Confidential meeting.");
+			await sql("UPDATE memories SET compartment_id=1 WHERE id='secret'");
+			for (const label of labels) {
+				const id = label === null ? "public" : "secret";
+				const text = label === null ? "Meeting is Tuesday." : "Confidential meeting.";
+				await pass(id, "default", label);
+				expect(
+					await submitEntries(id, [
+						{
+							entryId: "meeting",
+							text,
+							support: [{ source_ref: `memory:${label === null ? "meeting" : "secret"}`, quote: text }],
+						},
+					]),
+				).toMatchObject({ ok: true, revision: 1 });
+			}
+			for (const label of labels) {
+				const id = label === null ? "public" : "secret";
+				const text = label === null ? "Meeting is Tuesday." : "Confidential meeting.";
+				expect(await head({ action: "read", agentId: "default", passId: id })).toMatchObject({
+					status: "current",
+					content: `- ${text}`,
+					entries: [{ entry_id: "meeting", canonical_text: text, status: "active" }],
+					committedEntries: [
+						{
+							entryId: "meeting",
+							text,
+							support: [{ source_ref: `memory:${label === null ? "meeting" : "secret"}`, quote: text }],
+						},
+					],
+				});
+			}
+			expect(
+				await ownerReadOne(
+					client,
+					`SELECT COUNT(*) AS n FROM evidence_citations
+				WHERE derived_kind='head_entry' AND evidence_id='meeting'`,
+					[],
+					options,
+				),
+			).toEqual({ n: 1 });
+			expect(
+				await ownerReadOne(
+					client,
+					`SELECT COUNT(*) AS n FROM evidence_citations
+				WHERE derived_kind='head_entry' AND evidence_id='secret'`,
+					[],
+					options,
+				),
+			).toEqual({ n: 1 });
+			for (const label of labels) {
+				const otherLabel = label === null ? 1 : null;
+				const otherPass = label === null ? "secret" : "public";
+				const before = await head({ action: "read", agentId: "default", passId: otherPass });
+				const otherEntry = await ownerReadOne<{ id: string }>(
+					client,
+					"SELECT id FROM memory_head_entries WHERE agent_id='default' AND entry_id='meeting' AND compartment_id IS ?",
+					[otherLabel],
+					options,
+				);
+				if (!otherEntry) throw new Error("Missing other head entry");
+				const otherCitationId = otherEntry.id;
+				const citations = await ownerReadOne(
+					client,
+					`SELECT json_group_array(evidence_id) AS ids
+					FROM evidence_citations WHERE derived_kind='head_entry' AND derived_id=?`,
+					[otherCitationId],
+					options,
+				);
+				const nextPass = label === null ? "public-next" : "secret-next";
+				const text = label === null ? "Meeting is Tuesday." : "Confidential meeting.";
+				await pass(nextPass, "default", label);
+				expect(
+					await submitEntries(nextPass, [
+						{
+							entryId: "meeting",
+							text: `${text} Updated`,
+							support: [{ source_ref: `memory:${label === null ? "meeting" : "secret"}`, quote: text }],
+						},
+					]),
+				).toMatchObject({ ok: true, revision: 2 });
+				const after = await head({ action: "read", agentId: "default", passId: otherPass });
+				expect(after.content).toEqual(before.content);
+				expect(after.committedEntries).toEqual(before.committedEntries);
+				expect(after.status).toBe("current");
+				expect(
+					await ownerReadOne(
+						client,
+						`SELECT json_group_array(evidence_id) AS ids
+					FROM evidence_citations WHERE derived_kind='head_entry' AND derived_id=?`,
+						[otherCitationId],
+						options,
+					),
+				).toEqual(citations);
+				expect(
+					await ownerReadOne(
+						client,
+						`SELECT COUNT(*) AS n FROM memory_head_revisions
+					WHERE compartment_id IS ? AND is_current=1`,
+						[label],
+						options,
+					),
+				).toEqual({ n: 1 });
+			}
+			expect(readFileSync(join(root, "MEMORY.md"), "utf8")).not.toContain("Confidential");
+		});
+	}
 
 	it("keeps classified head streams out of the public projection and public revision fence", async () => {
 		await partitions();
@@ -209,22 +479,22 @@ describe("memory head owner runtime", () => {
 		expect(await submitEntries("union-later", entries)).toMatchObject({ ok: false, code: "INVALID_PROVENANCE" });
 	});
 
-	it("rejects entry relabeling and stale epochs before durable or file side effects", async () => {
+	it("keeps new labels separate and rejects stale epochs before durable or file side effects", async () => {
 		await partitions();
 		expect(await commit("public")).toMatchObject({ ok: true });
 		const projection = readFileSync(join(root, "MEMORY.md"), "utf8");
 		await pass("classified", "default", 1);
-		await expect(
-			submitEntries("classified", [
+		expect(
+			await submitEntries("classified", [
 				{
 					entryId: "meeting",
 					text: "Changed",
 					support: [{ source_ref: "memory:meeting", quote: "Meeting is Tuesday." }],
 				},
 			]),
-		).rejects.toThrow("compartment_mismatch");
+		).toMatchObject({ ok: true });
 		expect(await ownerReadOne(client, "SELECT COUNT(*) AS n FROM memory_head_revisions", [], options)).toEqual({
-			n: 1,
+			n: 2,
 		});
 		await pass("epoch");
 		await sql(
@@ -237,7 +507,7 @@ describe("memory head owner runtime", () => {
 		).rejects.toThrow("compartment_mismatch");
 		await expect(head({ action: "read", agentId: "default", passId: "epoch" })).rejects.toThrow("compartment_mismatch");
 		expect(await ownerReadOne(client, "SELECT COUNT(*) AS n FROM memory_head_revisions", [], options)).toEqual({
-			n: 1,
+			n: 2,
 		});
 		expect(readFileSync(join(root, "MEMORY.md"), "utf8")).toBe(projection);
 	});
@@ -436,7 +706,7 @@ describe("memory head owner runtime", () => {
 		const before = await ownerReadOne(client, "SELECT * FROM memory_head_revisions WHERE id='old-audit'", [], options);
 		expect(await commit("new-format")).toMatchObject({ ok: true, revision: 2 });
 		expect(await ownerReadOne(client, "SELECT * FROM memory_head_revisions WHERE id='old-audit'", [], options)).toEqual(
-			before,
+			{ ...before, is_current: 0 },
 		);
 		expect(await snapshot()).toMatchObject({ status: "current", content: "- Meeting is Tuesday." });
 	});
@@ -542,7 +812,9 @@ describe("memory head owner runtime", () => {
 		mkdirSync(target);
 		expect(await commit("pending")).toMatchObject({ ok: false, code: "PUBLICATION_PENDING" });
 		rmSync(target, { recursive: true });
-		expect(await snapshot()).toMatchObject({ status: "current", revision: 1 });
+		expect(await snapshot()).toMatchObject({ status: "current", revision: 1, publication: "pending" });
+		expect(existsSync(target)).toBe(false);
+		expect(await head({ action: "publish", agentId: "default" })).toMatchObject({ ok: true, publication: "completed" });
 		const generated = readFileSync(target, "utf8");
 		const edited = generated.replace("Meeting is Tuesday.", "My own wording.");
 		writeFileSync(target, edited);

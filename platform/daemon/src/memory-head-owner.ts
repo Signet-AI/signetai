@@ -256,7 +256,8 @@ export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommit
 }
 
 export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHeadRequest): Record<string, unknown> {
-	if (!["read", "inspect", "commit"].includes(request.action)) throw new Error("Unsupported memory head action");
+	if (!["read", "inspect", "commit", "publish"].includes(request.action))
+		throw new Error("Unsupported memory head action");
 	const agentId = request.action === "commit" ? request.input.agentId : request.agentId;
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
 	const passId =
@@ -291,19 +292,35 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 			content: generated ? (head?.is_current === 1 ? head.content : null) : request.content,
 		};
 	}
-	let publicationError: string | undefined;
-	if (head?.is_current === 1 && partition.compartmentId === null) {
-		try {
-			publish(db, root, agentId, head);
-		} catch (error) {
-			publicationError = String(error);
+	const publicationPending =
+		head?.is_current === 1 &&
+		partition.compartmentId === null &&
+		Boolean(
+			db
+				.prepare(
+					"SELECT 1 FROM memory_head_publications WHERE agent_id=? AND revision=? AND compartment_id IS NULL AND status='pending' LIMIT 1",
+				)
+				.get(agentId, head.revision),
+		);
+	if (request.action === "publish") {
+		if (publicationPending && head !== undefined) {
+			try {
+				publish(db, root, agentId, head);
+			} catch (error) {
+				return {
+					ok: false,
+					publication: "pending",
+					publicationError: error instanceof Error ? error.message : String(error),
+				};
+			}
 		}
+		return { ok: true, publication: head?.is_current === 1 ? "completed" : "stale" };
 	}
 	const committed = passId === undefined ? null : committedEntries(db, partition, head?.revision_id ?? null).entries;
 	return {
 		agentId,
 		compartmentId: partition.compartmentId,
-		...(publicationError ? { publication: "pending", publicationError } : {}),
+		...(publicationPending ? { publication: "pending" } : {}),
 		revision: head?.revision ?? 0,
 		hash: head?.content_hash ?? "",
 		revisionId: head?.revision_id ?? null,
@@ -398,12 +415,6 @@ function validateEntries(
 	for (const entry of input.entries) {
 		if (ids.has(entry.entryId)) return { error: { ok: false, code: "INVALID_HEAD", error: "duplicate entry id" } };
 		ids.add(entry.entryId);
-		const existing = prepareTypedStatement<{ compartment_id: number | null }>(
-			db,
-			"SELECT compartment_id FROM memory_head_entries WHERE agent_id=? AND entry_id=?",
-		).get(input.agentId, entry.entryId);
-		if (existing != null && existing.compartment_id !== partition.compartmentId)
-			throw new Error("compartment_mismatch");
 		if (entry.support.length === 0)
 			return { error: { ok: false, code: "MISSING_PROVENANCE", error: `entry ${entry.entryId} has no evidence` } };
 		for (const support of entry.support) {
@@ -442,11 +453,18 @@ function commitEntries(
 		now,
 		partition.compartmentId,
 	);
+	db.prepare("UPDATE memory_head_revisions SET is_current=0 WHERE agent_id=? AND compartment_id IS ? AND id!=?").run(
+		input.agentId,
+		partition.compartmentId,
+		revisionId,
+	);
 	for (const [ordinal, entry] of input.entries.entries()) {
+		const revisionCitationId = JSON.stringify([revisionId, entry.entryId]);
 		const entryHash = hash(entry.text.trim());
 		db.prepare(
-			"INSERT INTO memory_head_entries (entry_id, agent_id, canonical_text, entry_hash, status, first_revision, last_revision, created_at, updated_at, compartment_id, pass_id) VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_id, entry_id) DO UPDATE SET canonical_text=excluded.canonical_text, entry_hash=excluded.entry_hash, status='active', last_revision=excluded.last_revision, updated_at=excluded.updated_at, pass_id=excluded.pass_id",
+			"INSERT INTO memory_head_entries (id, entry_id, agent_id, canonical_text, entry_hash, status, first_revision, last_revision, created_at, updated_at, compartment_id, pass_id) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?) ON CONFLICT(agent_id, entry_id, COALESCE(compartment_id,0)) DO UPDATE SET canonical_text=excluded.canonical_text, entry_hash=excluded.entry_hash, status='active', last_revision=excluded.last_revision, updated_at=excluded.updated_at, pass_id=excluded.pass_id",
 		).run(
+			randomUUID(),
 			entry.entryId,
 			input.agentId,
 			entry.text.trim(),
@@ -458,6 +476,12 @@ function commitEntries(
 			partition.compartmentId,
 			input.passId,
 		);
+		const storedEntry = prepareTypedStatement<{ id: string }>(
+			db,
+			"SELECT id FROM memory_head_entries WHERE agent_id=? AND entry_id=? AND compartment_id IS ?",
+		).get(input.agentId, entry.entryId, partition.compartmentId);
+		if (!storedEntry) throw new Error("Committed head entry missing");
+		const entryCitationId = storedEntry.id;
 		db.prepare(
 			"INSERT INTO memory_head_revision_entries (agent_id, revision, entry_id, ordinal, operation, provenance_json, compartment_id, pass_id, revision_id) VALUES (?, ?, ?, ?, 'add', ?, ?, ?, ?)",
 		).run(
@@ -472,9 +496,9 @@ function commitEntries(
 		);
 		db.prepare(
 			"INSERT INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES('head_revision',?,?,'attribute',?)",
-		).run(JSON.stringify([nextRevision, entry.entryId]), input.agentId, entry.entryId);
+		).run(revisionCitationId, input.agentId, entryCitationId);
 		db.prepare("DELETE FROM evidence_citations WHERE derived_kind='head_entry' AND derived_id=? AND agent_id=?").run(
-			entry.entryId,
+			entryCitationId,
 			input.agentId,
 		);
 		for (const support of entry.support) {
@@ -487,8 +511,8 @@ function commitEntries(
 			const citation = evidence.get(ref);
 			if (citation === undefined || citation === null) throw new Error("Validated evidence missing");
 			for (const [kind, id] of [
-				["head_entry", entry.entryId],
-				["head_revision", JSON.stringify([nextRevision, entry.entryId])],
+				["head_entry", entryCitationId],
+				["head_revision", revisionCitationId],
 			])
 				db.prepare(
 					"INSERT OR IGNORE INTO evidence_citations(derived_kind,derived_id,agent_id,evidence_kind,evidence_id) VALUES(?,?,?,?,?)",
