@@ -157,6 +157,11 @@ test("a release with high or critical advisories in shipped bundles cannot publi
 		(step: { name?: string }) => step.name === "Verify all release assets",
 	).run;
 	expect(verify).toContain("signetai-sbom.cdx.json");
+	const publishNames = release.jobs.publish.steps.map((step: { name?: string }) => step.name);
+	const match = publishNames.indexOf("Verify shipped dependencies match the audited SBOM");
+	expect(release.jobs.publish.steps[match].run).toBe("bun scripts/sbom.ts verify dist/signetai/sbom.cdx.json");
+	expect(match).toBeGreaterThan(publishNames.indexOf("Generate and upload native manifest"));
+	expect(match).toBeLessThan(publishNames.indexOf("Publish npm packages"));
 	const wrapper = JSON.parse(readFileSync(join(root, "dist/signetai/package.json"), "utf8"));
 	expect(wrapper.files).toContain("sbom.cdx.json");
 });

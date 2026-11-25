@@ -20,14 +20,22 @@ const daemonProxy: ProxyOptions = {
 		});
 	},
 };
-const recordBundledPackages: Plugin = {
-	name: "signet-record-shipped-packages",
+const bundledModules = new Set<string>();
+const collectBundledModules = (): Plugin => ({
+	name: "signet-collect-shipped-modules",
 	apply: "build",
 	generateBundle(_, bundle) {
-		const modules = Object.values(bundle).flatMap((output) =>
-			output.type === "chunk" ? Object.keys(output.modules) : [],
-		);
-		recordShippedPackages("dashboard", packagesFromFiles(modules, __dirname));
+		for (const output of Object.values(bundle)) {
+			if (output.type === "chunk") for (const id of Object.keys(output.modules)) bundledModules.add(id);
+		}
+		for (const file of this.getWatchFiles()) if (file.endsWith(".css")) bundledModules.add(file);
+	},
+});
+const recordBundledPackages: Plugin = {
+	...collectBundledModules(),
+	name: "signet-record-shipped-packages",
+	closeBundle() {
+		recordShippedPackages("dashboard", packagesFromFiles(bundledModules, __dirname));
 	},
 };
 
@@ -36,6 +44,9 @@ export default defineConfig(({ command, mode }) => ({
 		"import.meta.env.VITE_ONBOARDING_PREVIEW": JSON.stringify(command === "serve" && mode === "onboarding"),
 	},
 	plugins: [react(), tailwindcss(), recordBundledPackages],
+	worker: {
+		plugins: () => [collectBundledModules()],
+	},
 	resolve: {
 		alias: {
 			"@": path.resolve(__dirname, "./src"),

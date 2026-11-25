@@ -133,6 +133,16 @@ export function packagesFromMetafile(metafile: unknown, cwd: string): ShippedPac
 	return packagesFromFiles(Object.keys(inputs), cwd);
 }
 
+export function packagesInlinedBy(source: string): ShippedPackage[] {
+	const store = /node_modules\/\.(?:pnpm|bun)\/((?:@[^/+@]+\+)?[^/+@]+)@(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)[^/]*\//g;
+	return uniquePackages(
+		[...source.matchAll(store)].map((match) => ({
+			name: (match[1] ?? "").replace("+", "/"),
+			version: match[2] ?? "",
+		})),
+	);
+}
+
 export function packagesInTree(dir: string): ShippedPackage[] {
 	const found: ShippedPackage[] = [];
 	const visit = (modules: string): void => {

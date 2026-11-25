@@ -2,12 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type Advisory, buildSbom, fetchAdvisories, findingsFor, sbomPackages } from "./sbom";
+import { type Advisory, buildSbom, fetchAdvisories, findingsFor, sbomMismatches, sbomPackages } from "./sbom";
 import {
 	packageRoot,
 	packagesFromFiles,
 	packagesFromMetafile,
 	packagesInTree,
+	packagesInlinedBy,
 	recordEmbeddedBundle,
 	recordShippedPackages,
 	shippedArtifacts,
@@ -191,6 +192,23 @@ describe("shipped package records", () => {
 		]);
 	});
 
+	test("reads the packages an upstream bundle inlined from its store paths", () => {
+		const source = [
+			"// node_modules/.pnpm/@huggingface+jinja@0.5.6/node_modules/@huggingface/jinja/dist/index.js",
+			"// node_modules/.pnpm/@huggingface+tokenizers@0.1.3/node_modules/@huggingface/tokenizers/dist/tokenizers.mjs",
+			"// node_modules/.bun/fast-uri@3.1.5+a1b2c3/node_modules/fast-uri/index.js",
+			"// node_modules/.pnpm/react-dom@19.2.0_react@19.2.0/node_modules/react-dom/index.js",
+			"// node_modules/.pnpm/@huggingface+jinja@0.5.6/node_modules/@huggingface/jinja/dist/other.js",
+		].join("\n");
+		expect(packagesInlinedBy(source)).toEqual([
+			{ name: "@huggingface/jinja", version: "0.5.6" },
+			{ name: "@huggingface/tokenizers", version: "0.1.3" },
+			{ name: "fast-uri", version: "3.1.5" },
+			{ name: "react-dom", version: "19.2.0" },
+		]);
+		expect(packagesInlinedBy("export const x = 1;")).toEqual([]);
+	});
+
 	test("walks vendored node_modules including scoped and nested packages", () => {
 		const root = scratch();
 		writePackage(join(root, "node_modules/@firecrawl/anydoc"), "@firecrawl/anydoc", "0.4.0");
@@ -246,6 +264,49 @@ describe("sbom", () => {
 			{ name: "@scope/shared", version: "1.0.0" },
 			{ name: "fast-uri", version: "3.1.9" },
 		]);
+	});
+});
+
+describe("sbom verify", () => {
+	test("passes when this build matches the audited SBOM and lists each difference otherwise", () => {
+		const audited = scratch();
+		for (const artifact of shippedArtifacts)
+			recordShippedPackages(artifact, [{ name: "hono", version: "4.13.22" }], audited);
+		recordShippedPackages(
+			"daemon-js-vendor",
+			[
+				{ name: "@firecrawl/anydoc", version: "0.4.0" },
+				{ name: "anydoc-linux-x64-gnu", version: "0.4.0" },
+			],
+			audited,
+		);
+		const sbom = JSON.parse(JSON.stringify(buildSbom(audited, "1.0.2")));
+
+		const publish = scratch();
+		recordShippedPackages("signet-mcp", [{ name: "hono", version: "4.13.22" }], publish);
+		recordShippedPackages(
+			"daemon-js-vendor",
+			[
+				{ name: "@firecrawl/anydoc", version: "0.4.0" },
+				{ name: "anydoc-linux-x64-gnu", version: "0.4.0" },
+			],
+			publish,
+		);
+		expect(sbomMismatches(sbom, publish)).toEqual([]);
+
+		recordShippedPackages(
+			"daemon-js-vendor",
+			[
+				{ name: "@firecrawl/anydoc", version: "0.4.0" },
+				{ name: "anydoc-darwin-arm64", version: "0.4.0" },
+			],
+			publish,
+		);
+		expect(sbomMismatches(sbom, publish)).toEqual([
+			"daemon-js-vendor: pkg:npm/anydoc-darwin-arm64@0.4.0 was built but not audited",
+			"daemon-js-vendor: pkg:npm/anydoc-linux-x64-gnu@0.4.0 was audited but not built",
+		]);
+		expect(() => sbomMismatches(sbom, scratch())).toThrow("No shipped package records");
 	});
 });
 

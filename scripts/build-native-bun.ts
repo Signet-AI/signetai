@@ -17,8 +17,8 @@ import { arch, platform } from "node:os";
 import { dirname, join } from "node:path";
 import {
 	type ShippedPackage,
-	packageRoot,
 	packagesFromMetafile,
+	packagesInlinedBy,
 	readPackage,
 	recordShippedPackages,
 } from "./shipped-packages";
@@ -265,11 +265,6 @@ const workerAssets: { name: string; contentBase64: string }[] = [
 const transformersPackageJson = daemonRequire.resolve("@huggingface/transformers/package.json");
 const transformersDir = dirname(transformersPackageJson);
 shipped.push(readPackage(transformersDir));
-for (const prebundled of ["@huggingface/jinja", "@huggingface/tokenizers"]) {
-	const root = packageRoot(Bun.resolveSync(prebundled, transformersDir));
-	if (root === null) throw new Error(`Cannot locate ${prebundled}, which the transformers web runtime inlines`);
-	shipped.push(readPackage(root));
-}
 const transformersRequire = createRequire(transformersPackageJson);
 const onnxRuntimeWebPackageJson = transformersRequire.resolve("onnxruntime-web/package.json");
 const onnxRuntimeWebDir = dirname(onnxRuntimeWebPackageJson);
@@ -279,6 +274,11 @@ const onnxRuntimeCommonPackageJson = onnxRuntimeWebRequire.resolve("onnxruntime-
 const onnxRuntimeCommonEsmPath = join(dirname(onnxRuntimeCommonPackageJson), "dist", "esm", "index.js");
 const transformersWebRuntimePath = join(transformersDir, "dist", "transformers.web.js");
 let patchedTransformersWebRuntimeSource = readFileSync(transformersWebRuntimePath, "utf8");
+const transformersInlined = packagesInlinedBy(patchedTransformersWebRuntimeSource);
+if (transformersInlined.length === 0) {
+	throw new Error("Unsupported @huggingface/transformers web runtime: inlined package paths changed");
+}
+shipped.push(...transformersInlined);
 for (const [specifier, resolved] of [
 	["onnxruntime-common", onnxRuntimeCommonEsmPath],
 	["onnxruntime-web/webgpu", onnxRuntimeWebWasmPath],

@@ -169,6 +169,41 @@ export async function fetchAdvisories(
 	return result;
 }
 
+function artifactsOf(component: unknown): string[] {
+	if (typeof component !== "object" || component === null) return [];
+	const properties = field(component, "properties");
+	if (!Array.isArray(properties)) return [];
+	return properties.flatMap((property: unknown) =>
+		typeof property === "object" &&
+		property !== null &&
+		field(property, "name") === "signet:artifact" &&
+		typeof field(property, "value") === "string"
+			? [String(field(property, "value"))]
+			: [],
+	);
+}
+
+export function sbomMismatches(sbom: unknown, dir: string): string[] {
+	if (typeof sbom !== "object" || sbom === null) throw new Error("SBOM is not an object");
+	const components = field(sbom, "components");
+	if (!Array.isArray(components)) throw new Error("SBOM has no components");
+	const present = shippedArtifacts.filter((artifact) => existsSync(join(dir, `${artifact}.json`)));
+	if (present.length === 0) throw new Error(`No shipped package records in ${dir} to compare with the SBOM`);
+	return present.flatMap((artifact) => {
+		const built = new Set(parsePackages(join(dir, `${artifact}.json`)).map(purl));
+		const audited = new Set(
+			components.flatMap((component: unknown) => {
+				const ref = typeof component === "object" && component !== null ? field(component, "purl") : undefined;
+				return typeof ref === "string" && artifactsOf(component).includes(artifact) ? [ref] : [];
+			}),
+		);
+		return [
+			...[...built].filter((ref) => !audited.has(ref)).map((ref) => `${artifact}: ${ref} was built but not audited`),
+			...[...audited].filter((ref) => !built.has(ref)).map((ref) => `${artifact}: ${ref} was audited but not built`),
+		];
+	});
+}
+
 async function audit(path: string, failOn: Severity): Promise<number> {
 	const packages = sbomPackages(JSON.parse(readFileSync(path, "utf8")));
 	if (packages.length === 0) throw new Error(`${path} lists no npm packages`);
@@ -198,8 +233,15 @@ if (import.meta.main) {
 		const failOn = flag === -1 ? "high" : rest[flag + 1];
 		if (!isSeverity(failOn)) throw new Error(`--fail-on must be one of ${severities.join(", ")}`);
 		process.exit(await audit(path, failOn));
+	} else if (command === "verify" && path !== undefined) {
+		const mismatches = sbomMismatches(JSON.parse(readFileSync(path, "utf8")), shippedPackagesDir);
+		for (const mismatch of mismatches) console.error(mismatch);
+		if (mismatches.length > 0) process.exit(1);
+		console.log(`This build matches ${path}`);
 	} else {
-		console.error("usage: bun scripts/sbom.ts generate <out.cdx.json> | audit <sbom.cdx.json> [--fail-on <severity>]");
+		console.error(
+			"usage: bun scripts/sbom.ts generate <out.cdx.json> | audit <sbom.cdx.json> [--fail-on <severity>] | verify <sbom.cdx.json>",
+		);
 		process.exit(2);
 	}
 }
