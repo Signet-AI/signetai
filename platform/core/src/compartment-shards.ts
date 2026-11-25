@@ -66,7 +66,7 @@ export function installCompartmentFts(db: MigrationDb, base: FtsBase, c: number 
  INSERT INTO ${name}(rowid, ${names}) VALUES(new.rowid, ${values("new")}); END;
  CREATE TRIGGER ${name}_ad AFTER DELETE ON ${table} WHEN ${condition("old")} BEGIN
  INSERT INTO ${name}(${name}, rowid, ${names}) VALUES('delete', old.rowid, ${values("old")}); END;
- CREATE TRIGGER ${name}_au AFTER UPDATE ON ${table} BEGIN
+ CREATE TRIGGER ${name}_au AFTER UPDATE OF ${names},compartment_id ON ${table} BEGIN
  INSERT INTO ${name}(${name}, rowid, ${names}) SELECT 'delete', old.rowid, ${values("old")} WHERE ${condition("old")};
  INSERT INTO ${name}(rowid, ${names}) SELECT new.rowid, ${values("new")} WHERE ${condition("new")}; END;
  `);
